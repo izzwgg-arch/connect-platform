@@ -7887,3 +7887,30 @@ model DeskPhoneSetupPhone {
   @@index([tenantId, state])
   @@index([runId, state])
 }
+
+/// A regulatory/compliance deadline (FCC, USAC, state) on LoopCom's calendar.
+/// Platform-wide — no tenant. Seeded federal items carry a stable `key`;
+/// hand-added items have key null. The reminder sweep texts and emails the
+/// owner 30 days before dueDate and then weekly until the item is completed.
+/// Completing a `recurrence: "yearly"` item rolls dueDate forward one year
+/// instead of closing the row.
+model ComplianceItem {
+  id             String    @id @default(cuid())
+  key            String?   @unique
+  title          String
+  details        String?
+  dueDate        DateTime
+  /// "yearly" | null (one-shot)
+  recurrence     String?
+  completedAt    DateTime?
+  /// Email of whoever marked it done (or last rolled a yearly item forward).
+  completedBy    String?
+  /// When a yearly item was last marked done (the roll-forward keeps the row open).
+  lastCompletedAt DateTime?
+  lastReminderAt DateTime?
+  reminderCount  Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([completedAt, dueDate])
+}

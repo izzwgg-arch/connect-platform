@@ -242,6 +242,7 @@ import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnec
 import { registerSupportReportRoutes } from "./supportReport";
 import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
+import { registerComplianceRoutes, startComplianceReminders } from "./complianceCalendar";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
@@ -2927,6 +2928,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // every handler ALSO calls requireSuperAdmin. Same pattern as pbx-console:
   // reuse an owner-held key, no new grantable key until a feature honours it.
   { prefix: "/admin/support", permission: "can_manage_global_settings" },
+  { prefix: "/admin/compliance", permission: "can_manage_global_settings" },
   { prefix: "/admin/numbers", permission: "can_view_admin_billing" },
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
@@ -42115,6 +42117,11 @@ const port = Number(process.env.PORT || 3001);
     },
   });
   registerFeatureSuggestionRoutes(app);
+  // The regulatory compliance calendar (Izzy, 2026-08-23): SUPER_ADMIN CRUD +
+  // the reminder sweep that texts/emails him at T-30 days then weekly.
+  registerComplianceRoutes({ app, db, requireSuper: (req, reply) => requireSuperAdmin(req, reply) });
+  const complianceTimer = startComplianceReminders(app.log);
+  if (complianceTimer) registerShutdownTimer(complianceTimer);
   await registerCrmRoutes(app, { smsQueue });
   await registerDeliveryRoutes(app);
   await app.listen({ host: "0.0.0.0", port });

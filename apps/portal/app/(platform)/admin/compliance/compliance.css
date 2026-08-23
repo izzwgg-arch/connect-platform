@@ -1,0 +1,50 @@
+/* Compliance calendar — Connect theme tokens only (bare :root is DARK; light
+   is the opt-in override), so no per-theme rules are needed here at all. */
+
+.cmp-page { max-width: 980px; margin: 0 auto; padding: 18px 18px 60px; }
+.cmp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.cmp-title { font-size: 22px; font-weight: 700; color: var(--text); margin: 0; }
+.cmp-sub { color: var(--text-dim); font-size: 13px; margin: 2px 0 16px; }
+
+.cmp-section { margin: 18px 0 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+
+.cmp-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; display: flex; gap: 14px; align-items: flex-start; }
+.cmp-card.cmp-overdue { border-color: var(--danger); }
+.cmp-card.cmp-soon { border-color: var(--warning); }
+.cmp-main { flex: 1; min-width: 0; }
+.cmp-item-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 0 0 2px; }
+.cmp-item-details { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin: 4px 0 0; white-space: pre-wrap; }
+.cmp-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+
+.cmp-chip { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); color: var(--text-dim); }
+.cmp-chip.cmp-chip-overdue { background: var(--danger); border-color: var(--danger); color: #fff; }
+.cmp-chip.cmp-chip-soon { background: var(--warning); border-color: var(--warning); color: #1a1305; }
+.cmp-chip.cmp-chip-ok { border-color: var(--border); }
+.cmp-chip.cmp-chip-yearly { border-style: dashed; }
+
+.cmp-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+.cmp-btn { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cmp-btn:hover { border-color: var(--accent); }
+.cmp-btn.cmp-btn-primary { background: var(--accent); border-color: var(--accent); color: #04121d; }
+.cmp-btn.cmp-btn-quiet { background: transparent; color: var(--text-dim); font-weight: 500; }
+.cmp-btn:disabled { opacity: 0.5; cursor: default; }
+
+.cmp-empty { color: var(--text-dim); font-size: 13px; padding: 10px 2px; }
+.cmp-error { background: var(--panel); border: 1px solid var(--danger); color: var(--text); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; }
+.cmp-note { color: var(--text-dim); font-size: 12px; }
+
+.cmp-add { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-top: 22px; }
+.cmp-add h3 { margin: 0 0 10px; font-size: 14px; color: var(--text); }
+.cmp-add-grid { display: grid; grid-template-columns: 1fr 170px; gap: 10px; }
+.cmp-add-grid .cmp-full { grid-column: 1 / -1; }
+.cmp-input, .cmp-textarea { width: 100%; box-sizing: border-box; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; padding: 8px 10px; font-family: inherit; }
+.cmp-input:focus, .cmp-textarea:focus { outline: none; border-color: var(--accent); }
+.cmp-textarea { min-height: 60px; resize: vertical; }
+.cmp-add-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 10px; flex-wrap: wrap; }
+.cmp-checkline { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); cursor: pointer; }
+
+@media (max-width: 640px) {
+  .cmp-card { flex-direction: column; }
+  .cmp-actions { flex-direction: row; align-items: center; }
+  .cmp-add-grid { grid-template-columns: 1fr; }
+}

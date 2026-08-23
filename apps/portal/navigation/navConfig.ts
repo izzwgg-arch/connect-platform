@@ -27,6 +27,7 @@ import {
   PhoneCall,
   ClipboardList,
   HandCoins,
+  CalendarCheck,
   LayoutDashboard,
   LayoutGrid,
   Lock,
@@ -163,6 +164,11 @@ export const navItems: NavItem[] = [
   // it shows every company's escalations, so it shares an owner-held key and
   // there is deliberately no grantable one yet.
   { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
+  // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
+  // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
+  // on can_manage_global_settings so the nav key and the api's
+  // /admin/compliance PORTAL_API_PERMISSION_RULES entry say the same thing.
+  { id: "admin.compliance", href: "/admin/compliance", label: "Compliance", icon: "CO", lucide: CalendarCheck, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
   { id: "admin.console", href: "/admin", label: "Admin Console", icon: "AD", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_console" },
   { id: "admin.users", href: "/admin/users", label: "Users", icon: "US", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_users" },
   { id: "admin.tenants", href: "/admin/tenants", label: "Tenants", icon: "TN", lucide: Building, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_tenants" },
@@ -295,5 +301,8 @@ export function isNavItemVisibleForUser(
   // Izzy, 2026-08-20: "for now do just super admin" — the support-agent role
   // comes later, with per-feature keys that actually gate.
   if (item.id === "admin.support" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The compliance calendar is the platform's own regulatory ledger — owner
+  // only, same pattern as the console items above.
+  if (item.id === "admin.compliance" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }
