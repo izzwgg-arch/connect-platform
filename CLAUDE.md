@@ -2697,7 +2697,13 @@ self-signed SUPER_ADMIN token: `/direct/me` → `200 identity:null`,
 `/direct/threads` → `200` empty, a junk number → the plain-English refusal, an
 unknown number → `not_on_loopcom`. The SUPER_ADMIN nav gate is grepped in the
 shipped bundle, so customers cannot see it. No PBX write, no env change, no
-tenant row touched.)
+tenant row touched.
+✅ **RE-VERIFIED LIVE 2026-08-23**, two days and many other deploys later: the
+routes are still in `app-api-1` (2 refs + 5 files), the 6 tables are still there
+with **0 identities and 0 threads — still inert, nobody has opted in**, the
+SUPER_ADMIN nav gate is still in the shipped bundle
+(`workspace.direct"!==e.id||"SUPER_ADMIN"===t`), and `/api/health` + `/direct`
+answer **200 on both hostnames**.)
 ⛔⛔ **AND IT COST A REAL 40-MINUTE EXPOSURE WINDOW, which is the lesson: the
 first portal build was pinned to `d0e98b96` — the commit BEFORE the nav gate —
 because another session's pipeline deploys the BRANCH TIP whenever it likes. A

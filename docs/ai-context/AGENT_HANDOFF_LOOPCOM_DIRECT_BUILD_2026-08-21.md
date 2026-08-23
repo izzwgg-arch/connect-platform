@@ -25,6 +25,11 @@ designed**; health 200 on both hostnames.
 `{"result":"not_on_loopcom"}`. The SUPER_ADMIN nav gate is in the shipped bundle
 (`workspace.direct"!==e.id||"SUPER_ADMIN"===i`), so **customers cannot see it**.
 
+✅ **RE-VERIFIED LIVE 2026-08-23** (two days and several unrelated deploys later,
+api `ed81e9f4` / portal `4972f0c8`): routes still present in `app-api-1`, 6 tables,
+**0 identities and 0 threads — still inert**, the SUPER_ADMIN nav gate still in the
+shipped bundle, `/api/health` and `/direct` both **200 on both hostnames**.
+
 ⛔ **STILL NOT PROVEN: nobody has opened the screen in a browser, no message has
 been sent between two people, and no verification code has been texted.**
 ⚠️ **There was a real exposure window**: the portal build that went out first was
