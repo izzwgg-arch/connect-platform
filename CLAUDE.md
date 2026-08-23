@@ -5794,10 +5794,19 @@ Full detail: `docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` 
   never stamped by design; zero non-Gesheft rows were unstamped.
   ⛔ **The lesson: a guard that cries wolf on every busy deploy day is a guard
   people learn to click past, and the next one — the real one — goes with it.**
-  ⏳ **NOT PROVEN: the boot kick has never run on a real container.** Acceptance
-  is one api deploy — a `watchdog_heartbeat` row ~90 s after the container
-  starts instead of 15 min; then the negative, that the next busy deploy day
-  raises no "watchdog has stopped" text.
+  ✅✅ **THE BOOT KICK IS PROVEN ON A REAL CONTAINER (2026-08-23) — this closes
+  the acceptance test that stood open since 08-21.** `app-api-1` started
+  **21:23:55Z** and wrote a `watchdog_heartbeat` at **21:25:49Z — 114 s later**
+  (the 90 s kick plus its own run time), then resumed the ordinary 15-minute
+  metronome (21:39 / 21:54 / 22:09 / 22:24). Before the fix that first row would
+  not have landed for 15 minutes, and on a churny deploy day never at all.
+  ⛔ **The 21:24:14Z row one minute earlier is the OUTGOING container during the
+  blue/green overlap — do not read it as the kick.** Recipe to re-verify after any
+  api deploy: `docker inspect -f '{{.State.StartedAt}}' app-api-1` against
+  `select ts from "AgentAuditLog" where event='voicemail_email.watchdog_heartbeat'
+  order by ts asc` in that window. ⏳ The other half of the acceptance test — that
+  a busy deploy day now raises no "watchdog has stopped" text — still needs a busy
+  day to pass; there has been no such text since 08-21.
   ⛔⛔ **AND IT EXPOSED A ONE-SHOT ALARM — NOT FIXED, IZZY’S CALL (handoff §8.6).**
   `raiseGuardrailEscalation` de-dupes on `status in (QUEUED, SENT)` **with no
   time bound**, and `AgentEscalationStatus` has **no RESOLVED value** — a
@@ -5812,11 +5821,54 @@ Full detail: `docs/ai-context/AGENT_HANDOFF_VOICEMAIL_EMAIL_DEAD_2026-08-18.md` 
   once, not every tick") rather than changing policy. ⛔ Deliberately NOT changed
   here: it decides how often Izzy’s phone rings.
   ⏳ Still open from the outage: onboarding writes the email onto the PBX
-  extension (new sign-ups get duplicates); and **3 mailboxes still email nobody**
-  — A plus center 108 (6 voicemails in 7 days), Trimpro 102 (3), Trimpro 104 (1),
-  which is the steady `gaps: 10` in every watchdog heartbeat. `no_recipient` is
-  deliberately never escalated (a standing condition); **the fix is one address
-  each in Settings and it is Izzy’s call, not an engineering one.**
+  extension (new sign-ups get duplicates); and **mailboxes that email nobody**
+  — `no_recipient` is deliberately never escalated (a standing condition);
+  **the fix is one address each in Settings and it is Izzy’s call, not an
+  engineering one.** ✅ **Trimpro 102 was FIXED on 2026-08-20 16:17** —
+  `ap@trimprony.com` added to `VoicemailEmailRecipient`, 1 h 34 m after its last
+  miss; ⛔ **it is configured but UNEXERCISED — no voicemail has landed on that
+  mailbox since**, so it is proven as a row, not as a delivered email.
+  ⏳ **Still blind as of 2026-08-23: A plus center 108 "Home" (9 missed
+  voicemails in 7 days and GROWING — it was 6 on 08-21) and Trimpro 104
+  "Shamshon Wertzberger" (1, on 08-17).** The heartbeat's `gaps` counter now
+  reads **13**, up from 10, and ⛔ **that number is a 7-day running total of
+  missed voicemails, NOT a count of blind mailboxes** — it climbs on its own
+  while an address stays unset, so a rising `gaps` is not a new fault.
+
+- ✅✅ **AUDITED 2026-08-23 (Izzy: "check if any voicemail emails failed to go out
+  from Loopcom in the past week") — NOTHING FAILED, and the send door has never
+  been the problem.** Read-only, no change made. **64 `VOICEMAIL_NOTIFICATION`
+  jobs over 7 days, ALL `SENT`, 0 FAILED, 0 with an `emailError`** — and **0
+  failures of ANY email type platform-wide** in the window (the only non-SENT
+  rows are the 275 `ADMIN_ALERT`s the deliberate mute SKIPs). 22 distinct
+  recipients across 12 companies.
+  ⛔⛔ **THE CHECK THAT MATTERS IS NOT `status='FAILED'` — IT IS WHETHER A JOB WAS
+  CREATED AT ALL.** The 08-18 outage had a perfect send-door record while nobody
+  on the platform received anything for 20 hours. **Judge it from the `Voicemail`
+  table** (`emailSkipReason` + unstamped `emailedAt`), never from `EmailJob`
+  alone. The 7-day outcome census: 301 emailed/none, 53 `too_short` (0–1 s
+  hang-ups), 45 `predates_feature`, 13 `no_recipient`, 3 `no_recording`.
+  ⛔ **And check for a SILENT GAP, not just a failure count** — emails landed on
+  **every one of the 7 days** (13/17/13/9/8/2/2). The two thin days are Fri–Sat
+  (2026-08-22 had **2** non-Gesheft voicemails all day) — **a Shabbos dip on this
+  customer base is the expected shape, not an outage.**
+  ✅ **237 unstamped voicemails, and ALL 237 are Gesheft** — the excluded tenant,
+  never stamped by design; **zero non-Gesheft rows unstamped**, exactly as on
+  08-21. ✅ **Gesheft's PBX side is healthy**: 35 voicemail emails delivered today
+  (33 `Orders@gesheftkosher.com` + 2 `Orders@pileupny.com`), **0 bounced, 0
+  deferred, mail queue empty**. ⛔ The PBX keeps **one day** of `mail.log`, so the
+  other six days of its delivery history are structurally unavailable — say so
+  rather than implying they were checked.
+  ⛔ **10 of Gesheft's 17 mailboxes carry NO address** (103, 104, 105, 106, 108,
+  112, 116, 117, 118, 897) — but that cost them almost nothing this week:
+  **exactly 1 of their 273 voicemails landed on a blind mailbox** (ext 108,
+  08-20). 220 went to ext 101 and 41 to ext 102, both addressed. **Size a blind
+  mailbox by the traffic it actually takes, not by the count of blind rows.**
+  ✅ Recipient coverage flat at **55** all week (a brief 55→53 dip across
+  08-19/08-20 that recovered on its own — under the alarm's ≥3-AND-≥20 %
+  threshold, correctly silent). Sweep heartbeat current to the second (7,643
+  runs), watchdog 494 runs. **One escalation fired all week and it was the 08-21
+  false alarm above** — no voicemail alarm has fired since.
 
 ## ⛔⛔ AGENT HANDOFF — voicemail email was DEAD for ~20 hours after the PBX cutover, FIXED and proven 2026-08-18 — READ FIRST for ANY "no voicemail emails today", before touching the voicemail-email sweep/watchdog, before "restoring" an address to the PBX, and before treating `Extension.pbxUserEmail` as a recipient
 
