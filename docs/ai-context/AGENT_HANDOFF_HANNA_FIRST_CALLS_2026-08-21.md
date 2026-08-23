@@ -338,6 +338,47 @@ the new APK should upload a quality report with a truthful platform,
 networkType, and (if moving) networkChangedMidCall — and its CDR row should
 carry `rtpStats`. One picture-by-text should arrive as a real MMS.
 
+## 4d. Build 53: the icon-refinement designs (2026-08-23, Izzy's icon decision — the thing the build was held for)
+
+Izzy: *"There is a file locally in Connect called 'icons reaffinement
+options'… Make it exactly like it."* The file is **`Icon refinement
+options.zip`** (was at the repo root; archived to
+`docs/brand/loopcom/icon-refinement-2026-08/`). Commit `a7eaf8e7`.
+
+**The decisions, as he stated them:**
+- **Two iOS icons: light blue (blue-2b) = DEFAULT, navy (navy-2a) = a user
+  setting.** Implemented with `expo-alternate-app-icons` (new dep,
+  lockfile re-locked): `ios.icon` → `assets/icons/ios-icon-blue.png`, plugin
+  registers alternate **'Navy'** (⛔ renaming that key orphans every device
+  already on it). Settings → Preferences → **"App icon"** toggles them —
+  ⛔ **iOS-gated**: `android/` is bare (never prebuilt), so the plugin's
+  activity-aliases never land there; Android icon switching is a separate
+  hand-job if ever wanted.
+- **Login: light by default; dark only when the phone is dark** (or the
+  in-app theme choice is dark) — `systemDark || isDark` in the rebuilt
+  `auth/LoginScreen.tsx`. The screen is the mockup: breathing wordmark +
+  tagline, uppercase-labeled fields with the #22a8ff focus ring, Forgot
+  password (opens the portal sign-in page — the only reset path that
+  exists), gradient CTA with the crossing sheen, or-divider + Scan QR code,
+  the foot line, drifting aurora. Sign-in LOGIC untouched. Android gets the
+  mockup's pill buttons.
+- **Splash: the three dots only when it's ACTUALLY thinking.** The rebuilt
+  `SplashScreen.tsx` follows the mockup (glow-pad pulse, mark springs in
+  with overshoot, wordmark rises, ~2s, brand navy in BOTH themes); the dots
+  render only if auth is still unresolved 1.2s in, and vanish the moment it
+  resolves. **Splash only when signed in** — already the rule since
+  2026-08-21 (`showSplash = … && !!token`), re-stated by Izzy today,
+  unchanged. iOS's native pre-JS splash is now a PLAIN navy field
+  (`ios.splash.backgroundColor`) so the JS spring-in owns the brand moment.
+- `ios.buildNumber` **53**; EAS build id `8e59d172-0741-4111-99db-7f6e96117b14`
+  (ios-prod, from the `/tmp/connect-ios-build` clone reset to `a7eaf8e7`).
+
+⛔ **The screens are shared RN code** — Android picks up the new login/splash
+at its NEXT APK (the one published tonight predates this commit and does NOT
+have them). ⏳ Acceptance once build 53 is on a phone: the blue icon on the
+home screen, Settings offering Navy, the springing splash with NO dots on a
+fast launch, and the light login on a light phone / dark on a dark phone.
+
 ## 5. Honest gaps
 
 - ⏳ Nobody has run the Wi-Fi control call — that is the acceptance test for §3.

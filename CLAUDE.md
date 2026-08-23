@@ -1551,11 +1551,22 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   directions incl. the uplink loss no client can measure. ⛔ The CLI truncates
   channel names; matching is prefix-based and ambiguity matches NOTHING.
   ⛔ The tuner is NOT built — it needs weeks of this data first.
-- ⏳ **Open:** iOS/TestFlight build 53 (HELD for Izzy's icon decision — ships
-  the same client fixes to iPhones; Hanna stays exposed to the client-side
-  race until then, though the server fix already protects her); no call has
-  yet exercised the deployed answer fix or produced an `rtpStats` row; no
-  picture sent through the fixed MMS path yet.
+- ✅ **BUILD 53 IS IN FLIGHT (2026-08-23) with Izzy's icon decision** — the
+  "Icon refinement options.zip" designs (`a7eaf8e7`, zip archived under
+  `docs/brand/loopcom/icon-refinement-2026-08/`): iOS icon **light blue by
+  default, Navy as a Settings choice** (`expo-alternate-app-icons`, alternate
+  key 'Navy' — ⛔ renaming it orphans devices; ⛔ iOS-gated, bare android/
+  never gets the aliases), the login rebuilt to the mockup (**light by
+  default, dark only when the phone is dark** — `systemDark || isDark`),
+  the splash rebuilt to the mockup (mark springs in, ⛔ **the three dots
+  render ONLY while auth is genuinely unresolved past 1.2s**, signed-in-only
+  unchanged), iOS native pre-JS splash now a plain navy field. EAS build
+  `8e59d172-0741-4111-99db-7f6e96117b14` (ios-prod). Build 53 also carries
+  the cancel-guard/claim/telemetry client fixes.
+- ⏳ **Open:** build 53 → TestFlight submit + group attach once EAS finishes;
+  no call has yet exercised the deployed answer fix or produced an
+  `rtpStats` row; no picture sent through the fixed MMS path yet; Android
+  gets the new login/splash at its NEXT APK (tonight's predates them).
 
 ## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
 
