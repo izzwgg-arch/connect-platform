@@ -4133,27 +4133,66 @@ and make sure the email stays in one thread … one thread per phone number."*
   (`already_claimed`, still exactly 1 outbound row) — which is itself the best
   proof that guard works. ⛔ And do not wait on `event like 'sms.reply%'`: it
   matches the pre-existing `sms.reply_enabled` row and returns instantly.
-- ⛔⛔ **RE-MEASURED 2026-08-23: NO REAL PERSON HAS EVER SUCCESSFULLY REPLIED BY
-  EMAIL, AND A CUSTOMER'S REPLY WAS SILENTLY DROPPED AFTER THE FIX.**
-  `sms.reply_sent` holds **exactly 2 rows for all time**, both
-  `receivedFrom: sms@loopcom.net` — the two 08-21 self-tests above and nothing
-  else. ⛔ **The forward half is separately healthy and busy** (70 `sms.emailed`,
-  newest 2026-08-23 22:35; the only `emailForwardError` in 5 days is
-  `no_opted_in_recipients` × 72, i.e. Gesheft by design) — **so never report "the
-  bridge works" as one fact; forwarding works and replying is unproven.**
-  ⛔⛔ **The live gap: `sales@iniimini.com`, 2026-08-21 14:21,
-  `ambiguous_reply_address` with `count: 2`** — their mail carried TWO different
-  signed reply addresses (what a quoted/forwarded chain across two text threads
-  produces), so the never-guess rule refused it. Right as a security decision,
-  **wrong as an outcome: that branch fires BEFORE sender resolution, so the
-  known-user notice never runs and they were told nothing** while believing they
-  had just texted a customer. Fix is to notify on this branch too, or resolve the
-  NEWEST signed address instead of refusing — **not built.**
-  ⛔ The earlier `cgreenfeld@trustbookkeepingny.com` refusal (2026-08-20 15:33,
-  `unknown_sender`) **IS cured** by the 08-21 thread-routing change — that same
-  reply would work today; do not re-open it. Gesheft is still excluded from the
-  forward half by design. Query:
+- ✅✅ **FIXED 2026-08-23 (`6d9b9f33`, agent REBUILT + container-verified) — AND THE
+  BUG WAS THE 08-21 AMBIGUITY GUARD ITSELF, NOT the customers' mail.**
+  ⛔⛔ **THE MECHANISM: the guard counted RAW ADDRESS STRINGS before verifying any
+  of them, and Gmail carries the reply address TWICE** — once as sent (`To:`) and
+  once with the whole local part **LOWER-CASED** (`Delivered-To:`). The signature
+  is base64url, so the two strings differ, so **ONE conversation read as TWO and
+  every real reply was refused** from 2026-08-21 until this fix.
+  ⛔ **It hid for three days because the only replies that ever worked were sent
+  FROM the bridge mailbox to itself** — Gmail does not stamp a self-send that way,
+  so the two 08-21 "PROOF A/PROOF B" round trips passed while the path every
+  customer uses was dead. **A test that dodges the delivery path it is meant to
+  prove passes for the wrong reason.**
+  ⛔⛔ **AND THE FIRST DIAGNOSIS IN THIS FILE WAS WRONG, WRITTEN HOURS EARLIER THE
+  SAME DAY:** it read the audit payload's `count: 2` as "their mail named two
+  different conversations — a quoted or forwarded chain". It named **ONE, twice**.
+  **A count in an audit payload is a fact about the counting code, not about the
+  world** — the check that settled it was reading the real message headers out of
+  the mailbox (headers only, never the body).
+- ✅ **THE FIX: `resolveSmsReplyTarget` VERIFIES BEFORE IT COUNTS**, and ambiguity
+  is stated in terms of proven **CONVERSATIONS**, never strings. Three deliberate
+  consequences: unverified junk can no longer **veto** a genuine reply (anyone
+  could previously have killed a customer's replies forever by CC'ing a made-up
+  `sms+…@loopcom.net`); **`References`/`In-Reply-To` breaks a tie between two
+  ALREADY-PROVEN conversations** instead of refusing, and can never route on its
+  own; and `verifySmsReplySignature` also accepts the all-lower-case form of that
+  exact signature, so a reply whose only surviving copy is the MTA-stamped one is
+  not dropped as forged. ⛔ `findSmsReplyAddress` / `findAllSmsReplyAddresses` are
+  **DELETED, not left unused** — first-match-wins and count-then-verify are the two
+  bugs, and a dead helper with a security-shaped name invites them back.
+- ✅✅ **PROVEN FOUR WAYS, ENDING IN A REAL TEXT ON THE WIRE.** 54 unit/route tests
+  (**12 fail replayed against `HEAD`**, incl. the customer-visible one); a stress
+  suite sweeping **8,192 exhaustive resolutions + 300 seeded chaos emails** through
+  the real job against 7 invariants (**6/6 fail against a mutant** that puts either
+  half of the bug back); **the two REAL refused customer emails replayed through
+  the DEPLOYED code** against the real secret and database with every write
+  intercepted — both now resolve to the right thread and would send, nothing
+  written; and finally a Gmail-shaped reply put into the LIVE mailbox by **IMAP
+  APPEND**, picked up by the real 45 s timer, **sent as a real text and received
+  back — OUT 23:13:07.189 → IN 23:13:20.629, VoIP.ms id 110280535**, between two of
+  Connect's own numbers (+18455577768 ↔ +18457231213), quoted block and "Sent from
+  my iPhone" correctly stripped. Agent typecheck **14 = the exact baseline**, none
+  in an edited file; agent suite 757/759 (the 2 documented transcription failures).
+  ⛔ **Read-through / stub-the-writes is how you prove a mail or sweep fix on live
+  data; IMAP APPEND is how you exercise the real job with a mail shape you cannot
+  otherwise produce.**
+- ⚠️ **WHAT THE OUTAGE COST, AND IT NEEDS IZZY: the message stuck in iniimini's
+  refused reply was "Please stop these emails"** — a customer asking to be switched
+  off, unheard for two days. ⛔ **And it was aimed at US, not at the person on the
+  other end of the text** — so had it gone through, it would have been TEXTED to
+  their customer. **Replying to a text-email is the only control a recipient has,
+  and there is no "turn this off" path in it**; the toggle lives in the app. Worth
+  a line in the forward email, and worth switching that user off if they meant it.
+  ⛔ The forward half was never affected and stayed busy throughout (70+
+  `sms.emailed`; the only `emailForwardError` in 5 days is
+  `no_opted_in_recipients` × 72 = Gesheft, by design).
+- ⏳ **STILL NOT PROVEN: no CUSTOMER has replied since the fix.** It is proven by
+  the four routes above — including a real SMS — but not by a person in their own
+  mail client. **Acceptance: one reply to any text-email, then**
   `select event, count(*) from "AgentAuditLog" where event like 'sms.reply%' group by 1;`
+  — `sms.reply_sent` should climb past 3.
 - ⛔ **"I didn't get any SMS emails" is usually NOT a bridge fault — check
   whether the person is a PARTICIPANT on a thread that received a text.** Izzy
   reported this on 2026-08-20 and the bridge was healthy: his SUPER_ADMIN and
