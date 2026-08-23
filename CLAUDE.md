@@ -301,10 +301,27 @@ to do everything in his power to get every single phone connected."*
   with the shipped stylesheet:
   <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
   shared **549** · desktop **77** · api desk-phones **72** · portal **316/318**.
-- ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up.** The
-  desktop half is **not built or published** — that renames and re-signs the app for every
-  customer, so it is Izzy's call. Until it ships, the wizard can be opened but the office
-  machine cannot scan, so **the acceptance test is one real phone on one real desk**.
+- ✅✅ **DESKTOP 0.1.8 IS BUILT AND PUBLISHED (2026-08-22, Izzy: "publish it as an
+  update")** — the wizard's hands (phoneSetup IPC + capability fence, verified inside
+  the packed asar) and the chosen **blue-2b refinement icon** (generator now renders
+  the pinned 1024 tile verbatim; 256/48 frames diff 0.00; ≤32px get one unsharp pass).
+  `verify:icon` read the BUILT exe: **7 RT_ICONs byte-identical to icon.ico, nothing
+  else embedded**. `latest.yml` answers 0.1.8 on both hostnames; installs ≥0.1.4
+  auto-update within ~3h — ⛔ **each update renames Connect → Loopcom with the new
+  icon**; a customer whose "app vanished" should look for the blue tile. ⛔ The
+  toast keeps NO image — the kit's toast PNGs are pinned in the brand folder and
+  deliberately unwired. ⛔ The winCodeSign cache dir had vanished; recreated per the
+  rebrand handoff §2.
+- ✅ **THE SIDEBAR DOOR: `workspace.desk_phones` → /settings/desk-phones, permission
+  `can_setup_desk_phones`** — the SAME key the page and api gate on. In no default
+  bucket → only SUPER_ADMIN sees it today; an ACTION key → custom roles offer it; the
+  nav entry makes it appear in /admin/permissions. ⛔ NO hardcoded visibility rule (a
+  guard pins the absence). ⛔ Placed ABOVE Conference — the Conference guard correctly
+  refused the slot between Conference and Install, which is Izzy's exact recorded
+  2026-08-20 placement. Two recorded instructions collided; the exact pin won.
+- ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up** — but
+  the desktop blocker is gone, so **the acceptance test is now runnable: one real
+  device on one real desk** in the updated app.
 - ⛔ **Backslash escapes do NOT survive this shell's heredocs** — `
 `, `
 ` and `‮`

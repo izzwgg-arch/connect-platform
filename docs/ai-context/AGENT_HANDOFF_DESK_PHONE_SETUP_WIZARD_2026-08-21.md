@@ -758,3 +758,72 @@ any touched file.
   `templates.provision` generation path is still the designed-unexercised one.
 - Everything from Parts 3–4's ledger still stands: nobody has opened the screen, the
   desktop app is unpublished, the two PBX template faults need Izzy's mandate.
+
+---
+
+# PART 6 — THE APP SHIPPED, AND THE SIDEBAR DOOR (2026-08-22)
+
+## 1. Desktop 0.1.8 is BUILT AND PUBLISHED — the wizard's hands are on the fleet's next update
+
+Izzy: "rebuild the Windows app, build it in … publish it as an update", plus the icon
+refinement kit ("use 2b").
+
+- **The icon is the chosen blue-2b refinement tile, verbatim** — the 1024 master pinned
+  into `docs/brand/loopcom/icon-refinement-2026-08/new-apps-icons/`, rendered per frame
+  by `scripts/desktop-loopcom-windows-assets.py` (now sourcing the tile; the <=32px
+  frames get one gentle unsharp pass so the white-on-blue mark survives the taskbar
+  sizes). Proven: 256/48 frames diff **0.00** against a straight master resize.
+  ⛔ CORRECTION recorded in the generator: an earlier probe misread the ALPHA channel
+  as "white corners" — the corners are brand blue and the tile is square edge to edge.
+- **The never-Electron safeguards all ran against the ARTIFACT**: `verify:icon` read the
+  built `Loopcom.exe` — **7 RT_ICONs byte-identical to the new icon.ico, nothing else
+  embedded**. `signAndEditExecutable` stays on. The toast stays two text nodes with NO
+  image — the kit's `loopcom-toast-*.png` are pinned in the brand folder and
+  **deliberately NOT wired** (an Electron toast image renders full-width inline, the
+  exact "big-ass icon" that was removed; the small header icon comes from the exe).
+- **The phone-setup hands ship for the first time**, verified inside the packed asar:
+  main registers `registerPhoneSetup`, preload exposes `phoneSetup:run` +
+  `rememberCredential`, the five-operation capability fence is in `dist/phoneSetup/`.
+- **PUBLISHED**: `Connect-Setup-0.1.8.exe` + blockmap + `latest.yml` on
+  `/opt/connectcomms/desktop/`, `Connect-Setup-latest.exe` alias updated, `latest.yml`
+  answering **0.1.8 on both hostnames**. Installs >=0.1.4 auto-update within ~3h.
+  ⛔⛔ **Each update renames the customer's app Connect → Loopcom with the new icon**
+  (the rebrand rides this build) — if a customer says their app vanished, tell them to
+  look for the blue tile. Watch the first upgrade for a leftover `Connect.exe`/`.lnk`.
+  ⛔ The winCodeSign workaround had vanished from the cache — recreated as
+  `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0` (copy of the
+  newest numeric temp dir), per the rebrand handoff §2.
+
+## 2. The workspace sidebar door — one key, three surfaces
+
+`workspace.desk_phones` → `/settings/desk-phones`, permission
+**`can_setup_desk_phones`** — the SAME key the page's PermissionGate and every api
+route already gate on ([[a-gate-must-agree-with-the-gate-behind-it]]).
+
+The whole visibility model falls out of existing machinery, **no new key, no snapshot
+migration**: the key is in NO default bucket, so **only SUPER_ADMIN sees the item
+today** (the force-add bucket); it is an ACTION key, so the **custom-roles editor
+already offers it**; and the nav entry is what makes it appear in **/admin/permissions**
+for built-in roles. ⛔ Deliberately NO hardcoded rule in `isNavItemVisibleForUser` — a
+force rule would make the permission toggles a lie, and a guard test pins its absence.
+
+⛔ **Placement lesson: the Conference guard did its job.** First insertion put Desk
+Phones between Conference and Install — and `conferencePage.test.ts` failed, because
+"Conference immediately before Install" is Izzy's exact recorded 2026-08-20 placement.
+Desk Phones sits ABOVE Conference instead. **Two recorded instructions collided and the
+one with the exact pin won.**
+
+Deployed: portal `35b13bce`, nav item grepped in the shipped bundle, health 200 both
+hostnames, installer serving 206 on both, 0 restarts. Portal 319/321.
+
+## 3. ⏳ Ledger updates
+
+- The Windows app is **published now** — the "desktop half not shipped" caveat from
+  Parts 2–5 is CLOSED. The wizard can genuinely scan once a customer's machine takes
+  the 0.1.8 update.
+- The acceptance test is unchanged and now actually runnable: **one real device on one
+  real desk**, driven from Settings → Desk Phones (or the new sidebar item) in the
+  updated app.
+- The kit's mobile icons (android/ios/notification `ic_stat_*`) are pinned in the brand
+  folder for the NEXT mobile build — mobile assets were another session's in-flight
+  work and were not touched.
