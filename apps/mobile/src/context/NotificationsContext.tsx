@@ -2773,30 +2773,24 @@ export function NotificationsProvider({
               .catch(() => false);
 
         let backendClaimed = false;
-        // ⛔ The warm fast-path (INVITE already on the socket) used to SKIP the
-        // backend claim entirely ("strictly an optimisation") — leaving the
-        // CallInvite PENDING, which is what let the answered_elsewhere sweep
-        // cancel the very call this device was on (Hanna 2026-08-21). Claim in
-        // the BACKGROUND: never gates the SIP answer (zero added latency),
-        // idempotent server-side, retried because the lossy links that hit this
-        // race are exactly the ones that drop a single POST. The server-side
-        // requeue is gated on "already bridged", so a late claim re-offers
-        // nothing (requeueLiveCallGate).
-        if (inviteReady && !earlyColdAcceptSent) {
-          backendClaimed = true;
-          consumedInviteActionRef.current.add(acceptKey);
-          void (async () => {
-            for (let attempt = 0; attempt < 3; attempt++) {
-              try {
-                await respondInvite(authToken, invite.id, "ACCEPT", deviceIdRef.current || undefined);
-                return;
-              } catch {
-                await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-              }
-            }
-            console.warn("[ANSWER_PIPELINE] background_claim_failed after 3 attempts inviteId=" + invite.id);
-          })();
-        }
+        // ⛔⛔ DO NOT set `backendClaimed` on the warm path. It is NOT just
+        // bookkeeping — it is the flag that selects which answer branch runs below,
+        // and the cold branch does NOT extend the answer deadline (the
+        // `if (!backendClaimed)` WARM ANSWER block does). Setting it here
+        // (83a5728c, 2026-08-22) routed the warm answer into the cold branch, so it
+        // ran on the 150 ms MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS deadline — a 500 ms,
+        // one-attempt budget instead of 4 s × 3 — and then hung the call up. It also
+        // skipped the answer_unacked rescue. Live outage 2026-08-23 (Create A Box
+        // ext 102): three answers dead at 641/745/694 ms, one of them a call Asterisk
+        // had already bridged. See
+        // docs/ai-context/AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md.
+        //
+        // ⛔ The premise that motivated it was also wrong: the warm path had NOT been
+        // skipping the backend claim. It has fired an async ACCEPT from inside the WARM
+        // ANSWER block since e75be0ec (2026-06-19) — just after the 200 OK rather than
+        // before it. Moving it earlier did not win the race it targeted either (proven
+        // 2026-08-23: the claim still lost by ~200 ms and the server cancelled anyway),
+        // so this block bought nothing and cost the answer budget.
         if (!inviteReady && earlyColdAcceptSent) {
           // Cold iOS: the backend ACCEPT (Mode-B trigger) already went out at
           // tap time above. Don't re-claim - just wait for the re-delivered
