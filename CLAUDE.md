@@ -2072,6 +2072,54 @@ DID (845) 537-8318.)
   **`e164`**. And `require("@connect/db")` fails inside `app-api-1` — use
   `new (require("@prisma/client").PrismaClient)()`.
 
+## ⛔⛔ AGENT HANDOFF — Hanna's dropped answer is FIXED FOR REAL: the stop-ring was asking who answered one event too early (2026-08-23) — READ FIRST before touching `answeredByAnyParty`, `bridgeIds`, or anything that decides "somebody answered, stop ringing"
+
+(`9621f6ac` on `feat/ivr-migration-takeover`. **telephony DEPLOYED and
+container-verified 2026-08-23 in a measured 0-active-calls window** — queue job
+`bb6e347d`, `multiPartyBridgeAt` present in both files inside `app-telephony-1`, the
+old `call.bridgeIds.length > 0` test greps **0**, 0 restarts, AMI + ARI reconnected,
+**0 error-level lines**, PBX back to 145 registered contacts and processing calls.
+No app build — this is server-side and reaches both platforms at once.)
+
+- ⛔⛔ **THE FIX SHIPPED 2026-08-22 (`61c34205`) NEVER WORKED, AND THE REASON IS
+  ORDERING, NOT A RACE.** It asks telephony WHICH endpoint answered so the api can
+  spare the answering app — but the field was **always blank by the time it was
+  read**. The decider was
+  `call.extensionAnsweredAt != null || call.bridgeIds.length > 0`, and **`bridgeIds`
+  is pushed at the TOP of `onBridgeEnter`, on EVERY BridgeEnter — including the first
+  channel entering a bridge ALONE** (music-on-hold, parking, an announcement), which
+  happens before anyone answers. So the one-shot `answered_elsewhere` stop-ring fired
+  one `callUpsert` too early, with `extensionAnsweredChannel` still null.
+- ⛔ **Live proof, pbxCallId `1787515311.13805` (Create A Box ext 102, 2026-08-23):**
+  `20:02:00.973` telephony → api `answered_elsewhere`, `answeredEndpoint` **null** →
+  `20:02:00.982` `extensionAnsweredChannel` recorded, **9 ms too late** → `20:02:01.344`
+  api queues `INVITE_CANCELED` **at the phone that had just answered**.
+- ✅ **THE FIX: `NormalizedCall.multiPartyBridgeAt`**, stamped ONLY inside the
+  `bridgeNumChannels >= 2` branch — the same handler that resolves
+  `extensionAnsweredChannel`, and **before its emit** — so any reader is guaranteed to
+  see the answering endpoint. `MobilePushNotifier` tests that instead of `bridgeIds`.
+- ⛔⛔ **DO NOT "FIX" THIS BY MAKING THE STOP-RING WAIT UNTIL IT KNOWS WHO ANSWERED.**
+  In the follow-me / virtual-extension case the customer answers on their **CARRIER
+  phone** and NO tenant extension leg ever answers — a wait would never resolve and the
+  app would ring on after pickup (the 2026-07-29 complaint). **Both arms stay.**
+- ⛔ **Traced before the edit, per the standing rule:** `bridgeIds` itself is unchanged
+  so every other reader is untouched; `answeredByAnyParty` is local to that one block
+  (2 references); desk answers still resolve to `T<t>_<ext>` with no device suffix and
+  still cancel-push the apps; and the stop-ring can now only fire **LATER, never
+  earlier**, so no ring can be cut off prematurely.
+- ✅ **5 tests** in `multiPartyBridgeStopRing.test.ts` (picked up by the existing
+  services glob). **Proven non-vacuous: 3 of 5 FAIL replayed against the pre-fix tree**
+  via `TELEPHONY_GUARD_ROOT`. Telephony typecheck **41 = the exact baseline**, none in
+  an edited file; suite 197/201 (the 4 failures are the documented pre-existing
+  smarthome `JWT_SECRET` local-shell artifact).
+- ⏳ **NOT PROVEN: no call has exercised it.** It is proven as deployed code and tests,
+  never as a call that answered and stayed up. **Acceptance: one app answer that
+  survives — no `INVITE_CANCELED` to the answering device, and the caller stays on.**
+- ⛔ **The client-side half of Hanna's protection is UNCHANGED and still shipping** —
+  `hasConfirmedSipSession()` + `answerInviteRef` guard both cancel branches; verified
+  present inside the published APK's bundle. The 2026-08-23 answer-budget revert did
+  NOT touch it.
+
 ## ⛔⛔ AGENT HANDOFF — answering a call on the CURRENT Android build tears the call down: the warm answer gets 500 ms instead of 4 s (2026-08-23) — READ FIRST for ANY "I answered and it didn't connect" on Android, before touching `MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS` or `backendClaimed`, and before telling anyone to install the latest APK
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md`**
@@ -2136,12 +2184,32 @@ to answer the call."*) Memory: [[warm-answer-deadline-regression]].
   on the warm branch before `answerIncomingInvite`. ⛔ **Do NOT "fix" it by reverting
   `backendClaimed = true`** — that flag is what stops the `answered_elsewhere` sweep
   cancelling a call this device is on. Keep the background claim; extend the deadline.
-- ⏳ **NOT APPLIED AND NOT BUILT — needs Izzy's word.** Per the standing rule anything
-  touching the answer path ships **alone** with a supervised two-way call test.
-  ⛔ Meanwhile **do not tell anyone else to install the current Android APK**; only 2
-  users have opened it and Sender is the only one who has taken a call on it (3 attempts,
-  3 failures, 0 successes). Platform-wide there are **no** inbound answer failures on any
-  other build since Aug 22.
+- ✅✅ **FIXED, BUILT, PUBLISHED AND VERIFIED IN THE SHIPPED BYTES (2026-08-23, Izzy's
+  go-ahead).** `8c78b2c0` reverts the `83a5728c` block and nothing else — 15 lines of
+  code out, none in. Fleet APK **`1.0.0+20260823-175041`** (63,419,846 b) is live on
+  the download page, smoke-tested 200, and `/api/mobile/android/latest` reports it.
+  ⛔⛔ **PROVEN BY OPENING BOTH BUNDLES, NOT BY THE PUBLISH LOG:** the live
+  `connectcomms-latest.apk` greps **0** for `background_claim_failed` (the block that
+  broke answering) and **1** for `ANSWER_UNACKED_REQUEUE` (the rescue that came back);
+  the previously published build greps **1** and **1**. That A/B is the check to repeat.
+- ⛔ **The blast radius was TRACED before the edit, per the standing rule** — the two
+  other readers of `backendClaimed` (`backendAccept:` telemetry and the
+  `rejectIncomingInvite` release) sit on the invite-never-arrived path, reachable only
+  when `inviteReady` is false, and the reverted block only fired when it was **true**.
+  Net effect: the warm path is byte-identical to the code that ran 2026-06-19 →
+  2026-08-22. Only delta vs the broken build is that the background claim is a single
+  POST again rather than 3 retries — and that retry demonstrably never won its race.
+- ✅ **6 tests, registered as `test:warm-answer`** — the first in this repo anchored on
+  `MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS`. **Proven non-vacuous: the flag guard FAILS
+  replayed against the broken tree** via `MOBILE_GUARD_PIPELINE`. Mobile typecheck 0.
+- ⏳ **iOS build 57 is IN PROGRESS** (EAS `8a0b65e8-2e30-4b6f-8aa3-ee4eadf62373`,
+  `2ce97a7a`). ⛔ On iOS the bug only ever bit when the app was **already open on
+  screen** — the cold/lock-screen path sets `earlyColdAcceptSent`, which gated the
+  broken block out. Builds 53–56 all carry it for the app-open case.
+- ⏳⏳ **STILL NOT PROVEN AND THIS IS THE ONLY THING THAT COUNTS: nobody has answered a
+  call on the fixed build.** It is proven as shipped bytes and tests, never as a
+  conversation. **Acceptance: Sender installs the new APK, Izzy calls, he taps Answer,
+  they talk.** ⛔ Nothing pushes the APK — he must install it himself.
 
 ## ⛔ AGENT HANDOFF — the mobile keypad HID `*`, `#` and `+`, so they read as dead keys (2026-08-23) — READ FIRST for ANY "I can't dial # or *" report, before touching `formatDialDisplay`, before adding ANY formatter between typed input and a dialpad screen, and before chasing DTMF transport on a mobile complaint
 
