@@ -298,6 +298,22 @@ export function isSipRegistered(): boolean {
   }
 }
 
+/**
+ * True when the shared client is on a CONFIRMED call (ACK'd dialog).
+ * ⛔ Ringing sessions do NOT count. Module-scope on purpose — push/cancel
+ * handlers must never read liveness out of a React render closure
+ * (the 2026-08-02 rule). Used to stop INVITE_CANCELED pushes from tearing
+ * down the very call this device answered (Hanna 2026-08-21).
+ */
+export function hasConfirmedSipSession(): boolean {
+  if (!_client) return false;
+  try {
+    return _client.hasConfirmedSession();
+  } catch {
+    return false;
+  }
+}
+
 /** True if the shared client currently owns at least one live session. */
 export function hasActiveSipSession(): boolean {
   if (!_client) return false;

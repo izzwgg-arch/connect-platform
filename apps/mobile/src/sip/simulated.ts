@@ -40,6 +40,10 @@ export class SimulatedSipClient implements SipClient {
     return this.sessions.some((s) => s.state !== "ended");
   }
 
+  hasConfirmedSession(): boolean {
+    return false;
+  }
+
   async register() {
     this.connected = true;
     this.events.onRegistrationState?.("registering");

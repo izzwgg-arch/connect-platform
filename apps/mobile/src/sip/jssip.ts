@@ -447,6 +447,15 @@ export class JsSipClient implements SipClient {
    */
   private static readonly INVITE_ANSWER_WINDOW_MS = 20_000;
   private callStartedAt: number | null = null;
+  /**
+   * WS-level drops observed WHILE a confirmed call was up — the "driving on
+   * the highway" signal (Izzy 2026-08-23: the system must know when a call
+   * was made while moving/switching networks). Reset when a call starts;
+   * reported as midCallNetworkEvents / networkChangedMidCall on the quality
+   * report. WS drops are the dependency-free proxy for tower handoffs —
+   * Hanna's highway calls flapped the socket 3× in 12 minutes.
+   */
+  private midCallNetworkEvents = 0;
   /** Last outbound dial target (normalized) for flight-recorder correlation. */
   private lastOutboundDialTarget: string | null = null;
   private callDirection: "outbound" | "inbound" = "outbound";
@@ -1131,6 +1140,9 @@ export class JsSipClient implements SipClient {
       // (async WebSocket close fires after ua.stop()) — the caller has
       // already moved on.
       if (!current) return;
+      // Mid-call network-change telemetry: a socket drop during a CONFIRMED
+      // call marks this call as "network changed underneath it" (movement).
+      if (this.hasConfirmedSession()) this.midCallNetworkEvents += 1;
       this.stopOptionsKeepalive();
       try {
         this.events.onRegistrationState?.("disconnected");
@@ -1686,6 +1698,7 @@ export class JsSipClient implements SipClient {
       if (this.ghostSessions.has(session)) return;
       console.log('[CALL_EVENT] session_accepted — early connect (inbound 200 OK sent)');
       if (!this.callStartedAt) this.callStartedAt = Date.now();
+    this.midCallNetworkEvents = 0;
       this.setSessionState(session, "connected");
       this.events.onCallState?.("connected");
     });
@@ -1708,6 +1721,7 @@ export class JsSipClient implements SipClient {
         audioRouteManager.noteCallConnected();
       }, 150);
       if (!this.callStartedAt) this.callStartedAt = Date.now();
+    this.midCallNetworkEvents = 0;
       this.setSessionState(session, "connected");
       this.events.onCallState?.("connected");
       if (isOutboundSession) {
@@ -2216,6 +2230,22 @@ export class JsSipClient implements SipClient {
   /** Used by the multi-call bridge to find a specific session. */
   private findSessionById(id: string): any | null {
     return this.sessionsById.get(id) ?? null;
+  }
+
+  /**
+   * True when ANY session has completed its SIP dialog (200 OK ACK'd).
+   * ⛔ A RINGING session does NOT count — this exists so push-driven cancel
+   * handlers can tell "stop a ring" (allowed) from "tear down a live call"
+   * (never from a push — the Hanna dropped-answer bug, 2026-08-21). Grounded
+   * in the module-scope singleton per the 2026-08-02 stale-closure rule.
+   */
+  hasConfirmedSession(): boolean {
+    try {
+      for (const s of this.sessionsById.values()) {
+        if (this.sessionConfirmedAt.has(s)) return true;
+      }
+    } catch { /* never throw from a guard */ }
+    return false;
   }
 
   listSessions(): SipSessionInfo[] {
@@ -2924,6 +2954,7 @@ export class JsSipClient implements SipClient {
     }
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
+    this.midCallNetworkEvents = 0;
     this.events.onCallState?.("dialing");
     // Start InCallManager early so there is always a matching stop() later.
     // On Android this sets MODE_IN_COMMUNICATION; the audio route manager
@@ -3681,6 +3712,9 @@ export class JsSipClient implements SipClient {
       endReason,
       deviceModel,
       networkType,
+      // Movement/handoff signal: socket drops observed during THIS call.
+      midCallNetworkEvents: this.midCallNetworkEvents,
+      networkChangedMidCall: this.midCallNetworkEvents > 0,
     };
 
     try {

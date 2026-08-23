@@ -2773,6 +2773,30 @@ export function NotificationsProvider({
               .catch(() => false);
 
         let backendClaimed = false;
+        // ⛔ The warm fast-path (INVITE already on the socket) used to SKIP the
+        // backend claim entirely ("strictly an optimisation") — leaving the
+        // CallInvite PENDING, which is what let the answered_elsewhere sweep
+        // cancel the very call this device was on (Hanna 2026-08-21). Claim in
+        // the BACKGROUND: never gates the SIP answer (zero added latency),
+        // idempotent server-side, retried because the lossy links that hit this
+        // race are exactly the ones that drop a single POST. The server-side
+        // requeue is gated on "already bridged", so a late claim re-offers
+        // nothing (requeueLiveCallGate).
+        if (inviteReady && !earlyColdAcceptSent) {
+          backendClaimed = true;
+          consumedInviteActionRef.current.add(acceptKey);
+          void (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await respondInvite(authToken, invite.id, "ACCEPT", deviceIdRef.current || undefined);
+                return;
+              } catch {
+                await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+              }
+            }
+            console.warn("[ANSWER_PIPELINE] background_claim_failed after 3 attempts inviteId=" + invite.id);
+          })();
+        }
         if (!inviteReady && earlyColdAcceptSent) {
           // Cold iOS: the backend ACCEPT (Mode-B trigger) already went out at
           // tap time above. Don't re-claim - just wait for the re-delivered
@@ -4707,6 +4731,35 @@ export function NotificationsProvider({
             }
             suppressedIncomingInviteIdsRef.current.add(callId);
             if (altId) suppressedIncomingInviteIdsRef.current.add(altId);
+            // ⛔⛔ NEVER tear down the call THIS DEVICE answered off a push.
+            // Hanna 2026-08-21: her own answer's answered_elsewhere cancel
+            // arrived 1-2s after connect and this unconditional endNativeCall
+            // killed the live, audible call (CallKit end → sip.hangup()).
+            // Guard = a CONFIRMED SIP session exists AND the canceled id is
+            // the invite we answered (answerInviteRef survives to SIP idle) —
+            // scoped so a SECOND ringing call's cancel still clears its ring.
+            // Liveness from the module-scope singleton, never sip.callState
+            // (the 2026-08-02 stale-closure rule).
+            {
+              const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+              const answeredId = answerInviteRef.current?.id ?? null;
+              const cancelIsForAnsweredCall =
+                singleton.hasConfirmedSipSession() &&
+                answeredId != null &&
+                (answeredId === callId || (!!altId && answeredId === altId));
+              if (cancelIsForAnsweredCall) {
+                console.log("[VOIP_PUSH] cancel push targets the call WE answered — keeping the live call, clearing ring state only. callId=", callId);
+                setIncomingInvite((prev) => {
+                  if (!prev || (prev.id !== callId && prev.id !== altId)) return prev;
+                  clearExpireTimer();
+                  shownInviteIdRef.current = null;
+                  setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
+                  AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+                  return null;
+                });
+                return;
+              }
+            }
             endNativeCall(callId);
             if (altId && altId !== callId) endNativeCall(altId);
             setIncomingInvite((prev) => {
@@ -5629,6 +5682,22 @@ export function NotificationsProvider({
         }
         setIncomingInvite((prev) => {
           if (!prev || prev.id !== data.inviteId) return prev;
+          // ⛔⛔ Same guard as the VoIP cancel branch: a cancel for the call
+          // THIS DEVICE answered must not endNativeCall into the live call
+          // (Hanna 2026-08-21). Clear the stale invite state; SIP owns the
+          // call's life from here.
+          {
+            const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+            const answeredId = answerInviteRef.current?.id ?? null;
+            if (singleton.hasConfirmedSipSession() && answeredId === prev.id) {
+              console.log("[Notif] INVITE_CANCELED targets the call WE answered — keeping the live call. inviteId=", prev.id);
+              clearExpireTimer();
+              shownInviteIdRef.current = null;
+              setIncomingCallUiState({ phase: "idle", inviteId: null, error: null });
+              AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+              return null;
+            }
+          }
           endNativeCall(prev.id);
           AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
           if (data.type === "INVITE_CANCELED") {

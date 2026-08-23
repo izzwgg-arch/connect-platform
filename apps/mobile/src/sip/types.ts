@@ -143,6 +143,8 @@ export type SipClient = {
    * a UA restart while this is true — it would kill the live call.
    */
   hasActiveSession: () => boolean;
+  /** True when ANY session's dialog is CONFIRMED (ACK'd 200 OK) — ringing does NOT count. Guard for push-driven cancels (Hanna 2026-08-21). */
+  hasConfirmedSession: () => boolean;
   dial: (target: string) => Promise<void>;
   answer: () => Promise<void>;
   answerIncoming: (
