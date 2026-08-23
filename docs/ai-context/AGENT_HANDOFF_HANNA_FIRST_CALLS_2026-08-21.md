@@ -228,6 +228,53 @@ silently wipes the baked edit (36 opus inbound calls, then 32 PCMU).
    the repo since 2026-08-06 (`apps/mobile/src/sip/jssip.ts`) and needs a
    TestFlight build to ship. It makes every iOS diagnosis slower.
 
+## 4b. Izzy's standing directive (2026-08-23): monitor EVERY call, learn, adapt — the coverage audit
+
+Izzy: *"I want the system to be monitoring every single call on a mobile
+device and learn from it: is it on a Wi-Fi network? How was the call? How
+many packets… eventually the system would be able to adjust between codecs…
+data, data, data."* And: *"Was she on an iPhone? Was she on an Android? Which
+codec… always learn and adjust and adapt, always on, especially on the mobile
+apps, but even on the WebRTC."*
+
+**What already exists (measured 2026-08-23, last 30 days of
+`VoiceDiagEvent type='CALL_QUALITY_REPORT'`):**
+
+| claimed platform | reports | with networkType |
+|---|---|---|
+| WEB (portal/desktop softphone) | 623 | **623 — complete** |
+| "ANDROID" (⛔ includes every iPhone) | 716 | **0** |
+| MOBILE | 27 | 0 |
+
+Every call already uploads jitter, loss %, packet counts, codec, duration,
+grade and an RCA — mobile AND WebRTC — and **nothing prunes the table**
+(53,927 rows back to 2026-04-06, 25 MB). The day-to-day data IS accumulating.
+
+**The blind spots, in priority order:**
+1. ⛔ **The mobile fleet lies about the two things Izzy asked for first**:
+   `platform` is hardcoded "ANDROID" (every iPhone counted as Android) and
+   `networkType` is null on 100% of 743 mobile reports (Wi-Fi vs cellular is
+   structurally absent). **Both fixes have sat in the repo since 2026-08-06**
+   (`apps/mobile/src/sip/jssip.ts` — platform from `Platform.OS`, networkType
+   from WebRTC ICE stats; ⛔ never import netinfo, the undici class) and ship
+   only with a mobile build (TestFlight 53 + APK). **This is the single
+   gating step of the whole program.**
+2. **The app cannot see its own uplink loss** — Hanna's phone reported 1.7%
+   while the PBX measured 39% on her uplink. The PBX-side per-call RTP stats
+   (both directions) need capturing into `ConnectCdr` at hangup — a
+   telephony-side build, the missing half of every call's picture, and the
+   half the tuner needs most.
+3. **Movement**: derivable without sensors — mid-call IP/candidate changes and
+   registration flaps ARE the moving signal (Hanna: 3 flaps in 12 min while
+   driving). A derived `networkChangedMidCall` flag on the report is cheap
+   once (1) ships.
+4. **The tuner** (auto codec/param adjustation) — the decision layer from
+   `PLAN_SELF_IMPROVING_CONNECT_2026-08-06.md`, deliberately deferred then for
+   lack of labeled data; becomes buildable a few weeks after (1)+(2) land.
+
+⛔ The per-endpooint opus override remains hand-baked and panel-fragile (the
+Landau wipe) — the tuner's output must eventually manage it, not humans.
+
 ## 5. Honest gaps
 
 - ⏳ Nobody has run the Wi-Fi control call — that is the acceptance test for §3.
