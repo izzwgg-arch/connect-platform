@@ -550,3 +550,109 @@ So the honest statement of the property is:
 by moving the prefix gate — that gate is what stops an unprivileged caller reaching this
 surface at all, and it is uniform, so it leaks nothing. The two gates answer different
 questions: *may you be here at all* and *is this yours*.
+
+---
+
+# PART 4 — THE SECOND FULL PASS (2026-08-22, on Izzy's ask)
+
+"Can you take a full other pass on this to make sure that everything is built correctly
+and stress test again? Go over the mockups and see if we can make it better."
+
+Fresh-eyes review of every file, harder stress, and a screen pass. **Five real findings**,
+every one shipped with a guard that fails against the pre-fix tree.
+
+## 1. ⛔⛔ The wizard never drove the setup — the biggest gap of the whole build
+
+The api's `advance` route decided what each phone needs. The desktop capability layer
+could perform it. **Nothing connected them.** The live step only polled, so pressing
+"Set Up My Phones" would have sat on "Setting up your office" forever — with every
+suite green, because the stress tests drove `advance` themselves.
+
+✅ `apps/portal/components/deskPhones/setupDriver.ts` is the loop: each tick asks the
+server per phone, performs the instructions this machine can perform
+(default-credential check → records what it learned; fetch-your-settings; re-find after
+a restart, reported by hardware id), and reports back. **The server stays the only
+decider.** Bounded: a non-executable instruction is not hammered (3-stall cap), a
+re-entry guard stops a slow tick overlapping the next, a failing phone does not stop
+its siblings. 10 tests, registered.
+
+⛔ The live step's copy changed from "you can close this window — setup keeps going"
+to **"keep this window open while we work"** — the office machine is doing the work,
+so the old sentence would have quietly stopped a setup the moment somebody believed it.
+
+## 2. ⛔⛔ The two person-only moments had no screen
+
+`resetAuth` sat in the Step type and was never rendered. The live step now surfaces:
+
+- **ONE approval card for the whole batch** of phones needing clearing (ten dialogs
+  teaches people to click through), posting `authorize-reset` with the exact ids the
+  card named. A caller without `can_authorize_phone_reset` gets the route's own
+  plain-English refusal.
+- **A password card per locked phone.** The password goes through
+  `bridge.rememberCredential` into the desktop's protected store (DPAPI); only the
+  REFERENCE ever travels. The card says "The password stays on this computer. It is
+  never sent to Loopcom" — and a source guard asserts the driver has no `password:`
+  object key anywhere.
+
+## 3. ⛔⛔ A printer fleet could become a phone list
+
+`scanLan` returns **every ARP entry** — the wizard fingerprinted and submitted all of
+them, so an office with 4 phones and 19 other devices opened on "We found 23 desk
+phones". ✅ `packages/shared/src/deskPhoneSetup/discoveryFilter.ts`: a device is a
+phone only on **evidence** (fingerprint, or a phone-maker hardware block — which is
+what still shows a LOCKED phone that refuses to talk); everything else is counted for
+the honesty line — *"We also saw 19 other devices … we left those alone"* — and never
+submitted. `shouldFingerprint` bounds the probe spend: 4 seconds per silent laptop
+also burned the capability's 30-actions-a-minute budget.
+
+## 4. ⛔⛔ The reset issue was check-then-act, not atomic
+
+Two `advance` calls landing at once both read `resetCount=0`, both passed
+`decideReset`, and both issued a wipe. **The chaos suite could not see it**: awaits
+alone march concurrent handlers in lockstep under the microtask queue — every write
+lands before the next read — so the race never fired in test while being real in
+production. With a one-tick read/write delay modelling database latency, **the pre-fix
+route issued FIFTEEN reset instructions from fifteen concurrent advances** (replayed
+and measured); the fixed route issues exactly one.
+
+✅ The claim is an `updateMany` guarded on the `resetCount` and `state` that were
+read — the same single-use-claim pattern as everywhere else in this repo. ⛔ The
+concurrency test counts **audited reset issuances, not the counter** — both racers
+wrote `resetCount=1`, which is exactly how the race hid. ⛔ The fake db's reads
+return **snapshot copies** now: a fake that hands back the live shared row lets the
+second caller see the first's mutation and masks every race of this shape.
+
+## 5. ⛔ Three smaller ones
+
+- **`applyYealinkStandards` replaced only the FIRST occurrence** of a managed key.
+  Yealink config is last-value-wins, so a duplicated key kept the vendor's later line
+  winning on the handset while the file read as fixed. Every occurrence is rewritten
+  now; a key with a Blade placeholder anywhere has ALL its copies left alone.
+- **The adapter caught its own fence throw** inside the transport try, reporting a
+  REFUSED address as retryable "unreachable". The fence runs before the try now.
+- **The "Connecting" pill failed contrast** — 4.42 dark / 3.87 light as 11px text,
+  both under the 4.5 small-text bar. Ink token per theme; now 6.00 / 6.08. Full sweep
+  after: **40/40 text elements AA in both themes, zero overflow.**
+
+## 6. Screen improvements (the "make it better" half)
+
+- "Do you know what kind of phone you have?" **now takes the answer** — the approved
+  copy promised "tell us and we will go straight to it" and then never asked. Choosing
+  Yes opens a box; the found screen echoes it back against the pictures.
+- The connection answer **now shapes the nothing-found explanation** (Wi-Fi → check
+  the Wi-Fi name; cable → follow the cable), which is what its own copy promised.
+- Comparison, rendered with the shipped stylesheet byte-for-byte in both themes:
+  <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>
+
+## 7. State after the pass
+
+Deployed: api at `76d29379` (atomic claim grepped in the container, `updateMany` ×2);
+portal at `17b20ab3` carrying the driver (all five new strings grepped in the shipped
+`.next`); the pill-fix tip deploy follows. Totals: shared **542**, desktop **77**, api
+desk-phones **72**, portal **309/311** (the two documented pre-existing) — all green,
+typecheck 0/0/(+0)/0.
+
+⏳ Still true: nobody has opened the screen, the desktop app is not published, the two
+PBX template faults stand, and `reset_over_sip` / `set_provisioning` / `check_sync` /
+`generate_template` have no executor — the driver treats those as waits, so a phone
+needing one of them ends honestly at "Needs attention" or waits, never in a loop.

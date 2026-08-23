@@ -232,6 +232,46 @@ to do everything in his power to get every single phone connected."*
   mandate. ⏳ Also unbuilt on purpose: the `reset_over_sip` executor, the
   `templates.provision` generation path (designed, unexercised — verifying it needs a
   throwaway phone row on prod), and firmware update/recovery.
+- ⛔⛔ **A SECOND FULL PASS (2026-08-22, Izzy's ask) FOUND FIVE MORE, and the headline
+  is the biggest gap of the whole build: THE WIZARD NEVER DROVE THE SETUP.** The api's
+  `advance` decided, the desktop could perform, and nothing connected them — the live
+  step only polled, so "Set Up My Phones" would have sat on "Setting up your office"
+  forever, with every suite green (the stress tests drove `advance` themselves).
+  ✅ `apps/portal/components/deskPhones/setupDriver.ts` is the loop now: per tick it asks
+  the server per phone, performs what this machine can perform, records what it
+  observed, reports back. The server stays the only decider; a non-executable
+  instruction is never hammered (3-stall cap); a failing phone does not stop siblings.
+  ⛔ The live copy changed to **"keep this window open while we work"** — the office
+  machine does the work, so "you can close this" would quietly stop a setup.
+- ⛔⛔ **THE TWO PERSON-ONLY MOMENTS HAD NO SCREEN** — `resetAuth` sat in the Step type
+  unrendered. Now: ONE approval card per batch of phones needing clearing (ten dialogs
+  teaches clicking through), and a password card per locked phone whose password goes
+  into the desktop's protected store BY REFERENCE — "never sent to Loopcom", and a
+  guard asserts the driver has no `password:` key anywhere.
+- ⛔⛔ **A PRINTER FLEET COULD BECOME A PHONE LIST.** `scanLan` returns every ARP entry
+  and the wizard submitted all of it — 4 phones + 19 other devices read "We found 23
+  desk phones". `discoveryFilter.ts`: a phone only on EVIDENCE (fingerprint or a
+  phone-maker hardware block — which still shows a locked phone); the rest are counted
+  for the honesty line and never submitted; `shouldFingerprint` bounds probe spend.
+- ⛔⛔ **THE RESET ISSUE WAS CHECK-THEN-ACT.** Two concurrent advances both read
+  resetCount=0 and both issued a wipe — invisible to the chaos suite because awaits
+  march handlers in lockstep under the microtask queue. With one tick of modelled
+  database latency, **the pre-fix route issued FIFTEEN wipes from fifteen concurrent
+  advances**; the fixed route issues one. The claim is an `updateMany` guarded on the
+  values read, and the test counts AUDITED issuances, not the counter — both racers
+  wrote 1, which is exactly how it hid. ⛔ Fake-db reads return SNAPSHOT COPIES now;
+  a fake handing back the live shared row masks every race of this shape.
+- ⛔ **Three smaller:** `applyYealinkStandards` rewrote only the FIRST occurrence of a
+  duplicated key (Yealink is last-value-wins — the vendor's later line kept winning);
+  the adapter's fence throw was caught by the transport try and mislabeled a refusal
+  as retryable "unreachable"; the "Connecting" pill measured 4.42/3.87 as 11px text —
+  ink per theme now, 6.00/6.08, and the full sweep reads 40/40 AA both themes.
+- ✅ **Screens improved on the same pass:** "Do you know what kind of phone" now TAKES
+  the answer (the copy promised "tell us" and never asked) and echoes it on the found
+  screen; the connection answer now shapes the nothing-found explanation. Comparison
+  with the shipped stylesheet:
+  <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
+  shared **542** · desktop **77** · api desk-phones **72** · portal **309/311**.
 - ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up.** The
   desktop half is **not built or published** — that renames and re-signs the app for every
   customer, so it is Izzy's call. Until it ships, the wizard can be opened but the office
