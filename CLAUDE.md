@@ -1592,11 +1592,28 @@ getting to the login page, or on the login page?"* then *"Do one, two, and three
 
 (`3ac07f1f` on `feat/ivr-migration-takeover`, pushed. **apps/mobile only — no
 server, no api, no portal, no PBX write, no migration, no deploy.**
-⏳ **In NO shipped build** — the fleet APK is `1.0.0+20260823-113754` and iOS is
-build 54, both of which predate this. It rides the next APK / TestFlight build,
-**which is Izzy's call.**) Izzy, 2026-08-23: *"from the iPhone and mobile
-Android app I'm not able to dial # or *"*. Memory:
-[[mobile-keypad-hid-star-hash-and-plus]].
+✅✅ **SHIPPED BOTH PLATFORMS 2026-08-23 on Izzy's explicit "do both"** — fleet
+APK **`1.0.0+20260823-132318`, 143,262,679 bytes** (live + smoke-tested on both
+hostnames, `publishedAt 2026-08-23T17:32:31Z`) and **iOS build 55** on
+TestFlight (EAS `1744f5e5-2f3b-4e71-a74b-59bf173a85a2`, submission finished,
+processingState VALID, attached to "Loopcom Testers" — 11 testers — beta review
+**APPROVED**). Izzy, 2026-08-23: *"from the iPhone and mobile Android app I'm
+not able to dial # or *"*. Memory: [[mobile-keypad-hid-star-hash-and-plus]].
+⛔⛔ **THE FLEET BUILD WAS MADE FROM A DELIBERATELY CLEANED TREE, AND THIS IS THE
+REUSABLE PART.** The shared worktree carried **another session's uncommitted
+splash flash-fix** (`SplashScreen.tsx` + `RootNavigator.tsx`, 85 lines, written
+~1 h earlier, locally built at 12:17:51, never committed and never published).
+Building as-is would have pushed unproven UI work to every customer's phone
+under cover of a dialpad fix. Recipe used: back the files up to the scratchpad
+(**plus `git diff HEAD` as a patch**) → `git checkout HEAD -- <paths>` → assert
+**`git diff HEAD -- apps/mobile` is EMPTY** → build → publish → confirm the
+files are STILL untouched (`git status --short`) before restoring, so a
+returning session is never clobbered → restore → verify the line counts match.
+⛔ **Do NOT restore their `strings.xml`** — `expo_runtime_version` is a build
+artifact that must record the PUBLISHED build, so commit yours instead.
+⛔ **The iOS half needed none of this**: `/tmp/connect-ios-build` builds from the
+`gh` remote, i.e. committed code only — `grep -c gradientFade` read **0** there,
+which is the one-command proof the splash work was absent.
 
 - ⛔⛔ **IT WAS A DISPLAY DEFECT, NOT A DIALING ONE — AND THAT IS WHY IT READ AS
   A DEAD KEY.** `KeypadTab`'s `formatDisplay` built its output from
@@ -1653,10 +1670,18 @@ Android app I'm not able to dial # or *"*. Memory:
   assertions FAIL there — and 0 of those failures involve an all-digit input**,
   so ordinary numbers and extensions render byte-identically to before. Mobile
   typecheck **0 errors**.
-- ⏳ **NOT PROVEN: nobody has pressed `*` on a phone running this.** Acceptance
-  is one build on one handset — press `*`, `#` and long-press `0`, and see each
-  character appear; then the negative that matters, that an ordinary 10-digit
-  number still reads `347 978 0090` and an extension still reads `101`.
+- ⏳ **NOT PROVEN: nobody has pressed `*` on a phone running this.** It is
+  shipped on both platforms but proven only by test and by the published
+  artifacts — no human has typed a feature code on a handset carrying it.
+  **Acceptance is 30 seconds on one phone**: press `*`, `#` and long-press `0`
+  and see each character appear; then the negative that matters, that an
+  ordinary 10-digit number still reads `347 978 0090` and an extension still
+  reads `101`. ⛔ Android customers get it on their **next install** (the fleet
+  turns over gradually — nothing pushes it); iPhone testers get it from
+  TestFlight now.
+- ⏳ **Deliberately NOT shipped in this build: the splash flash-fix** that was
+  sitting uncommitted in the tree. It is untouched, still uncommitted, and
+  needs its own commit + APK once whoever wrote it has Izzy's sign-off.
 
 ## ⛔⛔ AGENT HANDOFF — saved contact names now actually show on incoming calls and missed-call alerts (2026-08-23) — READ FIRST for ANY "contacts don't show on calls" report, before touching caller-name resolution on either side, or before trusting `numberNormalized` digit matching
 
