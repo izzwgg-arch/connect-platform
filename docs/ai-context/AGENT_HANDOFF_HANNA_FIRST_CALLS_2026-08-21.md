@@ -315,8 +315,9 @@ is deliberately HELD — Izzy may change the icon first; it goes LAST.**
    same UI plus the fixes. ⛔ The lesson stands: diff `apps/mobile` against
    HEAD before any fleet build from this tree.
 2. **PBX-side per-call RTP stats (`a9008ac1`, api DEPLOYED + migration
-   `20260823030000_connect_cdr_rtp_stats` applied and read back;
-   telephony queued):** `RtpStatsSampler` polls `pjsip show channelstats`
+   `20260823030000_connect_cdr_rtp_stats` applied and read back; telephony
+   DEPLOYED via queue job `c1acbe5a` — container verified, boot log reads
+   `rtp-stats: sampler armed`, AMI reconnected, 0 restarts):** `RtpStatsSampler` polls `pjsip show channelstats`
    over the read-only AMI Command action — active-calls-only (an idle PBX
    gets zero AMI traffic), 10s interval, kill switch
    `RTP_STATS_SAMPLER_DISABLED=1` — keeps the LAST sample per channel (the
