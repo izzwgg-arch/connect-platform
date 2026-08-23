@@ -2175,6 +2175,18 @@ her. I'm not charging her."*
   loudly, on the timeline). 911 does not work from this account until Izzy
   supplies her address. Also the known duplicate-voicemail-email gap applies
   (her email is on the PBX extension AND in Connect).
+- ✅ **INTERNATIONAL CALLING IS UNLOCKED ON HER SUBACCOUNT — HERS ONLY (Izzy,
+  2026-08-23: "enable international calling for Hannah Weber only").**
+  `setSubAccount` on `344022_Hannaeneh5c` (id 840905) flipped
+  `lock_international` `1 → 0`; `international_route` stays `1`; verified by
+  re-read (`lock_international: "0"`, password byte-unchanged). ⛔ Every OTHER
+  subaccount stays locked — onboarding creates them `lock_international: "1"`
+  on purpose (`voipMsProvisioning.ts`); do not copy this unlock to anyone
+  without Izzy's word. ⛔ International minutes bill the MASTER VoIP.ms account
+  and Hanna is a FREE tenant with no billing row — the cost is absorbed, by
+  design. ⏳ Carrier-side only: no international call has been placed, and the
+  PBX outbound route/ARS patterns for tenant 141 were not touched — if an
+  international dial fails, check the dialplan pattern before the carrier.
 - ⏳ **TestFlight: added to "Loopcom Testers" (Hanna Weber, build 52) and
   `/v1/betaTesterInvitations` answered 201 TWICE, but the tester still read
   `NOT_INVITED`** — confirm the email reached her; re-run
