@@ -205,3 +205,37 @@ test("every kind of device gets plain words, never category jargon", () => {
     assert.ok(!stripped.includes(`"${jargon}"`), `category jargon on the screen: ${jargon}`);
   }
 });
+
+/* ── the sidebar door (2026-08-22) ───────────────────────────────────────── */
+
+test("the sidebar item, the page gate and the api gate all name ONE permission", () => {
+  // ⛔ [[a-gate-must-agree-with-the-gate-behind-it]]: a nav key that differs from
+  // the page's is either a visible door that refuses on click (the Queues bug) or
+  // an invisible page that works. All three surfaces must say can_setup_desk_phones.
+  const NAV = read("navigation", "navConfig.ts");
+  const item = NAV.slice(NAV.indexOf('id: "workspace.desk_phones"'), NAV.indexOf('id: "workspace.desk_phones"') + 400);
+  assert.ok(item.length > 10, "the sidebar item is gone");
+  assert.ok(item.includes('permission: "can_setup_desk_phones"'),
+    "the sidebar item gates on a different key than the page");
+  assert.ok(item.includes('href: "/settings/desk-phones"'), "the item points somewhere else");
+  assert.ok(PAGE.includes('"can_setup_desk_phones"'), "the page no longer gates on the same key");
+});
+
+test("the desk-phones item sits in the workspace section, before Install", () => {
+  const NAV = read("navigation", "navConfig.ts");
+  const at = NAV.indexOf('id: "workspace.desk_phones"');
+  const install = NAV.indexOf('id: "workspace.install"');
+  assert.ok(at > 0 && install > 0 && at < install, "the item moved out of place");
+  const item = NAV.slice(at, at + 400);
+  assert.ok(item.includes('section: "workspace"'), "the item left the workspace section");
+});
+
+test("no force rule makes the desk-phones item visible past its permission", () => {
+  // Only system owners see it BECAUSE the key is in no default bucket — not
+  // because of a hardcoded role check that a future permission grant could not
+  // override. isNavItemVisibleForUser must not special-case it.
+  const NAV = read("navigation", "navConfig.ts");
+  const visible = NAV.slice(NAV.indexOf("export function isNavItemVisibleForUser"));
+  assert.ok(!visible.includes("workspace.desk_phones"),
+    "a hardcoded visibility rule would make the permission toggles a lie");
+});

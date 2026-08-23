@@ -105,6 +105,16 @@ export const navItems: NavItem[] = [
   // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
   // rides that action key's expansion in @connect/shared.
   { id: "workspace.conference", href: "/conference", label: "Conference", icon: "CN", lucide: UsersRound, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_conference" },
+  // Desk phone setup — Izzy, 2026-08-22: "add an option in the workspace sidebar
+  // to connect my desk phones … only system owners should see it".
+  // ⛔ The permission is the SAME key the page's PermissionGate and every api
+  // route already gate on ([[a-gate-must-agree-with-the-gate-behind-it]]): a
+  // different nav key here is either a visible door that refuses on click or an
+  // invisible page that works. can_setup_desk_phones is in NO default bucket,
+  // so only SUPER_ADMIN (the force-add bucket) sees this until it is granted —
+  // and because it is an ACTION key, the custom-roles editor already offers it,
+  // and this nav entry is what makes it appear in /admin/permissions too.
+  { id: "workspace.desk_phones", href: "/settings/desk-phones", label: "Desk Phones", icon: "DP", lucide: PhoneCall, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_setup_desk_phones" },
   // Stable alias (server keeps it pointing at the newest installer) so this
   // link never goes stale when a new version is published.
   { id: "workspace.install", href: "/desktop/Connect-Setup-latest.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
