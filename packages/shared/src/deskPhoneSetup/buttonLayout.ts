@@ -257,7 +257,12 @@ export function parseButtonLayout(raw: unknown): DssKeyMap {
   return { dss_keys: out };
 }
 
-/** Trim to digits; an extension with anything else in it is not one we can watch. */
+/**
+ * Trim only. ⛔ Deliberately NOT digits-only: this platform has non-3-digit and
+ * could have non-numeric extension identifiers (Relax Tires runs 1002/1003), and a
+ * BLF pointed at an identifier that never resolves is inert, while silently dropping
+ * a colleague from every layout is a missing button nobody can explain.
+ */
 function normalizeExt(raw: string | null | undefined): string {
   return String(raw ?? "").trim();
 }

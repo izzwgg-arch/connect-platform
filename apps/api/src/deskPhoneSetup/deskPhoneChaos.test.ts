@@ -46,15 +46,49 @@ const matches = (row: any, where: any): boolean =>
     return row[k] === v;
   });
 
+// ⛔⛔ READS RETURN A SNAPSHOT COPY, NOT THE LIVE ROW. This is what makes the fake
+// model production faithfully: Prisma hands back a fresh object, so two concurrent
+// callers that each read before either writes both see the OLD value — the exact
+// race the atomic reset claim exists to defeat. A fake that returned the live shared
+// row would let the second caller see the first's mutation and mask the race.
+const snap = (r: any) => (r ? { ...r } : r);
+
+/**
+ * ⛔⛔ READS TAKE REAL WALL TIME WHEN THIS IS ON. Awaits alone do NOT interleave the
+ * way a real database does — under the microtask queue, N concurrent handlers march
+ * in lockstep and each write lands before the next read, so a check-then-act race
+ * NEVER fires and a non-atomic claim looks safe. (Proven: the concurrency test below
+ * passed against the pre-fix route until this delay existed.) A setImmediate per read
+ * gives each read a genuine turn of the event loop, which is what lets two callers
+ * both read the OLD row before either writes — production's actual shape.
+ */
+let readDelay = false;
+const maybeDelay = async () => { if (readDelay) await new Promise((r) => setImmediate(r)); };
+
 function table(bucket: string, defaults: () => any) {
   return {
-    findFirst: async ({ where }: any = {}) => state[bucket].find((r: any) => matches(r, where)) ?? null,
-    findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)),
-    create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return row; },
+    findFirst: async ({ where }: any = {}) => {
+      await maybeDelay();
+      return snap(state[bucket].find((r: any) => matches(r, where)) ?? null);
+    },
+    findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)).map(snap),
+    create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return snap(row); },
     update: async ({ where, data }: any) => {
+      // ⛔ The write is ALSO delayed — the race needs caller B's read to land in the
+      // gap between caller A's read and A's write, and that gap only exists if the
+      // write itself costs a turn of the event loop, as a real database write does.
+      await maybeDelay();
       const row = state[bucket].find((r: any) => r.id === where.id);
       if (!row) throw new Error("record not found");
       Object.assign(row, data); return row;
+    },
+    // ⛔ Honours the WHERE clause, so the atomic reset claim is genuinely tested: a
+    // second concurrent writer whose guard no longer matches updates zero rows.
+    updateMany: async ({ where, data }: any = {}) => {
+      await maybeDelay();
+      const rows = state[bucket].filter((r: any) => matches(r, where));
+      for (const r of rows) Object.assign(r, data);
+      return { count: rows.length };
     },
   };
 }
@@ -325,6 +359,12 @@ test("CHAOS: the reset counter survives any interleaving of authorise and advanc
 });
 
 test("CHAOS: concurrent everything on one phone still resets it at most once", async () => {
+  // ⛔ Database latency ON for this test — without it the microtask queue marches the
+  // concurrent handlers in lockstep, every write lands before the next read, and the
+  // check-then-act race can never fire. With it, this test FAILS against the pre-fix
+  // non-atomic route (two reset audits), which is what makes it a real guard.
+  readDelay = true;
+  try {
   for (let seed = 1; seed <= 25; seed += 1) {
     reset();
     const a = await app();
@@ -345,7 +385,16 @@ test("CHAOS: concurrent everything on one phone still resets it at most once", a
     ]);
     assert.ok(state.phones[0].resetCount <= 1,
       `concurrency produced ${state.phones[0].resetCount} resets [seed=${seed}]`);
+    // ⛔⛔ THE PROPERTY THE ATOMIC CLAIM EXISTS FOR: not just that resetCount lands at
+    // 1, but that only ONE reset was ever ISSUED. Before the claim, two concurrent
+    // advances both read 0, both wrote 1, and both audited a reset — resetCount would
+    // read 1 while two wipes went out. Count the audit rows, not the counter.
+    const issued = state.audits.filter(
+      (r: any) => r.action === "DESK_PHONE_RESET_REQUESTED" && r.entityId === state.phones[0].id,
+    ).length;
+    assert.ok(issued <= 1, `concurrency issued ${issued} reset instructions [seed=${seed}]`);
   }
+  } finally { readDelay = false; }
 });
 
 test("CHAOS: no body shape on any route can produce a 500", async () => {

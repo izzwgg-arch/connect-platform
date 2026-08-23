@@ -165,9 +165,16 @@ export async function testCredentials(
   ip: string,
   creds: YealinkCredentials | null,
 ): Promise<AuthResult> {
+  // ⛔ The fence is checked BEFORE the try, so a refused address surfaces as exactly
+  // that. Building the request inside the try would catch the fence's own throw and
+  // report it as "unreachable" — a transient, retryable condition — when in fact the
+  // request was deliberately never sent.
+  let req: HttpRequest;
+  try { req = buildStatusRequest(ip, creds); }
+  catch { return { ok: false, reason: "unexpected", status: 0 }; }
   let res: HttpResponse;
   try {
-    res = await http(buildStatusRequest(ip, creds));
+    res = await http(req);
   } catch {
     return { ok: false, reason: "unreachable" };
   }
@@ -296,9 +303,14 @@ export async function sendAction(
   action: YealinkAction,
   creds: YealinkCredentials | null,
 ): Promise<ActionOutcome> {
+  // ⛔ Fence first, so a refused address is "refused" and never a retryable
+  // "unreachable" — the state machine treats those two very differently.
+  let req: HttpRequest;
+  try { req = buildActionRequest(ip, action, creds); }
+  catch { return { ok: false, reason: "refused" }; }
   let res: HttpResponse;
   try {
-    res = await http(buildActionRequest(ip, action, creds));
+    res = await http(req);
   } catch {
     return { ok: false, reason: "unreachable" };
   }

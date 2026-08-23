@@ -153,12 +153,18 @@ export function applyYealinkStandards(
 
   for (const { key, value } of yealinkStandardConfigKeys(s, opts)) {
     // Match "key =", "key=", leading whitespace, any existing value, to end of line.
-    const re = new RegExp(`^([ \\t]*)${escapeForRegex(key)}[ \\t]*=.*$`, "m");
-    const hit = re.exec(body);
-    if (hit) {
-      // ⛔ A line whose value is a Blade placeholder is VitalPBX's to fill. Leave it.
-      if (/\{\{/.test(hit[0])) continue;
-      body = body.replace(re, `${hit[1]}${key} = ${value}`);
+    // ⛔⛔ GLOBAL, NOT FIRST-MATCH. Yealink config is LAST-value-wins, so replacing
+    // only the first occurrence of a duplicated key leaves the vendor's later line
+    // winning on the handset while the file reads as fixed. Every occurrence is
+    // rewritten to the same value, so whichever one the phone honours, it is ours.
+    const re = new RegExp(`^([ \\t]*)${escapeForRegex(key)}[ \\t]*=.*$`, "gm");
+    const hits = body.match(re) ?? [];
+    // ⛔ A line whose value is a Blade placeholder is VitalPBX's to fill. If ANY
+    // occurrence is a placeholder, the whole key belongs to the template columns —
+    // leave every copy alone rather than fighting the generator over half of them.
+    if (hits.some((h) => /\{\{/.test(h))) continue;
+    if (hits.length > 0) {
+      body = body.replace(re, (_m, indent: string) => `${indent}${key} = ${value}`);
       replaced.push(key);
     } else {
       appended.push(key);

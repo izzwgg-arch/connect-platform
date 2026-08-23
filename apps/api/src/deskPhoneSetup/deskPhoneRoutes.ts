@@ -400,13 +400,28 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           phone: customerPhoneView(phone),
         });
       }
-      await db.deskPhoneSetupPhone.update({
-        where: { id: phone.id },
+      // ⛔⛔ THE CLAIM IS ATOMIC, AND THAT IS NOT OPTIONAL. `decideReset` is correct,
+      // but two advance calls landing at once would both read resetCount=0, both pass
+      // the check, and both issue a wipe — a check-then-act race on the one operation
+      // that must never happen twice. The updateMany is guarded on the resetCount and
+      // state we just read, so exactly one concurrent caller flips the row and the
+      // rest see count=0. Same pattern as every other single-use claim in this repo.
+      const claim = await db.deskPhoneSetupPhone.updateMany({
+        where: { id: phone.id, resetCount: phone.resetCount, state: phone.state },
         data: {
           state: "RESET_REQUESTED", resetCount: phone.resetCount + 1,
           resetRequestedAt: new Date(), attempts: phone.attempts + 1,
         },
       });
+      if (!claim || claim.count !== 1) {
+        // ⛔ Somebody else advanced this phone between our read and our write. We do
+        // NOT issue a second reset; we report the phone's current state instead.
+        const now = await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } });
+        return reply.send({
+          ok: true, action: "do_nothing", rung: 0, halted: false, handOff: null,
+          customerMessage: null, phone: customerPhoneView(now ?? phone),
+        });
+      }
       await deps.audit({
         tenantId: user.tenantId, action: "DESK_PHONE_RESET_REQUESTED",
         entityType: "DeskPhoneSetupPhone", entityId: phone.id, actorUserId: user.sub,
@@ -615,7 +630,12 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           signal: AbortSignal.timeout(4000),
         } as any);
         if (!res.ok) continue;
+        // ⛔ Bounded. The photos are ~100 KB; anything past 5 MB is not a product
+        // photo and must not be buffered into api memory.
+        const len = Number(res.headers.get("content-length") || 0);
+        if (len > 5 * 1024 * 1024) continue;
         const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > 5 * 1024 * 1024) continue;
         // ⛔ Forced to image/png rather than echoed. A CDN once served us MP3 audio
         // labelled text/plain and the browser silently declined to decode it.
         reply.header("Content-Type", "image/png");

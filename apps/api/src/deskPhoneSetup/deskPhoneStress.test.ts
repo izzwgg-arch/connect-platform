@@ -75,6 +75,14 @@ function table(bucket: string, cols: Set<string>, defaults: () => any) {
       if (!row) throw new Error("record not found");
       Object.assign(row, data); return row;
     },
+    // ⛔ Honours the WHERE guard so the atomic reset claim is genuinely exercised.
+    updateMany: async ({ where, data }: any = {}) => {
+      checkColumns(cols, where, `${bucket}.updateMany.where`);
+      checkColumns(cols, data, `${bucket}.updateMany`);
+      const rows = state[bucket].filter((r: any) => matches(r, where));
+      for (const r of rows) Object.assign(r, data);
+      return { count: rows.length };
+    },
   };
 }
 

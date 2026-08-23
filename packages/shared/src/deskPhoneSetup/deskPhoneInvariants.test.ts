@@ -431,6 +431,42 @@ test("FUZZ: applying the house standards is idempotent on any template body", ()
   }
 });
 
+test("FUZZ: a DUPLICATED key is rewritten everywhere, because Yealink is last-value-wins", () => {
+  // ⛔ Found in the 2026-08-22 review pass: the old implementation replaced only the
+  // FIRST occurrence, so a template carrying the key twice kept the vendor's later
+  // line winning on the handset while the file read as fixed. Every occurrence must
+  // end up carrying our value.
+  const body = [
+    "phone_setting.backlight_time = 30",
+    "# some vendor comment",
+    "phone_setting.backlight_time = 600",
+    "sip.notify_reset.enable = 0",
+    "other.key = 1",
+    "sip.notify_reset.enable = 0",
+  ].join("\n");
+  const out = applyYealinkStandards(body).body;
+  for (const line of out.split("\n")) {
+    if (/^\s*phone_setting\.backlight_time\s*=/.test(line)) {
+      assert.match(line, /=\s*0\s*$/, `a stale duplicate survived: ${line}`);
+    }
+    if (/^\s*sip\.notify_reset\.enable\s*=/.test(line)) {
+      assert.match(line, /=\s*1\s*$/, `a stale duplicate survived: ${line}`);
+    }
+  }
+  // untouched keys stay untouched, and the whole thing is still idempotent
+  assert.ok(out.includes("other.key = 1"));
+  assert.equal(applyYealinkStandards(out).body, out);
+  // ⛔ And a key with a Blade placeholder ANYWHERE has BOTH its copies left alone —
+  // the placeholder is VitalPBX's to fill, and rewriting only the literal half would
+  // have the file fight the generator. (The other absent keys are still appended;
+  // only this key is off limits.)
+  const blade = "phone_setting.backlight_time = {{ $x ?? 1 }}\nphone_setting.backlight_time = 600";
+  const bladeOut = applyYealinkStandards(blade).body;
+  assert.ok(bladeOut.includes("phone_setting.backlight_time = {{ $x ?? 1 }}"), "placeholder was rewritten");
+  assert.ok(bladeOut.includes("phone_setting.backlight_time = 600"), "the sibling of a placeholder was rewritten");
+  assert.ok(!/backlight_time = 0\b/.test(bladeOut), "our value was forced over a placeholder-managed key");
+});
+
 test("FUZZ: drift detection is total and never reports a healthy row as wrong", () => {
   const healthy = templateColumnStandards();
   assert.deepEqual(templateStandardsDrift(healthy), []);

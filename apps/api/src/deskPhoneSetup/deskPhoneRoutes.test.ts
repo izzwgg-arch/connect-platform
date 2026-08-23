@@ -36,6 +36,11 @@ function table(bucket: string, defaults: () => any) {
       const row = state[bucket].find((r: any) => r.id === where.id);
       Object.assign(row, data); return row;
     },
+    updateMany: async ({ where, data }: any = {}) => {
+      const rows = state[bucket].filter((r: any) => matches(r, where));
+      for (const r of rows) Object.assign(r, data);
+      return { count: rows.length };
+    },
   };
 }
 
