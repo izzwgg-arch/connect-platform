@@ -2413,6 +2413,22 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   moment you finish inspecting it** (done here; re-verified absent). ⛔ **No `tinted` variant on purpose** — the only monochrome art
   in the kit is the 24–96px notification silhouette and upscaling it to 1024 is
   mush; iOS derives its own.
+  ⛔⛔ **"IT CHANGES ON THE HOME SCREEN BUT NOT IN SIRI SUGGESTIONS" IS AN iOS
+  CACHE, NOT OUR BUG — DO NOT GO LOOKING FOR A CODE FIX (Izzy reported it on
+  build 56, 2026-08-23, and it is confirmed working elsewhere on his phone).**
+  iOS 18 refreshes the Home Screen and App Library immediately while
+  **Spotlight and the Siri-suggestion surfaces keep a stale icon**; Apple's own
+  developer forum thread describing exactly this
+  (<https://developer.apple.com/forums/thread/769188>) has **zero replies and no
+  Apple answer**, and there is **no public API to invalidate those caches**.
+  Our side is already complete and artifact-proven (both appearance variants in
+  the catalog, correct artwork) — **there is nothing to change and nothing to
+  build.** ⛔ The only remedies are on the DEVICE: **restart the phone** (most
+  reliable, and even that is reported inconsistent), or clear the icon cache by
+  toggling Home Screen icon size Large ↔ Normal.
+  ⚠️ Related and separate: a **pinned alternate** icon has never been reflected
+  in Spotlight/Siri Suggestions at all — a long-standing iOS behaviour. One more
+  reason Automatic is the better default.
   ⏳ **NOT PROVEN: nobody has watched the icon change on a real iPhone.** It is
   proven as config + generator + opaque artwork, never on a home screen.
   **Acceptance: install build 56, set Settings → App icon to Automatic, then
