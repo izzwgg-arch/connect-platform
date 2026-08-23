@@ -21,6 +21,7 @@ import {
   canonicalPortalOrigin,
   oauthRedirectUriForRequest,
   platformBillingFromEmail,
+  platformBillingContactEmail,
   platformNoreplyEmail,
   platformSupportEmail,
   portalOriginForRequest,
@@ -97,6 +98,23 @@ test("oauth redirect: keeps the REGISTERED PATH byte-for-byte and swaps only the
 });
 
 // ─── mail identity ────────────────────────────────────────────────────────────
+
+test("the invoice billing contact is loopcom.net and does NOT follow the mail domain", () => {
+  // Deliberate split while the rebrand lands surface by surface: the invoice PDF
+  // and the billing emails already say billing@loopcom.net, while support@ and
+  // noreply@ still answer on the old domain until the whole platform flips.
+  withEnv({}, () => {
+    assert.equal(platformBillingContactEmail(), "billing@loopcom.net");
+    assert.equal(platformSupportEmail(), "support@connectcomunications.com");
+  });
+  // Flipping PLATFORM_MAIL_DOMAIN must not move it — it is already there.
+  withEnv({ PLATFORM_MAIL_DOMAIN: "connectcomunications.com" }, () => {
+    assert.equal(platformBillingContactEmail(), "billing@loopcom.net");
+  });
+  withEnv({ PLATFORM_BILLING_CONTACT_EMAIL: "accounts@loopcom.net" }, () => {
+    assert.equal(platformBillingContactEmail(), "accounts@loopcom.net");
+  });
+});
 
 test("mail identity: defaults, domain flip, per-address override", () => {
   withEnv({}, () => {
@@ -186,5 +204,9 @@ test("billing: every portal-base helper is canonicalPortalOrigin()", () => {
   assert.ok(/const base = canonicalPortalOrigin\(\);/.test(read("billing/payLink.ts")));
   assert.ok(/const base = canonicalPortalOrigin\(\);/.test(read("billing/emailTemplates.ts")));
   assert.ok(/const base = canonicalPortalOrigin\(\);/.test(read("billing/serviceInterruption/serviceInterruptionRunner.ts")));
-  assert.ok(/platformSupportEmail\(\)/.test(read("billing/pdf.ts")) && /platformWebsite\(\)/.test(read("billing/pdf.ts")));
+  // The invoice PDF prints the BILLING contact, not support@ — it is a bill, and
+  // the covering emails have said billing@ since the rebrand. Both read the same
+  // helper so the PDF and its email can never name different addresses.
+  assert.ok(/platformBillingContactEmail\(\)/.test(read("billing/pdf.ts")) && /platformWebsite\(\)/.test(read("billing/pdf.ts")));
+  assert.ok(/platformBillingContactEmail\(\)/.test(read("billing/emailTemplates.ts")), "the billing email must not hardcode the address");
 });

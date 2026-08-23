@@ -226,7 +226,7 @@ export default function BillingInvoiceDetailPage() {
             <article className="invoice-document" aria-label={`Invoice ${row.invoiceNumber || row.id}`}>
               <header className="invoice-hero">
                 <div className="invoice-brand-lockup">
-                  <img src="/connect-logo.png" alt="Connect Communications" className="invoice-logo" />
+                  <img src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" className="invoice-logo" />
                   <div>
                     <p className="invoice-eyebrow">Enterprise VoIP billing</p>
                     <h1>Invoice</h1>

@@ -48,9 +48,13 @@
   min-width: 0;
 }
 
+/* The Loopcom wordmark is much wider per unit height than the old Connect mark,
+   so the previous 160x44 box shrank it to ~28px tall and left it looking timid
+   beside the "Invoice" heading. 196px matches the PDF header's optical weight;
+   the height is the wordmark's own aspect so object-fit never letterboxes it. */
 .invoice-logo {
-  width: 160px;
-  height: 44px;
+  width: 196px;
+  height: 35px;
   object-fit: contain;
   object-position: left center;
   display: block;

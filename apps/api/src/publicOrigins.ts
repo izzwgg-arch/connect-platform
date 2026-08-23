@@ -153,6 +153,26 @@ export function platformSupportEmail(): string {
   return firstEnv("PLATFORM_SUPPORT_EMAIL") ?? `support@${platformMailDomain()}`;
 }
 
+/**
+ * The billing address PRINTED on invoices and receipts — the one a customer
+ * replies to when they have a question about a bill.
+ *
+ * Deliberately already on loopcom.net while `platformMailDomain()` (support@,
+ * noreply@) still answers connectcomunications.com: the rebrand is landing
+ * surface by surface, and the billing emails have carried this address since
+ * the 2026-08-16 rebrand. Keeping it here means the invoice PDF and the invoice
+ * EMAIL can never disagree about where a reply should go.
+ *
+ * ⛔ The loopcom.net DOMAIN is verified in Google Workspace; that does NOT prove
+ * the billing@ MAILBOX exists, and Google bounces mail addressed to a user that
+ * does not. Confirm the mailbox before relying on replies reaching anyone.
+ */
+export const DEFAULT_PLATFORM_BILLING_CONTACT_EMAIL = "billing@loopcom.net";
+
+export function platformBillingContactEmail(): string {
+  return firstEnv("PLATFORM_BILLING_CONTACT_EMAIL") ?? DEFAULT_PLATFORM_BILLING_CONTACT_EMAIL;
+}
+
 export function platformBillingFromEmail(): string {
   return firstEnv("PLATFORM_BILLING_FROM_EMAIL") ?? `billing@${platformMailDomain()}`;
 }

@@ -1,24 +1,33 @@
 import path from "node:path";
-import { platformSupportEmail, platformWebsite } from "../publicOrigins";
+import { platformBillingContactEmail, platformWebsite } from "../publicOrigins";
 import fs from "node:fs";
 import PDFDocument from "pdfkit";
 import { money } from "./emailTemplates";
 import { billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
 import { resolveInvoiceEmailBranding, sanitizePlainText } from "./invoiceBranding";
 
-const BUNDLED_LOGO_PATH = path.join(__dirname, "assets", "connect-logo.png");
+// The Loopcom wordmark, tagline-free per Izzy 2026-08-16 ("take away the words
+// 'the AI communications platform' ... It should just be the logo"). Derived by
+// CROPPING docs/brand/loopcom/derived/loopcom-wordmark.png, never re-drawn.
+// 640x114 => 243 DPI at the 190pt render below, i.e. print-clean on a paper invoice.
+// The LEGAL NAME below is a separate question and is deliberately unchanged.
+const BUNDLED_LOGO_PATH = path.join(__dirname, "assets", "loopcom-logo.png");
 const BUNDLED_INTER_PATH = path.join(__dirname, "assets", "InterVariable.ttf");
 const FONT_REGULAR = "ConnectSans";
 const FONT_MEDIUM = "ConnectSans-Medium";
 const FONT_SEMIBOLD = "ConnectSans-Semibold";
 const FONT_BOLD = "ConnectSans-Bold";
 
+const CONNECT_BRAND_NAME = "Loopcom";
 const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
 const CONNECT_FOOTER_NAME = "Connect Communications LLC";
 // Resolved from the platform identity (publicOrigins.ts) so the Loopcom flip
 // changes the invoice footer too. The LEGAL NAME above is a separate question —
 // it is the registered entity and only Izzy can say whether it changed.
-const CONNECT_SUPPORT_EMAIL = platformSupportEmail();
+// The address a customer replies to about a bill. Was support@ on the old
+// domain, which disagreed with the billing EMAILS; both read it from one
+// helper now so an invoice PDF and its covering email can never differ.
+const CONNECT_SUPPORT_EMAIL = platformBillingContactEmail();
 const CONNECT_PHONE = "845-723-1213";
 const CONNECT_WEBSITE = platformWebsite();
 
@@ -404,14 +413,18 @@ export async function renderBillingInvoicePdf(invoice: any, options?: RenderBill
     doc.rect(0, 0, pageW, 6).fill(blue);
 
     // Header: logo left, invoice title/number right.
+    // fit[190,48]: the Loopcom wordmark is far wider per unit height than the old
+    // Connect mark, so the previous 155pt box rendered it visibly smaller than the
+    // INVOICE title beside it. 190pt restores the optical weight and still clears
+    // that title block, which starts at mr - 170.
     if (logo) {
       try {
-        doc.image(logo, ml + 2, 34, { fit: [155, 48] });
+        doc.image(logo, ml + 2, 34, { fit: [190, 48] });
       } catch {
-        doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_LEGAL_NAME, ml, 44, { width: 210 });
+        doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_BRAND_NAME, ml, 44, { width: 210 });
       }
     } else {
-      doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_LEGAL_NAME, ml, 44, { width: 210 });
+      doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_BRAND_NAME, ml, 44, { width: 210 });
     }
 
     const docTitle = documentType === "receipt" ? "RECEIPT" : "INVOICE";

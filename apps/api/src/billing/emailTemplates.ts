@@ -1,5 +1,5 @@
 import { DEFAULT_INVOICE_DISPLAY_NAME, escapeHtml, type InvoiceEmailBranding, resolveInvoiceEmailBranding } from "./invoiceBranding";
-import { canonicalPortalOrigin, platformSupportEmail } from "../publicOrigins";
+import { canonicalPortalOrigin, platformBillingContactEmail } from "../publicOrigins";
 import { formatBillingDate } from "./billingTime";
 
 export function money(cents: number): string {
@@ -20,7 +20,7 @@ function getDefaultLogoUrl(): string {
 
 const CONNECT_FALLBACK = resolveInvoiceEmailBranding({}, null);
 const CONNECT_COMPANY_NAME = "Loopcom";
-const CONNECT_SUPPORT_EMAIL = "billing@loopcom.net";
+const CONNECT_SUPPORT_EMAIL = platformBillingContactEmail();
 const CONNECT_SUPPORT_DOMAIN = "loopcom.net";
 const CONNECT_SUPPORT_PHONE = "845-723-1213";
 const CONNECT_BLUE = "#22a8ff";
