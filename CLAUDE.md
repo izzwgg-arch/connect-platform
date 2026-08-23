@@ -301,7 +301,19 @@ to do everything in his power to get every single phone connected."*
   with the shipped stylesheet:
   <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
   shared **549** · desktop **77** · api desk-phones **72** · portal **316/318**.
-- ✅✅ **DESKTOP 0.1.10 IS THE PUBLISHED BUILD (2026-08-23)** — the wizard's hands
+- ✅✅ **DESKTOP 0.1.11 IS THE PUBLISHED BUILD (2026-08-23): THE ICON FOLLOWS THE OS
+  THEME.** Izzy's mapping verbatim — **dark mode → navy-2a, light mode → blue-2b** —
+  in `src/themeIcon.ts`: a `nativeTheme "updated"` watcher re-images the tray and
+  every window the instant the Windows toggle moves. ⛔ The EXE-embedded icon (Start
+  menu, pins, toast header) cannot follow a theme — one .ico per program — and stays
+  blue-2b. ⛔ `iconPath` is a per-call resolver now; a guard pins that it never goes
+  back to module-load resolution (that shape makes the swap a lie), and another pins
+  that every size of BOTH variants exists (a missing file = an EMPTY nativeImage = a
+  silent no-op). ✅ **Proven LIVE on Izzy's own machine**: a throwaway harness ran the
+  compiled module while the real `AppsUseLightTheme` registry value was flipped 4× —
+  every swap **within ~95 ms**, artwork proven by its own pixels (light RGB 37,117,255
+  vs navy RGB 11,16,32), theme restored after.
+- ✅ *(superseded by 0.1.11)* **DESKTOP 0.1.10 (2026-08-23)** — the wizard's hands
   (phoneSetup IPC + capability fence, verified inside the packed asar), the /22
   scanner fix, and **the designer's own per-size Windows frames** (Izzy's second kit,
   2026-08-23: loopcom-win-16/32/48/64/256 with rounded corners and real transparency,

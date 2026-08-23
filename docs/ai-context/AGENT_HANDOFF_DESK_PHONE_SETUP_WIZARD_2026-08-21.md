@@ -869,3 +869,29 @@ navy-2a's Windows set is pinned beside it. verify:icon passed on the built exe;
 ⛔ **The lesson: when the designer delivers per-size frames, USE THEM PER SIZE** — the
 first Windows build downsampled the 1024 iOS tile algorithmically, and no unsharp pass
 makes a 16px downsample compete with a frame drawn at 16px.
+
+## 6. Desktop 0.1.11 — the icon follows the OS theme, proven live (2026-08-23, PUBLISHED)
+
+Izzy: *"the icon changes whether the person has dark mode or light mode … 2A would be
+dark mode. 2B would be the light mode. But test it. Make sure it actually changes.
+With the toggle, instantaneously."*
+
+- ⛔ **What cannot follow a theme, stated once:** the exe-embedded icon (Start menu,
+  pins, toast header) is one per program — Windows reads it out of the executable.
+  It stays blue-2b. **What does switch, live:** `src/themeIcon.ts` maps dark →
+  navy-2a (`icon-dark.*`) and light → blue-2b (`icon.*`); a `nativeTheme "updated"`
+  watcher re-images the tray and every window the moment the toggle moves.
+- ⛔ `iconPath` became a **per-call resolver**; a guard pins that it can never go
+  back to being resolved once at module load — that shape would make the swap a lie.
+  A second guard asserts every size of BOTH variants exists in assets, because
+  `createFromPath` on a missing file yields an EMPTY image and the swap becomes a
+  silent no-op.
+- ✅✅ **PROVEN LIVE, per his instruction — not by unit test.** A throwaway Electron
+  harness ran the compiled module with a real tray and window on his own machine
+  while the actual `AppsUseLightTheme` registry value was flipped four times:
+  **every swap landed within ~95 ms**, and the log recorded the applied artwork's
+  own pixels — light RGB(37,117,255) vs navy RGB(11,16,32) — so the proof is the
+  artwork changing, not a filename. Rapid double-flip correct; his theme restored
+  to light where it started; harness deleted.
+- PUBLISHED: `latest.yml` answers **0.1.11** on both hostnames. desktop **85/85**,
+  typecheck 0, verify:icon OK.
