@@ -206,6 +206,47 @@ no PBX write, no env change. Deploy state at the end of this section.)
 Izzy, 2026-08-23: *"there is a local file in the connect2 folder called icon
 refinement options. There is a favicon there to put in the browser on top."*
 
+- ⛔⛔ **UPDATED 2026-08-23 (second pass, Izzy): THE FAVICON IS THE MARK WITH THE
+  BACKGROUND CUT AWAY — no blue plate, transparent outside AND inside both eyes,
+  scaled EDGE TO EDGE.** *"take away the background colour from inside those two
+  peep holes, like eyes, and around it … I didn't want you to change anything."*
+  The band keeps exactly what the designer drew — blue fill, white outline, every
+  tick mark. Nothing is recoloured, nothing redrawn.
+  ⛔ **The kit ships that artwork ONLY as a flattened tile**, so the three regions
+  are recovered in `scripts/portal-favicon-assets.py`: the plate is a pure
+  vertical gradient (34,167,255 → 30,79,214), horizontally uniform, and the mark
+  never touches the left edge — **so column 0 IS the plate, row by row**. Every
+  pixel is `C = a*White + (1-a)*Plate`, solved by least squares over **R and G
+  only** (the plate's blue is pinned at 255 down the top half and carries no
+  signal). Then flood fill the non-ink from the border → OUTSIDE, from each loop
+  centre → the two EYES; what is left is the band. **Verified by re-compositing:
+  mean error 2.3/255**, and the two eyes come out at **1.31% each, equal to 3
+  decimals** — which a symmetric mark gives and a sloppy cut does not.
+  ⛔⛔ **`Image.fromarray()` RETURNS A READ-ONLY IMAGE AND `ImageDraw.floodfill()`
+  WRITES INTO IT DOING NOTHING, SILENTLY.** The first run reported `outside 0.00%`
+  and looked like a segmentation failure. `.copy()` is load-bearing.
+  ⛔ **Resize PREMULTIPLIED** — the plate blue still sitting in the fully
+  transparent area otherwise bleeds into every edge and prints a halo.
+  ⛔ **Edge to edge, `MARGIN = 0.0`** (*"make it as big as you possibly can"*).
+  The mark is **2.22:1**, so filling the width is as large as it goes without
+  distorting it; at 16px that is 16 wide and 7 tall. Do not squash the aspect.
+- ⛔⛔ **THE FLARE AT THE CENTRE STAYS, AND IT IS NOT A STYLE CHOICE — IT IS THE
+  JOIN.** Izzy asked for it out. **The two loops do not touch**; the flare bridges
+  them. Measured by trimming its four points 1px at a time and re-running the
+  segmentation: past **76px of their ~105px** the background floods through into
+  the band's blue fill and the infinity comes apart. The safe trim is a **28%
+  shortening — 2.1px → 1.5px at a 16px favicon**, i.e. invisible. Not worth
+  touching the designer's artwork, so it is left alone.
+  ⛔ **THE LESSON IS THE TEST, NOT THE ANSWER: my first trim test checked that the
+  two EYES stayed equal, and they stay equal long after the mark has been breached
+  somewhere else** — it reported "closed down to 65px" while the background had
+  already flooded the band. **The invariant that actually catches it is the BLUE
+  FILL between the ticks surviving (12.22%).** Both guards are now in the script
+  and it exits rather than write a broken mark.
+- ✅ **`apple-icon.png` DELIBERATELY KEEPS ITS PLATE** — iOS composites a
+  transparent touch icon onto **BLACK**, so the Add-to-Home-Screen icon would
+  come out as a mark on a black square. A `--check` guard fails if it ever loses
+  its opacity.
 - ✅ **What ships:** `apps/portal/app/favicon.ico` (**16 + 32 + 48**) and
   `apps/portal/app/apple-icon.png` (180, the "Add to Home Screen" icon). Both are
   **Next.js App Router FILE CONVENTIONS**, so Next injects
@@ -235,10 +276,10 @@ refinement options. There is a favicon there to put in the browser on top."*
 - ⛔⛔ **THE .ico IS ASSEMBLED BY HAND, AND `Image.save(..., format="ICO",
   sizes=[...])` IS THE TRAP:** Pillow downsamples **ONE** source for every entry,
   so the 16px frame comes out of the biggest render and the thin strokes average
-  into the plate. The designer drew 16 and 32 individually and both are embedded
-  **verbatim**; only the 48 is synthesised (LANCZOS from the 180 — big enough
-  that a reduction holds up, and the kit has no designer 48). Same rule as the
-  Windows icons: **when a designer delivers per-size frames, use them per size.**
+  into the plate. ⛔ **All three frames now come from the 1024 master** — the
+  kit's hand-drawn 16 and 32 favicons are flattened composites with the plate
+  painted into the pixels, so they cannot be keyed at that size. That is the one
+  thing cutting the background out costs: slightly less hand-hinting at 16px.
 - ⛔ **Every entry is BMP/DIB, not PNG, and the DIB height is DOUBLED.** PNG
   entries are fine in every modern browser, but Windows reads this same file for
   a pinned site / desktop shortcut and several shell surfaces render a small PNG
@@ -248,9 +289,10 @@ refinement options. There is a favicon there to put in the browser on top."*
   Writer copied from the proven one in `scripts/desktop-loopcom-windows-assets.py`.
 - ✅ **`python scripts/portal-favicon-assets.py --check` verifies the CONTENT, not
   just that a file exists** — it decodes each frame out of the shipped .ico and
-  compares it byte-for-byte against the kit. ⛔ **Proven non-vacuous:** planting a
-  Pillow-downsampled .ico fails it (16 + 32), and planting the **navy** variant at
-  the right sizes fails all three. Re-run it after any brand-kit change.
+  compares it byte-for-byte against a freshly re-derived master. ⛔ **Proven
+  non-vacuous:** planting the previous PLATED favicon fails all three frames, as
+  does a Pillow-downsampled .ico and the **navy** variant. Re-run after any
+  brand-kit change.
 - ✅ **Proven in a REAL browser and a REAL Next render, not by reading code:**
   Chrome decoded the exact shipped bytes (`image/x-icon`, 14,510 b, largest frame
   48 — so it parses every entry); a running dev server emitted
