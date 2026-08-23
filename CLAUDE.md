@@ -4133,10 +4133,27 @@ and make sure the email stays in one thread … one thread per phone number."*
   (`already_claimed`, still exactly 1 outbound row) — which is itself the best
   proof that guard works. ⛔ And do not wait on `event like 'sms.reply%'`: it
   matches the pre-existing `sms.reply_enabled` row and returns instantly.
-- ⏳ **Still open, deliberately:** the old `unknown_sender` refusal is gone, so the
-  only remaining silent drop is a mail whose signature does not verify (correct —
-  that is a stranger). Nobody has yet replied from a real customer's own mail
-  client, and Gesheft is still excluded from the forward half by design.
+- ⛔⛔ **RE-MEASURED 2026-08-23: NO REAL PERSON HAS EVER SUCCESSFULLY REPLIED BY
+  EMAIL, AND A CUSTOMER'S REPLY WAS SILENTLY DROPPED AFTER THE FIX.**
+  `sms.reply_sent` holds **exactly 2 rows for all time**, both
+  `receivedFrom: sms@loopcom.net` — the two 08-21 self-tests above and nothing
+  else. ⛔ **The forward half is separately healthy and busy** (70 `sms.emailed`,
+  newest 2026-08-23 22:35; the only `emailForwardError` in 5 days is
+  `no_opted_in_recipients` × 72, i.e. Gesheft by design) — **so never report "the
+  bridge works" as one fact; forwarding works and replying is unproven.**
+  ⛔⛔ **The live gap: `sales@iniimini.com`, 2026-08-21 14:21,
+  `ambiguous_reply_address` with `count: 2`** — their mail carried TWO different
+  signed reply addresses (what a quoted/forwarded chain across two text threads
+  produces), so the never-guess rule refused it. Right as a security decision,
+  **wrong as an outcome: that branch fires BEFORE sender resolution, so the
+  known-user notice never runs and they were told nothing** while believing they
+  had just texted a customer. Fix is to notify on this branch too, or resolve the
+  NEWEST signed address instead of refusing — **not built.**
+  ⛔ The earlier `cgreenfeld@trustbookkeepingny.com` refusal (2026-08-20 15:33,
+  `unknown_sender`) **IS cured** by the 08-21 thread-routing change — that same
+  reply would work today; do not re-open it. Gesheft is still excluded from the
+  forward half by design. Query:
+  `select event, count(*) from "AgentAuditLog" where event like 'sms.reply%' group by 1;`
 - ⛔ **"I didn't get any SMS emails" is usually NOT a bridge fault — check
   whether the person is a PARTICIPANT on a thread that received a text.** Izzy
   reported this on 2026-08-20 and the bridge was healthy: his SUPER_ADMIN and
