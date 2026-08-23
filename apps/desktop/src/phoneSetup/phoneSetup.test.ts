@@ -8,7 +8,7 @@ import {
   type HttpRequest, type HttpResponse,
 } from "./yealink";
 import { createPhoneCapability, PHONE_OPERATIONS } from "./capability";
-import { parseArpTable, hostsInSubnet, localScannableSubnets, isPrivateIpv4 as scanPrivate } from "./lanScan";
+import { parseArpTable, hostsInSubnet, ipInSubnet, localScannableSubnets, isPrivateIpv4 as scanPrivate } from "./lanScan";
 
 const CREDS = { username: "admin", password: "sup3r-s3cret" };
 
@@ -382,4 +382,49 @@ test("the preload exposes the narrow bridge and nothing URL-shaped", () => {
   for (const banned of ["url", "host", "fetch", "exec", "command"]) {
     assert.ok(!new RegExp(banned, "i").test(block), `the bridge must not be able to express a ${banned}`);
   }
+});
+
+/* ── the first real customer network was a /22 (2026-08-23) ──────────────── */
+
+test("a /22 home-mesh network is scannable — the first live run failed on exactly this", () => {
+  // Izzy's own home: 192.168.6.102 mask 255.255.252.0. The old /24-only rule
+  // returned nothing to scan and the wizard showed "we found 0 phones".
+  const subnets = localScannableSubnets({
+    "Wi-Fi": [{ family: "IPv4", internal: false, address: "192.168.6.102", netmask: "255.255.252.0" } as any],
+  } as any);
+  assert.deepEqual(subnets, ["192.168.4.0/22"], "the /22 base must align to the network address");
+});
+
+test("a /23 aligns and a /16 is still refused", () => {
+  const s23 = localScannableSubnets({
+    eth: [{ family: "IPv4", internal: false, address: "10.1.3.7", netmask: "255.255.254.0" } as any],
+  } as any);
+  assert.deepEqual(s23, ["10.1.2.0/23"]);
+  const s16 = localScannableSubnets({
+    eth: [{ family: "IPv4", internal: false, address: "10.1.3.7", netmask: "255.255.0.0" } as any],
+  } as any);
+  assert.deepEqual(s16, [], "a /16 is a port scan, not a phone search");
+});
+
+test("hostsInSubnet enumerates exactly the host range for each width", () => {
+  assert.equal(hostsInSubnet("192.168.1.0/24").length, 254);
+  assert.equal(hostsInSubnet("10.0.2.0/23").length, 510);
+  const h22 = hostsInSubnet("192.168.4.0/22");
+  assert.equal(h22.length, 1022);
+  assert.equal(h22[0], "192.168.4.1");
+  assert.equal(h22[h22.length - 1], "192.168.7.254");
+  // wider is refused outright, whatever the caller claims
+  assert.deepEqual(hostsInSubnet("10.0.0.0/16"), []);
+  assert.deepEqual(hostsInSubnet("10.0.0.0/8"), []);
+  assert.deepEqual(hostsInSubnet("not a cidr"), []);
+});
+
+test("ipInSubnet is a range test, not a string prefix", () => {
+  // A /22 spans four third-octets; startsWith could only express one of them.
+  assert.equal(ipInSubnet("192.168.4.1", "192.168.4.0/22"), true);
+  assert.equal(ipInSubnet("192.168.7.254", "192.168.4.0/22"), true);
+  assert.equal(ipInSubnet("192.168.8.1", "192.168.4.0/22"), false);
+  assert.equal(ipInSubnet("192.168.3.255", "192.168.4.0/22"), false);
+  assert.equal(ipInSubnet("junk", "192.168.4.0/22"), false);
+  assert.equal(ipInSubnet("192.168.4.1", "192.168.4.0/16"), false, "a too-wide cidr matches nothing");
 });

@@ -239,3 +239,19 @@ test("no force rule makes the desk-phones item visible past its permission", () 
   assert.ok(!visible.includes("workspace.desk_phones"),
     "a hardcoded visibility rule would make the permission toggles a lie");
 });
+
+test("a FAILED scan is never shown as an empty office", () => {
+  // ⛔ The first live run (2026-08-23, Izzy's own home) failed exactly here: the
+  // machine sat on a /22 the scanner would not sweep, the scanner said so in its
+  // note — and the wizard dropped the note and showed "we found 0 phones", which
+  // reads as "you have no phones" when the truth was "we never looked".
+  const src = stripComments(WIZARD);
+  assert.ok(src.includes('outcome === "failed"') || src.includes("outcome === 'failed'"),
+    "the wizard no longer checks the scan outcome");
+  const at = src.indexOf('outcome === "failed"');
+  const branch = src.slice(at, at + 500);
+  assert.ok(branch.includes("scan.scan?.note") || branch.includes("scan?.scan?.note"),
+    "the scanner's own plain-words reason is not shown");
+  assert.ok(branch.includes('setStep("network")'),
+    "a failed scan must land back on the network step, never on the found list");
+});

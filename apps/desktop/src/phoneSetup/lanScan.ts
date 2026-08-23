@@ -68,10 +68,24 @@ const PROBE_TIMEOUT_MS = 400;
 /**
  * Local IPv4 networks worth scanning.
  *
- * ⛔ Restricted to /24 and to private ranges on purpose. A corporate /16 is
+ * ⛔ Restricted to /22 THROUGH /24, private ranges only. A corporate /16 is
  * 65,000 addresses — probing that would look exactly like a port scan to any
  * monitoring the customer runs, and would take far too long to be useful.
+ *
+ * ⛔⛔ /22 AND /23 ARE IN BECAUSE THE FIRST REAL CUSTOMER NETWORK WAS ONE.
+ * The very first live run of the wizard (Izzy's own home, 2026-08-23) was
+ * 192.168.6.x with netmask 255.255.252.0 — a /22, which is what eero and
+ * several other home/mesh routers hand out BY DEFAULT. The old /24-only rule
+ * returned nothing to scan, and the failure surfaced as "we found 0 phones".
+ * A /22 is 1,022 addresses — under thirty seconds at this concurrency, and
+ * nothing like the /16 the restriction exists to refuse.
  */
+const SCANNABLE_MASKS: Record<string, number> = {
+  "255.255.255.0": 24,
+  "255.255.254.0": 23,
+  "255.255.252.0": 22,
+};
+
 export function localScannableSubnets(
   interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
 ): string[] {
@@ -79,14 +93,24 @@ export function localScannableSubnets(
   for (const addrs of Object.values(interfaces)) {
     for (const addr of addrs || []) {
       if (addr.family !== "IPv4" || addr.internal) continue;
-      if (addr.netmask !== "255.255.255.0") continue;
+      const prefix = SCANNABLE_MASKS[addr.netmask ?? ""];
+      if (!prefix) continue;
       if (!isPrivateIpv4(addr.address)) continue;
-      const base = addr.address.split(".").slice(0, 3).join(".");
-      const cidr = `${base}.0/24`;
+      const base = networkBase(addr.address, prefix);
+      if (base === null) continue;
+      const cidr = `${base}/${prefix}`;
       if (!out.includes(cidr)) out.push(cidr);
     }
   }
   return out;
+}
+
+/** The network address of `ip` under a /22–/24 prefix, dotted, or null. */
+function networkBase(ip: string, prefix: number): string | null {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return null;
+  const mask = prefix >= 24 ? 0xff : prefix === 23 ? 0xfe : 0xfc;
+  return `${parts[0]}.${parts[1]}.${parts[2] & mask}.0`;
 }
 
 /** RFC1918 only — never probe a public range from a customer's machine. */
@@ -100,14 +124,40 @@ export function isPrivateIpv4(ip: string): boolean {
   return false;
 }
 
-/** Every host address in a /24, skipping the network and broadcast addresses. */
+/** Every host address in a /22–/24, skipping the network and broadcast addresses. */
 export function hostsInSubnet(cidr: string): string[] {
-  const m = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.0\/24$/);
+  const m = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/);
   if (!m) return [];
-  const base = `${m[1]}.${m[2]}.${m[3]}`;
+  const prefix = Number(m[5]);
+  // ⛔ The bound is the safety property: anything wider than /22 is refused here
+  // too, so a caller cannot talk this function into sweeping a /16.
+  if (prefix < 22 || prefix > 24) return [];
+  const oct = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  if (oct.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return [];
+  const start = ((oct[0] << 24) | (oct[1] << 16) | (oct[2] << 8) | oct[3]) >>> 0;
+  const count = 2 ** (32 - prefix);
   const out: string[] = [];
-  for (let i = 1; i <= 254; i += 1) out.push(`${base}.${i}`);
+  // skip the network (first) and broadcast (last) addresses
+  for (let i = 1; i < count - 1; i += 1) {
+    const v = (start + i) >>> 0;
+    out.push(`${(v >>> 24) & 255}.${(v >>> 16) & 255}.${(v >>> 8) & 255}.${v & 255}`);
+  }
   return out;
+}
+
+/** Is `ip` inside the /22–/24 the scan swept? Replaces the old string-prefix test,
+ * which could only express a /24. */
+export function ipInSubnet(ip: string, cidr: string): boolean {
+  const m = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/);
+  if (!m) return false;
+  const prefix = Number(m[5]);
+  if (prefix < 22 || prefix > 24) return false;
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+  const ipv = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  const base = ((Number(m[1]) << 24) | (Number(m[2]) << 16) | (Number(m[3]) << 8) | Number(m[4])) >>> 0;
+  const mask = (~(2 ** (32 - prefix) - 1)) >>> 0;
+  return (ipv & mask) === (base & mask);
 }
 
 /**
@@ -235,9 +285,10 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
   }
 
   const table = parseArpTable(arpOutput);
-  const base = subnet.replace(/\.0\/24$/, "");
+  // ⛔ A range test, not a string prefix: a /22 spans four third-octets, and the
+  // old startsWith could only ever express a /24.
   const hosts = table
-    .filter((h) => h.ip.startsWith(`${base}.`))
+    .filter((h) => ipInSubnet(h.ip, subnet))
     .map((h) => ({ ...h, respondedOnHttp: responsive.has(h.ip) }));
 
   return {

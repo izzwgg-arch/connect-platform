@@ -147,6 +147,20 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setStep("welcome");
         return;
       }
+      // ⛔⛔ A FAILED SCAN IS NEVER SHOWN AS AN EMPTY OFFICE. The very first live
+      // run (2026-08-23) failed exactly here — the machine sat on a network shape
+      // the scanner would not sweep — and this screen showed "we found 0 phones",
+      // which reads as "you have no phones" when the truth was "we never looked".
+      // The scanner writes its reason in plain words; show that, stay on this
+      // step, and let the person try again or call us.
+      if (scan.scan?.outcome === "failed") {
+        setError(
+          String(scan.scan?.note || "We could not look at this network from this computer.").slice(0, 300) +
+          " If this keeps happening, Loopcom Support can take a look with you.",
+        );
+        setStep("network");
+        return;
+      }
       const hosts: Array<{ ip: string; mac: string; respondedOnHttp?: boolean }> = scan.scan?.hosts ?? [];
       // ⛔ Fingerprint only plausible candidates. A silent host on an unknown
       // hardware block is a laptop or a printer; spending four seconds and a rate
@@ -410,6 +424,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 Your phones and this computer need to be on the same office internet. They almost always are
                 &mdash; this is just so we know where to look.
               </p>
+              {/* ⛔ A failed search lands back here WITH its reason. Without this
+                  line the setError before setStep("network") was written to nobody. */}
+              {error && (
+                <div style={{ marginTop: 14, padding: "11px 13px", borderRadius: 10, border: "1.5px solid color-mix(in srgb, var(--warning, #f0b655) 45%, var(--dps-border))", background: "color-mix(in srgb, var(--warning, #f0b655) 9%, transparent)", font: "500 13.5px/1.5 Inter, sans-serif" }}>
+                  {error}
+                </div>
+              )}
               <div style={{ margin: "20px 0 6px", padding: 18, borderRadius: 12, background: "var(--dps-panel-2)", border: "1px solid var(--dps-border)" }}>
                 <SameNetworkDrawing />
               </div>
