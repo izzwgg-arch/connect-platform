@@ -24,12 +24,20 @@ dialing, autodialing, or telemarketing campaign services.
 
 ## 2. STIR/SHAKEN status
 
-LoopCom does not originate traffic directly onto the PSTN under its own
-Operating Company Number. All outbound calls are handed to underlying
-wholesale carriers, which apply STIR/SHAKEN attestation to calls they
-originate for LoopCom's customers. LoopCom's role under this plan is to
-ensure the traffic it hands upstream is lawful, attributable to a known
-customer, and carries only caller ID the customer is entitled to use.
+**LoopCom certifies no STIR/SHAKEN implementation of its own and is
+performing robocall mitigation, as described in this plan.**
+
+LoopCom does not hold an Operating Company Number or a Service Provider Code
+(SPC) token, and therefore does not itself apply STIR/SHAKEN authentication
+to calls. LoopCom does not originate traffic directly onto the PSTN. All
+outbound calls are handed to underlying wholesale carriers, which apply
+STIR/SHAKEN attestation to the calls they originate on LoopCom's behalf.
+
+Accordingly, LoopCom's obligation and commitment is robocall mitigation: to
+ensure that the traffic it hands to its upstream carriers is lawful,
+attributable to a known and identified customer, and carries only caller ID
+that the customer is entitled to use. The practices below implement that
+commitment.
 
 ## 3. Know-your-customer (KYC) controls
 
@@ -44,13 +52,24 @@ customer, and carries only caller ID the customer is entitled to use.
 
 ## 4. Caller ID controls
 
-- Outbound caller ID is provisioned by LoopCom, not chosen freely by the
-  customer at call time. Customers present numbers assigned to their account
-  or numbers they demonstrably control that LoopCom has provisioned for them.
-- Customers have no self-service mechanism to spoof arbitrary caller ID.
+- Outbound caller ID is configured exclusively by LoopCom personnel when a
+  customer's service is provisioned. Customers have no ability — self-service
+  or otherwise — to set, change, or override the caller ID their calls
+  present. There is no customer-facing setting for caller ID anywhere on the
+  platform.
+- Every number a customer presents was either purchased for them through
+  LoopCom's underlying carriers, or ported into LoopCom through a number port
+  in which the customer supplied documentary proof of ownership (such as a
+  carrier bill in the customer's name) before the number was provisioned.
+- Unlawful caller ID spoofing by a customer is therefore not merely
+  prohibited by policy — it is not possible on the platform, because the
+  customer never controls the caller ID field.
 
 ## 5. Traffic monitoring and abuse prevention
 
+- LoopCom requires 10DLC registration for outbound text messaging: customers
+  sending application-to-person text traffic must be registered under a 10DLC
+  brand and campaign before that traffic is permitted.
 - Outbound messaging is subject to per-customer daily caps and a campaign
   approval process; anomalous volume requires manual review.
 - Platform monitoring watches for toll-fraud patterns and anomalous calling
