@@ -198,6 +198,77 @@ Mock-up published: <https://claude.ai/code/artifact/47d9d49b-85f2-4b48-b5ba-4c3b
   every image in the mock-up was made; `page.get_text()` is how the address was verified.
   **Never claim a PDF renders correctly without looking at it.**
 
+## ⛔ AGENT HANDOFF — the browser tab shows the Loopcom mark now (2026-08-23) — READ FIRST before touching the portal favicon, before adding ANY icon `<link>` to `app/layout.tsx`, before putting an icon file in `apps/portal/public/`, or for "the tab still shows the old icon"
+
+(`scripts/portal-favicon-assets.py` + `apps/portal/app/favicon.ico` +
+`apps/portal/app/apple-icon.png`, portal-only — no api, no worker, no migration,
+no PBX write, no env change. Deploy state at the end of this section.)
+Izzy, 2026-08-23: *"there is a local file in the connect2 folder called icon
+refinement options. There is a favicon there to put in the browser on top."*
+
+- ✅ **What ships:** `apps/portal/app/favicon.ico` (**16 + 32 + 48**) and
+  `apps/portal/app/apple-icon.png` (180, the "Add to Home Screen" icon). Both are
+  **Next.js App Router FILE CONVENTIONS**, so Next injects
+  `<link rel="icon">` and `<link rel="apple-touch-icon">` into every page's
+  `<head>` by itself — **`app/layout.tsx` is UNCHANGED and must stay that way.**
+  ⛔ Do not also hand-write an icon `<link>`: two mechanisms for one tag is how
+  they drift, and Next already puts favicon.ico **first** in the icon list
+  (`resolve-metadata.js:537`, it special-cases exactly that filename).
+- ⛔⛔ **DO NOT PUT IT IN `apps/portal/public/`.** A file there is served at
+  `/favicon.ico` too, so it *looks* equivalent — but it bypasses Next's metadata
+  layer entirely, ships with **no `<link>` tag** and **no content hash**, and a
+  browser's favicon cache is one of the stickiest caches there is. That path is
+  what the 2026-08-16 rebrand section correctly refused; the file convention is
+  the answer it was waiting for.
+- ⛔ **The artwork is BLUE 2B, and the other two favicons in the kit are traps.**
+  `docs/brand/loopcom/icon-refinement-2026-08/new-apps-icons/` carries **three**
+  favicon pairs: `blue-2b/` (Izzy's pick, the same mark the Android launcher and
+  the Windows app ship), `navy-2a/` (the DARK-THEME app icon) and a **top-level**
+  `favicon-16/32.png` which is the **pre-refinement design** — looking right by
+  filename is exactly how the wrong one gets shipped.
+- ⛔ **A `prefers-color-scheme` favicon pair was considered and REFUSED.** It
+  follows the **operating system**, which routinely disagrees with the portal's
+  own light/dark toggle — the same mismatch that rendered billing as a white slab
+  inside a dark app ([[billing-must-use-connect-theme-tokens]]). One blue mark,
+  and it was **measured on both tab strips** (light `#f2f2f4` and dark `#212124`)
+  before shipping, not eyeballed.
+- ⛔⛔ **THE .ico IS ASSEMBLED BY HAND, AND `Image.save(..., format="ICO",
+  sizes=[...])` IS THE TRAP:** Pillow downsamples **ONE** source for every entry,
+  so the 16px frame comes out of the biggest render and the thin strokes average
+  into the plate. The designer drew 16 and 32 individually and both are embedded
+  **verbatim**; only the 48 is synthesised (LANCZOS from the 180 — big enough
+  that a reduction holds up, and the kit has no designer 48). Same rule as the
+  Windows icons: **when a designer delivers per-size frames, use them per size.**
+- ⛔ **Every entry is BMP/DIB, not PNG, and the DIB height is DOUBLED.** PNG
+  entries are fine in every modern browser, but Windows reads this same file for
+  a pinned site / desktop shortcut and several shell surfaces render a small PNG
+  entry **BLANK** — an all-PNG .ico opens perfectly in a viewer and ships an empty
+  shortcut. The doubled `biHeight` is mandatory (the format reserves the lower
+  half for the AND mask) or every frame renders squashed into the top half.
+  Writer copied from the proven one in `scripts/desktop-loopcom-windows-assets.py`.
+- ✅ **`python scripts/portal-favicon-assets.py --check` verifies the CONTENT, not
+  just that a file exists** — it decodes each frame out of the shipped .ico and
+  compares it byte-for-byte against the kit. ⛔ **Proven non-vacuous:** planting a
+  Pillow-downsampled .ico fails it (16 + 32), and planting the **navy** variant at
+  the right sizes fails all three. Re-run it after any brand-kit change.
+- ✅ **Proven in a REAL browser and a REAL Next render, not by reading code:**
+  Chrome decoded the exact shipped bytes (`image/x-icon`, 14,510 b, largest frame
+  48 — so it parses every entry); a running dev server emitted
+  `<link rel="icon" href="/favicon.ico" type="image/x-icon" sizes="16x16"/>` **and**
+  the apple-touch tag; `/favicon.ico` served **200 byte-identical** to the
+  committed file; and the tag is present on `/`, `/login` and `/meet/...`, i.e.
+  every page under the single root layout — which includes the public pay and
+  onboarding pages. ⚠️ The `sizes="16x16"` is Next reading only the first entry and
+  is cosmetic: it is the only declared icon, so the browser uses the .ico and
+  picks the best frame inside it.
+- ⏳ **NOT PROVEN: nobody has seen it in a real tab on production.** ⛔ And the
+  acceptance test needs a **hard reload** — favicons are cached far more
+  aggressively than pages, so an already-open tab (and the desktop app until it
+  is fully closed and reopened) will keep showing the old blank icon for a while.
+- ⚠️ **Noticed in passing, NOT touched:** `apps/desktop/assets/_f.ico` is
+  untracked, 1,086 bytes and **not a valid image** — a stray from another
+  session's desktop-icon work, unrelated to the portal.
+
 ## ⛔ AGENT HANDOFF — every dropdown platform-wide is ConnectSelect now (2026-08-23) — READ FIRST before adding ANY dropdown to the portal, before touching ConnectSelect.tsx, or before "fixing" a form that stopped enforcing `required` on a select
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECTSELECT_PLATFORM_WIDE_2026-08-23.md`**
@@ -8610,11 +8681,12 @@ HTTPS**, job `8e6a3525`, commit `140dec3e`. Everything else still unwired.)
   (`/_next/static/css/<hash>.css` → `.lc-login-logo{width:252px…}`) and the page
   chunk (`/_next/static/chunks/app/login/page-<hash>.js` → the asset path and
   `lc-login-card`). Both were checked over public HTTPS on 2026-08-16.
-- ⏳ **Still NOT wired, deliberately:** the **favicon is unchanged** — those
-  files sit under `.../brand/loopcom/favicon/` and NOT at the `public/` root,
-  because a file there is served as `/favicon.ico` and would rebrand every page
-  on deploy; app icons, invoices and invite emails all still carry Connect
-  branding. ⏳ **Nobody has opened the new page in a real browser** — it is
+- ✅ **SUPERSEDED 2026-08-23 — the favicon IS wired now (Izzy asked for it):
+  see the dedicated favicon section near the top of this file.** It went to
+  `apps/portal/app/favicon.ico`, the Next FILE CONVENTION, **not** `public/` —
+  the warning below was about `public/`, and it still stands for that path.
+  ⚠️ App icons, invoices and invite emails were the rest of this bullet and the
+  invoice/receipt half has since moved too (see the invoice section). ⏳ **Nobody has opened the new page in a real browser** — it is
   proven from the shipped bundles, not by a human signing in.
 - ⛔ **The rebrand is half a decision and customers can see it.** Portal says
   "Connect Communications", the iOS app is named "Loopcom", the logo says
