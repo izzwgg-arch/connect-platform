@@ -337,6 +337,7 @@ import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAva
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
 import { startTurnHealthWatch } from "./turnHealthWatch";
+import { startVoicemailMailboxSweep } from "./pbx/voicemailMailboxGuardrail";
 import { syncAgentKnowledgeDocs, resolveAgentKnowledgeDir } from "./agentKnowledgeSync";
 // The Watchman's read-only PBX probe (Phase 5b) — the same connect_read door
 // the PBX Console reads through, never a second credential path.
@@ -39394,6 +39395,13 @@ const yiddishCreditTimer = startYiddishLabsCreditWatch(app.log);
 // the api hands clients, and raises an AgentEscalation — the only channel that
 // reaches a phone. Boot line: TURN_HEALTH_WATCH_ARMED.
 const turnHealthTimer = startTurnHealthWatch(app.log);
+// Voicemail mailbox guardrail (2026-08-23). Two customers spent months unable
+// to receive a voicemail and nobody knew: ombu_extensions_vm.enabled defaults
+// to 'no', so a hand-created extension silently gets no mailbox at all.
+// ⛔ Sweeps for a non-allowlisted enabled='no' — NOT "intended vs loaded",
+// which read 122 == 122 through the whole incident because the casualties were
+// excluded from both sides. Boot line: VOICEMAIL_MAILBOX_SWEEP_ARMED.
+startVoicemailMailboxSweep(app.log);
 if (yiddishCreditTimer) registerShutdownTimer(yiddishCreditTimer);
 
 // "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
