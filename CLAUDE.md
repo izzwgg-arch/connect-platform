@@ -1556,8 +1556,9 @@ platform's largest list — and it was a STACK of defects, not one.)
 - ⏳ **NOT PROVEN: no real inbound call has exercised the fix** — acceptance is
   one call to Relax Tires ext 101 from a saved contact showing the name on the
   ring screen AND the missed-call alert. Deploy/build state: see the commit —
-  api deployed via deploy-direct (verify `.build-commit` ⊇ `57ab7c71`), mobile
-  rides the icon-refinement APK on Izzy's phone; **fleet APK not published.**
+  api DEPLOYED and container-verified (`.build-commit` = `57ab7c71`, old typo
+  grep 0, matcher grep 1, health 200 both hostnames, 0 restarts); the mobile
+  half is in the fleet APK **published 2026-08-23** (`1.0.0+20260823-113754`).
 
 ## ⛔ AGENT HANDOFF — the Android launcher icon is BLUE 2B from the icon-refinement kit, and the status-bar icon is the infinity silhouette (2026-08-22) — READ FIRST before touching Android launcher/notification icons, before running the icon generator script, or before believing the generator produces what ships
 
@@ -1635,10 +1636,18 @@ also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
   NAVY icon while the app theme is dark and the BLUE 2B icon after toggling
   light (screenshots taken both ways); `resolve-activity` flipped
   Blue→Navy→Blue→Navy across the boot reconcile + two UI toggles; his theme
-  was left on dark, as found. ⏳ **The fleet does NOT have it — publishing
-  renames every customer's home-screen icon AND swaps their launcher component
-  (a pinned home shortcut may drop on some launchers when the component
-  changes) — Izzy's call.**
+  was left on dark, as found. ✅✅ **PUBLISHED TO THE FLEET 2026-08-23 on
+  Izzy's explicit "Publish it"** — `connectcomms-latest.apk` is
+  **`1.0.0+20260823-113754`, 143,262,559 bytes** (sha256-verified identical to
+  the build proven on his phone), live + smoke-tested on both hostnames,
+  `publishedAt 2026-08-23T15:46:39Z`. It carries the WHOLE day: theme-following
+  launcher icons, deferred alias flip, themed splash with the real light mark,
+  the new login, the contact-name fixes and the voicemail button ink.
+  ⛔ **Customers update on their next install — each update renames their icon
+  to Blue 2B (or Navy on dark themes) AND changes the launcher component, so a
+  pinned home shortcut may drop once on some launchers** (it stays in the app
+  drawer). A customer saying "the app vanished from my home screen" after
+  updating: that is this — re-add from the drawer.**
 - ⛔⛔ **THE ALIAS FLIP IS DEFERRED TO THE BACKGROUND NOW (`185cd7b7`) — the
   first build flipped on the toggle and THE APP CLOSED EVERY TIME.** Flipping
   the enabled launcher alias makes Android remove the app's TASK; DONT_KILL_APP
