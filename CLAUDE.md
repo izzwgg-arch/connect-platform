@@ -71,6 +71,55 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — every dropdown platform-wide is ConnectSelect now (2026-08-23) — READ FIRST before adding ANY dropdown to the portal, before touching ConnectSelect.tsx, or before "fixing" a form that stopped enforcing `required` on a select
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_CONNECTSELECT_PLATFORM_WIDE_2026-08-23.md`**
+(`f6c61735` on `feat/ivr-migration-takeover`, portal-only — 51 files. Deploy state
+recorded at the end of that doc / in the session that shipped it.)
+Izzy, 2026-08-23: *"Every single dropdown … present and future, should only be the
+modern one we have in the upper pages, the Loopcom theme won."* Memory:
+[[connectselect-is-the-only-dropdown]].
+
+- ⛔⛔ **THE RULE: a native `<select>` may not exist in portal TSX.** ~115 across 45
+  files (IVR Studio + Jewish calendar, PBX console + PanelForm, all admin billing,
+  the public onboarding wizard, desk-phone wizard, SignalWire/VoIP.ms/Polly,
+  assistant, tracking, calls, mini/floating dialer, Cardknox payment form …) were
+  converted to `ConnectSelect` / `ConnectMultiSelect`
+  (`apps/portal/components/ConnectSelect.tsx`). **Enforced by
+  `apps/portal/lib/nativeSelectSweep.test.ts`** (registered; proven non-vacuous —
+  it listed every offender mid-conversion). The globals.css select rules are a
+  SAFETY NET only, never licence to add one.
+- ⛔⛔ **The `name` prop renders a HIDDEN input for FormData-read forms — and
+  hidden inputs are EXEMPT from browser `required` validation.** A form that
+  relied on a native select's `required` must validate the field itself.
+  `CardknoxIFieldsForm` (the Sola payment surface) does exactly that for expiry
+  month/year (`expiryError` inline); its `validateRequiredBillingFields` no longer
+  lists expMonth/expYear. **Copy that shape for any future `name`-using site.**
+- ⛔ **A surface that themes OUTSIDE `<html data-theme>` must pass
+  `theme="light"|"dark"`** — the dropdown panel PORTALS to `<body>`, so ancestor
+  theming can never reach it. Live examples: the onboarding wizard (data-ob-theme,
+  passes its live `themeLabel`) and Cardknox (passes `resolvedFieldTheme`). Inside
+  the platform shell, omit the prop.
+- ⛔ **Conversion contract for the next dropdown** (details in the handoff):
+  onChange gets the plain string (never an event); number state bridges
+  `String(x)`/`Number(v)`; a selectable empty option stays a real option while a
+  DISABLED placeholder option becomes the `placeholder` prop; never pass legacy
+  input classNames (trigger is self-styled) — carry only layout via `style`;
+  `size="sm"` in dense toolbars; `<select multiple>` → `ConnectMultiSelect`.
+- ⛔ **PanelForm (pbx-console) posted values were kept byte-identical** — the
+  parsed panel option fallback label contains a non-ASCII space and the file is
+  CRLF; multi values stay `string[]`; untouched fields never enter `changed`.
+  Do not "clean up" any of that.
+- ✅ Proven: portal typecheck 0, suite 322/324 (the two documented pre-existing
+  failures), Yiddish option strings moved byte-identically so phrase keys match.
+- ⏳ **NOT PROVEN: no human has opened a converted dropdown in a browser.**
+  Acceptance: pick a value on IVR Studio, admin billing, the PBX-console team
+  dialog, the onboarding number search (both ob themes), and the mini dialer —
+  and the negatives that matter most: one real payment through the pay page
+  (empty expiry must show the inline error, a filled one must tokenize), and one
+  PBX-console panel save proving posted values didn't drift. ⛔ Open tabs and the
+  desktop app keep the OLD bundle until fully reloaded/restarted.
+
 ## ⛔⛔ AGENT HANDOFF — the device setup wizard (ANY VoIP device, not just desk phones) is BUILT END TO END and DEPLOYED (api + portal, 0 rows — inert until somebody opens it); there was never a local agent, and the LAN scanner was in an app nobody has (2026-08-21→22) — READ FIRST before believing the Windows app can reach a customer's network, before writing a second Electron app or Windows service, before touching `provisioning.devices.keys`, or before quoting a phone's timezone
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md`**
