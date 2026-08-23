@@ -16,14 +16,16 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const THEME_KEY = 'cc_theme_mode';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>('dark');
+  // ⛔ Default is LIGHT (Izzy, 2026-08-21). A saved cc_theme_mode still wins,
+  // so anyone who has already chosen dark keeps dark on next launch.
+  const [mode, setModeState] = useState<ThemeMode>('light');
 
   useEffect(() => {
     (async () => {
       try {
         const saved = await SecureStore.getItemAsync(THEME_KEY);
         // Legacy 'system' preference (removed — dark/light only now) falls
-        // back to the default 'dark' mode instead of crashing.
+        // back to the default mode instead of crashing.
         if (saved === 'dark' || saved === 'light') {
           setModeState(saved as ThemeMode);
         }

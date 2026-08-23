@@ -2,8 +2,8 @@
  * SplashScreen — branded launch / identity screen.
  *
  * - Dark premium navy-black gradient background
- * - Centered Loopcom mark
- * - "Loopcom" wordmark + the brand's own tagline
+ * - The real Loopcom logo (the chrome LOOPCOM wordmark)
+ * - The brand's tagline as text beneath it
  * - NO buttons · NO "Get Started" · NO CTAs
  *
  * ⛔ Keep this in step with assets/splash.png, which is the same composition
@@ -27,13 +27,13 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { LoopcomMark } from '../components/LoopcomMark';
+import { LoopcomLogo } from '../components/LoopcomLogo';
 
 /** Minimum time the splash is visible regardless of how fast auth resolves. */
 const MIN_SHOW_MS = 2_400;
 
-/** Mark width as a fraction of screen width — mirrors SPLASH_MARK_INK_W. */
-const MARK_WIDTH_FRACTION = 0.27;
+/** Logo width as a fraction of screen width — mirrors SPLASH_LOGO_W. */
+const LOGO_WIDTH_FRACTION = 0.74;
 
 interface Props {
   /** Set to true once auth state is resolved. The splash will then finish on its own schedule. */
@@ -139,7 +139,7 @@ export function SplashScreen({ authReady, onReady }: Props) {
           ...styles.iconShadow,
         }}
       >
-        <LoopcomMark width={Math.round(width * MARK_WIDTH_FRACTION)} />
+        <LoopcomLogo width={Math.round(width * LOGO_WIDTH_FRACTION)} />
       </Animated.View>
 
       {/* ── Wordmark + tagline ── */}
@@ -152,7 +152,6 @@ export function SplashScreen({ authReady, onReady }: Props) {
           },
         ]}
       >
-        <Text style={styles.appName}>Loopcom</Text>
         <Text style={styles.tagline}>The AI communications platform</Text>
       </Animated.View>
     </Animated.View>

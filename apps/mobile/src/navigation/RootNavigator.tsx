@@ -477,7 +477,10 @@ export function RootNavigator() {
       callState === 'ringing' &&
       (!!incomingInvite || answerHandoffActive)) ||
     (!answerHandoffActive && callState === 'ended');
-  const showSplash = !splashDone && !hasActiveCallUi;
+  // ⛔ The splash is for a SIGNED-IN launch only. Izzy, 2026-08-21: "splash
+  // screen should only show when the app is logged in." Signed out, the app
+  // goes straight to the sign-in screen with no splash at all.
+  const showSplash = !splashDone && !hasActiveCallUi && !!token;
 
   // If an incoming call ever hid the splash before SplashScreen finished its
   // minimum timer, `splashDone` could still be false — when the call ends the

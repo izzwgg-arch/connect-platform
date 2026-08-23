@@ -188,7 +188,7 @@ export function QrProvisionScreen() {
               <View style={[styles.corner, styles.cornerBR, { borderColor: '#3b82f6' }]} />
             </View>
             <Text style={[typography.body, { color: 'rgba(240,244,255,0.85)', textAlign: 'center', marginTop: 20 }]}>
-              Scan the QR code shown in{'\n'}the Connect portal
+              Scan the QR code shown in{'\n'}the Loopcom portal
             </Text>
           </>
         )}

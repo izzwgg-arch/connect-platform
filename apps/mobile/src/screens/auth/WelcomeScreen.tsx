@@ -6,10 +6,12 @@ import {
   StyleSheet,
   Animated,
   Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LoopcomLogo } from '../../components/LoopcomLogo';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '../../context/ThemeContext';
@@ -19,8 +21,9 @@ import { spacing, radius } from '../../theme/spacing';
 const { width, height } = Dimensions.get('window');
 
 export function WelcomeScreen() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const nav = useNavigation<NativeStackNavigationProp<any>>();
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -37,6 +40,7 @@ export function WelcomeScreen() {
       ]),
     ]).start();
 
+    // the avatar breathes for as long as the screen is up
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.08, duration: 1400, useNativeDriver: true }),
@@ -49,14 +53,19 @@ export function WelcomeScreen() {
 
   return (
     <LinearGradient
-      colors={['#090e18', '#0d1830', '#111827']}
+      colors={isDark
+        ? ['#090e18', '#0d1830', '#111827']
+        : ['#FFFFFF', '#F3F7FC', '#E9F0FA']}
+      locations={isDark ? undefined : [0, 0.55, 1]}
       style={styles.container}
     >
       {/* Background glow circles */}
-      <View style={[styles.glow1, { backgroundColor: 'rgba(59,130,246,0.08)' }]} />
-      <View style={[styles.glow2, { backgroundColor: 'rgba(6,182,212,0.06)' }]} />
+      <View style={[styles.glow1, { backgroundColor: isDark ? 'rgba(59,130,246,0.08)' : 'rgba(34,168,255,0.10)' }]} />
+      <View style={[styles.glow2, { backgroundColor: isDark ? 'rgba(6,182,212,0.06)' : 'rgba(79,123,255,0.07)' }]} />
 
-      {/* Logo area */}
+      {/* Logo area — ⛔ UNCHANGED FROM THE ORIGINAL. Izzy, 2026-08-21:
+          "put that avatar back the way it was". Do not restyle it, do not
+          resize it, do not put a Loopcom mark or logo inside it. */}
       <Animated.View
         style={[
           styles.logoArea,
@@ -70,6 +79,12 @@ export function WelcomeScreen() {
         </View>
       </Animated.View>
 
+      {/* The LOGO itself is static — Izzy, 2026-08-21: "stop the animation of
+          the Loopcom logo". The avatar above animates; this must not. */}
+      <View style={styles.logoWordmark}>
+        <LoopcomLogo width={Math.round(width * 0.72)} />
+      </View>
+
       {/* Main content */}
       <Animated.View
         style={[
@@ -81,29 +96,6 @@ export function WelcomeScreen() {
           },
         ]}
       >
-        <Text style={[typography.displayMd, { color: '#f0f4ff', textAlign: 'center' }]}>
-          Connect
-        </Text>
-        <Text style={[typography.displayMd, { color: '#3b82f6', textAlign: 'center', marginTop: -6 }]}>
-          Communications
-        </Text>
-        <Text
-          style={[
-            typography.bodyLg,
-            { color: 'rgba(136,153,187,0.9)', textAlign: 'center', marginTop: 14, lineHeight: 26 },
-          ]}
-        >
-          Your enterprise communications hub.{'\n'}Calls, team, contacts — all in one place.
-        </Text>
-
-        {/* Feature chips */}
-        <View style={styles.chips}>
-          {['SIP Softphone', 'HD Audio', 'Team Chat', 'Voicemail'].map((f) => (
-            <View key={f} style={[styles.featureChip, { backgroundColor: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.2)' }]}>
-              <Text style={{ color: 'rgba(147,197,253,0.9)', fontSize: 12, fontWeight: '600' }}>{f}</Text>
-            </View>
-          ))}
-        </View>
 
         {/* CTAs */}
         <TouchableOpacity
@@ -115,12 +107,17 @@ export function WelcomeScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.secondaryBtn, { borderColor: 'rgba(59,130,246,0.4)' }]}
+          style={[styles.secondaryBtn, { borderColor: isDark ? 'rgba(59,130,246,0.4)' : 'rgba(30,107,232,0.45)' }]}
           onPress={() => nav.navigate('QrProvision')}
           activeOpacity={0.85}
         >
-          <Ionicons name="qr-code-outline" size={18} color="rgba(147,197,253,0.9)" style={{ marginRight: 8 }} />
-          <Text style={[styles.secondaryBtnText, { color: 'rgba(147,197,253,0.9)' }]}>
+          <Ionicons
+            name="qr-code-outline"
+            size={18}
+            color={isDark ? 'rgba(147,197,253,0.9)' : '#1E6BE8'}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={[styles.secondaryBtnText, { color: isDark ? 'rgba(147,197,253,0.9)' : '#1E6BE8' }]}>
             Scan QR to Pair Device
           </Text>
         </TouchableOpacity>
@@ -170,24 +167,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  logoWordmark: {
+    // The block that used to hold the wordmark text, the sub-line and the
+    // feature chips. Its height is kept so removing them does not move
+    // anything else. Izzy, 2026-08-21: "put it back to the same position on
+    // the screen that it was in."
+    //
+    // Measured from the pre-change screen recording on a Galaxy S24
+    // (1080x2340 @ 420dpi = 411x891dp): the avatar's centre sat at 178dp and
+    // the Sign In button's top edge at 585dp, which leaves exactly 307dp
+    // between the avatar's 40dp bottom margin and the buttons.
+    //
+    // Measured again after the first build: 307 put the avatar 29dp high and
+    // the buttons 29dp low, i.e. this block was 58dp too tall. 249 is the
+    // corrected value, verified against the original recording.
+    height: 249,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
   content: {
     width: '100%',
     paddingHorizontal: spacing['8'],
     alignItems: 'center',
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginTop: 20,
-    marginBottom: 32,
-  },
-  featureChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20,
-    borderWidth: 1,
-    margin: 4,
   },
   primaryBtn: {
     width: '100%',

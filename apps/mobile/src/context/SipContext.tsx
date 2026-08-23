@@ -1550,7 +1550,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           {
             title: 'Microphone access',
             message:
-              'Connect needs microphone access so you can be heard on calls. Without this, incoming calls will disconnect immediately when you answer.',
+              'Loopcom needs microphone access so you can be heard on calls. Without this, incoming calls will disconnect immediately when you answer.',
             buttonPositive: 'Allow',
             buttonNegative: 'Not now',
           },

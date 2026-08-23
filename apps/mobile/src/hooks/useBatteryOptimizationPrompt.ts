@@ -69,7 +69,7 @@ export function useBatteryOptimizationPrompt(enabled: boolean): void {
           if (cancelled) return;
           showAppAlert(
             'Keep calls ringing reliably',
-            'So Connect can ring for incoming calls while running in the background, allow it to ignore battery optimization. Tap Allow, then choose "Don\'t optimize" / "Allow".',
+            'So Loopcom can ring for incoming calls while running in the background, allow it to ignore battery optimization. Tap Allow, then choose "Don\'t optimize" / "Allow".',
             [
               { text: 'Not now', style: 'cancel' },
               {
