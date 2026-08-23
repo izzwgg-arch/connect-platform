@@ -1357,20 +1357,34 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   line to `…/api` + worker restart, AND/OR a code guard; NOT DONE — the env
   file is Izzy's** (AGENTS.md rule 10). ⛔⛔ **The rule: never claim "X never
   worked" from a failure-only query — count the successes first.**
-- ⛔ **Her "hangs up right when she answers" / "really broken" is her Verizon
-  cellular uplink, measured not guessed:** mid-call on the PBX her channel read
-  **39% receive loss (1,863 of 4,713 packets), RTT ~500ms** while every other
-  channel in the same second read 0% / 26–46ms; minutes later a 191s call on
-  the same phone was **0% loss / 90ms**. Registration flapped 3× in 12 min.
-  **Every ended call was ended by a HUMAN** — the app's `user_hangup` label is
-  stamped only in its own hangup path (her finger); `Terminated` = the other
-  side. The short calls are people giving up on 3–5s of broken audio. The one
-  genuine failure: she tapped Accept **8s after** her socket went Unreachable —
-  the known ring-push-with-no-contact gap. ⛔ **Media is DIRECT phone↔PBX on
-  the 443 route** (tcpdump-proven) — only signalling rides loopcom; do not
-  blame France for a 443 tenant's audio. ⛔ The app's own RCA said
-  `TURN_missing` at HIGH confidence — that verdict is the documented lie
-  (`iceHasTurn` is never sent).
+- ⛔⛔ **"It answered — I heard her — then it just hung up": HER OWN ANSWER'S
+  stop-ringing cancel tore down her live call.** ⛔ The first attribution
+  ("she hung up", off the `user_hangup` label) was WRONG — that label only
+  proves the app's hangup PATH ran, and CallKit-initiated ends ride it too.
+  The chain: a cold-start lock-screen answer (`pushToAnswerMs: 0`) connects
+  over SIP before the HTTPS **claim** lands on her lossy cellular → the
+  invite is still PENDING when telephony reports **`answered_elsewhere`**
+  (built for desk-phone answers) → the api cancels it (`server.ts:35153`) and
+  pushes INVITE_CANCELED **to the phone that just answered** → the app's
+  handler (`NotificationsContext.tsx:~5630`) calls **`endNativeCall`
+  unconditionally — no am-I-connected guard** → CallKit end → `sip.hangup()`
+  → dead 3–4s after connect, screen reads "Call ended". **Proven by
+  correlation with a control**: both dropped answers had `canceledAt` stamped
+  the second she connected (one invite was even ACCEPTED 1.1s earlier and
+  overridden — the cancel is a read-then-write race on `findMany(PENDING)`);
+  the one answer whose claim landed FIRST was never canceled and survived.
+  Fixes (not built): telephony/api must not cancel the ANSWERING user's own
+  devices (the answering channel `PJSIP/T<t>_<ext>_1` IS the invited app);
+  conditional `updateMany({status:"PENDING"})`; client guard at fire time
+  (TestFlight build).
+- ⛔ **"Really broken" audio = her Verizon cellular uplink, measured:** mid-call
+  her channel read **39% receive loss / ~500ms RTT** while every other channel
+  in the same second read 0% / 26–46ms; a call minutes later was 0%/90ms;
+  registration flapped 3× in 12 min. The 15:23 voicemail case: she tapped
+  Accept 8s after her socket went Unreachable — the known
+  ring-push-with-no-contact gap. ⛔ **Media is DIRECT phone↔PBX on the 443
+  route** (tcpdump-proven) — do not blame France for a 443 tenant's audio.
+  ⛔ The app's `TURN_missing` RCA verdict is the documented lie.
 - ⛔ **PCMU-vs-opus is an AMPLIFIER, not a cause — and only THREE endpoints
   platform-wide have the opus-inbound override** (T5_101_1, T7_102_1,
   T25_101_1 — the July pilot). Trust runs 454 calls on PCMU at ~2% loss,

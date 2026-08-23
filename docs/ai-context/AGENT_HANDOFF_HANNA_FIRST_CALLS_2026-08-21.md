@@ -104,60 +104,94 @@ of this report told Izzy a feature he used weekly had never worked.
 ⛔ Today's texted links are dead forever; the stored attachments are intact
 and working `/api/…` links can be re-minted for anyone who asks.
 
-## 3. "It hangs up right when she answers" + "really broken" — her cellular uplink; every ended call was ended by a HUMAN
+## 3. "It answered — I heard her — then it just hung up" — HER OWN ANSWER's stop-ringing cancel tore down her live call (a race), and the "really broken" audio was her cellular uplink
 
-**No system-side drop exists in the record.** All 11 calls were examined; the
-app's end labels are grounded in code (`jssip.ts:3476`: `user_hangup` is
-stamped ONLY inside the app's own hangup path — her finger; `Terminated` = the
-call ended from the other side).
+**⛔ CORRECTION (2026-08-22): the first version of this section attributed the
+short calls to "she hung up" off the app's `user_hangup` label. Izzy rejected
+that too — "I heard her on the other end, then it just hung up" — and again he
+was right.** `user_hangup` is stamped by the app's hangup PATH
+(`jssip.ts:3476`), which also runs when CallKit ends the call — it proves the
+app tore the call down, not that a finger did.
 
-| time (UTC) | dir | what happened |
-|---|---|---|
-| 15:21:52 | in | answered 15:22:06, **she hung up** 15:22:11 (4s, `user_hangup`, grade poor) |
-| 15:23:06 | in | **the one real failure**: she tapped Accept 15:23:12 — **8s after her connection had gone Unreachable** (15:23:04). The answer had no live socket; caller → voicemail. Push-driven ring outliving a dead socket — the known platform gap ("the api fans out ring pushes without consulting whether the PBX holds a contact", 2026-08-10 handoff). |
-| 15:24:56 | out | 29s, normal |
-| 15:25:41 | in | answered in 1.0s, **she hung up** at 3.3s (`user_hangup`, poor; 114 packets received — audio WAS flowing) |
-| 15:26:01 | out | 4s — her own quick test call |
-| 15:26:03 | in | Izzy called **while she was on that outbound call** → busy path → voicemail after the 10s wake-dial leg. Correct behaviour, not a fault (cause 19). |
-| 15:26:35 | out | **the 7-minute "really broken" call with Izzy.** Live-measured on the PBX mid-call: **her uplink lost 1,863 of 4,713 packets = 39%** (35% at another sample), RTT 469–539ms — while EVERY other channel on the PBX read 0% loss / 26–46ms in the same second. |
-| 15:33:50 | in | 3s (cause 19) |
-| 15:33:56 | out | 5s |
-| 15:34:45 | out | **191s and CLEAN — 0% loss, RTT 90ms** — minutes after the 39% call, same phone, same network |
-| 16:15:59 | in | third caller (989-220-1145): cold-start answer worked mechanically (pushToAnswer 0ms, answerToJoin 1.55s), **the CALLER hung up** after 5s (`Terminated`) — consistent with hearing her broken uplink and giving up |
+**The mechanism, established from invite rows + code, with a control case:**
 
-**The verdict:** her Verizon cellular link swings between perfect and unusable
-within minutes. Her registration flapped **Unreachable/Reachable 3× in 12
-minutes** (15:23, 15:28, 15:33 — qualify timeouts). The short "hangs up when
-she answers" calls are people (mostly her, once the caller) giving up after
-3–5 seconds of bad-or-absent audio. The uplink loss explains BOTH directions
-of "can barely hear" — the caller hears her gaps directly, and her own
-downlink shares the same radio.
+1. She answers instantly from the CallKit lock-screen path (`pushToAnswerMs:
+   0` — the buffered cold-start replay); the SIP 200 OK rides the already-open
+   socket and the call CONNECTS with audio (Izzy heard her).
+2. Her HTTPS **claim** of the `CallInvite` loses the race (or never fires on
+   that path) — her cellular link runs 334–664ms RTT with loss — so the
+   invite is still **PENDING** when the PBX bridges the call.
+3. Telephony's `MobilePushNotifier` sees the answered leg and notifies the api
+   **`answered_elsewhere`** ("every still-ringing fork must stop NOW" — built
+   for desk-phone answers, 2026-07-29).
+4. The api cancels the still-PENDING invite (`server.ts:35153`) and pushes
+   `INVITE_CANCELED` to **all of the user's devices — including the phone that
+   just answered.**
+5. The app's `INVITE_CANCELED` handler (`NotificationsContext.tsx:~5630`)
+   matches the lingering invite and calls **`endNativeCall(prev.id)`
+   unconditionally — there is no "am I already CONNECTED on this call?"
+   guard** — CallKit ends → the endCall handler runs `sip.hangup()` → BYE →
+   `user_hangup` stamped, and the screen shows "Call ended".
+
+**The evidence table (all times UTC 2026-08-21):**
+
+| call | claim (`acceptedAt`) | SIP answer | invite `canceledAt` | outcome |
+|---|---|---|---|---|
+| 15:21:52 | 15:22:06.152 ✓ | 15:22:07.256 | **15:22:07.256** (read-then-write race beat the claim) | died **+3.8s** after cancel |
+| 15:23:06 | ✓ claimed | never joined (socket dead 8s earlier) | none | voicemail — the separate ring-push-with-no-socket failure |
+| 15:25:41 | **null — never claimed** | 15:25:47.7 | **15:25:48.120** | died **+3.0s** after cancel |
+| 16:15:59 | 16:16:07.846 ✓ **before** the answer processed | 16:16:09.1 | **none** | **SURVIVED** until the remote caller hung up |
+
+The 16:16 call is the control: claim landed first → invite ACCEPTED → the
+answered_elsewhere sweep found nothing PENDING → no cancel push → the call
+lived. Cancel push → death 3–4s later; no cancel → survival. ⛔ **Note the
+15:22 row: even a claim that LANDED 1.1s early was overridden** — the cancel
+path `findMany({status:"PENDING"})` + unconditional `update` is a
+read-then-write race, so the server-side fix must be a conditional
+`updateMany({where: {status: "PENDING"}})` at minimum.
+
+**Why this hits Hanna and not the fleet:** it needs (a) a cold-start/lock-screen
+answer (her app was freshly launched for nearly every call — new user, day
+one), (b) a slow claim vs a fast SIP answer (her lossy cellular), and (c) the
+invite still displayed at cancel time. Warm-app users claim first and never
+race.
+
+**The fixes (NOT built — three layers, any one sufficient for her case):**
+- **Server (cheapest, deployable):** telephony knows the ANSWERING channel; when
+  it is `PJSIP/T<t>_<ext>_1` — the invited user's own app endpoint — the
+  answered_elsewhere cancel must exclude that user's devices (or carry the
+  answering endpoint so the api can). Plus the conditional-update race fix.
+- **Client (needs a TestFlight build):** the `INVITE_CANCELED` handler must
+  re-check at fire time whether a CONFIRMED SIP session exists for that
+  call/invite and never `endNativeCall` into it — the exact rule the
+  2026-08-02 deferred-decline fix already established for its own path.
+- **Client:** the buffered-replay answer path must also send the claim
+  (with retry), so the invite stops being PENDING at all.
+
+**The audio half is unchanged from the first report:** during the calls that
+DID survive, her Verizon uplink measured **39% packet loss / ~500ms RTT
+mid-call** while every other PBX channel read 0% in the same second, and was
+clean (0%/90ms) minutes later; registration flapped 3× in 12 min. That is what
+"she comes in really broken" was, and the Wi-Fi control call is still the
+acceptance test.
 
 **Ruled out, with evidence — do not re-litigate:**
 - **Not the France detour**: tcpdump on the PBX shows her RTP arriving DIRECT
-  from her phone IP. Only SIP signalling rides loopcom (443 route); media is
-  phone↔PBX. Traceroute reaches Verizon's edge at ~30ms.
+  from her phone IP; only SIP signalling rides loopcom.
 - **Not the PBX**: 8+ concurrent channels at 0% loss during her 39% sample.
-- **Not TURN**: her app's RCA verdict `TURN_missing → enable_TURN_relay`
-  (HIGH confidence) is the KNOWN-FALSE verdict — the app never sends
-  `iceHasTurn`, the server defaults it false, and the RCA inherits the lie
-  (documented 2026-08-05). Our only relay is in France; forcing it would make
-  her worse.
-- **Not the app build**: build 52 carries all the decline/CallKit fixes; the
-  cold-start answer at 16:16 worked in 1.55s.
+- **Not TURN**: the app's `TURN_missing` RCA verdict is the documented false
+  positive (`iceHasTurn` is never sent).
+- **Not her finger, and not the app build's known bugs**: build 52 carries the
+  decline/CallKit fixes; the teardown chain above is a DIFFERENT, unguarded
+  path.
 
-**⛔ The PCMU nuance (asked and answered):** her inbound calls run PCMU
-because only THREE endpoints platform-wide carry the opus-first inbound
-override (`T5_101_1` Luxure, `T7_102_1` Create A Box, `T25_101_1` Relax Tires
-— the July HD pilot). Everyone else, every iPhone included, gets PCMU inbound
-by default. PCMU is an **amplifier, not a cause**: Trust Bookkeepings runs
-454 calls on PCMU at ~2% loss with essentially zero complaints. On a clean
-line it's invisible; on a 39%-loss line it turns bad into unusable (no loss
-concealment; opus on this PBX has FEC). ⛔ **Landau Home HAD the override and
-LOST it** — 36 inbound opus calls then 32 PCMU, and the override is gone from
-their conf: a panel Apply regenerates the file and silently wipes it. Any
-rollout needs re-checking after every panel change (recipe:
-`pbx-inbound-hd-recipe` memory / AGENT_HANDOFF_MOBILE_AUDIO_2026-07-30.md).
+**⛔ The PCMU nuance (asked and answered):** her inbound calls run PCMU because
+only THREE endpoints platform-wide carry the opus-first inbound override
+(`T5_101_1` Luxure, `T7_102_1` Create A Box, `T25_101_1` Relax Tires — the
+July HD pilot). PCMU is an **amplifier, not a cause**: Trust Bookkeepings runs
+454 calls on PCMU at ~2% loss with essentially zero complaints. ⛔ **Landau
+Home HAD the override and LOST it** — a panel Apply regenerates the conf and
+silently wipes the baked edit (36 opus inbound calls, then 32 PCMU).
 
 ## 4. What prevention looks like (decisions are Izzy's)
 
@@ -168,11 +202,12 @@ rollout needs re-checking after every panel change (recipe:
    approved US media server move shrinking every latency budget). Still bad →
    the opus-first override on `T141_101_1` (PBX write, needs a mandate,
    fragile per the Landau precedent).
-3. **Answer-with-no-socket** (the 15:23 failure): the standing open item —
-   ring pushes don't consult PBX contact liveness even though
-   `connect-wake-core` already computes the WARM verdict; and the app accepts
-   an answer tap while unregistered instead of showing "reconnecting". A real
-   build, not a config flip.
+3. **The self-cancel race (§3)**: the server-side exclusion (don't cancel the
+   answering user's own devices) + the conditional-update race fix are
+   deployable without an app build and would have saved every one of her
+   dropped answers. The client-side guard rides the next TestFlight build.
+   Also still open: the 15:23 shape — ring pushes don't consult PBX contact
+   liveness, and the app accepts an Answer tap while unregistered.
 4. **iOS telemetry lies** (found in passing, again): every iOS quality report
    uploads `platform: "ANDROID"`, `networkType: null` — the fix has been in
    the repo since 2026-08-06 (`apps/mobile/src/sip/jssip.ts`) and needs a
