@@ -74,8 +74,16 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔ AGENT HANDOFF — the invoice and receipt are LOOPCOM END TO END now — wordmark, `Loopcom LLC`, `billing@loopcom.net`, `loopcom.net` (2026-08-23) — READ FIRST before touching `billing/pdf.ts`, before putting ANY logo in a PDF, before adding a second address or website constant, or for "the invoice still says Connect"
 
 (`apps/api/src/billing/pdf.ts` + `publicOrigins.ts` + `billing/emailTemplates.ts` +
-`apps/portal/.../billing/invoices/[id]/`. ⏳ **COMMITTED, NOT DEPLOYED** — it reaches
-customers at the next api **and** portal deploy. No migration, no PBX write, no env
+`apps/portal/.../billing/invoices/[id]/`. ✅✅ **api + portal DEPLOYED and
+container-verified 2026-08-23** — both at `bda349c5` (contains `90ac9181` + `b1b1c519`),
+neither logged `skip=unrelated_paths`, `connect-logo.png` greps **0** in both containers,
+0 restarts, 0 error lines, health 200 on both hostnames.
+⛔⛔ **PROVEN BY GENERATING REAL PDFs INSIDE `app-api-1`, not by the deploy's exit line:**
+invoice and receipt both come out carrying `Loopcom LLC`, `billing@loopcom.net` and
+`loopcom.net`, with **0 occurrences of "Connect Communications" or
+"connectcomunications.com"**. Recipe: `docker cp` a probe .ts into
+`/app/apps/api/`, `docker exec -w /app/apps/api app-api-1 npx tsx probe.ts`, read the
+text back through `pdf-parse`. No migration, no PBX write, no env
 change, no tenant row.) Izzy, 2026-08-23, in four messages: *"Put the newly rebranded logo onto the
 existing invoice and receipt … and on the PDFs"*, *"change the email address on the
 invoice as well to billing@loopcom.net"*, *"Change bill from LoopCom LLC"*, and
