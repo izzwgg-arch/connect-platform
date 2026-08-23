@@ -41,6 +41,7 @@ import {
   Animated,
   Easing,
   useWindowDimensions,
+  useColorScheme,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { LoopcomMark } from '../components/LoopcomMark';
@@ -65,9 +66,26 @@ interface Props {
 export function SplashScreen({ authReady, onReady }: Props) {
   const { width } = useWindowDimensions();
   const { isDark } = useTheme();
+  // The native pre-JS window can only follow the SYSTEM theme (the OS draws
+  // it before our code runs). When the in-app theme disagrees — e.g. phone
+  // dark, app light — the splash's entry fade IS the dark→light theme
+  // transition, so it gets longer; measured at 220 ms it still read as a
+  // flash on Izzy's phone (system dark, app light, 2026-08-23). When the
+  // themes agree the colors are identical and the fade is invisible either
+  // way, so it stays snappy.
+  const systemDark = useColorScheme() === 'dark';
+  const entryMs = systemDark === isDark ? 220 : 500;
+  const entryMsRef = useRef(entryMs);
+  entryMsRef.current = entryMs;
 
   // ── Animations ─────────────────────────────────────────────────────────────
-  const screenFade = useRef(new Animated.Value(1)).current;
+  // screenFade starts at 0: the splash FADES IN over the boot shield /
+  // native window beneath it instead of cutting in. When the in-app theme
+  // matches the system theme the colors are identical so the fade is
+  // invisible; when they differ (system light, app dark) this turns the one
+  // deliberate theme transition into a soft cross-fade instead of a flash.
+  const screenFade = useRef(new Animated.Value(0)).current;
+  const gradientFade = useRef(new Animated.Value(0)).current;
   const markOpacity = useRef(new Animated.Value(0)).current;
   const markScale = useRef(new Animated.Value(0.55)).current;
   const wordOpacity = useRef(new Animated.Value(0)).current;
@@ -105,6 +123,14 @@ export function SplashScreen({ authReady, onReady }: Props) {
   }, [authReady, maybeExit]);
 
   useEffect(() => {
+    // 0) Seamless entry. The root's flat base color equals the NATIVE splash
+    //    window color for this theme (#040810 / #f2f7fd), so the first frame
+    //    continues the pre-JS window exactly; the brand gradient then blooms
+    //    in on top instead of cutting from #040810 straight to #10203a — the
+    //    "flash before the splash" Izzy reported on 2026-08-23.
+    Animated.timing(screenFade, { toValue: 1, duration: entryMsRef.current, easing: Easing.inOut(Easing.quad), useNativeDriver: true }).start();
+    Animated.timing(gradientFade, { toValue: 1, duration: 600, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+
     // 1) Mark springs in — overshoot to ~1.05 then settle (mockup's
     //    cubic-bezier(.34,1.4,.5,1)). Animated.spring gives the same shape.
     Animated.parallel([
@@ -134,7 +160,7 @@ export function SplashScreen({ authReady, onReady }: Props) {
       clearTimeout(minTimer);
       clearTimeout(thinkTimer);
     };
-  }, [markOpacity, markScale, maybeExit, wordOpacity, wordRise]);
+  }, [markOpacity, markScale, maybeExit, wordOpacity, wordRise, screenFade, gradientFade]);
 
   // Dot bounce, staggered 0 / 180 / 360 ms — started only while thinking.
   useEffect(() => {
@@ -159,15 +185,24 @@ export function SplashScreen({ authReady, onReady }: Props) {
   const bg: readonly [string, string, string] = isDark
     ? ['#10203a', '#0a1322', '#060b14']
     : ['#ffffff', '#f2f7fd', '#e8f0fa'];
+  // ⛔ baseColor MUST equal the native splash window color for this theme —
+  // values-night/values splashscreen_background (#040810 / #f2f7fd). It is
+  // the splash's first-frame color; the gradient fades in on top of it, so
+  // any drift here reintroduces the boot flash.
+  const baseColor = isDark ? '#040810' : '#f2f7fd';
   const dotColor = isDark ? '#3f8fd8' : '#2f7cc4';
 
   return (
-    <Animated.View style={[StyleSheet.absoluteFill, styles.root, { opacity: screenFade }]}>
+    <Animated.View
+      style={[StyleSheet.absoluteFill, styles.root, { opacity: screenFade, backgroundColor: baseColor }]}
+    >
       {/* ⛔ Gradient only — no aurora blobs. Same reason the glow pad went: the
           mockup's blurred shapes render in RN as HARD-EDGED discs, and on the
           light splash they read as two pale saucers in the corners. A plain
           brand gradient is the clean answer until there is a real blur. */}
-      <LinearGradient colors={bg} locations={[0, 0.44, 1]} style={StyleSheet.absoluteFill} />
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: gradientFade }]}>
+        <LinearGradient colors={bg} locations={[0, 0.44, 1]} style={StyleSheet.absoluteFill} />
+      </Animated.View>
 
       <View style={styles.center}>
         <Animated.View style={{ opacity: markOpacity, transform: [{ scale: markScale }] }}>

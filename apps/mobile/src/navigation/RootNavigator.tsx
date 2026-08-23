@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Linking, NativeModules, Platform, StyleSheet, View } from 'react-native';
+import { Linking, NativeModules, Platform, StyleSheet, View, useColorScheme } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { CommonActions, NavigationContainer, StackActions, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -486,6 +486,53 @@ export function RootNavigator() {
   // dark-theme user gets a light first frame.
   const showSplash = !splashDone && !hasActiveCallUi && !!token && themeReady;
 
+  // ── Boot shield (Izzy 2026-08-23: "before the splash screen comes up there
+  // is a flash") ─────────────────────────────────────────────────────────────
+  // Until the saved theme + token have loaded, showSplash is false and the
+  // NavigationContainer's content (login screen / default background) is the
+  // app's FIRST JS frame — a one-or-two-frame flash between the native splash
+  // window and the branded splash. The shield is an opaque cover in the SAME
+  // color the native window used (the system-theme guess, matching
+  // values/values-night splashscreen_background), painted from the very first
+  // JS frame, so the chain native window → shield → splash is one continuous
+  // color. It sits UNDER the splash (zIndex 998 < 999) and comes down 450 ms
+  // after the splash mounts — after the splash's 220 ms fade-in has finished —
+  // so the splash never fades in over bare app UI.
+  // ⛔ Failure direction: the shield must ALWAYS come down (a stranded shield
+  // is a blank app — worse than any flash), hence the unconditional 6 s cap
+  // and the instant drop for any active-call UI.
+  const systemDark = useColorScheme() === 'dark';
+  const bootShieldColor = systemDark ? '#040810' : '#f2f7fd';
+  const [bootShieldGone, setBootShieldGone] = useState(false);
+
+  useEffect(() => {
+    if (bootShieldGone) return;
+    // A call surface (cold start straight into an incoming call) must never
+    // sit behind a shield.
+    if (hasActiveCallUi) {
+      setBootShieldGone(true);
+      return;
+    }
+    if (showSplash) {
+      // Must outlast the splash's LONGEST entry fade (500 ms in the
+      // mismatched-theme case) so the fade always lands on the shield,
+      // never on bare app UI.
+      const t = setTimeout(() => setBootShieldGone(true), 700);
+      return () => clearTimeout(t);
+    }
+    // Boot resolved with no splash to show (signed out, or splash already
+    // done) → reveal the app.
+    if (themeReady && !isLoading && (!token || splashDone)) {
+      setBootShieldGone(true);
+    }
+  }, [bootShieldGone, hasActiveCallUi, showSplash, themeReady, isLoading, token, splashDone]);
+
+  // Hard cap — never strand the shield, whatever state the boot ends up in.
+  useEffect(() => {
+    const t = setTimeout(() => setBootShieldGone(true), 6_000);
+    return () => clearTimeout(t);
+  }, []);
+
   // If an incoming call ever hid the splash before SplashScreen finished its
   // minimum timer, `splashDone` could still be false — when the call ends the
   // overlay would incorrectly reappear (looks like an app restart).
@@ -657,6 +704,18 @@ export function RootNavigator() {
           )}
         </RootStack.Navigator>
       </NavigationContainer>
+
+      {/* Boot shield — opaque native-splash-colored cover from the first JS
+          frame until the branded splash is fully in (see the comment where
+          bootShieldGone is managed). Rendered BELOW the splash overlay. */}
+      {!bootShieldGone && (
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: bootShieldColor, zIndex: 998, elevation: 998 },
+          ]}
+        />
+      )}
 
       {/* Branded splash overlay — sits on top, fades out on its own schedule */}
       {showSplash && (
