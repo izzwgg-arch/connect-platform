@@ -1,7 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TURNSTILE_SCRIPT_BASE, TURNSTILE_SCRIPT_SRC } from "../lib/turnstileScript";
+
+/**
+ * The widget's theme follows the PORTAL's own light/dark state, not the OS.
+ * `useAppContext` is the single theme authority and writes `<html data-theme>`
+ * ("light" | "dark"), which the LoginThemeToggle flips. ⛔ Read that attribute,
+ * NOT `prefers-color-scheme` (the OS setting), or the check-in box would show
+ * light on a dark page whenever the visitor's OS disagreed with their in-app
+ * choice — the exact OS-vs-app-theme mismatch this codebase keeps hitting.
+ */
+function readPortalTheme(): "light" | "dark" {
+  if (typeof document === "undefined") return "light";
+  return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+}
 
 /**
  * Cloudflare Turnstile on the sign-in form. Renders NOTHING when
@@ -30,6 +43,19 @@ const SCRIPT_SRC = TURNSTILE_SCRIPT_SRC;
 export function TurnstileWidget({ onToken, resetKey }: { onToken: (token: string) => void; resetKey?: number }) {
   const holder = useRef<HTMLDivElement | null>(null);
   const widgetId = useRef<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">(() => readPortalTheme());
+
+  // Follow the portal's own theme: re-read `<html data-theme>` whenever the
+  // LoginThemeToggle (or the in-app toggle) flips it, so the widget re-renders
+  // in the matching light/dark skin.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const el = document.documentElement;
+    setTheme(readPortalTheme());
+    const obs = new MutationObserver(() => setTheme(readPortalTheme()));
+    obs.observe(el, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!TURNSTILE_SITE_KEY || typeof window === "undefined" || !holder.current) return;
@@ -41,7 +67,7 @@ export function TurnstileWidget({ onToken, resetKey }: { onToken: (token: string
       }
       widgetId.current = window.turnstile.render(holder.current, {
         sitekey: TURNSTILE_SITE_KEY,
-        theme: "auto",
+        theme,
         callback: (t: string) => onToken(t),
         "expired-callback": () => onToken(""),
         "error-callback": () => onToken(""),
@@ -68,7 +94,7 @@ export function TurnstileWidget({ onToken, resetKey }: { onToken: (token: string
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey]);
+  }, [resetKey, theme]);
 
   if (!TURNSTILE_SITE_KEY) return null;
   return <div ref={holder} className="lc-login-turnstile" aria-label="Security check" />;
