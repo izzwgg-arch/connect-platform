@@ -4,6 +4,7 @@ import { VoipMsSmsProvider } from "@connect/integrations";
 import { buildChatAttachmentIdSignedDownloadUrl, buildChatDbSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
 import { splitVoipMsSendSmsParts, voipMsSmsPayloadLogFields } from "@connect/shared";
 import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
+import { resolveSmsPublicApiBase } from "./smsPublicApiBase";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
@@ -121,24 +122,12 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     return;
   }
 
-  // ⛔ Same chain as apps/api's publicOrigins.canonicalApiBase(): the API base
-  // env names first, then the portal origin + "/api" — this used to fall
-  // through to PORTAL_PUBLIC_URL (an ORIGIN, no /api) as an API base. The
-  // literal default is the canonical host until the Loopcom flip
-  // (PUBLIC_PORTAL_URL) moves it; both are set in the same .env.platform.
-  const portalOrigin = (
-    process.env.PUBLIC_PORTAL_URL ||
-    process.env.PORTAL_PUBLIC_URL ||
-    process.env.CONNECT_APP_URL ||
-    process.env.APP_PUBLIC_URL ||
-    "https://app.connectcomunications.com"
-  ).replace(/\/+$/, "");
-  const publicBase = (
-    process.env.PUBLIC_API_BASE_URL ||
-    process.env.API_PUBLIC_URL ||
-    process.env.PUBLIC_API_URL ||
-    `${portalOrigin}/api`
-  ).replace(/\/+$/, "");
+  // ⛔ ONE derivation, in smsPublicApiBase.ts, with the bare-origin guard the
+  // 2026-08-19 MMS regression earned: `PUBLIC_API_URL` was a pathless origin
+  // and every media URL built on it 404'd at VoIP.ms. Never inline this chain
+  // again — the guard is what keeps a pathless env value from silently
+  // breaking every picture-by-text.
+  const publicBase = resolveSmsPublicApiBase(process.env);
 
   const testMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
   const provider = new VoipMsSmsProvider(
