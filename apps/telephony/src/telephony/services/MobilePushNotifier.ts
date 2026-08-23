@@ -123,6 +123,15 @@ export type MobilePushRingPayload = {
    * phone / another endpoint — those are not missed calls.
    */
   answered?: boolean;
+  /**
+   * PJSIP endpoint of the leg that ANSWERED (e.g. `T141_101_1`), derived from
+   * {@link NormalizedCall.extensionAnsweredChannel}. The api uses it to tell
+   * "answered on the desk phone — stop the apps" apart from "answered BY the
+   * invited app whose claim lost a race" — the second must never receive a
+   * cancel push (it kills the live call; Hanna 2026-08-21). Null when the
+   * answering channel is unknown — the api then behaves as before.
+   */
+  answeredEndpoint?: string | null;
 };
 
 /**
@@ -132,6 +141,12 @@ export type MobilePushRingPayload = {
  *
  * Pattern mirrors CdrNotifier: fire-and-forget HTTP POST to /internal/mobile-ring-notify.
  */
+/** `PJSIP/T141_101_1-0000125e` → `T141_101_1`; null for trunk/Local/unknown channels. */
+export function answeredEndpointFromChannel(channel: string | null | undefined): string | null {
+  const m = /^PJSIP\/(T\d+_\d+(?:_\d+)?)-/i.exec(String(channel ?? ""));
+  return m ? m[1] : null;
+}
+
 export class MobilePushNotifier {
   private readonly url: string | undefined;
   private readonly prewakeUrl: string | undefined;
@@ -292,6 +307,7 @@ export class MobilePushNotifier {
         pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
         state: "answered_elsewhere",
         answered: true,
+        answeredEndpoint: answeredEndpointFromChannel(call.extensionAnsweredChannel),
       };
       log.info(
         { linkedId: call.linkedId, connectTenantId: call.tenantId },

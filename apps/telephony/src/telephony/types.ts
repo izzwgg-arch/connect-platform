@@ -73,6 +73,15 @@ export interface NormalizedCall {
    * forever for missed calls / IVR-only journeys / voicemail-handled calls.
    */
   extensionAnsweredAt: string | null;
+  /**
+   * The channel whose "up" set {@link extensionAnsweredAt} (e.g.
+   * `PJSIP/T141_101_1-0000125e`). Lets MobilePushNotifier tell the api WHICH
+   * endpoint answered, so an `answered_elsewhere` stop-ring can never be
+   * pushed at the very app that answered (the Hanna dropped-answer race,
+   * 2026-08-21). Optional — synthetic records (ARI poller backfills) leave
+   * it unset.
+   */
+  extensionAnsweredChannel?: string | null;
   endedAt: string | null;
   durationSec: number;
   billableSec: number;

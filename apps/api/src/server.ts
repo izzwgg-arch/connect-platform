@@ -23,6 +23,7 @@ import { Readable } from "node:stream";
 import nodemailer from "nodemailer";
 import { loadJobAttachments } from "./emailAttachments";
 import { checkInternalSecret } from "./internalSecret";
+import { inviteFulfilledByOwnApp } from "./mobileRingAnswerPolicy";
 import { assertCardknoxNotSimulating } from "./cardknoxSimulateGuard";
 import { promises as fsp } from "fs";
 import os from "node:os";
@@ -35114,6 +35115,12 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     cancelReason: z.string().max(120).optional().nullable(),
     /** True when a tenant extension leg answered (desk phone / other endpoint) — suppresses the missed-call alert. */
     answered: z.boolean().optional(),
+    /** PJSIP endpoint of the leg that ANSWERED (e.g. "T141_101_1") — lets the api
+     * recognise "answered elsewhere" that is actually the invited app itself
+     * (the Hanna dropped-answer race) and mark the invite ACCEPTED instead of
+     * pushing a cancel at the phone that is on the call. Optional — an older
+     * telephony build omits it and gets today's behaviour. */
+    answeredEndpoint: z.string().max(80).nullable().optional(),
   }).parse(req.body || {});
   const cleanedFromDisplay = cleanIncomingCallerNameForTenant(
     input.fromDisplay,
@@ -35147,11 +35154,35 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     }
     const nowIso = new Date().toISOString();
     let canceled = 0;
+    let fulfilled = 0;
     for (const inv of pending) {
-      await db.callInvite.update({
-        where: { id: inv.id },
+      // ⛔ The "answered elsewhere" that is actually THIS invite's own app: the
+      // SIP answer beat the HTTPS claim (lossy mobile link + cold-start answer).
+      // Mark the invite fulfilled and send NOTHING — a cancel push here is what
+      // tore down Hanna's live calls 3–4s after connect (2026-08-21). Desk-phone
+      // answers (endpoint without a device suffix) still cancel-push as before.
+      if (input.state === "answered_elsewhere" && inviteFulfilledByOwnApp(input.answeredEndpoint, inv.toExtension)) {
+        const res = await db.callInvite.updateMany({
+          where: { id: inv.id, status: "PENDING" },
+          data: { status: "ACCEPTED", acceptedAt: new Date() },
+        });
+        fulfilled += res.count;
+        app.log.info({ linkedId: input.linkedId, inviteId: inv.id, answeredEndpoint: input.answeredEndpoint }, "mobile-ring-notify: invite fulfilled by its own app — no cancel push");
+        continue;
+      }
+      // ⛔ CONDITIONAL, never a bare update by id: the findMany above races the
+      // claim endpoint, and an invite ACCEPTED in that gap must not be clobbered
+      // back to CANCELED (it happened live — an accept that landed 1.1s early
+      // was overridden and the answered call killed). 0 rows = the claim won;
+      // skip the push entirely.
+      const cancelRes = await db.callInvite.updateMany({
+        where: { id: inv.id, status: "PENDING" },
         data: { status: "CANCELED", canceledAt: new Date() },
       });
+      if (cancelRes.count === 0) {
+        app.log.info({ linkedId: input.linkedId, inviteId: inv.id }, "mobile-ring-notify: invite claimed since sweep read — skipping cancel push");
+        continue;
+      }
       canceled += 1;
       const terminationReason =
         input.state === "diverted_to_voicemail"
@@ -35190,7 +35221,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         );
       }
     }
-    app.log.info({ linkedId: input.linkedId, canceled, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
+    app.log.info({ linkedId: input.linkedId, canceled, fulfilled, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
     return { ok: true, hungup: true, canceled };
     });
   }

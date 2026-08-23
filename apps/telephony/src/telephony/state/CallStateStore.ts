@@ -705,6 +705,7 @@ export class CallStateStore extends EventEmitter {
         isExtensionLegChannel(params.channel)
       ) {
         call.extensionAnsweredAt = new Date().toISOString();
+        call.extensionAnsweredChannel = params.channel ?? null;
       }
     }
     this.debugBlfCallTransition(call, prevState, "Newchannel", {
@@ -796,6 +797,7 @@ export class CallStateStore extends EventEmitter {
         isExtensionLegChannel(channel)
       ) {
         call.extensionAnsweredAt = new Date().toISOString();
+        call.extensionAnsweredChannel = channel ?? null;
       }
       if (env.ENABLE_TELEPHONY_DEBUG && (newState === "ringing" || newState === "up")) {
         log.debug({ callId: params.linkedId, state: newState }, "live_call: call_marked_ringing_or_talking");
@@ -1021,6 +1023,9 @@ export class CallStateStore extends EventEmitter {
           call.channels.some((ch) => isExtensionLegChannel(ch));
         if (anyExtensionInBridge) {
           call.extensionAnsweredAt = new Date().toISOString();
+          call.extensionAnsweredChannel = isExtensionLegChannel(joiningChannel)
+            ? (joiningChannel ?? null)
+            : (call.channels.find((ch) => isExtensionLegChannel(ch)) ?? null);
         }
       }
     }
@@ -1062,6 +1067,7 @@ export class CallStateStore extends EventEmitter {
     if (fromCall.answeredAt && !intoCall.answeredAt) intoCall.answeredAt = fromCall.answeredAt;
     if (fromCall.extensionAnsweredAt && !intoCall.extensionAnsweredAt) {
       intoCall.extensionAnsweredAt = fromCall.extensionAnsweredAt;
+      intoCall.extensionAnsweredChannel = fromCall.extensionAnsweredChannel ?? intoCall.extensionAnsweredChannel ?? null;
     }
     if (fromCall.metadata["extensionLegSeen"]) {
       intoCall.metadata["extensionLegSeen"] = true;
