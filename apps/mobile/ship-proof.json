@@ -1,10 +1,15 @@
 ﻿{
-    "completedAt":  "2026-08-23T13:31:36.9101254-04:00",
-    "shipBuildId":  "20260823-132318",
-    "shipVersionCode":  "1787505798",
+    "completedAt":  "2026-08-23T15:32:13.5697858-04:00",
+    "shipBuildId":  "20260823-152650",
+    "shipVersionCode":  "1787513210",
     "apkPath":  "C:\\dev\\projects\\Connect 2\\apps\\mobile\\android\\app\\build\\outputs\\apk\\release\\app-release.apk",
-    "apkBytes":  143262679,
+    "apkBytes":  63420722,
     "buildRoot":  "C:\\dev\\projects\\Connect 2",
     "realRepo":  "C:\\dev\\projects\\Connect 2",
-    "skipInstall":  true
+    "skipInstall":  false,
+    "adbInstall":  true,
+    "dumpsysVersionLines":  [
+                                "    versionCode=1787513210 minSdk=24 targetSdk=36",
+                                "    versionName=1.0.0+20260823-152650"
+                            ]
 }
