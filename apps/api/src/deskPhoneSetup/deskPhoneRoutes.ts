@@ -341,6 +341,11 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       onACall: z.boolean().optional(),
       awaitingReboot: z.boolean().optional(),
       networkSuppliesOldProvisioning: z.boolean().optional(),
+      // The two answers a person can give: "I don't know the password" and
+      // "don't clear this one". Both are safe in the caller's hands — each can
+      // only make LESS happen to a phone, never more.
+      passwordUnavailable: z.boolean().optional(),
+      resetDeclined: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!observed.success) return reply.status(400).send({ error: "invalid_request" });
 
@@ -375,6 +380,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       networkSuppliesOldProvisioning: observed.data.networkSuppliesOldProvisioning ?? false,
       awaitingReboot: observed.data.awaitingReboot ?? phone.state === "WAITING_FOR_REBOOT",
       onACall: observed.data.onACall ?? false,
+      passwordUnavailable: observed.data.passwordUnavailable ?? false,
+      resetDeclined: observed.data.resetDeclined ?? false,
     };
 
     const decision = nextEscalation(condition, {

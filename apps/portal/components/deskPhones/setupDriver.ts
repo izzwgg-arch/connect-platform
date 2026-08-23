@@ -18,6 +18,8 @@
  * feed the gentle branches.
  */
 
+import { vendorSupportsLocalActions } from "@connect/shared";
+
 export type DriverApi = {
   get: <T>(path: string) => Promise<T>;
   post: <T>(path: string, body?: Record<string, unknown>) => Promise<T>;
@@ -32,6 +34,7 @@ export type DiagnosticPhone = {
   status: string;
   state: string;
   ip: string | null;
+  vendor: string | null;
   extNumber: string | null;
   displayName: string | null;
   attempts: number;
@@ -57,6 +60,10 @@ type PhoneMemo = {
   locked: boolean;
   haveCustomerCredentials: boolean;
   credentialRef: string | null;
+  /** The person said they do not have this device's password. A complete answer. */
+  passwordUnavailable: boolean;
+  /** The person chose not to clear this device. Also a complete answer. */
+  resetDeclined: boolean;
   /** How many consecutive ticks produced the same non-executable action. */
   stalledOn: string | null;
   stalledCount: number;
@@ -78,7 +85,11 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
   const memo = (id: string): PhoneMemo => {
     let m = memos.get(id);
     if (!m) {
-      m = { defaultCredentialsTried: false, locked: false, haveCustomerCredentials: false, credentialRef: null, stalledOn: null, stalledCount: 0 };
+      m = {
+        defaultCredentialsTried: false, locked: false, haveCustomerCredentials: false,
+        credentialRef: null, passwordUnavailable: false, resetDeclined: false,
+        stalledOn: null, stalledCount: 0,
+      };
       memos.set(id, m);
     }
     return m;
@@ -90,8 +101,31 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
     m.haveCustomerCredentials = true;
     m.credentialRef = credentialRef;
     m.locked = false;
+    m.passwordUnavailable = false;
     m.stalledOn = null;
     m.stalledCount = 0;
+  }
+
+  /**
+   * The person pressed "I don't know the password". ⛔ A complete answer — the next
+   * advance carries it and the server ends that device's setup kindly instead of
+   * asking again forever, which was the wall Izzy called out.
+   */
+  function passwordUnknown(phoneId: string) {
+    const m = memo(phoneId);
+    m.passwordUnavailable = true;
+    m.stalledOn = null;
+    m.stalledCount = 0;
+  }
+
+  /** The person left this device unticked on the clearing screen. A deliberate no. */
+  function declineReset(phoneIds: string[]) {
+    for (const id of phoneIds) {
+      const m = memo(id);
+      m.resetDeclined = true;
+      m.stalledOn = null;
+      m.stalledCount = 0;
+    }
   }
 
   async function tick(): Promise<TickResult> {
@@ -109,6 +143,8 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         locked: m.locked,
         defaultCredentialsTried: m.defaultCredentialsTried,
         haveCustomerCredentials: m.haveCustomerCredentials,
+        passwordUnavailable: m.passwordUnavailable,
+        resetDeclined: m.resetDeclined,
         reachableOnLan: Boolean(phone.ip),
       }).catch(() => null);
       if (!decision?.ok) continue;
@@ -135,6 +171,10 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
 
       // ── things this machine can do ─────────────────────────────────────────
       if (!bridge || !phone.ip) { markStall(m, action); continue; }
+      // ⛔ The local adapter speaks Yealink's documented mechanisms. Sending those
+      // at a Grandstream HT or a Fanvil speaker is not "worth a try" — another
+      // vendor's device gets configured SERVER-side, and locally we wait.
+      if (!vendorSupportsLocalActions(phone.vendor)) { markStall(m, action); continue; }
 
       if (action === "try_default_credentials") {
         const r = await bridge.run({ op: "test_credentials", ip: phone.ip, useDefault: true }).catch(() => null);
@@ -212,5 +252,5 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
     return all.length > 0 && all.every((m) => m.stalledCount >= MAX_CONSECUTIVE_STALLS);
   }
 
-  return { tick, credentialStored, everythingStalled };
+  return { tick, credentialStored, passwordUnknown, declineReset, everythingStalled };
 }

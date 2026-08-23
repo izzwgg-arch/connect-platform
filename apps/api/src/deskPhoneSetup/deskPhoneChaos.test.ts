@@ -257,6 +257,7 @@ async function chaosRun(seed: number, steps: number) {
               defaultCredentialsTried: r() < 0.5, haveCustomerCredentials: r() < 0.3,
               onACall: r() < 0.15, awaitingReboot: r() < 0.2,
               networkSuppliesOldProvisioning: r() < 0.2,
+              passwordUnavailable: r() < 0.15, resetDeclined: r() < 0.15,
             },
           }));
           if (out?.customerMessage) {

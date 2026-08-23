@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { classifyDiscoveredHosts, shouldFingerprint } from "@connect/shared";
+import { classifyDiscoveredHosts, shouldFingerprint, deviceKindFor, describeKind } from "@connect/shared";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
 import "./deskPhones.css";
@@ -58,16 +58,24 @@ function photoFor(model: string | null): string | null {
   return `/api/desk-phones/photo/${encodeURIComponent(m)}`;
 }
 
-/** A sentence a person can match to a desk, rather than a spec sheet. */
+/**
+ * A sentence a person can match to the thing on the desk, the wall or the ceiling.
+ * ⛔ Not just desk phones any more (Izzy, 2026-08-22): an HT box, a cordless base,
+ * a ceiling speaker and a door intercom each get words for what they LOOK like,
+ * never a category name.
+ */
 function describe(model: string | null): string {
   const m = String(model ?? "").toUpperCase();
+  const kind = deviceKindFor(m);
+  if (kind !== "desk_phone" && kind !== "unknown") return describeKind(kind);
   if (/T5[4-8]/.test(m)) return "Big colour screen, buttons down the side";
   if (/T4[6-8]/.test(m)) return "Colour screen, several buttons";
   if (/T4[0-4]/.test(m)) return "Small screen, plain black handset";
   if (/T29|T27/.test(m)) return "Large phone, lots of buttons";
   if (/T3[0-4]/.test(m)) return "Small desk phone";
   if (/CP/.test(m)) return "Conference room speakerphone";
-  return "Desk phone";
+  if (/GXP|GRP|^X\d/.test(m)) return "Desk phone";
+  return describeKind(kind);
 }
 
 export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
@@ -85,6 +93,8 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [othersCount, setOthersCount] = useState(0);
   const [needs, setNeeds] = useState<NeedsPerson[]>([]);
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
+  const [clearTicks, setClearTicks] = useState<Record<string, boolean>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const driverRef = useRef<ReturnType<typeof createSetupDriver> | null>(null);
   const tickingRef = useRef(false);
@@ -214,17 +224,41 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     pollRef.current = setInterval(tickNow, 4000);
   }, [runId]);
 
-  const approveReset = useCallback(async (phoneIds: string[]) => {
+  /**
+   * The person pressed the big button on the clearing screen. ⛔ Only the TICKED
+   * devices are approved; the unticked ones are recorded as a deliberate no, which
+   * ends their setup kindly rather than re-asking forever.
+   */
+  const approveReset = useCallback(async (allIds: string[]) => {
     if (!runId) return;
+    const ticked = allIds.filter((id) => clearTicks[id] !== false);
+    const declined = allIds.filter((id) => clearTicks[id] === false);
+    if (declined.length) driverRef.current?.declineReset(declined);
+    if (!ticked.length) {
+      setNeeds((n) => n.filter((x) => x.kind !== "reset_authorization"));
+      return;
+    }
     try {
-      await apiPost(`/desk-phones/runs/${runId}/authorize-reset`, { phoneIds });
+      await apiPost(`/desk-phones/runs/${runId}/authorize-reset`, { phoneIds: ticked });
       setNeeds((n) => n.filter((x) => x.kind !== "reset_authorization"));
     } catch (e: any) {
       // The api's own refusal is already plain English ("You are not allowed to
       // clear a phone. Ask somebody who is.").
       setError(e?.body?.message || "That could not be approved from this account.");
     }
-  }, [runId]);
+  }, [runId, clearTicks]);
+
+  /** "Skip all of these for now" — a deliberate no for every device on the screen. */
+  const declineAllResets = useCallback((allIds: string[]) => {
+    driverRef.current?.declineReset(allIds);
+    setNeeds((n) => n.filter((x) => x.kind !== "reset_authorization"));
+  }, []);
+
+  /** "I don't know the password" — a complete answer, never a wall. */
+  const dontKnowPassword = useCallback((phoneId: string) => {
+    driverRef.current?.passwordUnknown(phoneId);
+    setNeeds((n) => n.filter((x) => !(x.kind === "password" && x.phoneId === phoneId)));
+  }, []);
 
   const supplyPassword = useCallback(async (phoneId: string, label: string) => {
     const pw = passwordDrafts[phoneId] ?? "";
@@ -535,44 +569,114 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {step === "live" && (
+        {/*
+          ⛔⛔ THE TWO PERSON-ONLY MOMENTS ARE FULL SCREENS, ONE QUESTION AT A TIME.
+          Izzy saw the compact card version and said even he took a second to find
+          it — "dumb people will just get stuck here". So when a decision is needed,
+          the wizard STOPS: no progress list, no competing information, one big
+          question, big buttons, and a way out that is not a wall.
+        */}
+        {step === "live" && needs.some((n) => n.kind === "reset_authorization") && (() => {
+          const n: any = needs.find((x) => x.kind === "reset_authorization");
+          const items = phones.filter((p) => n.phoneIds.includes(p.id));
+          const tickedCount = n.phoneIds.filter((id: string) => clearTicks[id] !== false).length;
+          return (
+            <>
+              <div className="dps-wz-body">
+                <h3>{items.length === 1 ? "One phone needs a fresh start" : `${items.length} phones need a fresh start`}</h3>
+                <p className="dps-sub">
+                  These still have your <b>old phone company&rsquo;s</b> settings inside. To join Loopcom,
+                  we wipe the old settings off. That is all &mdash; your numbers, voicemails and
+                  everything in Loopcom are not touched.
+                </p>
+                <div className="dps-plist" style={{ marginTop: 16 }}>
+                  {(items.length ? items : n.phoneIds.map((id: string) => ({ id, model: null, vendor: null, displayName: null, extNumber: null }))).map((p: any) => (
+                    <label key={p.id} className="dps-prow dps-clear-row">
+                      <input
+                        type="checkbox"
+                        className="dps-check"
+                        checked={clearTicks[p.id] !== false}
+                        onChange={(e) => setClearTicks((t) => ({ ...t, [p.id]: e.target.checked }))}
+                        aria-label={`Clear ${p.displayName || p.model || "this device"}`}
+                      />
+                      <div className="dps-pimg">
+                        {photoFor(p.model) ? <img src={photoFor(p.model)!} alt="" /> : <PhoneGlyph />}
+                      </div>
+                      <div className="dps-pmeta">
+                        <b>{p.displayName ? `${p.displayName}${p.extNumber ? ` — ${p.extNumber}` : ""}` : (p.model ?? "Device")}</b>
+                        <span>{describe(p.model)}</span>
+                      </div>
+                      <span className="dps-hint">{clearTicks[p.id] !== false ? "Will be cleaned" : "Left alone"}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="dps-hint" style={{ marginTop: 12 }}>
+                  Untick any you want left exactly as it is. Each one restarts once and takes about two minutes.
+                </p>
+                {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
+              </div>
+              <div className="dps-wz-foot">
+                <button className="dps-btn dps-btn-g" onClick={() => declineAllResets(n.phoneIds)}>
+                  Skip all of these for now
+                </button>
+                <span className="dps-sp" />
+                <button className="dps-btn dps-btn-p dps-btn-big" onClick={() => approveReset(n.phoneIds)}>
+                  {tickedCount === 0 ? "Continue without cleaning" :
+                    tickedCount === 1 ? "Clean 1 phone — go ahead" : `Clean ${tickedCount} phones — go ahead`}
+                </button>
+              </div>
+            </>
+          );
+        })()}
+
+        {step === "live" && !needs.some((n) => n.kind === "reset_authorization") && needs.some((n) => n.kind === "password") && (() => {
+          const n: any = needs.find((x) => x.kind === "password");
+          return (
+            <>
+              <div className="dps-wz-body">
+                <h3>{n.label} is locked with a password</h3>
+                <p className="dps-sub">
+                  Your old phone company put a password on this one. If you have it, type it in
+                  and we do the rest. <b>If you don&rsquo;t have it, that is completely fine</b> &mdash;
+                  press the other button and Loopcom will sort it out for you.
+                </p>
+                <div className="dps-ask" style={{ marginTop: 18 }}>
+                  <b>Where would the password be?</b>
+                  <p>Sometimes it is on a sticker under the phone. Sometimes it is in an old email
+                  from your previous phone company. If you are not sure, don&rsquo;t dig &mdash; just press
+                  &ldquo;I don&rsquo;t know it&rdquo;.</p>
+                  <div className="dps-ask-row">
+                    <input
+                      type="password"
+                      className="dps-input"
+                      placeholder="Type the password here"
+                      value={passwordDrafts[n.phoneId] ?? ""}
+                      onChange={(e) => setPasswordDrafts((d) => ({ ...d, [n.phoneId]: e.target.value }))}
+                      aria-label={`Password for ${n.label}`}
+                    />
+                    <button className="dps-btn dps-btn-p" onClick={() => supplyPassword(n.phoneId, n.label)}>Use it</button>
+                  </div>
+                  <span className="dps-hint">The password stays on this computer. It is never sent to Loopcom.</span>
+                </div>
+                {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
+              </div>
+              <div className="dps-wz-foot">
+                <button className="dps-btn dps-btn-g dps-btn-big" onClick={() => dontKnowPassword(n.phoneId)}>
+                  I don&rsquo;t know it — Loopcom can sort this one out
+                </button>
+                <span className="dps-sp" />
+              </div>
+            </>
+          );
+        })()}
+
+        {step === "live" && !needs.length && (
           <div className="dps-wz-body">
             <div style={{ display: "flex", alignItems: "baseline", gap: 11, marginBottom: 11 }}>
               <div style={{ font: "700 22px/1 Inter, sans-serif", letterSpacing: "-0.025em" }}>
                 {summary?.headline ?? "Setting up your office"}
               </div>
             </div>
-            {/* ⛔⛔ The two things only a person may do, put in front of one. */}
-            {needs.filter((n) => n.kind === "reset_authorization").map((n: any) => (
-              <div key="reset-auth" className="dps-ask">
-                <b>Before we go on — {n.phoneIds.length === 1 ? "one phone" : `${n.phoneIds.length} phones`} need clearing</b>
-                <p>{n.message} Clearing wipes the old settings so it can join Loopcom. Anything saved on the phone itself from your old system will be gone.</p>
-                <div className="dps-ask-row">
-                  <button className="dps-btn dps-btn-p" onClick={() => approveReset(n.phoneIds)}>
-                    Yes, clear {n.phoneIds.length === 1 ? "this phone" : "these phones"}
-                  </button>
-                  <span className="dps-hint">Nothing is erased until you press this.</span>
-                </div>
-              </div>
-            ))}
-            {needs.filter((n) => n.kind === "password").map((n: any) => (
-              <div key={`pw-${n.phoneId}`} className="dps-ask">
-                <b>{n.label} has a password on it</b>
-                <p>{n.message} Type it here once and we will take it from there.</p>
-                <div className="dps-ask-row">
-                  <input
-                    type="password"
-                    className="dps-input"
-                    placeholder="Phone admin password"
-                    value={passwordDrafts[n.phoneId] ?? ""}
-                    onChange={(e) => setPasswordDrafts((d) => ({ ...d, [n.phoneId]: e.target.value }))}
-                    aria-label={`Password for ${n.label}`}
-                  />
-                  <button className="dps-btn dps-btn-p" onClick={() => supplyPassword(n.phoneId, n.label)}>Use it</button>
-                </div>
-                <span className="dps-hint">The password stays on this computer. It is never sent to Loopcom.</span>
-              </div>
-            ))}
             {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginBottom: 10 }}>{error}</p>}
             <div className="dps-bar">
               <i style={{ width: `${summary && summary.total ? Math.round((summary.ready / summary.total) * 100) : 0}%` }} />

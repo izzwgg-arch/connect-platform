@@ -162,3 +162,46 @@ test("motion is disabled for anyone who asks for less of it", () => {
 test("wide content scrolls in its own container", () => {
   assert.match(CSS, /\.dps-scroll\s*\{\s*overflow-x:\s*auto/);
 });
+
+/* ── the escape hatches Izzy asked for (2026-08-22) ──────────────────────── */
+
+test("'I don't know the password' is a real button, not a wall", () => {
+  // ⛔ Izzy: "What if they don't know their password?" The screen must offer the
+  // way out on the SAME screen that asks — a person who has to hunt for it is stuck.
+  assert.ok(WIZARD.includes("dontKnowPassword"), "the escape handler is gone");
+  assert.ok(/I don&rsquo;t know it/.test(WIZARD), "the escape button's words are gone");
+  // and pressing it must never post the api — it goes through the driver's memo
+  const handler = WIZARD.slice(WIZARD.indexOf("const dontKnowPassword"), WIZARD.indexOf("const dontKnowPassword") + 400);
+  assert.ok(!handler.includes("apiPost"), "the escape posts to the api instead of the driver");
+});
+
+test("the clearing screen lets a person pick WHICH devices, per device", () => {
+  // ⛔ Izzy: "they should be able to select which one should be cleared, not just
+  // clear all phones." A checkbox per row, ticked by default, and the button
+  // counts only the ticked ones.
+  assert.ok(WIZARD.includes("clearTicks"), "the per-device selection state is gone");
+  assert.ok(WIZARD.includes('type="checkbox"'), "the checkboxes are gone");
+  assert.ok(WIZARD.includes("tickedCount"), "the button no longer counts the ticked devices");
+  assert.ok(WIZARD.includes("Skip all of these for now"), "the no-thanks path is gone");
+  assert.ok(WIZARD.includes("declineAllResets"), "skipping no longer records a deliberate no");
+});
+
+test("the person-only asks are FULL SCREENS, never cards beside a progress list", () => {
+  // ⛔ Izzy saw the card version: "it took me a second to realize how it's working…
+  // dumb people will just get stuck here." When a decision is needed the wizard
+  // stops and shows one question. The progress list renders only when nothing is
+  // being asked.
+  assert.ok(WIZARD.includes('step === "live" && !needs.length'),
+    "the progress list no longer waits for the questions to be answered");
+  assert.ok(/needs\.some\(\(n\) => n\.kind === "reset_authorization"\)/.test(WIZARD),
+    "the clearing question is no longer its own screen");
+});
+
+test("every kind of device gets plain words, never category jargon", () => {
+  assert.ok(WIZARD.includes("deviceKindFor"), "the wizard no longer knows device kinds");
+  assert.ok(WIZARD.includes("describeKind"), "the friendly kind words are gone");
+  const stripped = stripComments(WIZARD);
+  for (const jargon of ["ATA", "FXS", "analog telephone adapter", "paging gateway"]) {
+    assert.ok(!stripped.includes(`"${jargon}"`), `category jargon on the screen: ${jargon}`);
+  }
+});

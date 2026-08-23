@@ -48,12 +48,17 @@ export function shouldFingerprint(host: { mac: string; respondedOnHttp?: boolean
   return guessVendorFromMac(host.mac).vendor !== "unknown";
 }
 
-/** Is there evidence this specific device is a desk phone? */
+/** The makers whose devices belong in the list. ⛔ Widened 2026-08-22: any VoIP
+ * device — Grandstream HT boxes and door systems, Fanvil speakers and intercoms —
+ * not only Yealink desk phones. */
+const PHONE_MAKERS = new Set(["yealink", "grandstream", "fanvil"]);
+
+/** Is there evidence this specific device is VoIP equipment we should show? */
 export function looksLikePhone(host: ScannedHost): boolean {
   if (!normalizeMac(host.mac)) return false;
   const fp = host.fingerprint;
   if (fp) {
-    if (String(fp.vendor ?? "").toLowerCase() === "yealink") return true;
+    if (PHONE_MAKERS.has(String(fp.vendor ?? "").toLowerCase())) return true;
     // A model was actually read off the device — that is the device speaking.
     if (fp.model && fp.confidence && fp.confidence !== "none") return true;
   }

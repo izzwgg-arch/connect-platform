@@ -49,7 +49,7 @@ function fakeBridge() {
 }
 
 const phone = (id: string, over: any = {}) => ({
-  id, state: "ASSIGNED", status: "Preparing", ip: "192.168.1.20",
+  id, state: "ASSIGNED", status: "Preparing", ip: "192.168.1.20", vendor: "yealink",
   extNumber: "101", displayName: "Leah", attempts: 0, resetCount: 0, ...over,
 });
 
@@ -89,10 +89,16 @@ test("a password from a person goes to the BRIDGE VAULT and only its reference t
   assert.ok(!("password" in autop), "a password crossed the boundary");
   const adv = api.calls.find((c) => c.path.includes("/advance"))!;
   assert.equal(adv.body.haveCustomerCredentials, true);
-  // ⛔ and nothing password-shaped is ever POSTed to the api
+  // ⛔ and no password VALUE is ever POSTed to the api. (The BOOLEAN field
+  // passwordUnavailable is fine — it carries the answer "I don't have one",
+  // which is knowledge, not a secret.)
   for (const c of api.calls) {
-    assert.ok(!JSON.stringify(c.body ?? {}).toLowerCase().includes("password"),
-      `a password reached the api: ${c.path}`);
+    const body = c.body ?? {};
+    assert.ok(!("password" in body), `a password key reached the api: ${c.path}`);
+    for (const v of Object.values(body)) {
+      assert.ok(typeof v !== "string" || !v.includes("secret"),
+        `a secret-looking value reached the api: ${c.path}`);
+    }
   }
 });
 
@@ -193,4 +199,46 @@ test("the driver never carries a password VALUE — only references", () => {
   const src = stripComments(read("setupDriver.ts"));
   assert.ok(!/password['"]?\s*:\s*[a-z(]/i.test(src), "a password value is being carried");
   assert.ok(src.includes("credentialRef"), "the reference mechanism is gone");
+});
+
+test("'I don't know the password' travels to the server and the wizard never re-asks", async () => {
+  const api = fakeApi([phone("p1")], { p1: { action: "ask_for_password", customerMessage: "x" } });
+  const d = createSetupDriver("r1", api, fakeBridge());
+  const first = await d.tick();
+  assert.equal(first.needs.filter((n) => n.kind === "password").length, 1);
+  d.passwordUnknown("p1");
+  await d.tick();
+  const adv = api.calls.filter((c) => c.path.includes("/advance")).at(-1)!;
+  assert.equal(adv.body.passwordUnavailable, true, "the answer never reached the server");
+});
+
+test("an unticked device is recorded as declined and the flag travels on every advance", async () => {
+  const api = fakeApi([phone("p1"), phone("p2")], {
+    p1: { action: "request_reset_authorization", customerMessage: "x" },
+    p2: { action: "request_reset_authorization", customerMessage: "x" },
+  });
+  const d = createSetupDriver("r1", api, fakeBridge());
+  await d.tick();
+  d.declineReset(["p2"]);
+  await d.tick();
+  const advances = api.calls.filter((c) => c.path.includes("/advance"));
+  const p1Last = advances.filter((c) => c.path.includes("/p1/")).at(-1)!;
+  const p2Last = advances.filter((c) => c.path.includes("/p2/")).at(-1)!;
+  assert.equal(p1Last.body.resetDeclined, false, "the ticked device was declined");
+  assert.equal(p2Last.body.resetDeclined, true, "the unticked device was not declined");
+});
+
+test("a non-Yealink device is never poked with Yealink mechanisms", async () => {
+  // ⛔ Izzy widened the scope to any VoIP device. The local adapter speaks Yealink;
+  // an HT box or a Fanvil speaker gets configured server-side and locally we WAIT —
+  // sending another vendor's device our Action URIs is not "worth a try".
+  const api = fakeApi(
+    [phone("ht", { vendor: "grandstream", model: "HT802" }), phone("yl", { vendor: "yealink" })],
+    { ht: { action: "trigger_autop" }, yl: { action: "trigger_autop" } },
+  );
+  const bridge = fakeBridge();
+  const d = createSetupDriver("r1", api, bridge);
+  const out = await d.tick();
+  assert.equal(bridge.ops.length, 1, `expected 1 local action, saw ${bridge.ops.length}`);
+  assert.deepEqual(out.performed.map((p) => p.phoneId), ["yl"]);
 });

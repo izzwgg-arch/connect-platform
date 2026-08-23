@@ -375,7 +375,8 @@ const cond = (over: Partial<PhoneCondition> = {}): PhoneCondition => ({
   registeredToUs: false, provisioningIsOurs: false, reachableOnLan: true, locked: false,
   defaultCredentialsTried: false, haveCustomerCredentials: false, oldSettingsInWay: false,
   modelProfileMissing: false, firmwareTooOld: false, provisioningRevertedAfterReset: false,
-  networkSuppliesOldProvisioning: false, awaitingReboot: false, onACall: false, ...over,
+  networkSuppliesOldProvisioning: false, awaitingReboot: false, onACall: false,
+  passwordUnavailable: false, resetDeclined: false, ...over,
 });
 
 test("a phone that already works is never touched", () => {

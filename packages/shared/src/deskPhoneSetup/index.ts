@@ -11,3 +11,4 @@ export * from "./states";
 export * from "./deviceIdentity";
 export * from "./escalation";
 export * from "./discoveryFilter";
+export * from "./deviceKinds";

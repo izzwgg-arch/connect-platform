@@ -38,21 +38,36 @@ export function formatMac(mac: string): string {
 }
 
 /**
- * Yealink hardware prefixes.
+ * Phone-maker hardware prefixes, from the IEEE OUI registry.
  *
  * ⛔ A prefix is a STRONG HINT, never proof. Vendors buy and sell address blocks,
  * and a phone behind a switch that rewrites addresses will not match at all. The
  * prefix decides what we try FIRST; the phone's own answer decides what it is.
+ *
+ * Widened 2026-08-22 when Izzy widened the scope to any VoIP device — a Grandstream
+ * HT under a desk and a Fanvil speaker on a ceiling both had to stop reading as
+ * "some other device, left alone".
  */
-const YEALINK_PREFIXES = ["805e0c", "805ec0", "001565", "249ad8", "805e18"];
+const VENDOR_PREFIXES: Array<{ vendor: "yealink" | "grandstream" | "fanvil"; prefixes: string[] }> = [
+  { vendor: "yealink", prefixes: ["805e0c", "805ec0", "001565", "249ad8", "805e18"] },
+  // IEEE registrations for Grandstream Networks.
+  { vendor: "grandstream", prefixes: ["000b82", "c074ad"] },
+  // IEEE registration for Fanvil Technology.
+  { vendor: "fanvil", prefixes: ["0c383e"] },
+];
 
-export type VendorGuess = { vendor: "yealink" | "unknown"; confidence: "prefix" | "none" };
+export type VendorGuess = {
+  vendor: "yealink" | "grandstream" | "fanvil" | "unknown";
+  confidence: "prefix" | "none";
+};
 
 export function guessVendorFromMac(mac: string): VendorGuess {
   const n = normalizeMac(mac);
   if (!n) return { vendor: "unknown", confidence: "none" };
-  for (const p of YEALINK_PREFIXES) {
-    if (n.startsWith(p)) return { vendor: "yealink", confidence: "prefix" };
+  for (const { vendor, prefixes } of VENDOR_PREFIXES) {
+    for (const p of prefixes) {
+      if (n.startsWith(p)) return { vendor, confidence: "prefix" };
+    }
   }
   return { vendor: "unknown", confidence: "none" };
 }

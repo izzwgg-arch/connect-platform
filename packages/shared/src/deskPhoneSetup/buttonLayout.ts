@@ -23,6 +23,8 @@
  * helper tests.
  */
 
+import { deviceKindFor } from "./deviceKinds";
+
 /** Yealink DSS key types. */
 export const DSS_TYPE = {
   /** Proven on a live customer phone (device 3, A plus center). */
@@ -88,10 +90,18 @@ export function yealinkKeyCount(model: string | null | undefined): number {
   return UNKNOWN_MODEL_KEY_COUNT;
 }
 
-/** ⛔ The T19 has no programmable keys at all — the vendor template says so outright. */
+/**
+ * ⛔ The T19 has no programmable keys at all — the vendor template says so outright.
+ * ⛔ And only a DESK PHONE has side keys at all: an HT box under a desk, a cordless
+ * base, a ceiling speaker and a door intercom have no keys to program, so giving
+ * them a layout writes rows the device renders as nothing (2026-08-22, when the
+ * scope widened to any VoIP device).
+ */
 export function modelSupportsButtons(model: string | null | undefined): boolean {
   const m = String(model ?? "").toUpperCase().replace(/[\s_-]/g, "");
-  return !(m === "T19PE2" || m === "T19P" || m === "T19");
+  if (m === "T19PE2" || m === "T19P" || m === "T19") return false;
+  const kind = deviceKindFor(m);
+  return kind === "desk_phone" || kind === "unknown";
 }
 
 export type Colleague = {

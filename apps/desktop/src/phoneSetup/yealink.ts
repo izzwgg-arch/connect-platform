@@ -195,7 +195,7 @@ export function buildStatusRequest(ip: string, creds: YealinkCredentials | null)
 }
 
 export type DeviceFingerprint = {
-  vendor: "yealink" | "unknown";
+  vendor: "yealink" | "grandstream" | "fanvil" | "unknown";
   model: string | null;
   firmware: string | null;
   /**
@@ -207,7 +207,14 @@ export type DeviceFingerprint = {
   confidence: "reported" | "banner" | "none";
 };
 
-const MODEL_PATTERN = /\b(SIP-)?(T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?)\b/i;
+/**
+ * ⛔ Every family here is a vendor's own published model naming, extended 2026-08-22
+ * when Izzy widened the scope to any VoIP device: Grandstream HT ATAs, GXP/GRP desk
+ * phones and GDS door systems; Fanvil PA paging gateways, X-series desk phones and
+ * i-series intercoms. Anything that matches none of them is honestly "unknown".
+ */
+const MODEL_PATTERN =
+  /\b(SIP-)?(T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}[SV]?)\b/i;
 
 /**
  * What is this thing, from whatever it said.
@@ -223,13 +230,17 @@ export function fingerprintFromResponse(res: HttpResponse): DeviceFingerprint {
   const title = /<title>([^<]{0,120})<\/title>/i.exec(res.body || "")?.[1] ?? "";
   const haystack = `${server} ${realm} ${title}`;
 
-  const isYealink = /yealink/i.test(haystack);
+  const vendor: DeviceFingerprint["vendor"] =
+    /yealink/i.test(haystack) ? "yealink"
+    : /grandstream/i.test(haystack) ? "grandstream"
+    : /fanvil/i.test(haystack) ? "fanvil"
+    : "unknown";
   const model = MODEL_PATTERN.exec(haystack)?.[2] ?? null;
-  const firmware = /\b(\d{2,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/.exec(haystack)?.[1] ?? null;
+  const firmware = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)\b/.exec(haystack)?.[1] ?? null;
 
-  if (!isYealink && !model) return { vendor: "unknown", model: null, firmware: null, confidence: "none" };
+  if (vendor === "unknown" && !model) return { vendor: "unknown", model: null, firmware: null, confidence: "none" };
   return {
-    vendor: isYealink ? "yealink" : "unknown",
+    vendor,
     model: model ? model.toUpperCase().replace(/[_-]/g, "") : null,
     firmware,
     confidence: model || firmware ? "banner" : "none",

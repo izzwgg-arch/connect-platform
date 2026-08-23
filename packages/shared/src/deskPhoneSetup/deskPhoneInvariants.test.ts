@@ -26,7 +26,7 @@ import {
   PHONE_STATES, CUSTOMER_STATES, MAX_ATTEMPTS, type PhoneRecord, type PhoneState,
 } from "./states";
 import { buildButtonLayout, parseButtonLayout, serializeButtonLayout, yealinkKeyCount } from "./buttonLayout";
-import { normalizeMac, formatMac, matchDevice, compareToPbxRecords } from "./deviceIdentity";
+import { normalizeMac, formatMac, matchDevice, compareToPbxRecords, guessVendorFromMac } from "./deviceIdentity";
 import { templateStandardsDrift, applyYealinkStandards, templateColumnStandards } from "./standards";
 import { classifyDiscoveredHosts, looksLikePhone, shouldFingerprint } from "./discoveryFilter";
 
@@ -37,9 +37,10 @@ const CONDITION_KEYS = [
   "defaultCredentialsTried", "haveCustomerCredentials", "oldSettingsInWay",
   "modelProfileMissing", "firmwareTooOld", "provisioningRevertedAfterReset",
   "networkSuppliesOldProvisioning", "awaitingReboot", "onACall",
+  "passwordUnavailable", "resetDeclined",
 ] as const;
 
-/** All 2^13 = 8,192 of them. */
+/** All 2^15 = 32,768 of them. */
 function allConditions(): PhoneCondition[] {
   const out: PhoneCondition[] = [];
   const n = CONDITION_KEYS.length;
@@ -88,7 +89,7 @@ test("EXHAUSTIVE: a reset is NEVER chosen when the stored record forbids it", ()
       );
     }
   }
-  assert.ok(checked > 3_000_000, `expected the whole space, walked ${checked}`);
+  assert.ok(checked > 12_000_000, `expected the whole space, walked ${checked}`);
   assert.ok(resets > 0, "if nothing ever resets, this test proves nothing");
 });
 
@@ -548,4 +549,114 @@ test("FUZZ: a device with model evidence is a phone even off an unknown hardware
     mac: "a4:5d:36:00:00:01", ip: "10.0.0.5",
     fingerprint: { vendor: "unknown", model: "T42S", confidence: "none" },
   }), false);
+});
+
+/* ── the two escape hatches, proven exhaustively ─────────────────────────── */
+
+test("EXHAUSTIVE: 'I don't know the password' always ends kindly, never asks again", () => {
+  // ⛔ Izzy: "what if they don't know their password?" Before this branch the wizard
+  // asked forever. Now, from EVERY record and every surrounding condition, a person
+  // who said they don't have it is never asked again and never left hanging.
+  for (const c of CONDITIONS) {
+    if (!(c.reachableOnLan && c.locked && !c.haveCustomerCredentials && c.defaultCredentialsTried && c.passwordUnavailable)) continue;
+    for (const rec of RECORDS) {
+      const e = nextEscalation(c, rec);
+      assert.notEqual(e.action, "ask_for_password",
+        `asked again after "I don't know it": ${JSON.stringify({ c, rec })}`);
+      assert.notEqual(e.action, "try_default_credentials",
+        `guessed a password after being told there is none: ${JSON.stringify({ c, rec })}`);
+    }
+  }
+});
+
+test("EXHAUSTIVE: an unticked phone is never cleared and never re-asked", () => {
+  // The person chose which phones to clear. A deliberate no is an answer.
+  for (const c of CONDITIONS) {
+    if (!c.resetDeclined) continue;
+    for (const rec of RECORDS) {
+      const e = nextEscalation(c, rec);
+      assert.ok(!RESET_ACTIONS.has(e.action),
+        `cleared a phone the person unticked: ${JSON.stringify({ c, rec, action: e.action })}`);
+      assert.notEqual(e.action, "request_reset_authorization",
+        `re-asked for an approval the person already refused: ${JSON.stringify({ c, rec })}`);
+    }
+  }
+});
+
+/* ── device kinds: any VoIP device, not just desk phones ─────────────────── */
+
+test("KINDS: every family lands in the right kind, and junk is honestly unknown", () => {
+  const { deviceKindFor } = require("./deviceKinds");
+  const cases: Array<[string, string]> = [
+    ["T54W", "desk_phone"], ["SIP-T42S", "desk_phone"], ["CP960", "desk_phone"],
+    ["GXP2170", "desk_phone"], ["GRP2614", "desk_phone"], ["X4U", "desk_phone"],
+    ["HT801", "ata"], ["HT802", "ata"], ["ht812", "ata"], ["HT814", "ata"],
+    ["W60B", "cordless_base"], ["W70B", "cordless_base"], ["W80B", "cordless_base"],
+    ["PA2", "pager"], ["PA3", "pager"],
+    ["GDS3710", "doorbell"], ["i16V", "doorbell"], ["i31S", "doorbell"],
+    ["", "unknown"], ["FOO99", "unknown"], ["not a model", "unknown"],
+  ];
+  for (const [model, want] of cases) {
+    assert.equal(deviceKindFor(model), want, `${model} classified wrong`);
+  }
+});
+
+test("KINDS: nothing but a desk phone ever gets buttons", () => {
+  const { deviceKindFor, kindSupportsButtons } = require("./deviceKinds");
+  for (const model of ["HT801", "W60B", "PA3", "GDS3710", "i16V"]) {
+    assert.equal(kindSupportsButtons(deviceKindFor(model)), false, `${model} got buttons`);
+    const layout = buildButtonLayout({
+      model, ownExtension: "101",
+      colleagues: [{ extension: "102", displayName: "P" }],
+    });
+    assert.equal(layout.capacity, 0, `${model} got a ${layout.capacity}-key layout`);
+    assert.equal(Object.keys(layout.keys.dss_keys).length, 0, `${model} got keys written`);
+  }
+  // and desk phones still do
+  assert.ok(buildButtonLayout({ model: "T54W", ownExtension: "101", colleagues: [{ extension: "102", displayName: "P" }] }).capacity > 0);
+});
+
+test("KINDS: the Grandstream HT house rule is on the kind, always", () => {
+  // ⛔ Izzy, 2026-08-22, verbatim intent: "it always has to block incoming calls
+  // from other places. Only from the SIP URL, incoming calls should be accepted.
+  // It should always be set to the Eastern time zone."
+  const { kindRequirements } = require("./deviceKinds");
+  const ata = kindRequirements("ata");
+  assert.ok(ata.some((r: any) => r.id === "inbound_from_sip_server_only"), "the HT inbound lock is missing");
+  assert.ok(ata.some((r: any) => r.id === "eastern_time"), "the HT eastern-time rule is missing");
+  // a device that opens a door or speaks into a room gets the same inbound lock
+  for (const kind of ["doorbell", "pager"]) {
+    assert.ok(kindRequirements(kind).some((r: any) => r.id === "inbound_from_sip_server_only"),
+      `${kind} may take calls from anywhere`);
+  }
+  // and every kind gets Eastern time — the fleet rule, no exceptions
+  for (const kind of ["desk_phone", "ata", "cordless_base", "pager", "doorbell", "unknown"]) {
+    assert.ok(kindRequirements(kind).some((r: any) => r.id === "eastern_time"), `${kind} escaped Eastern time`);
+  }
+});
+
+test("KINDS: only Yealink may be driven locally; every kind may be CLEARED", () => {
+  const { vendorSupportsLocalActions } = require("./deviceKinds");
+  assert.equal(vendorSupportsLocalActions("yealink"), true);
+  assert.equal(vendorSupportsLocalActions("Yealink"), true);
+  for (const v of ["grandstream", "fanvil", "unknown", "", null, undefined]) {
+    assert.equal(vendorSupportsLocalActions(v as any), false, `${v} allowed local actions`);
+  }
+  // ⛔ Clearing is decided by the RECORD, never the kind — an HT box and a doorbell
+  // go through the identical authorisation, once-only and attempt-cap gates. This
+  // pins that no kind-based carve-out sneaks into decideReset's inputs: the record
+  // type simply has no kind field.
+  const rec: PhoneRecord = { state: "PREPARING", resetCount: 0, resetAuthorizedAt: "2026-08-22T00:00:00Z", attempts: 0 };
+  assert.equal(decideReset(rec).allowed, true);
+});
+
+test("KINDS: phone-maker hardware blocks are recognised for all three vendors", () => {
+  assert.equal(guessVendorFromMac("80:5e:0c:00:00:01").vendor, "yealink");
+  assert.equal(guessVendorFromMac("00:0b:82:11:22:33").vendor, "grandstream");
+  assert.equal(guessVendorFromMac("c0:74:ad:11:22:33").vendor, "grandstream");
+  assert.equal(guessVendorFromMac("0c:38:3e:11:22:33").vendor, "fanvil");
+  assert.equal(guessVendorFromMac("a4:5d:36:11:22:33").vendor, "unknown");
+  // so an HT box on a customer's shelf is shown, not filtered out as "other device"
+  assert.equal(looksLikePhone({ mac: "00:0b:82:11:22:33", ip: "192.168.1.30" }), true);
+  assert.equal(looksLikePhone({ mac: "0c:38:3e:11:22:33", ip: "192.168.1.31" }), true);
 });

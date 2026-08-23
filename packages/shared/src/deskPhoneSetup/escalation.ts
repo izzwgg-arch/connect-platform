@@ -66,6 +66,18 @@ export type PhoneCondition = {
   awaitingReboot: boolean;
   /** Somebody is on a call on this phone right now. */
   onACall: boolean;
+  /**
+   * The person said they do not have this phone's password. ⛔ Without this fact the
+   * wizard asks for the password forever — the exact wall Izzy called out: "what if
+   * they don't know their password?" The answer has to be a graceful hand-off, never
+   * a screen that keeps asking.
+   */
+  passwordUnavailable: boolean;
+  /**
+   * The person chose NOT to clear this phone (unticked it on the approval screen).
+   * A deliberate no is an answer, not a condition to retry out of them.
+   */
+  resetDeclined: boolean;
 };
 
 export type Escalation = {
@@ -175,6 +187,20 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
 
   // 6 — old settings in the way. Reset, but only ever with a person's approval.
   if (c.oldSettingsInWay) {
+    // ⛔ A deliberate "no" ends the conversation about this phone. Asking again is
+    // how a wizard turns a choice into a wall.
+    if (c.resetDeclined) {
+      return {
+        action: "halt",
+        rung: -1,
+        halted: true,
+        handOff: "support",
+        reason: "the customer chose not to clear this phone",
+        customerMessage:
+          "Okay — we left this phone exactly as it was. Run setup again whenever you are ready, " +
+          "or Loopcom Support can move it over for you.",
+      };
+    }
     const verdict = decideReset(rec);
     if (!verdict.allowed) {
       if (verdict.reason === "not_authorized") {
@@ -209,6 +235,21 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
   if (c.reachableOnLan && c.locked && !c.haveCustomerCredentials) {
     if (!c.defaultCredentialsTried) {
       return { action: "try_default_credentials", rung: 4, reason: "one documented default attempt" };
+    }
+    // ⛔ "I don't know the password" is a complete answer and it ends here, kindly.
+    // Before this branch existed the wizard asked forever — a wall for exactly the
+    // person this wizard is for.
+    if (c.passwordUnavailable) {
+      return {
+        action: "halt",
+        rung: -1,
+        halted: true,
+        handOff: "support",
+        reason: "locked, and the customer does not have the password",
+        customerMessage:
+          "No problem — plenty of people never got that password. Loopcom Support will sort this " +
+          "phone out for you. The rest of your phones keep going.",
+      };
     }
     return {
       action: "ask_for_password",

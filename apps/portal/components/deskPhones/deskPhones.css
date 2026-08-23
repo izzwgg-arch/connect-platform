@@ -183,6 +183,16 @@
 .dps-input::placeholder { color: var(--dps-dim); }
 .dps-input:focus { outline: 2px solid var(--dps-accent); outline-offset: 1px; }
 
+/* The clearing screen's per-device rows. A row is one big click target. */
+.dps-clear-row { cursor: pointer; }
+.dps-clear-row:hover { border-color: var(--dps-accent); }
+.dps-check {
+  width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--dps-accent); cursor: pointer;
+}
+/* ⛔ The decision buttons are BIG on purpose — these are the screens a nervous
+   person meets, and a big button is half the reassurance. */
+.dps-btn-big { padding: 13px 22px; font-size: 14.5px; border-radius: 11px; }
+
 /* ── diagnostics ───────────────────────────────────────────────────────────── */
 .dps-diag {
   background: #0a1017; color: #b9cadb; border-radius: 11px; padding: 15px 17px;
