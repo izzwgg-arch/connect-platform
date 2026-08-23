@@ -2110,6 +2110,31 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   get it on Apple's approval. It carries the icon-refinement designs AND the
   cancel-guard/claim/telemetry client fixes, so iPhones (incl. Hanna) close
   the client-side answer race on install.
+- ✅✅ **BUILD 54 IS ON TESTFLIGHT (2026-08-23 16:05Z, SUPERSEDES 53): VALID,
+  attached to "Loopcom Testers" (204), beta review WAITING_FOR_REVIEW (201).**
+  Izzy's ask: *"Make iPhone match the current Android version, everything we
+  added in the past two days."* Commit `2dcdbca7` (EAS `f83abd97`, ios-prod)
+  = build 53 + the six post-53 mobile commits, all shared RN code that iOS
+  picks up untouched: the corrected login (`isDark` only — the phone's dark
+  mode no longer darkens it; Welcome DELETED; flexGrow spacers), the themed
+  splash with the real light-mode mark and no glow ball, the contact-name
+  fixes (ring screen + Recents), and the voicemail tab's white-on-blue ink.
+  **One iOS-side change: the native pre-JS splash now follows the SYSTEM
+  theme** (`ios.splash` `#f2f7fd` + `dark: #040810` — the exact split
+  Android's values/values-night makes) instead of a fixed navy field, so a
+  light-theme iPhone no longer flashes navy before the light JS splash.
+  ⛔ **The theme-following home-screen ICON stays Android-only ON PURPOSE** —
+  iOS pops a system alert on every programmatic icon change, so the Settings
+  → App icon row (build 53, key 'Navy') remains the iOS answer; ThemeContext's
+  launcher calls are all `Platform.OS !== 'android'`-guarded, verified.
+  ⛔ Pipeline correction re-earned: `/tmp/connect-ios-build`'s **`origin` is
+  the SERVER CLONE (`/opt/connectcomms/app`), which lags GitHub** — fetching
+  it reset the build dir 3 commits behind and `EAS_NO_VCS` would have shipped
+  the wrong tree; **fetch the `gh` remote and verify `git log -1` reads your
+  exact commit** before any build. ⏳ NOT PROVEN: nobody has opened build 54
+  on an iPhone — acceptance is one TestFlight install checking the light
+  login/splash, a saved contact's name on an incoming call, and the voicemail
+  tab's buttons in light mode.
 - ⏳ **Open:** Apple's beta-review approval (automatic notification to
   testers); nobody has seen build 53 on a device; no call has yet exercised
   the deployed answer fix or produced an `rtpStats` row; no picture sent
