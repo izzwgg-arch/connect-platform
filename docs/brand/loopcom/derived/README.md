@@ -80,3 +80,24 @@ src.resize((640, 114), Image.LANCZOS).save(
 `billingPdfLogo.test.ts` pins that the file stays 8-bit non-interlaced RGBA
 (PDFKit rejects interlaced PNGs) and that its aspect ratio is the tagline-free
 ~5.6:1 — a lockup carrying the tagline is ~4.5:1, so it can never pass by accident.
+
+## loopcom-mark-light.png — the infinity alone, LIGHT-mode version (2026-08-23)
+
+Izzy: the light splash must show "the actual logo, just the light mode
+version" — and the kit had no standalone file of the light infinity, so this
+one was made. It is the infinity exactly as it appears in
+`../masters/loopcom-logo-light.png`, keyed onto transparency:
+
+- alpha = 1 − min(R,G,B)/255 against the master's white ground, colors
+  un-mixed (fg = (c − (1−a)·255) / a);
+- tagline letters, the L's base and the background circuit decorations were
+  dropped by keeping only the mark's LARGEST CONNECTED ink region (dilated to
+  preserve the soft chrome glow) — ⛔ a plain crop cannot separate them, the
+  master's decorations run behind everything;
+- 443×221 native (the master's infinity is small); the app ships a 2× LANCZOS
+  + light-unsharp copy at `apps/mobile/assets/loopcom-mark-light.png` (886×442).
+
+⛔ `app-icons/ios-light-1024.png` looks like this file's sibling and is NOT —
+it is the pale silvery icon-polarity mark and was rejected for the splash.
+The dark-mode counterpart is `apps/mobile/assets/loopcom-mark.png` (the chrome
+glow art, cleaned of its dark alpha haze the same day).

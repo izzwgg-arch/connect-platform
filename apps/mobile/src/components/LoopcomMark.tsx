@@ -29,20 +29,24 @@ import type { ImageStyle, StyleProp } from 'react-native';
 
 const MARK = require('../../assets/loopcom-mark.png');
 /**
- * Light-ground variant (Izzy 2026-08-23: the chrome mark "doesn't look good in
- * light mode"). This is the Blue 2B icon's own mark — white-outlined, blue
- * bands with light ticks — extracted at high resolution from the 1024 icon by
- * difference-keying it against the icon's reconstructed gradient background
- * (the transparent kit foreground is only 222px of ink — too soft to upscale).
- * Recipe in CLAUDE.md. Used by the light-theme splash; the chrome mark stays
- * the dark-theme art.
+ * Light-ground variant — ⛔ THE REAL LIGHT-MODE LOGO, per Izzy 2026-08-23 ("I
+ * want it to be the actual logo, just the light mode version. We have a light
+ * mode version. Check the files."). The kit DOES ship light art:
+ * docs/brand/loopcom/masters/loopcom-logo-light.png. This asset is that
+ * master's infinity, white-keyed to transparency (alpha = 1 − min(RGB)/255,
+ * colors un-mixed), tagline/letter fragments dropped by keeping only the
+ * mark's largest connected ink region, then 2× LANCZOS + light unsharp
+ * (the master's infinity is only ~443px wide). A first attempt substituted
+ * the Blue 2B icon's tick-band mark — rejected as "horrible"; never swap in
+ * icon art for the logo again. Used by the light-theme splash; the chrome
+ * mark stays the dark-theme art.
  */
 const MARK_LIGHT = require('../../assets/loopcom-mark-light.png');
 
 /** Intrinsic aspect of assets/loopcom-mark.png (640 × 302, ink-cropped). */
 export const LOOPCOM_MARK_ASPECT = 640 / 302;
-/** Intrinsic aspect of assets/loopcom-mark-light.png (821 × 387, ink-cropped). */
-export const LOOPCOM_MARK_LIGHT_ASPECT = 821 / 387;
+/** Intrinsic aspect of assets/loopcom-mark-light.png (886 × 442, ink-cropped). */
+export const LOOPCOM_MARK_LIGHT_ASPECT = 886 / 442;
 
 interface LoopcomMarkProps {
   /** Width of the mark in dp. Height is derived from the artwork's aspect. */
