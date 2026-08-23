@@ -2397,11 +2397,20 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   switching. The row is relabelled **Automatic / Navy** (it read "Light blue",
   which became a lie the moment variants shipped) and **Automatic is the way
   back**. ⛔ Check that row before diagnosing this.
-  ⛔ **Verified at the IMPLEMENTATION, not the schema:**
-  `@expo/prebuild-config`'s `withIosIcons.js` really emits an
-  `appearance: 'dark'` catalog entry (a type accepting the key proves nothing);
-  `expo config --type public` resolves the object with no schema warning;
-  typecheck 0. ⛔ **No `tinted` variant on purpose** — the only monochrome art
+  ✅✅ **PROVEN IN THE GENERATED ARTIFACT, not just the config — `expo prebuild`
+  was run on the exact shipped commit and the asset catalog read back.**
+  `AppIcon.appiconset/Contents.json` carries TWO entries, the second tagged
+  **`appearances: [{ appearance: "luminosity", value: "dark" }]`**, and the
+  PNGs match the sources pixel-for-pixel: default corner **(34,167,255)** = the
+  blue art, dark corner **(12,19,37)** = the navy art. ⛔ Config resolving and
+  a type accepting `dark` prove nothing on their own — `@expo/prebuild-config`'s
+  `withIosIcons.js` emitting that entry is what proves it. Typecheck 0.
+  ⛔⛔ **AND THE TRAP THAT PROOF CREATES: `expo prebuild` leaves an `ios/`
+  DIRECTORY IN THE BUILD CLONE, and `EAS_NO_VCS=1` UPLOADS THE WORKING TREE — so
+  a leftover `ios/` rides the NEXT build and can silently override the
+  regenerated project.** `ios/` is gitignored, so `git status` stays clean and
+  never warns you. **`rm -rf ios` in `/tmp/connect-ios-build/apps/mobile` the
+  moment you finish inspecting it** (done here; re-verified absent). ⛔ **No `tinted` variant on purpose** — the only monochrome art
   in the kit is the 24–96px notification silhouette and upscaling it to 1024 is
   mush; iOS derives its own.
   ⏳ **NOT PROVEN: nobody has watched the icon change on a real iPhone.** It is
