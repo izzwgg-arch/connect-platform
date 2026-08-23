@@ -94,13 +94,18 @@ const config: ExpoConfig = {
 
   ios: {
     supportsTablet: false,
-    // iOS-only: the native pre-JS splash is a PLAIN navy field (no artwork),
-    // so the JS SplashScreen's mark can spring in from nothing exactly as the
-    // 2026-08-23 mockup draws it. Android keeps the shared config above (its
-    // native splash is effectively the background colour already).
+    // iOS-only: the native pre-JS splash is a PLAIN field (no artwork), so the
+    // JS SplashScreen's mark can spring in from nothing exactly as the
+    // 2026-08-23 mockup draws it. It follows the SYSTEM theme — the same split
+    // Android's values/values-night colors.xml makes (#f2f7fd light / #040810
+    // dark) — because the saved in-app theme isn't readable before JS loads;
+    // the in-app splash then follows the IN-APP theme (Izzy 2026-08-23).
     splash: {
-      backgroundColor: '#0a1322',
+      backgroundColor: '#f2f7fd',
       resizeMode: 'cover',
+      dark: {
+        backgroundColor: '#040810',
+      },
     },
     // iOS app icon (2026-08-23 refinement, Izzy's pick): light blue is the
     // DEFAULT; the navy variant is a user setting via expo-alternate-app-icons
@@ -111,7 +116,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '53',
+    buildNumber: '54',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       // App Store upload rejected "Connect" as an already-taken bundle name
