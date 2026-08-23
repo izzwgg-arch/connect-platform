@@ -152,13 +152,16 @@ Mock-up published: <https://claude.ai/code/artifact/47d9d49b-85f2-4b48-b5ba-4c3b
   ⛔ **`platformWebsite()` has exactly ONE caller — the invoice/receipt PDF — which is the
   only reason changing its default was safe. Keep it that way**, or that default silently
   becomes a platform-wide answer.
-  ⛔⛔ **THE SPELLING IS A LIVE RISK AND NOBODY HAS READ THE LLC FILING.** It is written
-  **`Loopcom LLC`** — lowercase c, matching Izzy's 2026-08-16 brand rule (he types
-  "LoopCom" casually; that same quote instructs lowercase) and the `O=Loopcom LLC`
-  already locked into the Play upload keystore. **USAC says "LoopCom, LLC" and the FCC
-  FRN says "loopcom llc."** — and D&B, Apple and Google all verify the org name against
-  that record, so a mismatch is a real verification risk, not a typo. One constant to
-  change if the filing disagrees.
+  ✅✅ **THE SPELLING IS SETTLED — Izzy confirmed it 2026-08-23: *"it's Loopcom LLC,
+  lowercase c is correct."*** So `Loopcom LLC` is what the invoice, the receipt and the
+  on-screen document print, and **this is not an open question — do not "correct" it to
+  LoopCom.** It already matched his 2026-08-16 brand rule and the `O=Loopcom LLC` locked
+  into the Play upload keystore.
+  ⛔ **What is still open is a REGISTRATION question, not an invoice one: the other
+  records disagree** — USAC says "LoopCom, LLC", the FCC FRN says "loopcom llc." D&B,
+  Apple and Google verify the org name against those records, so the mismatch still
+  matters for the D-U-N-S / Play / App Store work (see the Play Store section). It just
+  no longer blocks anything on the billing documents.
 - ⚠️ **`platformSupportEmail()` and `platformNoreplyEmail()` still answer on
   connectcomunications.com** — only the invoice's three printed identifiers moved. The
   platform-wide mail flip is still `PLATFORM_MAIL_DOMAIN`, and still Izzy's call.
