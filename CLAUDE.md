@@ -250,9 +250,7 @@ refinement options. There is a favicon there to put in the browser on top."*
   so at 16px it renders **7 tall in a 16 box → a gap of 9 → 4 above / 5 below**.
   **32 and 48 happened to land on even gaps and were pixel-perfect, which is why
   the defect was invisible in every frame except the one Chrome actually uses.**
-  Measured, not eyeballed: alpha-weighted centroid **y=7.50 vs a box centre of
-  8.00**, and Chrome's own tab title (**Segoe UI 12px** on Windows) measures
-  **y=8.05** in that same 16px line box — so the mark visibly rode above the text.
+  Measured: alpha-weighted centroid **y=7.50 vs a box centre of 8.00**.
   ✅ **Fix: centre by PADDING AT SOURCE RESOLUTION (794px) and resizing ONCE**, so
   the residual error is a fraction of a *source* pixel (~0.02px at 16px) instead
   of half a rendered one. All three frames now measure **0.00px off centre**;
@@ -272,6 +270,38 @@ refinement options. There is a favicon there to put in the browser on top."*
   multi-size asset can be correct at most sizes and wrong at the ONE that
   ships.** Judge every frame independently against the size it is actually used
   at — do not infer 16 from 32.
+- ⛔⛔ **AND CENTRING IT IN THE BOX WAS STILL NOT LEVEL WITH THE TEXT — Izzy
+  reported it a SECOND time, and the first measurement was of my own mock.**
+  I measured Chrome's tab-title centroid on a canvas with
+  **`textBaseline='middle'`**, got 8.05, and concluded box-centre was the
+  target. **That is a construction I invented, not Chrome's layout.** Measured
+  the way Chrome actually lays a tab out: **Segoe UI 12px has fontBoundingBox
+  ascent 13 / descent 3 — exactly a 16px line box — so the baseline sits at
+  y=13 and a lowercase string's ink runs rows 4..16, optical centre y=10.0**
+  (agreed three ways: ink bbox, x-height band, mass centroid). **So a
+  box-centred mark sits 2px HIGH against the word.**
+  ⛔ **It bites THIS mark especially because it is only ~7px tall** — a thin
+  band floating in the upper half of the text's ink instead of straddling it.
+  A conventional favicon fills its 16px box (rows 0..15), brackets the text's
+  ink, and reads level, which is why the whole web is not visibly misaligned.
+  ✅ **`OPTICAL_DROP_FRAC = 2/16`**, applied at source resolution; all three
+  frames land on the text's optical centre within **0.01px**. It is a
+  FRACTION so every frame agrees — **Chrome uses the 32px frame on a HiDPI
+  display**, so a pixel count would only be right at one DPR.
+  ⛔ **COST, stated plainly: any surface showing the icon with NO text beside
+  it — a pinned tab, or a Windows pinned-site shortcut, which reads this same
+  .ico — now shows the mark low in its box.** Deliberate trade: the favicon's
+  job is overwhelmingly tab strip and bookmarks bar, both of which pair it
+  with text. **The desktop app has its OWN icon set and is unaffected**, and
+  `apple-icon.png` is generated from a different source and is untouched.
+  ⛔ The guard now targets **box-middle + OPTICAL_DROP_FRAC**; replayed against
+  the box-centred build it reports **-2.00 / -4.00 / -6.00px, all -12.5%**.
+- ⛔⛔ **THE RULE THIS COST TWO ROUNDS: when you measure a thing to align
+  against, measure THE REAL LAYOUT, not a canvas you built to stand in for it.**
+  `textBaseline='middle'` centres the em box; CSS centres the LINE box, and for
+  a font with asymmetric ascent/descent those differ by 2px at 12px. Both of my
+  first two answers were confidently wrong in the same direction, and Izzy's eye
+  was right both times.
 - ✅ **`apple-icon.png` DELIBERATELY KEEPS ITS PLATE** — iOS composites a
   transparent touch icon onto **BLACK**, so the Add-to-Home-Screen icon would
   come out as a mark on a black square. A `--check` guard fails if it ever loses
