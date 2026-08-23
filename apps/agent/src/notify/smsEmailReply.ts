@@ -49,53 +49,141 @@ export function parseSmsReplyAddress(address: string): ParsedSmsReplyAddress | n
   return { threadId: m[1], sig: m[2], domain: m[3].toLowerCase() };
 }
 
-/**
- * Find the reply address among every recipient address a mail carried
- * (To, Cc, Delivered-To, X-Original-To, envelope). Bound to OUR reply domain —
- * a token minted for another deployment's domain is not ours to honour.
- */
-export function findSmsReplyAddress(candidates: string[], replyDomain: string): ParsedSmsReplyAddress | null {
-  const want = String(replyDomain || "").trim().toLowerCase();
-  if (!want) return null;
-  for (const c of candidates || []) {
-    const parsed = parseSmsReplyAddress(c);
-    if (parsed && parsed.domain === want) return parsed;
-  }
-  return null;
+export interface SmsReplyTargetResolution {
+  /** "ok" = exactly one conversation is named and proven; route to `target`. */
+  status: "ok" | "none" | "ambiguous";
+  target: ParsedSmsReplyAddress | null;
+  /** Distinct thread ids among the VERIFIED candidates (for the audit line). */
+  threadIds: string[];
+  /** How many addresses on our domain the mail carried at all. */
+  candidateCount: number;
+  /** True when addresses were present but not one of them verified. */
+  sawUnverified: boolean;
+  /** True when References/In-Reply-To picked between verified candidates. */
+  usedThreadingHint: boolean;
 }
 
+/** `sms-thread-<threadId>@…` — the synthetic root id the forward job threads on. */
+const THREAD_ROOT_RE = /sms-thread-([A-Za-z0-9]+)@/gi;
+
 /**
- * EVERY distinct reply address on our domain that a mail carried.
+ * WHICH conversation an incoming mail is a reply to.
  *
- * ⛔ Ambiguity is REFUSED by the caller, never resolved. A mail naming two
- * different threads has no single correct destination, and silently picking one
- * would hand whoever crafted it a way to steer a reply into a thread of their
- * choosing. One address or nothing.
+ * ⛔⛔ THE ORDER HERE IS THE WHOLE POINT: VERIFY FIRST, THEN COUNT.
+ * The 2026-08-21 version counted the raw addresses first and refused anything
+ * that carried more than one — and Gmail puts the SAME address in the mail
+ * TWICE: once as sent (`To:`) and once with the local part LOWERCASED
+ * (`Delivered-To:`). The signature is base64url, so those two strings differ,
+ * and every real reply looked like two conversations and was refused. It was
+ * invisible for three days because the only mails that ever succeeded were sent
+ * FROM the bridge mailbox to itself, which Gmail does not stamp that way.
+ * Measured on the live mailbox 2026-08-23: two customer replies, each ONE thread,
+ * each counted as two. **Never count unverified strings.**
+ *
+ * The security property is unchanged and is stated in terms of CONVERSATIONS,
+ * not strings: a mail that proves it holds the capability for two DIFFERENT
+ * conversations has no single correct destination and is refused. Junk that
+ * fails verification is ignored rather than allowed to veto a genuine reply —
+ * counting it would let anyone kill a customer's replies just by CC'ing a
+ * made-up `sms+…@` address.
  */
-export function findAllSmsReplyAddresses(candidates: string[], replyDomain: string): ParsedSmsReplyAddress[] {
-  const want = String(replyDomain || "").trim().toLowerCase();
-  if (!want) return [];
-  const out: ParsedSmsReplyAddress[] = [];
-  const seen = new Set<string>();
-  for (const c of candidates || []) {
-    const parsed = parseSmsReplyAddress(c);
-    if (!parsed || parsed.domain !== want) continue;
-    const key = `${parsed.threadId}.${parsed.sig}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(parsed);
+export function resolveSmsReplyTarget(opts: {
+  candidates: string[];
+  replyDomain: string;
+  secret: string;
+  /**
+   * Raw References / In-Reply-To text. Used ONLY to choose between addresses
+   * that have ALREADY been verified — never to route on its own. It is
+   * client-supplied, so it can express a preference among capabilities the
+   * sender demonstrably holds and nothing more.
+   */
+  threadingHint?: string | null;
+}): SmsReplyTargetResolution {
+  const want = String(opts.replyDomain || "").trim().toLowerCase();
+  const secret = String(opts.secret || "");
+  const empty: SmsReplyTargetResolution = {
+    status: "none", target: null, threadIds: [], candidateCount: 0, sawUnverified: false, usedThreadingHint: false,
+  };
+  if (!want || !secret) return empty;
+
+  const parsed: ParsedSmsReplyAddress[] = [];
+  for (const c of opts.candidates || []) {
+    const p = parseSmsReplyAddress(c);
+    if (p && p.domain === want) parsed.push(p);
   }
-  return out;
+  if (parsed.length === 0) return empty;
+
+  // Verify BEFORE counting. A candidate proves nothing until its signature does.
+  const verified = parsed.filter((p) => verifySmsReplySignature(p.threadId, p.sig, secret));
+  if (verified.length === 0) {
+    return { ...empty, candidateCount: parsed.length, sawUnverified: true };
+  }
+
+  // Group by conversation. ⛔ Case-insensitively: an MTA that lowercased the
+  // local part lowercased the thread id too, so the two copies of ONE id must
+  // not read as two conversations. The surviving candidate keeps its own case.
+  const groups = new Map<string, ParsedSmsReplyAddress>();
+  for (const p of verified) {
+    const key = p.threadId.toLowerCase();
+    if (!groups.has(key)) groups.set(key, p);
+  }
+  const threadIds = Array.from(groups.values()).map((p) => p.threadId);
+  if (groups.size === 1) {
+    return {
+      status: "ok", target: groups.values().next().value ?? null,
+      threadIds, candidateCount: parsed.length, sawUnverified: parsed.length !== verified.length,
+      usedThreadingHint: false,
+    };
+  }
+
+  // More than one PROVEN conversation. Let the mail client say which one it was
+  // replying to — but only as a tie-break among capabilities already held.
+  const hint = String(opts.threadingHint || "");
+  if (hint) {
+    const named = new Set<string>();
+    for (const m of hint.matchAll(THREAD_ROOT_RE)) named.add(m[1].toLowerCase());
+    const picked = Array.from(groups.entries()).filter(([key]) => named.has(key));
+    if (picked.length === 1) {
+      return {
+        status: "ok", target: picked[0][1], threadIds,
+        candidateCount: parsed.length, sawUnverified: parsed.length !== verified.length,
+        usedThreadingHint: true,
+      };
+    }
+  }
+  return {
+    status: "ambiguous", target: null, threadIds,
+    candidateCount: parsed.length, sawUnverified: parsed.length !== verified.length,
+    usedThreadingHint: false,
+  };
 }
 
-/** Timing-safe signature check. */
+function timingSafeEq(expected: string, candidate: string): boolean {
+  const a = Buffer.from(expected);
+  const b = Buffer.from(candidate);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Timing-safe signature check.
+ *
+ * ⛔ Accepts the signature as minted, AND the all-lowercase form of that exact
+ * signature — because a receiving MTA (Gmail, measured) lowercases the whole
+ * local part when it stamps `Delivered-To:`, and base64url is case-significant.
+ * This is NOT a case-insensitive compare of arbitrary input: the candidate must
+ * itself be entirely lower-case, and must then equal the lower-cased true
+ * signature, so exactly ONE derived string is accepted beyond the original.
+ * Without it, a reply whose only surviving copy is the MTA-stamped one is
+ * refused as forged — a silent drop of a genuine customer message.
+ */
 export function verifySmsReplySignature(threadId: string, sig: string, secret: string): boolean {
   if (!threadId || !sig || !secret) return false;
   const expected = mintSmsReplySignature(threadId, secret);
-  const a = Buffer.from(expected);
-  const b = Buffer.from(String(sig));
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  const candidate = String(sig);
+  if (timingSafeEq(expected, candidate)) return true;
+  if (candidate !== candidate.toLowerCase()) return false; // only an MTA-flattened copy qualifies
+  return timingSafeEq(expected.toLowerCase(), candidate);
 }
 
 /**

@@ -345,6 +345,56 @@ describe("SmsEmailReplyJob — routing decides the sender, not the From header",
     assert.equal(h.reason("sms.reply_ignored"), "ambiguous_reply_address");
   });
 
+  it("⛔⛔ THE REGRESSION: Gmail's To: + lower-cased Delivered-To: copy still sends", async () => {
+    // The exact shape measured on the live bridge mailbox 2026-08-23 for BOTH
+    // real customer replies: one conversation, carried twice, second copy with
+    // the whole local part flattened by the receiving MTA. The 08-21 build
+    // counted those as two conversations and refused every real reply.
+    const addr = mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN);
+    assert.ok(/[A-Z]/.test(addr.split("@")[0]), "fixture must have upper-case in the local part or this test proves nothing");
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: ["sms@loopcom.net", addr, addr.toLowerCase()] })]);
+    assert.equal(await h.job.runOnce(), 1, "a real Gmail reply must be sent");
+    assert.equal(h.fetches.length, 1);
+    assert.match(h.fetches[0].url, new RegExp(`/chat/threads/${THREAD_ID}/messages$`));
+  });
+
+  it("a reply whose ONLY surviving copy is the MTA-flattened one still sends", async () => {
+    const addr = mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN);
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: ["sms@loopcom.net", addr.toLowerCase()] })]);
+    assert.equal(await h.job.runOnce(), 1);
+  });
+
+  it("a made-up address CC'd alongside a real one cannot veto the reply", async () => {
+    // Otherwise anyone who knows the pattern can permanently kill a customer's
+    // replies just by CC'ing `sms+anything.<junk>@loopcom.net`.
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: [mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN), `sms+cmfake999.${"z".repeat(24)}@${DOMAIN}`] })]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.match(h.fetches[0].url, new RegExp(`/chat/threads/${THREAD_ID}/messages$`));
+  });
+
+  it("References picks between two PROVEN conversations instead of refusing", async () => {
+    const h = makeHarness();
+    h.setEmails([
+      makeEmail({
+        to: [mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN), mintSmsReplyAddress("cmotherthread999", SECRET, DOMAIN)],
+        headers: { references: `<sms-thread-${THREAD_ID}@sms.connectcomunications.com>` },
+      }),
+    ]);
+    assert.equal(await h.job.runOnce(), 1);
+    assert.match(h.fetches[0].url, new RegExp(`/chat/threads/${THREAD_ID}/messages$`));
+  });
+
+  it("an address on our domain that proves nothing is 'bad_signature', not 'no_reply_address'", async () => {
+    const h = makeHarness();
+    h.setEmails([makeEmail({ to: [`sms+cmfake999.${"z".repeat(24)}@${DOMAIN}`] })]);
+    assert.equal(await h.job.runOnce(), 0);
+    assert.equal(h.fetches.length, 0);
+    assert.equal(h.reason("sms.reply_ignored"), "bad_signature");
+  });
+
   it("the SAME address repeated is not ambiguous", async () => {
     const addr = mintSmsReplyAddress(THREAD_ID, SECRET, DOMAIN);
     const h = makeHarness();
