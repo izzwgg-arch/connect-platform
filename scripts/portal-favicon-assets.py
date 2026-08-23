@@ -101,6 +101,11 @@ MARGIN = 0.0
 EXPECT_BLUE_FILL_PCT = 12.22          # blue showing between the ticks
 EXPECT_EYE_PCT = 1.31                 # each eye, and they must match each other
 
+# How far the ink's vertical centroid may sit from the middle of the icon box.
+# 0.06px is a hair over the rounding floor of source-resolution padding and far
+# under anything an eye can see; the bug this catches was 0.55px at 16.
+MAX_CENTRE_OFFSET_PX = 0.06
+
 _problems: list[str] = []
 _written: list[Path] = []
 
@@ -176,26 +181,40 @@ def build_master():
 
 def render(side: int, src, band, box) -> Image.Image:
     """Premultiplied resize - without it the plate blue still sitting in the fully
-    transparent area bleeds into every edge and prints a halo."""
+    transparent area bleeds into every edge and prints a halo.
+
+    The mark is centred by PADDING AT SOURCE RESOLUTION and then resizing once.
+    Do NOT go back to resizing first and compositing at ``(side - nh) // 2``:
+    that floor is only exact when the leftover gap is even, and the mark is
+    2.22:1, so at 16px it is 7 tall in a 16 box - a gap of 9, which floored to
+    4 above / 5 below and printed the tab icon 0.55px HIGH. 32 and 48 happened
+    to land on even gaps, so the bug was invisible in every frame except the
+    one the tab strip actually uses. Padding at 794px means the residual error
+    is a fraction of a SOURCE pixel (~0.02px at 16px) instead of half a
+    rendered one, and it costs nothing: this is still a single resample.
+    """
     bw, bh = box[2] - box[0], box[3] - box[1]
     rgb = src[box[1]:box[3], box[0]:box[2]]
     a = band[box[1]:box[3], box[0]:box[2]]
     pm = rgb * a[..., None]
 
-    scale = (side * (1 - 2 * MARGIN)) / max(bw, bh)
-    nw, nh = max(1, round(bw * scale)), max(1, round(bh * scale))
-    p = np.asarray(Image.fromarray((pm * 255).astype(np.uint8), "RGB")
-                   .resize((nw, nh), Image.LANCZOS)).astype(np.float64) / 255.0
-    al = np.asarray(Image.fromarray((a * 255).astype(np.uint8), "L")
-                    .resize((nw, nh), Image.LANCZOS)).astype(np.float64) / 255.0
+    # Square canvas in SOURCE units, with the mark centred inside it.
+    span = int(round(max(bw, bh) / (1 - 2 * MARGIN)))
+    ox, oy = (span - bw) // 2, (span - bh) // 2
+    pm_sq = np.zeros((span, span, 3), dtype=np.float64)
+    a_sq = np.zeros((span, span), dtype=np.float64)
+    pm_sq[oy:oy + bh, ox:ox + bw] = pm
+    a_sq[oy:oy + bh, ox:ox + bw] = a
+
+    p = np.asarray(Image.fromarray((pm_sq * 255).astype(np.uint8), "RGB")
+                   .resize((side, side), Image.LANCZOS)).astype(np.float64) / 255.0
+    al = np.asarray(Image.fromarray((a_sq * 255).astype(np.uint8), "L")
+                    .resize((side, side), Image.LANCZOS)).astype(np.float64) / 255.0
     al = np.clip(al, 0.0, 1.0)
     with np.errstate(divide="ignore", invalid="ignore"):
         col = np.where(al[..., None] > 1e-6, p / np.maximum(al[..., None], 1e-6), 0.0)
 
-    frame = Image.fromarray((np.dstack([np.clip(col, 0, 1), al]) * 255).astype(np.uint8), "RGBA")
-    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    canvas.alpha_composite(frame, ((side - nw) // 2, (side - nh) // 2))
-    return canvas
+    return Image.fromarray((np.dstack([np.clip(col, 0, 1), al]) * 255).astype(np.uint8), "RGBA")
 
 
 def write_ico(images: dict[int, Image.Image], path: Path) -> None:
@@ -243,6 +262,27 @@ def check(frames: dict[int, Image.Image]) -> None:
                 if got.tobytes() != frames[size].tobytes():
                     _problems.append("{}: the {}px frame does not match the kit"
                                      .format(ICO_PATH.relative_to(REPO), size))
+
+            # The tab strip centres a 16x16 icon box against the title text, so
+            # the mark's own ink must sit on the centre of that box. This is a
+            # SEPARATE failure from "does not match the kit": the frame can be
+            # pixel-correct artwork and still be pasted a pixel high. It shipped
+            # exactly that way - 16px sat 0.55px high while 32 and 48 were
+            # perfect, because only 16 had an odd leftover gap to floor.
+            for size in ICO_SIZES:
+                with Image.open(ICO_PATH) as ico:
+                    ico.size = (size, size)
+                    alpha = np.asarray(ico.convert("RGBA")).astype(np.float64)[..., 3]
+                if alpha.sum() <= 0:
+                    continue
+                rows = np.arange(size) + 0.5
+                centroid = float((alpha.sum(axis=1) * rows).sum() / alpha.sum())
+                off = centroid - size / 2.0
+                if abs(off) > MAX_CENTRE_OFFSET_PX:
+                    _problems.append(
+                        "{}: the {}px frame sits {:+.2f}px off centre ({:+.1f}% of the "
+                        "icon) - it will not look level with the tab title"
+                        .format(ICO_PATH.relative_to(REPO), size, off, off / size * 100))
 
     if not APPLE_PATH.exists():
         _problems.append("missing: {}".format(APPLE_PATH.relative_to(REPO)))
