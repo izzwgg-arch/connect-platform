@@ -204,7 +204,12 @@ mandate**, both verified; no Connect deploy, no migration, no Apply Changes.)
   and writes the header when absent. ⛔ The installer embeds its own copy —
   **the drift guard caught the divergence**, which is what it is for; re-sync
   it and re-run `install-vitalpbx-inbound-route-helper.test.ts` (55/55).
-  ⏳ **The mirror fix reaches production only at the next helper install.**
+  ✅ **SHIPPED TO THE PBX 2026-08-23** — `mirror_writes.py` only (the other four
+  helper files were verified byte-identical to the repo first, so there was no
+  silent downgrade); backup `/root/helper-backup-20260823T211058Z/`, py_compile
+  before restart, and the fix **proven against the INSTALLED module** (empty file
+  gains the header, existing context not duplicated, old callers unchanged).
+  Helper still `2026.08.23.1`, active, geo path still **disabled**.
 - ✅ **THE STANDING CHECK: `scripts/pbx/voicemail-mailbox-audit.sh`** (runs on
   the PBX, read-only, exit 1 on a problem). Class A = non-allowlisted
   `enabled='no'`; class B = enabled but absent from Asterisk.
@@ -214,8 +219,23 @@ mandate**, both verified; no Connect deploy, no migration, no Apply Changes.)
   A check that only compared intended-vs-loaded would have watched this for
   four months and reported OK every time. Allowlist via
   `VM_AUDIT_ALLOW_DISABLED` (default `gesheft:898`, the one deliberate
-  exclusion). ⏳ **It is not yet on a timer — wiring it to an escalation is
-  the remaining step.**
+  exclusion).
+- ✅✅ **AND IT IS ON A TIMER NOW: `apps/api/src/pbx/voicemailMailboxGuardrail.ts`,
+  DEPLOYED (`b9ac1b69`) AND PROVEN RUNNING.** Hourly + a 4-minute boot kick;
+  raises an **AgentEscalation** (the only channel that reaches a phone — a guard
+  forbids `ADMIN_ALERT` and forbids it growing its own email path).
+  ⛔ **De-duped over a 24h WINDOW, deliberately NOT `raiseGuardrailEscalation`** —
+  that has no time bound and `AgentEscalationStatus` has no RESOLVED value, so
+  each key fires exactly ONCE EVER; this must keep nagging while a customer
+  cannot receive voicemail. ⛔ Writes an `AgentAuditLog` row on EVERY run
+  including clean ones, with **`actor` AND `hash`** (Prisma rejects the write
+  without them — how an earlier monitor went blind while still logging ARMED).
+  **Proof it works is the row, never the boot line:**
+  `select ts, payload from "AgentAuditLog" where event='voicemail_mailbox.sweep'`
+  → first live run `21:28:20 {"alerted":false,"offenders":[],"allowlisted":["gesheft:898"]}`.
+  16 tests; typecheck at its 76-error baseline with none in the new files.
+  Kill switch `VOICEMAIL_MAILBOX_SWEEP_DISABLED=1`, allowlist
+  `VOICEMAIL_MAILBOX_ALLOWLIST`.
 - ⛔ **Repairing a mailbox by hand: use the mirror, never Apply Changes.**
   `mirror_writes.py edit-extension --tenant-id N --ext E --vm '{"enabled":"yes"}'`
   (dry-run by default) splices one extension and reloads — **no whole-PBX
@@ -236,10 +256,41 @@ mandate**, both verified; no Connect deploy, no migration, no Apply Changes.)
 - ⛔ **Testing trap: `${VAR:-default}` treats an EMPTY value as unset**, so
   clearing an allowlist with `VAR=""` silently restores the default and a
   non-vacuity test passes for the wrong reason. Use a non-matching value.
-- ⏳ **Open:** the helper install to ship the mirror fix; putting the audit on a
-  timer with an escalation; and **Gesheft 898 "Order Tracking"** is the one
-  remaining disabled mailbox — allowlisted as deliberate, worth one
-  confirmation from Izzy.
+- ⏳ **Open:** **Gesheft 898 "Order Tracking"** is the one remaining disabled
+  mailbox — allowlisted as deliberate, worth one confirmation from Izzy. And
+  ⏳ **no real caller has yet left a voicemail on either repaired extension** —
+  it is proven as far as Asterisk loading the mailbox and the dialplan pointing
+  at it; one test call to each closes it.
+
+## ⛔⛔ THE THIRD RULE THAT WRAPS EVERY TASK (2026-08-23, Izzy's standing instruction, given after the answer-path regression) — NEVER PROPOSE A FIX WITHOUT FIRST CHECKING WHAT IT BREAKS
+
+Izzy, verbatim: *"Never fucking suggest a fix to me that will break something else,
+ever … Check before you fucking do something. Stop giving me suggestions on stuff,
+fixes, and patches without even fucking checking what it's gonna break."*
+
+- ⛔⛔ **A fix is not proposable until its blast radius has been TRACED, not guessed.**
+  Do the tracing BEFORE you offer it. Handing him a fix with an attached "the risk
+  is…" list is the failure itself — it moves the checking work onto him. He has spent
+  seven months being handed fixes that broke the next thing, each one reported done,
+  each one costing him credibility with a paying customer.
+- ⛔ **Before proposing ANY change:** `git grep` the symbol, find every caller, every
+  branch, every consumer. Read each call site. If you are moving code between two
+  branches, DIFF THE TWO BRANCHES and state the delta as a verified fact ("the only
+  difference is this one line"), never as a suspicion.
+- ⛔ **If you have not checked, do not propose it.** Say you are checking, then check.
+- ✅ **Prefer a fix that is a provable RESTORE to a known-good state** over a new
+  design — it is the only kind whose blast radius can be fully enumerated.
+- ⛔ **This rule exists because of a real, proven case:** `e75be0ec` (2026-06-19) was
+  correct in itself and silently left `backendClaimed` meaning something its name did
+  not say; `83a5728c` (2026-08-22) then wrote the only sensible-looking line a person
+  could write and tripped it, collapsing the mobile answer budget from 4 s × 3 attempts
+  to 500 ms × 1 and making the app hang up on the call it had just answered. Nobody
+  traced who else read that variable. See
+  `docs/ai-context/AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md` and
+  [[never-propose-a-fix-without-checking-blast-radius]].
+- ⛔ **And "fixed" still means a human did the thing and it worked** — for the call
+  path that means a real call, answered, with audio. Green tests, clean typechecks and
+  container greps are not proof and must never be reported as one.
 
 ## ⛔ AGENT HANDOFF — LoopCom is FEDERALLY REGISTERED (FRN + 499-A + RMD all filed) and the COMPLIANCE CALENDAR keeps it that way (2026-08-23) — READ FIRST before any FCC/USAC/RMD question, before touching `complianceCalendar.ts`, or before adding ANY regulatory deadline reminder
 
