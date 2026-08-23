@@ -55,6 +55,23 @@ after the push** → backend claim returned **INVITE_CLAIMED_OK** → the app th
 sat for **49 seconds** waiting for a SIP INVITE **that never arrived**, forced a
 socket restart, and gave up.
 
+⛔⛔ **AND HE WAS NOT SLOW — THE RING REACHED HIM WITH THREE SECONDS LEFT.**
+Measured against the call's own epoch (`pbxCallId` 1786919653 = 22:34:13Z):
+
+| | |
+|---|---|
+| call started | t+0.0 s |
+| **ring push reached his phone** | **t+34.6 s** |
+| he tapped Answer | t+35.8 s (**1.23 s** after the push) |
+| caller hung up | t+37.5 s |
+
+So the device was **unreachable for the first 34 seconds of a 37-second call** —
+`connect-mobile-wake-dial` held, waiting for it to come back — the ring finally
+landed with ~3 seconds to spare, and even then the INVITE could not get down the
+socket. **His reaction time was 1.2 seconds. Nothing about this call is a user
+error, and nothing about it is the answer code.** It is one call landing in the
+middle of the registration churn in §3.
+
 ⛔⛔ **This is the opposite shape from the 2026-08-23 warm-answer-deadline
 regression.** There, the INVITE arrives, the device answers, and the app tears
 down its own live call at ~500 ms (`answerAttempts: 1, pollIterations: 1,

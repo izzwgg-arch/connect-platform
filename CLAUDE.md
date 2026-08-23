@@ -1960,6 +1960,13 @@ DID (845) 537-8318.)
   answers, and the app kills its own live call at ~500 ms with
   `answerAttempts: 1, pollIterations: 1`. **`answerAttempts: null` vs `1` is the
   one field that tells them apart.**
+- ⛔⛔ **AND HE WAS NOT SLOW — the ring reached his phone at t+34.6 s of a
+  37.5-second call, he tapped Answer 1.23 s later, and the caller hung up 1.7 s
+  after that.** The device was unreachable for the first 34 seconds while
+  `connect-mobile-wake-dial` held for it. **Nothing about that call is user
+  error and nothing about it is the answer code** — check the push-to-ring gap
+  (`payload.pushMeta.pushReceivedAt` against the `pbxCallId` epoch) before
+  reading any answer failure as a slow tap.
 - ⛔ **Cause is the documented filtered-internet problem, still unfixed for this
   tenant.** Luxure is **NOT** on the 443 route (`webrtcRouteViaSbc: false`,
   `sipWsUrl wss://m.connectcomunications.com:8089/ws`), and its contacts are
