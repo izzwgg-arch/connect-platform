@@ -305,3 +305,22 @@ the answer at all and sent the caller to voicemail.** Identical shape to 2026-08
 - Ext attribution on a CDR is only via `channelsSeen`; `PJSIP/T7_102_1-…` = app leg,
   `PJSIP/T7_102-…` = desk leg. ⛔ **An inbound CDR shows BOTH legs because the PBX
   rings both — its presence proves the app was *rung*, never that it *answered*.**
+
+---
+
+## 10. ⛔⛔ SUPERSEDED 2026-08-23 — he took the advice in §9d, and that is what broke him
+
+§9d said the whole recommendation was *"get him onto `1.0.0+20260812-215020`"*.
+He updated (to `1.0.0+20260823-152650`, at 19:59Z on 2026-08-23) and the very next
+three calls **all failed at the answer**. It is a different defect and a genuine
+regression: `83a5728c` set `backendClaimed = true` on the warm answer path, which is
+also the flag that gates the deadline extension, so the warm answer now runs on the
+**150 ms pre-claim deadline** — a **500 ms** one-attempt budget instead of 4 s × 3 —
+and then hangs the call up when it expires.
+
+**Read `AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md`.** It is in every Android
+build published since 2026-08-22 22:18.
+
+⛔ The `answer_unacked` machinery from §3 is fine and is not implicated — it never
+gets a chance to run, because the 500 ms cap expires before the session reaches
+WAITING_FOR_ACK (the blackboxes show JsSIP `status: 5`, not 6).
