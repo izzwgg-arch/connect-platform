@@ -13,6 +13,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
+// iOS alternate app icons (2026-08-23 icon refinement): 'Navy' vs the default
+// light blue. ⛔ iOS-ONLY — android/ is bare so the plugin's activity-aliases
+// never land there; the row is Platform-gated below.
+import { setAlternateAppIcon, resetAppIcon, getAppIconName, supportsAlternateIcons } from 'expo-alternate-app-icons';
 import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
 import { useIncomingNotifications, type CallReadiness } from '../context/NotificationsContext';
@@ -133,6 +137,23 @@ export function SettingsScreen() {
   } = useIncomingNotifications();
 
   const [retryingPushToken, setRetryingPushToken] = useState(false);
+  // Current iOS app icon: null = default (light blue), 'Navy' = the dark one.
+  const [appIconName, setAppIconName] = useState<string | null>(() => {
+    try { return Platform.OS === 'ios' ? getAppIconName() : null; } catch { return null; }
+  });
+  const toggleAppIcon = async () => {
+    try {
+      if (appIconName === 'Navy') {
+        await resetAppIcon();
+        setAppIconName(null);
+      } else {
+        await setAlternateAppIcon('Navy');
+        setAppIconName('Navy');
+      }
+    } catch {
+      // iOS shows its own confirmation alert; a user cancelling it lands here. Nothing to do.
+    }
+  };
   const [incomingRingtone, setIncomingRingtoneId] =
     useState<MobileRingtoneId>(DEFAULT_MOBILE_RINGTONE_ID);
   const [launchTab, setLaunchTabState] = useState<LaunchTabId>(DEFAULT_LAUNCH_TAB);
@@ -330,6 +351,16 @@ export function SettingsScreen() {
             iconColor={colors.indigo}
             onPress={cycleTheme}
           />
+          {Platform.OS === 'ios' && supportsAlternateIcons && (
+            <SettingRow
+              icon="color-palette-outline"
+              label="App icon"
+              subtitle="The icon on your home screen"
+              value={appIconName === 'Navy' ? 'Navy' : 'Light blue'}
+              iconColor={colors.primary}
+              onPress={toggleAppIcon}
+            />
+          )}
           <SettingRow
             icon="notifications-outline"
             label="Notifications"

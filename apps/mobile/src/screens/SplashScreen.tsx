@@ -1,42 +1,52 @@
 /**
- * SplashScreen — branded launch / identity screen.
+ * SplashScreen — the brand moment, built to the "Login and splash mockups"
+ * designs (Icon refinement options.zip, Izzy 2026-08-23: "Make it exactly
+ * like it").
  *
- * - Dark premium navy-black gradient background
- * - The real Loopcom logo (the chrome LOOPCOM wordmark)
- * - The brand's tagline as text beneath it
- * - NO buttons · NO "Get Started" · NO CTAs
+ * The sequence, per the mockup:
+ *   1. The infinity mark SPRINGS in (overshoot then settle) over a softly
+ *      pulsing glow pad, with a faint aurora drifting behind.
+ *   2. The LOOPCOM wordmark rises beneath it.
+ *   3. ~2 seconds, then straight into the app (fade-out).
  *
- * ⛔ Keep this in step with assets/splash.png, which is the same composition
- * rendered as a static image. Both are produced from one set of numbers —
- * SPLASH_* in scripts/mobile-loopcom-android-assets.py — so a change to the
- * mark size, the gaps or the wording belongs in BOTH places or the launch
- * image and the screen that replaces it will not line up.
+ * ⛔ THE DOTS RULE (Izzy 2026-08-23): the three loading dots appear ONLY if
+ * the app is ACTUALLY still thinking — i.e. auth/session restore has not
+ * resolved by the time the wordmark has landed. A fast launch never shows
+ * them; they disappear the moment `authReady` flips true. Never render them
+ * unconditionally — an always-on "thinking" indicator is a lie.
  *
- * Lifecycle:
- *   Shows for a minimum of MIN_SHOW_MS (2 400 ms).
- *   Calls `onReady` once that time has elapsed AND the caller sets `authReady`.
- *   Fades out gracefully before handing off to the navigator.
+ * ⛔ SIGNED-IN ONLY: this overlay is mounted by RootNavigator solely when a
+ * token exists (`showSplash = … && !!token` — Izzy 2026-08-21 and re-stated
+ * 2026-08-23). A signed-out launch goes straight to the sign-in screen.
+ *
+ * ⛔ BRAND NAVY IN BOTH THEMES on purpose (mockup: "it is a brand flash, not
+ * a page") — no light variant here, unlike the login screen.
+ *
+ * Lifecycle contract (unchanged): shows ≥ MIN_SHOW_MS, calls `onReady` once
+ * that has elapsed AND the caller set `authReady`, fading out first.
  */
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   Animated,
-  Platform,
+  Easing,
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { LoopcomMark } from '../components/LoopcomMark';
 import { LoopcomLogo } from '../components/LoopcomLogo';
 
-/** Minimum time the splash is visible regardless of how fast auth resolves. */
-const MIN_SHOW_MS = 2_400;
-
-/** Logo width as a fraction of screen width — mirrors SPLASH_LOGO_W. */
-const LOGO_WIDTH_FRACTION = 0.74;
+/** Mockup: "about two seconds, then straight into the app". */
+const MIN_SHOW_MS = 2_000;
+/** Mockup proportions: mark 198/292, wordmark 210/292 of the screen width. */
+const MARK_FRACTION = 198 / 292;
+const WORD_FRACTION = 210 / 292;
+/** If auth still hasn't resolved this long in, the app is genuinely thinking. */
+const THINKING_GRACE_MS = 1_200;
 
 interface Props {
-  /** Set to true once auth state is resolved. The splash will then finish on its own schedule. */
+  /** Set to true once auth state is resolved. The splash then finishes on its own schedule. */
   authReady: boolean;
   /** Called when the splash is fully done and the navigator should take over. */
   onReady: () => void;
@@ -45,159 +55,169 @@ interface Props {
 export function SplashScreen({ authReady, onReady }: Props) {
   const { width } = useWindowDimensions();
 
-  // ── Entrance animations ────────────────────────────────────────────────────
-  const screenFade  = useRef(new Animated.Value(1)).current;
-  const iconFade    = useRef(new Animated.Value(0)).current;
-  const iconScale   = useRef(new Animated.Value(0.78)).current;
-  const textFade    = useRef(new Animated.Value(0)).current;
-  const textSlide   = useRef(new Animated.Value(14)).current;
+  // ── Animations ─────────────────────────────────────────────────────────────
+  const screenFade = useRef(new Animated.Value(1)).current;
+  const markOpacity = useRef(new Animated.Value(0)).current;
+  const markScale = useRef(new Animated.Value(0.55)).current;
+  const wordOpacity = useRef(new Animated.Value(0)).current;
+  const wordRise = useRef(new Animated.Value(16)).current;
+  const glow = useRef(new Animated.Value(0)).current;
+  const dotAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
 
-  // ── Internal state ─────────────────────────────────────────────────────────
-  const minTimeDone  = useRef(false);
-  const authDone     = useRef(authReady);
-  const exitStarted  = useRef(false);
-  const onReadyRef   = useRef(onReady);
+  // ── Lifecycle state (contract unchanged from the previous splash) ──────────
+  const minTimeDone = useRef(false);
+  const authDone = useRef(authReady);
+  const exitStarted = useRef(false);
+  const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
 
-  // ── Exit sequence ──────────────────────────────────────────────────────────
-  const maybeExit = useCallback(() => {
-    if (!minTimeDone.current || !authDone.current || exitStarted.current) return;
-    exitStarted.current = true;
+  // ⛔ Dots only when actually thinking: still unresolved past the grace.
+  const [thinking, setThinking] = useState(false);
 
+  const maybeExit = useCallback(() => {
+    if (exitStarted.current) return;
+    if (!minTimeDone.current || !authDone.current) return;
+    exitStarted.current = true;
     Animated.timing(screenFade, {
       toValue: 0,
       duration: 320,
+      easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start(() => onReadyRef.current());
   }, [screenFade]);
 
-  // ── Mount: entrance + continuous animations ────────────────────────────────
   useEffect(() => {
-    // 1. Icon fade + spring in
+    authDone.current = authReady;
+    if (authReady) {
+      setThinking(false); // the moment it stops thinking, the dots go
+      maybeExit();
+    }
+  }, [authReady, maybeExit]);
+
+  useEffect(() => {
+    // 1) Mark springs in — overshoot to ~1.05 then settle (mockup's
+    //    cubic-bezier(.34,1.4,.5,1)). Animated.spring gives the same shape.
     Animated.parallel([
-      Animated.timing(iconFade, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-      Animated.spring(iconScale, {
-        toValue: 1,
-        damping: 11,
-        stiffness: 70,
-        useNativeDriver: true,
-      }),
+      Animated.timing(markOpacity, { toValue: 1, duration: 340, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.spring(markScale, { toValue: 1, stiffness: 160, damping: 12, mass: 1, useNativeDriver: true }),
     ]).start();
 
-    // 2. Text slides up after icon settles (700 ms delay)
-    const textTimer = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(textFade, {
-          toValue: 1,
-          duration: 550,
-          useNativeDriver: true,
-        }),
-        Animated.timing(textSlide, {
-          toValue: 0,
-          duration: 550,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }, 700);
+    // 2) Wordmark rises beneath, slightly after the mark lands.
+    Animated.parallel([
+      Animated.timing(wordOpacity, { toValue: 1, duration: 500, delay: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(wordRise, { toValue: 0, duration: 500, delay: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
 
-    // 3. Min-display timer
+    // Glow pad pulse, for as long as the splash is up.
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(glow, { toValue: 0, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
+    );
+    glowLoop.start();
+
+    // Minimum display window.
     const minTimer = setTimeout(() => {
       minTimeDone.current = true;
       maybeExit();
     }, MIN_SHOW_MS);
 
+    // ⛔ Dots gate: only if auth is STILL unresolved once the wordmark has
+    // landed does the splash admit to thinking.
+    const thinkTimer = setTimeout(() => {
+      if (!authDone.current) setThinking(true);
+    }, THINKING_GRACE_MS);
+
     return () => {
-      clearTimeout(textTimer);
+      glowLoop.stop();
       clearTimeout(minTimer);
+      clearTimeout(thinkTimer);
     };
-  }, []);
+  }, [glow, markOpacity, markScale, maybeExit, wordOpacity, wordRise]);
 
-  // ── React when authReady flips to true ─────────────────────────────────────
+  // Dot bounce, staggered 0 / 180 / 360 ms — started only while thinking.
   useEffect(() => {
-    authDone.current = authReady;
-    if (authReady) maybeExit();
-  }, [authReady, maybeExit]);
+    if (!thinking) return;
+    const loops = dotAnims.map((v, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 180),
+          Animated.timing(v, { toValue: 1, duration: 585, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+          Animated.timing(v, { toValue: 0, duration: 715, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        ]),
+      ),
+    );
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, [thinking, dotAnims]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const markWidth = Math.round(width * MARK_FRACTION);
+  const wordWidth = Math.round(width * WORD_FRACTION);
+
   return (
-    <Animated.View style={[styles.root, { opacity: screenFade }]}>
-      <LinearGradient
-        colors={['#040810', '#060c18', '#0a1020', '#08111e', '#040810']}
-        locations={[0, 0.2, 0.5, 0.8, 1]}
-        style={StyleSheet.absoluteFill}
-      />
+    <Animated.View style={[StyleSheet.absoluteFill, styles.root, { opacity: screenFade }]}>
+      {/* Brand navy in both themes — the mockup's radial, as a vertical gradient. */}
+      <LinearGradient colors={['#10203a', '#0a1322', '#060b14']} locations={[0, 0.44, 1]} style={StyleSheet.absoluteFill} />
 
-      {/* ── App icon ── */}
-      <Animated.View
-        style={{
-          opacity: iconFade,
-          transform: [{ scale: iconScale }],
-          ...styles.iconShadow,
-        }}
-      >
-        <LoopcomLogo width={Math.round(width * LOGO_WIDTH_FRACTION)} />
-      </Animated.View>
+      {/* Aurora accents */}
+      <View pointerEvents="none" style={[styles.aura, styles.auraA]} />
+      <View pointerEvents="none" style={[styles.aura, styles.auraB]} />
 
-      {/* ── Wordmark + tagline ── */}
-      <Animated.View
-        style={[
-          styles.textBlock,
-          {
-            opacity: textFade,
-            transform: [{ translateY: textSlide }],
-          },
-        ]}
-      >
-        <Text style={styles.tagline}>The AI communications platform</Text>
-      </Animated.View>
+      <View style={styles.center}>
+        {/* Pulsing glow pad behind the mark */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.glowpad,
+            {
+              opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0.9] }),
+              transform: [{ scale: glow.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.08] }) }],
+            },
+          ]}
+        />
+        <Animated.View style={{ opacity: markOpacity, transform: [{ scale: markScale }] }}>
+          <LoopcomMark width={markWidth} />
+        </Animated.View>
+        <Animated.View style={{ opacity: wordOpacity, transform: [{ translateY: wordRise }], marginTop: 30 }}>
+          <LoopcomLogo width={wordWidth} />
+        </Animated.View>
+
+        {/* ⛔ Only while genuinely thinking. */}
+        {thinking && (
+          <View style={styles.dots}>
+            {dotAnims.map((v, i) => (
+              <Animated.View
+                key={i}
+                style={[
+                  styles.dot,
+                  {
+                    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.25, 1] }),
+                    transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
+                  },
+                ]}
+              />
+            ))}
+          </View>
+        )}
+      </View>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#040810',
+  root: { zIndex: 999, elevation: 999 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  glowpad: {
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(34,168,255,0.16)',
   },
-  iconShadow: {
-    ...Platform.select({
-      ios: {
-        shadowColor: '#22A8FF',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.7,
-        shadowRadius: 28,
-      },
-      // No Android elevation: the artwork carries its own glow, and an
-      // elevation on a transparent view draws a rectangular shadow on some OEMs.
-      android: {},
-    }),
-  },
-
-  textBlock: {
-    // == SPLASH_GAP_DP in scripts/mobile-loopcom-android-assets.py
-    marginTop: 34,
-    alignItems: 'center',
-  },
-
-  appName: {
-    fontSize: 34,
-    fontWeight: '700',
-    color: '#f0f6ff',
-    letterSpacing: 2.5,
-    marginBottom: 8,
-  },
-
-  tagline: {
-    fontSize: 13,
-    fontWeight: '400',
-    color: '#8FC0F5',
-    letterSpacing: 0.4,
-    opacity: 0.82,
-  },
+  aura: { position: 'absolute', borderRadius: 999 },
+  auraA: { width: 320, height: 260, top: '10%', left: '-20%', backgroundColor: 'rgba(34,168,255,0.10)' },
+  auraB: { width: 300, height: 250, top: '55%', right: '-22%', backgroundColor: 'rgba(79,123,255,0.09)' },
+  dots: { flexDirection: 'row', gap: 7, marginTop: 26 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#3f8fd8' },
 });
