@@ -181,7 +181,20 @@ export function platformNoreplyEmail(): string {
   return firstEnv("PLATFORM_NOREPLY_EMAIL") ?? `noreply@${platformMailDomain()}`;
 }
 
-/** The website printed on invoice PDFs — the apex marketing site, not the app. */
+/**
+ * The website printed on invoice PDFs — the apex marketing site, not the app.
+ *
+ * Izzy’s call, 2026-08-23: the invoice shows loopcom.net. It used to borrow
+ * DEFAULT_PLATFORM_MAIL_DOMAIN, which is why it printed the old domain — it has
+ * its own constant now, because the marketing site and the mail domain are
+ * separate questions that move at different times.
+ *
+ * ⛔ loopcom.net’s apex serves a LIVE Squarespace site, so this points somewhere
+ * real. ⛔ The ONLY caller is the invoice/receipt PDF — keep it that way, or this
+ * default quietly becomes a platform-wide answer.
+ */
+export const DEFAULT_PLATFORM_WEBSITE = "loopcom.net";
+
 export function platformWebsite(): string {
-  return firstEnv("PLATFORM_WEBSITE") ?? DEFAULT_PLATFORM_MAIL_DOMAIN;
+  return firstEnv("PLATFORM_WEBSITE") ?? DEFAULT_PLATFORM_WEBSITE;
 }

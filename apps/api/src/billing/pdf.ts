@@ -19,8 +19,15 @@ const FONT_SEMIBOLD = "ConnectSans-Semibold";
 const FONT_BOLD = "ConnectSans-Bold";
 
 const CONNECT_BRAND_NAME = "Loopcom";
-const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
-const CONNECT_FOOTER_NAME = "Connect Communications LLC";
+// The registered entity printed in Bill from and in the footer. Izzy’s call,
+// 2026-08-23: the invoice bills as Loopcom now, not Connect Communications.
+// ⛔ Spelling is deliberate: lowercase c, matching his 2026-08-16 brand rule and
+// the `O=Loopcom LLC` on the Play upload keystore. ⛔ Three spellings are in
+// circulation elsewhere (USAC "LoopCom, LLC", FCC "loopcom llc.") and nobody has
+// read the actual LLC filing — if that turns out to differ, this is the one place
+// to change, and D&B/Apple/Google verify their org name against that record.
+const CONNECT_LEGAL_NAME = "Loopcom LLC";
+const CONNECT_FOOTER_NAME = "Loopcom LLC";
 // Resolved from the platform identity (publicOrigins.ts) so the Loopcom flip
 // changes the invoice footer too. The LEGAL NAME above is a separate question —
 // it is the registered entity and only Izzy can say whether it changed.

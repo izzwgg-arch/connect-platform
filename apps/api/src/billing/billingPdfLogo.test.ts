@@ -98,3 +98,55 @@ test("the receipt PDF embeds the Loopcom logo", async () => {
   );
   assertEmbedsLogo(pdf, "receipt");
 });
+
+/**
+ * Who the invoice says it is FROM. The legal entity became Loopcom LLC on
+ * 2026-08-23 (Izzy's call) and the printed website moved to loopcom.net with it.
+ * Read out of the RENDERED TEXT, not the source, because the failure that matters
+ * is a customer receiving a bill from the wrong company.
+ *
+ * PDFKit compresses its content stream, so scanning the raw bytes finds nothing —
+ * that is why this goes through pdf-parse, the same way billingReceiptPdfContent
+ * does, rather than a latin1 substring search.
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PDFParse } = require("pdf-parse") as {
+  PDFParse: new (opts: { data: Buffer }) => {
+    getText(): Promise<{ text: string }>;
+    destroy(): Promise<void>;
+  };
+};
+
+async function renderedText(pdf: Buffer): Promise<string> {
+  const parser = new PDFParse({ data: pdf });
+  try {
+    return (await parser.getText()).text;
+  } finally {
+    await parser.destroy();
+  }
+}
+
+function assertBillsAsLoopcom(text: string, label: string) {
+  assert.match(text, /Loopcom LLC/, `${label}: Bill from must name Loopcom LLC`);
+  assert.match(text, /loopcom\.net/, `${label}: the printed website must be loopcom.net`);
+  assert.doesNotMatch(text, /Connect Communications/, `${label}: the old entity must not appear`);
+  assert.doesNotMatch(text, /connectcomunications\.com/, `${label}: the old website must not appear`);
+}
+
+test("the invoice bills as Loopcom LLC from loopcom.net", async () => {
+  assertBillsAsLoopcom(await renderedText(await generateInvoicePdf(baseInvoice)), "invoice");
+});
+
+test("the receipt bills as Loopcom LLC from loopcom.net", async () => {
+  const pdf = await generateReceiptPdf(
+    { ...baseInvoice, status: "PAID", balanceDueCents: 0, amountPaidCents: 14000, paidAt: new Date("2026-08-23T14:02:00Z") },
+    {
+      transactionId: "tx_logo_2",
+      paymentAmountCents: 14000,
+      paymentDate: new Date("2026-08-23T14:02:00Z"),
+      paymentMethod: "Visa ending 4242",
+      processorReference: "REF-88213",
+    },
+  );
+  assertBillsAsLoopcom(await renderedText(pdf), "receipt");
+});

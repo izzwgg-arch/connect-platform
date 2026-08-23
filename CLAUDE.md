@@ -71,14 +71,15 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
-## ⛔ AGENT HANDOFF — the invoice and receipt carry the Loopcom wordmark now, and the billing address on them is `billing@loopcom.net` (2026-08-23) — READ FIRST before touching `billing/pdf.ts`, before putting ANY logo in a PDF, before adding a second address constant, or for "the invoice still says Connect"
+## ⛔ AGENT HANDOFF — the invoice and receipt are LOOPCOM END TO END now — wordmark, `Loopcom LLC`, `billing@loopcom.net`, `loopcom.net` (2026-08-23) — READ FIRST before touching `billing/pdf.ts`, before putting ANY logo in a PDF, before adding a second address or website constant, or for "the invoice still says Connect"
 
 (`apps/api/src/billing/pdf.ts` + `publicOrigins.ts` + `billing/emailTemplates.ts` +
 `apps/portal/.../billing/invoices/[id]/`. ⏳ **COMMITTED, NOT DEPLOYED** — it reaches
 customers at the next api **and** portal deploy. No migration, no PBX write, no env
-change, no tenant row.) Izzy, 2026-08-23: *"Put the newly rebranded logo onto the
-existing invoice and receipt … and on the PDFs"*, then *"change the email address on
-the invoice as well to billing@loopcom.net."*
+change, no tenant row.) Izzy, 2026-08-23, in four messages: *"Put the newly rebranded logo onto the
+existing invoice and receipt … and on the PDFs"*, *"change the email address on the
+invoice as well to billing@loopcom.net"*, *"Change bill from LoopCom LLC"*, and
+*"put the domain there: loopcom.net."*
 Mock-up published: <https://claude.ai/code/artifact/47d9d49b-85f2-4b48-b5ba-4c3b354c65ad>
 
 - ⛔⛔ **THE INVOICE AND THE RECEIPT ARE ONE FUNCTION — `generateInvoicePdf` and
@@ -132,11 +133,27 @@ Mock-up published: <https://claude.ai/code/artifact/47d9d49b-85f2-4b48-b5ba-4c3b
   Google Workspace; that does NOT prove the `billing@` MAILBOX exists, and Google bounces
   mail to a user that does not.** The invoice now tells customers to reply there. This was
   already flagged in the rebrand section and is now load-bearing on a financial document.
-- ⛔ **The LEGAL NAME and the WEBSITE are deliberately untouched.** Bill-from still reads
-  **Connect Communications, LLC** and the footer still prints `connectcomunications.com`
-  (`platformWebsite()`). So the document currently mixes a Loopcom mark and address with
-  the old legal name and web address — that is a deliberate half-state, and the legal name
-  is Izzy's call, not an engineering one.
+- ✅✅ **THE DOCUMENT IS NOW LOOPCOM END TO END — Izzy made the call the same day**
+  (*"Change bill from LoopCom LLC"*, then *"and put the domain there: loopcom.net"*).
+  `CONNECT_LEGAL_NAME` and `CONNECT_FOOTER_NAME` are both **`Loopcom LLC`**, and
+  `platformWebsite()` defaults to **`loopcom.net`** via its own new
+  `DEFAULT_PLATFORM_WEBSITE` instead of borrowing `DEFAULT_PLATFORM_MAIL_DOMAIN` (which
+  is why it used to print the old domain). The portal's on-screen Bill-from fallback
+  moved too. **Verified from the RENDERED TEXT: 0 occurrences of "Connect Communications"
+  or "connectcomunications.com" on either document**, pinned by two `pdf-parse` tests.
+  ⛔ **`platformWebsite()` has exactly ONE caller — the invoice/receipt PDF — which is the
+  only reason changing its default was safe. Keep it that way**, or that default silently
+  becomes a platform-wide answer.
+  ⛔⛔ **THE SPELLING IS A LIVE RISK AND NOBODY HAS READ THE LLC FILING.** It is written
+  **`Loopcom LLC`** — lowercase c, matching Izzy's 2026-08-16 brand rule (he types
+  "LoopCom" casually; that same quote instructs lowercase) and the `O=Loopcom LLC`
+  already locked into the Play upload keystore. **USAC says "LoopCom, LLC" and the FCC
+  FRN says "loopcom llc."** — and D&B, Apple and Google all verify the org name against
+  that record, so a mismatch is a real verification risk, not a typo. One constant to
+  change if the filing disagrees.
+- ⚠️ **`platformSupportEmail()` and `platformNoreplyEmail()` still answer on
+  connectcomunications.com** — only the invoice's three printed identifiers moved. The
+  platform-wide mail flip is still `PLATFORM_MAIL_DOMAIN`, and still Izzy's call.
 - ⛔⛔ **`apps/api` NAMES BILLING TEST FILES EXPLICITLY, AND `billingPdf.test.ts` WAS NOT IN
   THE LIST — it had never run once.** Same trap as `portalPermissions.queues.test.ts`.
   Registered now, along with `billingReceiptPdfContent.test.ts` and the new
@@ -8373,8 +8390,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_REBRAND_EMAILS_2026-08-16
   untouched; ~50 `Connect Communications` occurrences remain in apps/api alone.
   ✅ **SUPERSEDED 2026-08-23: `billing/invoices/[id]` no longer loads
   `/connect-logo.png`, and the invoice + receipt PDFs carry the Loopcom wordmark**
-  — see the invoice/receipt logo section below. The LEGAL NAME is still
-  unchanged and still Izzy’s call.
+  — see the invoice/receipt section below. The legal name moved to **Loopcom LLC**
+  later the same day, as did the printed website.
 - ⏳ **NOT PROVEN: nobody has opened ANY of these emails in a real inbox**, and
   nobody has opened the rebuilt `/login` or the pay pages in a browser. All of it
   is proven from generated output, tests and container greps.

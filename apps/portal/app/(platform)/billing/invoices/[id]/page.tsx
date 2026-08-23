@@ -242,7 +242,7 @@ export default function BillingInvoiceDetailPage() {
               <section className="invoice-command-grid">
                 <div className="invoice-party-card">
                   <span className="invoice-section-kicker">Bill from</span>
-                  <h2>{settingsData?.invoiceCompanyName || "Connect Communications"}</h2>
+                  <h2>{settingsData?.invoiceCompanyName || "Loopcom LLC"}</h2>
                   {settingsData?.invoiceSupportEmail ? <p>{settingsData.invoiceSupportEmail}</p> : null}
                   {settingsData?.invoiceSupportPhone ? <p>{settingsData.invoiceSupportPhone}</p> : null}
                 </div>

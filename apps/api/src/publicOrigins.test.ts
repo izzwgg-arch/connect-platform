@@ -22,6 +22,7 @@ import {
   oauthRedirectUriForRequest,
   platformBillingFromEmail,
   platformBillingContactEmail,
+  platformWebsite,
   platformNoreplyEmail,
   platformSupportEmail,
   portalOriginForRequest,
@@ -114,6 +115,16 @@ test("the invoice billing contact is loopcom.net and does NOT follow the mail do
   withEnv({ PLATFORM_BILLING_CONTACT_EMAIL: "accounts@loopcom.net" }, () => {
     assert.equal(platformBillingContactEmail(), "accounts@loopcom.net");
   });
+});
+
+test("the invoice prints loopcom.net as the website", () => {
+  // Izzy’s call, 2026-08-23. It used to borrow the mail domain, so it printed the
+  // old one; it has its own default now and only the invoice/receipt PDF reads it.
+  withEnv({}, () => assert.equal(platformWebsite(), "loopcom.net"));
+  withEnv({ PLATFORM_MAIL_DOMAIN: "connectcomunications.com" }, () =>
+    assert.equal(platformWebsite(), "loopcom.net"));
+  withEnv({ PLATFORM_WEBSITE: "www.loopcom.net" }, () =>
+    assert.equal(platformWebsite(), "www.loopcom.net"));
 });
 
 test("mail identity: defaults, domain flip, per-address override", () => {
