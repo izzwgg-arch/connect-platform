@@ -301,6 +301,48 @@ to do everything in his power to get every single phone connected."*
   with the shipped stylesheet:
   <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
   shared **549** · desktop **77** · api desk-phones **72** · portal **316/318**.
+- ✅✅ **DESKTOP 0.1.14 (2026-08-23): THE BLANK "PAPER" TASKBAR ICON WAS A
+  RENAME-ORPHAN SHORTCUT, NOT AN ICON PROBLEM AT ALL.** ⛔⛔ Windows resolves a
+  running window's taskbar-BUTTON icon from the Start Menu shortcut matching the
+  window's AppUserModelID — NOT from the window's own HICON. Izzy's machine had a
+  stale **`Electron.lnk`** carrying `com.connectcommunications.desktop` but pointing
+  at the **deleted `Connect.exe`** (dead target → generic document/paper icon). That
+  is why every layer verified perfect — exe embed valid (`ExtractAssociatedIcon`
+  returns blue), every `.ico` frame 97-100% opaque, live window HICONs non-zero, AUMID
+  matching — and the taskbar STILL drew paper: Windows was reading a dead shortcut, not
+  the window. ⛔ **THE DIAGNOSIS THAT FOUND IT: enumerate every `.lnk` under Start Menu
+  / Quick Launch / Desktop whose `System.AppUserModel.ID` equals the app's AUMID, and
+  check each target exists** (`findaumid.ps1` pattern). ⛔ **A blank Windows taskbar
+  icon on an app with a valid embedded icon is an AUMID→shortcut problem — check the
+  shortcuts BEFORE the icon pipeline.** Fixed fleet-wide in `build/installer.nsh` (⛔
+  force-added — `apps/desktop/build` is gitignored; auto-included by electron-builder)
+  which deletes the orphan `Electron.lnk`/`Connect.lnk` on every install. ⛔ **GDI
+  screen capture CANNOT see the Win11 taskbar** (separate DWM composition layer) — it
+  captures the windows/desktop beneath, so this cannot be eyeballed remotely; the
+  shortcut enumeration IS the diagnosis. ⛔ Also: clearing Explorer's `iconcache*` +
+  `thumbcache*` must be done with the app CLOSED (a held handle defeats a live clear),
+  and 0.1.13's `pinWindowIcon` re-assert ladder (120/400/1200ms after first show)
+  covers the separate late-taskbar-button timing race.
+- ✅✅ **DESKTOP 0.1.13 IS THE PUBLISHED BUILD (2026-08-23) — two live-found icon
+  fixes on top of 0.1.11.** (1) **THE TASKBAR FOLLOWS THE *SYSTEM* THEME, NOT THE APP
+  THEME.** Izzy runs Windows split mode (system/taskbar DARK, apps LIGHT); the taskbar
+  sits on the SYSTEM surface but `nativeTheme.shouldUseDarkColors` reports the APPS
+  value, so 0.1.11 showed light-blue on a dark taskbar. `themeIcon.ts::resolveDark()`
+  reads `SystemUsesLightTheme` from the registry (0 = dark), falls back to nativeTheme
+  only on a failed read, and re-checks on a 15s poll because **Windows fires NO event
+  when only the system half of a custom theme changes**. Proven live on his exact
+  config: apps light + system dark → navy at boot; flip system → light-blue within the
+  poll. (2) **THE BLANK "PAPER" TASKBAR ICON WAS A TIMING RACE, NOT A BAD ICON.** Every
+  artifact was correct — exe icon valid (`ExtractAssociatedIcon` returns blue), every
+  `.ico` frame 97-100% opaque, AUMID matched, the live window reported valid HICONs
+  (`WM_GETICON` non-zero) — yet the taskbar drew the generic document icon. **The
+  taskbar BUTTON is created a beat AFTER the window first paints, and a `setIcon` that
+  lands before the button exists is silently dropped.** `pinWindowIcon` now re-asserts
+  on a **120/400/1200ms ladder after the first show**. ⛔ When a Windows taskbar icon
+  is blank, check the icon LAST — verify the exe embed, the frames' opacity and the
+  live HICONs first; if those are good it is a cache or a timing issue, never the art.
+  ⛔ A stale Explorer icon cache also masked it — clear `iconcache*` AND `thumbcache*`
+  with the app CLOSED (a held handle defeats a live clear).
 - ✅✅ **DESKTOP 0.1.11 IS THE PUBLISHED BUILD (2026-08-23): THE ICON FOLLOWS THE OS
   THEME.** Izzy's mapping verbatim — **dark mode → navy-2a, light mode → blue-2b** —
   in `src/themeIcon.ts`: a `nativeTheme "updated"` watcher re-images the tray and

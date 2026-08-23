@@ -895,3 +895,51 @@ With the toggle, instantaneously."*
   to light where it started; harness deleted.
 - PUBLISHED: `latest.yml` answers **0.1.11** on both hostnames. desktop **85/85**,
   typecheck 0, verify:icon OK.
+
+## 7. Desktop icon: two live-found fixes after 0.1.11 (2026-08-23)
+
+**0.1.12 — the taskbar follows the SYSTEM theme.** Izzy runs Windows split mode:
+system/taskbar DARK, apps LIGHT. The taskbar sits on the system surface, but
+`nativeTheme.shouldUseDarkColors` is the APPS value, so 0.1.11 keyed on the wrong half
+and showed light-blue on a dark taskbar. `themeIcon.ts::resolveDark()` reads
+`SystemUsesLightTheme` from the registry (0 = dark), falls back to nativeTheme only on
+a failed read, and re-checks on a 15s poll — Windows fires no event for a system-only
+change. Proven live on his exact config.
+
+**0.1.13 — the blank "paper" taskbar icon was a TIMING race, not a bad icon.** Every
+artifact verified correct: exe embed valid (`ExtractAssociatedIcon` → blue), every
+`.ico` frame 97-100% opaque, AUMID matched runtime, the live window reported valid
+HICONs (`WM_GETICON` non-zero). The taskbar button is created a beat AFTER first paint,
+and the initial `setIcon` lands before it exists and is dropped. `pinWindowIcon`
+re-asserts on a 120/400/1200ms ladder after first show. ⛔ Diagnosis order for a blank
+Windows taskbar icon: exe embed → frame opacity → live HICONs → THEN cache/timing;
+the art is the last suspect, not the first. Clearing Explorer's `iconcache*` +
+`thumbcache*` must be done with the app CLOSED or a held handle defeats it.
+
+## 8. The blank "paper" taskbar icon — an AUMID orphan, not an icon (0.1.14, 2026-08-23)
+
+Days of "the icon still isn't there" resolved to a cause that had nothing to do with
+the icon. Windows resolves a running window's taskbar-BUTTON icon from the Start Menu
+shortcut whose `System.AppUserModel.ID` matches the window's AUMID — not from the
+window's own HICON. Izzy's machine carried a stale `Electron.lnk` with the app's AUMID
+pointing at the **deleted `Connect.exe`**; a dead target renders as the generic paper
+icon.
+
+Everything else was perfect and that is exactly what made it hard: `ExtractAssociatedIcon`
+on the exe returned blue, every `.ico` frame was 97-100% opaque, the live window's
+`WM_GETICON` returned valid non-zero HICONs, and the shortcut AUMID matched the runtime
+one. The icon was never the problem.
+
+⛔ **Diagnosis (`findaumid.ps1`):** enumerate every `.lnk` under Start Menu / Quick
+Launch / Desktop, read `ExtendedProperty("System.AppUserModel.ID")`, and check each
+target exists. The dead one is the culprit.
+
+⛔ **Fleet fix:** `apps/desktop/build/installer.nsh` (force-added — `build/` is
+gitignored; electron-builder auto-includes it) deletes `Electron.lnk` / `Connect.lnk` /
+`Connect Communications.lnk` from Start Menu + pinned-taskbar on every install.
+
+⛔ **Two things that cost time and are worth knowing:** GDI screen capture cannot see
+the Windows 11 taskbar (it is a separate DWM layer — captures show the windows/desktop
+beneath), so a taskbar icon cannot be verified by an automated screenshot. And Explorer's
+`iconcache*`/`thumbcache*` clear only sticks with the app CLOSED. 0.1.13 also added a
+`pinWindowIcon` re-assert ladder for the unrelated late-button timing race.
