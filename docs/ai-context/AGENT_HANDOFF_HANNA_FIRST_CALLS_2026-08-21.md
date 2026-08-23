@@ -370,8 +370,14 @@ options.zip`** (was at the repo root; archived to
   2026-08-21 (`showSplash = … && !!token`), re-stated by Izzy today,
   unchanged. iOS's native pre-JS splash is now a PLAIN navy field
   (`ios.splash.backgroundColor`) so the JS spring-in owns the brand moment.
-- `ios.buildNumber` **53**; EAS build id `8e59d172-0741-4111-99db-7f6e96117b14`
+- `ios.buildNumber` **53**; EAS build `8e59d172-0741-4111-99db-7f6e96117b14`
   (ios-prod, from the `/tmp/connect-ios-build` clone reset to `a7eaf8e7`).
+  ✅✅ **SHIPPED THE SAME NIGHT: EAS FINISHED → submitted to App Store
+  Connect → Apple processing VALID (03:40Z) → attached to "Loopcom
+  Testers" (204) → beta review submitted (201 WAITING_FOR_REVIEW)** — the
+  exact build-52 pipeline (`asc-release-53.mjs`, kept in
+  `/root/.appstoreconnect/`). Testers receive it when Apple approves the
+  beta review (build 52's approved the same night it was submitted).
 
 ⛔ **The screens are shared RN code** — Android picks up the new login/splash
 at its NEXT APK (the one published tonight predates this commit and does NOT

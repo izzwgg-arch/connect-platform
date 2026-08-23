@@ -1614,10 +1614,16 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   unchanged), iOS native pre-JS splash now a plain navy field. EAS build
   `8e59d172-0741-4111-99db-7f6e96117b14` (ios-prod). Build 53 also carries
   the cancel-guard/claim/telemetry client fixes.
-- ⏳ **Open:** build 53 → TestFlight submit + group attach once EAS finishes;
-  no call has yet exercised the deployed answer fix or produced an
-  `rtpStats` row; no picture sent through the fixed MMS path yet; Android
-  gets the new login/splash at its NEXT APK (tonight's predates them).
+- ✅✅ **BUILD 53 IS ON TESTFLIGHT (2026-08-23 03:40Z): processing VALID,
+  attached to "Loopcom Testers", beta review WAITING_FOR_REVIEW** — testers
+  get it on Apple's approval. It carries the icon-refinement designs AND the
+  cancel-guard/claim/telemetry client fixes, so iPhones (incl. Hanna) close
+  the client-side answer race on install.
+- ⏳ **Open:** Apple's beta-review approval (automatic notification to
+  testers); nobody has seen build 53 on a device; no call has yet exercised
+  the deployed answer fix or produced an `rtpStats` row; no picture sent
+  through the fixed MMS path yet; Android gets the new login/splash at its
+  NEXT APK (tonight's predates them).
 
 ## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
 
