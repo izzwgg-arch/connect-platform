@@ -111,7 +111,14 @@ EXPECT_EYE_PCT = 1.31                 # each eye, and they must match each other
 # centroid of the rendered string). A mark centred at y=8 therefore sits 2px
 # HIGH against the word, and this mark is only ~7px tall, so it is a thin band
 # floating in the upper half of the text's ink instead of straddling it.
-# Izzy reported it twice; 10.0/16 = 0.625, i.e. drop it by 2/16 of the box.
+# Izzy reported it twice. A full 2/16 drop puts the ink centroid exactly on
+# that 10.0, and he called it "a tiny bit too much" - so the SHIPPED value is
+# 1.5/16 (centroid 9.49). That is deliberate and it is not a rounding slip:
+# the eye compares a mark against the x-height BODIES of the word, and a form
+# reads as centred when it sits a touch ABOVE the arithmetic middle. Chosen by
+# rendering 1.0/1.25/1.5/1.75/2.0 against text rasterised by Chrome itself and
+# looking at them; 1.75 and 2.0 both hang low against the letter bodies.
+# ⛔ Do not "correct" this back to 2/16 to make it match the measured 10.0.
 #
 # The offset is a FRACTION so every frame agrees - Chrome picks the 32px frame
 # on a HiDPI display, and the tab must look right at any device pixel ratio.
@@ -122,7 +129,7 @@ EXPECT_EYE_PCT = 1.31                 # each eye, and they must match each other
 # which pair it with text. The desktop app has its OWN icon set
 # (scripts/desktop-loopcom-windows-assets.py) and is not affected, and
 # apple-icon.png is generated from a different source and is untouched.
-OPTICAL_DROP_FRAC = 2.0 / 16.0
+OPTICAL_DROP_FRAC = 1.5 / 16.0
 
 # How far the ink's vertical centroid may sit from its TARGET (the box middle
 # plus OPTICAL_DROP_FRAC). 0.06px is a hair over the rounding floor of
