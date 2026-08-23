@@ -1285,15 +1285,45 @@ also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
   `assets/notification-icon.png` = the white silhouette, plugin color `#22A8FF`.
   All inert on bare `android/` today; they exist so prebuild-day is not a trap.
 - ⛔ **Notification channel ids untouched** (renaming resets every customer's
-  ringtone — standing rule). Splash/login state after `a7eaf8e7`: splash gated
-  `showSplash = … && !!token` (signed-in only, Izzy re-stated 2026-08-22), login
-  light by default and dark when `systemDark || isDark`, splash stays brand navy
-  in both themes.
-- ⏳ **NOT PROVEN: no phone has the new icons.** Proven as a green
-  `assembleRelease` (which pushes every PNG through aapt), typecheck 0, rendered
-  previews (circle-masked adaptive at 160/48px, round + square 48px, both
-  grounds), and the silhouette composited on dark. **Publishing renames every
-  customer's home-screen icon — Izzy's call, same as the rebrand.**
+  ringtone — standing rule). Splash state after `a7eaf8e7`: splash gated
+  `showSplash = … && !!token` (signed-in only, Izzy re-stated 2026-08-22) and
+  stays brand navy in both themes.
+- ⛔⛔ **THE LAUNCHER ICON FOLLOWS THE IN-APP THEME NOW (Izzy 2026-08-22:
+  "when I change to dark mode, the icon should change to 2a; light → 2b") —
+  PROVEN LIVE ON HIS PHONE, full round trip.** Mechanism: the MAIN/LAUNCHER
+  intent-filter moved OFF `.MainActivity` onto two activity-aliases —
+  `.LauncherBlue` (enabled by default, Blue 2B) and `.LauncherNavy` (disabled,
+  Navy 2A, own `ic_launcher_navy*` mipmaps) — and `LauncherIconModule.kt`
+  flips which one is enabled; `ThemeContext.setMode` calls it on every toggle
+  and once at boot (so a pre-update dark chooser gets navy on first launch —
+  that reconcile fired for real on Izzy's phone, whose theme was already dark).
+  ⛔ **`.MainActivity` itself must NEVER be disabled** — notifications and deep
+  links start it by explicit class, and a disabled activity cannot start; the
+  module enables the new alias BEFORE disabling the old (never zero launchers)
+  and always `DONT_KILL_APP` (the app's pid survived the switch, verified).
+  ⛔ `am start -n <pkg>/.LauncherBlue` answers **Error type 3** on Samsung —
+  launch aliases via the LAUNCHER intent (monkey), not bare `-n`. Verify which
+  icon is live with `cmd package resolve-activity -c android.intent.category.LAUNCHER
+  -a android.intent.action.MAIN <pkg>`. ⛔ iOS deliberately keeps the manual
+  Settings row instead (iOS pops a system alert on every programmatic change).
+- ⛔ **The LOGIN THEME RULE CHANGED on Izzy's correction (2026-08-22): the
+  phone's own dark mode does NOT darken the login any more.** `systemDark ||
+  isDark` shipped first and he rejected it — it is **`isDark` only** now
+  (light unless the user's in-app theme is dark). Also on his order: **the old
+  Welcome screen is DELETED** (`WelcomeScreen.tsx`, its `Welcome` route and
+  type — signed out lands straight on Login, which carries both entries), and
+  the login's Sign in + Scan QR sit LOWER via two flexGrow spacers
+  (`spacerA`/`spacerB`) that split the leftover height instead of leaving one
+  blank block at the bottom.
+- ✅ **PROVEN ON IZZY'S PHONE 2026-08-22/23** (build `1.0.0+20260823-025839`
+  installed via `android-ship.ps1 -SkipJunction`): launcher search shows the
+  NAVY icon while the app theme is dark and the BLUE 2B icon after toggling
+  light (screenshots taken both ways); `resolve-activity` flipped
+  Blue→Navy→Blue→Navy across the boot reconcile + two UI toggles; his theme
+  was left on dark, as found. ⏳ **The fleet does NOT have it — publishing
+  renames every customer's home-screen icon AND swaps their launcher component
+  (a pinned home shortcut may drop on some launchers when the component
+  changes) — Izzy's call.**
 
 ## ⛔⛔ AGENT HANDOFF — the Android app is Loopcom now (icon spacing, splash, 31 strings) and it is on NO PHONE (2026-08-21) — READ FIRST before touching the mobile launcher icon or splash, before renaming ANY notification channel id, before publishing an APK, or for "the native splash didn't change"
 

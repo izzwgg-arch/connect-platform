@@ -22,7 +22,6 @@ export type TabParamList = {
 
 // Root auth stack
 export type AuthStackParamList = {
-  Welcome: undefined;
   Login: undefined;
   QrProvision: undefined;
 };

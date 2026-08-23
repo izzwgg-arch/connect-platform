@@ -68,11 +68,14 @@
         <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
       </intent-filter>
     </receiver>
+    <!-- ⛔ The MAIN/LAUNCHER entry lives on the two activity-aliases below, NOT
+         on MainActivity itself. That is what lets the home-screen icon follow
+         the in-app theme (LauncherIconModule flips which alias is enabled:
+         light = Blue 2B, dark = Navy 2A) WITHOUT ever disabling MainActivity —
+         notifications and deep links target .MainActivity by explicit class,
+         and a disabled activity cannot be started, so the activity itself must
+         always stay enabled. Exactly one alias is enabled at any moment. -->
     <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait" android:showWhenLocked="true" android:turnScreenOn="true">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
@@ -81,6 +84,18 @@
         <data android:scheme="exp+connect-mobile"/>
       </intent-filter>
     </activity>
+    <activity-alias android:name=".LauncherBlue" android:targetActivity=".MainActivity" android:enabled="true" android:exported="true" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".LauncherNavy" android:targetActivity=".MainActivity" android:enabled="false" android:exported="true" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_navy" android:roundIcon="@mipmap/ic_launcher_navy_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
     <activity android:name="com.facebook.react.devsupport.DevSettingsActivity" android:exported="false"/>
   </application>
 </manifest>

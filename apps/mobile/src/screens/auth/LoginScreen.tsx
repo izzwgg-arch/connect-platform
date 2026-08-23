@@ -13,9 +13,12 @@
  *  - "Loopcom · Secure sign-in" foot.
  *  - A soft aurora drifts behind everything.
  *
- * ⛔ THEME RULE (Izzy 2026-08-23): the login screen is LIGHT by default; it is
- * dark only when the PHONE is in dark mode (or the user chose dark in-app).
- * That is `systemDark || isDark` — never dark by default.
+ * ⛔ THEME RULE (Izzy 2026-08-22, correcting the first cut): the login screen
+ * is LIGHT by default; it is dark ONLY when the user's IN-APP theme is dark.
+ * The phone's own dark mode does NOT force it — that shipped as
+ * `systemDark || isDark` and Izzy rejected it ("The default login screen
+ * should be light mode... unless the user already has his app set to dark
+ * mode"). That is `isDark`, nothing else.
  *
  * ⛔ The sign-in LOGIC is untouched from the previous screen: same
  * login()/error/shake contract, same QrProvision navigation. Only the view
@@ -34,7 +37,6 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
-  useColorScheme,
   useWindowDimensions,
   Easing,
   Linking,
@@ -53,9 +55,8 @@ const WORDMARK_FRACTION = 216 / 292;
 
 export function LoginScreen() {
   const { isDark } = useTheme();
-  const systemDark = useColorScheme() === 'dark';
-  // ⛔ Light by default; dark only when the phone (or the in-app choice) is dark.
-  const dk = systemDark || isDark;
+  // ⛔ Light by default; dark ONLY when the in-app theme is dark (see header).
+  const dk = isDark;
 
   const { login } = useAuth();
   const insets = useSafeAreaInsets();
@@ -209,13 +210,6 @@ export function LoginScreen() {
           bounces={false}
           overScrollMode="never"
         >
-          {/* Back (the flow arrives from Welcome; the mockup frame has no chrome, keep it quiet) */}
-          {nav.canGoBack() && (
-            <TouchableOpacity onPress={() => nav.goBack()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="arrow-back" size={22} color={pal.text} />
-            </TouchableOpacity>
-          )}
-
           {/* Brand block — wordmark breathing, tagline beneath. */}
           <Animated.View style={[styles.brandblock, settleStyle(settle1)]}>
             <Animated.View
@@ -283,8 +277,18 @@ export function LoginScreen() {
                 <Text style={styles.errorText}>{error}</Text>
               </View>
             )}
+          </Animated.View>
 
-            {/* Gradient CTA with the slow crossing sheen. */}
+          {/* Izzy 2026-08-22: "Move the Sign In and Scan QR button a little bit
+              lower on the screen... spread it out and fill them up." The two
+              flexible spacers split the leftover height, so the action group
+              sits lower and the bottom no longer collects one blank block.
+              On short screens they collapse to their minimums and the page
+              scrolls as before. */}
+          <View style={styles.spacerA} />
+
+          {/* Sign in + or + QR — the action group. */}
+          <Animated.View style={settleStyle(settle3)}>
             <TouchableOpacity onPress={handleLogin} disabled={loading} activeOpacity={0.85} style={styles.ctaTouch}>
               <LinearGradient
                 colors={['#22a8ff', '#4f7bff']}
@@ -300,10 +304,6 @@ export function LoginScreen() {
                 <Animated.View pointerEvents="none" style={[styles.sheen, { transform: [{ translateX: sheenX }, { skewX: '-18deg' }] }]} />
               </LinearGradient>
             </TouchableOpacity>
-          </Animated.View>
-
-          {/* or + QR */}
-          <Animated.View style={settleStyle(settle3)}>
             <View style={styles.or}>
               <View style={[styles.orLine, { backgroundColor: pal.orLine }]} />
               <Text style={[styles.orText, { color: pal.orText }]}>or</Text>
@@ -319,6 +319,7 @@ export function LoginScreen() {
             </TouchableOpacity>
           </Animated.View>
 
+          <View style={styles.spacerB} />
           <Text style={[styles.foot, { color: pal.foot }]}>Loopcom · Secure sign-in</Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -329,7 +330,11 @@ export function LoginScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   scroll: { flexGrow: 1, paddingHorizontal: 24 },
-  backBtn: { alignSelf: 'flex-start', padding: 4, marginBottom: 2 },
+  // The vertical-spread spacers: A (fields → Sign in) takes the bigger share,
+  // B (QR → foot) the smaller, so the actions land lower without hugging the
+  // very bottom. minHeights keep the layout sane on short/keyboard screens.
+  spacerA: { flexGrow: 1.3, minHeight: 26 },
+  spacerB: { flexGrow: 1, minHeight: 18 },
   aura: { position: 'absolute', borderRadius: 999 },
   aura1: { width: 340, height: 280, top: '6%', left: '-22%' },
   aura2: { width: 300, height: 260, top: '46%', right: '-24%' },
@@ -390,7 +395,7 @@ const styles = StyleSheet.create({
   },
   forgotTouch: { alignSelf: 'flex-end', marginTop: -2 },
   forgot: { fontSize: 13, fontWeight: '500', color: '#22a8ff' },
-  or: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 16, marginBottom: 2 },
+  or: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 18, marginBottom: 4 },
   orLine: { flex: 1, height: 1 },
   orText: { fontSize: 12 },
   qr: {
@@ -403,5 +408,5 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   qrText: { fontSize: 15, fontWeight: '600' },
-  foot: { marginTop: 'auto', paddingTop: 20, textAlign: 'center', fontSize: 11.5 },
+  foot: { textAlign: 'center', fontSize: 11.5 },
 });

@@ -9,7 +9,6 @@ import { useSip } from '../context/SipContext';
 import { useTheme } from '../context/ThemeContext';
 import { SplashScreen } from '../screens/SplashScreen';
 import { TabNavigator } from './TabNavigator';
-import { WelcomeScreen } from '../screens/auth/WelcomeScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
 import { QrProvisionScreen } from '../screens/auth/QrProvisionScreen';
 import { ActiveCallScreen } from '../screens/call/ActiveCallScreen';
@@ -56,8 +55,10 @@ const AppStack = createNativeStackNavigator();
 
 function AuthNavigator() {
   return (
+    // Signed out = straight onto the sign-in screen. The old Welcome screen
+    // was removed on Izzy's order (2026-08-22, "take away the old login
+    // screen") — Login carries both entries it offered (password + QR).
     <AuthStack.Navigator screenOptions={{ headerShown: false, animation: 'fade_from_bottom' }}>
-      <AuthStack.Screen name="Welcome" component={WelcomeScreen} />
       <AuthStack.Screen name="Login" component={LoginScreen} />
       <AuthStack.Screen name="QrProvision" component={QrProvisionScreen} />
     </AuthStack.Navigator>

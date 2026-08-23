@@ -13,6 +13,7 @@ class IncomingCallUiPackage : ReactPackage {
       SipSocketModule(reactContext),
       DownloadsModule(reactContext),
       ConnectToneModule(reactContext),
+      LauncherIconModule(reactContext),
     )
   }
 
