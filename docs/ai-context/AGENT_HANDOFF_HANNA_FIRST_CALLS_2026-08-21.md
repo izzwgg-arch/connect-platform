@@ -288,6 +288,55 @@ grade and an RCA — mobile AND WebRTC — and **nothing prunes the table**
 ⛔ The per-endpooint opus override remains hand-baked and panel-fragile (the
 Landau wipe) — the tuner's output must eventually manage it, not humans.
 
+## 4c. ✅✅ THE "DO THEM ALL" NIGHT (2026-08-23, Izzy: "Yep, do them all… the iPhone build will do the last")
+
+Everything below shipped the same night, in order. **iOS/TestFlight build 53
+is deliberately HELD — Izzy may change the icon first; it goes LAST.**
+
+1. **Android APK `1.0.0+20260822-221827` BUILT AND PUBLISHED** (142,542,776 B,
+   `connectcomms-latest.apk` smoke-tested 200; the size change vs the fleet's
+   142,381,803 is the proof it went out). It carries: the 2026-08-06 telemetry
+   fixes (real platform label + networkType from ICE stats), and three NEW
+   client fixes (`83a5728c`):
+   - **Both cancel branches** (iOS VoIP + Expo/FCM `INVITE_CANCELED`) check
+     `hasConfirmedSipSession()` + `answerInviteRef` before `endNativeCall` —
+     a push can never tear down the call THIS device answered; scoped to the
+     answered invite so a second ringing call's cancel still clears its ring.
+   - **The warm fast-path claims in the background** (3 retries, idempotent,
+     zero answer latency) — the "claim SKIPPED as an optimisation" hole that
+     left Hanna's invites PENDING is closed client-side too.
+   - **`midCallNetworkEvents` / `networkChangedMidCall`** on every quality
+     report — WS drops during a confirmed call, the driving/handoff signal.
+   ⛔ The APK was built from the SHARED worktree, which carries another
+   session's uncommitted screens reorganisation (`screens/auth/`, `screens/call/`,
+   flat files deleted). **Verified safe, not assumed:** the flat screens were
+   already deleted before the fleet's 2026-08-21 build succeeded, so the fleet
+   APK was NECESSARILY built from the same layout — this publish ships the
+   same UI plus the fixes. ⛔ The lesson stands: diff `apps/mobile` against
+   HEAD before any fleet build from this tree.
+2. **PBX-side per-call RTP stats (`a9008ac1`, api DEPLOYED + migration
+   `20260823030000_connect_cdr_rtp_stats` applied and read back;
+   telephony queued):** `RtpStatsSampler` polls `pjsip show channelstats`
+   over the read-only AMI Command action — active-calls-only (an idle PBX
+   gets zero AMI traffic), 10s interval, kill switch
+   `RTP_STATS_SAMPLER_DISABLED=1` — keeps the LAST sample per channel (the
+   stats die with the channel at hangup, so end-time sampling is structurally
+   impossible), and CdrNotifier attaches the samples to the CDR. They land on
+   **`ConnectCdr.rtpStats`** beside the app's own report — both directions,
+   including the uplink loss no client can measure (Hanna: app said 1.7%,
+   PBX said 39%). ⛔ The CLI truncates channel names (~18 chars): matching is
+   prefix-based against live calls and an AMBIGUOUS fragment matches NOTHING.
+   ⛔ The ingest DECLARES `rtpStats` in zod — an undeclared key is silently
+   stripped (the pageSize trap). ⛔ An empty sample set resolves to
+   `undefined`, never null — a late leg post must not blank an earlier set.
+3. **The tuner is NOT built** — it needs weeks of the above data. That was
+   always the plan's order.
+
+⏳ **Acceptance for the night:** one real mobile call after the phone takes
+the new APK should upload a quality report with a truthful platform,
+networkType, and (if moving) networkChangedMidCall — and its CDR row should
+carry `rtpStats`. One picture-by-text should arrive as a real MMS.
+
 ## 5. Honest gaps
 
 - ⏳ Nobody has run the Wi-Fi control call — that is the acceptance test for §3.

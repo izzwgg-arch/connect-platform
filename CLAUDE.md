@@ -1482,10 +1482,30 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   the app reports handle type `"number"` — **iOS matches it against the
   phone's own address book.** The name on screen is a contact on HER iPhone.
   Check the device's contacts before suspecting a CID leak.
-- ⏳ **Open:** the Wi-Fi control call (decides the audio verdict); the MMS env
-  fix + guard; the opus override for her extension (PBX write, Izzy's
-  mandate); iOS quality reports still upload `platform: "ANDROID"` /
-  `networkType: null` (fix in repo since 2026-08-06, needs a TestFlight build).
+- ✅✅ **THE "DO THEM ALL" NIGHT (2026-08-23, Izzy; iOS build deliberately HELD
+  for an icon decision — it goes LAST):** Android APK **1.0.0+20260822-221827
+  PUBLISHED** (fleet-live on next installs) carrying the Aug-6 telemetry fixes
+  (real platform + networkType) AND three new client fixes (`83a5728c`): both
+  INVITE_CANCELED branches guard on `hasConfirmedSipSession()` +
+  `answerInviteRef` (a push can never tear down the call this device
+  answered), the warm answer path background-claims its invite (3 retries —
+  the "claim skipped as an optimisation" hole), and quality reports carry
+  `midCallNetworkEvents`/`networkChangedMidCall` (the driving signal). ⛔ The
+  APK was built from the shared worktree carrying another session's
+  uncommitted screens reorganisation — verified equivalent to the fleet's
+  08-21 build layout before publishing, but **diff apps/mobile against HEAD
+  before any fleet build from this tree.** And **PBX-side per-call RTP stats**
+  (`a9008ac1`): `RtpStatsSampler` (read-only AMI `pjsip show channelstats`,
+  active-calls-only, 10s, kill switch `RTP_STATS_SAMPLER_DISABLED=1`) →
+  CdrNotifier attach → **`ConnectCdr.rtpStats`** (migration applied) — both
+  directions incl. the uplink loss no client can measure. ⛔ The CLI truncates
+  channel names; matching is prefix-based and ambiguity matches NOTHING.
+  ⛔ The tuner is NOT built — it needs weeks of this data first.
+- ⏳ **Open:** iOS/TestFlight build 53 (HELD for Izzy's icon decision — ships
+  the same client fixes to iPhones; Hanna stays exposed to the client-side
+  race until then, though the server fix already protects her); no call has
+  yet exercised the deployed answer fix or produced an `rtpStats` row; no
+  picture sent through the fixed MMS path yet.
 
 ## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
 
