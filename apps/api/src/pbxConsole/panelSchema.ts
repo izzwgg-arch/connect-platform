@@ -21,7 +21,9 @@
 import { parseForm, type ParsedForm, type FormOption } from "./panelForm";
 
 export type PanelControl =
-  | "text" | "password" | "textarea" | "select" | "multiselect" | "checkbox" | "file" | "radio";
+  | "text" | "password" | "textarea" | "select" | "multiselect" | "checkbox" | "file" | "radio"
+  /** A template row's hidden input (`member_id`). Never drawn; always posted. */
+  | "hidden";
 
 export type PanelField = {
   name: string;
@@ -39,8 +41,17 @@ export type PanelField = {
 /** A `table.repeat-wrapper` — patterns, members, custom settings. */
 export type PanelRepeat = {
   columns: string[];
-  /** One template cell per column; `[N]` stands in for the row index. */
-  cells: Array<{ name: string; type: PanelControl; options?: FormOption[] }>;
+  /**
+   * One template cell per column; `[N]` stands in for the row index.
+   * `dv` is the template's own rendered default — what a browser would post
+   * for a brand-new row before anyone touches it.
+   *
+   * ⛔ Hidden template cells (type "hidden", e.g. `queue_members[N][member_id]`)
+   * are REAL: the panel's save controller reads them for every row and throws
+   * `Undefined array key "member_id"` when a new row arrives without one.
+   * They are never drawn, and always posted (a new row posts "").
+   */
+  cells: Array<{ name: string; type: PanelControl; options?: FormOption[]; dv?: string }>;
 };
 
 export type PanelTab = { id: string; label: string; fields: PanelField[]; repeats: PanelRepeat[] };
@@ -202,12 +213,26 @@ export function parseSchema(html: string): PanelTab[] {
       for (const c of scanControls(src)) {
         const raw = attr(c.tag, "name");
         if (!raw) continue;
-        const type = controlType(c.kind, c.tag);
+        const isHidden = c.kind === "input" && (attr(c.tag, "type") || "").toLowerCase() === "hidden";
+        const type = isHidden ? ("hidden" as const) : controlType(c.kind, c.tag);
         if (!type) continue;
         const name = rowName(raw);
         if (claimed.has(name)) continue;
         claimed.add(name);
-        cells.push(c.kind === "select" ? { name, type, options: optionsOf(c.inner) } : { name, type });
+        const cell: PanelRepeat["cells"][number] =
+          c.kind === "select" ? { name, type, options: optionsOf(c.inner) } : { name, type };
+        // the template's own rendered default — what a browser posts untouched
+        if (c.kind === "select") {
+          const opts = optionsOf(c.inner);
+          const sel = c.inner.match(/<option\b([^>]*selected[^>]*)>/i);
+          cell.dv = sel ? decode(attr(sel[1], "value") ?? "") : (opts[0]?.v ?? "");
+        } else if (c.kind === "input") {
+          if ((attr(c.tag, "type") || "").toLowerCase() === "checkbox") cell.dv = /\bchecked\b/i.test(c.tag) ? (decode(attr(c.tag, "value") || "1")) : undefined;
+          else cell.dv = decode(attr(c.tag, "value") || "");
+        } else {
+          cell.dv = "";
+        }
+        cells.push(cell);
       }
       repeats.push({ columns, cells });
     }
@@ -256,6 +281,19 @@ export function parseSchema(html: string): PanelTab[] {
       fields.push(f);
     }
 
+    /* Concrete row cells of the tables above — `queue_members_0_extension_id`
+       has no brackets, so the bracket filter below cannot catch it. Without
+       this, every existing row's cells ALSO render as standalone fields. */
+    const rowGroups = new Set<string>();
+    for (const c of claimed) {
+      const m = c.match(/^(.+?)\[N\]\[/) || c.match(/^(.+?)_N_/);
+      if (m) rowGroups.add(m[1]);
+    }
+    const isConcreteRowCell = (n: string): boolean => {
+      const m = n.match(/^(.+?)\[\d+\]\[/) || n.match(/^(.+?)_\d+_/);
+      return !!m && rowGroups.has(m[1]);
+    };
+
     /* ⛔ Loose controls. Some sections — "Last Destination" is the standing
        example — render bare selects under a legend with NO form-group wrapper.
        They are real, required fields; dropping them loses the destination of
@@ -263,7 +301,7 @@ export function parseSchema(html: string): PanelTab[] {
     for (const c of scanControls(seg)) {
       const raw = attr(c.tag, "name");
       if (!raw || RESERVED.has(raw) || raw.includes("{{")) continue;
-      if (seen.has(raw) || claimed.has(rowName(raw)) || raw.includes("[")) continue;
+      if (seen.has(raw) || claimed.has(rowName(raw)) || raw.includes("[") || isConcreteRowCell(raw)) continue;
       const type = controlType(c.kind, c.tag);
       if (!type) continue;
       seen.add(raw);

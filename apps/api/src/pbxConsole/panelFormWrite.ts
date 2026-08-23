@@ -80,6 +80,17 @@ export function splitRowCell(
   return null;
 }
 
+/** The same split for a CONCRETE pair name — `queue_members[0][member_id]`. */
+export function splitConcreteRowCell(
+  name: string,
+): { group: string; field: string; index: number; shape: "bracket" | "underscore" } | null {
+  const b = name.match(/^(.+?)\[(\d+)\]\[(.+)\]$/);
+  if (b) return { group: b[1], field: b[3], index: Number(b[2]), shape: "bracket" };
+  const u = name.match(/^(.+?)_(\d+)_(.+)$/);
+  if (u) return { group: u[1], field: u[3], index: Number(u[2]), shape: "underscore" };
+  return null;
+}
+
 /** The concrete pair name for row `i` of a cell. */
 const rowPairName = (c: { group: string; field: string; shape: "bracket" | "underscore" }, i: number) =>
   c.shape === "bracket" ? `${c.group}[${i}][${c.field}]` : `${c.group}_${i}_${c.field}`;
@@ -111,6 +122,13 @@ export function buildPanelEditPairs(
   opts: { module?: PanelModuleKey } = {},
 ): Array<[string, string]> {
   const known = schemaFieldNames(tabs);
+  const repeatByGroup = new Map<string, PanelTab["repeats"][number]>();
+  for (const t of tabs) {
+    for (const r of t.repeats) {
+      const g = r.cells.map((c) => splitRowCell(c.name)).find(Boolean)?.group;
+      if (g) repeatByGroup.set(g, r);
+    }
+  }
 
   for (const n of Object.keys(input.set || {})) {
     if (!known.has(n)) throw new PanelEditError("unknown_field", `the phone system's form has no field called "${n}"`);
@@ -133,19 +151,77 @@ export function buildPanelEditPairs(
     if (!cells.length) {
       throw new PanelEditError("unknown_field", `the phone system's form has no row table called "${group}"`);
     }
+    /* ⛔ A ROW IS MORE THAN ITS VISIBLE CELLS. Existing rows carry HIDDEN pairs
+       the template never shows — `queue_members[N][member_id]` is the standing
+       example — and they are how the panel tells "update this member" from
+       "add a new one". Rebuilding rows from the visible cells alone drops the
+       ids, and the panel's save controller throws an exception dialog (seen
+       live on the clone). So: a row object may carry ANY field that exists on
+       the group's concrete pairs, and each is emitted in the shape the panel
+       itself used for it. A truly unknown field — one on neither the template
+       nor the current pairs — is still refused. */
+    const shapeByField = new Map<string, "bracket" | "underscore">();
+    for (const c of cells) shapeByField.set(c.field, c.shape);
+    for (const [k] of pairs) {
+      const cc = splitConcreteRowCell(k);
+      if (cc && cc.group === group && !shapeByField.has(cc.field)) shapeByField.set(cc.field, cc.shape);
+    }
+    const rep = repeatByGroup.get(group);
+    const tmplCells = (rep?.cells || [])
+      .map((c) => ({ c, s: splitRowCell(c.name) }))
+      .filter((x): x is { c: NonNullable<typeof x.c>; s: NonNullable<typeof x.s> } => !!x.s && x.s.group === group);
     pairs = pairs.filter(([k]) => !isRowPairOf(k, group));
     rows.forEach((row, i) => {
-      for (const c of cells) {
-        const v = row[c.field];
+      const emitted = new Set<string>();
+      for (const [field, v] of Object.entries(row)) {
+        const shape = shapeByField.get(field);
+        if (!shape) {
+          throw new PanelEditError("unknown_field", `the phone system's "${group}" rows have no field called "${field}"`);
+        }
+        emitted.add(field);
         // ⛔ the checkbox rule, inside a row: false means NO PAIR at all.
         if (v === false || v == null || v === undefined) continue;
-        if (v === true) {
-          pairs.push([rowPairName(c, i), "1"]);
-          continue;
-        }
-        pairs.push([rowPairName(c, i), String(v)]);
+        const name = rowPairName({ group, field, shape }, i);
+        pairs.push([name, v === true ? "1" : String(v)]);
+      }
+      /* ⛔ A row posts EVERY template cell, like a browser does. A brand-new
+         row from the screen carries only what the person typed — the rest is
+         filled from the template's own rendered defaults. Hidden cells matter
+         most: the save controller reads `member_id` for every row and throws
+         `Undefined array key` when a new row arrives without it, so a new row
+         posts `member_id=""` exactly as a browser would. */
+      for (const { c, s: cs } of tmplCells) {
+        if (emitted.has(cs.field)) continue;
+        if (c.type === "checkbox") { if (c.dv !== undefined) pairs.push([rowPairName(cs, i), c.dv]); continue; }
+        pairs.push([rowPairName(cs, i), c.dv ?? ""]);
       }
     });
+    /* ⛔ THE PLACEHOLDER ROW IS PART OF THE POST. The browser submits the
+       template row itself, literal `{{row-count-placeholder}}` index and all,
+       and the panel's save controller expects it — a queue created without it
+       dies on `Undefined array key "queue_members"`. `createQueue` in
+       teamBuilder has posted it since the day it shipped. */
+    for (const { c } of tmplCells) {
+      if (c.type === "checkbox" && c.dv === undefined) continue;
+      pairs.push([c.name.replace("[N]", "[{{row-count-placeholder}}]").replace("_N_", "_{{row-count-placeholder}}_"), c.dv ?? ""]);
+    }
+  }
+
+  /* ⛔ AND A TABLE THE CALLER NEVER TOUCHED STILL NEEDS ITS ARRAY KEY. On a
+     CREATE, parseForm's pairs carry no row pairs at all (the rendered template
+     row's `{{…}}` names are excluded by design), so a save without the group's
+     placeholder dies the same way. A browser cannot produce that post — its
+     template inputs always submit. Emit the placeholder for any repeat group
+     that would otherwise be entirely absent. */
+  for (const [group, rep] of repeatByGroup) {
+    if (input.rows && group in input.rows) continue; // handled above
+    if (pairs.some(([k]) => isRowPairOf(k, group) || (splitRowCell(k.replace("{{row-count-placeholder}}", "N"))?.group === group))) continue;
+    for (const c of rep.cells) {
+      const cs = splitRowCell(c.name);
+      if (!cs || cs.group !== group) continue;
+      if (c.type === "checkbox" && c.dv === undefined) continue;
+      pairs.push([c.name.replace("[N]", "[{{row-count-placeholder}}]").replace("_N_", "_{{row-count-placeholder}}_"), c.dv ?? ""]);
+    }
   }
 
   return opts.module === "extensions" ? generalOnlyPairs(pairs) : pairs;

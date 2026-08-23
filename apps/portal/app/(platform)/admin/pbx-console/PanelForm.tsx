@@ -17,14 +17,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 export type FormOption = { v: string; t: string };
 export type PanelControl =
-  | "text" | "password" | "textarea" | "select" | "multiselect" | "checkbox" | "file" | "radio";
+  | "text" | "password" | "textarea" | "select" | "multiselect" | "checkbox" | "file" | "radio"
+  | "hidden";
 export type PanelField = {
   name: string; label: string; type: PanelControl; required: boolean;
   help?: string; section?: string; options?: FormOption[]; placeholder?: string;
 };
 export type PanelRepeat = {
   columns: string[];
-  cells: Array<{ name: string; type: PanelControl; options?: FormOption[] }>;
+  cells: Array<{ name: string; type: PanelControl; options?: FormOption[]; dv?: string }>;
 };
 export type PanelTab = { id: string; label: string; fields: PanelField[]; repeats: PanelRepeat[] };
 
@@ -59,35 +60,43 @@ const groupOf = (r: PanelRepeat): string => {
   for (const c of r.cells) { const s = splitCell(c.name); if (s) return s.group; }
   return r.cells[0]?.name || "rows";
 };
-/** The pair name the panel used for row `i`, in that cell's own shape. */
-function existingRowName(cell: string, i: number): string {
-  const b = cell.match(/^(.+?)\[N\]\[(.+)\]$/);
-  if (b) return `${b[1]}[${i}][${b[2]}]`;
-  const u = cell.match(/^(.+?)_N_(.+)$/);
-  if (u) return `${u[1]}_${i}_${u[2]}`;
-  return cell;
+
+/** `queue_members[0][member_id]` → { group, field, index }. */
+function splitConcrete(name: string): { group: string; field: string; index: number } | null {
+  const b = name.match(/^(.+?)\[(\d+)\]\[(.+)\]$/);
+  if (b) return { group: b[1], field: b[3], index: Number(b[2]) };
+  const u = name.match(/^(.+?)_(\d+)_(.+)$/);
+  if (u) return { group: u[1], field: u[3], index: Number(u[2]) };
+  return null;
 }
 
-/** Read the rows the panel already has, straight out of its posted values. */
+/**
+ * Read the rows the panel already has, straight out of its posted values.
+ *
+ * ⛔ A ROW IS MORE THAN ITS VISIBLE CELLS. Existing rows carry HIDDEN pairs the
+ * template never shows — `queue_members[N][member_id]` is the standing example
+ * — and they are how the panel tells "update this member" from "add a new
+ * one". A row object therefore carries EVERY concrete pair of its group at its
+ * index, not just the drawn cells; the extras ride along invisibly and travel
+ * with the row through reorder and removal. Dropping them made the panel's
+ * save controller throw (seen live on the clone).
+ */
 function readRows(r: PanelRepeat, data: PanelFormData): Array<Record<string, string | boolean>> {
-  const out: Array<Record<string, string | boolean>> = [];
-  for (let i = 0; i < 200; i++) {
-    const row: Record<string, string | boolean> = {};
-    let any = false;
-    for (const c of r.cells) {
-      const s = splitCell(c.name);
-      if (!s) continue;
-      const key = existingRowName(c.name, i);
-      if (c.type === "checkbox") {
-        if (key in data.checks) { row[s.field] = data.checks[key].checked; any = true; }
-      } else if (key in data.values) {
-        row[s.field] = data.values[key]; any = true;
-      }
-    }
-    if (!any) break;
-    out.push(row);
+  const group = groupOf(r);
+  const byIndex = new Map<number, Record<string, string | boolean>>();
+  for (const [k, v] of Object.entries(data.values)) {
+    const c = splitConcrete(k);
+    if (!c || c.group !== group) continue;
+    if (!byIndex.has(c.index)) byIndex.set(c.index, {});
+    byIndex.get(c.index)![c.field] = v;
   }
-  return out;
+  for (const [k, v] of Object.entries(data.checks)) {
+    const c = splitConcrete(k);
+    if (!c || c.group !== group) continue;
+    if (!byIndex.has(c.index)) byIndex.set(c.index, {});
+    byIndex.get(c.index)![c.field] = v.checked;
+  }
+  return [...byIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row);
 }
 
 export function PanelForm({
@@ -276,8 +285,11 @@ export function PanelForm({
           </div>
         ))}
 
-        {t.repeats.map((rep, ri) => {
-          const g = groupOf(rep);
+        {t.repeats.map((repRaw, ri) => {
+          /* hidden template cells (member_id) are never drawn — they ride
+             invisibly inside the row objects and travel with each row */
+          const rep = { ...repRaw, cells: repRaw.cells.filter((c) => c.type !== "hidden") };
+          const g = groupOf(repRaw);
           const list = rows[g] || [];
           const set = (i: number, field: string, v: string | boolean) =>
             setRows((s) => {

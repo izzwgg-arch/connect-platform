@@ -6,7 +6,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeForm } from "./panelSchema";
+import { describeForm, parseSchema as parseSchemaOf } from "./panelSchema";
 import {
   buildPanelEditPairs, splitRowCell, summariseEdit, isPanelModule, PANEL_MODULES, PanelEditError,
 } from "./panelFormWrite";
@@ -104,12 +104,20 @@ test("⛔ saving rows DROPS the rows that were there before", () => {
   const p = buildPanelEditPairs(form, tabs, { rows: { queue_members: [{ extension_id: "8", penalty: "9" }] } });
   assert.deepEqual(get(p, "queue_members[0][penalty]"), ["9"]);
   assert.deepEqual(get(p, "queue_members[1][penalty]"), []);
-  assert.equal(p.filter(([k]) => k.startsWith("queue_members")).length, 2, "exactly the one row we sent");
+  const concrete = p.filter(([k]) => k.startsWith("queue_members") && !k.includes("{{"));
+  // one row, every template cell posted like a browser: extension_id, penalty,
+  // and diversions from the template default (unchecked -> absent)
+  assert.equal(concrete.filter(([k]) => /\[0\]|_0_/.test(k)).length + 0, concrete.length, "exactly the one concrete row we sent");
+  // ⛔ and the PLACEHOLDER row rides along — the browser posts the template
+  // row itself, and a queue created without it dies on
+  // `Undefined array key "queue_members"` (seen live on the clone)
+  assert.ok(p.some(([k]) => k.includes("{{row-count-placeholder}}")), "the placeholder row is part of the post");
 });
 
-test("emptying a table removes every row", () => {
+test("emptying a table removes every concrete row — the placeholder alone remains", () => {
   const p = buildPanelEditPairs(form, tabs, { rows: { queue_members: [] } });
-  assert.equal(p.filter(([k]) => k.startsWith("queue_members")).length, 0);
+  assert.equal(p.filter(([k]) => k.startsWith("queue_members") && !k.includes("{{")).length, 0, "no concrete rows");
+  assert.ok(p.some(([k]) => k.includes("{{row-count-placeholder}}")), "the template row still posts, as a browser would");
 });
 
 test("⛔ a field the screen never showed is REFUSED, not quietly written", () => {
@@ -131,6 +139,61 @@ test("the panel's own plumbing can never be overwritten from the screen", () => 
   // class/method/mode/csfr_token are not in the schema, so they are unknown.
   assert.throws(() => buildPanelEditPairs(form, tabs, { set: { class: "tenants" } }), /no field called/);
   assert.throws(() => buildPanelEditPairs(form, tabs, { set: { csfr_token: "x" } }), /no field called/);
+});
+
+test("⛔ a row's HIDDEN pairs travel with the row — member_id is how the panel tells update from add", () => {
+  // Queue member rows carry `queue_members[N][member_id]` which the template
+  // never shows. Rebuilding rows without it made the panel's save controller
+  // throw an exception dialog (seen live on the clone, 2026-08-21).
+  const f = describeForm(`
+    <div role="tabpanel" id="t">
+      <table class="repeat-wrapper">
+        <thead><tr><th>Extension</th><th>Penalty</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><select name="queue_members_{{row-count-placeholder}}_extension_id"><option value="7">101</option></select></td>
+            <td><input type="text" name="queue_members[{{row-count-placeholder}}][penalty]"></td>
+          </tr>
+          <tr>
+            <td><input type="hidden" name="queue_members[0][member_id]" value="41">
+                <select name="queue_members_0_extension_id"><option value="7" selected>101</option></select></td>
+            <td><input type="text" name="queue_members[0][penalty]" value="1"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`);
+  // the caller's row carries the extra (the portal's readRows collects it)
+  const p = buildPanelEditPairs(f.form, f.tabs, {
+    rows: { queue_members: [{ member_id: "41", extension_id: "7", penalty: "2" }, { extension_id: "7", penalty: "3" }] },
+  });
+  const get = (k: string) => p.filter(([n]) => n === k).map(([, v]) => v);
+  assert.deepEqual(get("queue_members[0][member_id]"), ["41"], "the id rides with the existing row, in the panel's own bracket shape");
+  assert.deepEqual(get("queue_members[1][member_id]"), [], "a NEW row carries no id — that is what makes it an add");
+  assert.deepEqual(get("queue_members_1_extension_id"), ["7"], "and underscore cells keep their shape");
+  // a field on neither the template nor the current pairs is still refused
+  assert.throws(
+    () => buildPanelEditPairs(f.form, f.tabs, { rows: { queue_members: [{ backdoor: "x" }] } }),
+    /no field called "backdoor"/,
+  );
+});
+
+test("⛔ concrete row cells are NOT drawn again as standalone fields", () => {
+  // `queue_members_0_extension_id` has no brackets, so it used to leak into
+  // the loose-control scan and every member row rendered twice.
+  const t = parseSchemaOf(`
+    <div role="tabpanel" id="t">
+      <table class="repeat-wrapper">
+        <thead><tr><th>Extension</th></tr></thead>
+        <tbody>
+          <tr><td><select name="queue_members_{{row-count-placeholder}}_extension_id"><option value="7">101</option></select></td></tr>
+          <tr><td><select name="queue_members_0_extension_id"><option value="7" selected>101</option></select></td></tr>
+        </tbody>
+      </table>
+      <div class="form-group"><label class="control-label">Weight</label><input type="text" name="weight" value="0"></div>
+    </div>`);
+  const names = t[0].fields.map((f) => f.name);
+  assert.ok(!names.includes("queue_members_0_extension_id"), "a concrete row cell is table data, not a field");
+  assert.ok(names.includes("weight"), "real fields still come through");
 });
 
 test("⛔ an extension's general save never carries device fields", () => {
