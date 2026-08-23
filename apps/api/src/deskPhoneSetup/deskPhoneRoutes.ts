@@ -514,7 +514,11 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // ⛔ Staff only, and checked on the ROLE rather than on a permission a customer
     // could be granted. Sending a setup request into somebody's office is ours.
     if (!user?.sub || !isSuper(user)) return reply.status(403).send({ error: "forbidden" });
-    const body = z.object({ tenantId: z.string().min(1) }).safeParse(req.body ?? {});
+    const body = z.object({
+      tenantId: z.string().min(1),
+      /** false = just invite them (the old behaviour); default true = Loopcom drives. */
+      drive: z.boolean().optional(),
+    }).safeParse(req.body ?? {});
     if (!body.success) return reply.status(400).send({ error: "invalid_request" });
 
     const tenant = await db.tenant.findFirst({ where: { id: body.data.tenantId } });
@@ -531,6 +535,10 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         startedByUserId: user.sub,
         requestedByUserId: user.sub,
         origin: "admin",
+        // ⛔ "admin" means Loopcom drives it from their end while one of the
+        // tenant's OWN installed apps does the network work. It still performs
+        // nothing until somebody in that office presses the consent card.
+        driveMode: body.data.drive === false ? "self" : "admin",
       },
     });
     // ⛔⛔ SENDING IS NOT CONSENTING. This creates an invitation, and nothing else.
@@ -544,6 +552,105 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     return reply.send({ ok: true, run: { id: run.id, resumed: false } });
   });
 
+  /* ── admin-driven runs: the office app is the hands, Loopcom is the head ── */
+
+  /**
+   * The office app asks: is Loopcom waiting for us to do anything here?
+   *
+   * ⛔⛔ THIS IS THE ONLY WAY AN ADMIN-STARTED RUN REACHES A CUSTOMER'S NETWORK,
+   * and it is a POLL, not a push. Same shape remote support already uses: no new
+   * socket, no inbound connection to a customer's machine, and the office app is
+   * always the one that initiates. A compromised server cannot reach into an
+   * office; it can only leave a note that the office may choose to read.
+   *
+   * ⛔ It answers with `needsConsent` until somebody THERE agrees. Scanning a
+   * customer's network with nobody present to say yes is the line the whole
+   * design draws.
+   */
+  app.get("/desk-phones/pending", async (req: any, reply: any) => {
+    const user = await mayRunSetup(req, reply); if (!user) return;
+    const run = await db.deskPhoneSetupRun.findFirst({
+      where: { tenantId: user.tenantId, status: "running", driveMode: "admin" },
+      orderBy: { startedAt: "desc" },
+    });
+    if (!run) return reply.send({ ok: true, pending: false });
+
+    // ⛔ Best-effort heartbeat: the admin's screen shows "their app is connected"
+    // from this, and a failure to stamp it must never stop the office working.
+    try {
+      await db.deskPhoneSetupRun.update({
+        where: { id: run.id },
+        data: {
+          officeAgentSeenAt: new Date(),
+          officeAgentLabel: run.officeAgentLabel || String((req.query || {}).label || "").slice(0, 120) || null,
+        },
+      });
+    } catch { /* non-fatal */ }
+
+    return reply.send({
+      ok: true,
+      pending: true,
+      runId: run.id,
+      needsConsent: !run.officeConsentAt,
+      // Plain words for the card the office person sees. ⛔ No jargon, and it
+      // names Loopcom so nobody wonders who is asking.
+      message: run.officeConsentAt
+        ? "Loopcom is setting up the phones in your office."
+        : "Loopcom would like to find the phones in your office and connect them.",
+    });
+  });
+
+  /**
+   * Somebody in that office says yes.
+   *
+   * ⛔⛔ THE ADMIN WHO SENT THE REQUEST CANNOT SUPPLY THIS. The consent is
+   * recorded against the office person's own session, and the route lives on the
+   * CUSTOMER side of the permission fence — a staff token switched onto a tenant
+   * still has to have a real person in that office press the card, because the
+   * whole point is that somebody there agreed.
+   */
+  app.post("/desk-phones/runs/:id/office-consent", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    if (run.status !== "running") return reply.status(404).send({ error: "not_found" });
+
+    // ⛔ Idempotent, and the FIRST consent wins: re-pressing must never re-stamp a
+    // different person as the one who agreed.
+    if (!run.officeConsentAt) {
+      await db.deskPhoneSetupRun.updateMany({
+        where: { id: run.id, officeConsentAt: null },
+        data: { officeConsentAt: new Date(), officeConsentByUserId: user.sub },
+      });
+      await deps.audit({
+        tenantId: user.tenantId, action: "DESK_PHONE_OFFICE_CONSENT",
+        entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub,
+        metadata: { consentedBy: user.email },
+      });
+    }
+    return reply.send({ ok: true, consented: true });
+  });
+
+  /**
+   * The office person declines, or stops a run that is already going.
+   * ⛔ Always available, and it consults no permission beyond being in that
+   * tenant — a stop button that can refuse is not a stop button.
+   */
+  app.post("/desk-phones/runs/:id/office-stop", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    await db.deskPhoneSetupRun.updateMany({
+      where: { id: run.id, status: "running" },
+      data: { status: "abandoned", finishedAt: new Date() },
+    });
+    await deps.audit({
+      tenantId: user.tenantId, action: "DESK_PHONE_OFFICE_STOPPED",
+      entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub,
+      metadata: { stoppedBy: user.email },
+    });
+    return reply.send({ ok: true, stopped: true });
+  });
+
   app.get("/admin/desk-phones/runs/:id", async (req: any, reply: any) => {
     const user = getUser(req);
     if (!user?.sub || !isSuper(user)) return reply.status(403).send({ error: "forbidden" });
@@ -552,7 +659,17 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
     return reply.send({
       ok: true,
-      run: { id: run.id, tenantId: run.tenantId, status: run.status, subnet: run.subnet, origin: run.origin, startedAt: run.startedAt },
+      run: {
+        id: run.id, tenantId: run.tenantId, status: run.status, subnet: run.subnet,
+        origin: run.origin, startedAt: run.startedAt,
+        // ⛔ The technician must be able to see WHY nothing is happening: waiting
+        // for the office to agree, and whether their app has checked in at all,
+        // are the two states that otherwise look identical from this end.
+        driveMode: run.driveMode,
+        officeConsentAt: run.officeConsentAt || null,
+        officeAgentLabel: run.officeAgentLabel || null,
+        officeAgentSeenAt: run.officeAgentSeenAt || null,
+      },
       summary: summarizeRun(phones.map((p: any) => p.state as PhoneState)),
       // The technician sees everything the customer does not.
       phones: phones.map(diagnosticPhoneView),

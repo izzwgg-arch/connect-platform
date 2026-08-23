@@ -7801,6 +7801,26 @@ model DeskPhoneSetupRun {
   /// on that list is not covered by that approval.
   resetAuthorizedPhoneIds String?
 
+  /// ⛔⛔ ADMIN-DRIVEN RUNS: Loopcom, switched onto a tenant, drives the setup
+  /// from their end while one of the tenant's OWN installed apps does the network
+  /// work. `driveMode` is "self" (the office runs its own wizard) or "admin" (a
+  /// Loopcom tech is driving it for them). An admin-driven run does nothing to a
+  /// network until somebody physically in that office presses one consent card —
+  /// scanning a customer's LAN with nobody there agreeing is the line the whole
+  /// design draws, same as remote support.
+  driveMode          String   @default("self")
+  /// Set the moment a person in that office agrees to the search. Until this is
+  /// set, the office app polls but performs NOTHING. Sending the request (admin)
+  /// and consenting (office) are deliberately different people and different times.
+  officeConsentAt        DateTime?
+  officeConsentByUserId  String?
+  /// The label of the office machine that claimed the run (which computer is
+  /// acting as the hands). Shown to the admin so a multi-machine office is legible.
+  officeAgentLabel   String?
+  /// Last time the office app checked in. Drives the "their app is connected" dot
+  /// in the admin view, and lets the admin see a run go quiet.
+  officeAgentSeenAt  DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

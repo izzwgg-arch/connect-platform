@@ -31,6 +31,7 @@ const RUN_COLUMNS = new Set([
   "id", "tenantId", "startedByUserId", "deviceLabel", "subnet", "origin", "requestedByUserId",
   "status", "startedAt", "finishedAt", "resetAuthorizedAt", "resetAuthorizedByUserId",
   "resetAuthorizedPhoneIds", "createdAt", "updatedAt",
+  "driveMode", "officeConsentAt", "officeConsentByUserId", "officeAgentLabel", "officeAgentSeenAt",
 ]);
 const PHONE_COLUMNS = new Set([
   "id", "tenantId", "runId", "macAddress", "ipAddress", "previousIp", "vendor", "model",
@@ -92,6 +93,8 @@ mock.module("@connect/db", {
       deskPhoneSetupRun: table("runs", RUN_COLUMNS, () => ({
         id: nextId("run"), status: "running", origin: "customer", startedAt: new Date(),
         subnet: null, resetAuthorizedAt: null, resetAuthorizedByUserId: null, resetAuthorizedPhoneIds: null,
+        driveMode: "self", officeConsentAt: null, officeConsentByUserId: null,
+        officeAgentLabel: null, officeAgentSeenAt: null,
       })),
       deskPhoneSetupPhone: table("phones", PHONE_COLUMNS, () => ({
         id: nextId("ph"), state: "DISCOVERED", attempts: 0, resetCount: 0, createdAt: new Date(),
@@ -570,4 +573,93 @@ test("STRESS: the whole run, start to finish, on eight phones", async () => {
   const remaining = view.phones.filter((p: any) => p.status !== "Ready");
   assert.equal(remaining.length, 2);
   assert.ok(!/fail/i.test(JSON.stringify(view.summary)));
+});
+
+/* ── admin-driven runs: Loopcom drives, the office consents (2026-08-23) ─── */
+
+test("DRIVE: an admin-started driven run performs NOTHING until the office agrees", async () => {
+  reset();
+  const admin = await app(STAFF);
+  const office = await app(CUSTOMER);
+  const started = B(await admin.inject({
+    method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" },
+  }));
+  assert.ok(started.ok, "the admin could not start a driven run");
+
+  // The office app polls and is told a person must agree first.
+  const pending = B(await office.inject({ method: "GET", url: "/desk-phones/pending" }));
+  assert.equal(pending.pending, true, "the office app was never told anything is waiting");
+  assert.equal(pending.needsConsent, true, "consent was not required — the whole safeguard");
+  assert.ok(!/HTTP|SIP|MAC|subnet|scan/i.test(String(pending.message)), `jargon in the card: ${pending.message}`);
+
+  // ⛔ THE ADMIN CANNOT CONSENT. Sending is not consenting.
+  const run = state.runs[0];
+  assert.equal(run.officeConsentAt, null, "an admin-started run arrived pre-consented");
+
+  // A person in that office presses the card.
+  const ok = await office.inject({ method: "POST", url: `/desk-phones/runs/${run.id}/office-consent`, payload: {} });
+  assert.equal(ok.statusCode, 200);
+  assert.ok(state.runs[0].officeConsentAt, "consent was not recorded");
+  assert.equal(state.runs[0].officeConsentByUserId, CUSTOMER.sub, "the wrong person was recorded as consenting");
+
+  // And from then on the office app is told to get on with it.
+  const after = B(await office.inject({ method: "GET", url: "/desk-phones/pending" }));
+  assert.equal(after.needsConsent, false, "still asking after consent");
+});
+
+test("DRIVE: consent is idempotent and the FIRST person is the one recorded", async () => {
+  reset();
+  const admin = await app(STAFF);
+  const office = await app(CUSTOMER);
+  await admin.inject({ method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" } });
+  const run = state.runs[0];
+  await office.inject({ method: "POST", url: `/desk-phones/runs/${run.id}/office-consent`, payload: {} });
+  const firstAt = state.runs[0].officeConsentAt;
+  const firstBy = state.runs[0].officeConsentByUserId;
+  // a colleague presses it too
+  const other = await app({ ...CUSTOMER, sub: "u_other", email: "b@b.example" });
+  await other.inject({ method: "POST", url: `/desk-phones/runs/${run.id}/office-consent`, payload: {} });
+  assert.equal(state.runs[0].officeConsentAt, firstAt, "a second press re-stamped the consent time");
+  assert.equal(state.runs[0].officeConsentByUserId, firstBy, "a second press changed who agreed");
+});
+
+test("DRIVE: another customer never sees this tenant's request", async () => {
+  reset();
+  const admin = await app(STAFF);
+  await admin.inject({ method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" } });
+  const stranger = await app(OTHER);
+  const seen = B(await stranger.inject({ method: "GET", url: "/desk-phones/pending" }));
+  assert.equal(seen.pending, false, "a request leaked into another company's browser");
+  const run = state.runs[0];
+  const tryConsent = await stranger.inject({
+    method: "POST", url: `/desk-phones/runs/${run.id}/office-consent`, payload: {},
+  });
+  assert.equal(tryConsent.statusCode, 404, "a stranger could consent on somebody else's behalf");
+  assert.equal(state.runs[0].officeConsentAt, null, "a stranger's press was recorded");
+});
+
+test("DRIVE: the office can stop it, and stopping never consults a permission", async () => {
+  reset();
+  const admin = await app(STAFF);
+  await admin.inject({ method: "POST", url: "/admin/desk-phones/send-setup", payload: { tenantId: "t_abc" } });
+  const run = state.runs[0];
+  // ⛔ Even with the setup permission revoked, Stop must work — a stop button
+  // that can refuse is not a stop button.
+  allowSetup = false;
+  const office = await app(CUSTOMER);
+  const stopped = await office.inject({ method: "POST", url: `/desk-phones/runs/${run.id}/office-stop`, payload: {} });
+  assert.equal(stopped.statusCode, 200, "the office could not stop a run Loopcom started");
+  assert.equal(state.runs[0].status, "abandoned");
+  allowSetup = true;
+  // and the office app stops being asked
+  const after = B(await (await app(CUSTOMER)).inject({ method: "GET", url: "/desk-phones/pending" }));
+  assert.equal(after.pending, false, "a stopped run still asks");
+});
+
+test("DRIVE: a self-driven run never shows up as a Loopcom request", async () => {
+  reset();
+  const office = await app(CUSTOMER);
+  await office.inject({ method: "POST", url: "/desk-phones/runs", payload: {} });
+  const pending = B(await office.inject({ method: "GET", url: "/desk-phones/pending" }));
+  assert.equal(pending.pending, false, "the office's own run was reported as a Loopcom request");
 });
