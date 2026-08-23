@@ -692,3 +692,24 @@ setsid nohup /root/x-deploy.sh > /root/x.log 2>&1 < /dev/null & disown
 ```
 
 A waiter that greps a **file** can never match itself.
+
+### ✅ The fix is DEPLOYED, and the whole feature RE-VERIFIED two days on
+
+Portal `d0e98b96` carried it, confirmed by grepping the shipped bundle rather
+than by the deploy's exit line: *A schedule for each holiday* ✓, *See the
+calendar* ✓, `jc-calbtn` ✓, **`showHolidays` gone (0 files)** ✓, and the holiday
+table **still out of the client bundle** ✓.
+
+**Re-verified live 2026-08-23** — two days and many other sessions' deploys later,
+on api `ed81e9f4` / portal `4972f0c8`:
+
+```
+api      loadJewishCalendar 6 | jewishSweep 2 | routes 4
+worker   override 2862 → acappella 2879 → one_time 2889     (still above the schedule)
+portal   both once-hidden halves present; showHolidays 0; table in client bundle 0
+row      Connect Communications | enabled=f | kiryas-joel | satmar
+```
+
+⛔ **Still `enabled = false`. Nobody has switched it on**, so it drives no menu and
+no hold music. That remains the one unproven step, and it is a decision rather
+than a task.

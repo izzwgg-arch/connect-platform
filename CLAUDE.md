@@ -1470,7 +1470,9 @@ schedule', the system will always know when that holiday is this year"*, plus
   *"a button where people can see the calendar view month by month"*.
   ✅ Fixed: the list is **always rendered**, headed **"A schedule for each
   holiday"** (named with the words someone would search for); the calendar is a
-  **primary button in the card header**. Commit `05936a00`.
+  **primary button in the card header**. Commit `05936a00`, **DEPLOYED and
+  bundle-verified** (portal `d0e98b96`: both strings present, `showHolidays`
+  **0 files**, holiday table still **0** in the client bundle).
   ⛔⛔ **THE RULE: A FEATURE THAT HAS TO BE DISCOVERED IS NOT BUILT.** Typecheck,
   unit tests, container greps and live route probes ALL passed — every one of them
   confirms the code EXISTS, and not one asks whether a person can find it. ⛔ And
