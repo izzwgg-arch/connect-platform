@@ -2194,9 +2194,22 @@ her. I'm not charging her."*
   on purpose (`voipMsProvisioning.ts`); do not copy this unlock to anyone
   without Izzy's word. ⛔ International minutes bill the MASTER VoIP.ms account
   and Hanna is a FREE tenant with no billing row — the cost is absorbed, by
-  design. ⏳ Carrier-side only: no international call has been placed, and the
-  PBX outbound route/ARS patterns for tenant 141 were not touched — if an
-  international dial fails, check the dialplan pattern before the carrier.
+  design (Izzy re-confirmed 2026-08-23: "I'm not charging her").
+  ✅ **The PBX half is VERIFIED too (read-only, 2026-08-23):** her outbound
+  route `trk-group-162` in the live rendered Main dialplan carries **`_011.`**
+  beside the NANPA patterns (ARS 289 → trk-group-162 → trunk 166, CID
+  8455577194) — onboarding put it there; nothing was written. ⏳ No
+  international call has been placed yet — that is the acceptance test.
+  ⛔ **"Every outbound route has 011" is NOT true fleet-wide: 37 of 58
+  trk-group contexts carry `_011.`, 21 do not** (mostly pre-Connect-era
+  routes: A Plus Center, Smart Steps, KJ Play Center, Quick Sat Rental,
+  Fleetease, Kitchens of USA, Silver Birch, Onveo, Avenue Filing, SpaceArt,
+  Sterlion Creations, Rollup, Koznits Catering, trust smooth, spam test,
+  McNamara Lion, landau home caller id, Trust Sge, Tellocall, Loopcom,
+  YS Plumbing). Harmless today — their subaccounts are all still
+  international-locked at VoIP.ms — but unlocking a customer on one of those
+  21 routes fails at the DIALPLAN, not the carrier. Fixing them is a panel
+  edit per route (PBX write, needs Izzy).
 - ⏳ **TestFlight: added to "Loopcom Testers" (Hanna Weber, build 52) and
   `/v1/betaTesterInvitations` answered 201 TWICE, but the tester still read
   `NOT_INVITED`** — confirm the email reached her; re-run
