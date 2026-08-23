@@ -1328,7 +1328,7 @@ and they are TWO defects.
   into this build**; an open window shows the OLD card for this deploy and the new
   strip only from the next one onward.
 
-## ⛔⛔ AGENT HANDOFF — Hanna's first calls: "hangs up on answer" was her cellular uplink, "picture came as a link" is a PLATFORM-WIDE MMS bug (`PUBLIC_API_URL` is an ORIGIN), and "Weber" was her own iPhone contacts (2026-08-21) — READ FIRST for ANY picture-by-text failure, before trusting `PUBLIC_API_URL`, before diagnosing a 443-route caller's audio, or before believing an app RCA verdict
+## ⛔⛔ AGENT HANDOFF — Hanna's first calls: "hangs up on answer" was her cellular uplink, "picture came as a link" is an MMS REGRESSION the Aug-19 identity refactor shipped, and "Weber" was her own iPhone contacts (2026-08-21) — READ FIRST for ANY picture-by-text failure, before adding an env name to a URL chain, before diagnosing a 443-route caller's audio, or before claiming a feature "never worked"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_HANNA_FIRST_CALLS_2026-08-21.md`**
 (**Read-only investigation — no code, no deploy, no PBX write, no env change.**
@@ -1336,19 +1336,27 @@ Measured live during her test calls: tcpdump on the PBX, `pjsip show
 channelstats` mid-call, the app's own `VoiceDiagEvent` uploads, the Asterisk
 log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
 
-- ⛔⛔ **PICTURES-BY-TEXT HAVE NEVER WORKED, FOR ANYONE — and the failure is one
-  env value.** `.env.platform:34` sets `PUBLIC_API_URL=https://app.connectcomunications.com`
-  — an **ORIGIN with no `/api`** — and every reader (`canonicalApiBase()`,
-  the worker's MMS `publicBase`, `billingEmailLifecycle`) treats that variable
-  as a full **API base**, returned verbatim. Only the WORKER receives it (empty
-  in app-api-1), so worker-minted MMS media URLs read `…/chat/a/…` with no
-  `/api`: VoIP.ms fetches the portal's **404 HTML**, refuses `invalid_media`,
-  and the fallback then **texts the customer that same dead link**. Proven by
-  curl both ways (404 text/html vs 200 image/png 315 KB with `/api`). Blast
-  radius measured: **13 fallback messages, 3 tenants, back to 2026-05-04** —
-  Landau Home ×10, Trust Bookkeepings, Hanna. ⛔ **Fix = one env line +
-  worker restart + a code guard; NOT DONE — the env file is Izzy's**
-  (AGENTS.md rule 10). Old texted links are dead forever.
+- ⛔⛔ **PICTURES-BY-TEXT BROKE ON 2026-08-19 — a regression the identity
+  refactor shipped, invisible for two days because nobody sent media.**
+  ⛔ **The first version of this finding said "never worked, broken since May"
+  and Izzy correctly rejected it** — the query counted only fallbacks, never
+  successes. Truth: **40 successful MMS sends May–July** (last 07-31), then
+  **0 successes and 5 failures in August, all on 08-21** (Fixup Group ×4 +
+  Hanna). The mechanism: `6a0f3a01` (08-19) added **`PUBLIC_API_URL`** to the
+  worker's `publicBase` chain (`connectChatSmsJob.ts`) — the old chain ended
+  in a literal WITH `/api` and never read that name. The variable has sat in
+  `.env.platform:34` since ~April as a **bare ORIGIN**, and it reaches **only
+  the worker** (api/api_candidate compose blocks override it to empty via
+  `${PUBLIC_API_URL:-}`; the worker block has no override, so env_file
+  supplies it). Result: media URLs lack `/api` → VoIP.ms fetches the portal's
+  **404 HTML** → `invalid_media` → the fallback **texts the customer the same
+  dead link** (pre-08-19 fallback links carried `/api` and worked — verified
+  from stored May/June rows). ⛔ The 08-19 session verified "changed nothing —
+  all six env names unset in the worker" — **its list was missing
+  `PUBLIC_API_URL`, the seventh candidate and the set one.** ⛔ **Fix = env
+  line to `…/api` + worker restart, AND/OR a code guard; NOT DONE — the env
+  file is Izzy's** (AGENTS.md rule 10). ⛔⛔ **The rule: never claim "X never
+  worked" from a failure-only query — count the successes first.**
 - ⛔ **Her "hangs up right when she answers" / "really broken" is her Verizon
   cellular uplink, measured not guessed:** mid-call on the PBX her channel read
   **39% receive loss (1,863 of 4,713 packets), RTT ~500ms** while every other
