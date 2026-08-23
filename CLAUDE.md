@@ -71,7 +71,7 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
-## ⛔⛔ AGENT HANDOFF — the desk-phone setup wizard is BUILT END TO END and DEPLOYED (api + portal, 0 rows — inert until somebody opens it); there was never a local agent, and the LAN scanner was in an app nobody has (2026-08-21) — READ FIRST before believing the Windows app can reach a customer's network, before writing a second Electron app or Windows service, before touching `provisioning.devices.keys`, or before quoting a phone's timezone
+## ⛔⛔ AGENT HANDOFF — the device setup wizard (ANY VoIP device, not just desk phones) is BUILT END TO END and DEPLOYED (api + portal, 0 rows — inert until somebody opens it); there was never a local agent, and the LAN scanner was in an app nobody has (2026-08-21→22) — READ FIRST before believing the Windows app can reach a customer's network, before writing a second Electron app or Windows service, before touching `provisioning.devices.keys`, or before quoting a phone's timezone
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md`**
 (`05763764` and its ancestors on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and
@@ -266,12 +266,41 @@ to do everything in his power to get every single phone connected."*
   the adapter's fence throw was caught by the transport try and mislabeled a refusal
   as retryable "unreachable"; the "Connecting" pill measured 4.42/3.87 as 11px text —
   ink per theme now, 6.00/6.08, and the full sweep reads 40/40 AA both themes.
+- ⛔⛔ **IZZY'S FEEDBACK ROUND (2026-08-22) WIDENED THE SCOPE: ANY VOIP DEVICE.**
+  `packages/shared/src/deskPhoneSetup/deviceKinds.ts` — desk phones, **Grandstream HT
+  boxes**, **Yealink W-series cordless bases**, **Fanvil PA speakers**, **door
+  intercoms** (GDS, Fanvil i-series). ⛔ The KIND decides three things and nothing else
+  may branch on a model string: what the customer is told it is ("Small box your regular
+  phones plug into", never "ATA"); which house rules apply; whether the office machine
+  may drive it locally. ⛔⛔ **The Grandstream HT rule is Izzy's, verbatim: accept
+  incoming calls ONLY from the SIP server it is registered to, always Eastern time** —
+  and a doorbell or ceiling speaker gets the SAME inbound lock, because a device that
+  opens a door must never take instructions from anything but our server. ⛔ **The
+  vendor config codes are deliberately NOT in the repo** — a wrong Grandstream P-code
+  silently configures nothing; capture them off a real device before the template
+  writer ships. ⛔ **Only Yealink is driven locally** (`vendorSupportsLocalActions`);
+  other vendors are configured server-side and the driver waits. Discovery knows the
+  Grandstream/Fanvil IEEE hardware blocks and banners now, so an HT on a shelf is shown
+  rather than filtered. **Only desk phones ever get BLF layouts.** ⛔ Clearing covers
+  every kind by construction — `decideReset` takes the RECORD and the record has no
+  kind field.
+- ⛔⛔ **THE TWO QUESTIONS BECAME FULL PAGES** (Izzy: "it took me a second to realize
+  how it's working… dumb people will just get stuck here", "they should be able to
+  select which one should be cleared", "what if they don't know their password?").
+  The wizard STOPS when a decision is needed. Clearing: one question fills the screen,
+  **a checkbox per device** (ticked by default), the button counts the ticked ones,
+  "Skip all of these for now" is real, and **an unticked device is a recorded
+  deliberate no** (`resetDeclined`) — never re-asked, never wiped, proven exhaustively.
+  Password: **"I don't know it" is a big button and a complete answer**
+  (`passwordUnavailable`) — that device hands off to Support kindly while the rest keep
+  going; proven exhaustively that it is never asked again. Both new booleans widened
+  the exhaustive space to **2^15 × 384 = 12.6M decisions per invariant.**
 - ✅ **Screens improved on the same pass:** "Do you know what kind of phone" now TAKES
   the answer (the copy promised "tell us" and never asked) and echoes it on the found
   screen; the connection answer now shapes the nothing-found explanation. Comparison
   with the shipped stylesheet:
   <https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d>. Totals after:
-  shared **542** · desktop **77** · api desk-phones **72** · portal **309/311**.
+  shared **549** · desktop **77** · api desk-phones **72** · portal **316/318**.
 - ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up.** The
   desktop half is **not built or published** — that renames and re-signs the app for every
   customer, so it is Izzy's call. Until it ships, the wizard can be opened but the office

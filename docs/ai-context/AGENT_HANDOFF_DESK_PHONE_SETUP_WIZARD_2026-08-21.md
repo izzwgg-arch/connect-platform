@@ -656,3 +656,105 @@ typecheck 0/0/(+0)/0.
 PBX template faults stand, and `reset_over_sip` / `set_provisioning` / `check_sync` /
 `generate_template` have no executor — the driver treats those as waits, so a phone
 needing one of them ends honestly at "Needs attention" or waits, never in a loop.
+
+---
+
+# PART 5 — IZZY'S FEEDBACK ROUND: any VoIP device, and the two questions became full pages (2026-08-22)
+
+His words, in order: *"are these all the pages, only four pages?"* · *"I don't see where
+they can clear the phone… oh, see, I do see — but it took me a second to realize how
+it's working. Dumb people will just get stuck here, so dumb it down."* · *"What if they
+don't know their password?"* · *"they should be able to select which one should be
+cleared, not just clear all phones."* · *"it's not just desk phones. Any VoIP device …
+a Grandstream HT device … a wireless cordless Yealink base station … a doorbell … a
+Fanvil PA device. The system should be able to connect all of them automatically."* ·
+*"if it's a Grandstream HT device, it always has to block incoming calls from other
+places. Only from the SIP URL … always Eastern time zone."* · *"it should be able to
+clear all these devices as well."*
+
+## 1. ⛔⛔ ANY VOIP DEVICE — the kind model (`packages/shared/src/deskPhoneSetup/deviceKinds.ts`)
+
+Six kinds: `desk_phone`, `ata` (Grandstream HT boxes), `cordless_base` (Yealink W-series),
+`pager` (Fanvil PA), `doorbell` (Grandstream GDS, Fanvil i-series), `unknown`. **The kind
+decides three things, and nothing else may branch on a model string:**
+
+1. **What the customer is told it is.** "Small box your regular phones plug into" —
+   never "ATA", never "FXS". `describeKind()` feeds the wizard's rows.
+2. **Which house rules apply.** `kindRequirements()`:
+   - ⛔⛔ **Grandstream HT: accept incoming calls ONLY from the SIP server it is
+     registered to, always Eastern time** — Izzy's rule verbatim. An HT with that
+     switch off rings its analog phones for any SIP scanner that finds it.
+   - ⛔ **A doorbell or a ceiling speaker gets the SAME inbound lock** — a device that
+     opens a door or speaks into a room must never take instructions from anything but
+     our server.
+   - Everything gets Eastern time; no kind escapes it (tested).
+   - ⛔ **The exact vendor config codes are NOT in the repo** — deliberately. A wrong
+     Grandstream P-code silently configures nothing; they get captured off a real
+     device's config before the template writer ships, per the house never-invent rule.
+3. **Whether the office machine may drive it locally.** `vendorSupportsLocalActions()`
+   — Yealink only. The adapter speaks Yealink's documented mechanisms; sending those
+   at another vendor's device is not "worth a try". Other vendors are configured
+   SERVER-side (the provisioning template), and locally the driver waits.
+
+Also: discovery recognises Grandstream (IEEE `000b82`, `c074ad`) and Fanvil (`0c383e`)
+hardware blocks and their fingerprint banners, so an HT box on a shelf lands in the
+list instead of being filtered as "other device". **Only desk phones ever get BLF
+layouts** — `buildButtonLayout` answers capacity 0 for every other kind.
+
+⛔ **Clearing covers every kind, and the proof is structural:** `decideReset` takes the
+RECORD, and the record has no kind field — an HT box and a doorbell ride the identical
+authorisation, once-only and attempt-cap gates as a desk phone.
+
+## 2. ⛔⛔ The clearing question is a FULL PAGE with a tick per device
+
+Izzy took a second to find the compact card and said dumb people would get stuck. Now:
+when a decision is needed **the wizard stops** — no progress list, no competing
+information. One question fills the screen: what these devices still hold, what
+cleaning does, what is NOT touched. **Every device is a row with its own checkbox**
+(photo, person, ticked by default); the big button counts exactly the ticked ones
+("Clean 2 phones — go ahead"); "Skip all of these for now" is a real path.
+
+⛔ **An unticked device is a deliberate no, recorded as `resetDeclined`** — new
+`PhoneCondition` field, threaded wizard → driver → advance route → ladder. The ladder
+ends that device's setup kindly ("we left this phone exactly as it was…"). **Proven
+exhaustively: a declined device is never wiped and never re-asked, from every record
+and every surrounding condition.**
+
+## 3. ⛔⛔ "I don't know the password" is a complete answer
+
+The password question is its own full page: where the password might be (sticker under
+the phone, an old email), "don't dig", and a **big "I don't know it — Loopcom can sort
+this one out" button**. Pressing it sets `passwordUnavailable` (also new on
+`PhoneCondition`); the ladder halts that device with the support hand-off — *"No
+problem — plenty of people never got that password."* — while the rest keep going.
+
+⛔ Before this branch existed the wizard asked forever. **Proven exhaustively: after
+"I don't know it", `ask_for_password` and `try_default_credentials` are unreachable.**
+
+## 4. The exhaustive space grew with the model
+
+`PhoneCondition` is 15 booleans now — **32,768 conditions × 384 records = 12.6M
+decisions per invariant**, every invariant re-proven. The chaos suite's random advance
+bodies carry the two new fields.
+
+## 5. The artifact answers "are these all the pages"
+
+<https://claude.ai/code/artifact/7632e24e-4526-45ca-a6f1-4d412785529d> — **all twelve
+screens in walking order**, shipped stylesheet, including the two new full-page
+questions and a found-list showing every device kind in its plain words.
+
+## 6. Totals
+
+shared **549/549** · desktop **77/77** · api desk-phones **72/72** · portal **316/318**
+(the two documented pre-existing). Typecheck: shared 0, desktop 0, portal 0, api +0 in
+any touched file.
+
+## 7. ⏳ Honest ledger for the wider scope
+
+- The kind model classifies, describes, fences and rules — **but no Grandstream or
+  Fanvil device has ever been driven**, and their reset/config executors do not exist
+  yet. First real HT box on a real shelf is the acceptance test for the kind half.
+- `kindRequirements` is DATA the template layer will consume; the
+  `templates.provision` generation path is still the designed-unexercised one.
+- Everything from Parts 3–4's ledger still stands: nobody has opened the screen, the
+  desktop app is unpublished, the two PBX template faults need Izzy's mandate.
