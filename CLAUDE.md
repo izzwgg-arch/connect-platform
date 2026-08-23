@@ -2374,6 +2374,40 @@ log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
   on an iPhone — acceptance is one TestFlight install checking the light
   login/splash, a saved contact's name on an incoming call, and the voicemail
   tab's buttons in light mode.
+- ✅✅ **BUILD 56 — THE iPHONE ICON FOLLOWS LIGHT/DARK NOW (2026-08-23,
+  `5f68ac0b`).** Izzy: *"on iPhone, the icon is not changing between light mode
+  and dark mode."* He was right, and it was never a regression — iOS had ONLY
+  the manual Settings row while Android's launcher aliases have followed the
+  theme since `4e3655f4`. Fixed with **iOS 18 appearance variants**: `ios.icon`
+  is now `{ light: ios-icon-blue, dark: ios-icon-navy }` and **the OS swaps
+  them itself, silently**. Both assets already shipped (the navy one IS the
+  approved alternate), both 1024×1024 and **alpha 255 everywhere**, so Expo's
+  flattening is a no-op — no halo risk.
+  ⛔⛔ **THE HONEST DIFFERENCE, AND IT IS PERMANENT: Android follows the IN-APP
+  theme; iOS follows the PHONE'S SYSTEM APPEARANCE.** Driving
+  `setAlternateAppIcon()` from `ThemeContext` the way Android drives its
+  activity-aliases makes iOS **pop a system alert on EVERY toggle**, which is
+  why it was never wired that way. The two agree for almost every user but are
+  genuinely different mechanisms — **do not "unify" them.**
+  ⛔⛔ **A MANUALLY PINNED ALTERNATE OVERRIDES THE VARIANTS — and that is the
+  thing most likely to be misreported as "the fix didn't work".** Anyone who
+  ever tapped Settings → App icon is pinned to 'Navy' and will see NO automatic
+  switching. The row is relabelled **Automatic / Navy** (it read "Light blue",
+  which became a lie the moment variants shipped) and **Automatic is the way
+  back**. ⛔ Check that row before diagnosing this.
+  ⛔ **Verified at the IMPLEMENTATION, not the schema:**
+  `@expo/prebuild-config`'s `withIosIcons.js` really emits an
+  `appearance: 'dark'` catalog entry (a type accepting the key proves nothing);
+  `expo config --type public` resolves the object with no schema warning;
+  typecheck 0. ⛔ **No `tinted` variant on purpose** — the only monochrome art
+  in the kit is the 24–96px notification silhouette and upscaling it to 1024 is
+  mush; iOS derives its own.
+  ⏳ **NOT PROVEN: nobody has watched the icon change on a real iPhone.** It is
+  proven as config + generator + opaque artwork, never on a home screen.
+  **Acceptance: install build 56, set Settings → App icon to Automatic, then
+  flip the PHONE between light and dark** — the home-screen icon swaps with no
+  alert. ⛔ The negative that matters: with the row on **Navy** it must stay
+  navy in both, which is the pin working, not a regression.
 - ⏳ **Open:** Apple's beta-review approval (automatic notification to
   testers); nobody has seen build 53 on a device; no call has yet exercised
   the deployed answer fix or produced an `rtpStats` row; no picture sent
