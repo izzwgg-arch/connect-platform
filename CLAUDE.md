@@ -303,10 +303,31 @@ refinement options. There is a favicon there to put in the browser on top."*
   onboarding pages. ⚠️ The `sizes="16x16"` is Next reading only the first entry and
   is cosmetic: it is the only declared icon, so the browser uses the .ico and
   picks the best frame inside it.
-- ⏳ **NOT PROVEN: nobody has seen it in a real tab on production.** ⛔ And the
-  acceptance test needs a **hard reload** — favicons are cached far more
-  aggressively than pages, so an already-open tab (and the desktop app until it
-  is fully closed and reopened) will keep showing the old blank icon for a while.
+- ✅✅ **DEPLOYED AND PROVEN IN A REAL CHROME TAB ON PRODUCTION, ON BOTH
+  HOSTNAMES (2026-08-23).** `app-portal-1` `.build-commit` = **`4972f0c8`** (the
+  background-cut-away commit). Measured from real Chrome, not curl: on
+  **`app.loopcom.net`** the head carries
+  `<link rel="icon" href="/favicon.ico" type="image/x-icon">` plus the
+  apple-touch tag, `/favicon.ico` answers **200 `image/x-icon`, 14,510 bytes**,
+  the ICO parses to **all three frames (16/32/48)**, and **Chrome
+  `createImageBitmap` DECODED it (48×48)** — then rendered the mark correctly
+  against both the light (`#f2f2f4`) and dark (`#212124`) tab-strip colours.
+  **`app.connectcomunications.com` returns the byte-identical file** (same
+  14,510 bytes, same rolling hash `3554451152`), which is expected: the two
+  hostnames are two nginx vhosts in front of **one portal container**.
+  `python scripts/portal-favicon-assets.py --check` → `favicon assets OK`.
+- ⛔⛔ **THE THING THAT WILL BE MISREPORTED AS A BUG, AND IT WAS ON 2026-08-23:
+  "the favicon is on connectcomunications.com but NOT on loopcom.net" IS
+  IMPOSSIBLE AS A SERVER FACT — one container serves both, and the bytes were
+  proven identical from Chrome itself.** What differs is the **browser's favicon
+  cache, which is keyed PER ORIGIN**: a tab that visited `app.loopcom.net`
+  before this shipped has "no favicon" cached for *that origin* and keeps
+  showing the blank/default one long after the other hostname updated. **Fix is
+  on the viewer, not the server** — hard reload the loopcom tab
+  (Ctrl+Shift+R), or fully close and reopen the desktop app. ⛔ **Do NOT
+  redeploy, re-cut the artwork, or add a `<link>` to `layout.tsx` on this
+  report — verify the served bytes on the hostname that "doesn't work" first**
+  (recipe above: fetch `/favicon.ico` in that origin and compare size + hash).
 - ⚠️ **Noticed in passing, NOT touched:** `apps/desktop/assets/_f.ico` is
   untracked, 1,086 bytes and **not a valid image** — a stray from another
   session's desktop-icon work, unrelated to the portal.
