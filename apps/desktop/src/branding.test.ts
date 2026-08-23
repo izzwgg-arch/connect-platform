@@ -465,3 +465,14 @@ test("the taskbar icon is re-asserted on a ladder after first show — the butto
   assert.match(main, /for \(const ms of \[120, 400, 1200\]\) setTimeout\(apply, ms\)/,
     "the delayed re-assert ladder is gone");
 });
+
+test("the installer removes the rename-orphan shortcuts that render as a paper taskbar icon", () => {
+  // ⛔ A stale Electron.lnk / Connect.lnk carrying this app's AUMID but pointing at
+  // the deleted Connect.exe makes Windows draw the generic document icon on the
+  // taskbar. electron-builder auto-includes build/installer.nsh; it must delete them.
+  const nsh = fs.readFileSync(path.join(DESKTOP, "build", "installer.nsh"), "utf8");
+  assert.match(nsh, /!macro customInstall/, "the customInstall hook is missing");
+  const bs = String.fromCharCode(92);
+  assert.ok(nsh.includes(`Delete "$SMPROGRAMS${bs}Electron.lnk"`), "does not delete the stale Electron.lnk");
+  assert.ok(nsh.includes(`Delete "$SMPROGRAMS${bs}Connect.lnk"`), "does not delete the stale Connect.lnk");
+});
