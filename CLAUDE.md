@@ -1328,6 +1328,58 @@ and they are TWO defects.
   into this build**; an open window shows the OLD card for this deploy and the new
   strip only from the next one onward.
 
+## ⛔⛔ AGENT HANDOFF — Hanna's first calls: "hangs up on answer" was her cellular uplink, "picture came as a link" is a PLATFORM-WIDE MMS bug (`PUBLIC_API_URL` is an ORIGIN), and "Weber" was her own iPhone contacts (2026-08-21) — READ FIRST for ANY picture-by-text failure, before trusting `PUBLIC_API_URL`, before diagnosing a 443-route caller's audio, or before believing an app RCA verdict
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_HANNA_FIRST_CALLS_2026-08-21.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no env change.**
+Measured live during her test calls: tcpdump on the PBX, `pjsip show
+channelstats` mid-call, the app's own `VoiceDiagEvent` uploads, the Asterisk
+log.) Izzy, 2026-08-21: *"I need a full report on what the fuck is going on."*
+
+- ⛔⛔ **PICTURES-BY-TEXT HAVE NEVER WORKED, FOR ANYONE — and the failure is one
+  env value.** `.env.platform:34` sets `PUBLIC_API_URL=https://app.connectcomunications.com`
+  — an **ORIGIN with no `/api`** — and every reader (`canonicalApiBase()`,
+  the worker's MMS `publicBase`, `billingEmailLifecycle`) treats that variable
+  as a full **API base**, returned verbatim. Only the WORKER receives it (empty
+  in app-api-1), so worker-minted MMS media URLs read `…/chat/a/…` with no
+  `/api`: VoIP.ms fetches the portal's **404 HTML**, refuses `invalid_media`,
+  and the fallback then **texts the customer that same dead link**. Proven by
+  curl both ways (404 text/html vs 200 image/png 315 KB with `/api`). Blast
+  radius measured: **13 fallback messages, 3 tenants, back to 2026-05-04** —
+  Landau Home ×10, Trust Bookkeepings, Hanna. ⛔ **Fix = one env line +
+  worker restart + a code guard; NOT DONE — the env file is Izzy's**
+  (AGENTS.md rule 10). Old texted links are dead forever.
+- ⛔ **Her "hangs up right when she answers" / "really broken" is her Verizon
+  cellular uplink, measured not guessed:** mid-call on the PBX her channel read
+  **39% receive loss (1,863 of 4,713 packets), RTT ~500ms** while every other
+  channel in the same second read 0% / 26–46ms; minutes later a 191s call on
+  the same phone was **0% loss / 90ms**. Registration flapped 3× in 12 min.
+  **Every ended call was ended by a HUMAN** — the app's `user_hangup` label is
+  stamped only in its own hangup path (her finger); `Terminated` = the other
+  side. The short calls are people giving up on 3–5s of broken audio. The one
+  genuine failure: she tapped Accept **8s after** her socket went Unreachable —
+  the known ring-push-with-no-contact gap. ⛔ **Media is DIRECT phone↔PBX on
+  the 443 route** (tcpdump-proven) — only signalling rides loopcom; do not
+  blame France for a 443 tenant's audio. ⛔ The app's own RCA said
+  `TURN_missing` at HIGH confidence — that verdict is the documented lie
+  (`iceHasTurn` is never sent).
+- ⛔ **PCMU-vs-opus is an AMPLIFIER, not a cause — and only THREE endpoints
+  platform-wide have the opus-inbound override** (T5_101_1, T7_102_1,
+  T25_101_1 — the July pilot). Trust runs 454 calls on PCMU at ~2% loss,
+  essentially no complaints. ⛔ **Landau Home HAD the override and a panel
+  Apply silently wiped it** (36 opus inbound calls, then 32 PCMU, conf edit
+  gone) — the per-endpoint bake does not survive regeneration; re-check after
+  any panel change on a pilot tenant.
+- ⛔ **"Comes up as Weber": Connect sends NO caller name** (`fromDisplay:
+  null`, PBX `CALLERID(all)= "" <num>`, 0 Connect contacts on the tenant) and
+  the app reports handle type `"number"` — **iOS matches it against the
+  phone's own address book.** The name on screen is a contact on HER iPhone.
+  Check the device's contacts before suspecting a CID leak.
+- ⏳ **Open:** the Wi-Fi control call (decides the audio verdict); the MMS env
+  fix + guard; the opus override for her extension (PBX write, Izzy's
+  mandate); iOS quality reports still upload `platform: "ANDROID"` /
+  `networkType: null` (fix in repo since 2026-08-06, needs a TestFlight build).
+
 ## ⛔ AGENT HANDOFF — "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing row ON PURPOSE (2026-08-20) — READ FIRST before touching tenant `cmt1qoxrq0004o8myjoq13m21`, before "fixing" its missing billing, or before re-running onboarding into a stale REST tenant list
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_HANNA_FREE_TENANT_2026-08-20.md`**
