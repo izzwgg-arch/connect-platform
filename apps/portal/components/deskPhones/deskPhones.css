@@ -161,6 +161,24 @@
 @keyframes dps-sp { to { transform: rotate(360deg); } }
 .dps-tick { color: var(--dps-ok); font-weight: 700; }
 
+/* ── the two things only a person may do ───────────────────────────────────── */
+.dps-ask {
+  border: 1.5px solid color-mix(in srgb, var(--warning, #f0b655) 45%, var(--dps-border));
+  background: color-mix(in srgb, var(--warning, #f0b655) 8%, var(--dps-panel-2));
+  border-radius: 12px; padding: 15px 17px; margin-bottom: 12px;
+}
+.dps-ask b { display: block; font: 600 14px/1.3 Inter, sans-serif; margin-bottom: 5px; }
+.dps-ask p { color: var(--dps-dim); font-size: 13px; line-height: 1.55; margin: 0 0 11px; max-width: 58ch; }
+.dps-ask-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+
+.dps-input {
+  border: 1px solid var(--dps-border); border-radius: 9px; padding: 9px 12px;
+  background: var(--dps-panel); color: var(--dps-text);
+  font: 500 13.5px/1 Inter, sans-serif; font-family: inherit; min-width: 220px;
+}
+.dps-input::placeholder { color: var(--dps-dim); }
+.dps-input:focus { outline: 2px solid var(--dps-accent); outline-offset: 1px; }
+
 /* ── diagnostics ───────────────────────────────────────────────────────────── */
 .dps-diag {
   background: #0a1017; color: #b9cadb; border-radius: 11px; padding: 15px 17px;

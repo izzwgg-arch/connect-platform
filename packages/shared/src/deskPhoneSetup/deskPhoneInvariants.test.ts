@@ -28,6 +28,7 @@ import {
 import { buildButtonLayout, parseButtonLayout, serializeButtonLayout, yealinkKeyCount } from "./buttonLayout";
 import { normalizeMac, formatMac, matchDevice, compareToPbxRecords } from "./deviceIdentity";
 import { templateStandardsDrift, applyYealinkStandards, templateColumnStandards } from "./standards";
+import { classifyDiscoveredHosts, looksLikePhone, shouldFingerprint } from "./discoveryFilter";
 
 /* ── build the entire condition space ────────────────────────────────────── */
 
@@ -486,4 +487,65 @@ test("FUZZ: drift detection is total and never reports a healthy row as wrong", 
   }
   // a completely empty row is all drift, not a crash
   assert.equal(templateStandardsDrift({}).length, 4);
+});
+
+/* ── discovery classification, fuzzed ────────────────────────────────────── */
+
+test("FUZZ: a printer fleet never becomes a phone list", () => {
+  // ⛔ The scanner returns EVERY ARP entry. Before the classifier, an office with
+  // four phones and nineteen other devices opened the wizard on "We found 23 desk
+  // phones". A device is a phone only on evidence.
+  const office = [
+    // four real phones: two identified by fingerprint, one locked (OUI only), one OUI
+    { mac: "80:5E:0C:00:00:01", ip: "192.168.1.20", respondedOnHttp: true, fingerprint: { vendor: "yealink", model: "T54W", confidence: "banner" as const } },
+    { mac: "80:5E:0C:00:00:02", ip: "192.168.1.21", respondedOnHttp: true, fingerprint: { vendor: "yealink", model: null, confidence: "none" as const } },
+    { mac: "80:5e:0c:00:00:03", ip: "192.168.1.22", respondedOnHttp: true, fingerprint: null }, // locked phone: web refused to talk
+    { mac: "00:15:65:00:00:04", ip: "192.168.1.23", respondedOnHttp: false }, // phone OUI, quiet
+    // nineteen other devices
+    ...Array.from({ length: 19 }, (_, i) => ({
+      mac: `a4:5d:36:00:00:${String(i).padStart(2, "0")}`, ip: `192.168.1.${40 + i}`,
+      respondedOnHttp: i % 3 === 0,
+      fingerprint: i % 3 === 0 ? { vendor: "unknown", model: null, confidence: "none" as const } : null,
+    })),
+  ];
+  const v = classifyDiscoveredHosts(office);
+  assert.equal(v.phones.length, 4, `classified ${v.phones.length} phones out of 4`);
+  assert.equal(v.othersCount, 19);
+  // and nothing is silently lost
+  assert.equal(v.phones.length + v.othersCount, office.length);
+});
+
+test("FUZZ: classification is total, deduplicates, and never throws on junk", () => {
+  const junk: any[] = [
+    { mac: "", ip: "" }, { mac: null, ip: null }, { mac: "zz", ip: "x" },
+    { mac: "ff:ff:ff:ff:ff:ff", ip: "192.168.1.255" },
+    { mac: "01:00:5e:00:00:fb", ip: "224.0.0.251" },
+    { mac: "80:5E:0C:00:00:01", ip: "192.168.1.20" },
+    { mac: "805e0c000001", ip: "192.168.1.99" },          // duplicate of the previous, different spelling
+    { mac: "80:5E:0C:00:00:01", ip: "192.168.1.20", fingerprint: { vendor: 42 as any, model: {} as any, confidence: "banner" as const } },
+  ];
+  const v = classifyDiscoveredHosts(junk);
+  assert.equal(v.phones.length, 1, "the duplicate or the junk leaked through");
+  for (const p of v.phones) assert.ok(typeof p.mac === "string");
+});
+
+test("FUZZ: fingerprint spend is bounded to plausible candidates", () => {
+  // A silent host with an unknown hardware block is never worth 4 seconds.
+  assert.equal(shouldFingerprint({ mac: "a4:5d:36:00:00:01", respondedOnHttp: false }), false);
+  // Anything that answered on a web port is worth one look.
+  assert.equal(shouldFingerprint({ mac: "a4:5d:36:00:00:01", respondedOnHttp: true }), true);
+  // A phone-maker's block is worth one look even when quiet — a locked phone is quiet.
+  assert.equal(shouldFingerprint({ mac: "80:5e:0c:00:00:01", respondedOnHttp: false }), true);
+});
+
+test("FUZZ: a device with model evidence is a phone even off an unknown hardware block", () => {
+  assert.equal(looksLikePhone({
+    mac: "a4:5d:36:00:00:01", ip: "10.0.0.5",
+    fingerprint: { vendor: "unknown", model: "T42S", confidence: "banner" },
+  }), true);
+  // but a model string with confidence "none" is a guess, and a guess is not evidence
+  assert.equal(looksLikePhone({
+    mac: "a4:5d:36:00:00:01", ip: "10.0.0.5",
+    fingerprint: { vendor: "unknown", model: "T42S", confidence: "none" },
+  }), false);
 });

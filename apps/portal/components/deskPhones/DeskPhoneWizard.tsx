@@ -19,7 +19,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { classifyDiscoveredHosts, shouldFingerprint } from "@connect/shared";
 import { apiGet, apiPost } from "../../services/apiClient";
+import { createSetupDriver, type NeedsPerson } from "./setupDriver";
 import "./deskPhones.css";
 
 type CustomerPhone = {
@@ -78,8 +80,14 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [knowsPhone, setKnowsPhone] = useState<"yes" | "no" | null>(null);
+  const [phoneNameHint, setPhoneNameHint] = useState("");
   const [connection, setConnection] = useState<"cable" | "wifi" | "unsure" | null>(null);
+  const [othersCount, setOthersCount] = useState(0);
+  const [needs, setNeeds] = useState<NeedsPerson[]>([]);
+  const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const driverRef = useRef<ReturnType<typeof createSetupDriver> | null>(null);
+  const tickingRef = useRef(false);
 
   const hasDesktop = Boolean(desktop()?.phoneSetup);
 
@@ -129,17 +137,28 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setStep("welcome");
         return;
       }
-      const hosts: Array<{ ip: string; mac: string }> = scan.scan?.hosts ?? [];
-      const found: any[] = [];
+      const hosts: Array<{ ip: string; mac: string; respondedOnHttp?: boolean }> = scan.scan?.hosts ?? [];
+      // ⛔ Fingerprint only plausible candidates. A silent host on an unknown
+      // hardware block is a laptop or a printer; spending four seconds and a rate
+      // slot on each of them stalls the search for nothing.
+      const enriched: any[] = [];
       for (const h of hosts) {
-        const fp = await bridge.run({ op: "fingerprint", ip: h.ip });
-        found.push({
-          mac: h.mac, ip: h.ip,
-          vendor: fp?.ok ? fp.fingerprint?.vendor : undefined,
-          model: fp?.ok ? fp.fingerprint?.model ?? undefined : undefined,
-          firmware: fp?.ok ? fp.fingerprint?.firmware ?? undefined : undefined,
-        });
+        if (!shouldFingerprint(h)) { enriched.push({ ...h, fingerprint: null }); continue; }
+        const fp = await bridge.run({ op: "fingerprint", ip: h.ip }).catch(() => null);
+        enriched.push({ ...h, fingerprint: fp?.ok ? fp.fingerprint : null });
       }
+      // ⛔⛔ ONLY DEVICES WITH EVIDENCE OF BEING A PHONE ARE SUBMITTED. Before this
+      // filter, every ARP entry went to the server — an office with four phones and
+      // nineteen other devices opened on "We found 23 desk phones", with the
+      // printer fleet dressed up as broken phones.
+      const verdict = classifyDiscoveredHosts(enriched);
+      setOthersCount(verdict.othersCount);
+      const found = verdict.phones.map((h: any) => ({
+        mac: h.mac, ip: h.ip,
+        vendor: h.fingerprint?.vendor ?? undefined,
+        model: h.fingerprint?.model ?? undefined,
+        firmware: h.fingerprint?.firmware ?? undefined,
+      }));
       const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null }>(
         `/desk-phones/runs/${runId}/discovered`,
         { subnet: scan.scan?.subnet ?? undefined, phones: found },
@@ -161,17 +180,70 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     } catch { setError("That could not be saved. Try again."); }
   }, [runId, loadRun]);
 
+  /**
+   * ⛔⛔ THE LIVE STEP DRIVES, IT DOES NOT MERELY WATCH. Each tick asks the server
+   * what each phone needs, performs the instructions this machine can perform
+   * (default-credential check, fetch-your-settings, re-find after a restart),
+   * reports what it observed, and surfaces the two things only a person may do —
+   * approving a wipe, and typing a password. Found on the 2026-08-22 review pass:
+   * before this, nothing called advance and setup could never finish.
+   */
   const beginSetup = useCallback(async () => {
     if (!runId) return;
     setStep("live");
-    pollRef.current = setInterval(async () => {
-      const out = await loadRun(runId).catch(() => null);
-      if (out?.summary?.finished) {
-        if (pollRef.current) clearInterval(pollRef.current);
-        setStep("done");
-      }
-    }, 3000);
-  }, [runId, loadRun]);
+    const bridge = desktop()?.phoneSetup ?? null;
+    driverRef.current = createSetupDriver(runId, { get: apiGet, post: apiPost }, bridge);
+    const tickNow = async () => {
+      // ⛔ Re-entry guard: a slow tick (each phone can cost a 4-second probe) must
+      // not overlap the next interval firing, or two ticks advance the same phone.
+      if (tickingRef.current || !driverRef.current) return;
+      tickingRef.current = true;
+      try {
+        const out = await driverRef.current.tick();
+        setPhones(out.phones);
+        setSummary(out.summary);
+        setNeeds(out.needs);
+        if (out.finished) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setStep("done");
+        }
+      } catch { /* the next tick looks again */ }
+      finally { tickingRef.current = false; }
+    };
+    void tickNow();
+    pollRef.current = setInterval(tickNow, 4000);
+  }, [runId]);
+
+  const approveReset = useCallback(async (phoneIds: string[]) => {
+    if (!runId) return;
+    try {
+      await apiPost(`/desk-phones/runs/${runId}/authorize-reset`, { phoneIds });
+      setNeeds((n) => n.filter((x) => x.kind !== "reset_authorization"));
+    } catch (e: any) {
+      // The api's own refusal is already plain English ("You are not allowed to
+      // clear a phone. Ask somebody who is.").
+      setError(e?.body?.message || "That could not be approved from this account.");
+    }
+  }, [runId]);
+
+  const supplyPassword = useCallback(async (phoneId: string, label: string) => {
+    const pw = passwordDrafts[phoneId] ?? "";
+    if (!pw.trim()) return;
+    const bridge = desktop()?.phoneSetup;
+    if (!bridge?.rememberCredential) return;
+    // ⛔⛔ THE PASSWORD STAYS ON THIS COMPUTER. It goes into the app's own protected
+    // store under a reference name; the server and the AI only ever see the
+    // reference. That is the design, not a nicety — never post it to the api.
+    const ref = `phone:${phoneId}`;
+    const r = await bridge.rememberCredential(ref, "admin", pw).catch(() => null);
+    if (r?.ok) {
+      driverRef.current?.credentialStored(phoneId, ref);
+      setPasswordDrafts((d) => { const { [phoneId]: _gone, ...rest } = d; return rest; });
+      setNeeds((n) => n.filter((x) => !(x.kind === "password" && x.phoneId === phoneId)));
+    } else {
+      setError(`The password for ${label} could not be saved on this computer.`);
+    }
+  }, [passwordDrafts]);
 
   const assigned = useMemo(() => phones.filter((p) => p.extNumber), [phones]);
   const stepIndex = Math.max(0, STEP_ORDER.indexOf(step));
@@ -233,6 +305,16 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <b>Yes &mdash; I can see a name on it</b>
                   <span>There is usually a brand name printed under the screen, like Yealink, Polycom or Grandstream.</span>
                 </button>
+                {knowsPhone === "yes" && (
+                  <input
+                    className="dps-input"
+                    style={{ gridColumn: "1 / -1" }}
+                    placeholder="What does it say? e.g. Yealink T54W"
+                    value={phoneNameHint}
+                    onChange={(e) => setPhoneNameHint(e.target.value)}
+                    aria-label="The name printed on your phone"
+                  />
+                )}
                 <button className={`dps-tile${knowsPhone === "no" ? " dps-sel" : ""}`} onClick={() => setKnowsPhone("no")}>
                   <b>No &mdash; I have no idea</b>
                   <span>Perfectly normal. We will look for every kind of desk phone and show you a picture of each one we find.</span>
@@ -350,6 +432,17 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <p className="dps-sub">Pick the person who sits at each desk. Leave a phone blank to skip it for now.</p>
                 </>
               )}
+              {step === "found" && othersCount > 0 && (
+                <p className="dps-hint" style={{ marginTop: 10 }}>
+                  We also saw {othersCount} other {othersCount === 1 ? "device" : "devices"} on your network
+                  &mdash; computers, printers and the like. We left those alone.
+                </p>
+              )}
+              {step === "found" && phoneNameHint.trim() && phones.length > 0 && (
+                <p className="dps-hint" style={{ marginTop: 6 }}>
+                  You told us &ldquo;{phoneNameHint.trim()}&rdquo; &mdash; check the pictures below match what is on your desk.
+                </p>
+              )}
               {subnet && (
                 <p className="dps-hint" style={{ marginTop: 10 }}>
                   We looked on this office&rsquo;s network. Phones in another building need this run again over there.
@@ -390,6 +483,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <p className="dps-hint">
                     We did not find any desk phones on this office&rsquo;s network. Check they are switched on and
                     plugged in, then search again.
+                    {/* ⛔ The connection answer earns its keep here — the copy on that
+                        step promises "this answer only helps us explain things better
+                        if a phone does not turn up", and this is that explanation. */}
+                    {connection === "wifi" &&
+                      " Wi-Fi phones sometimes join a guest network — check the phone is on the same Wi-Fi name as this computer."}
+                    {connection === "cable" &&
+                      " Follow the cable from one phone and make sure it goes to the same internet box this computer uses."}
                   </p>
                 )}
               </div>
@@ -442,6 +542,38 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 {summary?.headline ?? "Setting up your office"}
               </div>
             </div>
+            {/* ⛔⛔ The two things only a person may do, put in front of one. */}
+            {needs.filter((n) => n.kind === "reset_authorization").map((n: any) => (
+              <div key="reset-auth" className="dps-ask">
+                <b>Before we go on — {n.phoneIds.length === 1 ? "one phone" : `${n.phoneIds.length} phones`} need clearing</b>
+                <p>{n.message} Clearing wipes the old settings so it can join Loopcom. Anything saved on the phone itself from your old system will be gone.</p>
+                <div className="dps-ask-row">
+                  <button className="dps-btn dps-btn-p" onClick={() => approveReset(n.phoneIds)}>
+                    Yes, clear {n.phoneIds.length === 1 ? "this phone" : "these phones"}
+                  </button>
+                  <span className="dps-hint">Nothing is erased until you press this.</span>
+                </div>
+              </div>
+            ))}
+            {needs.filter((n) => n.kind === "password").map((n: any) => (
+              <div key={`pw-${n.phoneId}`} className="dps-ask">
+                <b>{n.label} has a password on it</b>
+                <p>{n.message} Type it here once and we will take it from there.</p>
+                <div className="dps-ask-row">
+                  <input
+                    type="password"
+                    className="dps-input"
+                    placeholder="Phone admin password"
+                    value={passwordDrafts[n.phoneId] ?? ""}
+                    onChange={(e) => setPasswordDrafts((d) => ({ ...d, [n.phoneId]: e.target.value }))}
+                    aria-label={`Password for ${n.label}`}
+                  />
+                  <button className="dps-btn dps-btn-p" onClick={() => supplyPassword(n.phoneId, n.label)}>Use it</button>
+                </div>
+                <span className="dps-hint">The password stays on this computer. It is never sent to Loopcom.</span>
+              </div>
+            ))}
+            {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginBottom: 10 }}>{error}</p>}
             <div className="dps-bar">
               <i style={{ width: `${summary && summary.total ? Math.round((summary.ready / summary.total) * 100) : 0}%` }} />
             </div>
@@ -463,7 +595,10 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               ))}
             </div>
             <p className="dps-hint" style={{ marginTop: 14 }}>
-              You can close this window &mdash; setup keeps going, and we will tell you when it is done.
+              {/* ⛔ Honest: the office machine is doing the work, so the window has to
+                  stay open. Saying "you can close this" here would quietly stop the
+                  setup the moment somebody believed it. */}
+              Keep this window open while we work &mdash; you can carry on using your computer.
             </p>
           </div>
         )}
