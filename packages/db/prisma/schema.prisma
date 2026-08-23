@@ -1619,6 +1619,12 @@ model PaymentTransaction {
   externalNotes            String?
   /// userId of the operator who posted this transaction (null = gateway-automated)
   createdByUserId          String?
+  /// When the owner's payment alert for this row was queued. Written only by
+  /// paymentTransactionAlerts.ts — never by a charge path.
+  alertEmailedAt           DateTime?
+  /// WHICH settled status was alerted, so an APPROVED payment later REFUNDED
+  /// raises a second, correct alert instead of being swallowed as a duplicate.
+  alertEmailedStatus       String?
   createdAt                DateTime                        @default(now())
   updatedAt                DateTime                        @updatedAt
   tenant                   Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)

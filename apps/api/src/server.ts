@@ -243,6 +243,7 @@ import { registerSupportReportRoutes } from "./supportReport";
 import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerComplianceRoutes, startComplianceReminders } from "./complianceCalendar";
+import { startPaymentTransactionAlerts } from "./billing/paymentTransactionAlerts";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
@@ -42122,6 +42123,11 @@ const port = Number(process.env.PORT || 3001);
   registerComplianceRoutes({ app, db, requireSuper: (req, reply) => requireSuperAdmin(req, reply) });
   const complianceTimer = startComplianceReminders(app.log);
   if (complianceTimer) registerShutdownTimer(complianceTimer);
+  // Owner payment alerts (Izzy, 2026-08-23): one email per settled transaction,
+  // approved or declined. A SWEEP over PaymentTransaction, deliberately outside
+  // every charge path so it can never fail a customer's payment.
+  const paymentAlertTimer = startPaymentTransactionAlerts(app.log);
+  if (paymentAlertTimer) registerShutdownTimer(paymentAlertTimer);
   await registerCrmRoutes(app, { smsQueue });
   await registerDeliveryRoutes(app);
   await app.listen({ host: "0.0.0.0", port });
