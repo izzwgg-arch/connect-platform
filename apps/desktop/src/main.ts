@@ -280,6 +280,15 @@ function pinWindowIcon(win: BrowserWindow): void {
   win.on("show", apply);
   win.on("restore", apply);
   win.on("focus", apply);
+  // ⛔⛔ THE TASKBAR BUTTON IS CREATED A BEAT AFTER THE WINDOW FIRST PAINTS, and a
+  // setIcon that lands before that button exists is silently lost — Windows draws
+  // the generic "document" icon and never refreshes it. Found live on Izzy's
+  // machine (2026-08-23): the window reported valid HICONs (WM_GETICON non-zero)
+  // yet the taskbar stayed blank. Re-assert on a short ladder after the first show
+  // so the WM_SETICON reliably reaches the button once it is real. Cheap, idempotent.
+  win.once("show", () => {
+    for (const ms of [120, 400, 1200]) setTimeout(apply, ms);
+  });
 }
 
 function createFullWindow(show = true): BrowserWindow {

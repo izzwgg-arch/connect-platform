@@ -455,3 +455,13 @@ test("main.ts reads SystemUsesLightTheme with real backslashes in the path", () 
   assert.ok(main.includes("resolveDark({ nativeTheme, readSystemDark })"),
     "the window icon resolver no longer follows the system theme");
 });
+
+test("the taskbar icon is re-asserted on a ladder after first show — the button appears late", () => {
+  // ⛔ Found live: the window reported valid HICONs but the taskbar drew the
+  // generic paper icon, because the button is created a beat after first paint and
+  // the initial setIcon lands before it exists. A delayed re-assert cures it.
+  assert.match(main, /win\.once\("show", \(\) => \{/,
+    "the one-shot post-show re-assert is gone");
+  assert.match(main, /for \(const ms of \[120, 400, 1200\]\) setTimeout\(apply, ms\)/,
+    "the delayed re-assert ladder is gone");
+});
