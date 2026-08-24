@@ -426,3 +426,93 @@ To make a callback work, the number needs a destination. That is:
 
 ⛔ Step 3 is the only risky part and it is the same doorway exposure documented
 throughout this file. Do it in a quiet window with the re-bake ready.
+
+
+---
+
+# 17. 845-637-2330 POINTED BACK TO THE SMART STEPS IVR — DONE AND PROVEN (2026-08-24)
+
+Izzy: *"that number is supposed to go to the Smart Steps IVR … point that number back
+to the Smart Steps main IVR"*, and **nothing about the inbound routes or the outbound
+caller-ID work should change.**
+
+✅ **Live and proven with a real call.** Full chain:
+```
+default-trunk → T2_default-trunk → T2_incoming-calls
+→ Goto(T2_app-ivr,IVR-9,1) → NoOp("IVR: Smart Steps")
+```
+Previously the same call ended in `invalid-dest` → *"no route exists to destination"*.
+
+## What it took — four things, because it was broken at four layers
+
+1. **`cid_number` cleared** on inbound route 4. It was filtered to `8457823064`, so it
+   only accepted calls from their own Home line and rejected everyone else.
+2. **DID added to `ombu_tenant_dids`** (tenant 2). Without it `default-trunk` has no
+   entry, which is why every caller fell through to the generic `incoming-calls` and
+   got the error recording.
+3. **Destination set to IVR 9** via the helper's **`/route-set-destination-v2`**
+   (`targetType: "ivr", targetId: 9`) — the sanctioned path; it verifies the target
+   belongs to the tenant, snapshots for rollback, and bakes.
+4. **`vitalpbx gen-conf`** so `default-trunk` renders the new tenant DID.
+
+## ⛔⛔ Traps this earned
+
+- ⛔⛔ **THE HELPER'S APPLY ONLY RELOADS ON THIS BOX.** It answered
+  `"mode": "legacy_no_api_key"` — there is **no VitalPBX app key configured**, so
+  `apply_tenant_changes` falls back to `asterisk -rx "dialplan reload"` and relies
+  entirely on its own bake. ✅ **Good news: that means it never regenerates the tenant,
+  so the Connect doorway is never at risk from it.** ⛔ Bad news: anything the bake does
+  not cover simply does not reach the dialplan.
+- ⛔⛔ **THE BAKE REWRITES THE `Goto` ONLY — NOT THE `exten` LINE.** After the helper
+  ran, the destination was correct (`Goto(T2_app-ivr,IVR-9,1)`) while the exten was
+  still `_8456372330/_8457823064`, i.e. **still rejecting every caller but one**. The
+  DB said one thing and the dialplan another, and everything *looked* done.
+  **Always re-read `dialplan show <did>@T<n>_incoming-calls` after a destination
+  change** — the route row is not the routing.
+- ✅ **Fixing the exten line without a tenant regen:** because `cid_number` was already
+  cleared in the DB, editing that one line in the generated file is **convergent** — the
+  next regen produces exactly the same result, so it is early convergence, not drift.
+  Done with `cat new > file` (never `cp`, to keep the inode + ACL — verified
+  `www-data:www-data 674`, `mask::rwx` unchanged) after proving the diff was **exactly
+  one line**. Whole-file diff afterwards: **2 lines**. Their main number
+  845-782-6775 verified **byte-identical**.
+- ⛔ **The helper REUSES an existing `ombu_destinations` row rather than creating one.**
+  Route 4 now shares **destination 317** with route 39 (Smart Steps' own number). That
+  is the documented cascade hazard — **deleting either route cascades 317 and breaks
+  both numbers.** Give one its own row before deleting either.
+- ⚠️ **Cosmetic only:** the rendered `NoOp` label still reads `INBOUND_ROUTE: TEST 2`
+  because the bake does not rewrite it; the DB description is now `Smart Steps 2` and
+  the label corrects itself at the next full tenant regen. Routing is correct either way.
+
+## ⚠️ Something my earlier regens changed that nobody asked for
+
+Diffing Main against the pre-change snapshot showed my `gen-conf` runs **uncommented
+five feature includes** that were disabled in the 2026-08-20 render:
+`feature-spy_extension`, `feature-spy_ext_whisper`, `feature-spy_ext_barge`,
+`feature-spy_random_chn`, `feature-remote_wakeup_call` — i.e. **call listen / whisper /
+barge went from disabled to enabled.**
+
+The database said enabled; the rendered file said disabled; `gen-conf` renders from the
+database, so it applied a change somebody had made in the panel and never applied.
+
+✅ **Scope: MAIN's own file only.** `[all-features-category]` (unprefixed) is included
+by `extensions__50-1-dialplan.conf` and nothing else — every tenant uses its own
+`T<n>_all-features-category`, and **every tenant file is byte-identical**. So this
+affects tenant 1 (the VitalPBX system tenant, 3 extensions) and **no customer**.
+⛔ Still an unrequested change — flagged to Izzy; trivially reverted by re-commenting
+those five lines, though a later regen would re-apply them unless the DB is changed.
+
+⛔⛔ **THE GENERAL LESSON: `gen-conf` applies EVERY unrendered database change, not
+just yours.** Diff the rendered file against a pre-change snapshot after any regen —
+that is the only way to see what else came along.
+
+## Rollback
+
+```sql
+UPDATE ombutel.ombu_inbound_routes SET destination_id=34, cid_number='8457823064',
+       description='TEST 2' WHERE inbound_route_id=4;
+DELETE FROM ombutel.ombu_tenant_dids WHERE tenant_id=2 AND did='8456372330';
+```
+then `vitalpbx gen-conf`. Pre-state: `inbound-before-smartsteps.sql` and
+`extensions__50-2-dialplan.conf.before-cidfilter` in
+`/root/pbx-pending-flags-backup-20260824T122426Z/`.
