@@ -2981,14 +2981,14 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/sbc", permission: "can_view_pbx_sbc_connectivity" },
   { prefix: "/voice/media-test", permission: "can_view_pbx_sbc_connectivity" },
-  // /voice/diag is a CLIENT SELF-REPORT surface -- every POST under it is a device
+  // ⛔⛔ /voice/diag is a CLIENT SELF-REPORT surface -- every POST under it is a device
   // describing its OWN call (session start/heartbeat/event, call-quality report + ping,
   // webrtc blackbox). All seven derive identity from the token (user.sub / user.tenantId)
   // and none accepts a userId or tenantId from the body, so "authenticated" IS the
   // correct gate. It used to require can_view_pbx_sbc_connectivity -- an ADMIN VIEWING
   // permission -- so ordinary users' phones were answered 403 and their telemetry was
   // thrown away, i.e. exactly the users most likely to be having trouble.
-  // The default is OPEN and the two admin READ paths are locked BY NAME below, so a
+  // ⛔ The default is OPEN and the two admin READ paths are locked BY NAME below, so a
   // new self-report route can never silently start 403ing. voiceDiagSelfReport.test.ts
   // reads this file and fails if any GET under /voice/diag loses its permission.
   { prefix: "/voice/diag", permission: null },
