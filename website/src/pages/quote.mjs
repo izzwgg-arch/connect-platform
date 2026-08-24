@@ -1,6 +1,6 @@
 import { COMPANY, QUOTE_OPTIONS as Q, FORM_ENDPOINT } from '../site.mjs';
 import { pageHead } from '../ui.mjs';
-import { esc } from '../layout.mjs';
+import { esc, turnstileWidget } from '../layout.mjs';
 
 const sel = (id, label, opts, req) =>
   `<div class="fld"><label for="${id}">${label}${req ? '<span class="req" aria-hidden="true">*</span>' : ''}</label>
@@ -97,6 +97,8 @@ ${pageHead('Request a quote',
     </div>
     <span class="err" id="consent_reply-err" style="margin-top:8px"></span>
   </fieldset>
+
+  ${turnstileWidget('quote')}
 
   <div class="form-foot">
     <p style="font-size:13.4px;color:var(--ink-3);max-width:330px">No account is created and we never ask for payment details.</p>

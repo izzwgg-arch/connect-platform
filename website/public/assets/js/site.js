@@ -29,6 +29,37 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim());
   }
   function digits(v) { return (v || '').replace(/\D/g, ''); }
+  /**
+   * ⛔ A TURNSTILE TOKEN IS SINGLE-USE. Without this, the SECOND attempt at a
+   * form always fails — the visitor fixes the field we told them about, presses
+   * send, and is refused for a reason that has nothing to do with what they
+   * changed. Reset the widget after EVERY refusal, not just Turnstile ones.
+   * Scoped to the form's own widget, so refusing a quote does not wipe the
+   * token sitting in the chat panel.
+   */
+  /** The "email us / call us" tail, built as DOM so nothing is ever parsed. */
+  function contactFallback() {
+    var f = document.createDocumentFragment();
+    f.appendChild(document.createTextNode(' Please try again, or email '));
+    var a = document.createElement('a');
+    a.href = 'mailto:onboarding@loopcom.net'; a.textContent = 'onboarding@loopcom.net';
+    f.appendChild(a);
+    f.appendChild(document.createTextNode(' or call '));
+    var b = document.createElement('a');
+    b.href = 'tel:+18457231213'; b.textContent = '(845) 723-1213';
+    f.appendChild(b);
+    f.appendChild(document.createTextNode('.'));
+    return f;
+  }
+
+  function resetHumanCheck(form) {
+    try {
+      if (!window.turnstile || !form) return;
+      var w = form.querySelector('.cf-turnstile');
+      if (w) window.turnstile.reset(w);
+    } catch (e) { /* the widget is optional; it must never break a form */ }
+  }
+
   function isUsPhone(v) {
     var d = digits(v);
     if (d.length === 11 && d.charAt(0) === '1') d = d.slice(1);
@@ -101,14 +132,23 @@
         return r.json().catch(function () { return { ok: r.ok }; });
       }).then(function (j) {
         if (j && j.ok) { window.location.href = '/quote/thank-you/'; return; }
-        throw new Error((j && j.message) || 'We could not send your request.');
+        var e = new Error((j && j.message) || 'We could not send your request.');
+        // ⛔ Remember WHERE the wording came from. The server's refusals already
+        // say what to do next and often already give the phone number; pasting
+        // our generic tail on the end produced a run-on telling the visitor to
+        // call us twice in one sentence.
+        e.fromServer = !!(j && j.message);
+        throw e;
       }).catch(function (err) {
+        resetHumanCheck(qf);
         if (submit) { submit.disabled = false; submit.textContent = 'Send my request'; }
         if (status) {
           status.setAttribute('data-state', 'error');
-          status.innerHTML = String(err.message || 'We could not send your request.') +
-            ' Please try again, or email <a href="mailto:onboarding@loopcom.net">onboarding@loopcom.net</a> ' +
-            'or call <a href="tel:+18457231213">(845) 723-1213</a>.';
+          // ⛔ textContent, never innerHTML. The message can originate from the
+          // server, and building markup out of it is an XSS sink waiting for
+          // the first refusal that quotes something the visitor typed.
+          status.textContent = String(err.message || 'We could not send your request.');
+          if (!err.fromServer) status.appendChild(contactFallback());
         }
       });
     });
@@ -184,13 +224,16 @@
               if (cNote) cNote.textContent = 'Message sent.';
               if (cQuick) cQuick.style.display = 'none';
             } else {
-              throw new Error((j && j.message) || 'That did not send.');
+              var e = new Error((j && j.message) || 'That did not send.');
+              e.fromServer = !!(j && j.message);
+              throw e;
             }
           })
           .catch(function (err) {
+            resetHumanCheck(cForm);
             if (btn) btn.disabled = false;
             bubble(String(err.message || 'That did not send.') +
-              ' You can email onboarding@loopcom.net or call (845) 723-1213.', false);
+              (err.fromServer ? '' : ' You can email onboarding@loopcom.net or call (845) 723-1213.'), false);
             if (cNote) cNote.textContent = 'Not sent — please try again.';
           });
       });

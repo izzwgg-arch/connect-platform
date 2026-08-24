@@ -2,7 +2,32 @@
  * Page shell: <head>, navigation, footer, chat assistant.
  * Everything SEO-related is generated here so no page can forget it.
  */
-import { COMPANY, SITE, NAV, FOOTER, CHAT_ENDPOINT } from './site.mjs';
+import { COMPANY, SITE, NAV, FOOTER, CHAT_ENDPOINT, TURNSTILE_SITE_KEY } from './site.mjs';
+
+/**
+ * The Cloudflare Turnstile widget.
+ *
+ * ⛔ Turnstile writes its token into a hidden input named
+ * "cf-turnstile-response" INSIDE THE ENCLOSING <form>. Both of our forms are
+ * submitted with new FormData(form), so the token travels automatically — do
+ * not "helpfully" append it by hand as well, or the server sees two values.
+ *
+ * ⛔ appearance="interaction-only" renders NOTHING unless a challenge is
+ * genuinely required. It is used in the chat panel, where a permanent widget
+ * would dominate a small surface. The quote form shows the widget, because on
+ * a form a business buyer is about to hand real details to, visible evidence
+ * that the submission is protected is worth the space it costs.
+ *
+ * ⛔ refresh-expired="auto" matters here: a Turnstile token dies after five
+ * minutes, and the quote form is long enough that a careful person will take
+ * longer than that. Without it their submission is refused for a reason that
+ * has nothing to do with anything they did.
+ */
+export function turnstileWidget(action, appearance) {
+  if (!TURNSTILE_SITE_KEY) return '';
+  return `<div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-action="${action}"` +
+    ` data-appearance="${appearance || 'always'}" data-refresh-expired="auto" data-theme="light"></div>`;
+}
 
 export const esc = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -156,6 +181,7 @@ function chat() {
     <input class="hp" type="text" id="chat-company" name="company" tabindex="-1" autocomplete="off">
     <textarea id="chat-message" name="message" placeholder="Type your message&hellip;" required aria-label="Your message"></textarea>
     <input type="email" id="chat-email" name="email" placeholder="Your email, so we can reply" required aria-label="Your email address" autocomplete="email">
+    ${turnstileWidget('chat', 'interaction-only')}
     <div class="chat-send">
       <button class="btn btn-pri" type="submit">Send message</button>
     </div>
@@ -218,6 +244,7 @@ ${p.body}
 </main>
 ${footer()}
 ${chat()}
+${TURNSTILE_SITE_KEY ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' : ''}
 <script src="/assets/js/site.js" defer></script>
 </body>
 </html>`;

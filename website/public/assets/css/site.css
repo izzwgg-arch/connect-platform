@@ -453,3 +453,18 @@ td b{color:var(--ink);font-weight:600}
   padding-top:16px;display:flex;flex-direction:column;gap:2px}
 .tm figcaption b{font-size:14.5px;color:var(--ink);font-weight:600}
 .tm figcaption span{font-size:13.4px;color:var(--ink-3)}
+
+/* ------------------------------------------------- Cloudflare Turnstile ---
+   The robot check on the quote form and the chat panel.
+
+   ⛔ Do NOT give .cf-turnstile a fixed height. Turnstile sizes its own iframe
+   and changes that size when it escalates from a silent check to a visible
+   challenge; pinning the height clips the challenge and the visitor is left
+   with a form they cannot submit and nothing on screen explaining why.
+
+   In the chat panel the widget is appearance="interaction-only", so it renders
+   at zero height on almost every visit. The margin only ever applies to the
+   rare visit where a real challenge appears. */
+.cf-turnstile { margin: 26px 0 0; }
+.chat-form .cf-turnstile { margin: 10px 0 0; }
+.chat-form .cf-turnstile:empty { margin: 0; }

@@ -18,6 +18,7 @@ import { join, normalize, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { sendMail, smtpConfigured, smtpStatus } from './mailer.mjs';
+import { verifyTurnstile, turnstileStatus } from './turnstile.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DIST = join(ROOT, '..', 'dist');
@@ -73,17 +74,49 @@ const WINDOW_MS = 60 * 60 * 1000;     // 1 hour
  * primary conversion action on the site, disabled by using the chat widget.
  * A conversation is many messages by nature; a quote request is one or two.
  */
-const MAX_PER_WINDOW = { quote: 6, chat: 30 };
+/**
+ * ⛔ TWO BUDGETS, AND THE SPLIT IS THE WHOLE POINT.
+ *
+ * MAX_ACCEPTED bounds submissions that actually reach the inbox — that is the
+ * thing worth protecting, and it is deliberately tight.
+ *
+ * MAX_ATTEMPTS bounds everything, including refusals, and is deliberately far
+ * looser. Counting a failed attempt against the tight budget locks a real
+ * person out for an hour because they mistyped their own email address a few
+ * times, which is the most human thing there is. A bot spraying garbage is
+ * still stopped, just at a threshold no honest visitor will ever reach.
+ */
+const MAX_ACCEPTED = { quote: 6, chat: 30 };
+const MAX_ATTEMPTS = { quote: 40, chat: 120 };
 
-function rateLimited(ip, kind = 'quote') {
+/**
+ * Count an ATTEMPT (any request that got past parsing) and report whether this
+ * connection has made too many. Called once per request.
+ */
+function attemptLimited(ip, kind = 'quote') {
   const now = Date.now();
-  const key = kind + '|' + ip;
-  const cap = MAX_PER_WINDOW[kind] ?? MAX_PER_WINDOW.quote;
+  const key = 'try|' + kind + '|' + ip;
+  const cap = MAX_ATTEMPTS[kind] ?? MAX_ATTEMPTS.quote;
   const arr = (hits.get(key) || []).filter((t) => now - t < WINDOW_MS);
-  if (arr.length >= cap) { hits.set(key, arr); return true; }
-  arr.push(now);
+  const over = arr.length >= cap;
+  if (!over) arr.push(now);
   hits.set(key, arr);
-  return false;
+  return over;
+}
+
+/**
+ * Count an ACCEPTED submission — one that is about to be stored and emailed.
+ * ⛔ Called only on the success path, never on a refusal.
+ */
+function acceptLimited(ip, kind = 'quote') {
+  const now = Date.now();
+  const key = 'ok|' + kind + '|' + ip;
+  const cap = MAX_ACCEPTED[kind] ?? MAX_ACCEPTED.quote;
+  const arr = (hits.get(key) || []).filter((t) => now - t < WINDOW_MS);
+  const over = arr.length >= cap;
+  if (!over) arr.push(now);
+  hits.set(key, arr);
+  return over;
 }
 setInterval(() => {                    // keep the map from growing forever
   const now = Date.now();
@@ -165,11 +198,28 @@ async function opLog(entry) {
 }
 
 /* ------------------------------------------------------------- email bodies */
+/**
+ * ⛔ ONLY SAYS ANYTHING WHEN THE CHECK DID NOT CONFIRM A PERSON.
+ * A banner on every single email is noise that gets ignored, and an ignored
+ * banner is the same as no banner on the one email where it matters.
+ * 'verified' and 'off' are silent; 'unavailable' is the one worth seeing.
+ */
+function humanCheckNoteHtml(d) {
+  if (d.humanCheck === 'verified' || d.humanCheck === 'off' || !d.humanCheck) return '';
+  return '<p style="margin:0 0 16px;padding:10px 12px;background:#FFF6E5;border:1px solid #F0C97A;border-radius:6px;font-size:13.5px;color:#5A3E00">' +
+    '<b>Robot check did not run.</b> Cloudflare could not be reached, so this was accepted without verification. Treat it with the usual care.</p>';
+}
+function humanCheckNoteText(d) {
+  if (d.humanCheck === 'verified' || d.humanCheck === 'off' || !d.humanCheck) return '';
+  return 'NOTE: robot check did not run (Cloudflare unreachable) — accepted unverified.';
+}
+
 function quoteEmail(d) {
   const row = (k, v) => v ? `<tr><td style="padding:6px 12px 6px 0;color:#4A5F76;vertical-align:top;white-space:nowrap">${esc(k)}</td><td style="padding:6px 0;color:#071A2F"><b>${esc(v)}</b></td></tr>` : '';
   const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:15px;color:#071A2F;max-width:640px">
 <h2 style="font-size:19px;margin:0 0 4px">New quote request</h2>
 <p style="color:#4A5F76;margin:0 0 18px;font-size:14px">${esc(d.receivedAt)} &middot; reference ${esc(d.ref)}</p>
+${humanCheckNoteHtml(d)}
 <table style="border-collapse:collapse;font-size:14.5px">
 ${row('Business', d.business_name)}${row('Industry', d.industry)}
 ${row('People', d.seats)}${row('Locations', d.locations)}
@@ -189,7 +239,7 @@ Submitted from ${esc(d.ip)}
 </p></div>`;
 
   const text = [
-    'New quote request', `${d.receivedAt} — reference ${d.ref}`, '',
+    'New quote request', `${d.receivedAt} — reference ${d.ref}`, humanCheckNoteText(d), '',
     `Business:         ${d.business_name}`, `Industry:         ${d.industry}`,
     `People:           ${d.seats}`, `Locations:        ${d.locations}`,
     `Current provider: ${d.current_provider || '—'}`, `Keep numbers:     ${d.porting}`,
@@ -212,12 +262,13 @@ function chatEmail(d) {
   const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:15px;color:#071A2F;max-width:640px">
 <h2 style="font-size:19px;margin:0 0 4px">Website message</h2>
 <p style="color:#4A5F76;margin:0 0 18px;font-size:14px">${esc(d.receivedAt)} &middot; reference ${esc(d.ref)}</p>
+${humanCheckNoteHtml(d)}
 <div style="white-space:pre-wrap;background:#F5F8FC;border:1px solid #E2EAF2;border-radius:6px;padding:14px;font-size:15px">${esc(d.message)}</div>
 <p style="margin:18px 0 0;font-size:13.5px;color:#4A5F76">
 Reply to: <b>${esc(d.email)}</b><br>
 Sent from page: ${esc(d.page)}<br>
 Submitted from ${esc(d.ip)}</p></div>`;
-  const text = ['Website message', `${d.receivedAt} — reference ${d.ref}`, '', d.message, '',
+  const text = ['Website message', `${d.receivedAt} — reference ${d.ref}`, humanCheckNoteText(d), '', d.message, '',
     `Reply to: ${d.email}`, `Page: ${d.page}`, `From ${d.ip}`].join('\n');
   return { subject: headerSafe(`Website message from ${d.email}`, 160), html, text };
 }
@@ -238,7 +289,7 @@ function spamReason(f, ip, kind = 'quote') {
   if (headerSafe(first(f.website_url) || first(f.company) || '')) return 'honeypot';
   const started = Number(first(f.form_started) || 0);
   if (started && Date.now() - started < 2500) return 'too_fast';
-  if (rateLimited(ip, kind)) return 'rate_limited';
+  if (attemptLimited(ip, kind)) return 'rate_limited';
   return null;
 }
 
@@ -271,9 +322,23 @@ async function handleQuote(req, res, f, ip) {
     return json(res, 400, { ok: false, message: 'Please check the highlighted fields.', errors });
   }
 
+  // ⛔ AFTER field validation ON PURPOSE. A Turnstile token is single-use, so
+  // verifying before validation would burn the visitor's token on an honest
+  // typo and make their corrected resubmission fail for an unrelated reason.
+  const human = await verifyTurnstile(first(f['cf-turnstile-response']), ip);
+  if (!human.allow) {
+    await opLog({ kind: 'quote', outcome: 'refused', reason: 'turnstile_' + human.outcome, detail: human.detail, ip });
+    return json(res, 403, {
+      ok: false,
+      code: 'human_check_failed',
+      message: 'We could not confirm this was sent by a person. Refresh the page and try once more, or email onboarding@loopcom.net or call (845) 723-1213.',
+    });
+  }
+
   const rec = {
     ref: randomUUID().slice(0, 8).toUpperCase(),
     receivedAt: new Date().toISOString(),
+    humanCheck: human.outcome,
     business_name, contact_name, email,
     phone, phoneDisplay: `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`,
     industry: headerSafe(first(f.industry), 80),
@@ -287,6 +352,11 @@ async function handleQuote(req, res, f, ip) {
     consent_reply, consent_sms: !!first(f.consent_sms),
     ip,
   };
+
+  if (acceptLimited(ip, 'quote')) {
+    await opLog({ kind: 'quote', outcome: 'refused', reason: 'accept_rate_limited', ip });
+    return json(res, 429, { ok: false, message: 'We already have several requests from this connection in the last hour. Give us a little time to reply to those first, or call (845) 723-1213.' });
+  }
 
   // ⛔ Persist BEFORE emailing. The lead survives any mail failure.
   await persist('quotes', rec);
@@ -321,13 +391,29 @@ async function handleChat(req, res, f, ip) {
   if (!message) return json(res, 400, { ok: false, message: 'Type a message first.' });
   if (!isEmail(email)) return json(res, 400, { ok: false, message: 'Add an email address so we can reply.' });
 
+  const human = await verifyTurnstile(first(f['cf-turnstile-response']), ip);
+  if (!human.allow) {
+    await opLog({ kind: 'chat', outcome: 'refused', reason: 'turnstile_' + human.outcome, detail: human.detail, ip });
+    return json(res, 403, {
+      ok: false,
+      code: 'human_check_failed',
+      message: 'We could not confirm this was sent by a person. Reload the page and try again, or email onboarding@loopcom.net.',
+    });
+  }
+
   const rec = {
     ref: randomUUID().slice(0, 8).toUpperCase(),
     receivedAt: new Date().toISOString(),
+    humanCheck: human.outcome,
     message, email,
     page: headerSafe(first(f.page), 120) || '/',
     ip,
   };
+  if (acceptLimited(ip, 'chat')) {
+    await opLog({ kind: 'chat', outcome: 'refused', reason: 'accept_rate_limited', ip });
+    return json(res, 429, { ok: false, message: 'We already have several messages from this connection in the last hour. We will reply to those first.' });
+  }
+
   await persist('messages', rec);
 
   const mail = chatEmail(rec);

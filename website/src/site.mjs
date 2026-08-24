@@ -99,6 +99,19 @@ export const FOOTER = [
  * Quote form + chat relay endpoint.
  * Same-origin so no CORS and no third-party form service sees customer data.
  */
+/**
+ * Cloudflare Turnstile — the robot check on the two public forms.
+ *
+ * ⛔ THIS KEY IS PUBLIC BY DESIGN. It ships inside every page and is meant to.
+ * The SECRET key is the other half and lives ONLY in the server's environment
+ * (TURNSTILE_SECRET_KEY, root-only) — it must never appear in this repo, in a
+ * NEXT_PUBLIC-style build variable, or anywhere a browser can reach.
+ *
+ * Set to '' to remove the check entirely: the widget stops rendering and the
+ * server stops verifying, and the site behaves exactly as it did before.
+ */
+export const TURNSTILE_SITE_KEY = '0x4AAAAAAEamM79uqjq_a-aY';
+
 export const FORM_ENDPOINT = '/api/quote';
 export const CHAT_ENDPOINT = '/api/chat';
 
