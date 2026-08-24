@@ -4059,6 +4059,28 @@ Built to <https://claude.ai/code/artifact/6f514701-4e37-4dea-a80f-2366ed600030>.
   ⛔ The portal deploy log's last line read `done d39cad7f`, NOT this commit —
   the documented trap; `merge-base --is-ancestor` confirms it contains the work,
   and the bundle STRING grep is the authority (old Inbox string greps **0**).
+- ⛔⛔ **"FOR PRIVACY, I CAN'T DO IT" WAS THE PROMPT, NOT THE PERMISSIONS
+  (`38910aa9`, agent REBUILT + container-verified).** Izzy hit this in the
+  Workbench within minutes. The tools and the tier were already correct —
+  `toolRoleFor` had handed him the staff tools — but **ONE system prompt served
+  every caller** and it said *"EVERYTHING ELSE … you cannot do it yet"* and
+  *"never discuss other tenants or internal systems"*, so the model declined to
+  look at the platform it held the keys to. ⛔ **A CAPABILITY THE PROMPT DENIES
+  IS NOT A CAPABILITY, and no test of the tool layer can see it.** Fixed with
+  `STAFF_SYSTEM_PROMPT` — ⛔ **a SEPARATE prompt, never a suffix** (building on
+  the customer one inherits the refusals; guard-tested) — gated on
+  **`isPlatformStaff(ctx.platformRole)`, the same check `toolRoleFor` uses**, so
+  prompt and capability can never disagree again. ⛔ **Never gate this on the
+  channel** — a client can claim any channel, nobody can forge a platform role.
+  ⛔ **It relaxes nothing real**: the ground rules, allowlist, Watchman,
+  secret-path refusal and read-only-ness are all CODE, which is why loosening
+  the words was safe. Scope: SUPER_ADMIN is **exactly one account**.
+  ⛔⛔ **DO NOT give the Workbench its own `channel`** — `store.ts` upper-cases
+  it into the `AgentChannel` enum (`CHAT|EMAIL|WHATSAPP|SMS|PHONE`), so
+  `"workbench"` makes the conversation create THROW and the dock stops answering
+  entirely. Also fixed in passing: the Yiddish bridge was hardcoded onto the
+  CUSTOMER prompt (a staff caller on the bridge got customer instructions), and
+  the viewing block called the owner "the customer".
 - ⏳ **NOT PROVEN: nobody has opened any of it in a browser.** Acceptance in
   §14f; the step that proves the engagement is asking the dock to READ A FILE.
   ⏳ Deliberately unbuilt: edits/diffs (every door is read-only; code ships only

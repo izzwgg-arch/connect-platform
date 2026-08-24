@@ -830,3 +830,86 @@ reloaded.
 read-only, and code ships only through the deploy queue), the Claude Agent SDK
 (option B — the streaming-edit "movie" and the permission pauses need it), and
 the support-staff accounts + per-feature permission keys.
+
+### §14g "For privacy, I can't do it" — the prompt, not the permissions (2026-08-24, `38910aa9`)
+
+Izzy, minutes after the desk went live, from the Workbench: *"I just asked him
+to do stuff. He told me that, for privacy, he can't do it. He needs to know that
+the difference between talking to a user through the AI agent assistant and the
+workbench is full-on. There shouldn't be any restrictions, just like me and you."*
+
+⛔⛔ **THE TOOLS AND THE TIER WERE ALREADY RIGHT.** `toolRoleFor` had resolved
+him to `"staff"` and handed over `read_file` / `list_files` / `run_command` /
+`browse`. **What refused him was the SYSTEM PROMPT**, which served every caller
+alike and said, verbatim:
+
+> `EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet`
+> `never discuss other tenants or internal systems`
+
+So the model dutifully declined to look at the platform it had just been handed
+the keys to. ⛔ **A CAPABILITY THE PROMPT DENIES IS NOT A CAPABILITY, and no test
+of the tool layer can see it** — the tools were present, gated correctly, and
+individually proven working by live probe. This is the exact prompt/capability
+drift CLAUDE.md flagged months ago ("`SYSTEM_PROMPT` still tells the model *you
+cannot do it yet* while the engine now hands it 13 tools") finally biting a real
+person, on day one of a feature built around those tools.
+
+**The fix:** `STAFF_SYSTEM_PROMPT` in `engine.ts` — **a separate prompt, not a
+suffix.** ⛔ Building it on top of the customer prompt would inherit the
+refusals, and a test asserts it does not contain the customer prompt's opening.
+It states plainly that the caller is the owner and not a customer, that there is
+no privacy boundary, that it should **default to LOOKING** rather than asking
+them to paste what it could read itself, and that it must never say a request
+was "passed to the human team" — it *is* talking to the team.
+
+⛔⛔ **THE GATE IS `isPlatformStaff(ctx.platformRole)` — the raw, server-verified
+JWT role, and the SAME check `toolRoleFor` uses**, so the instructions and the
+capabilities can never disagree again. ⛔ **NOT the channel**: a client can put
+any string in `channel`, nobody can forge a platform role. Scope was measured
+before shipping — `PLATFORM_STAFF_ROLES` is `SUPER_ADMIN` alone and the platform
+has **exactly one** such account, so this reaches one person and no customer or
+tenant admin can ever see it.
+
+⛔ **IT RELAXES NOTHING REAL, because none of it lived in the prompt.** The
+server still checks every command against the ground rules, the allowlist and
+the Watchman; credentials files are still refused; the browser still opens only
+our own pages; there is still no edit and no deploy. The prompt now states those
+limits *honestly* instead of inventing a privacy boundary that does not exist.
+**That separation is exactly why the gates are code and not instructions** — and
+it is why loosening the words was safe.
+
+**Two more caught in the same file:**
+- The **Yiddish bridge was hardcoded onto the customer prompt**
+  (`SYSTEM_PROMPT_BRIDGE = \`${SYSTEM_PROMPT}...\``), so a staff caller on the
+  bridge would have silently received the customer instructions. It composes
+  onto whichever prompt is in force now (`bridgeSuffix(basePrompt)`).
+- The **viewing block called the platform owner "the customer"** and told them
+  their page could not be seen — when `browse` opens it. Branched.
+
+⛔⛔ **AND A TRAP AVOIDED: DO NOT GIVE THE WORKBENCH ITS OWN CHANNEL.** The
+obvious way to signal the surface is `channel: "workbench"`, and it would have
+broken the dock completely: `store.ts` upper-cases the channel straight into the
+**`AgentChannel` Prisma enum**, which is `CHAT | EMAIL | WHATSAPP | SMS | PHONE`.
+Anything else makes the conversation create **throw**, and the dock stops
+answering at all. The role is the correct authority anyway. A test reads the
+enum out of `schema.prisma` so the guard cannot drift from the thing it guards.
+
+✅ **11 guards, ALL failing replayed against `HEAD`** — including a direct
+demonstration that HEAD's single prompt contained both refusal sentences.
+⛔ One of them first failed *against correct code*: the "no refusals" check
+matched the staff prompt's own **negation** of "passed to the human team" — the
+documented guard-matches-its-own-comment trap, for the sixth time in this repo.
+It now asserts every occurrence is negated rather than absent.
+Agent typecheck **14 = the exact baseline**, portal **0**, agent suite
+**804/806** (the two documented transcription failures).
+✅ **Agent REBUILT and container-verified**: `STAFF_SYSTEM_PROMPT` ×2, the
+`staffMode` selection ×1 and "NEVER refuse them on privacy" ×1 all grep inside
+the running `app-agent-1`; 0 restarts, 0 error lines.
+
+⚠️ **The portal carries a comment-only change** (pinning `channel: "chat"` with
+the reason) that rides the next portal deploy. Nothing behavioural waits on it.
+
+⏳ **NOT PROVEN: Izzy has not asked it anything since the rebuild.** The
+acceptance test is one sentence in the Workbench dock — *"read
+apps/api/src/supportBrowser.ts and tell me what it refuses"* — which should now
+produce an answer that quotes the file rather than a refusal.
