@@ -6957,7 +6957,7 @@ medium/low items §6a–§6l ARE still open.)
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIDEBAR_SMOOTHNESS_2026-08-17.md`**
 (portal source only — six files + one new test. No api, no worker, no PBX, no
 migration, no data change, no flag.)
-Memory: [[sidebar-must-not-swap-markup]], [[has-selectors-tax-every-dom-change]].
+Memory: [[sidebar-must-not-swap-markup]], [[move-layers-never-repaint-surfaces]].
 
 - ⛔⛔ **THE FINDING THAT OUTRANKS THE SIDEBAR: any DOM mutation inside
   `.console-shell` costs ~70 ms of style recalculation, and the cost does NOT
@@ -8276,7 +8276,7 @@ network backdrop and the query notes.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ANSWER_UNACKED_PUSH_CHANNEL_2026-08-06.md` §9**
 (**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
-Memory: [[createabox-102-answer-failure]].
+Memory: [[warm-answer-deadline-regression]].
 
 - ⛔⛔ **CHECK THE INSTALLED APP VERSION BEFORE DIAGNOSING ANYTHING.** Sender Weiss
   (ext 102) runs **`1.0.0+20260804-202642`**; the published APK is
@@ -9873,7 +9873,7 @@ that reply-approval "was deliberately NOT built".
 ## ⛔ AGENT HANDOFF — the assistant had NO access to any MD file, and its knowledge base was dead code (2026-08-16, FIXED same day by the section above) — READ FIRST before saying the assistant "knows" something we wrote down, or before answering "does the agent have the docs?"
 
 **Read-only audit — no code change, no deploy.** Memory:
-[[agent-has-no-document-knowledge]].
+[[agent-knowledge-docs-per-tenant]].
 
 - ⛔ **THE RULE: "the MD files exist" and "the agent has the MD files" are two
   different questions, and they answer opposite ways.** The docs side is
@@ -12038,7 +12038,7 @@ scoped to that one extension; backups `/root/blf-102-backup-20260806/`.)
   .gz). Every download logs the phone's **own MAC in its User-Agent**; compare it to the
   record, then `stat` that `<mac>.cfg`. Fetched but **mtime predates your edit** = wrong
   MAC (this case). **No fetch at all** = the phone never asked — fire the check-sync, see
-  [[desk-phone-reassign-needs-check-sync]]. A hit from **127.0.0.1 / UA "VitalPBX"** is
+  [[createabox-102-blf-mac-mismatch]]. A hit from **127.0.0.1 / UA "VitalPBX"** is
   just the panel rendering a page and proves nothing.
 - **Fix + proof shape:** correct the MAC on the record (durable — future saves land right),
   overwrite the phone-facing `.cfg` with the correct render for an immediate fix, then
@@ -12090,7 +12090,7 @@ All DEPLOYED and container-verified on `feat/ivr-migration-takeover`
   rewrote refs to match files (`custom/Home_main` → `custom/home_main`) made the
   catalog check fail and **blocked publishing entirely**. Publish now pushes the
   audio to the PBX under the name the ref asks for. See
-  [[ivr-menu-prompts-and-directdial-broken]].
+  [[ivr-per-number-menu-runtime]].
 - **Studio UX rules** (Izzy, sharply): a key choice is **never hidden for being
   empty** — picking one you don't have must CREATE it (team → MakeTeam,
   recording → upload/AI, number → add). Only "A person" stays greyed.
@@ -12116,7 +12116,7 @@ shows the phone. ⛔ The endpoint name changed (`T105_1_1` → `T105_101_1`), so
 **baila must sign out and back in**. The wizard is gated too (`0441fe2d`,
 deployed): a lone digit promotes 1 → 101 **on blur, not on change**, and under
 three digits is refused in the browser AND in the submit route. Recipe:
-[[vitalpbx-cannot-renumber-extension]], [[connect-extension-number-min-three-digits]].
+[[vitalpbx-cannot-renumber-extension]], [[relax-tires-billing-started-4digit-extension-gap]].
 
 **OPEN, not started:**
 1. **`invalid_prompt_ref` red banner** when making a recording on inii mini —
