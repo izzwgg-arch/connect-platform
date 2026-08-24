@@ -516,3 +516,60 @@ DELETE FROM ombutel.ombu_tenant_dids WHERE tenant_id=2 AND did='8456372330';
 then `vitalpbx gen-conf`. Pre-state: `inbound-before-smartsteps.sql` and
 `extensions__50-2-dialplan.conf.before-cidfilter` in
 `/root/pbx-pending-flags-backup-20260824T122426Z/`.
+
+
+---
+
+# 18. ⏪ REVERTED — §17 was undone the same day (2026-08-24)
+
+Izzy: *"actually, I was wrong. I mixed up the two numbers … remove that number from
+IVR 9 and leave it not going anywhere, and just leave the outbound the way it is."*
+
+**§17 is HISTORY. 845-637-2330 does NOT route to the Smart Steps IVR.** Read this
+section, not that one, for the live state.
+
+## Final state
+
+| Thing | State |
+|-------|-------|
+| Doorbells 509 / 510 outbound | **KEPT** — route 178 forces `"Front Door" <8456372330>`, re-verified by a live call after the revert |
+| 845-637-2330 inbound | **goes nowhere** — restored to its original state; callers hear the "no route exists to destination" recording, as before |
+| 845-837-6001 (Smart Steps' real number) | **untouched** — still `Goto(T2_app-ivr,IVR-9,1)` |
+| Tenant 2 dialplan | **byte-identical to the pre-change snapshot** |
+| Doorways | Main 3, T2 1 — intact throughout |
+
+## ⛔⛔ The trap in the revert, and it would have broken a live number
+
+**Route 4 had been left sharing `ombu_destinations` row 317 with route 39 — Smart
+Steps' own number** (the helper reuses an existing destination row rather than
+creating one, see §17). **Deleting route 4 at that moment would have cascaded row 317
+and taken 845-837-6001 down with it.**
+
+✅ The safe order, used here: **repoint route 4 back to its own destination (34)
+FIRST**, which leaves 317 owned solely by route 39, and only then touch anything else.
+Verified after: `select count(*) ... where destination_id=317` = **1**.
+
+⛔ **General rule: before deleting or repointing an inbound route, check whether its
+destination row is shared** — `select count(*) from ombu_inbound_routes where
+destination_id = <id>`. This is the inii-mini hazard in a new costume, and it now has
+a second confirmed instance.
+
+## How the revert was done
+
+1. DB: route 4 back to `destination_id=34`, `cid_number='8457823064'`,
+   `description='TEST 2'`; `ombu_tenant_dids` row deleted.
+2. Dialplan: T2's file restored from the **pre-change snapshot**
+   (`vitalpbx-conf-snapshot.tar.gz`) with `cat orig > file` to preserve the inode and
+   ACL — verified `www-data:www-data 674`, `mask::rwx` unchanged before and after, and
+   `diff` against the original **empty**.
+   ⛔ The intermediate backup `extensions__50-2-dialplan.conf.before-cidfilter` is
+   **NOT** the original — it was taken after the helper had already baked the IVR Goto.
+   The true original is only in the tarball snapshot. **Take one full snapshot before
+   the first change; per-step backups are not a substitute.**
+3. `dialplan reload` + `vitalpbx gen-conf` (drops the DID from `default-trunk`).
+
+## Verified after
+
+`8456372330` in `default-trunk`: **0**. Reaching IVR-9: **0**. Smart Steps' own number
+still reaches IVR-9. Doorbell route still first in ARS-19 with all 8 CID matches and
+the forced caller ID — **re-proven with a live originated call after the revert**.
