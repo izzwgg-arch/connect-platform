@@ -41,6 +41,18 @@ const CONTEXT_MESSAGES = 8;
 
 export class SmsEmailForwardJob {
   private running = false;
+  /**
+   * Message ids this PROCESS has already emailed, and when.
+   *
+   * The stamp is written AFTER the email goes out - deliberately, so a crash
+   * duplicates rather than loses. But the stamp used to swallow its own errors,
+   * so a single failed write meant the text was emailed again on EVERY pass for
+   * the rest of the fresh window: up to 60 copies of one text at a 30s poll.
+   * This makes it at most one - a row we know we have already sent gets its
+   * STAMP retried, never a second email. Bounded by throughput x window (a few
+   * hundred entries) and pruned on every pass.
+   */
+  private emailedThisProcess = new Map<string, number>();
   constructor(private deps: SmsEmailForwardJobDeps) {}
 
   /** One polling pass. Returns how many texts were emailed. */
@@ -49,6 +61,9 @@ export class SmsEmailForwardJob {
     this.running = true;
     try {
       const since = new Date(Date.now() - FRESH_WINDOW_MIN * 60_000);
+      for (const [id, at] of this.emailedThisProcess) {
+        if (at < since.getTime()) this.emailedThisProcess.delete(id);
+      }
       const rows = await this.deps.prisma.connectChatMessage.findMany({
         where: {
           emailForwardedAt: null,
@@ -63,9 +78,11 @@ export class SmsEmailForwardJob {
       });
 
       let sent = 0;
+      let sendFailed = 0;
       for (const m of rows) {
         try {
           if (await this.processOne(m)) sent++;
+          else if (!this.emailedThisProcess.has(m.id) && !(await this.wasStamped(m.id))) sendFailed++;
         } catch (err) {
           // Transient — leave the stamp null so it retries next cycle while still
           // inside the fresh window, then naturally drops out of scope.
@@ -76,16 +93,47 @@ export class SmsEmailForwardJob {
           });
         }
       }
+      // A refused SMTP send used to return silently: no stamp, no audit, no log
+      // line. With the fresh window that means an outage longer than
+      // FRESH_WINDOW_MIN loses every text's email PERMANENTLY, and the only
+      // trace is emailForwardedAt staying null. Recorded ONCE PER PASS (never
+      // per message - an outage would otherwise write ~960 rows an hour) so the
+      // condition is greppable while it is still recoverable.
+      if (sendFailed > 0) {
+        await this.deps.audit.record({
+          actor: "system",
+          event: "sms.email_send_failed",
+          payload: { failed: sendFailed, considered: rows.length, freshWindowMin: FRESH_WINDOW_MIN },
+        });
+      }
       return sent;
     } finally {
       this.running = false;
     }
   }
 
+  /** True when this pass reached a verdict for the row (emailed, or stamped with a reason). */
+  private async wasStamped(id: string): Promise<boolean> {
+    const row = await this.deps.prisma.connectChatMessage
+      .findUnique({ where: { id }, select: { emailForwardedAt: true } })
+      .catch(() => null);
+    return !!row?.emailForwardedAt;
+  }
+
   private async stamp(id: string, error: string | null): Promise<void> {
-    await this.deps.prisma.connectChatMessage
-      .update({ where: { id }, data: { emailForwardedAt: new Date(), emailForwardError: error } })
-      .catch(() => {});
+    try {
+      await this.deps.prisma.connectChatMessage.update({
+        where: { id },
+        data: { emailForwardedAt: new Date(), emailForwardError: error },
+      });
+    } catch (err) {
+      // Never silent: an unstamped row is re-selected on the next pass, and
+      // before the emailedThisProcess guard above that meant the SAME text
+      // emailed over and over until it aged out of the window.
+      await this.deps.audit
+        .record({ actor: "system", event: "sms.email_stamp_failed", payload: { id, error: String(err).slice(0, 200) } })
+        .catch(() => {});
+    }
   }
 
   /**
@@ -117,6 +165,12 @@ export class SmsEmailForwardJob {
   private async processOne(m: {
     id: string; tenantId: string; threadId: string; body: string; createdAt: Date; type: string;
   }): Promise<boolean> {
+    // Already emailed by this process, but the stamp did not land. Retry the
+    // STAMP - never the send.
+    if (this.emailedThisProcess.has(m.id)) {
+      await this.stamp(m.id, null);
+      return false;
+    }
     const thread = await this.deps.prisma.connectChatThread.findUnique({
       where: { id: m.threadId },
       select: { id: true, type: true, tenantSmsE164: true, externalSmsE164: true, smsInboxOwnerUserId: true },
@@ -191,6 +245,7 @@ export class SmsEmailForwardJob {
     });
 
     if (!res.sent) return false; // SMTP down — retry next cycle within the window.
+    this.emailedThisProcess.set(m.id, Date.now()); // the email is OUT; only the stamp may still fail
 
     await this.stamp(m.id, null);
     await this.deps.audit.record({
