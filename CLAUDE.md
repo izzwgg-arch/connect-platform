@@ -71,6 +71,105 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — you can email a customer their sign-up link now, and read exactly what they did (2026-08-24) — READ FIRST before adding tracking to the onboarding wizard, before touching the invite email, before "resending" a sign-up link, or for "how far did that customer get?"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONBOARDING_INVITATIONS_2026-08-24.md`**
+(`96cbb784` on `feat/ivr-migration-takeover`. **api DEPLOYED and container-verified**
+— `.build-commit` = `96cbb7847460`; portal deploy state in §7 of the handoff. No
+migration, no PBX write, no env change, no tenant row touched.)
+Mock-up Izzy approved: <https://claude.ai/code/artifact/4dbeb981-06ce-46b8-b743-2ec85f12a87d>
+Mock-up-vs-built: <https://claude.ai/code/artifact/361b80cd-d8c8-43df-95ed-84a3befb2059>
+Izzy: *"just enter somebody's email and it would send him the link"*, then *"see
+exactly what the user did, step by step, in crazy detail"*, then *"build it
+exactly, exactly, exactly like the mock-ups."*
+
+- ⛔⛔ **THE FINDING THAT MATTERS MOST, AND IT INVERTS THE OBVIOUS APPROACH: the
+  step-by-step detail was ALREADY being recorded and had been since the journey
+  beacons shipped.** TYH Industries carries **98 events, to the second** — every
+  step with the seconds spent on the previous one, every validation message that
+  stopped them, every number search and what came back. **Nobody could read it**:
+  the old page printed all 98 as one unbroken `<ul>` of raw ISO timestamps.
+  ⛔ **So `journeyStory.ts` adds NO instrumentation — it is a pure reader**, which
+  is why it works **retroactively on every sign-up that has ever happened**.
+  **Check `OnboardingEvent` before adding tracking to the wizard.**
+- ⛔⛔ **AND THE DATA ANSWERED A PRODUCT QUESTION THE MOMENT IT WAS READABLE:
+  "Your number" takes a MEDIAN of 398 seconds against 3–58s for every other
+  step** — ten times the rest of the wizard put together — **15 of the 21 number
+  searches ever run came back empty** (718 ×6, 646 ×4, 917 ×3, 347, 415: every NY
+  area code a customer asked for is sold out), and the commonest blocker ever is
+  **"Please pick a number from the list." (5×)**. That is the TYH sign-up in one
+  line: five area codes, thirteen searches, silence each time, then a 929 number
+  they never asked for. ✅ The silence itself was fixed 2026-08-18 — but nobody
+  could see the story until after it had cost a customer.
+- ⛔⛔ **`ONBOARDING_INVITE`, NEVER `ADMIN_ALERT`** — that type is SKIPPED at the
+  send door by the platform-wide mute, so an invitation on it would build clean,
+  log clean and reach nobody. Guard-tested. ⛔ **`USER_INVITE` is a DIFFERENT
+  email** (create-your-password, sent much later once the tenant exists) — before
+  this commit there was **no onboarding-invite email anywhere in the codebase**
+  and the platform had sent **0 in 23 sign-ups**, while the screen's "Main Email"
+  box read exactly like it emailed them.
+- ⛔ **Resend reuses the STORED token and never mints a new one.** A fresh link
+  per chase is exactly how this account got **11 orphaned links** (most with no
+  name and no email, so nothing to chase and no way to tell them apart) — and it
+  does not even invalidate the old one, so the customer holds two. Source guard,
+  **proven by mutation.**
+- ⛔ **Sending never hides the link** (Izzy's explicit ask — many of these
+  customers are easier to reach on WhatsApp), and the screen **warns as you type**
+  if the address already has a Loopcom login, because that silently kills their
+  welcome email at the very END of sign-up. The check **never blocks** on failure.
+- ⛔ **The link is absolute and says loopcom.net, but is NOT pinned there.**
+  `onboardingLinkOrigin()` prefers `ONBOARDING_LINK_ORIGIN`, then the platform's
+  canonical host **once one is actually chosen by env**, else loopcom. So the day
+  `PUBLIC_PORTAL_URL` is set the invitations follow it and a future move cannot
+  strand them. Same shape as `platformBillingContactEmail()`.
+- ⛔ **Paying is the CUSTOMER's last step, not the first thing we did** — it sits
+  in the customer lane, its duration derived from reached-Payment → paidAt
+  (nothing downstream measures the last step), and **a declined card is flagged as
+  a problem there**, since that is where sign-ups most often die.
+- ⛔ **Medians, not averages** on the patterns screen: with this few sign-ups one
+  tab left open overnight drags a mean into nonsense and invents a problem.
+- ⛔⛔ **A MECHANICAL CLASS RENAME CAN SILENTLY MERGE TWO CLASSES — caught for
+  real here.** Prefixing the mock-up's CSS turned `.ob-act.link` (a borderless
+  action) and `.ob-link` (the URL box) both into `.oi-link`, so "Open" would have
+  inherited `flex:1`, a mono font and a panel background. **Diff the class list
+  after any mechanical rename.** ⛔ `.tab`/`.tabs` already exist in globals.css
+  and the customer wizard owns `.ob-`, so everything is `oi-` prefixed and scoped
+  under `.oi-root`, with a test failing on any selector that escapes.
+- ⛔⛔ **A NUL BYTE IN SOURCE MAKES GIT TREAT THE FILE AS BINARY — no diff, no
+  review, ever.** `journeyPatterns.ts` used a NUL as a map-key separator and first
+  committed as `Bin 0 -> 4404 bytes`; it is `JSON.stringify([...])` now.
+  **Check `git show --stat` for `Bin` on any new source file.**
+- ⛔ **`git commit -- <path>` does NOTHING for an UNTRACKED file** — it errors
+  `pathspec did not match any file(s) known to git` and commits nothing at all.
+  `git add` the new paths first, then commit with the full pathspec (the pathspec
+  is still what protects you from another session's staged work).
+  ⛔⛔ **`git stash` was used in this shared tree by mistake this session.** It
+  caught only this session's own five untracked files and was popped immediately
+  with nothing lost — but the standing rule is never to stash here, and this was
+  a near miss.
+- ✅ **Proven: 55 tests** (40 api, driven on the **REAL TYH event stream** copied
+  from production — it carries shapes a synthetic fixture never would; 15 portal
+  guards, registered). **Both source guards fail under mutation.** api typecheck
+  **76 = the exact baseline**, 0 in an edited file; portal **0**; portal suite
+  338/340 (the two documented pre-existing). ⛔ The 49 failures in the onboarding
+  suite are **all** the pre-existing `resolvePbxRouteHelperConfig is not a
+  function` breakage — none of those three files reference anything in this commit.
+  ✅ **The pure modules were re-run inside `app-api-1` against the real database**
+  and reproduced the analysis exactly, and **every route was probed live**:
+  SUPER_ADMIN 200 / USER 403 / no token 401 / unknown submission 404, with
+  `email-check` correctly reporting `izzywgg@gmail.com` as taken.
+- ⏳ **NOT PROVEN: nobody has opened the screens and NO INVITATION HAS EVER BEEN
+  SENT TO A HUMAN.** Acceptance in §8 of the handoff — and **the negatives that
+  matter most: Resend must NOT create a second row**, and an ordinary login must
+  not see the screen at all. ⛔ Outlook is structurally hardened (it reuses the
+  billing shell) but has never been rendered.
+- ⏳ **Deliberately NOT built, because the mock-up does not draw them:** texting
+  the link; the four extra things worth recording (**phone-or-computer and which
+  browser is not captured AT ALL today** — so we cannot tell whether the number
+  step is painful for everyone or only on a phone; when they walked away; which
+  box they were typing in; clicking a greyed-out button); and an automatic
+  reminder for an unopened link.
+
 ## ⛔⛔ AGENT HANDOFF — the WhatsApp numbers are "Pending" because the review NEVER STARTED, and the Meta portfolio's legal name is wrong (2026-08-24) — READ FIRST for ANY "Meta/WhatsApp has been pending for days", before telling anyone to wait for Meta, and before clicking Start verification
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUTH_PROGRAM_2026-08-21.md` §7**
