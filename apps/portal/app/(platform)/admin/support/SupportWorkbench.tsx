@@ -404,6 +404,13 @@ export default function SupportWorkbench() {
     try {
       const res = await agentPost<{ reply: string; model?: string }>("chat/message", {
         text: file ? `${text}\n\n(Working in the support Workbench. Open file: ${file.path})` : text,
+        // ⛔⛔ STAYS "chat" — do NOT invent a "workbench" channel. The agent
+        // upper-cases this straight into the AgentChannel Prisma enum, which is
+        // CHAT | EMAIL | WHATSAPP | SMS | PHONE. Anything else makes the
+        // conversation create THROW and the dock stops answering at all.
+        // The surface does not need signalling here anyway: what unlocks the
+        // engineer prompt and the staff tools is the verified SUPER_ADMIN role
+        // in the JWT — the only authority a caller cannot forge.
         channel: "chat",
       });
       setChat((c) =>

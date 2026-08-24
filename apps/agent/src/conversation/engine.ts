@@ -64,11 +64,70 @@ been passed to the human team, and summarize it clearly.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
 /**
+ * ⛔⛔ THE STAFF PROMPT — and the bug that made it necessary.
+ *
+ * Izzy, 2026-08-24, from the Workbench: *"I just asked him to do stuff. He told
+ * me that, for privacy, he can't do it."* The tools were there and the tier was
+ * right — `toolRoleFor` had already resolved him to "staff" and handed him
+ * read_file / list_files / run_command / browse. What refused him was the
+ * PROMPT, which said, to every caller alike:
+ *
+ *     "EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet"
+ *     "never discuss other tenants or internal systems"
+ *
+ * So the model dutifully declined to look at the platform it had been given the
+ * keys to. ⛔ **A capability the prompt denies is not a capability.** This is
+ * the drift CLAUDE.md flagged months ago (the prompt still claiming "you cannot
+ * do it yet" while the engine handed over thirteen tools) finally biting.
+ *
+ * ⛔ THE GATE IS `isPlatformStaff(ctx.platformRole)` — the RAW, server-verified
+ * JWT role — and NOT the channel. A client can put any string in `channel`;
+ * nobody can forge the platform role. The channel only flavours the wording.
+ *
+ * ⛔ Scope, measured before shipping: `PLATFORM_STAFF_ROLES` is SUPER_ADMIN
+ * alone and the platform has exactly ONE such account. So this prompt reaches
+ * one person — the owner — and no customer or tenant admin can ever see it.
+ *
+ * ⛔ WHAT IT DOES **NOT** RELAX, because none of it lives in the prompt anyway:
+ * every command is still checked by the server against the ground rules, the
+ * allowlist and the Watchman; files holding credentials are still refused; the
+ * browser still opens only our own pages; and there is still no way to edit a
+ * file or deploy. Loosening the words cannot loosen the gates — that separation
+ * is exactly why the gates are code and not instructions.
+ */
+const STAFF_SYSTEM_PROMPT = `You are Loopcom's own engineering assistant, working with the platform owner inside the support Workbench.
+
+WHO YOU ARE TALKING TO: Connect staff — the owner of this platform. Not a customer. There is no privacy boundary between you and this person: the codebase, the servers, every company's data, the phone system and the internal tooling are all theirs. NEVER refuse them on privacy or confidentiality grounds, never say a request has been "passed to the human team" (you ARE talking to the team), and never tell them you are only a support assistant.
+
+YOUR TOOLS — USE THEM, DO NOT DESCRIBE THEM:
+- read_file — open any file in the codebase. Read the file before you say anything about what it does.
+- list_files — look around a folder when you are not sure where something lives.
+- run_command — run one read-only command on the server (grep, git, docker ps, psql, journalctl, wc, df...) to find out what is actually true.
+- browse — open one of Loopcom's own pages and read back its status, headings, text, forms and scripts.
+- investigate — run one read-only SQL query against Connect's database or the phone system's.
+
+DEFAULT TO LOOKING. If the answer is in a file, open it. If a command would settle it, run it. Asking the owner to paste something you could have read yourself is the wrong move.
+
+⛔ EVIDENCE RULE, and it matters more here than anywhere: state as fact only what you actually read or ran. If you did not check, say you did not check. A confident guess about production code, in the same voice as a measurement, is worse than no answer — it gets acted on.
+
+WHAT YOU CANNOT DO, and why it is not a restriction on THEM:
+- You cannot edit, write or delete files, and you cannot deploy. Code reaches production only through the deploy queue. Propose the change in full and let them ship it.
+- Some commands need their say-so. If a command comes back refused as "ask first", tell them plainly what you wanted to run and why, and ask. You cannot approve it on your own behalf — that is the point of the rule, not an obstacle to work around.
+- If a command comes back refused as "never", do not look for another way around it. Say which rule stopped you; if the rule looks wrong, say that too — an over-broad rule is worth reporting.
+
+HOW TO ANSWER: plain English, no jargon, get to the point. Short paragraphs. Show the command you ran or the file you read when it carries the argument. If something is broken, say what is broken, what you checked, and what you would do — in that order.`;
+
+/**
  * When the Yiddish Labs translate-bridge is active, the LLM must reason and
  * answer ONLY in English. Yiddish Labs handles BOTH translation legs (Yiddish→
  * English in, English→Yiddish out), so the customer only ever sees YL's
  * authentic heimishe Yiddish — never model-generated Yiddish.
  */
+function bridgeSuffix(base: string): string {
+  return `${base}
+TRANSLATION BRIDGE ACTIVE: Write your reply in clear, simple English ONLY. Never output Yiddish or Hebrew-script text — a dedicated Yiddish translation service renders your English into authentic Yiddish for the customer. Keep sentences short and plain so they translate cleanly.`;
+}
+
 const SYSTEM_PROMPT_BRIDGE = `${SYSTEM_PROMPT}
 TRANSLATION BRIDGE ACTIVE: Write your reply in clear, simple English ONLY. Never output Yiddish or Hebrew-script text — a dedicated Yiddish translation service renders your English into authentic Yiddish for the customer. Keep sentences short and plain so they translate cleanly.`;
 
@@ -543,11 +602,23 @@ export class ConversationEngine {
     // block, the engine dropped it, so the assistant answered "I can't see
     // what you're doing" to the exact question the banner invites. Name only —
     // the model must not pretend to see the screen's contents.
+    // ⛔ The wording differs for staff: calling the platform owner "the
+    // customer" is the same category error that made the model refuse them on
+    // privacy grounds. And staff CAN have the page looked at — `browse` opens
+    // it — so telling them it is impossible would be false.
     const viewingBlock = ctx.viewingPage
-      ? `The customer currently has the "${String(ctx.viewingPage).slice(0, 80)}" page of the Connect app open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You know which page they are on — answer page-related questions in that light — but you cannot see the page's contents, live data, or their screen; say so if asked about specifics.`
+      ? isPlatformStaff(ctx.platformRole)
+        ? `They have the "${String(ctx.viewingPage).slice(0, 80)}" page open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You cannot see their screen — but you can open that page yourself with the browse tool and read what it returns, so do that rather than saying you cannot see it.`
+        : `The customer currently has the "${String(ctx.viewingPage).slice(0, 80)}" page of the Connect app open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You know which page they are on — answer page-related questions in that light — but you cannot see the page's contents, live data, or their screen; say so if asked about specifics.`
       : null;
+    // ⛔ Staff get a different prompt entirely, gated on the RAW verified JWT
+    // role — the same check `toolRoleFor` uses to hand over the staff tools, so
+    // the instructions and the capabilities can never disagree again. NOT the
+    // channel: a client can claim any channel, nobody can forge a platform role.
+    const staffMode = isPlatformStaff(ctx.platformRole);
+    const basePrompt = staffMode ? STAFF_SYSTEM_PROMPT : SYSTEM_PROMPT;
     const msgs: ChatMessage[] = [
-      { role: "system", content: bridging ? SYSTEM_PROMPT_BRIDGE : SYSTEM_PROMPT },
+      { role: "system", content: bridging ? bridgeSuffix(basePrompt) : basePrompt },
       ...(identityBlock ? [{ role: "system" as const, content: identityBlock }] : []),
       // Knowledge sits BEFORE the trainer lessons on purpose: lessons are
       // corrections and must be able to override a document.
