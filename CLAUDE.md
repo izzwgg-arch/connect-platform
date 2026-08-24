@@ -4477,6 +4477,45 @@ and make sure the email stays in one thread … one thread per phone number."*
   removing the dedupe guard, the outage audit, the re-entrancy guard, the subject
   sanitiser, the body escaping or the backlog guard each fails exactly the
   matching invariant.
+- ✅✅ **THE FORWARD HALF HAS AN ALARM NOW — `apps/api/src/sms/smsForwardGuardrail.ts`
+  (2026-08-24, `ea8509c6`).** It closes the gap the load-stress opened: a text
+  could be lost three ways (job stopped, SMTP outage past the window, burst past
+  the 480-per-window ceiling) and **every one was invisible** — the only trace was
+  `emailForwardedAt` staying null and nothing read it.
+  ⛔ **It watches the OUTCOME, not the machinery: a text that aged out unsent is a
+  customer who was never told someone messaged them.** Three alarms, split on
+  purpose — **aged-out** (damage report, those texts are gone), **send failures**
+  (EARLY warning, ~28 min before the window destroys them), **stamp failures**
+  (a database problem, one duplicate each). Kill switch
+  `SMS_FORWARD_GUARDRAIL_DISABLED=1`; alert window `SMS_FORWARD_ALERT_WINDOW_MS`.
+- ⛔ **It follows the guardrail shape this repo has already paid for:** an
+  **AgentEscalation and NEVER an `ADMIN_ALERT`** (muted at the send door — an alarm
+  there reaches nobody); **de-duped over a 6 h WINDOW, deliberately NOT
+  `raiseGuardrailEscalation`** (that de-dupes on any open escalation with no time
+  bound, and `AgentEscalationStatus` has no RESOLVED value, so each key would fire
+  exactly ONCE, EVER — the open one-shot problem recorded in the voicemail
+  section); an **audit row on EVERY run including clean ones, with `actor` AND
+  `hash`**; and a **boot kick beside the interval**.
+  ⛔ **THE CUTOVER IS LOAD-BEARING AND WAS MEASURED:** 1,374 inbound texts predate
+  the bridge and are permanently unstamped. Run against production with the
+  guardrail's exact query: **0 would alarm WITH the cutover, 1,374 WITHOUT.**
+  ⛔ `apps/api` names test files explicitly and **`src/sms/*.test.ts` was missing
+  from the list** — the suite would never have run. Registered. 20 tests; five
+  mutations each fail the matching guard.
+- ⛔⛔ **A SHARED-WORKTREE NEAR-MISS, AND THE RULE IT EARNS: with `commit-tree`,
+  THE TREE AND THE PARENT MUST COME FROM THE SAME HEAD.** The private-index recipe
+  in this file protects against another session's *staged* work — it does NOT
+  protect against HEAD moving between `write-tree` and `commit-tree`. That happened
+  here: another session committed in the gap, and `commit-tree $TREE -p HEAD`
+  produced a commit that **reverted their `server.ts` work and DELETED their
+  brand-new test file**, because the tree predated their commit. ⛔ **My
+  HEAD-moved check was worthless — it compared HEAD against a value captured in the
+  same command, not against the head the TREE was read from.**
+  ✅ **Caught by reading `git show --stat` BEFORE pushing** (it said
+  `server.ts | 23 +-` and a 173-line deletion where it should have said `+2`);
+  recovery was `git update-ref HEAD <parent>`, rebuild from the current head,
+  re-verify, push. **Pin the base sha explicitly in BOTH `read-tree <sha>` and
+  `-p <sha>`, and read the stat line before every push.**
 - ⏳ **STILL NOT PROVEN: no CUSTOMER has replied since the fix.** It is proven by
   the four routes above — including a real SMS — but not by a person in their own
   mail client. **Acceptance: one reply to any text-email, then**
