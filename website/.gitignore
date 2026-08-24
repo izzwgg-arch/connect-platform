@@ -1,0 +1,13 @@
+# Build output — regenerate with `node build.mjs`. Not committed so content
+# edits produce one diff in src/, not thirty in dist/.
+dist/
+
+# Runtime
+node_modules/
+data/
+*.log
+
+# ⛔ Never commit deployment credentials. SMTP settings live in
+# /etc/loopcom-web.env on the server, root-only, and never in git.
+.env
+*.env

@@ -1,0 +1,35 @@
+[Unit]
+Description=Loopcom website (static site + quote/chat endpoints)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loopcom
+Group=loopcom
+WorkingDirectory=/var/www/loopcom
+ExecStart=/usr/bin/node /var/www/loopcom/server/server.mjs
+Environment=NODE_ENV=production
+Environment=PORT=8080
+Environment=LOOPCOM_DATA_DIR=/var/lib/loopcom
+EnvironmentFile=-/etc/loopcom/website.env
+Restart=always
+RestartSec=3
+
+# hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/loopcom
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
