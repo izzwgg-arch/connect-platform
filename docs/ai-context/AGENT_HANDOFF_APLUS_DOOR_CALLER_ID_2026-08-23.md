@@ -353,3 +353,76 @@ DELETE FROM ombutel.ombu_ars_members WHERE outbound_route_id=178;
 then `vitalpbx gen-conf`. The doors fall straight back to route 18 and 845-782-6775.
 To remove entirely, also delete route 178 and its members/patterns — full pre-state in
 `outbound-routing-before.sql` in the backup directory.
+
+
+---
+
+# 15. ⛔⛔ WHAT 845-637-2330 ACTUALLY IS — and I was wrong twice about it (2026-08-24)
+
+**It was COMFORT CONTROL's number.** Inbound CDR by tenant, all time:
+
+| Tenant | Inbound calls |
+|--------|---------------|
+| `vpbx:comfort_control` | **229** |
+| Comfort Control's Connect tenant (erased) | 16 |
+| unattributed | 64 |
+| A Plus Center | 3 + 2 |
+
+Comfort Control was erased 2026-08-19. The number stayed on their VoIP.ms subaccount
+(`344022_Comfortcont`) and their PBX trunk (**37, literally named "Comfort Control"**).
+
+On **2026-08-14** Izzy's own SUPER_ADMIN account created a `DidRouteMapping` pointing
+it at A Plus Center — and it was never finished at **four** layers:
+
+| Layer | State |
+|-------|-------|
+| Connect mapping | `ivrProfileId: null`, `routingMode: "pbx"`, `lastPublishedAt: null`, `lastSwitchedAt: null` |
+| PBX inbound route | "TEST 2" exists but is **CID-filtered to `8457823064`** (their Home line) — so it rejects everyone else |
+| PBX DID list | **absent from `ombu_tenant_dids`** → `default-trunk` has no entry |
+| Carrier | still routed to **Comfort Control's** subaccount, not `355362_apluscenter` |
+
+⛔⛔ **SO EVERY CALLER TODAY HEARS AN ERROR RECORDING.** Traced live:
+
+```
+[8456372330@trk-37-in] "Incoming call through: Comfort Control"
+Goto (default-trunk,8456372330,1)
+Goto (incoming-calls,8456372330,1)
+Goto (invalid-dest,s,1)
+Playback("im-sorry&no-route-exists-to-dest&vm-goodbye")
+```
+
+**22 callers in the last 30 days** got that, including Izzy testing it on 2026-08-24.
+
+⛔⛔ **TWO CORRECTIONS TO §5 OF THIS DOC, BOTH MINE:**
+1. I wrote *"no inbound call to it can ever reach this tenant"* — **wrong**. Calls DO
+   arrive (via trunk 37) and are recorded; they just have no destination. "Cannot
+   arrive" and "arrives and errors" are very different, and only the second is a
+   customer-facing fault. **`grep -c` on `default-trunk` and `ombu_tenant_dids` told me
+   the DID is unrouted; it did NOT tell me calls never arrive. Trace a real call.**
+2. I wrote it was *"a dead leftover"* — wrong. It carries real, ongoing traffic.
+
+⚠️ **This now matters more than before, because the doorbell presents this number**
+— so anyone who rings it back hears *"no route exists to destination."*
+
+✅ **AND THE DOORBELL CHANGE IS PROVEN ON A REAL PRESS.** Izzy pressed door **509** at
+09:50 EDT 2026-08-24:
+```
+Outbound Route: A Plus Center Doors
+CALLERID(all)="Front Door" <8456372330>
+Called PJSIP/8454226997@0001
+```
+So both doors are confirmed live in production, not just by originated tests.
+
+## 16. Fixing the inbound side (NOT done — needs a decision)
+
+To make a callback work, the number needs a destination. That is:
+1. add `8456372330` to `ombu_tenant_dids` for tenant 2 → `default-trunk` routes it
+   (**Main regen only — safe, `gen-conf` proven not to touch doorways**);
+2. **remove the `cid_number = 8457823064` filter** from inbound route 4, or it keeps
+   rejecting every caller but their Home line, and point it somewhere sensible
+   (ring group **900** is the natural choice for a doorbell callback);
+3. that second change renders in the **TENANT** file → **tenant-2 regen** → wipes the
+   doorway on **845-782-3064** → needs the re-bake straight after.
+
+⛔ Step 3 is the only risky part and it is the same doorway exposure documented
+throughout this file. Do it in a quiet window with the re-bake ready.
