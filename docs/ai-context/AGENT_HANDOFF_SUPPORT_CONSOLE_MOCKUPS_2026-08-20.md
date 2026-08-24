@@ -595,3 +595,87 @@ through the same injected `requireSuper` as every other route in the module.
   live route probe; no human has heard Kristen read an answer. ⏳ Deliberately
   NOT added to the Escalations view (the same hook and route would cover it) —
   the ask was the dock.
+
+
+## §13 AUDIT — the desk measured against production, and the SDK question answered (2026-08-24)
+
+**Read-only audit + mockups. No code, no deploy, no migration, no PBX interaction, no
+data change.** Izzy: *"audit the support desk and tell me how we can make it better by
+design… I don't want to see everybody's text messages… give me a mockup for every page
+inside the IDE audit, because I think some stuff is not working there. I wanted it to be
+more like the IDE cloud. Is that what it is? Is the cloud SDK?"*
+Deliverable: <https://claude.ai/code/artifact/6f514701-4e37-4dea-a80f-2366ed600030>
+
+### §13a The usage ledger — read live from the production database 2026-08-24
+
+⛔ **This table is the whole design argument. Re-measure before quoting it.**
+
+| Tab | Real use, all time |
+|---|---|
+| Escalations | **7 cases**, all within 30 days (≈2/week) |
+| Inbox | exposes **679 threads / 2,477 messages** of customers' private texts |
+| Assistant (take-over) | **0 take-overs ever**, against 114 agent conversations |
+| Workbench | **4 commands ever**, all on 2026-08-21 |
+| Ground rules | 2 versions, working |
+
+⛔⛔ **THE 24 `workbench.command_refused` ROWS ARE NOT EVIDENCE THE RULEBOOK IS BLOCKING
+REAL WORK — I nearly reported them that way.** Reading the payloads shows 18 of 24 are the
+BUILD DAY'S OWN SECURITY PROBES (`rm -rf /`, `bash -c whoami`, `cat …/.env.platform`,
+`git push origin main`, `ls; whoami`, `docker restart app-api-1`, `sed -i …`). **A refusal
+count is meaningless without reading what was refused.** The only genuinely-blocked real
+command was `wc -l apps/api/src/supportWorkbench.ts` matching *"Passwords, card details or
+API keys"* — the documented §11b over-block — and ✅ **that fix (`00a5c8a0`) is confirmed
+working: later rows show the same command as `command_ran`, exit 0.**
+
+⛔ The other honest reading of "4 commands ever": **no real maintenance work has EVER been
+done through the Workbench.** It is proven, deployed, and unused.
+
+### §13b The SDK question — the answer, verified again 2026-08-24
+
+⛔⛔ **NO. It is NOT the Claude Agent SDK and it is NOT "cloud".** `claude-agent-sdk`
+greps to **zero hits** across every app and package. What is installed is
+**`@anthropic-ai/sdk@^0.60.0`** in `apps/agent` — the plain HTTP client. The agentic loop
+(`completeWithTools`, `apps/agent/src/llm/router.ts`) is ours, hand-rolled.
+
+⛔⛔ **AND THIS IS THE ACTUAL "some stuff is not working there": THE IDE's CHAT DOCK CANNOT
+SEE THE IDE.** `SupportWorkbench.tsx:322` posts to `/agent-api/chat/message` — **the
+customer-support chatbot**. Its entire tool surface is `apps/agent/src/tools/`:
+contacts, investigation (SQL), permissionGrant, portStatus, provisioning, read,
+selfService. **`read_file` / `list_files` / `run_command` grep to ZERO.** So the model
+answers questions about a file it cannot read, on a box it cannot query. It is a very good
+chatbot in a window that looks like Cursor.
+
+⛔ **Second half: it is an editor that cannot edit.** All four workbench doors are read
+(`files`, `file`, `run` read-only allowlist, `capabilities`). No write, no diff, no save —
+while the chrome ships editor tabs, a minimap, a palette and a status bar.
+
+**Three options, given honestly (§3 of the artifact):**
+- **A** — add `read_file`/`list_files`/`run_command` as `minRole:"staff"` tools calling the
+  EXISTING gated doors. **No new dependency, no new key.** Fixes the honesty problem; still
+  no edits.
+- **B, recommended** — add the Claude Agent SDK. Streaming edits (the "movie"), permission
+  callbacks mapping 1:1 onto never/ask/allowed, native rule-file reading. One new dep in a
+  small service, **same API key, no new account.**
+- **C** — strip the IDE chrome back to an honest read-only server inspector.
+⛔ **Under every option code still ships ONLY through the deploy queue.**
+**Recommended order: fix the desk first** — the IDE is the least-used surface; the
+escalation desk is the only one carrying weekly work.
+
+### §13c The redesign — five tabs become one desk + two settings
+
+1. ⛔ **DELETE the Inbox browse surface** (Izzy, unprompted: *"I don't want to see
+   everybody's text messages, I don't know why it's there"*). He is right and it is not
+   taste: `GET /admin/support/threads` is the one screen on the platform where one person
+   reads 30 companies' customer conversations **with no case attached to the reading**.
+   Keep the capability, move it INSIDE the case, name the case in the header, audit each open.
+2. **Fold Assistant take-over into the escalation thread** — a button in the composer, not
+   a tab with 0 uses.
+3. **Escalations IS the desk** — cases / conversation / customer, no tab bar.
+4. **Ground rules → settings**, plus two additions: a **try-a-sentence box** (would have
+   caught the `api` over-block the day it was written) and an **over-blocking counter** so
+   a bad rule is found before it is ignored.
+5. **Watchman → a status strip**, always visible, not a tab.
+6. ⛔ **Draw only what the box can do** — no git gutter/source-control column: the api image
+   copies source, so there is no `.git` and no `git` binary (already known, §11a).
+
+⏳ **NOTHING BUILT. Every screen above is a mockup awaiting Izzy's pick.**
