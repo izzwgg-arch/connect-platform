@@ -71,6 +71,70 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the WhatsApp numbers are "Pending" because the review NEVER STARTED, and the Meta portfolio's legal name is wrong (2026-08-24) — READ FIRST for ANY "Meta/WhatsApp has been pending for days", before telling anyone to wait for Meta, and before clicking Start verification
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUTH_PROGRAM_2026-08-21.md` §7**
+(**Read-only investigation in Izzy's real Chrome — no Meta setting changed, no
+document uploaded, no verification submitted, no code, no deploy.**)
+Memory: [[whatsapp-numbers-pending-business-verification]].
+
+- ⛔⛔ **THE MECHANISM, AND IT INVERTS THE INTUITION — Meta's own words:
+  *"Your requested display name becomes eligible for review once your business
+  becomes eligible for higher messaging limits."***
+  (<https://www.facebook.com/business/help/338047025165344>) So the display-name
+  review is **not a queue Meta drains on its own schedule** — it does not ENTER
+  the queue until the business qualifies. WhatsApp Manager's Business Status
+  panel names the only two paths and reports both unmet: **"Verify your
+  business → Get Started"** (never started) and **"Send high-quality messages →
+  0 conversations started / 30d"**. **Nothing is being reviewed; waiting cannot
+  help.** ⛔ **Never answer this symptom with "give Meta a few more days"** —
+  read the Business Status panel and Security Center first (the latter shows
+  **"Eligible for verification" + a "Start verification" button**, i.e. never
+  submitted).
+- **Measured: TWO WABAs, TWO numbers, BOTH Pending, both added 2026-08-16**
+  (portfolio **Loopcom**, `business_id 1679921306977288`): **+1 845-723-1213**
+  (`loopcom`, WABA 1349133117379462) requested 1:11 PM ET, and **+1 845-557-7768**
+  (`Connect comunications`, WABA 1437420911538490) requested 11:37 AM ET. Each
+  activity log reads `Added` → `Updated Business Profile` → **`Name verification
+  requested`** inside one minute. **8 days, zero movement**, 0 messages sent.
+- ⛔ **BOTH ARE LIVE PRODUCTION SMS SENDERS** — (845) 723-1213 is the billing /
+  pay-link / 2FA / compliance sender and (845) 557-7768 is the agent-escalation
+  number, the Loopcom Direct verification sender and the admin shared SMS inbox.
+  WhatsApp registration does not remove SMS (separate transports), but **never
+  delete and re-add these numbers to "retry" a review.**
+- ⛔ **They were NOT waiting on an OTP** — both render the full tab set
+  (Insights / Profile / Automations / Message links / Two-step verification /
+  Call settings / Call logs), which an unverified number does not get, and the
+  Profile tab shows the display name with no "pending review" badge.
+- ⛔⛔ **AND SUBMITTING VERIFICATION TODAY WOULD BE REJECTED — the portfolio's
+  own details are wrong.** `Settings → Business info` reads **legal business name
+  `Connect comunications`** (misspelled, one `m`, and **not the legal entity**,
+  which is **`Loopcom LLC`**), **address `United States of America`** with no
+  street/city/state/ZIP, **no business phone**, **Primary Page: None**. Meta
+  matches documents against the portfolio's **name + address + phone
+  character-for-character**. **Fix Business info BEFORE clicking Start
+  verification** — a rejected verification is slower to unwind than getting it
+  right once.
+- ⛔ **This is exactly the systemic risk the platform-auth handoff's §0 flagged.**
+  It listed three spellings in circulation (`LoopCom, LLC` USAC, `loopcom llc.`
+  FCC FRN, `Loopcom` brand); **the Meta portfolio is a FOURTH, and it is the one
+  gating this.**
+- ✅ **Nothing is blocked on Loopcom code** (`apps/api` still has no WhatsApp
+  transport at all), and ✅ **he is not blocked from building** — Meta: *"You
+  don't need to complete a WhatsApp display name review or account checks to get
+  started... You can begin sending messages to customers immediately."* Pending
+  affects the **name customers see**, not API access.
+- **The fix, in order, all Izzy's:** (1) Business info → real legal name, street
+  address, phone; (2) Security Center → Start verification with matching
+  documents; (3) add a payment method (a standing alert reads *"Missing valid
+  payment method"*); (4) ⛔ **expect `Connect comunications` to be DECLINED even
+  after verification** — misspelled and unrelated to "Loopcom LLC"; settle the
+  customer-facing name first; (5) ⏳ **open question: why two WABAs at all?**
+- ⏳ **NOT PROVEN: nothing has been submitted, so no verification outcome exists.**
+  Acceptance is the "Verify your business" step turning green, then both numbers
+  moving off **Pending** — Meta says that lands 1–2 days after verification
+  completes.
+
 ## ⛔⛔ AGENT HANDOFF — Izzy is emailed on EVERY settled payment now (2026-08-23) — READ FIRST before adding ANY notification to a money or call event, before touching `paymentTransactionAlerts.ts`, or for "I got four emails for one payment" / "I got no email for that charge"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_PAYMENT_TRANSACTION_ALERTS_2026-08-23.md`**

@@ -431,3 +431,113 @@ gates** (BV → App Review → Access Verification), which cannot be parallelise
   turnaround, the Gmail per-scope classification, M365 Certification cost, and
   Meta's document recency window. ⛔ Meta's `facebook.com/business/help/*` pages
   are JS/login-gated and returned title-only; the Messenger changelog 500s.
+
+---
+
+## 7. UPDATE 2026-08-24 — THE WHATSAPP NUMBERS ARE "PENDING" BECAUSE THE REVIEW NEVER STARTED
+
+**Read-only investigation in Izzy's real Chrome. No Meta setting changed, no
+document uploaded, no verification submitted, no code, no deploy.**
+Izzy: *"I've applied for the WhatsApp number in Meta and it's been pending for
+days. Can we figure out why?"*
+
+### 7a. The mechanism — and it inverts the intuition
+
+⛔⛔ **Meta's own help article
+(<https://www.facebook.com/business/help/338047025165344>) states:**
+> *"Your requested display name becomes eligible for review once your business
+> becomes eligible for higher messaging limits."*
+
+So the display-name review is **not a queue Meta drains on its own schedule** —
+it does not ENTER the queue at all until the business qualifies for higher
+messaging limits. WhatsApp Manager's Business Status panel names the only two
+qualifying paths, and reports both as not met:
+
+1. **Verify your business** → button reads **"Get Started"** (never started)
+2. **Send high-quality messages** → **0 conversations started / 30d**
+
+⛔ **Therefore nothing is being reviewed and waiting cannot help.** Do not answer
+this symptom with "give Meta a few more days" — read the Business Status panel
+first. Security Center confirms the same from the other side: Business
+Verification shows **"Eligible for verification"** with a **"Start
+verification"** button, i.e. never submitted.
+
+### 7b. Measured state (portfolio Loopcom, business_id 1679921306977288)
+
+**TWO WABAs, TWO numbers, BOTH Pending, both created 2026-08-16:**
+
+| WABA | WABA ID | Number | Display name | Phone number ID | Name review requested |
+|---|---|---|---|---|---|
+| loopcom | 1349133117379462 | **+1 845-723-1213** | `loopcom` | 1287606197767864 | Aug 16, **1:11 PM** ET |
+| Connect comunications | 1437420911538490 | **+1 845-557-7768** | `Connect comunications` | 1282357178294967 | Aug 16, **11:37 AM** ET |
+
+Each activity log reads `Added` → `Updated Business Profile` →
+**`Name verification requested`**, all inside one minute. **8 days elapsed**,
+quality rating blank, 0 messages sent, 0 of 250 business-initiated conversations.
+
+⛔ **Both numbers are LIVE PRODUCTION SMS SENDERS.** (845) 723-1213 is the
+platform billing / pay-link / 2FA / compliance SMS sender
+(`BILLING_SMS_FROM_NUMBER`); (845) 557-7768 is the agent-escalation number, the
+Loopcom Direct verification sender, and the admin shared SMS inbox. WhatsApp
+registration does not remove SMS (separate transports) — but never delete and
+re-add these numbers casually to "retry" the review.
+
+⛔ **The numbers were NOT waiting on an OTP.** Both render the full tab set
+(Insights / Profile / Automations / Message links / Two-step verification / Call
+settings / Call logs), which an unverified number does not get. The Profile tab
+shows the display name with no "pending review" badge.
+
+### 7c. ⛔⛔ AND SUBMITTING VERIFICATION TODAY WOULD BE REJECTED — §0 IS NOW BITING
+
+`Settings → Business info` for the **Loopcom** portfolio reads:
+
+- **Legal business name: `Connect comunications`** — misspelled (one `m`) **and
+  not the legal entity**, which is **`Loopcom LLC`** (Izzy confirmed that
+  spelling 2026-08-23; FCC FRN 0038803722 carries "loopcom llc.", USAC carries
+  "LoopCom, LLC")
+- **Address: `United States of America`** — no street, city, state or ZIP
+- **Business phone: none**
+- **Primary Page: None**
+- Website: `https://connectcomunications.com/`
+- Business verification status: **Unverified**
+
+⛔ §0 of this handoff warned that Meta matches documents against the portfolio's
+**name + address + phone character-for-character**, and listed **three** spellings
+in circulation. **The Meta portfolio is a fourth — and it is the one gating
+this.** No incorporation document will say "Connect comunications" at an address
+of "United States of America".
+
+⛔ **Fix Business info BEFORE clicking Start verification.** A rejected
+verification costs more to unwind than getting it right once.
+
+### 7d. What is NOT the problem
+
+- ✅ **Nothing is blocked on Loopcom code.** `apps/api` still has no WhatsApp
+  transport at all (see `AGENT_HANDOFF_WHATSAPP_AUDIT_2026-08-16.md`); this is
+  entirely a Meta-side account problem.
+- ✅ **He is not blocked from building or testing.** Meta: *"You don't need to
+  complete a WhatsApp display name review or account checks to get started on
+  WhatsApp Business Platform. You can begin sending messages to customers
+  immediately."* Pending affects the **name customers see**, not API access.
+- ⚠️ A standing Overview alert reads *"Missing valid payment method — free tier
+  conversations can only be initiated by your customers."* Separate from the
+  review, but it blocks business-initiated messaging.
+
+### 7e. The fix, in order — all of it is Izzy's to do, none of it is code
+
+1. `Settings → Business info → Business details → Edit`: legal name matching the
+   LLC certificate exactly, real street address, business phone.
+2. `Settings → Security Center → Business Verification → Start verification`,
+   documents matching (1) character-for-character.
+3. Add a payment method.
+4. ⛔ **Expect `Connect comunications` to be DECLINED even after verification** —
+   it is misspelled and unrelated to "Loopcom LLC". Meta requires the display
+   name to be related to the business, or the relationship established on the
+   website listed in Business Manager. Settle the customer-facing name first.
+5. ⏳ **Open question: why two WABAs?** One portfolio, two accounts, two of our
+   own numbers. The second may simply be a duplicate worth deleting.
+
+⏳ **NOT PROVEN: nothing has been submitted, so no verification outcome exists.**
+The acceptance test is the Business Status panel's "Verify your business" step
+turning green, followed by the two numbers moving off **Pending** — Meta says
+that notification lands 1–2 days after verification completes.
