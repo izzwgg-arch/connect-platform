@@ -253,3 +253,49 @@ test("a declined card is flagged as the customer's problem, not filed as routine
   assert.equal(payment.beats.find((b) => b.text.startsWith("Paid:"))!.tone, "good");
   assert.equal(payment.seconds, 240, "reached 10:01, paid 10:05");
 });
+
+// ⛔ CAUGHT ON A REAL STORY, NOT A FIXTURE. inii mini's "Getting their phone
+// number" phase read **clean** while containing four VoIP.ms provisioning
+// errors, because the tone matcher had been written from the one sign-up that
+// happened to be open at the time. The phase flag is how an admin decides where
+// to look; labelling a phase full of failures "clean" is worse than no flag.
+test("a platform phase containing real failures can never read as clean", () => {
+  const realFailures = [
+    "VoIP.ms provisioning error: voipms addLNPPort failed: invalid",
+    "VoIP.ms provisioning error: voipms setSubAccount failed: provider_unreachable (timeout)",
+    "Port-in needs manual follow-up: voipms addLNPPort failed: invalid",
+    "Setup failed: number_stage_not_ready (error)",
+    'Watchdog resumed a stalled setup (stuck in "failed" for 15 min) — attempt 1 of 5.',
+    "Could not make 9298524026 the trunk's default 911 number (voipms setSubAccount failed) — the number itself IS registered.",
+    "911 could NOT be registered for 8455577194 — the sign-up is missing an address.",
+    "911 was TURNED OFF on 9298524026 at the owner's instruction — this line cannot reach emergency services.",
+  ];
+  for (const message of realFailures) {
+    const story = buildJourneyStory(
+      [{ type: "STATUS_CHANGED", message, createdAt: t("10:00:00") }],
+      {},
+    );
+    assert.equal(story.platform.length, 1, `not filed at all: ${message}`);
+    const phase = story.platform[0];
+    assert.notEqual(phase.flag, "clean", `a phase holding "${message.slice(0, 50)}…" reported CLEAN`);
+    assert.equal(phase.beats[0].tone, "warn", `not flagged: ${message.slice(0, 60)}`);
+  }
+});
+
+test("...but ordinary progress and deliberate skips are not cried wolf over", () => {
+  const fine = [
+    "PBX build: trunk ok (id 130)",
+    "DID 8452605692 routed to 344022_iniimi92gh2m.",
+    "SMS enabled on 9298524026.",
+    "Number stage ready — 9298524026 on 344022_apluscep3wlb.",
+    "Setup complete — tenant \"inii mini\" is live with 1 extension(s).",
+    "Sent 1 invitation email(s).",
+    "Billing stamp deliberately SKIPPED — free account per Izzy (no invoice created).",
+    "Subaccount 344022_iniimi92gh2m already existed — password rotated.",
+    "Temporary number 8452605692 retired — routed back to the master account (spare pool).",
+  ];
+  for (const message of fine) {
+    const story = buildJourneyStory([{ type: "STATUS_CHANGED", message, createdAt: t("10:00:00") }], {});
+    assert.equal(story.platform[0].beats[0].tone !== "warn", true, `false alarm on: ${message.slice(0, 60)}`);
+  }
+});

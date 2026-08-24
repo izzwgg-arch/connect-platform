@@ -179,9 +179,24 @@ function platformPhaseFor(msg: string): string {
   return PLATFORM_OTHER_PHASE;
 }
 
+/**
+ * ⛔ A PHASE THAT CONTAINS FAILURES MUST NOT BE LABELLED "clean" — caught by
+ * reading a real story on production. inii mini's "Getting their phone number"
+ * read **clean** while holding four `VoIP.ms provisioning error:` lines,
+ * because the first version of this matched only the message families that
+ * happened to appear in the ONE sign-up it was written from. The phase flag is
+ * how an admin decides where to look; getting it wrong is worse than showing no
+ * flag at all.
+ *
+ * Matched on the WORDS a failure uses rather than on a prefix list, so a new
+ * error message is flagged the day it first appears. ⛔ "skipped" is
+ * deliberately NOT a failure word — several skips here are intentional (the
+ * free-account billing stamp, a bill attachment we chose not to re-send).
+ */
+const PLATFORM_TROUBLE = /\b(failed|error|errors)\b|could not|cannot reach emergency|turned off|needs manual follow-up|^watchdog |^retry|declined/i;
+
 function toneForPlatform(msg: string): BeatTone {
-  if (/^(Could not|Setup failed|Watchdog |Card declined|The card was declined|.*TURNED OFF)/i.test(msg)) return "warn";
-  if (/(cannot reach emergency|was TURNED OFF)/i.test(msg)) return "warn";
+  if (PLATFORM_TROUBLE.test(msg)) return "warn";
   if (/^(Setup complete|Paid:|Sent \d+ invitation|All \d+ extension)/i.test(msg)) return "good";
   return "plain";
 }
