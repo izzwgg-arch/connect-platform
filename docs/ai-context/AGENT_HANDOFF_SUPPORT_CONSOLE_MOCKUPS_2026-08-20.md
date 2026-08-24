@@ -679,3 +679,154 @@ escalation desk is the only one carrying weekly work.
    copies source, so there is no `.git` and no `git` binary (already known, §11a).
 
 ⏳ **NOTHING BUILT. Every screen above is a mockup awaiting Izzy's pick.**
+
+## §14 THE REDESIGN IS BUILT AND DEPLOYED (2026-08-24, `f698d7c6`)
+
+Izzy: *"build it. Do it exactly like the mockup on the dot. Make sure everything,
+every feature the IDE needs, should be there, even a browser, so the agent can
+see what things look like."*
+
+✅ **api + portal DEPLOYED and container-verified; agent REBUILT and
+container-verified.** api `.build-commit` = **`f698d7c6`**; portal
+`.build-commit` = **`d39cad7f`**, which ⛔ is NOT this commit and is NOT a
+failure — another session pushed a docs commit on top while the portal built,
+and `git merge-base --is-ancestor f698d7c6 d39cad7f` confirms this work is
+inside it. **Judge by `.build-commit` plus a bundle STRING grep, never the
+deploy log's last line** (documented trap, hit again here).
+No migration, no PBX write, no env change, no tenant row.
+
+### §14a What shipped
+
+- **Five tabs → three** (`page.tsx`): **Desk**, **Workbench**, **Ground rules**.
+  The desk is what opens.
+- ⛔⛔ **THE INBOX IS DELETED, AND THE SCOPE MOVED INTO THE SCHEMA.**
+  `GET /admin/support/threads` now **requires `tenantId`**, so there is no
+  request that returns the platform — hiding a browse surface in the UI leaves
+  it one curl away. `caseRef` is optional and unvalidated **on purpose**: it is
+  provenance for the audit row, not permission, and making it mandatory tempts a
+  caller to invent one — a fabricated reason in an audit trail is worse than an
+  honest blank. Every open writes `support.customer_threads_opened`.
+  The reader is `SupportThreads.tsx`, reachable only from a case, and it says on
+  screen that the open was recorded.
+- **The Assistant tab is gone** (0 take-overs ever). Take-over was already a
+  button in the composer; watching every conversation moved to a header button.
+- **The Watchman is a strip**, in view while you work, instead of a tab.
+- **`SupportEscalationChats.tsx` → `SupportDesk.tsx`, EVOLVED not rewritten.**
+  The list → detail → take-over → approve chain was already proven against real
+  escalations; rewriting a working call path to add chrome is how a redesign
+  breaks the one thing that worked.
+
+### §14b The agent has hands — and shares the human's gates
+
+`apps/agent/src/tools/workbenchTools.ts` + `pbx/workbenchClient.ts`, wired into
+`chatTools`. Four tools, **all `minRole: "staff"`**: `read_file`, `list_files`,
+`run_command`, `browse`. ⛔ **No new dependency and no new key** — the agentic
+loop (`completeWithTools`) and both API keys already existed.
+
+⛔⛔ **THE AGENT'S DOOR IS REGISTERED INSIDE `registerSupportConsoleRoutes`'
+CLOSURE, AND THAT IS THE WHOLE DESIGN.** `POST /internal/agent/workbench` uses
+the *same* `decideCommandRun`, `currentRules()`, `watchmanNow()` and workspace
+root the human routes use. A module of its own would be a second gate
+implementation, and the day those drift the agent is running under rules nobody
+wrote down. **Auth is the only difference** (shared secret, fail-closed) — and
+⛔ the path is in `jwtPublicRouteBypass.ts`, without which the global JWT hook
+401s it before its own check runs (a 403 means you reached the handler).
+
+⛔ **The agent cannot pass `confirmed`.** A person may confirm an ask-first
+command because a person is accountable for it; the agent cannot confirm on its
+own behalf, so an ask-first verdict is a **refusal** that sends it back to the
+human in the dock. A source guard pins `confirmed: false`.
+
+### §14c The browser — two halves, honestly different
+
+- **A person gets pixels**: a same-origin `<iframe>` in the Workbench, with an
+  address bar, reload, and phone/tablet/desktop widths. It renders only because
+  nginx sends `X-Frame-Options: SAMEORIGIN` and the CSP allows `frame-src 'self'`.
+- **The agent gets the page**: `apps/api/src/supportBrowser.ts` returns status,
+  timing, title, headings, visible text, links, forms and scripts. Both are on
+  one screen so the person and the agent cannot describe different pages to each
+  other.
+- ⛔⛔ **IT DOES NOT SCREENSHOT, and the honest reason matters:** `app-api-1`
+  has **no chromium** (checked with `command -v`, not assumed), and puppeteer
+  pulls ~170 MB into an image every api deploy rebuilds. **Never describe this
+  tool as seeing a page's appearance** — it reads a page's content, and a model
+  told otherwise will act on it.
+- ⛔ **`clientRendered` is a real finding, proven live:** `/login` came back
+  200 / 5,288 bytes / 14 scripts / **no title**, and the tool labels it a shell
+  rather than reporting a blank page. That is the documented curl-and-grep trap
+  turned into a fact the model is handed.
+
+⛔⛔ **THE SSRF FENCE IS THE POINT OF THAT FILE.** `app-api-1` sits beside
+Postgres, Redis and the PBX credential. Host allowlist **derived from
+`PLATFORM_PORTAL_HOSTS`** (never re-typed — `publicOrigins.test.ts` enforces
+that no other file names a hostname, and it caught this one); http/https only;
+**no credentials ever**; redirects followed by hand with **every hop
+re-validated**. ⛔ **`api:3001` is deliberately ABSENT and must stay absent** —
+a fetch tool that reaches the api's own origin from inside the network is a
+confused deputy waiting for a model to be talked into it. Reaching the api
+through the *public* hostname is fine, because that path enforces JWTs and the
+nginx `/api/internal/` deny.
+
+### §14d Three documented traps, all hit again while building this
+
+1. ⛔ **A `.sd-watch` CLASS COLLISION.** The Ground rules page already had
+   `.sd-watch` and `.sd-watch-item`; my strip's rules sorted later and would
+   have silently turned its 3-column card grid into inline rows. Renamed to
+   `.sd-wstrip-*`. **Sweep new class names against the stylesheet before
+   wiring** — this is the `.sd-wb-out` incident in a new costume.
+2. ⛔⛔ **A WHOLE CSS BLOCK WRITTEN AGAINST A VARIABLE NAMESPACE THAT DOES NOT
+   EXIST.** I wrote the browser's styles against `--ide-bg`/`--ide-ink`/…;
+   `workbenchIde.css` actually declares `--edit`/`--ink`/`--acc`/…. **Zero of my
+   var() names resolved**, which paints an invisible panel and reads exactly
+   like a failed deploy. Caught by a scripted declared-vs-used diff, now a
+   permanent test (`⛔⛔ every --var the IDE stylesheet uses is DECLARED in it`).
+3. ⛔ **A FAKE DB THAT IGNORED THE WHERE-CLAUSE UNDER TEST.**
+   `inboxDb.connectChatThread.findMany` honoured `where.type` and dropped
+   `where.tenantId` — so the scoping test would have proven nothing. Same shape
+   as the service-interruption sweep that passed 102 tests against a query
+   Prisma was rejecting.
+
+### §14e Proven live on production, not by the deploy log
+
+Five gate probes inside `app-api-1`: **no secret → 403**, **wrong secret → 403**,
+**real secret → lists the real repo**, **`http://169.254.169.254/…` → refused**,
+**`.env.platform` → `refused_secrets`**. Then the real work: **browse
+`https://app.loopcom.net/login` → 200 in 84 ms**, and **`wc -l
+apps/api/src/supportBrowser.ts` → 345, exit 0** — ⛔ note that is the exact
+command shape the "api" over-block used to refuse, so the `00a5c8a0` fix holds.
+Portal: my strings in the server AND client chunks, **the old Inbox string
+greps 0**, 0 restarts, 200 on both hostnames. Agent: `workbenchTools.ts` in the
+container, `buildWorkbenchTools` ×2 in its `server.ts`, 0 restarts, 0 error
+lines, and ⛔ **both mounts are named VOLUMES, not source bind mounts**, so the
+code really is the image's.
+
+Tests: **18** browser + **8** agent tools + **12** portal structure + **8** new
+agent-door cases; the two existing guards updated **deliberately** (the
+write-surface guard learned the agent door; the "threads across companies" test
+now asserts the opposite). **All source guards fail replayed against `HEAD`.**
+Typechecks: portal **0**, api **76 = the exact baseline**, agent **14 = the
+exact baseline**, none in an edited file. Suites: portal 350/352, agent 793/795,
+api `src/*` 1259/1267 — every failure the documented pre-existing set.
+
+### §14f ⏳ NOT PROVEN, and what to check first
+
+**Nobody has opened any of it in a browser.** Everything above is deployed code,
+live route probes and tests. **Acceptance, in order:**
+1. Open `/admin/support` → the Desk opens on the cases, with the Watchman strip
+   green across the top.
+2. Open a case → **"Open their conversations"** in the customer panel → the
+   header must name the case and say the open was recorded.
+3. Workbench → the **🌐** icon → the login page renders in the iframe AND the
+   strip beneath reads 200 with its timing.
+4. Ask the dock *"read apps/api/src/supportBrowser.ts and tell me what it
+   refuses"* — it should actually read the file. **This is the one that proves
+   the whole engagement**, and it is the only step that needs the agent.
+5. ⛔ **The negatives that matter most:** the Ground rules page must still look
+   right (the class collision), and a `TENANT_ADMIN` must still get 403.
+⛔ An already-open portal tab or the desktop app keeps the OLD bundle until
+reloaded.
+
+⏳ **Still deliberately unbuilt:** edits and diffs (every workbench door is
+read-only, and code ships only through the deploy queue), the Claude Agent SDK
+(option B — the streaming-edit "movie" and the permission pauses need it), and
+the support-staff accounts + per-feature permission keys.
