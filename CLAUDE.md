@@ -158,6 +158,71 @@ exactly, exactly, exactly like the mock-ups."*
   and reproduced the analysis exactly, and **every route was probed live**:
   SUPER_ADMIN 200 / USER 403 / no token 401 / unknown submission 404, with
   `email-check` correctly reporting `izzywgg@gmail.com` as taken.
+- ⛔⛔ **STRESS-TESTED 2026-08-24 (`d937a36e` + `43fc907c`, api DEPLOYED) AND IT
+  FOUND FOUR REAL DEFECTS — ALL FOUR ARE THE SAME SHAPE: A RULE WRITTEN FROM ONE
+  EXAMPLE, APPLIED TO A POPULATION IT HAD NEVER SEEN.** Handoff §10.
+  **(1) OUR OWN FAILURES WERE BLAMED ON THE CUSTOMER.** The lane rule was
+  INVERTED: a prefix allowlist decided what counted as "platform" and anything
+  unmatched was attributed to the CUSTOMER. Replaying all 23 real sign-ups
+  showed **23 distinct lines WE wrote sitting in the customer's own steps** —
+  the whole porting family, every VoIP.ms error, tenant linking, the bill they
+  uploaded. inii mini's story literally read *"Port-in needs manual follow-up:
+  addLNPPort failed"* as something the customer did on the Payment step. The
+  allowlist had been built from ONE sign-up's events (TYH). ✅ Customer beats
+  are recognised **positively** now (journeyTracking.ts writes exactly those
+  shapes) and **everything else defaults to the platform lane, which is true by
+  construction** — a new beacon lands in the wrong lane, visible and harmless,
+  where the old default quietly blamed a customer for our porting failure.
+  ⛔ Failures stay **with their phase**, never swept into a separate bucket.
+  **(2) THE ROUTES VALIDATED NOTHING** — measured by fuzzing the live handler:
+  `{email:{}}` stored the literal `"[object Object]"`, `{email:123}` became
+  `"123"`, `"a@b"` passed (`includes("@")` was the whole check), a
+  **50,000-character company name** went into the DB and into an email, a 5 KB
+  address was accepted, `{companyName:{toString:"x"}}` **500'd**, and
+  `a@b.com\r\nBcc: victim@example.com` was **stored verbatim in `toEmail`**.
+  ⛔ That last is NOT safe merely because nodemailer flattens CR/LF — a mail
+  header must not depend on a downstream library to be well formed. All
+  SUPER_ADMIN-only, so unreachable by a customer; fixed with a zod schema
+  mirroring `createPublicLinkSchema`.
+  **(3) ONE BAD DATE 500'd THE WHOLE LIST** — `shortDate`/`gapWords`/`agoWords`
+  asserted non-null on a parsed date and run while building EVERY row, so one
+  unreadable value made 22 healthy invitations unreachable. They fail soft now.
+  **(4) A PHASE FULL OF FAILURES READ "clean"** — found by reading a real story
+  on production AFTER deploying (1): inii mini's number phase reported clean
+  while holding four `VoIP.ms provisioning error` lines, because the tone
+  matcher was the same one-example prefix list. Matched on the WORDS a failure
+  uses now. ⛔ `skipped` is deliberately not a failure word.
+- ⛔ **Two of MY OWN assertions were wrong, both already-documented shapes:**
+  *"the html contains no `<img>`"* fails on the email shell's own **logo** (and
+  an escaped `&lt;img … onerror=…&gt;` still contains `onerror=` harmlessly) —
+  **count tags against a benign baseline**; and `/color: var\(--warning\)/`
+  matches the tail of **`border-color`**, which is correct usage — it reported
+  14 false failures before it grew a lookbehind.
+- ⛔⛔ **THE CONTROL-CHARACTER TRAP BIT FOUR MORE TIMES IN ONE SESSION.** A NUL
+  or `\r\n` written through a shell heredoc lands as a REAL byte and **git then
+  treats the whole source file as binary — no diff, no review, ever.** It hit
+  `journeyPatterns.ts` (a NUL map-key separator), both stress files (`"\0nul"`
+  as test data) and `invitationRoutes.ts` twice (a regex character class, and a
+  `\r\n` inside a doc comment). **Write anything containing escapes through the
+  editor, never a heredoc.** Test data may legitimately contain a NUL — write it
+  `" nul"` so the string still holds one and the file stays text.
+  ⛔ **And the obvious scan is wrong twice over:** counting `c < 9` **misses CR
+  (13) entirely**, while counting CR flags every normal CRLF line ending in this
+  repo. Strip `\r\n` first, then look.
+- ✅ **The suite is 74 tests across 5 files**, incl. **7,680 exhaustive**
+  row-state combinations, **400 seeded random** event streams, 20k-event
+  aggregates, ReDoS probes at 5,000 chars, **30 concurrent creates / 25
+  concurrent resends**, an **RFC4180 CSV reader** proving a hostile search box
+  cannot break the export, and every hostile body through **real Fastify**.
+  **The route fuzz FAILS replayed against the pre-validation handler.**
+  ✅ **And the shipped modules were re-run inside `app-api-1` over all 23 real
+  sign-ups / 486 real events** asserting every invariant: before, one flagged
+  failure and 23 misclassified shapes; after, **"no invariant broken on any real
+  sign-up"**. Every fix was then **re-verified live on production** — all six
+  hostile bodies now answer 400 in plain English (including the CRLF injection
+  and the former 500), the porting failure sits in the platform lane, and the
+  count is still 23, so no refusal created anything.
+
 - ⏳ **NOT PROVEN: nobody has opened the screens and NO INVITATION HAS EVER BEEN
   SENT TO A HUMAN.** Acceptance in §8 of the handoff — and **the negatives that
   matter most: Resend must NOT create a second row**, and an ordinary login must

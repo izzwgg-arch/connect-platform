@@ -278,3 +278,160 @@ Izzy chose "exactly like the mock-ups", and the mock-up does not draw these:
   single addition: we currently cannot tell whether the number step is painful
   for everyone or only on a phone.
 - **An automatic reminder** if a link goes unopened.
+
+---
+
+## 10. Stress test (2026-08-24, Izzy: *"Stress test the fuck out of it"*)
+
+Commit `d937a36e`. **Three real defects, none of which review or the green suite
+had found**, plus two of my own assertions that were wrong.
+
+### ⛔⛔ The threat model, which is sharper than it looks
+
+`POST /onboarding/:token/track` is a **PUBLIC** route — it is the customer's own
+wizard reporting what they did — and `publicTrackSchema` bounds only the LENGTH
+of what it accepts (`step` 60, `detail` 300). So the **text inside these events
+is arbitrary and attacker-controlled** by anyone holding a sign-up link, and it
+flows into the story an admin reads, the CSV an admin opens in Excel, and the
+patterns screen.
+
+### Defect 1 — ⛔⛔ our own failures were being blamed on the customer
+
+The lane rule was **inverted**: a prefix allowlist decided what counted as
+"platform", and anything unmatched was attributed to the **CUSTOMER**.
+
+Replaying all 23 real sign-ups showed **23 distinct lines WE wrote sitting in the
+customer's own steps** — the entire porting family, every VoIP.ms error, tenant
+linking, even the bill they uploaded. inii mini's story literally read
+**"Port-in needs manual follow-up: addLNPPort failed"** as something the customer
+did on the Payment step.
+
+⛔ **The cause is the lesson: the allowlist had been built from ONE sign-up's
+events (TYH) and could only ever describe that one.**
+
+✅ Customer beats are now recognised **positively** — `journeyTracking.ts` writes
+exactly those shapes and nothing else does — and everything else defaults to the
+platform lane, which is true by construction. **The direction of that default is
+the whole point**: a beacon added later lands in the wrong lane, which is
+visible and harmless; the old default quietly blamed a customer for our porting
+failure. ⛔ Provisioning failures also stay **with their phase** now rather than
+being swept into a separate "problems" bucket three phases from their context —
+"Could not make X the default 911 number" *is* the interesting part of getting
+their number.
+
+### Defect 2 — ⛔ the routes validated nothing
+
+Fuzzing the real endpoint through Fastify, measured not theorised:
+
+| body | what it did |
+|---|---|
+| `{email:{}}` | stored the literal `"[object Object]"` |
+| `{email:123}` / `{email:true}` | coerced to `"123"` / `"true"` |
+| `{email:"@"}` / `{email:"a@b"}` | accepted — `includes("@")` was the whole check |
+| `{companyName:"x".repeat(50000)}` | 50,000 characters into the DB **and into an email** |
+| `{email:"a".repeat(5000)+"@b.com"}` | a 5 KB address accepted |
+| `{companyName:{toString:"x"}}` | **500** — `String()` throws on an object whose `toString` is not a function |
+| `{email:"a@b.com\r\nBcc: victim@example.com"}` | **stored verbatim in `toEmail`** |
+
+⛔ **That last one is NOT safe merely because nodemailer happens to flatten
+CR/LF** — a mail header must not depend on a downstream library to be well
+formed. All of it was SUPER_ADMIN-only, so none was reachable by a customer; it
+is hygiene on the one screen that creates customer records and sends the first
+email a customer ever sees. ✅ Now a zod schema mirroring the existing
+`createPublicLinkSchema`, refusing in plain English rather than dumping zod.
+
+### Defect 3 — ⛔ one bad date took out the whole screen
+
+`shortDate` / `gapWords` / `agoWords` asserted non-null on a parsed date
+(`d(v)!`), and they run while building **every** row — so a single unreadable
+value threw out of `buildInvitationRow` and **500'd the entire list**, making
+twenty-two healthy invitations unreachable. They fail soft now: one row reading
+*"an unknown date"* beats a blank page.
+
+### Defect 4 — ⛔ a phase full of failures was labelled "clean"
+
+Found by **reading a real story on production after deploying the lane fix**:
+inii mini's "Getting their phone number" reported **clean** while holding four
+`VoIP.ms provisioning error: …` lines.
+
+⛔ **Same root cause as defect 1, one layer along**: the tone matcher was a
+prefix list written from the one sign-up that happened to be open, so it knew
+`Could not` / `Setup failed` / `Watchdog ` and nothing else. It is matched on
+the **words a failure uses** now (failed / error / could not / turned off /
+needs manual follow-up / declined), so a message nobody has seen is flagged the
+first time it appears. ⛔ `skipped` is deliberately NOT a failure word — several
+skips here are intentional (the free-account billing stamp, a bill attachment).
+
+**The phase flag is how an admin decides where to look, so getting it wrong is
+worse than showing no flag at all.** Two tests pin it, both built from the real
+production message families: eight real failures that must never read clean, and
+nine ordinary progress lines that must never cry wolf.
+
+### ⛔ The pattern across all four defects
+
+Every one is the same shape: **a rule written from a single example, applied to
+a population it had never seen.** The lane allowlist, the tone matcher, the
+missing body validation and the non-null date assertion were all correct for the
+sign-up in front of me and wrong for the other twenty-two.
+
+**Replaying the real population is what found them — not review, and not a green
+suite.** The suite was green for all four.
+
+### ⛔ Two of MY OWN assertions were wrong, both documented shapes
+
+- **"the html contains no `<img>`"** fails on the shell's own **logo**, and an
+  escaped `&lt;img … onerror=…&gt;` still contains the substring `onerror=`
+  while being harmless text. **Count tags against a benign baseline** instead.
+- **`/color: var\(--warning\)/`** matches the tail of **`border-color`**, which
+  is correct usage — borders and fills are exactly where a display colour
+  belongs. Needed a lookbehind; it reported 14 false failures first.
+
+### ⛔ The control-character trap bit FOUR more times
+
+A literal NUL or CR/LF written through a shell heredoc lands in the file as a
+real byte, and **git then treats the whole source file as binary — no diff, no
+review, ever.** It hit `journeyPatterns.ts` (a NUL map-key separator), both
+stress files (`"\0nul"` as test data), and `invitationRoutes.ts` twice (a regex
+character class, and a `\r\n` inside a doc comment).
+
+⛔ **Write anything containing escapes through the editor, not a heredoc.** Test
+data may legitimately contain a NUL — write it `" nul"` so the string still
+holds one and the file stays text. ⛔ And a naive control-char scan that counts
+`c < 9` **misses CR (13) entirely**; a scan that counts CR flags every CRLF line
+ending in this repo. Strip `\r\n` first, then look.
+
+### What the stress suite actually does
+
+**72 tests across 5 files.** `onboardingInvitations.stress.test.ts` (13) and
+`invitationRoutes.stress.test.ts` (12) are the new ones:
+
+- **7,680 exhaustive** row-state combinations — every status × 4 opened times ×
+  4 activity times × 4 paid times × 4 emails × 3 names — asserting no crash, no
+  leaked enum, no `NaN`/`Invalid Date`, no resend offered where it cannot work,
+  and **no false "nobody has ever opened it"**.
+- **400 seeded random event streams** (out of order, duplicate timestamps,
+  hostile payloads) with every invariant re-checked; the seed is in the failure
+  message, so any failure is reproducible.
+- **~280 hostile strings** through every beacon shape; **ReDoS** probes at 5,000
+  characters; **5,000-event** and **20,000-event** runs for time and loss.
+- **The median brute-forced** against a naive implementation over 300 rounds.
+- **30 concurrent creates** (30 distinct tokens) and **25 concurrent resends**
+  (one token, one sign-up, one link).
+- **An RFC4180 CSV reader** proving every exported record still parses to
+  exactly three fields when the customer's search box contained quotes, commas
+  and newlines.
+- Every hostile body through **real Fastify**, and every route refusing a
+  non-super-admin.
+
+### Proof it is not decorative
+
+- **The route fuzz FAILS replayed against the pre-validation handler** and
+  passes after — the one test, nothing else moving.
+- ✅ **The shipped modules were re-run inside `app-api-1` over all 23 real
+  sign-ups and 486 real events**, asserting every invariant on each. Before the
+  fix: one flagged failure (inii mini's porting line in the customer lane) and
+  23 misclassified message shapes. After: **"OK — no invariant broken on any
+  real sign-up"**, and the only line left in the customer lane that is not
+  beacon-shaped is `uploaded Invoice_14945-2026-08-01.pdf`, which belongs there.
+- api typecheck **76 = the exact baseline**, 0 in an edited file; portal
+  **338/340** (the two documented pre-existing).
