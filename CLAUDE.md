@@ -4409,6 +4409,49 @@ and make sure the email stays in one thread … one thread per phone number."*
   text":**
   `select count(*) from "ConnectChatMessage" where direction='INBOUND' and "emailForwardedAt" is null and "createdAt" between now() - interval '24 hours' and now() - interval '5 minutes';`
   — anything above 0 is a text nobody was told about.
+- ⛔⛔ **LOAD-STRESSING THE FORWARD HALF (2026-08-24, `b5d6a2b1`) FOUND TWO MORE
+  REAL DEFECTS — BOTH IN WHAT HAPPENS AFTER THE EMAIL HAS GONE OUT.**
+  **(1) `stamp()` SWALLOWED ITS OWN ERRORS, AND AN UNSTAMPED ROW IS RE-SELECTED
+  ON EVERY PASS — so ONE failed database write emailed the SAME text once per
+  pass until it aged out: UP TO 60 COPIES of one text** at a 30 s poll across the
+  30-minute window. Measured across a full simulated window, not theorised.
+  ⛔ The stamp being written AFTER the send is deliberate and STAYS (a crash must
+  duplicate, never lose); what was missing is that the retry must retry the
+  **STAMP**, not the send. `emailedThisProcess` (pruned to one window of
+  throughput) does that: **60 passes → 1 email**, and the failure is audited as
+  `sms.email_stamp_failed` instead of vanishing.
+  **(2) A REFUSED SMTP SEND RETURNED SILENTLY** — `if (!res.sent) return false;`
+  with no stamp, no audit and no log line. With the fresh window that means **an
+  SMTP outage longer than 30 minutes loses every text's email PERMANENTLY**, and
+  the only trace is `emailForwardedAt` staying null. Now `sms.email_send_failed`
+  once per **PASS** — ⛔ never per message, or an outage writes ~960 audit rows an
+  hour.
+- ⛔⛔ **THE THROUGHPUT CEILING, MEASURED AND NOW WRITTEN DOWN: 480 texts per
+  30-minute window** (`MAX_BATCH` 8 × 60 passes at the 30 s poll). A burst past
+  that **ages out of the fresh window and is never emailed AND never stamped** —
+  silently. **Nothing alerts on it**; the detector is the unstamped-count query
+  above. Real volume is ~13/day so this is headroom, not a live problem — but it
+  is a cliff, not a slope, and it is the shape a marketing blast or an SMS flood
+  would hit. ⚠️ **Closer than it looks: 400 skipped (no-recipient) texts queued
+  ahead of 20 real ones take 53 passes ≈ 26 minutes to clear**, against that same
+  30-minute window. Skipped rows only fail to block because they ARE stamped —
+  the 2026-08-18 voicemail head-of-line bug was exactly this shape with the stamp
+  missing. ⛔ **Never add a skip path to this job that does not stamp.**
+- ✅ **Other shapes measured and healthy:** 200 participants + case-variant
+  duplicates + blank/null/malformed addresses → **201 unique recipients, ONE
+  email**; 40 × 10,000-character texts → the email caps at **90 KB** (the
+  8-message context window bounds it); overlapping passes never double-send (the
+  `running` guard holds); one poisoned row never kills its batch; processing is
+  strictly oldest-first. ✅ Message times render **America/New_York** because the
+  agent container sets `TZ` — **checked, not assumed**. ⛔ That is a latent
+  dependency: with `TZ` unset every bubble would silently show UTC to every
+  customer.
+- ✅ **Forward-half coverage is now 26 tests** — 14 content
+  (`smsEmailForward.stress.test.ts`) + 12 load/failure
+  (`smsEmailForwardLoad.stress.test.ts`). Both proven non-vacuous by mutation:
+  removing the dedupe guard, the outage audit, the re-entrancy guard, the subject
+  sanitiser, the body escaping or the backlog guard each fails exactly the
+  matching invariant.
 - ⏳ **STILL NOT PROVEN: no CUSTOMER has replied since the fix.** It is proven by
   the four routes above — including a real SMS — but not by a person in their own
   mail client. **Acceptance: one reply to any text-email, then**
