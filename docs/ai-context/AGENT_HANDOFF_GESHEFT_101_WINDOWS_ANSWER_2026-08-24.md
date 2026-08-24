@@ -349,3 +349,144 @@ and it says the problem is still there. **This is exactly why §6 step 2 (the pe
 grant) is not optional: it is the only thing that would make the silent mode visible**,
 because `call-quality-report` is posted on `ended` with an `endReason`, which WOULD
 capture a ring that terminated without ever connecting.
+
+---
+
+## 10. THE FIX — a device reporting its own trouble no longer needs an admin permission
+
+Izzy, 2026-08-24: *"So those errors that were lost, how can we prevent that from happening
+again?"* and *"if it's granting that permission granted for everybody by default adjust in
+the backend. Don't let him see it in the sidebar or anything."*
+
+Commit `3385e70c`, `apps/api` only. Deploy state at the end of this section.
+
+### ⛔⛔ Granting the permission was NOT the way to do it
+
+`can_view_pbx_sbc_connectivity` is the key behind the **"SBC Connectivity" sidebar item**
+(`navConfig.ts:128`, `portalPermissions.ts:41`). Granting it to everybody would have
+(a) put a new nav entry in every customer's sidebar — the exact thing Izzy ruled out — and
+(b) unlocked the three **admin READ** routes under the same prefix
+(`/voice/diag/sessions`, `/voice/diag/sessions/:id/events`, `/voice/diag/recent-errors`),
+i.e. reading other people's diagnostic sessions. A guard test records this so nobody
+"simplifies" the fix into a blanket grant later.
+
+### What shipped instead: invert the default under /voice/diag
+
+The prefix splits perfectly by method — **all 7 POSTs are client self-reports, all 3 GETs
+are admin views**:
+
+| method | route | what it is |
+|---|---|---|
+| POST | `session/start`, `session/heartbeat`, `event` | this device's own session |
+| POST | `call-quality-report`, `call-quality-ping`, `call-quality-ping/clear` | this device's own call |
+| POST | `webrtc-sdp-debug` | this device's own failure blackbox |
+| GET | `sessions`, `sessions/:id/events`, `recent-errors` | **admin, cross-user** |
+
+`PortalApiPermissionRule.permission` now accepts `null` (= authenticated only, no
+permission check — `portalApiPermissionForPath` already returned `null` for "no rule", and
+the preHandler already skips the check on `null`). The rules became:
+
+```js
+{ prefix: "/voice/diag",               permission: null },
+{ prefix: "/voice/diag/sessions",      permission: "can_view_pbx_sbc_connectivity" },
+{ prefix: "/voice/diag/recent-errors", permission: "can_view_pbx_sbc_connectivity" },
+```
+
+⛔ **`portalApiPermissionForPath` sorts by prefix length descending and takes the LONGEST
+match**, so the two named read paths override the open default. `/voice/diag/sessions`
+also covers `sessions/:id/events` by prefix.
+
+⛔⛔ **The default is OPEN and the reads are locked BY NAME — that direction is
+deliberate.** An allowlist of the seven write paths would have reintroduced this exact bug
+the next time somebody adds a self-report route: it would silently start 403ing and we
+would lose telemetry again without noticing. Inverting it means the failure mode moves to
+"a new READ route is exposed", which the guard test catches at build time instead.
+
+### Why dropping the permission is safe — traced, not assumed
+
+All seven writes call `getUser(req)` and scope to the token:
+
+- `session/start` → `mobileDevice.findFirst({ id: input.deviceId, tenantId: user.tenantId, userId: user.sub })`
+- `session/heartbeat`, `event` → `voiceClientSession.findFirst({ id: input.sessionId, tenantId: user.tenantId, userId: user.sub })`
+- `call-quality-report` (30/h), `webrtc-sdp-debug` (60/h), `call-quality-ping` (12/min) → rate-limited per `user.sub`
+- `call-quality-ping/clear` → `liveCallStore.delete(user.sub)`
+
+**None accepts a `userId` or `tenantId` from the body**, so "authenticated" is the correct
+gate and nothing new is exposed. A guard asserts that too — if one of these ever declares
+`userId`/`tenantId` in its body schema it becomes a cross-tenant write, and the test fails.
+
+### The guard: `apps/api/src/voiceDiagSelfReport.test.ts`
+
+7 tests, picked up by the existing `src/*.test.ts` glob (no registration needed). It reads
+`server.ts`, parses the rules table, mirrors the longest-prefix resolver, and asserts:
+every POST under `/voice/diag` resolves to `null`; **every GET resolves to a non-null
+permission**; the two read paths are pinned to `can_view_pbx_sbc_connectivity`; no write
+takes identity from the body; and that the SBC nav item still exists (so the
+"just grant it" shortcut stays visibly wrong).
+
+✅ **Proven non-vacuous: 2 of 7 FAIL replayed against `HEAD`** via
+`VOICE_DIAG_GUARD_SERVER=<HEAD copy of server.ts>`.
+
+⛔⛔ **Two authoring traps hit while writing it, both already in CLAUDE.md and both hit
+anyway:**
+1. **A block-comment stripper over `server.ts` swallows the file.** A regex literal opens a
+   fake block comment; the rules block measured **90,906 chars and contained no rules at
+   all**, so every assertion passed for the wrong reason. Use a **whole-line** `//` filter.
+2. **Backslash escapes do not survive this shell's heredocs** — `"
+"` became a real
+   newline inside a string literal and broke the file. Write test files through the editor.
+
+### Proof
+
+- 7/7 pass on the fixed tree; **2/7 fail against `HEAD`**
+- api typecheck **76 — the exact documented baseline**, with **no error between lines
+  2870-3020** (the edited region)
+- permission-rule + adjacent security suites (`adminRouteTenantScope`, `internalSecret`,
+  `publicReadyJwtBypass`, `nodeEnvGates`) **59/59**
+- ⛔ Committed with the **private-index technique**: `server.ts` also carried another
+  session's in-flight `startSmsForwardGuardrail` import + call whose `apps/api/src/sms/`
+  module is still untracked. A pathspec commit would have swept in an import of a file
+  that does not exist in the repo — **an api that fails to boot.** The commit tree was
+  built as HEAD + only these hunks and verified `git diff HEAD --stat` = exactly 2 files.
+  Afterwards the shared index read the new test as DELETED (documented trap) and was
+  re-synced with `git add` on that path only.
+
+### ✅ DEPLOYED AND PROVEN LIVE ON PRODUCTION, BOTH HALVES
+
+api DEPLOYED and container-verified 2026-08-24: `app-api-1` `.build-commit` =
+**`3385e70c`**, the three new rules grep inside the running container, the old gated rule
+greps **0**, **0 restarts, 0 error-level lines**, health **200** on both hostnames.
+
+⛔ **Proven by driving the real routes, not by the deploy's exit line.** A 60-second
+HS256 token was minted inside `app-api-1` for a **synthetic** `role: "USER"` id (touches
+no real account) and the routes were called on `127.0.0.1:3001`:
+
+| call | result |
+|---|---|
+| `POST /voice/diag/call-quality-ping` | **200** (was 403) |
+| `POST /voice/diag/call-quality-report` | **400 validation_error** — the handler RAN |
+| `POST /voice/diag/session/start` | **400 validation_error** — the handler RAN |
+| `GET /voice/diag/sessions` | **403 forbidden** — still locked ✓ |
+| `GET /voice/diag/recent-errors` | **403 forbidden** — still locked ✓ |
+
+⛔ **The 400s are the proof, and deliberately so** — an invalid body means the request
+reached the handler's own validation, which can only happen once the permission gate is
+gone, and it writes nothing. The one `liveCallStore` entry the 200 created for the
+synthetic id was cleared with `call-quality-ping/clear`.
+
+### ⏳ NOT PROVEN
+
+The deploy verification is above. **No 403 has yet been observed turning into a 200 for a
+real user** — that happens on her next call. **The acceptance check:**
+
+```sql
+select "createdAt", "type", payload->>'endReason', payload->>'qualityGrade'
+from "VoiceDiagEvent"
+where "tenantId" = 'cmnlgnumu0001p9g6xyl1pbdd'
+  and "userId"   = 'cmnmjhr3500anp96hc00p068a'
+order by "createdAt" desc limit 20;
+```
+
+Her user has **never** produced a row. Any row at all is the fix working. ⛔ And the
+negative that matters: `/api/voice/diag/*` 403s from 38.105.207.69 should fall to **zero**
+while the GETs stay refused for her.

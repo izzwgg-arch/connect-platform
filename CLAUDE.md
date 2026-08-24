@@ -2240,6 +2240,43 @@ app: most of the time, when she hits answer on an incoming call, it doesn't answ
   shows ext 101 is the **top answerer at 208/week** and rings the **full 30 s** when it
   does not answer. **Use `queues_log` (RINGNOANSWER `data1` = ring ms), never the
   verbose log, to measure a ring window.**
+- ✅✅ **FIXED AND DEPLOYED 2026-08-24 (`3385e70c`) — a device reporting its OWN trouble no
+  longer needs an admin permission (handoff §10).** `/voice/diag` splits perfectly by
+  method: **all 7 POSTs are client self-reports, all 3 GETs are admin cross-user views.**
+  `PortalApiPermissionRule.permission` now accepts **`null`** (authenticated only), and the
+  rules are `{"/voice/diag": null}` + `{"/voice/diag/sessions": can_view_pbx_sbc_connectivity}`
+  + `{"/voice/diag/recent-errors": …}` — `portalApiPermissionForPath` takes the **longest**
+  matching prefix, so the named reads override the open default.
+  ⛔⛔ **THE DEFAULT IS OPEN AND THE READS ARE LOCKED BY NAME — that direction is the whole
+  point.** An allowlist of the seven writes would reintroduce this bug the next time
+  somebody adds a self-report route: it would silently 403 and we would lose telemetry
+  again. Inverting it moves the failure mode to "a new READ is exposed", which
+  `voiceDiagSelfReport.test.ts` catches at build time.
+  ⛔⛔ **GRANTING `can_view_pbx_sbc_connectivity` TO EVERYBODY WAS THE WRONG FIX AND A TEST
+  RECORDS WHY** — it backs the **SBC Connectivity sidebar item**, so every customer would
+  have seen a new nav entry (the opposite of Izzy's *"don't let him see it in the sidebar"*),
+  and it would also have unlocked reading other people's diagnostic sessions.
+  ⛔ **Safe only because all seven writes derive identity from the TOKEN** (`user.sub` /
+  `user.tenantId`) and **none accepts a `userId`/`tenantId` from the body** — traced, and a
+  guard fails if one ever does. The three busiest already rate-limit per user.
+  ✅ **PROVEN LIVE ON PRODUCTION, both halves**, with a 60 s synthetic `role:"USER"` token
+  inside `app-api-1` against `127.0.0.1:3001`: `call-quality-ping` **200** (was 403),
+  `call-quality-report` and `session/start` **400 validation_error** (the handler RAN —
+  which is the proof, and writes nothing), while `GET /voice/diag/sessions` and
+  `recent-errors` still answer **403**. Container `.build-commit` `3385e70c`, old rule
+  greps 0, 0 restarts, 0 error lines, health 200 both hostnames.
+  ⛔ Committed with the **private-index technique** — `server.ts` also carried another
+  session's in-flight `startSmsForwardGuardrail` import whose `apps/api/src/sms/` module is
+  untracked; a pathspec commit would have shipped an import of a file not in the repo.
+  ⛔ Two authoring traps hit **again** despite being in this file: a block-comment stripper
+  over `server.ts` swallowed 90,906 chars so the rules parsed as EMPTY and every assertion
+  passed vacuously (use a whole-line `//` filter), and heredoc backslashes turned `"
+"`
+  into a real newline (write test files through the editor).
+  ⏳ **NOT PROVEN: no 403 has yet turned into a 200 for HER** — nothing from that office
+  since the cutover. Acceptance: any row at all in `VoiceDiagEvent` for
+  `userId='cmnmjhr3500anp96hc00p068a'` (she has never produced one), and `/api/voice/diag`
+  403s from 38.105.207.69 falling to zero while the GETs stay refused.
 - **Cheapest actions first:** (1) get her to **ONE window on 0.1.14** and sign out the
   July sessions — zero code risk, and four windows on one SIP account means four
   independent rebuild cycles abandoning contacts on the same AOR; (2) **grant
