@@ -53,6 +53,18 @@ export interface LoopcomEmailShellOptions {
   body: string;
   /** Absolute https URL of the wordmark. Supplied by the app's ONE wrapper. */
   logoUrl: string;
+  /**
+   * The customer company this email is FOR — their tenant name, printed in the
+   * footer as "This email was sent on behalf of <name>."
+   *
+   * ⛔ OPTIONAL, AND THE FALLBACK IS THE POINT. Omitted, blank or whitespace and
+   * the footer says the generic "your organization" exactly as it always has, so
+   * a caller that genuinely cannot name the tenant degrades to the old wording
+   * instead of printing an empty sentence or, far worse, guessing a name. Never
+   * make this required and never invent a value for it — an email that names the
+   * WRONG company is worse than one that names none.
+   */
+  organizationName?: string | null;
   /** Injectable only so tests can pin the footer year. */
   year?: number;
 }
@@ -61,6 +73,10 @@ export function loopcomEmailShell(opts: LoopcomEmailShellOptions): string {
   const year = opts.year ?? new Date().getFullYear();
   const esc = escapeEmailHtml;
   const font = LOOPCOM_EMAIL_FONT;
+  // Trimmed, so a tenant row holding "" or "   " reads as "no name given"
+  // rather than rendering "sent on behalf of ." at the bottom of the email.
+  const org = String(opts.organizationName || "").trim();
+  const onBehalfOf = org ? esc(org) : "your organization";
   return `<!doctype html>
 <html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -130,7 +146,7 @@ ${opts.preheaderText ? emailPreheader(opts.preheaderText) : ""}
           <td class="lc-pad" bgcolor="#f8fafc" style="padding:18px 44px 24px;background:#f8fafc;border-top:1px solid #e5e7eb;">
             <p style="margin:0;font-size:11.5px;color:#9ca3af;line-height:1.6;font-family:${font};">
               &copy; ${year} Loopcom &middot; All rights reserved.<br>
-              This email was sent on behalf of your organization.
+              This email was sent on behalf of ${onBehalfOf}.
             </p>
           </td>
         </tr>

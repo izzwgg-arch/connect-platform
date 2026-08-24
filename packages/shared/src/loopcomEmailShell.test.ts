@@ -101,3 +101,60 @@ test("GUARD: no email builder accepts a logo URL as an input", () => {
     assert.ok(!/logoUrl\??:/.test(src), `${p} takes a logoUrl input — resolve it in the app wrapper instead`);
   }
 });
+
+// ─── the footer names the customer's own company ─────────────────────────────
+// Izzy, 2026-08-24, looking at a Trust Bookkeepings voicemail email: "where it
+// says sent on behalf of your organization, it should say the tenant name."
+
+test("the footer names the tenant when it is given", () => {
+  const html = loopcomEmailShell({ ...OPTS, organizationName: "Trust Bookkeepings" });
+  assert.ok(
+    html.includes("This email was sent on behalf of Trust Bookkeepings."),
+    "the footer does not name the tenant",
+  );
+  assert.ok(!html.includes("on behalf of your organization"), "the generic wording survived");
+});
+
+test("without a name the footer keeps the old generic wording — it never guesses", () => {
+  for (const organizationName of [undefined, null, "", "   "]) {
+    const html = loopcomEmailShell({ ...OPTS, organizationName });
+    assert.ok(
+      html.includes("This email was sent on behalf of your organization."),
+      `blank name (${JSON.stringify(organizationName)}) did not fall back`,
+    );
+    assert.ok(!/on behalf of\s*\./.test(html), "an empty name rendered as a stub sentence");
+  }
+});
+
+test("the tenant name is escaped — it is customer-typed text going into HTML", () => {
+  const html = loopcomEmailShell({ ...OPTS, organizationName: `A & B <script>alert(1)</script>` });
+  assert.ok(!html.includes("<script>"), "a company name injected markup into the email");
+  assert.ok(html.includes("A &amp; B &lt;script&gt;"), "company name not escaped");
+});
+
+test("GUARD: every builder on this shell passes the tenant through", () => {
+  // The renderer is trivially right; the defect that matters is a CALLER that
+  // knows the company and forgets to say so, leaving that one email generic.
+  for (const [path, expected] of [
+    ["../../../apps/api/src/voicemail/voicemailEmailTemplate.ts", "organizationName: input.organizationName"],
+    ["../../../apps/agent/src/notify/smsEmail.ts", "organizationName: input.organizationName"],
+    ["../../../apps/api/src/userEmailTemplates.ts", "organizationName: input.tenantName"],
+  ] as const) {
+    const src = stripComments(read(path));
+    assert.ok(src.includes(expected), `${path} no longer passes the tenant name to the shell`);
+  }
+});
+
+test("GUARD: the voicemail sender takes the name from the tenant-scoped extension lookup", () => {
+  // ⛔ Whatever names the company must be scoped to the voicemail's OWN tenant.
+  // The extension lookup already is; a stray fetch on some other id is how one
+  // customer's name lands on another customer's email.
+  const sender = stripComments(read("../../../apps/api/src/voicemail/voicemailEmailSender.ts"));
+  assert.ok(sender.includes("organizationName: ext.tenantName"), "the voicemail email stopped naming the tenant");
+  const runtime = stripComments(read("../../../apps/api/src/voicemail/voicemailEmailRuntime.ts"));
+  assert.ok(
+    /tenant: \{ select: \{ name: true \} \}/.test(runtime),
+    "the extension lookup no longer loads the tenant name",
+  );
+  assert.ok(runtime.includes("tenantName: ext.tenant?.name ?? null"), "the runtime stopped returning the tenant name");
+});

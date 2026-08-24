@@ -133,6 +133,8 @@ export function loopComShell(opts: {
   headerTitle: string;
   headerSubtitle?: string;
   body: string;
+  /** Tenant name for the footer's "sent on behalf of". Blank → "your organization". */
+  organizationName?: string | null;
 }): string {
   // ⛔ THE LOOK ITSELF NOW LIVES IN `@connect/shared` so apps/agent renders the
   // SAME email instead of carrying a second copy — the SMS bridge shipped on a
@@ -310,6 +312,7 @@ ${divider()}
       headerTitle: "You're Invited",
       headerSubtitle: `Welcome to ${input.tenantName}`,
       body,
+      organizationName: input.tenantName,
     }),
     text,
   };

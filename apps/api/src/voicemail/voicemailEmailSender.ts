@@ -61,6 +61,16 @@ export type ExtensionEmailConfig = {
   pbxUserEmail: string | null;
   vmEmailEnabled: boolean;
   extraRecipients: string[];
+  /**
+   * The company that owns this mailbox — the email's footer names them.
+   *
+   * ⛔ It rides the EXTENSION lookup, not a second query, because that lookup is
+   * already scoped to `vm.tenantId`: the name can therefore only ever be the
+   * tenant the voicemail actually belongs to. A separate fetch keyed on some
+   * other id is exactly how one customer's name ends up on another customer's
+   * email. `null` is a legitimate answer and renders "your organization".
+   */
+  tenantName: string | null;
 };
 
 export type VoicemailSendOutcome =
@@ -146,6 +156,7 @@ export async function processVoicemailForEmail(
     transcriptLanguage: vm.transcriptLanguage,
     // Named for the message, so a mailbox full of these is still navigable.
     attachmentName: `voicemail-${(vm.receivedAt || new Date()).toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/^(\d{8})(\d{4})$/, "$1-$2")}.mp3`,
+    organizationName: ext.tenantName,
   });
 
   // The send door splits `toEmail` on commas, so several recipients ride one job

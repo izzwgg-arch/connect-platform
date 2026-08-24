@@ -105,6 +105,16 @@ test("it carries the Loopcom shell, its Outlook wrapper and no Connect wording",
   assert.ok(!/Connect Communications/.test(e.html), "no Connect Communications anywhere");
 });
 
+test("the footer names the company, not 'your organization'", () => {
+  const e = voicemailEmail({ ...BASE, organizationName: "Trust Bookkeepings" });
+  assert.match(e.html, /This email was sent on behalf of Trust Bookkeepings\./);
+  assert.ok(!/on behalf of your organization/.test(e.html));
+});
+
+test("with no company name the footer stays generic rather than blank", () => {
+  assert.match(voicemailEmail(BASE).html, /This email was sent on behalf of your organization\./);
+});
+
 test("a transcript cannot inject markup into the email", () => {
   const e = voicemailEmail({ ...BASE, transcript: '<script>alert(1)</script>', transcriptLanguage: "en" });
   assert.ok(!/<script>/.test(e.html), "transcript must be escaped");

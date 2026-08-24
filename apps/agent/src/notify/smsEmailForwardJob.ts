@@ -53,6 +53,8 @@ export class SmsEmailForwardJob {
    * hundred entries) and pruned on every pass.
    */
   private emailedThisProcess = new Map<string, number>();
+  /** tenantId → company name for the footer. `null` = looked up, none to show. */
+  private tenantNameCache = new Map<string, string | null>();
   constructor(private deps: SmsEmailForwardJobDeps) {}
 
   /** One polling pass. Returns how many texts were emailed. */
@@ -161,6 +163,38 @@ export class SmsEmailForwardJob {
     return name || null;
   }
 
+  /**
+   * The recipient's own company, for the email footer's "sent on behalf of".
+   *
+   * ⛔ Cached per process because a busy thread emails the same tenant over and
+   * over, and ⛔ it can NEVER fail the forward: a lookup error resolves to null,
+   * which renders the generic "your organization". Losing the company name off a
+   * footer is a cosmetic loss; losing the email is the one thing this job must
+   * never do.
+   */
+  private async resolveTenantName(tenantId: string): Promise<string | null> {
+    if (!tenantId) return null;
+    const cached = this.tenantNameCache.get(tenantId);
+    if (cached !== undefined) return cached;
+    let name: string | null = null;
+    try {
+      // ⛔ try/catch, NOT `.catch()`. If `prisma.tenant` is ever absent the
+      // property access throws SYNCHRONOUSLY, before a promise exists, so a
+      // `.catch()` never runs and the whole forward dies — the exact shape that
+      // broke every invitation for a commit in 2026-08-17.
+      const row = await this.deps.prisma.tenant?.findUnique?.({
+        where: { id: tenantId },
+        select: { name: true },
+      });
+      name = (row?.name || "").trim() || null;
+    } catch {
+      name = null;
+    }
+    // Bounded: one entry per tenant, and the fleet is under a hundred.
+    this.tenantNameCache.set(tenantId, name);
+    return name;
+  }
+
   /** True when an email was actually sent. */
   private async processOne(m: {
     id: string; tenantId: string; threadId: string; body: string; createdAt: Date; type: string;
@@ -228,6 +262,7 @@ export class SmsEmailForwardJob {
       messages,
       replyEnabled: !!replyTo,
       brandName: this.deps.brandName,
+      organizationName: await this.resolveTenantName(m.tenantId),
     });
 
     // Threading: every email for this thread references the same synthetic root id,

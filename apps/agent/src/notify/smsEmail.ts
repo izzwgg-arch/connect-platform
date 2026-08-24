@@ -52,6 +52,13 @@ export interface SmsEmailInput {
   /** True once reply-to-text-back is live, so the callout promises it. */
   replyEnabled?: boolean;
   brandName?: string;
+  /**
+   * The recipient's own company — the shell's footer names them instead of
+   * saying "your organization". ⛔ Not the same thing as `brandName`, which is
+   * OURS (Loopcom) and appears in the body copy. Null/blank is fine and keeps
+   * the old generic wording.
+   */
+  organizationName?: string | null;
 }
 
 export interface BuiltEmail {
@@ -208,6 +215,7 @@ export function buildSmsEmail(input: SmsEmailInput): BuiltEmail {
     headerTitle: `Text from ${name}`,
     headerSubtitle: `${number} → your ${brand} number ${yourNum}`,
     body: `${conversation}\n${callout}\n${footnote}`,
+    organizationName: input.organizationName,
   });
 
   return { subject, html, text };

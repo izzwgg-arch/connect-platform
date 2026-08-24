@@ -64,6 +64,12 @@ export type VoicemailEmailTemplateInput = {
   transcriptLanguage?: string | null;
   /** Filename shown beside the attachment note. */
   attachmentName: string;
+  /**
+   * The company whose mailbox this is — printed in the footer as "sent on behalf
+   * of <name>". Left out, the footer says "your organization" as before; it is
+   * never guessed.
+   */
+  organizationName?: string | null;
 };
 
 export function voicemailEmail(input: VoicemailEmailTemplateInput): {
@@ -123,6 +129,7 @@ ${voicemailEmailMarker(input.voicemailId)}`;
       preheaderText: `${caller} left a ${duration} message for ${mailbox}.`,
       headerTitle: "New voicemail",
       body,
+      organizationName: input.organizationName,
     }),
     text: textLines.join("\n"),
   };

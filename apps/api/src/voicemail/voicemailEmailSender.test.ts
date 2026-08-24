@@ -26,6 +26,7 @@ const VM: PendingVoicemail = {
 const EXT: ExtensionEmailConfig = {
   id: "e1", displayName: "Ari Schonbrun",
   pbxUserEmail: "orders@gesheftkosher.com", vmEmailEnabled: true, extraRecipients: [],
+  tenantName: "Gesheft",
 };
 
 function deps(over: Partial<VoicemailSenderDeps> = {}) {
@@ -59,6 +60,22 @@ test("a good voicemail is queued to the outbox and stamped", async () => {
   assert.equal(queued[0].toEmail, "orders@gesheftkosher.com");
   assert.match(queued[0].htmlBody, /connect-voicemail:vm1/);
   assert.deepEqual(marked, [["vm1", null]]);
+});
+
+test("the email's footer names the company the mailbox belongs to", async () => {
+  const { d, queued } = deps();
+  await processVoicemailForEmail(VM, d);
+  assert.match(queued[0].htmlBody, /This email was sent on behalf of Gesheft\./);
+  assert.ok(
+    !/on behalf of your organization/.test(queued[0].htmlBody),
+    "the generic wording is still there",
+  );
+});
+
+test("a tenant we cannot name falls back to the generic wording, never a blank", async () => {
+  const { d, queued } = deps({ loadExtension: async () => ({ ...EXT, tenantName: null }) });
+  await processVoicemailForEmail(VM, d);
+  assert.match(queued[0].htmlBody, /This email was sent on behalf of your organization\./);
 });
 
 test("several recipients ride ONE job, so a retry cannot double-send", async () => {

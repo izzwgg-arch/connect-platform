@@ -194,7 +194,7 @@ const THREAD = {
   smsInboxOwnerUserId: "u1",
 };
 
-function makeHarness(opts: { smtpOk?: boolean; thread?: any; users?: any[] } = {}) {
+function makeHarness(opts: { smtpOk?: boolean; thread?: any; users?: any[]; tenant?: any } = {}) {
   const audits: Array<{ event: string; payload: any }> = [];
   const sends: any[] = [];
   const stamps: Array<{ id: string; error: string | null }> = [];
@@ -225,6 +225,15 @@ function makeHarness(opts: { smtpOk?: boolean; thread?: any; users?: any[] } = {
         users.filter((u) => u.smsEmailForwardEnabled && u.status === "ACTIVE" && where.id.in.includes(u.id)),
     },
     contactPhone: { findFirst: async () => null },
+    // The footer names the recipient's own company. `opts.tenant` lets a test
+    // make this lookup fail or come back empty — the email must still go.
+    tenant: {
+      findUnique: async () => {
+        if (opts.tenant === "throws") throw new Error("db down");
+        if ("tenant" in opts) return opts.tenant;
+        return { name: "Trust Bookkeepings" };
+      },
+    },
   };
 
   const job = new SmsEmailForwardJob({
@@ -269,6 +278,24 @@ describe("SmsEmailForwardJob - the live path, driven", () => {
     const ageMin = (Date.now() - batch.where.createdAt.gte.getTime()) / 60000;
     assert.ok(ageMin > 0 && ageMin <= 24 * 60, "fresh window looks wrong: " + ageMin + " min");
     assert.ok(typeof batch.take === "number" && batch.take > 0 && batch.take <= 100, "batch must be bounded");
+  });
+
+  it("the footer names the recipient's own company", async () => {
+    const h = makeHarness();
+    h.setRows([msg(1)]);
+    await h.job.runOnce();
+    assert.match(String(h.sends[0].html), /This email was sent on behalf of Trust Bookkeepings\./);
+  });
+
+  it("the tenant lookup can NEVER cost anyone their email", async () => {
+    // Losing a company name off a footer is cosmetic; losing the text is not.
+    for (const tenant of ["throws", null, { name: "" }, { name: "   " }] as const) {
+      const h = makeHarness({ tenant });
+      h.setRows([msg(1)]);
+      await h.job.runOnce();
+      assert.strictEqual(h.sends.length, 1, "the email did not go out for tenant=" + JSON.stringify(tenant));
+      assert.match(String(h.sends[0].html), /This email was sent on behalf of your organization\./);
+    }
   });
 
   it("J4 - the Reply-To verifies, and only for THAT thread", async () => {

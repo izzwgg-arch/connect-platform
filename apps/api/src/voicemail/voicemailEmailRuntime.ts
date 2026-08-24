@@ -120,6 +120,12 @@ async function loadExtensionConfig(tenantId: string, extension: string): Promise
     select: {
       id: true, displayName: true, pbxUserEmail: true, vmEmailEnabled: true,
       voicemailEmailRecipients: { select: { email: true } },
+      // ⛔ `Extension` DOES have a `tenant` relation (schema.prisma) — unlike
+      // `Voicemail`, which carries a bare `tenantId` COLUMN and no relation, and
+      // where exactly this select shape threw on every watchdog run for weeks
+      // (see the note in runVoicemailEmailWatchdog). Checked, not assumed.
+      // It rides this query so the name is the tenant we already scoped to.
+      tenant: { select: { name: true } },
     },
   });
   if (!ext) return null;
@@ -129,6 +135,7 @@ async function loadExtensionConfig(tenantId: string, extension: string): Promise
     pbxUserEmail: ext.pbxUserEmail ?? null,
     vmEmailEnabled: ext.vmEmailEnabled !== false,
     extraRecipients: (ext.voicemailEmailRecipients || []).map((r: { email: string }) => r.email),
+    tenantName: ext.tenant?.name ?? null,
   };
 }
 

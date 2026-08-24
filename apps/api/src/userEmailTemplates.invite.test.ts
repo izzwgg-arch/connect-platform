@@ -89,7 +89,8 @@ test("every line of the original copy survives the redesign", () => {
     "request a new invite from your administrator",
     "If you were not expecting this invite",
     "No account will be created without your action",
-    "This email was sent on behalf of your organization",
+    // 2026-08-24: the footer names the tenant now instead of "your organization".
+    "This email was sent on behalf of Trust Bookkeepings",
   ]) {
     assert.ok(
       html.includes(fragment) || html.includes(fragment.replace(/'/g, "&#39;")),
