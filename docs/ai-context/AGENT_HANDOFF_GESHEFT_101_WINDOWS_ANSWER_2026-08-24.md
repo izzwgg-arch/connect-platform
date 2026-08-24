@@ -266,3 +266,86 @@ message (§3) — is what makes every variety of it feel like "answer doesn't wo
 usable failure reports were generated and destroyed in ten minutes this morning; the
 permission grant is the difference between guessing and knowing. Do it before the next
 complaint, not after.
+
+---
+
+## 9. ADDENDUM 2 — the reload, and why "no failures since" is NOT evidence it is fixed
+
+Izzy: *"I told her to reload... I suspect she just updated the app from the old one to the
+new one and the computer hadn't cleared it... After she reloaded again after those calls,
+she told me again, 'Sometimes it works, sometimes it doesn't.'"*
+
+### She reloaded THREE times today, not once
+
+Full page loads on her `Loopcom/0.1.14` window (HTML 200 + fresh `/sip` + fresh
+`/ws/telephony`), ET:
+
+| ET | page |
+|---|---|
+| 09:00:38 | `GET /?desktop=1` + `/desktop/mini-dialer` — the **app launching** after the upgrade |
+| **09:32:43** | `GET /dashboard` — **the reload Izzy asked for**, 2 min after her report |
+| **10:04:26** | `GET /voicemail` — another reload |
+| **10:11:04** | `GET /voicemail` — another reload |
+
+She is already self-medicating with reloads. ⛔ Correction to Addendum 1, which called
+10:04 and 10:11 "rebuilds" — they are full page loads.
+
+### ⛔⛔ The stale-bundle theory is RULED OUT, and what the reload really does matters more
+
+Measured against the live origin:
+
+```
+GET /dashboard        ->  cache-control: no-store, must-revalidate
+GET /_next/static/chunks/*.js  ->  cache-control: public, max-age=31536000, immutable
+```
+
+**The HTML is never cached, and the chunks are content-hashed.** So a page load ALWAYS
+pulls the current build, and a stale bundle can only survive inside a window that has not
+been reloaded. Her app **launched fresh at 09:00:38** — a new Electron process, a new
+document fetch — so **she was already running the current code when it failed at
+09:20/09:24/09:26.** The portal build (`bNWpncA_gaWt0kGCmQKke`) has been deployed since
+2026-08-23 20:18Z, before any of it.
+
+⛔⛔ **So reloading does not fix stale code — it forces a brand-new SIP registration.**
+That is the whole of its effect here, and it is why the fix does not hold: it is a
+workaround for a connection that goes bad, not a cure. Telling her to reload will keep
+working, and will keep being needed. **Do not record "the reload fixed it" as a
+resolution.**
+
+### The PBX rings her every single time — this is entirely client-side
+
+For all **24** inbound calls to ext 101 today, the wake-dial `Dial()` string contained
+**exactly 4 app contacts, every time**:
+
+```
+09:15:34 contacts_dialled=4   10:03:00 contacts_dialled=4   11:02:20 contacts_dialled=4
+09:23:52 contacts_dialled=4   10:10:28 contacts_dialled=4   11:04:25 contacts_dialled=4
+...                            (24 of 24, no variation)
+```
+
+⛔ **No contact eviction, no dropout, no gap in the dial list** (`max_contacts` 10 vs 4 in
+use, so `remove_existing` never fires). **The phone system is not the problem and neither
+is the registration count** — she is offered every call. Everything that goes wrong,
+goes wrong after the INVITE reaches her window.
+
+### Since the reload: 2 hours, clean on paper
+
+09:32 → 11:36 ET: **~21 calls rang ext 101, the app answered 6**, her window posted
+**7 `call-quality-report`s** (completed calls, inbound + outbound) and **ZERO
+`webrtc-sdp-debug` failure blackboxes**. All three failures of the day were before 09:32.
+
+### ⛔⛔ AND THAT SILENCE PROVES NOTHING — the symptom she describes emits NO telemetry
+
+The three blackboxes came from JsSIP's **`failed`** event. The failure mode in §3 —
+answer sent, ACK never arrives — **does not fire `failed`.** The session sits in
+`WAITING_FOR_ACK` indefinitely and the portal never reports anything. The same is true of
+the other two silent paths: `killPhantomRing` posts nothing, and `answer()`'s
+`if (!sessionRef.current) return;` posts nothing.
+
+⛔ **So "no failure blackboxes since the reload" is NOT evidence that the answer failures
+stopped.** It only means no SIP session *failed outright*. Her own report —
+"sometimes it works, sometimes it doesn't" — is the more reliable instrument right now,
+and it says the problem is still there. **This is exactly why §6 step 2 (the permission
+grant) is not optional: it is the only thing that would make the silent mode visible**,
+because `call-quality-report` is posted on `ended` with an `endReason`, which WOULD
+capture a ring that terminated without ever connecting.

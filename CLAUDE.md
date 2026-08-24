@@ -2273,6 +2273,31 @@ app: most of the time, when she hits answer on an incoming call, it doesn't answ
   factor is the SIP connection, and the portal's total silence (no timeout, no error, no
   message) is what makes every variety of it feel like "answer doesn't work". It
   **recovered by itself** after re-registering.
+- ⛔⛔ **THE RELOAD DOES NOT FIX STALE CODE — IT FORCES A FRESH SIP REGISTRATION, and the
+  stale-bundle theory is RULED OUT (handoff §9).** Measured on the live origin: portal HTML
+  is **`cache-control: no-store, must-revalidate`** and the JS chunks are content-hashed
+  **`immutable`** — so a page load ALWAYS pulls the current build, and a stale bundle can
+  only survive in a window that has not been reloaded. Her app **launched fresh at
+  09:00:38** (new Electron process, new document fetch), so **she was already on the
+  current code when it failed at 09:20/09:24/09:26**. ⛔ **Do not record "the reload fixed
+  it" as a resolution** — it is a workaround for a connection that goes bad, so it will
+  keep working and keep being needed. She reloaded **three times** today (09:32, 10:04,
+  10:11) and is already self-medicating.
+- ⛔⛔ **THE PBX RINGS HER EVERY SINGLE TIME — this is entirely client-side.** All **24**
+  inbound calls to ext 101 today carried **exactly 4 app contacts in the wake-dial
+  `Dial()` string, with no variation** (`max_contacts` 10 vs 4 in use, so `remove_existing`
+  never fires). No eviction, no dropout, no gap in the dial list. **Everything that goes
+  wrong, goes wrong after the INVITE reaches her window** — stop looking at the PBX, the
+  registration count and the AOR.
+- ⛔⛔ **"NO FAILURES SINCE THE RELOAD" IS NOT EVIDENCE IT IS FIXED, AND THIS IS THE TRAP.**
+  09:32→11:36 ET: ~21 calls rang, the app answered 6, her window posted 7
+  `call-quality-report`s and **ZERO failure blackboxes**. But the three blackboxes came
+  from JsSIP's **`failed`** event, and **the failure mode in §3 — answer sent, ACK never
+  arrives — does NOT fire `failed`**; the session sits in `WAITING_FOR_ACK` forever and
+  the portal reports nothing. `killPhantomRing` and `answer()`'s silent
+  `if (!sessionRef.current) return;` are equally silent. **So the quiet only means no SIP
+  session failed outright.** Her own "sometimes it works, sometimes it doesn't" is the
+  more reliable instrument, and it says the problem is still there.
 - ⏳ **STILL NOT PROVEN: the cause of any individual failure.** The `cause`/`sipCode`
   fields were inside the 403'd payloads. `pjsip set logger on` during a test call would
   settle whether her 200 OK ever arrives; that is a PBX-side toggle and needs Izzy's word.
