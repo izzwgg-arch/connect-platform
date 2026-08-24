@@ -205,3 +205,64 @@ registration data, the portal source and the absent-by-grep mobile fix, **not** 
 captured failure. **The acceptance test is step 2 above plus one real failed answer**;
 alternatively `pjsip set logger on` at the PBX during a test call would show whether her
 200 OK ever arrives — that is a PBX-side diagnostic toggle and needs Izzy's word.
+
+---
+
+## 8. ADDENDUM — she filed a support report, and it moves several of the findings above
+
+Izzy, later 2026-08-24: *"one of the users in that office upgraded today to the new app
+and sent me a technical support report through the agent this morning. That same user
+complains."*
+
+**The report is `AgentEscalation` `cmt79xh45640lrz13zq2fjlrk`, ref `Q2FJRK`**, created
+**2026-08-24T13:30:39Z = 09:30 ET**, status SENT (SMS + email both went out). Same user
+(`yisraelweinstock@gmail.com`, "Orders", ext 101). Callback **+1 845-248-6206**. Her own
+words:
+
+> **"I cant answer from the computer anymore, it used to work"**
+
+⛔⛔ **SHE WAS ALREADY ON THE NEW APP WHEN SHE FILED IT.** The
+`POST /api/support/report` is stamped `Loopcom/0.1.14`. So **"upgrade the app" is not the
+fix** — §6 step 1 is about cutting the *number of windows*, not the shell version, and
+that distinction now matters. The desktop shell loads the hosted portal, so 0.1.3 and
+0.1.14 run the *same* SIP code; upgrading was never going to change the answer path.
+
+⛔ **Correction to §7:** it is no longer true that nothing of hers is recorded. **Three
+failure blackboxes were generated this morning and all three were destroyed by the 403.**
+`postWebrtcBlackbox` is bound inside the SHARED `bindSession`, so despite the
+misleading name `buildOutboundFailurePayload` it fires on **inbound** sessions too.
+
+### The morning, minute by minute (nginx is CEST, pinned against the escalation row; PBX log is ET)
+
+| time (ET) | event |
+|---|---|
+| 09:00:56 | `session/start` from **0.1.14** — her upgraded window's first SIP session |
+| 09:15:34 | inbound call rings her app — nothing answers |
+| 09:19:30 / 09:19:56 / 09:20:53 / 09:22:12 | **four SIP re-authentications in under 3 minutes** on `T8_101_1` (baseline is ~1 per 30 min) |
+| 09:19:57 | she dials **her own mobile 845-248-6206** from the softphone — recording stamped `091957-OUT-NONE-101-8452486206`, dead in 5 s |
+| **09:20:02** | **failure blackbox → 403, payload discarded** |
+| 09:23:53 | inbound queue call rings all 4 app contacts + both desk phones |
+| **09:24:09** | **failure blackbox → 403** (17 s into that ring; **nothing ever answered that call**, so this one is NOT a lost race) |
+| 09:25:53 | inbound call rings her app |
+| 09:25:59 | a **desk phone** answers it (6 s in) |
+| **09:26:05** | **failure blackbox → 403** (6 s after the desk took it — this one *is* consistent with a lost race) |
+| **09:30:39** | she files ref `Q2FJRK` |
+| 09:32:44 | her app starts a **fresh SIP session** |
+| 09:37:44 | an app leg **answers** — first success of the day |
+| 09:37 / 09:44 / 09:57 / 10:03 / 10:55 | five calls connect and complete normally on her window |
+
+⛔ **What this establishes, and what it does not.** It establishes that her softphone was
+genuinely failing calls **in both directions** in a ~6-minute window while its
+registration churned four times, that it reported each failure and we threw every report
+away, that she gave up and complained, and that it **recovered by itself after a fresh
+registration at 09:32**. It does **not** establish the cause of any individual failure —
+the `cause` / `sipCode` fields were inside the 403'd payloads.
+
+⛔ **So the complaint is not purely about answering.** Outbound died too. The common
+factor is the SIP connection, and the portal's total silence — no timeout, no error, no
+message (§3) — is what makes every variety of it feel like "answer doesn't work".
+
+⛔ **This promotes §6 step 2 from useful to the single most valuable action.** Three
+usable failure reports were generated and destroyed in ten minutes this morning; the
+permission grant is the difference between guessing and knowing. Do it before the next
+complaint, not after.

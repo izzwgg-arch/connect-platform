@@ -2245,11 +2245,37 @@ app: most of the time, when she hits answer on an incoming call, it doesn't answ
   independent rebuild cycles abandoning contacts on the same AOR; (2) **grant
   `can_view_pbx_sbc_connectivity`** so `/voice/diag` stops 403ing and the next failure
   is actually recorded; (3) then the `answer_unacked` port.
-- ⏳ **NOT PROVEN: no specific failed answer of hers is recorded anywhere.** The
-  mechanism is established from the registration data, the portal source and the
-  absent-by-grep mobile fix — **not** from a captured failure. `pjsip set logger on`
-  during a test call would settle whether her 200 OK ever arrives; that is a PBX-side
-  toggle and needs Izzy's word.
+- ✅✅ **SHE FILED A SUPPORT REPORT AND IT MOVES SEVERAL OF THESE FINDINGS (handoff §8).**
+  `AgentEscalation cmt79xh45640lrz13zq2fjlrk`, ref **Q2FJRK**, 2026-08-24 **09:30 ET**:
+  *"I cant answer from the computer anymore, it used to work."*
+  ⛔⛔ **She was ALREADY on `Loopcom/0.1.14` when she filed it** (the
+  `POST /api/support/report` carries that UA) — **so "upgrade the app" is NOT the fix**,
+  and it never could have been: the desktop shell loads the HOSTED portal, so 0.1.3 and
+  0.1.14 run the same SIP code. Cutting the NUMBER of windows is the point, not the
+  version.
+  ⛔⛔ **THREE FAILURE BLACKBOXES WERE GENERATED THAT MORNING AND ALL THREE WERE
+  DESTROYED BY THE 403** — 09:20:02, 09:24:09, 09:26:05 ET. `postWebrtcBlackbox` is bound
+  in the SHARED `bindSession`, so despite the name `buildOutboundFailurePayload` it fires
+  on **inbound** sessions too. **That promotes the permission grant from useful to the
+  single most valuable action — three usable failure reports were thrown away in ten
+  minutes.**
+  **The morning, measured** (nginx CEST pinned against the escalation row; PBX log ET):
+  09:00:56 first session on the upgraded window → 09:15:34 inbound rings, nothing answers
+  → **four SIP re-auths in under 3 min** (09:19:30/09:19:56/09:20:53/09:22:12, against a
+  ~30-min baseline) → 09:19:57 she dials **her own mobile** and it dies in 5 s
+  (`091957-OUT-NONE-101-8452486206`) → **09:20:02 blackbox 403** → 09:23:53 inbound rings
+  → **09:24:09 blackbox 403** (17 s in; **nothing ever answered that call**, so that one
+  is NOT a lost race) → 09:25:53 inbound rings → 09:25:59 a **desk phone** takes it →
+  **09:26:05 blackbox 403** (that one IS consistent with a lost race) → **09:30:39 she
+  reports** → 09:32:44 **fresh SIP session** → 09:37:44 an app leg **answers**, then five
+  calls complete normally (09:37/09:44/09:57/10:03/10:55).
+  ⛔ **So the complaint is not purely about answering — OUTBOUND died too.** The common
+  factor is the SIP connection, and the portal's total silence (no timeout, no error, no
+  message) is what makes every variety of it feel like "answer doesn't work". It
+  **recovered by itself** after re-registering.
+- ⏳ **STILL NOT PROVEN: the cause of any individual failure.** The `cause`/`sipCode`
+  fields were inside the 403'd payloads. `pjsip set logger on` during a test call would
+  settle whether her 200 OK ever arrives; that is a PBX-side toggle and needs Izzy's word.
 
 ## ⛔⛔ AGENT HANDOFF — answering a call on the CURRENT Android build tears the call down: the warm answer gets 500 ms instead of 4 s (2026-08-23) — READ FIRST for ANY "I answered and it didn't connect" on Android, before touching `MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS` or `backendClaimed`, and before telling anyone to install the latest APK
 
