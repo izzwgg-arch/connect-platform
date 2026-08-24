@@ -269,3 +269,85 @@
 .ide-speakmsg { margin:0 12px; padding:6px 9px; border-radius:7px; font-size:10.5px; line-height:1.5; }
 .ide-speakmsg.bad { border:1px solid rgba(248,81,73,.35); background:rgba(248,81,73,.08); color:#f0a8a4; }
 .ide-speakmsg.note { border:1px solid var(--line2); background:var(--bar); color:var(--faint); }
+
+
+/* ═══════════ The browser, 2026-08-24 ═══════════
+   Izzy: "even a browser, so the agent can see what things look like."
+
+   ⛔ TWO HALVES, HONESTLY DIFFERENT. The iframe is pixels and only a PERSON can
+   see it. The strip beneath is what the SERVER read — status, timing, title,
+   headings, forms — which is exactly what the agent's `browse` tool receives.
+   Both on one screen is what stops the person and the agent describing
+   different pages to each other.
+
+   ⛔ The iframe renders ONLY because these are our own pages: nginx sends
+   X-Frame-Options: SAMEORIGIN and the CSP allows frame-src 'self'. A foreign
+   address would not frame at all — a second reason the server refuses one
+   rather than this stylesheet pretending it could be shown.
+
+   ⛔ USES THIS FILE'S OWN VARIABLES (--bar, --ink, --acc, …) declared on
+   .ide-root above. There is no --ide-* namespace here, and a var() naming one
+   resolves to nothing — which paints an invisible panel and reads exactly like
+   a failed deploy. */
+
+.ide-addr {
+  display:flex; align-items:center; gap:7px; flex:none;
+  padding:6px 10px; background:var(--bar); border-bottom:1px solid var(--line);
+}
+.ide-url {
+  flex:1; min-width:0;
+  background:var(--edit); color:var(--ink);
+  border:1px solid var(--line2); border-radius:6px;
+  padding:5px 10px; font-family:var(--mono); font-size:11.5px; outline:none;
+}
+.ide-url:focus { border-color:var(--acc); }
+.ide-abtn {
+  background:var(--panel); color:var(--dim);
+  border:1px solid var(--line2); border-radius:6px;
+  padding:5px 10px; font-size:11.5px; white-space:nowrap;
+}
+.ide-abtn:hover:not(:disabled) { color:var(--ink); border-color:var(--acc); }
+.ide-abtn:disabled { opacity:.5; cursor:default; }
+.ide-abtn:focus-visible, .ide-wbtn:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+
+.ide-widths { display:inline-flex; gap:2px; flex:none; }
+.ide-wbtn { color:var(--faint); border:1px solid transparent; border-radius:5px; padding:4px 9px; font-size:11px; }
+.ide-wbtn.on { background:var(--panel); color:var(--ink); border-color:var(--line2); }
+
+/* The stage. A neutral surround so a page's own background reads against it
+   whichever way that page is themed. */
+.ide-preview {
+  flex:1; min-height:0; overflow:auto; background:var(--edit);
+  display:flex; align-items:flex-start; justify-content:center;
+}
+.ide-frame-wrap { width:100%; height:100%; display:flex; justify-content:center; }
+.ide-frame { width:100%; height:100%; min-height:320px; border:0; background:#fff; box-shadow:0 0 0 1px var(--line2); }
+.ide-hosts { margin-top:8px; font-family:var(--mono); font-size:10.5px; color:var(--faint); }
+.ide-empty-bad { color:var(--bad); }
+.ide-ic-web { color:var(--acc); }
+
+/* ── what the SERVER saw: the agent's half of the same page ── */
+.ide-pagefacts {
+  flex:none; max-height:34%; overflow:auto;
+  border-top:1px solid var(--line); background:var(--panel); padding:9px 12px;
+}
+.ide-pf-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:7px; }
+.ide-pf-row b { font-size:12.5px; color:var(--ink); }
+.ide-pf-row .ide-abtn { margin-left:auto; }
+.ide-pf-status { font-family:var(--mono); font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px; flex:none; }
+.ide-pf-status.ok  { background:rgba(63,185,80,.15);  color:var(--ok); }
+.ide-pf-status.bad { background:rgba(248,81,73,.15);  color:var(--bad); }
+.ide-pf-dim { font-family:var(--mono); font-size:10.5px; color:var(--faint); }
+.ide-pf-note {
+  font-size:11.5px; line-height:1.5; color:var(--warn);
+  background:rgba(210,153,34,.10); border:1px solid var(--line2);
+  border-radius:6px; padding:7px 10px; margin-bottom:8px;
+}
+.ide-pf-cols { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+@media (max-width:900px) { .ide-pf-cols { grid-template-columns:1fr; } }
+.ide-pf-cols h6 {
+  margin:0 0 5px; font-family:var(--mono); font-size:9.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
+.ide-pf-item { font-size:11px; line-height:1.55; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ide-pf-item.dim { color:var(--faint); font-style:italic; }

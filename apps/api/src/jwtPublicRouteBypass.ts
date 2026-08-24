@@ -89,6 +89,12 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // it in a READ ONLY transaction and the PBX credential is SELECT-only.
   const isInternalAgentInvestigatePath =
     path === "/internal/agent/investigate" || path.endsWith("/internal/agent/investigate");
+  // The support Workbench door: the agent's read_file / list_files /
+  // run_command / browse. Same in-handler shared-secret auth, fail-closed, and
+  // it shares the HUMAN workbench's gate closure in supportConsole.ts so the
+  // agent can never be held to looser rules than a person at the desk.
+  const isInternalAgentWorkbenchPath =
+    path === "/internal/agent/workbench" || path.endsWith("/internal/agent/workbench");
   const isIvrPromptSyncPath =
     path === "/voice/ivr/prompts/sync-manifest"
     || path.endsWith("/voice/ivr/prompts/sync-manifest")
@@ -157,6 +163,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalAgentContactsPath
     || isInternalAgentNumberSearchPath
     || isInternalAgentInvestigatePath
+    || isInternalAgentWorkbenchPath
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isPublicMeetingPath

@@ -1,55 +1,66 @@
 "use client";
 
 /**
- * The Support Desk — the shell that holds the five screens.
+ * The Support Desk — the shell that holds the screens.
  *
- * Built to the approved mockups:
- * https://claude.ai/code/artifact/cf13e7b7-ebbf-414e-a1a6-f22dee7a2eaa
+ * Built to the approved redesign:
+ * https://claude.ai/code/artifact/6f514701-4e37-4dea-a80f-2366ed600030
  *
- *   Escalations — the escalation IS the chat (SupportEscalationChats)
- *   Inbox       — every company's texts in one list (SupportInbox)
- *   Assistant   — watch and take over (SupportConversations)
- *   Workbench   — the IDE (SupportWorkbench)
- *   Ground rules— the rulebook + the Watchman (SupportRules)
+ *   Desk         — the work: cases, the conversation, the customer (SupportDesk)
+ *   Workbench    — the IDE, with a browser (SupportWorkbench)
+ *   Ground rules — the rulebook + the Watchman (SupportRules)
+ *
+ * ⛔⛔ FIVE TABS BECAME THREE, AND THE SUBTRACTIONS ARE THE POINT — measured
+ * against production 2026-08-24, not guessed:
+ *
+ *   - **Inbox is DELETED.** `GET /admin/support/threads` browsed every
+ *     company's private text conversations — 679 threads, 2,477 messages — with
+ *     no case attached to the reading. It was the one screen on the platform
+ *     where one person could read thirty companies' customers for no stated
+ *     reason. The capability survives; the browse surface does not. A
+ *     customer's threads are now reachable ONLY from their case, and the
+ *     header of that screen names the case it was opened for.
+ *
+ *   - **Assistant stopped being a destination.** 0 take-overs, ever, against
+ *     114 conversations — because taking over is something you do INSIDE a
+ *     case, and it was already a button in the desk's composer. Watching every
+ *     assistant conversation is still reachable, from the desk's own header,
+ *     but it is no longer one of five equal doors.
+ *
+ *   - **Escalations IS the desk.** ~2 real cases a week arrive; that is the
+ *     whole job, and it sat behind a tab bar as though it were one option among
+ *     five.
  *
  * ⛔ This file holds NO screen logic on purpose. Each view owns its own data,
- * so a change to one can never quietly break another — the old version kept
- * every escalation's state here and it made the file impossible to reason
- * about once the desk grew past one screen.
+ * so a change to one can never quietly break another.
  *
- * ⛔ SUPER_ADMIN only (Izzy, 2026-08-20). The nav item is forced to SUPER_ADMIN
- * in navConfig.isNavItemVisibleForUser and every API handler checks again
+ * ⛔ SUPER_ADMIN only. The nav item is forced to SUPER_ADMIN in
+ * navConfig.isNavItemVisibleForUser and every API handler checks again
  * server-side; the PermissionGate below is presentation, not the fence.
  */
 import { useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
-import SupportEscalationChats from "./SupportEscalationChats";
-import SupportInbox from "./SupportInbox";
-import SupportConversations from "./SupportConversations";
+import SupportDesk from "./SupportDesk";
 import SupportWorkbench from "./SupportWorkbench";
 import SupportRules from "./SupportRules";
 import "./supportDesk.css";
 
-type View = "escalations" | "inbox" | "assistant" | "workbench" | "rules";
+type View = "desk" | "workbench" | "rules";
 
 const BLURB: Record<View, string> = {
-  escalations: "Everything the assistant passed to the team — as the conversation it came from, with its report inside the thread.",
-  inbox: "Every company's text conversations in one place. Replies go out from the company's own number.",
-  assistant: "Watch the assistant work — and take over when a person should talk.",
-  workbench: "Read the code, run read-only commands, and ask the agent — every command checked against your ground rules.",
+  desk: "Everything the assistant passed to a person — as the conversation it came from, with the customer beside it.",
+  workbench: "Read the code, run read-only commands, open a page, and ask the agent — every command checked against your ground rules.",
   rules: "What the agent may do, may never do, and must ask you about first.",
 };
 
 const TABS: Array<{ id: View; label: string }> = [
-  { id: "escalations", label: "Escalations" },
-  { id: "inbox", label: "Inbox" },
-  { id: "assistant", label: "Assistant" },
+  { id: "desk", label: "Desk" },
   { id: "workbench", label: "Workbench" },
   { id: "rules", label: "Ground rules" },
 ];
 
-function SupportDesk() {
-  const [view, setView] = useState<View>("escalations");
+function SupportDeskShell() {
+  const [view, setView] = useState<View>("desk");
 
   return (
     <div className="sd-page">
@@ -73,9 +84,7 @@ function SupportDesk() {
         </div>
       </header>
 
-      {view === "escalations" ? <SupportEscalationChats /> : null}
-      {view === "inbox" ? <SupportInbox /> : null}
-      {view === "assistant" ? <SupportConversations /> : null}
+      {view === "desk" ? <SupportDesk /> : null}
       {view === "workbench" ? <SupportWorkbench /> : null}
       {view === "rules" ? <SupportRules /> : null}
     </div>
@@ -88,7 +97,7 @@ export default function SupportDeskPage() {
       permission={"can_manage_global_settings" as never}
       fallback={<div className="sd-state">This page is for the platform owner.</div>}
     >
-      <SupportDesk />
+      <SupportDeskShell />
     </PermissionGate>
   );
 }

@@ -25,6 +25,8 @@ import { buildSelfServiceTools } from "./tools/selfServiceTools";
 import { buildPortStatusTools } from "./tools/portStatusTools";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
+import { buildWorkbenchTools } from "./tools/workbenchTools";
+import { makeWorkbenchClient } from "./pbx/workbenchClient";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
 import { ActionService } from "./actions/service";
@@ -279,6 +281,14 @@ async function main() {
       // change nothing; see investigationTools.ts for the four layers that
       // enforce that.
       ...buildInvestigationTools({ investigation: makeInvestigationClient() }),
+      // The support Workbench: read a file, list a folder, run a read-only
+      // command, open one of our own pages. ⛔ minRole "staff" on all four —
+      // this is a read of the platform source and a command runner on the
+      // production box, so a TENANT_ADMIN ("internal") must never reach it.
+      // ⛔ Nothing here decides what is allowed: the api door shares the HUMAN
+      // workbench's gate closure, so the agent is held to exactly the rules a
+      // person at the desk is held to. See workbenchTools.ts.
+      ...buildWorkbenchTools({ workbench: makeWorkbenchClient() }),
     ];
     // Standing knowledge: the platform document + the ONE document belonging to
     // the company this person is from, published from docs/agent-knowledge by

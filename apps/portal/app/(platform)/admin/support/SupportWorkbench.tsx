@@ -41,6 +41,41 @@ type TermLine = { kind: "cmd" | "out" | "err" | "note" | "agent"; text: string }
 type Problem = { sev: "e" | "w"; text: string; loc: string };
 type ChatMsg = { id: string; role: "you" | "agent" | "tool" | "error"; text: string; model?: string; pending?: boolean };
 
+/**
+ * What the SERVER saw when it opened the page — the same facts the agent's
+ * `browse` tool gets back.
+ *
+ * Shown beside the iframe on purpose. The person is looking at pixels the agent
+ * cannot see, and the agent is reasoning about a status code and a title the
+ * person cannot see; putting both on one screen is what stops the two of you
+ * describing different pages to each other.
+ */
+type PageInfo = {
+  url: string;
+  finalUrl: string;
+  status: number;
+  ok: boolean;
+  contentType: string;
+  bytes: number;
+  ms: number;
+  title: string | null;
+  headings: Array<{ level: number; text: string }>;
+  links: Array<{ text: string; href: string }>;
+  scripts: string[];
+  forms: Array<{ action: string; method: string; fields: string[] }>;
+  clientRendered: boolean;
+  text: string;
+};
+
+/** Widths the preview can be pinned to. A support person is usually being told
+ *  "it looks wrong on my phone", so the phone width is not a nicety. */
+const PREVIEW_WIDTHS: Array<{ id: string; label: string; px: number | null }> = [
+  { id: "fit", label: "Fit", px: null },
+  { id: "phone", label: "Phone", px: 390 },
+  { id: "tablet", label: "Tablet", px: 820 },
+  { id: "desktop", label: "Desktop", px: 1280 },
+];
+
 const AGENT_BASE = "/agent-api";
 
 function agentToken(): string {
@@ -198,6 +233,17 @@ export default function SupportWorkbench() {
   const [modelOpen, setModelOpen] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
 
+  // browser — the preview pane
+  const [mainView, setMainView] = useState<"editor" | "preview">("editor");
+  const [previewUrl, setPreviewUrl] = useState("https://app.loopcom.net/login");
+  const [previewLive, setPreviewLive] = useState("");
+  const [previewWidth, setPreviewWidth] = useState<string>("fit");
+  const [page, setPage] = useState<PageInfo | null>(null);
+  const [pageErr, setPageErr] = useState("");
+  const [pageBusy, setPageBusy] = useState(false);
+  const [browsableHosts, setBrowsableHosts] = useState<string[]>([]);
+  const [frameKey, setFrameKey] = useState(0);
+
   // palette
   const [palette, setPalette] = useState(false);
   const [palQuery, setPalQuery] = useState("");
@@ -219,6 +265,43 @@ export default function SupportWorkbench() {
         if (s?.activeChatModel) setModel(`${s.activeChatModel.provider}:${s.activeChatModel.model}`);
       })
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    apiGet<{ hosts: string[] }>("/admin/support/workbench/browsable-hosts")
+      .then((h) => setBrowsableHosts(h.hosts))
+      .catch(() => setBrowsableHosts([]));
+  }, []);
+
+  /**
+   * Open a page: put it in the iframe AND ask the server to describe it.
+   *
+   * ⛔ Both halves, always. The iframe is what a person sees; the server read is
+   * what the agent sees. Doing only the iframe would leave the agent blind on a
+   * screen that looks like it is showing it something.
+   *
+   * ⛔ The iframe only ever renders because these are OUR OWN pages and nginx
+   * sends `X-Frame-Options: SAMEORIGIN`. That is also the reason the address is
+   * refused server-side rather than trusted here: a foreign address would not
+   * frame anyway, and the server read must never be pointed off Loopcom.
+   */
+  const openPage = useCallback(async (raw: string) => {
+    const url = raw.trim();
+    if (!url) return;
+    setPageBusy(true);
+    setPageErr("");
+    try {
+      const out = await apiGet<PageInfo>(`/admin/support/workbench/browse?url=${encodeURIComponent(url)}`);
+      setPage(out);
+      setPreviewLive(out.finalUrl);
+      setFrameKey((k) => k + 1);
+    } catch (e) {
+      setPage(null);
+      setPreviewLive("");
+      setPageErr(errorText(e));
+    } finally {
+      setPageBusy(false);
+    }
   }, []);
 
   const openDir = useCallback(async (p: string) => {
@@ -427,6 +510,13 @@ export default function SupportWorkbench() {
           ) : null}
           <button className="ide-ai" title="Run" onClick={() => setPanelTab("terminal")}>▷</button>
           <button className="ide-ai" title="Problems" onClick={() => setPanelTab("problems")}>⬚</button>
+          <button
+            className={"ide-ai" + (mainView === "preview" ? " on" : "")}
+            title="Preview a page"
+            onClick={() => { setMainView("preview"); if (!page && !pageBusy) void openPage(previewUrl); }}
+          >
+            🌐
+          </button>
           <button className="ide-ai" title="Agent">✦</button>
           <span className="ide-ai-sp" />
           <button className="ide-ai" title="Command palette" onClick={() => setPalette(true)}>⚙</button>
@@ -477,7 +567,131 @@ export default function SupportWorkbench() {
 
         {/* ── editor ── */}
         <div className="ide-edcol">
-          <div className="ide-tabs">
+          {/* ── the browser ──────────────────────────────────────────────
+              Izzy, 2026-08-24: "even a browser, so the agent can see what
+              things look like."
+
+              ⛔ TWO HALVES, AND THEY ARE HONESTLY DIFFERENT. The iframe is
+              pixels, and only a PERSON can see it. The strip beneath is what
+              the SERVER read — status, timing, title, headings, forms — and
+              that is exactly what the agent's `browse` tool receives. Showing
+              both together is what stops the person and the agent describing
+              different pages to each other.
+
+              ⛔ It does NOT screenshot. Pixels would need a headless browser
+              and app-api-1 has no chromium; saying "the agent can see this"
+              about the iframe would be a lie the model would then act on. */}
+          {mainView === "preview" ? (
+            <>
+              <div className="ide-tabs">
+                <button className="ide-tab on">
+                  <span className="ide-ic ide-ic-web">🌐</span>
+                  Preview
+                  <span className="ide-x" onClick={(ev) => { ev.stopPropagation(); setMainView("editor"); }}>×</span>
+                </button>
+                <span className="ide-tab ide-fill" />
+              </div>
+
+              <div className="ide-addr">
+                <button className="ide-abtn" title="Reload" disabled={pageBusy} onClick={() => void openPage(previewUrl)}>⟳</button>
+                <input
+                  className="ide-url"
+                  value={previewUrl}
+                  spellCheck={false}
+                  onChange={(e) => setPreviewUrl(e.target.value)}
+                  onKeyDown={(e) => (e.key === "Enter" ? void openPage(previewUrl) : null)}
+                  placeholder="https://app.loopcom.net/login"
+                />
+                <span className="ide-widths">
+                  {PREVIEW_WIDTHS.map((w) => (
+                    <button
+                      key={w.id}
+                      className={"ide-wbtn" + (previewWidth === w.id ? " on" : "")}
+                      onClick={() => setPreviewWidth(w.id)}
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </span>
+                <button className="ide-abtn" disabled={pageBusy} onClick={() => void openPage(previewUrl)}>Open</button>
+              </div>
+
+              <div className="ide-preview">
+                {pageErr ? (
+                  <div className="ide-empty ide-empty-bad">
+                    {pageErr}
+                    {browsableHosts.length ? (
+                      <div className="ide-hosts">The browser can open: {browsableHosts.join(" · ")}</div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {!pageErr && !previewLive ? (
+                  <div className="ide-empty">{pageBusy ? "Opening…" : "Type one of Loopcom's own addresses and press Open."}</div>
+                ) : null}
+                {!pageErr && previewLive ? (
+                  <div className="ide-frame-wrap">
+                    <iframe
+                      key={frameKey}
+                      className="ide-frame"
+                      src={previewLive}
+                      title="Page preview"
+                      style={
+                        PREVIEW_WIDTHS.find((w) => w.id === previewWidth)?.px
+                          ? { width: `${PREVIEW_WIDTHS.find((w) => w.id === previewWidth)!.px}px` }
+                          : undefined
+                      }
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              {/* What the agent sees of the same page. */}
+              {page ? (
+                <div className="ide-pagefacts">
+                  <div className="ide-pf-row">
+                    <span className={"ide-pf-status " + (page.ok ? "ok" : "bad")}>{page.status}</span>
+                    <b>{page.title || "(no title)"}</b>
+                    <span className="ide-pf-dim">{page.ms} ms · {(page.bytes / 1024).toFixed(0)} KB · {page.contentType.split(";")[0]}</span>
+                    <button
+                      className="ide-abtn"
+                      title="Ask the agent about this page"
+                      onClick={() => setAsk(`Look at ${page.finalUrl} and tell me what you find.`)}
+                    >
+                      Ask the agent about this
+                    </button>
+                  </div>
+                  {page.clientRendered ? (
+                    <div className="ide-pf-note">
+                      This page fills itself in after loading, so there is almost no text in the markup. That is normal
+                      here — it is not evidence of a broken deploy.
+                    </div>
+                  ) : null}
+                  <div className="ide-pf-cols">
+                    <div>
+                      <h6>Headings</h6>
+                      {page.headings.length ? page.headings.slice(0, 8).map((h, i) => (
+                        <div key={i} className="ide-pf-item" style={{ paddingLeft: (h.level - 1) * 10 }}>{h.text}</div>
+                      )) : <div className="ide-pf-item dim">none</div>}
+                    </div>
+                    <div>
+                      <h6>Forms</h6>
+                      {page.forms.length ? page.forms.slice(0, 4).map((f, i) => (
+                        <div key={i} className="ide-pf-item">{f.method.toUpperCase()} {f.action || "(this page)"} · {f.fields.join(", ") || "no named fields"}</div>
+                      )) : <div className="ide-pf-item dim">none</div>}
+                    </div>
+                    <div>
+                      <h6>Scripts</h6>
+                      {page.scripts.length ? page.scripts.slice(0, 5).map((x, i) => (
+                        <div key={i} className="ide-pf-item">{x.split("/").pop()}</div>
+                      )) : <div className="ide-pf-item dim">none</div>}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          <div className="ide-tabs" style={mainView === "preview" ? { display: "none" } : undefined}>
             {openEditors.length === 0 ? <span className="ide-tab on">Welcome</span> : null}
             {openEditors.map((p) => (
               <button key={p} className={"ide-tab" + (file?.path === p ? " on" : "")} onClick={() => void openFile(p)}>
@@ -490,7 +704,7 @@ export default function SupportWorkbench() {
             <span className="ide-acts"><span>⫿⫿</span><span>⤢</span><span>⋯</span></span>
           </div>
 
-          <div className="ide-crumbs">
+          <div className="ide-crumbs" style={mainView === "preview" ? { display: "none" } : undefined}>
             {crumbs.length === 0 ? <span>no file open</span> : null}
             {crumbs.map((c, i) => (
               <span key={i}>
@@ -500,7 +714,7 @@ export default function SupportWorkbench() {
             ))}
           </div>
 
-          <div className="ide-edwrap">
+          <div className="ide-edwrap" style={mainView === "preview" ? { display: "none" } : undefined}>
             <div className="ide-code">
               {fileError ? <div className="ide-empty">{fileError}</div> : null}
               {!file && !fileError ? <div className="ide-empty">Pick a file in the explorer to read it.</div> : null}

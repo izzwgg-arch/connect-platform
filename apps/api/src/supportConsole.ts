@@ -43,10 +43,13 @@ import {
   type GroundRulesText,
 } from "./supportGroundRules";
 import { runWatchman, type WatchmanProbes, type WatchmanVerdict } from "./supportWatchman";
+import { agentMohSecretOk } from "./agentMohOverride";
+import { BROWSABLE_HOSTS, openPage } from "./supportBrowser";
 import {
   ALLOWED_BINARIES,
   COMMAND_TIMEOUT_MS,
   availableBinaries,
+  commandTouchesSecrets,
   decideCommandRun,
   deployedCommit,
   gitBranch,
@@ -357,20 +360,54 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
     };
   });
 
-  // ───────────────────────── Phase 3: the inbox ─────────────────────────
-
+  // ──────────────── One customer's threads, opened from a case ────────────────
+  //
+  // ⛔⛔ `tenantId` IS REQUIRED, AND THAT REQUIREMENT IS THE WHOLE FIX.
+  // This route used to answer with EVERY company's chat threads, newest first —
+  // 679 threads and 2,477 messages measured on 2026-08-24 — which made it the
+  // one surface on the platform where a single person could read thirty
+  // companies' customer conversations with no case attached to the reading.
+  //
+  // Izzy, 2026-08-24: *"I don't want to see everybody's text messages. I don't
+  // know why it's there."* He was right on the merits, not only on taste.
+  //
+  // The capability is kept because support genuinely does sometimes have to
+  // read the thread to answer the question. What is removed is BROWSING: a
+  // caller must now name the company, so there is no request that returns the
+  // platform. ⛔ Enforcing it in the SCHEMA rather than in the screen is
+  // deliberate — hiding a browse surface in the UI leaves it one curl away.
+  //
+  // `caseRef` is optional and unvalidated ON PURPOSE: it is provenance for the
+  // audit row, not permission. Making it mandatory would tempt a caller to
+  // invent one, and a fabricated reason in an audit trail is worse than an
+  // honest blank.
   app.get("/admin/support/threads", async (req, reply) => {
-    const user = await requireSuper(req, reply);
+    const user: any = await requireSuper(req, reply);
     if (!user) return reply;
     const q = z
       .object({
+        tenantId: z.string().min(1).max(64),
+        caseRef: z.string().max(64).optional(),
         type: z.enum(["all", "sms", "dm", "group", "tenant_group"]).optional(),
         take: z.coerce.number().int().min(1).max(THREADS_MAX_TAKE).optional(),
       })
       .safeParse(req.query ?? {});
-    if (!q.success) return reply.code(400).send({ error: "bad_query" });
-    const where: Record<string, unknown> = { active: true };
+    if (!q.success) {
+      return reply.code(400).send({
+        error: "tenant_required",
+        message: "Open a customer's conversations from their case — this list is never shown for the whole platform.",
+      });
+    }
+    const where: Record<string, unknown> = { active: true, tenantId: q.data.tenantId };
     if (q.data.type && q.data.type !== "all") where.type = q.data.type.toUpperCase();
+    // Every open is recorded against the case it was opened for. A reading with
+    // a reason attached is the thing that replaced browsing.
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: "support.customer_threads_opened",
+      tenantId: q.data.tenantId,
+      payload: { by: String(user.sub ?? ""), caseRef: q.data.caseRef ?? null },
+    });
     const threads = await db.connectChatThread.findMany({
       where,
       orderBy: { lastMessageAt: "desc" },
@@ -988,6 +1025,188 @@ export function registerSupportConsoleRoutes(deps: SupportConsoleDeps): void {
       // not one must say so, or the first `rm` reads as a broken product.
       note: "Read-only commands only. Changes go through the normal approval and deploy flow.",
     };
+  });
+
+  /**
+   * The browser. Opens one of Loopcom's own pages and describes it.
+   *
+   * The safety decisions all live in supportBrowser.ts (host allowlist, no
+   * credentials ever, hand-followed redirects re-validated per hop). This
+   * handler carries the answer and nothing else.
+   */
+  app.get("/admin/support/workbench/browse", async (req, reply) => {
+    const user: any = await requireSuper(req, reply);
+    if (!user) return reply;
+    const q = z.object({ url: z.string().min(1).max(2000) }).safeParse(req.query ?? {});
+    if (!q.success) return reply.code(400).send({ error: "bad_query", message: "Type a web address to open." });
+    const out = await openPage(q.data.url);
+    if (!out.ok) return reply.code(400).send({ error: "cannot_browse", message: out.reason });
+    await supportAudit(db, {
+      actor: "support-desk",
+      event: "workbench.browsed",
+      tenantId: String(user.tenantId ?? ""),
+      payload: { by: String(user.sub ?? ""), url: out.page.url, status: out.page.status, ms: out.page.ms },
+    });
+    return out.page;
+  });
+
+  /** The hosts the browser may open, so a refusal on screen is never a surprise. */
+  app.get("/admin/support/workbench/browsable-hosts", async (req, reply) => {
+    const user = await requireSuper(req, reply);
+    if (!user) return reply;
+    return { hosts: [...BROWSABLE_HOSTS] };
+  });
+
+  /**
+   * THE AGENT'S DOOR - and the reason it lives HERE, inside this closure,
+   * rather than in a module of its own.
+   *
+   * The agent must be held to exactly the gates a person is held to: the same
+   * Watchman verdict, the same command allowlist, the same secret-path refusal,
+   * the same rulebook, the same workspace root, the same audit shape. A second
+   * module would be a second implementation, and the moment those two drift the
+   * agent is running under rules nobody wrote down. Registering it in the same
+   * closure means there is no second copy to drift - decideCommandRun,
+   * currentRules(), watchmanNow() and the workspace root are literally the same
+   * things the human routes above use.
+   *
+   * AUTH IS THE ONLY DIFFERENCE: the agent has no JWT, so this door takes the
+   * shared internal secret and FAILS CLOSED when it is unset. The path must
+   * also be in jwtPublicRouteBypass.ts or the global JWT hook 401s it before
+   * this check ever runs - a 403 means you reached the handler, a 401 means you
+   * did not. That exact miss left the account-setup door dead for six days.
+   *
+   * There is no `confirmed` flag here, deliberately. A person may confirm an
+   * ask-first command because a person is accountable for it; the agent cannot
+   * confirm on its own behalf, so an ask-first verdict is a REFUSAL for the
+   * agent and it has to come back and ask the human in the dock.
+   */
+  app.post("/internal/agent/workbench", async (req: any, reply: any) => {
+    if (!agentMohSecretOk(req?.headers?.["x-agent-internal-secret"])) {
+      return reply.code(403).send({ error: "forbidden", message: "workbench door: bad or missing internal secret" });
+    }
+    const body = z
+      .object({
+        action: z.enum(["list_files", "read_file", "run_command", "browse"]),
+        path: z.string().max(400).optional(),
+        command: z.string().max(600).optional(),
+        url: z.string().max(2000).optional(),
+        purpose: z.string().max(300).optional(),
+      })
+      .safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: "bad_body" });
+    const { action, purpose } = body.data;
+
+    const root = String(deps.workspaceRoot ?? "").trim();
+    if (!root && action !== "browse") {
+      return { ok: false, error: "workbench_off", message: "The workbench has no workspace configured on this server." };
+    }
+
+    // A refusal is DATA, not an error - the same contract as `investigate`. The
+    // model has to see WHY so it can adjust; turning a rulebook refusal into a
+    // thrown error hides "your rules say never" behind a generic failure, and
+    // the model simply tries again.
+    try {
+      if (action === "list_files") {
+        const relative = body.data.path ?? "";
+        const [entries, git] = await Promise.all([listWorkspaceDir(root, relative), gitStatusMap(root)]);
+        await supportAudit(db, {
+          actor: "agent",
+          event: "workbench.agent_listed",
+          tenantId: "",
+          payload: { path: relative, count: entries.length, purpose: purpose ?? null },
+        });
+        return { ok: true, path: relative, entries: entries.map((e) => ({ ...e, git: git[e.path] ?? null })) };
+      }
+
+      if (action === "read_file") {
+        const relative = body.data.path ?? "";
+        if (!relative) return { ok: false, error: "no_path", message: "Which file?" };
+        // The same secret-path fence the terminal uses. `cat` is legitimately
+        // read-only, which is exactly why reading a PATH has to be checked too -
+        // otherwise this door serves .env.platform and every private key.
+        if (commandTouchesSecrets("cat " + relative)) {
+          await supportAudit(db, {
+            actor: "agent",
+            event: "workbench.agent_refused",
+            tenantId: "",
+            payload: { action, path: relative, reason: "refused_secrets", purpose: purpose ?? null },
+          });
+          return { ok: false, refused: true, error: "refused_secrets", message: "Refused - that file holds live credentials." };
+        }
+        const file = await readWorkspaceFile(root, relative);
+        await supportAudit(db, {
+          actor: "agent",
+          event: "workbench.agent_read",
+          tenantId: "",
+          payload: { path: relative, bytes: file.bytes, purpose: purpose ?? null },
+        });
+        return { ok: true, ...file };
+      }
+
+      if (action === "browse") {
+        const out = await openPage(body.data.url ?? "");
+        await supportAudit(db, {
+          actor: "agent",
+          event: out.ok ? "workbench.agent_browsed" : "workbench.agent_refused",
+          tenantId: "",
+          payload: { action, url: body.data.url ?? "", ok: out.ok, purpose: purpose ?? null },
+        });
+        if (!out.ok) return { ok: false, refused: true, error: "cannot_browse", message: out.reason };
+        return { ok: true, page: out.page };
+      }
+
+      // run_command
+      const command = (body.data.command ?? "").trim();
+      if (!command) return { ok: false, error: "no_command", message: "Which command?" };
+      const { rules, version } = await currentRules();
+      const watchman = await watchmanNow();
+      const decision = decideCommandRun({ command, rules, watchman, confirmed: false });
+      if (!decision.run) {
+        await supportAudit(db, {
+          actor: "agent",
+          event: "workbench.agent_refused",
+          tenantId: "",
+          payload: {
+            action,
+            command,
+            reason: decision.error,
+            matchedRule: decision.verdict?.matchedRule ?? null,
+            rulesVersion: version,
+            purpose: purpose ?? null,
+          },
+        });
+        return {
+          ok: false,
+          refused: true,
+          error: decision.error,
+          // An ask-first verdict reaches the model as "ask the person at the
+          // desk", never as something it may retry with a flag set.
+          message: decision.needsConfirm
+            ? decision.message + " Ask the person at the desk to run it - you cannot confirm this yourself."
+            : decision.message,
+          matchedRule: decision.verdict?.matchedRule ?? null,
+        };
+      }
+      const result = await runCheckedCommand(command, root);
+      await supportAudit(db, {
+        actor: "agent",
+        event: "workbench.agent_ran",
+        tenantId: "",
+        payload: { command, exitCode: result.exitCode, ms: result.ms, rulesVersion: version, purpose: purpose ?? null },
+      });
+      return {
+        ok: true,
+        command,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        truncated: result.truncated,
+        ms: result.ms,
+      };
+    } catch (e: any) {
+      return { ok: false, error: "workbench_failed", message: String(e?.message ?? "That did not work.").slice(0, 300) };
+    }
   });
 
   app.post("/admin/support/threads/:id/reply", async (req, reply) => {

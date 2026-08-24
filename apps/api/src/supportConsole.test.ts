@@ -194,6 +194,11 @@ function inboxDb(overrides: Record<string, any> = {}) {
     connectChatThread: {
       async findMany(args: any) {
         let out = threads.filter((t) => t.active);
+        // ⛔ The fake MUST honour the tenant filter. A fake that ignores the
+        // very where-clause under test is how a scoping bug ships green — this
+        // repo has already paid for that exact shape (the service-interruption
+        // sweep passed 102 tests against a query Prisma was rejecting).
+        if (args?.where?.tenantId) out = out.filter((t) => t.tenantId === args.where.tenantId);
         if (args?.where?.type) out = out.filter((t) => t.type === args.where.type);
         out.sort((a, b) => +b.lastMessageAt - +a.lastMessageAt);
         return out.slice(0, args?.take ?? out.length);
@@ -222,7 +227,7 @@ function inboxDb(overrides: Record<string, any> = {}) {
 
 function register(
   rows: any[],
-  opts: { allow?: boolean; action?: any; messages?: any[]; customer?: Record<string, any>; sendSms?: any; inbox?: Record<string, any> } = {},
+  opts: { allow?: boolean; action?: any; messages?: any[]; customer?: Record<string, any>; sendSms?: any; inbox?: Record<string, any>; workspaceRoot?: string; watchmanOk?: boolean } = {},
 ) {
   const app = fakeApp();
   const db = {
@@ -240,6 +245,18 @@ function register(
     // Test-specific overrides win over every default fake.
     ...(opts.customer ?? {}),
   };
+  // Capture audit rows so a test can prove a reading was RECORDED, not just
+  // permitted. ⛔ Wraps whatever fake is already in place rather than replacing
+  // it, so the tests that assert on their own agentAuditLog still see theirs.
+  const audits: any[] = [];
+  const innerAudit = (db as any).agentAuditLog;
+  (db as any).agentAuditLog = {
+    ...(innerAudit ?? {}),
+    async create(arg: any) {
+      audits.push(arg?.data ?? arg);
+      return innerAudit?.create ? innerAudit.create(arg) : { id: "a1" };
+    },
+  };
   registerSupportConsoleRoutes({
     app,
     db,
@@ -252,8 +269,21 @@ function register(
     },
     sendSms: opts.sendSms,
     smsQueue: { fake: true },
+    ...(opts.workspaceRoot ? { workspaceRoot: opts.workspaceRoot } : {}),
+    // ⛔ Gate order is WATCHMAN first, so a workbench test without healthy
+    // probes is refused "not safe to work" before it ever reaches the rule it
+    // meant to exercise — and would pass for entirely the wrong reason.
+    ...(opts.watchmanOk
+      ? {
+          watchmanProbes: {
+            rules: async () => ({ found: 2, missing: [] }),
+            server: async () => ({ healthy: 2, unhealthy: [] }),
+            pbx: async () => ({ reachable: true, readOnly: true }),
+          },
+        }
+      : {}),
   });
-  return { app, db };
+  return { app, db, audits };
 }
 
 async function call(app: any, route: string, req: any = {}) {
@@ -373,17 +403,46 @@ test("customer panel: gate refused → nothing touched", async () => {
   assert.equal(reply.statusCode, 403);
 });
 
-// ---------------------------------------------------------------- inbox (Phase 3)
+// ------------------------------------------- one customer's threads (2026-08-24)
 
-test("inbox: threads across companies, newest activity first, tenant names joined", async () => {
+/**
+ * ⛔⛔ THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT IS THE POINT.
+ * It read "threads across companies, newest activity first" — the browse
+ * surface. Measured 2026-08-24 that route answered with 679 threads and 2,477
+ * messages belonging to every company on the platform, reachable with no case
+ * attached to the reading. Izzy: "I don't want to see everybody's text
+ * messages. I don't know why it's there."
+ *
+ * The capability is kept (support does sometimes have to read the thread to
+ * answer the question); BROWSING is what was removed. So the assertion is now
+ * that a request without a company is REFUSED, and the refusal explains itself.
+ */
+test("⛔ a request with no company is refused — there is no way to browse the platform", async () => {
   const { app } = register([]);
-  const { out } = await call(app, "/admin/support/threads", { query: {} });
-  assert.equal(out.threads.length, 2);
+  const { reply } = await call(app, "/admin/support/threads", { query: {} });
+  assert.equal(reply.statusCode, 400);
+  assert.equal(reply.body.error, "tenant_required");
+  assert.match(String(reply.body.message), /from their case/i);
+});
+
+test("threads: scoped to one company, newest activity first, tenant names joined", async () => {
+  const { app } = register([]);
+  const { out } = await call(app, "/admin/support/threads", { query: { tenantId: "t1", caseRef: "Q2FJRK" } });
+  // t2's DM is absent: the scope is the fence, not a filter the screen applies.
+  assert.ok(out.threads.every((t: any) => t.tenantId === "t1"), "a scoped read returned another company's thread");
   assert.equal(out.threads[0].id, "th_sms");
-  assert.equal(out.threads[0].tenantName, "Gesheft"); // t1 joined via tenant table
+  assert.equal(out.threads[0].tenantName, "Gesheft"); // joined via tenant table
   assert.equal(out.threads[0].sharedInbox, true);
   assert.equal(out.threads[0].last.preview, "hi!"); // deleted m3 is not the preview
-  assert.equal(out.threads[1].type, "DM");
+});
+
+test("⛔ opening a customer's threads is recorded against the case it was opened for", async () => {
+  const { app, audits } = register([]);
+  await call(app, "/admin/support/threads", { query: { tenantId: "t1", caseRef: "Q2FJRK" } });
+  const row = audits.find((a: any) => a.event === "support.customer_threads_opened");
+  assert.ok(row, "no audit row — a reading with no record is the browse surface again");
+  assert.equal(row.tenantId, "t1");
+  assert.equal(row.payload.caseRef, "Q2FJRK");
 });
 
 test("inbox: transcript is oldest-first, deleted messages masked, sender named by the shared rule", async () => {
@@ -757,6 +816,14 @@ test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS 
       "/admin/support/speak",
       "/admin/support/threads/:id/reply",
       "/admin/support/workbench/run",
+      // ⛔ The AGENT's workbench door. It is registered in THIS module, inside
+      // the same closure as the human workbench routes, ON PURPOSE: it must
+      // ride the identical Watchman verdict, command allowlist, secret-path
+      // refusal and rulebook. A module of its own would be a second gate
+      // implementation, and the day those two drift the agent is running under
+      // rules nobody wrote down. Auth is the only difference (shared secret,
+      // fail-closed) because the agent has no JWT.
+      "/internal/agent/workbench",
     ],
     "supportConsole.ts grew an unexpected write route",
   );
@@ -765,6 +832,154 @@ test("⛔ the module's writes are exactly reply/takeover/staff-message, and SMS 
   for (const forbidden of ["smsQueue.add", "sendSMS(", "voipMs", "connectChatMessage.create"]) {
     assert.ok(!code.includes(forbidden), `supportConsole.ts must never send or write chat/SMS messages itself (found ${forbidden})`);
   }
+});
+
+// ─────────────── the agent's workbench door (2026-08-24) ───────────────
+
+/**
+ * These prove the ONE property the whole design rests on: the agent is held to
+ * exactly the gates a person at the desk is held to, because it goes through
+ * the same closure. Auth is the only thing that differs.
+ */
+
+const SECRET = "test-internal-secret-value";
+
+function withSecret<T>(fn: () => Promise<T>): Promise<T> {
+  const before = process.env.AGENT_INTERNAL_SECRET;
+  process.env.AGENT_INTERNAL_SECRET = SECRET;
+  return fn().finally(() => {
+    if (before === undefined) delete process.env.AGENT_INTERNAL_SECRET;
+    else process.env.AGENT_INTERNAL_SECRET = before;
+  });
+}
+
+test("⛔ the agent's door FAILS CLOSED with no secret configured", async () => {
+  const before = process.env.AGENT_INTERNAL_SECRET;
+  delete process.env.AGENT_INTERNAL_SECRET;
+  try {
+    const { app } = register([]);
+    const { reply } = await call(app, "POST /internal/agent/workbench", {
+      headers: {},
+      body: { action: "list_files" },
+    });
+    assert.equal(reply.statusCode, 403);
+  } finally {
+    if (before !== undefined) process.env.AGENT_INTERNAL_SECRET = before;
+  }
+});
+
+test("⛔ a wrong secret is refused 403 — never 401, which would mean the route was never reached", async () => {
+  await withSecret(async () => {
+    const { app } = register([]);
+    const { reply } = await call(app, "POST /internal/agent/workbench", {
+      headers: { "x-agent-internal-secret": "not-the-secret" },
+      body: { action: "list_files" },
+    });
+    assert.equal(reply.statusCode, 403);
+  });
+});
+
+test("⛔⛔ an ask-first command is a REFUSAL for the agent — it cannot confirm on its own behalf", async () => {
+  await withSecret(async () => {
+    // A rulebook whose ask-first list names docker; the human route would offer
+    // a confirm button, and the agent must instead be told to go and ask.
+    const rdb = {
+      supportGroundRule: {
+        async findFirst() {
+          return {
+            version: 3,
+            allowed: "Read files, logs and code.",
+            never: "Touch payments, billing or pension.",
+            askFirst: "Anything about docker.",
+            createdAt: new Date(),
+          };
+        },
+      },
+    };
+    const { app, audits } = register([], { customer: rdb as any, workspaceRoot: "/tmp", watchmanOk: true });
+    const { out } = await call(app, "POST /internal/agent/workbench", {
+      headers: { "x-agent-internal-secret": SECRET },
+      body: { action: "run_command", command: "docker ps" },
+    });
+    assert.equal(out.ok, false);
+    assert.equal(out.refused, true);
+    assert.match(String(out.message), /ask the person at the desk/i);
+    // ⛔ And it is audited: a door that records only its successes is not an
+    // audit trail.
+    assert.ok(audits.some((a: any) => a.event === "workbench.agent_refused"), "the refusal was not audited");
+  });
+});
+
+test("⛔ the agent cannot read a credentials file, even though `cat` is read-only", async () => {
+  await withSecret(async () => {
+    const { app, audits } = register([], { workspaceRoot: "/tmp", watchmanOk: true });
+    const { out } = await call(app, "POST /internal/agent/workbench", {
+      headers: { "x-agent-internal-secret": SECRET },
+      body: { action: "read_file", path: "../../opt/connectcomms/env/.env.platform" },
+    });
+    assert.equal(out.ok, false);
+    assert.equal(out.error, "refused_secrets");
+    assert.ok(audits.some((a: any) => a.event === "workbench.agent_refused"));
+  });
+});
+
+test("⛔ browsing off Loopcom is refused through the agent's door too", async () => {
+  await withSecret(async () => {
+    const { app } = register([]);
+    const { out } = await call(app, "POST /internal/agent/workbench", {
+      headers: { "x-agent-internal-secret": SECRET },
+      body: { action: "browse", url: "http://169.254.169.254/latest/meta-data/" },
+    });
+    assert.equal(out.ok, false);
+    assert.equal(out.refused, true);
+  });
+});
+
+test("⛔ a refusal comes back as DATA (200 ok:false), never a thrown error", async () => {
+  await withSecret(async () => {
+    const { app } = register([], { workspaceRoot: "/tmp", watchmanOk: true });
+    const { reply, out } = await call(app, "POST /internal/agent/workbench", {
+      headers: { "x-agent-internal-secret": SECRET },
+      body: { action: "run_command", command: "rm -rf /" },
+    });
+    // A thrown error would hide "your rules say never" behind a generic
+    // failure, and the model would simply try again.
+    assert.notEqual(reply.statusCode, 500);
+    assert.equal(out.ok, false);
+    assert.ok(String(out.message).length > 10, "the model must be told WHY so it can adjust");
+  });
+});
+
+test("⛔ the agent's door is on the JWT bypass list (source guard — a miss answers 401 forever)", () => {
+  const src = readSource("jwtPublicRouteBypass.ts");
+  assert.ok(
+    src.includes("/internal/agent/workbench"),
+    "the workbench door is not in jwtPublicRouteBypass.ts — the global JWT hook will 401 it before its own secret check ever runs",
+  );
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(code.includes("isInternalAgentWorkbenchPath"), "the bypass const exists but is never used in the chain");
+});
+
+test("⛔⛔ the agent and the human share ONE gate implementation (source guard)", () => {
+  const src = readSource("supportConsole.ts");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // Both the human route and the agent door must call the SAME decider. If the
+  // agent's door ever grows its own allowlist or its own rules read, the two
+  // can be given different rules — which is the whole thing this prevents.
+  const decideCalls = (code.match(/decideCommandRun\(/g) ?? []).length;
+  assert.ok(decideCalls >= 2, "the agent door does not go through decideCommandRun");
+  assert.ok(
+    !/const\s+AGENT_ALLOWED/.test(code) && !/agentAllowedBinaries/.test(code),
+    "supportConsole.ts grew a second, agent-specific allowlist",
+  );
+  // ⛔ And the agent must never be able to pass `confirmed` — a person is
+  // accountable for a confirmation; the agent is not.
+  const agentBlock = code.slice(code.indexOf('"/internal/agent/workbench"'));
+  const agentBody = agentBlock.slice(0, agentBlock.indexOf("app.post(", 10) + 1 || agentBlock.length);
+  assert.ok(
+    agentBody.includes("confirmed: false"),
+    "the agent's door must pass confirmed:false — it cannot confirm on its own behalf",
+  );
 });
 
 test("server.ts injects the real sendConnectChatSmsMessage (source guard on the caller)", () => {
