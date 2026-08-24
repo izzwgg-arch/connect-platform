@@ -198,3 +198,38 @@ export const DEFAULT_PLATFORM_WEBSITE = "loopcom.net";
 export function platformWebsite(): string {
   return firstEnv("PLATFORM_WEBSITE") ?? DEFAULT_PLATFORM_WEBSITE;
 }
+
+/**
+ * The origin used for the SIGN-UP LINK we email a brand-new customer.
+ *
+ * Izzy's call, 2026-08-24, choosing from the onboarding-invite mock-up: the
+ * invitation email is the very first thing a new customer ever sees of us, so
+ * its link says Loopcom even though the platform as a whole has not flipped yet
+ * (`PUBLIC_PORTAL_URL` is still unset, so `canonicalPortalOrigin()` still
+ * answers the old domain). Both hostnames serve the same site, so this is a
+ * naming choice, not a routing one — nothing breaks either way.
+ *
+ * ⛔ It is deliberately NOT a second hardcoded default that can drift: the
+ * moment the platform's own canonical origin IS set by env, this follows it,
+ * so a future move never leaves invitation links pointing at a dead host. The
+ * loopcom default only applies while nothing has been chosen platform-wide.
+ * Same shape as `platformBillingContactEmail()`, which is already ahead of the
+ * platform on loopcom.net for the same reason.
+ */
+export const DEFAULT_ONBOARDING_LINK_ORIGIN = "https://app.loopcom.net";
+
+export function onboardingLinkOrigin(): string {
+  const explicit = firstEnv("ONBOARDING_LINK_ORIGIN");
+  if (explicit) return stripTrailingSlashes(explicit);
+  // Only follow the platform once somebody has actually chosen a canonical
+  // host; the built-in fallback inside canonicalPortalOrigin() is the OLD
+  // domain, which is exactly what this exists to avoid.
+  const platform = firstEnv("PUBLIC_PORTAL_URL", "PORTAL_PUBLIC_URL", "CONNECT_APP_URL", "APP_PUBLIC_URL");
+  if (platform) return stripTrailingSlashes(platform);
+  return DEFAULT_ONBOARDING_LINK_ORIGIN;
+}
+
+/** Absolute, emailable sign-up URL for a public token. Never a bare path. */
+export function onboardingLinkForToken(token: string): string {
+  return `${onboardingLinkOrigin()}/onboarding/${encodeURIComponent(token)}`;
+}

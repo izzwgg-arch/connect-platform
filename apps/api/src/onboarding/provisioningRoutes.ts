@@ -6,6 +6,7 @@ import { buildVitalPbxCsvForSubmission, listAdminSubmissions, readAdminSubmissio
 import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { resolveOnboardingStoragePath } from "./storage";
 import { runOnboardingSetup } from "./setupOrchestrator";
+import { registerOnboardingInvitationRoutes } from "./invitationRoutes";
 
 function user(req: any): { sub?: string; role?: string } { return req.user as any; }
 async function requireSuperAdmin(req: any, reply: any): Promise<{ sub?: string; role?: string } | null> {
@@ -22,6 +23,11 @@ import { randomBytes } from "node:crypto";
 function secureToken(): string { return randomBytes(24).toString("base64url"); }
 
 export async function registerOnboardingProvisioningRoutes(app: FastifyInstance) {
+  // The invite-and-analyse screens (list, one sign-up's story, patterns).
+  // Same SUPER_ADMIN gate as everything else here, handed in explicitly so the
+  // guard is visible at the registration site.
+  await registerOnboardingInvitationRoutes(app, requireSuperAdmin);
+
   // Create a public onboarding link (SUPER_ADMIN only)
   app.post("/admin/onboarding/public-links", async (req, reply) => {
     const admin = await requireSuperAdmin(req, reply); if (!admin) return;
