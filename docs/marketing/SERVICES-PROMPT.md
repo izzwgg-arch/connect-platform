@@ -102,14 +102,15 @@ Apps and administration
 - Guided onboarding — we set it up with you and build your first menu together
 
 PRICING
-$30 per user, per month. Tax included.
+$30 per user, per month.
 First phone number included. No setup fee, no contract, no feature tiers —
 every account gets the whole platform. Additional phone numbers and messaging
 are billed per use.
 
 CONTACT
-WhatsApp +1 845 733 1213
-loopcom.com
+WhatsApp +1 845 723 1213
+(No domain anywhere in the copy — WhatsApp is the only call to action until
+DNS, TLS and the PBX are ready and a domain is actually confirmed.)
 
 VOICE
 Direct and concrete. Short sentences. Say the thing, don't tease it. Write

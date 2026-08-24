@@ -35,22 +35,53 @@ images. It's the brand in one block.
 ```
 BRAND: Loopcom — the AI communications platform for business.
 One system for everything a business says to a customer: calls, texts,
-WhatsApp, team chat, and the customer record underneath it.
+voicemail, team chat, and the customer record underneath it.
 
 POSITIONING LINE: "We build everything and anything phone-related."
 
-THE TWO THINGS NOBODY ELSE HAS:
-1. Yiddish voicemail and call transcription, written out and translated
-   automatically.
-2. An assistant that actually does everything — across calls, messages and
-   voicemail. Not a chatbot bolted onto a phone system.
+WHY WE ARE DIFFERENT (both of these are true today):
+1. We run our own switching stack, not a reseller wrapper. The routing, the
+   call handling, the diagnostics — ours. So when a customer needs something
+   specific we can build it instead of explaining why the vendor won't.
+2. The phone system, the customer records and the messaging sit on one
+   database. Nothing is synced, searched for, or asked twice.
 
-PRICE: $30/month, tax included.
-CONTACT: WhatsApp +1 845 733 1213
+WHAT WE SELL — pick ONE per piece of work, never all of them:
+- Phone system: softphone in browser / mobile / desktop, IVR menus,
+  business-hours + after-hours + holiday routing, emergency override,
+  queues, ring groups, transfers, call recording
+- Voicemail: full mailbox, greeting slots, record your greeting by phone,
+  missed-call records and push alerts
+- CRM: contacts, tags, campaigns, forms, tasks, call scripts, bulk import,
+  voicemail drops, local-presence caller ID, live-call screen-pop, and one
+  append-only timeline per customer covering every call, text, email and
+  voicemail
+- Messaging: threaded SMS/MMS, shared or personal team inbox, templates,
+  bulk campaigns with an approval gate, 10DLC handled, internal team chat
+- AI: lead intelligence with risk flags and a confidence score, AI email
+  writing, call transcription with summary, action items, sentiment, intent
+- Analytics: live call monitoring, call history, call-quality and queue
+  reports, dashboard KPIs, IVR analytics, CSV export
+- Billing: branded invoice PDFs, autopay with retries, usage metering,
+  hosted payment page  (only if billing is in scope for that campaign)
+- Admin: user invites, custom roles, number management, QR device pairing,
+  guided onboarding
+
+PRICE: $30/month.
+CONTACT: WhatsApp +1 845 723 1213
+
+DO NOT CLAIM — not supported by the product, see SERVICES-INVENTORY.md Part 3:
+- "We handle your WhatsApp." Outbound is simulated; no API client exists.
+  Using WhatsApp as OUR contact number is fine.
+- Yiddish voicemail or call transcription. The code cannot compile.
+- "An assistant that does everything." No auto-reply, no tool-calling.
+- Choosing or generating voices for recordings. There is no text-to-speech.
+  Say: upload your own, or record by phone.
 
 AUDIENCE: B2B. Small and mid-size business owners who are losing money to
-missed calls and voicemails nobody checks. Speak plainly to an owner, not to
-a procurement department.
+calls nobody answered, customers nobody followed up, and a phone system
+somebody else controls. Speak plainly to an owner, not to a procurement
+department.
 
 VISUAL IDENTITY:
 - Ground: near-black. #05080C to #0C1218. Never white, never light grey.
@@ -90,8 +121,8 @@ BEAT 3  TURN      9-14s   Loopcom answers. An assistant that actually
                           does everything.
 BEAT 4  PROOF    14-22s   Yiddish voicemail and call transcription,
                           written out automatically. Nobody else does this.
-BEAT 5  PRICE    22-26s   Thirty dollars a month. Tax included.
-BEAT 6  CTA      26-30s   WhatsApp +1 845 733 1213
+BEAT 5  PRICE    22-26s   Thirty dollars a month.
+BEAT 6  CTA      26-30s   WhatsApp +1 845 723 1213
 ```
 
 This doubles as your shot list and your voiceover script.
@@ -191,7 +222,7 @@ distorted hands, extra fingers, morphing objects, jitter, flicker
 
 ## BLOCK E — VOICEOVER SCRIPT
 
-83 words, lands at roughly 30 seconds read at an unhurried pace.
+81 words, lands at roughly 30 seconds read at an unhurried pace.
 
 ```
 We build everything and anything phone-related.
@@ -205,9 +236,9 @@ your calls, your messages, your voicemail, all in one system.
 And Yiddish voicemail and call transcription, written out
 automatically. Nobody else does that.
 
-Thirty dollars a month. Tax included.
+Thirty dollars a month.
 
-Message us on WhatsApp. Eight four five, seven three three,
+Message us on WhatsApp. Eight four five, seven two three,
 one two one three.
 ```
 

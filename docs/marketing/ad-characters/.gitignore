@@ -1,0 +1,4 @@
+# Character seed frames are ~17 MB each (3072x5504 PNG), ~100 MB total.
+# Large binaries are painful to remove from git history once committed.
+# Delete this file if you deliberately want them tracked.
+*.png

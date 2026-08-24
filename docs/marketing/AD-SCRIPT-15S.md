@@ -10,7 +10,7 @@ Three versions. A is the recommendation. All are timed at a measured ad read
 ## TWO RULES FOR 15 SECONDS
 
 **1. Never speak the phone number.**
-"Eight four five, seven three three, one two one three" takes 4.5 seconds.
+"Eight four five, seven two three, one two one three" takes 4.5 seconds.
 That is 30% of the entire ad spent on ten digits. On screen it costs nothing
 and it's more accurate. Say "WhatsApp us" and let the number sit in frame.
 
@@ -30,10 +30,10 @@ Leads with the positioning line. Broadest appeal, works for any business.
 | 0.0–3.0 | "We build everything and anything phone-related." | **WE BUILD EVERYTHING & ANYTHING PHONE-RELATED** | Logo, then slow push into dark server aisle |
 | 3.0–6.2 | "One assistant answers your calls, texts and WhatsApp." | **ONE ASSISTANT.<br>CALLS · TEXTS · WHATSAPP** | Cyan pulse travelling along fibre |
 | 6.2–10.0 | "Yiddish voicemail, transcribed automatically. Nobody else does that." | **YIDDISH VOICEMAIL,<br>TRANSCRIBED AUTOMATICALLY** | Hands holding phone, screen glow, face unseen |
-| 10.0–12.5 | "Thirty dollars a month. Tax included." | **$30/MONTH<br>TAX INCLUDED** | Chamfered panel, cyan rim light |
-| 12.5–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 733 1213 | Pull back to empty dark centre, logo lands |
+| 10.0–12.5 | "Thirty dollars a month." | **$30/MONTH** | Chamfered panel, cyan rim light |
+| 12.5–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 723 1213 | Pull back to empty dark centre, logo lands |
 
-**33 words.** Voiceover ends at 14.0s, leaving one full second of the number
+**31 words.** Voiceover ends at 14.0s, leaving one full second of the number
 on screen in silence. That silence is deliberate — it's the only moment the
 viewer isn't being talked at, so it's the moment they read.
 
@@ -49,10 +49,10 @@ opens with the thing no competitor can answer.
 | 0.0–3.4 | "Your voicemail, in Yiddish, written out automatically." | **YIDDISH VOICEMAIL,<br>WRITTEN OUT AUTOMATICALLY** |
 | 3.4–5.6 | "Nobody else does that." | **NOBODY ELSE DOES THIS** |
 | 5.6–9.5 | "Loopcom is one assistant for every call, text and WhatsApp your business gets." | **ONE ASSISTANT FOR<br>EVERY CALL & MESSAGE** |
-| 9.5–12.2 | "Thirty dollars a month, tax included." | **$30/MONTH · TAX INCLUDED** |
-| 12.2–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 733 1213 |
+| 9.5–12.2 | "Thirty dollars a month." | **$30/MONTH** |
+| 12.2–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 723 1213 |
 
-**35 words.**
+**33 words.**
 
 ---
 
@@ -66,10 +66,10 @@ problem is one line, not a setup.
 | 0.0–3.2 | "Every missed call is a customer who called someone else." | **EVERY MISSED CALL IS<br>A CUSTOMER YOU LOST** |
 | 3.2–6.8 | "Loopcom answers. Calls, texts, WhatsApp, voicemail." | **LOOPCOM ANSWERS** |
 | 6.8–10.2 | "One assistant that actually does everything." | **ONE ASSISTANT.<br>IT DOES EVERYTHING.** |
-| 10.2–12.4 | "Thirty dollars a month. Tax included." | **$30/MONTH · TAX INCLUDED** |
-| 12.4–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 733 1213 |
+| 10.2–12.4 | "Thirty dollars a month." | **$30/MONTH** |
+| 12.4–15.0 | "Message us on WhatsApp." | **LOOPCOM**<br>WhatsApp +1 845 723 1213 |
 
-**32 words.**
+**30 words.**
 
 ---
 
