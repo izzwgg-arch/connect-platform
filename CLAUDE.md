@@ -4172,6 +4172,28 @@ and make sure the email stays in one thread … one thread per phone number."*
   Volume for everyone else ≈ **14 emails/day** — nowhere near Gmail's cap.
   ⛔ **A NEW user starts OFF** (schema default false) — "everybody" was a
   one-time backfill, not a changed default; changing the default is Izzy's call.
+- ✅ **B VISIBLE IS SWITCHED OFF (2026-08-24, Izzy: "turn off SMS to email for
+  all users in B Visible") — all 5 ACTIVE users, tenant `cmnlgryp8001lp9pajhatv3t9`.**
+  Platform-wide ON went **79 → 74** (66 ACTIVE), so exactly those five moved and
+  nobody else was touched. ⛔ **No deploy and no agent rebuild were needed** —
+  `smsEmailForwardJob.ts:140` reads the flag in a LIVE per-message query, so the
+  next inbound text simply stamps `no_opted_in_recipients`. **The text is never
+  lost, only the email is skipped.** Backup of the prior state:
+  `/root/bv-sms-email-backup-20260824.json` on loopcom (600, root-only); reversal
+  is setting those five ids back to true. ⛔ Unlike the 08-20 wave this one DOES
+  carry per-user `SMS_TO_EMAIL_DISABLED` audit rows (5, `metadata.source =
+  admin_bulk`). ⛔ Each user can still flip it back themselves in Quick Controls —
+  it is a per-user preference, not a tenant lock.
+- ⛔⛔ **AND TURNING THE CONNECT TOGGLE OFF DOES NOT STOP B VISIBLE'S TEXT EMAILS —
+  THE CARRIER SENDS ITS OWN, AND THAT IS THE THING MOST LIKELY TO READ AS "the fix
+  didn't work".** Verified live at VoIP.ms the same day (read-only `getDIDsInfo`):
+  **845-238-0478 still has `sms_email: sales@bvisible.us` with
+  `sms_email_enabled: "1"`**, which is a VoIP.ms-side forward Connect does not
+  touch. So four mailboxes go quiet and **sales@bvisible.us keeps getting an email
+  per text.** ⛔ **Also found and NOT previously recorded anywhere:
+  `sms_forward: 8456626794`** — the carrier additionally forwards every inbound
+  text as a TEXT to that number. **Both are carrier writes (`setSMS`), both are
+  customer-facing, and both are Izzy's call — deliberately left alone.**
 - ✅✅ **THE FORWARD HALF IS PROVEN IN PRODUCTION (2026-08-20 evening, measured
   read-only) — the acceptance test PASSED and a human answered one.** Since the
   bridge armed at **11:36Z**, **27 inbound texts arrived and 0 were unhandled**:
@@ -11488,7 +11510,11 @@ Changes.
   would ADD a $10 `SMS_PACKAGE` line — the same question Create A Box got;
   left false pending his word. ⛔ `sms_email` forwards every inbound text to
   **sales@bvisible.us** (their OWN mailbox this time) — left alone, so texts
-  land in BOTH places. Their other two numbers (866-579-7575 toll-free,
+  land in BOTH places. ⛔⛔ **UPDATE 2026-08-24: Connect's own SMS-to-email is
+  now OFF for all 5 B Visible users (see the SMS↔email bridge section), so this
+  carrier forward — plus `sms_forward: 8456626794`, which re-texts every inbound
+  message — is the ONLY remaining reason they still get texts by email. Neither
+  was touched; both need Izzy.** Their other two numbers (866-579-7575 toll-free,
   845-776-1311) stay unclaimed on purpose. ⏳ Not proven: no outbound text yet.
 - ⛔⛔ **CREATE A BOX TEXTS FOR FREE, BY IZZY'S DECISION (2026-08-18) —
   `smsBillingEnabled` is `false` ON PURPOSE and must not be "fixed".** Asked

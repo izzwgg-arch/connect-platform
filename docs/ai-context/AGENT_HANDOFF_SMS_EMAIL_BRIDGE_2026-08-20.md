@@ -29,7 +29,18 @@ the busiest inbound-SMS tenant (~174 texts/wk vs ~98/wk for the whole rest of
 the platform); do not "finish" the rollout by including them. Expected volume
 ≈ 14 forward emails/day. ⛔ New users default OFF (schema default) — this was
 a backfill, not a default change. Because it was a bulk update, this wave has
-no per-user `SMS_TO_EMAIL_ENABLED` audit rows. ⏳ Still unproven: a REAL text
+no per-user `SMS_TO_EMAIL_ENABLED` audit rows. ⛔ **UPDATE 2026-08-24 — B VISIBLE IS OFF** (Izzy: *"turn off SMS to email
+for all users in B Visible"*): all 5 ACTIVE users of tenant
+`cmnlgryp8001lp9pajhatv3t9` set false; platform ON went **79 → 74** (66 ACTIVE),
+so exactly those five moved. No deploy/rebuild — the flag is read in a live
+per-message query, so the next text stamps `no_opted_in_recipients` and the
+text itself is never lost. Backup `/root/bv-sms-email-backup-20260824.json`
+(loopcom, 600). This wave DOES carry 5 `SMS_TO_EMAIL_DISABLED` audit rows.
+⛔⛔ **It does NOT silence their text emails**: VoIP.ms still has
+`sms_email: sales@bvisible.us` / `sms_email_enabled: "1"` on 845-238-0478
+(verified live, read-only), and — not recorded anywhere before —
+`sms_forward: 8456626794` re-texts every inbound message. Both are carrier
+writes and both are Izzy's call; neither was touched. ⏳ Still unproven: a REAL text
 riding the bridge end to end (§5) — the next inbound text to any non-Gesheft
 tenant is the acceptance test.
 
