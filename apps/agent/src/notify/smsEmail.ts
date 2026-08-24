@@ -80,6 +80,30 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/**
+ * A contact name as it may appear in a mail HEADER (the Subject).
+ *
+ * ⛔ Measured 2026-08-23: 18 of 12,160 real contacts have a control character
+ * in their display name, and that name is interpolated straight into the
+ * subject. Nodemailer flattens a CR/LF to a space rather than letting a header
+ * be injected — so this is not a hole today — but the subject is also HALF of
+ * the one-email-thread-per-number promise, and a header should never depend on
+ * a downstream library's sanitising to be well formed. Strips control
+ * characters, collapses whitespace, and caps the length (longest real name is
+ * 78 chars, so the cap moves nobody today).
+ */
+export function headerSafeName(s: string): string {
+  const flat = Array.from(String(s ?? ""))
+    .map((ch) => {
+      const cp = ch.codePointAt(0) ?? 0;
+      return cp < 0x20 || cp === 0x7f ? " " : ch; // control chars can never reach a header
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > 120 ? flat.slice(0, 119) + "…" : flat;
+}
+
 export function formatSmsPhone(num: string | null): string {
   if (!num) return "Unknown number";
   const d = num.replace(/\D/g, "");
@@ -140,7 +164,7 @@ export function buildSmsEmail(input: SmsEmailInput): BuiltEmail {
   // ⛔ Stable subject — this is HALF of "one email thread per phone number".
   // The sender pins References to a per-thread root id; a subject that varied
   // per message would still split the conversation in most mail clients.
-  const subject = `Text with ${name}`;
+  const subject = `Text with ${headerSafeName(name)}`;
 
   // ── plain-text alternative ────────────────────────────────────────────
   const text = [
