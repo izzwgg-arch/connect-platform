@@ -140,3 +140,37 @@ test("gaps and ages are written the way somebody would say them", () => {
   assert.equal(agoWords(ago(30_000), NOW), "just now");
   assert.equal(agoWords(ago(1 * DAY), NOW), "24 hours ago");
 });
+
+// ⛔ CAUGHT BY READING THE LIVE SCREEN, NOT BY A FIXTURE. The "opened" beacon
+// arrived after some of these sign-ups, and one an admin builds by script has
+// no wizard events at all — so a missing beacon is not proof nobody used the
+// link. The first live read showed a LIVE customer captioned "nobody has ever
+// opened it", and a customer with autosaves in the record labelled "Not opened
+// yet". Both are the kind of wrong that makes a screen untrustworthy.
+test("a link with typing in it is never reported as unopened, even with no beacon", () => {
+  const r = buildInvitationRow(
+    row({ openedAt: null, lastActivityAt: ago(30 * 60_000), currentStepLabel: "Your number" }),
+    NOW,
+  );
+  assert.notEqual(r.state, "not_opened");
+  assert.equal(r.state, "in_progress");
+  assert.ok(!r.storyLine.includes("nobody has ever opened it"), r.storyLine);
+  assert.ok(r.storyLine.includes("they filled it in"), r.storyLine);
+});
+
+test("a finished account built by hand says so, instead of accusing the customer", () => {
+  const r = buildInvitationRow(
+    row({ status: "ACTIVE", openedAt: null, lastActivityAt: null, submittedAt: ago(2 * DAY), paidAt: null }),
+    NOW,
+  );
+  assert.equal(r.state, "live");
+  assert.ok(!r.storyLine.includes("nobody has ever opened it"), r.storyLine);
+  assert.ok(r.storyLine.includes("set up for them"), r.storyLine);
+  assert.ok(r.storyLine.includes("finished"), r.storyLine);
+});
+
+test("a genuinely untouched link still says so plainly", () => {
+  const r = buildInvitationRow(row({ openedAt: null, lastActivityAt: null }), NOW);
+  assert.equal(r.state, "not_opened");
+  assert.ok(r.storyLine.endsWith("nobody has ever opened it"));
+});

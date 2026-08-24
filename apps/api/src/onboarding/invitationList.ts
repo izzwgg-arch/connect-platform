@@ -118,7 +118,13 @@ export function decideState(row: InvitationRowInput, now: Date = new Date()): { 
   if (row.status === "SUBMITTED" || row.status === "AWAITING_PAYMENT") {
     return { state: "awaiting_payment", label: "Waiting on payment" };
   }
-  if (!row.openedAt) return { state: "not_opened", label: "Not opened yet" };
+  // ⛔ A missing "opened" beacon does NOT mean nobody opened it. The beacon
+  // arrived after some of these sign-ups, and one that an admin builds by
+  // script has no wizard events at all — but autosaves and reached-steps are
+  // proof somebody used the link. Claiming "not opened" over a row that
+  // demonstrably has typing in it is the kind of wrong that makes a screen
+  // untrustworthy.
+  if (!row.openedAt && !row.lastActivityAt) return { state: "not_opened", label: "Not opened yet" };
 
   const quietSince = d(row.lastActivityAt) ?? d(row.openedAt)!;
   if (now.getTime() - quietSince.getTime() > NUDGE_AFTER_MS) {
@@ -139,14 +145,24 @@ export function buildStoryLine(row: InvitationRowInput, state: InvitationState, 
   parts.push(sent ? `Sent ${shortDate(sent, now)}` : `Made ${shortDate(created, now)}`);
 
   const opened = d(row.openedAt);
-  if (!opened) {
+  const activity = d(row.lastActivityAt);
+  const done = d(row.paidAt) ?? d(row.submittedAt);
+
+  if (opened) {
+    parts.push(`opened ${gapWords(sent ?? created, opened)}`);
+  } else if (activity) {
+    // Used, but before the open beacon existed — say what we know, not what
+    // we do not.
+    parts.push("they filled it in");
+  } else if (!done) {
     parts.push("nobody has ever opened it");
     return parts.join(" · ");
+  } else {
+    // Finished without ever touching the wizard: an admin built it by hand.
+    parts.push("set up for them");
   }
-  parts.push(`opened ${gapWords(sent ?? created, opened)}`);
 
   if (state === "live") {
-    const done = d(row.paidAt) ?? d(row.submittedAt);
     parts.push(done ? `finished ${shortDate(done, now)}` : "finished");
     return parts.join(" · ");
   }
