@@ -4188,6 +4188,48 @@ and make sure the email stays in one thread … one thread per phone number."*
   ⛔ The forward half was never affected and stayed busy throughout (70+
   `sms.emailed`; the only `emailForwardError` in 5 days is
   `no_opted_in_recipients` × 72 = Gesheft, by design).
+- ✅✅ **THE FORWARD HALF IS NOW STRESS-TESTED TOO — AND IT HAD ZERO TESTS UNTIL
+  2026-08-23 (`3d85f968` + `8951f825`).** `buildSmsEmail` and
+  `SmsEmailForwardJob` — the path carrying **100% of the live traffic** — had
+  none at all, while the reply half had 54. ⛔ **Check WHICH HALF of a feature
+  the tests cover before reading a green suite as coverage.** Now 14 in
+  `smsEmailForward.stress.test.ts`: a hostile sweep (16 message bodies × 9
+  contact names = 144 emails), 1,500 fuzz iterations and 200 seeded chaos passes
+  through the real job, against 7 invariants — the Subject never carries CR/LF,
+  nothing from a body or a contact name becomes markup, no inbound text is
+  silently lost, none is emailed twice, only opted-in ACTIVE participants are
+  recipients, the Reply-To verifies for that thread only, every message of one
+  thread shares a root id AND a subject, an SMTP failure leaves the row for
+  retry, and **the backlog guard lives in the QUERY**. Three mutations
+  (unsanitised subject, unescaped body, backlog guard removed) each fail the
+  matching invariant.
+- ⚠️ **ONE REAL DEFECT IT FOUND: the contact display name went STRAIGHT into the
+  Subject, and 18 of 12,160 live contacts carry a control character in their
+  name.** ⛔ **NOT an exploitable header injection — measured, not assumed:
+  nodemailer flattens CR/LF to a space** (a real MIME message was built; no
+  `Bcc:` header appeared). But a mail header must not depend on a downstream
+  library to be well formed, and the subject is HALF of the
+  one-thread-per-number promise. **`headerSafeName()` in `smsEmail.ts`** strips
+  control characters, collapses whitespace and caps at 120 (longest real name is
+  78, so it moves nobody today), applied at **both** subject sites — the forward
+  template and the reply job's failure notice.
+- ⛔⛔ **TWO TESTING TRAPS EARNED HERE, both of which leave assertions LOOKING
+  fine while guarding NOTHING.** (1) **Backslash escapes do not survive a shell
+  heredoc — `` became a literal BACKSPACE (0x08)**, so three
+  `<script|img|iframe>` regexes matched nothing, *and* the file committed as
+  **BINARY** (one NUL from a control-char fixture). This file already records the
+  heredoc trap; the new rule is **write any test file containing regexes through
+  the editor, never a heredoc, and check `git show --stat` for `Bin` on a new
+  source file.** (2) **"the html contains no `<img>`" is the WRONG assertion** —
+  the shared shell contributes ONE legitimate `<img>` (the brand logo, which
+  lives in `loopcomShell.ts`, so grepping `smsEmail.ts` finds nothing and the
+  check reads as a real failure). **Count against a benign baseline instead.**
+- ✅ **Forwarding measured healthy the same day: 13 emailed / 35 correctly skipped
+  (`no_opted_in_recipients` = Gesheft, by design) / 0 inbound texts left
+  unstamped in 24 h.** ⛔ **The one-query health check for "did anyone lose a
+  text":**
+  `select count(*) from "ConnectChatMessage" where direction='INBOUND' and "emailForwardedAt" is null and "createdAt" between now() - interval '24 hours' and now() - interval '5 minutes';`
+  — anything above 0 is a text nobody was told about.
 - ⏳ **STILL NOT PROVEN: no CUSTOMER has replied since the fix.** It is proven by
   the four routes above — including a real SMS — but not by a person in their own
   mail client. **Acceptance: one reply to any text-email, then**
