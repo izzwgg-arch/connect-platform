@@ -229,8 +229,71 @@ front door."*
   the ordinary outbound route and would present the new CID. The doors are
   single-purpose intercoms that have only ever dialled 900 — **confirm neither has a
   keypad before proceeding**, and register the chosen number's E911 to that address.
-- ⏳ **NOT DONE: nothing was changed.** This is a decision for Izzy — which number,
-  one or two, and the PBX write itself needs his mandate.
+- ✅✅ **BUILT AND PROVEN 2026-08-24 (Izzy's mandate: "create me that outbound route
+  … and 637 as the caller ID", both doors on one number).** Outbound route **178
+  "A Plus Center Doors"** — `cid_number 8456372330`, **`overwrite_cid = yes`** (forces
+  it), trunks 72 then 18 like their main route, and 8 patterns = route 18's four ×
+  **`cid_pattern` 509 / 510**. Attached as the **FIRST member of ARS-19**, ahead of
+  route 18. Asterisk reports the scoping itself: `'_nxxnxxxxxx' (CID match '_510')`.
+  ✅ **Proven with two real originated calls, no customer phone rung:** CID 510 →
+  *"Outbound Route: A Plus Center Doors"* → `CALLERID(all)="Front Door" <8456372330>`
+  → out via Telocall → **arrived at the far end as `__INCOMING_SOURCE=8456372330`**
+  (so Telocall passes an arbitrary CID end to end — the open unknown, now closed);
+  and the negative, CID 103 → *"Outbound Route: A Plus Center"* → unchanged
+  `<8457826775>`.
+- ⛔⛔ **ARS MEMBER ORDER IS INSERTION ORDER, NOT THE `sort` COLUMN — and getting
+  this wrong makes the route silently never fire.** `sort=0` on the new route still
+  rendered it SECOND, so route 18 matched first and won. **DELETE both members and
+  re-INSERT in the order you want**, then confirm with `dialplan show ARS-<id>`.
+- ✅ **`cid_pattern` on an outbound route WORKS and had never been used here** (0 of
+  ~70 routes). It renders `exten => _pattern/_cid`. **This is the clean way to scope a
+  route to specific extensions** — far better than the per-extension `outbound_profile`
+  AstDB key, which **no extension on this PBX uses** and which a tenant regen rewrites.
+  ⛔ `overwrite_cid` values in use: `if_not_provided` (32, the "only if empty" form),
+  `yes` (17, unconditional `Set(CALLERID(all)=…)`), `no` (9).
+- ✅✅ **`vitalpbx gen-conf` REGENERATES MAIN ONLY AND DOES NOT WIPE THE CONNECT
+  DOORWAYS — proven three times on 2026-08-24** (Main held at 3 doorway Gosubs,
+  tenant 2 untouched at 1). That materially narrows the "any regen is dangerous" fear.
+  ⛔ Read its help as `vitalpbx help gen-conf`; `gen-conf --help` actually RUNS it.
+  ✅ **So put a new route in an ARS that already renders in MAIN (ARS-19)** rather than
+  adding a new ARS to the tenant's `outbound_profiles` — the latter renders in the
+  TENANT's file and forces a tenant regen, which is what risks the doorway on
+  845-782-3064.
+- ⛔ **`[ARS-all]` is a global catch-all including EVERY trunk group**, so a new route
+  joins it automatically. Checked before wiring: **no tenant includes `ARS-all`** and
+  **only tenant 2 has a 509/510**, so no cross-tenant reach. Re-check both.
+- ✅ **Test an outbound route without ringing anyone: AMI Originate with a `CallerID:`
+  header** into `T<n>_cos-all` dialling a Loopcom number, then read the log for the
+  route taken, the CID sent and the CID that arrived. Creds are `astmanager` in
+  **`manager__50-ombutel-user.conf`** (⛔ not `manager__10-general.conf`).
+- ✅✅ **THE 84-ROW PENDING BACKLOG IS CLEARED (2026-08-24) — and it was NOT ours.**
+  ⛔⛔ I first said Connect stamped them; **the one-grep check disproves it** — our
+  helper's `_mark_pending_changes` only ever stamps **inbound_route (29), ivr (31),
+  queues (21)**. The backlog was **iax_settings (42) / sip_settings (43) /
+  pjsip_settings (110) × all 27 tenants** (PBX-wide settings pages, `multi_tenant: no`,
+  so one panel edit flags every tenant — exactly the 27×3 shape), plus
+  voicemail_general on Trust Bookkeepings and **tenants (99) on 140/141**, the two
+  mirror-built customers — the only genuinely Connect-created rows.
+  ⛔ **Why it never drained:** Connect deliberately avoids the whole-PBX Apply and
+  applies per tenant, so everyone else's notes accumulate forever.
+  ⛔ **The two dialplan switches (T2, T35) ARE our shape** — the helper flips
+  `<prefix>reload_dialplan = yes` and **nothing reliably flips it back**; their files
+  hadn't rendered since 6 and 10 Aug. **Fix that in the helper or this re-accumulates.**
+  ✅ Clearing changed **nothing live** (config mtimes byte-identical) and stayed at 0
+  through three later regens. Backup + full config snapshot:
+  `/root/pbx-pending-flags-backup-20260824T122426Z/`.
+- ⏳ **NOT PROVEN: nobody has pressed a real door since it went live.** Proven by two
+  originated calls on the real path, not by a person at the building. **One press
+  settles it — the cell should show 637-2330.**
+- ⛔ **Rollback is one statement + a regen:**
+  `DELETE FROM ombutel.ombu_ars_members WHERE outbound_route_id=178;` then
+  `vitalpbx gen-conf`. Full pre-state in `outbound-routing-before.sql` in that backup.
+- ⚠️ **Correction to the number caveat above:** `344022_Comfortcont` is **Connect
+  Communications' own inbound trunk** (T35's inbound arrived on it during the test),
+  not an outside customer's — so the earlier "an erased tenant's live subaccount"
+  framing was wrong. 845-637-2330 is still on master account **344022** while their
+  trunk dials out as **355362_apluscenter**, so a callback still goes nowhere and the
+  rare VoIP.ms fallback may refuse or replace the CID. Izzy chose it knowing that.
 - ⚠️ **Noticed, NOT touched:** A Plus Center's billing looks unconfigured —
   `taxEnabled: false` (so no per-number E911 fee is billed to them at all),
   `billingDayOfMonth: 1`, `billingFlatRate.amountCents: 1`, and their two most recent
