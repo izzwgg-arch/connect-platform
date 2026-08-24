@@ -77,9 +77,19 @@ function iso(v: Date | string | null | undefined): string | null {
   return t ? t.toISOString() : null;
 }
 
-/** "20 Aug" — short, because the row is scanned, not read. */
+/**
+ * "20 Aug" — short, because the row is scanned, not read.
+ *
+ * ⛔ These three helpers FAIL SOFT on an unreadable date, and that is not
+ * defensive noise: they are called while building EVERY row of the list, so a
+ * single bad value used to throw out of `buildInvitationRow` and 500 the whole
+ * screen — twenty-two healthy invitations made unreachable by one. Found by
+ * fuzzing, not by review. One row reading "an unknown date" is recoverable; a
+ * blank Onboarding page is not.
+ */
 export function shortDate(v: Date | string, now: Date = new Date()): string {
-  const t = d(v)!;
+  const t = d(v);
+  if (!t) return "an unknown date";
   const sameYear = t.getUTCFullYear() === now.getUTCFullYear();
   const month = t.toLocaleString("en-GB", { month: "short", timeZone: "UTC" });
   return sameYear ? `${t.getUTCDate()} ${month}` : `${t.getUTCDate()} ${month} ${t.getUTCFullYear()}`;
@@ -87,8 +97,11 @@ export function shortDate(v: Date | string, now: Date = new Date()): string {
 
 /** "2 minutes later", "4 days later" — the gap between two moments. */
 export function gapWords(from: Date | string, to: Date | string): string {
-  const a = d(from)!.getTime();
-  const b = d(to)!.getTime();
+  const f = d(from);
+  const to2 = d(to);
+  if (!f || !to2) return "later";
+  const a = f.getTime();
+  const b = to2.getTime();
   const secs = Math.max(0, Math.round((b - a) / 1000));
   if (secs < 90) return `${secs} second${secs === 1 ? "" : "s"} later`;
   const mins = Math.round(secs / 60);
@@ -101,7 +114,9 @@ export function gapWords(from: Date | string, to: Date | string): string {
 
 /** "4 days ago" — how long something has been quiet. */
 export function agoWords(v: Date | string, now: Date = new Date()): string {
-  const secs = Math.max(0, Math.round((now.getTime() - d(v)!.getTime()) / 1000));
+  const t = d(v);
+  if (!t) return "a while ago";
+  const secs = Math.max(0, Math.round((now.getTime() - t.getTime()) / 1000));
   if (secs < 90) return "just now";
   const mins = Math.round(secs / 60);
   if (mins < 90) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
@@ -141,15 +156,15 @@ export function decideState(row: InvitationRowInput, now: Date = new Date()): { 
 export function buildStoryLine(row: InvitationRowInput, state: InvitationState, now: Date = new Date()): string {
   const parts: string[] = [];
   const sent = d(row.inviteSentAt);
-  const created = d(row.createdAt)!;
-  parts.push(sent ? `Sent ${shortDate(sent, now)}` : `Made ${shortDate(created, now)}`);
+  const created = d(row.createdAt);
+  parts.push(sent ? `Sent ${shortDate(sent, now)}` : `Made ${shortDate(created ?? row.createdAt, now)}`);
 
   const opened = d(row.openedAt);
   const activity = d(row.lastActivityAt);
   const done = d(row.paidAt) ?? d(row.submittedAt);
 
   if (opened) {
-    parts.push(`opened ${gapWords(sent ?? created, opened)}`);
+    parts.push(`opened ${gapWords(sent ?? created ?? row.createdAt, opened)}`);
   } else if (activity) {
     // Used, but before the open beacon existed — say what we know, not what
     // we do not.

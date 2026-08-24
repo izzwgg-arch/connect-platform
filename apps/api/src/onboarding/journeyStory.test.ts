@@ -139,7 +139,10 @@ test("nothing is ever silently dropped — every event reaches the raw lane", ()
   assert.equal(story.raw.length, TYH.length);
 });
 
-test("an unrecognised message still shows up rather than vanishing", () => {
+// ⛔ A message nobody has written a parser for is OURS by default, not the
+// customer's — see the lane inversion in journeyStory.ts. It must still be
+// visible, and it must land under "what we did".
+test("an unrecognised message shows up under what WE did, never blamed on the customer", () => {
   const story = buildJourneyStory(
     [
       { type: "STATUS_CHANGED", message: "Customer opened the sign-up link", createdAt: t("10:00:00") },
@@ -147,8 +150,45 @@ test("an unrecognised message still shows up rather than vanishing", () => {
     ],
     {},
   );
-  const texts = story.customer.flatMap((c) => c.beats.map((b) => b.text));
-  assert.ok(texts.includes("something nobody has written a parser for"));
+  const customerTexts = story.customer.flatMap((c) => c.beats.map((b) => b.text));
+  const platformTexts = story.platform.flatMap((p) => p.beats.map((b) => b.text));
+  assert.ok(!customerTexts.includes("something nobody has written a parser for"), "must not be attributed to the customer");
+  assert.ok(platformTexts.includes("something nobody has written a parser for"), "but must still be visible");
+  assert.ok(story.raw.some((b) => b.text === "something nobody has written a parser for"), "and always in the raw lane");
+});
+
+// ⛔ THE BUG THIS WHOLE INVERSION EXISTS FOR, found by replaying all 23 real
+// sign-ups: our own porting failures were landing in the customer's steps.
+test("nothing WE write can ever be attributed to the customer", () => {
+  const ours = [
+    "Port-in needs manual follow-up: voipms addLNPPort failed: invalid",
+    "VoIP.ms provisioning error: voipms createSubAccount failed: used_username",
+    "Ported number 6469846023 arrived — routed to 344022_iniimi92gh2m.",
+    "Temporary number 8452605692 retired — routed back to the master account (spare pool).",
+    "Texting moved to the real number 9293598299 (now the number the company texts from).",
+    "Connect tenant linked (cmt1qoxrq0004o8myjoq13m21).",
+    "Directory entry seeded from the PBX database (REST tenant list is a stale cache — known trap).",
+    "Using spare number 8452605692 as temporary number until the port completes.",
+    "VoIP.ms port order number recorded: 217760 (for 6469846023 from Verizon).",
+    "Routing re-published — the ported number's inbound route is live.",
+    "Billing stamp deliberately SKIPPED — free account per Izzy",
+    "Canceled — payment-audit test run (Claude, 2026-08-04)",
+  ];
+  const story = buildJourneyStory(
+    [
+      { type: "STATUS_CHANGED", message: "Customer opened the sign-up link", createdAt: t("10:00:00") },
+      { type: "STATUS_CHANGED", message: 'Reached "Payment" after 10s on "Review"', createdAt: t("10:01:00") },
+      ...ours.map((m, i) => ({ type: "STATUS_CHANGED", message: m, createdAt: t(`10:0${2 + (i % 7)}:00`) })),
+    ],
+    {},
+  );
+  const customerTexts = story.customer.flatMap((c) => c.beats.map((b) => b.text)).join(" ||| ");
+  for (const m of ours) {
+    assert.ok(!customerTexts.includes(m), `OUR line was filed as the customer's: ${m}`);
+  }
+  const platformTexts = story.platform.flatMap((p) => p.beats.map((b) => b.text));
+  for (const m of ours) assert.ok(platformTexts.includes(m), `our line vanished entirely: ${m}`);
+  assert.equal(story.raw.length, ours.length + 2);
 });
 
 test("a sign-up nobody ever opened produces an empty, honest story rather than throwing", () => {

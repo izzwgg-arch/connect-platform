@@ -13,6 +13,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
+import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { buildInvitationRow, countByFilter, type InvitationRowInput } from "./invitationList";
 import { buildJourneyStory } from "./journeyStory";
@@ -29,6 +30,53 @@ export const INVITE_RESENT_PREFIX = "Invitation emailed again to ";
 
 function secureToken(): string {
   return randomBytes(24).toString("base64url");
+}
+
+/**
+ * ⛔ VALIDATE THE BODY. Found by fuzzing the real route: without this it
+ * accepted `{email:{}}` and stored the literal "[object Object]", coerced
+ * `{email:123}` to "123", took a 50,000-character company name straight into
+ * the database and into an email, 500'd on `{companyName:{toString:"x"}}`
+ * (String() on an object whose toString is not a function throws), and — the
+ * one that actually matters — stored
+ * `a@b.com\r\nBcc: victim@example.com` verbatim in `toEmail`.
+ *
+ * ⛔ That last one is NOT safe merely because nodemailer happens to flatten
+ * CR/LF: a mail header must not depend on a downstream library to be well
+ * formed. It is refused here instead.
+ *
+ * These routes are SUPER_ADMIN-only, so none of this was reachable by a
+ * customer — it is hygiene on the one screen that creates customer records
+ * and sends the first email a customer ever sees.
+ */
+const EMAIL_MAX = 254; // RFC 5321
+const COMPANY_MAX = 200; // matches createPublicLinkSchema, which this mirrors
+
+const emailField = z
+  .string()
+  .trim()
+  .min(3)
+  .max(EMAIL_MAX)
+  .refine((v) => !/[\r\n\u0000]/.test(v), "an address cannot contain a line break")
+  .refine((v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v), "that does not look like an email address");
+
+const createInvitationSchema = z.object({
+  email: emailField.optional(),
+  companyName: z.string().trim().max(COMPANY_MAX).optional(),
+  send: z.boolean().optional().default(false),
+});
+
+const resendSchema = z.object({ email: emailField.optional() });
+
+/** One plain-English sentence, never a zod dump. */
+function firstProblem(err: z.ZodError, fallback: string): string {
+  const issue = err.issues[0];
+  if (!issue) return fallback;
+  const field = issue.path[0] === "email" ? "email address" : issue.path[0] === "companyName" ? "company name" : "request";
+  if (issue.code === "too_big") return `That ${field} is too long.`;
+  if (issue.code === "too_small") return `That ${field} is too short.`;
+  if (issue.code === "invalid_type") return `That ${field} is not valid.`;
+  return issue.message && !/^Invalid/.test(issue.message) ? issue.message : `That ${field} is not valid.`;
 }
 
 const RE_REACHED = /^Reached "(.+?)"/;
@@ -140,12 +188,15 @@ export async function registerOnboardingInvitationRoutes(
   app.post("/admin/onboarding/invitations", async (req, reply) => {
     const admin = await requireOwner(req, reply);
     if (!admin) return;
-    const body = (req as any).body || {};
-    const email = String(body.email ?? "").trim();
-    const companyName = String(body.companyName ?? "").trim();
-    const send = body.send === true;
+    const parsed = createInvitationSchema.safeParse((req as any).body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", message: firstProblem(parsed.error, "That request is not valid.") });
+    }
+    const email = parsed.data.email ?? "";
+    const companyName = parsed.data.companyName ?? "";
+    const send = parsed.data.send;
 
-    if (send && (!email || !email.includes("@"))) {
+    if (send && !email) {
       return reply.code(400).send({ error: "email_required", message: "Enter an email address to send the invitation to." });
     }
 
@@ -197,9 +248,13 @@ export async function registerOnboardingInvitationRoutes(
     if (!row) return reply.code(404).send({ error: "not_found" });
     if (!row.publicToken) return reply.code(409).send({ error: "no_link", message: "This sign-up has no link to send." });
 
-    const to = String(((req as any).body?.email ?? row.mainEmail) || "").trim();
-    if (!to || !to.includes("@")) {
-      return reply.code(409).send({ error: "no_email", message: "There's no email address on this invitation to send it to." });
+    const parsedResend = resendSchema.safeParse((req as any).body ?? {});
+    if (!parsedResend.success) {
+      return reply.code(400).send({ error: "invalid_request", message: firstProblem(parsedResend.error, "That email address is not valid.") });
+    }
+    const to = parsedResend.data.email ?? String(row.mainEmail ?? "").trim();
+    if (!to || !emailField.safeParse(to).success) {
+      return reply.code(409).send({ error: "no_email", message: "There's no usable email address on this invitation to send it to." });
     }
 
     const result = await queueOnboardingInviteEmail(db as any, {

@@ -126,15 +126,57 @@ function isTypingNoise(e: RawEvent): boolean {
  * building things. These are the phrases the orchestrator writes.
  */
 const PLATFORM_PHASES: { title: string; match: RegExp }[] = [
-  { title: "Getting their phone number", match: /^(Subaccount |Reusing subaccount |DID |SMS enabled|911 |Could not make |Number stage |Number search|Porting|Port )/i },
-  { title: "Building the phone system", match: /^PBX build:|^PBX tenant built/i },
+  // ⛔ Order matters — first match wins — and a failure is deliberately filed
+  // with the phase it belongs to rather than swept into a separate "problems"
+  // bucket. "Could not make X the default 911 number" IS the interesting part
+  // of getting their number; reading it three phases away from its context is
+  // how a real failure stops looking like one.
+  { title: "Getting their phone number", match: /^(Subaccount |Reusing subaccount |DID |SMS enabled|911 |Number stage |Number search|Using spare number|Reusing temporary number|Temporary number |Ported number|Port-in |Porting|Port |VoIP\.ms port order|VoIP\.ms provisioning error|Texting moved|Routing re-published|Could not make)/i },
+  { title: "Building the phone system", match: /^(PBX build:|PBX tenant built|Connect tenant linked|Directory entry seeded)/i },
   { title: "Handing it over", match: /^(All \d+ extension|Owner:|Sent \d+ invitation|Setup complete|Told )/i },
   { title: "Problems along the way", match: /^(Watchdog |Setup failed|Retry|Could not )/i },
 ];
 
-function platformPhaseFor(msg: string): string | null {
+/** Anything the platform wrote that no named phase claims still has a home. */
+export const PLATFORM_OTHER_PHASE = "Other things we did";
+
+/**
+ * The customer's OWN beats, recognised positively. `journeyTracking.ts` is the
+ * only thing that writes these shapes, plus the wizard's autosaves, its file
+ * uploads and its submit. Everything else on a submission was written by us.
+ *
+ * ⛔ Keep this in step with `beaconMessage()` in journeyTracking.ts. If a new
+ * beacon is added there and not here, it is filed under "what we did" — wrong,
+ * but visible and harmless. The reverse default (unknown ⇒ the customer) is the
+ * one that quietly blames a customer for our own porting failure.
+ */
+const CUSTOMER_SHAPES: RegExp[] = [
+  /^Reached "/,
+  /^Went BACK to "/,
+  /^Stuck on "/,
+  /^Searched numbers for "/,
+  /^Number transfer check: /,
+  /^Customer opened the sign-up link$/,
+  /^Customer came back to the sign-up link$/,
+  /^Handed to the payment page/,
+  /^Paid:/,
+  /^Card declined|^The card was declined/,
+];
+
+function isCustomerLine(e: RawEvent): boolean {
+  if (e.type === "AUTOSAVED" || e.type === "SUBMITTED" || e.type === "FILE_UPLOADED") return true;
+  const msg = String(e.message ?? "");
+  return CUSTOMER_SHAPES.some((re) => re.test(msg));
+}
+
+/** The platform lane is the complement: everything that is not the customer's. */
+function isPlatformLine(e: RawEvent): boolean {
+  return e.type !== "CREATED" && !isCustomerLine(e) && Boolean(String(e.message ?? "").trim());
+}
+
+function platformPhaseFor(msg: string): string {
   for (const p of PLATFORM_PHASES) if (p.match.test(msg)) return p.title;
-  return null;
+  return PLATFORM_OTHER_PHASE;
 }
 
 function toneForPlatform(msg: string): BeatTone {
@@ -260,9 +302,8 @@ export function buildJourneyStory(
     }
     flushTyping();
 
-    // Platform-lane lines are handled separately; skip them here so the
-    // customer lane stays about the customer.
-    if (platformPhaseFor(msg)) continue;
+    // Ours, not theirs — collected into the platform lane further down.
+    if (isPlatformLine(e)) continue;
 
     let m: RegExpMatchArray | null;
 
@@ -336,6 +377,11 @@ export function buildJourneyStory(
 
     if (e.type === "CREATED") continue; // belongs to the invitation, not the wizard
 
+    if (e.type === "FILE_UPLOADED") {
+      byStep.get(current)?.beats.push({ at: iso(e.createdAt), text: `uploaded ${msg || "a file"}`, tone: "plain" });
+      continue;
+    }
+
     // Paying is the customer's own last step. A decline belongs to their story
     // just as much as the success does — it is the single most common place a
     // sign-up dies, so it must never read as an ordinary line.
@@ -348,8 +394,24 @@ export function buildJourneyStory(
       continue;
     }
 
-    // Anything we do not recognise still shows up, against the current step.
+    // A customer-shaped line with no dedicated parser above still belongs to
+    // them — e.g. "Handed to the payment page". ⛔ Deleting this fallback (as a
+    // first cut of the lane inversion did) silently drops such lines from the
+    // customer lane altogether; they survive in `raw`, so nothing looks broken.
     if (msg) byStep.get(current)?.beats.push({ at: iso(e.createdAt), text: msg, tone: "plain" });
+
+    // ⛔ EVERYTHING NOT CUSTOMER-SHAPED IS OURS, AND THE DIRECTION OF THAT
+    // DEFAULT IS THE POINT. This used to be the other way round — a prefix
+    // allowlist decided what was "platform" and anything unmatched was
+    // attributed to the CUSTOMER. Replaying all 23 real sign-ups showed 23
+    // distinct lines WE wrote landing in the customer's own steps: the whole
+    // porting family, every VoIP.ms error, tenant linking, the uploaded bill.
+    // The allowlist had been built from one sign-up's events and could only
+    // ever describe that one.
+    //
+    // Recognising the customer's beats POSITIVELY fails safe: a message nobody
+    // has seen before appears under "what we did", which is true by
+    // construction, instead of blaming a customer for our own porting failure.
   }
   flushTyping();
 
@@ -377,8 +439,8 @@ export function buildJourneyStory(
   const phases = new Map<string, Beat[]>();
   for (const e of sorted) {
     const msg = String(e.message ?? "");
+    if (!isPlatformLine(e)) continue;
     const phase = platformPhaseFor(msg);
-    if (!phase) continue;
     if (!phases.has(phase)) {
       phases.set(phase, []);
       phaseOrder.push(phase);
