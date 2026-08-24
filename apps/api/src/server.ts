@@ -2882,7 +2882,12 @@ function ensureCredentialCrypto(reply: any): boolean {
 
 type PortalApiPermissionRule = {
   prefix: string;
-  permission: PortalPermissionKey;
+  // null = authenticated callers only, NO permission check. Used for client
+  // SELF-REPORT endpoints (a device posting telemetry about itself). Gating
+  // those on a viewing permission is how we silently destroyed three real
+  // failure reports from Gesheft ext 101 on 2026-08-24 -- see
+  // AGENT_HANDOFF_GESHEFT_101_WINDOWS_ANSWER_2026-08-24.md.
+  permission: PortalPermissionKey | null;
 };
 
 const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
@@ -2975,7 +2980,19 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/voice/effective-config", permission: "can_view_pbx_softphone" },
   { prefix: "/voice/sbc", permission: "can_view_pbx_sbc_connectivity" },
   { prefix: "/voice/media-test", permission: "can_view_pbx_sbc_connectivity" },
-  { prefix: "/voice/diag", permission: "can_view_pbx_sbc_connectivity" },
+  // /voice/diag is a CLIENT SELF-REPORT surface -- every POST under it is a device
+  // describing its OWN call (session start/heartbeat/event, call-quality report + ping,
+  // webrtc blackbox). All seven derive identity from the token (user.sub / user.tenantId)
+  // and none accepts a userId or tenantId from the body, so "authenticated" IS the
+  // correct gate. It used to require can_view_pbx_sbc_connectivity -- an ADMIN VIEWING
+  // permission -- so ordinary users' phones were answered 403 and their telemetry was
+  // thrown away, i.e. exactly the users most likely to be having trouble.
+  // The default is OPEN and the two admin READ paths are locked BY NAME below, so a
+  // new self-report route can never silently start 403ing. voiceDiagSelfReport.test.ts
+  // reads this file and fails if any GET under /voice/diag loses its permission.
+  { prefix: "/voice/diag", permission: null },
+  { prefix: "/voice/diag/sessions", permission: "can_view_pbx_sbc_connectivity" },
+  { prefix: "/voice/diag/recent-errors", permission: "can_view_pbx_sbc_connectivity" },
   { prefix: "/voice/ivr", permission: "can_view_pbx_ivr_routing" },
   { prefix: "/voice/moh", permission: "can_view_pbx_moh_scheduling" },
   { prefix: "/pbx/dids", permission: "can_view_pbx_did_routing" },
