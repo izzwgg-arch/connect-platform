@@ -2654,6 +2654,24 @@ also carries `Login and splash mockups.html`), 2026-08-22 in-chat.)
   (proven equivalent to the composite-crop within 2px), round = circle-masked
   square. All 20 mipmap PNGs replaced; `mipmap-anydpi-v26/*.xml` untouched
   (they already reference `@mipmap/ic_launcher_background` as an IMAGE).
+  ⛔⛔ **AND THE SHARED WORKTREE CARRIES AN UNCOMMITTED REWRITE OF THAT
+  GENERATOR THAT IS EVEN FURTHER FROM WHAT SHIPS — verified 2026-08-24.** It is the
+  **W1 “whole logo on white”** design Izzy picked on 08-21, one day before Blue 2B
+  superseded it: `ICON_ART` points at `derived/loopcom-wordmark.png` (the WORDMARK,
+  not the infinity mark) and `ICON_GROUND` is `((0xFF,0xFF,0xFF),(0xFF,0xFF,0xFF))`,
+  a **white** tile. The shipped `ic_launcher_background.png` was read to check: it is
+  a blue gradient, **RGBA(34,167,255) → (53,128,255)** — Blue 2B. So running the
+  worktree copy repaints the launcher white and swaps the mark for the wordmark.
+  ⛔ **Its docstring dates itself to the 08-21 decision, so it reads as current work
+  and is not** — judge this file by the ARTWORK it names, never by its comments.
+  Left uncommitted deliberately (finish it for Blue 2B or revert it — Izzy's call);
+  a copy is in the scratchpad at `worktree-clear-20260824/`.
+  ⛔ **It arrived in a bulk file-write at `2026-08-22 21:53` that wrote several
+  files IN BOTH DIRECTIONS IN THE SAME SECOND** — this forward edit alongside a
+  **stale revert** of the deployed role-snapshot forward-merge feature
+  (`platformRolePermissions.ts` byte-identical to `b1f94452^`, plus its test and
+  handoff doc deleted). **That is the per-file-direction rule at the top of this
+  file, as a real event: one mtime, one operation, two opposite directions.**
 - ⛔ **The status-bar notification icon is now `res/drawable-{mdpi..xxxhdpi}/
   notification_icon.png`** — the kit's monochrome `ic_stat_loopcom` infinity
   silhouette (24/36/48/72/96) — and **`drawable/notification_icon.xml` (the old
