@@ -2183,6 +2183,74 @@ No app build — this is server-side and reaches both platforms at once.)
   present inside the published APK's bundle. The 2026-08-23 answer-budget revert did
   NOT touch it.
 
+## ⛔⛔ AGENT HANDOFF — the Windows app has NO protection for an answer that is never acknowledged, and Gesheft ext 101 rings SIX devices (2026-08-24) — READ FIRST for ANY "I hit Answer on the desktop app and nothing happens", before measuring a ring window from the Asterisk log, or before trusting that a softphone's telemetry reached us
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_GESHEFT_101_WINDOWS_ANSWER_2026-08-24.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
+Izzy, 2026-08-24: *"gesheft 101 ... one of the devices there keeps complaining. Windows
+app: most of the time, when she hits answer on an incoming call, it doesn't answer."*
+
+- ⛔⛔ **THE MECHANISM: the portal answers and then waits for JsSIP's `confirmed`
+  event FOREVER.** `apps/portal/hooks/useSipPhone.ts:3061` calls `session.answer()` and
+  deliberately does not set `connected` until the ACK arrives — **with no timeout, no
+  retry, no error and no message.** If the 200 OK rides a socket that has just been
+  replaced or stranded, the incoming-call screen simply sits there. **The mobile app got
+  exactly this protection in `c55ae840` (2026-08-06, Create A Box ext 102) —
+  `answer_unacked` + a bounded 4 s per-attempt cap + `ANSWER_UNACKED_REQUEUE`. Grep the
+  portal for `answer_unacked`/`unacked`/`WAITING_FOR_ACK`: ZERO hits.** Porting it is
+  the real fix and is **NOT built and NOT traced** — `c55ae840`'s own notes warn the cap
+  interacts with SIP's 200 OK retransmit ladder and that a socket rebuild between
+  attempts rejects the pending INVITE.
+- ⛔ **`answer()` opens with `if (!sessionRef.current) return;` — a SILENT no-op**, while
+  the ring UI renders off `phone.callState === "ringing"` (React state, `FloatingDialer.tsx:611`,
+  `DesktopMiniDialer.tsx:1155`). The phantom-ring guards null that ref, and desktop
+  **proxy** windows only `send("answer")` over IPC (line 3900) against a mirrored state —
+  so a window whose mirror disagrees with the engine shows an Answer button that does
+  nothing at all, with no feedback.
+- ⛔⛔ **THE SOFTPHONE REBUILDS ITS WHOLE SIP STACK ROUGHLY EVERY 30 MINUTES, AND THE
+  TELL IS THE CONTACT USERNAME.** `T8_101_1` logged 28 registration events in 24 h and
+  **the random SIP username changes on every one** (`ef525g8i` → `pdgu5m12`). A plain
+  re-REGISTER keeps its contact URI; a new contact user means JsSIP built a **new UA**.
+  Each rebuild leaves a 3–40 s hole with no contact, and Asterisk keeps the dead one for
+  up to `qualify_frequency 30`. **Read the contact URI, not just the event count.**
+  ⛔ **This churn is NORMAL — do not chase it as a bad network:** fleet-wide 4,974 events
+  across 53 endpoints in 24 h, mean **93.8**; `T8_101_1` is **14th at 28**, far below
+  `T7_102_1` (Create A Box) and `T5_101_1` (Luxure).
+- ⛔⛔ **HER TELEMETRY IS BEING THROWN AWAY, WHICH IS WHY NOTHING IS PROVABLE.**
+  `PORTAL_API_PERMISSION_RULES` gates **`{ prefix: "/voice/diag", permission:
+  "can_view_pbx_sbc_connectivity" }`** — so an ordinary `USER` posting a report **about
+  their own device** is refused **403**. That office produced **42 of the 73 `/voice/diag`
+  403s on the entire platform today**; Gesheft's last `CALL_QUALITY_REPORT` is
+  **2026-08-21**, and every WEB row for the tenant belongs to a different user
+  (`ap@gesheftkosher.com`, ext 114). **The PBX cannot help either — a 200 OK that never
+  arrives leaves no trace — so the failure is invisible from both ends by construction.**
+  ⛔ **The reusable point: `/voice/diag/*` is a SELF-REPORT gated on a VIEWING permission**,
+  so the users most likely to have trouble are exactly the ones we cannot see.
+- ⛔ **Ext 101 "Phone Orders" rings SIX devices: 4 softphone contacts on `T8_101_1` +
+  2 desk phones on `T8_101` (two sites).** All four softphone contacts are the **same
+  login** (`yisraelweinstock@gmail.com`) from **three separate sign-ins — 16 July,
+  17 July and 12 August** — still alive because portal tokens never expire. The office
+  runs **three desktop shells at once: 0.1.14, 0.1.6 and 0.1.3**, and the two pre-rename
+  shells carry ~98% of its 120,642 requests today.
+- ⛔⛔ **TWO THEORIES I FORMED AND DISPROVED — do not re-derive them.**
+  **(a) "the app only rings 2 seconds"** came from measuring first-to-last mention of a
+  channel in the Asterisk log; **that is a log-verbosity artifact** — a ringing leg is
+  mentioned exactly twice and its teardown is never logged against the channel name.
+  **(b) "she loses the ringall race"** is wrong: `asterisk.queues_log` for `T8_Q750`
+  shows ext 101 is the **top answerer at 208/week** and rings the **full 30 s** when it
+  does not answer. **Use `queues_log` (RINGNOANSWER `data1` = ring ms), never the
+  verbose log, to measure a ring window.**
+- **Cheapest actions first:** (1) get her to **ONE window on 0.1.14** and sign out the
+  July sessions — zero code risk, and four windows on one SIP account means four
+  independent rebuild cycles abandoning contacts on the same AOR; (2) **grant
+  `can_view_pbx_sbc_connectivity`** so `/voice/diag` stops 403ing and the next failure
+  is actually recorded; (3) then the `answer_unacked` port.
+- ⏳ **NOT PROVEN: no specific failed answer of hers is recorded anywhere.** The
+  mechanism is established from the registration data, the portal source and the
+  absent-by-grep mobile fix — **not** from a captured failure. `pjsip set logger on`
+  during a test call would settle whether her 200 OK ever arrives; that is a PBX-side
+  toggle and needs Izzy's word.
+
 ## ⛔⛔ AGENT HANDOFF — answering a call on the CURRENT Android build tears the call down: the warm answer gets 500 ms instead of 4 s (2026-08-23) — READ FIRST for ANY "I answered and it didn't connect" on Android, before touching `MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS` or `backendClaimed`, and before telling anyone to install the latest APK
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md`**
