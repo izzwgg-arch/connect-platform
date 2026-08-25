@@ -71,6 +71,66 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the IVR migration's red "Connect can't reproduce these" list is MOSTLY A FALSE ALARM, and the two-line real list hides DISA (2026-08-24) — READ FIRST before migrating ANY customer's IVR, before believing that dialog, or before decoding an `ombu_destinations` row
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_IVR_MIGRATION_RED_LIST_2026-08-24.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**
+Every fact read from the live PBX 2026-08-24, config from `ombutel` and behaviour from
+the **rendered dialplan**.) Izzy, 2026-08-24: *"I want to start migrating people's IVRs
+into Connect, and I'm getting this."*
+Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
+
+- ⛔⛔ **THE HEADING CONTRADICTS ITS OWN ROWS.** `buildImportPlan` files every
+  **multi-digit** IVR entry as a `problem` unless the PBX menu already has
+  dial-by-extension on (`ombu_ivrs.freedial`). Most customers have it **off**, so their
+  per-extension shortcuts (101, 102, 103…) render under a red *"Connect can't reproduce
+  these"* heading — while each row's text says *"Connect can do the same if you switch
+  dial-by-extension on"*. **Fleet-wide: 41 reproducible extension shortcuts vs 10 genuine
+  losses.** B Visible shows **13 red rows and only 2 are real.**
+- ⛔⛔ **IT IS NOT PURELY COSMETIC, AND THIS IS THE HALF TO GET RIGHT.** `planFor`
+  copies `directDialEnabled` **as-is**, so a menu that was off on the PBX arrives in
+  Connect off — and **callers who dial 103 at that menu today stop being able to.**
+  The honest framing is **"one switch away, and the copy will not flip it for you."**
+  ✅ The switch really does reproduce it, verified live: `_XXX` / `_XXXX` in
+  `connect-menu` (`extensions__60_custom.conf:443/452`) gated on `M_DIRECT_DIAL`, which
+  also moves `TIMEOUT(digit)` **0.2 s → 1 s** — without which multi-digit entry cannot
+  work at all. ⛔ The caveat is real and is the customer's call: Connect then accepts
+  **any** 3–4 digit extension, not only the ones the PBX menu listed (for B Visible that
+  adds 107 and the virtual forwards 108/109/110, which ring outside numbers).
+- **The census, so nobody re-derives it:** *dial-by-ext ON* — A plus center (12 kept
+  silently, only `1818` red), Relax Tires, Solidify, Trust. *OFF* — **Gesheft 16**,
+  **B Visible 11**, Displaydex 2.
+- ⛔ **The 10 genuine ones are all real features, none of them dead:** four are **DISA**
+  (`0478` B Visible, `7879` Solidify, `1708` Trust, plus B Visible's `vacation` menu) —
+  dial the main number, enter the code, **get dial tone and place outbound calls
+  presenting the company's caller ID**; two jump straight to a voicemail box
+  (`55648752` → VM 101, `1159` → VM 101); **Gesheft's `750` and `13132` both jump into
+  queue 750 — Phone Orders, their busiest (~2,020 calls/30 d)**; `303` → a custom
+  application; `1818` → ring group 1010. **Confirm with the customer before copying a
+  menu that carries one** — this is the one class where "copy the rest anyway" genuinely
+  drops something people use.
+- ⛔⛔ **MY FIRST READ OF THOSE 10 WAS WRONG AND THE DIALPLAN CORRECTED IT.** Decoding
+  `ombu_destinations` by `module_id`/`index` (module 31 → "ivr") resolved B Visible's
+  `0478` to **ivr_id 1, which belongs to A plus center** — it looked like a live
+  cross-tenant leak — and three more looked like pointers to menus that no longer exist.
+  **All false.** `index` is not an `ivr_id` in that table. **Never turn an
+  `ombu_destinations` row into a customer-facing claim without reading the rendered
+  context** (`extensions__50-<t>-dialplan.conf`).
+- **Copying is gated in TWO places and they must move together:** the portal disables the
+  button (`page.tsx:402`) and the API answers **422 `plan_has_problems`**
+  (`server.ts:26647`) unless `allowPartial`. The *"Copy the rest anyway"* checkbox sets
+  it, so **it does work end to end today.**
+- **What to do per customer:** dial-by-ext OFF (B Visible, Displaydex, Gesheft) → tick
+  *"Copy the rest anyway"*, copy, then **turn dial-by-extension ON for each copied menu
+  in IVR Studio before Go live**. The others have nothing reproducible to worry about.
+- ⏳ **RECOMMENDED FIX, NOT BUILT (§7 of the handoff, Izzy's call):** split the list so a
+  "switch dial-by-extension on" row is a **decision on the copy** (a checkbox, defaulted
+  ticked, stating the trade-off) rather than a red blocker — taking B Visible from 13
+  problems to **2**, and the estate from 51 to **10**.
+- ⏳ **NOT PROVEN: nothing has been copied and no number has been flipped.** All of the
+  above is read-only measurement. **The acceptance test for any migration is a real
+  call** — dial the number, press a key, and dial an extension at the menu.
+
 ## ⛔⛔ AGENT HANDOFF — the loopcom.net WEBSITE has a robot check on its forms, and Cloudflare is CONFIGURED BUT NOT ACTIVATED because the domain is DNSSEC-signed (2026-08-24) — READ FIRST before changing ANY nameserver, before touching `website/server/turnstile.mjs`, before adding a form to the website, or for "the Cloudflare settings aren't doing anything"
 
 Cutover state + the full mirror table:
