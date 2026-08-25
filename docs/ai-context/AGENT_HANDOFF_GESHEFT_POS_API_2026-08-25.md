@@ -288,6 +288,35 @@ window + the API key that has still not arrived.
   accounts lack PINs the IVR needs a no-PIN fallback or Gesheft issues PINs
   before launch.
 
+## §11 — ORDERS-DESK REQUIREMENTS + THE FIRST MOCKUPS (2026-08-25 late night)
+
+**Izzy's added requirements for the draft-order build:**
+- ⛔ **Learn from the EXISTING corpus before going live**: months of Gesheft
+  voicemails (already transcribed) + text threads sit in Connect — study how
+  people phrase orders; no need to back-transcribe everything.
+- ⛔ **WIC rule**: a customer mentioning they're paying with WIC → that goes
+  **automatically into the order's COMMENTS**; any OTHER remark ("leave it by
+  the side door") → the order's **NOTES**. (POS invoices have `memo`; the
+  order-object fields are in the missing Data Models section — confirm where
+  comments vs notes land on THEIR side.)
+- ⛔ **The Orders page lives inside Loopcom**: drafts arrive with a **button
+  opening the original source** (the text thread or the voicemail player) so the
+  rep verifies the pre-fill against what the customer actually sent, then puts
+  the order through; **Loopcom keeps tracking it afterward** (register status +
+  delivery tracker).
+- **PIN flow addition**: a MAIN MENU after recognition (1 = balance,
+  2 = payment, consistent everywhere — see §10 notes).
+
+✅ **MOCKUPS ROUND 1 PUBLISHED ("The Orders Desk"):**
+<https://claude.ai/code/artifact/1dd4bc4c-003f-4481-9185-ecacc1550f75> — four
+screens: Orders page (draft queue + sent-with-tracking), draft review (Yiddish
+transcript + translation with item-mapping highlights beside the editable order;
+WIC auto-comment; notes; correction capture called out), the call screen pop
+with the POS account, and settings (mode picker + integration keys). All names
+fabricated. ⏳ Awaiting Izzy's approval; M5 (specials composer) not yet drawn.
+⛔ Per the standing rule, when these are BUILT the built-vs-mockup comparison
+must be published before claiming a match.
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
