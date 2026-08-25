@@ -389,7 +389,29 @@ tool-results/), stripping the frame-runtime wrapper, and diffing before
 publishing the merge; never force blind. The parallel session's "Loopcom
 Driver" separate-APK decision (memory: delivery-tracking file) is reflected in
 the setup email's step 1.
-⏳ Awaiting Izzy's approval of the full 7-screen set.
+**v9 (Izzy, 2026-08-26 — THE ORDER TWIN; this supersedes v8's
+main-window-pre-open design for the Windows flow):** when a call rings, the
+mini dialer pops; **the moment somebody ANSWERS, a SECOND mini window — a twin
+of the mini dialer, same size — pops beside it: the new-order window.** His
+spec, verbatim requirements:
+- The twin pops only for **whoever answered** the call.
+- **Known caller**: twin opens already inside her account — balance, card on
+  file, the quick-add box focused, and **her LAST THREE ORDERS visible** so the
+  rep sees what she usually takes, plus a **"See her usual order" button**.
+- **Unknown number on the Phone Orders queue**: the twin opens **ready to take
+  the account's phone number — keyboard focus already in the field, no mouse
+  click needed** the second the call is answered; matches show as you type.
+- ⛔ **The twin must NOT disappear until the order is put through** ("everything
+  is good") — a call can't end with a half-taken order lost.
+- **Later phase**: once enough order history exists, the twin **auto-suggests
+  her usual order** for one-tap confirm (explicitly "eventually, once the
+  system starts knowing the customers").
+- **No Windows app → the browser does the same thing**: answering in the
+  browser pops the new-order page in that account, cursor in the item box.
+Screen 3 redrawn as three frames (known-caller desktop scene, unknown-caller
+lookup scene, browser fallback) + 6 annotations; republished same URL, label
+`v9-order-twin`.
+⏳ Awaiting Izzy's approval of the full set (now v9).
 
 ## §13 — THE DRIVER APP IS A SEPARATE APK (Izzy, 2026-08-25 late night)
 
