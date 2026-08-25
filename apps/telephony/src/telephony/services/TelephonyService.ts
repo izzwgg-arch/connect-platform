@@ -6,6 +6,7 @@ import { mapAmiFrame } from "../ami/AmiEventMapper";
 import type { CallStateStore } from "../state/CallStateStore";
 import { isExtensionLegChannel } from "../state/CallStateStore";
 import { AorContactRegistry } from "../state/AorContactRegistry";
+import { resolveWakeDialLeg } from "./wakeDialLeg";
 import { isHelperChannel } from "../normalizers/normalizeCallEvent";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
@@ -49,6 +50,20 @@ export class TelephonyService {
    * the requeue-gate tests can seed contact observations directly.
    */
   readonly contactRegistry = new AorContactRegistry();
+
+  /**
+   * Mode-B timing knobs. Mutable fields (not consts) ONLY so the requeue-gate
+   * tests can shrink them — production code never writes them.
+   * `modeBAnswerGraceMs` (2026-08-25): before a Mode-B redirect fires while a
+   * live extension leg is still ringing, wait this long for a normal SIP 200 —
+   * a device answering the ordinary way (Android warm answer lands in
+   * ~300–900 ms, worst measured 2.6 s) must never have its live INVITE torn
+   * down by a redirect racing its own answer.
+   */
+  modeBFreshContactWaitMs = 8000;
+  modeBFreshContactPollMs = 350;
+  modeBAnswerGraceMs = 2500;
+  modeBAnswerGracePollMs = 250;
 
   constructor(
     private readonly ami: AmiClient,
@@ -1090,10 +1105,35 @@ export class TelephonyService {
     const isInviteAccept = params.trigger === "invite_accept"; // (1)
     const isDirectExtTarget =
       !!extLegDialContext && !!extLegDialExten && /local-dialing/i.test(extLegDialContext); // (3)
+    // WAKE-LEG SHAPE (2026-08-25). Since the wake-dial fleet rollout
+    // (2026-08-05) a wake-enrolled extension's app fork is dialed through
+    // `Local/T<pbx>_<ext>_1@connect-mobile-wake-dial/n`, so on a desk+app
+    // extension the captured `extLegDialContext` reads `connect-mobile-wake-dial`
+    // (→ `not_direct_extension`) and `extLegAor` captured the DESK AOR — both
+    // halves of the gate predate the context and refused every wake-enrolled
+    // cold answer. PROVEN live (Fixup Group ext 103, linkedId 1787609370.20746,
+    // 2026-08-24): invite_accept, fresh contact registered and visible, refused.
+    // The wake channel's own name carries the authoritative app AOR / ext / pbx
+    // (resolveWakeDialLeg); `params.fallbackExten` (the invite's toExtension)
+    // pins WHICH extension's wake leg when several ring. The shape additionally
+    // requires the trunk's own Dial position to be a direct extension dial
+    // (`*local-dialing*`) — a ring-group/queue/IVR trunk position keeps the old
+    // refusals, so the RSBK restart-at-priority-1 loop stays impossible. The
+    // redirect target stays the proven `T<pbx>_cos-all,<ext>` (self-contained:
+    // re-dials the LIVE AOR — every current contact including the fresh one —
+    // and re-creates the wake leg, without the IVR or any group).
+    const wakeLeg =
+      isInviteAccept && !modeBAlreadyRedirected
+        ? resolveWakeDialLeg(call.channels, params.fallbackExten ?? null)
+        : null;
+    const wakeShape =
+      !!wakeLeg && /local-dialing/i.test(trunkDialContextForGate ?? "");
+    const effAor = wakeShape ? wakeLeg!.aor : extLegAor;
+    const effDirectExtTarget = wakeShape ? true : isDirectExtTarget;
     let freshContactUri =
-      isInviteAccept && isDirectExtTarget && extLegAor && extLegDialedAt != null
+      isInviteAccept && effDirectExtTarget && effAor && extLegDialedAt != null
         ? this.contactRegistry.freshContactNotDialed(
-            extLegAor,
+            effAor,
             extLegDialedAt,
             extLegDialedContacts,
           )
@@ -1118,22 +1158,20 @@ export class TelephonyService {
     // requeued INVITE, so this bounded wait is well within its answer budget.
     if (
       isInviteAccept &&
-      isDirectExtTarget &&
+      effDirectExtTarget &&
       !modeBAlreadyRedirected &&
-      !!extLegAor &&
+      !!effAor &&
       extLegDialedAt != null &&
       extLegDialedContacts.length > 0 &&
       !freshContactUri
     ) {
-      const MODE_B_FRESH_CONTACT_WAIT_MS = 8000;
-      const MODE_B_FRESH_CONTACT_POLL_MS = 350;
-      const waitDeadline = Date.now() + MODE_B_FRESH_CONTACT_WAIT_MS;
+      const waitDeadline = Date.now() + this.modeBFreshContactWaitMs;
       log.info(
-        { linkedId: params.linkedId, extLegAor, waitMs: MODE_B_FRESH_CONTACT_WAIT_MS },
+        { linkedId: params.linkedId, effAor, wakeShape, waitMs: this.modeBFreshContactWaitMs },
         "mode-b: awaiting late cold-answer registration (no fresh contact yet)",
       );
       while (!freshContactUri && Date.now() < waitDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, MODE_B_FRESH_CONTACT_POLL_MS));
+        await new Promise((resolve) => setTimeout(resolve, this.modeBFreshContactPollMs));
         const liveCall = this.calls.getById(params.linkedId);
         // Never disturb a call that ended or answered (e.g. Android SIP 200)
         // while we were waiting.
@@ -1141,7 +1179,7 @@ export class TelephonyService {
           break;
         }
         freshContactUri = this.contactRegistry.freshContactNotDialed(
-          extLegAor,
+          effAor,
           extLegDialedAt,
           extLegDialedContacts,
         );
@@ -1149,9 +1187,10 @@ export class TelephonyService {
           log.info(
             {
               linkedId: params.linkedId,
-              extLegAor,
+              effAor,
+              wakeShape,
               freshContactUri,
-              waitedMs: MODE_B_FRESH_CONTACT_WAIT_MS - (waitDeadline - Date.now()),
+              waitedMs: this.modeBFreshContactWaitMs - (waitDeadline - Date.now()),
             },
             "mode-b: fresh contact resolved after wait (stable-instance cold answer)",
           );
@@ -1166,7 +1205,7 @@ export class TelephonyService {
       !!postWaitCall && postWaitCall.state !== "hungup" && !postWaitCall.extensionAnsweredAt;
     const modeBReDeliver =
       isInviteAccept &&
-      isDirectExtTarget &&
+      effDirectExtTarget &&
       !!freshContactUri &&
       !modeBAlreadyRedirected &&
       stillUnanswered; // (1)(3)(4)(5)(7) + still-unanswered
@@ -1179,9 +1218,9 @@ export class TelephonyService {
       let modeBReason: string | undefined;
       if (!modeBReDeliver) {
         if (!isInviteAccept) modeBReason = "not_invite_accept";
-        else if (!isDirectExtTarget) modeBReason = "not_direct_extension";
+        else if (!effDirectExtTarget) modeBReason = "not_direct_extension";
         else if (modeBAlreadyRedirected) modeBReason = "already_redirected";
-        else if (!extLegAor) modeBReason = "missing_aor";
+        else if (!effAor) modeBReason = "missing_aor";
         else if (extLegDialedAt == null) modeBReason = "missing_dialed_at";
         else if (extLegDialedContacts.length === 0) modeBReason = "no_dialed_contacts";
         else if (!freshContactUri) modeBReason = "no_fresh_contact";
@@ -1199,12 +1238,16 @@ export class TelephonyService {
           modeBAlreadyRedirected,
           isInviteAccept,
           isDirectExtTarget,
+          wakeLeg,
+          wakeShape,
+          effAor,
+          effDirectExtTarget,
           freshContactUri,
-          registryContacts: extLegAor ? this.contactRegistry.snapshot(extLegAor) : [],
+          registryContacts: effAor ? this.contactRegistry.snapshot(effAor) : [],
           freshContactNotDialed:
-            extLegAor && extLegDialedAt != null
+            effAor && extLegDialedAt != null
               ? this.contactRegistry.freshContactNotDialed(
-                  extLegAor,
+                  effAor,
                   extLegDialedAt,
                   extLegDialedContacts,
                 )
@@ -1279,6 +1322,45 @@ export class TelephonyService {
       };
     }
 
+    // ANSWERED-GRACE (2026-08-25): a Mode-B redirect over a call that still has
+    // a LIVE extension leg tears that leg down and re-dials. When the leg is a
+    // genuine device mid-answer — not the zombie the bypass exists for — the
+    // redirect can race its own SIP 200 (measured warm answers land in
+    // ~300–900 ms, worst 2.6 s). So before redirecting past a live leg, give a
+    // normal answer a short window to land; `extensionAnsweredAt` flipping
+    // during the grace means the ordinary path worked and the redirect must
+    // stand down. The genuine cold case loses at most `modeBAnswerGraceMs` —
+    // well inside the app's 16 s post-accept answer budget.
+    if (modeBReDeliver && call.channels.some((ch) => isExtensionLegChannel(ch))) {
+      const graceDeadline = Date.now() + this.modeBAnswerGraceMs;
+      while (Date.now() < graceDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, this.modeBAnswerGracePollMs));
+        const liveCall = this.calls.getById(params.linkedId);
+        if (!liveCall || liveCall.state === "hungup" || liveCall.extensionAnsweredAt) break;
+      }
+      const postGrace = this.calls.getById(params.linkedId);
+      if (!postGrace || postGrace.state === "hungup" || postGrace.extensionAnsweredAt) {
+        log.info(
+          {
+            linkedId: params.linkedId,
+            wakeShape,
+            effAor,
+            answered: !!postGrace?.extensionAnsweredAt,
+            ended: !postGrace || postGrace.state === "hungup",
+          },
+          "mobile invite requeue skipped — answered/ended during mode-b grace",
+        );
+        return {
+          actionId: null,
+          channel: null,
+          exten: null,
+          context: null,
+          skipped: true,
+          skipReason: "answered_during_grace",
+        };
+      }
+    }
+
     // Prefer the trunk leg as the redirect channel — that's the leg the
     // dialplan needs to re-execute Dial() against. Fall back to the first
     // non-helper channel only if no trunk-recorded channel is known.
@@ -1348,12 +1430,24 @@ export class TelephonyService {
     // captured AOR (`T2_110_1` → `T2`); `modeBReDeliver` already guaranteed a
     // direct-extension target, and a null pbx code falls through to the
     // `missing_safe_redirect_target` guard below (never a DID/last_newchannel).
-    const modeBPbxCode = /^(T\d+)_/i.exec(extLegAor ?? "")?.[1] ?? null;
+    // For the wake-leg shape the pbx code and exten come from the wake channel
+    // itself (`Local/T31_103_1@connect-mobile-wake-dial-…` → T31 / 103) — the
+    // captured `extLegDialExten` there is the ENDPOINT name (`T31_103_1`), which
+    // is not an exten in `T31_cos-all` and would dead-end the redirect.
+    const modeBPbxCode = wakeShape
+      ? wakeLeg!.pbxCode
+      : /^(T\d+)_/i.exec(extLegAor ?? "")?.[1] ?? null;
     const modeBContext = modeBPbxCode ? `${modeBPbxCode}_cos-all` : null;
     const context = modeBReDeliver ? modeBContext : trunkContext;
-    const exten = modeBReDeliver ? extLegDialExten : trunkExten;
+    const exten = modeBReDeliver
+      ? wakeShape
+        ? wakeLeg!.ext
+        : extLegDialExten
+      : trunkExten;
     const targetSource = modeBReDeliver
-      ? "tenant_cos_all_cold_answer"
+      ? wakeShape
+        ? "tenant_cos_all_wake_leg_cold_answer"
+        : "tenant_cos_all_cold_answer"
       : "trunk_dial_position";
 
     if (!context || !exten) {
@@ -1401,6 +1495,7 @@ export class TelephonyService {
         targetSource,
         modeBReDeliver,
         modeBFreshContact: modeBReDeliver ? freshContactUri : undefined,
+        modeBShape: modeBReDeliver ? (wakeShape ? "wake_leg" : "direct_ext") : undefined,
         trunkContext,
         trunkExten,
         lastContext,
