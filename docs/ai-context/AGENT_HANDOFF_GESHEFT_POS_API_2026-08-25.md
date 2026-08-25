@@ -375,6 +375,30 @@ browser, and an Outlook window (fixed 600px, noted as identical by the shell's
 own mso engineering).
 ⏳ Awaiting Izzy's approval of the full 7-screen set.
 
+## §13 — THE DRIVER APP IS A SEPARATE APK (Izzy, 2026-08-25 late night)
+
+⛔⛔ **Izzy rejected the driver-flow-inside-the-main-app path: "I want to make it
+a separate APK because I want to be able to give it to people without a phone,
+or make a switch that turns the app into the tracking and turns off the phone
+side."** Decision taken: a **separate "Loopcom Driver" APK**, NOT a mode switch
+— a switch would entangle with the SIP/call path (the most regression-sensitive
+code in the fleet), while a separate app simply never contains it.
+- Same codebase (`apps/mobile`), second build target: **own applicationId
+  (permanent once chosen), own icon/name, own signing keystore (create once,
+  BACK IT UP off-machine — the Play-keystore lesson)**; installs alongside the
+  main app; boots straight into the delivery flow; permissions = location +
+  camera, ⛔ NO microphone, no SIP stack, no call push channels.
+- Server side unchanged — same delivery APIs; a driver login is a User +
+  `DriverProfile`, no extension needed.
+- Publishing = a second artifact beside `connectcomms-latest.apk` on the
+  download page; the driver setup email's step 1 says **"Get the Loopcom
+  Driver app"** (applied to all three email renderings in the mockups and
+  republished).
+- ⛔ The fork session working the mockups found that **v6's dark/light toggle
+  never worked — inline `onclick=` is blocked by the artifact CSP; bind with
+  addEventListener** (recorded in its v7 note above; kept here too since this
+  session authored the broken toggle).
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
