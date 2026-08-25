@@ -135,6 +135,20 @@ their IVR ext 898 "Order Tracking" is the manual process this replaces.)
   smoke ingest → scan → `/track/<token>`; then the real decisions — Gesheft's
   order-source integration (blocked on them), SMS go-live (compliance), a real
   routing/geocoding provider, and PIN validation.
+- ✅✅ **UPDATE 2026-08-25 EVENING — GESHEFT'S POS API DOCS ARRIVED, so Phase 10 is
+  no longer blocked on them.** Emailed by Gesheft Kosher; base
+  `api.poswithlogic.dev` ("POS with Logic"), `x-api-key` auth, metered credits.
+  Full intake: **`docs/ai-context/AGENT_HANDOFF_GESHEFT_POS_API_2026-08-25.md`**
+  (⛔ the source file `C:\Users\izzyw\Documents\AD_Port` is an XPS printout with
+  ZERO extractable text — PyMuPDF-render + read the pages; the printout is also
+  incomplete, missing the auth/PIN/rate-limit sections). Beyond delivery ingest it
+  offers phone-number→customer lookup, product catalog sync (`lastMod`), house
+  balances + stored-card charges behind an `X-Customer-Pin` header, and a checkout
+  payment webhook (their POS calls US to process payment — money, Izzy's call).
+  ⛔ **The API only shows orders created with OUR key** — in-store orders are
+  invisible; that question gates the delivery-ingest design. ⏳ No key exists and
+  no request has ever been made. Possibilities report for Izzy:
+  <https://claude.ai/code/artifact/f46069de-22fa-4b91-8f5d-a7709809e5f3>
 
 ## ⛔⛔ AGENT HANDOFF — the IVR migration's red "Connect can't reproduce these" list is MOSTLY A FALSE ALARM, and the two-line real list hides DISA (2026-08-24) — READ FIRST before migrating ANY customer's IVR, before believing that dialog, or before decoding an `ombu_destinations` row
 
