@@ -356,7 +356,12 @@ second account). **Plus (Izzy, next message): NUMBERS-AND-ENTER item entry** —
 the order editor's quick-add box always holds focus: punch the item number,
 Enter adds the line at catalog price (`GET /products/code/{code}` is the exact
 primitive) and the box empties/refocuses for the next; mouse never needed;
-name-search only for the rare unnumbered item. Mockups v5 republished.
+refined (Izzy, next message) into ONE unified box: item numbers AND names in
+the same field, live auto-suggest as you type, ↓/↑ moves through suggestions,
+Enter adds the highlighted item and refocuses empty for the next — mouse never
+needed. Suggest data = the synced catalog; number path = code lookup. Mockups
+v6 republished with the dropdown drawn open mid-keystroke ("chal" → 4
+suggestions, keyboard legend bar).
 ⏳ Awaiting Izzy's approval of the full 7-screen set.
 
 ## Open questions for Gesheft (nobody has asked yet)
