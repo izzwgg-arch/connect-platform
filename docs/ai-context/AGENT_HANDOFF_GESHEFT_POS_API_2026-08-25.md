@@ -449,6 +449,25 @@ publish conflicts with the fork session — ⛔ both sessions edit the SAME
 scratchpad file; re-read the live artifact (WebFetch) before publishing, verify
 disk ⊇ live by grepping the saved copy, then retry — never force.
 
+### §13c — Navigation choice + the barcode question (2026-08-25)
+
+- **Navigate offers the driver a choice** (Izzy): Waze, Google Maps, or Apple
+  Maps on the iPhone build; "Always use this app" remembers it. Mockup frame
+  added to screen 8 (the `psheet` chooser).
+- **Order tracking is scan-to-track by a system-generated barcode** (Izzy) —
+  and ⛔ **the POS API has NO barcode facility** (grepped the whole intake: zero
+  barcode/UPC/label hits; the printout is incomplete, but nothing points at
+  one). **Ours already works exactly this way**: `orderService.ts` mints a
+  `labelToken` per order at ingest (returned ONCE raw; stored HASHED in
+  `DeliveryOrderIdentifier`, kind LABEL, tenant-unique), and
+  `POST /mobile/delivery/scan` → `scanLabel` (idempotent clientOpId,
+  tenant/store-safe) transitions READY→SCANNED→ASSIGNED — the scan IS the
+  moment tracking attaches to the driver. ⛔ **The missing piece is PRINTING**:
+  no route renders the token as a barcode label (grep label in routes.ts = 0
+  print route). Plan: the Orders desk's put-through step generates the printed
+  label (Code 128/QR of the raw token; the POS `externalInvoiceId` ties our
+  order to theirs). Mockup annotation 5 records it customer-facing.
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
