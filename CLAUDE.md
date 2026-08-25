@@ -9640,6 +9640,9 @@ Memory: [[shopify-agent-integration-shape]], [[sola-is-cardknox]],
   charging → `xToken`): our IVR can collect digits and immediately trade the
   PAN for a token — but PCI covers TRANSMISSION, so the DIY path's scope stands
   regardless (the masking bullet below). Memory: [[sola-is-cardknox]].
+  Full handoff (findings, DIY build sketch, the six questions for the Sola
+  rep, and the wayback/tab-group research traps):
+  **`docs/ai-context/AGENT_HANDOFF_SOLA_PHONEPAY_DTMF_2026-08-25.md`**.
 - ⛔ **"MASKING" CANNOT BE SELF-ADMINISTERED** — the product IS that a certified
   third party decodes the digits so yours never do; build it and your box is
   simply the in-scope one. **PCI covers transmission, so storing nothing (or
