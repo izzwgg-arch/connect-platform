@@ -148,9 +148,37 @@ Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
 ` inside
   a Bash heredoc landed as REAL newlines and broke the string literals. Written through
   the editor with `String.fromCharCode(10)` instead. It is in this file twice already.
-- ⏳ **NOT PROVEN: nothing has been copied and no number has been flipped.** All of the
-  above is read-only measurement. **The acceptance test for any migration is a real
-  call** — dial the number, press a key, and dial an extension at the menu.
+- ✅✅ **THE "10 GENUINE LOSSES" ARE NOT LOSSES ANY MORE (2026-08-25, `316e6dbb`, Izzy:
+  "fix it. It's the IVR." — handoff §9): Connect menus CARRY hidden 3–8 digit dial
+  codes now, and B Visible plans CLEAN.** A code is an ordinary `IvrOptionRoute` row
+  whose `optionDigit` IS the code (no schema change; rule shared in
+  `apps/api/src/ivrMenuCodes.ts`), published as
+  `connect/t_<slug>/menu/<id>/code_<digits>/dest|type` + `has_codes` (which widens
+  `TIMEOUT(digit)` to 1s), matched by `[connect-menu]`'s `_XXX`..`_XXXXXXXX` patterns
+  AHEAD of direct dial, and routed to the IDENTICAL Goto the PBX's own literal exten
+  used (`0478 → T9_app-disa,DISA-1,1`, `55648752 → sub-extensions-vm,VM-101,1`, both
+  read from the rendered dialplan). The migration planner turns every mappable code
+  into a carried option + `plan.carriedCodes`; only out-of-range (>8 digits) or
+  broken-target codes stay problems. **api + portal DEPLOYED + container-verified;
+  PBX dialplan patched live** (`scripts/pbx/patch-connect-menu-codes.sh`, backup
+  `.bak.menucodes.20260825T111217Z`, parse PROVEN via `dialplan show`).
+  ⛔⛔ **Codes are the one VARIABLE part of the published key slate — BOTH publish
+  paths append `""` tombstones (`collectStaleIvrCodeTombstones`, diffed against the
+  last successful IvrPublishRecord) or a DELETED dial-through code keeps answering
+  forever.** Never remove those calls; live-proven (delete + republish blanked the key).
+  ⛔ Codes work only on menus served through `[connect-menu]` (didmap/per-number = every
+  migrated menu); the legacy `[connect-tenant-ivr]` path was deliberately not touched.
+  ✅ **PROVEN WITH A REAL CALL** on Loopcom Demo: real DTMF `0478` through AMI →
+  `Connect menu code … type=voicemail` → `VM-101@sub-extensions-vm`. And the deployed
+  plan route for B Visible (pbxTenantId 9, ivrs 25/24) answers **`problems: []`** with
+  both codes under `carriedCodes` — the red section is gone and Copy is not blocked.
+  Studio shows code rows as removable 🔑 steps (an invisible row that routes calls is
+  how a "removed" code survives).
+- ⏳ **NOT PROVEN: nothing has been copied and no number has been flipped, and no HUMAN
+  has dialled a carried code on a live migrated number** (the probe entered the menu
+  directly, not through a DID). **The acceptance test for any migration is a real
+  call** — dial the number, press a key, dial an extension, and dial the hidden code
+  at the menu.
 
 ## ⛔⛔ AGENT HANDOFF — Fixup Group's iPhone was never in the ring list: the wake hold is per-shared-AOR but sleeping is per-DEVICE — Mode-B wake-leg rescue BUILT AND DEPLOYED (2026-08-24 → 25) — READ FIRST for ANY "the app rang but I couldn't answer" on iOS, before touching `connect-wake-core` / `connect-mobile-wake-dial` or `requeueLiveCallToDialplan`, or before telling an iPhone customer to update the app
 

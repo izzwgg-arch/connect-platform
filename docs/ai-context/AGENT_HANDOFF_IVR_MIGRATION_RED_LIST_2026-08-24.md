@@ -185,3 +185,77 @@ Proven as tests, typechecks and a HEAD replay — never as a screen a person use
    is ticked — the DISA code is a real loss and must still stop the operator.
 6. Then the only proof that counts: **a real call.** Dial the number, press a key, and
    dial an extension at the menu.
+
+## 9. BUILT AND DEPLOYED (2026-08-25, `316e6dbb`) — hidden codes are CARRIED now; the red list is EMPTY for every mappable code
+
+Izzy, looking at B Visible's residual two red rows (`0478`, `55648752`): *"Be
+visible. fix it. It's the IVR."* So the last genuine losses became a feature:
+**a Connect menu holds hidden 3–8 digit dial codes.**
+
+### The mechanism, end to end
+
+- **Storage**: an ordinary `IvrOptionRoute` row whose `optionDigit` IS the code
+  (`"0478"`). The column was always a plain string — **no schema migration**.
+  The rule lives once in `apps/api/src/ivrMenuCodes.ts` (`/^\d{3,8}$/`), shared
+  by the planner and the publish path so the two can never disagree.
+- **Planner** (`ivrMigration.ts`): a mappable 3–8 digit non-extension code is a
+  `PlannedOption` + a `plan.carriedCodes` rollup (informational — the dialog
+  names a DISA code for what it is). Out-of-range or broken-target codes stay
+  `problems`. Extension shortcuts keep the dial-by-extension decision exactly
+  as §7 built it.
+- **Publish** (`buildIvrKeys`): per-menu family gains
+  `code_<digits>/dest|type` + `has_codes`. ⛔ Codes are the one VARIABLE part
+  of the published key slate, so BOTH publish paths append `""` tombstones
+  (`collectStaleIvrCodeTombstones`, diffed against the last successful
+  `IvrPublishRecord`, non-empty previous values only so tombstones never
+  re-propagate) — without this a DELETED dial-through code keeps answering.
+- **Dialplan** (`scripts/pbx/patch-connect-menu-codes.sh`, applied to the live
+  PBX 2026-08-25, backup
+  `extensions__60_custom.conf.bak.menucodes.20260825T111217Z`): the
+  `_XXX`/`_XXXX` heads in `[connect-menu]` check `code_${EXTEN}/dest` FIRST
+  (code beats direct dial — the same precedence a literal exten has over a
+  pattern on VitalPBX), new `_XXXXX`..`_XXXXXXXX` patterns are code-only, and
+  `TIMEOUT(digit)` widens to 1s when `has_codes` is "1" so an 8-digit code is
+  typeable on a direct-dial-off menu. ⛔ `[connect-tenant-ivr]`'s own patterns
+  were deliberately NOT touched — codes ride the per-menu family, i.e. every
+  didmap-served (= every migrated) menu.
+- **Studio**: code rows render as removable 🔑 steps under the key list — an
+  invisible row that routes live calls is how a "removed" code survives.
+  The option-create route accepts a code-shaped `optionDigit`.
+- **Migration dialog**: new "Hidden dial codes — carried over" section; the
+  red list shrinks to genuinely unmappable entries only.
+
+### Proof
+
+- 49 planner/rule tests pass (`ivrMigration.test.ts` reworked — the two "still
+  reported as lost" tests flipped into carried-code tests — plus
+  `ivrMenuCodes.test.ts` with caller-side source guards; all guard strings
+  grep 0 on HEAD^). api typecheck 76 = the exact baseline; portal 0.
+- api + portal DEPLOYED and container-verified at `316e6dbb` (tombstone helper
+  ×4 in the running server.ts, "Hidden dial codes" in the shipped
+  ivr-migration chunk).
+- **PROVEN WITH A REAL CALL** on Loopcom Demo (T102, menu
+  `cmsy43972064hnx14seqgcmp1`): code `0478 → sub-extensions-vm,VM-101,1`
+  created through the real option route, published through the real publish
+  route (AstDB read back), then an AMI-originated call sent REAL DTMF `0478`
+  into the menu — log shows `TIMEOUT(digit)=1`, the code branch
+  (`[0478@connect-menu:7] Connect menu code … type=voicemail`),
+  `[connect-exit-router]`, and `VM-101@sub-extensions-vm` running voicemail.
+  Then the delete + republish blanked `code_0478/dest` and `has_codes` → 0 —
+  the tombstones proven live, not just by test.
+- **B Visible plans CLEAN through the deployed route**: `POST
+  /voice/ivr/migration/plan` for pbxTenantId 9, ivr 25 and 24 both answer
+  `problems: []` with `carriedCodes` = `0478 → Dial-through 1` (Main) and
+  `55648752 → Voicemail 101 · Front Desk` (After Hours). The Copy button is
+  no longer blocked on this customer at all.
+
+### Still not proven
+
+- Nobody has pressed Copy on B Visible, no number there is live on Connect,
+  and no HUMAN has dialled a carried code on a live migrated number — the
+  probe entered the menu directly, not through a DID. Acceptance stays §8's:
+  a real call to the number, dial `0478` at the menu, get dial tone; dial
+  `55648752` at the after-hours menu, land in voicemail 101.
+- The other estates' codes (Gesheft 750/13132/1159, Solidify 7879, Trust 1708,
+  A plus 1818, B Visible's `vacation` DISA) will carry the same way; none has
+  been copied yet.
