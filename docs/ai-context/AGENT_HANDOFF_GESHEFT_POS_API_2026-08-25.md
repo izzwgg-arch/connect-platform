@@ -352,7 +352,12 @@ ask) — drawn in the Loopcom email shell language: wordmark header, "Gesheft
 Kosher set you up as a delivery driver", Choose-my-password CTA, his
 name/phone/sign-in shown not asked, get-the-app steps, footer naming the store;
 annotated as riding the real hardened shell + resend-safe (same link, never a
-second account). ⏳ Awaiting Izzy's approval of the full 7-screen set.
+second account). **Plus (Izzy, next message): NUMBERS-AND-ENTER item entry** —
+the order editor's quick-add box always holds focus: punch the item number,
+Enter adds the line at catalog price (`GET /products/code/{code}` is the exact
+primitive) and the box empties/refocuses for the next; mouse never needed;
+name-search only for the rare unnumbered item. Mockups v5 republished.
+⏳ Awaiting Izzy's approval of the full 7-screen set.
 
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
