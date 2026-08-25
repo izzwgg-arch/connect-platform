@@ -1985,6 +1985,22 @@ to do everything in his power to get every single phone connected."*
   ⛔ ONE naming rule — `identityFromBanner` — serves both paths, and
   `shouldFingerprint` treats answering SIP as better evidence than any OUI
   block. ⛔ The wizard KEEPS a scan-provided identity — it used to null it.
+- ⛔⛔ **SUPERSEDED BY 0.1.16 THE SAME EVENING — "there is only one network
+  here" WAS RIGHT, and the registrar proved it (`49166657`, PUBLISHED, sha256
+  `3b7af6ac…`).** The PBX registrar's `call_id` carries each Yealink's PRIVATE
+  address (Grandstream: `x-ast-orig-host`): A plus center's desk phones sit at
+  192.168.0.61/.94/.224/.240/… — the exact swept subnet — while every
+  table-first scan missed them. ⛔ **Windows throttles the neighbor lookups a
+  fast connect burst fires, negative-caches the failures, and `arp -a` then
+  OMITS live devices — so a table-first sweep is structurally blind.** 0.1.16:
+  SIP OPTIONS to EVERY address (the device answers regardless of the table and
+  names itself), ping-pass with Windows' own pacing, neighbor table read via
+  BOTH `arp -a` AND `netsh interface ip show neighbors` (Unreachable/Incomplete
+  skipped — a failed lookup is not a device), merged after every pass.
+  ⛔ **`database show registrar` is the ground truth for a phone's LAN address
+  — read it before ANY topology theory.** ⏳ Acceptance: the office's next scan
+  finds the ~10 live devices with models. Separately REAL: rooms 502–505 down
+  since 12:30 ET (building switch/PoE) — no scanner finds hardware off the wire.
 - ✅✅ **Desktop 0.1.15 is PUBLISHED (Izzy: "Publish it.", 2026-08-25)** — latest.yml reads 0.1.15 on both hostnames, sha256-verified alias; fleet auto-updates. **Was:** (installer +
   icon guard OK, the probe grepped in the packed asar) — publishing
   auto-updates the fleet and waits for Izzy's word, and the scanner lives in

@@ -1187,3 +1187,37 @@ new sweep only after publish + the app's own "New Update — Install" click.
 Proven: desktop **99** (12 new), shared **95**, typechecks 0/0. ⏳ NOT PROVEN:
 no real office has run the new sweep — acceptance is Izzy's next scan at
 A plus center finding the rest of his fifteen-odd SIP devices with models.
+
+---
+
+## §16 — "There is only one network here." He was right, the registrar proved it, and 0.1.16 asks every address (2026-08-25, `49166657`, PUBLISHED)
+
+Izzy rejected the VLAN theory twice; the PROOF was on the PBX all along:
+**the registrar's `call_id` carries each Yealink's private address**
+(`asterisk -rx "database show registrar"` — Yealink builds Call-ID as
+`0_<n>@<own-ip>`; Grandstream puts the LAN IP in `x-ast-orig-host`). A plus
+center's desk phones sit at **192.168.0.61/.89/.94/.142/.224/.240/.244** —
+exactly the subnet every sweep covered — registered and passing calls the same
+minute the scan could not see them. ⛔ **That registrar read is the ground
+truth for "what LAN address is this phone on" — use it before ANY theory about
+a customer's network topology.**
+
+**The real bug: table-first discovery inherits Windows' throttling wholesale.**
+Windows rate-limits the neighbor lookups a fast connect burst fires,
+negative-caches the failures, and `arp -a` then OMITS live devices. The 0.1.15
+SIP identity pass only asked devices ALREADY in the table — blind by design.
+
+**0.1.16 (published the same evening, sha256 `3b7af6ac…`, latest.yml 0.1.16
+both hostnames):** pass 2 sends a SIP OPTIONS to **EVERY address** — a SIP
+device answers regardless of what Windows' table thinks, the exchange plants
+the entry, the reply carries make + model; pass 3 pings stragglers with
+Windows' own pacing; the neighbor table is read through **BOTH doors**
+(`arp -a` AND `netsh interface ip show neighbors` — netsh reports states arp
+hides; ⛔ Unreachable/Incomplete rows are SKIPPED, a failed lookup is not a
+device) and merged after every pass. Desktop suite 100.
+
+**Also established from the same logs:** rooms **502–505 went Unreachable at
+12:30 ET** and stayed down — a real building outage (switch/PoE), the reason
+they vanished from every post-12:30 scan; and the `.66` **Fanvil i64** the SIP
+probe identified is door station **509**. ⏳ Acceptance: the office's next scan
+on 0.1.16 finding the ~10 live devices with models.
