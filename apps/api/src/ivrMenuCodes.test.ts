@@ -45,23 +45,29 @@ const stripComments = (src: string) =>
     })
     .join(String.fromCharCode(10));
 
-test("buildIvrKeys publishes has_codes and per-code keys into the menu family", () => {
+test("buildIvrKeys publishes the code slate through the shared pure builder", () => {
   const src = stripComments(read("server.ts"));
-  assert.match(src, /key: "has_codes"/);
-  assert.match(src, /ivrMenuCodeKey\(opt\.optionDigit\)/);
-  // Codes are filtered by the SHARED rule, never a local re-implementation.
-  assert.match(src, /filter\(\(o\) => isIvrMenuCode\(o\.optionDigit\)\)/);
+  // The slate itself lives in ivrMenuCodes.ts (pure, stress-tested); server.ts
+  // must CALL it per menu — a local re-implementation would drift.
+  assert.match(src, /keys\.push\(\.\.\.buildMenuCodeKeys\(menuFam, menuOptionsByProfile\[p\.id\] \?\? \[\]/);
+  // And the ref pipeline every other published ref uses must be the one codes
+  // get too — inMenuFamily like the digit slate beside it.
+  assert.match(src, /buildMenuCodeKeys\(menuFam[\s\S]{0,220}inMenuFamily: true/);
 });
 
 test("BOTH publish paths append stale-code tombstones", () => {
   // The two publish paths are near-duplicates; anything added to one belongs
-  // in both. One definition plus two call sites = 3 mentions minimum.
+  // in both. One wrapper definition plus two call sites = 3 mentions minimum.
   const src = stripComments(read("server.ts"));
   const calls = src.split("collectStaleIvrCodeTombstones(").length - 1;
-  assert.ok(calls >= 3, `expected the helper + 2 call sites, found ${calls} mentions`);
-  // And the tombstone diff must only chase code keys — a bug here that
-  // tombstoned opt_ slots would blank real menu keys on every publish.
-  assert.match(src, /\^code_\\d\+\\\/\(dest\|type\)\$/);
+  assert.ok(calls >= 3, `expected the wrapper + 2 call sites, found ${calls} mentions`);
+  // The wrapper's baseline is every record SINCE the last success — a FAILED
+  // or PENDING publish can have partially written its keys before dying, so
+  // consulting only successes lets a deleted code survive (found by the
+  // lifetime stress simulator; do not "simplify" this back).
+  assert.match(src, /status: "success" \}/);
+  assert.match(src, /publishedAt: \{ gte: lastSuccess\.publishedAt \}/);
+  assert.match(src, /diffStaleIvrCodeTombstones\(prev, keys\)/);
 });
 
 test("the Studio option route accepts a code as an optionDigit", () => {

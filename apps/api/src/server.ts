@@ -21682,7 +21682,7 @@ import {
   buildMonthView, buildHolidaySpans, nextChange,
 } from "@connect/shared";
 import { rewriteMenuNavRef } from "./ivrMenuNav";
-import { isIvrMenuCode, ivrMenuCodeKey, IVR_MENU_CODE_REGEX } from "./ivrMenuCodes";
+import { isIvrMenuCode, buildMenuCodeKeys, diffStaleIvrCodeTombstones, IVR_MENU_CODE_REGEX } from "./ivrMenuCodes";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
 type IvrActiveOption = {
@@ -21921,14 +21921,9 @@ function buildIvrKeys(
     // tombstones from collectStaleIvrCodeTombstones to close exactly that.
     // A DISABLED code row still exists in the DB and is cleared right here by
     // writing "" for its slots.
-    const codeRows = (menuOptionsByProfile[p.id] ?? []).filter((o) => isIvrMenuCode(o.optionDigit));
-    keys.push({ family: menuFam, key: "has_codes", value: codeRows.some((o) => o.enabled) ? "1" : "0" });
-    for (const opt of codeRows) {
-      keys.push(
-        { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/dest`, value: opt.enabled ? rewriteMenuNavRef(opt.destinationType, normalizeTenantDestinationRef(opt.destinationType, opt.destinationRef, tenantDialContext), { inMenuFamily: true }) : "" },
-        { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/type`, value: opt.enabled ? opt.destinationType : "" },
-      );
-    }
+    keys.push(...buildMenuCodeKeys(menuFam, menuOptionsByProfile[p.id] ?? [], (opt) =>
+      rewriteMenuNavRef(opt.destinationType, normalizeTenantDestinationRef(opt.destinationType, opt.destinationRef, tenantDialContext), { inMenuFamily: true }),
+    ));
   }
 
   return keys;
@@ -21956,22 +21951,27 @@ async function collectStaleIvrCodeTombstones(
   keys: Array<{ family: string; key: string; value: string }>,
 ): Promise<Array<{ family: string; key: string; value: string }>> {
   try {
-    const last = await (db as any).ivrPublishRecord.findFirst({
+    // ⛔ The baseline is every record SINCE (and including) the last success,
+    // not the last success alone — found by the lifetime stress simulator. A
+    // FAILED/PENDING publish can have written any prefix of its keys to AstDB
+    // before dying (the record is created before the write), so a code that
+    // only ever landed via a failed publish and was then deleted would never
+    // be tombstoned off the PBX if only successes were consulted. take: 25
+    // bounds a pathological failure streak; the flat concat is fine because
+    // the pure diff dedupes and ignores "" values.
+    const lastSuccess = await (db as any).ivrPublishRecord.findFirst({
       where: { tenantId, status: "success" },
       orderBy: { publishedAt: "desc" },
+      select: { publishedAt: true },
+    });
+    const recs = await (db as any).ivrPublishRecord.findMany({
+      where: { tenantId, ...(lastSuccess ? { publishedAt: { gte: lastSuccess.publishedAt } } : {}) },
+      orderBy: { publishedAt: "desc" },
+      take: 25,
       select: { keysWritten: true },
     });
-    const prev: any[] = Array.isArray(last?.keysWritten) ? (last.keysWritten as any[]) : [];
-    const current = new Set(keys.map((k) => `${k.family}|${k.key}`));
-    const out: Array<{ family: string; key: string; value: string }> = [];
-    for (const k of prev) {
-      if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
-      if (!/^code_\d+\/(dest|type)$/.test(k.key)) continue;
-      if (!String(k.value ?? "").trim()) continue;
-      if (current.has(`${k.family}|${k.key}`)) continue;
-      out.push({ family: k.family, key: k.key, value: "" });
-    }
-    return out;
+    const prev = (recs as any[]).flatMap((r) => (Array.isArray(r?.keysWritten) ? r.keysWritten : []));
+    return diffStaleIvrCodeTombstones(prev, keys);
   } catch {
     return [];
   }

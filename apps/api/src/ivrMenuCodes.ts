@@ -45,3 +45,76 @@ export function isIvrMenuCode(value: string | null | undefined): boolean {
 export function ivrMenuCodeKey(code: string): string {
   return `code_${code}`;
 }
+
+export interface AstDbKeyValue { family: string; key: string; value: string }
+
+/**
+ * The per-menu code slate for one publish: `has_codes` plus
+ * `code_<digits>/dest|type` for every code-shaped option row.
+ *
+ * Pure so it can be driven exhaustively — buildIvrKeys (server.ts) is inside
+ * a module no test can import without booting the whole api. `refFor` is the
+ * caller's ref pipeline (rewriteMenuNavRef ∘ normalizeTenantDestinationRef);
+ * a DISABLED row still gets its slots written as "" so switching a code off
+ * clears it on the very next publish.
+ *
+ * Rows are deduped by code, LAST wins — the same rule the fixed digit slate
+ * applies via its Map. The DB's @@unique([profileId, optionDigit]) means a
+ * duplicate can't happen through Prisma, but this function must not emit a
+ * contradictory slate no matter what it is handed.
+ */
+export function buildMenuCodeKeys<T extends { optionDigit: string; enabled: boolean; destinationType: string }>(
+  menuFam: string,
+  rows: T[],
+  refFor: (row: T) => string,
+): AstDbKeyValue[] {
+  const byCode = new Map<string, T>();
+  for (const o of rows) {
+    if (isIvrMenuCode(o.optionDigit)) byCode.set(o.optionDigit, o);
+  }
+  const codeRows = Array.from(byCode.values());
+  const keys: AstDbKeyValue[] = [
+    { family: menuFam, key: "has_codes", value: codeRows.some((o) => o.enabled) ? "1" : "0" },
+  ];
+  for (const opt of codeRows) {
+    keys.push(
+      { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/dest`, value: opt.enabled ? refFor(opt) : "" },
+      { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/type`, value: opt.enabled ? opt.destinationType : "" },
+    );
+  }
+  return keys;
+}
+
+/**
+ * "" tombstones for code keys the LAST successful publish wrote and THIS
+ * publish no longer carries — i.e. codes whose option row was deleted since.
+ * Codes are the one variable-size part of the published key set; every fixed
+ * slot self-clears by always being written, but a deleted code's key would
+ * otherwise stay in AstDB forever, silently keeping a removed dial-through
+ * code answering live calls.
+ *
+ * Diffed against the previous record's NON-EMPTY values only, so a tombstone
+ * written once does not re-propagate through every later publish. Hostile or
+ * malformed history rows are skipped, never thrown on — a publish must not be
+ * blocked by bookkeeping.
+ */
+export function diffStaleIvrCodeTombstones(
+  previousKeysWritten: unknown,
+  currentKeys: Array<{ family: string; key: string }>,
+): AstDbKeyValue[] {
+  const prev: unknown[] = Array.isArray(previousKeysWritten) ? previousKeysWritten : [];
+  const current = new Set(currentKeys.map((k) => `${k.family}|${k.key}`));
+  const out: AstDbKeyValue[] = [];
+  const seen = new Set<string>();
+  for (const raw of prev) {
+    const k = raw as { family?: unknown; key?: unknown; value?: unknown } | null;
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    if (!/^code_\d+\/(dest|type)$/.test(k.key)) continue;
+    if (typeof k.value !== "string" || !k.value.trim()) continue;
+    const id = `${k.family}|${k.key}`;
+    if (current.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ family: k.family, key: k.key, value: "" });
+  }
+  return out;
+}
