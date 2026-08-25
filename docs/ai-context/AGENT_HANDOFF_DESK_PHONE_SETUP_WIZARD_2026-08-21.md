@@ -1119,3 +1119,68 @@ center: the Yealink row should read **"Mrs Weinstock — ext 102 / yealink T42S 
 with MACs, and the "also set up" section lists the ~8 unseen provisioned
 phones by name. ⛔ The desktop window must be fully closed and reopened first —
 an open window keeps the old bundle.
+
+---
+
+## §15 — "The scanner is not working properly." He was right: the SIP identity probe + the sweep rebuild (2026-08-25, `4bc1c3b0`, desktop 0.1.15)
+
+Izzy, still at A plus center: *"All SIP devices — model number, and MAC
+address"*, and, on being told the missing Yealinks were probably on another
+VLAN: *"they are definitely on the same network — if your scanner doesn't pick
+it up, the scanner is not working properly."* Taken as fact, and the
+pass-to-pass evidence agreed (the rescan re-saw only 2 of the 6 devices the
+first pass had found).
+
+### The sweep was structurally lossy
+
+`lanScan.ts` probed 80/443 only, sequentially per host, 400 ms each, and read
+`arp -a` ONCE at the end. Three failure modes, all real on this office:
+(1) a provisioned Yealink with its web pages off answers neither port;
+(2) tearing the connection down at 400 ms can abandon the PENDING ARP
+resolution before a slow (power-saving) device answers — no table entry, no
+device; (3) entries age out during the sweep, so the single end-of-sweep read
+is pass-to-pass roulette. **Rebuilt:** ports **80/443/5060 in PARALLEL** per
+host at **900 ms**, a **slower retry pass (1.5 s)** over every address the
+first pass did not land in the table, and the table **read + MERGED after
+every pass**.
+
+### The model comes from the device itself now — over SIP
+
+⛔⛔ **A locked web page fingerprints as "unknown", but a SIP device signs
+everything it says.** One read-only **OPTIONS** packet gets back
+`User-Agent: Fanvil i16SV 2.4.0` / `Yealink SIP-T42S 66.84.0.125` /
+`Grandstream HT812 …` — no password, no web page, and ANY response counts (a
+405 refusal is still signed). New **`apps/desktop/src/phoneSetup/sipProbe.ts`**:
+`buildSipOptions` (private-address-only, hostile branch seed refused — CRLF in
+an interpolated value is header injection into our own packet),
+`parseSipBanner` (⛔ responses only — a SIP *request* arriving at our socket is
+someone scanning us back and is not parsed; replies from any address other
+than the one asked are discarded), `sipOptionsProbe` (never throws).
+
+- The scan's pass 3 asks EVERY present device who it is and attaches the
+  identity to the host, so the wizard gets models with zero extra round-trips.
+- The `fingerprint` capability op is **HTTP first, SIP second** — an HTTP
+  identity with a model is final and SIP is never asked (a test counts the
+  probe calls); silence on both fronts is still honestly `unreachable`.
+- ⛔ **One naming rule**: `identityFromBanner` extracted from
+  `fingerprintFromResponse` — two parsers is how "Fanvil i16SV" is a phone on
+  one path and a printer on the other. `MODEL_PATTERN` widened for the
+  i-series (`i16SV` did not match `i\d{2}[SV]?` — the `\b` fails mid-token).
+- ⛔ **`shouldFingerprint` now treats answering SIP as better evidence than any
+  hardware-address block** — an unknown-OUI SIP box used to be filed under
+  "other devices" forever with no chance to identify itself.
+- ⛔ **The wizard keeps a scan-provided identity** — its enrich step used to
+  overwrite `h.fingerprint` unconditionally and NULL it for
+  implausible-looking hosts; a scan identity with a model now short-circuits
+  the per-host call entirely.
+
+### State
+
+Desktop **0.1.15 BUILT AND VERIFIED** (`Connect-Setup-0.1.15.exe`, icon guard
+OK, `sipOptionsProbe`/the OPTIONS branch/“Loopcom Setup” all grepped in the
+packed asar) — ⛔ **NOT PUBLISHED; publishing auto-updates the fleet and waits
+for Izzy's word.** The scanner lives in the INSTALLED app: the office gets the
+new sweep only after publish + the app's own "New Update — Install" click.
+Proven: desktop **99** (12 new), shared **95**, typechecks 0/0. ⏳ NOT PROVEN:
+no real office has run the new sweep — acceptance is Izzy's next scan at
+A plus center finding the rest of his fifteen-odd SIP devices with models.

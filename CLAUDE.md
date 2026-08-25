@@ -1953,6 +1953,44 @@ to do everything in his power to get every single phone connected."*
   handset). The chaos guard that FORBADE it asserts the opposite now (present
   AND formatted); ip/state/provisioningUrl stay diagnostic-only. ⛔ `formatMac`
   UPPER-cases — a lowercase regex in the flipped guard failed the first run.
+- ⛔⛔ **THE SECOND LIVE ROUND PROVED THE SCANNER ITSELF LOSSY, AND IZZY CALLED
+  IT (2026-08-25, `beff0fe4` + `4bc1c3b0`): "they are definitely on the same
+  network — if your scanner doesn't pick it up, the scanner is not working
+  properly."** His rescan re-saw only 2 of the 6 devices the first pass found.
+  Three structural faults in `lanScan.ts`: web-ports-only (a provisioned phone
+  with its web pages off answers neither), a 400 ms teardown that can abandon
+  the PENDING ARP resolution before a slow device answers, and ONE end-of-sweep
+  `arp -a` read while entries age out. **Rebuilt:** 80/443/5060 in PARALLEL at
+  900 ms, a 1.5 s retry pass over addresses missing from the table, the table
+  read + MERGED after every pass.
+- ⛔⛔ **AND `beff0fe4` FIRST: `Number("T2")` — the name join returned NOTHING
+  because `TenantPbxLink.pbxTenantCode` is "T2", not "2".** The one-liner came
+  from `lanPhoneRoutes.ts`, where its failure direction was WORSE: the NaN
+  fallthrough dropped the tenant filter and compared against EVERY tenant's
+  phones. One exported parser now (`resolvePbxTenantNumber`, tested on the live
+  row shapes); lan-phones REFUSES instead of widening. Same commit: the
+  enrichment OUI-fills vendor on every row of the run (not only rows the
+  current pass resubmitted), and **`PBX_PHONE_IMAGE_BASE` was never set in
+  production** — the photo proxy answered not_configured on every call, ever.
+  Set to `https://m.connectcomunications.com/provisioning_resources` (proven:
+  200, real PNG, strict TLS; backup `.bak.*.phonephotos`).
+- ✅ **The device names ITSELF over SIP now (`4bc1c3b0`, desktop 0.1.15):** a
+  locked web page fingerprints as "unknown", but one read-only SIP OPTIONS gets
+  back `Fanvil i16SV 2.4.0` / `Yealink SIP-T42S …` — no password, no web page,
+  and ANY response counts (a 405 refusal is still signed). `sipProbe.ts`:
+  private-address-only, hostile branch seed refused, SIP *requests* arriving at
+  our socket never parsed, replies from any other address discarded. The scan
+  attaches the identity to every present host; the `fingerprint` op is HTTP
+  first / SIP second (an HTTP model is final — a test counts the probe calls);
+  ⛔ ONE naming rule — `identityFromBanner` — serves both paths, and
+  `shouldFingerprint` treats answering SIP as better evidence than any OUI
+  block. ⛔ The wizard KEEPS a scan-provided identity — it used to null it.
+- ⛔⛔ **Desktop 0.1.15 is BUILT AND VERIFIED, NOT PUBLISHED** (installer +
+  icon guard OK, the probe grepped in the packed asar) — publishing
+  auto-updates the fleet and waits for Izzy's word, and the scanner lives in
+  the INSTALLED app, so the office only gets the new sweep after publish + the
+  in-app "New Update — Install" click. Proven: desktop 99, shared 95, api
+  suites 90, typechecks at baseline.
 - ⏳ **NOT PROVEN: nobody has pressed "Search again" on the new build.**
   Acceptance: Izzy rescans at A plus — the Yealink reads "Mrs Weinstock — ext
   102" with photo + MAC, the Fanvils read fanvil + MAC, and the "also set up"
