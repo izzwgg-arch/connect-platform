@@ -491,6 +491,45 @@ item."
   real sticker, see which matches. ⛔ This approves the scan-resolution
   DESIGN; the overall plan/mockup sign-off gate for the build is unchanged.
 
+### §14 — SMART CONVERSATIONAL ORDER-TAKING IVR (Izzy, 2026-08-25 night): recommendation given, NOT built
+
+Izzy: an interactive smart IVR that takes orders "instead of a human… understand
+people and be very human-like"; open-source vs "the OpenAI model we already
+have"; ⛔ **multi-tenant: every tenant enters their OWN OpenAI API key**; must
+understand item numbers/names/codes; MALE voice; efficient + professional +
+sustainable for our call volume.
+
+**Recommendation (delivered in chat, sources verified 2026-08-25):**
+- **Brain = OpenAI realtime speech-to-speech (`gpt-realtime` family)**, ~$0.06–
+  0.11/min (mini $0.02–0.05/min); barge-in native. **Plumbing = OUR Asterisk**:
+  ARI ExternalMedia bridge → Realtime WebSocket (proven public pattern, incl.
+  DTMF human-handoff), or OpenAI's native SIP connector as the simpler variant.
+  ⛔ NO middleman voice platform (Vapi/Retell/Bland — per-minute markup between
+  our own PBX and OpenAI). Open-source harnesses exist (LiveKit Agents — we
+  self-host LiveKit already; Pipecat) but apps/telephony + ARI already fill
+  that role; keep the harness ours, the model rented and swappable.
+- **Items are a TOOL, not speech**: the model calls our catalog search (number/
+  name/code — same search as the Orders desk auto-suggest, POS catalog synced
+  via lastMod) and READS BACK name+price; orders land in the Orders desk as
+  AI-taken drafts first, straight-through once trusted (same learn-then-
+  autopilot rule as voicemail orders; WIC→comments etc. unchanged).
+- **Male voice = Cedar** (OpenAI's production-recommended voice, no surcharge).
+  Stephen stays on the prerecorded payment line — different system.
+- **Multi-tenant OpenAI keys**: the §8 integration-keys screen grows a third
+  integration — Sola | Tracking | **OpenAI** — per-tenant, encrypted;
+  ⛔ **NO fallback to the platform key** (same rule as Sola: a runaway call must
+  never bill us) + per-tenant minutes cap/alert.
+- **Volume math**: Gesheft ~2,020 phone-order calls/30d × ~4 min ≈ $250–900/mo
+  on the tenant's key.
+- ⛔ **Yiddish is the honest limit**: no provider does human-like real-time
+  Yiddish. Design = language detect at greeting → Yiddish → voicemail-order
+  path (existing draft pipeline) or human; English/Spanish/Hebrew → AI. Never
+  promise conversational Yiddish. AI-down = calls fall to the human queue
+  exactly as today (additive, never a replacement).
+- ⏳ NOT built, not in the published plan artifact yet — becomes its own phase
+  at the next plan revision; the plan/mockup approval gates are unchanged.
+  ⛔ Another fork session exists and may be working the same question.
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
