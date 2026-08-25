@@ -372,7 +372,23 @@ verbatim (white card on #f1f4f8, 168×30 wordmark, 2px 22a8ff→4f7bff rule, the
 real flat ctaButton, footer naming the store) rendered THREE ways — phone frame
 (mobile media-query behavior: 142px logo, 22px padding, block button), Gmail
 browser, and an Outlook window (fixed 600px, noted as identical by the shell's
-own mso engineering).
+own mso engineering). **v8 (Izzy: "you're giving me different incoming call
+screens than the actual Gesheft"): screen 3 is now the REAL Gesheft surface** —
+a Windows-desktop scene with the MINI DIALER ringing in the corner (caller
+identified + account line on the ring card, Answer/Decline, mini tab bar) and
+the main Loopcom window ALREADY OPEN on a NEW ORDER inside the caller's account
+(quick-add focused "punch while you talk", her file/usuals beside it, pill
+"opened by the incoming call"; on-ring vs on-answer noted as a setting).
+⛔ Do not draw generic call screens for Gesheft — their reps live in the
+desktop app + mini dialer. ⛔ Artifact-editing traps hit here: inline `onclick=`
+handlers are CSP-blocked (bind listeners; also apply data-theme to BODY and
+duplicate token sets on body[data-theme] so the viewer's own root stamp can't
+fight the toggle), and **a concurrent session republished the same artifact
+mid-edit (409)** — resolve by WebFetching the URL (full HTML lands in
+tool-results/), stripping the frame-runtime wrapper, and diffing before
+publishing the merge; never force blind. The parallel session's "Loopcom
+Driver" separate-APK decision (memory: delivery-tracking file) is reflected in
+the setup email's step 1.
 ⏳ Awaiting Izzy's approval of the full 7-screen set.
 
 ## §13 — THE DRIVER APP IS A SEPARATE APK (Izzy, 2026-08-25 late night)
