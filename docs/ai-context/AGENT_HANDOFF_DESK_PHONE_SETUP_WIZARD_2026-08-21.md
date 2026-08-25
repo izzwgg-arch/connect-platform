@@ -1025,3 +1025,97 @@ the LAN scan runs on his own machine over the desktop `phoneSetup` IPC (needs
 ≥ 0.1.9 for the /22 subnet fix, §b5272867). In a browser the page loads and says
 *"Open this in the Loopcom app on a computer in the same office as your phones"*
 and finds nothing — that is correct behaviour, not a broken grant.
+
+---
+
+## §14 — The first live run's three reports, fixed the same hour (2026-08-25, `42f0c2d3`)
+
+Izzy, testing at A plus center on ext 103's login minutes after §13's grant:
+*"I know I have more phones than… six desk phones that I found. And it's not
+telling me the names of the phones either. mac addresses should all be
+displayed."* All three root-caused from the run's own rows
+(`cmt8v34vb005bpc13popbg5cs`, subnet 192.168.0.0/24, 6 phones) and fixed in
+`42f0c2d3` (api + portal).
+
+### 1. Vendor "unknown" on all six — the OUI evidence was thrown away
+
+The scan admitted all six devices BECAUSE their hardware addresses matched
+phone-maker blocks (5 × `0c383e` = Fanvil — the room speakers/door units;
+1 × `805ec0` = Yealink, ext 102's T42S). But the stored `vendor` came only from
+`h.fingerprint?.vendor`, and a locked web page fingerprints as "unknown" — so
+the very fact that admitted the device never reached the row. **The ingest now
+falls back to `guessVendorFromMac`** (a vendor the device itself admitted still
+wins). ⛔ Fixed at the SERVER ingest so both submit paths (wizard + driver) get
+it — the two-publish-paths lesson.
+
+### 2. No names — the join was never built, and its helper was dead on arrival
+
+⛔⛔ **`listPbxProvisionedPhones` had NEVER returned a row in its life:** it
+selected **`pm.name`**, and `provisioning.phone_models` has NO `name` column
+(it is `pm.model` — live schema: `id, brand_id, model, …`). Every call threw
+"Unknown column", the catch classified it `pbx_unavailable`, and the function
+reported the whole PBX as unreachable. Invisible because the lan-phones screen
+(its only caller) has never been used. **The rule: a helper that has never had
+a real consumer has never been proven — its first customer is its first test.**
+Fixed to `pm.model`, source-guarded (comment-stripped — the doc block quotes the
+broken name; **guard replayed against HEAD: both assertions fail there**), and
+extended with the accounts join (`provisioning.accounts` → `ombu_devices` →
+`ombu_extensions`) so each MAC resolves to its extension + the person's name.
+`PROVISIONING_GRANT_SQL` now lists `provisioning.accounts` too — ✅ moot on this
+PBX, `connect_read` holds `provisioning.*` since 2026-08-19.
+
+The ingest then runs the MAC → record join, best-effort (a PBX that cannot be
+read costs the names, never the discovery — everything in one try/catch):
+fills `model` + `vendor`, and where the record maps to a Connect Extension it
+writes the SAME `{extensionId, extNumber, displayName}` a human's assign click
+writes. ⛔ **Never over a human's assignment** — the guard is
+`!row.extensionId && !row.extNumber`, tested ("a human's assignment is never
+overwritten by the record"). Injectable as `deps.provisionedPhones` for tests;
+the in-module default resolves TenantPbxLink → PbxInstance →
+`listPbxProvisionedPhones`. ✅ The exact join replayed read-only against the
+live PBX resolves **all 9** of A plus center's provisioned devices to people
+(101 Leah Fulop, 102 Mrs Weinstock ×2, 103 Jacob Weinstock, 104 Libby, 105
+Mrs Brach, 108 Home HT812, 111 AIT Room, 112 Mrs. Glick).
+
+### 3. "I have more phones than six" — and the count is genuinely honest
+
+The PBX shows **~13 A plus SIP devices registered from the office IP
+(24.187.220.38)** — 101, 102×2, 104, 105, 111, 112, rooms 502–505, doors
+509/510 — while the scan of `192.168.0.0/24` saw only ONE of the provisioned
+Yealinks. The others are almost certainly on a **separate phone network/VLAN
+the PC cannot ARP into** — structural, not a scanner bug (a live host on the
+same /24 appears in `arp -a` after the sweep whether or not it answers HTTP).
+⛔ **Do not "fix" this by letting the desktop scan arbitrary subnets** — the
+capability fence validates against the machine's own interfaces on purpose, and
+cross-subnet ARP is impossible anyway.
+
+What shipped instead: the `/discovered` response carries **`knownElsewhere`** —
+the tenant's provisioned phones whose MACs the scan did not see — and the found
+screen lists them ("already set up… may be plugged into a different network in
+the building. They keep working as they are."). ⛔ **Context only: an unseen
+record never becomes a phone row** (tested), so it can never enter the reset
+ladder.
+
+### The MAC display override
+
+⛔ **The customer view carries the formatted MAC ON PURPOSE since 2026-08-25**
+(`customerPhoneView.mac`, `formatMac` → `80:5E:C0:C8:9B:86`) — Izzy's explicit
+instruction; it is the sticker under the handset, the one identifier a person
+can check two identical phones against. The chaos guard that asserted `p.mac ===
+undefined` ("mac leaked to the customer view") now asserts the opposite — mac
+present AND formatted — while ip/state/provisioningUrl stay diagnostic-only.
+⛔ `formatMac` UPPER-cases; a lowercase regex in the flipped guard failed the
+first chaos run. Shown on the found, clearing and live rows (`.dps-mac`, mono).
+
+### Proven / not proven
+
+Proven: api desk-phone suites **94 pass** (routes 33 incl. 6 new, stress,
+chaos, ordering, invariants), shared 94, portal driver 13; typechecks at
+baseline (api **76**, portal **0**); the pm.model guard fails against HEAD; the
+enrichment SQL replayed on the live PBX. ⏳ NOT PROVEN: nobody has pressed
+"Search again" on the new build — acceptance is Izzy's next scan at A plus
+center: the Yealink row should read **"Mrs Weinstock — ext 102 / yealink T42S /
+80:5E:C0:C8:9B:86"** with her handset photo, the five Fanvils read "fanvil"
+with MACs, and the "also set up" section lists the ~8 unseen provisioned
+phones by name. ⛔ The desktop window must be fully closed and reopened first —
+an open window keeps the old bundle.

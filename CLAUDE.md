@@ -1914,6 +1914,50 @@ to do everything in his power to get every single phone connected."*
   his colleague Leah (ext 101, same tenant) → **403 `permission:
   can_setup_desk_phones`**, her set unchanged at 42 — the grant is scoped to the
   PERSON, not the company.
+- ✅✅ **HE OPENED IT THE SAME HOUR AND THE FIRST LIVE RUN FILED THREE REPORTS —
+  ALL FIXED IN `42f0c2d3` (2026-08-25, api + portal; handoff §14).** Izzy, at the
+  office on ext 103's login: found 6 devices, "I know I have more phones than
+  … six", "not telling me the names", "mac addresses should all be displayed."
+- ⛔⛔ **THE VENDOR EVIDENCE WAS THROWN AWAY AT INGEST.** All six stored vendor
+  "unknown" while their MAC blocks had ALREADY identified them (5 Fanvil room/
+  door units + ext 102's Yealink T42S) — the very evidence the discovery filter
+  admitted them on; the stored vendor came only from the locked web page's
+  fingerprint. The ingest now falls back to `guessVendorFromMac` — at the
+  SERVER, so both submit paths get it.
+- ⛔⛔ **`listPbxProvisionedPhones` HAD NEVER RETURNED A ROW IN ITS LIFE** — it
+  selected **`pm.name`**, a column `provisioning.phone_models` does not have
+  (it is `pm.model`), so EVERY call threw "Unknown column", was caught, and
+  reported the whole PBX as unreachable. Invisible because its only caller (the
+  lan-phones screen) has never been used. **A helper with no real consumer has
+  never been proven — its first customer is its first test.** Fixed +
+  source-guarded (comment-stripped; **guard fails replayed against HEAD**), and
+  extended with the accounts→extension join so a MAC resolves to the person.
+- ✅ **The wizard NAMES phones from the PBX's own provisioning records now**:
+  ingest joins MAC → record, fills model/vendor, and where the record maps to a
+  Connect Extension writes the SAME `{extensionId, extNumber, displayName}` a
+  human's assign click writes — ⛔ never over a human's assignment
+  (`!row.extensionId && !row.extNumber`, tested). Injectable as
+  `deps.provisionedPhones`; best-effort everywhere — a PBX that cannot be read
+  costs the names, never the discovery. ✅ The join replayed read-only on the
+  live PBX resolves all 9 A plus devices to people (102 → Mrs Weinstock…).
+- ⛔ **"More phones than six" is a VLAN fact, not a scanner bug**: ~13 A plus
+  SIP devices register from the office IP while the 192.168.0.0/24 sweep saw one
+  provisioned Yealink — the rest sit on a separate phone network the PC cannot
+  ARP into. ⛔ Do NOT "fix" by scanning arbitrary subnets (the capability fence
+  is deliberate; cross-subnet ARP is impossible anyway). Shipped instead:
+  `knownElsewhere` on the /discovered response — the provisioned phones the scan
+  did not see, listed on the found screen as "already set up … different network
+  in the building". ⛔ Context only; an unseen record never becomes a phone row.
+- ⛔ **THE CUSTOMER VIEW CARRIES THE FORMATTED MAC ON PURPOSE NOW** (Izzy, live:
+  "mac addresses should all be displayed" — it is the sticker under the
+  handset). The chaos guard that FORBADE it asserts the opposite now (present
+  AND formatted); ip/state/provisioningUrl stay diagnostic-only. ⛔ `formatMac`
+  UPPER-cases — a lowercase regex in the flipped guard failed the first run.
+- ⏳ **NOT PROVEN: nobody has pressed "Search again" on the new build.**
+  Acceptance: Izzy rescans at A plus — the Yealink reads "Mrs Weinstock — ext
+  102" with photo + MAC, the Fanvils read fanvil + MAC, and the "also set up"
+  section lists the ~8 unseen phones by name. ⛔ Close and reopen the desktop
+  app first — an open window keeps the old bundle.
 - ⏳ **Still not proven by a human: he has not opened it** (last login
   2026-06-17). ⛔ **He must use the Loopcom DESKTOP app, not a browser tab** —
   the LAN scan runs on his own machine over the desktop `phoneSetup` IPC (≥ 0.1.9
