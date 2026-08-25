@@ -228,6 +228,23 @@ window + the API key that has still not arrived.
   ElevenLabs' on neither `voice_id` nor `id` — BOTH providers' list objects
   defeated a naive `find` this session; probe by synthesising, or read the
   mapper's interface first.
+- ⛔⛔ **THE PAYMENT IVR SHIPS IN TWO VOICES BY DESIGN (Izzy, same night): "two
+  IVRs for payment that customers can choose from: male and female"** — Stephen
+  (Polly) and Kristen (ElevenLabs) are BOTH kept as complete parallel sets; the
+  voice is a per-line setting. Any future prompt change must be generated in
+  BOTH voices or they drift.
+- ⛔ **"Gesheft" was pronounced with a soft G (giraffe); Izzy wants hard G
+  (get).** Four welcome candidates were generated and sent for his pick:
+  A = Stephen generative + SSML `<phoneme alphabet="ipa" ph="ɡəˈʃɛft">`,
+  B = Stephen neural + same phoneme, C = Stephen generative + respelling
+  "Guh-sheft" (plain text), D = Kristen + the respelling (ElevenLabs' flash
+  model takes no IPA — respelling is the ElevenLabs pronunciation tool).
+  ⛔ Polly generative ACCEPTED the phoneme SSML (no refusal) but Polly
+  generative is the engine already proven to accept-and-discard prosody markup
+  — whether A actually honours the phoneme is for EARS to judge, which is why
+  B and C exist. Server stash: loopcom `/root/gesheft-welcome-fix/`.
+  ⏳ Izzy has not picked a winner; whichever wins replaces 01_welcome in its
+  voice's set.
 - ⛔ **PIN answers (Izzy asked directly):** the PIN step IS in the IVR script
   because **the API requires X-Customer-Pin for balance and charges — their
   rule, non-negotiable**; whether every account HAS a PIN is UNKNOWN (the
