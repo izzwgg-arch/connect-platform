@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { comparePhones, PROVISIONING_GRANT_SQL } from "./pbxPhoneProvisioning";
+import { comparePhones, PROVISIONING_GRANT_SQL, resolvePbxTenantNumber } from "./pbxPhoneProvisioning";
 
 /**
  * The comparison is the product. A list of MAC addresses helps nobody; "this
@@ -190,4 +190,26 @@ test("the provisioning select reads pm.model — phone_models has no name column
     .join("\n");
   assert.ok(/pm\.model\s+AS model/.test(executable), "the model column must be pm.model");
   assert.ok(!/pm\.name/.test(executable), "pm.name is not a column; selecting it kills every call");
+});
+
+/* ── the tenant number that was never a number (2026-08-25) ────────────
+ * TenantPbxLink stores pbxTenantCode as "T2" and pbxTenantId as the string "2".
+ * `Number("T2")` is NaN, so the old `Number(code || id || 0)` resolved to
+ * undefined for every linked tenant — the lan-phones comparison then ran with
+ * NO tenant filter (every customer's phones), and the desk-phone name join
+ * returned nothing, which is how it was caught on A plus center's live run.
+ */
+test("resolvePbxTenantNumber reads the real link shapes", () => {
+  // The live A plus center row, verbatim shape.
+  assert.equal(resolvePbxTenantNumber({ pbxTenantId: "2", pbxTenantCode: "T2" }), 2);
+  // Code only — the digits are the number.
+  assert.equal(resolvePbxTenantNumber({ pbxTenantId: null, pbxTenantCode: "T31" }), 31);
+  // Numeric id.
+  assert.equal(resolvePbxTenantNumber({ pbxTenantId: 7, pbxTenantCode: null }), 7);
+  // Unresolvable shapes REFUSE — undefined must never widen a query.
+  assert.equal(resolvePbxTenantNumber({ pbxTenantId: null, pbxTenantCode: "T" }), undefined);
+  assert.equal(resolvePbxTenantNumber({ pbxTenantId: "", pbxTenantCode: "" }), undefined);
+  assert.equal(resolvePbxTenantNumber(null), undefined);
+  // ⛔ The exact old bug, pinned: the one-liner it replaces answered undefined here.
+  assert.equal(Number("T2") || undefined, undefined);
 });

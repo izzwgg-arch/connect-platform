@@ -69,6 +69,29 @@ export const PROVISIONING_GRANT_SQL =
   "GRANT SELECT ON `provisioning`.`accounts` TO 'connect_read'@'%'; " +
   "FLUSH PRIVILEGES;";
 
+/**
+ * The PBX tenant NUMBER out of a TenantPbxLink row.
+ *
+ * ⛔⛔ `pbxTenantCode` is "T2", NOT "2" — and `Number("T2")` is NaN, so the
+ * one-liner `Number(link.pbxTenantCode || link.pbxTenantId || 0)` that the
+ * lan-phones comparison shipped with resolved to undefined for EVERY linked
+ * tenant. There it silently widened the query to ALL tenants' phones; copied
+ * into the desk-phone wizard's name join it returned nothing at all — which is
+ * exactly how it was finally caught (A plus center, 2026-08-25: names stayed
+ * null while the join was proven good). One parser, both call sites.
+ */
+export function resolvePbxTenantNumber(
+  link: { pbxTenantId?: string | number | null; pbxTenantCode?: string | null } | null | undefined,
+): number | undefined {
+  if (!link) return undefined;
+  const fromId = Number(String(link.pbxTenantId ?? "").trim());
+  if (Number.isFinite(fromId) && fromId > 0) return fromId;
+  const digits = String(link.pbxTenantCode ?? "").replace(/[^0-9]/g, "");
+  const fromCode = Number(digits);
+  if (digits && Number.isFinite(fromCode) && fromCode > 0) return fromCode;
+  return undefined;
+}
+
 function normalizeMac(input: unknown): string | null {
   const cleaned = String(input ?? "").toLowerCase().replace(/[^0-9a-f]/g, "");
   if (cleaned.length !== 12) return null;

@@ -19,7 +19,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { userHasActionPermission } from "./permissionGates";
 import { formatMac, normalizeIpv4, normalizeMac, vendorForMac } from "./lanPhoneVendors";
-import { comparePhones, listPbxProvisionedPhones } from "./pbxPhoneProvisioning";
+import { comparePhones, listPbxProvisionedPhones, resolvePbxTenantNumber } from "./pbxPhoneProvisioning";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -287,11 +287,21 @@ export async function registerLanPhoneRoutes(app: FastifyInstance, deps: LanPhon
     }
 
     const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
-    const pbxTenant = Number(link.pbxTenantCode || link.pbxTenantId || 0) || undefined;
+    // ⛔ resolvePbxTenantNumber, never Number(pbxTenantCode || …): the code is
+    // "T2", Number("T2") is NaN, and the old fallthrough passed NO tenant filter
+    // — a per-customer comparison quietly running over EVERY tenant's phones.
+    const pbxTenant = resolvePbxTenantNumber(link);
+    if (!pbxTenant) {
+      return reply.send({
+        available: false,
+        reason: "no_pbx_link",
+        message: "This company's phone-system link is missing its tenant number, so there is nothing to compare against.",
+      });
+    }
 
     const provisioned = await listPbxProvisionedPhones(
       (instance as any)?.ombuMysqlUrlEncrypted,
-      pbxTenant ? { pbxTenant } : {},
+      { pbxTenant },
     );
 
     if (!provisioned.available) {

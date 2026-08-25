@@ -22,7 +22,7 @@ import {
   guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
   summarizeRun, type PhoneCondition, type PhoneState,
 } from "@connect/shared";
-import { listPbxProvisionedPhones, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
+import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -60,7 +60,8 @@ async function defaultProvisionedPhones(tenantId: string): Promise<PbxProvisione
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
     if (!link?.pbxInstanceId) return [];
     const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
-    const pbxTenant = Number((link as any).pbxTenantCode || (link as any).pbxTenantId || 0) || undefined;
+    // ⛔ resolvePbxTenantNumber, never Number(pbxTenantCode) — the code is "T2".
+    const pbxTenant = resolvePbxTenantNumber(link as any);
     if (!pbxTenant) return [];
     const out = await listPbxProvisionedPhones((instance as any)?.ombuMysqlUrlEncrypted, { pbxTenant });
     return out.available ? out.phones : [];
@@ -288,16 +289,30 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     let knownElsewhere: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }> = [];
     try {
       const lookup = deps.provisionedPhones ?? defaultProvisionedPhones;
-      const recorded = await lookup(user.tenantId);
-      if (recorded.length) {
+      let recorded: PbxProvisionedPhone[] = [];
+      try { recorded = await lookup(user.tenantId); } catch { recorded = []; }
+      {
         const byMac = new Map(recorded.filter((r) => r.mac).map((r) => [r.mac, r]));
         const rows = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id } });
         const seen = new Set<string>();
         for (const row of rows) {
           seen.add(String(row.macAddress));
-          const rec = byMac.get(String(row.macAddress));
-          if (!rec) continue;
           const patch: Record<string, unknown> = {};
+          // ⛔ Rows from EARLIER passes too: ARP is ephemeral, so a rescan often
+          // resubmits only part of the list — on the first live run 4 of 6 rows
+          // kept vendor null because only the resubmitted two went through the
+          // ingest fallback. The hardware address does not change; fill it here.
+          if (!row.vendor || row.vendor === "unknown") {
+            const oui = guessVendorFromMac(String(row.macAddress)).vendor;
+            if (oui !== "unknown") patch.vendor = oui;
+          }
+          const rec = byMac.get(String(row.macAddress));
+          if (!rec) {
+            if (Object.keys(patch).length) {
+              await db.deskPhoneSetupPhone.update({ where: { id: row.id }, data: patch });
+            }
+            continue;
+          }
           if (!row.model && rec.model) patch.model = sanitizeDeviceText(rec.model, 120);
           if ((!row.vendor || row.vendor === "unknown") && rec.brand) {
             patch.vendor = sanitizeDeviceText(rec.brand.toLowerCase(), 80);

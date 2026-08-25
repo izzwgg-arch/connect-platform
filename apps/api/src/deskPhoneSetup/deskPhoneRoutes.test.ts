@@ -591,3 +591,17 @@ test("a PBX that cannot be read costs the names, never the discovery", async () 
   assert.equal(out.phones.length, 1);
   assert.deepEqual(out.knownElsewhere, []);
 });
+
+test("a rescan that resubmits only part of the list still fills vendors on the older rows", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { provisionedPhones: async () => [] });
+  const runId = await startRun(app);
+  // First pass finds two devices, before any vendor knowledge existed server-side.
+  await discover(app, runId, [{ mac: "0C:38:3E:77:C5:36" }, { mac: "0C:38:3E:77:C5:43" }]);
+  state.phones.forEach((r: any) => { r.vendor = null; }); // the pre-fix stored state
+  // ⛔ ARP is ephemeral: the rescan sees only ONE of them. The other row's
+  // hardware address has not changed — it must be named anyway (on the first
+  // live run 4 of 6 rows kept vendor null exactly this way).
+  const out = await discover(app, runId, [{ mac: "0C:38:3E:77:C5:36" }]);
+  assert.deepEqual(out.phones.map((p: any) => p.vendor), ["fanvil", "fanvil"]);
+});
