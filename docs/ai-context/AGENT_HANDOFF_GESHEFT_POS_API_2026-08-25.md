@@ -347,7 +347,12 @@ must be published before claiming a match.
 route with done-checks/numbered remaining stops, GPS-off banner + last-known
 marker, call-cell buttons) and screen 5 (Drivers: table with app status/last
 location, Add-a-driver panel with the setup-email flow, resend for
-not-yet-set-up invites). ⏳ Awaiting Izzy's approval of the full set.
+not-yet-set-up invites), then **screen 7: the driver SETUP EMAIL** (Izzy's
+ask) — drawn in the Loopcom email shell language: wordmark header, "Gesheft
+Kosher set you up as a delivery driver", Choose-my-password CTA, his
+name/phone/sign-in shown not asked, get-the-app steps, footer naming the store;
+annotated as riding the real hardened shell + resend-safe (same link, never a
+second account). ⏳ Awaiting Izzy's approval of the full 7-screen set.
 
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
