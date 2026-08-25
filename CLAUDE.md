@@ -1985,6 +1985,24 @@ to do everything in his power to get every single phone connected."*
   ⛔ ONE naming rule — `identityFromBanner` — serves both paths, and
   `shouldFingerprint` treats answering SIP as better evidence than any OUI
   block. ⛔ The wizard KEEPS a scan-provided identity — it used to null it.
+- ⛔⛔ **THE RESET TEST FOUND THE FOURTH DEAD DEP: `isRegistered` WAS NEVER
+  WIRED (`995dfa50`, handoff §18).** Izzy factory-reset his own ext-103 phone
+  and the wizard "still showed the same" — because server.ts never passed the
+  optional `isRegistered` dep, so `advance`'s Asterisk question silently
+  skipped and `registeredToUs` was ALWAYS false: the wizard could never turn a
+  phone green, and a reset phone kept its record identity. ⛔ **An optional dep
+  nobody wires is a feature nobody has — grep the server.ts call site before
+  believing an injected capability is live.** Fix: `defaultIsRegistered` reads
+  the live **`PbxEndpointRegistration`** mirror (contact-status pushes; proven
+  truthful against the 502–505 outage), querying the DESK endpoint
+  `T<n>_<ext>`, never `_1`. Every customer list now carries `connectedNow`
+  beside the record identity — pills read Connected / Not connected / Found,
+  and a dark "already set up" entry reads "Not connected right now": **the
+  record says whose phone it is; only Asterisk says whether it works.** The
+  found footer reads "Choose who uses each phone" — the assignment step
+  existed (found → match) and was merely unfindable. ⏳ The true end-to-end
+  acceptance — reset T53W → discovered → assigned → REGISTERED — is exactly
+  what Izzy is walking now.
 - ⛔⛔ **"THE PHOTOS ARE NOT SHOWING" — AN `<img>` SENDS NO TOKEN (`ecf70d93`,
   portal DEPLOYED, handoff §17).** The photo route requires a session; a browser
   image tag carries no Authorization, so every picture request was refused, for

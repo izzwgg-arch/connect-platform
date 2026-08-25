@@ -1244,3 +1244,52 @@ was STRUCTURALLY BLIND to this failure (the URL existed; the request died) —
 it now pins the component, the onError fallback, the absence of any bare
 `<img src={photoFor…`, and the token on the URL. Portal suite 27/27,
 container `ecf70d93` verified (fresh page chunk, marker present, 200).
+
+---
+
+## §18 — The reset test: `isRegistered` was never wired, so the wizard never knew anything (2026-08-25, `995dfa50`)
+
+Izzy factory-reset his own ext-103 desk phone to test the wizard end to end:
+*"I need to be able to select just this phone and then assign it. Also, it
+should pick up that that phone was factory reset and it's not registered to
+103 anymore. It's still showing the same."*
+
+⛔⛔ **THE FINDING: the `isRegistered` dep — the wizard's ONE question to
+Asterisk — existed in the route contract, was consumed by `advance`, and was
+NEVER PASSED by server.ts.** `if (phone.extNumber && deps.isRegistered)` with
+an undefined dep meant `registeredToUs` was ALWAYS false in production: the
+wizard could never turn a phone green, and a reset phone kept its
+record-derived identity with nothing saying it had gone dark. **Fourth
+dead-optional-dep/config gap of this feature in one day** (photo env, tenant
+number, vendor evidence, this) — ⛔ **an optional dep nobody wires is a feature
+nobody has; grep the call site in server.ts before believing an injected
+capability is live.**
+
+✅ **`defaultIsRegistered`** reads the api's own live mirror —
+**`PbxEndpointRegistration`**, upserted by the PBX's `contact-status` pushes
+(verified truthful live: rooms 502–505 read UNREGISTERED at the outage minute,
+working desks REGISTERED minutes prior). It queries the **DESK endpoint
+`T<n>_<ext>`, never `_1`** — a registered app must not make a blank desk phone
+read as connected. Tests still inject their own; `advance` falls back to the
+default.
+
+✅ **Every customer-facing list now carries `connectedNow` beside the record
+identity** (`withConnectedNow` on `/discovered`, the run GET, and
+`knownElsewhere`, which now carries its extension for the purpose): the
+found/match pill reads **Connected / Not connected / Found** instead of a
+blanket "Ready", and an "already set up" entry whose extension is dark reads
+**"Not connected right now"** — ⛔ **the record says whose phone it is; only
+Asterisk says whether it works. A screen showing the first without the second
+is a lie about every reset or unplugged phone.**
+
+✅ The assignment step already existed (found → Continue → "match", a
+who-uses-this-phone picker per phone); the found footer button now reads
+**"Choose who uses each phone"** so it is findable — his "no way of selecting
+just that phone" was a discoverability failure, not a missing feature.
+
+Proven: 85 api desk-phone tests (incl. the reset-phone truth test: the record
+names it Jacob/103 while the live check contradicts it, and a genuinely
+registered unseen phone reads connected), typechecks at baseline. ⏳ NOT
+PROVEN: the reset T53W has not yet been walked through discovery → assignment
+→ setup → REGISTERED — that walk (on desktop 0.1.16) is the feature's true
+end-to-end acceptance test, and it is exactly what Izzy is doing.
