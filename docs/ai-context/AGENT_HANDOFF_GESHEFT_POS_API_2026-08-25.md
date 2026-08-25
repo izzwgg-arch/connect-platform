@@ -469,6 +469,15 @@ disk ⊇ live by grepping the saved copy, then retry — never force.
   order to theirs). Mockup annotation 5 records it customer-facing.
 
 ## Open questions for Gesheft (nobody has asked yet)
+
+- **The box sticker (2026-08-25, gates the label design):** their POS already
+  prints a sticker that goes on the box (Izzy). Does it carry a BARCODE, and is
+  it the order/invoice number? If yes → the driver scans THEIR sticker and we
+  resolve by that number (add a second identifier kind beside the hashed
+  labelToken; scan is driver-authenticated so a guessable number is acceptable
+  there) — zero change in the store. If no → we print our own label from the
+  Orders desk at put-through (already planned, §13c). One photo of a sticker
+  answers it.
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
 - Credit pricing / monthly allowance.
