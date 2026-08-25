@@ -166,6 +166,22 @@ written 2026-08-25 late evening.** Nothing here is built; these are his decision
   any specials feature ships. SMS specials = the 10DLC/TCPA lane already
   documented in the shop-by-text handoff.
 
+## §9 — The FULL PLAN exists and is AWAITING IZZY'S APPROVAL (2026-08-25 late)
+
+⛔ **Izzy's explicit gate, twice in one message: a full plan before ANY build, and
+MOCKUPS he sees before ANY UI page is built.** The plan is published:
+<https://claude.ai/code/artifact/0312b85a-9676-4e66-9cec-0d40bd762ff3> — 8 phases
+(0 keys/answers → 1 POS bridge + screen pop → 2 CRM mode system + supermarket
+cockpit → 3 draft orders with correction capture → 4 pay-by-phone → 5 multi-tenant
+Sola → 6 specials incl. the marketing-mail sending lane → 7 automation graduation
++ delivery tie-in), six named mockups (M1 pop, M2 mode nav/account card, M3 draft
+review, M4 IVR storyboard, M5 specials composer, M6 mode picker + Sola key
+screen), and the safety rails (no platform-key fallback, stored cards only, drafts
+never auto-post, server-side mode enforcement). ⛔ **Do not start building any of
+it without his approval of the plan AND the relevant mockup.** ⏳ The Gesheft API
+key has still not actually been received (he said "giving it to you now" twice;
+no key has appeared in any message).
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
