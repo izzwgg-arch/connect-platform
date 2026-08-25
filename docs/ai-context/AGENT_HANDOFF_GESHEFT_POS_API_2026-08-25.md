@@ -415,6 +415,18 @@ code in the fleet), while a separate app simply never contains it.
   addEventListener** (recorded in its v7 note above; kept here too since this
   session authored the broken toggle).
 
+### §13b — Driver APP mockups added (screen 8, same artifact)
+
+Izzy: "I don't see any app markups in there" — correct; the set was
+dispatcher-side only. **Screen 8 added: four phone frames of the Loopcom Driver
+app** (morning runs list with "Start run" + location-notice, mid-run with
+Location-on chip / next-stop card / customer note carried from the voicemail,
+stop-finish with proof options, and the **location-off full-screen blocker**:
+"run paused, dispatcher notified"). Republished at the same URL after two
+publish conflicts with the fork session — ⛔ both sessions edit the SAME
+scratchpad file; re-read the live artifact (WebFetch) before publishing, verify
+disk ⊇ live by grepping the saved copy, then retry — never force.
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
