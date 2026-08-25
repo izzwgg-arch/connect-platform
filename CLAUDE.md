@@ -1985,6 +1985,17 @@ to do everything in his power to get every single phone connected."*
   ⛔ ONE naming rule — `identityFromBanner` — serves both paths, and
   `shouldFingerprint` treats answering SIP as better evidence than any OUI
   block. ⛔ The wizard KEEPS a scan-provided identity — it used to null it.
+- ⛔⛔ **"THE PHOTOS ARE NOT SHOWING" — AN `<img>` SENDS NO TOKEN (`ecf70d93`,
+  portal DEPLOYED, handoff §17).** The photo route requires a session; a browser
+  image tag carries no Authorization, so every picture request was refused, for
+  everyone, always — and ⛔ **the server-side probe that "proved" the photo
+  route proved nothing about the browser: it attached the Bearer by hand. A
+  media URL is only proven by the tag that will fetch it.** Fix: `?token=` on
+  the URL (the recordings player's pattern) + ONE `PhonePhoto` component with a
+  real `onError` → glyph fallback (⛔ VitalPBX ships NO Fanvil i-series photos;
+  the i64 door correctly keeps the drawing). The old guard pinned the render
+  ternary and was structurally blind to this; it now pins the component, the
+  fallback, and the token on the URL.
 - ⛔⛔ **SUPERSEDED BY 0.1.16 THE SAME EVENING — "there is only one network
   here" WAS RIGHT, and the registrar proved it (`49166657`, PUBLISHED, sha256
   `3b7af6ac…`).** The PBX registrar's `call_id` carries each Yealink's PRIVATE

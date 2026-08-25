@@ -1221,3 +1221,26 @@ device) and merged after every pass. Desktop suite 100.
 they vanished from every post-12:30 scan; and the `.66` **Fanvil i64** the SIP
 probe identified is door station **509**. ⏳ Acceptance: the office's next scan
 on 0.1.16 finding the ~10 live devices with models.
+
+---
+
+## §17 — "The photos are not showing" — an <img> sends no token (2026-08-25, `ecf70d93`, portal DEPLOYED)
+
+The photo route (`GET /desk-phones/photo/:model`) requires a signed session,
+and **a browser `<img>` sends no Authorization header** — so every picture
+request was refused, for everyone, always. ⛔ **The earlier server-side probe
+proved NOTHING about the browser: it attached the Bearer token by hand. A
+media URL is only proven by the tag that will fetch it.** `photoFor` now rides
+`?token=` on the URL — the recordings player's exact pattern
+(`getRecordingToken`; the api's global preHandler copies `?token=` into
+Authorization). All four render sites moved to ONE `PhonePhoto` component with
+a real `onError` fallback: a model the PBX has no picture for renders the
+glyph, never a broken-image icon — ⛔ **VitalPBX ships NO Fanvil i-series
+photos** (V/X/H/W series only), so the i64 door station correctly keeps the
+drawing while T42S/T53W show real pictures.
+
+⛔ The old "falls back to a drawing" guard pinned the render-time ternary and
+was STRUCTURALLY BLIND to this failure (the URL existed; the request died) —
+it now pins the component, the onError fallback, the absence of any bare
+`<img src={photoFor…`, and the token on the URL. Portal suite 27/27,
+container `ecf70d93` verified (fresh page chunk, marker present, 200).
