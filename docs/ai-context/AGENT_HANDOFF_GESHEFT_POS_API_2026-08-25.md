@@ -468,6 +468,29 @@ disk ⊇ live by grepping the saved copy, then retry — never force.
   label (Code 128/QR of the raw token; the POS `externalInvoiceId` ties our
   order to theirs). Mockup annotation 5 records it customer-facing.
 
+### §13d — Scan resolution DESIGN APPROVED (Izzy, 2026-08-25 night): order-number smart search, never items
+
+Izzy: "For now, make it the order number... when we test it tomorrow, we'll
+find out. Yes, build it this way. You can even make it smarter... search the
+system for that number, the whole system... Only if it's an order, not an
+item."
+
+- **The scan resolver searches ORDER IDENTIFIERS ONLY**: our raw labelToken
+  (hashed lookup, existing) + the POS order id + externalOrderId + invoice
+  number/externalInvoiceId, stored per order at ingest as additional
+  `DeliveryOrderIdentifier` kinds (e.g. POS_ORDER / POS_INVOICE, value hashed
+  like LABEL). First match wins; tenant-scoped as today.
+- ⛔ **Items are excluded BY CONSTRUCTION** — the search never touches the
+  product catalog, so a scanned UPC can never resolve to an order. No
+  blocklist logic needed; keep it structural.
+- Unknown number → explicit "not an order" on the driver screen WITH the
+  scanned number (never silent). Our own printed label stays the fallback if
+  the sticker's number turns out not to be in the API.
+- ⏳ **NO API KEY EXISTS YET** (Izzy acknowledged); first live test planned
+  "tomorrow" (2026-08-26): pull a real order, enumerate its numbers, scan a
+  real sticker, see which matches. ⛔ This approves the scan-resolution
+  DESIGN; the overall plan/mockup sign-off gate for the build is unchanged.
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
