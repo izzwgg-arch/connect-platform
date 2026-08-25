@@ -317,3 +317,69 @@ The repair, for whoever runs it (four substitutions, in a `python` script file):
 Then assert zero characters remain matching
 `c < 32 and c not in "\r\n\t"`, or in `U+200B-200F / U+202A-202E / U+2066-2069 / U+FEFF`,
 before writing the file back.
+
+---
+
+## 11. Follow-up (2026-08-25): the late-join rescue EXISTS and it refused this exact call — Mode-B diag preserved
+
+Asked "how would we fix this", the design investigation found that telephony's
+**Mode-B cold-answer re-delivery** (`requeueLiveCallToDialplan`,
+`apps/telephony/src/telephony/services/TelephonyService.ts:892`) is precisely
+the tap-triggered late-join mechanism — and it **ran on the 18:09 answer tap,
+found the fresh contact, and refused**. The log line (preserved here because
+`docker logs` is wiped at every telephony deploy):
+
+```json
+{"time":1787609384250,"component":"TelephonyService","linkedId":"1787609370.20746",
+ "trigger":"invite_accept","callState":"up",
+ "extLegAor":"T31_103","extLegDialedAt":1787609379916,
+ "extLegDialContext":"connect-mobile-wake-dial","extLegDialExten":"T31_103_1",
+ "modeBAlreadyRedirected":false,"isInviteAccept":true,
+ "isDirectExtTarget":false,
+ "freshContactNotDialed":"sip:t31_103@50.122.143.130:8961",
+ "modeBReDeliver":false,"modeBReason":"not_direct_extension",
+ "msg":"mode-b diag: invite_accept requeue evaluation"}
+```
+
+Plus, in the same second: `mobile invite requeue skipped — extension leg
+already ringing/live` (the desk legs genuinely were), and at ring start a
+`device_register_complete` requeue attempt refused with `no safe trunk Dial
+position`.
+
+**Three mechanical reasons it refused, all fixable in Connect code (no dialplan
+change):**
+
+1. ⛔ **`isDirectExtTarget` only recognises `*local-dialing*` contexts, and the
+   app leg is dialed from `connect-mobile-wake-dial`** — a context that did not
+   exist when the Mode-B gate was written (Mode-B: 2026-06-29; wake-dial fleet
+   rollout: 2026-08-05). The gate was never taught the new context.
+2. ⛔ **`extLegAor` captured the DESK AOR (`T31_103`), not the app AOR
+   (`T31_103_1`)** — so `freshContactNotDialed` searched the wrong endpoint and
+   found a fresh *desktop* contact instead of the iPhone's fresh registration.
+   The capture takes one leg's DialBegin per call; with desk + wake-dial legs
+   both live, it kept the desk one.
+3. ⛔ **The re-delivery mechanism is an AMI Redirect of the TRUNK leg**, which
+   restarts the entire dial — that is why the `extension leg already
+   ringing/live` skip exists (the RSBK ring-group loop, 2026-06-25) and why it
+   must keep firing while a desk phone is legitimately ringing. A safe
+   late-join needs to dial **only the one fresh contact as an additional leg**
+   (Originate + bridge), disturbing nothing already ringing; the
+   answered-elsewhere machinery (Hanna fix, `multiPartyBridgeAt`) already
+   cleans up losing legs.
+
+**The stale-vs-sleeping question is already answered in code and it is
+time-based, not state-based**: `AorContactRegistry` stamps `firstSeenAt`;
+`freshContactNotDialed(aor, dialedAt, dialedContacts)` = registered AFTER this
+call's dial AND not among the dialed contacts. A stale/zombie contact (which
+can keep answering qualify and even return 180 — proven 2026-06-28) existed
+before the dial by definition; a woken phone registers after the push, and
+JsSIP rotates the Contact URI on every REGISTER so the fresh one is always
+literally new. Do not add a contact-classification heuristic — watch for the
+new registration.
+
+⛔ **Fix order per the blast-radius rule** (the Mode-B comment block records
+FOUR prior regressions from loosening these gates — trace before editing):
+teach the gate the `connect-mobile-wake-dial` context + capture the leg's own
+AOR per leg (tap-triggered only; fixes exactly this call's shape), prove on a
+real call, and only then consider registration-triggered join and the
+Originate-a-single-leg mechanism. NOT built, NOT started.
