@@ -84,3 +84,49 @@ test("SOURCE GUARD: a claim that lands mid-sweep skips the push (count === 0 con
     "a 0-row cancel means the claim won — the push must be skipped",
   );
 });
+
+// ── CLAIMED-BUT-NEVER-CONNECTED loss notification (2026-08-25, Fixup Group
+// follow-up). The PENDING-only sweep left a device that TAPPED Answer (invite
+// ACCEPTED) frozen on "Connecting…" for its full 16 s budget when the desk
+// phone answered first / the caller gave up. The sweep now also notifies
+// claimed-but-unconnected invites — with the Hanna own-app guard dominating
+// and the write one-shot on `endedAt`. Source guards, because the whole
+// defect class here lives in server.ts's loop. ──
+
+test("SOURCE GUARD: the sweep also fetches claimed-but-unconnected invites (ACCEPTED, endedAt null)", () => {
+  const src = serverSrc();
+  assert.ok(
+    /const claimedUnconnected = await db\.callInvite\.findMany\(\{\s*\n\s*where: \{\s*\n\s*pbxCallId: input\.linkedId,\s*\n\s*status: "ACCEPTED",\s*\n\s*endedAt: null,/.test(src),
+    "the sweep must look for invites the user tapped Answer on that never connected",
+  );
+});
+
+test("SOURCE GUARD: the loss write is one-shot — updateMany conditioned on ACCEPTED + endedAt null", () => {
+  const src = serverSrc();
+  assert.ok(
+    /updateMany\(\{\s*\n\s*where: \{ id: inv\.id, status: "ACCEPTED", endedAt: null \},\s*\n\s*data: \{ endedAt: new Date\(\) \},/.test(src),
+    "the loss marker must be a conditional endedAt stamp so a repeat sweep can never push twice",
+  );
+  assert.ok(
+    src.includes("if (lostRes.count === 0) continue;"),
+    "a 0-row loss stamp means another sweep handled it — the push must be skipped",
+  );
+});
+
+test("SOURCE GUARD: the Hanna own-app guard dominates the loss push too", () => {
+  const src = serverSrc();
+  // Both loops must consult inviteFulfilledByOwnApp — two call sites, not one.
+  const count = src.split("inviteFulfilledByOwnApp(input.answeredEndpoint, inv.toExtension)").length - 1;
+  assert.ok(
+    count >= 2,
+    `both the PENDING cancel loop AND the claimed-lost loop must check the own-app guard (found ${count})`,
+  );
+});
+
+test("SOURCE GUARD: a normally-completed answered call gets no loss push (answered + not answered_elsewhere skips)", () => {
+  const src = serverSrc();
+  assert.ok(
+    src.includes('if (input.state !== "answered_elsewhere" && input.answered) continue;'),
+    "a hungup report for an answered call must not push a cancel at the winner's invite",
+  );
+});

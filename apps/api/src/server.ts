@@ -35215,13 +35215,33 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         status: "PENDING",
       },
     });
-    if (!pending.length) {
-      app.log.info({ linkedId: input.linkedId, state: input.state }, "mobile-ring-notify: stop — no pending invites");
+    // CLAIMED-BUT-NEVER-CONNECTED (2026-08-25, Fixup Group follow-up): an
+    // invite the user tapped Answer on is ACCEPTED, so the PENDING-only sweep
+    // above never told that device when it LOST — the desk phone answered
+    // first (or the caller gave up / the ring diverted to voicemail) while the
+    // tapping phone sat on "Connecting…" for its full 16 s answer budget
+    // before giving up on its own. `endedAt` is stamped exactly once here as
+    // the loss marker (nothing else writes it on CallInvite), so a repeat
+    // sweep can never push twice. ⛔ The Hanna own-app guard below still
+    // dominates: an invite fulfilled by its own app endpoint is never touched,
+    // and the client-side cancel handler additionally ignores a cancel for a
+    // call it holds a CONFIRMED session on — this push only ever reaches a
+    // device with no SIP session behind its screen.
+    const claimedUnconnected = await db.callInvite.findMany({
+      where: {
+        pbxCallId: input.linkedId,
+        status: "ACCEPTED",
+        endedAt: null,
+      },
+    });
+    if (!pending.length && !claimedUnconnected.length) {
+      app.log.info({ linkedId: input.linkedId, state: input.state }, "mobile-ring-notify: stop — no pending or claimed-unconnected invites");
       return { ok: true, hungup: true, canceled: 0 };
     }
     const nowIso = new Date().toISOString();
     let canceled = 0;
     let fulfilled = 0;
+    let lostNotified = 0;
     for (const inv of pending) {
       // ⛔ The "answered elsewhere" that is actually THIS invite's own app: the
       // SIP answer beat the HTTPS claim (lossy mobile link + cold-start answer).
@@ -35288,7 +35308,61 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         );
       }
     }
-    app.log.info({ linkedId: input.linkedId, canceled, fulfilled, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
+    // Second pass: tell every claimed-but-never-connected device it lost.
+    for (const inv of claimedUnconnected) {
+      // A hungup/voicemail report for a call that WAS answered: the loser (if
+      // any) was already handled by the answered_elsewhere sweep at answer
+      // time, and the winner's invite must not receive a pointless cancel
+      // push after every normally-completed call.
+      if (input.state !== "answered_elsewhere" && input.answered) continue;
+      // ⛔ Hanna guard, same as the PENDING loop: when the "elsewhere" is this
+      // invite's own app endpoint, the SIP answer may simply have beaten our
+      // bookkeeping (or a sibling device on the shared `_1` AOR answered) —
+      // never push a cancel at it. A shared-AOR sibling's claimed loser falls
+      // back to the app's own 16 s give-up, which is the safe direction.
+      if (input.state === "answered_elsewhere" && inviteFulfilledByOwnApp(input.answeredEndpoint, inv.toExtension)) {
+        app.log.info(
+          { linkedId: input.linkedId, inviteId: inv.id, answeredEndpoint: input.answeredEndpoint },
+          "mobile-ring-notify: claimed invite's own app endpoint answered — no loss push",
+        );
+        continue;
+      }
+      // One-shot: stamp the loss marker conditionally; 0 rows = another sweep
+      // already handled it (or the invite moved on) — no push.
+      const lostRes = await db.callInvite.updateMany({
+        where: { id: inv.id, status: "ACCEPTED", endedAt: null },
+        data: { endedAt: new Date() },
+      });
+      if (lostRes.count === 0) continue;
+      lostNotified += 1;
+      const lostReason =
+        input.state === "diverted_to_voicemail"
+          ? "diverted_to_voicemail"
+          : input.state === "answered_elsewhere"
+            ? "answered_elsewhere"
+            : (input.cancelReason?.trim() || "pbx_hangup");
+      try {
+        await sendPushToUserDevices({
+          tenantId: inv.tenantId,
+          userId: inv.userId,
+          payload: {
+            type: "INVITE_CANCELED",
+            inviteId: inv.id,
+            pbxCallId: inv.pbxCallId,
+            reason: lostReason,
+            tenantId: inv.tenantId,
+            timestamp: nowIso,
+          },
+        });
+        app.log.info(
+          { linkedId: input.linkedId, inviteId: inv.id, state: input.state, answeredEndpoint: input.answeredEndpoint ?? null },
+          "mobile-ring-notify: claimed-but-unconnected invite lost — cancel push sent",
+        );
+      } catch (err: any) {
+        app.log.warn({ err: err?.message, inviteId: inv.id }, "mobile-ring-notify: claimed-lost push failed");
+      }
+    }
+    app.log.info({ linkedId: input.linkedId, canceled, fulfilled, lostNotified, answered: !!input.answered }, "mobile-ring-notify: hangup — invites canceled + push sent");
     return { ok: true, hungup: true, canceled };
     });
   }
