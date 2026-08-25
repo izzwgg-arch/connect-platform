@@ -541,3 +541,71 @@ verification costs more to unwind than getting it right once.
 The acceptance test is the Business Status panel's "Verify your business" step
 turning green, followed by the two numbers moving off **Pending** — Meta says
 that notification lands 1–2 days after verification completes.
+
+### 7f. UPDATE 2026-08-25 — business info CORRECTED and verification SUBMITTED
+
+⛔ **§7c above is now history — re-read this before repeating any of it.** Izzy
+fixed the portfolio and submitted verification the same session.
+
+**Business details, saved and verified on the live page:**
+- Legal business name: **`Loopcom LLC`** (was `Connect comunications`)
+- Address: **`33 Route 17M, Harriman, New York 10926`** (was `United States of America`)
+- Business phone: **`+18457231213`** (was none)
+- Website: **`https://loopcom.net/`** (was `connectcomunications.com`)
+- Tax ID (EIN): entered by Izzy himself
+
+⛔ **The EIN was deliberately NOT typed by the agent** — a government-issued tax
+ID is not something to enter into a form on someone's behalf. The field is
+optional (`"Tax ID will be used to find potential matching business records"`),
+so leaving it blank blocks nothing; it exists to help Meta auto-match the
+business and skip the document upload.
+
+✅ **Business verification status is now `In review`** — *"Your business
+verification application is being reviewed by Meta."* That is the gate the two
+Pending numbers were stuck behind since 2026-08-16.
+
+⛔⛔ **DOCUMENTS ARE CONDITIONAL, NOT MANDATORY — the wizard's own words:**
+*"You may need to upload accepted documents to confirm these details **if your
+business is not found**."* Meta tries to match the legal name against official
+records first (which is what the EIN feeds). Only an unmatched business is asked
+to upload. The three wizard steps are **Verify business details → Confirm your
+connection → Upload documents (conditional)**.
+
+⚠️ **A correction the agent made to its own earlier advice:** §7e said to get a
+real website up *before* submitting verification. That was over-cautious —
+**verification turns on the documents and the record match, not the website.**
+loopcom.net being a parked page does not block BV. It DOES still matter for the
+display-name approval and for Tech Provider App Review, both of which lean on
+the site to prove "loopcom" belongs to Loopcom LLC.
+
+### 7g. The Tech Provider path — the app already exists and is further along than expected
+
+**Meta app `Loopcom`, ID `1027780856754202`**, owned by the Loopcom portfolio,
+Izzy the only person on it with full access. On its dashboard:
+
+- ✅ **"Customize the Connect with customers through WhatsApp use case" — DONE**
+- ○ Test use cases — not done
+- ○ Check requirements and publish — not done
+- **Publish status: `Unpublished`** (still development mode)
+- **A "Become a Tech Provider" card is present**: *"Become a Tech Provider to
+  submit to App Review and request access to user data and data from other
+  businesses. You'll be required to complete access verification."*
+- `Facebook Login for Business` already appears in the left nav — the product
+  Embedded Signup needs.
+
+⛔ **Note a sequencing discrepancy worth resolving before planning around it:**
+§3 of this handoff has the order as App Review → Access Verification → Tech
+Provider, but **Meta's own dashboard copy says you become a Tech Provider in
+order TO submit to App Review.** Do not assert either order as fact until the
+"Become a Tech Provider" flow has actually been opened and read.
+
+⛔⛔ **THE REAL LONG POLE IS NOT PAPERWORK — IT IS THAT WE CANNOT SEND A MESSAGE.**
+App Review requires **at least one successful API call per requested permission
+within the 30 days before submitting**, plus a separate screencast per
+permission. `apps/api` has **no WhatsApp transport at all** —
+`POST /whatsapp/threads/:id/send` writes a row and returns. So App Review is
+blocked on a real build, not on Meta.
+
+⏳ **Still open:** no payment method on the WABAs; loopcom.net is still a parked
+"under construction" page; and the display name `Connect comunications` on the
+second WABA remains likely to be declined once reviews do start.

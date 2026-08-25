@@ -700,6 +700,24 @@ Memory: [[whatsapp-numbers-pending-business-verification]].
   moving off **Pending** — Meta says that lands 1–2 days after verification
   completes.
 
+- ✅✅ **UPDATE 2026-08-25 — FIXED AND SUBMITTED; the bullets above are now
+  HISTORY.** Legal business name corrected to **`Loopcom LLC`**, address to
+  **`33 Route 17M, Harriman, New York 10926`**, phone **`+18457231213`**, website
+  **`https://loopcom.net/`**, and Izzy entered the EIN himself — ⛔ the agent
+  deliberately does NOT type a government-issued tax ID into a form, and the field
+  is optional anyway ("used to find potential matching business records").
+  **Business verification now reads `In review`.** ⛔⛔ **Documents are
+  CONDITIONAL** — the wizard says *"you may need to upload accepted documents …
+  **if your business is not found**"*; Meta matches the legal name against official
+  records first. ⚠️ **Correction to the advice above:** "get a real website up
+  before submitting verification" was over-cautious — BV turns on the documents and
+  the record match, not the website. ✅ The Meta app **`Loopcom` (`1027780856754202`)**
+  already exists with the WhatsApp use case customised, Facebook Login for Business
+  present and a **"Become a Tech Provider"** card — but is still **Unpublished**.
+  ⛔⛔ **The long pole for the partnership is a BUILD, not paperwork: App Review
+  needs ≥1 successful API call per permission in the 30 days before submitting, and
+  `apps/api` has no WhatsApp transport at all.**
+
 ## ⛔ AGENT HANDOFF — the email footer names the CUSTOMER'S company now, not "your organization" (2026-08-24) — READ FIRST before touching `loopcomEmailShell.ts`, before putting a NEW email on that shell, or for "the footer names the wrong company"
 
 (`a2bfadd6` on `feat/ivr-migration-takeover`. ✅ **api DEPLOYED and
