@@ -943,3 +943,85 @@ the Windows 11 taskbar (it is a separate DWM layer — captures show the windows
 beneath), so a taskbar icon cannot be verified by an automated screenshot. And Explorer's
 `iconcache*`/`thumbcache*` clear only sticks with the app CLOSED. 0.1.13 also added a
 `pinWindowIcon` re-assert ladder for the unrelated late-button timing race.
+
+---
+
+## §13 — The first customer holds the key: A plus center ext 103 (2026-08-25)
+
+Izzy: *"A plus center 103 — permission to add desk phones, and add it to his
+sidebar."* **Permission change only — no code, no deploy, no migration, no PBX
+write.** Everything below was driven through the REAL admin routes as
+SUPER_ADMIN against `127.0.0.1:3001`.
+
+**Who.** `cmnmjhjgs002vp96hstcfzhnw` — **jacobw@apluscenterinc.org**, Jacob
+Weinstock, ext **103**, tenant `cmnlgnumi0000p9g6l7t1t0z7` = **A plus center**.
+⛔ That is the real April tenant; the 2026-08-18 duplicate "a plus center" was
+renamed **TYH Industries** and is a different company — check the id, not the
+name.
+
+### ⛔⛔ The trap: his existing custom role belongs to three companies
+
+He is `role: USER` and already had ONE active custom role — **"S m Weiss"**
+(`cmq9mt87n039rrw13ay3d13gr`, 76 keys), which lives under
+`connect-admin-tenant-v1` and is assigned to **three users in three unrelated
+tenants**:
+
+| user | company |
+|---|---|
+| relaxtires@gmail.com | Relax Tires |
+| senderweiss@gmail.com | Create A Box |
+| jacobw@apluscenterinc.org | **A plus center** |
+
+**Ticking a box on "his role" would have handed desk-phone setup to two other
+customers Izzy never mentioned.** Run
+`GET /admin/custom-roles/:id/users` before editing any custom role.
+
+### What was done instead — an additive second role
+
+`getEffectiveCustomRolePermissions` (`platformRolePermissions.ts:214`) looks
+assignments up by **`userId` alone** and **UNIONS every active role**. So a
+second role carrying only the new key is purely additive:
+
+1. `POST /admin/custom-roles` → `cmt8ulg430abbpn13k5fai5x7`
+   *"Desk phone setup — Jacob Weinstock (A plus center)"*, permissions
+   `["can_setup_desk_phones"]`.
+2. `PUT /admin/users/<uid>/custom-roles` with **both** ids.
+   ⛔ That route is **REPLACE** — it deletes every assignment under the actor's
+   tenant first. Omitting the existing id strips the man's entire portal.
+3. Verified `GET /admin/users/<uid>/effective-permissions`.
+
+**Result: 76 → 77 keys. `GAINED: ["can_setup_desk_phones"]`. `LOST: []`.**
+Both other holders of the shared role re-read afterwards: unchanged.
+
+⛔ **`can_authorize_phone_reset` was deliberately NOT granted.** §2's split is
+the point — the wizard points phones at us, a reset **ERASES a customer device**.
+Izzy asked to *add* phones. A phone still owned by the previous provider will
+need clearing, and that is a separate decision with a separate key.
+
+### The sidebar needed no code change
+
+`workspace.desk_phones` in `navConfig.ts` has **no SUPER_ADMIN force line** in
+`isNavItemVisibleForUser` (unlike Meetings, Direct, PBX Console…), so visibility
+is exactly `can_view_section_workspace && can_setup_desk_phones`. He already held
+the section key. Read from the field the sidebar actually uses — **`/me` →
+`portalPermissionSet`**, not `permissions` (a probe on the wrong field reported 0
+keys and looked like a failed grant).
+
+### Proven live, both directions
+
+| caller | `GET /desk-phones/state` | `/me` set | sidebar |
+|---|---|---|---|
+| Jacob (103) | **200** `hasActiveRun:false` | 77, both keys true | **visible** |
+| Leah (101, same tenant) | **403** `permission: can_setup_desk_phones` | 42, key false | hidden |
+
+The 403 is the half that matters: the grant is scoped to **him**, not to
+A plus center.
+
+### ⏳ Not proven
+
+Nobody has opened the screen and no phone has been set up — his last login was
+**2026-06-17**. ⛔ **He must open it in the Loopcom DESKTOP app**, not a browser:
+the LAN scan runs on his own machine over the desktop `phoneSetup` IPC (needs
+≥ 0.1.9 for the /22 subnet fix, §b5272867). In a browser the page loads and says
+*"Open this in the Loopcom app on a computer in the same office as your phones"*
+and finds nothing — that is correct behaviour, not a broken grant.

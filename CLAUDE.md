@@ -1859,6 +1859,52 @@ to do everything in his power to get every single phone connected."*
   guard pins the absence). ⛔ Placed ABOVE Conference — the Conference guard correctly
   refused the slot between Conference and Install, which is Izzy's exact recorded
   2026-08-20 placement. Two recorded instructions collided; the exact pin won.
+- ✅✅ **A REAL CUSTOMER HOLDS THE KEY NOW — A plus center ext 103, 2026-08-25
+  (Izzy: "permission to add desk phones, and add it to his sidebar"). Handoff §13.
+  Permission change only: no code, no deploy, no migration, no PBX write.**
+  Jacob Weinstock (`jacobw@apluscenterinc.org`, user `cmnmjhjgs002vp96hstcfzhnw`,
+  tenant `cmnlgnumi0000p9g6l7t1t0z7`) is the first non-SUPER_ADMIN with
+  `can_setup_desk_phones`. ⛔ That is the **real April** A plus center — the
+  2026-08-18 duplicate was renamed **TYH Industries**; check the id, not the name.
+- ⛔⛔ **THE TRAP THAT ALMOST GAVE IT TO TWO OTHER COMPANIES: his existing custom
+  role "S m Weiss" (`cmq9mt87n039rrw13ay3d13gr`, 76 keys) is assigned to THREE
+  users in THREE unrelated tenants** — Relax Tires, Create A Box and A plus
+  center. Custom roles live under `connect-admin-tenant-v1` and are assigned
+  platform-wide by `userId`, so "their role" is routinely not theirs.
+  **Run `GET /admin/custom-roles/:id/users` before editing ANY custom role.**
+- ✅ **The fix is an ADDITIVE SECOND ROLE, because roles UNION.**
+  `getEffectiveCustomRolePermissions` (`platformRolePermissions.ts:214`) looks
+  assignments up by `userId` alone and unions every ACTIVE role — so role
+  `cmt8ulg430abbpn13k5fai5x7` carrying the single key was assigned alongside the
+  shared one: **76 → 77 keys, `GAINED: ["can_setup_desk_phones"]`, `LOST: []`**,
+  and both other holders re-read afterwards **unchanged**.
+  ⛔ The "rebuild their full effective set + the addition" recipe in
+  [[custom-roles-are-authoritative]] is only for a user with **NO** custom role,
+  where the role replaces the bucket — applying it here would have forked him off
+  the shared role forever.
+  ⛔ `PUT /admin/users/:userId/custom-roles` is **REPLACE**: it deletes every
+  assignment under the actor's tenant first, so the body must carry the EXISTING
+  role ids too or the person loses their whole portal. ⛔ `POST
+  /admin/custom-roles` returns the row under **`role`**, not `customRole`.
+- ⛔ **`can_authorize_phone_reset` was deliberately NOT granted.** The two-key
+  split above is the point — the wizard points phones at us, a reset **ERASES a
+  customer device**, and Izzy asked to *add* phones. A handset still owned by the
+  previous provider will need clearing; that is a separate decision.
+- ✅ **The sidebar needed no code change**: `workspace.desk_phones` has **no
+  SUPER_ADMIN force line** in `isNavItemVisibleForUser`, so visibility is exactly
+  `can_view_section_workspace && can_setup_desk_phones` and he already held the
+  section key. ⛔ Judge it from **`/me` → `portalPermissionSet`**, not
+  `permissions` — probing the wrong field reported 0 keys and read like a failed
+  grant. **Proven live both ways:** Jacob `GET /desk-phones/state` → **200**;
+  his colleague Leah (ext 101, same tenant) → **403 `permission:
+  can_setup_desk_phones`**, her set unchanged at 42 — the grant is scoped to the
+  PERSON, not the company.
+- ⏳ **Still not proven by a human: he has not opened it** (last login
+  2026-06-17). ⛔ **He must use the Loopcom DESKTOP app, not a browser tab** —
+  the LAN scan runs on his own machine over the desktop `phoneSetup` IPC (≥ 0.1.9
+  for the /22 fix). A browser loads the page, says "Open this in the Loopcom app
+  on a computer in the same office as your phones", and finds nothing; that is
+  correct, not a broken grant.
 - ⏳ **NOT PROVEN: nobody has opened the screen and no phone has been set up** — but
   the desktop blocker is gone, so **the acceptance test is now runnable: one real
   device on one real desk** in the updated app.
