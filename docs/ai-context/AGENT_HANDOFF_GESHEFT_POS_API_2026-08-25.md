@@ -263,10 +263,12 @@ window + the API key that has still not arrived.
 - ⛔⛔ **PIN FLOW RULE (Izzy, 2026-08-25 night): caller ID matching the account's
   own number = NO PIN asked to hear the balance or pay; a caller from a
   DIFFERENT number (keyed-in account lookup) MUST key the PIN.** Plus: balance
-  and payment are separate options — new prompt 21_menu_after_balance ("payment
-  press one / balance again press two / done, just hang up"), generated in BOTH
-  voices (sets now 51 files each; loopcom stashes updated, incl.
-  `/root/kristen-extra/`).
+  and payment are separate options, and (Izzy, next message) **a MAIN MENU comes
+  first: "To hear your balance, press one. To make a payment, press two."**
+  New prompts, both voices: 22_main_menu, and 21_menu_after_balance re-recorded
+  so keys are CONSISTENT call-wide (**1 = balance, 2 = payment, everywhere** —
+  its first cut had payment on 1 and would have clashed). Sets are 52 files
+  each; loopcom stashes `/root/stephen-neural/` + `/root/kristen-extra/` updated.
   ⛔⛔ **The wrinkle nobody may paper over: the API requires X-Customer-Pin on
   EVERY balance/charge call regardless of who's calling — the IVR cannot simply
   skip it.** Two ways to deliver Izzy's UX, in preference order: (a) ask Gesheft
