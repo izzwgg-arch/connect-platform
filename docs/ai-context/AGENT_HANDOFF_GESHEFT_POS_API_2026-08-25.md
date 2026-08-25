@@ -150,6 +150,13 @@ written 2026-08-25 late evening.** Nothing here is built; these are his decision
   order history, email/SMS specials). Cold-calling screens get mode-gated, not
   deleted. ⛔ A per-tenant mode flag that some code paths ignore is worse than no
   flag (the HIPAA-tier rule) — enforce server-side.
+- ⛔⛔ **THE POS/TRACKING API IS MULTI-TENANT TOO (Izzy, same evening): "I should
+  be able to assign the API key to a tenant from where I enter the API key and be
+  able to add as many as I like. Sola and Tracking system."** ONE admin
+  integration-keys screen — pick tenant, pick integration (Sola | Tracking
+  system), paste key; unlimited rows; encrypted, masked after save, strictly
+  tenant-scoped. ⛔ The Phase-1 POS bridge must therefore be tenant-keyed FROM
+  DAY ONE — never a Gesheft-hardcoded key that later gets "made multi-tenant".
 - ⛔⛔ **SOLA GOES MULTI-TENANT**: every payment-integrated customer will be on
   Sola; each tenant gets its OWN Sola API key (their merchant account, their
   name — standing rule), stored encrypted, tenant-scoped. ⛔ The existing
@@ -181,6 +188,32 @@ never auto-post, server-side mode enforcement). ⛔ **Do not start building any 
 it without his approval of the plan AND the relevant mockup.** ⏳ The Gesheft API
 key has still not actually been received (he said "giving it to you now" twice;
 no key has appeared in any message).
+
+## §10 — The payment IVR's VOICE exists: 18 Kristen prompts generated (2026-08-25 night)
+
+Izzy: *"create the IVR for the payment system with 11 labs and use Kristin's
+voice."* ✅ **All 18 prompts of the pay-by-phone call script were generated with
+ElevenLabs in Kristen's voice** (`CvD6hF1BJzAFN428j1cO`, "Warm, Corporate and
+Steady" — ⛔ never the OTHER Kristen `dfeOmy6Uay63tNhyO99j`, the ad read), via the
+real `synthesiseSpeech` (8 kHz phone-native, IVR tuning, one call per prompt,
+never retried). 1,054 characters billed. Files delivered to Izzy as WAVs + zip;
+server stash kept at **loopcom `/root/gesheft-pay-ivr/`** (18 wavs).
+⛔ **REVIEW ARTIFACTS ONLY — nothing was written to any prompt catalog, tenant,
+or the PBX.** The IVR itself (dialplan payment context, POS charge wiring) is
+Phase 4 and remains gated on plan approval + the M4 script sign-off + a PBX
+window + the API key that has still not arrived.
+- ⛔ **`listElevenLabsVoices` objects do NOT expose `voice_id`** — an existence
+  check against the list reads every voice as absent. The right gate is a direct
+  1-word synthesis probe (the provider accepts or refuses the id).
+- ⛔ **The script splices dynamic numbers between fixed prompts**
+  (balance_intro → SayNumber → "dollars"/"and"/"cents" as Kristen fragments) —
+  but **Asterisk's own digit sounds are Allison's voice**, so amounts will
+  voice-switch mid-sentence unless a Kristen digit set (0–20, tens, hundred,
+  thousand) is generated later. Flagged to Izzy, not yet decided.
+- ⛔ **The prompts are ENGLISH; Gesheft's customers are largely Yiddish
+  speakers** and no TTS on earth speaks Yiddish
+  ([[no-voice-provider-speaks-yiddish]]). Options if wanted: a human recording
+  run through the voice changer, or bilingual keys. Izzy's call.
 
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
