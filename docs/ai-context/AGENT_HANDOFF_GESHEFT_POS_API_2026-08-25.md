@@ -313,7 +313,13 @@ screens: Orders page (draft queue + sent-with-tracking), draft review (Yiddish
 transcript + translation with item-mapping highlights beside the editable order;
 WIC auto-comment; notes; correction capture called out), the call screen pop
 with the POS account, and settings (mode picker + integration keys). All names
-fabricated. ⏳ Awaiting Izzy's approval; M5 (specials composer) not yet drawn.
+fabricated. ✅ **Izzy on v1: "the mock-ups are good" but wanted them "a lot
+more SaaS, a lot more professional, fully consistent with the Connect theme" —
+v2 REPUBLISHED at the same URL** using the portal's EXACT globals.css tokens
+(dark `#0c1218/#141f2b/#22a8ff/#26374a…` bare-:root, light `#f6f8fb/#3b82f6…`
+via data-theme, Inter, real chrome: topbar + sectioned sidebar, KPI strip, SVG
+icons — no emoji). ⏳ v2 awaiting his approval; M5 (specials composer) not yet
+drawn.
 ⛔ Per the standing rule, when these are BUILT the built-vs-mockup comparison
 must be published before claiming a match.
 
