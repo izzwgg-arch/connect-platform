@@ -323,6 +323,32 @@ drawn.
 ⛔ Per the standing rule, when these are BUILT the built-vs-mockup comparison
 must be published before claiming a match.
 
+## §12 — DELIVERY-TRACKING REQUIREMENTS (Izzy, 2026-08-25 night) + mockups v3
+
+**His spec for the dispatcher/driver side** (extends the dormant delivery module
+— see the CLAUDE.md delivery section; most machinery exists, these finish it):
+- **Full live map in the Gesheft UI**: every driver's position, his route, stops
+  done/remaining, ETAs — plus per-driver cards. (The `/tracking/map` page +
+  `DriverLocationSample` exist; the GPS feed was never wired — that's the gap.)
+- ⛔ **Calling a driver rings his REAL CELL, not an app** — drivers will NOT have
+  the Loopcom phone app; the rep clicks Call and Loopcom dials the cell number
+  on the driver's record. (Driver's mobile app is ONLY the delivery flow:
+  runs/scans/GPS.)
+- **Driver-login page**: create a driver with name + cell + email → Loopcom
+  emails a set-your-password link for the driver app; name/number pre-filled in
+  the app. (`DriverProfile` + the USER_INVITE machinery cover most of this;
+  needs the clean Add-a-driver screen + driver-scoped invite.)
+- ⛔⛔ **NO OFF SWITCH IN THE DRIVER APP** — tracking runs whenever he's on a
+  run; the only escape is revoking the OS location permission, and **that must
+  fire a dispatcher notification immediately** (banner + amber driver card +
+  last-known position on the map). The dashboard's `staleGps` tile is currently
+  a hardcoded 0 — this requirement is what makes it real.
+✅ **Mockups v3 republished (same URL)** adding screen 4 (live map: SVG map,
+route with done-checks/numbered remaining stops, GPS-off banner + last-known
+marker, call-cell buttons) and screen 5 (Drivers: table with app status/last
+location, Add-a-driver panel with the setup-email flow, resend for
+not-yet-set-up invites). ⏳ Awaiting Izzy's approval of the full set.
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
