@@ -214,6 +214,26 @@ window + the API key that has still not arrived.
   speakers** and no TTS on earth speaks Yiddish
   ([[no-voice-provider-speaks-yiddish]]). Options if wanted: a human recording
   run through the voice changer, or bilingual keys. Izzy's call.
+- ✅ **SCRIPT REVISIONS, same night (Izzy):** (1) **unrecognized caller → offer
+  account lookup by keyed-in phone number** (the API supports lookup by any
+  number) — revised prompt 13 + new 19 (lookup not found) + 20 (connect to a
+  person); (2) ⛔⛔ **AMOUNT ENTRY USES STAR AS THE DECIMAL POINT** — "2 5 * 3 7"
+  = $25.37, pound to finish — **and the IVR will be BUILT that way**; prompt 05
+  rewritten. (3) **A SECOND FULL SET exists in AMAZON POLLY, voice `Stephen`,
+  generative engine** (Izzy asked for both voices to choose from). Server
+  stashes on loopcom: `/root/gesheft-pay-ivr/` (Kristen v1, 05+13 superseded),
+  `/root/gesheft-pay-ivr-kristen-v2/` (the 4 revised), `/root/gesheft-pay-ivr-stephen/`
+  (all 20). Both full sets delivered to Izzy as zips. Still review-only.
+  ⛔ **Polly's mapped voice objects key on `voiceId`** (`listPollyVoices`), and
+  ElevenLabs' on neither `voice_id` nor `id` — BOTH providers' list objects
+  defeated a naive `find` this session; probe by synthesising, or read the
+  mapper's interface first.
+- ⛔ **PIN answers (Izzy asked directly):** the PIN step IS in the IVR script
+  because **the API requires X-Customer-Pin for balance and charges — their
+  rule, non-negotiable**; whether every account HAS a PIN is UNKNOWN (the
+  Customer PIN doc section is missing) and is the top ask-Gesheft item; if
+  accounts lack PINs the IVR needs a no-PIN fallback or Gesheft issues PINs
+  before launch.
 
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
