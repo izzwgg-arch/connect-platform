@@ -260,6 +260,25 @@ window + the API key that has still not arrived.
   `/root/gesheft-pay-ivr-kristen-v2/` + 19/20 from there + numbers. Both final
   zips delivered to Izzy. Still review artifacts — nothing on the PBX or in any
   catalog.
+- ⛔⛔ **PIN FLOW RULE (Izzy, 2026-08-25 night): caller ID matching the account's
+  own number = NO PIN asked to hear the balance or pay; a caller from a
+  DIFFERENT number (keyed-in account lookup) MUST key the PIN.** Plus: balance
+  and payment are separate options — new prompt 21_menu_after_balance ("payment
+  press one / balance again press two / done, just hang up"), generated in BOTH
+  voices (sets now 51 files each; loopcom stashes updated, incl.
+  `/root/kristen-extra/`).
+  ⛔⛔ **The wrinkle nobody may paper over: the API requires X-Customer-Pin on
+  EVERY balance/charge call regardless of who's calling — the IVR cannot simply
+  skip it.** Two ways to deliver Izzy's UX, in preference order: (a) ask Gesheft
+  whether PIN enforcement is configurable / how the missing PIN docs handle
+  trusted caller ID; (b) **one-time PIN enrollment** — the first call from the
+  account's own number asks the PIN once, Loopcom stores it encrypted bound to
+  that account+number pair, and silently supplies it on later matching-caller-ID
+  calls; a non-matching caller NEVER gets the stored PIN applied (that is the
+  PIN's whole job). ⛔ Caller-ID spoofing is the accepted residual risk of the
+  matching-number shortcut — same trade every bank IVR makes; the stored-card-
+  only rule bounds the damage (an attacker can only pay the victim's bill with
+  the victim's card).
 - ⛔ **PIN answers (Izzy asked directly):** the PIN step IS in the IVR script
   because **the API requires X-Customer-Pin for balance and charges — their
   rule, non-negotiable**; whether every account HAS a PIN is UNKNOWN (the
