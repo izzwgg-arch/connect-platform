@@ -57,6 +57,9 @@ interface Plan {
   requiredRecordings: Array<{ recordingId: number; name: string; promptRef: string; inConnectCatalog?: boolean }>;
   keptByDirectDial: string[];
   directDialRestorable: Array<{ pbxIvrId: number; menu: string; codes: string[] }>;
+  /** Hidden multi-digit codes copied as-is (DISA, straight-to-voicemail…).
+   *  Optional so a portal built ahead of the api can't crash on its absence. */
+  carriedCodes?: Array<{ pbxIvrId: number; menu: string; codes: Array<{ code: string; label: string }> }>;
   problems: PlanProblem[];
   warnings: string[];
 }
@@ -509,6 +512,26 @@ function PlanModal({ plan, tenantName, busy, error, onClose, onCopy }: {
               </p>
             </section>
           )}
+          {(plan.carriedCodes?.length ?? 0) > 0 && (
+            <section>
+              <h3>Hidden dial codes — carried over</h3>
+              <p className="dim">
+                These menus have secret multi-digit codes callers can type to jump straight through.
+                Connect copies each one exactly as it works today — same code, same destination —
+                including any dial-through (DISA) code, which hands the caller outbound dial tone as
+                this company. If one of these shouldn&apos;t survive the move, remove it in the Studio
+                after copying.
+              </p>
+              <ul className="plain">
+                {plan.carriedCodes!.map((m) => (
+                  <li key={m.pbxIvrId}>
+                    <b>{m.menu}</b> — {m.codes.map((c) => `${c.code} → ${c.label}`).join(", ")}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {plan.warnings.length > 0 && (
             <section>
               <h3>Worth knowing</h3>

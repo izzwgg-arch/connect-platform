@@ -376,8 +376,8 @@ test("a hand-forced hours override on the PBX is surfaced, not inherited", () =>
 
 // Real data: tenants 9, 14 and 18 have ombu_ivr_entries whose "option" is a
 // multi-digit code (0478, 7879, 1708) — VitalPBX dial-through shortcuts, not
-// keypad keys. They must be reported as lost capability, in words that say
-// what they actually are.
+// keypad keys. Since 2026-08-25 Connect menus carry those as hidden codes
+// (see the carried-code tests below).
 // Real estate data: VitalPBX lists each extension as its own menu entry
 // (A Plus Center alone has 101–108 on two menus). Connect covers those with
 // dial-by-extension, so they are NOT lost — reporting them as problems buried
@@ -402,25 +402,94 @@ test("extension shortcuts are kept by dial-by-extension, not reported as problem
   assert.deepEqual(plan.keptByDirectDial, ["103", "108"]);
 });
 
-test("a shortcut that ISN'T an extension is still reported as lost", () => {
+// Real data: tenant 9's Main menu carries 0478 → Goto(T9_app-disa,DISA-1,1)
+// and its After Hours menu 55648752 → Goto(sub-extensions-vm,VM-101,1), both
+// read from the rendered dialplan on 2026-08-25. These used to be filed under
+// "Connect can't reproduce these"; a Connect menu carries them now, routed to
+// the IDENTICAL Goto target the PBX's own literal exten used.
+test("a non-extension shortcut is carried over as a hidden menu code", () => {
   const withCode: PbxTenantFlowMap = {
     ...MAP,
     ivrs: MAP.ivrs.map((i) =>
       i.id !== 1 ? i : {
         ...i,
         directDialEnabled: true,
-        // 1818 / 0478 / 55648752 were all verified as non-extensions on the
-        // live PBX — these are the ones that genuinely don't survive.
         options: [...i.options, { entryId: 98, digit: "1818", enabled: true, sort: 9, target: { destinationId: 61, type: "disa", targetId: "2", label: "Staff" } }],
       },
     ),
   };
   const plan = buildImportPlan(withCode, 1);
-  assert.equal(plan.problems.length, 1);
-  assert.match(plan.problems[0].reason, /isn't one of this tenant's extensions/);
+  assert.equal(plan.problems.length, 0);
   assert.deepEqual(plan.keptByDirectDial, []);
   const home = plan.profiles.find((p) => p.pbxIvrId === 1)!;
-  assert.deepEqual(home.options.map((o) => o.optionDigit), ["1", "2", "6"]);
+  assert.deepEqual(home.options.map((o) => o.optionDigit), ["1", "2", "6", "1818"]);
+  const code = home.options.find((o) => o.optionDigit === "1818")!;
+  // The exact target the PBX's own exten body Gotos — behavior-preserving.
+  assert.equal(code.destinationRef, "T2_app-disa,DISA-2,1");
+  assert.equal(code.destinationType, "custom");
+  assert.equal(code.handsBackToPbx, true);
+  // Surfaced to the operator: a secret code (a DISA one especially) on a menu
+  // being copied is something they must be able to SEE.
+  assert.deepEqual(plan.carriedCodes, [
+    { pbxIvrId: 1, menu: "Home Main", codes: [{ code: "1818", label: "Dial-through: Staff" }] },
+  ]);
+});
+
+// B Visible's real After Hours shape: an 8-digit code straight into a
+// voicemail box (55648752 → Goto(sub-extensions-vm,VM-101,1) on the PBX).
+test("a straight-to-voicemail code is carried with the PBX's own VM target", () => {
+  const withVmCode: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((i) =>
+      i.id !== 1 ? i : {
+        ...i,
+        options: [...i.options, { entryId: 97, digit: "55648752", enabled: true, sort: 9, target: { destinationId: 62, type: "vm_direct", targetId: "1", label: "VM" } }],
+      },
+    ),
+  };
+  const plan = buildImportPlan(withVmCode, 1);
+  assert.equal(plan.problems.length, 0);
+  const home = plan.profiles.find((p) => p.pbxIvrId === 1)!;
+  const code = home.options.find((o) => o.optionDigit === "55648752")!;
+  assert.equal(code.destinationType, "voicemail");
+  assert.equal(code.destinationRef, "sub-extensions-vm,VM-103,1");
+});
+
+// The dialplan's patterns cover 3–8 digits (_XXX.._XXXXXXXX). A code outside
+// that range would be published and never fire — the caller types it and gets
+// "invalid" — so it MUST stay a problem, never a silently-dead carry.
+test("a code outside the 3-8 digit pattern range is still reported as lost", () => {
+  const tooLong: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((i) =>
+      i.id !== 1 ? i : {
+        ...i,
+        options: [...i.options, { entryId: 96, digit: "123456789", enabled: true, sort: 9, target: { destinationId: 61, type: "disa", targetId: "2", label: "Staff" } }],
+      },
+    ),
+  };
+  const plan = buildImportPlan(tooLong, 1);
+  assert.equal(plan.problems.length, 1);
+  assert.match(plan.problems[0].reason, /3–8 digits/);
+  assert.deepEqual(plan.carriedCodes, []);
+});
+
+// A code whose TARGET can't be resolved must not be guessed at — same rule as
+// a single-key option with a deleted destination.
+test("a code with a broken target is a problem, not a guess", () => {
+  const broken: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((i) =>
+      i.id !== 1 ? i : {
+        ...i,
+        options: [...i.options, { entryId: 95, digit: "4321", enabled: true, sort: 9, target: { destinationId: 63, type: "extension", targetId: "555", label: "gone" } }],
+      },
+    ),
+  };
+  const plan = buildImportPlan(broken, 1);
+  assert.equal(plan.problems.length, 1);
+  assert.match(plan.problems[0].where, /code "4321"/);
+  assert.match(plan.problems[0].reason, /no longer exists/);
 });
 
 // Real case: Gesheft's "Main" lists 16 extensions one by one with VitalPBX's
@@ -472,7 +541,7 @@ test("a menu that already has dial-by-extension on is not offered as a decision"
   assert.deepEqual(plan.profiles.find((p) => p.pbxIvrId === 1)!.directDialWouldRestore, []);
 });
 
-test("dial-by-extension off AND not an extension is still a plain loss", () => {
+test("a code is carried whether or not dial-by-extension is on", () => {
   const noDirect: PbxTenantFlowMap = {
     ...MAP,
     ivrs: MAP.ivrs.map((i) =>
@@ -485,12 +554,15 @@ test("dial-by-extension off AND not an extension is still a plain loss", () => {
   };
   const plan = buildImportPlan(noDirect, 1);
   // 0478 is B Visible's real DISA code — dial in, enter it, get outbound dial
-  // tone as the company. Genuinely inexpressible as a Connect menu key, and it
-  // must stay in `problems` so the copy still stops to ask.
-  assert.equal(plan.problems.length, 1);
-  assert.match(plan.problems[0].reason, /isn't one of this tenant's extensions/);
-  assert.match(plan.problems[0].reason, /won't come across/);
+  // tone as the company. Codes ride their own AstDB keys and dialplan
+  // patterns, not the direct-dial switch, so direct dial being off on the PBX
+  // must not cost the code — and the leading zero must survive verbatim (a
+  // numeric parse would turn 0478 into 478 and the code would never match).
+  assert.equal(plan.problems.length, 0);
   assert.deepEqual(plan.directDialRestorable, []);
+  const home = plan.profiles.find((p) => p.pbxIvrId === 1)!;
+  assert.ok(home.options.some((o) => o.optionDigit === "0478"));
+  assert.deepEqual(plan.carriedCodes[0].codes, [{ code: "0478", label: "Dial-through: Staff" }]);
 });
 
 test("a broken key is reported but the rest of the menu still copies", () => {

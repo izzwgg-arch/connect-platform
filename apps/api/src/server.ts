@@ -21682,6 +21682,7 @@ import {
   buildMonthView, buildHolidaySpans, nextChange,
 } from "@connect/shared";
 import { rewriteMenuNavRef } from "./ivrMenuNav";
+import { isIvrMenuCode, ivrMenuCodeKey, IVR_MENU_CODE_REGEX } from "./ivrMenuCodes";
 
 /** Shape of the data buildIvrKeys needs from the active profile's options. */
 type IvrActiveOption = {
@@ -21906,9 +21907,74 @@ function buildIvrKeys(
         { family: menuFam, key: `opt_${digit}/after`, value: rewriteMenuNavRef(opt?.afterDestinationType, normalizeTenantDestinationRef(opt?.afterDestinationType, opt?.afterDestinationRef, tenantDialContext), { inMenuFamily: true }) },
       );
     }
+
+    // Hidden multi-digit dial codes (see ivrMenuCodes.ts). An option row whose
+    // optionDigit is 3–8 digits is a code the caller types at the menu; the
+    // dialplan's _XXX.._XXXXXXXX patterns look up code_<digits>/dest FIRST and
+    // route a hit through [connect-exit-router]. `has_codes` widens the menu's
+    // inter-digit timeout to 1s — without it a caller gets 0.2s per keypress
+    // on a direct-dial-off menu and an 8-digit code is untypeable.
+    //
+    // ⛔ Unlike the fixed digit slate above, the code key set VARIES between
+    // publishes, so a code DELETED from the DB leaves its old AstDB key live —
+    // a removed DISA code that still answers. Both publish paths append
+    // tombstones from collectStaleIvrCodeTombstones to close exactly that.
+    // A DISABLED code row still exists in the DB and is cleared right here by
+    // writing "" for its slots.
+    const codeRows = (menuOptionsByProfile[p.id] ?? []).filter((o) => isIvrMenuCode(o.optionDigit));
+    keys.push({ family: menuFam, key: "has_codes", value: codeRows.some((o) => o.enabled) ? "1" : "0" });
+    for (const opt of codeRows) {
+      keys.push(
+        { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/dest`, value: opt.enabled ? rewriteMenuNavRef(opt.destinationType, normalizeTenantDestinationRef(opt.destinationType, opt.destinationRef, tenantDialContext), { inMenuFamily: true }) : "" },
+        { family: menuFam, key: `${ivrMenuCodeKey(opt.optionDigit)}/type`, value: opt.enabled ? opt.destinationType : "" },
+      );
+    }
   }
 
   return keys;
+}
+
+/**
+ * "" tombstones for menu-code AstDB keys that the LAST successful publish
+ * wrote and THIS publish no longer carries — i.e. codes whose option row was
+ * deleted since. Codes are the one variable-size part of the published key
+ * set; every fixed slot self-clears by always being written, but a deleted
+ * code's key would otherwise stay in AstDB forever, silently keeping a
+ * removed dial-through code answering live calls.
+ *
+ * Tombstones are diffed against the previous record's NON-EMPTY values only,
+ * so a tombstone written once does not re-propagate through every later
+ * publish. Failure returns [] — a publish must never be blocked by history
+ * bookkeeping; the worst case is one stale code until the next clean run.
+ *
+ * ⛔ Called from BOTH publish paths (POST /voice/ivr/publish and
+ * publishIvrForTenant) — the two are near-duplicates and anything added to
+ * one belongs in both.
+ */
+async function collectStaleIvrCodeTombstones(
+  tenantId: string,
+  keys: Array<{ family: string; key: string; value: string }>,
+): Promise<Array<{ family: string; key: string; value: string }>> {
+  try {
+    const last = await (db as any).ivrPublishRecord.findFirst({
+      where: { tenantId, status: "success" },
+      orderBy: { publishedAt: "desc" },
+      select: { keysWritten: true },
+    });
+    const prev: any[] = Array.isArray(last?.keysWritten) ? (last.keysWritten as any[]) : [];
+    const current = new Set(keys.map((k) => `${k.family}|${k.key}`));
+    const out: Array<{ family: string; key: string; value: string }> = [];
+    for (const k of prev) {
+      if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+      if (!/^code_\d+\/(dest|type)$/.test(k.key)) continue;
+      if (!String(k.value ?? "").trim()) continue;
+      if (current.has(`${k.family}|${k.key}`)) continue;
+      out.push({ family: k.family, key: k.key, value: "" });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 // ── IVR input validation ─────────────────────────────────────────────────────
@@ -24224,7 +24290,11 @@ app.post("/voice/ivr/route-profiles/:profileId/options", async (req, reply) => {
   if ("error" in gate) return reply.code(gate.error).send(gate.body);
 
   const body = z.object({
-    optionDigit:     IVR_OPTION_DIGIT_SCHEMA,
+    // A keypad key ("0".."9" | "star" | "hash") OR a hidden 3–8 digit dial
+    // code (see ivrMenuCodes.ts) — codes are stored as ordinary option rows
+    // whose optionDigit is the code itself, which is how the IVR migration
+    // carries a PBX menu's secret shortcuts (0478, 55648752, …) across.
+    optionDigit:     z.union([IVR_OPTION_DIGIT_SCHEMA, z.string().regex(IVR_MENU_CODE_REGEX)]),
     destinationType: z.enum(IVR_DESTINATION_TYPES as unknown as [string, ...string[]]),
     destinationRef:  z.string().min(1).max(200),
     label:           z.string().max(60).nullable().optional(),
@@ -24916,6 +24986,8 @@ app.post("/voice/ivr/publish", async (req, reply) => {
   }
 
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
+  // Clear any menu code deleted since the last publish — see the helper's note.
+  keys.push(...(await collectStaleIvrCodeTombstones(tenantId, keys)));
 
   // STRICT PRE-PUBLISH CHECK — every non-default prompt ref we're about to
   // write to AstDB must exist in this tenant's catalog. The save path
@@ -25089,6 +25161,8 @@ async function publishIvrForTenant(tenantId: string, publishedBy: string): Promi
   }
 
   const keys = buildIvrKeys(slug, mode, profiles, override, activeOptions, tenantDialContext, schedule, menuOptionsByProfile);
+  // Clear any menu code deleted since the last publish — see the helper's note.
+  keys.push(...(await collectStaleIvrCodeTombstones(tenantId, keys)));
 
   const IVR_DEFAULT_PROMPT_REFS = new Set([IVR_DEFAULT_PROMPT_INVALID, IVR_DEFAULT_PROMPT_TIMEOUT, "vm-goodbye", "pbx-invalid", "vm-enter-num-to-call"]);
   const promptCandidates: Array<{ key: string; ref: string; profileType?: string | null }> = [];

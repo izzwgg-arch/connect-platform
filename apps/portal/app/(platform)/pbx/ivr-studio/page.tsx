@@ -127,7 +127,8 @@ const UI_PHRASES = [
   "No teams yet — make the first one:", "Or make a new one:", "Make a team",
   "Rings a phone outside the office — a cell, or another business.",
   "Plays a recording — directions, hours, an announcement — then continues.",
-  "Remove this key", "Cancel", "Save name", "Loading…",
+  "Remove this key", "Cancel", "Save name", "Loading…", "Remove",
+  "A hidden code: callers who dial it at this menu jump straight there. Carried over from the old phone system.",
   "Your phone number", "Your recording", "No recording set — callers hear a stand-in message",
   "No number points at this menu yet", "We replay the menu, then the call ends",
   "They press a key you haven't set up", "We tell them it wasn't valid and replay the menu",
@@ -1279,6 +1280,11 @@ export default function IvrStudioPage() {
   const greetingRow = prompts.find((p) => p.promptRef === active?.pbxPromptRef);
   const assignedDigits = DIGITS.filter((d) => optionByDigit.has(d));
   const freeDigits = DIGITS.filter((d) => !optionByDigit.has(d));
+  // Hidden multi-digit dial codes (IVR migration carry-overs — DISA codes,
+  // straight-to-voicemail shortcuts). They are real option rows that route
+  // live calls, so they MUST be visible here: an invisible row nobody can see
+  // or remove is how a "deleted" dial-through code keeps answering.
+  const hiddenCodes = options.filter((o) => /^\d{3,8}$/.test(o.optionDigit));
 
   return (
     <div className="ivrs">
@@ -1560,6 +1566,19 @@ export default function IvrStudioPage() {
                           />
                         )}
                       </div>
+                    );
+                  })}
+
+                  {hiddenCodes.map((o) => {
+                    const read = readDestination(o, directory);
+                    return (
+                      <Step key={o.id} glyph="🔑"
+                        title={`${o.optionDigit} — ${o.label || read.name || KIND_LABEL[read.kind]}`}
+                        sub={t("A hidden code: callers who dial it at this menu jump straight there. Carried over from the old phone system.")}
+                        actions={canManage ? (
+                          <button className="btn sm" disabled={saving} onClick={() => clearKey(o.optionDigit)}>{t("Remove")}</button>
+                        ) : undefined}
+                      />
                     );
                   })}
 

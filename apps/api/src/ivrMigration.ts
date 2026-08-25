@@ -27,6 +27,8 @@
 // have not taken over yet. Menus can then be migrated one at a time, in any
 // order, and rolled back one at a time.
 
+import { isIvrMenuCode } from "./ivrMenuCodes";
+
 // ── Shapes returned by the PBX helper's /flow-map (read-only) ────────────────
 
 export interface PbxDecodedDestination {
@@ -553,6 +555,13 @@ export interface ImportPlan {
    *  turned on for them. A decision to put in front of the operator — never a
    *  blocker, and never silently decided for them. */
   directDialRestorable: Array<{ pbxIvrId: number; menu: string; codes: string[] }>;
+  /** Hidden multi-digit codes (DISA, straight-to-voicemail, queue jumps…)
+   *  that the copy carries over as-is: the Connect menu routes them to the
+   *  IDENTICAL dialplan target the PBX menu's own literal exten used, so they
+   *  keep behaving exactly as they do today. Informational — the operator
+   *  should know a secret code exists on a menu they are copying, especially
+   *  a DISA code (dial in, enter it, get outbound dial tone as the company). */
+  carriedCodes: Array<{ pbxIvrId: number; menu: string; codes: Array<{ code: string; label: string }> }>;
   problems: ImportProblem[];
   warnings: string[];
 }
@@ -601,7 +610,7 @@ export function buildImportPlan(
   if (!root) {
     return {
       pbxTenantId: map.tenantId, tenantSlug: map.tenantSlug, rootPbxIvrId,
-      profiles: [], schedule: null, dids: [], requiredRecordings: [], keptByDirectDial: [], directDialRestorable: [],
+      profiles: [], schedule: null, dids: [], requiredRecordings: [], keptByDirectDial: [], directDialRestorable: [], carriedCodes: [],
       problems: [{ where: "menu", reason: `Menu ${rootPbxIvrId} isn't on the PBX any more`, pbxType: "ivr", pbxLabel: null }],
       warnings: [],
     };
@@ -636,10 +645,11 @@ export function buildImportPlan(
         // problem; doing so buried the 4 real issues on this estate under 92
         // false alarms and would have blocked every copy.
         //
-        // What IS lost: codes that aren't extensions (PIN-style shortcuts
-        // like 0478 / 1818 / 55648752, all verified non-extensions on
-        // 2026-08-03), codes of a length the patterns don't match, and
-        // anything at all when direct dial is off.
+        // Non-extension codes (PIN-style shortcuts like 0478 / 1818 /
+        // 55648752, all verified non-extensions on 2026-08-03) are carried
+        // over as hidden menu codes below. What IS still lost: codes outside
+        // the 3–8 digit range, and extension shortcuts when direct dial
+        // stays off.
         const code = String(opt.digit).trim();
         const isTenantExtension = ctx.directory.extensions.some((e) => e.number === code);
         const lengthMatchesDirectDial = code.length === 3 || code.length === 4;
@@ -652,18 +662,32 @@ export function buildImportPlan(
           else wouldRestore.push(code);
           continue;
         }
+        // A non-extension multi-digit code — DISA, straight-to-voicemail,
+        // queue jumps. Measured across the estate 2026-08-24 there are 10 and
+        // every one is a live feature people use. Since 2026-08-25 Connect
+        // menus CARRY these: the code is stored as an option row whose
+        // optionDigit is the code itself, published into the per-menu AstDB
+        // family as code_<digits>/dest, and matched by [connect-menu]'s
+        // _XXX.._XXXXXXXX patterns — routing to the IDENTICAL dialplan target
+        // the PBX's own literal exten used. So a mappable code is a carried
+        // feature now, never a `problem`.
+        if (isIvrMenuCode(code)) {
+          const mapped = mapPbxDestination(opt.target, ctx);
+          if (mapped.ok) {
+            options.push({ optionDigit: code, ...mapped.destination });
+            continue;
+          }
+          // The code itself is fine — its TARGET is the thing we refuse to
+          // guess at (deleted extension, unreadable module). Same rule as a
+          // single-key option with a broken target.
+          problems.push({ where: `${ivr.description} · code "${code}"`, reason: mapped.problem.reason, pbxType: mapped.problem.pbxType, pbxLabel: mapped.problem.pbxLabel });
+          continue;
+        }
         problems.push({
           where: `${ivr.description} · code "${code}"`,
-          // Everything reaching here is genuinely outside what a Connect menu
-          // can express: a multi-digit code that is NOT one of this tenant's
-          // extensions. Measured across the estate on 2026-08-24 there are 10,
-          // and every one is a live feature rather than dead config — four are
-          // DISA (dial in, enter the code, get outbound dial tone as the
-          // company), two jump straight to a voicemail box, two jump into
-          // Gesheft's busiest queue, one a custom application, one a ring
-          // group. ⛔ Read them before copying; this is the one class where
-          // "copy the rest anyway" really does drop something people use.
-          reason: `Callers can dial ${code} at this menu to jump straight through, and it isn't one of this tenant's extensions. Connect menus only handle single keys plus dial-by-extension, so that shortcut won't come across.`,
+          // Only codes OUTSIDE the dialplan's 3–8 digit pattern range (or
+          // carrying non-digit characters) land here now.
+          reason: `Callers can dial ${code} at this menu to jump straight through. Connect carries hidden codes of 3–8 digits, and this one falls outside that, so it won't come across.`,
           pbxType: "option",
           pbxLabel: code,
         });
@@ -784,6 +808,19 @@ export function buildImportPlan(
     directDialRestorable: profiles
       .filter((p) => p.directDialWouldRestore.length > 0)
       .map((p) => ({ pbxIvrId: p.pbxIvrId, menu: p.name, codes: [...p.directDialWouldRestore].sort() })),
+    // Derived from `profiles` (not a second pass over the PBX) for the same
+    // reason as directDialRestorable: the screen and the copy can never
+    // disagree about which codes are actually going to be written.
+    carriedCodes: profiles
+      .map((p) => ({
+        pbxIvrId: p.pbxIvrId,
+        menu: p.name,
+        codes: p.options
+          .filter((o) => isIvrMenuCode(o.optionDigit))
+          .map((o) => ({ code: o.optionDigit, label: o.label }))
+          .sort((a, b) => a.code.localeCompare(b.code)),
+      }))
+      .filter((m) => m.codes.length > 0),
     problems,
     warnings,
   };
