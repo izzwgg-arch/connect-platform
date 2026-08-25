@@ -131,6 +131,138 @@ Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
   above is read-only measurement. **The acceptance test for any migration is a real
   call** — dial the number, press a key, and dial an extension at the menu.
 
+## ⛔⛔ AGENT HANDOFF — Fixup Group's iPhone was never in the ring list: the wake hold is per-EXTENSION but sleeping is per-DEVICE (2026-08-24) — READ FIRST for ANY "the app rang but I couldn't answer" on iOS, before touching `connect-wake-core` / `connect-mobile-wake-dial`, or before telling an iPhone customer to update the app
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIXUP_GROUP_IPHONE_2026-08-24.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
+Izzy, 2026-08-24: *"Fix Up Group 101 is complaining that he had problems today
+with the iPhone app."* ⛔ **The extension is 103 "Office", not 101** — T31 has no
+101 in Connect or on the PBX. (Secro ext 103 is *named* "Fix Up Group" and is a
+different, inactive record; T34_101 is RSBK.) Tenant `cmqr9cs9402qqs013m7p64lpi`,
+PBX **T31**, user `fixupusa1@gmail.com`.
+
+- ⛔⛔ **THE HEADLINE: on 6 of the 7 calls that rang him today, the PBX never
+  dialled the iPhone at all.** Read from `connect-mobile-wake-dial:18
+  Set(CONTACTS=…)`, the app contacts actually rung were the **desktop app** and the
+  **Android** — never the iPhone. The one call where the iPhone was in the list
+  (20:13 ET) was only because he had opened the app **5 seconds earlier**. The
+  iPhone answered **zero** calls today, and in 14 days has accepted exactly one
+  `CallInvite` — today's, which failed.
+- ⛔⛔ **ROOT CAUSE, and it generalises to every tenant: the wake-and-wait hold
+  is gated on the whole EXTENSION, while sleeping is per DEVICE.**
+  `connect-wake-core` sets `WARM = LEN(CONTACTS_PRIMARY) > 0 | LEN(CONTACTS_SECONDARY) > 0`,
+  where PRIMARY is the **desk** endpoint and SECONDARY the app endpoint, and jumps
+  straight to `warm` — no grace wait — if either has any contact;
+  `connect-mobile-wake-dial:11` repeats the shape (`DEVICE_STATE != UNAVAILABLE ?
+  dial`). Fixup Group has a permanently registered **desk phone**, a permanently
+  registered **desktop app** and an **Android** on that one extension, so the
+  endpoint is never `UNAVAILABLE` and the hold **can never engage for them**.
+  Verbatim on all 7 calls today: `connect-wake-core warm — live contact ext=103`
+  then `connect-mobile-wake-dial dialing T31_103_1 after 0s`.
+  ⛔ Across the whole PBX log (~2 days, ~230 wake-dials) the hold fired > 0 s
+  **twice**. Any extension with a desk phone or a second always-on client has it
+  silently disarmed.
+- ⛔⛔ **THE FAILED ANSWER, TO THE SECOND (18:09 ET):** PBX commits its contact
+  list at 18:09:39 (desktop + Android, no iPhone) → VoIP push delivered
+  18:09:40.674 `expoStatus: "ok"` → iPhone `DEVICE_REGISTER_COMPLETE` at
+  **18:09:43.9, 4.3 s after the PBX stopped looking** → he taps Answer 18:09:44.2,
+  backend answers `INVITE_CLAIMED_OK` → the app waits **16.2 s** for a SIP INVITE
+  that was never addressed to it → caller hangs up at 20 s. Blackbox:
+  `sip_invite_not_received`, `incomingSessionCount: 0`, `candidates: []`,
+  `answerAttempts: null`, `sipAnswer.sent: false`. **The 30-second ring had 26
+  seconds of runway the PBX never used.**
+- ⛔ **Why the iPhone has no contact: its registration lives a median of 33
+  seconds** (n=18 over the full 15-day `PbxEndpointRegistrationEvent` retention;
+  min 2 s, max 213 s) against **840 s** for his Android and **21 hours** for the
+  office desktop on the same AOR. `qualify_frequency 30` / `qualify_timeout 3`, so
+  the contact dies at almost exactly the first `OPTIONS` ping — iOS suspends the
+  app, the WebSocket stops answering, Asterisk marks it Unreachable and stops
+  dialling it. **That is normal iOS behaviour and is precisely what wake-and-wait
+  exists to cover.**
+- ⛔ **NOT the cause — checked, so nobody re-derives it.** **Not the push
+  channel** (every call delivered `INCOMING_CALL_WAKE` + `INCOMING_CALL` to both
+  iPhones, `expoStatus: "ok"`, on time). **Not the 2026-08-22 warm-answer-deadline
+  regression** — that fingerprint is `answerAttempts: 1, pollIterations: 1,
+  durationUntilFailureMs ≈ 641-745`; here `answerAttempts` is **null** and the
+  failure took 16.2 s, i.e. the answer code never ran. ⛔ **Do not tell him to
+  update the app for this.** **Not the two 2-second outbound calls at 20:25/20:26
+  ET** — the PBX shows both answered by the far end and cleared with `Trunk
+  Hangup`; test calls, not failures.
+- ⛔ **`ConnectCdr.disposition: "answered"` is not proof a human answered** — four
+  of today's calls read `answered` while the PBX log says `Nobody picked up in
+  30000 ms → Leave Voicemail` (the IVR/voicemail answered). Only **2** voicemail
+  recordings exist today. Use the `app_dial.c … answered` line.
+- ⛔ **He is signed in on TWO iPhone 17 Pros** (iOS 26.6 and iOS 26.5.1, both
+  created 2026-08-05, both pushed on every call) sharing one AOR with the desktop
+  and the Android against `max_contacts: 5, remove_existing: true`. Both of
+  today's `ANSWER_TAPPED action=DECLINE` taps came from the *other* iPhone while
+  the first was showing the incoming screen — the two phones fight each other.
+- ⛔ **Fixup Group is the LAST active iOS user still on the direct-to-PBX
+  port-8089 route** (`webrtcRouteViaSbc: false`, `sipWsUrl:
+  wss://209.145.60.79:8089/ws` — a raw IP that `normalizeSipWsUrlHost` serves as
+  `wss://m.connectcomunications.com:8089/ws`, so no TLS-on-IP problem). B Visible,
+  TYH, Hanna and Displaydex are all `via443: true`. Moving them is three fields
+  and no deploy — but **it does not fix the hold gap on its own**; say so plainly.
+- ⛔ **The identification trick worth keeping: `x-ast-orig-host=<id>.invalid` in a
+  contact URI is the JsSIP instance id** and is stable per client install.
+  Correlate it against `VoiceClientSession.startedAt` to say which physical device
+  a contact belongs to — that is how the desktop, the Android and each iPhone were
+  told apart on one shared AOR.
+- ⏳ **NOTHING WAS CHANGED, so nothing is fixed.** The real fix is ours and is a
+  PBX dialplan change on `connect-wake-core` / `connect-mobile-wake-dial`, which
+  **every tenant shares** — hold when a known mobile device has no reachable
+  contact rather than only when the whole extension is `UNAVAILABLE`, and/or
+  re-read `PJSIP_DIAL_CONTACTS` during the ring instead of committing at t=0.
+  Per the third standing rule, trace every consumer before proposing either.
+  Cheap non-code steps first: **sign out of one of the two iPhones**, and close
+  the desktop app when he is out (a workaround, and it also stops his desk
+  ringing, so it is his call).
+- ⚠ **Noticed, NOT touched:** the desk phone `T31_103` holds a contact at
+  **159.89.179.105 — DigitalOcean**, which is odd for a desk phone and worth one
+  question.
+
+## ⛔⛔ CLAUDE.md ITSELF CONTAINS A NUL BYTE AND HAS BEEN COMMITTING AS CRLF SINCE `d39cad7f` (2026-08-24) — READ BEFORE "fixing" it, and before wondering why `grep -n CLAUDE.md` says "Binary file matches"
+
+Found while doing the routine end-of-task CLAUDE.md update, 2026-08-24.
+**Deliberately NOT repaired — it needs a quiet tree and Izzy's word (below).**
+
+- ⛔⛔ **Three warning bullets in this file are each about the heredoc escape
+  trap, and each one FELL INTO IT.** A `\0`, a `\b` and a `\u202e` were written
+  through a shell heredoc and landed as the **real** bytes: a NUL (in the
+  *"Test data may legitimately contain a NUL — write it"* bullet), a BACKSPACE (in
+  the SMS-bridge *"became a literal BACKSPACE"* bullet) and a real
+  **right-to-left override** (in the desk-phone *"Backslash escapes do NOT
+  survive this shell's heredocs"* bullet, whose own newline/CR escapes also
+  became real characters). The sentences currently render as garbage.
+- ⛔ **The NUL is why `grep -n CLAUDE.md` answers `Binary file CLAUDE.md
+  matches` and returns no line numbers** — grep and ripgrep scan the whole buffer,
+  so a NUL at byte 29,684 makes the file binary to them. **git disagrees**: its
+  binary sniff window is the first 8,000 bytes, so `git diff` still renders it as
+  text. Two heuristics, two answers.
+- ⛔⛔ **AND THE CONSEQUENCE NOBODY WOULD LOOK FOR: git stopped normalising line
+  endings.** Measured from the blobs — `5f2b071d` (the commit before the NUL)
+  stored **0 CRLF / 13,870 LF**; `d39cad7f` (the commit that introduced it) stored
+  **13,771 CRLF**; every CLAUDE.md commit since stores CRLF. With
+  `core.autocrlf=true`, a file git considers binary is exempt from conversion.
+- ⛔⛔ **SO REMOVING THE NUL IS NOT A THREE-CHARACTER FIX — it flips the file
+  back to text and git immediately wants to renormalise all 14,049 lines: a
+  28,099-line diff.** That was measured, then reverted, precisely because **a
+  whole-file line-ending diff cannot be reviewed**, and this repo's rule is to
+  read the staged diff before every commit — which is the only thing that catches
+  another session's in-flight CLAUDE.md work being swept in.
+- ✅ **The repair itself is ready and safe:** replace the NUL with a literal
+  backslash-zero, the BACKSPACE with a literal backslash-b, the RLO with a
+  literal `\u202e`, and the real newline/CR inside that third bullet's backticks
+  with their two-character escapes. ⛔ **Write it through the editor, never a
+  heredoc** — this session's first attempt used a heredoc and the shell ate the
+  double backslashes, writing the same bad bytes straight back.
+- ⏳ **Izzy's decision, and it is only about WHEN:** run the repair when nobody
+  else has CLAUDE.md in flight and take the one-time normalisation commit on its
+  own (which restores the pre-`d39cad7f` state and makes every future CLAUDE.md
+  diff reviewable again), or pin `/CLAUDE.md -text` in `.gitattributes` to keep
+  the current CRLF blobs and avoid the rewrite. **Doing nothing keeps the file
+  ungreppable and keeps committing CRLF.**
+
 ## ⛔⛔ AGENT HANDOFF — the loopcom.net WEBSITE has a robot check on its forms, and Cloudflare is CONFIGURED BUT NOT ACTIVATED because the domain is DNSSEC-signed (2026-08-24) — READ FIRST before changing ANY nameserver, before touching `website/server/turnstile.mjs`, before adding a form to the website, or for "the Cloudflare settings aren't doing anything"
 
 Cutover state + the full mirror table:
