@@ -361,7 +361,18 @@ the same field, live auto-suggest as you type, ↓/↑ moves through suggestions
 Enter adds the highlighted item and refocuses empty for the next — mouse never
 needed. Suggest data = the synced catalog; number path = code lookup. Mockups
 v6 republished with the dropdown drawn open mid-keystroke ("chal" → 4
-suggestions, keyboard legend bar).
+suggestions, keyboard legend bar). **v7 after Izzy's design notes:** the REAL
+wordmark (`loopcom-wordmark-email-336.png` embedded as a data URI — artifacts
+cannot load external images) replaces the styled-text logo in every topbar and
+the email; the oversized global search was shrunk to portal scale; ⛔ **the v6
+dark/light toggle NEVER WORKED — inline `onclick=` handlers are blocked by the
+artifact CSP; bind with addEventListener** (that is why he "only saw the email
+in light"); and the setup email is now the PRODUCTION `loopcomEmailShell` design
+verbatim (white card on #f1f4f8, 168×30 wordmark, 2px 22a8ff→4f7bff rule, the
+real flat ctaButton, footer naming the store) rendered THREE ways — phone frame
+(mobile media-query behavior: 142px logo, 22px padding, block button), Gmail
+browser, and an Outlook window (fixed 600px, noted as identical by the shell's
+own mso engineering).
 ⏳ Awaiting Izzy's approval of the full 7-screen set.
 
 ## Open questions for Gesheft (nobody has asked yet)
