@@ -214,7 +214,7 @@ export type DeviceFingerprint = {
  * i-series intercoms. Anything that matches none of them is honestly "unknown".
  */
 const MODEL_PATTERN =
-  /\b(SIP-)?(T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}[SV]?)\b/i;
+  /\b(SIP-)?(T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}(?:SV|SW|[SVWD])?)\b/i;
 
 /**
  * What is this thing, from whatever it said.
@@ -228,8 +228,17 @@ export function fingerprintFromResponse(res: HttpResponse): DeviceFingerprint {
   const server = header(res, "server");
   const realm = header(res, "www-authenticate");
   const title = /<title>([^<]{0,120})<\/title>/i.exec(res.body || "")?.[1] ?? "";
-  const haystack = `${server} ${realm} ${title}`;
+  return identityFromBanner(`${server} ${realm} ${title}`);
+}
 
+/**
+ * What a device said about itself, from ANY banner it says it in — an HTTP
+ * Server header, a login-page title, or (2026-08-25) a SIP User-Agent/Server
+ * header. Extracted from fingerprintFromResponse so the SIP identity probe and
+ * the HTTP fingerprint share ONE naming rule — two parsers is how "Fanvil i16SV"
+ * ends up a phone on one path and a printer on the other.
+ */
+export function identityFromBanner(haystack: string): DeviceFingerprint {
   const vendor: DeviceFingerprint["vendor"] =
     /yealink/i.test(haystack) ? "yealink"
     : /grandstream/i.test(haystack) ? "grandstream"

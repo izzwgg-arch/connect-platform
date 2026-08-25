@@ -171,15 +171,21 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setStep("network");
         return;
       }
-      const hosts: Array<{ ip: string; mac: string; respondedOnHttp?: boolean }> = scan.scan?.hosts ?? [];
+      const hosts: Array<{ ip: string; mac: string; respondedOnHttp?: boolean; respondedOnSip?: boolean; fingerprint?: any }> = scan.scan?.hosts ?? [];
       // ⛔ Fingerprint only plausible candidates. A silent host on an unknown
       // hardware block is a laptop or a printer; spending four seconds and a rate
       // slot on each of them stalls the search for nothing.
+      // ⛔ The scan itself may ALREADY carry the identity — the SIP probe reads
+      // make + model off any SIP device, web page locked or not (2026-08-25).
+      // A scan-provided fingerprint with a model is final; never overwrite it
+      // with a per-host call, and never null it out for an implausible-looking
+      // host — the device itself has spoken.
       const enriched: any[] = [];
       for (const h of hosts) {
-        if (!shouldFingerprint(h)) { enriched.push({ ...h, fingerprint: null }); continue; }
+        if (h.fingerprint?.model) { enriched.push(h); continue; }
+        if (!shouldFingerprint(h)) { enriched.push({ ...h, fingerprint: h.fingerprint ?? null }); continue; }
         const fp = await bridge.run({ op: "fingerprint", ip: h.ip }).catch(() => null);
-        enriched.push({ ...h, fingerprint: fp?.ok ? fp.fingerprint : null });
+        enriched.push({ ...h, fingerprint: fp?.ok ? fp.fingerprint : (h.fingerprint ?? null) });
       }
       // ⛔⛔ ONLY DEVICES WITH EVIDENCE OF BEING A PHONE ARE SUBMITTED. Before this
       // filter, every ARP entry went to the server — an office with four phones and

@@ -13,6 +13,7 @@
  */
 
 import { scanLan, type ScanResult } from "./lanScan";
+import { sipOptionsProbe, type SipProbeResult } from "./sipProbe";
 import {
   buildStatusRequest, fingerprintFromResponse, isPrivateIpv4, sendAction, testCredentials,
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
@@ -59,6 +60,8 @@ export type CapabilityDeps = {
   resolveCredential: CredentialResolver;
   scan?: (opts: { subnet?: string }) => Promise<ScanResult>;
   now?: () => number;
+  /** The SIP identity probe, injectable for tests. Read-only: one OPTIONS packet. */
+  sipProbe?: (ip: string) => Promise<SipProbeResult>;
 };
 
 /**
@@ -123,12 +126,31 @@ export function createPhoneCapability(deps: CapabilityDeps) {
 
     switch (req.op) {
       case "fingerprint": {
+        // ⛔ HTTP first, SIP second, and the SIP answer fills only what HTTP could
+        // not. On the first customer run every device's web page was locked, so
+        // the HTTP fingerprint said "unknown" about hardware that announces its
+        // own make and model to anyone who asks over SIP (2026-08-25).
+        const probeSip = deps.sipProbe ?? sipOptionsProbe;
+        let http: DeviceFingerprint | null = null;
         try {
           const res = await deps.http(buildStatusRequest(ip, creds));
-          return { ok: true, op: "fingerprint", fingerprint: fingerprintFromResponse(res) };
-        } catch {
-          return { ok: false, refused: "unreachable" };
+          http = fingerprintFromResponse(res);
+        } catch { http = null; }
+        if (http && http.model && http.vendor !== "unknown") {
+          return { ok: true, op: "fingerprint", fingerprint: http };
         }
+        const sip = await probeSip(ip).catch(() => null);
+        if (sip) {
+          const merged: DeviceFingerprint = {
+            vendor: http && http.vendor !== "unknown" ? http.vendor : sip.fingerprint.vendor,
+            model: http?.model ?? sip.fingerprint.model,
+            firmware: http?.firmware ?? sip.fingerprint.firmware,
+            confidence: sip.fingerprint.confidence === "none" && http ? http.confidence : sip.fingerprint.confidence,
+          };
+          return { ok: true, op: "fingerprint", fingerprint: merged };
+        }
+        if (http) return { ok: true, op: "fingerprint", fingerprint: http };
+        return { ok: false, refused: "unreachable" };
       }
       case "test_credentials": {
         const r = await testCredentials(deps.http, ip, creds);

@@ -16,6 +16,7 @@ import {
 import {
   normalizeMac, formatMac, guessVendorFromMac, matchDevice, findByIdentity, compareToPbxRecords,
 } from "./deviceIdentity";
+import { shouldFingerprint } from "./discoveryFilter";
 import {
   nextEscalation, customerFacingFailure, sanitizeDeviceText, SETUP_ACTIONS,
   type PhoneCondition,
@@ -517,4 +518,12 @@ test("text a device gave us is bounded and stripped before it goes anywhere", ()
 
 test("a device cannot inject a newline into a diagnostics line", () => {
   assert.equal(sanitizeDeviceText("line one\nline two"), "line one line two");
+});
+
+test("a device that answered SIP is fingerprinted whatever its hardware block says", () => {
+  // ⛔ 2026-08-25: an unknown-OUI SIP box used to be filed under "other devices"
+  // forever — no fingerprint call, no chance to identify itself. Answering SIP
+  // is the device behaving like a SIP device right now.
+  assert.equal(shouldFingerprint({ mac: "aa:bb:cc:00:11:22", respondedOnSip: true }), true);
+  assert.equal(shouldFingerprint({ mac: "aa:bb:cc:00:11:22" }), false);
 });

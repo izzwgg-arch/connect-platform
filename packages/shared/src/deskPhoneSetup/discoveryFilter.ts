@@ -22,6 +22,8 @@ export type ScannedHost = {
   mac: string;
   ip: string;
   respondedOnHttp?: boolean;
+  /** The host answered a SIP OPTIONS — a SIP device whatever its web page says. */
+  respondedOnSip?: boolean;
   fingerprint?: {
     vendor?: string | null;
     model?: string | null;
@@ -43,8 +45,13 @@ export type DiscoveryVerdict = {
 };
 
 /** Should this host get a fingerprint call at all? */
-export function shouldFingerprint(host: { mac: string; respondedOnHttp?: boolean }): boolean {
+export function shouldFingerprint(host: { mac: string; respondedOnHttp?: boolean; respondedOnSip?: boolean }): boolean {
   if (host.respondedOnHttp) return true;
+  // ⛔ Answering SIP is BETTER evidence than a phone-maker address block — it is
+  // the device behaving like a SIP device right now, whoever made it. This is
+  // what lets an unknown-OUI SIP box be identified instead of filed under
+  // "other devices" forever (2026-08-25).
+  if (host.respondedOnSip) return true;
   return guessVendorFromMac(host.mac).vendor !== "unknown";
 }
 

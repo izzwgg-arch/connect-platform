@@ -36,12 +36,20 @@
 import { exec } from "node:child_process";
 import { networkInterfaces } from "node:os";
 import { createConnection } from "node:net";
+import { sipOptionsProbe } from "./sipProbe";
+import type { DeviceFingerprint } from "./yealink";
 
 export type DiscoveredHost = {
   ip: string;
   mac: string;
   /** Set when the host answered on a web port — phones nearly always do. */
   respondedOnHttp?: boolean;
+  /** Set when the host answered a SIP OPTIONS — a SIP device with its web page
+   * off says nothing on 80/443 and everything here. */
+  respondedOnSip?: boolean;
+  /** The device's own SIP identity, when it gave one — make + model straight
+   * from the User-Agent, no password and no web page needed. */
+  fingerprint?: DeviceFingerprint | null;
 };
 
 export type ScanResult = {
@@ -57,13 +65,26 @@ export type ScanResult = {
  * there and forces the OS to resolve its MAC into the ARP table, which is where
  * we actually read it from.
  */
-const PHONE_PORTS = [80, 443];
+const PHONE_PORTS = [80, 443, 5060];
 
 /** How many addresses to probe at once. Bounded so a scan cannot swamp a small office LAN. */
 const CONCURRENCY = 32;
 
-/** Per-address connect timeout. Short: a phone on the same LAN answers in single-digit ms. */
-const PROBE_TIMEOUT_MS = 400;
+/**
+ * Per-address connect timeout.
+ *
+ * ⛔⛔ 400ms LOST REAL PHONES AND WAS RAISED 2026-08-25 after the first customer
+ * run (A plus center) re-saw only 2 of its own 6 devices on a rescan, and the
+ * office's other Yealinks — on the SAME network, web pages off — never appeared
+ * at all. The sweep's real job is forcing the OS to ARP every address; a device
+ * that answers ARP a beat late (power-saving phones do) had its connection —
+ * and with it the pending ARP resolution — torn down before the reply landed.
+ * 900ms per address, ports probed in PARALLEL, so the sweep is no slower.
+ */
+const PROBE_TIMEOUT_MS = 900;
+
+/** The slower second look at addresses the first pass did not land in the table. */
+const RETRY_TIMEOUT_MS = 1500;
 
 /**
  * Local IPv4 networks worth scanning.
@@ -264,17 +285,50 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
   }
 
   const responsive = new Set<string>();
+  const sipResponsive = new Map<string, DeviceFingerprint | null>();
+
+  // Pass 1: every address, web + SIP ports in PARALLEL — any completed exchange
+  // (even a refusal) is what plants the address in the OS's table.
   await inBatches(addresses, CONCURRENCY, async (ip) => {
-    for (const port of PHONE_PORTS) {
-      if (await probe(ip, port)) {
-        responsive.add(ip);
-        return;
-      }
-    }
+    const results = await Promise.all(PHONE_PORTS.map((port) => probe(ip, port)));
+    if (results[0] || results[1]) responsive.add(ip);
+    if (results[2]) sipResponsive.set(ip, null);
   });
 
-  const arpOutput = await runArp();
-  if (!arpOutput) {
+  // ⛔ The table is read and MERGED after every pass. Entries age out during a
+  // sweep, and reading once at the end is how the first customer run re-saw only
+  // 2 of its own 6 devices — pass-to-pass roulette.
+  const table = new Map<string, DiscoveredHost>();
+  const mergeArp = (output: string) => {
+    for (const h of parseArpTable(output)) {
+      if (!table.has(h.mac)) table.set(h.mac, h);
+    }
+  };
+  mergeArp(await runArp());
+
+  // Pass 2: the addresses that still have no table entry get one slower retry —
+  // the pass that catches the phone that answered ARP a beat late.
+  const known = new Set([...table.values()].map((h) => h.ip));
+  const missing = addresses.filter((ip) => !known.has(ip));
+  if (missing.length) {
+    await inBatches(missing, CONCURRENCY, async (ip) => {
+      const results = await Promise.all(PHONE_PORTS.map((port) => probe(ip, port, RETRY_TIMEOUT_MS)));
+      if (results[0] || results[1]) responsive.add(ip);
+      if (results[2]) sipResponsive.set(ip, null);
+    });
+    mergeArp(await runArp());
+  }
+
+  // Pass 3: ask every device that showed up WHO IT IS, over SIP. One OPTIONS
+  // packet each — the reply's User-Agent carries make and model even when the
+  // web page is locked, which on the first customer run was ALL of them.
+  const present = [...table.values()].filter((h) => ipInSubnet(h.ip, subnet));
+  await inBatches(present, CONCURRENCY, async (h) => {
+    const r = await sipOptionsProbe(h.ip);
+    if (r) sipResponsive.set(h.ip, r.fingerprint);
+  });
+
+  if (table.size === 0) {
     return {
       subnet,
       hostsSeen: responsive.size,
@@ -284,12 +338,14 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
     };
   }
 
-  const table = parseArpTable(arpOutput);
   // ⛔ A range test, not a string prefix: a /22 spans four third-octets, and the
   // old startsWith could only ever express a /24.
-  const hosts = table
-    .filter((h) => ipInSubnet(h.ip, subnet))
-    .map((h) => ({ ...h, respondedOnHttp: responsive.has(h.ip) }));
+  const hosts = present.map((h) => ({
+    ...h,
+    respondedOnHttp: responsive.has(h.ip),
+    respondedOnSip: sipResponsive.has(h.ip),
+    fingerprint: sipResponsive.get(h.ip) ?? null,
+  }));
 
   return {
     subnet,
