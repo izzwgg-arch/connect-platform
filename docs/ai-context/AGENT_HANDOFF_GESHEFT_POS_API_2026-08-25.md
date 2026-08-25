@@ -115,6 +115,57 @@ Honor `Retry-After` + exponential backoff on 429; webhook replies within 30 s;
 6. **Checkout payment automation** via their paymentEndpoint webhook — deepest and
    most sensitive; last.
 
+## §8 — IZZY'S DIRECTIVE (2026-08-25 evening, in-chat) — the build this API feeds
+
+⛔ **An earlier session summary claimed this section existed before it did — it was
+written 2026-08-25 late evening.** Nothing here is built; these are his decisions.
+
+1. **Pay-by-phone IVR**: caller recognized by phone number → PIN → hear balance →
+   choose ANY partial amount → charge the stored card via the POS charges endpoint
+   (never direct Sola for Gesheft — the POS charge keeps their books/balance in
+   sync and uses their Sola underneath). ⛔ Stored cards only; new-card capture by
+   phone stays a separate decision pending PhonePay pricing (see the Sola DTMF
+   handoff of the same date).
+2. **One DIY IVR** for it (IVR Studio + a new payment dialplan context — PBX write,
+   needs a mandate when built).
+3. **Yiddish voicemail orders → DRAFT orders**: transcription is already live
+   (~97-99% by his estimate); the agent parses the transcript against the synced
+   catalog into a draft; a REP reviews/corrects/approves; only approval posts the
+   real order. ⛔ Corrections are CAPTURED as training data (guess vs corrected)
+   — the measured correction rate is the evidence gate for later auto-submit.
+   Drafts live in Connect; the POS has no draft concept, which fits.
+4. **Text-message orders → same draft flow** (Gesheft SMS already lands in
+   Connect). Screen pop on inbound calls shows the POS account.
+
+**Architecture decisions, same conversation:**
+- **The CRM is the rep cockpit** — reuse screen pop, timeline, work queue,
+  permissions; the genuinely new pieces are the line-item draft-order editor, the
+  correction capture, and the POS bridge. ⛔ LINK to POS accounts, never copy them
+  into a third customer list — the POS stays source of truth for account/balance/
+  cards (stale-mirror class).
+- ⛔⛔ **CRM MODES, per industry**: the current CRM is cold-calling shaped (cash
+  advance) and **Izzy is done with cold calling** — do not build on that shape.
+  A per-tenant MODE decides which CRM screens/vocabulary a tenant sees;
+  first new mode = **supermarket** (account-centric records, order drafts,
+  order history, email/SMS specials). Cold-calling screens get mode-gated, not
+  deleted. ⛔ A per-tenant mode flag that some code paths ignore is worse than no
+  flag (the HIPAA-tier rule) — enforce server-side.
+- ⛔⛔ **SOLA GOES MULTI-TENANT**: every payment-integrated customer will be on
+  Sola; each tenant gets its OWN Sola API key (their merchant account, their
+  name — standing rule), stored encrypted, tenant-scoped. ⛔ The existing
+  `solaGateway.ts` runs CONNECT'S OWN billing on Connect's key — the tenant
+  payment layer must be a SEPARATE tenant-keyed client that can never fall back
+  to the platform key (a fallback charges the wrong merchant's account; fail
+  closed on a missing tenant key). `ProviderCredential`/`AgentSecret` patterns
+  are the storage precedent.
+- ⛔ **Email specials from the CRM have a SENDING problem to solve first**: all
+  platform mail rides ONE Google mailbox with a 500/day allowance
+  ([[own-mailboxes-yes-but-sending-is-the-trap]]) — marketing blasts cannot ride
+  it. The send path already accepts SENDGRID/SMTP providers by config; move
+  marketing sending to SES/SendGrid (with unsubscribe/CAN-SPAM handling) before
+  any specials feature ships. SMS specials = the 10DLC/TCPA lane already
+  documented in the shop-by-text handoff.
+
 ## Open questions for Gesheft (nobody has asked yet)
 - An actual API key, and which scopes they'll grant (incl. sensitive
   `customer:get:all`).
