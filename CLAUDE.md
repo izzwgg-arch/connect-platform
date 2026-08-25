@@ -9622,6 +9622,24 @@ Memory: [[shopify-agent-integration-shape]], [[sola-is-cardknox]],
   `cc:save`, `xToken` card-on-file and a Customer/Recurring API — and **zero
   mentions of IVR/DTMF/phone payments**. ⛔ A customer's merchant account opens
   in **THEIR** name, never Connect's.
+  ✅ **UPDATE 2026-08-25 — Sola DOES have a phone-payment product, and it is
+  NOT an API: PhonePay**, a hosted fully-automated IVR line (first-party
+  Cardknox product since 2019 — schema.org datePublished 2019-04-05, updated
+  2023-11; NOT a third-party partnership, no Datatel/IVR-vendor anywhere).
+  Merchant gets a dedicated phone number; customers dial 24/7, key card digits
+  on their own keypad; Sola captures the DTMF and charges the merchant account
+  — the zero-PCI-scope route, because the tones never cross our PBX.
+  ⛔ **It has no developer docs and never did**: re-swept the full current
+  `docs.solapayments.com/llms.txt` index (76 pages) — zero DTMF/IVR/phone
+  pages; the only living references are the docs glossary's IVR entry (still
+  linking `cardknox.com/phonepay`, now 410 Gone — the page died in the
+  cardknox→solapayments site migration, not the product) and Sola's own
+  public-sector guide selling "Sola PhonePay". **Provisioned via sales/support
+  only** — so "the DTMF thing should be in the docs" is half-right.
+  ⛔ **"Tokenize the DTMF" via the API = `cc:save`** (tokenize without
+  charging → `xToken`): our IVR can collect digits and immediately trade the
+  PAN for a token — but PCI covers TRANSMISSION, so the DIY path's scope stands
+  regardless (the masking bullet below). Memory: [[sola-is-cardknox]].
 - ⛔ **"MASKING" CANNOT BE SELF-ADMINISTERED** — the product IS that a certified
   third party decodes the digits so yours never do; build it and your box is
   simply the in-scope one. **PCI covers transmission, so storing nothing (or
