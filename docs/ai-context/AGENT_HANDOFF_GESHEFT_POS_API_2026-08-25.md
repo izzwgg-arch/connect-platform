@@ -243,8 +243,23 @@ window + the API key that has still not arrived.
   generative is the engine already proven to accept-and-discard prosody markup
   — whether A actually honours the phoneme is for EARS to judge, which is why
   B and C exist. Server stash: loopcom `/root/gesheft-welcome-fix/`.
-  ⏳ Izzy has not picked a winner; whichever wins replaces 01_welcome in its
-  voice's set.
+  ✅ **DECIDED: Izzy picked B** (Stephen NEURAL + IPA phoneme) — and clarified
+  **Kristen's ORIGINAL welcome already said Gesheft correctly**, so candidate D
+  is discarded and her v1 welcome stands.
+- ✅✅ **THE FINAL VOICE SETS EXIST — 50 files per voice** (20 prompts + a
+  30-word NUMBER set: zero–twenty, tens, hundred, thousand — so spliced
+  balances/amounts never voice-switch to Asterisk's Allison).
+  ⛔ **Stephen's ENTIRE set was regenerated on NEURAL** — mixing the chosen
+  neural welcome with the earlier generative prompts is audible back-to-back;
+  one engine per voice set is the rule now, and **Stephen = neural, always**
+  (neural also honours the phoneme markup, which generative may discard).
+  Kristen = her existing ElevenLabs set + numbers. Server stashes on loopcom:
+  **`/root/stephen-neural/` (the 50 canonical Stephen files)** and
+  `/root/kristen-numbers/`; Kristen's canonical prompt files = the v1 set
+  (`/root/gesheft-pay-ivr/`) with 05+13 replaced from
+  `/root/gesheft-pay-ivr-kristen-v2/` + 19/20 from there + numbers. Both final
+  zips delivered to Izzy. Still review artifacts — nothing on the PBX or in any
+  catalog.
 - ⛔ **PIN answers (Izzy asked directly):** the PIN step IS in the IVR script
   because **the API requires X-Customer-Pin for balance and charges — their
   rule, non-negotiable**; whether every account HAS a PIN is UNKNOWN (the
