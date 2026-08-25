@@ -36,7 +36,7 @@
 import { exec } from "node:child_process";
 import { networkInterfaces } from "node:os";
 import { createConnection } from "node:net";
-import { sipOptionsProbe } from "./sipProbe";
+import { sipOptionsProbe, type SipProbeResult } from "./sipProbe";
 import type { DeviceFingerprint } from "./yealink";
 
 export type DiscoveredHost = {
@@ -258,6 +258,59 @@ function runArp(): Promise<string> {
 }
 
 /**
+ * The neighbor table through the richer door. `arp -a` hides several entry
+ * states that `netsh` still reports; on the A plus center office (2026-08-25)
+ * live phones the PBX was talking to that very second were absent from arp -a.
+ * Both are read and MERGED — belt and braces on the one table everything
+ * downstream depends on.
+ */
+function runNetshNeighbors(): Promise<string> {
+  return new Promise((resolve) => {
+    exec("netsh interface ip show neighbors", { windowsHide: true, timeout: 15_000 }, (err, stdout) => {
+      resolve(err ? "" : String(stdout || ""));
+    });
+  });
+}
+
+/**
+ * Parse `netsh interface ip show neighbors` rows:
+ *   "192.168.0.61    80-5e-c0-c8-9b-72   Stale"
+ * ⛔ Unreachable and Incomplete rows are SKIPPED — those are Windows recording
+ * a FAILED lookup, and treating one as a device invents hardware that is not
+ * there. Every other state is a real neighbor.
+ */
+export function parseNetshNeighbors(output: string): DiscoveredHost[] {
+  const out: DiscoveredHost[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of String(output || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const m = line.match(/^(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9a-fA-F]{2}(?:[-:][0-9a-fA-F]{2}){5})\s+(\S.*)$/);
+    if (!m) continue;
+    const ip = m[1];
+    const macRaw = m[2].toLowerCase().replace(/[^0-9a-f]/g, "");
+    const state = m[3].trim().toLowerCase();
+    if (/unreachable|incomplete/.test(state)) continue;
+    if (macRaw === "ffffffffffff" || macRaw === "000000000000") continue;
+    if (ip.endsWith(".255") || ip.startsWith("224.") || ip.startsWith("239.")) continue;
+    if (macRaw.startsWith("01005e")) continue;
+    if (seen.has(macRaw)) continue;
+    seen.add(macRaw);
+    out.push({ ip, mac: macRaw });
+  }
+  return out;
+}
+
+/**
+ * One Windows ping. Not for the reply — for the ARP it forces with the OS's own
+ * pacing, which survives the throttling that a raw connect burst trips.
+ */
+function pingOnce(ip: string): Promise<void> {
+  return new Promise((resolve) => {
+    exec(`ping -n 1 -w 600 ${ip}`, { windowsHide: true, timeout: 5_000 }, () => resolve());
+  });
+}
+
+/**
  * Sweep the local /24, then read the ARP table it populated.
  *
  * The order matters: ARP only holds hosts the machine has recently spoken to,
@@ -287,6 +340,22 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
   const responsive = new Set<string>();
   const sipResponsive = new Map<string, DeviceFingerprint | null>();
 
+  // ⛔ The table is read and MERGED after every pass, from BOTH doors (arp -a
+  // AND netsh neighbors). Entries age out during a sweep, arp -a hides states
+  // netsh reports, and reading once at the end is how the first customer run
+  // re-saw only 2 of its own 6 devices — pass-to-pass roulette.
+  const table = new Map<string, DiscoveredHost>();
+  const mergeTable = (hostsIn: DiscoveredHost[]) => {
+    for (const h of hostsIn) {
+      if (!table.has(h.mac)) table.set(h.mac, h);
+    }
+  };
+  const readTables = async () => {
+    mergeTable(parseArpTable(await runArp()));
+    mergeTable(parseNetshNeighbors(await runNetshNeighbors()));
+  };
+  const knownIps = () => new Set([...table.values()].map((h) => h.ip));
+
   // Pass 1: every address, web + SIP ports in PARALLEL — any completed exchange
   // (even a refusal) is what plants the address in the OS's table.
   await inBatches(addresses, CONCURRENCY, async (ip) => {
@@ -294,41 +363,62 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
     if (results[0] || results[1]) responsive.add(ip);
     if (results[2]) sipResponsive.set(ip, null);
   });
+  await readTables();
 
-  // ⛔ The table is read and MERGED after every pass. Entries age out during a
-  // sweep, and reading once at the end is how the first customer run re-saw only
-  // 2 of its own 6 devices — pass-to-pass roulette.
-  const table = new Map<string, DiscoveredHost>();
-  const mergeArp = (output: string) => {
-    for (const h of parseArpTable(output)) {
-      if (!table.has(h.mac)) table.set(h.mac, h);
+  // Pass 2: ask EVERY ADDRESS who it is, over SIP — not only the addresses the
+  // table already admits to.
+  //
+  // ⛔⛔ THIS IS THE PASS THAT FOUND A PLUS CENTER'S PHONES (2026-08-25). Windows
+  // THROTTLES the address lookups a fast connect burst fires, negative-caches
+  // the failures, and arp -a then simply omits live devices — ten registered,
+  // working phones on the very subnet being swept were invisible to every
+  // table-first approach, exactly as Izzy said ("they are definitely on the
+  // same network — the scanner is not working properly"). A SIP device answers
+  // an OPTIONS regardless of what Windows' table thinks, the exchange itself
+  // plants the entry, and the reply carries make + model as a bonus.
+  await inBatches(addresses, CONCURRENCY, async (ip) => {
+    const r = await sipOptionsProbe(ip);
+    if (r) sipResponsive.set(ip, r.fingerprint);
+  });
+  await readTables();
+
+  // Pass 3: Windows' own ping for anything still unlisted — ping paces its
+  // lookups the way the OS likes, which survives the throttle a raw burst trips.
+  {
+    const known = knownIps();
+    const stillMissing = addresses.filter((ip) => !known.has(ip) && !sipResponsive.has(ip));
+    if (stillMissing.length) {
+      await inBatches(stillMissing, CONCURRENCY, (ip) => pingOnce(ip));
+      await readTables();
     }
-  };
-  mergeArp(await runArp());
-
-  // Pass 2: the addresses that still have no table entry get one slower retry —
-  // the pass that catches the phone that answered ARP a beat late.
-  const known = new Set([...table.values()].map((h) => h.ip));
-  const missing = addresses.filter((ip) => !known.has(ip));
-  if (missing.length) {
-    await inBatches(missing, CONCURRENCY, async (ip) => {
-      const results = await Promise.all(PHONE_PORTS.map((port) => probe(ip, port, RETRY_TIMEOUT_MS)));
-      if (results[0] || results[1]) responsive.add(ip);
-      if (results[2]) sipResponsive.set(ip, null);
-    });
-    mergeArp(await runArp());
   }
 
-  // Pass 3: ask every device that showed up WHO IT IS, over SIP. One OPTIONS
-  // packet each — the reply's User-Agent carries make and model even when the
-  // web page is locked, which on the first customer run was ALL of them.
-  const present = [...table.values()].filter((h) => ipInSubnet(h.ip, subnet));
-  await inBatches(present, CONCURRENCY, async (h) => {
-    const r = await sipOptionsProbe(h.ip);
-    if (r) sipResponsive.set(h.ip, r.fingerprint);
-  });
+  // Pass 4: a slower straight retry on anything not yet seen — the phone that
+  // answers a beat late.
+  {
+    const known = knownIps();
+    const missing = addresses.filter((ip) => !known.has(ip));
+    if (missing.length) {
+      await inBatches(missing, CONCURRENCY, async (ip) => {
+        const results = await Promise.all(PHONE_PORTS.map((port) => probe(ip, port, RETRY_TIMEOUT_MS)));
+        if (results[0] || results[1]) responsive.add(ip);
+      });
+      await readTables();
+    }
+  }
 
-  if (table.size === 0) {
+  // A SIP responder we STILL have no hardware address for gets one direct
+  // lookup nudge — the UDP exchange planted the entry, but belt and braces.
+  {
+    const known = knownIps();
+    const sipNoMac = [...sipResponsive.keys()].filter((ip) => !known.has(ip));
+    if (sipNoMac.length) {
+      await inBatches(sipNoMac, CONCURRENCY, (ip) => pingOnce(ip));
+      await readTables();
+    }
+  }
+
+  if (table.size === 0 && sipResponsive.size === 0) {
     return {
       subnet,
       hostsSeen: responsive.size,
@@ -340,6 +430,7 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
 
   // ⛔ A range test, not a string prefix: a /22 spans four third-octets, and the
   // old startsWith could only ever express a /24.
+  const present = [...table.values()].filter((h) => ipInSubnet(h.ip, subnet));
   const hosts = present.map((h) => ({
     ...h,
     respondedOnHttp: responsive.has(h.ip),

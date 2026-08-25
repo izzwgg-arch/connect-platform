@@ -108,3 +108,26 @@ test("silence on both fronts is still honestly unreachable", async () => {
   const out: any = await cap.run({ op: "fingerprint", ip: "192.168.0.7" });
   assert.deepEqual(out, { ok: false, refused: "unreachable" });
 });
+
+/* ── the neighbor table, both doors ──────────────────────────────────────── */
+
+import { parseNetshNeighbors } from "./lanScan";
+
+test("netsh neighbors parse: real states in, failure states out", () => {
+  const out = parseNetshNeighbors([
+    "Interface 17: Ethernet",
+    "",
+    "Internet Address                              Physical Address   Type",
+    "--------------------------------------------  -----------------  -----------",
+    "192.168.0.61                                  80-5e-c0-c8-9b-72  Stale",
+    "192.168.0.94                                  80-5e-c0-bf-8c-62  Reachable (Router)",
+    "192.168.0.240                                 80-5e-c0-c8-9b-82  Probe",
+    // ⛔ A FAILED lookup is not a device — treating it as one invents hardware.
+    "192.168.0.77                                  00-00-00-00-00-00  Unreachable",
+    "192.168.0.78                                  aa-bb-cc-dd-ee-01  Incomplete",
+    "192.168.0.255                                 ff-ff-ff-ff-ff-ff  Permanent",
+    "224.0.0.22                                    01-00-5e-00-00-16  Permanent",
+  ].join("\r\n"));
+  assert.deepEqual(out.map((h) => h.ip), ["192.168.0.61", "192.168.0.94", "192.168.0.240"]);
+  assert.equal(out[0].mac, "805ec0c89b72");
+});
