@@ -174,6 +174,21 @@ Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
   both codes under `carriedCodes` — the red section is gone and Copy is not blocked.
   Studio shows code rows as removable 🔑 steps (an invisible row that routes calls is
   how a "removed" code survives).
+  ✅✅ **STRESS-TESTED 2026-08-25 (`5133b52f`, api DEPLOYED — handoff §10) AND IT FOUND
+  ONE REAL HOLE: a FAILED publish could shield a deleted code from its tombstone.**
+  The record is created BEFORE the AstDB write, so a failed/pending publish may have
+  written any prefix of its keys — baselining the diff on the last SUCCESS alone let a
+  code that landed via a failed publish and was then deleted answer forever. The
+  wrapper now diffs against every record since (and incl.) the last success (take 25).
+  Found by the 300-run lifetime simulator with failure injection, which required moving
+  the slate + diff into `ivrMenuCodes.ts` as pure functions — ⛔ **server.ts cannot be
+  imported by tests, so logic left inline there is logic nobody can drive.** Also
+  proven live: 9 hostile bodies refused (forged body tenantId IGNORED), 5-way
+  concurrent publish burst consistent, 5 real-DTMF probes (code precedence with
+  direct-dial off, 8-digit, wrong code → told invalid, 0.5s-gap typing, single keys
+  unbroken), deleted code dead ON THE WIRE with 0.2s timing restored. ⛔ The NUL trap
+  bit AGAIN writing hostile fixtures (`Bin` in the staged stat is the tell); NULs in
+  test data go through `String.fromCharCode(0)`.
 - ⏳ **NOT PROVEN: nothing has been copied and no number has been flipped, and no HUMAN
   has dialled a carried code on a live migrated number** (the probe entered the menu
   directly, not through a DID). **The acceptance test for any migration is a real

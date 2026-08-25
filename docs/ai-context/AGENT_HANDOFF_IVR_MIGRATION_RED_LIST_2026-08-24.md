@@ -259,3 +259,51 @@ visible. fix it. It's the IVR."* So the last genuine losses became a feature:
 - The other estates' codes (Gesheft 750/13132/1159, Solidify 7879, Trust 1708,
   A plus 1818, B Visible's `vacation` DISA) will carry the same way; none has
   been copied yet.
+
+## 10. STRESS-TESTED (2026-08-25, `5133b52f`, Izzy: "Stress test. Fuck out of it.") — one REAL hole found and fixed
+
+- ⛔⛔ **THE FINDING: a FAILED publish could shield a deleted code from its
+  tombstone.** The tombstone diff baselined only the last SUCCESSFUL
+  `IvrPublishRecord` — but the record is created BEFORE the AstDB write, and a
+  publish that dies midway (telephony timeout) has already written any prefix
+  of its keys. A code that only ever landed via such a failed publish and was
+  then deleted would never be cleared: a dead dial-through code answering
+  forever, invisible to every unit test. **Found by the lifetime simulator**
+  (300 seeded runs modelling create → publish → delete → failed-midway publish
+  → republish against a modelled AstDB, invariant checked after every
+  successful publish: a code answers iff a live enabled row says so). Fix: the
+  wrapper diffs against every record since (and including) the last success
+  (`take: 25`, includes failed AND pending); the pure diff dedupes and ignores
+  "" so the chain still converges (proven: two clean publishes → zero
+  tombstones on the second).
+- **Refactor that made it testable:** the code slate + tombstone diff are pure
+  functions in `ivrMenuCodes.ts` now (`buildMenuCodeKeys`,
+  `diffStaleIvrCodeTombstones`) — server.ts cannot be imported by any test, so
+  logic that stays inline there is logic nobody can drive. Thin wrappers in
+  server.ts are pinned by source guards. The slate dedupes duplicate codes
+  LAST-wins (the digit slate's Map rule) so it can never emit a contradictory
+  pair.
+- **Suite (59 tests total):** hostile code strings (Arabic-Indic + fullwidth
+  digits — JS `\d` is ASCII-only and must stay so; NUL via
+  `String.fromCharCode` so the file stays text; whitespace, exponents, regex
+  metas); 500 randomized slates (shape/dedupe/determinism/has_codes oracle on
+  the deduped view); 300 publish lifetimes with failure injection; hostile
+  publish history (non-code keys can NEVER be tombstoned — a bug there would
+  blank real menu keys every publish; garbage rows never throw); 400 fuzzed
+  flow maps with a strict partition invariant — every enabled option lands in
+  exactly ONE of options/kept/restorable/problems, nothing silently dropped.
+- **Live, on production:** 9 hostile bodies against the option route all
+  refused (400/409) incl. a forged body `tenantId` proven IGNORED (row landed
+  on the profile's tenant); a **5-way concurrent publish burst** — all 200,
+  AstDB slate consistent; **five real-DTMF probes** on the demo menu — 3-digit
+  code with direct-dial OFF (code precedence), 8-digit code, wrong code →
+  invalid handler (caller told, never stranded), `0478` typed with 0.5s gaps
+  (the 1s digit timeout holds), and single key `1` still routing through the
+  option router; then delete-all + republish and the dead code proven dead ON
+  THE WIRE (falls to invalid/fallback, and `has_codes: 0` restored the 0.2s
+  instant single-key timing). Demo tenant left at its 2-key baseline.
+- ⛔ **The NUL trap bit AGAIN writing the hostile fixtures** — two literal NULs
+  landed in the test file and git showed it as `Bin 0 -> 16080 bytes` in the
+  staged stat. Caught before commit by reading the stat line; rewritten as
+  `String.fromCharCode(0)`. Check `git diff --cached --stat` for `Bin` on
+  every new source file.
