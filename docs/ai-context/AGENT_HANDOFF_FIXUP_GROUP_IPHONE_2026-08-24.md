@@ -462,3 +462,57 @@ answers normally, and NO `wake_leg` redirect ever appearing on a ring-group
 call. ⏳ Registration-triggered join (INVITE the phone the moment it
 re-registers, before any tap — native ring instead of tap-and-wait) is the
 designed next step and is NOT built.
+
+---
+
+## 13. The desk-answers-first race (2026-08-25, Izzy's follow-up) — every layer, and the one that was missing is built
+
+Izzy: *"the desk phone is going to start ringing before the iPhone and
+potentially answer... the iPhone would still ring, they would answer, and it
+would freeze on them."* Traced layer by layer:
+
+| moment | what happens | state |
+|---|---|---|
+| desk answers while iPhone rings, **no tap yet** | Asterisk CANCELs the app INVITEs; the answered_elsewhere sweep cancels the PENDING invite and pushes INVITE_CANCELED (incl. the iOS VoIP cancel push, built 2026-07-30) → ring dismissed in ~1–2 s | ✅ already built |
+| iPhone taps **after** the invite was canceled | the claim refuses (`INVITE_ALREADY_HANDLED` / `INVITE_EXPIRED`) → app dismisses | ✅ already built |
+| iPhone taps, claim WINS, **then** desk answers | the Mode-B **answered-grace** (dc12d3c5) sees `extensionAnsweredAt` flip and stands the redirect down — the desk's live call is never stolen | ✅ built yesterday |
+| …but the iPhone then sat on **"Connecting…" for its full 16 s budget** | ⛔ the answered_elsewhere sweep only canceled **PENDING** invites; a claimed invite is **ACCEPTED**, so the loser was never told | **THIS was the gap** |
+
+**The fix (`f17f507a`, api):** the mobile-ring-notify fast-path runs a second
+pass over invites that are **ACCEPTED with `endedAt` null** (claimed, never
+connected) and pushes INVITE_CANCELED at the loser, stamping `endedAt` as the
+one-shot loss marker (conditional `updateMany` — nothing else writes `endedAt`
+on `CallInvite`). The frozen screen dismisses in ~1–3 s instead of 16.
+
+⛔ **Safety ladder, in order of dominance — each line is a test:**
+1. **The Hanna own-app guard applies to the loss push too**: an invite whose
+   own app endpoint answered is never touched — including a shared-AOR sibling
+   (the desktop app answering while the iPhone claimed), which deliberately
+   falls back to the app's own 16 s give-up. ⛔ Pushing there could tear down
+   the sibling's live answer on pre-guard app builds (Luxure's 2026-08-01 APK
+   has no client-side cancel guard) — the safe direction is chosen.
+2. **`hungup`/`voicemail` reports for a call that WAS answered skip the pass**
+   (`input.answered`) — the loser was handled at answer time, and the winner
+   must not get a pointless cancel push after every completed call.
+3. **Client side** (fleet builds since `83a5728c`): the cancel handler ignores
+   a cancel for a call with a CONFIRMED session (`hasConfirmedSipSession() &&
+   answeredId === prev.id`) — so this push can only ever dismiss a screen with
+   no call behind it. Verified by reading `NotificationsContext.tsx:5685`.
+
+Also covered for free: **caller-gives-up-while-claimed** (state `hungup`,
+`answered: false`) and **ring-diverts-to-voicemail-while-claimed** — both
+previously froze the tapping phone the same way.
+
+⛔ `answeredEndpoint: null` on an answered_elsewhere report means a
+carrier/follow-me answer (the Hanna fix resolves the endpoint BEFORE emit when
+an extension leg answered) — the app cannot be the connected party, so pushing
+is safe there.
+
+**Proven:** 13/13 in `mobileRingAnswerPolicy.test.ts`; **all 4 new source
+guards FAIL replayed against `HEAD`'s server.ts**. api typecheck **76 = the
+exact baseline**. Deploy state at the end of this section.
+
+⏳ **NOT PROVEN by a real race** — acceptance: desk answers while the iPhone
+is mid-tap; the iPhone should show "Call ended" within ~3 s instead of
+freezing. The one-grep check:
+`docker logs app-api-1 | grep "claimed-but-unconnected invite lost"`.

@@ -278,6 +278,28 @@ PBX **T31**, user `fixupusa1@gmail.com`.
   before any tap — native ring instead of tap-and-wait) is designed, NOT built.
   Still worth doing regardless: **sign out one of his two iPhones** (they fight
   each other for AOR slots and both got pushed on every call).
+- ✅✅ **THE DESK-ANSWERS-FIRST RACE IS CLOSED TOO (`f17f507a`, api — handoff
+  §13, Izzy's follow-up "it would freeze on them until somebody already
+  answered").** Three of four layers already existed (SIP CANCEL + the
+  2026-07-30 VoIP cancel pushes dismiss an un-tapped ring; a tap after the
+  cancel refuses at the claim; the dc12d3c5 answered-grace keeps the redirect
+  off the desk's live call). ⛔ **The gap: the answered_elsewhere/hungup/
+  voicemail sweep only canceled PENDING invites — a tapped invite is ACCEPTED,
+  so the phone that tapped and LOST froze on "Connecting…" for its full 16 s
+  budget.** The sweep now runs a second pass over **ACCEPTED + `endedAt` null**
+  (claimed, never connected) and pushes INVITE_CANCELED at the loser, stamping
+  `endedAt` as the one-shot loss marker (nothing else writes it on CallInvite).
+  ⛔ **The safety ladder is the point**: the Hanna own-app guard dominates the
+  loss push too (a shared-AOR sibling's win deliberately falls back to the 16 s
+  give-up — pushing there could kill the sibling's live answer on pre-guard app
+  builds); `input.answered` skips the pass on hungup/voicemail so a normally
+  completed call never gets a cancel push at its winner; and the client cancel
+  handler ignores cancels for calls with a CONFIRMED session. Also covers
+  caller-gives-up-while-claimed and voicemail-divert-while-claimed. 4 new
+  source guards (13/13; **all 4 fail against HEAD**); api typecheck 76 =
+  baseline. ⏳ Acceptance:
+  `docker logs app-api-1 | grep "claimed-but-unconnected invite lost"` on the
+  next real desk-first race.
 - ⚠ **Noticed, NOT touched:** the desk phone `T31_103` holds a contact at
   **159.89.179.105 — DigitalOcean**, which is odd for a desk phone and worth one
   question.
