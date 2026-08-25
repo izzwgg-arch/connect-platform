@@ -37,6 +37,10 @@ type CustomerPhone = {
   vendor: string | null;
   displayName: string | null;
   extNumber: string | null;
+  /** Whether this phone's extension is registered to the phone system RIGHT NOW
+   * — the record says whose phone it is, only this says it is connected. A
+   * factory-reset phone keeps its name and loses this (ext-103 test, 2026-08-25). */
+  connectedNow?: boolean | null;
   status: "Finding" | "Preparing" | "Restarting" | "Connecting" | "Ready" | "Needs attention";
   note: string | null;
   needsAttention: boolean;
@@ -117,7 +121,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   // Phones the phone system already runs for this customer that THIS network scan
   // could not see (usually a separate phone network in the same building). Shown
   // as context on the found screen so a short list never reads as lost phones.
-  const [knownElsewhere, setKnownElsewhere] = useState<Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }>>([]);
+  const [knownElsewhere, setKnownElsewhere] = useState<Array<{ mac: string; model: string | null; vendor: string | null; name: string | null; connectedNow?: boolean | null }>>([]);
   const [needs, setNeeds] = useState<NeedsPerson[]>([]);
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
@@ -216,7 +220,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         model: h.fingerprint?.model ?? undefined,
         firmware: h.fingerprint?.firmware ?? undefined,
       }));
-      const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null; knownElsewhere?: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }> }>(
+      const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null; knownElsewhere?: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null; connectedNow?: boolean | null }> }>(
         `/desk-phones/runs/${runId}/discovered`,
         { subnet: scan.scan?.subnet ?? undefined, phones: found },
       );
@@ -564,8 +568,15 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         ]}
                       />
                     ) : (
-                      <span className={`dps-pill ${p.needsAttention ? "dps-pill-hm" : "dps-pill-ok"}`}>
-                        {p.needsAttention ? "Needs attention" : "Ready"}
+                      /* ⛔ The pill tells the LIVE truth, never a blanket "Ready":
+                         a factory-reset phone keeps its name from the records and
+                         loses its connection — the difference is the whole point
+                         of running this wizard on it. */
+                      <span className={`dps-pill ${p.needsAttention ? "dps-pill-hm" : p.connectedNow === false ? "dps-pill-hm" : "dps-pill-ok"}`}>
+                        {p.needsAttention ? "Needs attention"
+                          : p.connectedNow === true ? "Connected"
+                          : p.connectedNow === false ? "Not connected"
+                          : "Found"}
                       </span>
                     )}
                   </div>
@@ -586,7 +597,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                             <span>{[k.vendor, k.model].filter(Boolean).join(" ") || "Already set up"}</span>
                             <span className="dps-mac">{k.mac}</span>
                           </div>
-                          <span className="dps-pill dps-pill-ok">Already set up</span>
+                          <span className={`dps-pill ${k.connectedNow === false ? "dps-pill-hm" : "dps-pill-ok"}`}>
+                            {k.connectedNow === false ? "Not connected right now" : "Already set up"}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -617,7 +630,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 className="dps-btn dps-btn-p"
                 onClick={() => (step === "found" ? setStep("match") : setStep("ready"))}
                 disabled={phones.length === 0}
-              >Continue</button>
+              >{step === "found" ? "Choose who uses each phone" : "Continue"}</button>
             </div>
           </>
         )}

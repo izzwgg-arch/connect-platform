@@ -55,6 +55,32 @@ export type DeskPhoneDeps = {
  * Returns [] on ANY failure — names are decoration on this path, the phone list
  * is the feature.
  */
+/**
+ * Is this extension's DESK endpoint registered, from the api's own live mirror
+ * (`PbxEndpointRegistration`, upserted by the PBX's contact-status pushes).
+ *
+ * ⛔⛔ THE DEP EXISTED AND WAS NEVER WIRED IN PRODUCTION — server.ts passed no
+ * `isRegistered`, so `advance` skipped its Asterisk question and registeredToUs
+ * was ALWAYS false: the wizard could never turn a phone green, and a
+ * factory-reset phone kept reading as its old self (found live 2026-08-25 when
+ * Izzy reset his own ext 103 to test and "it's still showing the same"). This
+ * default makes the optional dep real; tests still inject their own.
+ *
+ * ⛔ The DESK endpoint (`T<n>_<ext>`), never `_1` — the app registering must not
+ * make a blank desk phone read as connected.
+ */
+async function defaultIsRegistered(tenantId: string, extNumber: string): Promise<boolean> {
+  try {
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
+    const n = resolvePbxTenantNumber(link as any);
+    if (!n) return false;
+    const row = await db.pbxEndpointRegistration.findUnique({ where: { endpoint: `T${n}_${extNumber}` } });
+    return row?.status === "REGISTERED";
+  } catch {
+    return false;
+  }
+}
+
 async function defaultProvisionedPhones(tenantId: string): Promise<PbxProvisionedPhone[]> {
   try {
     const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
@@ -132,6 +158,24 @@ async function allowedToReset(user: JwtUser, reply: any): Promise<boolean> {
 }
 
 const isSuper = (user: JwtUser) => String(user?.role || "").toUpperCase() === "SUPER_ADMIN";
+
+/**
+ * The live truth beside the record: is this phone's extension registered RIGHT
+ * NOW. ⛔ The record says whose phone it IS; only Asterisk says whether it is
+ * CONNECTED — a factory-reset phone keeps its name and loses its connection,
+ * and a screen showing the first without the second reads as a lie (Izzy's
+ * ext-103 reset test, 2026-08-25). Best-effort: null when unknowable.
+ */
+async function withConnectedNow(
+  deps: DeskPhoneDeps, tenantId: string, views: Array<Record<string, unknown> & { extNumber?: string | null }>,
+): Promise<Array<Record<string, unknown>>> {
+  const isReg = deps.isRegistered ?? defaultIsRegistered;
+  return Promise.all(views.map(async (v) => {
+    if (!v.extNumber) return { ...v, connectedNow: null };
+    try { return { ...v, connectedNow: await isReg(tenantId, String(v.extNumber)) }; }
+    catch { return { ...v, connectedNow: null }; }
+  }));
+}
 
 /** What the customer's screen gets. ⛔ Nothing technical crosses this boundary. */
 function customerPhoneView(row: any) {
@@ -286,7 +330,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // ⛔ Best-effort, never blocking: a PBX that cannot be read costs the names,
     // never the discovery. ⛔ A row a human already assigned (extensionId set) is
     // never overwritten — the person's explicit choice beats the record.
-    let knownElsewhere: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }> = [];
+    let knownElsewhere: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null; extNumber?: string | null }> = [];
     try {
       const lookup = deps.provisionedPhones ?? defaultProvisionedPhones;
       let recorded: PbxProvisionedPhone[] = [];
@@ -347,6 +391,10 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
             model: r.model,
             vendor: r.brand ? r.brand.toLowerCase() : null,
             name: r.extensionName || r.description || null,
+            // The extension, so the response can say whether this phone is
+            // CONNECTED right now — "already set up" from a record alone is a
+            // lie about a factory-reset or unplugged phone.
+            extNumber: r.extension || null,
           }));
       }
     } catch { /* names and context are decoration; discovery already succeeded */ }
@@ -359,8 +407,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       subnet: parsed.data.subnet || run.subnet || null,
       dropped,
       stored,
-      phones: phones.map(customerPhoneView),
-      knownElsewhere,
+      phones: await withConnectedNow(deps, user.tenantId, phones.map(customerPhoneView)),
+      knownElsewhere: await withConnectedNow(deps, user.tenantId, knownElsewhere),
     });
   });
 
@@ -478,8 +526,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // our settings is not a working phone; only the PBX reporting the endpoint
     // registered turns anything green.
     let registeredToUs = false;
-    if (phone.extNumber && deps.isRegistered) {
-      try { registeredToUs = await deps.isRegistered(user.tenantId, phone.extNumber); }
+    if (phone.extNumber) {
+      const isReg = deps.isRegistered ?? defaultIsRegistered;
+      try { registeredToUs = await isReg(user.tenantId, phone.extNumber); }
       catch { registeredToUs = false; }
     }
 
@@ -596,7 +645,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       ok: true,
       run: { id: run.id, status: run.status, subnet: run.subnet, startedAt: run.startedAt, origin: run.origin },
       summary,
-      phones: phones.map(wantsDiagnostics ? diagnosticPhoneView : customerPhoneView),
+      phones: await withConnectedNow(
+        deps, user.tenantId, phones.map(wantsDiagnostics ? diagnosticPhoneView : customerPhoneView),
+      ),
     });
   });
 

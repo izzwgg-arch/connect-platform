@@ -605,3 +605,23 @@ test("a rescan that resubmits only part of the list still fills vendors on the o
   const out = await discover(app, runId, [{ mac: "0C:38:3E:77:C5:36" }]);
   assert.deepEqual(out.phones.map((p: any) => p.vendor), ["fanvil", "fanvil"]);
 });
+
+test("the screen tells the live truth about a factory-reset phone, records notwithstanding", async () => {
+  reset();
+  // The record says this is Jacob's ext-103 phone; Asterisk says ext 103 is NOT
+  // registered — the exact shape of Izzy's own reset test (2026-08-25).
+  const records = [
+    { mac: "805e0c4d796d", macRaw: "80:5E:0C:4D:79:6D", pbxTenant: 2, description: "103", model: "T53W", brand: "Yealink", extension: "103", extensionName: "Jacob Weinstock" },
+    { mac: "805ec0bf8c62", macRaw: "80:5E:C0:BF:8C:62", pbxTenant: 2, description: "101", model: "T53W", brand: "Yealink", extension: "101", extensionName: "Reception" },
+  ];
+  state.extensions.push({ id: "e103", tenantId: "t_abc", extNumber: "103", displayName: "Jacob Weinstock", status: "ACTIVE" });
+  registered = new Set(["101"]); // 101 is up; the reset 103 is not
+  const app = await makeApp(CUSTOMER, { provisionedPhones: async () => records });
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80:5E:0C:4D:79:6D" }]);
+  const p = out.phones[0];
+  assert.equal(p.displayName, "Jacob Weinstock", "the record still names the phone");
+  assert.equal(p.connectedNow, false, "and the live check says it is NOT connected");
+  const known = out.knownElsewhere.find((k: any) => k.mac === "80:5E:C0:BF:8C:62");
+  assert.equal(known.connectedNow, true, "a genuinely registered unseen phone reads connected");
+});
