@@ -505,6 +505,19 @@ export interface PlannedProfile {
   timeoutSeconds: number;
   maxRetries: number;
   directDialEnabled: boolean;
+  /** Extension codes this menu lists one by one that Connect reproduces ONLY if
+   *  dial-by-extension is switched on for the copied menu. Empty when the PBX
+   *  already had it on — those land in ImportPlan.keptByDirectDial instead.
+   *
+   *  ⛔ These are NOT problems. The row's own wording says Connect can do it,
+   *  so filing them under "can't reproduce" contradicted itself and disabled
+   *  the Copy button on 3 of the 7 customers that have menus (2026-08-24: 29
+   *  of the estate's 41 extension shortcuts). ⛔ They are not free either —
+   *  planFor copies directDialEnabled AS-IS, so a menu that was off on the PBX
+   *  arrives off in Connect and callers lose these codes. It is one switch,
+   *  and it is the operator's to make, because turning it on accepts ANY
+   *  extension rather than only the ones the PBX menu listed. */
+  directDialWouldRestore: string[];
   timeoutDestinationType: ConnectDestinationType | null;
   timeoutDestinationRef: string | null;
   invalidDestinationType: ConnectDestinationType | null;
@@ -536,6 +549,10 @@ export interface ImportPlan {
    *  dial-by-extension. Reported so the operator can see they weren't lost —
    *  not a problem, and not something to act on. */
   keptByDirectDial: string[];
+  /** Menus whose extension shortcuts survive only if dial-by-extension is
+   *  turned on for them. A decision to put in front of the operator — never a
+   *  blocker, and never silently decided for them. */
+  directDialRestorable: Array<{ pbxIvrId: number; menu: string; codes: string[] }>;
   problems: ImportProblem[];
   warnings: string[];
 }
@@ -584,7 +601,7 @@ export function buildImportPlan(
   if (!root) {
     return {
       pbxTenantId: map.tenantId, tenantSlug: map.tenantSlug, rootPbxIvrId,
-      profiles: [], schedule: null, dids: [], requiredRecordings: [], keptByDirectDial: [],
+      profiles: [], schedule: null, dids: [], requiredRecordings: [], keptByDirectDial: [], directDialRestorable: [],
       problems: [{ where: "menu", reason: `Menu ${rootPbxIvrId} isn't on the PBX any more`, pbxType: "ivr", pbxLabel: null }],
       warnings: [],
     };
@@ -602,6 +619,7 @@ export function buildImportPlan(
 
   const planFor = (ivr: PbxIvr, type: string): PlannedProfile => {
     const options: PlannedOption[] = [];
+    const wouldRestore: string[] = [];
     for (const opt of ivr.options) {
       if (!opt.enabled) continue;
       const digit = normalizeOptionDigit(opt.digit);
@@ -625,23 +643,27 @@ export function buildImportPlan(
         const code = String(opt.digit).trim();
         const isTenantExtension = ctx.directory.extensions.some((e) => e.number === code);
         const lengthMatchesDirectDial = code.length === 3 || code.length === 4;
-        if (ivr.directDialEnabled && isTenantExtension && lengthMatchesDirectDial) {
-          coveredByDirectDial.add(code);
+        if (isTenantExtension && lengthMatchesDirectDial) {
+          // Reproducible either way — the only question is whether the switch
+          // is already on. ⛔ Neither branch is a `problem`: the menu the
+          // operator is copying can carry these codes, and saying otherwise
+          // both contradicts the row's own wording and blocks the copy.
+          if (ivr.directDialEnabled) coveredByDirectDial.add(code);
+          else wouldRestore.push(code);
           continue;
         }
         problems.push({
           where: `${ivr.description} · code "${code}"`,
-          reason: !ivr.directDialEnabled && isTenantExtension && lengthMatchesDirectDial
-            // Reproducible, and worth saying how: VitalPBX lists these
-            // extensions one by one even with its own dial-by-extension off.
-            // Connect gets the same result by turning dial-by-extension ON for
-            // this menu — with the honest caveat that it then accepts ANY
-            // extension, not only the listed ones. That is the operator's call
-            // to make, so name the trade-off instead of deciding for them.
-            ? `Callers can dial extension ${code} straight from this menu. Connect can do the same if you switch dial-by-extension on for this menu — but that lets callers reach any extension, not just the ones listed here.`
-            : ivr.directDialEnabled
-              ? `Callers can dial ${code} at this menu to jump straight through, and it isn't one of this tenant's extensions. Connect menus only handle single keys plus dial-by-extension, so that shortcut won't come across.`
-              : `Callers can dial ${code} at this menu to jump straight through. It isn't one of this tenant's extensions, so Connect has no way to reproduce it.`,
+          // Everything reaching here is genuinely outside what a Connect menu
+          // can express: a multi-digit code that is NOT one of this tenant's
+          // extensions. Measured across the estate on 2026-08-24 there are 10,
+          // and every one is a live feature rather than dead config — four are
+          // DISA (dial in, enter the code, get outbound dial tone as the
+          // company), two jump straight to a voicemail box, two jump into
+          // Gesheft's busiest queue, one a custom application, one a ring
+          // group. ⛔ Read them before copying; this is the one class where
+          // "copy the rest anyway" really does drop something people use.
+          reason: `Callers can dial ${code} at this menu to jump straight through, and it isn't one of this tenant's extensions. Connect menus only handle single keys plus dial-by-extension, so that shortcut won't come across.`,
           pbxType: "option",
           pbxLabel: code,
         });
@@ -675,6 +697,7 @@ export function buildImportPlan(
       timeoutSeconds: ivr.timeoutSec && ivr.timeoutSec > 0 ? ivr.timeoutSec : 7,
       maxRetries: ivr.invalidTries && ivr.invalidTries > 0 ? ivr.invalidTries : 3,
       directDialEnabled: ivr.directDialEnabled,
+      directDialWouldRestore: wouldRestore,
       timeoutDestinationType: timeout.ok ? timeout.destination.destinationType : null,
       timeoutDestinationRef: timeout.ok ? timeout.destination.destinationRef : null,
       invalidDestinationType: invalid.ok ? invalid.destination.destinationType : null,
@@ -755,6 +778,12 @@ export function buildImportPlan(
     dids,
     requiredRecordings: Array.from(requiredRecordings.values()),
     keptByDirectDial: Array.from(coveredByDirectDial).sort(),
+    // Roll the per-menu lists up for the screen. Built from `profiles` rather
+    // than a second pass over the PBX so the two can never disagree about
+    // which menus the copy is actually going to write.
+    directDialRestorable: profiles
+      .filter((p) => p.directDialWouldRestore.length > 0)
+      .map((p) => ({ pbxIvrId: p.pbxIvrId, menu: p.name, codes: [...p.directDialWouldRestore].sort() })),
     problems,
     warnings,
   };

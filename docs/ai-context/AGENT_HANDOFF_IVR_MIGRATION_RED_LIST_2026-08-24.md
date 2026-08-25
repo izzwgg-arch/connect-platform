@@ -109,26 +109,79 @@ Gesheft also has the largest reproducible set (16) and dial-by-extension **off**
 - **Relax Tires / Solidify / Trust**: nothing reproducible to worry about; each has
   exactly one real code to decide on.
 
-## 7. Recommended fix (NOT built — awaiting Izzy)
+## 7. BUILT (2026-08-25) — the list is split
 
-Split the list in `ImportPlan`. A row whose own text says *"Connect can do the same if
-you switch dial-by-extension on"* is **not** a "can't reproduce" and must not sit under
-that heading nor block the button. Instead surface it as a decision on the copy:
+Izzy's go-ahead the same session. **Code complete, tests green, ⏳ NOT DEPLOYED.**
 
-> ☑ Turn dial-by-extension on for these menus so callers can still dial 101–106
-> *(Connect then accepts any extension, not only the ones listed here.)*
+**`apps/api/src/ivrMigration.ts`** — the branch no longer files an extension shortcut
+as a problem at all. It splits on whether the switch is already on:
 
-…defaulted **ticked**, because the standing bar is that nothing already working may
-break. Then `problems` holds only the genuinely-unreproducible rows — for B Visible
-that is **2 instead of 13**, and for the whole estate **10 instead of 51**.
+- already on → `ImportPlan.keptByDirectDial` (silent, unchanged)
+- off → `PlannedProfile.directDialWouldRestore` + the `ImportPlan.directDialRestorable`
+  roll-up, built **from `profiles`** so the screen and the write can never disagree
+  about which menus the copy touches
 
-⛔ Blast radius traced: `problems` is read in three places — the portal preview
-(`page.tsx:402/486`), the portal's 422 error banner (`:509`), and the API gate
-(`server.ts:26645/26647`). All three must move together or the button and the server
-will disagree.
+`problems` now holds only the genuinely inexpressible ones. The three-way `reason`
+ternary collapses to one message, because the reproducible arms are unreachable.
+
+**`apps/api/src/server.ts`** — `POST /voice/ivr/migration/import` takes
+`enableDirectDial`, and the profile write becomes:
+
+```ts
+directDialEnabled: p.directDialEnabled || (body.data.enableDirectDial === true && p.directDialWouldRestore.length > 0)
+```
+
+⛔⛔ **Raise-only and scoped, and both halves are load-bearing.** The PBX value is
+**ORed, never replaced**, so declining the checkbox cannot switch OFF a menu the PBX
+already had it on for. And the flag only reaches menus whose plan actually lists codes
+to restore, so ticking cannot widen a menu the operator was never shown.
+⛔ The `allowPartial` gate is **unchanged** — the 10 real ones still stop the copy.
+
+**`apps/portal/.../ivr-migration/page.tsx`** — new section *"Extension shortcuts — one
+switch away"*, listing menu + codes, with a checkbox **ticked by default** and a line
+underneath that changes with the state to name the consequence either way.
+⛔ Default ticked because these codes work for callers **today** and the standing bar is
+that a migration must not break what already works.
+
+### Proof
+
+- **39 tests in `ivrMigration.test.ts`; 5 fail replayed against `HEAD`** — 3 plan-builder
+  and 2 route guards. ⛔ The third route guard (*"the copy still stops on genuinely
+  unreproducible keys"*) **passes at HEAD by design**: it pins behaviour that must not
+  change. Reported as 5 of 6, not 6 of 6.
+- ⛔ **The guards read `server.ts`'s SOURCE**, comments stripped — the doc block above the
+  flag quotes the very wording they match, so a naive check would pass on the comment.
+- api typecheck **76 = the exact baseline**, none in an edited file; portal **0**;
+  portal suite **350/352** (the two documented pre-existing failures).
+- ⛔ **The heredoc control-character trap bit again.** `
+` written into the guard through
+  a Bash heredoc landed as REAL newlines and broke the TS string literals (`TransformError`,
+  which reads like a broken test). Rewritten through the editor using
+  `String.fromCharCode(10)`. **This is in CLAUDE.md twice already; write escapes through
+  the editor.**
+
+### Numbers
+
+| | problems before | problems after |
+|---|---|---|
+| B Visible | 13 | **2** |
+| Gesheft | 19 | **3** |
+| Displaydex | 2 | **0** |
+| whole estate | 51 | **10** |
 
 ## 8. NOT PROVEN
 
-No menu has been copied and **no number has been flipped to Connect** in this session.
-Everything above is read-only measurement. The acceptance test for any migration is
-still a **real call**: dial the number, press a key, and dial an extension at the menu.
+⏳ **Nothing is deployed, nobody has opened the dialog, and no menu has been copied.**
+Proven as tests, typechecks and a HEAD replay — never as a screen a person used.
+
+**Acceptance, and the negatives matter most:**
+1. Open B Visible's Main in IVR Migration → the red list reads **2 rows** (`0478`,
+   `55648752`), and the new section offers **101–106** with the box ticked.
+2. Copy with it ticked → the copied menus read **dial-by-extension ON** in IVR Studio.
+3. ⛔ **Untick and copy → they must come across OFF**, exactly as the PBX has them.
+4. ⛔ **A plus center must show NO new section** — its menus already have the switch on,
+   so there is nothing to decide, and its 12 codes stay in *"Extension shortcuts — kept"*.
+5. ⛔ **The Copy button must still be disabled** on B Visible until *"Copy the rest anyway"*
+   is ticked — the DISA code is a real loss and must still stop the operator.
+6. Then the only proof that counts: **a real call.** Dial the number, press a key, and
+   dial an extension at the menu.

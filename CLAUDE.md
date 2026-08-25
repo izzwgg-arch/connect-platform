@@ -123,10 +123,31 @@ Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
 - **What to do per customer:** dial-by-ext OFF (B Visible, Displaydex, Gesheft) → tick
   *"Copy the rest anyway"*, copy, then **turn dial-by-extension ON for each copied menu
   in IVR Studio before Go live**. The others have nothing reproducible to worry about.
-- ⏳ **RECOMMENDED FIX, NOT BUILT (§7 of the handoff, Izzy's call):** split the list so a
-  "switch dial-by-extension on" row is a **decision on the copy** (a checkbox, defaulted
-  ticked, stating the trade-off) rather than a red blocker — taking B Visible from 13
-  problems to **2**, and the estate from 51 to **10**.
+- ✅✅ **FIXED THE SAME DAY (Izzy's go-ahead) — the list is split.** A "switch
+  dial-by-extension on" row is now a **decision on the copy**, not a red blocker:
+  `PlannedProfile.directDialWouldRestore` + `ImportPlan.directDialRestorable` carry it,
+  the dialog renders **"Extension shortcuts — one switch away"** with a checkbox
+  **ticked by default**, and `POST /voice/ivr/migration/import` takes `enableDirectDial`.
+  **B Visible goes from 13 problems to 2, Gesheft from 19 to 3, the estate from 51 to 10.**
+  ⛔⛔ **The flag RAISES ONLY and is SCOPED**: `p.directDialEnabled || (enableDirectDial
+  && p.directDialWouldRestore.length > 0)` — so declining can never switch OFF a menu the
+  PBX already had it on for, and ticking can never widen a menu the operator was never
+  shown. A source guard reads that one line out of `server.ts` (comments stripped — the
+  block above the flag quotes the same wording), because the plan builder can be perfectly
+  right and the feature still dead if the route ignores it.
+  ⛔ **The checkbox defaults TICKED on purpose**: these codes work for callers today and a
+  migration must not break what already works. Unticking states the consequence in the
+  same box ("callers who dial these will hear an invalid-option message").
+  ⛔ The `allowPartial` gate is UNCHANGED and still fires on the 10 real ones — dropping a
+  DISA code or Gesheft's queue shortcut without asking is what it exists to prevent.
+  ✅ **39 api tests pass; 5 of them fail replayed against `HEAD`** (3 plan-builder, 2 route
+  guards). The third route guard passes at HEAD by design — it pins existing behaviour.
+  api typecheck **76 = the exact baseline**, none in an edited file; portal **0**, suite
+  350/352 (the two documented pre-existing).
+  ⛔ **The heredoc control-character trap bit again writing those guards** — `
+` inside
+  a Bash heredoc landed as REAL newlines and broke the string literals. Written through
+  the editor with `String.fromCharCode(10)` instead. It is in this file twice already.
 - ⏳ **NOT PROVEN: nothing has been copied and no number has been flipped.** All of the
   above is read-only measurement. **The acceptance test for any migration is a real
   call** — dial the number, press a key, and dial an extension at the menu.

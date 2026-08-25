@@ -6,6 +6,8 @@
 // copied from the real rows; the expectations were checked against the
 // generated dialplan (extensions__50-2-dialplan.conf).
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import {
   mapPbxDestination,
@@ -421,11 +423,12 @@ test("a shortcut that ISN'T an extension is still reported as lost", () => {
   assert.deepEqual(home.options.map((o) => o.optionDigit), ["1", "2", "6"]);
 });
 
-// Real case: tenant 8's "Main" lists 19 extensions one by one with VitalPBX's
-// own dial-by-extension switched OFF. Connect CAN reproduce that, so the
-// report must name the fix and its trade-off rather than claim it's
-// impossible.
-test("with dial-by-extension OFF, the report names the fix and its trade-off", () => {
+// Real case: Gesheft's "Main" lists 16 extensions one by one with VitalPBX's
+// own dial-by-extension switched OFF, and B Visible's Main/After Hours another
+// 11 between them. Connect CAN reproduce those, so they are a DECISION on the
+// copy — not a `problem`, which contradicted the row's own wording and
+// disabled the Copy button on 3 of the 7 customers that have menus.
+test("with dial-by-extension OFF, extension codes are a decision, not a problem", () => {
   const noDirect: PbxTenantFlowMap = {
     ...MAP,
     ivrs: MAP.ivrs.map((i) =>
@@ -437,12 +440,39 @@ test("with dial-by-extension OFF, the report names the fix and its trade-off", (
     ),
   };
   const plan = buildImportPlan(noDirect, 1);
-  assert.equal(plan.problems.length, 1);
-  assert.match(plan.problems[0].reason, /switch dial-by-extension on/);
-  assert.match(plan.problems[0].reason, /any extension, not just the ones listed/);
+  // The whole point: nothing here blocks the copy.
+  assert.equal(plan.problems.length, 0);
+  assert.deepEqual(plan.keptByDirectDial, []);
+  assert.deepEqual(plan.directDialRestorable, [{ pbxIvrId: 1, menu: "Home Main", codes: ["103"] }]);
+  // ⛔ And it is NOT free: the copy carries the PBX's own setting across, so
+  // the profile still reads off. Only the operator's tick changes that, and
+  // the route reads this per-profile list to decide which menus to raise.
+  const home = plan.profiles.find((p) => p.pbxIvrId === 1)!;
+  assert.equal(home.directDialEnabled, false);
+  assert.deepEqual(home.directDialWouldRestore, ["103"]);
 });
 
-test("dial-by-extension off AND not an extension is a plain loss", () => {
+// A menu that already had it on must not appear as a decision — there is
+// nothing to decide, and the route must never flip a menu it did not list.
+test("a menu that already has dial-by-extension on is not offered as a decision", () => {
+  const on: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((i) =>
+      i.id !== 1 ? i : {
+        ...i,
+        directDialEnabled: true,
+        options: [...i.options, { entryId: 94, digit: "103", enabled: true, sort: 7, target: { destinationId: 70, type: "extension", targetId: "1", label: "103" } }],
+      },
+    ),
+  };
+  const plan = buildImportPlan(on, 1);
+  assert.equal(plan.problems.length, 0);
+  assert.deepEqual(plan.keptByDirectDial, ["103"]);
+  assert.deepEqual(plan.directDialRestorable, []);
+  assert.deepEqual(plan.profiles.find((p) => p.pbxIvrId === 1)!.directDialWouldRestore, []);
+});
+
+test("dial-by-extension off AND not an extension is still a plain loss", () => {
   const noDirect: PbxTenantFlowMap = {
     ...MAP,
     ivrs: MAP.ivrs.map((i) =>
@@ -454,7 +484,13 @@ test("dial-by-extension off AND not an extension is a plain loss", () => {
     ),
   };
   const plan = buildImportPlan(noDirect, 1);
-  assert.match(plan.problems[0].reason, /no way to reproduce it/);
+  // 0478 is B Visible's real DISA code — dial in, enter it, get outbound dial
+  // tone as the company. Genuinely inexpressible as a Connect menu key, and it
+  // must stay in `problems` so the copy still stops to ask.
+  assert.equal(plan.problems.length, 1);
+  assert.match(plan.problems[0].reason, /isn't one of this tenant's extensions/);
+  assert.match(plan.problems[0].reason, /won't come across/);
+  assert.deepEqual(plan.directDialRestorable, []);
 });
 
 test("a broken key is reported but the rest of the menu still copies", () => {
@@ -475,4 +511,47 @@ test("a broken key is reported but the rest of the menu still copies", () => {
   assert.match(plan.problems[0].where, /key 4/);
   const home = plan.profiles.find((p) => p.pbxIvrId === 1)!;
   assert.deepEqual(home.options.map((o) => o.optionDigit), ["1", "2", "6"]);
+});
+
+// ── the CALLER, not the function ───────────────────────────────────────────
+//
+// buildImportPlan can be perfectly right and the feature still broken, because
+// the decision it surfaces is only worth anything if the import route acts on
+// it. Every defect of this shape in this repo has been a caller — so read the
+// route's own source. ⛔ Comments are stripped first: the block above the flag
+// quotes the very wording these assertions look for, so a naive match would
+// pass on the comment and guard nothing.
+const ROUTE_SRC = (() => {
+  const LF = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  const raw = readFileSync(join(__dirname, "server.ts"), "utf8").split(CR + LF).join(LF);
+  return raw
+    .split(LF)
+    .filter((line) => {
+      const t = line.trim();
+      return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+    })
+    .join(LF);
+})();
+
+test("the import route accepts the dial-by-extension decision", () => {
+  assert.match(ROUTE_SRC, /enableDirectDial: z\.boolean\(\)\.optional\(\)/);
+});
+
+test("the copy raises dial-by-extension only, and only for menus that need it", () => {
+  const line = ROUTE_SRC.split(String.fromCharCode(10)).find((l) => l.includes("directDialEnabled: p.directDialEnabled"));
+  assert.ok(line, "the profile write must still start from the PBX's own setting");
+  // Raise-only: the PBX value is ORed, never replaced — so declining the
+  // checkbox can never switch OFF a menu the PBX already had it on for.
+  assert.match(line!, /p\.directDialEnabled \|\|/);
+  // Scoped: a menu with nothing to restore is never flipped, so ticking the box
+  // cannot widen a menu the operator was never shown.
+  assert.match(line!, /p\.directDialWouldRestore\.length > 0/);
+  assert.match(line!, /body\.data\.enableDirectDial === true/);
+});
+
+test("the copy still stops on genuinely unreproducible keys", () => {
+  // The gate must remain. Dropping a DISA code or a queue shortcut without
+  // asking is exactly what it exists to prevent.
+  assert.match(ROUTE_SRC, /plan\.problems\.length > 0 && !body\.data\.allowPartial/);
 });

@@ -26634,6 +26634,16 @@ app.post("/voice/ivr/migration/import", async (req, reply) => {
      *  half-copied menu that nobody was warned about is how callers end up in
      *  dead ends. */
     allowPartial: z.boolean().optional(),
+    /** Switch dial-by-extension ON for the copied menus that need it so the
+     *  extension codes the PBX menu listed one by one keep working.
+     *
+     *  ⛔ Only reaches menus whose plan actually lists codes it would restore
+     *  — never a menu that had none, and never one the PBX already had it on
+     *  for. ⛔ Absent means leave every menu exactly as the PBX had it, which
+     *  is the old behaviour and loses those codes. The trade-off is the
+     *  operator's: turning it on accepts ANY extension, not only the listed
+     *  ones, so the screen states that and this route never assumes it. */
+    enableDirectDial: z.boolean().optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", details: body.error.flatten() });
 
@@ -26671,7 +26681,9 @@ app.post("/voice/ivr/migration/import", async (req, reply) => {
         pbxPromptRef: p.promptRef,
         timeoutSeconds: p.timeoutSeconds,
         maxRetries: p.maxRetries,
-        directDialEnabled: p.directDialEnabled,
+        // Raising only: a menu the PBX already had it on stays on, and a menu
+        // with nothing to restore is never flipped by this flag.
+        directDialEnabled: p.directDialEnabled || (body.data.enableDirectDial === true && p.directDialWouldRestore.length > 0),
         timeoutDestinationType: p.timeoutDestinationType,
         timeoutDestinationRef: p.timeoutDestinationRef,
         invalidDestinationType: p.invalidDestinationType,
@@ -26833,7 +26845,7 @@ app.post("/voice/ivr/migration/import", async (req, reply) => {
   const warningsWithAudio = [...plan.warnings, ...recordingCopy.failures];
 
   app.log.info(
-    { connectTenantId, pbxTenantId: body.data.pbxTenantId, pbxIvrId: body.data.pbxIvrId, profiles: written.length, problems: plan.problems.length, recordingsCopied: recordingCopy.copied, recordingFailures: recordingCopy.failures.length },
+    { connectTenantId, pbxTenantId: body.data.pbxTenantId, pbxIvrId: body.data.pbxIvrId, profiles: written.length, problems: plan.problems.length, directDialEnabledFor: body.data.enableDirectDial === true ? plan.directDialRestorable.length : 0, recordingsCopied: recordingCopy.copied, recordingFailures: recordingCopy.failures.length },
     "ivr-migration: copied from PBX",
   );
 

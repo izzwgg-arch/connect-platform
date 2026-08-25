@@ -56,6 +56,7 @@ interface Plan {
   dids: Array<{ did: string; description: string; viaTimeCondition: boolean }>;
   requiredRecordings: Array<{ recordingId: number; name: string; promptRef: string; inConnectCatalog?: boolean }>;
   keptByDirectDial: string[];
+  directDialRestorable: Array<{ pbxIvrId: number; menu: string; codes: string[] }>;
   problems: PlanProblem[];
   warnings: string[];
 }
@@ -233,7 +234,7 @@ export default function IvrMigrationPage() {
     await load();
   }
 
-  async function copyIn(allowPartial: boolean) {
+  async function copyIn(allowPartial: boolean, enableDirectDial: boolean) {
     // Deliberately does NOT depend on the tenant switcher — the destination is
     // the Connect account linked to the PBX tenant being copied, resolved
     // server-side. Gating on the switcher here would silently do nothing.
@@ -241,7 +242,7 @@ export default function IvrMigrationPage() {
     setBusy("import"); setError(null); setErrorDetail(null); setCopyError(null); setCopiedNotice(null);
     try {
       const r = await apiPost<{ profiles: Array<{ name: string }>; warnings?: string[] }>("/voice/ivr/migration/import", {
-        pbxTenantId: plan.pbxTenantId, pbxIvrId: plan.pbxIvrId, allowPartial,
+        pbxTenantId: plan.pbxTenantId, pbxIvrId: plan.pbxIvrId, allowPartial, enableDirectDial,
       });
       setPlan(null);
       // The server copies the menus' AUDIO after the rows land, and reports
@@ -396,9 +397,13 @@ export default function IvrMigrationPage() {
 function PlanModal({ plan, tenantName, busy, error, onClose, onCopy }: {
   plan: Plan; tenantName: string; busy: boolean;
   error: { text: string; problems: PlanProblem[]; warnings: string[] } | null;
-  onClose: () => void; onCopy: (allowPartial: boolean) => void;
+  onClose: () => void; onCopy: (allowPartial: boolean, enableDirectDial: boolean) => void;
 }) {
   const [confirmPartial, setConfirmPartial] = useState(false);
+  // Ticked by default: these codes work for callers TODAY, and the standing bar
+  // is that a migration must not break what already works. Unticking is a
+  // deliberate choice the operator can see the consequence of, right above it.
+  const [enableDirectDial, setEnableDirectDial] = useState(true);
   const blocked = plan.problems.length > 0 && !confirmPartial;
   const missingAudio = plan.requiredRecordings.filter((r) => r.inConnectCatalog === false);
 
@@ -476,6 +481,34 @@ function PlanModal({ plan, tenantName, busy, error, onClose, onCopy }: {
             </section>
           )}
 
+          {plan.directDialRestorable.length > 0 && (
+            <section>
+              <h3>Extension shortcuts — one switch away</h3>
+              <p className="dim">
+                The PBX lists these extensions on the menu one by one, and its own dial-by-extension is
+                switched off — so the copy brings that setting across too and callers would lose them.
+                Connect reaches the same extensions through dial-by-extension instead.
+              </p>
+              <ul className="plain">
+                {plan.directDialRestorable.map((m) => (
+                  <li key={m.pbxIvrId}><b>{m.menu}</b> — {m.codes.join(", ")}</li>
+                ))}
+              </ul>
+              <label className="confirm">
+                <input
+                  type="checkbox"
+                  checked={enableDirectDial}
+                  onChange={(e) => setEnableDirectDial(e.target.checked)}
+                />
+                Turn dial-by-extension on for {plan.directDialRestorable.length === 1 ? "this menu" : "these menus"} so callers can still dial them
+              </label>
+              <p className="dim small">
+                {enableDirectDial
+                  ? "Callers will then be able to dial any of this company's extensions at the menu, not only the ones listed above."
+                  : "Leave it off and callers who dial these at the menu will hear an invalid-option message once this menu goes live."}
+              </p>
+            </section>
+          )}
           {plan.warnings.length > 0 && (
             <section>
               <h3>Worth knowing</h3>
@@ -517,7 +550,7 @@ function PlanModal({ plan, tenantName, busy, error, onClose, onCopy }: {
 
         <div className="mfoot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy || blocked} onClick={() => onCopy(confirmPartial)}>
+          <button className="btn primary" disabled={busy || blocked} onClick={() => onCopy(confirmPartial, enableDirectDial)}>
             {busy ? "Copying…" : "Copy into Connect"}
           </button>
         </div>
@@ -546,6 +579,7 @@ function MigrationStyles() {
       .ivrm .btn{font:inherit;font-size:13.5px;font-weight:600;border-radius:11px;padding:9px 15px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:.15s}
       .ivrm .btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
       .ivrm .btn:disabled{opacity:.5;cursor:not-allowed}
+      .ivrm .small{font-size:12px;margin-top:6px}
       .ivrm .btn.primary{background:linear-gradient(150deg,var(--accent),#0f7ede);border-color:transparent;color:#fff}
       .ivrm .btn.primary:hover:not(:disabled){filter:brightness(1.06);color:#fff}
       .ivrm .btn.ghost{background:transparent}
