@@ -383,3 +383,82 @@ teach the gate the `connect-mobile-wake-dial` context + capture the leg's own
 AOR per leg (tap-triggered only; fixes exactly this call's shape), prove on a
 real call, and only then consider registration-triggered join and the
 Originate-a-single-leg mechanism. NOT built, NOT started.
+
+---
+
+## 12. THE FIX IS BUILT AND DEPLOYED (2026-08-25) — Mode-B learns the wake-dial leg shape
+
+Izzy: *"Build it and do it."* Commit **`dc12d3c5`** on
+`feat/ivr-migration-takeover`, **telephony DEPLOYED via the queue** (job
+`683341f1`, 2026-08-25 11:47Z) **in a measured 0-active-calls window and
+container-verified**: server clone at `dc12d3c5`, `resolveWakeDialLeg` ×3 +
+`answered_during_grace` grepped in the running container's src (telephony runs
+from src via tsx — there is no dist/), `wakeDialLeg.ts` present, 0 restarts,
+AMI authenticated + ARI healthy, 0 error-level lines. No API change, no
+dialplan change, no PBX write, no migration.
+
+**What shipped** (`apps/telephony/src/telephony/services/`):
+
+- **`wakeDialLeg.ts`** — pure `resolveWakeDialLeg(channels, preferExt)`:
+  derives the app AOR / extension / pbx code from the wake channel's own name
+  (`Local/T31_103_1@connect-mobile-wake-dial-…` → `T31_103_1` / `103` / `T31`).
+  `preferExt` (= the invite's `toExtension`, already arriving as
+  `fallbackExten` — **no API change was needed**) pins WHICH extension's wake
+  leg when several ring; ambiguity fails closed to `null`.
+- **The wake-leg shape in `requeueLiveCallToDialplan`**: when an
+  `invite_accept` requeue finds a live wake-dial channel AND the trunk's own
+  Dial position is a direct extension dial (`*local-dialing*` — ring groups /
+  queues keep the old refusals, so the RSBK restart-at-priority-1 loop stays
+  impossible), the fresh-contact test runs against the **APP** AOR instead of
+  the mis-captured desk AOR, and the redirect goes to the proven
+  `T<pbx>_cos-all,<ext>` target — ⛔ **the exten is the extension NUMBER from
+  the wake leg, never `extLegDialExten`**, which for this shape is the endpoint
+  name `T31_103_1` and would dead-end the redirect.
+- **`modeBAnswerGraceMs` (2.5 s)**: before ANY Mode-B redirect past a
+  still-live extension leg, wait for a normal SIP 200 — a device answering the
+  ordinary way (measured 300 ms–2.6 s) must never have its live INVITE torn
+  down by a redirect racing its own answer. `extensionAnsweredAt` flipping
+  during the grace stands the redirect down (`answered_during_grace`).
+- Timing knobs became test-overridable class fields
+  (`modeBFreshContactWaitMs/PollMs`, `modeBAnswerGraceMs/PollMs`);
+  `requeueTestEnv.ts`'s `JWT_SECRET` seed lengthened to satisfy env.ts's ≥32
+  minimum (`d21fd166`) so TelephonyService-importing tests run in a bare shell.
+
+**Every historical protection is unchanged and re-asserted by test:**
+`invite_accept` only (the 2026-06-28 `device_register_complete` revert), a
+fresh contact NOT among the dialed set only, one-shot per call,
+`extensionAnsweredAt` dominates everything, ring-group/queue trunk positions
+excluded.
+
+**Proven:** 12 tests in `wakeLegRedelivery.test.ts` driving the real service
+against the real `CallStateStore`/`AorContactRegistry`, rebuilt from the
+production call's own DialBegin shapes (so `extLegAor` really captures the desk
+AOR and `extLegDialContext` really reads `connect-mobile-wake-dial`, exactly as
+prod logged them). **Non-vacuous: 3 of 12 FAIL replayed against `HEAD`'s
+TelephonyService** — the Fixup rescue, the grace, and the one-shot — while
+every safety test passes on BOTH trees. Full telephony suite **225/228** (the 3
+documented pre-existing smarthome `JWT_SECRET` local-shell artifacts);
+typecheck **41 = the exact baseline**, the 5 in TelephonyService.ts being the
+pre-existing `Timeout` typing artifacts present at HEAD.
+
+⛔ **CORRECTION to §3's attribution, found while tracing the fix — the desk
+phone was over-blamed.** `connect-mobile-wake-dial:11` gates its hold on
+`DEVICE_STATE(PJSIP/T31_103_1)` — the **app endpoint's own** state — so a desk
+phone ALONE would not disarm it (desk-only + sleeping iPhone → `UNAVAILABLE` →
+the hold loop engages). What disarms it for Fixup is the **desktop app and the
+Android sharing the `_1` AOR**: any always-on sibling app client keeps
+`DEVICE_STATE` available and the frozen dial list ships without the iPhone.
+The per-extension `WARM` check in `connect-wake-core` only skips its own
+(redundant) grace loop. The mechanism conclusion and the fix are unchanged —
+the hold's granularity is the shared `_1` AOR, not the device.
+
+⏳ **NOT PROVEN: no real call has exercised the rescue.** It is proven as
+deployed code, container greps and 12 tests — never as a conversation.
+**Acceptance: the next inbound call he answers on the iPhone from a sleeping
+state.** The one-grep check:
+`docker logs app-telephony-1 | grep -a "AMI mobile invite requeue sent" | grep wake_leg`
+— and the negatives that matter: `answered_during_grace` rows when a desk/app
+answers normally, and NO `wake_leg` redirect ever appearing on a ring-group
+call. ⏳ Registration-triggered join (INVITE the phone the moment it
+re-registers, before any tap — native ring instead of tap-and-wait) is the
+designed next step and is NOT built.

@@ -152,10 +152,12 @@ Memory: [[ivr-migration-red-list-is-mostly-a-false-alarm]].
   above is read-only measurement. **The acceptance test for any migration is a real
   call** — dial the number, press a key, and dial an extension at the menu.
 
-## ⛔⛔ AGENT HANDOFF — Fixup Group's iPhone was never in the ring list: the wake hold is per-EXTENSION but sleeping is per-DEVICE (2026-08-24) — READ FIRST for ANY "the app rang but I couldn't answer" on iOS, before touching `connect-wake-core` / `connect-mobile-wake-dial`, or before telling an iPhone customer to update the app
+## ⛔⛔ AGENT HANDOFF — Fixup Group's iPhone was never in the ring list: the wake hold is per-shared-AOR but sleeping is per-DEVICE — Mode-B wake-leg rescue BUILT AND DEPLOYED (2026-08-24 → 25) — READ FIRST for ANY "the app rang but I couldn't answer" on iOS, before touching `connect-wake-core` / `connect-mobile-wake-dial` or `requeueLiveCallToDialplan`, or before telling an iPhone customer to update the app
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIXUP_GROUP_IPHONE_2026-08-24.md`**
-(**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
+(Investigation read-only; **the fix is `dc12d3c5`, telephony DEPLOYED via the
+queue 2026-08-25 in a 0-active-calls window and container-verified** — §12. No
+API change, no dialplan change, no PBX write, no migration.)
 Izzy, 2026-08-24: *"Fix Up Group 101 is complaining that he had problems today
 with the iPhone app."* ⛔ **The extension is 103 "Office", not 101** — T31 has no
 101 in Connect or on the PBX. (Secro ext 103 is *named* "Fix Up Group" and is a
@@ -170,14 +172,17 @@ PBX **T31**, user `fixupusa1@gmail.com`.
   iPhone answered **zero** calls today, and in 14 days has accepted exactly one
   `CallInvite` — today's, which failed.
 - ⛔⛔ **ROOT CAUSE, and it generalises to every tenant: the wake-and-wait hold
-  is gated on the whole EXTENSION, while sleeping is per DEVICE.**
-  `connect-wake-core` sets `WARM = LEN(CONTACTS_PRIMARY) > 0 | LEN(CONTACTS_SECONDARY) > 0`,
-  where PRIMARY is the **desk** endpoint and SECONDARY the app endpoint, and jumps
-  straight to `warm` — no grace wait — if either has any contact;
-  `connect-mobile-wake-dial:11` repeats the shape (`DEVICE_STATE != UNAVAILABLE ?
-  dial`). Fixup Group has a permanently registered **desk phone**, a permanently
-  registered **desktop app** and an **Android** on that one extension, so the
-  endpoint is never `UNAVAILABLE` and the hold **can never engage for them**.
+  is gated on the SHARED `_1` AOR, while sleeping is per DEVICE.**
+  `connect-mobile-wake-dial:11` holds only while
+  `DEVICE_STATE(PJSIP/T<t>_<ext>_1)` is `UNAVAILABLE` — the **app endpoint's
+  own** state — and then commits a frozen contact list.
+  ⛔ **CORRECTED 2026-08-25 (§12): the desk phone was over-blamed.** A desk
+  phone ALONE would NOT disarm the hold (desk-only + sleeping iPhone →
+  `UNAVAILABLE` → the hold engages); `connect-wake-core`'s per-extension `WARM`
+  check only skips its own redundant grace loop. **What disarms it for Fixup is
+  the desktop app and the Android sharing `T31_103_1`** — any always-on sibling
+  app client keeps the AOR available, so the sleeping iPhone is never waited
+  for and never in the frozen dial list.
   Verbatim on all 7 calls today: `connect-wake-core warm — live contact ext=103`
   then `connect-mobile-wake-dial dialing T31_103_1 after 0s`.
   ⛔ Across the whole PBX log (~2 days, ~230 wake-dials) the hold fired > 0 s
@@ -229,15 +234,50 @@ PBX **T31**, user `fixupusa1@gmail.com`.
   Correlate it against `VoiceClientSession.startedAt` to say which physical device
   a contact belongs to — that is how the desktop, the Android and each iPhone were
   told apart on one shared AOR.
-- ⏳ **NOTHING WAS CHANGED, so nothing is fixed.** The real fix is ours and is a
-  PBX dialplan change on `connect-wake-core` / `connect-mobile-wake-dial`, which
-  **every tenant shares** — hold when a known mobile device has no reachable
-  contact rather than only when the whole extension is `UNAVAILABLE`, and/or
-  re-read `PJSIP_DIAL_CONTACTS` during the ring instead of committing at t=0.
-  Per the third standing rule, trace every consumer before proposing either.
-  Cheap non-code steps first: **sign out of one of the two iPhones**, and close
-  the desktop app when he is out (a workaround, and it also stops his desk
-  ringing, so it is his call).
+- ✅✅ **THE FIX IS BUILT AND DEPLOYED (`dc12d3c5`, 2026-08-25 — handoff §12):
+  Mode-B learned the wake-dial leg shape, so a woken phone can JOIN a ring that
+  is already up.** The late-join rescue existed all along — telephony's
+  tap-triggered `requeueLiveCallToDialplan` Mode-B — and it **evaluated his
+  exact 18:09 tap, found the fresh contact, and refused** on gates written
+  before the wake-dial rollout (log preserved in §11: `not_direct_extension`,
+  and `extLegAor` had captured the DESK AOR). Now: `resolveWakeDialLeg`
+  (`wakeDialLeg.ts`, pure) derives the app AOR/ext/pbx from the wake channel's
+  own name, the fresh-contact test runs against the **APP** AOR, and the
+  redirect goes to the proven `T<pbx>_cos-all,<ext>` — ⛔ **the exten is the
+  extension NUMBER from the wake leg, never `extLegDialExten`**, which for this
+  shape is the endpoint name and would dead-end the redirect. **No API change**
+  (`fallbackExten` already carries the invite's extension and pins which wake
+  leg when several ring; ambiguity fails closed).
+- ⛔⛔ **THE ANSWERED-GRACE IS LOAD-BEARING — never remove it.** Before ANY
+  Mode-B redirect past a still-live extension leg, telephony waits
+  `modeBAnswerGraceMs` (2.5 s) for a normal SIP 200 — a device answering the
+  ordinary way (measured 300 ms–2.6 s) must never have its live INVITE torn
+  down by a redirect racing its own answer; `extensionAnsweredAt` flipping
+  during the grace stands the redirect down (`answered_during_grace`).
+  ⛔ **Every historical Mode-B protection is unchanged and test-pinned**:
+  `invite_accept` only (the 2026-06-28 revert), fresh-contact-not-dialed only,
+  one-shot per call, `extensionAnsweredAt` dominates, ring-group/queue trunk
+  positions excluded (the RSBK loop stays impossible — the wake shape also
+  requires the trunk's own Dial position to be `*local-dialing*`).
+- ✅ **Proven: 12 tests (`wakeLegRedelivery.test.ts`) driving the real service
+  against the real CallStateStore/registry, rebuilt from the production call's
+  own DialBegin shapes; 3 of 12 FAIL replayed against `HEAD`** (the rescue, the
+  grace, the one-shot) while every safety test passes on both trees. Suite
+  225/228 (the 3 documented smarthome `JWT_SECRET` artifacts — and
+  `requeueTestEnv.ts`'s seed was lengthened to ≥32 chars, which is why it is no
+  longer 4); typecheck 41 = the exact baseline. Container-verified: clone at
+  `dc12d3c5`, `resolveWakeDialLeg` + `answered_during_grace` grepped in the
+  running container's **src** (telephony runs from src via tsx), 0 restarts,
+  AMI/ARI reconnected, 0 error lines, deployed at 0 active calls.
+- ⏳ **NOT PROVEN: no real call has exercised the rescue.** Acceptance is the
+  next inbound call he answers on the iPhone from a sleeping state — check
+  `docker logs app-telephony-1 | grep -a "AMI mobile invite requeue sent" | grep wake_leg`;
+  the negatives that matter: `answered_during_grace` rows when a desk/app
+  answers normally, and NO `wake_leg` redirect ever on a ring-group call.
+  ⏳ Registration-triggered join (INVITE the phone the moment it re-registers,
+  before any tap — native ring instead of tap-and-wait) is designed, NOT built.
+  Still worth doing regardless: **sign out one of his two iPhones** (they fight
+  each other for AOR slots and both got pushed on every call).
 - ⚠ **Noticed, NOT touched:** the desk phone `T31_103` holds a contact at
   **159.89.179.105 — DigitalOcean**, which is odd for a desk phone and worth one
   question.
