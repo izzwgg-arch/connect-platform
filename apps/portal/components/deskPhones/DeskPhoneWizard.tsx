@@ -23,6 +23,7 @@ import { classifyDiscoveredHosts, shouldFingerprint, deviceKindFor, describeKind
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
+import { getRecordingToken } from "../../services/recordingPlayback";
 import "./deskPhones.css";
 
 type CustomerPhone = {
@@ -57,11 +58,27 @@ function desktop(): any | null {
   return (window as any).connectDesktop ?? null;
 }
 
-/** ⛔ The photo comes from the PBX's own product images, filed under the model name. */
+/** ⛔ The photo comes from the PBX's own product images, filed under the model name.
+ * ⛔⛔ The token rides the QUERY STRING because an <img> sends no Authorization
+ * header — without it every photo request was refused and the pictures never
+ * showed (found live at A plus center, 2026-08-25). The api's global preHandler
+ * copies ?token= into Authorization; this is the recordings player's exact
+ * pattern (getRecordingToken + ?token=). */
 function photoFor(model: string | null): string | null {
   const m = String(model ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!m) return null;
-  return `/api/desk-phones/photo/${encodeURIComponent(m)}`;
+  const token = getRecordingToken();
+  const base = `/api/desk-phones/photo/${encodeURIComponent(m)}`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+}
+
+/** The handset photo with an HONEST fallback: a model the PBX has no picture
+ * for (Fanvil i-series, for one) gets the glyph, never a broken-image icon. */
+function PhonePhoto({ model, alt }: { model: string | null; alt?: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = photoFor(model);
+  if (!src || failed) return <PhoneGlyph />;
+  return <img src={src} alt={alt ?? ""} onError={() => setFailed(true)} />;
 }
 
 /**
@@ -524,9 +541,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 {phones.map((p) => (
                   <div key={p.id} className="dps-prow dps-found">
                     <div className="dps-pimg">
-                      {photoFor(p.model)
-                        ? <img src={photoFor(p.model)!} alt={p.model ? `${p.vendor ?? ""} ${p.model}`.trim() : "Desk phone"} />
-                        : <PhoneGlyph />}
+                      <PhonePhoto model={p.model} alt={p.model ? `${p.vendor ?? ""} ${p.model}`.trim() : "Desk phone"} />
                     </div>
                     <div className="dps-pmeta">
                       {/* The person's name leads when the phone system already knows
@@ -565,7 +580,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                     <div className="dps-plist" style={{ marginTop: 8 }}>
                       {knownElsewhere.map((k) => (
                         <div key={k.mac} className="dps-prow dps-known-row">
-                          <div className="dps-pimg">{photoFor(k.model) ? <img src={photoFor(k.model)!} alt="" /> : <PhoneGlyph />}</div>
+                          <div className="dps-pimg"><PhonePhoto model={k.model} /></div>
                           <div className="dps-pmeta">
                             <b>{k.name || [k.vendor, k.model].filter(Boolean).join(" ") || "Phone"}</b>
                             <span>{[k.vendor, k.model].filter(Boolean).join(" ") || "Already set up"}</span>
@@ -664,7 +679,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         aria-label={`Clear ${p.displayName || p.model || "this device"}`}
                       />
                       <div className="dps-pimg">
-                        {photoFor(p.model) ? <img src={photoFor(p.model)!} alt="" /> : <PhoneGlyph />}
+                        <PhonePhoto model={p.model} />
                       </div>
                       <div className="dps-pmeta">
                         <b>{p.displayName ? `${p.displayName}${p.extNumber ? ` — ${p.extNumber}` : ""}` : (p.model ?? "Device")}</b>
@@ -750,7 +765,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               {phones.map((p) => (
                 <div key={p.id} className="dps-prow">
                   <div className="dps-pimg">
-                    {photoFor(p.model) ? <img src={photoFor(p.model)!} alt="" /> : <PhoneGlyph />}
+                    <PhonePhoto model={p.model} />
                   </div>
                   <div className="dps-pmeta">
                     <b>{p.displayName ? `${p.displayName} — ${p.extNumber}` : (p.model ?? "Desk phone")}</b>

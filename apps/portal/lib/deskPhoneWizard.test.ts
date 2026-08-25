@@ -125,8 +125,17 @@ test("every drawing has an accessible label", () => {
 });
 
 test("the phone photo falls back to a drawing rather than a broken image", () => {
-  assert.match(WIZARD, /photoFor\(p\.model\)\s*\n?\s*\?\s*<img/);
-  assert.match(WIZARD, /:\s*<PhoneGlyph\s*\/>/);
+  // 2026-08-25: strengthened from a render-time ternary to a real onError
+  // fallback — a photo URL that EXISTS but is refused or missing must also end
+  // as the drawing, never a broken-image icon (the live failure was exactly
+  // that: the <img> carried no token, every request was refused).
+  assert.match(WIZARD, /function PhonePhoto\(/);
+  assert.match(WIZARD, /onError=\{\(\) => setFailed\(true\)\}/);
+  assert.match(WIZARD, /return <PhoneGlyph \/>;/);
+  // ⛔ No render site may bypass the component with a bare img on photoFor.
+  assert.doesNotMatch(WIZARD, /<img src=\{photoFor/);
+  // ⛔ The token must ride the photo URL — an <img> sends no Authorization.
+  assert.match(WIZARD, /\?token=\$\{encodeURIComponent\(token\)\}/);
 });
 
 test("a missing desktop app is explained rather than shown as an empty list", () => {
