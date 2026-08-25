@@ -1176,10 +1176,13 @@ than the one asked are discarded), `sipOptionsProbe` (never throws).
 
 ### State
 
-Desktop **0.1.15 BUILT AND VERIFIED** (`Connect-Setup-0.1.15.exe`, icon guard
-OK, `sipOptionsProbe`/the OPTIONS branch/“Loopcom Setup” all grepped in the
-packed asar) — ⛔ **NOT PUBLISHED; publishing auto-updates the fleet and waits
-for Izzy's word.** The scanner lives in the INSTALLED app: the office gets the
+Desktop **0.1.15 PUBLISHED (Izzy: "Publish it.", 2026-08-25 19:27Z)** —
+uploaded to `/opt/connectcomms/desktop/`, `Connect-Setup-latest.exe` promoted,
+sha256 `f864a68b…` identical local ↔ server ↔ alias, `latest.yml` reads
+0.1.15 and the exe serves 200 at full size on BOTH hostnames. Fleet installs
+≥0.1.4 auto-update within ~3h or via the in-app "New Update — Install".
+(Built + verified first: icon guard OK, `sipOptionsProbe`/the OPTIONS
+branch/“Loopcom Setup” all grepped in the packed asar.) The scanner lives in the INSTALLED app: the office gets the
 new sweep only after publish + the app's own "New Update — Install" click.
 Proven: desktop **99** (12 new), shared **95**, typechecks 0/0. ⏳ NOT PROVEN:
 no real office has run the new sweep — acceptance is Izzy's next scan at

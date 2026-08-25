@@ -1985,7 +1985,7 @@ to do everything in his power to get every single phone connected."*
   ⛔ ONE naming rule — `identityFromBanner` — serves both paths, and
   `shouldFingerprint` treats answering SIP as better evidence than any OUI
   block. ⛔ The wizard KEEPS a scan-provided identity — it used to null it.
-- ⛔⛔ **Desktop 0.1.15 is BUILT AND VERIFIED, NOT PUBLISHED** (installer +
+- ✅✅ **Desktop 0.1.15 is PUBLISHED (Izzy: "Publish it.", 2026-08-25)** — latest.yml reads 0.1.15 on both hostnames, sha256-verified alias; fleet auto-updates. **Was:** (installer +
   icon guard OK, the probe grepped in the packed asar) — publishing
   auto-updates the fleet and waits for Izzy's word, and the scanner lives in
   the INSTALLED app, so the office only gets the new sweep after publish + the
