@@ -71,6 +71,71 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — the supermarket DELIVERY TRACKING system: server side complete and LIVE-BUT-INERT in prod; the DRIVER APP FLOW IS UNREACHABLE (2026-08-25) — READ FIRST before answering "where is the tracking system at", before touching apps/api/src/delivery, or before restoring the driver launcher
+
+(**Read-only status investigation 2026-08-25 — no code, no deploy, no data change.**
+Built 2026-07-23 in one day by Ezra as `feature/supermarket-delivery-tracking`,
+merged to main as `5419bdd2`; feature docs live BESIDE the code —
+`apps/api/src/delivery/DELIVERY_PR.md` / `DELIVERY_RUNBOOK.md` /
+`DELIVERY_DEPLOY.md`, `apps/mobile/DELIVERY_APK_HANDOFF.md` — there was no
+ai-context handoff until this section. Customer = Gesheft (the supermarket);
+their IVR ext 898 "Order Tracking" is the manual process this replaces.)
+
+- ✅ **THE DOCS' "not migrated / not deployed" IS STALE — verified live 2026-08-25:
+  all 21 Delivery*/Driver*/TrackingToken tables EXIST in the prod DB, the routes
+  are in `app-api-1` (`registerDeliveryRoutes`, `server.ts:42319`), the public
+  page answers** (`GET /api/track/bad-token` → `{"state":"invalid"}`), **and the
+  worker container runs both delivery jobs** (`deliveryEtaJob` 30s /
+  `deliveryRetentionJob` 6h — silent no-ops at zero rows). The runbook's
+  "remaining wiring" list is also done in code: worker crons registered, driver
+  screens + `DeliveryNavigator` registered (`RootNavigator.tsx:419`),
+  `expo-battery` installed (came with the SDK 54 upgrade; the old tsc error is
+  gone — mobile typecheck is 0).
+- ⛔ **INERT BY CONFIGURATION, not by absence: 0 `DeliveryTenantSettings` rows,
+  0 orders, 0 drivers, and ALL FOUR env vars unset in prod**
+  (`DELIVERY_ORDER_SOURCE_SECRET` — so all five `/internal/delivery/*` doors
+  refuse; `PUBLIC_TRACKING_BASE_URL`; `DELIVERY_SMS_LIVE`;
+  `DELIVERY_GEOCODER_URL`). No human has ever exercised any of it.
+- ⛔⛔ **THE DRIVER FLOW IS UNREACHABLE IN THE SHIPPED APP.** Nothing navigates
+  to the `"Delivery"` route — the Settings → "Delivery driver" launcher added by
+  `5c95f86c` was **deliberately removed** in `d42cd0bf` (2026-07-28; that
+  session's own notes record *"Removed the unrequested 'Delivery driver' row
+  from Settings"* — it showed for EVERY user, driver or not).
+  `DELIVERY_APK_HANDOFF.md:13` still documents the removed path. Restoring it
+  should gate on the user having a `DriverProfile`, not go back for everyone.
+- ⛔⛔ **LIVE GPS TRACKING IS DEAD CODE — the headline feature has no data
+  source.** `startTracking`/`stopTracking` (`trackingService.ts:70/:90`) are
+  called by NOTHING: `deliveryClient.ts` has no tracking start/end functions,
+  `RunsScreen` has no "start run" action, so `/mobile/delivery/tracking/*` and
+  `/location` are never hit and the dispatcher live map + every ETA stay empty.
+  ⛔ And `ACCESS_FINE_LOCATION` + `FOREGROUND_SERVICE_LOCATION` were never added
+  to `app.config.ts`/the manifest — the foreground location service would fail
+  at runtime on Android 14+ even once wired.
+- ⛔ **SMS never sends even with `DELIVERY_SMS_LIVE=1`** — `smsService.ts` only
+  stamps rows QUEUED; the BullMQ enqueue was never written (deliberate: needs
+  carrier/compliance sign-off). Inbound STATUS/STOP/START parsing works but only
+  via the secret-gated test door, not the live VoIP.ms path. **Order intake is a
+  `MockOrderSourceAdapter`** — Phase 10 (Gesheft's real order API) is blocked on
+  the supermarket's docs. ETA is a haversine stub; geocoding is a noop without
+  `DELIVERY_GEOCODER_URL`; proof-of-delivery PIN is recorded but **never
+  validated server-side**; voice/IVR status is resolve-only (a PBX write it
+  never got). Dashboard `delayed`/`staleGps`/`notificationFailures` tiles
+  hardcode 0.
+- ✅ **What IS solid:** 44 api routes in `apps/api/src/delivery/` (61 files), 22
+  tenant-scoped Prisma models, 14 portal pages under `/tracking/*` + the public
+  `/track/[token]` page (JWT-bypassed, leak-free on bad tokens), full RBAC keys
+  in `portalPermissions.ts`, offline-queue driver client, 117 unit tests green
+  (re-run 2026-08-25). The 2026-08-17 audit's three delivery findings (scan
+  idempotency, tracking-session scoping, createDriver validation) are all fixed
+  in code. ⛔ The 9.22M-iteration stress harness `DELIVERY_PR.md` cites was
+  never committed — the claim is unreproducible.
+- ⏳ **Path to production (in order):** restore a gated driver launcher + wire
+  start/stop tracking + location permissions (= an APK build); set the two env
+  vars; enable a pilot tenant + store + driver per `DELIVERY_RUNBOOK.md` §4 and
+  smoke ingest → scan → `/track/<token>`; then the real decisions — Gesheft's
+  order-source integration (blocked on them), SMS go-live (compliance), a real
+  routing/geocoding provider, and PIN validation.
+
 ## ⛔⛔ AGENT HANDOFF — the IVR migration's red "Connect can't reproduce these" list is MOSTLY A FALSE ALARM, and the two-line real list hides DISA (2026-08-24) — READ FIRST before migrating ANY customer's IVR, before believing that dialog, or before decoding an `ombu_destinations` row
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_IVR_MIGRATION_RED_LIST_2026-08-24.md`**
