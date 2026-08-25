@@ -38,6 +38,13 @@ export type PbxProvisionedPhone = {
   description: string | null;
   model: string | null;
   brand: string | null;
+  /** The extension number this device's first SIP account belongs to, when the
+   * accounts join could resolve one. Null for un-accounted or unreadable rows. */
+  extension?: string | null;
+  /** The extension's NAME on the PBX — the person ("Mrs Weinstock"), which is
+   * what a customer screen should say. Null when unresolvable. Optional so the
+   * comparison fixtures and any structural caller stay valid. */
+  extensionName?: string | null;
 };
 
 export type ProvisionedPhonesResult =
@@ -59,6 +66,7 @@ export const PROVISIONING_GRANT_SQL =
   "GRANT SELECT ON `provisioning`.`devices` TO 'connect_read'@'%'; " +
   "GRANT SELECT ON `provisioning`.`phone_models` TO 'connect_read'@'%'; " +
   "GRANT SELECT ON `provisioning`.`brands` TO 'connect_read'@'%'; " +
+  "GRANT SELECT ON `provisioning`.`accounts` TO 'connect_read'@'%'; " +
   "FLUSH PRIVILEGES;";
 
 function normalizeMac(input: unknown): string | null {
@@ -102,11 +110,17 @@ export async function listPbxProvisionedPhones(
     const where = options.pbxTenant ? "WHERE d.tenant = ?" : "";
     const params = options.pbxTenant ? [options.pbxTenant] : [];
 
+    // ⛔ `phone_models` has NO `name` column — the model string lives in
+    // `pm.model`. The original select said `pm.name`, which threw
+    // "Unknown column" on EVERY call, was caught below, and reported the whole
+    // PBX as unreachable — a latent bug for the feature's entire life, found
+    // 2026-08-25 the first time a real customer run needed this data.
     const [rows] = (await conn.query(
-      `SELECT d.mac        AS mac,
+      `SELECT d.id         AS id,
+              d.mac        AS mac,
               d.tenant     AS tenant,
               d.description AS description,
-              pm.name      AS model,
+              pm.model     AS model,
               b.name       AS brand
          FROM provisioning.devices d
          LEFT JOIN provisioning.phone_models pm ON pm.id = d.model_id
@@ -116,12 +130,40 @@ export async function listPbxProvisionedPhones(
       params,
     )) as any;
 
+    // The person behind the phone: provisioning.accounts -> ombu_devices ->
+    // ombu_extensions. Separate query (a device can carry several accounts —
+    // W60P bases do) and best-effort: a failure here loses the NAMES, never the
+    // phone list itself.
+    const extByDevice = new Map<number, { extension: string; name: string }>();
+    try {
+      const ids = (rows as any[]).map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+      if (ids.length) {
+        const [accts] = (await conn.query(
+          `SELECT a.device_id AS phone_id, e.extension AS extension, e.name AS ext_name
+             FROM provisioning.accounts a
+             LEFT JOIN ombutel.ombu_devices od ON od.device_id = a.phone_device_id
+             LEFT JOIN ombutel.ombu_extensions e ON e.extension_id = od.extension_id
+            WHERE a.device_id IN (${ids.map(() => "?").join(",")})
+            ORDER BY a.id`,
+          ids,
+        )) as any;
+        for (const a of accts as any[]) {
+          const pid = Number(a.phone_id);
+          // First account wins — it is the phone's primary line.
+          if (!extByDevice.has(pid) && a.extension) {
+            extByDevice.set(pid, { extension: String(a.extension), name: String(a.ext_name ?? "") });
+          }
+        }
+      }
+    } catch { /* names are optional; the phone list is not */ }
+
     const phones: PbxProvisionedPhone[] = [];
     for (const row of rows as any[]) {
       const mac = normalizeMac(row.mac);
       // ⛔ A record with an unreadable MAC is REPORTED, not silently dropped —
       // it is one of the ways provisioning breaks, so hiding it would hide the
       // very thing this module exists to surface.
+      const acct = extByDevice.get(Number(row.id)) || null;
       phones.push({
         mac: mac ?? "",
         macRaw: String(row.mac ?? ""),
@@ -129,6 +171,8 @@ export async function listPbxProvisionedPhones(
         description: row.description ? String(row.description) : null,
         model: row.model ? String(row.model) : null,
         brand: row.brand ? String(row.brand) : null,
+        extension: acct?.extension || null,
+        extensionName: acct?.name || null,
       });
     }
     return { available: true, phones };

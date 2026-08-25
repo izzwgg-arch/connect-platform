@@ -277,8 +277,13 @@ async function chaosRun(seed: number, steps: number) {
             for (const p of out.phones) {
               assert.ok(CUSTOMER_WORDS.has(p.status), `bad status ${p.status} [seed=${seed} step=${step}]`);
               if (op === "read") {
-                // ⛔ the customer view must never carry the technical fields
-                assert.equal(p.mac, undefined, `mac leaked to the customer view [seed=${seed} step=${step}]`);
+                // ⛔ The customer view carries the MAC ON PURPOSE since 2026-08-25 —
+                // Izzy, testing live at A plus center: "mac addresses should all be
+                // displayed." It is the sticker under the handset. It must arrive
+                // FORMATTED (aa:bb:cc:dd:ee:ff), and the rest of the technical
+                // fields stay diagnostic-only.
+                assert.ok(typeof p.mac === "string" && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(p.mac),
+                  `customer view mac missing or unformatted: ${p.mac} [seed=${seed} step=${step}]`);
                 assert.equal(p.ip, undefined, `ip leaked [seed=${seed} step=${step}]`);
                 assert.equal(p.provisioningUrl, undefined, `provisioning url leaked [seed=${seed} step=${step}]`);
               }

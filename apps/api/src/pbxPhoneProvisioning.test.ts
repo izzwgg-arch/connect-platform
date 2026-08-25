@@ -165,3 +165,29 @@ test("⛔ the grant is the narrowest possible — SELECT only, three tables", ()
     assert.ok(PROVISIONING_GRANT_SQL.includes(`\`${table}\``), `${table} missing from the grant`);
   }
 });
+
+/* ── the column that does not exist (2026-08-25) ──────────────────────
+ *
+ * `provisioning.phone_models` has NO `name` column — the model string is
+ * `pm.model`. The original select said `pm.name`, which threw "Unknown column"
+ * on EVERY call, was caught by the error handler, and reported the whole PBX as
+ * unreachable. It shipped that way and was never noticed because nothing had
+ * ever consumed this data until the first real desk-phone customer run
+ * (A plus center, 2026-08-25). Verified against the live PBX:
+ * SHOW COLUMNS FROM provisioning.phone_models → id, brand_id, model, …
+ */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+test("the provisioning select reads pm.model — phone_models has no name column", () => {
+  const src = readFileSync(join(__dirname, "pbxPhoneProvisioning.ts"), "utf8").replace(/\r?\n/g, "\n");
+  // ⛔ Strip comments first: the doc block deliberately quotes the broken
+  // `pm.name`, and a naive substring match fails on the very comment that
+  // records why the guard exists (the documented trap, again).
+  const executable = src
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//") && !l.trim().startsWith("/*"))
+    .join("\n");
+  assert.ok(/pm\.model\s+AS model/.test(executable), "the model column must be pm.model");
+  assert.ok(!/pm\.name/.test(executable), "pm.name is not a column; selecting it kills every call");
+});

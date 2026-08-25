@@ -27,6 +27,11 @@ import "./deskPhones.css";
 
 type CustomerPhone = {
   id: string;
+  /** Formatted hardware address (aa:bb:cc:dd:ee:ff) — shown on every phone row
+   * since 2026-08-25 (Izzy, live at A plus center: "mac addresses should all be
+   * displayed"). It is the sticker under the handset, i.e. how a person tells
+   * two identical phones apart. */
+  mac: string | null;
   model: string | null;
   vendor: string | null;
   displayName: string | null;
@@ -92,6 +97,10 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [phoneNameHint, setPhoneNameHint] = useState("");
   const [connection, setConnection] = useState<"cable" | "wifi" | "unsure" | null>(null);
   const [othersCount, setOthersCount] = useState(0);
+  // Phones the phone system already runs for this customer that THIS network scan
+  // could not see (usually a separate phone network in the same building). Shown
+  // as context on the found screen so a short list never reads as lost phones.
+  const [knownElsewhere, setKnownElsewhere] = useState<Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }>>([]);
   const [needs, setNeeds] = useState<NeedsPerson[]>([]);
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
@@ -184,12 +193,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         model: h.fingerprint?.model ?? undefined,
         firmware: h.fingerprint?.firmware ?? undefined,
       }));
-      const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null }>(
+      const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null; knownElsewhere?: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }> }>(
         `/desk-phones/runs/${runId}/discovered`,
         { subnet: scan.scan?.subnet ?? undefined, phones: found },
       );
       setPhones(out.phones);
       setSubnet(out.subnet);
+      setKnownElsewhere(out.knownElsewhere ?? []);
       setStep("found");
     } catch {
       setError("Something went wrong while searching. Try again.");
@@ -513,8 +523,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         : <PhoneGlyph />}
                     </div>
                     <div className="dps-pmeta">
-                      <b>{[p.vendor, p.model].filter(Boolean).join(" ") || "Desk phone"}</b>
-                      <span>{describe(p.model)}</span>
+                      {/* The person's name leads when the phone system already knows
+                          whose phone this is; the hardware line always shows the MAC. */}
+                      <b>{p.displayName
+                        ? `${p.displayName}${p.extNumber ? ` — ext ${p.extNumber}` : ""}`
+                        : ([p.vendor, p.model].filter(Boolean).join(" ") || "Desk phone")}</b>
+                      <span>{p.displayName ? ([p.vendor, p.model].filter(Boolean).join(" ") || describe(p.model)) : describe(p.model)}</span>
+                      {p.mac && <span className="dps-mac">{p.mac}</span>}
                     </div>
                     {step === "match" ? (
                       <ConnectSelect
@@ -534,6 +549,28 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                     )}
                   </div>
                 ))}
+                {knownElsewhere.length > 0 && (
+                  <div className="dps-known">
+                    <p className="dps-hint" style={{ marginTop: 14 }}>
+                      Your phone system also has <b>{knownElsewhere.length}</b> {knownElsewhere.length === 1 ? "phone" : "phones"} already
+                      set up that we did not see on this network &mdash; they may be plugged into a different
+                      network in the building. They keep working as they are.
+                    </p>
+                    <div className="dps-plist" style={{ marginTop: 8 }}>
+                      {knownElsewhere.map((k) => (
+                        <div key={k.mac} className="dps-prow dps-known-row">
+                          <div className="dps-pimg">{photoFor(k.model) ? <img src={photoFor(k.model)!} alt="" /> : <PhoneGlyph />}</div>
+                          <div className="dps-pmeta">
+                            <b>{k.name || [k.vendor, k.model].filter(Boolean).join(" ") || "Phone"}</b>
+                            <span>{[k.vendor, k.model].filter(Boolean).join(" ") || "Already set up"}</span>
+                            <span className="dps-mac">{k.mac}</span>
+                          </div>
+                          <span className="dps-pill dps-pill-ok">Already set up</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {phones.length === 0 && (
                   <p className="dps-hint">
                     We did not find any desk phones on this office&rsquo;s network. Check they are switched on and
@@ -626,6 +663,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                       <div className="dps-pmeta">
                         <b>{p.displayName ? `${p.displayName}${p.extNumber ? ` — ${p.extNumber}` : ""}` : (p.model ?? "Device")}</b>
                         <span>{describe(p.model)}</span>
+                        {p.mac && <span className="dps-mac">{p.mac}</span>}
                       </div>
                       <span className="dps-hint">{clearTicks[p.id] !== false ? "Will be cleaned" : "Left alone"}</span>
                     </label>
@@ -711,6 +749,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <div className="dps-pmeta">
                     <b>{p.displayName ? `${p.displayName} — ${p.extNumber}` : (p.model ?? "Desk phone")}</b>
                     {p.note && <span>{p.note}</span>}
+                    {p.mac && <span className="dps-mac">{p.mac}</span>}
                   </div>
                   <span className={`dps-pill ${p.status === "Ready" ? "dps-pill-ok" : p.needsAttention ? "dps-pill-hm" : "dps-pill-br"}`}>
                     {p.status !== "Ready" && !p.needsAttention && <span className="dps-spin" style={{ marginRight: 5 }} />}

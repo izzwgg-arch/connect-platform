@@ -85,13 +85,14 @@ function routes() {
 
 let registered = new Set<string>();
 
-async function makeApp(user: any) {
+async function makeApp(user: any, extraDeps: Record<string, unknown> = {}) {
   const app = Fastify();
   app.addHook("preHandler", async (req: any) => { req.user = user; });
   await routes()(app as any, {
     audit: async (p: any) => { state.audits.push(p); },
     ourProvisioningHosts: () => ["loopcom.net", "m.connectcomunications.com"],
     isRegistered: async (_t: string, ext: string) => registered.has(ext),
+    ...extraDeps,
   });
   return app;
 }
@@ -490,4 +491,103 @@ test("the route module never reads a tenant from a request body", () => {
   // the one exception is the staff route, which takes a tenantId by design and is
   // role-gated; it reads it through a parsed schema rather than off req.body.
   assert.match(executable, /isSuper\(user\)/);
+});
+
+/* ── naming what was found (2026-08-25, the A plus center live run) ────────
+ *
+ * The first real customer run stored vendor "unknown" on all six devices — the
+ * fingerprint only knows a vendor when the phone's locked web page admits one,
+ * and nothing fell back to the hardware-address block that had ALREADY admitted
+ * the device into the list. And nothing named the phones: the MAC→PBX-record
+ * join did not exist. Izzy, live at the office: "it's not telling me the names
+ * of the phones either. mac addresses should all be displayed."
+ */
+
+test("a locked phone is still identified by its hardware address block", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  // No fingerprint vendor at all, and an explicit "unknown" — both must fall
+  // back to the OUI. A vendor the device itself admitted is never overridden.
+  const out = await discover(app, runId, [
+    { mac: "0C:38:3E:11:22:33" },
+    { mac: "80:5E:C0:AA:BB:CC", vendor: "unknown" },
+    { mac: "C0:74:AD:00:11:22", vendor: "grandstream" },
+  ]);
+  const vendors = out.phones.map((p: any) => p.vendor);
+  assert.deepEqual(vendors, ["fanvil", "yealink", "grandstream"]);
+});
+
+test("the customer view shows the formatted hardware address", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80-5e-0c-bd-13-5a" }]);
+  // ⛔ Deliberate since 2026-08-25 — the MAC is the sticker under the handset,
+  // the one identifier a person can check two identical phones against.
+  assert.equal(out.phones[0].mac, "80:5E:0C:BD:13:5A");
+});
+
+const APLUS_RECORDS = [
+  { mac: "805ec0c89b86", macRaw: "80:5E:C0:C8:9B:86", pbxTenant: 2, description: "102", model: "T42S", brand: "Yealink", extension: "102", extensionName: "Mrs Weinstock" },
+  { mac: "805ec0bf8c62", macRaw: "80:5E:C0:BF:8C:62", pbxTenant: 2, description: "101", model: "T53W", brand: "Yealink", extension: "101", extensionName: "Reception" },
+];
+
+test("the PBX's own record names the phone and fills the person", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisionedPhones: async (tenantId: string) => {
+      assert.equal(tenantId, "t_abc", "the lookup must be scoped to the caller's tenant");
+      return APLUS_RECORDS;
+    },
+  });
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80:5E:C0:C8:9B:86" }]);
+  const p = out.phones[0];
+  assert.equal(p.model, "T42S");
+  assert.equal(p.extNumber, "102");
+  // The Connect extension row for 102 exists (David Klein), so the assignment is
+  // made exactly as a human's click would make it — and the Connect display name
+  // wins over the PBX one, because it is what every other screen calls him.
+  assert.equal(p.displayName, "David Klein");
+  const row = state.phones.find((r: any) => r.macAddress === "805ec0c89b86");
+  assert.equal(row.extensionId, "e2");
+});
+
+test("a human's assignment is never overwritten by the record", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { provisionedPhones: async () => APLUS_RECORDS });
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:C0:C8:9B:86" }]);
+  const row = state.phones.find((r: any) => r.macAddress === "805ec0c89b86");
+  // The person re-points the phone at Reception…
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${row.id}/assign`, payload: { extensionId: "e1" } });
+  // …and a re-scan must not drag it back to what the PBX record says.
+  await discover(app, runId, [{ mac: "80:5E:C0:C8:9B:86" }]);
+  assert.equal(row.extensionId, "e1");
+  assert.equal(row.extNumber, "101");
+});
+
+test("phones the system already runs that the scan could not see are reported, never invented as rows", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { provisionedPhones: async () => APLUS_RECORDS });
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80:5E:C0:C8:9B:86" }]);
+  // ⛔ Context only: the six-phone result in a thirteen-phone office must read as
+  // "here is where we looked", never as lost phones — and never as new work items.
+  assert.equal(out.phones.length, 1);
+  assert.equal(out.knownElsewhere.length, 1);
+  assert.equal(out.knownElsewhere[0].mac, "80:5E:C0:BF:8C:62");
+  assert.equal(out.knownElsewhere[0].name, "Reception");
+  assert.equal(state.phones.length, 1, "an unseen record must not become a phone row");
+});
+
+test("a PBX that cannot be read costs the names, never the discovery", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { provisionedPhones: async () => { throw new Error("pbx down"); } });
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "80:5E:C0:C8:9B:86" }]);
+  assert.equal(out.ok, true);
+  assert.equal(out.phones.length, 1);
+  assert.deepEqual(out.knownElsewhere, []);
 });

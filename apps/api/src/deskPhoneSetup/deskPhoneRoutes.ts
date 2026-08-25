@@ -18,10 +18,11 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { userHasActionPermission } from "../permissionGates";
 import {
-  buildButtonLayout, serializeButtonLayout, customerStateFor, decideReset, isTerminal,
-  nextEscalation, normalizeMac, sanitizeDeviceText, summarizeRun,
-  type PhoneCondition, type PhoneState,
+  buildButtonLayout, serializeButtonLayout, customerStateFor, decideReset, formatMac,
+  guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
+  summarizeRun, type PhoneCondition, type PhoneState,
 } from "@connect/shared";
+import { listPbxProvisionedPhones, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -37,7 +38,36 @@ export type DeskPhoneDeps = {
   isRegistered?: (tenantId: string, extNumber: string) => Promise<boolean>;
   /** Where the PBX serves its installed handset photos, or null when unknown. */
   phoneImageBase?: () => string | null;
+  /**
+   * The tenant's phones AS THE PBX HAS THEM RECORDED (mac -> model + the person's
+   * name), used to NAME what the scan found and to list the phones the system
+   * already runs that the scan could not see. Optional and injectable for tests;
+   * when absent the in-module default reads the PBX's provisioning records
+   * through the read-only connect_read user. ⛔ Best-effort EVERYWHERE it is
+   * consumed — a PBX that cannot be read must never fail a discovery ingest.
+   */
+  provisionedPhones?: (tenantId: string) => Promise<PbxProvisionedPhone[]>;
 };
+
+/**
+ * Default provisionedPhones: Connect tenant -> TenantPbxLink -> PbxInstance ->
+ * provisioning.devices (the lan-phones comparison's exact resolution chain).
+ * Returns [] on ANY failure — names are decoration on this path, the phone list
+ * is the feature.
+ */
+async function defaultProvisionedPhones(tenantId: string): Promise<PbxProvisionedPhone[]> {
+  try {
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
+    if (!link?.pbxInstanceId) return [];
+    const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
+    const pbxTenant = Number((link as any).pbxTenantCode || (link as any).pbxTenantId || 0) || undefined;
+    if (!pbxTenant) return [];
+    const out = await listPbxProvisionedPhones((instance as any)?.ombuMysqlUrlEncrypted, { pbxTenant });
+    return out.available ? out.phones : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * ⛔⛔ ONE PLACE DECIDES WHETHER A PERSON MAY DO THIS, AND IT IS NOT THE ROUTE
@@ -106,6 +136,12 @@ const isSuper = (user: JwtUser) => String(user?.role || "").toUpperCase() === "S
 function customerPhoneView(row: any) {
   return {
     id: row.id,
+    // ⛔ The MAC is DELIBERATELY in the customer view since 2026-08-25 — Izzy,
+    // testing live at A plus center: "mac addresses should all be displayed."
+    // It is the one identifier printed on the sticker under the handset, so it is
+    // how a person tells two identical phones apart. The rest of the technical
+    // fields (ip, state, provisioningUrl…) stay diagnostic-only.
+    mac: row.macAddress ? formatMac(String(row.macAddress)) : null,
     model: row.model || null,
     vendor: row.vendor || null,
     displayName: row.displayName || null,
@@ -205,9 +241,18 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       // the list that is guaranteed to look broken forever.
       if (!mac) { dropped += 1; continue; }
       const existing = await db.deskPhoneSetupPhone.findFirst({ where: { runId: run.id, macAddress: mac } });
+      // ⛔ The office machine's fingerprint only knows the vendor when the phone's
+      // web page admitted it — a locked phone says nothing, and on the first real
+      // customer run (A plus center, 2026-08-25) all six devices stored vendor
+      // "unknown" while their hardware addresses had ALREADY identified them (it
+      // is the very evidence the discovery filter admitted them on). The MAC
+      // block is the fallback, here at the ingest so every submit path gets it.
+      const claimedVendor = p.vendor && p.vendor.toLowerCase() !== "unknown" ? p.vendor : null;
+      const ouiVendor = guessVendorFromMac(mac).vendor;
+      const vendor = claimedVendor ?? (ouiVendor !== "unknown" ? ouiVendor : null);
       const facts = {
         ipAddress: p.ip ? sanitizeDeviceText(p.ip, 64) : null,
-        vendor: p.vendor ? sanitizeDeviceText(p.vendor, 80) : null,
+        vendor: vendor ? sanitizeDeviceText(vendor, 80) : null,
         model: p.model ? sanitizeDeviceText(p.model, 120) : null,
         firmware: p.firmware ? sanitizeDeviceText(p.firmware, 120) : null,
         provisioningUrl: p.provisioningUrl ? sanitizeDeviceText(p.provisioningUrl, 500) : null,
@@ -232,6 +277,65 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       data: { subnet: parsed.data.subnet || run.subnet },
     });
 
+    // ── Name what we found, and be honest about what we did not ────────────
+    // The PBX's provisioning records are the ground truth of "this hardware IS
+    // extension N" — the MAC on the record is exactly what the config file is
+    // named after. Matching on it names the phone with the person's own name and
+    // fills the model (which is also what puts the handset PHOTO on screen).
+    // ⛔ Best-effort, never blocking: a PBX that cannot be read costs the names,
+    // never the discovery. ⛔ A row a human already assigned (extensionId set) is
+    // never overwritten — the person's explicit choice beats the record.
+    let knownElsewhere: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null }> = [];
+    try {
+      const lookup = deps.provisionedPhones ?? defaultProvisionedPhones;
+      const recorded = await lookup(user.tenantId);
+      if (recorded.length) {
+        const byMac = new Map(recorded.filter((r) => r.mac).map((r) => [r.mac, r]));
+        const rows = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id } });
+        const seen = new Set<string>();
+        for (const row of rows) {
+          seen.add(String(row.macAddress));
+          const rec = byMac.get(String(row.macAddress));
+          if (!rec) continue;
+          const patch: Record<string, unknown> = {};
+          if (!row.model && rec.model) patch.model = sanitizeDeviceText(rec.model, 120);
+          if ((!row.vendor || row.vendor === "unknown") && rec.brand) {
+            patch.vendor = sanitizeDeviceText(rec.brand.toLowerCase(), 80);
+          }
+          if (!row.extensionId && !row.extNumber) {
+            const extNumber = rec.extension || (rec.description && /^\d{2,6}$/.test(rec.description) ? rec.description : null);
+            const name = rec.extensionName || rec.description || null;
+            if (extNumber) patch.extNumber = sanitizeDeviceText(extNumber, 16);
+            if (name) patch.displayName = sanitizeDeviceText(name, 120);
+            // The Connect extension row, when exactly this number exists for this
+            // customer — the same write a human's assign click makes, sourced from
+            // the record that provisioned the phone in the first place.
+            if (extNumber) {
+              const ext = await db.extension.findFirst({ where: { tenantId: user.tenantId, extNumber } });
+              if (ext) {
+                patch.extensionId = ext.id;
+                if (ext.displayName) patch.displayName = sanitizeDeviceText(ext.displayName, 120);
+              }
+            }
+          }
+          if (Object.keys(patch).length) {
+            await db.deskPhoneSetupPhone.update({ where: { id: row.id }, data: patch });
+          }
+        }
+        // The phones the system ALREADY RUNS that this scan could not see — on a
+        // different network in the building, usually. Without this list a six-phone
+        // result in a thirteen-phone office reads as "the wizard lost my phones".
+        knownElsewhere = recorded
+          .filter((r) => r.mac && !seen.has(r.mac))
+          .map((r) => ({
+            mac: formatMac(r.mac),
+            model: r.model,
+            vendor: r.brand ? r.brand.toLowerCase() : null,
+            name: r.extensionName || r.description || null,
+          }));
+      }
+    } catch { /* names and context are decoration; discovery already succeeded */ }
+
     const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
     return reply.send({
       ok: true,
@@ -241,6 +345,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       dropped,
       stored,
       phones: phones.map(customerPhoneView),
+      knownElsewhere,
     });
   });
 
