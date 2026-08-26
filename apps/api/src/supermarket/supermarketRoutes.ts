@@ -34,7 +34,7 @@ import { approveAndSubmitDraft, sanitizeDraftItems } from "./orderSubmit";
 import { runPayIvrStep } from "./payIvrRuntime";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
-import { PosApiError, posPhoneDigits } from "./posWithLogic";
+import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 
 export type SupermarketRouteDeps = {
@@ -107,6 +107,8 @@ const draftPatchSchema = z.object({
   comments: z.string().max(1000).optional(),
   notes: z.string().max(2000).optional(),
   orderMethod: z.enum(["Pickup", "Delivery"]).optional(),
+  /** The account IS the phone number (Izzy) — 7 digits get the 845 area code. */
+  customerPhone: z.string().max(24).optional(),
 });
 
 const draftApproveSchema = z.object({
@@ -427,6 +429,25 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
           localAudioPath,
           voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
         });
+        // the customer SPOKE their account number → re-run the POS lookup on it
+        let customerFields: any = {};
+        if (content.statedPhone) {
+          customerFields.customerPhone = content.statedPhone;
+          try {
+            const client = await posClientForTenant(db, tenant.id);
+            if (client) {
+              const body: any = await client.getCustomerByPhone(posPhoneDigits(content.statedPhone) ?? content.statedPhone);
+              const ext = extractPosCustomer(body);
+              if (ext?.posCustomerId) {
+                customerFields.posCustomerId = ext.posCustomerId;
+                if (ext.name) customerFields.customerName = ext.name;
+                customerFields.customerInfo = ext;
+              }
+            }
+          } catch {
+            /* best-effort — an unreachable register costs the name, never the reprocess */
+          }
+        }
         await db.supermarketOrderDraft.update({
           where: { id: draft.id },
           data: {
@@ -436,6 +457,11 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
             agentItems: content.items,
             comments: content.comments,
             notes: content.notes,
+            // ⛔ "not every message is an order... It's not supposed to be a
+            // draft" (Izzy) — the brain's non-order verdict clears it off the
+            // review queue, reason preserved in notes.
+            ...(content.notAnOrder ? { status: "DISMISSED" } : {}),
+            ...customerFields,
           },
         });
         results.push({
@@ -444,6 +470,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
           engine: content.engine,
           items: content.items.length,
           translated: Boolean(content.translation),
+          notAnOrder: content.notAnOrder ?? undefined,
         });
       } catch (err: any) {
         results.push({ id: draft.id, ok: false, error: String(err?.message ?? err).slice(0, 200) });
@@ -541,6 +568,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         customerName: true,
         customerPhone: true,
         posCustomerId: true,
+        customerInfo: true,
         items: true,
         comments: true,
         notes: true,
@@ -598,6 +626,31 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     if (parsed.data.comments !== undefined) data.comments = parsed.data.comments;
     if (parsed.data.notes !== undefined) data.notes = parsed.data.notes;
     if (parsed.data.orderMethod !== undefined) data.orderMethod = parsed.data.orderMethod;
+    if (parsed.data.customerPhone !== undefined) {
+      const phone10 = posPhoneDigits(parsed.data.customerPhone);
+      if (!phone10) {
+        return reply.status(400).send({ error: "bad_phone", message: "That doesn't look like a phone number — 7 or 10 digits." });
+      }
+      data.customerPhone = phone10;
+      // the phone IS the account: look the customer up on the register and
+      // bring in EVERYTHING the record holds (name, address, email).
+      data.posCustomerId = null;
+      data.customerInfo = null;
+      try {
+        const client = await clientFor(db, tenantOf(req));
+        if (client) {
+          const body: any = await client.getCustomerByPhone(phone10);
+          const ext = extractPosCustomer(body);
+          if (ext?.posCustomerId) {
+            data.posCustomerId = ext.posCustomerId;
+            if (ext.name) data.customerName = ext.name;
+            data.customerInfo = ext;
+          }
+        }
+      } catch {
+        /* best-effort — an unreachable register costs the lookup, never the save */
+      }
+    }
     const updated = await db.supermarketOrderDraft.update({ where: { id: draft.id }, data });
     return reply.send({ draft: updated });
   });

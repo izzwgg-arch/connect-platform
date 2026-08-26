@@ -26,6 +26,7 @@
  */
 
 import { resolveIntegrationKey } from "./integrationCredentials";
+import { posPhoneDigits } from "./posWithLogic";
 import { detectWic, WIC_COMMENT, type DraftItem } from "./draftMatcher";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -39,6 +40,10 @@ export type BrainResult = {
   comments: string[];
   notes: string[];
   model: string;
+  /** Set when the message is NOT an order (a complaint, a question, chatter). */
+  notAnOrder?: { reason: string };
+  /** The account phone the customer STATED (10 digits, 845-defaulted), if any. */
+  customerPhone?: string;
 };
 
 type ExtractedLine = { phrase: string; qty: number; constraints: string };
@@ -75,8 +80,11 @@ async function openaiJson(apiKey: string, model: string, system: string, user: s
   }
 }
 
-const EXTRACT_SYSTEM = `You turn a grocery phone-order (voicemail transcript or text message, already in English) into a structured shopping list for a kosher supermarket in Kiryas Joel. Output STRICT JSON:
-{"lines":[{"phrase":"<the item as asked for, normalized English>","qty":<integer 1-99>,"constraints":"<brand/size/substitution instructions for THIS item, or empty>"}],"remarks":["<anything that is not an item: delivery instructions, payment remarks, greetings worth keeping>"]}
+const EXTRACT_SYSTEM = `You read a customer message to a kosher supermarket in Kiryas Joel (voicemail transcript or text message, already in English).
+FIRST decide: is this actually a NEW grocery order — a request for the store to supply items? A complaint about a past delivery ("you sent me X instead of Y"), a thank-you, a question, delivery/payment chatter, or a confirmation is NOT an order. For a non-order output STRICT JSON: {"isOrder":false,"reason":"<one short sentence for the store rep, plain English>"} and nothing else.
+For a real order output STRICT JSON:
+{"isOrder":true,"customerPhone":"<the phone number the customer states for their account, digits only, or empty>","lines":[{"phrase":"<the item as asked for, normalized English>","qty":<integer 1-99>,"constraints":"<brand/size/substitution instructions for THIS item, or empty>"}],"remarks":["<anything that is not an item: delivery instructions, payment remarks, greetings worth keeping>"]}
+Customers identify their account by SPEAKING their phone number — always capture it when stated; seven digits is normal (the area code is implied).
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
 const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand; if no candidate honours the constraints, refuse the line. Output STRICT JSON:
@@ -150,7 +158,16 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
 
   // 1) EXTRACT
   const extracted = await llm(key.apiKey, model, EXTRACT_SYSTEM, text.slice(0, 6000), 4000);
-  if (!extracted || !Array.isArray(extracted.lines)) return null;
+  if (!extracted) return null;
+  // ⛔ Izzy, 2026-08-26 ("the agent needs to use common sense. It's not
+  // supposed to be a draft"): a complaint / question / chatter is NOT an
+  // order — say so and skip the resolve pass entirely.
+  if (extracted.isOrder === false) {
+    const reason = String(extracted.reason ?? "Not an order.").slice(0, 200);
+    return { items: [], comments: [], notes: [reason], model, notAnOrder: { reason } };
+  }
+  if (!Array.isArray(extracted.lines)) return null;
+  const statedPhone = posPhoneDigits(String(extracted.customerPhone ?? "")) ?? undefined;
   const lines: ExtractedLine[] = extracted.lines
     .slice(0, MAX_BRAIN_LINES)
     .map((l: any) => ({
@@ -163,7 +180,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     ? extracted.remarks.map((r: any) => String(r).slice(0, 240)).filter(Boolean).slice(0, 12)
     : [];
   if (lines.length === 0) {
-    return { items: [], comments: detectWic(text) ? [WIC_COMMENT] : [], notes: remarks, model };
+    return { items: [], comments: detectWic(text) ? [WIC_COMMENT] : [], notes: remarks, model, customerPhone: statedPhone };
   }
 
   // 2) candidates per line, from OUR catalog only
@@ -228,5 +245,5 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     }
   }
   const comments = detectWic(text) ? [WIC_COMMENT] : [];
-  return { items, comments, notes: notes.slice(0, 20), model };
+  return { items, comments, notes: notes.slice(0, 20), model, customerPhone: statedPhone };
 }

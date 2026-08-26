@@ -81,7 +81,50 @@ export function posPhoneDigits(input: string): string | null {
   const digits = String(input ?? "").replace(/\D/g, "");
   if (digits.length === 10) return digits;
   if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  // ⛔ Izzy, 2026-08-26: the account IS the phone number, "the area code is
+  // always 845" — customers routinely speak/type only seven digits.
+  if (digits.length === 7) return `845${digits}`;
   return null;
+}
+
+/**
+ * Everything the register knows about a customer, extracted defensively — the
+ * record's exact field names are unproven (⛔ Gesheft's key is scoped
+ * customer:get access-level "own" as of 2026-08-26, so no live record has ever
+ * been read; POS with Logic must raise it to "all" before lookups return).
+ * Izzy's rule: once the account is found, EVERYTHING comes into the order.
+ */
+export function extractPosCustomer(body: any): {
+  posCustomerId: string | null;
+  name: string;
+  phone: string;
+  address: string;
+  email: string;
+  raw: any;
+} | null {
+  if (!body || typeof body !== "object") return null;
+  const rec: any = Array.isArray((body as any).results) ? (body as any).results[0] : body;
+  if (!rec || typeof rec !== "object") return null;
+  const id = rec.id ?? rec.customerId ?? rec.customerID ?? null;
+  const name =
+    [rec.firstName, rec.lastName].filter(Boolean).join(" ") ||
+    String(rec.name ?? rec.fullName ?? "");
+  const street = String(rec.address ?? rec.address1 ?? rec.street ?? "");
+  const city = String(rec.city ?? "");
+  const state = String(rec.state ?? "");
+  const zip = String(rec.zip ?? rec.zipCode ?? rec.postalCode ?? "");
+  const address = [street, [city, state].filter(Boolean).join(" "), zip].filter(Boolean).join(", ");
+  const phone = String(rec.phoneNumber ?? rec.phone ?? rec.phone1 ?? "");
+  const email = String(rec.email ?? "");
+  if (!id && !name) return null;
+  let raw: any = null;
+  try {
+    const s = JSON.stringify(rec);
+    raw = s.length <= 4000 ? rec : null;
+  } catch {
+    raw = null;
+  }
+  return { posCustomerId: id != null ? String(id) : null, name: name.slice(0, 120), phone, address: address.slice(0, 300), email: email.slice(0, 200), raw };
 }
 
 /** A customer PIN their api accepts: 1–8 chars, no whitespace/control chars. */

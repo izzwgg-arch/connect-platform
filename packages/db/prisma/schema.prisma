@@ -8023,6 +8023,9 @@ model SupermarketOrderDraft {
   customerName  String    @default("")
   customerPhone String    @default("")
   posCustomerId String?
+  /// The register's whole customer record (name/address/email + raw) — "once
+  /// we find the account, it should bring in everything into the order".
+  customerInfo  Json?
   /// Verbatim source text (Yiddish transcript or the text message body).
   transcript    String    @default("")
   /// English translation when one exists; "" otherwise.

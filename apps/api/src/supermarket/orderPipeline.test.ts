@@ -197,6 +197,31 @@ test("brain returns null with no tenant OpenAI key", async () => {
   assert.equal(out, null);
 });
 
+test("a complaint is NOT an order — one LLM call, no resolve pass, reason kept", async () => {
+  let calls = 0;
+  const llm = async () => {
+    calls++;
+    return { isOrder: false, reason: "Complaint about a wrong delivery, not a new order." };
+  };
+  const out = await runOrderBrain({ db: fakeBrainDb(), llm: llm as any, keyResolver: fakeKey } as any, "t1", "you sent me the square tissues and lettuce instead of tomatoes");
+  assert.ok(out);
+  assert.equal(calls, 1, "the resolve pass must be skipped for a non-order");
+  assert.equal(out!.notAnOrder?.reason, "Complaint about a wrong delivery, not a new order.");
+  assert.equal(out!.items.length, 0);
+});
+
+test("the customer's SPOKEN phone number is captured, 845-defaulted at 7 digits", async () => {
+  let call = 0;
+  const llm = async () => {
+    call++;
+    if (call === 1) return { isOrder: true, customerPhone: "2815596", lines: [{ phrase: "corn cakes", qty: 1, constraints: "" }], remarks: [] };
+    return { picks: [], refused: [] };
+  };
+  const out = await runOrderBrain({ db: fakeBrainDb(), llm: llm as any, keyResolver: fakeKey } as any, "t1", "this is 281-5596, corn cakes please");
+  assert.ok(out);
+  assert.equal(out!.customerPhone, "8452815596");
+});
+
 // ── composeDraftContent glue ─────────────────────────────────────────────
 
 const INDEX_ENTRIES: CatalogEntry[] = CATALOG.map((c) => ({
@@ -281,7 +306,36 @@ test("the reprocess door only touches NEEDS_REVIEW drafts", () => {
   const s = src("supermarketRoutes.ts");
   const i = s.indexOf("/admin/integrations/reprocess-drafts");
   assert.ok(i > 0);
-  const block = s.slice(i, i + 3000);
+  const block = s.slice(i, i + 5000);
   assert.ok(block.includes('status: "NEEDS_REVIEW"'), "reprocess must filter NEEDS_REVIEW");
   assert.ok(!block.includes('"SUBMITTED"'), "reprocess must never name SUBMITTED");
+});
+
+test("a non-order verdict lands as DISMISSED — sweep create AND reprocess update", () => {
+  const sweep = src("draftBuilder.ts");
+  const dismissed = sweep.split('content.notAnOrder ? { status: "DISMISSED" }').length - 1;
+  assert.equal(dismissed, 2, "both sweep create blocks must auto-dismiss a non-order");
+  const routes = src("supermarketRoutes.ts");
+  const i = routes.indexOf("/admin/integrations/reprocess-drafts");
+  const block = routes.slice(i, i + 5000);
+  assert.ok(block.includes('content.notAnOrder ? { status: "DISMISSED" }'), "reprocess must clear a non-order off the review queue");
+});
+
+test("posPhoneDigits defaults a 7-digit number to area code 845", async () => {
+  const { posPhoneDigits } = await import("./posWithLogic");
+  assert.equal(posPhoneDigits("2815596"), "8452815596");
+  assert.equal(posPhoneDigits("845-281-5596"), "8452815596");
+  assert.equal(posPhoneDigits("+1 845 281 5596"), "8452815596");
+  assert.equal(posPhoneDigits("12345"), null);
+});
+
+test("extractPosCustomer pulls id, name, address and email from common shapes", async () => {
+  const { extractPosCustomer } = await import("./posWithLogic");
+  const ext = extractPosCustomer({ id: 771, firstName: "Chaim", lastName: "Stern", address1: "12 Forest Rd", city: "Monroe", state: "NY", zip: "10950", email: "cs@example.com", phoneNumber: "8452815596" });
+  assert.ok(ext);
+  assert.equal(ext!.posCustomerId, "771");
+  assert.equal(ext!.name, "Chaim Stern");
+  assert.equal(ext!.address, "12 Forest Rd, Monroe NY, 10950");
+  assert.equal(ext!.email, "cs@example.com");
+  assert.equal(extractPosCustomer({ foo: 1 }), null);
 });

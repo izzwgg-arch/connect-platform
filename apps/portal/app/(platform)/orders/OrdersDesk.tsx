@@ -46,6 +46,7 @@ export const SM_ORDERS_PHRASES = [
   "The order went through.", "Saved.",
   "This draft was already put through.",
   "Loading…", "This screen is switched off for your account.",
+  "Customer phone (845…)", "Looking up…", "No account with that number on the register.",
 ] as string[];
 
 type DraftRow = {
@@ -67,6 +68,8 @@ type DraftRow = {
   submittedAt: string | null;
   transcript?: string;
   translation?: string;
+  /** the register's whole customer record, when the phone matched an account */
+  customerInfo?: { name?: string; address?: string; email?: string; phone?: string } | null;
 };
 
 type DraftItem = {
@@ -332,6 +335,25 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // the account IS the phone number (Izzy) — 7 digits imply area code 845
+  const [phoneEdit, setPhoneEdit] = useState("");
+  const [phoneBusy, setPhoneBusy] = useState(false);
+
+  const lookupPhone = useCallback(async () => {
+    const typed = phoneEdit.trim();
+    if (!typed || !draft) return;
+    setPhoneBusy(true);
+    try {
+      const res = await apiPatch<{ draft: DraftRow }>(`/supermarket/drafts/${encodeURIComponent(draft.id)}`, { customerPhone: typed });
+      setDraft(res.draft);
+      setPhoneEdit(res.draft.customerPhone ?? "");
+      setError(null);
+    } catch (e) {
+      setError(errText(e, "That customer could not be looked up."));
+    } finally {
+      setPhoneBusy(false);
+    }
+  }, [phoneEdit, draft]);
 
   // ── the ONE quick-add box (mockup note 5) ────────────────────────────────
   const [q, setQ] = useState("");
@@ -350,6 +372,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
         setComments(res.draft.comments ?? "");
         setNotes(res.draft.notes ?? "");
         setOrderMethod(res.draft.orderMethod === "Delivery" ? "Delivery" : "Pickup");
+        setPhoneEdit(res.draft.customerPhone ?? "");
       } catch (e) {
         if (!dead) setError(errText(e, "The draft could not be loaded."));
       }
@@ -545,9 +568,39 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
         <div className="sm-card">
           <div className="sm-card-h">{t("Order draft — check & put through")}</div>
           <div className="sm-card-b">
-            <div className="sm-acct">
-              {draft.posCustomerId ? <b>Acct {draft.posCustomerId}</b> : <b>{draft.customerPhone || "—"}</b>}
-              {/WIC/i.test(comments) ? <span className="sm-pill sm-wic"><i />{t("WIC mentioned")}</span> : null}
+            <div className="sm-acct" style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div className="sm-fieldbox" style={{ maxWidth: 220, flexWrap: "nowrap" }}>
+                  <input
+                    value={phoneEdit}
+                    placeholder={t("Customer phone (845…)")}
+                    aria-label={t("Customer phone (845…)")}
+                    onChange={(e) => setPhoneEdit(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void lookupPhone();
+                      }
+                    }}
+                    onBlur={() => {
+                      if (phoneEdit.trim() && phoneEdit.trim() !== (draft.customerPhone ?? "")) void lookupPhone();
+                    }}
+                    disabled={phoneBusy || draft.status === "SUBMITTED"}
+                    style={{ flex: 1, minWidth: 0, background: "transparent", border: 0, outline: "none", color: "inherit", font: "inherit", fontWeight: 700 }}
+                  />
+                </div>
+                {phoneBusy ? <span className="sm-sku">{t("Looking up…")}</span> : draft.posCustomerId ? <b>Acct {draft.posCustomerId}</b> : null}
+                {/WIC/i.test(comments) ? <span className="sm-pill sm-wic"><i />{t("WIC mentioned")}</span> : null}
+              </div>
+              {draft.posCustomerId && (draft.customerName || draft.customerInfo) ? (
+                <div className="sm-sku" style={{ lineHeight: 1.5 }}>
+                  {draft.customerName ? <b style={{ color: "inherit" }}>{draft.customerName}</b> : null}
+                  {draft.customerInfo?.address ? <> · {draft.customerInfo.address}</> : null}
+                  {draft.customerInfo?.email ? <> · {draft.customerInfo.email}</> : null}
+                </div>
+              ) : !phoneBusy && phoneEdit && !draft.posCustomerId ? (
+                <div className="sm-sku">{t("No account with that number on the register.")}</div>
+              ) : null}
             </div>
 
             <table className="sm-items">

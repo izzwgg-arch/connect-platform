@@ -18,7 +18,7 @@
 
 import { buildCatalogIndex, matchDraftText, WIC_COMMENT, type CatalogEntry } from "./draftMatcher";
 import { posClientForTenant } from "./integrationCredentials";
-import { posPhoneDigits } from "./posWithLogic";
+import { extractPosCustomer, posPhoneDigits } from "./posWithLogic";
 import { prepareOrderText } from "./orderYiddish";
 import { runOrderBrain } from "./orderBrain";
 
@@ -56,6 +56,10 @@ export type DraftContent = {
   notes: string;
   /** honest provenance: "brain:<model>[+yl]" or "matcher[+yl]" */
   engine: string;
+  /** The brain judged this message NOT an order (complaint/question/chatter). */
+  notAnOrder?: string;
+  /** The account phone the customer STATED in the message (10 digits). */
+  statedPhone?: string;
 };
 
 /**
@@ -89,6 +93,8 @@ export async function composeDraftContent(
       comments: brainResult.comments.join("\n").slice(0, 1000),
       notes: [...prefixNotes, ...brainResult.notes].join("\n").slice(0, 2000),
       engine: `brain:${brainResult.model}${ylTag}`,
+      notAnOrder: brainResult.notAnOrder?.reason,
+      statedPhone: brainResult.customerPhone,
     };
   }
   // no tenant OpenAI key / brain failure → the regex matcher over the ENGLISH
@@ -131,21 +137,24 @@ export async function loadCatalogIndex(db: any, tenantId: string) {
   return buildCatalogIndex(entries);
 }
 
-async function lookupCustomer(
+export type PosCustomerHit = { posCustomerId: string | null; name: string; info: any | null };
+
+export async function lookupCustomer(
   client: any,
-  cache: Map<string, { posCustomerId: string | null; name: string }>,
+  cache: Map<string, PosCustomerHit>,
   phoneRaw: string,
-): Promise<{ posCustomerId: string | null; name: string }> {
+): Promise<PosCustomerHit> {
   const phone10 = posPhoneDigits(phoneRaw);
-  if (!phone10 || !client) return { posCustomerId: null, name: "" };
+  if (!phone10 || !client) return { posCustomerId: null, name: "", info: null };
   const hit = cache.get(phone10);
   if (hit) return hit;
-  let result: { posCustomerId: string | null; name: string } = { posCustomerId: null, name: "" };
+  let result: PosCustomerHit = { posCustomerId: null, name: "", info: null };
   try {
     const body: any = await client.getCustomerByPhone(phone10);
-    const id = body?.id ?? body?.customerId ?? null;
-    const name = [body?.firstName, body?.lastName].filter(Boolean).join(" ") || String(body?.name ?? "");
-    if (id) result = { posCustomerId: String(id), name: name.slice(0, 120) };
+    // "once we find the account, it should bring in everything" — the whole
+    // extracted record rides the draft, not just the id.
+    const ext = extractPosCustomer(body);
+    if (ext?.posCustomerId) result = { posCustomerId: ext.posCustomerId, name: ext.name, info: ext };
   } catch {
     // best-effort: an unreachable register costs the name, never the draft
   }
@@ -171,7 +180,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
   for (const tenant of tenants) {
     const index = await loadCatalogIndex(db, tenant.id);
     const client = await clientFor(db, tenant.id).catch(() => null);
-    const customerCache = new Map<string, { posCustomerId: string | null; name: string }>();
+    const customerCache = new Map<string, PosCustomerHit>();
 
     // ⛔ Exclude already-drafted sources IN THE QUERY, not just per-row. The
     // per-row dedupe alone stalls a busy store forever: with more than
@@ -221,16 +230,21 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
         localAudioPath: vm.localAudioPath,
         voicemailId: vm.id,
       });
-      const customer = await lookupCustomer(client, customerCache, String(vm.callerNumber ?? ""));
+      // ⛔ the account IS the phone number (Izzy) — the number the customer
+      // SPOKE in the message beats caller ID for the account lookup.
+      const accountPhone = content.statedPhone || String(vm.callerNumber ?? "");
+      const customer = await lookupCustomer(client, customerCache, accountPhone);
       try {
         await db.supermarketOrderDraft.create({
           data: {
             tenantId: tenant.id,
             sourceType: "voicemail",
             sourceId: vm.id,
+            ...(content.notAnOrder ? { status: "DISMISSED" } : {}),
             customerName: customer.name || String(vm.callerName ?? ""),
-            customerPhone: String(vm.callerNumber ?? ""),
+            customerPhone: accountPhone,
             posCustomerId: customer.posCustomerId,
+            ...(customer.info ? { customerInfo: customer.info } : {}),
             transcript: content.transcript,
             translation: content.translation,
             items: content.items,
@@ -279,7 +293,8 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
       if (existing) continue;
       const phone = String(msg.thread?.externalSmsE164 ?? "");
       const content = await composeDraftContent(deps, tenant.id, index, { kind: "text", text });
-      const customer = await lookupCustomer(client, customerCache, phone);
+      const accountPhone = content.statedPhone || phone;
+      const customer = await lookupCustomer(client, customerCache, accountPhone);
       try {
         await db.supermarketOrderDraft.create({
           data: {
@@ -287,9 +302,11 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             sourceType: "text",
             sourceId: msg.id,
             threadId: msg.threadId,
+            ...(content.notAnOrder ? { status: "DISMISSED" } : {}),
             customerName: customer.name || String(msg.thread?.title ?? ""),
-            customerPhone: phone,
+            customerPhone: accountPhone,
             posCustomerId: customer.posCustomerId,
+            ...(customer.info ? { customerInfo: customer.info } : {}),
             transcript: content.transcript,
             translation: content.translation,
             items: content.items,
