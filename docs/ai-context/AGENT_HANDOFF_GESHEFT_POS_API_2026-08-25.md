@@ -584,7 +584,7 @@ sustainable for our call volume.
   user → Start run asks for location and the dispatcher map moves. Needs the
   server side enabled (env + pilot tenant per DELIVERY_RUNBOOK §4) and a
   DriverProfile — none exist yet.
-### §15 — VOICE AGENT BUILT (telephony committed; api tested, awaiting the shared schema commit) — 2026-08-26
+### §15 — VOICE AGENT BUILT AND FULLY COMMITTED (awaiting deploy) — 2026-08-26
 
 Izzy: "Build it end to end. Do not stop until you have tested it and it is
 production-ready. After you test it, stress the fuck out of it." (This order
@@ -631,18 +631,29 @@ fallback (the default branch, never hangup — additive in front of today's flow
 - ✅ PBX dialplan + idempotent patch script committed (`scripts/pbx/
   connect-voice-agent.{conf,sh}`, LF-pinned). Deploy runbook + phone-free
   live-check script committed (`41b0ad3e`).
-- ⏳ API half (`apps/api/src/voiceAgent/*` + server.ts/jwtPublicRouteBypass
-  edits) WRITTEN + FULLY TESTED offline (25 tests incl. the 10k hostile-executor
-  stress; 0 typecheck errors in the files; all 6 Prisma accessors verified
-  against the generated client) but UNCOMMITTED — it depends on the fork's
-  migration `20260826020000_supermarket_mode` (which carries my VoiceAgentSettings
-  / VoiceAgentCall models + the OPENAI enum value). Commits after the fork's
-  schema lands; then rebase server.ts/bypass on top of theirs.
-- ⏳ NOT DONE: deploy (gated on the fork's api deploy carrying the migration),
-  VOICE_AGENT_ENABLED flip, the DOCKER-USER firewall rule, PBX dialplan install,
-  pilot-tenant enablement (Loopcom Demo T102), and the acceptance REAL CALL.
-- ⏳ Portal admin screen: coordinating ownership with the fork (their integration-
-  keys screen may host the OpenAI key; my api exposes GET/PUT /admin/voice-agent).
+- ✅ API half COMMITTED (`5856d4c8`): `apps/api/src/voiceAgent/*` (routes,
+  executor, catalog, policy) + server.ts registration + the test glob. The
+  fork's schema commit `8e224306` created my VoiceAgentSettings/VoiceAgentCall
+  tables + the OPENAI enum AND carried my 3 /internal/voice-agent bypass entries
+  + the admin.voice_agent nav wiring. 25 tests (incl. the 10k hostile-executor
+  stress); 0 typecheck errors in my files; all 6 Prisma accessors verified
+  against the generated client.
+- ✅ Portal admin page COMMITTED (`6f64c768` page/css + `1d2c5157` nav guard
+  test): standalone /admin/voice-agent (enable/voice/greeting/caps + readiness
+  card + call history). OpenAI key is entered on the fork's /admin/integrations
+  (one writer, one ProviderCredential row). SUPER_ADMIN-forced; portal 0 errors.
+- ✅ Telephony transcription model made env-tunable (`1d2c5157`,
+  VOICE_AGENT_TRANSCRIBE_MODEL). FULL VERIFICATION: telephony 41 typecheck +
+  37 tests, api 25 + 18 bypass, portal 0 + 9 nav — 71 tests, all green.
+- ⏳ NOT DONE (the deploy chain, all mine after the fork's api deploy): the api
+  deploy carries both halves + the migration (the fork enqueues it); then
+  VOICE_AGENT_ENABLED=1 + the DOCKER-USER firewall rule (loopcom), the telephony
+  deploy (in a 0-active-calls window, ⛔ never during the api rollout), the PBX
+  dialplan install (`scripts/pbx/patch-connect-voice-agent.sh`), pilot-tenant
+  enablement (Loopcom Demo T102: OpenAI key on /admin/integrations + settings +
+  catalog + DID→context + fallback dest), and the acceptance REAL CALL. Runbook:
+  `scripts/voice-agent-deploy-prep.md`; phone-free chain check:
+  `scripts/voice-agent-live-check.mjs`.
 
 ## Open questions for Gesheft (nobody has asked yet)
 
