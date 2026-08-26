@@ -403,6 +403,16 @@ enum SmsMessageStatus {
 enum IntegrationProvider {
   TWILIO
   VOIPMS
+  /// The supermarket register connection ("Tracking system" on the admin
+  /// screen — POS with Logic, api.poswithlogic.dev). Per-tenant x-api-key.
+  POS_TRACKING
+  /// Per-customer Sola merchant credentials (Phase 5 of the supermarket plan).
+  /// ⛔ The per-customer Sola lane must NEVER fall back to the platform's own
+  /// billing Sola key — a missing row refuses loudly (crm-modes directive).
+  SOLA
+  /// Per-tenant OpenAI key for the conversational voice agent (sibling
+  /// session's build — rides the same integrationCredentials vault).
+  OPENAI
 }
 
 enum SmsSendMode {
@@ -781,6 +791,12 @@ model Tenant {
   /// "EMAIL" | "SMS" | "EITHER" — which channels the code may go out on. SMS
   /// needs User.phone; a user with none is emailed even under "SMS".
   loginOtpChannel                 String                            @default("EITHER")
+  /// CRM mode (supermarket plan Phase 2). "classic" = every existing tenant,
+  /// byte-identical behaviour to before the mode existed. "supermarket" = the
+  /// supermarket cockpit (orders desk, drafts, pay-by-phone) — and the
+  /// cold-calling campaign surface is refused server-side for that tenant.
+  /// ⛔ Enforced on the SERVER on every gated path, never only hidden in menus.
+  crmMode                         String                            @default("classic")
   smsSubscriptionRequired         Boolean                           @default(true)
   smsBillingEnforced              Boolean                           @default(true)
   webrtcEnabled                   Boolean                           @default(false)
@@ -823,6 +839,14 @@ model Tenant {
   numbers                         PhoneNumber[]                     @relation("TenantOwnedNumbers")
   audits                          AuditLog[]
   providerCredentials             ProviderCredential[]
+  posCatalogItems                 PosCatalogItem[]
+  posCatalogSyncState             PosCatalogSyncState?
+  supermarketOrderDrafts          SupermarketOrderDraft[]
+  supermarketPhonePins            SupermarketPhonePin[]
+  supermarketPayCalls             SupermarketPayCall[]
+  supermarketSpecials             SupermarketSpecial[]
+  marketingUnsubscribes           MarketingUnsubscribe[]
+  supermarketSettings             SupermarketSettings?
   billingSolaConfig               BillingSolaConfig?
   whatsappProviderConfigs         WhatsAppProviderConfig[]
   whatsAppThreads                 WhatsAppThread[]
@@ -7919,4 +7943,256 @@ model ComplianceItem {
   updatedAt      DateTime  @updatedAt
 
   @@index([completedAt, dueDate])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supermarket mode (Gesheft plan, Phases 0–7 — 2026-08-26).
+// Every table here starts EMPTY and every switch defaults OFF, so deploying
+// this changes nothing for any existing customer until a tenant is put into
+// supermarket mode AND given a POS_TRACKING ProviderCredential row.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Synced copy of a supermarket tenant's register catalog (POS with Logic).
+/// Kept current by the credit-aware lastMod sweep — never queried live per
+/// keystroke; the Orders Desk quick-add searches THIS table.
+model PosCatalogItem {
+  id             String   @id @default(cuid())
+  tenantId       String
+  posProductId   String
+  /// Register item number — what a rep punches. "" when their record has none.
+  code           String   @default("")
+  name           String   @default("")
+  /// Shelf price in cents (their decimal price × 100).
+  priceCents     Int      @default(0)
+  /// ⛔ priceQty is a DIVISOR in their system: unit price = price ÷ priceQty.
+  priceQty       Float    @default(1)
+  unitPriceCents Int      @default(0)
+  isActive       Boolean  @default(true)
+  /// Their lastMod stamp, verbatim — the incremental-sync high-water anchor.
+  posLastMod     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, posProductId])
+  @@index([tenantId, code])
+  @@index([tenantId, isActive, name])
+}
+
+/// One row per supermarket tenant: catalog-sync cursor + credit accounting.
+model PosCatalogSyncState {
+  id           String    @id @default(cuid())
+  tenantId     String    @unique
+  /// High-water lastMod handed back to their api on the next sweep.
+  lastMod      String?
+  /// Mid-sync page cursor — non-null means a sweep stopped inside a page run
+  /// (credit budget) and the next run continues where it left off.
+  cursor       String?
+  lastSyncAt   DateTime?
+  lastError    String?
+  /// Running credit estimate — the meter their key pays for.
+  creditsSpent Int       @default(0)
+  itemCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// A pre-filled order awaiting a rep — built from a Yiddish voicemail, an
+/// inbound text, or opened live on a call. ⛔ Their register only ever sees a
+/// draft AFTER a human approves it (or, Phase 7, after auto-submit is earned
+/// and switched on) — there is no "the robot ordered".
+model SupermarketOrderDraft {
+  id            String    @id @default(cuid())
+  tenantId      String
+  /// "voicemail" | "text" | "call"
+  sourceType    String
+  /// Voicemail.id / ConnectChatMessage.id / a call id — with sourceType, the
+  /// dedupe anchor: one draft per source, ever.
+  sourceId      String
+  /// Chat thread for texts so the desk can open the conversation.
+  threadId      String?
+  customerName  String    @default("")
+  customerPhone String    @default("")
+  posCustomerId String?
+  /// Verbatim source text (Yiddish transcript or the text message body).
+  transcript    String    @default("")
+  /// English translation when one exists; "" otherwise.
+  translation   String    @default("")
+  /// [{ code, name, qty, unitPriceCents, posProductId, matchedFrom }]
+  items         Json      @default("[]")
+  /// WIC mentions land HERE automatically (Izzy's rule); rep-editable.
+  comments      String    @default("")
+  /// Every other remark ("leave it by the side door") lands here.
+  notes         String    @default("")
+  /// NEEDS_REVIEW | APPROVED | SUBMITTED | SUBMIT_FAILED | DISMISSED
+  status        String    @default("NEEDS_REVIEW")
+  /// The agent's ORIGINAL guess, frozen at build time — the training data.
+  agentItems    Json?
+  /// Computed agent-vs-approved diff, written at approval (correction capture).
+  corrections   Json?
+  /// "Pickup" | "Delivery" — Delivery feeds the delivery tracker after submit.
+  orderMethod   String    @default("Pickup")
+  posOrderId    String?
+  /// Idempotency anchor toward their api (max 20 chars) — a retried submit can
+  /// never create a second register order (their 409 = already landed).
+  posExternalId String?   @unique
+  submitError   String?
+  reviewedBy    String?
+  approvedAt    DateTime?
+  submittedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+/// Pay-by-phone PIN enrollment: the account PIN, encrypted, bound to ONE
+/// (account, caller-number) pair. Supplied silently only on calls whose
+/// caller-ID matches this exact number; a foreign number ALWAYS keys the PIN.
+model SupermarketPhonePin {
+  id            String    @id @default(cuid())
+  tenantId      String
+  posCustomerId String
+  phoneE164     String
+  /// AES-GCM envelope from @connect/security.encryptJson — never logged.
+  pinEnc        String
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, posCustomerId, phoneE164])
+  @@index([tenantId, phoneE164])
+}
+
+/// One pay-by-phone call — the IVR state machine's durable session, and the
+/// idempotency anchor for its charges (externalId = row-derived + chargeSeq).
+model SupermarketPayCall {
+  id           String   @id @default(cuid())
+  tenantId     String
+  /// PBX call id (uniqueid/linkedid) — one session per call.
+  callId       String
+  callerNumber String   @default("")
+  /// Serialized PayIvrState (the pure reducer's state).
+  state        Json?
+  posCustomerId String?
+  chargeSeq    Int      @default(0)
+  chargedCents Int      @default(0)
+  /// open | done | failed
+  status       String   @default("open")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, callId])
+  @@index([tenantId, createdAt])
+}
+
+/// A weekly-special blast (email lane; text waits on 10DLC). SENDING and SENT
+/// are outcomes of the marketing lane, which refuses loudly until the
+/// marketing sender is configured — never rides the platform's one mailbox.
+model SupermarketSpecial {
+  id             String    @id @default(cuid())
+  tenantId       String
+  subject        String
+  body           String
+  /// DRAFT | SENDING | SENT | FAILED
+  status         String    @default("DRAFT")
+  recipientCount Int       @default(0)
+  sentCount      Int       @default(0)
+  createdBy      String?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+/// Legally-required unsubscribe ledger for the marketing lane. Checked before
+/// EVERY send; an address here never receives another special from
+/// this tenant, whatever list it appears on.
+model MarketingUnsubscribe {
+  id        String   @id @default(cuid())
+  tenantId  String
+  email     String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+}
+
+/// Per-tenant supermarket switches. All OFF by default; Phase 7's auto-submit
+/// gate lives here as a written threshold ("under X% corrections for Y weeks")
+/// that decideAutoSubmit enforces — flipping the enable bit alone is not enough.
+model SupermarketSettings {
+  id                         String   @id @default(cuid())
+  tenantId                   String   @unique
+  /// Phase 7: submit trusted drafts without a rep. OFF until earned + flipped.
+  autoSubmitEnabled          Boolean  @default(false)
+  /// The written threshold: max correction rate (percent) ...
+  autoSubmitMaxCorrectionPct Float    @default(5)
+  /// ... held for at least this many consecutive weeks.
+  autoSubmitMinWeeks         Int      @default(2)
+  /// Approved Delivery-method orders flow into the delivery tracker.
+  deliveryIngestEnabled      Boolean  @default(false)
+  /// DeliveryStore.externalRef the bridge files orders under.
+  deliveryStoreRef           String   @default("main")
+  /// The pay-by-phone line answers for this tenant (dialplan ships separately).
+  payIvrEnabled              Boolean  @default(false)
+  updatedBy                  String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Per-tenant conversational voice-agent settings (the order-taking AI on a
+/// phone line). The tenant's OpenAI key itself rides ProviderCredential
+/// (provider OPENAI) via supermarket/integrationCredentials — write-only,
+/// masked, and with NO platform-key fallback by design.
+model VoiceAgentSettings {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  enabled            Boolean  @default(false)
+  model              String   @default("gpt-realtime")
+  voice              String   @default("cedar")
+  greeting           String   @default("")
+  instructionsExtra  String   @default("")
+  maxCallSeconds     Int      @default(600)
+  maxConcurrentCalls Int      @default(4)
+  monthlyMinuteCap   Int      @default(3000)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+/// One row per voice-agent call — the audit trail and the minute meter the
+/// monthly cap is enforced against.
+model VoiceAgentCall {
+  id           String    @id @default(cuid())
+  tenantId     String
+  sessionUuid  String    @unique
+  callerNumber String?
+  did          String?
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  seconds      Int       @default(0)
+  endReason    String?
+  transcript   Json?
+  toolCalls    Json?
+  draftId      String?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, startedAt])
 }

@@ -62,7 +62,9 @@ import {
   Voicemail,
   Wallet,
   Zap,
+  KeyRound,
   Package,
+  Tag,
   Truck
 } from "lucide-react";
 import type { Permission } from "../types/app";
@@ -114,6 +116,14 @@ export const navItems: NavItem[] = [
   // and because it is an ACTION key, the custom-roles editor already offers it,
   // and this nav entry is what makes it appear in /admin/permissions too.
   { id: "workspace.desk_phones", href: "/settings/desk-phones", label: "Desk Phones", icon: "DP", lucide: PhoneCall, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_setup_desk_phones" },
+  // Supermarket mode (Gesheft plan). All four keys are in NO default bucket, so
+  // only supermarket reps who were granted them (and SUPER_ADMIN via force-add)
+  // ever see these — classic tenants keep an unchanged sidebar. The nav key IS
+  // the page + api key (a-gate-must-agree-with-the-gate-behind-it).
+  { id: "workspace.supermarket_orders", href: "/orders", label: "Orders", icon: "OR", lucide: Package, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
+  { id: "workspace.supermarket_deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
+  { id: "workspace.supermarket_drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
+  { id: "workspace.supermarket_specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
   // Conference rooms — right before Install, per Izzy (2026-08-20). Visible to
   // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
   // rides that action key's expansion in @connect/shared.
@@ -187,6 +197,14 @@ export const navItems: NavItem[] = [
   // PORTAL_API_PERMISSION_RULES entry for /admin/pbx-console already demands,
   // so the nav key and the server gate now say the same thing.
   { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  // Per-tenant integration keys + CRM modes (supermarket plan Phase 5) —
+  // SUPER_ADMIN only, forced in isNavItemVisibleForUser like the console.
+  { id: "admin.integrations", href: "/admin/integrations", label: "Integrations", icon: "IK", lucide: KeyRound, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  // Conversational order-taking voice agent settings (2026-08-26) — SUPER_ADMIN
+  // only, forced in isNavItemVisibleForUser like the console. The OpenAI key
+  // itself is entered on admin.integrations (one writer, one ProviderCredential
+  // row); this screen is voice/greeting/caps/enable + per-call history.
+  { id: "admin.voice_agent", href: "/admin/voice-agent", label: "Voice Agent", icon: "VA", lucide: Bot, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
   // Trunks & Routing + Ring Groups & Queues (2026-08-20, Izzy: "add them all
   // to the sidebar with permissions off for everybody but me") — direct doors
   // into the console's routing and teams modules. SUPER_ADMIN only, forced in
@@ -278,6 +296,8 @@ export function isNavItemVisibleForUser(
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.integrations" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.voice_agent" && backendJwtRole !== "SUPER_ADMIN") return false;
   // Meetings: Izzy only, by his instruction 2026-08-21 ("Permissions off for
   // everybody but me"). Only STARTING a meeting is restricted — anyone with a
   // link still joins, which is the whole point of the feature.

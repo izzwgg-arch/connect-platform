@@ -280,7 +280,7 @@ import {
   readEnabledExtensionOverridesForTenant,
   upsertExtensionOverride,
 } from "./mohExtensionOverride";
-import { passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
+import { loopComShell, passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
   hasEffectivePortalPermission,
@@ -292,6 +292,11 @@ import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
+import { registerSupermarketRoutes } from "./supermarket/supermarketRoutes";
+import { crmModeEnforcementHook } from "./supermarket/crmMode";
+import { runCatalogSyncSweep, CATALOG_SYNC_BOOT_DELAY_MS, CATALOG_SYNC_DEFAULT_INTERVAL_MS } from "./supermarket/catalogSync";
+import { runDraftBuilderSweep, DRAFT_BUILDER_BOOT_DELAY_MS, DRAFT_BUILDER_DEFAULT_INTERVAL_MS } from "./supermarket/draftBuilder";
+import { ingestOrderEvent } from "./delivery/orderService";
 import { registerMfaRoutes, buildMfaDeps } from "./mfa/mfaRoutes";
 import { decideLoginMfa } from "./mfa/mfaService";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
@@ -2897,6 +2902,12 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // reads a customer network and points their handsets somewhere, so it gets its
   // own key, which is in neither default bucket.
   { prefix: "/desk-phones", permission: "can_setup_desk_phones" },
+  // Supermarket mode (Gesheft plan). /supermarket/mode is authenticated-only
+  // (longest prefix wins) so the portal nav + order-twin watcher can ask the
+  // tenant's mode without holding the orders key.
+  { prefix: "/supermarket", permission: "can_view_supermarket_orders" },
+  { prefix: "/supermarket/mode", permission: null },
+  { prefix: "/admin/integrations", permission: "can_manage_global_settings" },
   { prefix: "/admin/desk-phones", permission: "can_manage_global_settings" },
   { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
   { prefix: "/admin/custom-roles", permission: "can_view_admin_roles" },
@@ -2932,6 +2943,10 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // PBX Console (2026-08-19) — platform-owner only; every handler also calls requireOwner.
   { prefix: "/admin/pbx-console", permission: "can_manage_global_settings" },
   { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
+  // Voice agent (conversational order-taking IVR) admin (2026-08-26) —
+  // SUPER_ADMIN only; every handler ALSO calls requireSuperAdmin. Rule exists
+  // so the route is inside the global gate (the /admin/wake-health class).
+  { prefix: "/admin/voice-agent", permission: "can_manage_global_settings" },
   // Support Console (2026-08-20) — SUPER_ADMIN only for now (Izzy's call);
   // every handler ALSO calls requireSuperAdmin. Same pattern as pbx-console:
   // reuse an owner-held key, no new grantable key until a feature honours it.
@@ -42122,6 +42137,58 @@ const port = Number(process.env.PORT || 3001);
   // disable / recovery codes. `/auth/mfa/challenge` is the ONLY public route in
   // it (bypass list) and verifies its own pre-auth token; everything else is an
   // ordinary JWT-gated route. Login itself decides via `decideLoginMfa` above.
+  // ── Supermarket mode (Gesheft plan Phases 0-7, 2026-08-26) ────────────────
+  // The admin integration-keys screen, the Orders Desk, the pay-by-phone door,
+  // the public unsubscribe, and the server-side CRM-mode wall. Inert until a
+  // tenant is switched to supermarket mode and given a POS key.
+  await registerSupermarketRoutes({
+    app,
+    db,
+    requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+    audit,
+    internalGuard: (req, reply, endpoint) => guardInternalSecret(req, reply, endpoint),
+    renderShell: loopComShell,
+    publicOrigin: () => canonicalPortalOrigin(),
+    ingestDeliveryOrder: (tenantId, event) => ingestOrderEvent(tenantId, event),
+    driverInvite: {
+      createInviteToken: async (userId, createdBy) => {
+        const { token } = await createUserPasswordToken({
+          userId,
+          type: "INVITE",
+          ttlMs: INVITE_TOKEN_HOURS * 60 * 60 * 1000,
+          createdBy: createdBy ?? null,
+        });
+        return { token };
+      },
+      portalPublicUrl,
+      queueEmailJob: async (input) => {
+        await queueEmailJob(input);
+      },
+    },
+  });
+  // The mode wall: cold-calling campaign prefixes refuse for supermarket
+  // tenants. Instance-level hook — applies to every route at ready time
+  // (the rate-limiter onRoute lesson does not bite lifecycle hooks).
+  app.addHook("preHandler", crmModeEnforcementHook(db));
+  // Catalog sync + draft builder sweeps (boot kick + interval — a bare
+  // setInterval is starved to nothing on a busy deploy day).
+  if (String(process.env.SUPERMARKET_SWEEPS_DISABLED ?? "").trim() !== "1") {
+    const catalogMs = Number(process.env.SUPERMARKET_CATALOG_SYNC_INTERVAL_MS || CATALOG_SYNC_DEFAULT_INTERVAL_MS);
+    const draftMs = Number(process.env.SUPERMARKET_DRAFT_BUILDER_INTERVAL_MS || DRAFT_BUILDER_DEFAULT_INTERVAL_MS);
+    setTimeout(() => {
+      runCatalogSyncSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket catalog sweep failed"));
+    }, CATALOG_SYNC_BOOT_DELAY_MS);
+    setInterval(() => {
+      runCatalogSyncSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket catalog sweep failed"));
+    }, catalogMs);
+    setTimeout(() => {
+      runDraftBuilderSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket draft sweep failed"));
+    }, DRAFT_BUILDER_BOOT_DELAY_MS);
+    setInterval(() => {
+      runDraftBuilderSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket draft sweep failed"));
+    }, draftMs);
+    app.log.info({ catalogMs, draftMs }, "SUPERMARKET_SWEEPS_ARMED");
+  }
   await registerMfaRoutes(app, { audit, issueSession: issueLoginSession, service: mfaDeps });
   await registerLoginOtpRoutes(app, otpDeps);
   await registerOnboardingPublicRoutes(app);

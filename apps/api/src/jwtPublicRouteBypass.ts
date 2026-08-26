@@ -43,6 +43,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
     path === "/internal/chat/sms-system-reply" || path.endsWith("/internal/chat/sms-system-reply");
   const isInternalVoicemailNotifyPath =
     path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
+  // Voice agent (conversational order-taking IVR): three telephony→api doors,
+  // each in-handler internal-secret auth (fail-closed). ⛔ MUST be here or the
+  // JWT hook 401s them before the secret check runs — the twice-shipped trap.
+  // They answer 403 on a bad secret, so a 401 means the bypass entry is missing.
+  const isInternalVoiceAgentPath =
+    path === "/internal/voice-agent/session-start" || path.endsWith("/internal/voice-agent/session-start")
+    || path === "/internal/voice-agent/tool" || path.endsWith("/internal/voice-agent/tool")
+    || path === "/internal/voice-agent/session-end" || path.endsWith("/internal/voice-agent/session-end");
   // M1 (AI agent): agent-service MOH override door. Authenticates in-handler via
   // the AGENT_INTERNAL_SECRET shared-secret header (fail-closed when unset).
   const isInternalAgentMohPath =
@@ -130,6 +138,16 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
   const isCrmEmailOauthCallbackPath =
     path === "/crm/email/oauth/callback" || path.endsWith("/crm/email/oauth/callback");
+  // Supermarket pay-by-phone door: the PBX dialplan curls it per IVR step.
+  // In-handler shared-secret auth via guardInternalSecret (fail-closed) — but
+  // without this bypass the JWT hook 401s before that check ever runs (403 =
+  // you reached the handler, 401 = you did not).
+  const isInternalSupermarketPayIvrPath =
+    path === "/internal/supermarket/pay-ivr/step" || path.endsWith("/internal/supermarket/pay-ivr/step");
+  // Marketing one-click unsubscribe: opened from an email, no Bearer token.
+  // The HMAC-signed token in the path is the whole credential (specials.ts).
+  const isMarketingUnsubscribePath =
+    path.startsWith("/marketing/unsubscribe/") || path.startsWith("/api/marketing/unsubscribe/");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
@@ -154,6 +172,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalTelephonyPath
     || isInternalChatSystemReplyPath
     || isInternalVoicemailNotifyPath
+    || isInternalVoiceAgentPath
     || isInternalAgentMohPath
     || isInternalAgentRoutePath
     || isInternalAgentIvrPath
@@ -171,6 +190,8 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isPublicCrmFormPath
     || isPublicTrackingPath
     || isCrmEmailOauthCallbackPath
+    || isInternalSupermarketPayIvrPath
+    || isMarketingUnsubscribePath
     || [
       "/health",
       // Blue/green deploy + load balancers probe :3001/:3004 without JWT; must not 401.

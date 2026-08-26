@@ -36,6 +36,17 @@ test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler s
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/other"), false);
 });
 
+test("shouldSkipJwtVerification: voice-agent internal doors skip JWT (in-handler secret auth)", () => {
+  // ⛔ Missing bypass = 401 at the JWT hook before the secret check runs.
+  assert.equal(shouldSkipJwtVerification("/internal/voice-agent/session-start"), true);
+  assert.equal(shouldSkipJwtVerification("/internal/voice-agent/tool"), true);
+  assert.equal(shouldSkipJwtVerification("/internal/voice-agent/session-end"), true);
+  assert.equal(shouldSkipJwtVerification("/api/internal/voice-agent/tool"), true);
+  // NOT bypassed: admin doors are JWT-gated + SUPER_ADMIN.
+  assert.equal(shouldSkipJwtVerification("/admin/voice-agent/tenant_x"), false);
+  assert.equal(shouldSkipJwtVerification("/internal/voice-agent/other"), false);
+});
+
 // ⛔ Every /internal/agent/* door authenticates with the shared secret INSIDE its
 // own handler, so each one must also skip the JWT hook — otherwise it 401s before
 // that check runs and the feature is silently dead. account-setup-info shipped

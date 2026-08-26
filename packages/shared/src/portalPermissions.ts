@@ -292,6 +292,15 @@ export const ACTION_PERMISSION_KEYS = [
   "can_manage_tracking_drivers",
   "can_access_tracking_proof",
   "can_manage_tracking_settings",
+  // Supermarket mode / the Orders Desk (Gesheft plan, 2026-08-26). THREE keys:
+  // seeing the draft queue, putting orders through the register (money-adjacent
+  // — a submitted order bills a customer at pickup), and sending specials
+  // blasts (reaches every contact's inbox). ⛔ All three absent from BOTH
+  // default buckets like the desk-phone pair — granted per rep via custom
+  // roles when Gesheft goes live; SUPER_ADMIN holds them via force-add.
+  "can_view_supermarket_orders",
+  "can_manage_supermarket_orders",
+  "can_manage_supermarket_specials",
 ] as const;
 
 export type SidebarSectionPermissionKey = (typeof SIDEBAR_SECTIONS)[number]["permission"];

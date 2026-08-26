@@ -5,6 +5,7 @@ import { DesktopNotificationsBridge } from "../components/DesktopNotificationsBr
 import { PortalReloadNotice } from "../components/DesktopUpdateNotice";
 import RemoteSupportConsent from "../components/RemoteSupportConsent";
 import { LoopcomSetupRequest } from "../components/deskPhones/LoopcomSetupRequest";
+import { SupermarketOrderPop } from "../components/SupermarketOrderPop";
 import { AppProvider } from "../hooks/useAppContext";
 import { TelephonyProvider } from "../contexts/TelephonyContext";
 import { SipPhoneProvider } from "../hooks/useSipPhone";
@@ -25,6 +26,11 @@ export function Providers({ children }: { children: ReactNode }) {
               person in that office is looking at their dashboard, not at a settings
               page somebody else opened. */}
           <LoopcomSetupRequest />
+          {/* ⛔ Passive observer of phone.callState for SUPERMARKET tenants only:
+              answering an inbound call opens the order twin / new-order page.
+              Inert for every classic tenant (one /supermarket/mode probe), and
+              it can never touch the answer path itself. */}
+          <SupermarketOrderPop />
           {children}
         </SipPhoneProvider>
       </TelephonyProvider>
