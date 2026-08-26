@@ -74,6 +74,7 @@ export const SM_ORDERS_PHRASES = [
   "Skip payment", "Save this card to their account", "Securing…", "Secured & powered by",
   "Put order through & charge", "But the card was not charged:",
   "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
+  "Closest match — check with the customer",
 ] as string[];
 
 type DraftRow = {
@@ -109,6 +110,8 @@ type DraftItem = {
   qty: number;
   unitPriceCents: number;
   matchedFrom?: string;
+  /** the brain filled the CLOSEST match — shown with a "?" for the rep */
+  unsure?: boolean;
 };
 
 type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null };
@@ -749,8 +752,12 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
               <tbody>
                 <tr><th>{t("Item")}</th><th>{t("Qty")}</th><th className="sm-num">{t("Unit")}</th><th className="sm-num">{t("Subtotal")}</th></tr>
                 {items.map((i) => (
-                  <tr key={i.posProductId} className={i.matchedFrom === "name" ? "sm-flagged" : undefined}>
-                    <td>{i.name || i.code}<br /><span className="sm-sku">{i.code}</span></td>
+                  <tr key={i.posProductId} className={i.unsure ? "sm-flagged sm-unsure" : i.matchedFrom === "name" ? "sm-flagged" : undefined}>
+                    <td>
+                      {i.name || i.code}
+                      {i.unsure ? <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span> : null}
+                      <br /><span className="sm-sku">{i.code}</span>
+                    </td>
                     <td>
                       <span className="sm-qty">
                         <i role="button" tabIndex={-1} onClick={() => !readOnly && bumpQty(i.posProductId, -1)}>−</i>

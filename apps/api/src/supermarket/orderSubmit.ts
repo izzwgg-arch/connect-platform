@@ -24,6 +24,8 @@ export type DraftItemInput = {
   name: string;
   qty: number;
   unitPriceCents: number;
+  /** the brain's closest-match "?" flag — display only, never sent to the register */
+  unsure?: boolean;
 };
 
 export function sanitizeDraftItems(input: unknown): DraftItemInput[] {
@@ -44,6 +46,8 @@ export function sanitizeDraftItems(input: unknown): DraftItemInput[] {
       name: String(r.name ?? "").slice(0, 200),
       qty,
       unitPriceCents: unit,
+      // the brain's closest-match flag survives edits so the rep sees the "?"
+      ...(r.unsure === true ? { unsure: true } : {}),
     });
   }
   return out;

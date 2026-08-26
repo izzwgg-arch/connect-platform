@@ -270,3 +270,9 @@
 .sm-root .sm-ifwrap .billing-field-cardholder { order: 4; }
 .sm-root .sm-ifwrap .billing-field-zip-only { order: 5; }
 .sm-root .sm-ifwrap .billing-pay-secure-note { display: none; }
+
+/* closest-match "?" — filled in, never left empty; the rep confirms */
+.sm-root .sm-unsure-pill { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+    margin-left: .4rem; border-radius: 50%; font-size: .68rem; font-weight: 900; vertical-align: 1px;
+    background: var(--sm-pill-warn-bg); color: var(--sm-pill-warn-ink); border: 1px solid color-mix(in srgb, var(--sm-pill-warn-ink) 40%, transparent); }
+.sm-root tr.sm-unsure td { background: color-mix(in srgb, var(--warning) 11%, transparent); }

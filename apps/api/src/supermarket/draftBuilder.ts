@@ -73,14 +73,28 @@ export async function composeDraftContent(
   deps: DraftBuilderDeps,
   tenantId: string,
   index: ReturnType<typeof buildCatalogIndex>,
-  input: { kind: "voicemail" | "text"; text: string; localAudioPath?: string | null; voicemailId?: string; customerPhone?: string },
+  input: {
+    kind: "voicemail" | "text";
+    text: string;
+    localAudioPath?: string | null;
+    voicemailId?: string;
+    customerPhone?: string;
+    /**
+     * A REPROCESS of a draft that already carries YL's transcript+translation
+     * reuses them instead of re-billing YL for the same audio — only the
+     * brain re-runs.
+     */
+    preTranslated?: { transcript: string; translation: string };
+  },
 ): Promise<DraftContent> {
   const prepare = deps.prepareText ?? prepareOrderText;
   const brain = deps.brain ?? runOrderBrain;
-  const prepared = await prepare(
-    { db: deps.db },
-    { kind: input.kind, text: input.text, localAudioPath: input.localAudioPath, voicemailId: input.voicemailId },
-  );
+  const prepared = input.preTranslated
+    ? { transcript: input.preTranslated.transcript, translation: input.preTranslated.translation, engine: "yiddishlabs" as const, error: undefined }
+    : await prepare(
+        { db: deps.db },
+        { kind: input.kind, text: input.text, localAudioPath: input.localAudioPath, voicemailId: input.voicemailId },
+      );
   const english = (prepared.translation || prepared.transcript).trim();
   const ylTag = prepared.engine.startsWith("yiddishlabs") ? "+yl" : "";
   const prefixNotes = prepared.error ? [`transcription: ${prepared.error}`] : [];

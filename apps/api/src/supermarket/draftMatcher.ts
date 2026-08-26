@@ -33,6 +33,12 @@ export type DraftItem = {
   unitPriceCents: number;
   /** "code" (item number keyed/said) or "name" (product name matched). */
   matchedFrom: "code" | "name";
+  /**
+   * The brain picked the CLOSEST available product (a 5-pack when they asked
+   * for one, a different size) — filled in with a question mark for the rep
+   * to confirm, never left empty (Izzy, 2026-08-26).
+   */
+  unsure?: boolean;
 };
 
 export type DraftMatch = {

@@ -233,6 +233,36 @@ test("the brain may pick from the customer's own USUALS (learning layer 1)", asy
   assert.equal(out!.items[0].unitPriceCents, 429);
 });
 
+test("a close-variant pick carries the unsure '?' flag onto the item", async () => {
+  let call = 0;
+  const llm = async () => {
+    call++;
+    if (call === 1) return { isOrder: true, lines: [{ phrase: "vanilla yogurt", qty: 1, constraints: "" }], remarks: [] };
+    return { picks: [{ line: 0, id: "p3", qty: 1, unsure: true }], refused: [] };
+  };
+  const db: any = fakeBrainDb();
+  const out = await runOrderBrain(
+    { db, llm: llm as any, keyResolver: fakeKey, search: (async () => [{ posProductId: "p3", code: "333", name: "Vanilla Yogurt 5-Pack", brand: "", sizeText: "", unitPriceCents: 599 }]) as any } as any,
+    "t1",
+    "one vanilla yogurt",
+  );
+  assert.ok(out);
+  assert.equal(out!.items.length, 1);
+  assert.equal(out!.items[0].unsure, true);
+});
+
+test("the brain token budgets survived — 16000, never shrunk back to a truncating cap", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const s = readFileSync(path.join(__dirname, "orderBrain.ts"), "utf8").replace(/\r\n/g, "\n");
+  // ⛔ proven live 2026-08-26: a real 31-line order used 3,946 of a 4,000 cap
+  // (3,264 reasoning) — the truncated JSON silently fell back to the matcher.
+  const calls = s.match(/EXTRACT_SYSTEM, text\.slice\(0, 6000\), (\d+)\)/);
+  const calls2 = s.match(/RESOLVE_SYSTEM, resolveUser, (\d+)\)/);
+  assert.ok(Number(calls?.[1]) >= 16000, "extract budget must stay >= 16000");
+  assert.ok(Number(calls2?.[1]) >= 16000, "resolve budget must stay >= 16000");
+});
+
 test("the customer's SPOKEN phone number is captured, 845-defaulted at 7 digits", async () => {
   let call = 0;
   const llm = async () => {

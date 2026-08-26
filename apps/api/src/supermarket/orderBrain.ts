@@ -33,7 +33,7 @@ const OPENAI_BASE = "https://api.openai.com/v1";
 const BRAIN_TIMEOUT_MS = 90_000;
 export const DEFAULT_BRAIN_MODEL = "gpt-5";
 export const MAX_BRAIN_LINES = 40;
-const CANDIDATES_PER_LINE = 6;
+const CANDIDATES_PER_LINE = 8;
 
 export type BrainResult = {
   items: DraftItem[];
@@ -87,8 +87,9 @@ For a real order output STRICT JSON:
 Customers identify their account by SPEAKING their phone number — always capture it when stated; seven digits is normal (the area code is implied).
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
-const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand; if no candidate honours the constraints, refuse the line. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan". Output STRICT JSON:
-{"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
+const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
+When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size or count), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. Refuse a line only when nothing close exists or a hard constraint rules every candidate out. Output STRICT JSON:
+{"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>,"unsure":<true ONLY for a close-variant pick>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
 Never invent an id that is not among that line's candidates or customerUsuals. Never change prices.`;
 
 function normalizeQty(v: unknown): number {
@@ -191,7 +192,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   const model = deps.model ?? String(process.env.SUPERMARKET_BRAIN_MODEL || DEFAULT_BRAIN_MODEL);
 
   // 1) EXTRACT
-  const extracted = await llm(key.apiKey, model, EXTRACT_SYSTEM, text.slice(0, 6000), 4000);
+  const extracted = await llm(key.apiKey, model, EXTRACT_SYSTEM, text.slice(0, 6000), 16000);
   if (!extracted) return null;
   // ⛔ Izzy, 2026-08-26 ("the agent needs to use common sense. It's not
   // supposed to be a draft"): a complaint / question / chatter is NOT an
@@ -241,7 +242,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     })),
     ...(usuals.length ? { customerUsuals: usuals.map(asCandidate) } : {}),
   });
-  const resolved = await llm(key.apiKey, model, RESOLVE_SYSTEM, resolveUser, 4000);
+  const resolved = await llm(key.apiKey, model, RESOLVE_SYSTEM, resolveUser, 16000);
   if (!resolved || !Array.isArray(resolved.picks)) return null;
 
   const items: DraftItem[] = [];
@@ -267,6 +268,8 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
         qty,
         unitPriceCents: candidate.unitPriceCents,
         matchedFrom: "name",
+        // closest-variant pick — filled in with a "?" for the rep, never empty
+        ...(pick?.unsure === true ? { unsure: true } : {}),
       });
     }
   }

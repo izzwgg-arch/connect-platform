@@ -408,7 +408,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         status: "NEEDS_REVIEW",
         ...(parsed.data.draftIds?.length ? { id: { in: parsed.data.draftIds } } : {}),
       },
-      select: { id: true, sourceType: true, sourceId: true, transcript: true },
+      select: { id: true, sourceType: true, sourceId: true, transcript: true, translation: true, customerPhone: true },
       orderBy: { createdAt: "desc" },
       take: parsed.data.limit,
     });
@@ -427,12 +427,16 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
             localAudioPath = vm.localAudioPath ?? null;
           }
         }
+        // a draft that already carries YL's translation reuses it — the brain
+        // re-runs, YL is never re-billed for the same audio
+        const storedTranslation = String(draft.translation ?? "").trim();
         const content = await composeDraftContent({ db }, tenant.id, index, {
           kind: draft.sourceType === "voicemail" ? "voicemail" : "text",
           text,
           localAudioPath,
           voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
           customerPhone: String(draft.customerPhone ?? "") || undefined,
+          ...(storedTranslation ? { preTranslated: { transcript: String(draft.transcript ?? ""), translation: storedTranslation } } : {}),
         });
         // the customer SPOKE their account number → re-run the POS lookup on it
         let customerFields: any = {};
