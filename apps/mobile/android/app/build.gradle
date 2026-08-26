@@ -4,6 +4,20 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
+// ── Loopcom Driver (CONNECT_DRIVER_APP=1) ────────────────────────────────────
+// The delivery-driver APK is this SAME codebase built as a SECOND app:
+//   * its own applicationId, so it installs BESIDE the phone app and can be
+//     handed to people who don't have a Loopcom phone line at all;
+//   * its own slim manifest (src/driver/AndroidManifest.xml — location for run
+//     tracking; NO microphone, NO telecom/SIP services, NO FCM service);
+//   * its own JS entry (index.driver.js) that never imports the SIP stack.
+// ⛔ Deliberately env-gated rather than productFlavors: flavors rename every
+// output path (apk/<flavor>/release/…) and task name, which would break
+// scripts/android-ship.ps1 and scripts/android-play-bundle.ps1 — both pin
+// apk/release/app-release.apk and :app:assembleRelease. With the env gate the
+// phone build is byte-identical to before when the variable is unset.
+def loopcomDriverBuild = System.getenv("CONNECT_DRIVER_APP") == "1"
+
 /** Hermes is invoked as `cmd /c <path> â€¦`; paths with spaces break. Use 8.3 short path on Windows. */
 static String windowsShortExePath(File exeOrBinary) {
     if (!org.gradle.internal.os.OperatingSystem.current().isWindows()) {
@@ -72,7 +86,9 @@ react {
     // even though the working directory it launches in is already apps/mobile.
     // The same command with an absolute entry bundles fine (1406 modules), so
     // append it here — Expo's parser takes the last occurrence of a flag.
-    extraPackagerArgs = ["--entry-file", file("../../index.js").absolutePath]
+    // The driver APK boots from its own entry so the SIP stack (and its
+    // module-scope side effects) are never even imported into that bundle.
+    extraPackagerArgs = ["--entry-file", file(loopcomDriverBuild ? "../../index.driver.js" : "../../index.js").absolutePath]
 
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '..'
@@ -154,8 +170,14 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.connectcommunications.mobile'
+    if (loopcomDriverBuild) {
+        // Driver build: swap in the slim driver manifest. The namespace (and so
+        // every generated/Kotlin class package) is unchanged on purpose — only
+        // the INSTALLED identity differs.
+        sourceSets { main { manifest.srcFile 'src/driver/AndroidManifest.xml' } }
+    }
     defaultConfig {
-        applicationId 'com.connectcommunications.mobile'
+        applicationId (loopcomDriverBuild ? 'com.loopcom.driver' : 'com.connectcommunications.mobile')
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Ship script sets SHIP_VERSION_CODE / SHIP_BUILD_ID so adb install -r always picks up new APKs.
@@ -308,5 +330,13 @@ if (rnVersion < versionToNumber(0, 75, 0)) {
     applyNativeModulesAppBuildGradle(project)
 }
 
-apply plugin: 'com.google.gms.google-services'
+// ⛔ google-services validates applicationId against google-services.json, which
+// only knows com.connectcommunications.mobile — applying it to the driver build
+// fails with "No matching client found". The driver app ships WITHOUT FCM (no
+// call pushes to receive; run updates arrive by polling), so the plugin is
+// simply skipped there. FirebaseInitProvider no-ops when the generated
+// resources are absent — no boot crash.
+if (!loopcomDriverBuild) {
+    apply plugin: 'com.google.gms.google-services'
+}
 

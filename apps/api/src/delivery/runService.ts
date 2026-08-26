@@ -169,6 +169,27 @@ export async function listRunsForDriver(tenantId: string, driverId: string) {
   return db.deliveryRun.findMany({
     where: { tenantId, driverId, status: { in: ["DRAFT", "ACTIVE"] } },
     orderBy: { createdAt: "asc" },
-    include: { stops: { orderBy: { sequence: "asc" }, include: { order: { select: { id: true, status: true, addrLine1: true, addrUnit: true } } } } },
+    include: {
+      stops: {
+        orderBy: { sequence: "asc" },
+        include: {
+          order: {
+            // The driver app's in-app map needs coordinates; the stop card needs the
+            // person + the voicemail/text note. All read-only, all this driver's own run.
+            select: {
+              id: true,
+              status: true,
+              addrLine1: true,
+              addrUnit: true,
+              addrCity: true,
+              customerName: true,
+              instructions: true,
+              lat: true,
+              lng: true,
+            },
+          },
+        },
+      },
+    },
   });
 }

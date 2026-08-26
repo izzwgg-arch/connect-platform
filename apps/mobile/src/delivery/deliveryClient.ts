@@ -34,7 +34,32 @@ export async function scanLabel(
   return json as ScanResponse;
 }
 
-export async function getStopNav(token: string, orderId: string, app: "waze" | "google" = "waze"): Promise<{ url: string }> {
+/** Start a server tracking session for a run — the bound inside which location
+ *  is collected. Returns the sessionId the location task posts against. */
+export async function startTrackingSession(token: string, runId: string): Promise<{ sessionId: string }> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/tracking/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ runId }),
+  });
+  const json = await parseJson(res);
+  if (!res.ok || !json?.sessionId) throw Object.assign(new Error(json?.error || "TRACKING_START_FAILED"), { status: res.status, body: json });
+  return json as { sessionId: string };
+}
+
+export async function endTrackingSession(token: string, sessionId: string, reason = "COMPLETED"): Promise<void> {
+  const res = await fetch(`${API_BASE}/mobile/delivery/tracking/end`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ sessionId, reason }),
+  });
+  if (!res.ok) {
+    const json = await parseJson(res);
+    throw Object.assign(new Error(json?.error || "TRACKING_END_FAILED"), { status: res.status, body: json });
+  }
+}
+
+export async function getStopNav(token: string, orderId: string, app: "waze" | "google" | "apple" = "waze"): Promise<{ url: string }> {
   const res = await fetch(`${API_BASE}/mobile/delivery/stops/${orderId}/nav?app=${app}`, { headers: { authorization: `Bearer ${token}` } });
   const json = await parseJson(res);
   if (!res.ok) throw Object.assign(new Error(json?.error || "NAV_FAILED"), { status: res.status, body: json });

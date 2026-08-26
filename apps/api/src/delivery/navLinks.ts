@@ -32,8 +32,17 @@ export function googleNavUrl(dest: LatLng): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
 }
 
-export type NavApp = "waze" | "google";
+/** Apple Maps driving directions — iPhone drivers (opens the Maps app on iOS). */
+export function appleNavUrl(dest: LatLng): string {
+  const lat = clampCoord(dest.lat, 90);
+  const lng = clampCoord(dest.lng, 180);
+  return `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`;
+}
+
+export type NavApp = "waze" | "google" | "apple";
 
 export function navUrlFor(app: NavApp, dest: LatLng): string {
-  return app === "waze" ? wazeNavUrl(dest) : googleNavUrl(dest);
+  if (app === "waze") return wazeNavUrl(dest);
+  if (app === "apple") return appleNavUrl(dest);
+  return googleNavUrl(dest);
 }

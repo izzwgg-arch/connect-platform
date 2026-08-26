@@ -197,11 +197,12 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     return reply.send(r);
   });
 
-  // Driver: navigation deep link for a stop (Waze default; ?app=google to override).
+  // Driver: navigation deep link for a stop (Waze default; ?app=google|apple to override —
+  // apple is the iPhone driver's Maps app; the URL is a no-op choice on Android clients).
   app.get("/mobile/delivery/stops/:orderId/nav", async (req: any, reply: any) => {
     const ctx = await requireDriver(req, reply);
     if (!ctx) return;
-    const app2 = req.query?.app === "google" ? "google" : "waze";
+    const app2 = req.query?.app === "google" ? "google" : req.query?.app === "apple" ? "apple" : "waze";
     const r = await stopNavUrl(ctx.user.tenantId, String(req.params.orderId), app2 as any);
     if (!r.ok) return reply.status(404).send(r);
     return reply.send(r);
