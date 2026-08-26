@@ -112,11 +112,27 @@ Escalation ref **Y6GQZ8**, Shia Weinstock ext 105, Trimpro (PBX tenant 11).
   his mobile.** `T11_105` (desk) and `T11_105_1` (app) are separate endpoints on separate
   AORs — the normal shape for **every** extension here, `max_contacts=5`. They do not
   "both take the call leg" and clip audio; one answers.
-- ⛔ **"They run filtered internet like most of our accounts" was an unsupported
-  generalisation.** `whois 69.118.75.72` → **Optimum Online, Hicksville NY** — an ordinary
-  ISP, not a filtering proxy. ✅ And the whois test is VALID here only because Trimpro is
-  **not** on the 443 route (`webrtcRouteViaSbc: false`) — check that flag first, or the
-  contact IP is loopcom and tells you nothing about the customer.
+- ⛔⛔ **"They run filtered internet like most of our accounts" is FALSE for this site —
+  the customer denied it and the registration history proves them right.** `whois
+  69.118.75.72` → **Optimum Online `OOL-CPE-WRWKNY`, Hicksville NY** — a customer-premises
+  cable address. ✅ The whois test is VALID here only because Trimpro is **not** on the 443
+  route (`webrtcRouteViaSbc: false`) — check that flag first, or the contact IP is loopcom
+  and tells you nothing about the customer.
+- ✅✅ **THE DECISIVE CHECK IS REGISTRATION CHURN, NOT WHOIS** — a filtering proxy rotates
+  addresses and ports constantly (Luxure: 128/day across six addresses in a /20). Over 10
+  days at 69.118.75.72: **ONE address, never rotating** — T11_105 **4** events, T11_105_1
+  **10**, T11_107 **10**. A clean, stable line with no proxy in the path.
+  ⛔⛔ **And it is a SECOND independent finger at the same phone: T11_103 logs 60 events,
+  6/day, and goes UNREACHABLE 29 times** while its siblings on the same wire barely move.
+  A device that misses keepalives AND loses 37% of its RTP is a device fault.
+  ⛔ The whois rules out a proxy in the PATH; it cannot rule out a filter on the customer's
+  own router or DNS. **The churn data is what settles it.**
+- ⚠⚠ **WHERE THE REPORT GOT THE IDEA — one Trimpro user IS behind a filter, at a DIFFERENT
+  site: `T11_108_1` (Yitzchok Hollender) at `169.61.99.50` = **SoftLayer / IBM Cloud**,
+  **5,367 registration events in 10 days (537/day, 1,334 distinct ports)**, `Unavail` now.**
+  That is the textbook filtered-internet signature. The report applied one user's situation
+  to the site that complained — [[agent-reports-borrow-other-tenants-facts]] inside a single
+  tenant. ⏳ **Ext 108 is a real, separate problem and nobody has looked at it.**
 - ⛔⛔ **HAD ANYONE ACTED ON IT, THE BLAST RADIUS WAS PLATFORM-WIDE.** These endpoints
   inherit from template `(p1)`, so a per-endpoint override is **not durable** (a tenant
   regen wipes it — the Landau Home opus case), and making the edit **through the VitalPBX
