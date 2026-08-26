@@ -71,6 +71,73 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — CRM SUPERMARKET MODE is BUILT END TO END (phases 0–7, the Gesheft plan) and is INERT until a tenant is switched on (2026-08-26) — READ FIRST before touching apps/api/src/supermarket, the /orders portal screens, ProviderCredential, Tenant.crmMode, or before believing any POS integration is live
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SUPERMARKET_MODE_2026-08-26.md`**
+(`8e224306` on `feat/ivr-migration-takeover`. Izzy: *"do phase 0 to 7, one
+shot… Run 25 very, very heavy stress tests… then… call it done."* Deploy state
+recorded in-session — verify the containers, not this section.)
+
+- ⛔⛔ **EVERYTHING IS INERT ON DEPLOY**: `Tenant.crmMode` defaults `"classic"`
+  (0 supermarket tenants), the 3 new permission keys are in NO default bucket,
+  `MARKETING_MAIL_ENABLED` is unset, and the sweeps no-op on tenants without a
+  `POS_TRACKING` key. Nothing changed for any existing customer.
+- ⛔⛔ **NO REAL POS CALL HAS EVER BEEN MADE — the Gesheft key never arrived.**
+  Every provider-facing behaviour is proven against a faithful fake register
+  only. First key in: `/admin/integrations` → paste → **Test** (differential
+  refusal: `pos_not_found` = key works, `pos_auth_failed` = rejected).
+- ⛔ **The POS client NEVER retries a write** (a 409 `pos_duplicate` on the
+  idempotency id means it LANDED — read back, never re-post), **`priceQty` is
+  a DIVISOR** ("2 for $10" = $5 each), and `externalId` is capped at their 20
+  chars. `approveAndSubmitDraft` is **the ONLY register-order writer**
+  (atomic claim → SUBMITTING → createOrder → 409-readback; a wiring test fails
+  if any other file calls `.createOrder(`).
+- ⛔⛔ **THE PER-TENANT KEY LANE HAS NO PLATFORM FALLBACK, EVER** — Sola/POS
+  keys live in `ProviderCredential` (`tenantId`+`provider` unique, encrypted);
+  `resolveIntegrationKey` answers null and callers refuse in plain English. A
+  customer's charges must never ride the platform's own merchant key.
+- ⛔ **The pay-by-phone IVR is stored-cards only** (card-capture shapes are
+  guard-tested absent), star is the decimal (`25*37`), PIN enrollment only on
+  caller-ID-matching KEYED calls (foreign lookups never enroll), one charge
+  effect per fresh confirmation — 3k-call fuzz pins it. ⏳ **The PBX dialplan
+  half is NOT on the PBX** — the api door
+  (`/internal/supermarket/pay-ivr/step`, secret-gated, on the bypass) is live
+  and fail-closed; wiring the dialplan needs a maintenance-window mandate.
+- ⛔ **Supermarket tenants are WALLED OFF campaigns** (`crmModeEnforcementHook`
+  403s `/crm/campaigns` + `/admin/sms/campaigns` — "cold calling is over");
+  the hook fails OPEN on a DB error so a hiccup never kills classic tenants'
+  campaigns, while `requireSupermarketMode` on the supermarket surface fails
+  CLOSED. The asymmetry is deliberate.
+- ⛔ **Specials never ride the platform mailbox**: the lane needs
+  `MARKETING_MAIL_ENABLED=1` (today OFF — a send refuses loudly and queues
+  NOTHING), type `MARKETING_SPECIAL` never `ADMIN_ALERT`, HMAC unsubscribe on
+  every email, caps 2000 recipients / 3 blasts/day, atomic send claim.
+- ✅ **The 25 heavy stress tests exist and ALL PASS** (63 api tests + 8 portal
+  guards; api typecheck at its 76 baseline, portal 0). ⛔ **They caught two
+  real defects pre-ship**: the draft sweep STALLED forever past 50 sources
+  (per-row dedupe without a query-level `notIn` — a busy store's tail was
+  never reached) and the matcher emitted DUPLICATE line items when one product
+  matched by name and code. Both fixed. The test kit
+  (`supermarketTestKit.ts`) is the faithful-fake infrastructure — snapshot
+  reads, P2002, relation-filter `where` support — reuse it, don't fork it.
+- ⛔ **The order twin (`SupermarketOrderPop`) is a PASSIVE observer** of
+  `useOptionalSipPhone` — a guard greps it for any call-path touch. Answered
+  inbound call on a supermarket tenant → mini dialer pops `/orders/twin`, full
+  window routes `/orders/new`; localStorage `"sm-order-pop"` is the
+  cross-window bus. It probes `/supermarket/mode` ONCE (that rule is
+  `permission: null` — authenticated-only — on purpose, or the pop could
+  never learn the mode).
+- ⛔ **Shared-worktree note:** the commit was a private-index build with a
+  **pinned base in BOTH `read-tree` and `-p`** plus a compare-and-swap
+  `update-ref`, surgically EXCLUDING the sibling voice-agent session's
+  uncommitted server.ts hunks (their import of an untracked dir); their
+  schema models + bypass entries + nav row were carried by agreement. The
+  shared index was repaired afterwards (the staged-deletion trap).
+- ⏳ **NOT PROVEN: no human has opened any screen, no tenant is in supermarket
+  mode, no real POS call, no live pay call, no twin on a real answered call.**
+  Acceptance starts with the key: paste it, Test green, flip Gesheft to
+  supermarket, watch `SUPERMARKET_SWEEPS_ARMED` + the first catalog sync.
+
 ## ⛔ AGENT HANDOFF — the supermarket DELIVERY TRACKING system: server side complete and LIVE-BUT-INERT in prod; the DRIVER APP FLOW IS UNREACHABLE (2026-08-25) — READ FIRST before answering "where is the tracking system at", before touching apps/api/src/delivery, or before restoring the driver launcher
 
 (**Read-only status investigation 2026-08-25 — no code, no deploy, no data change.**
