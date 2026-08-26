@@ -18,7 +18,7 @@
 
 import "./supermarket.css";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, ExternalLink, MessageCircle, Mic, Phone, Play, Search } from "lucide-react";
 import { PermissionGate } from "../../../components/PermissionGate";
@@ -76,6 +76,9 @@ export const SM_ORDERS_PHRASES = [
   "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
   "Closest match — check with the customer", "not in stock",
   "WHAT THEY ASKED FOR", "Click to search the catalog for this", "Add this instead",
+  "Complete this order?", "pay & place", "No charge — put the order through without paying",
+  "places it", "typing sets qty", "replacing:", "the swap is remembered — the agent learns it",
+  "= qty", "= replace item", "remove", "checkout",
 ] as string[];
 
 type DraftRow = {
@@ -376,6 +379,105 @@ function OrdersList() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Inline replace-item box — "Oh, it's not that item. It's this item." Opens
+ * on a selected cart row (right-arrow or just typing letters); Enter swaps.
+ * The swap is TAUGHT to the agent by the caller (doReplace).
+ */
+function ReplaceBox({
+  initial,
+  oldName,
+  onCancel,
+  onPick,
+  t,
+}: {
+  initial: string;
+  oldName: string;
+  onCancel: () => void;
+  onPick: (hit: CatalogHit, meant: string) => void;
+  t: (s: string) => string;
+}) {
+  const [q, setQ] = useState(initial);
+  const [hits, setHits] = useState<CatalogHit[]>([]);
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 1) {
+      setHits([]);
+      return;
+    }
+    let dead = false;
+    const timer = setTimeout(() => {
+      void apiGet<{ items: CatalogHit[] }>(`/supermarket/catalog/search?q=${encodeURIComponent(term)}`)
+        .then((res) => {
+          if (!dead) {
+            setHits(res.items ?? []);
+            setSel(0);
+          }
+        })
+        .catch(() => {});
+    }, 120);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+    };
+  }, [q]);
+
+  return (
+    <div className="sm-replbox">
+      <div className="sm-replhead">
+        {t("replacing:")} <s>{oldName}</s>
+      </div>
+      <div className="sm-replsearch">
+        <Search size={13} aria-hidden />
+        <input
+          ref={inputRef}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") { e.preventDefault(); setSel((v) => Math.min(v + 1, Math.max(0, hits.length - 1))); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setSel((v) => Math.max(0, v - 1)); }
+            else if (e.key === "Enter" && hits[sel]) { e.preventDefault(); onPick(hits[sel], q); }
+            else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); }
+          }}
+          placeholder={t("item # or name")}
+          aria-label={t("replacing:")}
+        />
+      </div>
+      {hits.length > 0 ? (
+        <div className="sm-repldd">
+          {hits.map((h, i) => (
+            <div
+              key={h.posProductId}
+              className={`sm-replopt${i === sel ? " sm-replsel" : ""}`}
+              onMouseEnter={() => setSel(i)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onPick(h, q);
+              }}
+            >
+              <SmItemPhoto url={h.imageUrl} size={24} />
+              <span className="sm-replnm">
+                {h.name}
+                {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+              </span>
+              <span className="sm-replpr">{money(h.unitPriceCents)}</span>
+              {i === sel ? <span className="sm-payenter">↵</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="sm-kbd-hint">{t("the swap is remembered — the agent learns it")}</div>
+    </div>
+  );
+}
+
 export function DraftReview({ draftId, compact }: { draftId: string; compact?: boolean }) {
   const { t } = useUiLanguage(SM_ORDERS_PHRASES);
   const router = useRouter();
@@ -401,13 +503,20 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   const [savingCard, setSavingCard] = useState(false);
   const [cardErr, setCardErr] = useState<string | null>(null);
   const tokenizeRef = useRef<(() => void) | null>(null);
-  // "they press the right arrow. It will prompt, 'Sure, you want to place
-  // this order?' They press Enter, and it will place the order." (Izzy)
+  // The keyboard-first flow (Izzy, built to the approved mockup, artifact
+  // c6c802ed): up/down rove over items + fields, right-arrow enters, digits
+  // set the selected item's quantity, letters open replace-item, Del removes,
+  // and PageDown is the ONE checkout key. DraftReview drives BOTH the full
+  // desk and the mini order-twin, so the model is identical in both windows.
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    if (confirmOpen) confirmBtnRef.current?.focus();
-  }, [confirmOpen]);
+  const [kbSel, setKbSel] = useState(-1);
+  const [qtyBuf, setQtyBuf] = useState("");
+  const qtyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [replaceFor, setReplaceFor] = useState<string | null>(null);
+  const [replaceInit, setReplaceInit] = useState("");
+  const [payIdx, setPayIdx] = useState(0);
+  const commentsRef = useRef<HTMLInputElement | null>(null);
+  const notesRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let dead = false;
@@ -601,29 +710,15 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   const subtotal = useMemo(() => items.reduce((s, i) => s + i.unitPriceCents * i.qty, 0), [items]);
   const readOnly = draft?.status === "SUBMITTED" || draft?.status === "SUBMITTING";
 
-  // "once the card information is entered, they press the right arrow" — the
-  // → key anywhere outside a typing surface opens the place-order prompt;
-  // Enter (the focused Place button) places it, Escape backs out.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (confirmOpen) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setConfirmOpen(false);
-        }
-        return;
-      }
-      if (e.key !== "ArrowRight") return;
-      const el = e.target as HTMLElement | null;
-      const tag = (el?.tagName ?? "").toUpperCase();
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
-      if (readOnly || busy || items.length === 0) return;
-      e.preventDefault();
-      setConfirmOpen(true);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen, readOnly, busy, items.length]);
+  const chargeable = useMemo(() => cards.filter((c) => c.chargeable), [cards]);
+  // payment choices in the checkout prompt: each chargeable card + "no charge"
+  const payCount = chargeable.length + 1;
+
+  const commitQtyBuf = useCallback((buf: string, itemId: string | null) => {
+    if (!buf || !itemId) return;
+    const n = Math.max(1, Math.min(99, parseInt(buf, 10) || 1));
+    setItems((prev) => prev.map((it) => (it.posProductId === itemId ? { ...it, qty: n } : it)));
+  }, []);
 
   const save = useCallback(async () => {
     if (!draft) return;
@@ -639,7 +734,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     }
   }, [draft, items, comments, notes, orderMethod, t]);
 
-  const putThrough = useCallback(async () => {
+  const putThrough = useCallback(async (opts?: { cardId: string | null }) => {
     if (!draft) return;
     setBusy(true);
     try {
@@ -654,10 +749,12 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       // ⛔ the charge runs AFTER the order landed on the register, and a
       // decline never blocks it — the money is the rep's to chase.
       const total = items.reduce((a, i) => a + i.qty * i.unitPriceCents, 0);
-      if (chargeOnPut && selCard && total >= 50) {
+      // an explicit checkout-prompt choice beats the payment block's radio
+      const useCardId = opts !== undefined ? opts.cardId : chargeOnPut && selCard ? selCard : null;
+      if (useCardId && total >= 50) {
         try {
           const cr = await apiPost<any>(`/supermarket/drafts/${encodeURIComponent(draft.id)}/charge`, {
-            cardId: selCard,
+            cardId: useCardId,
             amountCents: total,
           });
           setOkMsg(`${t("The order went through.")} ${cr.message ?? ""}`.trim());
@@ -677,6 +774,134 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       setBusy(false);
     }
   }, [draft, items, comments, notes, orderMethod, chargeOnPut, selCard, t]);
+
+  const placeWithChoice = useCallback(
+    (idx: number) => {
+      setConfirmOpen(false);
+      const card = chargeable[idx] ?? null; // past the cards = "no charge"
+      void putThrough(card ? { cardId: card.id } : { cardId: null });
+    },
+    [chargeable, putThrough],
+  );
+
+  // ── the keyboard controller — one handler, both windows ──
+  useEffect(() => {
+    const isTyping = (el: Element | null) => {
+      const tag = (el?.tagName ?? "").toUpperCase();
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el as HTMLElement | null)?.isContentEditable === true;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmOpen) {
+        if (e.key === "Escape") { e.preventDefault(); setConfirmOpen(false); }
+        else if (e.key === "ArrowDown") { e.preventDefault(); setPayIdx((v) => Math.min(v + 1, payCount - 1)); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); setPayIdx((v) => Math.max(0, v - 1)); }
+        else if (e.key === "Enter") { e.preventDefault(); if (!busy) placeWithChoice(payIdx); }
+        return;
+      }
+      // PageDown checks out from ANYWHERE, typing included
+      if (e.key === "PageDown") {
+        if (readOnly || busy || items.length === 0) return;
+        e.preventDefault();
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        const def = chargeable.findIndex((c) => c.id === selCard);
+        setPayIdx(def >= 0 ? def : chargeable.length);
+        setConfirmOpen(true);
+        return;
+      }
+      const typing = isTyping(e.target as Element | null);
+      if (typing) {
+        if (e.key === "Escape") (e.target as HTMLElement).blur();
+        return;
+      }
+      if (replaceFor || readOnly) return;
+      const fieldStops = 3; // quick-add search, comments, notes
+      const last = items.length + fieldStops - 1;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        commitQtyBuf(qtyBuf, items[kbSel]?.posProductId ?? null);
+        setQtyBuf("");
+        setKbSel((v) => (e.key === "ArrowDown" ? Math.min((v < 0 ? -1 : v) + 1, last) : Math.max(0, (v < 0 ? 1 : v) - 1)));
+        return;
+      }
+      if (kbSel < 0) return;
+      const onItem = kbSel < items.length;
+      const item = onItem ? items[kbSel] : null;
+      if (e.key === "ArrowRight" || e.key === "Enter") {
+        e.preventDefault();
+        if (onItem && item) {
+          if (qtyBuf) { commitQtyBuf(qtyBuf, item.posProductId); setQtyBuf(""); return; }
+          setReplaceInit("");
+          setReplaceFor(item.posProductId);
+        } else {
+          const which = kbSel - items.length;
+          (which === 0 ? boxRef.current : which === 1 ? commentsRef.current : notesRef.current)?.focus();
+        }
+        return;
+      }
+      if (onItem && item && /^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        const buf = (qtyBuf + e.key).slice(0, 2);
+        setQtyBuf(buf);
+        if (qtyTimer.current) clearTimeout(qtyTimer.current);
+        qtyTimer.current = setTimeout(() => {
+          commitQtyBuf(buf, item.posProductId);
+          setQtyBuf("");
+        }, 900);
+        return;
+      }
+      if (onItem && item && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        setItems((prev) => prev.filter((it) => it.posProductId !== item.posProductId));
+        setQtyBuf("");
+        return;
+      }
+      if (onItem && item && /^[a-zA-Z]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setReplaceInit(e.key);
+        setReplaceFor(item.posProductId);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen, payIdx, payCount, busy, readOnly, items, kbSel, qtyBuf, replaceFor, chargeable, selCard, placeWithChoice, commitQtyBuf]);
+
+  // items shrink -> keep the selection on the list
+  useEffect(() => {
+    const last = items.length + 2;
+    if (kbSel > last) setKbSel(items.length > 0 ? items.length - 1 : -1);
+  }, [items.length, kbSel]);
+
+  // "it's not that item. It's this item" — swap the row, keep the qty, and
+  // TEACH the swap: the customer's phrase for the old item -> the new item.
+  const doReplace = useCallback(
+    (oldId: string, hit: CatalogHit, meant: string) => {
+      setItems((prev) => {
+        const oldItem = prev.find((it) => it.posProductId === oldId);
+        if (!oldItem) return prev;
+        const existing = prev.find((it) => it.posProductId === hit.posProductId && it.posProductId !== oldId);
+        if (existing) {
+          return prev
+            .filter((it) => it.posProductId !== oldId)
+            .map((it) => (it.posProductId === hit.posProductId ? { ...it, qty: Math.min(99, it.qty + oldItem.qty) } : it));
+        }
+        return prev.map((it) =>
+          it.posProductId === oldId
+            ? { posProductId: hit.posProductId, code: hit.code, name: hit.name, qty: it.qty, unitPriceCents: hit.unitPriceCents, imageUrl: hit.imageUrl }
+            : it,
+        );
+      });
+      setReplaceFor(null);
+      const line = (draft?.agentLines ?? [])?.find((l) => l.posProductId === oldId);
+      if (line?.phrase) {
+        void apiPost("/supermarket/phrase-teaching/teach", {
+          phrase: line.phrase,
+          posProductId: hit.posProductId,
+          ...(meant.trim() ? { meantPhrase: meant.trim() } : {}),
+        }).catch(() => {}); // teaching is a bonus — a 403 must never break the swap
+      }
+    },
+    [draft?.agentLines],
+  );
 
   const dismiss = useCallback(async () => {
     if (!draft) return;
@@ -822,8 +1047,15 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
             <table className="sm-items">
               <tbody>
                 <tr><th>{t("Item")}</th><th>{t("Qty")}</th><th className="sm-num">{t("Unit")}</th><th className="sm-num">{t("Subtotal")}</th></tr>
-                {items.map((i) => (
-                  <tr key={i.posProductId} className={i.unsure ? "sm-flagged sm-unsure" : i.matchedFrom === "name" ? "sm-flagged" : undefined}>
+                {items.map((i, itemIdx) => (
+                  <Fragment key={i.posProductId}>
+                  <tr
+                    className={[
+                      i.unsure ? "sm-flagged sm-unsure" : i.matchedFrom === "name" ? "sm-flagged" : "",
+                      kbSel === itemIdx ? "sm-kbsel" : "",
+                    ].join(" ").trim() || undefined}
+                    onClick={() => setKbSel(itemIdx)}
+                  >
                     <td>
                       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <SmItemPhoto url={i.imageUrl} size={32} zoom />
@@ -841,10 +1073,27 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         <b>{i.qty}</b>
                         <i role="button" tabIndex={-1} onClick={() => !readOnly && bumpQty(i.posProductId, +1)}>＋</i>
                       </span>
+                      {kbSel === itemIdx && qtyBuf ? (
+                        <span className="sm-qtybuf">{qtyBuf}<small>{t("typing sets qty")}</small></span>
+                      ) : null}
                     </td>
                     <td className="sm-num">{money(i.unitPriceCents)}</td>
                     <td className="sm-num">{money(i.unitPriceCents * i.qty)}</td>
                   </tr>
+                  {replaceFor === i.posProductId ? (
+                    <tr className="sm-replrow">
+                      <td colSpan={4}>
+                        <ReplaceBox
+                          initial={replaceInit}
+                          oldName={i.name || i.code}
+                          onCancel={() => setReplaceFor(null)}
+                          onPick={(hit, meant) => doReplace(i.posProductId, hit, meant)}
+                          t={t}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -905,12 +1154,20 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                     </div>
                   </div>
                 ) : null}
+                <div className="sm-kbd-legend">
+                  <span><b>↑↓</b> {t("move")}</span>
+                  <span><b>15</b> {t("= qty")}</span>
+                  <span><b>abc</b> {t("= replace item")}</span>
+                  <span><b>Del</b> {t("remove")}</span>
+                  <span><b>PgDn</b> {t("checkout")}</span>
+                </div>
               </div>
             ) : null}
 
             <div className="sm-flab">{t("Comments — goes on the order")}</div>
             <div className="sm-fieldbox">
               <input
+                ref={commentsRef}
                 value={comments}
                 onChange={(e) => setComments(e.target.value)}
                 disabled={readOnly}
@@ -922,6 +1179,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
             <div className="sm-flab">{t("Notes")}</div>
             <div className="sm-fieldbox">
               <input
+                ref={notesRef}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 disabled={readOnly}
@@ -1060,23 +1318,38 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       {confirmOpen ? (
         <div className="sm-confirm-scrim" role="dialog" aria-modal="true" onClick={() => setConfirmOpen(false)}>
           <div className="sm-confirm" onClick={(e) => e.stopPropagation()}>
-            <div className="sm-confirm-t">{t("Sure you want to place this order?")}</div>
+            <div className="sm-confirm-t">{t("Complete this order?")}</div>
             <div className="sm-confirm-d">
               {items.length} {t("items")} · <b>{money(subtotal)}</b>
-              {chargeOnPut && selCard && subtotal >= 50 ? <> · {t("charging the card on file")}</> : null}
+              {draft.customerName ? <> · {draft.customerName}</> : null}
             </div>
-            <div className="sm-actions">
+            {chargeable.map((c, ci) => {
+              const chip = brandChip(c.brand);
+              return (
+                <div
+                  key={c.id}
+                  className={`sm-payopt${payIdx === ci ? " sm-payopt-on" : ""}`}
+                  onMouseEnter={() => setPayIdx(ci)}
+                  onClick={() => !busy && placeWithChoice(ci)}
+                >
+                  <span className={`sm-cb ${chip.cls}`}>{chip.label}</span>
+                  •••• {c.last4} · {t("card on file")}
+                  {payIdx === ci ? <span className="sm-payenter">↵ {t("pay & place")}</span> : null}
+                </div>
+              );
+            })}
+            <div
+              className={`sm-payopt${payIdx === chargeable.length ? " sm-payopt-on" : ""}`}
+              onMouseEnter={() => setPayIdx(chargeable.length)}
+              onClick={() => !busy && placeWithChoice(chargeable.length)}
+            >
+              {t("No charge — put the order through without paying")}
+              {payIdx === chargeable.length ? <span className="sm-payenter">↵</span> : null}
+            </div>
+            <div className="sm-actions" style={{ alignItems: "center" }}>
+              <span className="sm-kbd-hint">↑↓ · Enter {t("places it")} · Esc</span>
               <button type="button" className="sm-btn sm-quiet" onClick={() => setConfirmOpen(false)}>{t("Not yet")}</button>
-              <button
-                ref={confirmBtnRef}
-                type="button"
-                className="sm-btn sm-primary"
-                disabled={busy}
-                onClick={() => {
-                  setConfirmOpen(false);
-                  void putThrough();
-                }}
-              >
+              <button type="button" className="sm-btn sm-primary" disabled={busy} onClick={() => placeWithChoice(payIdx)}>
                 {t("Place the order")}
               </button>
             </div>

@@ -67,8 +67,23 @@ test("the supermarket stylesheet is scoped: every rule sits under .sm- prefixed 
   // trap, fifth occurrence in this repo).
   const css = read("app/(platform)/orders/supermarket.css").replace(/\/\*[\s\S]*?\*\//g, "");
   const classSelectors = css.match(/\.[a-zA-Z][a-zA-Z0-9_-]*/g) ?? [];
-  const foreign = [...new Set(classSelectors.filter((c) => !c.startsWith(".sm-")))];
+  // The shared Sola payment form (CardknoxIFieldsForm) renders its OWN
+  // .billing-* class names; the desk lays them out under .sm-ifwrap. Those
+  // tokens are allowed ONLY as descendants — every line naming one must also
+  // name an .sm- ancestor, which the per-line check below enforces.
+  const IFIELDS_DESCENDANTS = new Set([
+    ".billing-ifields-card", ".billing-pay-row--expiration", ".billing-ifields-cvv",
+    ".billing-field-cardholder", ".billing-field-zip-only", ".billing-pay-secure-note",
+  ]);
+  const foreign = [...new Set(classSelectors.filter((c) => !c.startsWith(".sm-") && !IFIELDS_DESCENDANTS.has(c)))];
   assert.deepEqual(foreign, [], `unscoped selectors would collide with globals.css (.tab/.tabs live there): ${foreign.join(", ")}`);
+  for (const line of css.split("\n")) {
+    for (const tok of IFIELDS_DESCENDANTS) {
+      if (line.includes(tok)) {
+        assert.ok(/\.sm-[a-zA-Z0-9_-]+\s+\S/.test(line.slice(0, line.indexOf(tok))), `${tok} may only be styled as a descendant of an .sm- class: ${line.trim()}`);
+      }
+    }
+  }
 });
 
 test("the twin page keeps its stay-until-done promise", () => {
