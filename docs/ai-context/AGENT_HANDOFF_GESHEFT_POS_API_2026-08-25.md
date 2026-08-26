@@ -724,6 +724,40 @@ recipe: resolve the key via `resolveIntegrationKey(db, gesheftTenantId,
 key dead, 404 = key fine + store up, 503 STORE_UNREACHABLE = key fine +
 store down.
 
+### ⛔ LIVE SITE OUTAGE at Gesheft's MAIN store, 2026-08-26 11:09:40 ET — phones AND the register server went together
+
+Read-only investigation (Connect DB + PBX inspection; no write anywhere).
+
+- **Gesheft is TWO sites and only ONE is down.** `75.99.30.60` (main store)
+  holds exts **101, 102, 103, 104, 105, 106, 107, 108, 111, 897** — every one
+  `Unavail`. `38.105.207.69` (second site) holds **114, 115, 116 + a SECOND
+  101 phone** — all `Avail`, 32 ms ping. ⛔ So "Gesheft's phones are down" is
+  half-true and the half matters: inbound still lands (ext 101 keeps a live
+  contact at site B plus 3 softphone contacts on the 443 route).
+- **Exact sequence (Asterisk log, EDT), 10 phones in 21 seconds:** 11:09:40
+  ext 104 · 11:09:45 ext 101 · 11:09:46 ext 111 · 11:09:47 ext 107 · 11:09:48
+  ext 106 · 11:09:53 exts 105 + 108 · 11:09:54 ext 897 · 11:09:56 ext 102 ·
+  11:10:01 ext 103. **Nothing from that IP since 11:10:01**; ping from the PBX
+  = **100% packet loss**. Same shape as the Create A Box T7 site outage.
+- ⛔⛔ **ONE EVENT, NOT TWO — the timestamp that proves it: the POS catalog
+  sync last wrote successfully at 11:07:56 ET, 104 SECONDS before the first
+  phone dropped.** So the store's whole network died ~11:08–11:09 and took the
+  register server and the phones with it; `STORE_UNREACHABLE` from the POS
+  gateway right now is that outage, not an API fault.
+- **The 00:45 ET STORE_UNREACHABLE was genuinely separate** — the registration
+  history shows NO mass-drop at that hour, so the phones were up while only
+  the register server was unreachable (overnight shutdown, as read).
+- **What to tell the customer:** their internet/network at the main store is
+  down — router/modem/switch at the site. Nothing on Loopcom's side; the PBX,
+  the second site and every softphone are healthy.
+- ⛔ **Query trap that cost a round:** `LIKE 'T8[_]%' ESCAPE '['` returns ZERO
+  rows — with `[` as the escape char, `[_` is a literal underscore and `]` a
+  literal bracket, so it searches for `T8_]`. Use `endpoint ~ '^T8_'`.
+- **Liveness recipe for any site:** `pjsip show contacts | grep T8_` (Avail vs
+  Unavail per site IP) → the Asterisk log for the exact second → ping the
+  site's public IP from the PBX → `max("updatedAt")` on PosCatalogItem to date
+  the last successful register-server contact.
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
