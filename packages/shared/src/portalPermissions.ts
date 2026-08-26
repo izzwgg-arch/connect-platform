@@ -6,6 +6,7 @@ export type PortalSidebarSectionKey =
   | "pbx"
   | "crm"
   | "apps"
+  | "store"
   | "tracking"
   | "billing"
   | "admin"
@@ -16,6 +17,11 @@ export const SIDEBAR_SECTIONS = [
   { id: "pbx", label: "PBX", permission: "can_view_section_pbx" },
   { id: "crm", label: "CRM", permission: "can_view_section_crm" },
   { id: "apps", label: "Apps", permission: "can_view_section_apps" },
+  // Supermarket mode (the Gesheft plan). can_view_section_store is in NO
+  // default bucket, so only SUPER_ADMIN (the force-add bucket) sees the Store
+  // section until it is granted per custom role — Izzy, 2026-08-26: "give
+  // only me permission for now".
+  { id: "store", label: "Store", permission: "can_view_section_store" },
   { id: "tracking", label: "Tracking", permission: "can_view_section_tracking" },
   { id: "billing", label: "Billing", permission: "can_view_section_billing" },
   { id: "admin", label: "Admin", permission: "can_view_section_admin" },

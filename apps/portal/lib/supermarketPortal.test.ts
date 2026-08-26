@@ -16,11 +16,12 @@ const navSrc = read("navigation/navConfig.ts");
 const popSrc = read("components/SupermarketOrderPop.tsx");
 const providersSrc = read("app/providers.tsx");
 
-test("orders nav items gate on can_view_supermarket_orders — the SAME key the pages and api gate on", () => {
-  for (const id of ["workspace.supermarket_orders", "workspace.supermarket_deliveries", "workspace.supermarket_drivers", "workspace.supermarket_specials"]) {
+test("the Store section's items gate on can_view_supermarket_orders under can_view_section_store — both in NO default bucket (only SUPER_ADMIN sees Store)", () => {
+  for (const id of ["store.orders", "store.deliveries", "store.drivers", "store.specials"]) {
     const line = navSrc.split("\n").find((l) => l.includes(`id: "${id}"`));
     assert.ok(line, `${id} missing from navConfig`);
     assert.ok(line!.includes('permission: "can_view_supermarket_orders"'), `${id} gates on the wrong key — a visible door that refuses on click`);
+    assert.ok(line!.includes('section: "store"') && line!.includes('sectionPermission: "can_view_section_store"'), `${id} must live in the Store section`);
   }
 });
 

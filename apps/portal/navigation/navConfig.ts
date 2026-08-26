@@ -120,10 +120,10 @@ export const navItems: NavItem[] = [
   // only supermarket reps who were granted them (and SUPER_ADMIN via force-add)
   // ever see these — classic tenants keep an unchanged sidebar. The nav key IS
   // the page + api key (a-gate-must-agree-with-the-gate-behind-it).
-  { id: "workspace.supermarket_orders", href: "/orders", label: "Orders", icon: "OR", lucide: Package, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
-  { id: "workspace.supermarket_deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
-  { id: "workspace.supermarket_drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
-  { id: "workspace.supermarket_specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_supermarket_orders" },
+  { id: "store.orders", href: "/orders", label: "Orders", icon: "OR", lucide: Package, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
+  { id: "store.deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
+  { id: "store.drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
+  { id: "store.specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
   // Conference rooms — right before Install, per Izzy (2026-08-20). Visible to
   // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
   // rides that action key's expansion in @connect/shared.
@@ -259,10 +259,11 @@ export const navItems: NavItem[] = [
 ];
 
 /** Sidebar section order: Workspace → PBX → CRM → Apps → Billing → Admin → Settings */
-export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "pbx", "crm", "apps", "billing", "admin", "settings"];
+export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "store", "pbx", "crm", "apps", "billing", "admin", "settings"];
 
 export const navSectionMeta: Record<NavItem["section"], { label: string; railIcon: string }> = {
   workspace: { label: "Workspace", railIcon: "WS" },
+  store: { label: "Store", railIcon: "SO" },
   pbx: { label: "PBX", railIcon: "PB" },
   crm: { label: "CRM", railIcon: "CR" },
   settings: { label: "Settings", railIcon: "ST" },
