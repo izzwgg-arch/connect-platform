@@ -218,3 +218,36 @@ by re-adding my paths (the staged-deletion trap).
   `38b6c54c` after the cssnano fix (bundle string-verified). The voice-agent
   sibling's api half rode the same api deploy; their telephony half + env/PBX
   steps await Izzy's word.
+
+## §7 THE KEY ARRIVED — the register is live (2026-08-26, same night)
+
+Izzy pasted Gesheft's POS key and flipped their crmMode himself. The first
+real calls ever made found the API differing from its printout four ways —
+each fixed, deployed and pinned by a verbatim fixture (`1d84a4b9`, `09954727`,
+`93d7ac60`, `bdb5af35`):
+
+1. **Envelope**: `{results, hasMore, cursor, total}`; items carry
+   `itemCode`/`description`/`prices[]`/`active`/`lastModified`. The shipped
+   parser returned null → the sweep would loop `pos_unparseable_page` forever.
+2. **`prices[]`** includes EXPIRED Specials beside Regular —
+   `pickEffectivePrice` filters priceFrom/priceTill windows; in-window Special
+   beats Regular; `qty` is the bulk divisor.
+3. **Cursors die between runs** (stored cursor → 500 on the next run's first
+   request, at 8 and 11 min of age — proven twice). Walks must finish in one
+   run: full walks are active-only, cursors never persisted,
+   DEFAULT_PAGE_BUDGET 400 paced pages.
+4. **Rate limiter**: a full-speed walk 429s at ~page 73. Pages paced 350ms
+   (SUPERMARKET_CATALOG_PAGE_PACE_MS); a 429 waits capped Retry-After and
+   retries the SAME page (MAX_RATE_LIMIT_WAITS/run). Proven live: two waits
+   mid-walk, walk continued.
+
+Also: order-by-id answers **500** on the probe id (Test falls back to a
+1-credit products read); `take` capped at 100; ⛔ their `total` is a filtered
+figure (said 5,211; active catalog ≈ 19,244) — never size off it.
+
+**End state, verified live**: 22,063 catalog rows, `finished:true`, high-water
+`2026-08-25T23:05:32-04:00`; the next tick cost **1 credit** and upserted 45
+live register edits. Quick-add search returns real rows (Challah, foil pans,
+real prices). Shape discovery spent ~533 credits total, one-time. The "Store"
+sidebar section shipped the same night (`03a5f370`): section key
+`can_view_section_store` in NO default bucket — SUPER_ADMIN-only until granted.

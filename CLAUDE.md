@@ -92,10 +92,27 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   (0 supermarket tenants), the 3 new permission keys are in NO default bucket,
   `MARKETING_MAIL_ENABLED` is unset, and the sweeps no-op on tenants without a
   `POS_TRACKING` key. Nothing changed for any existing customer.
-- ⛔⛔ **NO REAL POS CALL HAS EVER BEEN MADE — the Gesheft key never arrived.**
-  Every provider-facing behaviour is proven against a faithful fake register
-  only. First key in: `/admin/integrations` → paste → **Test** (differential
-  refusal: `pos_not_found` = key works, `pos_auth_failed` = rejected).
+- ✅✅ **SUPERSEDED HOURS LATER THE SAME NIGHT: THE KEY ARRIVED AND THE REGISTER
+  IS LIVE.** Izzy pasted Gesheft's key + flipped them to supermarket mode
+  himself (2026-08-26 01:40Z); the catalog synced end to end — **22,063 items,
+  193 paced pages, `finished:true`, high-water set; incrementals now cost 1
+  credit/15 min and picked up 45 live register edits on the first tick.**
+  ⛔⛔ **THE REAL API DISAGREED WITH ITS OWN PRINTOUT FOUR WAYS, all fixed +
+  fixture-pinned** (`1d84a4b9`→`bdb5af35`): (1) the page envelope is
+  `results/hasMore/cursor/total` with `itemCode`/`description`/`prices[]`
+  items — the shipped parser read NULL and the sweep would have looped
+  `pos_unparseable_page` forever; (2) `prices[]` carries EXPIRED Specials
+  beside Regular, so effective-price selection filters priceFrom/priceTill
+  windows; (3) ⛔ **their cursors DIE between runs** (a stored cursor 500s on
+  the next run — proven twice), so a walk must FINISH inside one run: full
+  walks are active-only, cursors are never persisted, budget 400 paced pages;
+  (4) **their rate limiter 429s a full-speed walk at ~page 73** — pages are
+  paced 350ms and a 429 waits Retry-After and retries the SAME page.
+  ⛔ Their order-by-id answers **500** (not 404) on a probe id, so the admin
+  Test button falls back to a 1-credit products read. `take` is hard-capped
+  at 100. ⛔ **Their `total` field is a filtered figure that means something
+  else — never size anything off it** (it said 5,211; the active catalog is
+  ~19,244). Shape-discovery cost ~533 credits, one-time.
 - ⛔ **The POS client NEVER retries a write** (a 409 `pos_duplicate` on the
   idempotency id means it LANDED — read back, never re-post), **`priceQty` is
   a DIVISOR** ("2 for $10" = $5 each), and `externalId` is capped at their 20
