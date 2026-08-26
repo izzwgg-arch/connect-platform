@@ -673,6 +673,41 @@ fallback (the default branch, never hangup — additive in front of today's flow
   `scripts/voice-agent-deploy-prep.md`; phone-free chain check:
   `scripts/voice-agent-live-check.mjs`.
 
+### §13f — THE DEMO APK (Izzy: "fully populated demo… real addresses… prompt the GPS… create a login") — `3c0851ba`
+
+- **A THIRD app**: `CONNECT_DRIVER_DEMO=1` → `com.loopcom.driver.demo`, label
+  "Loopcom Driver Demo" (manifest label is now `${driverAppLabel}` via
+  manifestPlaceholders), entry `index.driverdemo.js` (= driver entry +
+  `markDriverDemo()`). Installs beside BOTH real apps. Artifact-verified:
+  `apps/mobile/dist/loopcom-driver-demo-1.0.0+20260825-demo1.apk`
+  (62,480,447 b, vc 260825211; demo markers grep 3 in the bundle, SIP 0,
+  RECORD_AUDIO 0, location perms present). Delivered to Izzy as a file.
+- **`src/driver/demoBackend.ts` is the whole "server"**: one Gesheft run, 8
+  stops on real KJ/Monroe streets (Forest Rd, Acres Rd, Van Buren Dr,
+  Bakertown Rd, Israel Zupnick Dr, Satmar Dr, Getzel Berger Blvd, Seven
+  Springs Rd) with hand-placed coords — ⛔ never dispatch a real driver off
+  them — names + notes (side door, WIC, frozen). Stop state advances
+  locally (any scan attaches the next READY stop) and persists in
+  AsyncStorage; Settings gains a demo-only "Reset the demo".
+- **Every deliveryClient function branches on `isDriverDemo()`** (8 branches —
+  syncOp rides scanLabel). Navigate builds real Waze/Google/Apple URLs from
+  stop coords, so turn-by-turn genuinely opens on the demo.
+- **GPS is REAL**: Start run fires the actual permission prompt + foreground
+  service; ⛔ only `trackingService.flush()` short-circuits in demo (no
+  server session; a 401 loop would be noise). Follow-me on the in-app map
+  works off the real fix stream.
+- **Login is LOCAL**: `driver@gesheftkosher.com` / `demo1234` — prefilled
+  email + on-screen hint (demo builds only); accepted via
+  `setTokenFromQr(DEMO_TOKEN)`, no server account exists.
+- ⛔ **Build order gotcha**: all three variants share
+  `apk/release/app-release.apk` — whatever built LAST sits there. The ship
+  scripts build fresh so the fleet is safe, but never grab that path without
+  checking `aapt dump badging` first.
+- ⏳ NOT PROVEN on a device (no phone attached). Acceptance: install → login
+  hint visible → sign in → Start run pops the location prompt → map shows
+  the KJ route + follow-me → scan anything → stop → proof photo → stop goes
+  green; "Reset the demo" starts over.
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
