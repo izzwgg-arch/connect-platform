@@ -235,7 +235,19 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   ArrowRight no longer opens the confirm; ONE controller serves the desk AND
   the mini twin. ⛔ Reprocess without explicit draftIds re-takes the same
   newest N; an api deploy kills in-flight reprocess handlers — deploy only
-  between runs.
+  between runs (bit twice on 08-26: two parallel-session deploys each killed a
+  run; a server-side supervisor relaunching on the still-missing-agentLines set
+  is the converging shape). ✅✅ **DEPLOYED + VERIFIED 2026-08-26 evening: api +
+  portal both at `d05e9f3a` (⊇ `9928ddb3`), both migrations applied, teach-page
+  chunk + "Complete this order"/"WHAT THEY ASKED FOR" grepped in the shipped
+  bundle. Full-fleet reprocess DONE on the new brain: 219 waiting drafts carry
+  1,389 items (was 192 items across 221 that morning), 113 non-orders
+  dismissed, 205/219 with checklists (1,669 lines: 1,066 in-cart / 332 unsure /
+  271 skipped). The 14 without a checklist have EMPTY transcripts — voicemails
+  the YL audio budget deferred; they fill on the next sweep, nothing is lost.
+  ⛔ Prisma `agentLines: {equals: null}` on a Json column matches NOTHING —
+  filter Json-null in JS.** ⏳ Open tabs/desktop app keep the OLD bundle until
+  fully reopened — nobody has driven the keyboard flow or teach page yet.
   ✅ **Gesheft ext 101 (yisraelweinstock@gmail.com) is on her OWN role
   "Gesheft" now — `cmta3tac105acsd138bhyi5qc`, 84 keys = the shared Owner
   role's 82 + `can_view_section_store` + `can_view_supermarket_orders`

@@ -502,3 +502,33 @@ Commits `7fc674b1` (checklist + lessons) → `3d3b6e48` (Teach the Agent) →
   miss, recorded per the rule.
 - ⏳ NOT PROVEN: nobody has driven the checklist, the teach page or the
   keyboard flow in a browser; no lesson has auto-filled a real order yet.
+
+## §13 — day-3 deploy + the full-fleet reprocess (2026-08-26 evening)
+
+- ✅✅ **api + portal DEPLOYED and container-verified at `d05e9f3a`** (contains
+  `9928ddb3`; the tip also carries a parallel session's order-voicemail playback
+  door). Both migrations applied (`20260826140000_phrase_lessons_agent_lines`,
+  `20260826160000_phrase_teaching` — lesson/dismissal tables answering count
+  queries). Portal proven by BUNDLE STRINGS, never the deploy exit line: the
+  teach page chunk (`orders/teach/page-*.js`) plus "Complete this order" and
+  "WHAT THEY ASKED FOR" in chunk 2255.
+- ✅ **Full-fleet reprocess on the new brain is DONE.** Final census across
+  NEEDS_REVIEW + DISMISSED: **219 waiting drafts / 1,389 items** (the morning
+  baseline was 192 items across 221 drafts), **113 non-orders dismissed**,
+  **205/219 drafts carry a checklist** — 1,669 agentLines: 1,066 in_cart /
+  332 unsure / 271 skipped. The **14 without a checklist all have EMPTY
+  transcripts** — voicemails the YL audio budget deferred; they process on a
+  later sweep, nothing lost. The runner's "30 failed" are the same
+  empty-source shape.
+- ⛔ **Two parallel-session api deploys each KILLED a reprocess run mid-flight**
+  (the documented in-flight-exec trap, twice in one evening). The converging
+  shape: a server-side supervisor (`/root/reprocess-supervisor.sh`) that
+  relaunches only the drafts still missing agentLines, waits while the deploy
+  queue is busy, and exits at zero remaining. It ran out of its 2h cycle budget
+  while the final run was still going — harmless, the run finished on its own.
+- ⛔ **Prisma trap: `agentLines: { equals: null }` on a Json column matches
+  NOTHING** (Json-null vs Db-null) — the "remaining drafts" query silently
+  returned `[]`. Select the column and filter `!Array.isArray(x)` in JS.
+- ⏳ Still not proven by a human: the checklist, /orders/teach and the keyboard
+  flow in a real browser (open tabs/desktop app keep the OLD bundle until fully
+  reopened), and no lesson has auto-filled a real order yet.
