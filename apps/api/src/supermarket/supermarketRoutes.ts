@@ -32,6 +32,7 @@ import {
 import { clearCrmModeCache, requireSupermarketMode, CRM_MODES } from "./crmMode";
 import { approveAndSubmitDraft, sanitizeDraftItems } from "./orderSubmit";
 import { runPayIvrStep } from "./payIvrRuntime";
+import { payIvrDialplanView } from "./payIvrDialplan";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase } from "./phraseTeaching";
@@ -1316,10 +1317,13 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const settings = await db.supermarketSettings.findUnique({ where: { tenantId: parsed.data.tenantId } }).catch(() => null);
     const tenant = await db.tenant.findUnique({ where: { id: parsed.data.tenantId }, select: { crmMode: true } }).catch(() => null);
     if (tenant?.crmMode !== "supermarket" || !settings?.payIvrEnabled) {
-      return reply.send({ prompts: ["20_connect_person"], gather: null, transfer: true, done: false });
+      const off = { prompts: ["20_connect_person"], gather: null, transfer: true, done: false };
+      return reply.send({ ...off, ...payIvrDialplanView(off) });
     }
     const result = await runPayIvrStep({ db, log: app.log, clientFor }, parsed.data);
-    return reply.send(result);
+    // the dialplan gets ONE playback string and one word — Asterisk cannot loop
+    // a JSON array, and the PBX must hold no logic of its own
+    return reply.send({ ...result, ...payIvrDialplanView(result) });
   });
 
   // ══════════════════════════ PUBLIC: unsubscribe ══════════════════════════
