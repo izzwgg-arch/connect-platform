@@ -406,3 +406,40 @@ orders missing items. The agent needs to be a lot better."
   brain (216 with stored YL text = zero YL cost; before-count 192 items
   total). Runner: `/root/reprocess-all.js` + `/root/reprocess-ids.json`,
   copied into the container, batches of 10 by explicit draftIds.
+
+## §11 — Gesheft ext 101 can SEE the Store section (2026-08-26, permission change only — no code, no deploy)
+
+Izzy: "give gshaft101 permission to see store section 101 only."
+
+- **Who**: ext 101 "Phone Orders" → owner `yisraelweinstock@gmail.com`
+  (user `cmnmjhr3500anp96hc00p068a`, role USER, Gesheft
+  `cmnlgnumu0001p9g6xyl1pbdd`) — the same login as the Windows-answer story.
+- ⛔ **Her existing custom role "Owner" (`cmr2thutwh4qdmw134fa2t95t`) is
+  shared by 10 users across 9 TENANTS** (Displaydex, Yossis, inii mini ×2,
+  Landau, Trust, Gesheft, Trimpro, Secro, TYH) — editing it would have given
+  nine other companies the Store section. The [[custom-roles-are-authoritative]]
+  holders-check caught it again. **Additive second role instead** (roles
+  UNION): `cmta3nz1604p5sd13xhxf78ys` "Store desk (view) —
+  yisraelweinstock@gmail.com" carrying exactly `can_view_section_store` +
+  `can_view_supermarket_orders`, assigned ALONGSIDE Owner (the PUT is
+  REPLACE — both ids in the body). Effective set 82 → **84**, gained exactly
+  the two keys.
+- ⛔ **`can_manage_supermarket_orders` deliberately NOT granted** — Izzy's
+  verb was "see", and manage is money-adjacent (put-through submits a
+  register order and can charge a card on file). She can open /orders, read
+  drafts and search the catalog; approve/put-through/charge answer 403 until
+  Izzy says the word. One PUT adds it.
+- ⛔ **The actor `sub` on the service JWT must be a REAL User id** —
+  `customRole.create` stamps `createdByUserId` from it and the FK rejects a
+  synthetic sub (first attempt 500 db_error). Used Izzy's own SUPER_ADMIN id
+  `cmm0414y7000tmq10nxtha90f`, which is also the honest audit trail.
+- ⛔ `GET /admin/users/:id/effective-permissions` needs
+  `?tenantId=<target's tenant>` from a SUPER_ADMIN actor — without it the
+  tenant resolves to the ACTOR's and the route 403s, which my diff swallowed
+  as "0 keys".
+- ✅ **Negatives proven**: eli@displaydex.com (another Owner holder) still
+  82 keys / NO store keys; ap@gesheftkosher.com (another Gesheft user) still
+  42 / NONE. No nav force line exists for store.* — visibility is exactly the
+  two keys, so no code change was needed.
+- ⏳ NOT PROVEN: she has not signed in and seen the section. She must reload
+  (or fully reopen the desktop app); the permission cache TTL also applies.

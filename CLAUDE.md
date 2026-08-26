@@ -152,6 +152,16 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   with `unsure:true`). ⛔ The pipeline tests' fake db used to IGNORE its where
   — the name-only bug sat green under 104 tests; `fakeBrainDb` now evaluates
   AND/OR/contains/in faithfully.
+  ✅ **Gesheft ext 101 (yisraelweinstock@gmail.com) can SEE the Store section
+  (2026-08-26, handoff §11 — permission change only): additive role
+  `cmta3nz1604p5sd13xhxf78ys` with exactly `can_view_section_store` +
+  `can_view_supermarket_orders`, assigned BESIDE her shared "Owner" role**
+  (⛔ that role is held by 10 users in 9 tenants — never edit it; the
+  holders-check caught it again). ⛔ `can_manage_supermarket_orders`
+  (put-through + card charge) deliberately NOT granted — Izzy said "see";
+  writes 403 for her until his word. ⛔ A service JWT driving
+  `/admin/custom-roles` needs a REAL User id as `sub` (createdByUserId FK),
+  and `effective-permissions` needs `?tenantId=` or it 403s.
   ⛔⛔ **GESHEFT'S POS KEY IS SCOPED `customer:get` ACCESS-LEVEL "own"** — it
   CANNOT read the store's existing customers ("Customer not found or you do
   not have access to it"), which is why NO draft has ever resolved an account.
