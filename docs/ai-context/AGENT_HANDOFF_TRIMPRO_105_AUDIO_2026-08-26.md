@@ -120,14 +120,98 @@ regenerates every tenant with pending changes and **wipes the Connect doorway** 
 callers on A plus center / Connect Communications / inii mini hit dead air. Any endpoint
 edit here must be a surgical conf edit + `module reload res_pjsip.so`, or `applyAndRebake`.
 
+## 3b. WHAT ACTUALLY HAPPENED — it starts with a site outage on Tue 2026-08-24
+
+⛔⛔ **"Faulty wire" was a lazy answer and the data argues against it.** The real shape:
+
+**Tue 2026-08-24, 11:40 UTC (07:40 EDT) — ALL THREE phones at the site went unreachable
+within 25 seconds of each other and stayed down ~22 minutes.**
+
+| endpoint | went unreachable | came back |
+|---|---|---|
+| T11_107 | 11:40:10 | 12:02:22 |
+| T11_105 | 11:40:21 | 12:01:42 |
+| T11_103 | 11:40:35 | 12:03:35 |
+
+✅ **That was THEIR site, not us — checked, not assumed.** Platform-wide that 45-minute
+window logged **46** UNREACHABLE events against a 15-day **median of 42** (p95 97, max
+132) — completely ordinary — and Asterisk has been up since Aug 19 with no restart.
+⛔ **Do not read a raw cross-tenant event count as an outage** — 53 events across 11
+tenants in that window looked alarming until it was compared against the baseline.
+
+**105 and 107 recovered clean. 103 has degraded every day since:**
+
+| day | 103 dropped keepalives | worst RTP loss on a 103 call |
+|---|---|---|
+| Aug 12–20 | 1–4/day, scattered | — (sampler only starts Aug 23) |
+| **Aug 24** (outage day) | 3 | **21%** |
+| **Aug 25** | **12**, all inside 13:09–14:55 EDT | 15%, 5% |
+| **Aug 26** | 5 by early afternoon | **34%, 37%, 49%** |
+
+The 49% is the 103→105 call at 13:24 — **three minutes before Shia opened the chat.**
+
+### The 27-second quantisation is the key to reading this
+
+⛔⛔ **Every "outage" is 27 seconds, with almost no variance** — 34 windows, median **27**,
+mode 27, and the only outliers are 57 / 59 / 87 / 87, i.e. **2 and 3 of the same unit**.
+With `qualify_frequency 30` / `qualify_timeout 3`, **27 s is exactly one lost OPTIONS
+packet** (3 s to time out, then clear at the next 30 s poll). **The phone is not going
+offline for half a minute — it is dropping individual packets in bursts**, and the
+keepalive machinery quantises that into apparent 27-second outages. Overall that is only
+**0.08% of ~43,200 qualifies in 15 days**, so the loss is bursty, not constant.
+
+### The loss originates AT 103, in both directions
+
+On the 13:24 call: `T11_103` rx **49%** / tx **28%**; `T11_105` rx **0%** / tx 48%.
+⛔ **105's 48% is INHERITED, not its own** — the PBX only received half of 103's audio and
+forwarded the gaps, so 105's RTCP reports them as loss. 105's own uplink was flawless.
+
+⛔⛔ **This rules out the WAN, the ISP and anything site-wide: at 13:24:31 exactly, 105
+was on that same call through that same router and lost 0%.**
+
+⚠ **Jitter stayed at 4–9 ms throughout, even at 49% loss.** Congestion and marginal
+cabling both raise jitter as packets queue and retry. **Clean loss at low jitter means
+packets are being discarded outright**, which points away from a bad cable and away from
+bandwidth contention.
+
+### Leading candidate, stated as a hypothesis
+
+**An IP conflict on `192.168.50.200`.** Two hosts answering for one address split traffic
+roughly in half — which is what 49% / 28% looks like — with low jitter, in bursts, for
+that host only, **beginning right after a network restart re-shuffled DHCP**, and
+worsening as more devices come online each day. ⚠ **103 sits at `.200`, a very common
+DHCP-pool start address**, while its healthy siblings are at `.205` and `.233`.
+
+Also open, same evidence: it may have come back on **Wi-Fi** rather than Ethernet after
+the 22-minute outage (the T34W has built-in Wi-Fi), or something is now daisy-chained
+through its **PC passthrough port**.
+
+⚠ **All three phones are the SAME model (Yealink T34W) on the SAME subnet** — 103
+`192.168.50.200` fw `124.86.0.77`, 105 `192.168.50.233` fw `124.86.0.75`, 107
+`192.168.50.205` fw `124.86.0.115` — so model and subnet are both ruled out, and firmware
+does not sort them (105 is on an OLDER build than 103 and is clean). Private addresses
+read from each contact's `call_id`.
+
+⚠ **One more fact worth acting on: 103 is the phone holding the router's external port
+5060** (`69.118.75.72:5060`) while 105 and 107 were remapped to high ports (43093, 59482)
+— all three use local 5060, so the NAT gave the first registrant the matching external
+port. **If that router runs SIP ALG, 103 is the only phone it touches.**
+
 ## 4. What to actually do
 
-1. **Look at the phone on ext 103** (Shlomie, 192.168.50.200): its cable, its switch port,
-   its PoE, or its wifi link. One device is losing a third of its packets on its way to
-   the PBX while three siblings on the same public IP measure clean.
-2. Nothing to change on the PBX. Nothing to change on the router. Nothing for Shia to do.
-3. Tell Shia his own line tests clean and the trouble is on the other end of his internal
-   calls — he is not imagining it.
+1. **Ask what happened at the office on Tue 26-08-24 around 07:40 EDT** — power cut,
+   internet outage, anyone working on the network. That is when this started, and nothing
+   before it looks like this.
+2. **On Shlomie's phone (T34W, `192.168.50.200`): is anything else on the network using
+   that address, and is the phone on Ethernet or Wi-Fi?** Cheapest test in the building:
+   give it a different address outside the DHCP pool (or let it take a fresh lease) and
+   watch whether the dropped keepalives stop.
+3. **Turn SIP ALG off on the router.** Good hygiene regardless, and 103 is the one phone
+   exposed to it.
+4. **Nothing to change on our side.** The PBX settings the report wanted are already
+   correct, and Shia's own line and phone are provably clean.
+5. Tell Shia the trouble is at the other end of his internal calls — he is not imagining
+   it, and it is not his phone.
 
 ## 5. Coverage caveat, stated rather than hidden
 

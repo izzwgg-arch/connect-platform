@@ -147,10 +147,50 @@ Escalation ref **Y6GQZ8**, Shia Weinstock ext 105, Trimpro (PBX tenant 11).
 - ⚠ **Coverage caveat, to be stated rather than hidden:** `RtpStatsSampler` samples every
   10 s over **active calls only**, so short calls carry no row (14 of 48 for ext 105).
   Report a census as "of sampled legs", never "of all calls".
-- ✅ **What the answer actually is:** look at the ONE phone on ext 103 — its cable, switch
-  port, PoE or wifi. Nothing to change on the PBX, nothing on the router, nothing for the
-  customer to do. ⏳ **NOT PROVEN: nobody has touched that phone yet**, and no follow-up
-  call has been made to Shia.
+- ⛔⛔ **WHAT ACTUALLY HAPPENED — and "faulty wire" was a lazy answer the data argues
+  against. It starts with a SITE OUTAGE on Tue 2026-08-24 at 07:40 EDT:** all three phones
+  (103, 105, 107) went unreachable **within 25 seconds of each other** and stayed down
+  **~22 minutes**. ✅ **That was THEIR site, checked not assumed** — platform-wide that
+  45-min window logged **46** UNREACHABLE against a 15-day **median of 42**, and Asterisk
+  had been up since Aug 19. ⛔ **Never read a raw cross-tenant event count as an outage** —
+  53 events across 11 tenants looked alarming until compared against the baseline.
+  **105 and 107 recovered clean; 103 has degraded every day since** — dropped keepalives
+  3 (24th) → **12** (25th, all inside 13:09–14:55 EDT) → 5 by early afternoon (26th), with
+  RTP loss tracking the same curve 21% → 15% → **34/37/49%**.
+- ⛔⛔ **THE 27-SECOND QUANTISATION IS HOW TO READ ANY QUALIFY DATA: 34 outage windows,
+  median 27 s, mode 27, outliers only 57/59/87/87 — exactly 2 and 3 of the same unit.**
+  With `qualify_frequency 30` / `qualify_timeout 3`, **27 s IS ONE LOST OPTIONS PACKET**
+  (3 s to time out, cleared at the next 30 s poll). The phone is **not** going offline for
+  half a minute — it drops individual packets in bursts and the keepalive machinery
+  quantises that into apparent 27-second outages. Only **0.08% of ~43,200 qualifies** in
+  15 days, so the loss is **bursty, not constant**.
+- ⛔ **The loss originates AT 103 in BOTH directions** (rx 49% / tx 28%), and **105's
+  apparent 48% is INHERITED** — the PBX received half of 103's audio and forwarded the
+  gaps, so 105's RTCP reports them as loss. 105's own uplink was flawless.
+  ⛔⛔ **That rules out the WAN, the ISP and anything site-wide: at 13:24:31 exactly, 105
+  was on that same call through that same router and lost 0%.**
+  ⚠ **Jitter stayed 4–9 ms even at 49% loss** — congestion and marginal cabling both RAISE
+  jitter; clean loss at low jitter means packets discarded outright, which points away
+  from a bad cable and away from bandwidth contention.
+- ⚠ **Leading hypothesis (stated as one): an IP conflict on `192.168.50.200`.** Two hosts
+  answering one address split traffic roughly in half — which is what 49%/28% looks like —
+  low jitter, bursty, one host only, **starting right after a network restart re-shuffled
+  DHCP**, worsening as more devices come online daily. **103 sits at `.200`, a very common
+  DHCP-pool start address**; its healthy siblings are `.205` and `.233`. Also open: it may
+  have come back on **Wi-Fi** after the outage (T34W has built-in Wi-Fi), or something is
+  daisy-chained through its **PC passthrough port**.
+- ⚠ **Model, subnet and firmware are all RULED OUT:** all three are Yealink **T34W** on
+  `192.168.50.x` — 103 fw `124.86.0.77`, 105 fw `124.86.0.75`, 107 fw `124.86.0.115` — and
+  **105 is on an OLDER build than 103 and is clean**. ✅ Private addresses come from each
+  contact's **`call_id`** (`pjsip show contact <aor/uri>`), the documented trick.
+- ⚠ **103 holds the router's external port 5060** (105 and 107 were remapped to 43093 /
+  59482 — all three use local 5060, so the NAT gave the first registrant the match).
+  **If that router runs SIP ALG, 103 is the only phone it touches.** Worth switching off.
+- ✅ **What to ask them, in order, all free:** (1) what happened at the office Tue 08-24
+  ~07:40 EDT; (2) is anything else using `192.168.50.200`, and is that phone on Ethernet
+  or Wi-Fi — give it a fresh//different address and watch; (3) turn SIP ALG off.
+  **Nothing to change on our side.** ⏳ **NOT PROVEN: nobody has touched that phone**, and
+  no follow-up call has been made to Shia.
 - ⏳ **The durable fix is to give the escalation researcher `rtpStats`** — `investigate`
   can read it today and the researcher simply does not know to. Until then this class of
   report will keep pointing at NAT.
