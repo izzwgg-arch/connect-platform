@@ -409,3 +409,102 @@ test("extractPosCustomer pulls id, name, address and email from common shapes", 
   assert.equal(ext!.email, "cs@example.com");
   assert.equal(extractPosCustomer({ foo: 1 }), null);
 });
+
+// ── learning layer 2: phrase lessons ────────────────────────────────────────
+
+test("pairLessons: the unambiguous single-skip/single-add case pairs with zero overlap", async () => {
+  const { pairLessons } = await import("./phraseLessons");
+  const pairs = pairLessons(["Doc's Sauce"], [{ posProductId: "duck1", name: "Duck Sauce Squeeze" }]);
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].posProductId, "duck1");
+});
+
+test("pairLessons: garbled brand phrase pairs to the rep's pick by stem overlap", async () => {
+  const { pairLessons } = await import("./phraseLessons");
+  const pairs = pairLessons(
+    ["Schrieber's Sparkler chip cookie dough", "Million Men canola oil"],
+    [
+      { posProductId: "cd1", name: "Cookie Dough Bombs Chocolate Chip", brand: "Ostreicher's" },
+      { posProductId: "oil1", name: "Canola Oil 96 Oz", brand: "Mehadrin" },
+    ],
+  );
+  assert.equal(pairs.length, 2);
+  assert.equal(pairs.find((p) => p.posProductId === "cd1") !== undefined, true);
+  assert.equal(pairs.find((p) => p.posProductId === "oil1") !== undefined, true);
+});
+
+test("pairLessons: a tie between two items for one phrase pairs NOTHING for that phrase", async () => {
+  const { pairLessons } = await import("./phraseLessons");
+  const pairs = pairLessons(
+    ["chocolate milk", "orange juice"],
+    [
+      { posProductId: "m1", name: "Chocolate Milk Quart" },
+      { posProductId: "m2", name: "Chocolate Milk Gallon" },
+    ],
+  );
+  // "chocolate milk" ties m1/m2 → skipped; "orange juice" overlaps neither
+  assert.equal(pairs.length, 0);
+});
+
+test("matchLessonsToLines: a stored garble matches the same garble next time", async () => {
+  const { matchLessonsToLines, normalizePhrase } = await import("./phraseLessons");
+  const lessons = [{ phrase: normalizePhrase("Doc's Sauce"), posProductId: "duck1" }];
+  const m = matchLessonsToLines(lessons, ["a small gate of Doc's Sauce", "eggs"]);
+  assert.deepEqual(m.get(0), ["duck1"]);
+  assert.equal(m.has(1), false);
+});
+
+test("the brain returns the per-line checklist: in_cart, unsure and skipped-with-suggestions", async () => {
+  const { runOrderBrain } = await import("./orderBrain");
+  const db = fakeBrainDb();
+  let call = 0;
+  const llm = async () => {
+    call++;
+    if (call === 1) {
+      return { isOrder: true, lines: [
+        { phrase: "milk", qty: 2 },
+        { phrase: "unicorn spread", qty: 1 },
+      ], remarks: [] };
+    }
+    return { picks: [{ line: 0, id: "p3", qty: 2 }], refused: [{ line: 1, reason: "Nothing like that in the catalog" }] };
+  };
+  const out = await runOrderBrain({ db, llm, keyResolver: async () => ({ apiKey: "k" }) } as any, "t1", "2 milk and unicorn spread");
+  assert.ok(out);
+  assert.equal(out!.lines!.length, 2);
+  assert.equal(out!.lines![0].outcome, "in_cart");
+  assert.equal(out!.lines![0].posProductId, "p3");
+  assert.equal(out!.lines![1].outcome, "skipped");
+  assert.match(String(out!.lines![1].reason), /Nothing like that/);
+  assert.ok(Array.isArray(out!.lines![1].suggestions), "skipped line carries suggestions");
+});
+
+test("harvestPhraseLessons upserts a lesson from a submitted draft's skipped line + rep-added item", async () => {
+  const { harvestPhraseLessons } = await import("./phraseLessons");
+  const upserts: any[] = [];
+  const db = { supermarketPhraseLesson: { upsert: async (a: any) => { upserts.push(a); } } };
+  const n = await harvestPhraseLessons(db, "t1", {
+    agentItems: [{ posProductId: "kept1" }],
+    agentLines: [{ phrase: "Doc's Sauce", outcome: "skipped" }, { phrase: "milk", outcome: "in_cart" }],
+  }, [
+    { posProductId: "kept1", name: "Milk" },
+    { posProductId: "duck1", name: "Duck Sauce Squeeze" },
+  ]);
+  assert.equal(n, 1);
+  assert.equal(upserts.length, 1);
+  assert.equal(upserts[0].create.posProductId, "duck1");
+  assert.equal(upserts[0].create.tenantId, "t1");
+});
+
+test("SOURCE GUARDS: agentLines is written at every compose site and lessons harvest at submit", async () => {
+  const fs = await import("node:fs");
+  const read = (p: string) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+  const builder = read("src/supermarket/draftBuilder.ts");
+  assert.equal((builder.match(/agentLines: content\.lines/g) ?? []).length, 2, "both create sites store agentLines");
+  const routes = read("src/supermarket/supermarketRoutes.ts");
+  assert.equal((routes.match(/agentLines: content\.lines/g) ?? []).length, 1, "reprocess stores agentLines");
+  const submit = read("src/supermarket/orderSubmit.ts");
+  assert.ok(submit.includes("harvestPhraseLessons(db, input.tenantId, draft"), "submit harvests lessons");
+  const brain = read("src/supermarket/orderBrain.ts");
+  assert.ok(brain.includes("REFUSING A LINE IS THE LAST RESORT"), "refusal is the last resort in the prompt");
+  assert.ok(brain.includes("learned:true"), "the prompt explains learned candidates");
+});

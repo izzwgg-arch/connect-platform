@@ -842,6 +842,7 @@ model Tenant {
   posCatalogItems                 PosCatalogItem[]
   posCatalogSyncState             PosCatalogSyncState?
   supermarketOrderDrafts          SupermarketOrderDraft[]
+  supermarketPhraseLessons        SupermarketPhraseLesson[]
   supermarketPhonePins            SupermarketPhonePin[]
   supermarketPayCalls             SupermarketPayCall[]
   supermarketSpecials             SupermarketSpecial[]
@@ -8066,6 +8067,11 @@ model SupermarketOrderDraft {
   status        String    @default("NEEDS_REVIEW")
   /// The agent's ORIGINAL guess, frozen at build time — the training data.
   agentItems    Json?
+  /// The brain's EXTRACTED line list with per-line outcome — Izzy 2026-08-26:
+  /// "I should see an item list in English. Each item should be checked if
+  /// it's in the cart or not." [{ phrase, qty, constraints?, outcome:
+  /// "in_cart"|"unsure"|"skipped", posProductId?, name?, reason? }]
+  agentLines    Json?
   /// Computed agent-vs-approved diff, written at approval (correction capture).
   corrections   Json?
   /// "Pickup" | "Delivery" — Delivery feeds the delivery tracker after submit.
@@ -8086,6 +8092,27 @@ model SupermarketOrderDraft {
   @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, status, createdAt])
   @@index([tenantId, createdAt])
+}
+
+/// Learning layer 2 (Izzy 2026-08-26: "we need data so the system can see the
+/// mistakes... so it will auto-correct itself eventually"): a phrase the
+/// transcription produced, paired with the product a REP actually chose for
+/// it on a submitted order. Fed back into the brain as candidates — a lesson
+/// is a HINT the model judges, never a forced pick.
+model SupermarketPhraseLesson {
+  id              String   @id @default(cuid())
+  tenantId        String
+  /// Normalized phrase exactly as the transcription/translation garbled it.
+  phrase          String
+  posProductId    String
+  timesConfirmed  Int      @default(1)
+  lastConfirmedAt DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phrase, posProductId])
+  @@index([tenantId, lastConfirmedAt])
 }
 
 /// Pay-by-phone PIN enrollment: the account PIN, encrypted, bound to ONE

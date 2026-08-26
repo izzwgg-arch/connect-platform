@@ -464,6 +464,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
             translation: content.translation,
             items: content.items,
             agentItems: content.items,
+            agentLines: content.lines ?? undefined,
             comments: content.comments,
             notes: content.notes,
             // ⛔ "not every message is an order... It's not supposed to be a
@@ -600,15 +601,19 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     // (sanitizeDraftItems strips them on every write)
     try {
       const items: any[] = Array.isArray(draft.items) ? draft.items : [];
-      const ids = items.map((i) => String(i?.posProductId ?? "")).filter(Boolean);
+      const agentLines: any[] = Array.isArray((draft as any).agentLines) ? ((draft as any).agentLines as any[]) : [];
+      const suggIds = agentLines.flatMap((l: any) =>
+        Array.isArray(l?.suggestions) ? l.suggestions.map((s: any) => String(s?.posProductId ?? "")) : [],
+      );
+      const ids = [...new Set([...items.map((i) => String(i?.posProductId ?? "")), ...suggIds])].filter(Boolean);
       if (ids.length) {
         const rows = await db.posCatalogItem.findMany({
-          where: { tenantId: tenantOf(req), posProductId: { in: ids.slice(0, 100) } },
+          where: { tenantId: tenantOf(req), posProductId: { in: ids.slice(0, 200) } },
           select: { posProductId: true, imageUrl: true, onHand: true },
         });
         const byId = new Map(rows.map((p: any) => [p.posProductId, p]));
-        draft.items = items.map((i) => {
-          const row: any = byId.get(i?.posProductId);
+        const decorate = (i: any) => {
+          const row: any = byId.get(String(i?.posProductId ?? ""));
           if (!row) return i;
           return {
             ...i,
@@ -616,7 +621,14 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
             // "not in stock" on the order line — current as of the last tick
             ...(row.onHand !== null && row.onHand <= 0 ? { outOfStock: true } : {}),
           };
-        });
+        };
+        draft.items = items.map(decorate);
+        // the checklist's skipped-line suggestions get photos/stock too
+        if (agentLines.length) {
+          (draft as any).agentLines = agentLines.map((l: any) =>
+            Array.isArray(l?.suggestions) ? { ...l, suggestions: l.suggestions.map(decorate) } : l,
+          );
+        }
       }
     } catch {
       /* photos are decoration — never fail the draft read */

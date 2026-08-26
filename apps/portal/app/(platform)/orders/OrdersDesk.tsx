@@ -75,6 +75,7 @@ export const SM_ORDERS_PHRASES = [
   "Put order through & charge", "But the card was not charged:",
   "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
   "Closest match — check with the customer", "not in stock",
+  "WHAT THEY ASKED FOR", "Click to search the catalog for this", "Add this instead",
 ] as string[];
 
 type DraftRow = {
@@ -101,6 +102,8 @@ type DraftRow = {
   paymentStatus?: string | null;
   paymentLast4?: string | null;
   paymentAmountCents?: number | null;
+  /** the extracted item list with per-line in-cart/skipped outcome */
+  agentLines?: AskLine[] | null;
 };
 
 type DraftItem = {
@@ -119,6 +122,18 @@ type DraftItem = {
 };
 
 type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
+
+/** The brain's per-line checklist — what the customer asked for, in English. */
+type AskLine = {
+  phrase: string;
+  qty: number;
+  constraints?: string;
+  outcome: "in_cart" | "unsure" | "skipped";
+  posProductId?: string;
+  name?: string;
+  reason?: string;
+  suggestions?: Array<{ posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null; outOfStock?: boolean }>;
+};
 
 /**
  * One product-photo renderer for every supermarket surface. ⛔ A broken or
@@ -751,6 +766,58 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                 <div className="sm-sku">{t("No account with that number on the register.")}</div>
               ) : null}
             </div>
+
+            {Array.isArray(draft.agentLines) && draft.agentLines.length > 0 ? (
+              <div className="sm-asklist">
+                <div className="sm-asklist-h">{t("WHAT THEY ASKED FOR")}</div>
+                {draft.agentLines.map((l, idx) => {
+                  // judged LIVE against the current cart, so a fixed line flips to a check
+                  const inCart =
+                    (l.posProductId && items.some((i) => i.posProductId === l.posProductId)) ||
+                    (Array.isArray(l.suggestions) && l.suggestions.some((sg) => items.some((i) => i.posProductId === sg.posProductId)));
+                  const state = inCart ? (l.outcome === "unsure" ? "unsure" : "in") : "out";
+                  return (
+                    <div key={idx} className={`sm-askline sm-askline--${state}`}>
+                      <span className="sm-askmark" aria-hidden>{state === "in" ? "✓" : state === "unsure" ? "?" : "✗"}</span>
+                      <span className="sm-askbody">
+                        <span
+                          className="sm-askphrase"
+                          role={!readOnly && state === "out" ? "button" : undefined}
+                          title={!readOnly && state === "out" ? t("Click to search the catalog for this") : undefined}
+                          onClick={() => {
+                            if (readOnly || state !== "out") return;
+                            setQ(l.phrase);
+                            boxRef.current?.focus();
+                          }}
+                        >
+                          {l.qty > 1 ? `${l.qty}× ` : ""}{l.phrase}
+                          {l.constraints ? <span className="sm-askcon"> ({l.constraints})</span> : null}
+                        </span>
+                        {state !== "out" && l.name ? <span className="sm-askto"> → {l.name}</span> : null}
+                        {state === "out" && l.reason ? <span className="sm-askwhy"> — {l.reason}</span> : null}
+                        {state === "out" && !readOnly && Array.isArray(l.suggestions) && l.suggestions.length > 0 ? (
+                          <span className="sm-asksugg">
+                            {l.suggestions.slice(0, 4).map((sg) => (
+                              <button
+                                key={sg.posProductId}
+                                type="button"
+                                className="sm-asschip"
+                                title={t("Add this instead")}
+                                onClick={() => addHit({ posProductId: sg.posProductId, code: sg.code, name: sg.name, unitPriceCents: sg.unitPriceCents, imageUrl: sg.imageUrl }, l.qty)}
+                              >
+                                <SmItemPhoto url={sg.imageUrl} size={20} />
+                                <span>{sg.name}</span>
+                                <b>{money(sg.unitPriceCents)}</b>
+                              </button>
+                            ))}
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
 
             <table className="sm-items">
               <tbody>

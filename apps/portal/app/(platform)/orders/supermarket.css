@@ -282,3 +282,58 @@
     font-size: .6rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; vertical-align: 1px;
     background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger);
     border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
+
+/* ── "What they asked for" checklist (Izzy 2026-08-26): every extracted line,
+   checked live against the cart; skipped lines carry the reason + one-click
+   alternatives. Same --sm-* token discipline as the rest of the desk. */
+.sm-root .sm-asklist {
+  margin: 10px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+}
+.sm-root .sm-asklist-h {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 2px 0 6px;
+}
+.sm-root .sm-askline {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  border-top: 1px dashed var(--border);
+}
+.sm-root .sm-askline:first-of-type { border-top: 0; }
+.sm-root .sm-askmark {
+  flex: 0 0 16px;
+  text-align: center;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.sm-root .sm-askline--in .sm-askmark { color: var(--sm-pill-wic-ink); }
+.sm-root .sm-askline--unsure .sm-askmark { color: var(--sm-pill-warn-ink); }
+.sm-root .sm-askline--out .sm-askmark { color: var(--danger); }
+.sm-root .sm-askbody { flex: 1; min-width: 0; line-height: 1.5; }
+.sm-root .sm-askline--out .sm-askphrase[role="button"] { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.sm-root .sm-askcon { color: var(--text-dim); }
+.sm-root .sm-askto { color: var(--text-dim); }
+.sm-root .sm-askwhy { color: var(--danger); }
+.sm-root .sm-asksugg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.sm-root .sm-asschip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11.5px;
+  padding: 3px 8px 3px 4px;
+  cursor: pointer;
+}
+.sm-root .sm-asschip:hover { border-color: var(--accent); }
+.sm-root .sm-asschip b { font-weight: 600; }

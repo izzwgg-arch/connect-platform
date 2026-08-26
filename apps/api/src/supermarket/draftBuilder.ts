@@ -60,6 +60,8 @@ export type DraftContent = {
   notAnOrder?: string;
   /** The account phone the customer STATED in the message (10 digits). */
   statedPhone?: string;
+  /** Per-line checklist (BrainLine[]) — what they asked for, in/out + why. */
+  lines?: any[];
 };
 
 /**
@@ -111,6 +113,7 @@ export async function composeDraftContent(
       engine: `brain:${brainResult.model}${ylTag}`,
       notAnOrder: brainResult.notAnOrder?.reason,
       statedPhone: brainResult.customerPhone,
+      lines: brainResult.lines,
     };
   }
   // no tenant OpenAI key / brain failure → the regex matcher over the ENGLISH
@@ -266,6 +269,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             translation: content.translation,
             items: content.items,
             agentItems: content.items,
+            agentLines: content.lines ?? undefined,
             comments: content.comments,
             notes: content.notes,
           },
@@ -328,6 +332,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             translation: content.translation,
             items: content.items,
             agentItems: content.items,
+            agentLines: content.lines ?? undefined,
             comments: content.comments,
             notes: content.notes,
           },

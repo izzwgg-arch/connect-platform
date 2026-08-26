@@ -15,6 +15,7 @@
  */
 
 import { computeCorrections } from "./draftMatcher";
+import { harvestPhraseLessons } from "./phraseLessons";
 import { posClientForTenant } from "./integrationCredentials";
 import { PosApiError, posPhoneDigits, toPosExternalId } from "./posWithLogic";
 
@@ -175,6 +176,16 @@ export async function approveAndSubmitDraft(
     where: { id: draft.id },
     data: { status: "SUBMITTED", posOrderId, submitError: null, submittedAt: new Date() },
   });
+
+  // Learning layer 2 — pair the brain's SKIPPED phrases with the items the
+  // rep ADDED, now proven by a submitted order (Izzy: "the system... will
+  // auto-correct itself eventually"). Best-effort: the order already landed
+  // on the register, so a lesson failure must never surface here.
+  try {
+    await harvestPhraseLessons(db, input.tenantId, draft as any, input.reviewedItems);
+  } catch {
+    /* never let learning fail a submitted order */
+  }
 
   // 4) Delivery tracker tie-in — best-effort, after the register accepted.
   if (input.orderMethod === "Delivery" && deps.ingestDeliveryOrder) {

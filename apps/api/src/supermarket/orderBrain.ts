@@ -28,6 +28,7 @@
 import { resolveIntegrationKey } from "./integrationCredentials";
 import { posPhoneDigits } from "./posWithLogic";
 import { detectWic, WIC_COMMENT, type DraftItem } from "./draftMatcher";
+import { loadLessons, matchLessonsToLines } from "./phraseLessons";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
 const BRAIN_TIMEOUT_MS = 90_000;
@@ -44,6 +45,26 @@ export type BrainResult = {
   notAnOrder?: { reason: string };
   /** The account phone the customer STATED (10 digits, 845-defaulted), if any. */
   customerPhone?: string;
+  /**
+   * The extracted line list with per-line outcome — the desk's "what they
+   * asked for" checklist (Izzy: "each item should be checked if it's in the
+   * cart or not... next to it should be a reason why it's not").
+   */
+  lines?: BrainLine[];
+};
+
+export type BrainLine = {
+  phrase: string;
+  qty: number;
+  constraints?: string;
+  outcome: "in_cart" | "unsure" | "skipped";
+  /** Set for in_cart/unsure — the product that landed on the order. */
+  posProductId?: string;
+  name?: string;
+  /** Set for skipped — the brain's own reason, plain English. */
+  reason?: string;
+  /** Skipped lines carry the top catalog alternatives for one-click add. */
+  suggestions?: Array<{ posProductId: string; code: string; name: string; unitPriceCents: number }>;
 };
 
 type ExtractedLine = { phrase: string; qty: number; constraints: string };
@@ -87,8 +108,9 @@ For a real order output STRICT JSON:
 Customers identify their account by SPEAKING their phone number — always capture it when stated; seven digits is normal (the area code is implied).
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
-const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. A brand the customer NAMES ("Gold's pads", "Ta'am Tov cream of lox") is a hard constraint: never pick another brand's product just because a generic word matches (pads, milk, cream) — if the named brand isn't among the candidates, refuse the line or pick the same TYPE of product with "unsure":true, never an unrelated product. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
-When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size or count), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. A candidate marked inStock:false is out of stock — prefer an in-stock one; when only an out-of-stock candidate matches, still pick it with "unsure":true. Refuse a line only when nothing close exists or a hard constraint rules every candidate out. Output STRICT JSON:
+const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. A brand the customer NAMES ("Gold's pads", "Ta'am Tov cream of lox") is a hard constraint: never pick another brand's product just because a generic word matches (pads, milk, cream). When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
+The request text comes from a speech transcription that GARBLES brand names phonetically ("Ostreicher's" arrives as "Schrieber's", "duck sauce" as "Doc's Sauce") — match brands by SOUND when a candidate's brand is phonetically close to what was asked. A candidate marked learned:true was chosen by a store rep for this same phrase on a past order — strongly prefer it.
+When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size, count or brand of the same TYPE of product), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. A candidate marked inStock:false is out of stock — prefer an in-stock one; when only an out-of-stock candidate matches, still pick it with "unsure":true. REFUSING A LINE IS THE LAST RESORT: refuse only when nothing of that product type exists among the candidates at all — an empty line costs the store a sale, while an unsure pick just gets a question mark for the rep. Output STRICT JSON:
 {"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>,"unsure":<true ONLY for a close-variant pick>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
 Never invent an id that is not among that line's candidates or customerUsuals. Never change prices.`;
 
@@ -246,6 +268,37 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   for (const line of lines) candidateSets.push(await search(deps.db, tenantId, line.phrase));
   const usuals = await customerUsuals(deps.db, tenantId, opts.customerPhone ?? statedPhone);
 
+  // 2b) phrase LESSONS — products a rep chose for this same garbled phrase on
+  //     a past submitted order, re-fetched LIVE from the catalog and appended
+  //     as candidates marked learned:true. A hint the model judges, never a
+  //     forced pick (learning layer 2).
+  try {
+    const lessons = await loadLessons(deps.db, tenantId);
+    if (lessons.length) {
+      const matched = matchLessonsToLines(lessons, lines.map((l) => l.phrase));
+      const wantedIds = [...new Set([...matched.values()].flat())];
+      if (wantedIds.length) {
+        const rows = await deps.db.posCatalogItem.findMany({
+          where: { tenantId, isActive: true, posProductId: { in: wantedIds } },
+          select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
+        });
+        const byId = new Map((rows ?? []).map((r: any) => [r.posProductId, r]));
+        for (const [lineIdx, ids] of matched) {
+          for (const id of ids) {
+            const row = byId.get(id);
+            if (!row) continue;
+            const set = candidateSets[lineIdx];
+            const existing = set.find((c: any) => c.posProductId === id);
+            if (existing) existing.learned = true;
+            else set.push({ ...row, learned: true });
+          }
+        }
+      }
+    }
+  } catch {
+    /* lessons are best-effort — never block a draft */
+  }
+
   // 3) RESOLVE
   const asCandidate = (c: any) => ({
     id: c.posProductId,
@@ -254,6 +307,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     size: c.sizeText ?? undefined,
     price: (c.unitPriceCents / 100).toFixed(2),
     ...(c.onHand !== null && c.onHand !== undefined && c.onHand <= 0 ? { inStock: false } : {}),
+    ...(c.learned ? { learned: true } : {}),
   });
   const resolveUser = JSON.stringify({
     lines: lines.map((l, i) => ({
@@ -271,6 +325,8 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   const items: DraftItem[] = [];
   const notes: string[] = [...remarks];
   const pickedLines = new Set<number>();
+  const lineOutcome = new Map<number, { outcome: "in_cart" | "unsure"; posProductId: string; name: string }>();
+  const lineReason = new Map<number, string>();
   for (const pick of resolved.picks.slice(0, MAX_BRAIN_LINES)) {
     const lineIdx = Math.floor(Number(pick?.line));
     if (!Number.isFinite(lineIdx) || lineIdx < 0 || lineIdx >= lines.length || pickedLines.has(lineIdx)) continue;
@@ -280,6 +336,11 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     const candidate = candidateSets[lineIdx]?.find((c) => c.posProductId === pickId) ?? usuals.find((c) => c.posProductId === pickId);
     if (!candidate) continue;
     pickedLines.add(lineIdx);
+    lineOutcome.set(lineIdx, {
+      outcome: pick?.unsure === true ? "unsure" : "in_cart",
+      posProductId: candidate.posProductId,
+      name: candidate.name,
+    });
     const existing = items.find((i) => i.posProductId === candidate.posProductId);
     const qty = normalizeQty(pick?.qty ?? lines[lineIdx].qty);
     if (existing) existing.qty = Math.min(99, existing.qty + qty);
@@ -301,15 +362,41 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
       const lineIdx = Math.floor(Number(r?.line));
       const line = Number.isFinite(lineIdx) ? lines[lineIdx] : null;
       const reason = String(r?.reason ?? "").slice(0, 200);
-      if (line) notes.push(`${line.qty > 1 ? `${line.qty}x ` : ""}${line.phrase}${line.constraints ? ` (${line.constraints})` : ""} — ${reason || "needs a person"}`);
+      if (line && !pickedLines.has(lineIdx)) {
+        lineReason.set(lineIdx, reason || "needs a person");
+        notes.push(`${line.qty > 1 ? `${line.qty}x ` : ""}${line.phrase}${line.constraints ? ` (${line.constraints})` : ""} — ${reason || "needs a person"}`);
+      }
     }
   }
   // lines the model neither picked nor refused still reach the rep
   for (let i = 0; i < lines.length; i++) {
-    if (!pickedLines.has(i) && !(Array.isArray(resolved.refused) && resolved.refused.some((r: any) => Math.floor(Number(r?.line)) === i))) {
+    if (!pickedLines.has(i) && !lineReason.has(i)) {
+      lineReason.set(i, "No match found in the catalog");
       notes.push(`${lines[i].qty > 1 ? `${lines[i].qty}x ` : ""}${lines[i].phrase}${lines[i].constraints ? ` (${lines[i].constraints})` : ""} — not matched`);
     }
   }
+  // The per-line checklist the desk renders — every asked-for item with its
+  // outcome, and for a skipped line the reason plus the top catalog
+  // alternatives ("if the brand doesn't exist, auto-suggest alternatives").
+  const brainLines: BrainLine[] = lines.map((l, i) => {
+    const hit = lineOutcome.get(i);
+    if (hit) {
+      return { phrase: l.phrase, qty: l.qty, ...(l.constraints ? { constraints: l.constraints } : {}), outcome: hit.outcome, posProductId: hit.posProductId, name: hit.name };
+    }
+    return {
+      phrase: l.phrase,
+      qty: l.qty,
+      ...(l.constraints ? { constraints: l.constraints } : {}),
+      outcome: "skipped" as const,
+      reason: lineReason.get(i) ?? "No match found in the catalog",
+      suggestions: (candidateSets[i] ?? []).slice(0, 4).map((c: any) => ({
+        posProductId: c.posProductId,
+        code: c.code,
+        name: c.name,
+        unitPriceCents: c.unitPriceCents,
+      })),
+    };
+  });
   const comments = detectWic(text) ? [WIC_COMMENT] : [];
-  return { items, comments, notes: notes.slice(0, 20), model, customerPhone: statedPhone };
+  return { items, comments, notes: notes.slice(0, 20), model, customerPhone: statedPhone, lines: brainLines };
 }
