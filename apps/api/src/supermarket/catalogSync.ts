@@ -27,16 +27,16 @@ import { posAmountToCents, posUnitPriceCents } from "./posWithLogic";
 export const CATALOG_SYNC_DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 export const CATALOG_SYNC_BOOT_DELAY_MS = 3 * 60 * 1000;
 /**
- * ⛔ Sized against the REAL store, 2026-08-26: Gesheft's catalog is ~5,211
+ * ⛔ Sized against the REAL store, 2026-08-26: Gesheft's catalog measured 7,198+ rows on the first full walk (their total:5211 undercounts inactive)
  * items and their `take` is hard-capped at 100 ("Take must be between 1 and
- * 100" — probed), so a full walk is ~53 calls. The budget must let a full
+ * 100" — probed), so a full walk is ~75+ calls. The budget must let a full
  * catalog finish INSIDE ONE RUN: in-run cursor paging is proven good, while
  * the first cross-run cursor resume came back 500 — a budget smaller than the
  * catalog would restart from scratch every run, never finish, never set the
  * lastMod high-water, and spend ~21 credits per 15 minutes forever. After the
  * first FINISHED sweep, lastMod makes every later run ~1 call.
  */
-export const DEFAULT_PAGE_BUDGET = 80;
+export const DEFAULT_PAGE_BUDGET = 120;
 
 export type ParsedProduct = {
   posProductId: string;
@@ -143,7 +143,16 @@ export type CatalogSyncDeps = {
   /** Injected for tests; production uses the real client factory. */
   clientFor?: typeof posClientForTenant;
   pageBudget?: number;
+  /** ms between catalog pages. ⛔ Their rate limiter 429'd a full-speed walk at
+   *  page 73 (measured live 2026-08-26) — pacing is what lets a whole catalog
+   *  finish in one run. Tests pass 0. */
+  pagePaceMs?: number;
 };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export const DEFAULT_PAGE_PACE_MS = 350;
+/** How many 429 waits one run will honour before giving up. */
+export const MAX_RATE_LIMIT_WAITS = 3;
 
 let running = false;
 
@@ -163,6 +172,7 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
   const log = deps.log ?? { info: () => {}, warn: () => {}, error: () => {} };
   const clientFor = deps.clientFor ?? posClientForTenant;
   const pageBudget = Math.max(1, deps.pageBudget ?? Number(process.env.SUPERMARKET_CATALOG_PAGE_BUDGET || DEFAULT_PAGE_BUDGET));
+  const pagePaceMs = deps.pagePaceMs ?? Number(process.env.SUPERMARKET_CATALOG_PAGE_PACE_MS || DEFAULT_PAGE_PACE_MS);
 
   const tenants = await db.tenant.findMany({
     where: { crmMode: "supermarket", pbxRemovedAt: null },
@@ -190,6 +200,7 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
     let error: string | null = null;
     let finished = false;
 
+    let rateLimitWaits = 0;
     while (pages < pageBudget) {
       pages++;
       let body: unknown;
@@ -203,6 +214,17 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
           includeInactive: true,
         });
       } catch (err: any) {
+        // ⛔ A 429 is "slow down", not "give up" — honour Retry-After (capped)
+        // and retry the SAME page, a bounded number of times per run. Aborting
+        // on 429 is what left the walk restarting from scratch forever.
+        if (err?.code === "pos_rate_limited" && rateLimitWaits < MAX_RATE_LIMIT_WAITS) {
+          rateLimitWaits++;
+          pages--; // the failed request spent no page of the budget's progress
+          const waitSec = Math.min(Math.max(Number(err.retryAfterSec ?? 15), 1), 60);
+          log.warn({ tenantId: tenant.id, waitSec, rateLimitWaits }, "supermarket catalog sync rate-limited; waiting");
+          await sleep(waitSec * 1000);
+          continue;
+        }
         error = String(err?.code ?? err?.message ?? "pos_error").slice(0, 200);
         break;
       }
@@ -234,6 +256,7 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
         break;
       }
       cursor = page.cursor;
+      if (pagePaceMs > 0) await sleep(pagePaceMs);
     }
 
     const itemCount = await db.posCatalogItem.count({ where: { tenantId: tenant.id } });

@@ -511,7 +511,7 @@ test("STRESS 11 — catalog sync paging storm: 12,000 products over 120 cursor p
   const clientFor = clientForFactory(new Map([["t-cat", pos]]));
   let runs = 0;
   while (runs++ < 40) {
-    await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10 });
+    await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10, pagePaceMs: 0 });
     const state = db.rows("posCatalogSyncState")[0];
     if (state && !state.cursor && state.lastMod) break;
     // ⛔ mid-cursor the high-water must NOT have advanced
@@ -523,8 +523,25 @@ test("STRESS 11 — catalog sync paging storm: 12,000 products over 120 cursor p
   assert.equal(state.lastMod, "2026-08-25");
   assert.equal(state.itemCount, 12_000);
   // idempotent re-run with lastMod: nothing older re-fetched, count stable
-  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10 });
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10, pagePaceMs: 0 });
   assert.equal(db.rows("posCatalogItem").length, 12_000);
+});
+
+test("STRESS 11b — a mid-walk 429 waits Retry-After and CONTINUES the same walk (the live 2026-08-26 failure: aborting restarts from scratch forever)", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos({ failEvery: 25, failStatus: 429 }); // every 25th request is a 429
+  for (let i = 0; i < 4000; i++) {
+    pos.products.push({ id: `rl${i}`, code: String(i), name: `p${i}`, price: 1, lastMod: "m" });
+  }
+  await seedPosTenant(db, "t-rl", pos);
+  pos.counter = 0;
+  const clientFor = clientForFactory(new Map([["t-rl", pos]]));
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pagePaceMs: 0 });
+  const state = db.rows("posCatalogSyncState")[0];
+  // 40 pages + a 429 every 25th request: with wait-and-continue the walk FINISHES.
+  assert.equal(db.rows("posCatalogItem").length, 4000, `429s aborted the walk: ${JSON.stringify(state)}`);
+  assert.equal(state.lastMod, "m", "high-water not set — the walk did not finish");
+  assert.equal(state.lastError, null);
 });
 
 // ═════════════════════════════ STRESS 12 ═════════════════════════════════════
@@ -535,7 +552,7 @@ test("STRESS 12 — catalog sync vs 40 hostile page shapes: records lastError, n
   goodPos.products.push({ id: "keep1", code: "1", name: "Keep me", price: 1, lastMod: "a" });
   await seedPosTenant(db, "t-host", goodPos);
   const clientFor1 = clientForFactory(new Map([["t-host", goodPos]]));
-  await runCatalogSyncSweep({ db, clientFor: clientFor1 as any });
+  await runCatalogSyncSweep({ db, clientFor: clientFor1 as any, pagePaceMs: 0 });
   assert.equal(db.rows("posCatalogItem").length, 1);
 
   const hostileBodies = [
@@ -548,7 +565,7 @@ test("STRESS 12 — catalog sync vs 40 hostile page shapes: records lastError, n
     badPos.fetchImpl = (async () => ({ status: 200, headers: { get: () => null }, text: async () => hostile })) as any;
     // re-point the same tenant at the hostile register
     const clientFor2 = clientForFactory(new Map([["t-host", badPos]]));
-    await runCatalogSyncSweep({ db, clientFor: clientFor2 as any });
+    await runCatalogSyncSweep({ db, clientFor: clientFor2 as any, pagePaceMs: 0 });
     assert.equal(db.rows("posCatalogItem").length, 1, `stored items were disturbed by: ${hostile.slice(0, 40)}`);
   }
   // parseProductsPage direct sweep too
@@ -571,7 +588,7 @@ test("STRESS 13 — the credit meter: a full sync + lookups account exactly the 
   for (let i = 0; i < 250; i++) pos.products.push({ id: `pc${i}`, code: String(i), name: `p${i}`, price: 1, lastMod: "z" });
   await seedPosTenant(db, "t-credit", pos);
   const clientFor = clientForFactory(new Map([["t-credit", pos]]));
-  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10 });
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10, pagePaceMs: 0 });
   const state = db.rows("posCatalogSyncState")[0];
   // 250 products at take=100 → 3 pages → 3 credits (products = 1 credit each)
   assert.equal(state.creditsSpent, 3, `meter read ${state.creditsSpent}, expected 3`);
@@ -1075,7 +1092,7 @@ test("STRESS 25 — the life of 120 orders, end to end: voicemail/text → sweep
 
   // 0) catalog sync fills the quick-add index
   const clientFor = clientForFactory(posByTenant);
-  await runCatalogSyncSweep({ db, clientFor: clientFor as any });
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pagePaceMs: 0 });
   assert.equal(db.rows("posCatalogItem").length, 200);
 
   // 1) 60 voicemails + 60 texts arrive (some WIC, some remarks)
