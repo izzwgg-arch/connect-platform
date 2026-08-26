@@ -122,7 +122,8 @@ function fakeBrainDb() {
           if (Array.isArray(w?.AND)) w.AND.forEach(collect);
         };
         collect(where);
-        if (where?.code?.startsWith) rows = rows.filter((r) => r.code.startsWith(where.code.startsWith));
+        if (Array.isArray(where?.posProductId?.in)) rows = rows.filter((r) => where.posProductId.in.includes(r.posProductId));
+        else if (where?.code?.startsWith) rows = rows.filter((r) => r.code.startsWith(where.code.startsWith));
         else if (nameFilters.length) rows = rows.filter((r) => nameFilters.every((t) => r.name.toLowerCase().includes(t)));
         return rows.slice(0, take ?? 6);
       },
@@ -208,6 +209,28 @@ test("a complaint is NOT an order — one LLM call, no resolve pass, reason kept
   assert.equal(calls, 1, "the resolve pass must be skipped for a non-order");
   assert.equal(out!.notAnOrder?.reason, "Complaint about a wrong delivery, not a new order.");
   assert.equal(out!.items.length, 0);
+});
+
+test("the brain may pick from the customer's own USUALS (learning layer 1)", async () => {
+  let call = 0;
+  const llm = async (_k: string, _m: string, _sys: string, user: string) => {
+    call++;
+    if (call === 1) return { isOrder: true, lines: [{ phrase: "the milk I always get", qty: 1, constraints: "" }], remarks: [] };
+    const parsed = JSON.parse(user);
+    // the usuals travel to the model and their ids are valid picks
+    const usual = parsed.customerUsuals?.[0];
+    return { picks: usual ? [{ line: 0, id: usual.id, qty: 1 }] : [], refused: [] };
+  };
+  const db: any = fakeBrainDb();
+  db.supermarketOrderDraft = {
+    findMany: async () => [{ items: [{ posProductId: "p3", code: "333", name: "Whole Milk", qty: 1, unitPriceCents: 429 }] }],
+  };
+  const out = await runOrderBrain({ db, llm: llm as any, keyResolver: fakeKey } as any, "t1", "the milk I always get", { customerPhone: "8452815596" });
+  assert.ok(out);
+  assert.equal(out!.items.length, 1);
+  assert.equal(out!.items[0].posProductId, "p3");
+  // ⛔ the price came from the LIVE catalog row, not the historical draft
+  assert.equal(out!.items[0].unitPriceCents, 429);
 });
 
 test("the customer's SPOKEN phone number is captured, 845-defaulted at 7 digits", async () => {

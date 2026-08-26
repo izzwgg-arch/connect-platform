@@ -432,6 +432,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
           text,
           localAudioPath,
           voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
+          customerPhone: String(draft.customerPhone ?? "") || undefined,
         });
         // the customer SPOKE their account number → re-run the POS lookup on it
         let customerFields: any = {};

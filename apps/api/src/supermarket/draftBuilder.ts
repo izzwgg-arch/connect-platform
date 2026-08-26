@@ -73,7 +73,7 @@ export async function composeDraftContent(
   deps: DraftBuilderDeps,
   tenantId: string,
   index: ReturnType<typeof buildCatalogIndex>,
-  input: { kind: "voicemail" | "text"; text: string; localAudioPath?: string | null; voicemailId?: string },
+  input: { kind: "voicemail" | "text"; text: string; localAudioPath?: string | null; voicemailId?: string; customerPhone?: string },
 ): Promise<DraftContent> {
   const prepare = deps.prepareText ?? prepareOrderText;
   const brain = deps.brain ?? runOrderBrain;
@@ -84,7 +84,9 @@ export async function composeDraftContent(
   const english = (prepared.translation || prepared.transcript).trim();
   const ylTag = prepared.engine.startsWith("yiddishlabs") ? "+yl" : "";
   const prefixNotes = prepared.error ? [`transcription: ${prepared.error}`] : [];
-  const brainResult = english ? await brain({ db: deps.db }, tenantId, english).catch(() => null) : null;
+  const brainResult = english
+    ? await brain({ db: deps.db }, tenantId, english, { customerPhone: input.customerPhone }).catch(() => null)
+    : null;
   if (brainResult) {
     return {
       transcript: prepared.transcript.slice(0, 8000),
@@ -229,6 +231,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
         text,
         localAudioPath: vm.localAudioPath,
         voicemailId: vm.id,
+        customerPhone: String(vm.callerNumber ?? ""),
       });
       // ⛔ the account IS the phone number (Izzy) — the number the customer
       // SPOKE in the message beats caller ID for the account lookup.
@@ -292,7 +295,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
       });
       if (existing) continue;
       const phone = String(msg.thread?.externalSmsE164 ?? "");
-      const content = await composeDraftContent(deps, tenant.id, index, { kind: "text", text });
+      const content = await composeDraftContent(deps, tenant.id, index, { kind: "text", text, customerPhone: phone });
       const accountPhone = content.statedPhone || phone;
       const customer = await lookupCustomer(client, customerCache, accountPhone);
       try {

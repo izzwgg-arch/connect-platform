@@ -87,9 +87,9 @@ For a real order output STRICT JSON:
 Customers identify their account by SPEAKING their phone number — always capture it when stated; seven digits is normal (the area code is implied).
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
-const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand; if no candidate honours the constraints, refuse the line. Output STRICT JSON:
+const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand; if no candidate honours the constraints, refuse the line. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan". Output STRICT JSON:
 {"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
-Never invent an id that is not among that line's candidates. Never change prices. When two candidates fit, prefer the one whose name/size matches the request most literally.`;
+Never invent an id that is not among that line's candidates or customerUsuals. Never change prices.`;
 
 function normalizeQty(v: unknown): number {
   const n = Math.floor(Number(v));
@@ -143,10 +143,44 @@ export type BrainDeps = {
 };
 
 /**
+ * What THIS customer ordered before — the first learning layer (Izzy,
+ * 2026-08-26: "the agent has to get smarter every day"). Free: read from our
+ * own SUBMITTED drafts, prices refreshed from the live catalog row.
+ */
+export async function customerUsuals(db: any, tenantId: string, customerPhone: string | undefined): Promise<any[]> {
+  const phone10 = posPhoneDigits(String(customerPhone ?? ""));
+  if (!phone10) return [];
+  try {
+    const prior = await db.supermarketOrderDraft.findMany({
+      where: { tenantId, customerPhone: phone10, status: "SUBMITTED" },
+      orderBy: { submittedAt: "desc" },
+      take: 5,
+      select: { items: true },
+    });
+    const ids: string[] = [];
+    for (const d of prior) {
+      for (const it of Array.isArray(d.items) ? d.items : []) {
+        const id = String((it as any)?.posProductId ?? "");
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    }
+    if (ids.length === 0) return [];
+    // ⛔ prices come from the LIVE catalog row, never a historical draft
+    return await db.posCatalogItem.findMany({
+      where: { tenantId, isActive: true, posProductId: { in: ids.slice(0, 12) } },
+      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true },
+      take: 12,
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Fill a draft intelligently from English order text. Null on ANY failure —
  * the caller keeps the regex matcher's answer instead.
  */
-export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishText: string): Promise<BrainResult | null> {
+export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishText: string, opts: { customerPhone?: string } = {}): Promise<BrainResult | null> {
   const text = String(englishText ?? "").trim();
   if (!text) return null;
   const resolveKey = deps.keyResolver ?? resolveIntegrationKey;
@@ -183,25 +217,29 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     return { items: [], comments: detectWic(text) ? [WIC_COMMENT] : [], notes: remarks, model, customerPhone: statedPhone };
   }
 
-  // 2) candidates per line, from OUR catalog only
+  // 2) candidates per line, from OUR catalog only — plus what this customer
+  //    usually orders (their own approved history, ids equally valid picks)
   const candidateSets: any[][] = [];
   for (const line of lines) candidateSets.push(await search(deps.db, tenantId, line.phrase));
+  const usuals = await customerUsuals(deps.db, tenantId, opts.customerPhone ?? statedPhone);
 
   // 3) RESOLVE
+  const asCandidate = (c: any) => ({
+    id: c.posProductId,
+    name: c.name,
+    brand: c.brand ?? undefined,
+    size: c.sizeText ?? undefined,
+    price: (c.unitPriceCents / 100).toFixed(2),
+  });
   const resolveUser = JSON.stringify({
     lines: lines.map((l, i) => ({
       line: i,
       request: l.phrase,
       qty: l.qty,
       constraints: l.constraints,
-      candidates: candidateSets[i].map((c) => ({
-        id: c.posProductId,
-        name: c.name,
-        brand: c.brand ?? undefined,
-        size: c.sizeText ?? undefined,
-        price: (c.unitPriceCents / 100).toFixed(2),
-      })),
+      candidates: candidateSets[i].map(asCandidate),
     })),
+    ...(usuals.length ? { customerUsuals: usuals.map(asCandidate) } : {}),
   });
   const resolved = await llm(key.apiKey, model, RESOLVE_SYSTEM, resolveUser, 4000);
   if (!resolved || !Array.isArray(resolved.picks)) return null;
@@ -212,8 +250,10 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   for (const pick of resolved.picks.slice(0, MAX_BRAIN_LINES)) {
     const lineIdx = Math.floor(Number(pick?.line));
     if (!Number.isFinite(lineIdx) || lineIdx < 0 || lineIdx >= lines.length || pickedLines.has(lineIdx)) continue;
-    // ⛔ the id MUST be one of THAT line's server-fetched candidates
-    const candidate = candidateSets[lineIdx]?.find((c) => c.posProductId === String(pick?.id ?? ""));
+    // ⛔ the id MUST be one of THAT line's server-fetched candidates — or one
+    // of this customer's own usuals (also server-fetched, live-priced)
+    const pickId = String(pick?.id ?? "");
+    const candidate = candidateSets[lineIdx]?.find((c) => c.posProductId === pickId) ?? usuals.find((c) => c.posProductId === pickId);
     if (!candidate) continue;
     pickedLines.add(lineIdx);
     const existing = items.find((i) => i.posProductId === candidate.posProductId);
