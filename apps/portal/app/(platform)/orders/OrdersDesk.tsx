@@ -20,11 +20,13 @@ import "./supermarket.css";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, ExternalLink, MessageCircle, Mic, Phone, Play, Search } from "lucide-react";
+import { Check, ExternalLink, Loader2, MessageCircle, Mic, Pause, Phone, Play, Search } from "lucide-react";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient";
+import { getPortalApiBaseUrl } from "../../../services/apiClient";
+import { readAuthToken } from "../../../services/session";
 import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
 
 /** A card on file — the register's stored cards + ones saved here via Sola. */
@@ -48,6 +50,7 @@ function brandChip(brand: string): { label: string; cls: string } {
 }
 
 export const SM_ORDERS_PHRASES = [
+  "Play the voicemail", "Pause", "This voicemail's audio isn't available.",
   "Orders", "Supermarket mode", "New order",
   "Needs review", "Sent today", "From voicemail", "From texts",
   "Sent", "All orders", "Review", "Open",
@@ -474,6 +477,142 @@ function ReplaceBox({
         </div>
       ) : null}
       <div className="sm-kbd-hint">{t("the swap is remembered — the agent learns it")}</div>
+    </div>
+  );
+}
+
+/**
+ * The order voicemail, playable while the rep reads the draft it produced.
+ *
+ * ⛔ Media elements send no Authorization header, so the JWT rides as ?token=
+ * (the recordings-player pattern; the api's global preHandler copies it back
+ * onto the header before jwtVerify). The CSP already allows media from 'self'.
+ *
+ * ⛔ The src is built ONCE per draft and never re-assigned while playing —
+ * swapping an <audio> src mid-play is what silently stopped chat voice notes
+ * on every poll (portal-voice-note-src-swap-stops-playback).
+ *
+ * Failure is stated, never silent: a stall or a dead recording replaces the
+ * player with a sentence, because a play button that does nothing is the exact
+ * defect this repo has now fixed twice.
+ */
+function VoicemailPlayer({ draftId, t }: { draftId: string; t: (s: string) => string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const stallRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [phase, setPhase] = useState<"idle" | "loading" | "playing" | "paused" | "dead">("idle");
+  const [pos, setPos] = useState(0);
+  const [dur, setDur] = useState(0);
+
+  const src = useMemo(() => {
+    const token = readAuthToken();
+    const q = token ? `?token=${encodeURIComponent(token)}` : "";
+    return `${getPortalApiBaseUrl()}/supermarket/drafts/${encodeURIComponent(draftId)}/audio${q}`;
+  }, [draftId]);
+
+  useEffect(() => {
+    const a = new Audio();
+    a.preload = "none";
+    audioRef.current = a;
+    const clearStall = () => {
+      if (stallRef.current) clearTimeout(stallRef.current);
+      stallRef.current = null;
+    };
+    const onMeta = () => setDur(Number.isFinite(a.duration) ? a.duration : 0);
+    const onTime = () => setPos(a.currentTime);
+    const onPlaying = () => {
+      clearStall();
+      setPhase("playing");
+    };
+    const onPause = () => setPhase((cur) => (cur === "dead" ? cur : "paused"));
+    const onEnded = () => {
+      clearStall();
+      a.currentTime = 0;
+      setPos(0);
+      setPhase("paused");
+    };
+    const onError = () => {
+      clearStall();
+      setPhase("dead");
+    };
+    a.addEventListener("loadedmetadata", onMeta);
+    a.addEventListener("durationchange", onMeta);
+    a.addEventListener("timeupdate", onTime);
+    a.addEventListener("playing", onPlaying);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    a.addEventListener("error", onError);
+    return () => {
+      clearStall();
+      a.pause();
+      a.removeAttribute("src");
+      a.load();
+      audioRef.current = null;
+    };
+  }, [draftId]);
+
+  const toggle = useCallback(async () => {
+    const a = audioRef.current;
+    if (!a || phase === "dead") return;
+    if (phase === "playing") {
+      a.pause();
+      return;
+    }
+    if (!a.src) a.src = src;
+    setPhase("loading");
+    // A voicemail may need a first-play pull from the PBX; past this window the
+    // honest answer is that it is not coming.
+    if (stallRef.current) clearTimeout(stallRef.current);
+    stallRef.current = setTimeout(() => setPhase("dead"), 30000);
+    try {
+      await a.play();
+    } catch {
+      if (stallRef.current) clearTimeout(stallRef.current);
+      setPhase("dead");
+    }
+  }, [phase, src]);
+
+  const seek = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const a = audioRef.current;
+      if (!a || !dur) return;
+      const box = e.currentTarget.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+      a.currentTime = ratio * dur;
+      setPos(a.currentTime);
+    },
+    [dur],
+  );
+
+  const clock = (secs: number) => {
+    const v = Math.max(0, Math.floor(secs || 0));
+    return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
+  };
+
+  if (phase === "dead") {
+    return <div className="sm-player sm-player-dead">{t("This voicemail's audio isn't available.")}</div>;
+  }
+  return (
+    <div className="sm-player">
+      <button
+        type="button"
+        className="sm-play"
+        onClick={() => void toggle()}
+        aria-label={phase === "playing" ? t("Pause") : t("Play the voicemail")}
+      >
+        {phase === "loading" ? (
+          <Loader2 size={12} className="sm-spin" aria-hidden />
+        ) : phase === "playing" ? (
+          <Pause size={12} aria-hidden />
+        ) : (
+          <Play size={12} aria-hidden />
+        )}
+      </button>
+      <div className="sm-wave" onClick={seek} role="presentation">
+        <span className="sm-wave-fill" style={{ width: dur ? `${Math.min(100, (pos / dur) * 100)}%` : "0%" }} />
+      </div>
+      <span className="sm-dur">
+        {dur ? `${clock(pos)} / ${clock(dur)}` : phase === "loading" ? t("Loading…") : "--:--"}
+      </span>
     </div>
   );
 }
@@ -944,7 +1083,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
             <div className="sm-card-h">{t("What they sent")}</div>
             <div className="sm-card-b">
               {draft.sourceType === "voicemail" ? (
-                <div className="sm-player"><span className="sm-play"><Play size={12} aria-hidden /></span><span className="sm-wave" /><span className="sm-dur" /></div>
+                <VoicemailPlayer draftId={draft.id} t={t} />
               ) : null}
               <div className="sm-yid">{draft.transcript}</div>
               {draft.translation ? (

@@ -42143,6 +42143,9 @@ const port = Number(process.env.PORT || 3001);
   // the public unsubscribe, and the server-side CRM-mode wall. Inert until a
   // tenant is switched to supermarket mode and given a POS key.
   await registerSupermarketRoutes({
+    // one voicemail-streaming implementation, shared: the Orders Desk player
+    // reuses it (never marks read — a rep listening is not the mailbox owner).
+    streamVoicemail: (req: any, vm: any, reply: any) => streamVoicemailAudio(req, vm, reply, false, false, false),
     app,
     db,
     requireOwner: (req, reply) => requireSuperAdmin(req, reply),

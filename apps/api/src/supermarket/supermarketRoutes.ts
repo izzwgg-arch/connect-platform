@@ -53,6 +53,12 @@ export type SupermarketRouteDeps = {
     actorUserId?: string;
     metadata?: Record<string, unknown> | null;
   }) => Promise<void>;
+  /**
+   * Streams a voicemail's audio. Injected from server.ts so there is exactly
+   * ONE voicemail-streaming implementation on the platform — a second one here
+   * is how the two-recording-players defect happened.
+   */
+  streamVoicemail?: (req: any, vm: any, reply: any) => Promise<any>;
   /** guardInternalSecret bound at the call site (fail-closed). */
   internalGuard: (req: any, reply: any, endpoint: string) => boolean;
   /** loopComShell — the ONE branded email look. */
@@ -158,7 +164,7 @@ export const SUPERMARKET_MANAGE_KEY = "can_manage_supermarket_orders";
 export const SUPERMARKET_SPECIALS_KEY = "can_manage_supermarket_specials";
 
 export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Promise<void> {
-  const { app, db, requireOwner, audit, internalGuard, renderShell } = deps;
+  const { app, db, requireOwner, audit, internalGuard, renderShell, streamVoicemail } = deps;
   const hasKey = deps.hasActionPermission ?? userHasActionPermission;
   const clientFor = deps.clientFor ?? posClientForTenant;
 
@@ -635,6 +641,39 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       /* photos are decoration — never fail the draft read */
     }
     return reply.send({ draft });
+  });
+
+  // The rep plays the customer's own voicemail while reading the draft it
+  // produced (Izzy, 2026-08-26: "so they can actually play the voicemail while
+  // they read the order").
+  //
+  // ⛔ Deliberately its OWN door, not /voice/voicemail/:id/stream: that route
+  // needs can_view_tenant_voicemails or owning the mailbox, which a supermarket
+  // rep does not have — and widening it would hand every rep every mailbox in
+  // the company. This grants exactly the audio behind a draft they are already
+  // allowed to open, and nothing else.
+  //
+  // Ownership first (404, indistinguishable from a draft that never existed),
+  // then the voicemail is re-read SCOPED TO THE SAME TENANT, so a draft can
+  // never reach across to another company's recording.
+  app.get("/supermarket/drafts/:id/audio", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const draft = await ownDraft(req, reply, (req.params as any).id);
+    if (!draft) return;
+    if (draft.sourceType !== "voicemail" || !draft.sourceId) {
+      return reply.status(404).send({ error: "not_found" });
+    }
+    if (!streamVoicemail) return reply.status(503).send({ error: "audio_unavailable" });
+    const vm = await db.voicemail
+      .findFirst({ where: { id: String(draft.sourceId), tenantId: tenantOf(req), deletedAt: null } })
+      .catch(() => null);
+    if (!vm) return reply.status(404).send({ error: "not_found" });
+    try {
+      // ⛔ never marks the mailbox read — a rep listening is not its owner
+      return await streamVoicemail(req, vm, reply);
+    } catch {
+      return reply.status(503).send({ error: "audio_unavailable" });
+    }
   });
 
   app.post("/supermarket/drafts", async (req: any, reply: any) => {

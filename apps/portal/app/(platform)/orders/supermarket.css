@@ -147,6 +147,18 @@
 .sm-root .sm-play svg { width: 12px; height: 12px; }
 .sm-root .sm-wave { flex: 1; height: 20px; border-radius: 4px; opacity: .6;
     background: repeating-linear-gradient(90deg, var(--accent) 0 2px, transparent 2px 5px); }
+/* Real voicemail player: the mockup's bar, now with a progress fill, a
+   clickable seek track and a spinner while the first byte is fetched. */
+.sm-root .sm-play { border: 0; padding: 0; cursor: pointer; }
+.sm-root .sm-play:disabled { cursor: default; opacity: .6; }
+.sm-root .sm-wave { position: relative; cursor: pointer; overflow: hidden; }
+.sm-root .sm-wave-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); opacity: .85; pointer-events: none; }
+.sm-root .sm-player-dead { color: var(--text-dim); font-size: .8rem; }
+.sm-root .sm-spin { animation: sm-spin 1s linear infinite; }
+@keyframes sm-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sm-root .sm-spin { animation: none; } }
+
 .sm-root .sm-dur { font-size: .72rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .sm-root .sm-yid { direction: rtl; unicode-bidi: isolate; text-align: right; font-size: 1rem; line-height: 1.85;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: .7rem .9rem; margin-bottom: .55rem; }

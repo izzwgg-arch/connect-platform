@@ -119,3 +119,21 @@ test("⛔ the pay runtime never captures a card number: no card-collection promp
   }
   assert.match(runtime, /listCustomerCards/, "charging must resolve the STORED card");
 });
+
+test("⛔ the draft-audio door is tenant-scoped and reuses the ONE voicemail streamer", () => {
+  const src = read("./supermarketRoutes.ts");
+  const route = src.slice(src.indexOf('/supermarket/drafts/:id/audio'));
+  // a fixed window, not the first "});" — reply.send({...}); closes with one
+  const body = route.slice(0, 1800).replace(/\/\/[^\n]*/g, "");
+  // ownership (404) comes before anything else — a foreign draft is
+  // indistinguishable from one that never existed
+  assert.ok(body.indexOf("ownDraft") < body.indexOf("streamVoicemail"), "ownership must be checked before the audio is resolved");
+  // the voicemail is re-read scoped to the SAME tenant, never by bare id
+  assert.match(body, /tenantId: tenantOf\(req\)/, "the voicemail must be scoped to the draft's own tenant");
+  assert.ok(!/findUnique\(\{ where: \{ id:/.test(body), "a bare-id voicemail fetch would reach across tenants");
+  // ⛔ ONE voicemail streamer on the platform: this route may not implement its own
+  assert.ok(!body.includes("ffmpeg") && !body.includes("createReadStream"), "must not grow a second voicemail-streaming implementation");
+  // and server.ts passes it with markRead=false — a rep listening is not the owner
+  assert.match(serverSrc, /streamVoicemail: \(req: any, vm: any, reply: any\) => streamVoicemailAudio\(req, vm, reply, false, false, false\)/,
+    "the desk player must never stamp a customer's mailbox as read");
+});
