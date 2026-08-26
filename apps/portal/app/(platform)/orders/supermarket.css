@@ -47,23 +47,7 @@
   --sm-row-hover: #f1f5f9;
 }
 
-.sm-root Dark is the app's default (bare :root); light mirrors the portal's
-     data-theme="light" tokens. */
-  :root {
-    --bg: #0c1218; --bg-soft: #101923;
-    --panel: #141f2b; --panel-2: #1a2635;
-    --text: #e1e9f1; --text-dim: #8ea0b2;
-    --accent: #22a8ff; --accent-2: #4f7bff; --accent-ink: #04121d;
-    --border: #26374a;
-    --success: #34c27b; --warning: #f0b655; --danger: #ea6068; --info: #4ab2ff;
-    --shadow: 0 8px 30px rgba(0, 0, 0, 0.24);
-    --page: #090d12; --page-ink: #e1e9f1; --page-dim: #8ea0b2; --page-line: #1d2a3a;
-    --pill-wic-bg: rgba(52,194,123,.14); --pill-wic-ink: #6fdca8;
-    --pill-warn-bg: rgba(240,182,85,.13); --pill-warn-ink: #f0b655;
-    --pill-info-bg: rgba(74,178,255,.13); --pill-info-ink: #6fc4ff;
-    --pill-move-bg: rgba(79,123,255,.16); --pill-move-ink: #9cb4ff;
-    --row-hover: #182534;
-  }
+
 .sm-root * { box-sizing: border-box; }
 .sm-root /* ---------- browser frame ---------- */
   .sm-frame { border: 1px solid var(--sm-page-line); border-radius: 14px; overflow: hidden;
