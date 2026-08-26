@@ -708,6 +708,22 @@ fallback (the default branch, never hangup — additive in front of today's flow
   the KJ route + follow-me → scan anything → stop → proof photo → stop goes
   green; "Reset the demo" starts over.
 
+### Verbatim fact learned 2026-08-26 00:45 ET — the API is a GATEWAY to a server AT THE STORE
+
+Authenticated 0-credit probe (invoices/id/{bogus}, real key from the vault):
+**`503 {"success":false,"error":"STORE_UNREACHABLE","message":"The store
+server is currently unreachable. Please retry shortly.","retryable":true}`**
+— auth PASSED (key active; the same call with no key answers 401), then the
+gateway failed to reach the in-store server. At 12:45 AM with the store
+closed that reads as a nightly window, not a fault — the sibling's catalog
+walks all succeeded the previous evening. ⛔ **Every automation against this
+API must treat 503 STORE_UNREACHABLE as retryable-later and never fail an
+order on it** — overnight the register system may simply be off. Liveness
+recipe: resolve the key via `resolveIntegrationKey(db, gesheftTenantId,
+"POS_TRACKING")` inside app-api-1, GET /invoices/id/{bogus} (0cr): 401/403 =
+key dead, 404 = key fine + store up, 503 STORE_UNREACHABLE = key fine +
+store down.
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
