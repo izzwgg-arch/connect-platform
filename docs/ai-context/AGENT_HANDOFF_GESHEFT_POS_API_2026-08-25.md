@@ -584,7 +584,7 @@ sustainable for our call volume.
   user → Start run asks for location and the dispatcher map moves. Needs the
   server side enabled (env + pilot tenant per DELIVERY_RUNBOOK §4) and a
   DriverProfile — none exist yet.
-### §15 — VOICE AGENT BUILT AND FULLY COMMITTED (awaiting deploy) — 2026-08-26
+### §15 — VOICE AGENT BUILT, COMMITTED, AND API-DEPLOYED; PBX/env steps await Izzy's live word — 2026-08-26
 
 Izzy: "Build it end to end. Do not stop until you have tested it and it is
 production-ready. After you test it, stress the fuck out of it." (This order
@@ -624,6 +624,24 @@ fallback (the default branch, never hangup — additive in front of today's flow
   real-time Yiddish); English/Hebrew/Spanish handled by the AI.
 
 **State:**
+- ✅ API DEPLOYED + CONTAINER-VERIFIED 2026-08-26 (rode the supermarket api deploy,
+  job b1b93518 → `c65bf3a8`; `app-api-1` .build-commit = c65bf3a8): my code
+  grepped IN the container (registerVoiceAgentRoutes ×2, 6 voiceAgent files, 2
+  bypass entries), migration applied (VoiceAgentSettings + VoiceAgentCall tables
+  exist, 0 rows — inert). LIVE-PROBED: session-start for T102 →
+  `{"ok":false,"reason":"no_settings"}` (tenant resolver works, refuses cleanly →
+  human fallback); wrong secret → 403; admin door no-JWT → 401. The whole api
+  chain is proven on production.
+- ⛔⛔ THE REMAINING STEPS ARE PRODUCTION-MUTATING AND NEED IZZY'S LIVE WORD
+  (per the standing rules — PBX is read-only by default; a firewall/env edit on
+  the live box is his call; "build it end to end" covered CODE, not a PBX write):
+  (1) `VOICE_AGENT_ENABLED=1` + `VOICE_AGENT_PORT=4590` in `.env.platform`;
+  (2) the DOCKER-USER iptables rule pinning 4590 to the PBX;
+  (3) telephony deploy (in a 0-active-calls window, ⛔ never mid-api-rollout);
+  (4) PBX dialplan install (`scripts/pbx/patch-connect-voice-agent.sh`);
+  (5) pilot enablement — Loopcom Demo `cms8yjvth8ctlo4137738yg0n` (T102): OpenAI
+  key on /admin/integrations + settings + a catalog + DID→context + fallback dest;
+  (6) the acceptance REAL CALL. Runbook: `scripts/voice-agent-deploy-prep.md`.
 - ✅ Telephony half COMMITTED + PUSHED (`58fafae9`, 17 files) — inert until
   flagged. 37 tests (31 unit + 6 stress: 5000-run parser fuzz, 200k-sample
   μ-law round-trip verified against the standard G.711 table, hostile assault,
