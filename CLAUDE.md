@@ -152,6 +152,22 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   with `unsure:true`). ⛔ The pipeline tests' fake db used to IGNORE its where
   — the name-only bug sat green under 104 tests; `fakeBrainDb` now evaluates
   AND/OR/contains/in faithfully.
+  ✅✅ **DAY 3 (2026-08-26 afternoon, handoff §12): the CHECKLIST, the TEACHING
+  LANE and the KEYBOARD-FIRST FLOW** (`7fc674b1`→`9928ddb3`, both approved
+  mockups built exactly). Every draft stores **agentLines** (per-line
+  in_cart/unsure/skipped + reason + top-4 suggestions) → the desk's "WHAT THEY
+  ASKED FOR" checklist, live-checked against the cart; **phrase lessons**
+  (`SupermarketPhraseLesson`) harvested from rep fixes at submit AND taught on
+  **/orders/teach** (Enter teaches; the admin's search text is the
+  "what-he-meant" second lesson) feed back as `learned:true` candidates —
+  hints the model judges, never forced picks; RESOLVE refuses only as a LAST
+  RESORT and matches brands by SOUND. **Keyboard**: ↑/↓ rove, digits set qty,
+  letters replace the item (⛔ the swap TEACHES the agent), **PageDown is the
+  ONE checkout key** (cards-on-file picker inline, Enter pays & places) — ⛔
+  ArrowRight no longer opens the confirm; ONE controller serves the desk AND
+  the mini twin. ⛔ Reprocess without explicit draftIds re-takes the same
+  newest N; an api deploy kills in-flight reprocess handlers — deploy only
+  between runs.
   ✅ **Gesheft ext 101 (yisraelweinstock@gmail.com) is on her OWN role
   "Gesheft" now — `cmta3tac105acsd138bhyi5qc`, 84 keys = the shared Owner
   role's 82 + `can_view_section_store` + `can_view_supermarket_orders`
