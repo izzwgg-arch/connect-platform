@@ -530,6 +530,60 @@ sustainable for our call volume.
   at the next plan revision; the plan/mockup approval gates are unchanged.
   ⛔ Another fork session exists and may be working the same question.
 
+### §13e — THE LOOPCOM DRIVER APK IS BUILT (Izzy: "Build an APK", 2026-08-25 night) — commit `3544f2fa`
+
+- **Second app from the same codebase, env-gated**: `CONNECT_DRIVER_APP=1` in
+  `android/app/build.gradle` flips applicationId → `com.loopcom.driver`, swaps
+  in `src/driver/AndroidManifest.xml`, swaps the JS entry to `index.driver.js`,
+  and SKIPS the google-services plugin (its json has no client for the driver
+  id; FirebaseInitProvider no-ops → no FCM in the driver app, by design).
+  ⛔ **Deliberately NOT productFlavors** — flavors rename output paths/tasks and
+  would break android-ship.ps1 + android-play-bundle.ps1. Unset env = the phone
+  build is byte-path identical.
+- **The driver manifest** grants location (fine/coarse + FOREGROUND_SERVICE_LOCATION)
+  and camera, and `tools:node="remove"`s RECORD_AUDIO/telecom/contacts that
+  library manifests (webrtc) would merge back in. ⛔ It keeps the
+  LauncherBlue/Navy aliases — ThemeContext flips them by component name at boot
+  and a missing alias would reject on every launch (caught, but noisy).
+- **The missing wiring is CONNECTED now**: `runTracking.ts` ties
+  `/mobile/delivery/tracking/start|end` to `trackingService`'s foreground task;
+  RunsScreen has Start run / "Location on — End run"; permission refusal ends
+  the server session immediately (dispatcher never watches an empty map);
+  sign-out force-ends tracking.
+- **The map setting (Izzy)**: `navPrefs.ts` — mapMode inapp|external + navApp
+  waze|google|apple(iOS-only in UI). `DriverMapScreen` = Leaflet/OSM in a
+  react-native-webview (NEW DEP ^13.17.0 — ⛔ its class typing collapses to
+  `never` under React 19 types; cast via ComponentClass<WebViewProps>),
+  numbered stop pins, route polyline, follow-me, giant next-stop bar with
+  Navigate (external handoff always available). `DriverSettingsScreen` — map
+  mode, nav app, sign-out; ⛔ deliberately NO tracking switch (the no-off-switch
+  rule). Server side: navLinks/routes grew `app=apple`;
+  `listRunsForDriver` select widened (lat/lng/customerName/instructions).
+- **`src/driver/appKind.ts`**: index.driver.js calls `markDriverApp()`;
+  shared screens gate driver-only chrome on `isDriverApp()` — the phone app's
+  navigator doesn't register DriverMap/DriverSettings and would crash on tap.
+- **Signing: debug keystore, same as every sideload build** (house practice —
+  the fleet convention). Play upload key comes later with its own decision.
+- ✅ **BUILT AND ARTIFACT-VERIFIED (aapt + bundle grep, 2026-08-25 ~20:30):**
+  `apps/mobile/dist/loopcom-driver-1.0.0+20260825-driver1.apk` (62,474,067 b,
+  versionCode 260825201). Package `com.loopcom.driver`, label `Loopcom
+  Driver`; location+camera IN; **RECORD_AUDIO / MANAGE_OWN_CALLS / contacts /
+  mic+phoneCall FGS / ConnectionService all read 0**; the JS bundle greps 0
+  for sipWakeRegistrar/backgroundCallTask and 3 for driver markers — the
+  driver entry really was bundled. Delivered to Izzy as a file; no phone was
+  attached, so it is NOT installed anywhere and NOT on the download page.
+  ⛔ `com.google.firebase.messaging.FirebaseMessagingService` (the SDK's base
+  service, from its library manifest) IS declared — inert with no
+  google-services config; do not chase it as a leak.
+  ⛔ Two library-manifest permissions survive (CALL_PHONE, READ_PHONE_NUMBERS,
+  from callkeep's lib manifest) — cosmetic follow-up: tools:node=remove them.
+  ⛔ SHIP_VERSION_CODE must fit a 32-bit Int — `2608252030` overflowed
+  `.toInteger()` and failed the build; 9 digits (`260825201`) works.
+- ⏳ **NOT PROVEN: never launched on a device.** Acceptance: install beside
+  the phone app → boots to the Loopcom Driver sign-in → sign in as a driver
+  user → Start run asks for location and the dispatcher map moves. Needs the
+  server side enabled (env + pilot tenant per DELIVERY_RUNBOOK §4) and a
+  DriverProfile — none exist yet.
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
