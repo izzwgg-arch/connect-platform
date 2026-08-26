@@ -111,22 +111,27 @@ const CATALOG = [
   { posProductId: "p3", code: "333", name: "Whole Milk", brand: "Golden Flow", sizeText: "64 oz", unitPriceCents: 429, isActive: true },
 ];
 
-function fakeBrainDb() {
+function fakeBrainDb(catalog: any[] = CATALOG) {
+  // a tiny where-evaluator faithful to the shapes the search really sends
+  // (AND of OR(name/brand contains) — the fake must not ignore filters, the
+  // recorded ignores-its-where trap)
+  const matches = (row: any, w: any): boolean => {
+    if (!w || typeof w !== "object") return true;
+    if (Array.isArray(w.AND)) return w.AND.every((x: any) => matches(row, x));
+    if (Array.isArray(w.OR)) return w.OR.some((x: any) => matches(row, x));
+    for (const [k, v] of Object.entries<any>(w)) {
+      if (k === "AND" || k === "OR" || k === "tenantId" || k === "isActive") continue;
+      if (v && typeof v === "object") {
+        if (Array.isArray(v.in) && !v.in.includes(row[k])) return false;
+        if (v.contains !== undefined && !String(row[k] ?? "").toLowerCase().includes(String(v.contains).toLowerCase())) return false;
+        if (v.startsWith !== undefined && !String(row[k] ?? "").startsWith(String(v.startsWith))) return false;
+      }
+    }
+    return true;
+  };
   return {
     posCatalogItem: {
-      findMany: async ({ where, take }: any) => {
-        let rows = CATALOG.filter((r) => r.isActive);
-        const nameFilters: string[] = [];
-        const collect = (w: any) => {
-          if (w?.name?.contains) nameFilters.push(String(w.name.contains).toLowerCase());
-          if (Array.isArray(w?.AND)) w.AND.forEach(collect);
-        };
-        collect(where);
-        if (Array.isArray(where?.posProductId?.in)) rows = rows.filter((r) => where.posProductId.in.includes(r.posProductId));
-        else if (where?.code?.startsWith) rows = rows.filter((r) => r.code.startsWith(where.code.startsWith));
-        else if (nameFilters.length) rows = rows.filter((r) => nameFilters.every((t) => r.name.toLowerCase().includes(t)));
-        return rows.slice(0, take ?? 6);
-      },
+      findMany: async ({ where, take }: any) => catalog.filter((r) => r.isActive && matches(r, where)).slice(0, take ?? 6),
     },
   };
 }
@@ -231,6 +236,18 @@ test("the brain may pick from the customer's own USUALS (learning layer 1)", asy
   assert.equal(out!.items[0].posProductId, "p3");
   // ⛔ the price came from the LIVE catalog row, not the historical draft
   assert.equal(out!.items[0].unitPriceCents, 429);
+});
+
+test("the candidate search finds a product whose BRAND carries half the phrase (the cream-of-lox case)", async () => {
+  const { searchCandidates } = await import("./orderBrain");
+  const catalog = [
+    { posProductId: "lox1", code: "014", name: "Cream Of Lox", brand: "Ta'am Tov", sizeText: "", unitPriceCents: 589, isActive: true },
+    // the polluters that used to fill the pool before "lox" ever ran
+    ...Array.from({ length: 10 }, (_, i) => ({ posProductId: `soup${i}`, code: `29${i}`, name: `Cream Of Squash Soup ${i}`, brand: "", sizeText: "", unitPriceCents: 1099, isActive: true })),
+  ];
+  const out = await searchCandidates(fakeBrainDb(catalog).posCatalogItem ? fakeBrainDb(catalog) : null, "t1", "Ta'am Tov cream of lox");
+  assert.ok(out.some((c: any) => c.posProductId === "lox1"), "Cream Of Lox must be among the candidates");
+  assert.equal(out[0].posProductId, "lox1", "and FIRST — the all-tokens name-or-brand pass beats the polluters");
 });
 
 test("a close-variant pick carries the unsure '?' flag onto the item", async () => {

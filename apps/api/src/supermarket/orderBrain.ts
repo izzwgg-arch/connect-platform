@@ -87,7 +87,7 @@ For a real order output STRICT JSON:
 Customers identify their account by SPEAKING their phone number — always capture it when stated; seven digits is normal (the area code is implied).
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
-const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
+const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. A brand the customer NAMES ("Gold's pads", "Ta'am Tov cream of lox") is a hard constraint: never pick another brand's product just because a generic word matches (pads, milk, cream) — if the named brand isn't among the candidates, refuse the line or pick the same TYPE of product with "unsure":true, never an unrelated product. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
 When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size or count), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. A candidate marked inStock:false is out of stock — prefer an in-stock one; when only an out-of-stock candidate matches, still pick it with "unsure":true. Refuse a line only when nothing close exists or a hard constraint rules every candidate out. Output STRICT JSON:
 {"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>,"unsure":<true ONLY for a close-variant pick>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
 Never invent an id that is not among that line's candidates or customerUsuals. Never change prices.`;
@@ -99,9 +99,11 @@ function normalizeQty(v: unknown): number {
 
 /** Server-side candidate search — name tokens against the tenant's own catalog. */
 export async function searchCandidates(db: any, tenantId: string, phrase: string): Promise<any[]> {
+  // ⛔ split drops apostrophes entirely — "Gold's" must arrive as "gold"
+  // (the register may store ' vs ’ differently; a contains() on either misses)
   const tokens = String(phrase ?? "")
     .toLowerCase()
-    .split(/[^a-z0-9']+/)
+    .split(/[^a-z0-9]+/)
     .filter((t) => t.length >= 3)
     .slice(0, 4);
   const numeric = String(phrase ?? "").match(/^\s*(\d{2,14})\s*$/);
@@ -114,11 +116,31 @@ export async function searchCandidates(db: any, tenantId: string, phrase: string
   }
   if (tokens.length === 0) return [];
   const seen = new Map<string, any>();
-  // most-specific first: all tokens, then each token
-  const wheres = [
-    { AND: tokens.map((t) => ({ name: { contains: t, mode: "insensitive" } })) },
-    ...tokens.map((t) => ({ name: { contains: t, mode: "insensitive" } })),
-  ];
+  // ⛔ each token may live in the NAME or the BRAND — "Ta'am Tov cream of
+  // lox" is brand "Ta'am Tov" + name "Cream Of Lox", and a name-only search
+  // filled the pool with cream-of-soup before "lox" ever ran (a real refused
+  // line, 2026-08-26). Most-specific first: all tokens, then PAIRS, then
+  // singles — pairs are what rescue a phrase whose extra words pollute.
+  // substring-match on the STEM so plural/singular both hit ("eggs" ⊃ "egg"
+  // matches "Eggs Cage Free" AND "Egg Medium"); apostrophes already dropped
+  // by the tokenizer so "gold's" arrives as "gold".
+  const stem = (t: string) => (t.length >= 4 && t.endsWith("es") ? t.slice(0, -2) : t.length >= 4 && t.endsWith("s") ? t.slice(0, -1) : t);
+  const tokenWhere = (raw: string) => {
+    const t = stem(raw);
+    return {
+      OR: [
+        { name: { contains: t, mode: "insensitive" } },
+        { brand: { contains: t, mode: "insensitive" } },
+      ],
+    };
+  };
+  const wheres: any[] = [{ AND: tokens.map(tokenWhere) }];
+  for (let i = 0; i < tokens.length; i++) {
+    for (let j = i + 1; j < tokens.length; j++) {
+      wheres.push({ AND: [tokenWhere(tokens[i]), tokenWhere(tokens[j])] });
+    }
+  }
+  for (const t of tokens) wheres.push(tokenWhere(t));
   for (const nameWhere of wheres) {
     if (seen.size >= CANDIDATES_PER_LINE) break;
     const rows = await db.posCatalogItem.findMany({
