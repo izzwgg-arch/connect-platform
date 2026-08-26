@@ -141,6 +141,17 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   `customerUsuals` (the customer's own SUBMITTED drafts, live-priced) rides the
   resolve pass. Reprocess door `POST /admin/integrations/reprocess-drafts`
   (NEEDS_REVIEW only, sequential, per-draft results).
+  ⛔⛔ **THE CANDIDATE SEARCH MATCHES NAME **OR BRAND**, MOST-SPECIFIC-FIRST,
+  ON STEMS (`5f318d52`, handoff §10) — never regress it to name-only.** Two
+  live failures taught it: "Ta'am Tov cream of lox" was refused (the brand is
+  a COLUMN, "cream" soups filled the 8-slot pool first) and "Gold's pads"
+  picked **Steelwool Soap Pads**. `searchCandidates`: all-tokens AND →
+  pairwise ANDs → singles; tokenizer drops apostrophes (`gold's`→`gold`, the
+  `'` vs `’` trap); contains() runs on stems so plurals meet singulars. The
+  RESOLVE prompt makes a spoken brand a HARD constraint (same-type pick only
+  with `unsure:true`). ⛔ The pipeline tests' fake db used to IGNORE its where
+  — the name-only bug sat green under 104 tests; `fakeBrainDb` now evaluates
+  AND/OR/contains/in faithfully.
   ⛔⛔ **GESHEFT'S POS KEY IS SCOPED `customer:get` ACCESS-LEVEL "own"** — it
   CANNOT read the store's existing customers ("Customer not found or you do
   not have access to it"), which is why NO draft has ever resolved an account.

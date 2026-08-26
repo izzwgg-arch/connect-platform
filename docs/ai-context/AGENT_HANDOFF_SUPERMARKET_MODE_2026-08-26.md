@@ -374,3 +374,35 @@ through the queue same night (jobs 956e06be / 2960707e / b27b69d2), portal
 - ⛔ Trap re-paid: `pkill -f <script>` over ssh self-matches the remote
   shell's own command line when ANY part of the command names the file —
   split the pattern AND keep sed/nohup mentions out of the same ssh call.
+
+## §10 — the brain's item search learned BRANDS (2026-08-26, `5f318d52`, api DEPLOYED)
+
+Izzy, from two live drafts: "Why wasn't the Lux added to this order?" (Berkowitz
+— "Ta'am Tov cream of lox" refused while Cream Of Lox sat in the catalog) and
+"This one said gold. They should have been searching the brand they say as
+well" (Falkowitz — "Gold's pads" picked **Steelwool Soap Pads**). Then: "most
+orders missing items. The agent needs to be a lot better."
+
+- ⛔ **The candidate search only matched product NAMES.** "Ta'am Tov" lives in
+  the `brand` column, so no token combination could surface the lox, and the
+  single-token "cream" pass filled the 8-slot pool with soups before "lox" ever
+  ran. `searchCandidates` (orderBrain.ts) now:
+  - matches every token against **name OR brand** (`tokenWhere`);
+  - runs **most-specific-first**: all-tokens AND → every pairwise AND →
+    singles — so a polluted generic word can no longer starve the pool;
+  - **stems** each token for the contains() (`gallons`→`gallon`,
+    `pads`→`pad`, `cuties`→`cuti`) so plural/singular meet both ways;
+  - the tokenizer **drops apostrophes** (`gold's` → `gold`) — the register may
+    store `'` vs `’` and a contains() on either spelling misses.
+- ⛔ **RESOLVE prompt: a spoken brand is a HARD constraint.** Never another
+  brand's product off a generic word (pads, milk, cream); brand absent from
+  candidates → refuse the line or same-TYPE pick with `unsure:true`.
+- ⛔ **The fake db was ignoring its where AGAIN** — the pipeline tests' catalog
+  fake returned everything, so the old name-only search passed green.
+  `fakeBrainDb` now evaluates AND/OR/contains/in faithfully and takes an
+  optional catalog; the cream-of-lox regression test builds the polluted pool
+  and asserts the lox comes back FIRST.
+- **Fleet reprocess**: all 221 NEEDS_REVIEW drafts re-run through the improved
+  brain (216 with stored YL text = zero YL cost; before-count 192 items
+  total). Runner: `/root/reprocess-all.js` + `/root/reprocess-ids.json`,
+  copied into the container, batches of 10 by explicit draftIds.
