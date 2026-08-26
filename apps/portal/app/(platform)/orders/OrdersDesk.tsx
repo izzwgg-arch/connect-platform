@@ -87,8 +87,18 @@ type CatalogHit = { posProductId: string; code: string; name: string; unitPriceC
  * URLs are the store's own webstore CDN (public, https — the portal CSP allows
  * any https image).
  */
-function SmItemPhoto({ url, size }: { url?: string | null; size: number }) {
+/**
+ * The webstore CDN serves each photo in named sizes; we store `medium` and the
+ * hover preview asks for `large` (proven live: `xlarge`/`original` 403).
+ * Both URL shapes carry the token: /items/medium/<id>.jpg and .../medium.jpg.
+ */
+function largePhotoUrl(url: string): string {
+  return url.replace("/items/medium/", "/items/large/").replace("/medium.jpg", "/large.jpg");
+}
+
+function SmItemPhoto({ url, size, zoom }: { url?: string | null; size: number; zoom?: boolean }) {
   const [dead, setDead] = useState(false);
+  const [preview, setPreview] = useState<{ x: number; y: number; src: string } | null>(null);
   const box: React.CSSProperties = {
     width: size,
     height: size,
@@ -108,10 +118,55 @@ function SmItemPhoto({ url, size }: { url?: string | null; size: number }) {
       </span>
     );
   }
+  const PREVIEW = 260;
+  const onEnter = zoom
+    ? (e: React.MouseEvent<HTMLElement>) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        // to the right of the thumbnail, clamped inside the viewport — the
+        // suggestion list scrolls, so the preview must be position:fixed or it
+        // clips inside the dropdown's overflow.
+        const x = Math.min(r.right + 10, window.innerWidth - PREVIEW - 12);
+        const y = Math.max(8, Math.min(r.top - PREVIEW / 2 + r.height / 2, window.innerHeight - PREVIEW - 12));
+        setPreview({ x, y, src: largePhotoUrl(url) });
+      }
+    : undefined;
   return (
-    <span style={box}>
+    <span style={box} onMouseEnter={onEnter} onMouseLeave={zoom ? () => setPreview(null) : undefined}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt="" width={size} height={size} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" onError={() => setDead(true)} />
+      {preview ? (
+        <span
+          style={{
+            position: "fixed",
+            left: preview.x,
+            top: preview.y,
+            width: PREVIEW,
+            height: PREVIEW,
+            zIndex: 1000,
+            borderRadius: 10,
+            border: "1px solid var(--border)",
+            background: "var(--panel)",
+            boxShadow: "0 12px 32px rgba(0,0,0,.35)",
+            overflow: "hidden",
+            pointerEvents: "none",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          aria-hidden
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={preview.src}
+            alt=""
+            style={{ width: "100%", height: "100%", objectFit: "contain", background: "#fff" }}
+            onError={(e) => {
+              // no large variant → fall back to the stored medium
+              if ((e.currentTarget as HTMLImageElement).src !== url) (e.currentTarget as HTMLImageElement).src = url;
+            }}
+          />
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -553,7 +608,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                             : { color: "var(--text-dim)", borderTop: "1px solid var(--border)" }),
                         }}
                       >
-                        <SmItemPhoto url={h.imageUrl} size={28} />
+                        <SmItemPhoto url={h.imageUrl} size={28} zoom />
                         <span className="sm-sku" style={{ fontSize: ".74rem" }}>{h.code}</span>
                         {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
                         <span className="sm-amount">{money(h.unitPriceCents)}</span>
