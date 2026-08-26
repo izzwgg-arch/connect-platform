@@ -186,6 +186,16 @@ Escalation ref **Y6GQZ8**, Shia Weinstock ext 105, Trimpro (PBX tenant 11).
 - ⚠ **103 holds the router's external port 5060** (105 and 107 were remapped to 43093 /
   59482 — all three use local 5060, so the NAT gave the first registrant the match).
   **If that router runs SIP ALG, 103 is the only phone it touches.** Worth switching off.
+- ⛔⛔ **IT SELF-CLEARS, AND THAT IS HOW THIS GETS MISREPORTED AS FIXED.** Re-checked at
+  15:39 EDT the same day: **103 quiet since 13:31** (2h08m, no dropped keepalives) and its
+  last sampled call — **15:32 EDT, 103→102, 2m21s — ran 0% loss both ways**; 5 drops today
+  vs 12 yesterday. **Nothing was changed, so this is remission, not repair** (yesterday's
+  episode 13:09–14:55 EDT, today's 13:19–13:31). ⚠ **And it flips within SECONDS:**
+  `13:24:12` a call at **0%**, then `13:24:31` — nineteen seconds later — at **49%**.
+  **One good test call proves nothing here.** ⚠ Drops are not purely business-hours
+  (03:42 / 03:51 / 00:37 / 23:20 EDT also appear), which fits an always-on cause (IP
+  conflict, Wi-Fi) better than a person arriving. ⚠ And `no-rtp` on short calls means
+  **not sampled**, never **no loss**.
 - ✅ **What to ask them, in order, all free:** (1) what happened at the office Tue 08-24
   ~07:40 EDT; (2) is anything else using `192.168.50.200`, and is that phone on Ethernet
   or Wi-Fi — give it a fresh//different address and watch; (3) turn SIP ALG off.

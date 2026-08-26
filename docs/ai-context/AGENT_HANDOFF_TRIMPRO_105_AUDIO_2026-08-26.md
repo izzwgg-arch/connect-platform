@@ -197,6 +197,30 @@ read from each contact's `call_id`.
 — all three use local 5060, so the NAT gave the first registrant the matching external
 port. **If that router runs SIP ALG, 103 is the only phone it touches.**
 
+### It self-clears — which is exactly how this gets misreported as fixed
+
+Checked again at **15:39 EDT** the same day. **103 has been quiet since 13:31 EDT** — no
+dropped keepalives in 2h08m, and its last sampled call (**15:32 EDT, internal 103→102,
+2m21s**) ran **0% loss both directions**. Today totalled **5** dropped keepalives against
+**12** yesterday.
+
+⛔⛔ **NOTHING HAS BEEN CHANGED, so a quiet afternoon is not a fix.** Yesterday's episode
+ran 13:09–14:55 EDT and today's ran 13:19–13:31 — it burns out on its own and comes back.
+**Do not let "it seems fine now" close this case.**
+
+⚠ **And it flips within SECONDS, not minutes** — today, back to back on the same phone:
+`13:24:12` a 7-second call at **0% loss**, then `13:24:31`, nineteen seconds later, the
+call to Shia at **49%**. Any test that takes one good call as proof will pass while the
+fault is still there.
+
+⚠ **The drops are NOT purely business-hours**, which weakens "somebody plugs a laptop in":
+there are 03:42, 03:51, 00:37 and 23:20 EDT drops in the 15-day history alongside the
+afternoon clusters. A device that is always on — an IP-conflicting host, or a Wi-Fi link
+— fits that better than a person arriving.
+
+⚠ **Sampler coverage caveat again:** several of today's 103 calls read `no-rtp` simply
+because they were too short for the 10 s sampler. **"No row" is not "no loss."**
+
 ## 4. What to actually do
 
 1. **Ask what happened at the office on Tue 26-08-24 around 07:40 EDT** — power cut,
