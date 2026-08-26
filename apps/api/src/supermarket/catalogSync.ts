@@ -47,6 +47,8 @@ export type ParsedProduct = {
   unitPriceCents: number;
   isActive: boolean;
   posLastMod: string | null;
+  brand: string | null;
+  sizeText: string | null;
 };
 
 /**
@@ -113,6 +115,11 @@ export function parseProductsPage(body: unknown): { items: ParsedProduct[]; curs
       priceQty,
       unitPriceCents: posUnitPriceCents(priceValue, priceQty) ?? 0,
       isActive: r.active === false || r.isActive === false || r.inactive === true ? false : true,
+      brand: r.brand !== undefined && r.brand !== null && String(r.brand).trim() ? String(r.brand).trim().slice(0, 80) : null,
+      sizeText:
+        r.size !== undefined && r.size !== null && Number(r.size) > 0
+          ? `${r.size} ${String(r.unit ?? "").trim()}`.trim().slice(0, 40)
+          : null,
       posLastMod:
         r.lastModified !== undefined && r.lastModified !== null
           ? String(r.lastModified).slice(0, 64)
@@ -254,6 +261,8 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
             unitPriceCents: item.unitPriceCents,
             isActive: item.isActive,
             posLastMod: item.posLastMod,
+            brand: item.brand,
+            sizeText: item.sizeText,
           },
           create: { tenantId: tenant.id, ...item },
         });

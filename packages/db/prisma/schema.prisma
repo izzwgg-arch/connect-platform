@@ -7972,6 +7972,10 @@ model PosCatalogItem {
   posLastMod     String?
   /// Product photo, harvested from the store's own webstore (barcode-keyed). Public CDN URL.
   imageUrl        String?
+  /// Brand + pack size off the register — the order brain needs them to honour
+  /// "this item, but not that brand" instructions from customers.
+  brand           String?
+  sizeText        String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

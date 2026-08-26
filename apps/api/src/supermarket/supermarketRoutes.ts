@@ -35,6 +35,7 @@ import { runPayIvrStep } from "./payIvrRuntime";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { PosApiError, posPhoneDigits } from "./posWithLogic";
+import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 
 export type SupermarketRouteDeps = {
   app: any;
@@ -370,6 +371,93 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       metadata: { received: parsed.data.images.length, matched, unmatched },
     });
     return reply.send({ ok: true, matched, unmatched });
+  });
+
+  /**
+   * Re-run the order pipeline over EXISTING review-queue drafts (Izzy,
+   * 2026-08-26: "re-transcribe all drafts that we have right now with Yiddish
+   * Labs, then translate with English, and let's see if it's going to fill in
+   * the right items").
+   *
+   * ⛔ NEEDS_REVIEW only — an approved or submitted draft is a record of what a
+   * person decided and is never rewritten. Sequential on purpose: YL audio is
+   * per-credit and OpenAI per-token; a burst here is a bill, not a speedup.
+   */
+  app.post("/admin/integrations/reprocess-drafts", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply);
+    if (!admin) return;
+    const parsed = z
+      .object({
+        tenantId: z.string().min(5).max(64),
+        limit: z.number().int().min(1).max(50).default(20),
+        draftIds: z.array(z.string().min(5).max(64)).max(50).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const tenant = await db.tenant.findUnique({ where: { id: parsed.data.tenantId }, select: { id: true } });
+    if (!tenant) return reply.status(404).send({ error: "not_found" });
+    const drafts = await db.supermarketOrderDraft.findMany({
+      where: {
+        tenantId: tenant.id,
+        status: "NEEDS_REVIEW",
+        ...(parsed.data.draftIds?.length ? { id: { in: parsed.data.draftIds } } : {}),
+      },
+      select: { id: true, sourceType: true, sourceId: true, transcript: true },
+      orderBy: { createdAt: "desc" },
+      take: parsed.data.limit,
+    });
+    const index = await loadCatalogIndex(db, tenant.id);
+    const results: any[] = [];
+    for (const draft of drafts) {
+      try {
+        let text = String(draft.transcript ?? "");
+        let localAudioPath: string | null = null;
+        if (draft.sourceType === "voicemail") {
+          const vm = await db.voicemail
+            .findUnique({ where: { id: draft.sourceId }, select: { transcript: true, localAudioPath: true } })
+            .catch(() => null);
+          if (vm) {
+            text = String(vm.transcript ?? "") || text;
+            localAudioPath = vm.localAudioPath ?? null;
+          }
+        }
+        const content = await composeDraftContent({ db }, tenant.id, index, {
+          kind: draft.sourceType === "voicemail" ? "voicemail" : "text",
+          text,
+          localAudioPath,
+          voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
+        });
+        await db.supermarketOrderDraft.update({
+          where: { id: draft.id },
+          data: {
+            transcript: content.transcript,
+            translation: content.translation,
+            items: content.items,
+            agentItems: content.items,
+            comments: content.comments,
+            notes: content.notes,
+          },
+        });
+        results.push({
+          id: draft.id,
+          ok: true,
+          engine: content.engine,
+          items: content.items.length,
+          translated: Boolean(content.translation),
+        });
+      } catch (err: any) {
+        results.push({ id: draft.id, ok: false, error: String(err?.message ?? err).slice(0, 200) });
+      }
+    }
+    await safeAudit({
+      tenantId: tenant.id,
+      action: "SUPERMARKET_DRAFTS_REPROCESSED",
+      entityType: "SupermarketOrderDraft",
+      entityId: "batch",
+      actorUserId: String(admin.sub ?? ""),
+      metadata: { reprocessed: results.length },
+    });
+    return reply.send({ ok: true, reprocessed: results.length, results });
   });
 
   app.put("/admin/integrations/crm-mode", async (req: any, reply: any) => {

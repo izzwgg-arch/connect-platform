@@ -19,6 +19,8 @@
 import { buildCatalogIndex, matchDraftText, WIC_COMMENT, type CatalogEntry } from "./draftMatcher";
 import { posClientForTenant } from "./integrationCredentials";
 import { posPhoneDigits } from "./posWithLogic";
+import { prepareOrderText } from "./orderYiddish";
+import { runOrderBrain } from "./orderBrain";
 
 export const DRAFT_BUILDER_DEFAULT_INTERVAL_MS = 2 * 60 * 1000;
 export const DRAFT_BUILDER_BOOT_DELAY_MS = 4 * 60 * 1000;
@@ -26,13 +28,81 @@ export const DRAFT_BUILDER_BOOT_DELAY_MS = 4 * 60 * 1000;
 export const DRAFT_FRESH_WINDOW_MS = 72 * 60 * 60 * 1000;
 const MAX_SOURCES_PER_RUN = 50;
 const CATALOG_CAP = 5_000;
+/**
+ * ⛔ YL bills per credit and AUDIO is the expensive kind — a sweep transcribes
+ * at most this many voicemails per run; the rest simply wait for the next tick
+ * (the fresh window is 72h, so nothing is lost, only paced).
+ */
+export const YL_TRANSCRIPTIONS_PER_RUN = Math.max(
+  1,
+  Number(process.env.SUPERMARKET_YL_MAX_TRANSCRIPTIONS_PER_RUN || 10),
+);
 
 export type DraftBuilderDeps = {
   db: any;
   log?: { info: (o: any, m?: string) => void; warn: (o: any, m?: string) => void };
   clientFor?: typeof posClientForTenant;
   now?: () => Date;
+  /** injected for tests / the reprocess door */
+  prepareText?: typeof prepareOrderText;
+  brain?: typeof runOrderBrain;
 };
+
+export type DraftContent = {
+  transcript: string;
+  translation: string;
+  items: any[];
+  comments: string;
+  notes: string;
+  /** honest provenance: "brain:<model>[+yl]" or "matcher[+yl]" */
+  engine: string;
+};
+
+/**
+ * The whole order-understanding pipeline for ONE source, per Izzy's rule
+ * (2026-08-26): Yiddish Labs ONLY for transcription/translation, then the
+ * OpenAI brain fills the items with the constraints honoured — and every
+ * failure degrades to the next-best layer instead of blocking the draft:
+ * YL audio → YL translate → brain → regex matcher.
+ */
+export async function composeDraftContent(
+  deps: DraftBuilderDeps,
+  tenantId: string,
+  index: ReturnType<typeof buildCatalogIndex>,
+  input: { kind: "voicemail" | "text"; text: string; localAudioPath?: string | null; voicemailId?: string },
+): Promise<DraftContent> {
+  const prepare = deps.prepareText ?? prepareOrderText;
+  const brain = deps.brain ?? runOrderBrain;
+  const prepared = await prepare(
+    { db: deps.db },
+    { kind: input.kind, text: input.text, localAudioPath: input.localAudioPath, voicemailId: input.voicemailId },
+  );
+  const english = (prepared.translation || prepared.transcript).trim();
+  const ylTag = prepared.engine.startsWith("yiddishlabs") ? "+yl" : "";
+  const prefixNotes = prepared.error ? [`transcription: ${prepared.error}`] : [];
+  const brainResult = english ? await brain({ db: deps.db }, tenantId, english).catch(() => null) : null;
+  if (brainResult) {
+    return {
+      transcript: prepared.transcript.slice(0, 8000),
+      translation: prepared.translation.slice(0, 8000),
+      items: brainResult.items,
+      comments: brainResult.comments.join("\n").slice(0, 1000),
+      notes: [...prefixNotes, ...brainResult.notes].join("\n").slice(0, 2000),
+      engine: `brain:${brainResult.model}${ylTag}`,
+    };
+  }
+  // no tenant OpenAI key / brain failure → the regex matcher over the ENGLISH
+  // text (or the raw source when even YL had nothing to give us).
+  const match = matchDraftText(english || String(input.text ?? ""), index);
+  return {
+    transcript: prepared.transcript.slice(0, 8000),
+    translation: prepared.translation.slice(0, 8000),
+    items: match.items,
+    comments: match.wicMentioned ? WIC_COMMENT : "",
+    notes: [...prefixNotes, ...match.notes].join("\n").slice(0, 2000),
+    engine: `matcher${ylTag}`,
+  };
+}
 
 let running = false;
 
@@ -46,7 +116,7 @@ export async function runDraftBuilderSweep(deps: DraftBuilderDeps): Promise<{ dr
   }
 }
 
-async function loadCatalogIndex(db: any, tenantId: string) {
+export async function loadCatalogIndex(db: any, tenantId: string) {
   const rows = await db.posCatalogItem.findMany({
     where: { tenantId, isActive: true },
     select: { posProductId: true, code: true, name: true, unitPriceCents: true },
@@ -96,6 +166,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
     take: 50,
   });
   let created = 0;
+  let ylSpent = 0;
 
   for (const tenant of tenants) {
     const index = await loadCatalogIndex(db, tenant.id);
@@ -120,23 +191,36 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
       where: {
         tenantId: tenant.id,
         receivedAt: { gte: since },
-        transcript: { not: null },
+        // audio alone is enough now — YL transcribes it; the agent transcript
+        // is only the fallback when there is no local audio copy.
+        OR: [{ transcript: { not: null } }, { localAudioPath: { not: null } }],
         deletedAt: null,
         ...(draftedVm.length ? { id: { notIn: draftedVm } } : {}),
       },
-      select: { id: true, transcript: true, callerNumber: true, callerName: true, receivedAt: true },
+      select: { id: true, transcript: true, callerNumber: true, callerName: true, receivedAt: true, localAudioPath: true },
       orderBy: { receivedAt: "asc" },
       take: MAX_SOURCES_PER_RUN,
     });
     for (const vm of voicemails) {
       const text = String(vm.transcript ?? "").trim();
-      if (!text) continue;
+      const hasAudio = Boolean(vm.localAudioPath);
+      if (!text && !hasAudio) continue;
       const existing = await db.supermarketOrderDraft.findFirst({
         where: { tenantId: tenant.id, sourceType: "voicemail", sourceId: vm.id },
         select: { id: true },
       });
       if (existing) continue;
-      const match = matchDraftText(text, index);
+      // ⛔ over the per-run YL audio budget the voicemail WAITS for the next
+      // tick — better a later draft than one with the worse transcript baked
+      // in forever.
+      if (hasAudio && ylSpent >= YL_TRANSCRIPTIONS_PER_RUN) continue;
+      if (hasAudio) ylSpent++;
+      const content = await composeDraftContent(deps, tenant.id, index, {
+        kind: "voicemail",
+        text,
+        localAudioPath: vm.localAudioPath,
+        voicemailId: vm.id,
+      });
       const customer = await lookupCustomer(client, customerCache, String(vm.callerNumber ?? ""));
       try {
         await db.supermarketOrderDraft.create({
@@ -147,11 +231,12 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             customerName: customer.name || String(vm.callerName ?? ""),
             customerPhone: String(vm.callerNumber ?? ""),
             posCustomerId: customer.posCustomerId,
-            transcript: text.slice(0, 8000),
-            items: match.items,
-            agentItems: match.items,
-            comments: match.wicMentioned ? WIC_COMMENT : "",
-            notes: match.notes.join("\n").slice(0, 2000),
+            transcript: content.transcript,
+            translation: content.translation,
+            items: content.items,
+            agentItems: content.items,
+            comments: content.comments,
+            notes: content.notes,
           },
         });
         created++;
@@ -193,7 +278,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
       });
       if (existing) continue;
       const phone = String(msg.thread?.externalSmsE164 ?? "");
-      const match = matchDraftText(text, index);
+      const content = await composeDraftContent(deps, tenant.id, index, { kind: "text", text });
       const customer = await lookupCustomer(client, customerCache, phone);
       try {
         await db.supermarketOrderDraft.create({
@@ -205,11 +290,12 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             customerName: customer.name || String(msg.thread?.title ?? ""),
             customerPhone: phone,
             posCustomerId: customer.posCustomerId,
-            transcript: text.slice(0, 8000),
-            items: match.items,
-            agentItems: match.items,
-            comments: match.wicMentioned ? WIC_COMMENT : "",
-            notes: match.notes.join("\n").slice(0, 2000),
+            transcript: content.transcript,
+            translation: content.translation,
+            items: content.items,
+            agentItems: content.items,
+            comments: content.comments,
+            notes: content.notes,
           },
         });
         created++;
