@@ -34,6 +34,7 @@ import { approveAndSubmitDraft, sanitizeDraftItems } from "./orderSubmit";
 import { runPayIvrStep } from "./payIvrRuntime";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
+import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase } from "./phraseTeaching";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
@@ -851,6 +852,99 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const inStock = (r: any) => r.onHand === null || r.onHand > 0;
     const items = [...rows.filter(inStock), ...rows.filter((r: any) => !inStock(r))].slice(0, 8);
     return reply.send({ items });
+  });
+
+  // ── Teach the Agent (Izzy 2026-08-26): the admin correction lane over the
+  //    SAME lessons table the rep-fix harvest writes — one mistakes database.
+  app.get("/supermarket/phrase-teaching", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const tenantId = tenantOf(req);
+    const [drafts, lessons, dismissals] = await Promise.all([
+      db.supermarketOrderDraft.findMany({
+        where: { tenantId, agentLines: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: 400,
+        select: { id: true, customerName: true, sourceType: true, createdAt: true, agentLines: true },
+      }),
+      db.supermarketPhraseLesson.findMany({
+        where: { tenantId },
+        orderBy: { lastConfirmedAt: "desc" },
+        take: 200,
+      }),
+      db.supermarketPhraseDismissal.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, take: 200 }),
+    ]);
+    const taughtKeys = new Set<string>((lessons as any[]).map((l: any) => String(l.phrase)));
+    const dismissedKeys = new Set<string>((dismissals as any[]).map((d: any) => String(d.phrase)));
+    const queue = buildTeachQueue(drafts as any[], taughtKeys, dismissedKeys);
+    // hydrate each lesson's product for the "taught so far" table
+    const prodIds = [...new Set((lessons as any[]).map((l: any) => String(l.posProductId)))];
+    const prods = prodIds.length
+      ? await db.posCatalogItem.findMany({
+          where: { tenantId, posProductId: { in: prodIds } },
+          select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, imageUrl: true, onHand: true },
+        })
+      : [];
+    const byId = new Map((prods as any[]).map((p: any) => [p.posProductId, p]));
+    return reply.send({
+      queue,
+      taught: (lessons as any[]).map((l: any) => ({
+        id: l.id,
+        phrase: l.phrase,
+        displayPhrase: l.displayPhrase || l.phrase,
+        source: l.source,
+        timesConfirmed: l.timesConfirmed,
+        timesUsed: l.timesUsed,
+        lastConfirmedAt: l.lastConfirmedAt,
+        product: byId.get(String(l.posProductId)) ?? { posProductId: l.posProductId, code: "", name: "(no longer in the catalog)", unitPriceCents: 0 },
+      })),
+      dismissed: (dismissals as any[]).map((d: any) => ({ phrase: d.phrase, createdAt: d.createdAt })),
+    });
+  });
+
+  app.post("/supermarket/phrase-teaching/teach", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const parsed = z.object({ phrase: z.string().trim().min(1).max(200), posProductId: z.string().trim().min(1).max(80), meantPhrase: z.string().trim().max(200).optional() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    // the product must be THIS store's — a foreign id teaches nothing
+    const prod = await db.posCatalogItem.findFirst({
+      where: { tenantId, posProductId: parsed.data.posProductId, isActive: true },
+      select: { posProductId: true, code: true, name: true, unitPriceCents: true, imageUrl: true },
+    });
+    if (!prod) return reply.status(404).send({ error: "product_not_found" });
+    const res = await teachPhrase(db, tenantId, parsed.data.phrase, parsed.data.posProductId, parsed.data.meantPhrase);
+    if (!res) return reply.status(400).send({ error: "invalid_request" });
+    await safeAudit({
+      tenantId,
+      actorUserId: String(getUser(req).sub ?? ""),
+      action: "SUPERMARKET_PHRASE_TAUGHT",
+      entityType: "SupermarketPhraseLesson",
+      entityId: res.phrase.slice(0, 60),
+      metadata: { phrase: res.phrase, posProductId: prod.posProductId },
+    });
+    return reply.send({ ok: true, phrase: res.phrase, product: prod });
+  });
+
+  app.post("/supermarket/phrase-teaching/dismiss", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z.object({ phrase: z.string().trim().min(1).max(200), undo: z.boolean().optional() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const fn = parsed.data.undo ? undismissPhrase : dismissPhrase;
+    const res = await fn(db, tenantOf(req), parsed.data.phrase);
+    if (!res) return reply.status(400).send({ error: "invalid_request" });
+    return reply.send({ ok: true, phrase: res.phrase });
+  });
+
+  app.delete("/supermarket/phrase-teaching/lessons/:id", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const del = await db.supermarketPhraseLesson.deleteMany({
+      where: { id: String((req.params as any).id), tenantId: tenantOf(req) },
+    });
+    if (!del || del.count !== 1) return reply.status(404).send({ error: "not_found" });
+    return reply.send({ ok: true });
   });
 
   /** The screen-pop / order-twin lookup: phone → register account. */

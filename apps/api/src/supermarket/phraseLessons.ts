@@ -35,7 +35,7 @@ function overlap(a: string[], b: string[]): number {
   return a.filter((t) => set.has(t)).length;
 }
 
-export type LessonPair = { phrase: string; posProductId: string };
+export type LessonPair = { phrase: string; displayPhrase: string; posProductId: string };
 
 /**
  * Pair the brain's SKIPPED phrases with the items the REP ADDED, at submit
@@ -57,7 +57,7 @@ export function pairLessons(
   if (phrases.length === 0 || items.length === 0) return [];
 
   if (phrases.length === 1 && items.length === 1) {
-    return [{ phrase: normalizePhrase(phrases[0].raw), posProductId: items[0].posProductId }];
+    return [{ phrase: normalizePhrase(phrases[0].raw), displayPhrase: phrases[0].raw, posProductId: items[0].posProductId }];
   }
 
   const scored: Array<{ pi: number; ii: number; score: number }> = [];
@@ -79,7 +79,7 @@ export function pairLessons(
     if (tie) { usedP.add(s.pi); continue; }
     usedP.add(s.pi);
     usedI.add(s.ii);
-    out.push({ phrase: normalizePhrase(phrases[s.pi].raw), posProductId: items[s.ii].posProductId });
+    out.push({ phrase: normalizePhrase(phrases[s.pi].raw), displayPhrase: phrases[s.pi].raw, posProductId: items[s.ii].posProductId });
   }
   return out;
 }
@@ -108,7 +108,7 @@ export async function harvestPhraseLessons(
       if (!p.phrase) continue;
       await db.supermarketPhraseLesson.upsert({
         where: { tenantId_phrase_posProductId: { tenantId, phrase: p.phrase, posProductId: p.posProductId } },
-        create: { tenantId, phrase: p.phrase, posProductId: p.posProductId },
+        create: { tenantId, phrase: p.phrase, displayPhrase: p.displayPhrase.slice(0, 160), posProductId: p.posProductId, source: "rep" },
         update: { timesConfirmed: { increment: 1 }, lastConfirmedAt: new Date() },
       });
     }

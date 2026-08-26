@@ -272,10 +272,12 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   //     a past submitted order, re-fetched LIVE from the catalog and appended
   //     as candidates marked learned:true. A hint the model judges, never a
   //     forced pick (learning layer 2).
+  const learnedByLine = new Map<number, Set<string>>();
   try {
     const lessons = await loadLessons(deps.db, tenantId);
     if (lessons.length) {
       const matched = matchLessonsToLines(lessons, lines.map((l) => l.phrase));
+      for (const [li, ids] of matched) learnedByLine.set(li, new Set(ids));
       const wantedIds = [...new Set([...matched.values()].flat())];
       if (wantedIds.length) {
         const rows = await deps.db.posCatalogItem.findMany({
@@ -336,6 +338,16 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     const candidate = candidateSets[lineIdx]?.find((c) => c.posProductId === pickId) ?? usuals.find((c) => c.posProductId === pickId);
     if (!candidate) continue;
     pickedLines.add(lineIdx);
+    // the "auto-filled N×" gauge: the pick came off a stored lesson.
+    // ⛔ try/catch, not .catch() — a missing accessor throws SYNCHRONOUSLY
+    // before any promise exists (the documented voicemail-footer trap).
+    if (learnedByLine.get(lineIdx)?.has(pickId)) {
+      try {
+        await deps.db.supermarketPhraseLesson.updateMany({ where: { tenantId, posProductId: pickId }, data: { timesUsed: { increment: 1 } } });
+      } catch {
+        /* a gauge, never a blocker */
+      }
+    }
     lineOutcome.set(lineIdx, {
       outcome: pick?.unsure === true ? "unsure" : "in_cart",
       posProductId: candidate.posProductId,

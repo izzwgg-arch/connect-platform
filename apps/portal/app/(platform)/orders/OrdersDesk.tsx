@@ -151,7 +151,7 @@ function largePhotoUrl(url: string): string {
   return url.replace("/items/medium/", "/items/large/").replace("/medium.jpg", "/large.jpg");
 }
 
-function SmItemPhoto({ url, size, zoom }: { url?: string | null; size: number; zoom?: boolean }) {
+export function SmItemPhoto({ url, size, zoom }: { url?: string | null; size: number; zoom?: boolean }) {
   const [dead, setDead] = useState(false);
   const [preview, setPreview] = useState<{ x: number; y: number; src: string } | null>(null);
   const box: React.CSSProperties = {
@@ -226,7 +226,7 @@ function SmItemPhoto({ url, size, zoom }: { url?: string | null; size: number; z
   );
 }
 
-function money(cents: number): string {
+export function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 

@@ -124,6 +124,7 @@ export const navItems: NavItem[] = [
   { id: "store.deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
   { id: "store.drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
   { id: "store.specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
+  { id: "store.teach", href: "/orders/teach", label: "Teach the Agent", icon: "TA", lucide: GraduationCap, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
   // Conference rooms — right before Install, per Izzy (2026-08-20). Visible to
   // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
   // rides that action key's expansion in @connect/shared.

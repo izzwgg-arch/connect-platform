@@ -843,6 +843,7 @@ model Tenant {
   posCatalogSyncState             PosCatalogSyncState?
   supermarketOrderDrafts          SupermarketOrderDraft[]
   supermarketPhraseLessons        SupermarketPhraseLesson[]
+  supermarketPhraseDismissals     SupermarketPhraseDismissal[]
   supermarketPhonePins            SupermarketPhonePin[]
   supermarketPayCalls             SupermarketPayCall[]
   supermarketSpecials             SupermarketSpecial[]
@@ -8104,8 +8105,15 @@ model SupermarketPhraseLesson {
   tenantId        String
   /// Normalized phrase exactly as the transcription/translation garbled it.
   phrase          String
+  /// The phrase as a human last saw it (pre-normalization) — display only.
+  displayPhrase   String   @default("")
   posProductId    String
   timesConfirmed  Int      @default(1)
+  /// How often the brain actually filled an order line off this lesson.
+  timesUsed       Int      @default(0)
+  /// "rep" = harvested from a rep's fix at submit; "taught" = the admin
+  /// Teach-the-Agent page (Izzy's daily correction lane).
+  source          String   @default("rep")
   lastConfirmedAt DateTime @default(now())
   createdAt       DateTime @default(now())
 
@@ -8113,6 +8121,20 @@ model SupermarketPhraseLesson {
 
   @@unique([tenantId, phrase, posProductId])
   @@index([tenantId, lastConfirmedAt])
+}
+
+/// A phrase the admin marked "not an item" on the Teach-the-Agent page —
+/// greetings, payment remarks ("charge my file"). Stops it piling up on the
+/// teaching queue; never consulted by the brain.
+model SupermarketPhraseDismissal {
+  id        String   @id @default(cuid())
+  tenantId  String
+  phrase    String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phrase])
 }
 
 /// Pay-by-phone PIN enrollment: the account PIN, encrypted, bound to ONE
