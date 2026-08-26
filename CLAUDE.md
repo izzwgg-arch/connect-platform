@@ -277,6 +277,15 @@ their IVR ext 898 "Order Tracking" is the manual process this replaces.)
   (`DELIVERY_ORDER_SOURCE_SECRET` — so all five `/internal/delivery/*` doors
   refuse; `PUBLIC_TRACKING_BASE_URL`; `DELIVERY_SMS_LIVE`;
   `DELIVERY_GEOCODER_URL`). No human has ever exercised any of it.
+  ✅ **UPDATE 2026-08-26: `DELIVERY_GEOCODER_URL` + `DELIVERY_GEOCODER_FORMAT=google`
+  are now IN `.env.platform`** (backup `.bak.*.geocoder`) — a Google Geocoding
+  API key on the Connect Firebase project `connect-app-23d4f` (billing account
+  "loopcom" created + linked by Izzy live; key "Loopcom tracking geocoder"
+  restricted to the Geocoding API AND server IP 45.14.194.179 — proven working
+  from loopcom, proven REFUSED from elsewhere; 10k lookups/mo free then $5/1k).
+  ⛔ No compose override exists, so it reaches the api container at its NEXT
+  deploy — an env-only change has no deploy path of its own. The other three
+  vars stay unset.
 - ⛔⛔ **THE DRIVER FLOW IS UNREACHABLE IN THE SHIPPED APP.** Nothing navigates
   to the `"Delivery"` route — the Settings → "Delivery driver" launcher added by
   `5c95f86c` was **deliberately removed** in `d42cd0bf` (2026-07-28; that
