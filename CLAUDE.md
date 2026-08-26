@@ -150,9 +150,21 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   finished all 193 pages in one run** (19,244 upserted, high-water set,
   incrementals back to 1 credit; catalog rows carry `brand`/`sizeText` now).
   ⛔ Photos: the POS API has none; they come from Gesheft's own Self-Point
-  webstore (browser-harvested, barcode-keyed) — 4,085 of 22,063 rows carry
-  one, which is EVERYTHING the webstore publishes; hover a suggestion
-  thumbnail for the CDN's `large` variant (xlarge/original 403).
+  webstore (browser-harvested) — **4,540** of 22,063 rows carry one after two
+  passes: 4,085 barcode-keyed + 455 matched by **brand + name + ounces**
+  (Izzy's rule; conservative — 114 ambiguous skipped, a wrong photo is worse
+  than none; matcher `scratchpad/photo-match.py`, names harvest
+  `webstore-names.json` — the per-CATEGORY list endpoint with `filters={}`
+  works in-browser, the FLAT products list 403s, and their own default filter
+  HIDES out-of-stock items). Photos render in the quick-add AND on order item
+  rows (server-hydrated, stripped on write); hover for the CDN's `large`.
+  ⛔ **Live stock (`PosCatalogItem.onHand`) rides every catalog tick at zero
+  extra credits** (Izzy: "always in sync… least credits possible") —
+  suggestions sort in-stock first with "not in stock" labels (never hidden),
+  order lines carry the tag, the brain prefers in-stock and flags "?"
+  otherwise. null = not yet synced (shown normally); register drift can go
+  NEGATIVE. No backfill walk was run — stock fills as items change; the full
+  walk (~193 credits, 2.5s pacing) is the optional fast fill.
 - ✅✅ **CARDS ON FILE AT PUT-THROUGH (`2b564f71`, built to the approved mockup
   <https://claude.ai/code/artifact/18c52179-0658-4fb0-b6c3-7e4dc15a924a>, both
   themes).** `customerCards.ts`: register cards (POS `listCustomerCards`, no

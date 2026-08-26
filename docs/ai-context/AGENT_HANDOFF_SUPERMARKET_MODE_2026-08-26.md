@@ -339,3 +339,38 @@ through the queue same night (jobs 956e06be / 2960707e / b27b69d2), portal
   cheap history mining of months of texts WITHOUT YL) — designed, not built.
 - Nobody has driven the card UI in a browser; the reprocess quality verdict
   is Izzy's to make from the drafts screen.
+
+## §9 — Later on night 2: truncation fix, stock, photo pass 2, keyboard flow
+
+- ⛔⛔ **THE BRAIN WAS TRUNCATING ON REAL ORDERS — the recorded gpt-5 trap,
+  caught on Izzy's own test case.** Pearl Mutter's 31-line WIC voicemail
+  filled only 6 items (the regex matcher's answer). Probed live: the extract
+  call used 3,946 of its 4,000-token cap, **3,264 of it reasoning** — over the
+  cap on the real run, truncated JSON, silent matcher fallback. Both calls now
+  cap at 16,000 (`orderPipeline.test.ts` pins them ≥16000). After the fix the
+  same draft fills 18 items with the WIC split, returns and refusal reasons in
+  notes. ⛔ Reprocess reuses a draft's stored YL transcript+translation
+  (`preTranslated`) — re-running the brain never re-bills YL audio.
+- **Closest-match "?"** (Izzy: "fill in with the one available and put a
+  question mark"): the resolve pass picks the close variant with
+  `unsure:true` instead of refusing; the flag survives sanitizeDraftItems and
+  renders as a "?" pill. Refusal only for nothing-close / hard constraints.
+- **Live stock, zero extra credits**: `onHand` parsed off every catalog tick;
+  suggestions in-stock-first with "not in stock" labels (out-of-stock shown
+  at the bottom, NEVER hidden — Izzy corrected mid-build); order lines carry
+  the tag via draft-detail hydration; brain candidates carry inStock:false.
+  No backfill walk (his "least credits possible") — stock fills as the
+  register touches items; freshness rides the 15-min incremental.
+- **Photo pass 2 by brand+name+oz**: category-walk harvest in the browser
+  (394 nav categories, `filters={}`, size=100; the flat list 403s; their own
+  filter hides out-of-stock) → 6,864 products with names/brand/weight/unit →
+  conservative matcher (brand agreement + token overlap + oz equality,
+  ambiguity skips) → 455 new matches ingested via the barcode door using the
+  POS row's OWN code. 4,540 rows now carry photos. Only 13 products were
+  missing from the original barcode harvest by image-URL diff.
+- **Keyboard flow** (Izzy): Enter advances through the card iFields
+  (react-ifields `options.autoSubmit` + `onSubmit`), → opens "Sure you want
+  to place this order?", Enter places, Esc backs out.
+- ⛔ Trap re-paid: `pkill -f <script>` over ssh self-matches the remote
+  shell's own command line when ANY part of the command names the file —
+  split the pattern AND keep sed/nohup mentions out of the same ssh call.
