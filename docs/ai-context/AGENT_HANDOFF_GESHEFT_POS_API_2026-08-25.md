@@ -584,6 +584,66 @@ sustainable for our call volume.
   user → Start run asks for location and the dispatcher map moves. Needs the
   server side enabled (env + pilot tenant per DELIVERY_RUNBOOK §4) and a
   DriverProfile — none exist yet.
+### §15 — VOICE AGENT BUILT (telephony committed; api tested, awaiting the shared schema commit) — 2026-08-26
+
+Izzy: "Build it end to end. Do not stop until you have tested it and it is
+production-ready. After you test it, stress the fuck out of it." (This order
+overrides the mockups-before-UI gate for THIS feature's screens.)
+
+**Architecture (all reuses the fork's supermarket module, no duplication):**
+OpenAI `gpt-realtime` bridged from OUR Asterisk. PBX dialplan
+`[connect-voice-agent]` answers a tenant's DID, announces the call over AMI
+(`UserEvent(ConnectVoiceAgent, UUID, Tenant, ...)`, the ConnectWake lane), and
+`AudioSocket(uuid, loopcom:4590)` streams μ-law 8 kHz to a new TCP server in
+apps/telephony. That server (`apps/telephony/src/voiceAgent/*`) bridges to the
+OpenAI realtime WebSocket with the TENANT'S OWN key, runs the order-taking
+conversation, writes the finished order as a `SupermarketOrderDraft`
+(sourceType "voice_call", agentItems frozen, NEEDS_REVIEW — the fork's review
+queue), and on "get me a person" / any failure returns to the dialplan's HUMAN
+fallback (the default branch, never hangup — additive in front of today's flow).
+
+**⛔ Load-bearing invariants (all test-proven):**
+- The OpenAI key is the tenant's own (ProviderCredential/OPENAI via the fork's
+  `resolveIntegrationKey('OPENAI')`) — NO platform-key fallback (source-guarded);
+  a runaway AI call bills the tenant, never us. Same wall as tenant Sola keys.
+- The model's arguments are UNTRUSTED: every finalized price comes from
+  PosCatalogItem at execution time (10k-attempt stress proves a model-supplied
+  price never moves the total); an order with a phantom item is refused WHOLE,
+  never trimmed; one draft per call (50-way concurrent finalize → 1 draft);
+  tenant comes from the api-issued session, never the model.
+- The voice agent NEVER submits to the POS — `approveAndSubmitDraft` (fork) stays
+  the only register path, human-gated (source-guarded: no posClientForTenant /
+  PosWithLogicClient reference).
+- The AudioSocket port is internet-reachable (docker bypasses ufw), gated by a
+  single-use 128-bit session UUID announced over AMI (unknown UUID → terminated
+  instantly) + a DOCKER-USER iptables rule pinning it to the PBX. 100-probe
+  hostile assault admits ZERO sessions.
+- ⛔ Armed ONLY by VOICE_AGENT_ENABLED=1 — a pure no-op otherwise; shipping the
+  code changes nothing until the flag is set. Touches no other telephony service.
+- Yiddish: the model is instructed to transfer to a person (no provider does
+  real-time Yiddish); English/Hebrew/Spanish handled by the AI.
+
+**State:**
+- ✅ Telephony half COMMITTED + PUSHED (`58fafae9`, 17 files) — inert until
+  flagged. 37 tests (31 unit + 6 stress: 5000-run parser fuzz, 200k-sample
+  μ-law round-trip verified against the standard G.711 table, hostile assault,
+  concurrency flood, 300-session well-formed-frame chaos). typecheck 41 = baseline.
+- ✅ PBX dialplan + idempotent patch script committed (`scripts/pbx/
+  connect-voice-agent.{conf,sh}`, LF-pinned). Deploy runbook + phone-free
+  live-check script committed (`41b0ad3e`).
+- ⏳ API half (`apps/api/src/voiceAgent/*` + server.ts/jwtPublicRouteBypass
+  edits) WRITTEN + FULLY TESTED offline (25 tests incl. the 10k hostile-executor
+  stress; 0 typecheck errors in the files; all 6 Prisma accessors verified
+  against the generated client) but UNCOMMITTED — it depends on the fork's
+  migration `20260826020000_supermarket_mode` (which carries my VoiceAgentSettings
+  / VoiceAgentCall models + the OPENAI enum value). Commits after the fork's
+  schema lands; then rebase server.ts/bypass on top of theirs.
+- ⏳ NOT DONE: deploy (gated on the fork's api deploy carrying the migration),
+  VOICE_AGENT_ENABLED flip, the DOCKER-USER firewall rule, PBX dialplan install,
+  pilot-tenant enablement (Loopcom Demo T102), and the acceptance REAL CALL.
+- ⏳ Portal admin screen: coordinating ownership with the fork (their integration-
+  keys screen may host the OpenAI key; my api exposes GET/PUT /admin/voice-agent).
+
 ## Open questions for Gesheft (nobody has asked yet)
 
 - **The box sticker (2026-08-25, gates the label design):** their POS already
