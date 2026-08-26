@@ -155,6 +155,9 @@ export class OpenAiRealtimeClient extends EventEmitter {
   private sendSessionUpdate(shape: "ga" | "beta"): void {
     const s = this.pendingSession;
     if (!s) return;
+    // Env-tunable; "off" (or empty) disables input transcription.
+    const transcriptionRaw = (process.env.VOICE_AGENT_TRANSCRIBE_MODEL ?? "gpt-4o-mini-transcribe").trim();
+    const transcriptionModel = transcriptionRaw && transcriptionRaw.toLowerCase() !== "off" ? transcriptionRaw : "";
     const tools = s.tools.map((t) => ({
       type: "function",
       name: t.name,
@@ -171,7 +174,11 @@ export class OpenAiRealtimeClient extends EventEmitter {
           audio: {
             input: {
               format: { type: "audio/pcmu" },
-              transcription: { model: "gpt-4o-mini-transcribe" },
+              // Transcription only feeds the call log (not the conversation),
+              // so its model name is the most likely thing to drift; env-
+              // tunable, and its rejection triggers the beta-shape retry which
+              // omits it. Empty string disables it entirely.
+              ...(transcriptionModel ? { transcription: { model: transcriptionModel } } : {}),
               turn_detection: {
                 type: "server_vad",
                 silence_duration_ms: s.vadSilenceMs ?? 600,
