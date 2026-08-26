@@ -7970,6 +7970,8 @@ model PosCatalogItem {
   isActive       Boolean  @default(true)
   /// Their lastMod stamp, verbatim — the incremental-sync high-water anchor.
   posLastMod     String?
+  /// Product photo, harvested from the store's own webstore (barcode-keyed). Public CDN URL.
+  imageUrl        String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

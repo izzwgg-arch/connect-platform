@@ -323,6 +323,55 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     }
   });
 
+  /**
+   * Product-photo ingest (Izzy, 2026-08-26: "when the suggestions come up, it
+   * should come up with the photos"). The photos live on the store's own
+   * webstore (Self-Point), whose API sits behind a Cloudflare browser
+   * challenge — the SERVER cannot walk it, so the barcode→imageUrl map is
+   * harvested in a real browser and fed through this SUPER_ADMIN door.
+   * Updates PosCatalogItem by (tenantId, code=barcode); https URLs only;
+   * additive — a row keeps its photo until a newer harvest replaces it.
+   */
+  app.post("/admin/integrations/webstore-images", async (req: any, reply: any) => {
+    const admin = await requireOwner(req, reply);
+    if (!admin) return;
+    const parsed = z
+      .object({
+        tenantId: z.string().min(5).max(64),
+        images: z
+          .array(z.object({ barcode: z.string().trim().min(3).max(32), imageUrl: z.string().trim().url().max(500) }))
+          .min(1)
+          .max(5000),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const tenant = await db.tenant.findUnique({ where: { id: parsed.data.tenantId }, select: { id: true } });
+    if (!tenant) return reply.status(404).send({ error: "not_found" });
+    let matched = 0;
+    let unmatched = 0;
+    for (const img of parsed.data.images) {
+      if (!img.imageUrl.startsWith("https://")) {
+        unmatched++;
+        continue;
+      }
+      const res = await db.posCatalogItem.updateMany({
+        where: { tenantId: tenant.id, code: img.barcode },
+        data: { imageUrl: img.imageUrl },
+      });
+      if (res.count > 0) matched++;
+      else unmatched++;
+    }
+    await safeAudit({
+      tenantId: tenant.id,
+      action: "SUPERMARKET_WEBSTORE_IMAGES_INGESTED",
+      entityType: "PosCatalogItem",
+      entityId: "batch",
+      actorUserId: String(admin.sub ?? ""),
+      metadata: { received: parsed.data.images.length, matched, unmatched },
+    });
+    return reply.send({ ok: true, matched, unmatched });
+  });
+
   app.put("/admin/integrations/crm-mode", async (req: any, reply: any) => {
     const admin = await requireOwner(req, reply);
     if (!admin) return;
@@ -526,7 +575,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       where: isNumeric
         ? { tenantId, isActive: true, code: { startsWith: q } }
         : { tenantId, isActive: true, name: { contains: q, mode: "insensitive" } },
-      select: { posProductId: true, code: true, name: true, unitPriceCents: true },
+      select: { posProductId: true, code: true, name: true, unitPriceCents: true, imageUrl: true },
       orderBy: isNumeric ? { code: "asc" } : { name: "asc" },
       take: 8,
     });

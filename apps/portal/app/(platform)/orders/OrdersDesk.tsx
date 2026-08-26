@@ -78,7 +78,43 @@ type DraftItem = {
   matchedFrom?: string;
 };
 
-type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number };
+type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null };
+
+/**
+ * One product-photo renderer for every supermarket surface. ⛔ A broken or
+ * absent image must collapse to the neutral glyph, never a broken-image icon —
+ * the desk-phone PhonePhoto lesson: give every <img> a real onError fallback.
+ * URLs are the store's own webstore CDN (public, https — the portal CSP allows
+ * any https image).
+ */
+function SmItemPhoto({ url, size }: { url?: string | null; size: number }) {
+  const [dead, setDead] = useState(false);
+  const box: React.CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: 6,
+    border: "1px solid var(--border)",
+    background: "var(--panel-2)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    flexShrink: 0,
+  };
+  if (!url || dead) {
+    return (
+      <span style={box} aria-hidden>
+        <span style={{ fontSize: size * 0.5, lineHeight: 1, opacity: 0.45 }}>🛒</span>
+      </span>
+    );
+  }
+  return (
+    <span style={box}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="" width={size} height={size} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" onError={() => setDead(true)} />
+    </span>
+  );
+}
 
 function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -506,7 +542,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         }}
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "5.2rem 1fr auto",
+                          gridTemplateColumns: "2rem 5.2rem 1fr auto",
                           gap: ".7rem",
                           padding: ".5rem .8rem",
                           alignItems: "center",
@@ -517,6 +553,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                             : { color: "var(--text-dim)", borderTop: "1px solid var(--border)" }),
                         }}
                       >
+                        <SmItemPhoto url={h.imageUrl} size={28} />
                         <span className="sm-sku" style={{ fontSize: ".74rem" }}>{h.code}</span>
                         {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
                         <span className="sm-amount">{money(h.unitPriceCents)}</span>

@@ -709,6 +709,41 @@ test("STRESS 14b — the workspace tenant switch: SUPER_ADMIN with x-tenant-cont
   assert.equal(body(forged).error, "wrong_crm_mode");
 });
 
+test("STRESS 14c — the webstore-images ingest door: barcode-matched updates, https-only, owner-only, honest counts", async () => {
+  const kit = await buildApp();
+  const { app, db, tokenFor } = kit;
+  db.seed("tenant", { id: "t-img", crmMode: "supermarket" });
+  db.seed("posCatalogItem", { tenantId: "t-img", posProductId: "i1", code: "719165941959", name: "Challah", unitPriceCents: 1519, isActive: true });
+  db.seed("posCatalogItem", { tenantId: "t-img", posProductId: "i2", code: "729940005486", name: "Foil Pan", unitPriceCents: 199, isActive: true });
+  db.seed("posCatalogItem", { tenantId: "t-other-img", posProductId: "i3", code: "719165941959", name: "Foreign twin", unitPriceCents: 1, isActive: true });
+  const owner = tokenFor({ sub: "ow", tenantId: "admin", role: "SUPER_ADMIN" });
+  const payload = {
+    tenantId: "t-img",
+    images: [
+      { barcode: "719165941959", imageUrl: "https://cdn.example.com/items/medium/1.jpg" },
+      { barcode: "729940005486", imageUrl: "http://insecure.example.com/2.jpg" }, // http refused
+      { barcode: "000000000000", imageUrl: "https://cdn.example.com/3.jpg" }, // no such item
+    ],
+  };
+  // non-owner refused before anything
+  const pleb = tokenFor({ sub: "p", tenantId: "t-img", role: "USER" });
+  assert.equal((await app.inject({ method: "POST", url: "/admin/integrations/webstore-images", headers: { authorization: `Bearer ${pleb}` }, payload })).statusCode, 403);
+  const res = await app.inject({ method: "POST", url: "/admin/integrations/webstore-images", headers: { authorization: `Bearer ${owner}` }, payload });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.deepEqual(body(res), { ok: true, matched: 1, unmatched: 2 });
+  const rows = db.rows("posCatalogItem");
+  assert.equal(rows.find((r) => r.posProductId === "i1")!.imageUrl, "https://cdn.example.com/items/medium/1.jpg");
+  assert.equal(rows.find((r) => r.posProductId === "i2")!.imageUrl ?? null, null, "an http URL must never land");
+  // ⛔ tenant-scoped: the foreign tenant's same-barcode row is untouched
+  assert.equal(rows.find((r) => r.posProductId === "i3")!.imageUrl ?? null, null);
+  // and the search now carries the photo
+  const kh = kit.keyHolders; kh.set("viewer", new Set(["can_view_supermarket_orders"]));
+  db.seed("user", { id: "viewer", tenantId: "t-img", email: "v2@x.com" });
+  const viewer = tokenFor({ sub: "viewer", tenantId: "t-img", role: "USER" });
+  const search = await app.inject({ method: "GET", url: "/supermarket/catalog/search?q=chal", headers: { authorization: `Bearer ${viewer}` } });
+  assert.equal(body(search).items[0].imageUrl, "https://cdn.example.com/items/medium/1.jpg");
+});
+
 // ═════════════════════════════ STRESS 15 ═════════════════════════════════════
 
 test("STRESS 15 — tenant-isolation storm: 300 concurrent mixed operations across 3 tenants with forged tenantIds in every body — zero cross-tenant bleed", async () => {
