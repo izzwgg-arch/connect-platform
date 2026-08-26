@@ -213,5 +213,8 @@ by re-adding my paths (the staged-deletion trap).
   sending mailbox exists for it.
 - **No human has opened any screen**, no tenant is in supermarket mode, no
   driver has been invited, no twin has popped on a real call.
-- Deploy state at the time of writing: committed + pushed; api/portal deploy
-  is the next step in-session — check the containers, not this doc.
+- ✅ DEPLOYED 2026-08-26: api job `b1b93518` → `c65bf3a8` (container-verified:
+  boot line, tables, fail-closed doors, 0 restarts); portal job `727c5c63` →
+  `38b6c54c` after the cssnano fix (bundle string-verified). The voice-agent
+  sibling's api half rode the same api deploy; their telephony half + env/PBX
+  steps await Izzy's word.

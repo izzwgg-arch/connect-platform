@@ -74,9 +74,19 @@ ends: **commit → push → deploy.** Not "committed, will push later."
 ## ⛔⛔ AGENT HANDOFF — CRM SUPERMARKET MODE is BUILT END TO END (phases 0–7, the Gesheft plan) and is INERT until a tenant is switched on (2026-08-26) — READ FIRST before touching apps/api/src/supermarket, the /orders portal screens, ProviderCredential, Tenant.crmMode, or before believing any POS integration is live
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SUPERMARKET_MODE_2026-08-26.md`**
-(`8e224306` on `feat/ivr-migration-takeover`. Izzy: *"do phase 0 to 7, one
-shot… Run 25 very, very heavy stress tests… then… call it done."* Deploy state
-recorded in-session — verify the containers, not this section.)
+(`8e224306` + css fix `38b6c54c` on `feat/ivr-migration-takeover`. Izzy: *"do
+phase 0 to 7, one shot… Run 25 very, very heavy stress tests… then… call it
+done."* ✅ **api DEPLOYED and container-verified** — `app-api-1`
+`.build-commit` = `c65bf3a8`, `SUPERMARKET_SWEEPS_ARMED` boot line, all 10
+tables applied, 0 supermarket tenants, doors fail closed (pay-ivr 401/403,
+unsubscribe junk 400), health 200 both hostnames, 0 restarts. ✅ **portal
+DEPLOYED and bundle-verified** — `app-portal-1` = `38b6c54c`, all six
+/orders routes + `sm-root` in the shipped CSS + `sm-order-pop` in the app
+layout chunk. ⛔ The FIRST portal deploy died in cssnano on generator debris
+in supermarket.css — a mangled comment + a raw `:root` token dump that would
+also have leaked mockup tokens portal-wide; excised, then proven by running
+next's own compiled cssnano over the file BEFORE re-enqueueing. **Validate a
+generated stylesheet with the deploy's own minifier before shipping it.**)
 
 - ⛔⛔ **EVERYTHING IS INERT ON DEPLOY**: `Tenant.crmMode` defaults `"classic"`
   (0 supermarket tenants), the 3 new permission keys are in NO default bucket,
