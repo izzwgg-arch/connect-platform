@@ -669,6 +669,46 @@ test("STRESS 14 — route auth matrix: every surface × six principals answers e
   assert.equal((await app.inject({ method: "POST", url: "/supermarket/drivers/full", headers: h(tokens.view), payload: { name: "A Driver", cell: "8455551234", email: "d@x.com" } })).statusCode, 403);
 });
 
+test("STRESS 14b — the workspace tenant switch: SUPER_ADMIN with x-tenant-context operates on the SWITCHED tenant; a plain user's forged header is IGNORED", async () => {
+  const kit = await buildApp();
+  const { app, db, posByTenant, keyHolders, tokenFor } = kit;
+  const pos = new FakePos();
+  pos.products.push({ id: "sw1", code: "104", name: "Milk", price: 4.29, lastMod: "m" });
+  posByTenant.set("t-shop", pos);
+  await seedPosTenant(db, "t-shop", pos);
+  db.seed("posCatalogItem", { tenantId: "t-shop", posProductId: "sw1", code: "104", name: "Milk", unitPriceCents: 429, isActive: true });
+  db.seed("supermarketOrderDraft", { tenantId: "t-shop", sourceType: "voicemail", sourceId: "sw-vm", agentItems: [] });
+  db.seed("tenant", { id: "t-other", crmMode: "classic" });
+  db.seed("user", { id: "u-pleb", tenantId: "t-other", email: "pleb@x.com" });
+  keyHolders.set("u-pleb", new Set(["can_view_supermarket_orders"]));
+
+  const admin = tokenFor({ sub: "u-owner", tenantId: "admin-tenant", role: "SUPER_ADMIN" });
+  const switched = { authorization: `Bearer ${admin}`, "x-tenant-context": "t-shop" };
+
+  // unswitched: the admin tenant has nothing
+  const bare = await app.inject({ method: "GET", url: "/supermarket/drafts", headers: { authorization: `Bearer ${admin}` } });
+  assert.equal(body(bare).drafts.length, 0, "unswitched admin should see the admin tenant (empty)");
+  // switched: the store's drafts + catalog appear — Izzy's exact report was
+  // "I started to type, nothing came up in suggestions"
+  const drafts = await app.inject({ method: "GET", url: "/supermarket/drafts", headers: switched });
+  assert.equal(body(drafts).drafts.length, 1, "the switch must reach the drafts list");
+  const search = await app.inject({ method: "GET", url: "/supermarket/catalog/search?q=mil", headers: switched });
+  assert.equal(body(search).items.length, 1, "the switch must reach the quick-add search");
+  assert.equal(body(search).items[0].name, "Milk");
+  // a call-sourced draft lands in the SWITCHED tenant
+  const created = await app.inject({ method: "POST", url: "/supermarket/drafts", headers: switched, payload: { sourceType: "call", customerPhone: "8456624417" } });
+  assert.equal(created.statusCode, 200, created.body);
+  const row = db.rows("supermarketOrderDraft").find((d) => d.id === body(created).draft.id);
+  assert.equal(row!.tenantId, "t-shop", "a created draft must land in the switched tenant");
+
+  // ⛔ a NON-admin sending the header is ignored — the switch is SUPER_ADMIN only
+  const pleb = tokenFor({ sub: "u-pleb", tenantId: "t-other", role: "USER" });
+  const forged = await app.inject({ method: "GET", url: "/supermarket/drafts", headers: { authorization: `Bearer ${pleb}`, "x-tenant-context": "t-shop" } });
+  // t-other is classic → the mode wall refuses; the header must NOT have moved them into t-shop
+  assert.equal(forged.statusCode, 403);
+  assert.equal(body(forged).error, "wrong_crm_mode");
+});
+
 // ═════════════════════════════ STRESS 15 ═════════════════════════════════════
 
 test("STRESS 15 — tenant-isolation storm: 300 concurrent mixed operations across 3 tenants with forged tenantIds in every body — zero cross-tenant bleed", async () => {

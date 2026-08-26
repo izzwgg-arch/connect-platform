@@ -21,6 +21,7 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { userHasActionPermission } from "../permissionGates";
+import { resolveEffectiveTenantBillingContext } from "../billing/billingAuth";
 import {
   describeIntegrationKeys,
   isSupermarketProvider,
@@ -155,6 +156,17 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   const clientFor = deps.clientFor ?? posClientForTenant;
 
   const getUser = (req: any) => (req.user ?? {}) as { sub?: string; tenantId?: string; role?: string; email?: string };
+  /**
+   * The tenant every tenant-facing route operates on. ⛔ For SUPER_ADMIN this
+   * honours the workspace tenant switch (x-tenant-context / ?tenantId=) via the
+   * platform's ONE resolver in billing/billingAuth — Izzy, 2026-08-26: "from
+   * the main tenant, when I go to Gesheft, I should be able to access their
+   * system with their API key." Without this, every route read the admin
+   * tenant (no catalog, no drafts) and the quick-add suggested nothing —
+   * the recorded routes-ignore-the-tenant-selector trap.
+   */
+  const tenantOf = (req: any): string =>
+    resolveEffectiveTenantBillingContext(req, { tenantId: String(getUser(req).tenantId ?? ""), role: getUser(req).role });
   const allowed = async (req: any, key: string): Promise<boolean> => {
     const user = getUser(req);
     if (user.role === "SUPER_ADMIN") return true;
@@ -163,7 +175,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   /** Tenant-scoped draft fetch — the 404-before-anything ownership step. */
   const ownDraft = async (req: any, reply: any, draftId: string) => {
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     const draft = await db.supermarketOrderDraft.findFirst({ where: { id: String(draftId), tenantId } });
     if (!draft) {
       reply.status(404).send({ error: "not_found" });
@@ -353,7 +365,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
    *  + the order-twin watcher ask this for every signed-in user. */
   app.get("/supermarket/mode", async (req: any, reply: any) => {
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     if (!tenantId) return reply.send({ mode: "classic" });
     const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { crmMode: true } }).catch(() => null);
     return reply.send({ mode: tenant?.crmMode === "supermarket" ? "supermarket" : "classic" });
@@ -361,7 +373,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
 
   app.get("/supermarket/summary", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const dayStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [needsReview, submittedToday, fromVoicemail, fromText] = await Promise.all([
       db.supermarketOrderDraft.count({ where: { tenantId, status: "NEEDS_REVIEW" } }),
@@ -374,7 +386,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
 
   app.get("/supermarket/drafts", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const status = String((req.query as any)?.status ?? "").trim();
     const where: any = { tenantId };
     if (status && ["NEEDS_REVIEW", "APPROVED", "SUBMITTED", "SUBMIT_FAILED", "DISMISSED", "SUBMITTING"].includes(status)) {
@@ -419,7 +431,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const parsed = draftCreateSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     const draft = await db.supermarketOrderDraft.create({
       data: {
         tenantId,
@@ -464,7 +476,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const result = await approveAndSubmitDraft(
       { db, log: app.log, clientFor, ingestDeliveryOrder: deps.ingestDeliveryOrder },
       {
-        tenantId: String(user.tenantId ?? ""),
+        tenantId: tenantOf(req),
         draftId: draft.id,
         actorUserId: String(user.sub ?? ""),
         reviewedItems: sanitizeDraftItems(parsed.data.items),
@@ -478,7 +490,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       return reply.status(status).send({ error: result.code, message: result.message });
     }
     await safeAudit({
-      tenantId: String(user.tenantId ?? ""),
+      tenantId: tenantOf(req),
       action: "SUPERMARKET_DRAFT_SUBMITTED",
       entityType: "SupermarketOrderDraft",
       entityId: draft.id,
@@ -506,7 +518,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
 
   app.get("/supermarket/catalog/search", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const q = String((req.query as any)?.q ?? "").trim().slice(0, 60);
     if (q.length < 1) return reply.send({ items: [] });
     const isNumeric = /^\d+$/.test(q);
@@ -524,7 +536,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   /** The screen-pop / order-twin lookup: phone → register account. */
   app.get("/supermarket/lookup", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const phoneRaw = String((req.query as any)?.phone ?? "");
     const phone10 = posPhoneDigits(phoneRaw);
     if (!phone10) return reply.send({ found: false });
@@ -592,7 +604,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
 
   app.get("/supermarket/stats", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const rows = await db.supermarketOrderDraft.findMany({
       where: { tenantId, corrections: { not: null }, approvedAt: { not: null } },
       select: { approvedAt: true, corrections: true },
@@ -613,7 +625,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
 
   app.get("/supermarket/specials", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const specials = await db.supermarketSpecial.findMany({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
@@ -630,7 +642,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const user = getUser(req);
     const special = await db.supermarketSpecial.create({
       data: {
-        tenantId: String(user.tenantId ?? ""),
+        tenantId: tenantOf(req),
         subject: parsed.data.subject,
         body: parsed.data.body,
         createdBy: String(user.sub ?? ""),
@@ -643,7 +655,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     if (!(await requireSupermarketMode(db, req, reply))) return;
     if (!(await allowed(req, SUPERMARKET_SPECIALS_KEY))) return reply.status(403).send({ error: "forbidden" });
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     const result = await sendSpecialBlast(
       { db, renderShell, publicOrigin: deps.publicOrigin, log: app.log },
       { tenantId, specialId: String((req.params as any).id) },
@@ -669,7 +681,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
    *  phone app; the dispatcher's Call button dials the cell on this record. */
   app.get("/supermarket/drivers", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
-    const tenantId = String(getUser(req).tenantId ?? "");
+    const tenantId = tenantOf(req);
     const profiles = await db.driverProfile.findMany({
       where: { tenantId },
       orderBy: { createdAt: "asc" },
@@ -707,7 +719,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const parsed = driverCreateSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "invalid_request", message: "A driver needs a name, a cell number and an email." });
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     const email = parsed.data.email.toLowerCase();
 
     const existing = await db.user.findFirst({ where: { email }, select: { id: true, tenantId: true } });
@@ -796,7 +808,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   app.post("/supermarket/drivers/:userId/resend-invite", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
     const user = getUser(req);
-    const tenantId = String(user.tenantId ?? "");
+    const tenantId = tenantOf(req);
     const target = await db.user.findFirst({
       where: { id: String((req.params as any).userId), tenantId },
       select: { id: true, email: true, firstName: true, lastName: true, phone: true, status: true, lastLoginAt: true },
