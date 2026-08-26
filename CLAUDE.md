@@ -7893,42 +7893,79 @@ PBX write, no data change, no credits spent.** Memory:
   minutes.
 - ✅ **Its first live verdict was correct and cost nothing:** at 11:57:01Z it read
   the 11:50 translation row and recorded `state: ok, via: translation`.
-- ✅✅ **“I NEVER GOT THE TEXT” — ANSWERED 2026-08-26, AND THE ALARM IS NOT AT
-  FAULT: IT HAS NEVER HAD ANYTHING TO FIRE ON.** The watcher was armed
-  **2026-08-18T11:57:01Z** and the **last credit failure that has ever happened**
-  is **2026-08-18T03:33:27Z — 8h 24m EARLIER**, so during the only outage on
-  record it did not yet exist. Since then: **170 checks, 168 `ok` + 2 `unknown`,
-  zero `out`**, and only **2** `insufficient_credits` rows in the entire 30-day
-  audit trail (25,598 rows scanned), both from that outage. Proven healthy today
-  by making the watcher’s own call: **200, real Yiddish back,
-  `credits_consumed: 1`**. ⛔ **The one-line check before answering this again:**
-  `select ts, payload from "AgentAuditLog" where event='yiddishlabs.credit_check'
-  order by ts desc limit 5;` — all `ok` means it is watching and there has been
-  nothing to report. ⛔ The empty **`AGENT_ESCALATION_SMS_TO`** on the container
-  is **NOT a fault** — the two numbers are a hardcoded default at
-  `agentEscalationDispatch.ts:30`, and escalations texted fine on 08-24.
-- ⛔⛔ **THE GAP THAT ACTUALLY EXPLAINS THE QUESTION: THERE IS NO LOW-BALANCE
-  WARNING AND THERE CANNOT BE ONE.** Re-probed 2026-08-26 — `/credits`,
-  `/balance`, `/account`, `/usage`, `/quota`, `/me`, `/user`, `/status`,
-  `/subscription`, `/billing`, `/wallet`, `/credits/balance`, `/account/credits`
-  — **all 13 answer 404**. The only way to learn the balance is to be refused, so
-  the text lands on the **first customer who is already broken**, never before.
-  **A low balance seen on their dashboard, or an email from Yiddish Labs, is
-  invisible to Loopcom** — say so plainly instead of hunting a bug in the watcher.
-- ⚠️⚠️ **AND THE FINDING WORTH ACTING ON: THE MONITOR IS NOW THE BIGGEST
-  CONSUMER OF YIDDISH LABS CREDITS.** Across all 170 checks the `via` split is
-  **168 probe / 2 translation** — the free path almost never applies because real
-  usage is near zero (**38 `AgentTranslation` rows in 14 days, only 1 in the last
-  8**). At 1 credit a probe that is **~22/day, ~168 spent in 7.7 days**, against
-  15–21 for one assistant reply. **The thing built to warn about running out of
-  credits is what will run the account down.** Cheap fixes, deliberately NOT
-  applied: accept a fresh **`voicemail.translate_ondemand`** audit row as proof of
-  life (15 in 30 days, newest today), and/or raise
-  `YIDDISHLABS_CREDIT_CHECK_INTERVAL_MS` from hourly to 4–6 hourly — an outage
-  with no Yiddish traffic harms nobody until somebody uses it.
-- ⏳ **Still NOT proven: no alert has ever been raised or delivered by this
-  caller.** The acceptance test is the next real outage, or one deliberate test
-  (⛔ which really does text both numbers, so ask first).
+- ⛔⛔ **“I NEVER GOT THE TEXT” — THE ALARM IS BLIND, AND IT WAS PROVEN ON THE
+  NIGHT OF 2026-08-25/26. An earlier pass of this file recorded “the alarm is not
+  at fault, it has never had anything to fire on.” THAT WAS WRONG.** The account
+  ran dry through the evening of 08-25, Izzy paid at **12am ET = 04:00Z**, and
+  **the watcher probed NINE times across the outage and answered `state:"ok"`
+  every single time** (18:03, 19:59, 20:59, 21:59, 22:59, 23:59, 00:59, 02:16,
+  03:54Z — the last one **6 minutes before the top-up**). He found out by reading
+  transcripts, which is exactly what this file was built to stop.
+- ⛔⛔ **ALL THREE DETECTION PATHS WERE BLIND AT ONCE — that is the finding.**
+  **(1) The chat path** only greps `chat.bridge_out_failed`/`chat.bridge_in_failed`;
+  nobody chatted in Yiddish, so silence. **(2) The voicemail path — THE ONE
+  CARRYING ALL THE TRAFFIC — SWALLOWS THE REFUSAL.** `yiddishPass()`
+  (`apps/agent/src/transcription/voicemailJob.ts:180`) wraps Yiddish Labs in a
+  **bare `catch {}`** and falls through to ivrit; **26 voicemails were refused in
+  that window and 1,145 audit rows were written, of which ZERO recorded the
+  refusal.** ⛔ It also fails silently WITHOUT throwing when `r.status` is not
+  `completed` — two silent exits, not one. **(3) The probe — the real killer.**
+- ⛔⛔ **THE PROBE TESTS THE CHEAPEST ACTION IN THE CATALOGUE, SO IT GOES GREEN
+  WHILE THE ACTUAL WORKLOAD IS BEING REFUSED.** `probeYiddishLabs` asks
+  `/process/text` to translate the word `ok` — **1 credit** (verified live:
+  `{"text":"...","credits_consumed":1}`). A voicemail goes to a **different
+  endpoint** (`POST /transcriptions/sync`) and costs far more, and YL refuses
+  **per-action**: *“requires N credits but you only have B available”*. So a
+  balance too small for a transcription still affords the 1-credit probe. ⛔ The
+  text endpoint DOES enforce credits (at **-3** even a 1-credit call was refused,
+  2026-08-18), so the balance that night sat **above 1 and below one voicemail** —
+  precisely the band the probe cannot see. ⚠️ Not directly measured: whether YL
+  also runs **separate pools** for text vs audio. **Ask them — it changes nothing
+  about the fix, only the explanation.**
+- ⛔ **`transcriptEngine` CANNOT TELL YOU WHICH ENGINE RAN — re-proven here.** The
+  re-transcribe Izzy ran is in the audit twice under **one voicemail id**
+  (`cmt9kasfn00vsrz13qzpdh9a7`): **03:57:28Z, 1951 chars** (fallback) and
+  **04:02:07Z, 1953 chars** (Yiddish Labs) — **same length, both stamped
+  `stt-yi`**. Only the WORDS differ, so **quality is the only signal** and the DB
+  keeps just the latest transcript. Measured across the boundary: before it,
+  `פארטן` repeated **42 times** on a 1-second clip (270 chars/sec) and word salad
+  like `עבדים איןשמונגען שטארקייט`; after it, clean orders with intact phone
+  numbers. ⛔ **5 of the 26 came out as `stt-en` English** — with the Yiddish
+  candidate degraded, `pickLanguage` picks the OpenAI English transcript, which is
+  the “it switched to OpenAI and it is gibberish” Izzy reports.
+- ✅ **The fallback IS configured, so do not chase it.** `ivrit_api_key` is in the
+  **`AgentSecret` store** and the endpoint id defaults to `536xyqv8oyqygx`.
+  ⛔ **An env check LIES here**: the code reads **`EVERETT_API_KEY` /
+  `EVERETT_ENDPOINT_ID`** (DB-first), so grepping `IVRIT_*` shows empty and reads
+  as “no fallback configured”. It is ivrit.ai (Yiddish-tuned Whisper on RunPod),
+  not raw OpenAI — but it is markedly worse than YL, which is the whole point.
+- ⛔⛔ **THE FIX, AND ITS ORDER MATTERS — REAL TRAFFIC BEATS ANY PROBE.** Gesheft
+  alone puts **~50 Yiddish voicemails a day** through this path, so the failures
+  are free, constant and truthful. **(a)** Stop swallowing in `yiddishPass` —
+  record the refusal (best-effort, never able to break transcription) so a
+  run-out is visible within **minutes** instead of never. **(b)** Widen the
+  watcher’s free path to match `insufficient_credits` in **any** audit event, not
+  two hardcoded chat names. **(c)** Stop reading a cheap probe as proof of health;
+  once (a) lands the hourly probe can drop to a rare heartbeat, which also ends
+  the **~22 credits/day** it burns. ⛔ (a) is in **apps/agent — a MANUAL container
+  rebuild** (reset the server clone first); (b)/(c) ride the api deploy queue.
+- ⚠️⚠️ **THE MONITOR IS STILL THE BIGGEST CONSUMER OF YIDDISH LABS CREDITS.**
+  Across 170 checks the `via` split is **168 probe / 2 translation** — the free
+  path almost never applies because chat usage is near zero (**38
+  `AgentTranslation` rows in 14 days, 1 in the last 8**). At 1 credit a probe that
+  is **~22/day**, against 15–21 for one assistant reply. **The thing built to warn
+  about running out of credits is helping to run the account down** — and it was
+  buying nothing, because it cannot see the failure that matters.
+- ⛔ **THERE IS STILL NO LOW-BALANCE WARNING AND THERE CANNOT BE ONE.** Re-probed
+  2026-08-26: `/credits` `/balance` `/account` `/usage` `/quota` `/me` `/user`
+  `/status` `/subscription` `/billing` `/wallet` `/credits/balance`
+  `/account/credits` — **all 13 answer 404**. The only way to learn the balance is
+  to be refused, so the honest early warning is **the first refused REAL job**,
+  which is exactly what fix (a) delivers.
+- ⛔ The empty **`AGENT_ESCALATION_SMS_TO`** on the container is **NOT a fault** —
+  the two numbers are a hardcoded default at `agentEscalationDispatch.ts:30`, and
+  escalations texted fine on 08-24. **Delivery was never the problem; detection
+  was.**
 - ⏳ Still not done, and now much less urgent: `/agent/ui/translate`'s bare
   `catch { failed.push(s); }` still discards the HTTP status (needs a manual
   agent rebuild — ⛔ reset the server clone first).
