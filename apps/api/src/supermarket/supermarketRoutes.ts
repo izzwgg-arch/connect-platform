@@ -602,12 +602,21 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       const items: any[] = Array.isArray(draft.items) ? draft.items : [];
       const ids = items.map((i) => String(i?.posProductId ?? "")).filter(Boolean);
       if (ids.length) {
-        const photos = await db.posCatalogItem.findMany({
-          where: { tenantId: tenantOf(req), posProductId: { in: ids.slice(0, 100) }, imageUrl: { not: null } },
-          select: { posProductId: true, imageUrl: true },
+        const rows = await db.posCatalogItem.findMany({
+          where: { tenantId: tenantOf(req), posProductId: { in: ids.slice(0, 100) } },
+          select: { posProductId: true, imageUrl: true, onHand: true },
         });
-        const byId = new Map(photos.map((p: any) => [p.posProductId, p.imageUrl]));
-        draft.items = items.map((i) => (byId.has(i?.posProductId) ? { ...i, imageUrl: byId.get(i.posProductId) } : i));
+        const byId = new Map(rows.map((p: any) => [p.posProductId, p]));
+        draft.items = items.map((i) => {
+          const row: any = byId.get(i?.posProductId);
+          if (!row) return i;
+          return {
+            ...i,
+            ...(row.imageUrl ? { imageUrl: row.imageUrl } : {}),
+            // "not in stock" on the order line — current as of the last tick
+            ...(row.onHand !== null && row.onHand <= 0 ? { outOfStock: true } : {}),
+          };
+        });
       }
     } catch {
       /* photos are decoration — never fail the draft read */
@@ -817,14 +826,18 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const q = String((req.query as any)?.q ?? "").trim().slice(0, 60);
     if (q.length < 1) return reply.send({ items: [] });
     const isNumeric = /^\d+$/.test(q);
-    const items = await db.posCatalogItem.findMany({
+    const rows = await db.posCatalogItem.findMany({
       where: isNumeric
         ? { tenantId, isActive: true, code: { startsWith: q } }
         : { tenantId, isActive: true, name: { contains: q, mode: "insensitive" } },
-      select: { posProductId: true, code: true, name: true, unitPriceCents: true, imageUrl: true },
+      select: { posProductId: true, code: true, name: true, unitPriceCents: true, imageUrl: true, onHand: true },
       orderBy: isNumeric ? { code: "asc" } : { name: "asc" },
-      take: 8,
+      take: 16,
     });
+    // in-stock (or unknown) first, out-of-stock at the bottom labelled — never
+    // hidden (Izzy, 2026-08-26). null onHand = not yet synced = shown normally.
+    const inStock = (r: any) => r.onHand === null || r.onHand > 0;
+    const items = [...rows.filter(inStock), ...rows.filter((r: any) => !inStock(r))].slice(0, 8);
     return reply.send({ items });
   });
 

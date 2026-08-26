@@ -88,7 +88,7 @@ Customers identify their account by SPEAKING their phone number — always captu
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
 const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
-When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size or count), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. Refuse a line only when nothing close exists or a hard constraint rules every candidate out. Output STRICT JSON:
+When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size or count), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. A candidate marked inStock:false is out of stock — prefer an in-stock one; when only an out-of-stock candidate matches, still pick it with "unsure":true. Refuse a line only when nothing close exists or a hard constraint rules every candidate out. Output STRICT JSON:
 {"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>,"unsure":<true ONLY for a close-variant pick>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
 Never invent an id that is not among that line's candidates or customerUsuals. Never change prices.`;
 
@@ -108,7 +108,7 @@ export async function searchCandidates(db: any, tenantId: string, phrase: string
   if (numeric) {
     return db.posCatalogItem.findMany({
       where: { tenantId, isActive: true, code: { startsWith: numeric[1] } },
-      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true },
+      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
       take: CANDIDATES_PER_LINE,
     });
   }
@@ -123,7 +123,7 @@ export async function searchCandidates(db: any, tenantId: string, phrase: string
     if (seen.size >= CANDIDATES_PER_LINE) break;
     const rows = await db.posCatalogItem.findMany({
       where: { tenantId, isActive: true, ...nameWhere },
-      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true },
+      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
       take: CANDIDATES_PER_LINE,
     });
     for (const row of rows) {
@@ -169,7 +169,7 @@ export async function customerUsuals(db: any, tenantId: string, customerPhone: s
     // ⛔ prices come from the LIVE catalog row, never a historical draft
     return await db.posCatalogItem.findMany({
       where: { tenantId, isActive: true, posProductId: { in: ids.slice(0, 12) } },
-      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true },
+      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
       take: 12,
     });
   } catch {
@@ -231,6 +231,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     brand: c.brand ?? undefined,
     size: c.sizeText ?? undefined,
     price: (c.unitPriceCents / 100).toFixed(2),
+    ...(c.onHand !== null && c.onHand !== undefined && c.onHand <= 0 ? { inStock: false } : {}),
   });
   const resolveUser = JSON.stringify({
     lines: lines.map((l, i) => ({

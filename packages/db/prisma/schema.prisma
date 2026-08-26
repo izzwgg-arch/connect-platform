@@ -7993,6 +7993,9 @@ model PosCatalogItem {
   /// "this item, but not that brand" instructions from customers.
   brand           String?
   sizeText        String?
+  /// Live stock (their onHand) — can be NEGATIVE (register drift); null =
+  /// not yet synced. <= 0 renders "not in stock", never hides the item.
+  onHand          Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

@@ -49,6 +49,8 @@ export type ParsedProduct = {
   posLastMod: string | null;
   brand: string | null;
   sizeText: string | null;
+  /** live register stock; null = the field was absent (never invent 0) */
+  onHand: number | null;
 };
 
 /**
@@ -115,6 +117,7 @@ export function parseProductsPage(body: unknown): { items: ParsedProduct[]; curs
       priceQty,
       unitPriceCents: posUnitPriceCents(priceValue, priceQty) ?? 0,
       isActive: r.active === false || r.isActive === false || r.inactive === true ? false : true,
+      onHand: Number.isFinite(Number(r.onHand)) && r.onHand !== null && r.onHand !== undefined ? Math.trunc(Number(r.onHand)) : null,
       brand: r.brand !== undefined && r.brand !== null && String(r.brand).trim() ? String(r.brand).trim().slice(0, 80) : null,
       sizeText:
         r.size !== undefined && r.size !== null && Number(r.size) > 0
@@ -263,6 +266,8 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
             posLastMod: item.posLastMod,
             brand: item.brand,
             sizeText: item.sizeText,
+            // stock rides every tick we already pay for — zero extra credits
+            ...(item.onHand !== null ? { onHand: item.onHand } : {}),
           },
           create: { tenantId: tenant.id, ...item },
         });

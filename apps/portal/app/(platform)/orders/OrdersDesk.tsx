@@ -74,7 +74,7 @@ export const SM_ORDERS_PHRASES = [
   "Skip payment", "Save this card to their account", "Securing…", "Secured & powered by",
   "Put order through & charge", "But the card was not charged:",
   "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
-  "Closest match — check with the customer",
+  "Closest match — check with the customer", "not in stock",
 ] as string[];
 
 type DraftRow = {
@@ -114,9 +114,11 @@ type DraftItem = {
   unsure?: boolean;
   /** hydrated by the server on read; stripped on every write */
   imageUrl?: string | null;
+  /** the register says none left — shown on the line, never blocks the order */
+  outOfStock?: boolean;
 };
 
-type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null };
+type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
 
 /**
  * One product-photo renderer for every supermarket surface. ⛔ A broken or
@@ -761,6 +763,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         <span>
                           {i.name || i.code}
                           {i.unsure ? <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span> : null}
+                          {i.outOfStock ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                           <br /><span className="sm-sku">{i.code}</span>
                         </span>
                       </span>
@@ -819,7 +822,10 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                       >
                         <SmItemPhoto url={h.imageUrl} size={28} zoom />
                         <span className="sm-sku" style={{ fontSize: ".74rem" }}>{h.code}</span>
-                        {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
+                        <span style={{ minWidth: 0 }}>
+                          {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
+                          {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                        </span>
                         <span className="sm-amount">{money(h.unitPriceCents)}</span>
                       </div>
                     ))}
