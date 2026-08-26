@@ -596,6 +596,22 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     if (!(await requireSupermarketMode(db, req, reply))) return;
     const draft = await ownDraft(req, reply, (req.params as any).id);
     if (!draft) return;
+    // hydrate product photos onto the items — display-only, never persisted
+    // (sanitizeDraftItems strips them on every write)
+    try {
+      const items: any[] = Array.isArray(draft.items) ? draft.items : [];
+      const ids = items.map((i) => String(i?.posProductId ?? "")).filter(Boolean);
+      if (ids.length) {
+        const photos = await db.posCatalogItem.findMany({
+          where: { tenantId: tenantOf(req), posProductId: { in: ids.slice(0, 100) }, imageUrl: { not: null } },
+          select: { posProductId: true, imageUrl: true },
+        });
+        const byId = new Map(photos.map((p: any) => [p.posProductId, p.imageUrl]));
+        draft.items = items.map((i) => (byId.has(i?.posProductId) ? { ...i, imageUrl: byId.get(i.posProductId) } : i));
+      }
+    } catch {
+      /* photos are decoration — never fail the draft read */
+    }
     return reply.send({ draft });
   });
 

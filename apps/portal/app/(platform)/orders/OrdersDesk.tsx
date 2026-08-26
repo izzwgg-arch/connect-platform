@@ -112,6 +112,8 @@ type DraftItem = {
   matchedFrom?: string;
   /** the brain filled the CLOSEST match — shown with a "?" for the rep */
   unsure?: boolean;
+  /** hydrated by the server on read; stripped on every write */
+  imageUrl?: string | null;
 };
 
 type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null };
@@ -522,7 +524,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
         if (existing) {
           return prev.map((i) => (i.posProductId === hit.posProductId ? { ...i, qty: Math.min(99, i.qty + qty) } : i));
         }
-        return [...prev, { posProductId: hit.posProductId, code: hit.code, name: hit.name, qty, unitPriceCents: hit.unitPriceCents }];
+        return [...prev, { posProductId: hit.posProductId, code: hit.code, name: hit.name, qty, unitPriceCents: hit.unitPriceCents, imageUrl: hit.imageUrl }];
       });
       setQ("");
       setHits([]);
@@ -754,9 +756,14 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                 {items.map((i) => (
                   <tr key={i.posProductId} className={i.unsure ? "sm-flagged sm-unsure" : i.matchedFrom === "name" ? "sm-flagged" : undefined}>
                     <td>
-                      {i.name || i.code}
-                      {i.unsure ? <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span> : null}
-                      <br /><span className="sm-sku">{i.code}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <SmItemPhoto url={i.imageUrl} size={32} zoom />
+                        <span>
+                          {i.name || i.code}
+                          {i.unsure ? <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span> : null}
+                          <br /><span className="sm-sku">{i.code}</span>
+                        </span>
+                      </span>
                     </td>
                     <td>
                       <span className="sm-qty">
