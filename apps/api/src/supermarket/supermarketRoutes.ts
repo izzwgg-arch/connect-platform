@@ -295,7 +295,19 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       if (err instanceof PosApiError && err.code === "pos_auth_failed") {
         return reply.send({ ok: false, verdict: "key_rejected", message: "Their system rejected this key." });
       }
-      return reply.send({ ok: false, verdict: "unreachable", message: "Their system could not be reached — the key itself may still be fine." });
+      // ⛔ Proven live 2026-08-26 with the first real key: their order-by-id
+      // endpoint answers 500 on the probe id, NOT 404 — so the free probe is
+      // inconclusive there. Fall back to one tiny catalog read (1 credit):
+      // a 200 settles "the key works" definitively; a 401 settles the reverse.
+      try {
+        await client.listProducts({ take: 1 });
+        return reply.send({ ok: true, verdict: "key_works" });
+      } catch (err2: any) {
+        if (err2 instanceof PosApiError && err2.code === "pos_auth_failed") {
+          return reply.send({ ok: false, verdict: "key_rejected", message: "Their system rejected this key." });
+        }
+        return reply.send({ ok: false, verdict: "unreachable", message: "Their system could not be reached — the key itself may still be fine." });
+      }
     }
   });
 

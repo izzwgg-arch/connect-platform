@@ -32,7 +32,7 @@ import {
 } from "./payIvrCore";
 import { buildCatalogIndex, computeCorrections, detectWic, matchDraftText, WIC_COMMENT } from "./draftMatcher";
 import { decideAutoSubmit, weeklyCorrectionStats, MIN_WEEK_VOLUME } from "./learning";
-import { laterLastMod, parseProductsPage } from "./catalogSync";
+import { laterLastMod, parseProductsPage, pickEffectivePrice } from "./catalogSync";
 import { maskKeyHint } from "./integrationCredentials";
 import { unsubscribeToken, verifyUnsubscribeToken } from "./specials";
 import { sanitizeDraftItems } from "./orderSubmit";
@@ -375,6 +375,76 @@ test("parseProductsPage reads items/products/data/rows and hostile shapes", () =
   // bulk pricing honoured
   const bulk = parseProductsPage({ data: [{ id: 1, price: 10, priceQty: 2 }] })!;
   assert.equal(bulk.items[0].unitPriceCents, 500);
+});
+
+
+test("⛔ THE REAL REGISTER PAGE PARSES — verbatim fixture from the first live call ever made (Gesheft's key, 2026-08-26)", () => {
+  // The documented shape was flat code/name/price; the REAL envelope is
+  // results/hasMore/cursor/total with itemCode/description/prices[] items —
+  // and the live data carried an EXPIRED Special beside the Regular price.
+  const realPage = {
+    results: [
+      {
+        id: "1", itemCode: "729940005486", primaryCode: "729940005486",
+        description: 'Foil Pan 8" Round Deep', labelDescription: "Foil Pan 8 Round 4 Pack",
+        brand: "Jetfoil", byMeasure: false, lastSold: "2026-08-24", size: 4, caseQty: 75,
+        tax: true, ebt: false, unit: "pk", categoryName: "PAPERGDS", subCategoryName: "FOIL",
+        prices: [
+          { qty: 1, priceQtyType: "Bulk", price: 1.99, priceType: "Regular", priceFrom: null, priceTill: null, daysOfWeek: [], name: "Regular" },
+          // expired Special — must NOT be chosen
+          { qty: 1, priceQtyType: "Minimum", price: 1.69, priceType: "Special", priceFrom: null, priceTill: "2025-09-23T00:00:00-04:00", daysOfWeek: [], name: "Special" },
+        ],
+        taxRate: 8.125, active: true, aliases: [], onHand: 32,
+        lastModified: "2026-08-24T22:37:17-04:00", location: "5B3", wicEligible: null, tags: [],
+      },
+      {
+        id: "10", itemCode: "727891000154", primaryCode: "727891000154",
+        description: "Apple Cider", labelDescription: "Apple Cider 64 Oz.", brand: "Golden Flow",
+        prices: [{ qty: 1, priceQtyType: "Bulk", price: 5.19, priceType: "Regular", priceFrom: null, priceTill: null, name: "Regular" }],
+        taxRate: 0, active: true, onHand: -149, lastModified: "2026-08-24T13:40:03-04:00",
+      },
+    ],
+    hasMore: true, cursor: "eyJpZCI6IjEwIn0", total: 5211,
+  };
+  const page = parseProductsPage(realPage);
+  assert.ok(page, "the real register page must parse — a null here is a sync that never runs");
+  assert.equal(page!.items.length, 2);
+  const foil = page!.items[0];
+  assert.equal(foil.posProductId, "1");
+  assert.equal(foil.code, "729940005486");
+  assert.equal(foil.name, 'Foil Pan 8" Round Deep');
+  assert.equal(foil.unitPriceCents, 199, "the EXPIRED Special (1.69) must lose to the Regular price");
+  assert.equal(foil.isActive, true);
+  assert.equal(foil.posLastMod, "2026-08-24T22:37:17-04:00");
+  assert.equal(page!.items[1].unitPriceCents, 519);
+  assert.equal(page!.cursor, "eyJpZCI6IjEwIn0");
+  // hasMore false terminates the walk even if a cursor value lingers
+  const last = parseProductsPage({ ...realPage, hasMore: false });
+  assert.equal(last!.cursor, null, "hasMore=false must null the cursor or the sweep loops forever");
+});
+
+test("pickEffectivePrice: in-window Special beats Regular; expired/future windows excluded; bulk qty is the divisor", () => {
+  const now = new Date("2026-08-26T00:00:00Z");
+  assert.deepEqual(
+    pickEffectivePrice([
+      { qty: 1, price: 1.99, priceType: "Regular" },
+      { qty: 1, price: 1.69, priceType: "Special", priceFrom: "2026-08-01T00:00:00Z", priceTill: "2026-09-01T00:00:00Z" },
+    ], now),
+    { price: 1.69, qty: 1 },
+  );
+  assert.deepEqual(
+    pickEffectivePrice([
+      { qty: 1, price: 1.99, priceType: "Regular" },
+      { qty: 1, price: 1.69, priceType: "Special", priceTill: "2025-09-23T00:00:00-04:00" },
+      { qty: 1, price: 1.49, priceType: "Special", priceFrom: "2027-01-01T00:00:00Z" },
+    ], now),
+    { price: 1.99, qty: 1 },
+  );
+  // "2 for $10" as a prices[] row
+  assert.deepEqual(pickEffectivePrice([{ qty: 2, price: 10, priceType: "Regular" }], now), { price: 10, qty: 2 });
+  assert.equal(pickEffectivePrice([], now), null);
+  assert.equal(pickEffectivePrice("junk", now), null);
+  assert.equal(pickEffectivePrice([{ price: "free" }], now), null);
 });
 
 test("laterLastMod keeps the max and survives nulls", () => {

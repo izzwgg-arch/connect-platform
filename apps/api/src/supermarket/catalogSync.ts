@@ -39,13 +39,47 @@ export type ParsedProduct = {
   posLastMod: string | null;
 };
 
-/** Defensive page parse — pure, stress-tested against hostile shapes. */
+/**
+ * Pick the price a shopper pays TODAY from their `prices[]` array.
+ * Read off the REAL payload 2026-08-26 (the first live call ever made): each
+ * row carries priceType Regular|Special with an optional priceFrom/priceTill
+ * window — and the live data included an EXPIRED Special (priceTill in 2025)
+ * sitting beside the Regular, so window filtering is not optional. An
+ * in-window Special beats Regular; `qty` is the bulk quantity the price
+ * covers (the divisor rule).
+ */
+export function pickEffectivePrice(prices: unknown, now: Date = new Date()): { price: number; qty: number } | null {
+  if (!Array.isArray(prices)) return null;
+  const usable = prices.filter((p: any) => {
+    if (p == null || typeof p !== "object") return false;
+    if (typeof p.price !== "number" || !Number.isFinite(p.price) || p.price < 0) return false;
+    const from = p.priceFrom ? new Date(p.priceFrom) : null;
+    const till = p.priceTill ? new Date(p.priceTill) : null;
+    if (from && !Number.isNaN(from.getTime()) && from.getTime() > now.getTime()) return false;
+    if (till && !Number.isNaN(till.getTime()) && till.getTime() < now.getTime()) return false;
+    return true;
+  });
+  if (usable.length === 0) return null;
+  const special = usable.find((p: any) => String(p.priceType).toLowerCase() === "special");
+  const chosen: any = special ?? usable.find((p: any) => String(p.priceType).toLowerCase() === "regular") ?? usable[0];
+  const qty = typeof chosen.qty === "number" && Number.isFinite(chosen.qty) && chosen.qty > 0 ? chosen.qty : 1;
+  return { price: chosen.price, qty };
+}
+
+/**
+ * Defensive page parse — pure, stress-tested against hostile shapes.
+ * ⛔ The REAL envelope (proven live 2026-08-26, first call with Gesheft's key)
+ * is { results: [...], hasMore, cursor, total } and items carry
+ * itemCode/description/prices[]/active/lastModified — NOT the flat
+ * code/name/price/lastMod the printout implied. Both shapes are read; the
+ * real one is pinned by a verbatim fixture in supermarketCore.test.ts.
+ */
 export function parseProductsPage(body: unknown): { items: ParsedProduct[]; cursor: string | null } | null {
   if (body == null || typeof body !== "object") {
     if (!Array.isArray(body)) return null;
   }
   const b: any = body;
-  const rawList: unknown = Array.isArray(b) ? b : b.items ?? b.products ?? b.data ?? b.rows ?? null;
+  const rawList: unknown = Array.isArray(b) ? b : b.results ?? b.items ?? b.products ?? b.data ?? b.rows ?? null;
   if (!Array.isArray(rawList)) return null;
   const items: ParsedProduct[] = [];
   for (const raw of rawList.slice(0, 500)) {
@@ -53,20 +87,35 @@ export function parseProductsPage(body: unknown): { items: ParsedProduct[]; curs
     const r: any = raw;
     const id = r.id ?? r.productId ?? r.posProductId;
     if (id === undefined || id === null || String(id).length === 0) continue;
-    const priceCents = posAmountToCents(r.price) ?? 0;
-    const priceQty = typeof r.priceQty === "number" && Number.isFinite(r.priceQty) && r.priceQty > 0 ? r.priceQty : 1;
+    const effective = pickEffectivePrice(r.prices);
+    const priceValue = effective ? effective.price : r.price;
+    const priceQty = effective
+      ? effective.qty
+      : typeof r.priceQty === "number" && Number.isFinite(r.priceQty) && r.priceQty > 0
+        ? r.priceQty
+        : 1;
+    const priceCents = posAmountToCents(priceValue) ?? 0;
     items.push({
       posProductId: String(id).slice(0, 64),
-      code: String(r.code ?? r.productCode ?? "").slice(0, 32),
-      name: String(r.name ?? r.description ?? "").slice(0, 200),
+      code: String(r.itemCode ?? r.primaryCode ?? r.code ?? r.productCode ?? "").slice(0, 32),
+      name: String(r.description ?? r.name ?? "").slice(0, 200),
       priceCents,
       priceQty,
-      unitPriceCents: posUnitPriceCents(r.price, r.priceQty) ?? 0,
-      isActive: r.isActive === false || r.inactive === true ? false : true,
-      posLastMod: r.lastMod !== undefined && r.lastMod !== null ? String(r.lastMod).slice(0, 64) : null,
+      unitPriceCents: posUnitPriceCents(priceValue, priceQty) ?? 0,
+      isActive: r.active === false || r.isActive === false || r.inactive === true ? false : true,
+      posLastMod:
+        r.lastModified !== undefined && r.lastModified !== null
+          ? String(r.lastModified).slice(0, 64)
+          : r.lastMod !== undefined && r.lastMod !== null
+            ? String(r.lastMod).slice(0, 64)
+            : null,
     });
   }
-  const cursorRaw = Array.isArray(b) ? null : b.cursor ?? b.nextCursor ?? b.next ?? null;
+  // ⛔ hasMore is authoritative when present: if their API were to keep a
+  // `cursor` value on the LAST page, trusting cursor alone would loop forever
+  // — hasMore === false always terminates the walk.
+  const hasMore: unknown = Array.isArray(b) ? undefined : b.hasMore;
+  const cursorRaw = Array.isArray(b) || hasMore === false ? null : b.cursor ?? b.nextCursor ?? b.next ?? null;
   const cursor = typeof cursorRaw === "string" && cursorRaw.length > 0 && cursorRaw.length < 512 ? cursorRaw : null;
   return { items, cursor };
 }
