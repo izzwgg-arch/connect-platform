@@ -15,12 +15,14 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
+import { isDriverDemo } from "./appKind";
+import { DEMO_LOGIN_EMAIL, DEMO_LOGIN_PASSWORD, DEMO_TOKEN } from "./demoBackend";
 
 export function DriverLoginScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const { login } = useAuth();
-  const [email, setEmail] = useState("");
+  const { login, setTokenFromQr } = useAuth();
+  const [email, setEmail] = useState(isDriverDemo() ? DEMO_LOGIN_EMAIL : "");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +35,15 @@ export function DriverLoginScreen() {
     setBusy(true);
     setError(null);
     try {
+      if (isDriverDemo()) {
+        // The demo validates locally — no server, no real account.
+        if (email.trim().toLowerCase() === DEMO_LOGIN_EMAIL && password === DEMO_LOGIN_PASSWORD) {
+          await setTokenFromQr(DEMO_TOKEN);
+        } else {
+          setError(`Demo login: ${DEMO_LOGIN_EMAIL} / ${DEMO_LOGIN_PASSWORD}`);
+        }
+        return;
+      }
       await login(email.trim(), password);
     } catch {
       setError("That email and password didn't match. Check your setup email and try again.");
@@ -50,7 +61,9 @@ export function DriverLoginScreen() {
         <Text style={[styles.brand, { color: colors.text }]}>
           Loopcom <Text style={{ color: colors.primary }}>Driver</Text>
         </Text>
-        <Text style={[styles.sub, { color: colors.textSecondary }]}>Sign in with the login from your setup email.</Text>
+        <Text style={[styles.sub, { color: colors.textSecondary }]}>
+          {isDriverDemo() ? `Demo — sign in with ${DEMO_LOGIN_EMAIL} / ${DEMO_LOGIN_PASSWORD}` : "Sign in with the login from your setup email."}
+        </Text>
 
         <View style={{ height: 28 }} />
         <TextInput

@@ -10,6 +10,7 @@ import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import * as Battery from "expo-battery";
 import { API_BASE } from "../api/client";
+import { isDriverDemo } from "../driver/appKind";
 import { reportingIntervalSec } from "./adaptiveInterval";
 
 export const DELIVERY_LOCATION_TASK = "cc-delivery-location";
@@ -31,6 +32,10 @@ let lastFlush = 0;
 
 async function flush() {
   if (!session || buffer.length === 0) return;
+  // Demo build: the location task, permission prompt and foreground
+  // notification are all REAL — only the upload is dropped (there is no
+  // server session to post against, and a 401 loop is just noise).
+  if (isDriverDemo()) { buffer = []; lastFlush = Date.now(); return; }
   const batch = buffer;
   buffer = [];
   try {

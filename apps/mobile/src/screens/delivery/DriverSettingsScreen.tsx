@@ -15,6 +15,8 @@ import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
 import { getNavPrefs, setNavPrefs, type NavPrefs, type MapMode, type NavApp } from "../../delivery/navPrefs";
 import { activeRunSession, endRunTracking } from "../../delivery/runTracking";
+import { isDriverDemo } from "../../driver/appKind";
+import { demoResetState } from "../../driver/demoBackend";
 
 const MODES: Array<{ id: MapMode; title: string; sub: string }> = [
   { id: "external", title: "Open my navigation app", sub: "Each stop hands off to Waze, Google Maps, or Apple Maps for turn-by-turn." },
@@ -85,6 +87,14 @@ export function DriverSettingsScreen() {
         Location is shared only while you're on a run. There's no switch for it here — ending the run or the phone's own
         location permission are the only ways it stops, and your dispatcher is notified if it goes off mid-run.
       </Text>
+      {isDriverDemo() && (
+        <TouchableOpacity
+          style={[styles.signOut, { borderColor: colors.border, marginBottom: 10 }]}
+          onPress={async () => { await demoResetState(); Alert.alert("Demo reset", "Every stop is back to the start of the run."); }}
+        >
+          <Text style={[styles.signOutText, { color: colors.textSecondary }]}>Reset the demo</Text>
+        </TouchableOpacity>
+      )}
       <TouchableOpacity
         style={[styles.signOut, { borderColor: colors.border, marginBottom: insets.bottom + 16 }]}
         onPress={() => Alert.alert("Sign out?", "You'll need your login from the setup email to sign back in.", [

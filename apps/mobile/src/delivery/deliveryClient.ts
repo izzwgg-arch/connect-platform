@@ -3,6 +3,8 @@
 
 import { API_BASE } from "../api/client";
 import type { QueuedOp, SyncResult } from "./offlineQueue";
+import { isDriverDemo } from "../driver/appKind";
+import { demoGetRuns, demoScan, demoArrive, demoProof, demoException, demoStopNavUrl } from "../driver/demoBackend";
 
 async function parseJson(res: Response) {
   const text = await res.text();
@@ -24,6 +26,7 @@ export async function scanLabel(
   token: string,
   body: { token: string; clientOpId: string; confirmReassign?: boolean },
 ): Promise<ScanResponse> {
+  if (isDriverDemo()) return demoScan() as Promise<ScanResponse>;
   const res = await fetch(`${API_BASE}/mobile/delivery/scan`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -37,6 +40,7 @@ export async function scanLabel(
 /** Start a server tracking session for a run — the bound inside which location
  *  is collected. Returns the sessionId the location task posts against. */
 export async function startTrackingSession(token: string, runId: string): Promise<{ sessionId: string }> {
+  if (isDriverDemo()) return { sessionId: `demo-session-${runId}` };
   const res = await fetch(`${API_BASE}/mobile/delivery/tracking/start`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -48,6 +52,7 @@ export async function startTrackingSession(token: string, runId: string): Promis
 }
 
 export async function endTrackingSession(token: string, sessionId: string, reason = "COMPLETED"): Promise<void> {
+  if (isDriverDemo()) return;
   const res = await fetch(`${API_BASE}/mobile/delivery/tracking/end`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -60,6 +65,7 @@ export async function endTrackingSession(token: string, sessionId: string, reaso
 }
 
 export async function getStopNav(token: string, orderId: string, app: "waze" | "google" | "apple" = "waze"): Promise<{ url: string }> {
+  if (isDriverDemo()) return demoStopNavUrl(orderId, app);
   const res = await fetch(`${API_BASE}/mobile/delivery/stops/${orderId}/nav?app=${app}`, { headers: { authorization: `Bearer ${token}` } });
   const json = await parseJson(res);
   if (!res.ok) throw Object.assign(new Error(json?.error || "NAV_FAILED"), { status: res.status, body: json });
@@ -67,6 +73,7 @@ export async function getStopNav(token: string, orderId: string, app: "waze" | "
 }
 
 export async function markArrived(token: string, orderId: string, gps?: { lat: number; lng: number }): Promise<any> {
+  if (isDriverDemo()) return demoArrive(orderId);
   const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/arrive`, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify(gps || {}),
@@ -77,6 +84,7 @@ export async function markArrived(token: string, orderId: string, gps?: { lat: n
 }
 
 export async function submitProof(token: string, orderId: string, body: Record<string, unknown>): Promise<any> {
+  if (isDriverDemo()) return demoProof(orderId);
   const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/proof`, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body),
   });
@@ -86,6 +94,7 @@ export async function submitProof(token: string, orderId: string, body: Record<s
 }
 
 export async function submitException(token: string, orderId: string, body: Record<string, unknown>): Promise<any> {
+  if (isDriverDemo()) return demoException(orderId);
   const res = await fetch(`${API_BASE}/mobile/delivery/orders/${orderId}/exception`, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body),
   });
@@ -95,6 +104,7 @@ export async function submitException(token: string, orderId: string, body: Reco
 }
 
 export async function getRuns(token: string): Promise<any[]> {
+  if (isDriverDemo()) return demoGetRuns();
   const res = await fetch(`${API_BASE}/mobile/delivery/runs`, {
     headers: { authorization: `Bearer ${token}` },
   });

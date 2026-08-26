@@ -51,7 +51,7 @@
       <data android:scheme="google.navigation"/>
     </intent>
   </queries>
-  <application android:name=".MainApplication" android:label="Loopcom Driver" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/AppTheme">
+  <application android:name=".MainApplication" android:label="${driverAppLabel}" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/AppTheme">
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="NEVER"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
@@ -69,13 +69,13 @@
         <data android:scheme="loopcom-driver"/>
       </intent-filter>
     </activity>
-    <activity-alias android:name=".LauncherBlue" android:targetActivity=".MainActivity" android:enabled="true" android:exported="true" android:label="Loopcom Driver" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
+    <activity-alias android:name=".LauncherBlue" android:targetActivity=".MainActivity" android:enabled="true" android:exported="true" android:label="${driverAppLabel}" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity-alias>
-    <activity-alias android:name=".LauncherNavy" android:targetActivity=".MainActivity" android:enabled="false" android:exported="true" android:label="Loopcom Driver" android:icon="@mipmap/ic_launcher_navy" android:roundIcon="@mipmap/ic_launcher_navy_round">
+    <activity-alias android:name=".LauncherNavy" android:targetActivity=".MainActivity" android:enabled="false" android:exported="true" android:label="${driverAppLabel}" android:icon="@mipmap/ic_launcher_navy" android:roundIcon="@mipmap/ic_launcher_navy_round">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>

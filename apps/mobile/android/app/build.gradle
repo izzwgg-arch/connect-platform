@@ -16,7 +16,12 @@ def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 // scripts/android-ship.ps1 and scripts/android-play-bundle.ps1 — both pin
 // apk/release/app-release.apk and :app:assembleRelease. With the env gate the
 // phone build is byte-identical to before when the variable is unset.
-def loopcomDriverBuild = System.getenv("CONNECT_DRIVER_APP") == "1"
+def loopcomDriverDemoBuild = System.getenv("CONNECT_DRIVER_DEMO") == "1"
+def loopcomDriverBuild = loopcomDriverDemoBuild || System.getenv("CONNECT_DRIVER_APP") == "1"
+// The DEMO flavor of the driver app: a third applicationId so it installs
+// beside BOTH real apps, its own entry (index.driverdemo.js) whose bundle
+// answers from built-in demo data, and a "Loopcom Driver Demo" label.
+def driverAppLabel = loopcomDriverDemoBuild ? "Loopcom Driver Demo" : "Loopcom Driver"
 
 /** Hermes is invoked as `cmd /c <path> â€¦`; paths with spaces break. Use 8.3 short path on Windows. */
 static String windowsShortExePath(File exeOrBinary) {
@@ -88,7 +93,7 @@ react {
     // append it here — Expo's parser takes the last occurrence of a flag.
     // The driver APK boots from its own entry so the SIP stack (and its
     // module-scope side effects) are never even imported into that bundle.
-    extraPackagerArgs = ["--entry-file", file(loopcomDriverBuild ? "../../index.driver.js" : "../../index.js").absolutePath]
+    extraPackagerArgs = ["--entry-file", file(loopcomDriverDemoBuild ? "../../index.driverdemo.js" : (loopcomDriverBuild ? "../../index.driver.js" : "../../index.js")).absolutePath]
 
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '..'
@@ -175,9 +180,10 @@ android {
         // every generated/Kotlin class package) is unchanged on purpose — only
         // the INSTALLED identity differs.
         sourceSets { main { manifest.srcFile 'src/driver/AndroidManifest.xml' } }
+        defaultConfig { manifestPlaceholders = [driverAppLabel: driverAppLabel] }
     }
     defaultConfig {
-        applicationId (loopcomDriverBuild ? 'com.loopcom.driver' : 'com.connectcommunications.mobile')
+        applicationId (loopcomDriverDemoBuild ? 'com.loopcom.driver.demo' : (loopcomDriverBuild ? 'com.loopcom.driver' : 'com.connectcommunications.mobile'))
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Ship script sets SHIP_VERSION_CODE / SHIP_BUILD_ID so adb install -r always picks up new APKs.
