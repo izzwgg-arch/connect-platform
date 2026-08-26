@@ -27,16 +27,16 @@ import { posAmountToCents, posUnitPriceCents } from "./posWithLogic";
 export const CATALOG_SYNC_DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 export const CATALOG_SYNC_BOOT_DELAY_MS = 3 * 60 * 1000;
 /**
- * ⛔ Sized against the REAL store, 2026-08-26: Gesheft's catalog measured 7,198+ rows on the first full walk (their total:5211 undercounts inactive)
+ * ⛔ Sized against the REAL store, 2026-08-26: Gesheft's catalog measured 12,000+ ACTIVE rows across the first full walks (their total:5211 is a filtered figure that means something else; a real supermarket carries tens of thousands of SKUs)
  * items and their `take` is hard-capped at 100 ("Take must be between 1 and
- * 100" — probed), so a full walk is ~75+ calls. The budget must let a full
+ * 100" — probed), so a full walk is 120+ calls; 400 pages = 40,000 items of headroom while still bounding a runaway. The budget must let a full
  * catalog finish INSIDE ONE RUN: in-run cursor paging is proven good, while
  * the first cross-run cursor resume came back 500 — a budget smaller than the
  * catalog would restart from scratch every run, never finish, never set the
  * lastMod high-water, and spend ~21 credits per 15 minutes forever. After the
  * first FINISHED sweep, lastMod makes every later run ~1 call.
  */
-export const DEFAULT_PAGE_BUDGET = 120;
+export const DEFAULT_PAGE_BUDGET = 400;
 
 export type ParsedProduct = {
   posProductId: string;
