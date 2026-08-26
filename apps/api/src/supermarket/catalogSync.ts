@@ -193,7 +193,11 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
       (await db.posCatalogSyncState.findUnique({ where: { tenantId: tenant.id } })) ??
       (await db.posCatalogSyncState.create({ data: { tenantId: tenant.id } }));
 
-    let cursor: string | null = state.cursor ?? null;
+    // ⛔ Cross-run cursors are DEAD — proven twice live (2026-08-26): a cursor
+    // stored from a finished run 500s on the next run's first request, both at
+    // 11 minutes and at 8 minutes of age. Every run starts fresh; a walk must
+    // FINISH inside its own run or its progress beyond upserts is lost.
+    let cursor: string | null = null;
     let highWater: string | null = state.lastMod ?? null;
     let pages = 0;
     let upserted = 0;
@@ -211,7 +215,13 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
           take: 100,
           lastMod: state.lastMod ?? undefined,
           cursor: cursor ?? undefined,
-          includeInactive: true,
+          // ⛔ The FULL walk is active-only: with inactive included the real
+          // catalog exceeded 12,000 rows and outran any one-run budget, and a
+          // walk that cannot finish in one run never finishes at all (dead
+          // cursors above). Once the high-water is set, the INCREMENTAL walk
+          // includes inactive so a deactivation (which bumps lastModified)
+          // still reaches us.
+          includeInactive: state.lastMod ? true : false,
         });
       } catch (err: any) {
         // ⛔ A 429 is "slow down", not "give up" — honour Retry-After (capped)
@@ -266,7 +276,7 @@ async function sweepInner(deps: CatalogSyncDeps): Promise<{ tenants: number; ups
         // ⛔ The high-water mark only advances on a FINISHED sweep — advancing
         // it mid-cursor would silently skip the unfetched tail forever.
         lastMod: finished ? highWater : state.lastMod,
-        cursor: error ? null : cursor,
+        cursor: null, // never persisted — cross-run cursors are dead (see above)
         lastSyncAt: new Date(),
         lastError: error,
         creditsSpent: { increment: credits },

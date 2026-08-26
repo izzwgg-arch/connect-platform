@@ -501,7 +501,7 @@ test("STRESS 10 — matcher precision at scale: 1,500-item catalog × 300 genera
 
 // ═════════════════════════════ STRESS 11 ═════════════════════════════════════
 
-test("STRESS 11 — catalog sync paging storm: 12,000 products over 120 cursor pages, budget-bounded runs resume and converge; high-water only moves on completion", async () => {
+test("STRESS 11 — catalog paging storm: a 12,000-product walk FINISHES IN ONE RUN, the high-water gates re-reads, and a too-small budget persists NO cursor (their cursors die between runs — proven live)", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   for (let i = 0; i < 12_000; i++) {
@@ -509,22 +509,27 @@ test("STRESS 11 — catalog sync paging storm: 12,000 products over 120 cursor p
   }
   await seedPosTenant(db, "t-cat", pos);
   const clientFor = clientForFactory(new Map([["t-cat", pos]]));
-  let runs = 0;
-  while (runs++ < 40) {
-    await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10, pagePaceMs: 0 });
-    const state = db.rows("posCatalogSyncState")[0];
-    if (state && !state.cursor && state.lastMod) break;
-    // ⛔ mid-cursor the high-water must NOT have advanced
-    if (state?.cursor) assert.equal(state.lastMod, null, "high-water advanced mid-cursor — the tail would be skipped forever");
-  }
-  assert.ok(runs < 40, "paging never converged");
-  assert.equal(db.rows("posCatalogItem").length, 12_000);
-  const state = db.rows("posCatalogSyncState")[0];
-  assert.equal(state.lastMod, "2026-08-25");
-  assert.equal(state.itemCount, 12_000);
-  // idempotent re-run with lastMod: nothing older re-fetched, count stable
+
+  // a too-small budget: run cannot finish → NO cursor persisted, NO high-water
   await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 10, pagePaceMs: 0 });
+  let state = db.rows("posCatalogSyncState")[0];
+  assert.equal(state.cursor, null, "a cross-run cursor was persisted — their cursors are DEAD between runs");
+  assert.equal(state.lastMod, null, "high-water advanced on an unfinished walk — the tail would be skipped forever");
+  assert.equal(db.rows("posCatalogItem").length, 1000);
+
+  // an adequate budget: the whole walk completes inside one run
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 200, pagePaceMs: 0 });
+  state = db.rows("posCatalogSyncState")[0];
   assert.equal(db.rows("posCatalogItem").length, 12_000);
+  assert.equal(state.lastMod, "2026-08-25");
+  assert.equal(state.cursor, null);
+  assert.equal(state.itemCount, 12_000);
+
+  // incremental re-run: nothing older re-fetched, count stable
+  const before = pos.requestLog.length;
+  await runCatalogSyncSweep({ db, clientFor: clientFor as any, pageBudget: 200, pagePaceMs: 0 });
+  assert.equal(db.rows("posCatalogItem").length, 12_000);
+  assert.ok(pos.requestLog.length - before <= 2, "incremental run should cost ~1 page");
 });
 
 test("STRESS 11b — a mid-walk 429 waits Retry-After and CONTINUES the same walk (the live 2026-08-26 failure: aborting restarts from scratch forever)", async () => {
