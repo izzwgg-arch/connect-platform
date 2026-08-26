@@ -119,6 +119,57 @@ generated stylesheet with the deploy's own minifier before shipping it.**)
   chars. `approveAndSubmitDraft` is **the ONLY register-order writer**
   (atomic claim → SUBMITTING → createOrder → 409-readback; a wiring test fails
   if any other file calls `.createOrder(`).
+- ✅✅ **2026-08-26 NIGHT 2 — THE ORDER PIPELINE GREW A BRAIN (commits
+  `9ba7368c` → `1d4e3249`, api+portal DEPLOYED same night).** Izzy's rules,
+  verbatim-shaped: **(1) Yiddish Labs ONLY** for order transcription/translation
+  (`orderYiddish.ts`: voicemail audio → YL sync STT → YL translate-english; a
+  Yiddish text → YL translate; English passes through free; every failure
+  degrades to the next layer, never blocks a draft; YL audio budgeted
+  `SUPERMARKET_YL_MAX_TRANSCRIPTIONS_PER_RUN`=10/sweep — an over-budget
+  voicemail WAITS, it never gets the worse transcript baked in). **(2) An
+  OpenAI order brain** (`orderBrain.ts`, tenant's OWN OPENAI key, two
+  chat.completions calls — extract lines+constraints, resolve against
+  server-fetched catalog candidates): "not brand X" picks a DIFFERENT brand or
+  refuses into notes; a hallucinated id is dropped; **null on any failure → the
+  regex matcher**. **(3) "Not every message is an order"** — the extract pass
+  judges isOrder first; complaints/questions auto-DISMISS with the reason in
+  notes (proven live: "Customer is asking why you need their pen"). **(4) The
+  account IS the phone number** — `posPhoneDigits` 845-defaults 7 digits; the
+  brain captures the phone the customer SPEAKS (beats caller ID); the desk
+  editor gained an account-phone box + `extractPosCustomer` brings the WHOLE
+  record onto `SupermarketOrderDraft.customerInfo`. **(5) Learning layer 1** —
+  `customerUsuals` (the customer's own SUBMITTED drafts, live-priced) rides the
+  resolve pass. Reprocess door `POST /admin/integrations/reprocess-drafts`
+  (NEEDS_REVIEW only, sequential, per-draft results).
+  ⛔⛔ **GESHEFT'S POS KEY IS SCOPED `customer:get` ACCESS-LEVEL "own"** — it
+  CANNOT read the store's existing customers ("Customer not found or you do
+  not have access to it"), which is why NO draft has ever resolved an account.
+  **POS with Logic must raise it to "all"** — everything above lights up then.
+  ⛔ **Their catalog rate limiter is a rolling quota, not pure pacing** — a
+  350ms-paced walk died at page 96, a 2s-paced one at 177; **2.5s pacing
+  finished all 193 pages in one run** (19,244 upserted, high-water set,
+  incrementals back to 1 credit; catalog rows carry `brand`/`sizeText` now).
+  ⛔ Photos: the POS API has none; they come from Gesheft's own Self-Point
+  webstore (browser-harvested, barcode-keyed) — 4,085 of 22,063 rows carry
+  one, which is EVERYTHING the webstore publishes; hover a suggestion
+  thumbnail for the CDN's `large` variant (xlarge/original 403).
+- ✅✅ **CARDS ON FILE AT PUT-THROUGH (`2b564f71`, built to the approved mockup
+  <https://claude.ai/code/artifact/18c52179-0658-4fb0-b6c3-7e4dc15a924a>, both
+  themes).** `customerCards.ts`: register cards (POS `listCustomerCards`, no
+  PIN) merged with cards saved via the tenant's OWN Sola iFields
+  (`SmCustomerCard`, xToken encrypted); charge = `chargeToken` on the tenant's
+  SOLA ProviderCredential — ⛔ **no platform fallback (guard-tested), ONE
+  attempt never retried, a silent Sola records `UNKNOWN` and 409s a second
+  press, a DECLINE never blocks the order** (recorded on the draft, rep
+  chases). Keyboard flow per Izzy: **Enter advances through the card fields**
+  (shared `CardknoxIFieldsForm` gained opt-in `enterAdvancesFocus` —
+  ifields `autoSubmit` + `onSubmit` focus chain; the five existing payment
+  surfaces byte-identical with it off), **→ opens "Sure you want to place this
+  order?" and Enter places it**. ⛔ All of it refuses in plain English until
+  Gesheft's Sola key + public `ifieldsKey` are pasted under Integrations
+  (SOLA key entry accepts `ifieldsKey` now). ⏳ POS-sourced cards are listed
+  but only chargeable when their record carries a gateway token — unproven
+  until the customer scope is fixed and a real card record is seen.
 - ⛔⛔ **THE PER-TENANT KEY LANE HAS NO PLATFORM FALLBACK, EVER** — Sola/POS
   keys live in `ProviderCredential` (`tenantId`+`provider` unique, encrypted);
   `resolveIntegrationKey` answers null and callers refuse in plain English. A

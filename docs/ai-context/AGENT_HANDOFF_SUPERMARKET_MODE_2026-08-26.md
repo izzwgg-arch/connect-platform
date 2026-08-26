@@ -251,3 +251,91 @@ live register edits. Quick-add search returns real rows (Challah, foil pans,
 real prices). Shape discovery spent ~533 credits total, one-time. The "Store"
 sidebar section shipped the same night (`03a5f370`): section key
 `can_view_section_store` in NO default bucket — SUPER_ADMIN-only until granted.
+
+## §8 — Night 2 (2026-08-26): the order pipeline grew a brain, cards on file, photos, the phone-is-the-account rule
+
+Commits `9ba7368c` → `1d4e3249` on `feat/ivr-migration-takeover`; api deployed
+through the queue same night (jobs 956e06be / 2960707e / b27b69d2), portal
+(dff7f0d6 hover-zoom + f9dd5e2f cards). Migrations applied by the api deploys:
+`20260826050000_catalog_brand_size`, `20260826070000_draft_customer_info`,
+`20260826090000_customer_cards_payment`.
+
+### The YL + brain pipeline (Izzy's orders, same session)
+- `orderYiddish.ts` — YL sync STT for voicemail audio (local audio store file),
+  YL translate-english for Yiddish text; key from the AgentSecret row
+  `yiddishlabs_api_key` (env fallback); 402 = out of credits, its own code;
+  a transcription is attempted ONCE per source. Degradation ladder ends at the
+  stored transcript — a draft with a worse transcript beats no draft.
+- `orderBrain.ts` — two bounded chat.completions calls on the TENANT's OPENAI
+  ProviderCredential (no platform fallback). EXTRACT judges `isOrder` first
+  (complaints/questions/chatter → notAnOrder + reason, resolve pass skipped);
+  captures the SPOKEN account phone (7 digits → 845…). RESOLVE picks from
+  server-fetched candidates per line + `customerUsuals` (the customer's own
+  SUBMITTED drafts, prices refreshed from the live catalog row). Constraint
+  honouring is the point: "not brand X" → a different brand or a refusal into
+  notes. Hallucinated ids dropped. Null on ANY failure → regex matcher.
+- `draftBuilder.composeDraftContent` — the ONE pipeline for both sweep blocks
+  and the reprocess door; engine provenance "brain:<model>[+yl]"/"matcher[+yl]";
+  YL audio budget SUPERMARKET_YL_MAX_TRANSCRIPTIONS_PER_RUN (10) per sweep —
+  over budget a voicemail WAITS for the next tick. notAnOrder → the draft is
+  created (or reprocessed) as DISMISSED with the reason in notes — the dedupe
+  anchor survives, the review queue stays honest.
+- Reprocess door `POST /admin/integrations/reprocess-drafts` {tenantId, limit,
+  draftIds?} — NEEDS_REVIEW only (never rewrites a decision), sequential on
+  purpose (YL is per-credit, OpenAI per-token), per-draft result rows.
+  ⛔ Repeat calls WITHOUT draftIds re-take the same newest N forever (reprocess
+  does not change status) — the runner must pass explicit id slices.
+
+### Live findings that shaped it
+- ⛔⛔ **Gesheft's POS key: `customer:get` access level "own"** — cannot read
+  the store's existing customers; every lookup answers "Customer not found or
+  you do not have access to it" (and some records 500 "unexpected error").
+  Discovered by probing path variants; `/customers/phonenumber/{10digits}` IS
+  the right path. POS with Logic must raise the key to access level "all".
+- ⛔ **The catalog rate limiter is a rolling QUOTA** — 350ms pacing died at
+  page 96, 2s at 177, **2.5s finished all 193 pages in one run** (19,244
+  upserted, lastError null, high-water set → incrementals 1 credit again).
+  brand on 15,865 rows; the rest carry no brand at the register.
+- The reprocess test over Izzy's pinned scope (newest 10 voicemail drafts +
+  the page's 60 texts) ran the same night — results in the session log
+  (loopcom /root/reprocess-run.log): the brain filled items, translated, and
+  correctly ruled non-orders ("Audio contained no clear speech", "Customer is
+  asking why you need their pen; no items requested").
+- Photos: 4,085/22,063 rows carry a webstore photo — ALL the webstore offers;
+  hover-zoom uses the CDN's `large` size (xlarge/original 403).
+
+### Cards on file (approved mockup 18c52179, built both themes)
+- `customerCards.ts` + routes GET/POST `/supermarket/customers/:id/cards`,
+  POST `/supermarket/drafts/:id/charge`. Money rules: tenant SOLA key only
+  (guard: no resolveBillingGatewayConfig/billingSolaConfig anywhere in the
+  file); chargeToken called EXACTLY once per attempt (guard counts call
+  sites); silent Sola → paymentStatus UNKNOWN and the route 409s any second
+  press; DECLINE recorded, order unaffected. SmCustomerCard stores the
+  encrypted xToken (cc:save on the tenant key from the iFields SUT).
+- Desk: Payment block per the mockup; Enter-advance through card fields via
+  the shared CardknoxIFieldsForm's new opt-in `enterAdvancesFocus`
+  (react-ifields `options.autoSubmit` + `onSubmit` per iframe — README-proven
+  Enter detection); → opens "Sure you want to place this order?", Enter
+  places (confirm button autofocused), Esc backs out. The charge chains AFTER
+  approve succeeded.
+- ⏳ Register-sourced cards (`pos:` ids) are listed but chargeable only when a
+  record carries a gateway token — unknown until the customer scope is fixed.
+  ⏳ Sola key + public ifieldsKey arrive "tomorrow"; the SOLA key entry now
+  accepts ifieldsKey. Until pasted, every card surface refuses in plain
+  English and orders go through unchanged.
+
+### The phone IS the account
+- posPhoneDigits: 7 digits → `845` + digits. The brain's spoken phone beats
+  caller ID for the lookup; the desk editor's phone box PATCHes customerPhone
+  (route normalizes, POS-looks-up, fills posCustomerId/customerName/
+  customerInfo). `extractPosCustomer` pulls id/name/address/email + bounded
+  raw into `customerInfo` — "once we find the account, bring in everything".
+
+### Still open
+- POS key scope fix (their side) — gates account lookup AND register cards.
+- Sola key + ifieldsKey paste (Izzy, tomorrow) — first live save-card + charge
+  is the acceptance test.
+- Learning layers 2+ (phrase→item lessons harvested from rep corrections;
+  cheap history mining of months of texts WITHOUT YL) — designed, not built.
+- Nobody has driven the card UI in a browser; the reprocess quality verdict
+  is Izzy's to make from the drafts screen.
