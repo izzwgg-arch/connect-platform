@@ -24,6 +24,8 @@ import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
 import { HealingEngine } from "./services/HealingEngine";
 import { createAriBridgedRedisPublisher } from "./services/ariBridgedRedisPublisher";
+import { startVoiceAgent } from "../voiceAgent";
+import type { VoiceAgentServer } from "../voiceAgent/VoiceAgentServer";
 import * as metrics from "../metrics";
 
 export type TelephonyModule = ReturnType<typeof createTelephonyModule>;
@@ -300,6 +302,14 @@ export function createTelephonyModule(server: http.Server) {
     metrics.activeCalls.set(allCalls.length);
   }
 
+  // Conversational order-taking voice agent (PBX AudioSocket ⇄ OpenAI
+  // realtime). ⛔ Armed ONLY by VOICE_AGENT_ENABLED=1 — with the flag unset,
+  // startVoiceAgent() is a pure no-op (no port, no AMI listener), so shipping
+  // this code changes nothing until the env flag is deliberately set. The
+  // module touches no other telephony service; its failures end at the
+  // dialplan's human-fallback branch.
+  let voiceAgentServer: VoiceAgentServer | null = null;
+
   function start() {
     log.info("Starting telephony module");
     ami.start();
@@ -307,6 +317,12 @@ export function createTelephonyModule(server: http.Server) {
     ariBridgedPoller.start();
     healingEngine.start();
     connectWakeConsumer.start();
+    try {
+      voiceAgentServer = startVoiceAgent(ami);
+    } catch (err) {
+      // A voice-agent fault must never take the call path down with it.
+      log.error({ err: String(err) }, "voice-agent failed to start — continuing without it");
+    }
     // Run stale ghost cleanup every 60 s so zombies are evicted even when no new WS clients connect
     callStore.startPeriodicStaleCleanup(60_000);
     _metricsInterval = setInterval(refreshMetrics, 5_000);
@@ -322,6 +338,7 @@ export function createTelephonyModule(server: http.Server) {
 
   function stop() {
     log.info("Stopping telephony module");
+    if (voiceAgentServer) { void voiceAgentServer.stop().catch(() => undefined); voiceAgentServer = null; }
     if (_presenceRefreshInterval) { clearInterval(_presenceRefreshInterval); _presenceRefreshInterval = null; }
     if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
     cdrNotifier.stopRetryDrain();

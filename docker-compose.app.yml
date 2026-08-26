@@ -508,6 +508,15 @@ services:
       PBX_CONTACT_QUALIFY_ON_RING: ${PBX_CONTACT_QUALIFY_ON_RING:-1}
     ports:
       - "127.0.0.1:3003:3003"
+      # Voice-agent AudioSocket ingress (PBX dialplan → AudioSocket(uuid, host:4590)).
+      # ⛔ Docker-published ports BYPASS ufw, so this is internet-reachable; the
+      # structural lock is the single-use 128-bit session UUID announced over AMI
+      # seconds earlier (unknown UUID → terminated instantly), plus a
+      # DOCKER-USER iptables rule restricting the port to the PBX's address.
+      # ⛔ VOICE_AGENT_ENABLED / VOICE_AGENT_PORT are read from env_file ONLY —
+      # never add them to `environment:` (the ${VAR:-} deploy-shell substitution
+      # trap that silently blanked CDR_INGEST_SECRET for the platform's life).
+      - "4590:4590"
     networks:
       - default
       - infra_default
