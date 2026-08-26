@@ -247,6 +247,7 @@ import { registerComplianceRoutes, startComplianceReminders } from "./compliance
 import { startPaymentTransactionAlerts } from "./billing/paymentTransactionAlerts";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerDeliveryRoutes } from "./delivery/routes";
+import { registerVoiceAgentRoutes } from "./voiceAgent/voiceAgentRoutes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
 import { matchTenantContactByPhone } from "./crm/inboundCallerMatch";
 import { fireCrmCdrHook } from "./crm/cdrHook";
@@ -42384,6 +42385,11 @@ const port = Number(process.env.PORT || 3001);
   if (paymentAlertTimer) registerShutdownTimer(paymentAlertTimer);
   await registerCrmRoutes(app, { smsQueue });
   await registerDeliveryRoutes(app);
+  registerVoiceAgentRoutes(app, {
+    db,
+    requireSuper: async (req: any, reply: any) => Boolean(await requireSuperAdmin(req, reply)),
+    log: app.log,
+  });
   await app.listen({ host: "0.0.0.0", port });
   markListeningComplete();
   hostMetricsCollector.start();
