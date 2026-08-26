@@ -443,3 +443,21 @@ Izzy: "give gshaft101 permission to see store section 101 only."
   two keys, so no code change was needed.
 - ⏳ NOT PROVEN: she has not signed in and seen the section. She must reload
   (or fully reopen the desktop app); the permission cache TTL also applies.
+
+### §11b — superseded minutes later: she is on her OWN "Gesheft" role now
+
+Izzy: "duplicate their owner… Name it Gesheft. and add the permission. Then
+change their role." Final state (all via the real admin routes, actor = Izzy's
+SUPER_ADMIN id):
+
+- Role **"Gesheft" `cmta3tac105acsd138bhyi5qc`** = the shared Owner role's 82
+  keys + the two store view keys = **84**, unshared — editing it touches only
+  her. She was moved onto it ALONE (PUT replaced Owner + the interim role).
+- **Effective set proven byte-identical across the move**: 84 → 84, gained
+  `[]`, lost `[]` — the restructure changed WHO owns the keys, not what she
+  can do.
+- The interim "Store desk (view)" role from §11 was **deleted** (0 holders at
+  deletion); the shared Owner role is down to **9 holders**, all other
+  companies, untouched.
+- ⛔ Manage (put-through/charge) is STILL not granted — same reasoning as §11.
+  Adding it is now a one-line edit to the Gesheft role's key list.
