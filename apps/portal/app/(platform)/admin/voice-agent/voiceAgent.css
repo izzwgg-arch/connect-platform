@@ -1,0 +1,269 @@
+/* Voice agent admin — Connect theme tokens only (no section palette). */
+
+.va-root {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+  color: var(--text);
+}
+
+.va-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.va-head h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.va-sub {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  max-width: 44rem;
+}
+
+.va-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+  max-width: 30rem;
+}
+.va-lbl {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.3rem;
+  display: block;
+}
+.va-picker .va-lbl {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+.va-alert {
+  border-radius: 10px;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+.va-alert-err {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+.va-alert-ok {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--success);
+}
+
+.va-empty {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  padding: 1.5rem 0.25rem;
+}
+
+.va-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow, 0 8px 30px rgba(0, 0, 0, 0.12));
+}
+.va-card-h {
+  padding: 0.7rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.va-card-b {
+  padding: 1rem 1.1rem 1.15rem;
+}
+
+.va-checks {
+  display: grid;
+  gap: 0.6rem;
+}
+.va-check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+  flex-wrap: wrap;
+}
+.va-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-dim);
+}
+.va-check.ok .va-dot {
+  background: var(--success);
+}
+.va-check.no .va-dot {
+  background: var(--warning);
+}
+.va-check.idle .va-dot {
+  background: var(--text-dim);
+}
+.va-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  font-size: 0.82rem;
+}
+.va-link:hover {
+  text-decoration: underline;
+}
+.va-hint {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.va-row {
+  display: block;
+  margin-bottom: 0.9rem;
+}
+.va-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+}
+.va-toggle input {
+  margin-top: 0.15rem;
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+.va-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem;
+  margin-bottom: 0.9rem;
+}
+.va-grid-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+@media (max-width: 640px) {
+  .va-grid,
+  .va-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.va-field {
+  margin-bottom: 0.9rem;
+}
+.va-input,
+.va-textarea {
+  width: 100%;
+  background: var(--panel-2, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.88rem;
+  color: var(--text);
+  font-family: inherit;
+}
+.va-input:focus,
+.va-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.va-textarea {
+  resize: vertical;
+}
+
+.va-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.4rem;
+}
+.va-btn {
+  border-radius: 9px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.5rem 1.1rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.va-btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent)));
+  color: var(--accent-ink, #fff);
+}
+.va-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.va-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.va-table th {
+  text-align: left;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.va-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.va-table tr:last-child td {
+  border-bottom: 0;
+}
+.va-pill {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  background: var(--panel-2, var(--bg));
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.va-pill-completed {
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
+  border-color: transparent;
+}
+.va-pill-transfer {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border-color: transparent;
+}
+.va-pill-callerhangup {
+  color: var(--text-dim);
+}
+.va-pill-providererror,
+.va-pill-socketerror,
+.va-pill-capreached,
+.va-pill-inactive {
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
+  border-color: transparent;
+}
