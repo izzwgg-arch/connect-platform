@@ -461,3 +461,44 @@ SUPER_ADMIN id):
   companies, untouched.
 - ⛔ Manage (put-through/charge) is STILL not granted — same reasoning as §11.
   Adding it is now a one-line edit to the Gesheft role's key list.
+
+## §12 — day 3: the checklist, the teaching lane, and the keyboard-first flow (2026-08-26 afternoon)
+
+Commits `7fc674b1` (checklist + lessons) → `3d3b6e48` (Teach the Agent) →
+`9928ddb3` (keyboard flow). Izzy's orders, all built to approved mockups
+(teach page: artifact 323aca92; keyboard: artifact c6c802ed).
+
+- **agentLines** on every draft: the brain's extracted line list with
+  outcome in_cart/unsure/skipped + reason + top-4 suggestions; the desk
+  renders it as the "WHAT THEY ASKED FOR" checklist, judged LIVE against the
+  cart. ⛔ Written at BOTH create sites + the reprocess door (source guard).
+- **Phrase lessons** (`SupermarketPhraseLesson`): rep fixes harvested at
+  submit + admin teaching, ONE table. The brain injects matching lessons as
+  candidates marked learned:true — a hint, never a forced pick. timesUsed
+  counts real auto-fills (⛔ try/catch not .catch — the sync-throw trap).
+- **/orders/teach** (store.teach nav): the pile of skipped phrases, inline
+  catalog search per row, Enter teaches (the admin's SEARCH TEXT is taught
+  as the "what he meant" second lesson), dismiss for non-items,
+  taught-so-far table with source tags + delete.
+- **RESOLVE prompt**: refusal is the LAST RESORT; brands match by SOUND
+  (the transcription garbles them phonetically). Search matches name OR
+  brand on stems, most-specific-first (§10).
+- **Keyboard flow** (ONE controller in DraftReview = desk AND mini twin):
+  ↑/↓ rove items+fields, → enters, digits set qty (visible buffer chip,
+  900ms commit), letters open replace-item, Del removes, **PageDown is the
+  ONE checkout key** — "Complete this order?" with cards-on-file + no-charge
+  inline, arrows pick, Enter pays & places. ⛔ ArrowRight NO LONGER opens
+  the confirm (it enters the selected field). `putThrough({cardId})`
+  override beats the payment radio. **A replace-item swap TEACHES the
+  agent** (old item's phrase → new item + the rep's search text).
+- ⛔ The stylesheet scope guard had been RED since the cards CSS landed
+  (bare `.billing-*` iFields class tokens); it now allows exactly those six
+  as descendants of an .sm- ancestor, enforced per line.
+- ⛔⛔ **`git stash` fired by accident in the shared tree this session** (a
+  leftover `git stash -q` inside a probe command) — caught within seconds,
+  `git stash pop` restored all four dirty files exactly (incl. the other
+  session's mobile-assets script), the WIP stash dropped, the two historical
+  stashes untouched. The standing never-stash rule stands; this was a near
+  miss, recorded per the rule.
+- ⏳ NOT PROVEN: nobody has driven the checklist, the teach page or the
+  keyboard flow in a browser; no lesson has auto-filled a real order yet.
