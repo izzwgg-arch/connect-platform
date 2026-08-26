@@ -135,6 +135,19 @@ their IVR ext 898 "Order Tracking" is the manual process this replaces.)
   smoke ingest → scan → `/track/<token>`; then the real decisions — Gesheft's
   order-source integration (blocked on them), SMS go-live (compliance), a real
   routing/geocoding provider, and PIN validation.
+- ✅✅ **UPDATE 2026-08-25 NIGHT — THE LOOPCOM DRIVER APK EXISTS (`3544f2fa`),
+  so the mobile half of the path-to-production is DONE as code.** A separate
+  app (`com.loopcom.driver`, env-gated `CONNECT_DRIVER_APP=1` in
+  build.gradle — ⛔ not productFlavors, the ship scripts pin the output
+  paths), slim driver manifest (location+camera in, mic/telecom/FCM stripped),
+  own entry `index.driver.js` (SIP never bundled — grep-proven in the APK).
+  Start/End run now really drives `/mobile/delivery/tracking/start|end` +
+  the foreground location task (`runTracking.ts`); map is a driver setting
+  (in-app Leaflet/WebView map or Waze/Google/Apple handoff — `navPrefs.ts`).
+  Artifact-verified build at `apps/mobile/dist/loopcom-driver-1.0.0+20260825-driver1.apk`,
+  debug-signed like every sideload. ⏳ Never launched on a device; server env
+  + pilot tenant + DriverProfile still unset. Full detail:
+  `AGENT_HANDOFF_GESHEFT_POS_API_2026-08-25.md` §13–§13e.
 - ✅✅ **UPDATE 2026-08-25 EVENING — GESHEFT'S POS API DOCS ARRIVED, so Phase 10 is
   no longer blocked on them.** Emailed by Gesheft Kosher; base
   `api.poswithlogic.dev` ("POS with Logic"), `x-api-key` auth, metered credits.
