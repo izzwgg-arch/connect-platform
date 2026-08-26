@@ -36,6 +36,7 @@ import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
+import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
 
 export type SupermarketRouteDeps = {
   app: any;
@@ -85,6 +86,8 @@ const keyBodySchema = z.object({
   apiKey: z.string().min(8).max(512),
   baseUrl: z.string().max(200).optional(),
   label: z.string().max(120).optional(),
+  /** SOLA only: the merchant's public iFields key (renders the card iframes). */
+  ifieldsKey: z.string().max(200).optional(),
 });
 
 const modeBodySchema = z.object({
@@ -238,6 +241,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         apiKey: parsed.data.apiKey,
         baseUrl: parsed.data.baseUrl,
         label: parsed.data.label,
+        ifieldsKey: parsed.data.ifieldsKey,
         actorUserId: String(admin.sub ?? admin.id ?? ""),
       });
     } catch (err: any) {
@@ -653,6 +657,86 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     }
     const updated = await db.supermarketOrderDraft.update({ where: { id: draft.id }, data });
     return reply.send({ draft: updated });
+  });
+
+  // ── cards on file (Izzy, 2026-08-26) ─────────────────────────────────────
+  app.get("/supermarket/customers/:posCustomerId/cards", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_VIEW_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    if (!posCustomerId) return reply.status(400).send({ error: "invalid_request" });
+    const posClient = await clientFor(db, tenantId).catch(() => null);
+    const cards = await listCardsOnFile({ db, posClient }, tenantId, posCustomerId);
+    const sola = await solaAdapterForTenant(db, tenantId);
+    return reply.send({ cards, solaConnected: Boolean(sola), ifieldsKey: sola?.ifieldsKey ?? null });
+  });
+
+  app.post("/supermarket/customers/:posCustomerId/cards", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    const parsed = z
+      .object({
+        cardToken: z.string().min(8).max(512),
+        exp: z.string().max(8).optional(),
+        cardholderName: z.string().max(120).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!posCustomerId || !parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const user = getUser(req);
+    const result = await saveCardFromSut(
+      { db },
+      {
+        tenantId,
+        posCustomerId,
+        sut: parsed.data.cardToken,
+        exp: parsed.data.exp,
+        cardholderName: parsed.data.cardholderName,
+        actorUserId: String(user.sub ?? ""),
+      },
+    );
+    if (!result.ok) return reply.status(result.code === "sola_not_connected" ? 503 : 422).send({ error: result.code, message: result.message });
+    await safeAudit({
+      tenantId,
+      action: "SUPERMARKET_CARD_SAVED",
+      entityType: "SmCustomerCard",
+      entityId: result.card.id,
+      actorUserId: String(user.sub ?? ""),
+      metadata: { posCustomerId, last4: result.card.last4 },
+    });
+    return reply.send({ ok: true, card: result.card });
+  });
+
+  app.post("/supermarket/drafts/:id/charge", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const draft = await ownDraft(req, reply, (req.params as any).id);
+    if (!draft) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z
+      .object({ cardId: z.string().min(3).max(80), amountCents: z.number().int().min(50).max(500_000) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    // ⛔ one charge per draft, ever — a second press must not double-bill.
+    if (draft.paymentStatus === "CHARGED" || draft.paymentStatus === "UNKNOWN") {
+      return reply.status(409).send({ error: "already_charged", message: "A charge was already made for this order." });
+    }
+    const user = getUser(req);
+    const tenantId = tenantOf(req);
+    const result = await chargeCardForDraft(
+      { db },
+      { tenantId, draftId: draft.id, cardRef: parsed.data.cardId, amountCents: parsed.data.amountCents, actorUserId: String(user.sub ?? "") },
+    );
+    await safeAudit({
+      tenantId,
+      action: result.ok ? "SUPERMARKET_CARD_CHARGED" : "SUPERMARKET_CARD_CHARGE_FAILED",
+      entityType: "SupermarketOrderDraft",
+      entityId: draft.id,
+      actorUserId: String(user.sub ?? ""),
+      metadata: { code: result.code, amountCents: parsed.data.amountCents, last4: result.last4 ?? null },
+    });
+    return reply.status(result.ok ? 200 : 402).send(result);
   });
 
   app.post("/supermarket/drafts/:id/approve", async (req: any, reply: any) => {

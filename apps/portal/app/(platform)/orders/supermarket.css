@@ -213,3 +213,60 @@
 .sm-root .sm-wm-top { width: 118px; height: 21px; }
 .sm-root .sm-wm-mail { width: 168px; height: 30px; }
 .sm-root .sm-wm-mail-sm { width: 142px; height: 25px; }
+
+/* ── Payment / cards on file (built to the approved 2026-08-26 mockup) ───── */
+.sm-root { --sm-good: #34c27b; --sm-good-bg: rgba(52, 194, 123, 0.1); --sm-good-line: rgba(52, 194, 123, 0.35); }
+:root[data-theme="light"] .sm-root { --sm-good: #15803d; --sm-good-bg: rgba(22, 163, 74, 0.08); --sm-good-line: rgba(22, 163, 74, 0.35); }
+.sm-root .sm-payblock { margin-top: .8rem; display: grid; gap: .5rem; }
+.sm-root .sm-payrow { display: flex; align-items: center; gap: .65rem; border: 1px solid var(--border);
+    background: var(--panel-2); border-radius: 10px; padding: .6rem .75rem; cursor: pointer; }
+.sm-root .sm-payrow.sm-sel { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+.sm-root .sm-payrow.sm-dim { opacity: .6; cursor: default; }
+.sm-root .sm-pradio { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--text-dim); flex-shrink: 0; }
+.sm-root .sm-payrow.sm-sel .sm-pradio { border-color: var(--accent);
+    background: radial-gradient(circle at center, var(--accent) 0 45%, transparent 50%); }
+.sm-root .sm-cbrand { width: 40px; height: 26px; border-radius: 5px; display: flex; align-items: center; justify-content: center;
+    font-size: .6rem; font-weight: 900; letter-spacing: .03em; flex-shrink: 0; }
+.sm-root .sm-cb-visa { background: #1a3a8f; color: #fff; }
+.sm-root .sm-cb-mc { background: #2a2a2e; color: #ff9f43; }
+.sm-root .sm-cb-amex { background: #1d6fa5; color: #fff; }
+.sm-root .sm-cb-disc { background: #4a3b2a; color: #f0b655; }
+.sm-root .sm-cb-any { background: var(--panel); color: var(--text-dim); border: 1px solid var(--border); }
+.sm-root .sm-pmeta { flex: 1; min-width: 0; }
+.sm-root .sm-pmeta b { font-size: .86rem; letter-spacing: .02em; }
+.sm-root .sm-pmeta span { display: block; font-size: .72rem; color: var(--text-dim); }
+.sm-root .sm-chargebar { display: flex; align-items: center; gap: .55rem; padding: .6rem .75rem; border-radius: 10px;
+    background: var(--sm-good-bg); border: 1px solid var(--sm-good-line); font-size: .82rem; cursor: pointer; }
+.sm-root .sm-chargebar input { accent-color: var(--sm-good); }
+.sm-root .sm-chargebar b { color: var(--sm-good); }
+.sm-root .sm-nofile { display: flex; align-items: center; gap: .6rem; padding: .7rem .8rem; border: 1px dashed var(--border);
+    border-radius: 10px; color: var(--text-dim); font-size: .83rem; }
+.sm-root .sm-addcardbtn { align-self: flex-start; }
+.sm-root .sm-paynote { font-size: .78rem; }
+/* the shared iFields form, worn compact — labels and boxes per the mockup */
+.sm-root .sm-ifwrap { border: 1px solid var(--border); border-radius: 10px; padding: .8rem .85rem; background: var(--panel-2); }
+.sm-root .sm-ifwrap label { font-size: .66rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); }
+.sm-root .sm-ifwrap iframe { border: 1px solid var(--border) !important; background: var(--panel) !important; border-radius: 9px !important; }
+.sm-root .sm-ifwrap input[type="text"], .sm-root .sm-ifwrap select {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 9px; padding: .55rem .7rem; font: inherit; }
+.sm-root .sm-trust { display: flex; align-items: center; gap: .45rem; justify-content: center; margin-top: .7rem;
+    color: var(--text-dim); font-size: .72rem; }
+.sm-root .sm-trust svg { color: var(--sm-good); flex-shrink: 0; }
+.sm-root .sm-trust b { color: var(--text); font-weight: 700; }
+
+/* the place-order prompt (right arrow -> Enter places it) */
+.sm-root .sm-confirm-scrim { position: fixed; inset: 0; z-index: 1200; background: rgba(4, 8, 14, 0.55);
+    display: flex; align-items: center; justify-content: center; }
+.sm-root .sm-confirm { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 1.1rem 1.2rem; min-width: 320px; max-width: 420px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4); }
+.sm-root .sm-confirm-t { font-weight: 800; font-size: 1rem; margin-bottom: .35rem; }
+.sm-root .sm-confirm-d { color: var(--text-dim); font-size: .85rem; margin-bottom: .9rem; }
+.sm-root .sm-confirm-d b { color: var(--text); }
+/* mockup field order inside the compact card form: number -> exp -> cvv -> name */
+.sm-root .sm-ifwrap form { display: flex; flex-direction: column; gap: .6rem; }
+.sm-root .sm-ifwrap .billing-ifields-card { order: 1; }
+.sm-root .sm-ifwrap .billing-pay-row--expiration { order: 2; }
+.sm-root .sm-ifwrap .billing-ifields-cvv { order: 3; }
+.sm-root .sm-ifwrap .billing-field-cardholder { order: 4; }
+.sm-root .sm-ifwrap .billing-field-zip-only { order: 5; }
+.sm-root .sm-ifwrap .billing-pay-secure-note { display: none; }

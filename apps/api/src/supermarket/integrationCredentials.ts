@@ -29,6 +29,8 @@ export type StoredIntegrationKey = {
   apiKey: string;
   /** Optional base-url override (tests / sandbox); production leaves it unset. */
   baseUrl?: string;
+  /** SOLA only: the merchant's PUBLIC iFields key (renders the card iframes). */
+  ifieldsKey?: string;
 };
 
 export function isSupermarketProvider(value: unknown): value is SupermarketProvider {
@@ -49,6 +51,7 @@ export async function storeIntegrationKey(
     apiKey: string;
     baseUrl?: string;
     label?: string;
+    ifieldsKey?: string;
     actorUserId: string;
   },
 ): Promise<{ id: string; hint: string }> {
@@ -61,6 +64,8 @@ export async function storeIntegrationKey(
   if (input.baseUrl && /^https:\/\/[a-z0-9.-]+/i.test(input.baseUrl.trim())) {
     payload.baseUrl = input.baseUrl.trim();
   }
+  const ifk = String(input.ifieldsKey ?? "").trim();
+  if (ifk && ifk.length <= 200 && !/[\r\n]/.test(ifk)) payload.ifieldsKey = ifk;
   const credentialsEncrypted = sec.encryptJson(payload);
   const row = await db.providerCredential.upsert({
     where: { tenantId_provider: { tenantId: input.tenantId, provider: input.provider } },

@@ -25,6 +25,27 @@ import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient";
+import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
+
+/** A card on file — the register's stored cards + ones saved here via Sola. */
+type CardOnFile = {
+  id: string;
+  source: "saved" | "pos";
+  brand: string;
+  last4: string;
+  exp: string;
+  cardholderName: string;
+  chargeable: boolean;
+};
+
+function brandChip(brand: string): { label: string; cls: string } {
+  const b = brand.toLowerCase();
+  if (b.includes("visa")) return { label: "VISA", cls: "sm-cb-visa" };
+  if (b.includes("master") || b === "mc") return { label: "MC", cls: "sm-cb-mc" };
+  if (b.includes("amex") || b.includes("american")) return { label: "AMEX", cls: "sm-cb-amex" };
+  if (b.includes("discover")) return { label: "DISC", cls: "sm-cb-disc" };
+  return { label: "CARD", cls: "sm-cb-any" };
+}
 
 export const SM_ORDERS_PHRASES = [
   "Orders", "Supermarket mode", "New order",
@@ -47,6 +68,12 @@ export const SM_ORDERS_PHRASES = [
   "This draft was already put through.",
   "Loading…", "This screen is switched off for your account.",
   "Customer phone (845…)", "Looking up…", "No account with that number on the register.",
+  "Payment", "Charged", "expires", "card on file", "on the register — can't be charged from here",
+  "No card on file for this account.", "Charge this card when the order goes through —",
+  "Add a card", "Sola isn't connected for this store yet — orders go through without charging.",
+  "Skip payment", "Save this card to their account", "Securing…", "Secured & powered by",
+  "Put order through & charge", "But the card was not charged:",
+  "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
 ] as string[];
 
 type DraftRow = {
@@ -70,6 +97,9 @@ type DraftRow = {
   translation?: string;
   /** the register's whole customer record, when the phone matched an account */
   customerInfo?: { name?: string; address?: string; email?: string; phone?: string } | null;
+  paymentStatus?: string | null;
+  paymentLast4?: string | null;
+  paymentAmountCents?: number | null;
 };
 
 type DraftItem = {
@@ -307,7 +337,7 @@ function OrdersList() {
               return (
                 <div className="sm-trow" key={d.id}>
                   <span className="sm-srcic sm-done" aria-hidden><Check size={14} /></span>
-                  <div className="sm-who"><b>{d.customerName || d.customerPhone || "—"}</b><span>{d.posOrderId ? `#${d.posOrderId} · ` : ""}{t(d.sourceType === "voicemail" ? "from voicemail" : d.sourceType === "text" ? "from text" : "from a call")}</span></div>
+                  <div className="sm-who"><b>{d.customerName || d.customerPhone || "—"}</b><span>{d.posOrderId ? `#${d.posOrderId} · ` : ""}{t(d.sourceType === "voicemail" ? "from voicemail" : d.sourceType === "text" ? "from text" : "from a call")}{d.paymentStatus === "CHARGED" ? ` · ${"paid"} ${d.paymentLast4 ? `•••• ${d.paymentLast4}` : ""}` : d.paymentStatus === "DECLINED" ? " · card declined" : ""}</span></div>
                   <span className="sm-cellsub"><span className="sm-amount">{money(total)}</span></span>
                   <span><span className="sm-pill sm-info"><i />{d.orderMethod}</span></span>
                   <span />
@@ -338,6 +368,75 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   // the account IS the phone number (Izzy) — 7 digits imply area code 845
   const [phoneEdit, setPhoneEdit] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
+
+  // ── cards on file (built to the approved 2026-08-26 mockup) ──────────────
+  const [cards, setCards] = useState<CardOnFile[]>([]);
+  const [solaConnected, setSolaConnected] = useState(false);
+  const [ifieldsKey, setIfieldsKey] = useState<string | null>(null);
+  const [selCard, setSelCard] = useState<string | null>(null);
+  const [chargeOnPut, setChargeOnPut] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
+  const [savingCard, setSavingCard] = useState(false);
+  const [cardErr, setCardErr] = useState<string | null>(null);
+  const tokenizeRef = useRef<(() => void) | null>(null);
+  // "they press the right arrow. It will prompt, 'Sure, you want to place
+  // this order?' They press Enter, and it will place the order." (Izzy)
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (confirmOpen) confirmBtnRef.current?.focus();
+  }, [confirmOpen]);
+
+  useEffect(() => {
+    let dead = false;
+    const posCustomerId = draft?.posCustomerId;
+    if (!posCustomerId) {
+      setCards([]);
+      setSelCard(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await apiGet<{ cards: CardOnFile[]; solaConnected: boolean; ifieldsKey: string | null }>(
+          `/supermarket/customers/${encodeURIComponent(posCustomerId)}/cards`,
+        );
+        if (dead) return;
+        setCards(res.cards ?? []);
+        setSolaConnected(Boolean(res.solaConnected));
+        setIfieldsKey(res.ifieldsKey ?? null);
+        const firstChargeable = (res.cards ?? []).find((c) => c.chargeable);
+        setSelCard(firstChargeable?.id ?? null);
+      } catch {
+        if (!dead) setCards([]);
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [draft?.posCustomerId]);
+
+  const saveNewCard = useCallback(
+    async (payload: { cardToken: string; billing: { cardholderName: string; expMonth: string; expYear: string } }) => {
+      if (!draft?.posCustomerId) return;
+      setSavingCard(true);
+      setCardErr(null);
+      try {
+        const exp = payload.billing.expMonth && payload.billing.expYear ? `${payload.billing.expMonth.padStart(2, "0")}${payload.billing.expYear.slice(-2)}` : undefined;
+        const res = await apiPost<{ ok: boolean; card: CardOnFile }>(
+          `/supermarket/customers/${encodeURIComponent(draft.posCustomerId)}/cards`,
+          { cardToken: payload.cardToken, exp, cardholderName: payload.billing.cardholderName || undefined },
+        );
+        setCards((prev) => [res.card, ...prev]);
+        setSelCard(res.card.id);
+        setAddOpen(false);
+      } catch (e: any) {
+        setCardErr(e?.body?.message ?? errText(e, "The card was not saved."));
+      } finally {
+        setSavingCard(false);
+      }
+    },
+    [draft?.posCustomerId],
+  );
 
   const lookupPhone = useCallback(async () => {
     const typed = phoneEdit.trim();
@@ -480,6 +579,30 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   const subtotal = useMemo(() => items.reduce((s, i) => s + i.unitPriceCents * i.qty, 0), [items]);
   const readOnly = draft?.status === "SUBMITTED" || draft?.status === "SUBMITTING";
 
+  // "once the card information is entered, they press the right arrow" — the
+  // → key anywhere outside a typing surface opens the place-order prompt;
+  // Enter (the focused Place button) places it, Escape backs out.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setConfirmOpen(false);
+        }
+        return;
+      }
+      if (e.key !== "ArrowRight") return;
+      const el = e.target as HTMLElement | null;
+      const tag = (el?.tagName ?? "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      if (readOnly || busy || items.length === 0) return;
+      e.preventDefault();
+      setConfirmOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen, readOnly, busy, items.length]);
+
   const save = useCallback(async () => {
     if (!draft) return;
     setBusy(true);
@@ -504,15 +627,34 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
         notes,
         orderMethod,
       });
-      setOkMsg(res.alreadySubmitted ? t("This draft was already put through.") : t("The order went through."));
       setError(null);
       setDraft((d) => (d ? { ...d, status: "SUBMITTED", posOrderId: res.posOrderId ?? d.posOrderId } : d));
+      // ⛔ the charge runs AFTER the order landed on the register, and a
+      // decline never blocks it — the money is the rep's to chase.
+      const total = items.reduce((a, i) => a + i.qty * i.unitPriceCents, 0);
+      if (chargeOnPut && selCard && total >= 50) {
+        try {
+          const cr = await apiPost<any>(`/supermarket/drafts/${encodeURIComponent(draft.id)}/charge`, {
+            cardId: selCard,
+            amountCents: total,
+          });
+          setOkMsg(`${t("The order went through.")} ${cr.message ?? ""}`.trim());
+          setDraft((d) => (d ? { ...d, paymentStatus: "CHARGED", paymentLast4: cr.last4 ?? null } : d));
+        } catch (e: any) {
+          const msg = e?.body?.message ?? errText(e, "The card was not charged.");
+          setOkMsg(null);
+          setError(`${t("The order went through.")} ${t("But the card was not charged:")} ${msg}`);
+          setDraft((d) => (d ? { ...d, paymentStatus: "DECLINED" } : d));
+        }
+      } else {
+        setOkMsg(res.alreadySubmitted ? t("This draft was already put through.") : t("The order went through."));
+      }
     } catch (e) {
       setError(errText(e, "The register did not accept the order."));
     } finally {
       setBusy(false);
     }
-  }, [draft, items, comments, notes, orderMethod, t]);
+  }, [draft, items, comments, notes, orderMethod, chargeOnPut, selCard, t]);
 
   const dismiss = useCallback(async () => {
     if (!draft) return;
@@ -713,6 +855,103 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
 
             <div className="sm-totals"><span>{t("Subtotal")} <b>{money(subtotal)}</b></span><span>{t("Total")} <b>{money(subtotal)}</b></span></div>
 
+            {/* ── Payment — built to the approved card-on-file mockup ────── */}
+            {draft.posCustomerId ? (
+              <div className="sm-payblock">
+                <div className="sm-flab">{t("Payment")}</div>
+                {draft.paymentStatus === "CHARGED" ? (
+                  <div className="sm-payrow" style={{ cursor: "default" }}>
+                    <span className={`sm-cbrand sm-cb-any`}>PAID</span>
+                    <span className="sm-pmeta"><b>{t("Charged")} {draft.paymentLast4 ? `•••• ${draft.paymentLast4}` : ""}</b></span>
+                    <span className="sm-pill sm-done"><i />{t("Charged")}</span>
+                  </div>
+                ) : (
+                  <>
+                    {cards.map((c) => {
+                      const chip = brandChip(c.brand);
+                      return (
+                        <div
+                          key={c.id}
+                          className={`sm-payrow${selCard === c.id ? " sm-sel" : ""}${c.chargeable ? "" : " sm-dim"}`}
+                          role="radio"
+                          aria-checked={selCard === c.id}
+                          tabIndex={0}
+                          onClick={() => c.chargeable && !readOnly && setSelCard(c.id)}
+                          onKeyDown={(e) => {
+                            if ((e.key === "Enter" || e.key === " ") && c.chargeable && !readOnly) {
+                              e.preventDefault();
+                              setSelCard(c.id);
+                            }
+                          }}
+                        >
+                          <span className="sm-pradio" />
+                          <span className={`sm-cbrand ${chip.cls}`}>{chip.label}</span>
+                          <span className="sm-pmeta">
+                            <b>•••• {c.last4 || "????"}</b>
+                            <span>
+                              {c.exp ? `${t("expires")} ${c.exp} · ` : ""}
+                              {c.chargeable ? t("card on file") : t("on the register — can't be charged from here")}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {cards.length === 0 && !addOpen ? (
+                      <div className="sm-nofile">💳 {t("No card on file for this account.")}</div>
+                    ) : null}
+                    {selCard && !readOnly ? (
+                      <label className="sm-chargebar">
+                        <input type="checkbox" checked={chargeOnPut} onChange={(e) => setChargeOnPut(e.target.checked)} />
+                        <span>
+                          {t("Charge this card when the order goes through —")} <b>{money(subtotal)}</b>
+                        </span>
+                      </label>
+                    ) : null}
+                    {!readOnly && !addOpen ? (
+                      solaConnected && ifieldsKey ? (
+                        <button type="button" className="sm-btn sm-quiet sm-addcardbtn" onClick={() => setAddOpen(true)}>
+                          {t("Add a card")}
+                        </button>
+                      ) : (
+                        <div className="sm-mut sm-paynote">{t("Sola isn't connected for this store yet — orders go through without charging.")}</div>
+                      )
+                    ) : null}
+                    {addOpen && ifieldsKey ? (
+                      <div className="sm-ifwrap">
+                        <CardknoxIFieldsForm
+                          ifieldsKey={ifieldsKey}
+                          variant="customer"
+                          showBillingAddress={false}
+                          showEmail={false}
+                          showPhone={false}
+                          enterAdvancesFocus
+                          hideSubmit
+                          tokenizeRef={tokenizeRef}
+                          onTokenizeError={(m) => setCardErr(m)}
+                          errorMessage={cardErr}
+                          secureNote={null}
+                          onSubmitCardToken={(p) => void saveNewCard(p)}
+                        />
+                        {cardErr ? <p className="sm-mut" role="alert">{cardErr}</p> : null}
+                        <div className="sm-actions" style={{ marginTop: ".5rem" }}>
+                          <button type="button" className="sm-btn sm-quiet" disabled={savingCard} onClick={() => { setAddOpen(false); setCardErr(null); }}>
+                            {t("Skip payment")}
+                          </button>
+                          <button type="button" className="sm-btn sm-primary" disabled={savingCard} onClick={() => tokenizeRef.current?.()}>
+                            {savingCard ? t("Securing…") : t("Save this card to their account")}
+                          </button>
+                        </div>
+                        <div className="sm-trust">
+                          <svg width="11" height="13" viewBox="0 0 11 13" fill="none" aria-hidden><path d="M5.5 0 11 2.4v3.4c0 3.2-2.3 6-5.5 7.2C2.3 11.8 0 9 0 5.8V2.4L5.5 0Z" fill="currentColor" /></svg>
+                          {t("Secured & powered by")} <b>Sola</b>
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null}
+
             {error ? <p className="sm-mut" role="alert">{error}</p> : null}
             {okMsg ? <p className="sm-mut" role="status">{okMsg}</p> : null}
 
@@ -720,7 +959,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
               <div className="sm-actions">
                 <button type="button" className="sm-btn sm-danger" disabled={busy} onClick={() => void dismiss()}>{t("Dismiss")}</button>
                 <button type="button" className="sm-btn sm-quiet" disabled={busy} onClick={() => void save()}>{t("Save for later")}</button>
-                <button type="button" className="sm-btn sm-primary" disabled={busy || items.length === 0} onClick={() => void putThrough()}>{t("Put order through")}</button>
+                <button type="button" className="sm-btn sm-primary" disabled={busy || items.length === 0} onClick={() => setConfirmOpen(true)}>{chargeOnPut && selCard && subtotal >= 50 ? `${t("Put order through & charge")} ${money(subtotal)}` : t("Put order through")}</button>
               </div>
             ) : (
               <div className="sm-actions">
@@ -730,6 +969,33 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
           </div>
         </div>
       </div>
+
+      {confirmOpen ? (
+        <div className="sm-confirm-scrim" role="dialog" aria-modal="true" onClick={() => setConfirmOpen(false)}>
+          <div className="sm-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="sm-confirm-t">{t("Sure you want to place this order?")}</div>
+            <div className="sm-confirm-d">
+              {items.length} {t("items")} · <b>{money(subtotal)}</b>
+              {chargeOnPut && selCard && subtotal >= 50 ? <> · {t("charging the card on file")}</> : null}
+            </div>
+            <div className="sm-actions">
+              <button type="button" className="sm-btn sm-quiet" onClick={() => setConfirmOpen(false)}>{t("Not yet")}</button>
+              <button
+                ref={confirmBtnRef}
+                type="button"
+                className="sm-btn sm-primary"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmOpen(false);
+                  void putThrough();
+                }}
+              >
+                {t("Place the order")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -38,6 +38,14 @@ export type CardknoxIFieldsFormProps = {
   errorMessage?: string | null;
   /** When true, omit the built-in submit button (parent triggers tokenization via `tokenizeRef`). */
   hideSubmit?: boolean;
+  /**
+   * Keyboard-first entry (the supermarket desk, Izzy 2026-08-26): Enter inside
+   * the card-number iframe moves to expiration, Enter inside the CVV iframe
+   * moves to the cardholder name, Enter on a native field submits as ever.
+   * Optional and OFF by default — the five existing payment surfaces are
+   * byte-identical without it.
+   */
+  enterAdvancesFocus?: boolean;
   formId?: string;
   onReadyChange?: (ready: boolean) => void;
   /** Parent calls `tokenizeRef.current?.()` to tokenize (e.g. admin drawer review step). */
@@ -85,6 +93,7 @@ export function CardknoxIFieldsForm({
   secureNote,
   errorMessage,
   hideSubmit = false,
+  enterAdvancesFocus = false,
   formId,
   onReadyChange,
   tokenizeRef,
@@ -360,10 +369,19 @@ export function CardknoxIFieldsForm({
             ref={cardFieldRef as any}
             account={account}
             type={CARD_TYPE}
-            options={{ ...ifieldOptions, placeholder: "Card number" }}
+            options={{ ...ifieldOptions, placeholder: "Card number", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }}
             onLoad={() => setIfieldsReady(true)}
             onToken={handleCardToken}
             onError={handleCardError}
+            {...(enterAdvancesFocus
+              ? {
+                  onSubmit: () => {
+                    // Enter inside the card iframe → the expiration picker
+                    const next = formRef.current?.querySelector<HTMLElement>(".billing-pay-row--expiration button, .billing-pay-row--expiration [tabindex]");
+                    next?.focus();
+                  },
+                }
+              : {})}
           />
         </span>
       </label>
@@ -373,10 +391,19 @@ export function CardknoxIFieldsForm({
           <IField
             account={account}
             type={CVV_TYPE}
-            options={{ ...ifieldOptions, placeholder: "CVV" }}
+            options={{ ...ifieldOptions, placeholder: "CVV", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }}
             onLoad={() => undefined}
             onToken={() => undefined}
             onError={() => undefined}
+            {...(enterAdvancesFocus
+              ? {
+                  onSubmit: () => {
+                    // Enter inside the CVV iframe → the cardholder name
+                    const next = formRef.current?.querySelector<HTMLElement>('input[name="cardholderName"]');
+                    next?.focus();
+                  },
+                }
+              : {})}
           />
         </span>
       </label>

@@ -7955,6 +7955,23 @@ model ComplianceItem {
 /// Synced copy of a supermarket tenant's register catalog (POS with Logic).
 /// Kept current by the credit-aware lastMod sweep — never queried live per
 /// keystroke; the Orders Desk quick-add searches THIS table.
+/// A card a rep saved for a POS customer through the tenant's OWN Sola
+/// iFields — the encrypted xToken, never a pan. Charged at order put-through.
+model SmCustomerCard {
+  id             String   @id @default(cuid())
+  tenantId       String
+  posCustomerId  String
+  tokenEnc       String
+  brand          String   @default("")
+  last4          String   @default("")
+  exp            String   @default("")
+  cardholderName String   @default("")
+  createdBy      String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, posCustomerId])
+}
+
 model PosCatalogItem {
   id             String   @id @default(cuid())
   tenantId       String
@@ -8026,6 +8043,12 @@ model SupermarketOrderDraft {
   /// The register's whole customer record (name/address/email + raw) — "once
   /// we find the account, it should bring in everything into the order".
   customerInfo  Json?
+  /// Charge result: CHARGED | DECLINED | UNKNOWN (Sola went silent). A
+  /// decline never blocks the order.
+  paymentStatus String?
+  paymentRef    String?
+  paymentLast4  String?
+  paymentAmountCents Int?
   /// Verbatim source text (Yiddish transcript or the text message body).
   transcript    String    @default("")
   /// English translation when one exists; "" otherwise.
