@@ -71,6 +71,74 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — the support desk blamed a router while the real packet loss was on a DIFFERENT extension, and the proof was already in our own database (2026-08-26) — READ FIRST before accepting ANY call-quality diagnosis, before proposing a NAT/SIP-ALG fix, or before telling a customer their internet is filtered
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRIMPRO_105_AUDIO_2026-08-26.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**)
+Memory: [[rtpstats-is-the-per-call-quality-data]].
+Escalation ref **Y6GQZ8**, Shia Weinstock ext 105, Trimpro (PBX tenant 11).
+
+- ⛔⛔ **`ConnectCdr.rtpStats` IS the per-call quality data, and the escalation researcher
+  does not know it exists.** Its report said in so many words *"There is no per-call
+  quality data tied to extension 105"* — while **14 of that extension's 48 calls carried
+  `rtpStats`, including the one that caused the complaint.** It had read only
+  `VoiceDiagEvent` (client self-reports, all filed against one user id — hence its honest
+  "I cannot prove these rows are Shia's" caveat), found it unattributable, then reasoned
+  from **call durations** and blamed the customer's router for SIP ALG / NAT.
+  **Query `rtpStats` before accepting any call-quality verdict.** It names the CHANNEL
+  (`PJSIP/T11_103-000037f8`), so it attributes loss to one ENDPOINT, not to an account.
+- ⛔⛔ **THE PER-ENDPOINT CENSUS IS THE WHOLE DIAGNOSTIC, and here it named a different
+  phone.** 7 days: **T11_103 — 49 legs, 7 at ≥5% loss, worst rx 49%; T11_105 — 14 legs,
+  ONE bad, and that one is the internal call it shared WITH 103**; T11_107 / T11_102 clean
+  on the same public IP. The five minutes before he complained: 103 outbound rx **37%**,
+  103 outbound rx **34%**, **103→105 internal rx 49% / tx 48%**, then the chat opens.
+  **The complainant's line was fine; the phone at the other end of his internal calls was
+  losing a third of its packets.** Ext 103 = "Shlomie folkowits", LAN **192.168.50.200**
+  (read from the contact's `call_id` — the documented private-address trick).
+- ⛔ **"11 answered calls were very short — the classic one-way-audio signature" did not
+  describe his calls.** All **17 incoming answered, none missed**, talk times
+  `9…1415 s`, thirteen over a minute, longest **23½ minutes**, exactly one under 15 s —
+  and every incoming call carrying RTP measured **0% loss both ways**, including one
+  **twelve minutes before he complained**. **Nobody stays on a line 23 minutes when they
+  cannot hear.** The short calls were in the OUTBOUND set, which is ordinary.
+- ⛔ **THREE OF THE FOUR PROPOSED PBX CHANGES WERE ALREADY TRUE.** Live
+  `pjsip show endpoint T11_105`: `rewrite_contact`, `rtp_symmetric`, `force_rport` all
+  **already `true`**; the codec pin was a no-op (every sampled leg already ran ulaw); and
+  `direct_media: true` is already suppressed by **`disable_direct_media_on_nat: true`**,
+  with the RTP counters proving media went through the PBX on the bad call anyway.
+  **Read the endpoint before proposing the standard NAT fix** — on this platform it is
+  usually already applied, so it cannot be the explanation for the symptom.
+- ⛔⛔ **"Ask the customer to sign out of the web app" is WRONG ADVICE and would cost him
+  his mobile.** `T11_105` (desk) and `T11_105_1` (app) are separate endpoints on separate
+  AORs — the normal shape for **every** extension here, `max_contacts=5`. They do not
+  "both take the call leg" and clip audio; one answers.
+- ⛔ **"They run filtered internet like most of our accounts" was an unsupported
+  generalisation.** `whois 69.118.75.72` → **Optimum Online, Hicksville NY** — an ordinary
+  ISP, not a filtering proxy. ✅ And the whois test is VALID here only because Trimpro is
+  **not** on the 443 route (`webrtcRouteViaSbc: false`) — check that flag first, or the
+  contact IP is loopcom and tells you nothing about the customer.
+- ⛔⛔ **HAD ANYONE ACTED ON IT, THE BLAST RADIUS WAS PLATFORM-WIDE.** These endpoints
+  inherit from template `(p1)`, so a per-endpoint override is **not durable** (a tenant
+  regen wipes it — the Landau Home opus case), and making the edit **through the VitalPBX
+  panel fires Apply Changes**, which regenerates every tenant with pending changes and
+  **wipes the Connect doorway** → dead air for A plus center / Connect Communications /
+  inii mini. Any endpoint edit here is a surgical conf edit + `module reload
+  res_pjsip.so`, or `applyAndRebake`.
+- ⛔ **Query traps that each produced a wrong answer first:** `ConnectCdr.direction` is
+  `incoming` / `outgoing` / `internal` — filtering on `"inbound"` returns **zero** and
+  reads like the customer has no incoming calls; `channelsSeen` is **Json, not a string
+  array** (`has:` throws); and there is **no `extension` column** on `ConnectCdr`.
+- ⚠ **Coverage caveat, to be stated rather than hidden:** `RtpStatsSampler` samples every
+  10 s over **active calls only**, so short calls carry no row (14 of 48 for ext 105).
+  Report a census as "of sampled legs", never "of all calls".
+- ✅ **What the answer actually is:** look at the ONE phone on ext 103 — its cable, switch
+  port, PoE or wifi. Nothing to change on the PBX, nothing on the router, nothing for the
+  customer to do. ⏳ **NOT PROVEN: nobody has touched that phone yet**, and no follow-up
+  call has been made to Shia.
+- ⏳ **The durable fix is to give the escalation researcher `rtpStats`** — `investigate`
+  can read it today and the researcher simply does not know to. Until then this class of
+  report will keep pointing at NAT.
+
 ## ⛔⛔ AGENT HANDOFF — CRM SUPERMARKET MODE is BUILT END TO END (phases 0–7, the Gesheft plan) and is INERT until a tenant is switched on (2026-08-26) — READ FIRST before touching apps/api/src/supermarket, the /orders portal screens, ProviderCredential, Tenant.crmMode, or before believing any POS integration is live
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SUPERMARKET_MODE_2026-08-26.md`**
