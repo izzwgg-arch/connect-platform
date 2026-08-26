@@ -74,7 +74,6 @@ const settingsPutSchema = z.object({
   maxCallSeconds: z.number().int().min(60).max(3600).optional(),
   maxConcurrentCalls: z.number().int().min(1).max(32).optional(),
   monthlyMinuteCap: z.number().int().min(0).max(1_000_000).optional(),
-  storeName: z.string().max(120).optional(),
   openAiKey: z.string().min(8).max(512).optional(),
 });
 
@@ -176,7 +175,10 @@ export function registerVoiceAgentRoutes(app: any, deps: VoiceAgentRouteDeps): v
     const tenant = await db.tenant
       .findUnique({ where: { id: tenantId }, select: { name: true } })
       .catch(() => null);
-    const storeName = String(settingsRow?.storeName || tenant?.name || "the store");
+    // The store's own name for the AI to use. VoiceAgentSettings has no
+    // storeName column (kept off the shared schema); the tenant name is the
+    // source, and the greeting/instructionsExtra carry any nicer wording.
+    const storeName = String(tenant?.name || "the store");
 
     return reply.send({
       ok: true,

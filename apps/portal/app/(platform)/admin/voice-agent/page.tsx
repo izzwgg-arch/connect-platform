@@ -30,7 +30,6 @@ type Settings = {
   maxCallSeconds: number;
   maxConcurrentCalls: number;
   monthlyMinuteCap: number;
-  storeName?: string;
 } | null;
 
 type CallRow = {
@@ -85,7 +84,6 @@ const DEFAULTS = {
   maxCallSeconds: 600,
   maxConcurrentCalls: 4,
   monthlyMinuteCap: 3000,
-  storeName: "",
 };
 
 export default function VoiceAgentAdminPage() {
@@ -147,7 +145,6 @@ export default function VoiceAgentAdminPage() {
         maxCallSeconds: Number(form.maxCallSeconds),
         maxConcurrentCalls: Number(form.maxConcurrentCalls),
         monthlyMinuteCap: Number(form.monthlyMinuteCap),
-        storeName: form.storeName,
       });
       setNotice("Saved.");
       setDirty(false);
@@ -235,15 +232,9 @@ export default function VoiceAgentAdminPage() {
                   </span>
                 </label>
 
-                <div className="va-grid">
-                  <div className="va-field">
-                    <label className="va-lbl">Store name (how the AI refers to the store)</label>
-                    <input className="va-input" value={form.storeName} onChange={(e) => set("storeName", e.target.value)} placeholder="e.g. Gesheft Kosher" />
-                  </div>
-                  <div className="va-field">
-                    <label className="va-lbl">Voice</label>
-                    <ConnectSelect value={form.voice} onChange={(v) => set("voice", v)} options={VOICES} ariaLabel="Voice" />
-                  </div>
+                <div className="va-field">
+                  <label className="va-lbl">Voice</label>
+                  <ConnectSelect value={form.voice} onChange={(v) => set("voice", v)} options={VOICES} ariaLabel="Voice" />
                 </div>
 
                 <div className="va-field">
