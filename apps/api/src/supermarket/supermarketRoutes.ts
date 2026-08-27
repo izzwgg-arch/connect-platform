@@ -38,6 +38,7 @@ import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase, retireLesson, restoreLesson } from "./phraseTeaching";
 import { applyRuleEdit, rollbackRule, MAX_RULE_CHARS } from "./agentRules";
 import { catalogCodePrefix, catalogSearchWheres, inStockFirst, rankCatalogRows } from "./catalogSearch";
+import { knownCustomerPhones, resolveCustomerPhone } from "./customerPhoneMatch";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
@@ -405,19 +406,31 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   const reprocessOneDraft = async (
     tenantId: string,
     index: Awaited<ReturnType<typeof loadCatalogIndex>>,
-    draft: { id: string; sourceType: string; sourceId: string; transcript: unknown; translation: unknown; customerPhone: unknown },
+    draft: { id: string; sourceType: string; sourceId: string; transcript: unknown; translation: unknown; customerPhone: unknown; threadId?: string | null },
   ): Promise<any> => {
     try {
       let text = String(draft.transcript ?? "");
       let localAudioPath: string | null = null;
+      // ⛔ the ORIGINAL caller ID, not the stored customerPhone — the stored
+      // one may already BE the mis-heard number we are trying to correct
+      let callerId = "";
       if (draft.sourceType === "voicemail") {
         const vm = await db.voicemail
-          .findUnique({ where: { id: draft.sourceId }, select: { transcript: true, localAudioPath: true } })
+          .findUnique({ where: { id: draft.sourceId }, select: { transcript: true, localAudioPath: true, callerNumber: true } })
           .catch(() => null);
         if (vm) {
           text = String(vm.transcript ?? "") || text;
           localAudioPath = vm.localAudioPath ?? null;
+          callerId = String(vm.callerNumber ?? "");
         }
+      } else if (draft.sourceType === "text" && (draft as any).threadId) {
+        // ⛔ SupermarketOrderDraft has a bare `threadId` and NO `thread`
+        // relation — a nested select here throws and a .catch() would hide it
+        // (the documented (db as any) transposition trap). Read the thread.
+        const th = await db.connectChatThread
+          .findUnique({ where: { id: String((draft as any).threadId) }, select: { externalSmsE164: true } })
+          .catch(() => null);
+        callerId = String(th?.externalSmsE164 ?? "");
       }
       // a draft that already carries YL's translation reuses it — the brain
       // re-runs, YL is never re-billed for the same audio
@@ -430,14 +443,22 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         customerPhone: String(draft.customerPhone ?? "") || undefined,
         ...(storedTranslation ? { preTranslated: { transcript: String(draft.transcript ?? ""), translation: storedTranslation } } : {}),
       });
-      // the customer SPOKE their account number → re-run the POS lookup on it
+      // the customer SPOKE their account number → reconcile it against the
+      // number they called from and our own past customers, then re-run the
+      // POS lookup on the winner (a transcription slips a digit — Izzy)
       let customerFields: any = {};
-      if (content.statedPhone) {
-        customerFields.customerPhone = content.statedPhone;
+      const phoneMatch = resolveCustomerPhone({
+        spoken: content.statedPhone,
+        callerId: callerId || String(draft.customerPhone ?? ""),
+        known: await knownCustomerPhones(db, tenantId),
+      });
+      customerFields.phoneMatch = phoneMatch as any;
+      if (phoneMatch.phone) {
+        customerFields.customerPhone = phoneMatch.phone;
         try {
           const client = await posClientForTenant(db, tenantId);
           if (client) {
-            const body: any = await client.getCustomerByPhone(posPhoneDigits(content.statedPhone) ?? content.statedPhone);
+            const body: any = await client.getCustomerByPhone(phoneMatch.phone);
             const ext = extractPosCustomer(body);
             if (ext?.posCustomerId) {
               customerFields.posCustomerId = ext.posCustomerId;
@@ -508,7 +529,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         status: "NEEDS_REVIEW",
         ...(parsed.data.draftIds?.length ? { id: { in: parsed.data.draftIds } } : {}),
       },
-      select: { id: true, sourceType: true, sourceId: true, transcript: true, translation: true, customerPhone: true },
+      select: { id: true, sourceType: true, sourceId: true, transcript: true, translation: true, customerPhone: true, threadId: true },
       orderBy: { createdAt: "desc" },
       take: parsed.data.limit,
     });
@@ -779,6 +800,11 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         return reply.status(400).send({ error: "bad_phone", message: "That doesn't look like a phone number — 7 or 10 digits." });
       }
       data.customerPhone = phone10;
+      // ⛔ A HUMAN typing/confirming the number IS the resolution — settle any
+      // "corrected"/"ambiguous" verdict so the desk stops asking. Without
+      // this the confirmation banner never clears and the rep is nagged about
+      // a number they just decided.
+      data.phoneMatch = { phone: phone10, confidence: "stated" };
       // the phone IS the account: look the customer up on the register and
       // bring in EVERYTHING the record holds (name, address, email).
       data.posCustomerId = null;

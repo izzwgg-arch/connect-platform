@@ -21,6 +21,7 @@ import { posClientForTenant } from "./integrationCredentials";
 import { extractPosCustomer, posPhoneDigits } from "./posWithLogic";
 import { prepareOrderText } from "./orderYiddish";
 import { runOrderBrain } from "./orderBrain";
+import { knownCustomerPhones, resolveCustomerPhone } from "./customerPhoneMatch";
 
 export const DRAFT_BUILDER_DEFAULT_INTERVAL_MS = 2 * 60 * 1000;
 export const DRAFT_BUILDER_BOOT_DELAY_MS = 4 * 60 * 1000;
@@ -200,6 +201,9 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
     const index = await loadCatalogIndex(db, tenant.id);
     const client = await clientFor(db, tenant.id).catch(() => null);
     const customerCache = new Map<string, PosCustomerHit>();
+    // the numbers this store has actually served — read ONCE per tenant per
+    // sweep, not per draft
+    const knownPhones = await knownCustomerPhones(db, tenant.id);
 
     // ⛔ Exclude already-drafted sources IN THE QUERY, not just per-row. The
     // per-row dedupe alone stalls a busy store forever: with more than
@@ -251,8 +255,15 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
         customerPhone: String(vm.callerNumber ?? ""),
       });
       // ⛔ the account IS the phone number (Izzy) — the number the customer
-      // SPOKE in the message beats caller ID for the account lookup.
-      const accountPhone = content.statedPhone || String(vm.callerNumber ?? "");
+      // SPOKE beats caller ID, but a transcription slips a digit ("783" heard
+      // as "780"), so the spoken number is reconciled against the number they
+      // CALLED FROM and against customers we have served before.
+      const phoneMatch = resolveCustomerPhone({
+        spoken: content.statedPhone,
+        callerId: String(vm.callerNumber ?? ""),
+        known: knownPhones,
+      });
+      const accountPhone = phoneMatch.phone;
       const customer = await lookupCustomer(client, customerCache, accountPhone);
       try {
         await db.supermarketOrderDraft.create({
@@ -270,6 +281,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             items: content.items,
             agentItems: content.items,
             agentLines: content.lines ?? undefined,
+            phoneMatch: phoneMatch as any,
             comments: content.comments,
             notes: content.notes,
           },
@@ -314,7 +326,10 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
       if (existing) continue;
       const phone = String(msg.thread?.externalSmsE164 ?? "");
       const content = await composeDraftContent(deps, tenant.id, index, { kind: "text", text, customerPhone: phone });
-      const accountPhone = content.statedPhone || phone;
+      // same reconciliation as the voicemail path — the number they texted
+      // FROM is this path's hard evidence
+      const phoneMatch = resolveCustomerPhone({ spoken: content.statedPhone, callerId: phone, known: knownPhones });
+      const accountPhone = phoneMatch.phone;
       const customer = await lookupCustomer(client, customerCache, accountPhone);
       try {
         await db.supermarketOrderDraft.create({
@@ -333,6 +348,7 @@ async function sweepInner(deps: DraftBuilderDeps): Promise<{ drafts: number }> {
             items: content.items,
             agentItems: content.items,
             agentLines: content.lines ?? undefined,
+            phoneMatch: phoneMatch as any,
             comments: content.comments,
             notes: content.notes,
           },

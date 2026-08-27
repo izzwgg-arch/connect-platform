@@ -89,6 +89,8 @@ export const SM_ORDERS_PHRASES = [
   "Right? Click to confirm — the agent learns it", "that's right", "Confirms the pick and teaches the agent",
   "Change", "Pick the item", "Set the right item — the agent learns it",
   "Click to set the right item — the agent learns it", "Add this instead — a one-off, not taught",
+  "Please confirm the phone number.", "Use this number", "Use what they said", "keep",
+  "from the number they called from",
 ] as string[];
 
 type DraftRow = {
@@ -116,7 +118,16 @@ type DraftRow = {
   paymentLast4?: string | null;
   paymentAmountCents?: number | null;
   /** the extracted item list with per-line in-cart/skipped outcome */
+  /** the extracted item list with per-line in-cart/skipped outcome */
   agentLines?: AskLine[] | null;
+  /** how customerPhone was arrived at — "corrected"/"ambiguous" need a human */
+  phoneMatch?: {
+    phone: string;
+    confidence: "stated" | "caller_id" | "corrected" | "ambiguous" | "unknown";
+    heard?: string;
+    candidates?: string[];
+    note?: string;
+  } | null;
 };
 
 type DraftItem = {
@@ -749,8 +760,10 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     [draft?.posCustomerId],
   );
 
-  const lookupPhone = useCallback(async () => {
-    const typed = phoneEdit.trim();
+  const lookupPhone = useCallback(async (override?: string) => {
+    // the phone-confirmation banner passes the number to use explicitly —
+    // setPhoneEdit is async, so reading state here would use the old value
+    const typed = (override ?? phoneEdit).trim();
     if (!typed || !draft) return;
     setPhoneBusy(true);
     try {
@@ -1312,6 +1325,46 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                 {phoneBusy ? <span className="sm-sku">{t("Looking up…")}</span> : draft.posCustomerId ? <b>Acct {draft.posCustomerId}</b> : null}
                 {/WIC/i.test(comments) ? <span className="sm-pill sm-wic"><i />{t("WIC mentioned")}</span> : null}
               </div>
+              {/* ⛔ A corrected or ambiguous number is NEVER silently trusted:
+                  an account carries cards on file, so binding the wrong one can
+                  charge the wrong person (Izzy, 2026-08-27). */}
+              {!readOnly && (draft.phoneMatch?.confidence === "corrected" || draft.phoneMatch?.confidence === "ambiguous") ? (
+                <div className="sm-askline sm-askline--unsure" style={{ borderRadius: 8, padding: ".45rem .6rem" }}>
+                  <span className="sm-askmark" aria-hidden>?</span>
+                  <span className="sm-askbody">
+                    <span>{draft.phoneMatch.note ?? t("Please confirm the phone number.")}</span>
+                    <span className="sm-asksugg">
+                      {(draft.phoneMatch.candidates ?? []).slice(0, 5).map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          className="sm-asschip"
+                          title={t("Use this number")}
+                          onClick={() => {
+                            setPhoneEdit(c);
+                            void lookupPhone(c);
+                          }}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                      {draft.phoneMatch.heard && !(draft.phoneMatch.candidates ?? []).includes(draft.phoneMatch.heard) ? (
+                        <button
+                          type="button"
+                          className="sm-asschip"
+                          title={t("Use what they said")}
+                          onClick={() => {
+                            setPhoneEdit(draft.phoneMatch!.heard!);
+                            void lookupPhone(draft.phoneMatch!.heard!);
+                          }}
+                        >
+                          {t("keep")} {draft.phoneMatch.heard}
+                        </button>
+                      ) : null}
+                    </span>
+                  </span>
+                </div>
+              ) : null}
               {draft.posCustomerId && (draft.customerName || draft.customerInfo) ? (
                 <div className="sm-sku" style={{ lineHeight: 1.5 }}>
                   {draft.customerName ? <b style={{ color: "inherit" }}>{draft.customerName}</b> : null}

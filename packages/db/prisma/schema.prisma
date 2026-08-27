@@ -8074,6 +8074,14 @@ model SupermarketOrderDraft {
   /// it's in the cart or not." [{ phrase, qty, constraints?, outcome:
   /// "in_cart"|"unsure"|"skipped", posProductId?, name?, reason? }]
   agentLines    Json?
+  /// How `customerPhone` was arrived at (Izzy 2026-08-27: "sometimes they
+  /// don't speak too clearly… the system searches for the closest match.
+  /// Obviously, check the number they're calling from as well").
+  /// { phone, confidence: "stated"|"caller_id"|"corrected"|"ambiguous"|
+  /// "unknown", heard?, candidates?, note? }
+  /// ⛔ "corrected" and "ambiguous" mean a REP MUST CONFIRM before the order
+  /// is bound to that account — an account carries cards on file.
+  phoneMatch    Json?
   /// Computed agent-vs-approved diff, written at approval (correction capture).
   corrections   Json?
   /// "Pickup" | "Delivery" — Delivery feeds the delivery tracker after submit.
