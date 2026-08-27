@@ -28,7 +28,10 @@ const fakeDb: any = {
   agentEscalation: {
     findFirst: async ({ where }: any) =>
       state.escalations.find((e) => e.requestSummary.startsWith(where.requestSummary.startsWith) && ["QUEUED", "SENT"].includes(e.status)) || null,
-    create: async ({ data }: any) => { state.escalations.push(data); return data; },
+    // ⛔ Prisma stamps `createdAt` via @default(now()); the fake must too, or a
+    // guard that reads it (the time-bounded de-dupe) is exercised against a shape
+    // production never produces.
+    create: async ({ data }: any) => { const row = { createdAt: new Date(), ...data }; state.escalations.push(row); return row; },
   },
   emailJob: {
     findFirst: async ({ where, orderBy }: any) => {

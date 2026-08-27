@@ -126,20 +126,61 @@ export const ALARM_PREFIX = {
   recipientsLost: "Voicemail email addresses disappeared",
   outboxStalled: "Email outbox is not sending",
   outboxFailing: "Emails are failing to send",
+  blindMailbox: "A voicemail mailbox has nobody to email",
 } as const;
 
 /**
- * Raise once. De-duplicated on an OPEN escalation whose summary starts with the
- * same key. Returns true when a new escalation was written.
+ * ⛔⛔ THE DE-DUPE MUST BE TIME-BOUNDED, AND THIS CONSTANT IS THE WHOLE REASON.
+ *
+ * This used to suppress on ANY open escalation with the same key, with no time
+ * bound — and `AgentEscalationStatus` has no RESOLVED value, so a delivered
+ * alarm ends at SENT and NOTHING ever moves it. The effect was that **each of
+ * the six keys below could fire exactly ONCE, EVER**, and one was already burned
+ * (`Voicemail email watchdog has stopped`, 2026-08-21). If the sweep died today
+ * the alarm would fire; if it died again next month it would be silent — for a
+ * pipeline whose entire requirement is "an email must never silently fail to go
+ * out". Found 2026-08-27 auditing a week of voicemail email.
+ *
+ * ⛔ Six hours restores the STATED intent — "a persistent fault texts once, not
+ * every tick" — while letting a fault that recurs weeks later be heard again.
+ * The sibling `voicemailMailboxGuardrail` already uses a 24 h window for exactly
+ * this reason. ⛔ Do NOT go back to an unbounded de-dupe, and do NOT drop this to
+ * minutes: a guard that texts through the night is muted by the human, which is
+ * the same as having no guard.
  */
-export async function raiseGuardrailEscalation(alarm: GuardrailAlarm, log?: Log, database: any = db): Promise<boolean> {
+export const ESCALATION_REDUPE_WINDOW_MS = 6 * 60 * 60_000;
+
+/** Pure: should this alarm be suppressed by an existing one? */
+export function decideEscalationSuppressed(input: {
+  existingCreatedAt: Date | null;
+  now: Date;
+  windowMs?: number;
+}): boolean {
+  if (!input.existingCreatedAt) return false;
+  const age = input.now.getTime() - input.existingCreatedAt.getTime();
+  // ⛔ A future-dated row (clock skew) must not suppress forever.
+  if (age < 0) return false;
+  return age < (input.windowMs ?? ESCALATION_REDUPE_WINDOW_MS);
+}
+
+/**
+ * Raise, de-duplicated on a RECENT open escalation with the same key prefix.
+ * Returns true when a new escalation was written.
+ */
+export async function raiseGuardrailEscalation(
+  alarm: GuardrailAlarm,
+  log?: Log,
+  database: any = db,
+  now: Date = new Date(),
+): Promise<boolean> {
   try {
     const open = await database.agentEscalation.findFirst({
       where: { requestSummary: { startsWith: alarm.key }, status: { in: ["QUEUED", "SENT"] } },
-      select: { id: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, createdAt: true },
     });
-    if (open) {
-      log?.info({ existing: open.id, key: alarm.key }, "email-guardrail: already escalated, not re-alerting");
+    if (open && decideEscalationSuppressed({ existingCreatedAt: open.createdAt ?? null, now })) {
+      log?.info({ existing: open.id, key: alarm.key }, "email-guardrail: already escalated recently, not re-alerting");
       return false;
     }
     await database.agentEscalation.create({
@@ -550,6 +591,125 @@ export async function requeueDeadVoicemailEmails(log: Log, database: any = db, n
 // ─── Wiring ──────────────────────────────────────────────────────────────────
 
 /** Start the standalone timers (liveness, recipient coverage, outbox health). */
+// ─── Guard 7: a mailbox that has just gone blind ─────────────────────────────
+
+export const BLIND_MAILBOX_EVENT = "voicemail_email.blind_mailboxes";
+export const BLIND_MAILBOX_INTERVAL_MS = 60 * 60_000;
+export const BLIND_MAILBOX_WINDOW_MS = 7 * 24 * 3600_000;
+
+/**
+ * ⛔⛔ WHY THIS EXISTS, AND WHY IT IS EDGE-TRIGGERED RATHER THAN A NAG.
+ *
+ * `no_recipient` — a real voicemail that reached NOBODY because the mailbox has
+ * no address — is deliberately filtered out of the watchdog's alarm
+ * (`gapsWorthAlerting`), because it is a standing condition and paging about it
+ * every 15 minutes is how an alarm gets muted. The cost of that is total
+ * silence: over the week to 2026-08-27 FIFTEEN voicemails reached nobody across
+ * five mailboxes, and **three of those mailboxes were new that week** (B Visible
+ * 105, B Visible 106, Create A Box 105) with nothing anywhere announcing it. One
+ * was a 3 m 42 s message — a caller does not talk for four minutes to leave
+ * nothing.
+ *
+ * So: alarm ONCE when a mailbox JOINS the blind set, never for one that was
+ * already in it. The set lives in `AgentAuditLog` because the api restarts
+ * dozens of times a day. A mailbox drops out of the set by itself once it stops
+ * producing `no_recipient` voicemails inside the window, so fixing the address
+ * re-arms it — if it ever goes blind again, that is genuinely new and is heard.
+ */
+export function decideNewlyBlindMailboxes(input: {
+  previous: string[] | null;
+  current: string[];
+}): { firstRun: boolean; newly: string[] } {
+  // ⛔ FIRST RUN IS A BASELINE, NEVER AN ALARM. Without this the very first pass
+  // after deploy pages about every mailbox that is already blind — a
+  // back-catalogue burst for a condition that is already written down and
+  // already has an owner. Same reasoning as the payment-alert cutover.
+  if (input.previous == null) return { firstRun: true, newly: [] };
+  const before = new Set(input.previous);
+  return { firstRun: false, newly: input.current.filter((k) => !before.has(k)) };
+}
+
+export async function runBlindMailboxCheck(
+  log: Log,
+  database: any = db,
+  now: Date = new Date(),
+): Promise<{ current: string[]; newly: string[] } | null> {
+  if (!voicemailEmailEnabled()) return null;
+  try {
+    const excluded = Array.from(voicemailEmailExcludedTenantIds());
+    const rows = await database.voicemail.findMany({
+      where: {
+        receivedAt: { gte: new Date(now.getTime() - BLIND_MAILBOX_WINDOW_MS) },
+        deletedAt: null,
+        emailSkipReason: "no_recipient",
+        ...(excluded.length ? { tenantId: { not: null, notIn: excluded } } : { tenantId: { not: null } }),
+      },
+      select: { tenantId: true, extension: true, durationSec: true },
+      take: 2000,
+    });
+
+    const byKey = new Map<string, { tenantId: string; extension: string; count: number; longest: number }>();
+    for (const r of rows) {
+      const key = `${r.tenantId}:${r.extension}`;
+      const cur = byKey.get(key) || { tenantId: r.tenantId, extension: r.extension, count: 0, longest: 0 };
+      cur.count += 1;
+      cur.longest = Math.max(cur.longest, Number(r.durationSec ?? 0));
+      byKey.set(key, cur);
+    }
+    const current = Array.from(byKey.keys()).sort();
+
+    const last = await database.agentAuditLog.findFirst({
+      where: { event: BLIND_MAILBOX_EVENT },
+      orderBy: { ts: "desc" },
+      select: { payload: true },
+    });
+    const previous: string[] | null = Array.isArray(last?.payload?.mailboxes) ? last.payload.mailboxes : null;
+    const verdict = decideNewlyBlindMailboxes({ previous, current });
+
+    if (verdict.newly.length > 0) {
+      const tenantIds = Array.from(new Set(verdict.newly.map((k) => k.split(":")[0])));
+      const tenants = await database.tenant.findMany({
+        where: { id: { in: tenantIds } },
+        select: { id: true, name: true },
+      });
+      const nameById = new Map<string, string>(tenants.map((t: any) => [t.id, t.name || t.id]));
+      const lines = verdict.newly.map((k) => {
+        const d = byKey.get(k)!;
+        return `${nameById.get(d.tenantId) || d.tenantId} ext ${d.extension} — ${d.count} voicemail${d.count === 1 ? "" : "s"} reached nobody (longest ${d.longest}s)`;
+      });
+      const first = verdict.newly[0];
+      const firstLabel = `${nameById.get(first.split(":")[0]) || first.split(":")[0]} ext ${first.split(":")[1]}`;
+      await raiseGuardrailEscalation(
+        {
+          key: ALARM_PREFIX.blindMailbox,
+          summary: `${ALARM_PREFIX.blindMailbox} — ${firstLabel}${verdict.newly.length > 1 ? ` and ${verdict.newly.length - 1} more` : ""}`,
+          sms: `Loopcom: ${firstLabel} took a voicemail and there is no email address on that mailbox, so nobody was told.${verdict.newly.length > 1 ? ` +${verdict.newly.length - 1} more.` : ""}`,
+          report: `These mailboxes took a voicemail in the last 7 days and had nobody to send it to:\n\n${lines.join("\n")}`,
+          fix: "Add an email address for each mailbox in Settings -> voicemail email. Until then every voicemail left on them reaches nobody. Do NOT substitute the owner's login email — on several extensions the two are different people.",
+        },
+        log,
+        database,
+        now,
+      );
+      log.warn({ newly: verdict.newly }, "voicemail-email: mailbox(es) newly reaching nobody");
+    }
+
+    // ⛔ Recorded on EVERY run, including a clean one — the row IS the state, and
+    // a run that writes nothing leaves the next run unable to tell new from old.
+    await database.agentAuditLog.create({
+      data: auditRow(BLIND_MAILBOX_EVENT, {
+        mailboxes: current,
+        newly: verdict.newly,
+        firstRun: verdict.firstRun,
+      }),
+    });
+    return { current, newly: verdict.newly };
+  } catch (err) {
+    log.warn({ err: (err as Error)?.message }, "voicemail-email: blind-mailbox check failed");
+    return null;
+  }
+}
+
 export function startEmailGuardrails(log: Log): NodeJS.Timeout[] {
   const timers: NodeJS.Timeout[] = [];
   // setTimeout/setInterval type as `number` under this tsconfig (pre-existing
@@ -564,5 +724,10 @@ export function startEmailGuardrails(log: Log): NodeJS.Timeout[] {
   // Outbox: 2 min after boot, then every 5 min.
   add(setTimeout(() => { void runOutboxHealthCheck(log); }, 2 * 60_000));
   add(setInterval(() => { void runOutboxHealthCheck(log); }, OUTBOX_CHECK_INTERVAL_MS));
+  // ⛔ Blind mailboxes: 4 min after boot AND hourly. The boot kick is mandatory
+  // beside the interval — a bare setInterval is starved to nothing on a busy
+  // deploy day (the watchdog's 67 silent minutes, 2026-08-21).
+  add(setTimeout(() => { void runBlindMailboxCheck(log); }, 4 * 60_000));
+  add(setInterval(() => { void runBlindMailboxCheck(log); }, BLIND_MAILBOX_INTERVAL_MS));
   return timers;
 }
