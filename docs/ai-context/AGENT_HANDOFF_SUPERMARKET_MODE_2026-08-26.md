@@ -702,3 +702,120 @@ array may not. `doReplace` moved below its dependencies.
 Teaching is centralised in `teachLine` (all four gestures route through it),
 and the source guard now pins that the Change control is **NOT** gated on the
 line being skipped — that gating IS the bug that shipped.
+
+### §14b — the desk search could not find most of the catalog (2026-08-27, `b76f53ca`)
+
+Izzy: *"is there a Golden Flow orange juice?"* — there are six — then twice:
+*"a lot of items don't come up in the suggestions. Every item should come up."*
+
+⛔⛔ **`GET /supermarket/catalog/search` was
+`name: { contains: <the whole typed string> }` — ONE substring, NAME ONLY.**
+So any phrase whose words span the name and the brand, or simply are not
+adjacent inside the name, matched nothing. Measured on the live catalog:
+`"golden flow orange juice"` → **0** (Golden Flow is the BRAND column),
+`"balabusta rice"` → **0**, `"eggland eggs"` → **0**.
+
+⛔ **The BRAIN had searched name-OR-brand across stemmed tokens since
+`5f318d52`.** So the rep's own box was strictly *dumber* than the agent's —
+exactly backwards, since the rep is there to correct the agent. The rule now
+lives once, in **`catalogSearch.ts`**, used by both.
+
+⛔⛔ **RECALL FROM SQL, PRECISION FROM RANKING — and skipping the second half
+is a trap.** The SQL match is `contains`, a bare substring, so the token
+`"red"` also matches `"Cove**red**"`. Typing **"milk red" really did return
+chocolate-covered crackers above Golden Flow's "Milk Red"** (measured, not
+theorised). `rankCatalogRows` scores a **whole-word** hit (`\bred`) far above
+a substring, bonuses an all-tokens match and an intact phrase, and slightly
+prefers the shorter (more exact) name.
+
+⛔ **Relevance outranks stock, deliberately.** Izzy's in-stock-first rule
+(2026-08-26) is for choosing between *comparable* products; applied across
+relevance groups it buries the exact item someone just typed under an
+in-stock item sharing one syllable. Stock breaks ties *within* a relevance
+group, and nothing is ever hidden.
+
+✅ **Brand and size are now selected and shown** in all three suggestion lists
+(desk quick-add, the replace box, the teach page) — half this catalog is told
+apart ONLY by brand and ounces (four sizes of "Milk Red"), so a list without
+them cannot be picked from. Desk limit 8 → **12**; the brain stays at 8
+because it pays prompt tokens per candidate and a human does not.
+
+Proven through the DEPLOYED route: `"golden flow orange juice"` → 12, all
+Golden Flow OJ; `"milk red"` leads with Milk Red; `"balabusta rice"` → all
+Balabusta rice.
+
+⚠️ **Not the search's fault, found while testing:** there is **no "Gold's"
+brand in this catalog at all** (the documented "Gold's pads" failure), and the
+register carries typo'd brands — *Goldem Taste*, *Golden Tatse*, *Gold Nit*
+beside *Gold Nut*. Brand-exact matching will miss those.
+
+### §14c — a mis-heard account number (2026-08-27, `e34c673a`)
+
+Izzy: *"most numbers start with 845-783, 845-782, 845-774, 845-238, 845-662,
+and 718… sometimes they don't speak too clearly, so they'd say 'it's 783' and
+the system picks it up as 780. The system searches for the closest match.
+Obviously, check the number they're calling from as well."*
+
+`customerPhoneMatch.ts` reconciles the SPOKEN number against two sources, in
+order of trust:
+1. **the number the call/text physically came FROM** — hard evidence;
+2. **customers this store has actually served** — our own SUBMITTED orders.
+   ⛔ SUBMITTED only: an un-submitted draft may carry the very mis-hearing
+   this exists to correct, and feeding those back teaches the mistake.
+
+Damerau-Levenshtein at distance **1**, so a transposition ("783" heard as
+"738") counts as the single slip it is. ⛔ Distance 1 and 10 digits only — at
+distance 2 the candidate space explodes and "closest match" starts inventing
+customers.
+
+⛔⛔ **THE SAFETY RULE THAT SHAPES ALL OF IT: an account carries CARDS ON FILE
+and a house balance, so binding the wrong one can charge the wrong person.**
+Only an exact agreement is `stated`. A one-digit fix is `corrected`; several
+equally-close customers is `ambiguous` and picks **NOTHING**. Both raise a
+confirm banner on the desk with the candidates as one-click chips (plus "keep
+what they said"), and a human typing or confirming a number **settles the
+verdict server-side** so the banner clears and the rep is not nagged again.
+
+Wired into BOTH draft paths and the re-run; a guard counts both, because
+doing one of two creation paths is this repo's recurring half-fix shape.
+⛔ **Caught while wiring: `SupermarketOrderDraft` has a bare `threadId` and NO
+`thread` relation** — the text path's nested select would have thrown into a
+`.catch()` and silently produced no caller ID (the `(db as any)`
+transposition trap). It reads `connectChatThread` directly, and a guard
+forbids the nested select.
+
+Measured live: 440 drafts, 208 distinct customer numbers, top prefixes
+845-783 (36) / 782 (26) / 492 (22) / 774 (19) / 248 (13) — exactly the local
+ones. ⛔ **0 drafts have EVER resolved a `posCustomerId`**, because the POS key
+is still scoped `customer:get` = "own". This works regardless: it matches
+against caller ID and our own history, neither of which needs the POS.
+
+### §14d — PHOTOS: the barcode route does NOT work for this catalog
+
+Izzy: *"on every item that doesn't have a photo, you can search the internet…
+it has to be the exact brand, exact ounce, exact item."*
+
+Coverage today: **4,540 of 19,259 active items (23.6%)** carry a photo, from
+the 2026-08-26 harvest of Gesheft's own Self-Point webstore. **12,962** of the
+photo-less items carry a real 12–13 digit barcode.
+
+A barcode IS "exact brand, exact ounce, exact item" by construction, so it
+looked like the answer. ⛔ **It is not — measured, and the first measurement
+was misleading.** A hand-picked sample of 10 recognisable brands hit **3/10**
+on Open Food Facts; a **random sample of 60** photo-less barcodes, probed
+against Open Food Facts, Open Beauty Facts AND Open Products Facts, returned
+**0 usable images**. These are kosher-specialty brands (Paskesz, Unger's,
+Mechel's, Yitzy's, Balabusta, Gesheft's own label) that the open databases do
+not carry; one barcode even resolved to a record with no photo at all.
+
+⛔ **Do NOT fall back to free-text web image search.** It cannot satisfy
+"exact brand, exact ounce, exact item", and the 2026-08-26 pass already set
+the standard: 114 ambiguous matches were skipped because *a wrong photo is
+worse than none*. A wrong photo on an order line is a picking error.
+
+✅ **The route that is exact and already proven is their OWN webstore.** The
+first harvest used the per-CATEGORY list endpoint (the flat products list
+403s) and **their default filter HIDES out-of-stock items** — so a re-harvest
+that walks categories with the out-of-stock filter cleared is the highest-value
+next pass, and every photo it returns is the store's own product image.
+⏳ Not done; it needs a browser session against their webstore.

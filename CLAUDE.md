@@ -566,6 +566,77 @@ just change it right there on the spot."* Memory: [[supermarket-training-loop-bu
   blocking a draft); portal 372/374 (the two documented pre-existing); api
   typecheck 76 = the exact baseline; portal 0. The three orderPipeline source
   guards were repointed at the refactored structure (`reprocessOneDraft`).
+- ⛔⛔ **THE DESK SEARCH COULD NOT FIND MOST OF THE CATALOG (2026-08-27,
+  `b76f53ca` — handoff §14b).** `GET /supermarket/catalog/search` was
+  `name: { contains: <the whole typed string> }` — ONE substring, NAME ONLY —
+  so any phrase whose words span the name and the brand, or are not adjacent
+  in the name, matched nothing. Measured live: **"golden flow orange juice"
+  → 0** (Golden Flow is the BRAND column), "balabusta rice" → 0, "eggland
+  eggs" → 0. ⛔ **The BRAIN had searched name-OR-brand on stemmed tokens
+  since `5f318d52`, so the REP's box was strictly dumber than the agent's** —
+  backwards, since the rep is there to correct the agent. The rule now lives
+  once in **`catalogSearch.ts`**, used by both.
+  ⛔⛔ **RECALL COMES FROM THE SQL, PRECISION FROM RANKING — do not skip the
+  second half.** `contains` is a bare substring, so the token "red" also
+  matches "Cove**red**": "milk red" really did return chocolate-covered
+  crackers ABOVE Golden Flow's "Milk Red". `rankCatalogRows` scores
+  whole-word hits far above substrings. ⛔ **Relevance outranks stock** — the
+  in-stock-first rule is for choosing between COMPARABLE products; across
+  relevance groups it buries the exact item just typed. Stock breaks ties
+  within a group; nothing is ever hidden.
+  ✅ **Brand + size are selected and shown in all three suggestion lists** —
+  half this catalog is told apart ONLY by brand and ounces (four sizes of
+  "Milk Red"), so a list without them cannot be picked from. Desk limit
+  8 → 12; the brain stays at 8 (it pays prompt tokens per candidate).
+  ⚠️ Found while testing, NOT a search fault: there is **no "Gold's" brand in
+  this catalog at all**, and the register carries typo'd brands — *Goldem
+  Taste*, *Golden Tatse*, *Gold Nit* beside *Gold Nut*.
+- ⛔⛔ **A MIS-HEARD ACCOUNT NUMBER FINDS THE CLOSEST REAL CUSTOMER, AND NEVER
+  BINDS ONE SILENTLY (`e34c673a` — handoff §14c).** `customerPhoneMatch.ts`
+  reconciles the SPOKEN number against (1) the number the call/text physically
+  came FROM and (2) customers this store has served — our own **SUBMITTED**
+  orders only (⛔ an un-submitted draft may carry the very mis-hearing this
+  corrects). Damerau-Levenshtein distance **1**, so "783" heard as "738" is
+  the single slip it is; ⛔ distance 1 and 10 digits only, or "closest match"
+  starts inventing customers.
+  ⛔⛔ **AN ACCOUNT CARRIES CARDS ON FILE, so binding the wrong one can charge
+  the wrong person.** Only exact agreement is `stated`; a one-digit fix is
+  `corrected`, and several equally-close customers is `ambiguous` and picks
+  **NOTHING**. Both raise a confirm banner on the desk with the candidates as
+  chips, and a human confirming a number **settles the verdict server-side**
+  so the banner clears. Wired into BOTH draft paths + the re-run (guard counts
+  both). ⛔ `SupermarketOrderDraft` has a bare `threadId` and **NO `thread`
+  relation** — the nested select would have thrown into a `.catch()` and
+  silently produced no caller ID; it reads `connectChatThread` directly.
+  Live: 440 drafts, 208 distinct numbers, top prefixes 845-783/782/492/774 —
+  and **0 drafts have ever resolved a `posCustomerId`** (the POS key is still
+  scoped "own"), which is exactly why this matches against caller ID and our
+  own history instead.
+- ⛔⛔ **PHOTOS: THE BARCODE ROUTE DOES NOT WORK HERE, AND THE FIRST
+  MEASUREMENT LIED (handoff §14d).** 4,540 of 19,259 active items (23.6%)
+  have a photo; 12,962 photo-less items carry a real 12–13 digit barcode, and
+  a barcode IS "exact brand, exact ounce, exact item" by construction — so it
+  looked like the answer. A hand-picked sample of 10 recognisable brands hit
+  **3/10** on Open Food Facts; a **random 60**, probed against Open Food,
+  Open Beauty AND Open Products Facts, returned **0 usable images**. These are
+  kosher-specialty brands the open databases do not carry.
+  ⛔ **Do NOT fall back to free-text web image search** — it cannot satisfy
+  "exact brand, exact ounce, exact item", and the 2026-08-26 pass already set
+  the standard by SKIPPING 114 ambiguous matches: a wrong photo is worse than
+  none, and on an order line it is a picking error.
+  ✅ The exact, already-proven route is **their OWN webstore**: the first
+  harvest walked the per-CATEGORY endpoint (the flat list 403s) and **their
+  default filter HIDES out-of-stock items**, so a re-harvest with that filter
+  cleared is the highest-value next pass. ⏳ Not done — needs a browser session.
+- ⚠️ **REGISTER STOCK DRIFT IS NOW STEERING PICKS, THREE TIMES OVER.** 926
+  active Gesheft items sit at a NEGATIVE `onHand` (impossible = a broken
+  count, not an empty shelf) and 16,151 are null/never-synced. Negative reads
+  as out-of-stock, which is why the seeded eggs rule lands on the ORGANIC
+  dozen ("Eggs Large" is −75) and why Golden Flow's "Milk Blue" (−16,688)
+  sorts below other blue milks. ⏳ **Open product question for Izzy: should a
+  NEGATIVE count read as "unknown" rather than "out of stock"?** Zero is a
+  real empty shelf; negative is not. Deliberately NOT changed — it moves what
+  every rep sees.
 - ⏳ **NOT PROVEN: no human has driven it** — nobody has typed a rule on the
   screen, clicked a "?", or pressed "Re-run the agent" in a browser.
   ⛔ **An already-open desk tab/desktop window keeps the OLD bundle** — reload
