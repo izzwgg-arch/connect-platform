@@ -159,6 +159,91 @@ change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
   `ConnectChatMessage` with `emailForwardedAt is null` older than 35 min = a lost
   text email. **Both read 0 today.**
 
+## ⛔⛔ AGENT HANDOFF — Relax Tires "it only rang my cell, not the app": the PBX rang the app on EVERY call for 24 days, and the app rebuilds its SIP stack every 10 minutes (2026-08-27) — READ FIRST for ANY "the app didn't ring" report, before trusting a VoiceDiagEvent gap, or before moving a cellular tenant to the 443 route
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_RELAX_TIRES_APP_RING_2026-08-27.md`**
+(**Read-only investigation — no code, no deploy, no PBX write, no data change, no config
+touched.**) Izzy, 2026-08-27: *"relax tires just had more problems with the incoming calls …
+On the Android app, he said it only rang his cell phone, which is the virtual extension.
+Usually, they ring both."* Tenant `cmnlgryme000up9paz1w40fg0`, PBX **T25**, ext 101
+"S M Weiss", user `relaxtires@gmail.com`.
+
+- ⛔⛔ **THE COMPLAINT'S OWN SIGNATURE DOES NOT EXIST IN THE DATA.** Over 30 days, on every
+  call where the cell leg was dialed, the app leg was dialed too — `app_MISSING` is **0 every
+  day from 2026-08-03 onward** (the only misses are 07-28/29/31, before his 08-23 re-login).
+  The one-query test: `ConnectCdr."channelsSeen"::text like '%T25_101_1%'` on the **outgoing**
+  row to the cell number `8455129339`, which pairs the two legs of one call.
+- ⛔ **And the app leg does not merely get dialed — it answers `180 Ringing`.** Today's
+  08:33:56 EDT call: `PJSIP/T25_101_1-00003f6b is ringing` **and**
+  `Local/8455129339@T25_cos-all is ringing`, then `Nobody picked up in 30000 ms`. Today's
+  13:43 call went further — push → invite → **ACCEPTED on the app in 4.5 s**
+  (`invite fulfilled by its own app — no cancel push`). Push is healthy on BOTH channels
+  (`FCM_DIRECT_DELIVERED` + Expo `ok`, `DEVICE_PUSH_RECEIVED` ack in **70 ms**).
+- ⛔ **Ext 101 has THREE devices and the desk phone is DEAD — so "both" means APP + CELL.**
+  `PJSIP/T25_101` has **never registered** (0 events in the 15-day retention, 0 contacts), so
+  every Relax Tires call logs `Unable to create channel of type 'PJSIP' (cause 3 - No route to
+  destination)`. **That NOTICE is the dead desk phone, not a fault** — do not chase it.
+  Dial string is correct: `PJSIP/T25_101 & Local/T25_101_1@connect-mobile-wake-dial/n &
+  Local/8455129339@T25_cos-all`; wake-enrolled, `MAX_WAIT=20` against `ringtimer 30` —
+  ✅ **correctly sized**, not the `followme/ringtime` clipping trap.
+- ⛔⛔ **WHAT IS ACTUALLY WRONG: the app rebuilds its ENTIRE SIP stack every ~10 minutes.**
+  ~130–160 REGISTERED **and** ~130–160 UNREACHABLE per day, and **the SIP username changes on
+  every re-registration** (`29touipr` → `js5tmnao` → `tq4r5juv` → `s93okd57`…) — per the
+  Gesheft 101 rule, a plain re-REGISTER keeps its contact URI, so a **new contact user means a
+  NEW UA**. Measured dark time: **33–46 minutes a day (~3%)**, in gaps up to **6 minutes**,
+  plus a **28-hour total outage 08-21 21:15 → 08-23 01:13 UTC**. Network is **T-Mobile USA
+  cellular** (whois `TMO9` on `172.56.166.134`), tenant is on the **direct :8089 route**.
+  ✅ **ONE device, not siblings** — `x-ast-orig-host=4pqif3nji323.invalid` is identical on
+  every registration, so the Fixup Group "an always-on sibling disarms the wake hold"
+  mechanism does **not** apply here.
+- ⛔ **The churn did not cause any observed miss, and that was checked, not assumed:** for all
+  **46** rings in 10 days the endpoint's most recent registration event at invite time was
+  **`REGISTERED`** — every one. Not a single ring landed in a dark window.
+- ⛔⛔ **THE TRAP THAT WOULD HAVE PRODUCED A CONFIDENT WRONG ANSWER: this device's
+  `VoiceDiagEvent` telemetry is ~75% LOSSY.** It reads `INCOMING_INVITE` **32** against **46**
+  rings and `UI_SHOWN` only **8**, which looks exactly like "the app never got the INVITE".
+  It is not — **of the 8 calls the app demonstrably ANSWERED (`CallInvite.status = ACCEPTED`,
+  which only the app can produce), only 2 carry an `INCOMING_INVITE` event.** The gap measures
+  telemetry loss, not ring failures. **Sanity-check any telemetry gap against a case you KNOW
+  succeeded before reporting it.**
+- ⛔ **Method traps, each of which produced a wrong answer first:** `ConnectCdr.startedAt` is
+  naive UTC so `at time zone 'America/New_York'` **adds** 4 h (real EDT = displayed − 8h);
+  the CDR `startedAt` is when the call hit the **IVR**, and ext 101 is dialed only when the
+  caller picks an option (**42 s later** on the 13:43 call — not a delay); the DID goes
+  **IVR-43 → ring group "New Tires" → ext 101**, so many `app_leg=false` calls never reached
+  101 at all and the cell did not ring either — **require a paired outgoing CDR to
+  8455129339 before calling an `app_leg=false` call a miss**; and ⛔ **do NOT grep the api log
+  by `pbxCallId`** — several `[CALL_WAKE]` lines (incl. `FCM_DIRECT_DELIVERED`) carry no such
+  field, and the control test (a call whose lines I had already read) returned **0**.
+- ⛔ **He is on the CURRENT fleet APK** (`1.0.0+20260823-175041`, i.e. he already has the
+  warm-answer-deadline fix) — **do not tell him to update.** Fleet context: T25_101_1 is
+  **6th of 20** app endpoints by 24 h churn (395 events vs a mean of 347); T34_102_1 is 2661.
+  This is the ordinary cellular-CGNAT class, not a new fault.
+- ⚠ **TWO `active` MobileDevice rows for ONE phone**, so **every push is sent twice** (one to
+  a dead install): `cms4omoi01jmoro12bzrood5x` (deviceId `mobile-android-ms4omoaw-7tfv0exl`,
+  last seen 08-23 20:15) and the live `cmt69ey2d1p3tph13t2hjsida` (created 08-23 20:28).
+  Different deviceIds **and** different tokens, so the `@@unique([userId, deviceId])` dedupe
+  never matched. Harmless but noisy; deactivating the stale row is a one-row update —
+  **not done, needs Izzy's word.**
+- ⚠ **Do NOT reflexively move this tenant to the 443 SIP route.** That fix is for *filtered*
+  internet (blocked ports); his contact IP is plain T-Mobile cellular and his registrations
+  succeed. The churn is CGNAT idle-timeout on **his** side of the NAT, which 443 does not
+  obviously fix. It is an experiment, not a known remedy, and it costs him a sign-out/sign-in.
+- ⏳ **NOT PROVEN, and it is the whole gap: I could not identify the specific failed call.**
+  No timestamp was supplied, today's three calls all rang the app correctly, and **the api
+  container was recreated at 18:04 UTC by another session's deploy, which wiped `docker
+  logs`** — while `/var/log/asterisk/full` holds **today only**. Two possibilities remain and
+  the data cannot separate them: **(1)** he answered on the cell (it rings instantly over PSTN
+  while the app needs push → wake → render; 38 of 46 rings ended CANCELED), or **(2)** the app
+  got the INVITE and never alerted him — the Android ring **screen is push-driven**, so the
+  SIP stack can answer 180 while no screen or sound reaches the user, which is invisible from
+  the server.
+- ✅ **The two cheap next steps, in order:** (a) **get the time of the call — it is
+  perishable**, the PBX log holds today only; (b) ask him the one question that separates the
+  two branches: *did the phone show a Connect incoming-call screen at all?* Then, on the
+  device, put Connect in Samsung's **Never sleeping apps** (a throttled keepalive service is
+  the classic cause of exactly this 10-minute rebuild pattern).
+
 ## ⛔⛔ AGENT HANDOFF — "they left a voicemail and we never got it" was a caller hanging up inside a 24-SECOND greeting, and 11.7% of that customer's callers do the same (2026-08-27) — READ FIRST for ANY "we never got their voicemail", before trusting `disposition: "answered"`, and before telling a customer we lost anything
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GESHEFT_MISSING_VOICEMAIL_2026-08-27.md`**
