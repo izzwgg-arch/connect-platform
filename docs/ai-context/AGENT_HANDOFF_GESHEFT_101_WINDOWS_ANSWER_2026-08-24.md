@@ -624,3 +624,90 @@ best instrument we have.
 finding here is server-side. The one question that would settle branch (1) vs (2) is
 still the one from §9 — when it fails, does the incoming-call screen **stay up** (the
 answer went nowhere) or **disappear** (someone else got it)?
+
+---
+
+# §12 — QP7APH worked through the ticket MCP (2026-08-27): TWO answer paths, failing two different ways
+
+Worked from a Claude Code session via the new `loopcom-support` MCP server
+(`tools/loopcom-support-mcp`). **Read-only investigation — no code change, no
+deploy, no PBX write, nothing sent to the customer.**
+
+## The ticket carried nothing
+
+QP7APH came from the **Report-a-problem button**, so `EscalationService.research()`
+never ran: `PROPOSED FIX: None — reported by the customer, a person needs to look
+at it.` ⛔ An empty diagnosis on that path is expected, not a failed
+investigation — the MCP server now says so on every ticket, because the two read
+identically and have completely different fixes.
+
+## The churn is worse than this morning, re-measured
+
+`PbxEndpointRegistrationEvent` for `T8_101_1`, last 24 h, split by contact:
+
+| Route | REGISTERED events | Distinct `x-ast-orig-host` (i.e. distinct SIP stacks) |
+|---|---|---|
+| **443 (her Windows desktop)** | **49** | **29** |
+| direct :8089 (her Android) | 3 | 1 |
+
+Same AOR, same extension, same day. §11 measured 33/29 this morning; it is **49/29**
+now. The desktop client rebuilt its SIP stack 29 times in a day; the Android
+did it once.
+
+## ⛔⛔ THE FINDING: the portal has TWO answer paths and they fail DIFFERENTLY
+
+| | `answer()` — `useSipPhone.ts:3151` | `answerSession(id)` — `useSipPhone.ts:3641` |
+|---|---|---|
+| Used by | mini dialer **primary Answer** (`DesktopMiniDialer.tsx:1195`), floating dialer (`FloatingDialer.tsx:1208`) | mini dialer **call-waiting** Answer (`:1211`), `MultiCallPanel.tsx:203` |
+| After `session.answer()` | **waits for `confirmed` forever** — deliberately does not set state | **sets `setCallState("connected")` IMMEDIATELY**, before any ACK |
+| On a dead socket | hangs silently — no timeout, no retry, no error, no message | **shows a CONNECTED call that has no media path** |
+
+**Her primary Answer button is the first one.** That is her complaint word for
+word: she taps Answer and sometimes nothing happens at all, forever, with
+nothing on screen to explain it.
+
+⛔ **A fix applied to one of these leaves the other broken** — the two-IVR-publish-paths
+shape this repo keeps paying for. Both must move together, and they need
+DIFFERENT fixes: one needs a watchdog, the other needs to stop claiming
+success it has not got.
+
+## ⛔ The mobile fix is NOT a straight port
+
+`c55ae840` gave mobile `answer_unacked` + a bounded per-attempt cap, but its
+value is the **requeue rescue** — re-offering the call over a fresh leg *while
+the PBX is still ringing* (`NotificationsContext.tsx:3105` →
+`/telephony/internal/mobile-invites/requeue` → `requeueLiveCallToDialplan`).
+That route takes only a `linkedId`, so it is not structurally mobile-only — but
+today the portal has no entry to it. Detection alone buys an honest, fast
+failure, not a recovered call.
+
+## ⛔⛔ WHY I AM NOT PROPOSING THE FIX YET — the number cannot be guessed
+
+A watchdog needs a timeout, and **we have no idea how long a healthy portal
+answer takes.** Mobile picked 4 s per attempt against a measured 15 s PBX ring
+timer, from a real failing call. The portal has no such measurement, and §11
+already records why: this failure mode does not fire JsSIP's `failed`, so it
+emits **nothing** — 0 `WEBRTC_CALL_DEBUG` rows for her on 08-27.
+
+Pick a number now and the risk is tearing down calls that were about to
+succeed — which is precisely the class of mistake the standing third rule
+exists to prevent.
+
+## ✅ THE SAFE FIRST STEP: instrument, do not fix
+
+Stamp the answer tap and emit the delta when `confirmed` arrives. **Zero
+behaviour change on the answer path** — nothing is torn down, nothing times out,
+no call can be lost by it. The plumbing already exists: `apiPost("/voice/diag/…")`
+is used at six sites in `useSipPhone.ts`, both `confirmed` handlers are already
+there (`:2630` and `:2898` — one per answer path, which is itself the tell that
+there are two), and `/voice/diag` POSTs were opened to ordinary users on
+2026-08-24 (`3385e70c`), so her client can finally report.
+
+Then the timeout is sized from her own distribution, and the fix ships knowing
+what it breaks.
+
+⚠️ And the honest limit: this addresses the *silent failure*. The upstream cause
+is still whatever changed on her machine on 08-26 that doubled the rebuild rate,
+and **nobody has looked at that.** Cutting her to ONE current desktop window
+(she still has a `desktop-pre-0.1.5` alive) remains the only zero-risk action
+available today.
