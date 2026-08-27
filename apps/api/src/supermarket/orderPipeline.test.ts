@@ -274,8 +274,8 @@ test("the brain token budgets survived — 16000, never shrunk back to a truncat
   const s = readFileSync(path.join(__dirname, "orderBrain.ts"), "utf8").replace(/\r\n/g, "\n");
   // ⛔ proven live 2026-08-26: a real 31-line order used 3,946 of a 4,000 cap
   // (3,264 reasoning) — the truncated JSON silently fell back to the matcher.
-  const calls = s.match(/EXTRACT_SYSTEM, text\.slice\(0, 6000\), (\d+)\)/);
-  const calls2 = s.match(/RESOLVE_SYSTEM, resolveUser, (\d+)\)/);
+  const calls = s.match(/EXTRACT_SYSTEM \+ rulesBlock, text\.slice\(0, 6000\), (\d+)\)/);
+  const calls2 = s.match(/RESOLVE_SYSTEM \+ rulesBlock, resolveUser, (\d+)\)/);
   assert.ok(Number(calls?.[1]) >= 16000, "extract budget must stay >= 16000");
   assert.ok(Number(calls2?.[1]) >= 16000, "resolve budget must stay >= 16000");
 });
@@ -374,11 +374,14 @@ test("the sweep's voicemail and text blocks both go through composeDraftContent"
 
 test("the reprocess door only touches NEEDS_REVIEW drafts", () => {
   const s = src("supermarketRoutes.ts");
-  const i = s.indexOf("/admin/integrations/reprocess-drafts");
+  // the ROUTE block proper: from its app.post to the next registration
+  const i = s.indexOf('app.post("/admin/integrations/reprocess-drafts"');
   assert.ok(i > 0);
-  const block = s.slice(i, i + 5000);
+  const end = s.indexOf("app.put(", i);
+  const block = s.slice(i, end > i ? end : i + 5000);
   assert.ok(block.includes('status: "NEEDS_REVIEW"'), "reprocess must filter NEEDS_REVIEW");
   assert.ok(!block.includes('"SUBMITTED"'), "reprocess must never name SUBMITTED");
+  assert.ok(block.includes("reprocessOneDraft"), "the batch must ride the ONE shared per-draft core");
 });
 
 test("a non-order verdict lands as DISMISSED — sweep create AND reprocess update", () => {
@@ -386,8 +389,10 @@ test("a non-order verdict lands as DISMISSED — sweep create AND reprocess upda
   const dismissed = sweep.split('content.notAnOrder ? { status: "DISMISSED" }').length - 1;
   assert.equal(dismissed, 2, "both sweep create blocks must auto-dismiss a non-order");
   const routes = src("supermarketRoutes.ts");
-  const i = routes.indexOf("/admin/integrations/reprocess-drafts");
-  const block = routes.slice(i, i + 5000);
+  // the shared per-draft core (used by the admin batch AND the desk re-run)
+  const i = routes.indexOf("const reprocessOneDraft");
+  assert.ok(i > 0, "the shared reprocess core must exist");
+  const block = routes.slice(i, routes.indexOf('app.post("/admin/integrations/reprocess-drafts"', i));
   assert.ok(block.includes('content.notAnOrder ? { status: "DISMISSED" }'), "reprocess must clear a non-order off the review queue");
 });
 

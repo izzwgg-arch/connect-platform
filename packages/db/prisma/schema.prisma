@@ -844,6 +844,7 @@ model Tenant {
   supermarketOrderDrafts          SupermarketOrderDraft[]
   supermarketPhraseLessons        SupermarketPhraseLesson[]
   supermarketPhraseDismissals     SupermarketPhraseDismissal[]
+  supermarketAgentRules           SupermarketAgentRule[]
   supermarketPhonePins            SupermarketPhonePin[]
   supermarketPayCalls             SupermarketPayCall[]
   supermarketSpecials             SupermarketSpecial[]
@@ -8114,6 +8115,11 @@ model SupermarketPhraseLesson {
   /// "rep" = harvested from a rep's fix at submit; "taught" = the admin
   /// Teach-the-Agent page (Izzy's daily correction lane).
   source          String   @default("rep")
+  /// Set when a NEWER correction superseded this lesson (Izzy 2026-08-27:
+  /// "if I re-correct that same correction, it changes — and I should be able
+  /// to roll back"). Retired lessons are never fed to the brain, but stay
+  /// restorable — restoring one retires its replacement, a clean toggle.
+  retiredAt       DateTime?
   lastConfirmedAt DateTime @default(now())
   createdAt       DateTime @default(now())
 
@@ -8135,6 +8141,28 @@ model SupermarketPhraseDismissal {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, phrase])
+}
+
+/// House rules for the order brain (Izzy 2026-08-27: "a dozen eggs means a
+/// pack of 12 large eggs… blue milk means Golden Flow 2%… if they just say
+/// milk, that means Golden Flow"). Plain-English rules the store owner
+/// writes; injected VERBATIM into both brain passes (extract + resolve), so
+/// a correction takes effect on the very next draft, no deploy. Every edit
+/// keeps the prior wording in `history` so a wrong correction rolls back.
+model SupermarketAgentRule {
+  id        String   @id @default(cuid())
+  tenantId  String
+  text      String
+  /// Switched-off rules stop reaching the brain but stay restorable.
+  active    Boolean  @default(true)
+  /// Prior wordings, newest first: [{ text, at }] — the rollback trail.
+  history   Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, active])
 }
 
 /// Pay-by-phone PIN enrollment: the account PIN, encrypted, bound to ONE

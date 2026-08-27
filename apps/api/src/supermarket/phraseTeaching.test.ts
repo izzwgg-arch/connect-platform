@@ -47,7 +47,10 @@ test("teachPhrase upserts source 'taught' and clears any dismissal", async () =>
   const { teachPhrase } = await import("./phraseTeaching");
   const calls: any[] = [];
   const db = {
-    supermarketPhraseLesson: { upsert: async (a: any) => calls.push(["upsert", a]) },
+    supermarketPhraseLesson: {
+      upsert: async (a: any) => calls.push(["upsert", a]),
+      updateMany: async (a: any) => calls.push(["supersede", a]),
+    },
     supermarketPhraseDismissal: { deleteMany: async (a: any) => calls.push(["undismiss", a]) },
   };
   const res = await teachPhrase(db, "t1", "Doc's Sauce", "duck1");
@@ -55,7 +58,12 @@ test("teachPhrase upserts source 'taught' and clears any dismissal", async () =>
   assert.equal(calls[0][1].create.source, "taught");
   assert.equal(calls[0][1].create.displayPhrase, "Doc's Sauce");
   assert.equal(calls[0][1].update.source, "taught");
-  assert.equal(calls[1][0], "undismiss");
+  // a taught lesson comes back from retirement, and every OTHER product's
+  // active lesson on the same phrase is superseded (Izzy 2026-08-27)
+  assert.equal(calls[0][1].update.retiredAt, null);
+  assert.equal(calls[1][0], "supersede");
+  assert.deepEqual(calls[1][1].where.posProductId, { not: "duck1" });
+  assert.equal(calls[2][0], "undismiss");
 });
 
 test("dismiss + undismiss round-trip on the normalized key", async () => {

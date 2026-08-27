@@ -314,6 +314,12 @@ export function makeSupermarketDb(): FakeDb {
         approvedAt: null, submittedAt: null,
       }),
     },
+    supermarketPhraseLesson: {
+      uniques: [["tenantId", "phrase", "posProductId"]],
+      defaults: () => ({ displayPhrase: "", timesConfirmed: 1, timesUsed: 0, source: "rep", retiredAt: null, lastConfirmedAt: new Date() }),
+    },
+    supermarketPhraseDismissal: { uniques: [["tenantId", "phrase"]], defaults: () => ({}) },
+    supermarketAgentRule: { uniques: [["id"]], defaults: () => ({ active: true, history: [] }) },
     supermarketPhonePin: { uniques: [["tenantId", "posCustomerId", "phoneE164"]], defaults: () => ({ lastUsedAt: null }) },
     supermarketPayCall: {
       uniques: [["tenantId", "callId"]],

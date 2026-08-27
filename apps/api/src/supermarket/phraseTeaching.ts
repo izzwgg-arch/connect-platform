@@ -85,6 +85,13 @@ export function buildTeachQueue(
  * the corrected wording, so a future correctly-translated order matches too.
  * The teach page passes the admin's own search text as the meant phrase: the
  * words they typed to FIND the item are literally what the customer meant.
+ *
+ * ⛔ A teach is a CORRECTION, so it SUPERSEDES (Izzy 2026-08-27: "if I
+ * re-correct that same correction, that means it changes"): any OTHER
+ * product's active lesson on the same phrase key is retired — not deleted,
+ * so it can be rolled back (restoreLesson). The rep-fix HARVEST at submit
+ * deliberately does NOT supersede: two rep fixes for one phrase are two
+ * hints, only an explicit teach declares a winner.
  */
 export async function teachPhrase(
   db: any,
@@ -98,8 +105,14 @@ export async function teachPhrase(
   const upsert = async (key: string, display: string) => {
     await db.supermarketPhraseLesson.upsert({
       where: { tenantId_phrase_posProductId: { tenantId, phrase: key, posProductId } },
+      // a re-taught lesson comes back from retirement — retiredAt: null in
+      // the update is what makes teach→undo→teach behave
       create: { tenantId, phrase: key, displayPhrase: display.slice(0, 160), posProductId, source: "taught" },
-      update: { source: "taught", timesConfirmed: { increment: 1 }, lastConfirmedAt: new Date(), displayPhrase: display.slice(0, 160) },
+      update: { source: "taught", timesConfirmed: { increment: 1 }, lastConfirmedAt: new Date(), displayPhrase: display.slice(0, 160), retiredAt: null },
+    });
+    await db.supermarketPhraseLesson.updateMany({
+      where: { tenantId, phrase: key, posProductId: { not: posProductId }, retiredAt: null },
+      data: { retiredAt: new Date() },
     });
   };
   await upsert(phrase, String(rawPhrase));
@@ -107,6 +120,37 @@ export async function teachPhrase(
   if (meantKey && meantKey !== phrase) await upsert(meantKey, String(meantPhrase));
   await db.supermarketPhraseDismissal.deleteMany({ where: { tenantId, phrase } }).catch(() => {});
   return { phrase };
+}
+
+/**
+ * Retire a lesson (the taught-table ✕). Soft on purpose — "undo" must not
+ * destroy the rollback trail.
+ */
+export async function retireLesson(db: any, tenantId: string, id: string): Promise<boolean> {
+  const res = await db.supermarketPhraseLesson.updateMany({
+    where: { id: String(id), tenantId, retiredAt: null },
+    data: { retiredAt: new Date() },
+  });
+  return Boolean(res && res.count === 1);
+}
+
+/**
+ * Bring a retired lesson back. Symmetric with teach's supersede: restoring
+ * phrase→A retires any active phrase→B, so the pair toggles cleanly instead
+ * of both becoming hints.
+ */
+export async function restoreLesson(db: any, tenantId: string, id: string): Promise<boolean> {
+  const row = await db.supermarketPhraseLesson.findFirst({ where: { id: String(id), tenantId } });
+  if (!row) return false;
+  await db.supermarketPhraseLesson.updateMany({
+    where: { tenantId, phrase: row.phrase, posProductId: { not: row.posProductId }, retiredAt: null },
+    data: { retiredAt: new Date() },
+  });
+  await db.supermarketPhraseLesson.updateMany({
+    where: { id: row.id, tenantId },
+    data: { retiredAt: null, lastConfirmedAt: new Date() },
+  });
+  return true;
 }
 
 export async function dismissPhrase(db: any, tenantId: string, rawPhrase: string): Promise<{ phrase: string } | null> {

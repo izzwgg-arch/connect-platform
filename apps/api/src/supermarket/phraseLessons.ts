@@ -144,11 +144,16 @@ export function matchLessonsToLines(
   return out;
 }
 
-/** Newest lessons for a tenant, bounded — the brain's read path. */
+/**
+ * Newest lessons for a tenant, bounded — the brain's read path.
+ * ⛔ Retired lessons (superseded by a newer correction) never reach the
+ * brain — that is the whole point of retiring instead of leaving both hints
+ * in the pool: a correction must CHANGE the answer, not add a rival.
+ */
 export async function loadLessons(db: any, tenantId: string): Promise<Array<{ phrase: string; posProductId: string }>> {
   try {
     const rows = await db.supermarketPhraseLesson.findMany({
-      where: { tenantId },
+      where: { tenantId, retiredAt: null },
       orderBy: { lastConfirmedAt: "desc" },
       take: 400,
       select: { phrase: true, posProductId: true },

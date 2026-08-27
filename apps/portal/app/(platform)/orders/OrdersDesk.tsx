@@ -20,12 +20,12 @@ import "./supermarket.css";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, ExternalLink, Loader2, MessageCircle, Mic, Pause, Phone, Play, Search } from "lucide-react";
+import { Check, ExternalLink, Loader2, MessageCircle, Mic, Pause, Phone, Play, RefreshCw, Search } from "lucide-react";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient";
-import { getPortalApiBaseUrl } from "../../../services/apiClient";
+import { browserTenantContext, getPortalApiBaseUrl } from "../../../services/apiClient";
 import { readAuthToken } from "../../../services/session";
 import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
 
@@ -82,6 +82,11 @@ export const SM_ORDERS_PHRASES = [
   "Complete this order?", "pay & place", "No charge — put the order through without paying",
   "places it", "typing sets qty", "replacing:", "the swap is remembered — the agent learns it",
   "= qty", "= replace item", "remove", "checkout",
+  "Re-run the agent", "Re-running…", "Sure? This replaces the cart with the agent's new answer",
+  "Runs the agent again on this order with everything it has learned since",
+  "The agent re-filled this order.", "The agent could not be re-run.",
+  "fixing:", "the pick is remembered — the agent learns it",
+  "Right? Click to confirm — the agent learns it", "that's right", "Confirms the pick and teaches the agent",
 ] as string[];
 
 type DraftRow = {
@@ -505,8 +510,18 @@ function VoicemailPlayer({ draftId, t }: { draftId: string; t: (s: string) => st
 
   const src = useMemo(() => {
     const token = readAuthToken();
-    const q = token ? `?token=${encodeURIComponent(token)}` : "";
-    return `${getPortalApiBaseUrl()}/supermarket/drafts/${encodeURIComponent(draftId)}/audio${q}`;
+    // ⛔ An <audio> element sends NO custom headers, so the SUPER_ADMIN
+    // workspace tenant switch (normally the x-tenant-context header) must
+    // ride the URL as ?tenantId= — without it the audio route resolves the
+    // ADMIN tenant, 404s, and the player reads "isn't available" while the
+    // draft plays fine for the store's own reps (found live, 2026-08-27).
+    // Harmless for ordinary users: the server ignores ?tenantId= for them.
+    const params = new URLSearchParams();
+    if (token) params.set("token", token);
+    const tenantCtx = browserTenantContext();
+    if (tenantCtx) params.set("tenantId", tenantCtx);
+    const q = params.toString();
+    return `${getPortalApiBaseUrl()}/supermarket/drafts/${encodeURIComponent(draftId)}/audio${q ? `?${q}` : ""}`;
   }, [draftId]);
 
   useEffect(() => {
@@ -631,6 +646,17 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   // the account IS the phone number (Izzy) — 7 digits imply area code 845
   const [phoneEdit, setPhoneEdit] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
+  // Training mode (Izzy 2026-08-27: "correct the agent without actually
+  // putting through the order… I need to see progress"): the server says
+  // whether this login may re-run the agent, and a skipped checklist line
+  // that gets fixed through the quick-add box TEACHES the fix immediately.
+  const [canManage, setCanManage] = useState(false);
+  const [rerunAsk, setRerunAsk] = useState(false);
+  const [rerunBusy, setRerunBusy] = useState(false);
+  // the skipped phrase the quick-add box is currently fixing — the next add
+  // from the box is taught as phrase → product (the teach-page gesture,
+  // brought onto the desk)
+  const [teachFor, setTeachFor] = useState<string | null>(null);
 
   // ── cards on file (built to the approved 2026-08-26 mockup) ──────────────
   const [cards, setCards] = useState<CardOnFile[]>([]);
@@ -730,26 +756,46 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   const [hi, setHi] = useState(0);
   const boxRef = useRef<HTMLInputElement | null>(null);
 
+  const loadDraft = useCallback(async () => {
+    const res = await apiGet<{ draft: DraftRow; canManage?: boolean }>(`/supermarket/drafts/${encodeURIComponent(draftId)}`);
+    setDraft(res.draft);
+    setCanManage(Boolean(res.canManage));
+    setItems(Array.isArray(res.draft.items) ? res.draft.items : []);
+    setComments(res.draft.comments ?? "");
+    setNotes(res.draft.notes ?? "");
+    setOrderMethod(res.draft.orderMethod === "Delivery" ? "Delivery" : "Pickup");
+    setPhoneEdit(res.draft.customerPhone ?? "");
+  }, [draftId]);
+
   useEffect(() => {
     let dead = false;
-    (async () => {
-      try {
-        const res = await apiGet<{ draft: DraftRow }>(`/supermarket/drafts/${encodeURIComponent(draftId)}`);
-        if (dead) return;
-        setDraft(res.draft);
-        setItems(Array.isArray(res.draft.items) ? res.draft.items : []);
-        setComments(res.draft.comments ?? "");
-        setNotes(res.draft.notes ?? "");
-        setOrderMethod(res.draft.orderMethod === "Delivery" ? "Delivery" : "Pickup");
-        setPhoneEdit(res.draft.customerPhone ?? "");
-      } catch (e) {
-        if (!dead) setError(errText(e, "The draft could not be loaded."));
-      }
-    })();
+    loadDraft().catch((e) => {
+      if (!dead) setError(errText(e, "The draft could not be loaded."));
+    });
     return () => {
       dead = true;
     };
-  }, [draftId]);
+  }, [loadDraft]);
+
+  // Re-run the agent on THIS draft with everything it has learned since the
+  // last pass (lessons + house rules are read fresh per run). Replaces the
+  // cart with the agent's new answer — that is the point: watch it improve.
+  const rerun = useCallback(async () => {
+    if (!draft || rerunBusy) return;
+    setRerunBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      await apiPost(`/supermarket/drafts/${encodeURIComponent(draft.id)}/rerun`);
+      await loadDraft();
+      setOkMsg(t("The agent re-filled this order."));
+    } catch (e) {
+      setError(errText(e, "The agent could not be re-run."));
+    } finally {
+      setRerunBusy(false);
+      setRerunAsk(false);
+    }
+  }, [draft, rerunBusy, loadDraft, t]);
 
   // Cursor lives in the box — always (mockup: "a rep never touches the mouse").
   useEffect(() => {
@@ -762,6 +808,8 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     if (term.length < 1) {
       setHits([]);
       setHi(0);
+      // an emptied box is no longer fixing any checklist line
+      setTeachFor(null);
       return;
     }
     let dead = false;
@@ -798,6 +846,28 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     [],
   );
 
+  // An add from the BOX while fixing a skipped checklist line also TEACHES
+  // the fix (phrase → product, search text as "what he meant") — the teach
+  // page's gesture on the desk, effective on the very next draft. Suggestion
+  // chips deliberately do NOT teach: a chip is a one-off substitute ("no
+  // whole milk today → kefir"), not a statement of what the phrase means.
+  const addFromBox = useCallback(
+    (hit: CatalogHit, qty: number) => {
+      const phrase = teachFor;
+      const term = q.replace(/^\d+[x×]/i, "").trim();
+      if (phrase) {
+        void apiPost("/supermarket/phrase-teaching/teach", {
+          phrase,
+          posProductId: hit.posProductId,
+          ...(term ? { meantPhrase: term } : {}),
+        }).catch(() => {}); // teaching is a bonus — a 403 must never break the add
+        setTeachFor(null);
+      }
+      addHit(hit, qty);
+    },
+    [teachFor, q, addHit],
+  );
+
   const onBoxKey = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "ArrowDown") {
@@ -813,6 +883,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       if (e.key === "Escape") {
         setQ("");
         setHits([]);
+        setTeachFor(null);
         return;
       }
       if (e.key !== "Enter") return;
@@ -823,19 +894,19 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       const term = (mult ? mult[2] : q).trim();
       if (!term) return;
       if (hits.length > 0) {
-        addHit(hits[Math.max(0, Math.min(hi, hits.length - 1))], qty);
+        addFromBox(hits[Math.max(0, Math.min(hi, hits.length - 1))], qty);
         return;
       }
       if (/^\d+$/.test(term)) {
         void apiGet<{ items: CatalogHit[] }>(`/supermarket/catalog/search?q=${encodeURIComponent(term)}`)
           .then((res) => {
             const exact = (res.items ?? []).find((i) => i.code === term) ?? (res.items ?? [])[0];
-            if (exact) addHit(exact, qty);
+            if (exact) addFromBox(exact, qty);
           })
           .catch(() => {});
       }
     },
-    [q, hits, hi, addHit],
+    [q, hits, hi, addFromBox],
   );
 
   const bumpQty = useCallback((posProductId: string, delta: number) => {
@@ -1042,6 +1113,35 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     [draft?.agentLines],
   );
 
+  // "?" confirmation (Izzy 2026-08-27: "I should also be able to confirm
+  // question marks or just change it right there on the spot, and it would
+  // update in the agent"): confirming an unsure pick clears the ? AND teaches
+  // phrase → product immediately — the strongest positive signal there is.
+  // Changing it instead goes through the replace flow, which already teaches.
+  const confirmPick = useCallback(
+    (posProductId: string) => {
+      setItems((prev) => prev.map((it) => (it.posProductId === posProductId && it.unsure ? { ...it, unsure: undefined } : it)));
+      const line = (draft?.agentLines ?? []).find((l) => l.posProductId === posProductId && l.outcome === "unsure");
+      if (line?.phrase) {
+        void apiPost("/supermarket/phrase-teaching/teach", {
+          phrase: line.phrase,
+          posProductId,
+        }).catch(() => {}); // teaching is a bonus — a 403 must never break the confirm
+      }
+      setDraft((d) =>
+        d && Array.isArray(d.agentLines)
+          ? {
+              ...d,
+              agentLines: d.agentLines.map((l) =>
+                l.posProductId === posProductId && l.outcome === "unsure" ? { ...l, outcome: "in_cart" } : l,
+              ),
+            }
+          : d,
+      );
+    },
+    [draft?.agentLines],
+  );
+
   const dismiss = useCallback(async () => {
     if (!draft) return;
     setBusy(true);
@@ -1151,6 +1251,8 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                           onClick={() => {
                             if (readOnly || state !== "out") return;
                             setQ(l.phrase);
+                            // the next add from the box teaches phrase → item
+                            setTeachFor(l.phrase);
                             boxRef.current?.focus();
                           }}
                         >
@@ -1158,6 +1260,17 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                           {l.constraints ? <span className="sm-askcon"> ({l.constraints})</span> : null}
                         </span>
                         {state !== "out" && l.name ? <span className="sm-askto"> → {l.name}</span> : null}
+                        {state === "unsure" && !readOnly && l.posProductId ? (
+                          <button
+                            type="button"
+                            className="sm-asschip"
+                            style={{ marginLeft: 6 }}
+                            title={t("Confirms the pick and teaches the agent")}
+                            onClick={() => confirmPick(l.posProductId!)}
+                          >
+                            ✓ {t("that's right")}
+                          </button>
+                        ) : null}
                         {state === "out" && l.reason ? <span className="sm-askwhy"> — {l.reason}</span> : null}
                         {state === "out" && !readOnly && Array.isArray(l.suggestions) && l.suggestions.length > 0 ? (
                           <span className="sm-asksugg">
@@ -1200,7 +1313,24 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         <SmItemPhoto url={i.imageUrl} size={32} zoom />
                         <span>
                           {i.name || i.code}
-                          {i.unsure ? <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span> : null}
+                          {i.unsure ? (
+                            readOnly ? (
+                              <span className="sm-unsure-pill" title={t("Closest match — check with the customer")}>?</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="sm-unsure-pill"
+                                style={{ cursor: "pointer", border: 0, font: "inherit" }}
+                                title={t("Right? Click to confirm — the agent learns it")}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  confirmPick(i.posProductId);
+                                }}
+                              >
+                                ?
+                              </button>
+                            )
+                          ) : null}
                           {i.outOfStock ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                           <br /><span className="sm-sku">{i.code}</span>
                         </span>
@@ -1260,7 +1390,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         aria-selected={idx === hi}
                         onMouseDown={(e) => {
                           e.preventDefault();
-                          addHit(h, 1);
+                          addFromBox(h, 1);
                         }}
                         style={{
                           display: "grid",
@@ -1288,6 +1418,11 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                       <span><b style={{ color: "var(--text)" }}>↑ ↓</b> {t("move")}</span>
                       <span><b style={{ color: "var(--text)" }}>Enter</b> {t("add & next")}</span>
                       <span><b style={{ color: "var(--text)" }}>Esc</b> {t("clear")}</span>
+                      {teachFor ? (
+                        <span style={{ marginLeft: "auto", color: "var(--accent)" }}>
+                          {t("fixing:")} <b style={{ color: "var(--text)" }}>{teachFor}</b> — {t("the pick is remembered — the agent learns it")}
+                        </span>
+                      ) : null}
                       <span className="sm-spacer" />
                       <span>{t("typing a number adds by item # directly")}</span>
                     </div>
@@ -1441,6 +1576,23 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
 
             {!readOnly ? (
               <div className="sm-actions">
+                {canManage && draft.status === "NEEDS_REVIEW" ? (
+                  rerunAsk ? (
+                    <button type="button" className="sm-btn sm-danger" disabled={rerunBusy} onClick={() => void rerun()}>
+                      {rerunBusy ? t("Re-running…") : t("Sure? This replaces the cart with the agent's new answer")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="sm-btn sm-quiet"
+                      disabled={busy || rerunBusy}
+                      title={t("Runs the agent again on this order with everything it has learned since")}
+                      onClick={() => setRerunAsk(true)}
+                    >
+                      <RefreshCw size={13} aria-hidden /> {t("Re-run the agent")}
+                    </button>
+                  )
+                ) : null}
                 <button type="button" className="sm-btn sm-danger" disabled={busy} onClick={() => void dismiss()}>{t("Dismiss")}</button>
                 <button type="button" className="sm-btn sm-quiet" disabled={busy} onClick={() => void save()}>{t("Save for later")}</button>
                 <button type="button" className="sm-btn sm-primary" disabled={busy || items.length === 0} onClick={() => setConfirmOpen(true)}>{chargeOnPut && selCard && subtotal >= 50 ? `${t("Put order through & charge")} ${money(subtotal)}` : t("Put order through")}</button>

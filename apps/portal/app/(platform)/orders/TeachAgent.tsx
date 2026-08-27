@@ -18,7 +18,7 @@ import "./supermarket.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
-import { apiDelete, apiGet, apiPost } from "../../../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiPut } from "../../../services/apiClient";
 import { SmItemPhoto, money } from "./OrdersDesk";
 
 export const SM_TEACH_PHRASES = [
@@ -39,7 +39,175 @@ export const SM_TEACH_PHRASES = [
   "Nothing taught yet.", "No dismissed phrases.",
   "Bring back", "not in stock", "Loading…",
   "Couldn't save that — try again.",
+  "HOUSE RULES — the agent follows these on every order",
+  "Plain English. Takes effect on the very next order. Example: a dozen eggs means a pack of 12 large eggs — pick the cheapest in stock.",
+  "Add a rule…", "Add rule", "Change", "Save", "Cancel", "Roll back", "Turn off", "Turn back on",
+  "was:", "No rules yet — write the first one above.",
+  "Switched-off rules", "replaced by a newer correction",
+  "Couldn't save the rule — try again.",
 ] as string[];
+
+type RuleRow = {
+  id: string;
+  text: string;
+  active: boolean;
+  history: Array<{ text: string; at: string }>;
+};
+
+/**
+ * House rules (Izzy 2026-08-27): one plain-English sentence per rule, fed to
+ * the brain on every run. Editing keeps the old wording; Roll back restores
+ * it; Turn off retires a rule without losing it.
+ */
+function HouseRules({ t }: { t: (s: string) => string }) {
+  const [rules, setRules] = useState<RuleRow[]>([]);
+  const [newRule, setNewRule] = useState("");
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await apiGet<{ rules: RuleRow[] }>("/supermarket/agent-rules");
+      setRules(res.rules ?? []);
+    } catch {
+      /* the card stays; rows just don't fill */
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const run = useCallback(
+    async (fn: () => Promise<unknown>) => {
+      if (busy) return;
+      setBusy(true);
+      setErr(null);
+      try {
+        await fn();
+        await load();
+      } catch {
+        setErr(t("Couldn't save the rule — try again."));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, load, t],
+  );
+
+  const add = () => {
+    const text = newRule.trim();
+    if (!text) return;
+    void run(async () => {
+      await apiPost("/supermarket/agent-rules", { text });
+      setNewRule("");
+    });
+  };
+
+  const active = rules.filter((r) => r.active);
+  const off = rules.filter((r) => !r.active);
+  const btn: React.CSSProperties = { fontSize: ".72rem", padding: ".2rem .55rem" };
+
+  return (
+    <div className="sm-ta-tablewrap" style={{ marginBottom: "1rem" }}>
+      <div style={{ padding: ".7rem .9rem .2rem" }}>
+        <div className="sm-asklist-h" style={{ marginBottom: 2 }}>{t("HOUSE RULES — the agent follows these on every order")}</div>
+        <div className="sm-ta-sub">{t("Plain English. Takes effect on the very next order. Example: a dozen eggs means a pack of 12 large eggs — pick the cheapest in stock.")}</div>
+      </div>
+      <div style={{ display: "flex", gap: 8, padding: ".6rem .9rem" }}>
+        <input
+          value={newRule}
+          onChange={(e) => setNewRule(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+          placeholder={t("Add a rule…")}
+          maxLength={300}
+          disabled={busy}
+          style={{ flex: 1, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, padding: ".45rem .7rem", color: "inherit", font: "inherit" }}
+        />
+        <button type="button" className="sm-ta-ghost" style={btn} disabled={busy || !newRule.trim()} onClick={add}>
+          {t("Add rule")}
+        </button>
+      </div>
+      {err ? <div className="sm-ta-why" style={{ padding: "0 .9rem .5rem" }}>{err}</div> : null}
+      <div style={{ padding: "0 .9rem .8rem", display: "flex", flexDirection: "column", gap: 6 }}>
+        {active.map((r) => (
+          <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+            {editId === r.id ? (
+              <>
+                <input
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  maxLength={300}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void run(async () => {
+                      await apiPut(`/supermarket/agent-rules/${encodeURIComponent(r.id)}`, { text: editText.trim() });
+                      setEditId(null);
+                    });
+                    if (e.key === "Escape") setEditId(null);
+                  }}
+                  style={{ flex: 1, background: "var(--panel-2)", border: "1px solid var(--accent)", borderRadius: 8, padding: ".4rem .6rem", color: "inherit", font: "inherit" }}
+                />
+                <button type="button" className="sm-ta-ghost" style={btn} disabled={busy || !editText.trim()} onClick={() => void run(async () => {
+                  await apiPut(`/supermarket/agent-rules/${encodeURIComponent(r.id)}`, { text: editText.trim() });
+                  setEditId(null);
+                })}>
+                  {t("Save")}
+                </button>
+                <button type="button" className="sm-ta-ghost" style={btn} disabled={busy} onClick={() => setEditId(null)}>{t("Cancel")}</button>
+              </>
+            ) : (
+              <>
+                <span style={{ flex: 1, lineHeight: 1.45 }}>
+                  {r.text}
+                  {r.history.length > 0 ? (
+                    <span className="sm-ta-dim" style={{ display: "block", fontSize: ".72rem" }}>
+                      {t("was:")} {r.history[0].text}
+                    </span>
+                  ) : null}
+                </span>
+                <button type="button" className="sm-ta-ghost" style={btn} disabled={busy} onClick={() => { setEditId(r.id); setEditText(r.text); }}>
+                  {t("Change")}
+                </button>
+                {r.history.length > 0 ? (
+                  <button type="button" className="sm-ta-ghost" style={btn} disabled={busy} title={r.history[0].text} onClick={() => void run(async () => {
+                    await apiPost(`/supermarket/agent-rules/${encodeURIComponent(r.id)}/rollback`);
+                  })}>
+                    {t("Roll back")}
+                  </button>
+                ) : null}
+                <button type="button" className="sm-ta-del" title={t("Turn off")} disabled={busy} onClick={() => void run(async () => {
+                  await apiPost(`/supermarket/agent-rules/${encodeURIComponent(r.id)}/active`, { active: false });
+                })}>
+                  ✕
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+        {active.length === 0 ? <div className="sm-ta-dim" style={{ fontSize: ".8rem" }}>{t("No rules yet — write the first one above.")}</div> : null}
+        {off.length > 0 ? (
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+            <div className="sm-ta-dim" style={{ fontSize: ".72rem", marginBottom: 4 }}>{t("Switched-off rules")}</div>
+            {off.map((r) => (
+              <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", opacity: 0.65 }}>
+                <span style={{ flex: 1, textDecoration: "line-through" }}>{r.text}</span>
+                <button type="button" className="sm-ta-ghost" style={btn} disabled={busy} onClick={() => void run(async () => {
+                  await apiPost(`/supermarket/agent-rules/${encodeURIComponent(r.id)}/active`, { active: true });
+                })}>
+                  {t("Turn back on")}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 type QueueRow = {
   phrase: string;
@@ -223,6 +391,7 @@ export function TeachAgentInner() {
   const { t } = useUiLanguage(SM_TEACH_PHRASES);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [taught, setTaught] = useState<TaughtRow[]>([]);
+  const [retired, setRetired] = useState<TaughtRow[]>([]);
   const [dismissed, setDismissed] = useState<Array<{ phrase: string }>>([]);
   const [justTaught, setJustTaught] = useState<Map<string, Hit>>(new Map());
   const [tab, setTab] = useState<"queue" | "taught" | "dismissed">("queue");
@@ -230,11 +399,12 @@ export function TeachAgentInner() {
 
   const reload = useCallback(async () => {
     try {
-      const res = await apiGet<{ queue: QueueRow[]; taught: TaughtRow[]; dismissed: Array<{ phrase: string }> }>(
+      const res = await apiGet<{ queue: QueueRow[]; taught: TaughtRow[]; retired?: TaughtRow[]; dismissed: Array<{ phrase: string }> }>(
         "/supermarket/phrase-teaching",
       );
       setQueue(res.queue ?? []);
       setTaught(res.taught ?? []);
+      setRetired(res.retired ?? []);
       setDismissed(res.dismissed ?? []);
     } catch {
       /* the shell stays; rows just don't fill */
@@ -271,6 +441,15 @@ export function TeachAgentInner() {
     [reload],
   );
 
+  // rollback: bringing a retired lesson back retires whatever replaced it —
+  // a clean toggle, so a wrong re-correction is one click to undo
+  const restoreLessonRow = useCallback(
+    (row: TaughtRow) => {
+      void apiPost(`/supermarket/phrase-teaching/lessons/${row.id}/restore`).then(() => reload()).catch(() => reload());
+    },
+    [reload],
+  );
+
   const unDismiss = useCallback(
     (phrase: string) => {
       void apiPost("/supermarket/phrase-teaching/dismiss", { phrase, undo: true }).then(() => reload()).catch(() => reload());
@@ -295,6 +474,8 @@ export function TeachAgentInner() {
             <div className="sm-ta-stat sm-ta-ok"><b>{autoFilled}</b><span>{t("auto-filled")}</span></div>
           </div>
         </div>
+
+        <HouseRules t={t} />
 
         <div className="sm-ta-toolbar">
           <button type="button" className={`sm-ta-chip${tab === "queue" ? " sm-ta-on" : ""}`} onClick={() => setTab("queue")}>
@@ -376,6 +557,21 @@ export function TeachAgentInner() {
               </tbody>
             </table>
             {taught.length === 0 ? <div className="sm-ta-empty">{t("Nothing taught yet.")}</div> : null}
+            {retired.length > 0 ? (
+              <div style={{ padding: ".6rem .9rem", borderTop: "1px solid var(--border)" }}>
+                <div className="sm-ta-dim" style={{ fontSize: ".72rem", marginBottom: 4 }}>{t("replaced by a newer correction")}</div>
+                {retired.map((r) => (
+                  <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", opacity: 0.65, padding: ".2rem 0" }}>
+                    <span style={{ flex: 1 }}>
+                      <b>{r.displayPhrase}</b> <span className="sm-ta-dim">→ {r.product.name}</span>
+                    </span>
+                    <button type="button" className="sm-ta-ghost" style={{ fontSize: ".72rem", padding: ".2rem .55rem" }} onClick={() => restoreLessonRow(r)}>
+                      {t("Bring back")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 

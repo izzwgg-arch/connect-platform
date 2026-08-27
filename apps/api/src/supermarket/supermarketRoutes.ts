@@ -35,7 +35,8 @@ import { runPayIvrStep } from "./payIvrRuntime";
 import { payIvrDialplanView } from "./payIvrDialplan";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
-import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase } from "./phraseTeaching";
+import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase, retireLesson, restoreLesson } from "./phraseTeaching";
+import { applyRuleEdit, rollbackRule, MAX_RULE_CHARS } from "./agentRules";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
@@ -388,6 +389,91 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
   });
 
   /**
+   * Re-run the pipeline over ONE draft — the shared core of the admin batch
+   * reprocess AND the desk's "Re-run the agent" training button. A draft that
+   * already carries YL's translation reuses it (YL is never re-billed for the
+   * same audio); only the brain re-runs — which is exactly what makes it the
+   * training feedback loop: corrections (lessons + house rules) are read
+   * fresh on every brain run.
+   */
+  const reprocessOneDraft = async (
+    tenantId: string,
+    index: Awaited<ReturnType<typeof loadCatalogIndex>>,
+    draft: { id: string; sourceType: string; sourceId: string; transcript: unknown; translation: unknown; customerPhone: unknown },
+  ): Promise<any> => {
+    try {
+      let text = String(draft.transcript ?? "");
+      let localAudioPath: string | null = null;
+      if (draft.sourceType === "voicemail") {
+        const vm = await db.voicemail
+          .findUnique({ where: { id: draft.sourceId }, select: { transcript: true, localAudioPath: true } })
+          .catch(() => null);
+        if (vm) {
+          text = String(vm.transcript ?? "") || text;
+          localAudioPath = vm.localAudioPath ?? null;
+        }
+      }
+      // a draft that already carries YL's translation reuses it — the brain
+      // re-runs, YL is never re-billed for the same audio
+      const storedTranslation = String(draft.translation ?? "").trim();
+      const content = await composeDraftContent({ db }, tenantId, index, {
+        kind: draft.sourceType === "voicemail" ? "voicemail" : "text",
+        text,
+        localAudioPath,
+        voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
+        customerPhone: String(draft.customerPhone ?? "") || undefined,
+        ...(storedTranslation ? { preTranslated: { transcript: String(draft.transcript ?? ""), translation: storedTranslation } } : {}),
+      });
+      // the customer SPOKE their account number → re-run the POS lookup on it
+      let customerFields: any = {};
+      if (content.statedPhone) {
+        customerFields.customerPhone = content.statedPhone;
+        try {
+          const client = await posClientForTenant(db, tenantId);
+          if (client) {
+            const body: any = await client.getCustomerByPhone(posPhoneDigits(content.statedPhone) ?? content.statedPhone);
+            const ext = extractPosCustomer(body);
+            if (ext?.posCustomerId) {
+              customerFields.posCustomerId = ext.posCustomerId;
+              if (ext.name) customerFields.customerName = ext.name;
+              customerFields.customerInfo = ext;
+            }
+          }
+        } catch {
+          /* best-effort — an unreachable register costs the name, never the reprocess */
+        }
+      }
+      await db.supermarketOrderDraft.update({
+        where: { id: draft.id },
+        data: {
+          transcript: content.transcript,
+          translation: content.translation,
+          items: content.items,
+          agentItems: content.items,
+          agentLines: content.lines ?? undefined,
+          comments: content.comments,
+          notes: content.notes,
+          // ⛔ "not every message is an order... It's not supposed to be a
+          // draft" (Izzy) — the brain's non-order verdict clears it off the
+          // review queue, reason preserved in notes.
+          ...(content.notAnOrder ? { status: "DISMISSED" } : {}),
+          ...customerFields,
+        },
+      });
+      return {
+        id: draft.id,
+        ok: true,
+        engine: content.engine,
+        items: content.items.length,
+        translated: Boolean(content.translation),
+        notAnOrder: content.notAnOrder ?? undefined,
+      };
+    } catch (err: any) {
+      return { id: draft.id, ok: false, error: String(err?.message ?? err).slice(0, 200) };
+    }
+  };
+
+  /**
    * Re-run the order pipeline over EXISTING review-queue drafts (Izzy,
    * 2026-08-26: "re-transcribe all drafts that we have right now with Yiddish
    * Labs, then translate with English, and let's see if it's going to fill in
@@ -423,76 +509,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const index = await loadCatalogIndex(db, tenant.id);
     const results: any[] = [];
     for (const draft of drafts) {
-      try {
-        let text = String(draft.transcript ?? "");
-        let localAudioPath: string | null = null;
-        if (draft.sourceType === "voicemail") {
-          const vm = await db.voicemail
-            .findUnique({ where: { id: draft.sourceId }, select: { transcript: true, localAudioPath: true } })
-            .catch(() => null);
-          if (vm) {
-            text = String(vm.transcript ?? "") || text;
-            localAudioPath = vm.localAudioPath ?? null;
-          }
-        }
-        // a draft that already carries YL's translation reuses it — the brain
-        // re-runs, YL is never re-billed for the same audio
-        const storedTranslation = String(draft.translation ?? "").trim();
-        const content = await composeDraftContent({ db }, tenant.id, index, {
-          kind: draft.sourceType === "voicemail" ? "voicemail" : "text",
-          text,
-          localAudioPath,
-          voicemailId: draft.sourceType === "voicemail" ? draft.sourceId : undefined,
-          customerPhone: String(draft.customerPhone ?? "") || undefined,
-          ...(storedTranslation ? { preTranslated: { transcript: String(draft.transcript ?? ""), translation: storedTranslation } } : {}),
-        });
-        // the customer SPOKE their account number → re-run the POS lookup on it
-        let customerFields: any = {};
-        if (content.statedPhone) {
-          customerFields.customerPhone = content.statedPhone;
-          try {
-            const client = await posClientForTenant(db, tenant.id);
-            if (client) {
-              const body: any = await client.getCustomerByPhone(posPhoneDigits(content.statedPhone) ?? content.statedPhone);
-              const ext = extractPosCustomer(body);
-              if (ext?.posCustomerId) {
-                customerFields.posCustomerId = ext.posCustomerId;
-                if (ext.name) customerFields.customerName = ext.name;
-                customerFields.customerInfo = ext;
-              }
-            }
-          } catch {
-            /* best-effort — an unreachable register costs the name, never the reprocess */
-          }
-        }
-        await db.supermarketOrderDraft.update({
-          where: { id: draft.id },
-          data: {
-            transcript: content.transcript,
-            translation: content.translation,
-            items: content.items,
-            agentItems: content.items,
-            agentLines: content.lines ?? undefined,
-            comments: content.comments,
-            notes: content.notes,
-            // ⛔ "not every message is an order... It's not supposed to be a
-            // draft" (Izzy) — the brain's non-order verdict clears it off the
-            // review queue, reason preserved in notes.
-            ...(content.notAnOrder ? { status: "DISMISSED" } : {}),
-            ...customerFields,
-          },
-        });
-        results.push({
-          id: draft.id,
-          ok: true,
-          engine: content.engine,
-          items: content.items.length,
-          translated: Boolean(content.translation),
-          notAnOrder: content.notAnOrder ?? undefined,
-        });
-      } catch (err: any) {
-        results.push({ id: draft.id, ok: false, error: String(err?.message ?? err).slice(0, 200) });
-      }
+      results.push(await reprocessOneDraft(tenant.id, index, draft));
     }
     await safeAudit({
       tenantId: tenant.id,
@@ -641,7 +658,44 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     } catch {
       /* photos are decoration — never fail the draft read */
     }
-    return reply.send({ draft });
+    // canManage: the desk hides manage-only affordances (Re-run the agent)
+    // for viewers who would only ever get a 403 — a visible control that
+    // refuses on click reads as a broken product, not a permission.
+    const canManage = await allowed(req, SUPERMARKET_MANAGE_KEY);
+    return reply.send({ draft, canManage });
+  });
+
+  /**
+   * The training feedback loop (Izzy, 2026-08-27: "I should be able to
+   * correct the agent right there, and then it would update automatically…
+   * I need to see progress until it's flawless"): re-run the agent on THIS
+   * draft with everything it has learned since — house rules + lessons are
+   * read fresh on every brain run. YL's stored translation is reused (no
+   * re-billing); only the brain re-runs.
+   *
+   * ⛔ NEEDS_REVIEW only — an approved/submitted draft is a record of what a
+   * person decided and is never rewritten. Ownership (404) before permission
+   * (403), per this file's ordering contract.
+   */
+  app.post("/supermarket/drafts/:id/rerun", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const draft = await ownDraft(req, reply, (req.params as any).id);
+    if (!draft) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    if (draft.status !== "NEEDS_REVIEW") return reply.status(409).send({ error: "not_reviewable" });
+    const tenantId = tenantOf(req);
+    const index = await loadCatalogIndex(db, tenantId);
+    const result = await reprocessOneDraft(tenantId, index, draft as any);
+    await safeAudit({
+      tenantId,
+      action: "SUPERMARKET_DRAFT_RERUN",
+      entityType: "SupermarketOrderDraft",
+      entityId: String(draft.id),
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { ok: Boolean(result?.ok), engine: result?.engine ?? null, items: result?.items ?? null },
+    });
+    if (!result?.ok) return reply.status(502).send({ error: "rerun_failed", detail: String(result?.error ?? "") });
+    return reply.send({ ok: true, engine: result.engine, items: result.items, notAnOrder: result.notAnOrder ?? undefined });
   });
 
   // The rep plays the customer's own voicemail while reading the draft it
@@ -909,11 +963,16 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       db.supermarketPhraseLesson.findMany({
         where: { tenantId },
         orderBy: { lastConfirmedAt: "desc" },
-        take: 200,
+        take: 300,
       }),
       db.supermarketPhraseDismissal.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, take: 200 }),
     ]);
-    const taughtKeys = new Set<string>((lessons as any[]).map((l: any) => String(l.phrase)));
+    // retired = superseded by a newer correction; kept restorable (rollback)
+    const activeLessons = (lessons as any[]).filter((l: any) => !l.retiredAt);
+    const retiredLessons = (lessons as any[]).filter((l: any) => l.retiredAt).slice(0, 100);
+    // ⛔ ACTIVE lessons only — a retired lesson must not hide its phrase from
+    // the teaching queue while nothing active answers it
+    const taughtKeys = new Set<string>(activeLessons.map((l: any) => String(l.phrase)));
     const dismissedKeys = new Set<string>((dismissals as any[]).map((d: any) => String(d.phrase)));
     const queue = buildTeachQueue(drafts as any[], taughtKeys, dismissedKeys);
     // hydrate each lesson's product for the "taught so far" table
@@ -925,18 +984,20 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         })
       : [];
     const byId = new Map((prods as any[]).map((p: any) => [p.posProductId, p]));
+    const lessonView = (l: any) => ({
+      id: l.id,
+      phrase: l.phrase,
+      displayPhrase: l.displayPhrase || l.phrase,
+      source: l.source,
+      timesConfirmed: l.timesConfirmed,
+      timesUsed: l.timesUsed,
+      lastConfirmedAt: l.lastConfirmedAt,
+      product: byId.get(String(l.posProductId)) ?? { posProductId: l.posProductId, code: "", name: "(no longer in the catalog)", unitPriceCents: 0 },
+    });
     return reply.send({
       queue,
-      taught: (lessons as any[]).map((l: any) => ({
-        id: l.id,
-        phrase: l.phrase,
-        displayPhrase: l.displayPhrase || l.phrase,
-        source: l.source,
-        timesConfirmed: l.timesConfirmed,
-        timesUsed: l.timesUsed,
-        lastConfirmedAt: l.lastConfirmedAt,
-        product: byId.get(String(l.posProductId)) ?? { posProductId: l.posProductId, code: "", name: "(no longer in the catalog)", unitPriceCents: 0 },
-      })),
+      taught: activeLessons.map(lessonView),
+      retired: retiredLessons.map(lessonView),
       dismissed: (dismissals as any[]).map((d: any) => ({ phrase: d.phrase, createdAt: d.createdAt })),
     });
   });
@@ -977,14 +1038,124 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     return reply.send({ ok: true, phrase: res.phrase });
   });
 
+  // ⛔ SOFT retire, not delete (2026-08-27): "undo" must keep the rollback
+  // trail — a re-corrected correction has to be reversible.
   app.delete("/supermarket/phrase-teaching/lessons/:id", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
     if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
-    const del = await db.supermarketPhraseLesson.deleteMany({
-      where: { id: String((req.params as any).id), tenantId: tenantOf(req) },
-    });
-    if (!del || del.count !== 1) return reply.status(404).send({ error: "not_found" });
+    const ok = await retireLesson(db, tenantOf(req), String((req.params as any).id));
+    if (!ok) return reply.status(404).send({ error: "not_found" });
     return reply.send({ ok: true });
+  });
+
+  app.post("/supermarket/phrase-teaching/lessons/:id/restore", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const ok = await restoreLesson(db, tenantOf(req), String((req.params as any).id));
+    if (!ok) return reply.status(404).send({ error: "not_found" });
+    return reply.send({ ok: true });
+  });
+
+  // ── House rules (Izzy 2026-08-27): plain-English conventions injected into
+  //    both brain passes; every edit keeps the prior wording for rollback.
+  app.get("/supermarket/agent-rules", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const rows = await db.supermarketAgentRule.findMany({
+      where: { tenantId: tenantOf(req) },
+      orderBy: { createdAt: "asc" },
+      take: 200,
+    });
+    return reply.send({
+      rules: (rows as any[]).map((r: any) => ({
+        id: r.id,
+        text: r.text,
+        active: r.active,
+        history: Array.isArray(r.history) ? r.history : [],
+        updatedAt: r.updatedAt,
+      })),
+    });
+  });
+
+  app.post("/supermarket/agent-rules", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z.object({ text: z.string().trim().min(3).max(MAX_RULE_CHARS) }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const tenantId = tenantOf(req);
+    const rule = await db.supermarketAgentRule.create({
+      data: { tenantId, text: parsed.data.text.replace(/\s+/g, " ") },
+    });
+    await safeAudit({
+      tenantId,
+      action: "SUPERMARKET_RULE_ADDED",
+      entityType: "SupermarketAgentRule",
+      entityId: String(rule.id),
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { text: rule.text.slice(0, 200) },
+    });
+    return reply.send({ ok: true, rule: { id: rule.id, text: rule.text, active: rule.active, history: [] } });
+  });
+
+  app.put("/supermarket/agent-rules/:id", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const tenantId = tenantOf(req);
+    const rule = await db.supermarketAgentRule.findFirst({ where: { id: String((req.params as any).id), tenantId } });
+    if (!rule) return reply.status(404).send({ error: "not_found" });
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z.object({ text: z.string().trim().min(3).max(MAX_RULE_CHARS) }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const edit = applyRuleEdit(rule, parsed.data.text);
+    if (!edit) return reply.send({ ok: true, rule: { id: rule.id, text: rule.text, active: rule.active, history: rule.history } });
+    const saved = await db.supermarketAgentRule.update({ where: { id: rule.id }, data: { text: edit.text, history: edit.history } });
+    await safeAudit({
+      tenantId,
+      action: "SUPERMARKET_RULE_EDITED",
+      entityType: "SupermarketAgentRule",
+      entityId: String(rule.id),
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { text: edit.text.slice(0, 200), was: rule.text.slice(0, 200) },
+    });
+    return reply.send({ ok: true, rule: { id: saved.id, text: saved.text, active: saved.active, history: saved.history } });
+  });
+
+  app.post("/supermarket/agent-rules/:id/rollback", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const tenantId = tenantOf(req);
+    const rule = await db.supermarketAgentRule.findFirst({ where: { id: String((req.params as any).id), tenantId } });
+    if (!rule) return reply.status(404).send({ error: "not_found" });
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const rolled = rollbackRule(rule);
+    if (!rolled) return reply.status(409).send({ error: "nothing_to_roll_back" });
+    const saved = await db.supermarketAgentRule.update({ where: { id: rule.id }, data: { text: rolled.text, history: rolled.history } });
+    await safeAudit({
+      tenantId,
+      action: "SUPERMARKET_RULE_ROLLED_BACK",
+      entityType: "SupermarketAgentRule",
+      entityId: String(rule.id),
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { text: saved.text.slice(0, 200), was: rule.text.slice(0, 200) },
+    });
+    return reply.send({ ok: true, rule: { id: saved.id, text: saved.text, active: saved.active, history: saved.history } });
+  });
+
+  app.post("/supermarket/agent-rules/:id/active", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const tenantId = tenantOf(req);
+    const rule = await db.supermarketAgentRule.findFirst({ where: { id: String((req.params as any).id), tenantId } });
+    if (!rule) return reply.status(404).send({ error: "not_found" });
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z.object({ active: z.boolean() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
+    const saved = await db.supermarketAgentRule.update({ where: { id: rule.id }, data: { active: parsed.data.active } });
+    await safeAudit({
+      tenantId,
+      action: parsed.data.active ? "SUPERMARKET_RULE_RESTORED" : "SUPERMARKET_RULE_DISABLED",
+      entityType: "SupermarketAgentRule",
+      entityId: String(rule.id),
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { text: rule.text.slice(0, 200) },
+    });
+    return reply.send({ ok: true, rule: { id: saved.id, text: saved.text, active: saved.active, history: saved.history } });
   });
 
   /** The screen-pop / order-twin lookup: phone → register account. */

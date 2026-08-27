@@ -29,6 +29,7 @@ import { resolveIntegrationKey } from "./integrationCredentials";
 import { posPhoneDigits } from "./posWithLogic";
 import { detectWic, WIC_COMMENT, type DraftItem } from "./draftMatcher";
 import { loadLessons, matchLessonsToLines } from "./phraseLessons";
+import { loadActiveRules, rulesPromptBlock } from "./agentRules";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
 const BRAIN_TIMEOUT_MS = 90_000;
@@ -235,8 +236,18 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
   const search = deps.search ?? searchCandidates;
   const model = deps.model ?? String(process.env.SUPERMARKET_BRAIN_MODEL || DEFAULT_BRAIN_MODEL);
 
+  // House rules — the store owner's own conventions (agentRules.ts), read
+  // FRESH on every run so a correction reaches the very next draft.
+  // ⛔ Injected into BOTH passes on purpose: EXTRACT needs spelling/quantity
+  // conventions ("Balabusta" → the catalog's brand wording, "two dozen eggs"
+  // = 2× the 12-pack) because the phrase it emits is what the candidate
+  // search runs on; RESOLVE needs the pick rules ("no brand milk = Golden
+  // Flow", "cheapest in-stock dozen"). One pass alone leaves half the rule
+  // unenforceable.
+  const rulesBlock = rulesPromptBlock(await loadActiveRules(deps.db, tenantId));
+
   // 1) EXTRACT
-  const extracted = await llm(key.apiKey, model, EXTRACT_SYSTEM, text.slice(0, 6000), 16000);
+  const extracted = await llm(key.apiKey, model, EXTRACT_SYSTEM + rulesBlock, text.slice(0, 6000), 16000);
   if (!extracted) return null;
   // ⛔ Izzy, 2026-08-26 ("the agent needs to use common sense. It's not
   // supposed to be a draft"): a complaint / question / chatter is NOT an
@@ -321,7 +332,7 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     })),
     ...(usuals.length ? { customerUsuals: usuals.map(asCandidate) } : {}),
   });
-  const resolved = await llm(key.apiKey, model, RESOLVE_SYSTEM, resolveUser, 16000);
+  const resolved = await llm(key.apiKey, model, RESOLVE_SYSTEM + rulesBlock, resolveUser, 16000);
   if (!resolved || !Array.isArray(resolved.picks)) return null;
 
   const items: DraftItem[] = [];
