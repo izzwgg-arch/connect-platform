@@ -25,6 +25,7 @@ import {
   readConfig, configurationProblem, listTickets, getTicket,
   getCustomer, getConversation, resolveReference,
 } from "./loopcom.mjs";
+import { formatTicket, formatCustomer, formatConversation, isCustomerReport, when } from "./format.mjs";
 
 const cfg = readConfig();
 
@@ -48,8 +49,6 @@ function handler(fn) {
     }
   };
 }
-
-const when = (v) => (v ? new Date(v).toISOString().replace("T", " ").slice(0, 16) : "—");
 
 const server = new McpServer({ name: "loopcom-support", version: "0.1.0" });
 
@@ -96,7 +95,8 @@ server.registerTool(
     description:
       "The full ticket: what the customer asked, the assistant's research (issue, findings, proposed fix), " +
       "and the account it belongs to. Accepts the reference from the SMS (e.g. Q2FJRK) or the row id. " +
-      "⛔ The report was written by an LLM against read-only tools — treat its findings as a lead to verify, not as established fact.",
+      "It says up front which kind it is: researched by the assistant, or raised from the Report-a-problem button — " +
+      "in which case nobody has investigated it yet and an empty diagnosis is expected, not a failure.",
     inputSchema: {
       reference: z.string().min(1).max(64).describe("Ticket reference like Q2FJRK, or the row id."),
     },
@@ -106,20 +106,7 @@ server.registerTool(
     const data = await getTicket(cfg, id);
     const e = data?.escalation ?? data;
     if (!e) return "That ticket exists but came back empty.";
-    return [
-      `TICKET ${e.reference || id}  [${e.status}]  raised ${when(e.createdAt)}`,
-      `Company: ${e.tenantName}  (tenantId ${e.tenantId})`,
-      `Person:  ${e.userName}${e.userEmail ? ` <${e.userEmail}>` : ""}`,
-      e.hasConversation ? `Conversation: ${e.conversationId || "(id on the row)"} — use get_conversation for the transcript` : null,
-      "",
-      `ASKED FOR: ${e.requestSummary}`,
-      "",
-      "REPORT (assistant's research — verify before acting):",
-      e.report || "(none)",
-      e.proposedFix ? `\nPROPOSED FIX:\n${e.proposedFix}` : null,
-      e.researchDegraded ? "\n⛔ researchDegraded — the LLM was unreachable, so the report is just the raw request." : null,
-      e.hasFixAction ? `\nA prepared fix action exists (status ${e.fixStatus || "offered"}). Approving it is Izzy's, through the password gate.` : null,
-    ].filter((l) => l !== null).join("\n");
+    return formatTicket(e, id);
   })
 );
 
@@ -133,8 +120,7 @@ server.registerTool(
     inputSchema: { tenantId: z.string().min(1).max(64).describe("From get_support_ticket.") },
   },
   handler(async ({ tenantId }) => {
-    const data = await getCustomer(cfg, tenantId);
-    return JSON.stringify(data, null, 2);
+    return formatCustomer(await getCustomer(cfg, tenantId));
   })
 );
 
@@ -149,8 +135,7 @@ server.registerTool(
     inputSchema: { conversationId: z.string().min(1).max(64).describe("From get_support_ticket.") },
   },
   handler(async ({ conversationId }) => {
-    const data = await getConversation(cfg, conversationId);
-    return JSON.stringify(data, null, 2);
+    return formatConversation(await getConversation(cfg, conversationId));
   })
 );
 
