@@ -104,15 +104,37 @@ change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
   **Trust Bookkeepings 106 (08-24, a real customer in Yiddish)**. Size: **~2/week
   (2 the week of 08-24, 2 the week of 08-17), ≈2% of eligible** — matching the
   mechanism (~2 s copy ÷ 60 s sweep ≈ 3%).
-  ⏳ **NOT FIXED, both halves Izzy's call:** the narrow fix is to make
-  `no_recording` **non-final while the voicemail is young** (leave `emailedAt`
-  null, let the next sweep re-decide, exactly as the watchdog rescues stranded
-  rows). ⛔ **Do NOT "fix" it by awaiting the copy inline** — that puts a PBX HTTP
-  fetch back on the ingest path, the 2026-08-12 helper FD-exhaustion class.
-  Releasing the three (clear `emailedAt` + `emailSkipReason`, the 2026-08-18
-  recipe) would email them, but they are 3–4 days old.
-  Ids `cmt5xnl6w01x7r013air2y6ex`, `cmt7jhgvr0c14r613opfjfv8f`,
-  `cmt7plqxg0l4dmj13zeyrvtkv`.
+  ✅✅ **FIXED THE SAME DAY (`6136f462`) — Izzy: *"There can never, ever, ever,
+  ever be a situation where emails don't arrive."*** Two changes, and **the
+  BOUNDS are the safety, not the behaviour.** (a) Missing audio on a
+  just-arrived voicemail is now `awaiting_recording` carrying `retry: true`,
+  which the sender deliberately does NOT stamp, so the next sweep judges it
+  again — bounded by **`AUDIO_ARRIVAL_GRACE_MS` = 5 min**, which ⛔ **MUST stay
+  under `NEVER_PROCESSED_GRACE_MS` (10 min)** or a voicemail legitimately
+  waiting for audio gets reported as stranded, and ⛔ **MUST be finite** or the
+  row is permanently eligible, permanently the OLDEST, and fills the sweep's
+  ascending batch of 50 — **the 2026-08-18 outage exactly**. ⛔ A row with no
+  `receivedAt`, or one dated in the FUTURE, takes the FINAL branch: an unknown
+  age must never buy an unbounded retry. (b) Watchdog **self-heal 3** re-opens a
+  `no_recording` stamp whose audio has SINCE arrived, so a grace that expires
+  during a wedged helper is still recoverable.
+  ⛔⛔ **THE TERMINATION ARGUMENT MUST BE RE-DERIVED IF THAT QUERY IS EVER
+  WIDENED:** a row is re-opened only while stamped `no_recording` AND its audio
+  is present, then re-judged WITH audio — so it can only reach send / `too_short`
+  / `no_recipient` / `disabled` / `already_queued`, none of which the query
+  matches, so it re-opens at most once. **Matching a reason the re-decision can
+  produce again is an infinite re-open/re-email loop that mails a customer every
+  watchdog tick**; a test enumerates every reachable outcome to pin it.
+  ⛔ **Do NOT "fix" the original race by awaiting the copy inline** — that puts a
+  PBX HTTP fetch back on the ingest path, the 2026-08-12 helper FD-exhaustion
+  class. ✅ **19 tests, 12 of which FAIL replayed against `HEAD`** (all three
+  source guards + the behavioural no-stamp test); voicemail suite **101/101**;
+  api typecheck **76 = the exact baseline**, none in a voicemail file.
+  ✅ **The three lost ones are recovered BY THE CODE, not by a hand edit** —
+  previewed read-only before deploying so the outcome was known, not discovered:
+  **2 emails really send** (Trust Bookkeepings 106, Yossis 102 — both have a
+  recipient) and **A plus center 108 correctly reclassifies to `no_recipient`**,
+  its true reason, which `gapsWorthAlerting` never escalates, so no spurious page.
 - ⚠️⚠️ **FIVE BLIND MAILBOXES TOOK 15 VOICEMAILS THAT REACHED NOBODY, AND THE LIST
   IN THIS FILE WAS OUT OF DATE.** Now: **A plus center 108 (10)**, **B Visible 105
   (2)**, **B Visible 106 (1)**, **Create A Box 105 (1)**, **Landau Home 101 (1)** —

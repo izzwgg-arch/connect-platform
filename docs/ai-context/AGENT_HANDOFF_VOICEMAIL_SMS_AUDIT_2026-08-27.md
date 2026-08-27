@@ -110,20 +110,60 @@ by voicemail id.
 unrecoverable. The expected rate matches the mechanism: ~2 s copy over a 60 s
 sweep is about 3%.
 
-### NOT FIXED — two decisions, both Izzy's
+### FIXED the same day — Izzy: *"There can never, ever, ever, ever be a situation where emails don't arrive"*
 
-1. **The fix.** The narrow one is to make `no_recording` non-final while the
-   voicemail is young — leave `emailedAt` null and let the next sweep re-decide,
-   the way the watchdog already rescues stranded rows. **Do NOT "fix" it by
-   awaiting the audio copy inline**: that puts a PBX HTTP fetch on the ingest
-   path, which is exactly what the fire-and-forget shape deliberately avoids
-   (the 2026-08-12 helper FD-exhaustion class).
-2. **The three lost emails.** Clearing `emailedAt` + `emailSkipReason` on those
-   three ids makes the next sweep email them — the same release used for the 9
-   `no_recipient` stamps on 2026-08-18. They are 3-4 days old. **Deliberately not
-   done**: emailing a customer a 4-day-old voicemail notification is his call.
-   Ids: `cmt5xnl6w01x7r013air2y6ex`, `cmt7jhgvr0c14r613opfjfv8f`,
-   `cmt7plqxg0l4dmj13zeyrvtkv`.
+Commit `6136f462`. Two changes, and **the bounds on each are the safety, not the
+behaviour** — get either wrong and this becomes a worse bug than the one it fixes.
+
+**(a) Missing audio on a just-arrived voicemail is now a RETRY, not a stamp.**
+`decideVoicemailEmail` returns a new `awaiting_recording` reason carrying
+`retry: true`, and the sender deliberately does **not** call `markProcessed` for
+it, so the next sweep judges it again once the copy has landed. Bounded by
+**`AUDIO_ARRIVAL_GRACE_MS` = 5 minutes**, and both bounds are load-bearing:
+
+- ⛔ **It MUST stay under `NEVER_PROCESSED_GRACE_MS` (10 min)** or a voicemail
+  legitimately waiting for its audio starts being reported by the watchdog as
+  stranded — a guard test asserts the inequality rather than the constant, so it
+  survives either being retuned.
+- ⛔ **It MUST be finite.** An unstamped row is permanently eligible, permanently
+  the OLDEST, and fills the sweep's ascending batch of 50 — **that is the
+  2026-08-18 outage exactly**, and the sweep's own header warns about it.
+- ⛔ A row with **no `receivedAt`, or one in the future** (clock skew), takes the
+  FINAL branch: an unknown age must never buy an unbounded retry.
+
+**(b) A `no_recording` stamp whose audio has SINCE arrived is re-opened.**
+Watchdog self-heal 3 (`buildNoRecordingReopenWhere` + `reopenRecoveredNoRecordings`)
+clears `emailedAt`/`emailSkipReason` so the next sweep emails it. This is what
+makes the promise true when the grace legitimately expires — a wedged PBX helper
+delays the audio past 5 minutes, the row stamps, and without this it is lost.
+Bounded to `REOPEN_BATCH` (50) per pass, scoped to the 7-day window, excluded
+tenants filtered in the query, and the `updateMany` is conditioned on the reason
+still being `no_recording` so a blue/green pair cannot re-open twice.
+
+⛔⛔ **THE TERMINATION ARGUMENT IS THE THING TO RE-DERIVE IF YOU EVER WIDEN THAT
+QUERY.** A row is re-opened only while stamped `no_recording` **and** its audio is
+present. It is then re-judged **with** audio, so it can only reach `send`,
+`too_short`, `no_recipient`, `disabled` or `already_queued` — none of which the
+query matches. A row therefore re-opens at most once. Matching a reason the
+re-decision can produce again is an infinite re-open/re-email cycle that mails a
+customer on every watchdog tick; a test enumerates every reachable outcome and
+asserts none is `no_recording`.
+
+⛔ **Do NOT "fix" the original race by awaiting the audio copy inline** — that
+puts a PBX HTTP fetch back on the ingest path, which is exactly what the
+fire-and-forget shape avoids (the 2026-08-12 helper FD-exhaustion class).
+
+**Proven:** 19 tests in `voicemailAudioRace.test.ts`, **12 of which fail replayed
+against `HEAD`** — including all three source guards and the behavioural "the
+sender does not stamp" test. Voicemail suite **101/101**; api typecheck **76 = the
+exact baseline**, none in a voicemail file.
+
+**The three lost ones are recovered by (b) rather than by a hand edit** — the
+system heals itself, which is the point. Previewed read-only before deploying, so
+the outcome was known rather than discovered: **2 emails actually send** (Trust
+Bookkeepings 106 and Yossis 102, both have a recipient) and **A plus center 108
+correctly reclassifies to `no_recipient`** — its true reason — which
+`gapsWorthAlerting` never escalates, so no spurious page.
 
 ---
 
