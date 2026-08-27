@@ -1,0 +1,17 @@
+{
+  "name": "loopcom-support-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read LoopCom support escalations from a Claude Code session (read-only).",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check loopcom.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^4.4.3"
+  }
+}
