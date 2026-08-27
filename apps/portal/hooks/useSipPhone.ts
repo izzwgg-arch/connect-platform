@@ -3,6 +3,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
+import { AnswerLatencyTracker, type AnswerLatencyReport } from "../lib/answerLatency";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 import { useTelephonySocket } from "./useTelephonySocket";
 import type { LiveCall } from "../types/liveCall";
@@ -2626,8 +2627,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         window.setTimeout(() => syncReceiversToAudio(pc), 450);
       }
     };
-    session.on("accepted", () => onCallAnswered("[SIP] CALL_ACCEPTED"));
-    session.on("confirmed", () => onCallAnswered("[SIP] CALL_ACCEPTED (confirmed)"));
+    session.on("accepted", () => {
+      // ⛔ JsSIP fires this when our 200 OK is handed to the transport — BEFORE
+      // any ACK (RTCSession.js: reply(200) sets STATUS_WAITING_FOR_ACK, then
+      // _accepted). It is NOT proof the call is up.
+      answerLatency.accepted(session);
+      onCallAnswered("[SIP] CALL_ACCEPTED");
+    });
+    session.on("confirmed", () => {
+      // Their ACK arrived. THIS is proof the call is up.
+      answerLatency.confirmed(session);
+      onCallAnswered("[SIP] CALL_ACCEPTED (confirmed)");
+    });
     session.on("hold", () => {
       console.log(`[MULTICALL_HOLD] web session=${mcId} hold_event`);
       patchSessionMeta(mcId, { onHold: true, state: "held", isActive: false });
@@ -2637,7 +2648,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchSessionMeta(mcId, { onHold: false, state: "connected", isActive: true });
     });
 
-    session.on("ended", () => {
+    session.on("ended", (e?: { cause?: string }) => {
+      // ⛔ THE POINT OF THIS WHOLE CHANGE: JsSIP ends a missing-ACK call with
+      // cause NO_ACK, and this argument used to be dropped on the floor.
+      reportAnswerLatency(answerLatency.finish(session, e?.cause ?? null, "primary"));
       stopAllAudio();
       if (!userInitiatedHangupRef.current) {
         playCallEndChime();
@@ -2892,10 +2906,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     });
     session.on("accepted", () => {
       // Answered via answerSession — promotion to active is handled there.
+      answerLatency.accepted(session);
       patchSessionMeta(mcId, { state: "connected" });
       settleCallWaitingAlert();
     });
     session.on("confirmed", () => {
+      answerLatency.confirmed(session);
       patchSessionMeta(mcId, { state: "connected" });
       settleCallWaitingAlert();
     });
@@ -2905,7 +2921,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     session.on("unhold", () => {
       patchSessionMeta(mcId, { onHold: false, state: "connected", isActive: true });
     });
-    session.on("ended", () => {
+    session.on("ended", (e?: { cause?: string }) => {
+      reportAnswerLatency(answerLatency.finish(session, e?.cause ?? null, "multicall"));
       if (!userInitiatedHangupRef.current) {
         playCallEndChime();
       }
@@ -3150,6 +3167,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   const answer = useCallback(() => {
     if (!sessionRef.current) return;
+    answerLatency.tap(sessionRef.current);
     stopAllAudio(); // Stop ringtone immediately on answer
     navigator.mediaDevices
       .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
@@ -3644,6 +3662,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       console.warn(`[MULTICALL] answerSession: no session for id=${id}`);
       return;
     }
+    answerLatency.tap(s);
     // Hold any currently active session before answering the new one.
     const active = Array.from(sessionMetaRef.current.values()).find((x) => x.isActive);
     if (active && active.id !== id) {
@@ -4036,6 +4055,44 @@ export function SipPhoneProvider({ children }: { children: ReactNode }) {
   if (mode === "detecting") return null;
   if (mode === "proxy") return React.createElement(DesktopSipPhoneProxyProvider, null, children);
   return React.createElement(LocalSipPhoneProvider, null, children);
+}
+
+/**
+ * ⛔ INSTRUMENTATION ONLY — see lib/answerLatency.ts for why this measures
+ * rather than fixes. Nothing here tears down a call, cancels a timer, or
+ * changes what the user sees. Every failure is swallowed: losing a metric must
+ * never cost a call.
+ */
+const answerLatency = new AnswerLatencyTracker();
+let diagSessionPromise: Promise<string | null> | null = null;
+
+/** Opened lazily on the FIRST answered call, so an idle client costs nothing. */
+function ensureDiagSession(): Promise<string | null> {
+  if (!diagSessionPromise) {
+    // ⛔ `iceHasTurn` is deliberately NOT sent. The server defaults it to false,
+    // and CLAUDE.md records that the resulting "iceHasTurn:false" has misled
+    // investigations. Sending nothing is honest; sending a guess is not.
+    diagSessionPromise = apiPost<{ sessionId?: string }>("/voice/diag/session/start", { platform: "WEB" })
+      .then((r) => r?.sessionId ?? null)
+      .catch(() => null);
+  }
+  return diagSessionPromise;
+}
+
+function reportAnswerLatency(report: AnswerLatencyReport | null): void {
+  if (!report) return;
+  void ensureDiagSession()
+    .then((sessionId) => {
+      if (!sessionId) return undefined;
+      return apiPost("/voice/diag/event", {
+        sessionId,
+        // Reuse a type the enum already allows — adding one would need an api
+        // change and a deploy, and this is portal-only by design.
+        type: report.outcome === "confirmed" ? "SIP_ANSWER_CONFIRMED" : "CALL_ENDED",
+        payload: { answerLatency: report },
+      }).catch(() => undefined);
+    })
+    .catch(() => undefined);
 }
 
 export function useSipPhone(): SipPhoneState & SipPhoneActions {
