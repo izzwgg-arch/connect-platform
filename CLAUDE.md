@@ -5242,6 +5242,28 @@ on loopcom, backed up.)
   `developer.apple.com/contact/request/migrate-individual-account`, needs
   founder + Account Holder + the D-U-N-S, and **migrates the existing account**
   so app `6796392950` and TestFlight survive.
+- ⛔ **NUANCE, asked and answered 2026-08-27: "can we START without the D-U-N-S?"
+  — for the ORGANIZATION account, NO. It is a required field in the Play Console
+  signup form itself, so the account cannot be created at all.** A **PERSONAL**
+  account needs no D-U-N-S and can be opened today ($25) — and **personal →
+  organization conversion IS supported** (new payments profile of the org type →
+  verify → link it), which corrects the "everything waits on the D-U-N-S"
+  framing above. ⛔⛔ **But the price is real and permanent for that app:
+  personal accounts created after 2023-11-13 must run a closed test with 12
+  testers opted in CONTINUOUSLY for 14 days before they may apply for production
+  access; ORGANIZATION accounts are exempt and publish straight to production.**
+  ⏳ **UNVERIFIED and it is the whole decision: whether converting to
+  organization LIFTS that gate, or whether the app stays bound to it.** Do not
+  assume it lifts. **Recommendation: wait for the D-U-N-S** — a clean case lands
+  in 48–72 h and the 14-day tester clock is longer than the wait it avoids.
+- ⚠️ **FOUND 2026-08-27, needs Izzy: there are TWO D&B cases and NO number has
+  arrived.** `support@connectcomunications.com` holds an EARLIER case
+  **`DFC-614186` (2026-07-08)** whose only mail is a reminder to *"complete and
+  submit"* — i.e. it reads as **started and never submitted** — and **nothing at
+  all for `DFC-656595`**, which was presumably filed under `izzy@loopcom.net`.
+  ⛔ **Check that mailbox before concluding the August case is progressing**, and
+  ⛔ **two open applications for one entity is itself a manual-review trigger**.
+  ✅ The name risk is settled since — see [[loopcom-llc-registered-name-is-authoritative]].
 - ⛔⛔ **`33 NY-17M` IS REJECTED BY ADDRESS AUTOCOMPLETES AND IT IS NOT A BAD
   ADDRESS** — type **`33 Route 17M`**. The hyphenated route shorthand matches
   no postal index and the error reads like the address does not exist.
