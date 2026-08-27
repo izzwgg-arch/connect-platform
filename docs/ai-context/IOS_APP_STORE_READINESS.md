@@ -1,76 +1,103 @@
-# iOS App Store Readiness Checklist
+# iOS App Store Readiness — measured state (2026-08-27)
 
-> Goal: get the Connect iPhone app fully production-ready and submitted to the App
-> Store, at parity with the Android app, **without breaking Android**.
-> Safety spine for every step: `IOS_WORK_ANDROID_GUARDRAILS.md`.
-> Plain-English status so the owner (Izzy) can see exactly what's left.
+> Goal: submit the Loopcom iPhone app to the App Store.
+> Safety spine: `IOS_WORK_ANDROID_GUARDRAILS.md`.
+> **Everything here was READ LIVE from the App Store Connect API**, and the fixes
+> below were WRITTEN through it and read back. Re-run before trusting it:
+> `node /root/.appstoreconnect/asc-final.mjs` on loopcom (read-only checklist).
 
-Legend: ✅ done · 🟡 prepared, needs owner action · ⬜ not started
+App id **6796392950** · bundle `com.connectcommunications.mobile` · SKU
+`connectcomms-mobile` · name **Loopcom** · version **1.0**, state
+`PREPARE_FOR_SUBMISSION`, release type `AFTER_APPROVAL`.
 
----
-
-## A. Already done in the repo (verified in code)
-
-- ✅ Bundle identifier `com.connectcommunications.mobile` (`app.config.ts` → ios).
-- ✅ iOS purpose strings: camera, microphone, contacts (`ios.infoPlist`).
-- ✅ Background modes: `voip`, `remote-notification`, `audio`.
-- ✅ Native PushKit + CallKit wiring via `plugins/withIosVoipPush.js` (reports
-  CallKit before JS boots; no-op on Android).
-- ✅ Worker APNs VoIP sender (`packages/shared/apnsVoipPush.ts`), gated on
-  `device.platform === "IOS"`.
-- ✅ `eas.json` production profile with iOS `autoIncrement: buildNumber`.
-- ✅ Cold-killed CallKit ring verified on a real iPhone (Phase 7b, commit 0141aa2d).
-- ✅ OTA updates disabled (owner directive) — ship only via new builds.
-
-## B. Compliance changes made this session (iOS-scoped, zero Android surface)
-
-- ✅ **Encryption export declaration** — `ITSAppUsesNonExemptEncryption: false`
-  added to `ios.infoPlist`. Removes the manual export-compliance prompt on every
-  build. (App uses only standard TLS/HTTPS — exempt.)
-- ✅ **Privacy manifest** — `ios.privacyManifests` added, declaring the
-  required-reason APIs (UserDefaults, file timestamp, system boot time, disk
-  space), `NSPrivacyTracking: false`, no tracking domains. Apple requires this.
-
-## C. Cursor builds these (iOS-scoped, behind the Android gate)
-
-- ⬜ Prebuild + production iOS build via EAS (`eas build -p ios --profile production`).
-- ⬜ Confirm the privacy manifest and encryption key land in the generated
-  `Info.plist` / `PrivacyInfo.xcprivacy` after prebuild.
-- ⬜ Run mobile + telephony test suites; produce the iOS-only `git diff` proof.
-
-## D. Owner-only human steps (no tool can do these for you)
-
-These are hard-gated by Apple and by safety rules. They are quick, but they're yours:
-
-- 🟡 **Apple Developer account / signing.** Sign in to your Apple Developer
-  account; let EAS manage or upload the distribution certificate + provisioning
-  profile. (Credentials never pass through an agent.)
-- 🟡 **APNs production flip.** Set `APNS_PRODUCTION=1` (or the equivalent) in the
-  server worker environment so VoIP pushes go to Apple's production host for
-  TestFlight/App Store builds. Agents can only tell you the value; you apply it in
-  `/opt/connectcomms/env/` — which is off-limits to agents.
-- 🟡 **Demo account for Apple review.** Apple reviewers must be able to place a
-  call that actually rings. Provide a test extension/login that rings on iOS (e.g.
-  enroll an iOS-only test extension in the wake canary). Put the credentials in the
-  App Store review notes.
-- 🟡 **`eas.json` submit block.** Fill `submit.production.ios` with your `appleId`,
-  `ascAppId`, and `appleTeamId` (or connect an App Store Connect API key). These
-  are your account identifiers — you add them.
-- 🟡 **Store listing in App Store Connect.** App name, subtitle, description,
-  keywords, support URL, **privacy policy URL**, category, screenshots (6.7" and
-  6.1" at minimum), app privacy questionnaire.
-- 🟡 **Submit for review** (`eas submit -p ios --profile production`, then hit
-  Submit in App Store Connect). This is an irreversible publish action — yours.
-
-## E. Ship gate (must pass before submission — see guardrails doc)
-
-- ⬜ `git diff --name-only` shows only iOS-only files + docs.
-- ⬜ Mobile pure-logic test suite green.
-- ⬜ Telephony test suite green.
-- ⬜ **Manual Android cold-call smoke test passes** (kill app, inbound call rings
-  and answers). Android must be provably intact.
+## Decisions Izzy made 2026-08-27
+- **Submit under the personal/individual Apple account** rather than wait for the
+  organization migration (D-U-N-S case DFC-656595). ⛔ So the App Store will list
+  the seller as **Israel Weinstock**, not Loopcom LLC, until that migration lands
+  — and **the migration does not require re-submitting the app.**
+- **Submit build 57 straight away** (not 56, which is what testers have).
+- **Move every listing URL to loopcom.net.**
 
 ---
 
-*Update the checkboxes as steps land. Do not mark C or E complete on green CI
-alone — confirm the artifact and the Android smoke test per the guardrails doc.*
+## ✅ Done — written through the API and read back
+
+| Field | Value |
+|---|---|
+| description | rewritten, Loopcom-branded, dead URL removed |
+| keywords / subtitle | already present ("Business calls & voicemail") |
+| support URL | `https://www.loopcom.net/support/` |
+| marketing URL | `https://www.loopcom.net/` |
+| privacy policy URL | `https://app.loopcom.net/privacy` |
+| content rights | `DOES_NOT_USE_THIRD_PARTY_CONTENT` |
+| age rating | `FOUR_PLUS`, declaration present |
+| category | Business |
+| build attached | **57** (was 35, from July) |
+| review notes | rewritten; now also states there is no in-app sign-up |
+
+⛔ **Encryption + privacy manifest are in the BUILD, not the listing** —
+`ITSAppUsesNonExemptEncryption: false` and `ios.privacyManifests` in
+`app.config.ts`. Confirmed on the artifact: build 57 carries
+`usesNonExemptEncryption: false`, so export compliance is auto-answered and the
+submission will not stop to ask. Do not hunt for these in App Store Connect.
+
+## ✅ The reviewer demo account is REAL and correctly wired — checked, not assumed
+`loopcom.review@example.com` is **ACTIVE**, **has actually signed in**
+(`lastLoginAt` 2026-07-31), belongs to tenant **Loopcom Demo**
+(`cms8yjvth8ctlo4137738yg0n`), **owns extension 101**, and the tenant is on the
+**443 SIP route**. The test number in the notes, **347-978-0090**, really maps to
+`loopcom_demo` in `PbxTenantInboundDid`.
+⛔ **The `@example.com` address looks like a placeholder and is not one** — Apple
+never emails it, and changing it breaks a working login.
+
+## ✅ What the URL fix actually repaired
+`https://connectcomunications.com` **fails TLS**: the cert on 31.220.77.60 is
+`CN=www.loopcom.net` (SANs `loopcom.net, www.loopcom.net`), so that hostname is
+not on it; plain HTTP 301s to `https://www.loopcom.net/`, but the stored URL was
+https so the redirect was never reached. It was the marketing URL **and** the
+closing line of the customer-facing description. Both are gone.
+✅ Support now points at a **real support page** (`Support | Loopcom`, 200) rather
+than the portal login screen, which is a weak support URL and draws its own
+rejection.
+
+---
+
+## ⛔ WHAT STILL BLOCKS THE SUBMIT BUTTON
+
+### 1. ZERO screenshots — the only engineering-side blocker left
+`appScreenshotSets` is **empty**. Apple hard-blocks submission without them.
+Needs a **real iPhone** signed into the demo account — there is no Mac here, so a
+simulator capture is not available.
+⛔ **Shoot them on the Loopcom Demo tenant ONLY.** A real customer's call history,
+voicemail or messages in a store screenshot is a data leak — the same rule the
+Play Store handoff records.
+Screens worth capturing: Recents (call history), an active call, Voicemail,
+Messages, Contacts/keypad.
+
+### 2. App Privacy questionnaire — UNPROVABLE FROM HERE
+⛔⛔ `/v1/appDataUsages` and `/v1/appDataUsagesPublishState` both answer
+**404 "does not exist"** — App Privacy is **not on the public App Store Connect
+API at all**. **No script can confirm it, and a green probe means nothing.**
+Somebody must open App Store Connect → App Privacy and look. It is a hard gate.
+
+### 3. Free Apps agreement — no API either
+Must be active under Agreements, Tax, and Banking. An expired agreement silently
+blocks submission and shows up nowhere in the API.
+
+### 4. The Submit press itself
+Irreversible and outward-facing. Izzy's.
+
+---
+
+## ⚠️ Worth knowing
+- **Account deletion (Guideline 5.1.1(v))** applies to apps supporting account
+  *creation*. Loopcom is invite-only with no in-app sign-up — the standard
+  exemption. The review notes now say so explicitly.
+- ⛔ **Build 57 has never left the internal group.** External testers have **56**;
+  57 has no beta review and no external group. Beta review is irrelevant to an App
+  Store submission, but it does mean **the build going to Apple is one no human
+  has opened**. Izzy chose this knowingly.
+- ⛔ **A 200 from the ASC API is not proof the field changed.** The content-rights
+  PATCH answered 200 and read back `null` on the immediate GET; a second read
+  showed it had landed. **Read back twice, or on a fresh request, before
+  believing a write failed.**

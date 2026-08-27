@@ -71,69 +71,72 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
-## ⛔⛔ AGENT HANDOFF — submitting the iPhone app to Apple: the listing is 80% done, and FIVE things block the submit button (2026-08-27) — READ FIRST before any App Store work, before "fixing" the reviewer demo account, or before believing the App Privacy questionnaire can be checked by a script
+## ⛔⛔ AGENT HANDOFF — the iPhone App Store submission: 4 of 5 blockers CLOSED, only SCREENSHOTS and two web-UI checks remain (2026-08-27) — READ FIRST before any App Store work, before "fixing" the reviewer demo account, before trusting a 200 from the ASC API, or before believing App Privacy can be checked by a script
 
-Full state, measured live: **`docs/ai-context/IOS_APP_STORE_READINESS.md`**
-(**Read-only App Store Connect API probe — no listing write, no submission, no
-build, no deploy, no data change.** Probe script:
-`/root/.appstoreconnect/asc-probe.mjs` on loopcom.)
+Full state: **`docs/ai-context/IOS_APP_STORE_READINESS.md`**
+(**Listing metadata WRITTEN through the App Store Connect API and read back — no
+submission, no build, no deploy, no code change, no data change.** Read-only
+checklist: `node /root/.appstoreconnect/asc-final.mjs` on loopcom.)
+Izzy's decisions, 2026-08-27: **submit under the personal account** (do not wait
+for the org migration), **submit build 57**, **move every URL to loopcom.net**.
 
-- ✅ **Far more is done than anyone remembered.** App id **6796392950**, version
-  **1.0** has sat in `PREPARE_FOR_SUBMISSION` since 2026-07-30 carrying a real
-  1,036-char description, keywords, subtitle, Business category, a **4+** age
-  rating with its declaration, a working privacy-policy URL and **genuinely good
-  review notes** that tell the reviewer how to place an inbound and an outbound
-  test call. Encryption + privacy manifest live **in the build**
-  (`ITSAppUsesNonExemptEncryption`, `ios.privacyManifests` in `app.config.ts`),
-  not in the listing — do not hunt for them in App Store Connect.
+- ✅ **Far more was already done than anyone remembered.** App **6796392950**,
+  version **1.0** has sat in `PREPARE_FOR_SUBMISSION` since 2026-07-30 with a real
+  description, keywords, subtitle, Business category, **4+** rating + declaration,
+  and **genuinely good review notes** telling the reviewer how to place an inbound
+  and an outbound test call. **Check the listing before assuming it is empty.**
+- ✅ **FIXED THIS PASS:** support URL → `https://www.loopcom.net/support/`
+  (a **real support page** — it pointed at the portal LOGIN screen, which is a
+  weak support URL and draws its own rejection), marketing URL →
+  `https://www.loopcom.net/`, privacy → `https://app.loopcom.net/privacy`,
+  `contentRightsDeclaration` → `DOES_NOT_USE_THIRD_PARTY_CONTENT`, review notes
+  rewritten, description rebranded, and **build 35 → build 57** (the attached
+  build was four weeks old, predating the CallKit zombie fix, the answer-deadline
+  fix, contact names, the icon variants and the rebuilt login/splash).
+- ⛔⛔ **THE URL WAS NOT MERELY OLD, IT WAS BROKEN:**
+  `https://connectcomunications.com` **fails TLS** — the cert on 31.220.77.60 is
+  `CN=www.loopcom.net` (SANs `loopcom.net, www.loopcom.net`), so that hostname is
+  not on it; plain HTTP 301s to www.loopcom.net but the stored URL was https, so
+  the redirect was never reached. It was the marketing URL **and** the closing
+  line of the customer-facing description. Guideline 2.1 rejection, twice over.
 - ✅ **The reviewer demo account is REAL — checked, not assumed.**
-  `loopcom.review@example.com` is ACTIVE, **has actually signed in**
-  (2026-07-31), sits on tenant **Loopcom Demo**, **owns ext 101**, and the test
-  number in the notes (**347-978-0090**) really maps to `loopcom_demo`.
+  `loopcom.review@example.com` is ACTIVE, **has actually signed in** (2026-07-31),
+  sits on tenant **Loopcom Demo**, **owns ext 101**, tenant is on the 443 route,
+  and the notes' test number **347-978-0090** really maps to `loopcom_demo`.
   ⛔ **The `@example.com` address looks like a placeholder and is not one** —
-  Apple never emails it; changing it breaks a working login.
-- ⛔⛔ **BLOCKER 1 — there are ZERO screenshots.** `appScreenshotSets` is empty,
-  and Apple hard-blocks the submit button without them. Needs a **real iPhone**
-  signed into the demo account (no Mac here, so no simulator capture).
-  ⛔ **Shoot them on the Loopcom Demo tenant ONLY** — a real customer's call
-  history or voicemail in a store screenshot is a data leak (the Play Store
-  handoff records the same rule).
-- ⛔⛔ **BLOCKER 2 — the version has BUILD 35 attached, from 2026-07-31.** Current
-  is **57**. Build 35 predates the CallKit zombie fix, the answer-deadline fix,
-  contact names, the icon appearance variants and the rebuilt login/splash.
-- ⛔⛔ **BLOCKER 3 — the marketing URL is BROKEN, and it is inside the description
-  too.** `https://connectcomunications.com` **fails TLS**: the cert on
-  31.220.77.60 is `CN=www.loopcom.net` (SANs `loopcom.net, www.loopcom.net`), so
-  that hostname is not on it. Plain HTTP 301s to `https://www.loopcom.net/`, but
-  the stored URL is https so the redirect is never reached. **The description's
-  closing line tells customers to "visit connectcomunications.com"** — same dead
-  URL, in customer-facing copy. Either link is a Guideline 2.1 rejection.
-- ⛔ **BLOCKER 4 — `contentRightsDeclaration` is null.** "Does your app contain
-  third-party content?" is required before submission.
-- ⛔⛔ **BLOCKER 5 — THE APP PRIVACY QUESTIONNAIRE CANNOT BE CHECKED BY ANY SCRIPT.**
+  Apple never emails it; "fixing" it breaks a working login.
+- ⛔ **Encryption + privacy manifest live in the BUILD, not the listing**
+  (`ITSAppUsesNonExemptEncryption`, `ios.privacyManifests` in `app.config.ts`).
+  Confirmed on the artifact: build 57 carries `usesNonExemptEncryption: false`, so
+  export compliance is auto-answered. Do not hunt for these in App Store Connect.
+- ⛔⛔ **BLOCKER — ZERO screenshots, and it is the only engineering one left.**
+  `appScreenshotSets` is empty and Apple hard-blocks the submit button. Needs a
+  **real iPhone** signed into the demo account (no Mac here, so no simulator
+  capture). ⛔ **Shoot them on the Loopcom Demo tenant ONLY** — a real customer's
+  call history or voicemail in a store screenshot is a data leak (same rule as the
+  Play Store handoff).
+- ⛔⛔ **BLOCKER — THE APP PRIVACY QUESTIONNAIRE CANNOT BE CHECKED BY ANY SCRIPT.**
   `/v1/appDataUsages` and `/v1/appDataUsagesPublishState` both answer **404 "does
-  not exist"** — App Privacy is simply not on the public API. **So its state is
+  not exist"** — App Privacy is not on the public API at all. **Its state is
   unprovable from here and a green probe means nothing**; somebody must open
-  App Store Connect → App Privacy and look. It is a hard gate.
-- ⛔ **BUILD 57 HAS NEVER LEFT THE INTERNAL GROUP.** External testers
-  ("Loopcom Testers") have **56**; 57 has **no beta review and no external
-  group**. So 57 is the better code and the *less proven* build. Push it to the
-  external group and get one real answered call before attaching it.
-- ⏳ **Izzy's decisions, not engineering's:** individual vs organization seller
-  name (the account is still personal; the org migration is pending on D-U-N-S
-  case **DFC-656595**, so submitting today lists the seller as **Israel
-  Weinstock**, not Loopcom LLC — and the migration does not require
-  re-submitting later); which build; whether the support/privacy URLs move from
-  `connectcomunications.com` to `loopcom.net` (both answer 200); and that the
-  description says "Connect Communications" throughout while the app is named
-  Loopcom.
-- ⚠️ **Two things no API can answer:** the **Free Apps agreement** must be active
-  (an expired one silently blocks submission), and **account deletion
-  (Guideline 5.1.1(v))** applies to apps supporting account *creation* — Loopcom
-  is invite-only with no in-app sign-up, the standard exemption, worth one line
-  in the review notes.
-- ⏳ **NOT PROVEN: nothing has been submitted and no listing field has been
-  written.** This was a measurement pass only.
+  App Store Connect → App Privacy and look. Same for the **Free Apps agreement**,
+  which silently blocks submission and appears in no API.
+- ⛔⛔ **A 200 FROM THE ASC API IS NOT PROOF THE FIELD CHANGED — AND THE OPPOSITE
+  TRAP IS WORSE.** The content-rights PATCH answered **200** and the immediate GET
+  read back **null**, which reads exactly like a silently-ignored write; a second
+  read showed it HAD landed — Apple has read-after-write lag. **Read back on a
+  fresh request before concluding a write failed, or you will "re-fix" something
+  that was already correct.**
+- ⚠️ **Build 57 has never left the internal group** (external testers have 56; 57
+  has no beta review and no external group). Beta review is irrelevant to an App
+  Store submission, but the build going to Apple is one **no human has opened**.
+  Izzy chose that knowingly.
+- ⚠️ **Account deletion (Guideline 5.1.1(v))** applies to apps supporting account
+  *creation*; Loopcom is invite-only with no in-app sign-up — the standard
+  exemption, and the review notes now say so explicitly.
+- ⏳ **NOT SUBMITTED. Nothing has been sent to Apple.** Remaining: screenshots,
+  the App Privacy questionnaire, the agreement check, and the Submit press — which
+  is irreversible and Izzy's.
 
 ## ⛔⛔ AGENT HANDOFF — 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RACE permanently killed 3 voicemail emails and 5 mailboxes email NOBODY (2026-08-27) — READ FIRST before answering "did any voicemail/text fail", before reading `no_recording` as a real skip, or before proving the SMS reply half is alive
 
