@@ -490,3 +490,137 @@ order by "createdAt" desc limit 20;
 Her user has **never** produced a row. Any row at all is the fix working. ⛔ And the
 negative that matters: `/api/voice/diag/*` 403s from 38.105.207.69 should fall to **zero**
 while the GETs stay refused for her.
+
+## 11. ADDENDUM 3 (2026-08-27) — she filed it AGAIN (ref QP7APH), the telemetry fix WORKED, and the churn is now provably hers
+
+**Read-only investigation — no code, no deploy, no PBX write, no data change.**
+Escalation `cmtbuamwb021bo5138qpo7aph`, ref **QP7APH**, filed **2026-08-27 18:11:50Z**
+(2:11 PM ET), status SENT (SMS + email dispatched 18:12:56Z). Same person, same
+extension, same complaint as **Q2FJRK** three days earlier:
+
+> "answering the phone on the computer works on and off, sometimes it does other
+> times it doesn't. it's very annoying"
+
+⛔ **The ref is the id tail with the ambiguous characters dropped** — id ends
+`…8qpo7aph`, the `o` is removed, giving `QP7APH`. A `lower(id) like '%qp7aph%'`
+lookup therefore returns **nothing**; search `smsBody`/`requestSummary`/`report`
+instead. That cost the first query of this session.
+
+### 11a. ✅ §10's acceptance test PASSED — her telemetry is flowing
+
+§4 and §10 said her `/voice/diag` posts were 403'd and that her user had **never**
+produced a row. **That is no longer true, and the sentence at the end of §10 should
+be read as history.** After the `3385e70c` cutover she produces rows on every day
+she works:
+
+| day | SESSION_START | CALL_QUALITY_REPORT | INCOMING_INVITE | UI_SHOWN |
+|---|---|---|---|---|
+| 08-24 | 5 | 19 | 2 | 1 |
+| 08-25 | 8 | 43 | 0 | 0 |
+| 08-26 | 24 | 18 | 1 | 1 |
+| 08-27 | 14 | 14 | 5 | 1 |
+
+⛔ **But it did NOT produce a failure blackbox, and that is expected, not a
+disappointment.** §9 already predicted it: the failure mode in §3 — answer sent, ACK
+never arrives — does **not** fire JsSIP's `failed` event, so it emits nothing. There
+are **zero** `WEBRTC_CALL_DEBUG` rows for her on 08-27. **Her telemetry can now
+confirm she is present and how often her stack restarts; it still cannot see the
+answer failure itself.** Do not go looking for a blackbox that the code cannot write.
+
+### 11b. ⛔⛔ THE NEW EVIDENCE: 29 distinct SIP stacks in 33 registrations, and her phone on the same AOR used ONE
+
+§3 measured the rebuild at "roughly every 30 minutes" off 28 events. Measured again
+on 08-27, splitting the AOR by contact address:
+
+| route | REGISTERED | distinct `x-ast-orig-host` UAs |
+|---|---|---|
+| `@45.14.194.179` (443 route — her Windows windows) | 33 | **29** |
+| `@75.99.30.60` (direct :8089 — her Android) | 2 | **1** |
+
+**Same AOR, same extension, same day.** A plain re-REGISTER keeps its contact URI, so
+a new instance id means a **new UA** — nearly every desktop registration is a SIP
+stack built from scratch and the previous one abandoned. Her phone, on the same
+`T8_101_1`, re-registered normally. **That contrast is the finding**: this is not the
+network and not the AOR, it is the desktop client.
+
+Cadence on 08-27 (UNREGISTERED then REGISTERED 2-4 s later, a fresh instance id each
+time): 17:06, 17:12, 17:23, 17:29, 17:46, 17:53, 18:02, 18:03, 18:03, 18:11, 18:13 —
+**a rebuild every ~6-11 minutes**, tightening around the moment she gave up and filed.
+
+### 11c. ⛔ It is HERS, not a fleet-wide deploy artifact — and that was checked, not assumed
+
+The obvious benign explanation is that portal deploys prompt a reload and each reload
+mints a UA. **Ruled out by comparing her against every other 443-route app endpoint:**
+
+| day | fleet UAs (443 route, all `*_1` endpoints) | of which HERS |
+|---|---|---|
+| 08-26 | 52 | **39** |
+| 08-27 | 40 | **29** |
+
+**She is ~75% of all web SIP-stack rebuilds on the entire platform.** A deploy-driven
+reload would be spread across the fleet; this is concentrated on one machine.
+
+⛔ **And it roughly DOUBLED on 08-26**: her own baseline over the preceding week was
+10-17 web registrations/day (08-19 16, 08-20 19, 08-21 10, 08-23 9, 08-24 17,
+08-25 4), then **08-26 38 and 08-27 33**. Whatever changed on her machine on 08-26 is
+the upstream cause and **has not been investigated**.
+
+### 11d. The PBX rings FIVE contacts, several of them abandoned
+
+From the wake-dial `Set(CONTACTS=…)` line at 14:08 EDT (18:08Z), ext 101's app leg
+carried **five** contacts, every one on the 443 route with a **different** instance
+id: `se6nfeff4gka`, `vqn6ml00qteb`, `sp8p808r5ekv`, `i3umguqqtdl1`, `he6r2i7m8hin`.
+By 14:12:49 EDT `i3umguqqtdl1` had been replaced by `lrqnu5duh4di`, and by 14:13:49 by
+`eo7amp93l7o6` — the list is rewritten as fast as the PBX can re-read it.
+
+⛔ `max_contacts` is 10, so **`remove_existing` never fires** and dead contacts simply
+accumulate until `qualify_frequency` (30 s) notices. **Every call is therefore fired
+into a set of sockets of which only some have a live UA reading them.** That is the
+mechanism behind "works on and off" in one sentence.
+
+### 11e. The code is UNCHANGED — §3 still describes the live product
+
+`apps/portal/hooks/useSipPhone.ts:3150` (line moved, code identical):
+
+```js
+const answer = useCallback(() => {
+    if (!sessionRef.current) return;          // silent no-op
+    …
+      sessionRef.current?.answer({ mediaStream: localStream });
+      // Do NOT set callState("connected") here — wait for JsSIP "confirmed"
+```
+
+`grep -rn "answer_unacked\|unacked\|WAITING_FOR_ACK" apps/portal` → **still zero
+hits**. The only commit touching this file since 08-24 is `2ee9a614` (call-waiting
+timer / DTMF sink / settings popover), which does not go near the answer path.
+
+### 11f. What today's numbers can and cannot say
+
+**84** wake-dial invocations offered the call to ext 101's app endpoint today; **16**
+app legs answered.
+
+⛔⛔ **The other 68 are NOT 68 failures and must never be reported as such.** Ext 101
+is a queue extension (`T8_Q750`) that also rings two desk phones and shares the queue
+with other agents, so a call the app did not answer was very often answered correctly
+by somebody else. **And the failure itself is invisible from the server** — §9's rule
+still holds: a 200 OK that never arrives leaves no trace, so **her failed answers
+cannot be counted from here at all.** Her own account of the frequency is still the
+best instrument we have.
+
+### 11g. ⏳ What to do — unchanged from §6, but now with a measured case behind it
+
+1. **Cut her to ONE window on `desktop-0.1.16`.** She still has a
+   **`desktop-pre-0.1.5`** session alive (last seen 08-27 13:48Z) beside the current
+   ones — a shell many releases old. Five contacts on one AOR, each rebuilding
+   independently, is itself the mechanism. Zero code risk and it is the only step that
+   can be taken today.
+2. **Port the mobile `answer_unacked` watchdog to the portal** (`c55ae840`). This is
+   the real fix and it is still **not traced** — see the warning in §6 and
+   [[never-propose-a-fix-without-checking-blast-radius]].
+3. **Find out why her stack rebuilds every ~6 minutes**, and what changed on 08-26 to
+   double it. Nobody has looked at her machine.
+
+⏳ **NOT PROVEN and still the honest gap: nobody has watched her press Answer.** Every
+finding here is server-side. The one question that would settle branch (1) vs (2) is
+still the one from §9 — when it fails, does the incoming-call screen **stay up** (the
+answer went nowhere) or **disappear** (someone else got it)?

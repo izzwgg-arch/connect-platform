@@ -4154,10 +4154,14 @@ app: most of the time, when she hits answer on an incoming call, it doesn't answ
   passed vacuously (use a whole-line `//` filter), and heredoc backslashes turned `"
 "`
   into a real newline (write test files through the editor).
-  ⏳ **NOT PROVEN: no 403 has yet turned into a 200 for HER** — nothing from that office
-  since the cutover. Acceptance: any row at all in `VoiceDiagEvent` for
-  `userId='cmnmjhr3500anp96hc00p068a'` (she has never produced one), and `/api/voice/diag`
-  403s from 38.105.207.69 falling to zero while the GETs stay refused.
+  ✅✅ **THE ACCEPTANCE TEST PASSED — verified 2026-08-27, and the "she has never produced
+  one" line that stood here is now HISTORY.** She produces `VoiceDiagEvent` rows on every
+  working day since the cutover (08-24 → 08-27: 5/8/24/14 `SESSION_START`, 19/43/18/14
+  `CALL_QUALITY_REPORT`). ⛔ **But it did NOT produce a failure blackbox and never will:**
+  the §3 failure — answer sent, ACK never arrives — does not fire JsSIP's `failed`, so it
+  emits nothing (**0** `WEBRTC_CALL_DEBUG` rows for her on 08-27). **Her telemetry can now
+  prove she is present and how often her stack restarts; it still cannot see the answer
+  failure itself.** Do not hunt a blackbox the code cannot write.
 - **Cheapest actions first:** (1) get her to **ONE window on 0.1.14** and sign out the
   July sessions — zero code risk, and four windows on one SIP account means four
   independent rebuild cycles abandoning contacts on the same AOR; (2) **grant
@@ -4219,6 +4223,39 @@ app: most of the time, when she hits answer on an incoming call, it doesn't answ
 - ⏳ **STILL NOT PROVEN: the cause of any individual failure.** The `cause`/`sipCode`
   fields were inside the 403'd payloads. `pjsip set logger on` during a test call would
   settle whether her 200 OK ever arrives; that is a PBX-side toggle and needs Izzy's word.
+- ⛔⛔ **SHE FILED IT AGAIN THREE DAYS LATER — ref `QP7APH`, 2026-08-27 18:11:50Z (handoff
+  §11), and the churn is now PROVABLY HERS.** *"answering the phone on the computer works
+  on and off, sometimes it does other times it doesn't. it's very annoying"* — same
+  person, same extension, same fault. **The code is unchanged**: `useSipPhone.ts:3150`
+  still opens `if (!sessionRef.current) return;` and still waits for `confirmed` forever,
+  and `grep -rn "answer_unacked\|unacked\|WAITING_FOR_ACK" apps/portal` is **still 0**.
+  ⛔⛔ **THE MEASUREMENT THAT SETTLES IT — split the AOR by contact address.** On 08-27
+  `T8_101_1` took **33 registrations on the 443 route (`@45.14.194.179`, her Windows
+  windows) carrying 29 DISTINCT `x-ast-orig-host` instance ids** — nearly every one a SIP
+  stack built from scratch — while **her Android on the direct `:8089` route used 2
+  registrations and ONE UA**. Same AOR, same extension, same day. **That contrast is the
+  finding: it is the desktop client, not the network and not the AOR.** Rebuild cadence
+  every ~6-11 min (17:06/17:12/17:23/17:29/17:46/17:53/18:02/18:03/18:11/18:13Z),
+  tightening around the moment she gave up and filed.
+  ⛔ **And it is NOT a deploy artifact — checked, not assumed.** Against every other
+  443-route app endpoint she is **~75% of all web SIP rebuilds on the platform** (08-26:
+  39 of 52; 08-27: 29 of 40). ⛔ Her own baseline was 10-17/day all week and **DOUBLED on
+  08-26** (38, then 33) — whatever changed on her machine that day is the upstream cause
+  and **nobody has looked at it**.
+  ⛔ The §"PBX rings her every time" bullet above is still true but the number moved:
+  the wake-dial `Dial()` now carries **FIVE** contacts, each a different instance id, and
+  the list is rewritten between calls — so every call is fired into a set of sockets of
+  which only some have a live UA reading them. **That is "works on and off" in one
+  sentence.** ⛔ Today: **84** calls offered to the app endpoint, **16** answered by an app
+  leg — **do NOT report the other 68 as failures**; ext 101 is a queue extension with two
+  desk phones and other agents, and per the bullet above a swallowed 200 OK **leaves no
+  server-side trace at all**, so her failures cannot be counted from here.
+  ⛔ **She still has a `desktop-pre-0.1.5` window alive** (last seen 08-27 13:48Z) beside
+  the `desktop-0.1.16` ones. **Cutting her to ONE current window is still step 1 and is
+  still the only zero-risk action available today.**
+  ⛔ **Ref lookup trap:** the ref drops ambiguous characters from the id tail
+  (`…8qpo7aph` → `QP7APH`), so `lower(id) like '%qp7aph%'` returns **nothing** — search
+  `smsBody`/`requestSummary`/`report` instead.
 
 ## ⛔⛔ AGENT HANDOFF — answering a call on the CURRENT Android build tears the call down: the warm answer gets 500 ms instead of 4 s (2026-08-23) — READ FIRST for ANY "I answered and it didn't connect" on Android, before touching `MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS` or `backendClaimed`, and before telling anyone to install the latest APK
 
