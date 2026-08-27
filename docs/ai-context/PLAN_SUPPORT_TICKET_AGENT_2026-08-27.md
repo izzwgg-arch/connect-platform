@@ -115,3 +115,121 @@ only writes that exist, and by the undo.
 - May it write files at all, or read-only + propose?
 - The daily ceiling. Volume is **7 escalations in 30 days (~2/week)**, so 5/day
   is generous.
+
+---
+
+# Round 2 (same day) — the cloud half, and where the MCP finally belongs
+
+Izzy: *"we should be able to do it in the cloud as well"*, and then
+*"I want to make it so it syncs. I should be able to enable in the MCP if I
+should see live the technical support come in locally or not."*
+
+## 8. ⛔ CORRECTION to §2 — I was wrong about prompt caching
+
+§2 said caching is "what makes it affordable". That is true **within one
+ticket's run** and false **across tickets**. Cache TTL is **5 minutes by
+default, 1 hour maximum**. Tickets arrive ~2 a week, so the cache is always
+cold when a ticket starts — every ticket pays a fresh cache WRITE (~1.25×), not
+a read.
+
+Corrected shape, at Opus 5 input $5.00/MTok:
+
+- turn 1 of a run: ~305k tokens written to cache ≈ **$1.90**
+- every turn after, within the run (seconds apart, cache warm): ~0.1× ≈ **$0.15**
+- a 20-turn run ≈ **$5 in input**, plus output
+
+So ~$5–10 a ticket, and at 2/week that is noise. **Caching still matters — it
+is what stops a 20-turn run costing $30 — but it never amortises across
+tickets.** Do not plan as if it does.
+
+## 9. ✅ The better answer to the size problem: don't carry the rules, READ them
+
+At 1.2 MB, CLAUDE.md should not be a prompt the agent carries — it should be a
+file the agent opens. That is literally what the project rule already says
+("READ THE MD FILES FIRST"). So the ticket agent gets a SHORT scoped rules file
+(one page) that points at the CLAUDE.md sections and handoffs worth reading for
+this ticket, and reads them on demand. Cheaper, and it is the behaviour the
+repo already asks for.
+
+## 10. The cloud shape: Managed Agents
+
+Four ways to build an agent; only one supplies BOTH the harness and the
+deployment:
+
+| Approach | Harness | Deployment |
+|---|---|---|
+| Claude API manual loop | you | you |
+| Tool Runner | SDK | you |
+| **Managed Agents (CMA)** | **Anthropic** | **Anthropic** |
+| Claude Agent SDK | SDK (Claude Code harness) | you |
+
+So: **cloud = Managed Agents. On loopcom = Claude Agent SDK.** Same ticket
+queue, two workers.
+
+**And this is the trigger, plainly:** the flow is `POST /v1/agents` **once**
+(model, system, tools, mcp_servers, skills live here) and `POST /v1/sessions`
+**per run** (a pointer to the agent id — nothing else). **`sessions.create` IS
+"kick off an agent."** That is the call LoopCom's sweeper fires with the
+escalation id. There is no MCP in that sentence.
+
+⛔ Pitfalls that would cost a day each: the agent is created **once** and
+versioned (`POST /v1/agents/{id}` bumps a version; sessions pin to one) — never
+`agents.create()` in the hot path; `model`/`system`/`tools` on a session body is
+rejected; archiving is **permanent, no unarchive**.
+
+### Two CMA features that directly answer the risks in §5–§6
+
+- **Session budgets** — a hard, dollar-denominated cap on one session, enforced
+  by the platform. It pauses at `stop_reason: budget_reached`. That is a better
+  runaway guard than anything we would write, and it is a platform primitive.
+- **Vault `environment_variable` credentials** — secrets stored by Anthropic and
+  **substituted at egress, never visible in the sandbox.** Given that the ticket
+  text is customer-written (§6), a secret the sandbox cannot read is a secret a
+  prompt-injection attempt cannot exfiltrate. MCP auth goes through vaults too;
+  the agent's `mcp_servers` array carries `{type, name, url}` and no auth.
+
+## 11. ✅ WHERE THE MCP ACTUALLY BELONGS — the local/live switch
+
+Izzy's newest ask is the first thing in this conversation that MCP is genuinely
+the right tool for. It is not the trigger; it is the **view and control surface**
+his own Claude Code attaches to.
+
+Tools the LoopCom MCP server exposes: `list_tickets`, `get_ticket`,
+`claim_ticket`, `get_routing_mode`, `set_routing_mode`.
+
+Remote MCP is supported by URL, so it can be hosted next to the api and used by
+both the cloud agent and his local session. ⛔ **The MCP connector needs BOTH
+halves** — `mcp_servers=[{type:"url", url, name}]` **and**
+`tools=[{type:"mcp_toolset", mcp_server_name:<same name>}]`, with beta
+`mcp-client-2025-11-20`. Declaring only the server is a validation error.
+
+### ⛔⛔ The sync rule: ONE queue, ONE atomic claim, never two workers
+
+`routing_mode` is `cloud` | `local` | `both`, and it must be **enforced
+server-side in the claim**, never as a local preference. The cloud sweeper's
+atomic claim (`updateMany` guarded on a null column) reads the mode before it
+claims: in `local` mode it does not claim at all and the ticket sits for his
+session to pick up through the MCP; in `both` it claims only what a local
+session has not.
+
+If the flag lives on the client, a ticket gets worked twice — by the cloud agent
+and by him — and with auto-approval on (§5 Phase 3) that means two grants, two
+extensions, or two of anything else. **The flag IS the claim, or it is nothing.**
+
+⛔ "Live" is still pull: MCP clients poll, servers do not push into a local
+Claude Code session. So local-live means his session polls the MCP on a loop.
+That is fine — it just must not be described as a push.
+
+## 12. Revised build order
+
+Unchanged: **Phase 0 is still proving the revert.** Then:
+
+1. `routing_mode` + the atomic claim in the api (the sync rule, §11).
+2. The LoopCom MCP server — read tools + the routing switch. Useful on its own:
+   it gives him a live ticket view from his own Claude before any agent runs.
+3. The cloud worker: one CMA agent config (versioned, created once), a session
+   per ticket, session budget set, vault credentials, repo mounted, short scoped
+   rules file.
+4. Auto-approval (§5 Phase 3) last — after the revert is proven.
+
+Step 2 is worth doing even if he never turns the automation on.
