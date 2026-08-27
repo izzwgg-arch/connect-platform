@@ -71,6 +71,70 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — submitting the iPhone app to Apple: the listing is 80% done, and FIVE things block the submit button (2026-08-27) — READ FIRST before any App Store work, before "fixing" the reviewer demo account, or before believing the App Privacy questionnaire can be checked by a script
+
+Full state, measured live: **`docs/ai-context/IOS_APP_STORE_READINESS.md`**
+(**Read-only App Store Connect API probe — no listing write, no submission, no
+build, no deploy, no data change.** Probe script:
+`/root/.appstoreconnect/asc-probe.mjs` on loopcom.)
+
+- ✅ **Far more is done than anyone remembered.** App id **6796392950**, version
+  **1.0** has sat in `PREPARE_FOR_SUBMISSION` since 2026-07-30 carrying a real
+  1,036-char description, keywords, subtitle, Business category, a **4+** age
+  rating with its declaration, a working privacy-policy URL and **genuinely good
+  review notes** that tell the reviewer how to place an inbound and an outbound
+  test call. Encryption + privacy manifest live **in the build**
+  (`ITSAppUsesNonExemptEncryption`, `ios.privacyManifests` in `app.config.ts`),
+  not in the listing — do not hunt for them in App Store Connect.
+- ✅ **The reviewer demo account is REAL — checked, not assumed.**
+  `loopcom.review@example.com` is ACTIVE, **has actually signed in**
+  (2026-07-31), sits on tenant **Loopcom Demo**, **owns ext 101**, and the test
+  number in the notes (**347-978-0090**) really maps to `loopcom_demo`.
+  ⛔ **The `@example.com` address looks like a placeholder and is not one** —
+  Apple never emails it; changing it breaks a working login.
+- ⛔⛔ **BLOCKER 1 — there are ZERO screenshots.** `appScreenshotSets` is empty,
+  and Apple hard-blocks the submit button without them. Needs a **real iPhone**
+  signed into the demo account (no Mac here, so no simulator capture).
+  ⛔ **Shoot them on the Loopcom Demo tenant ONLY** — a real customer's call
+  history or voicemail in a store screenshot is a data leak (the Play Store
+  handoff records the same rule).
+- ⛔⛔ **BLOCKER 2 — the version has BUILD 35 attached, from 2026-07-31.** Current
+  is **57**. Build 35 predates the CallKit zombie fix, the answer-deadline fix,
+  contact names, the icon appearance variants and the rebuilt login/splash.
+- ⛔⛔ **BLOCKER 3 — the marketing URL is BROKEN, and it is inside the description
+  too.** `https://connectcomunications.com` **fails TLS**: the cert on
+  31.220.77.60 is `CN=www.loopcom.net` (SANs `loopcom.net, www.loopcom.net`), so
+  that hostname is not on it. Plain HTTP 301s to `https://www.loopcom.net/`, but
+  the stored URL is https so the redirect is never reached. **The description's
+  closing line tells customers to "visit connectcomunications.com"** — same dead
+  URL, in customer-facing copy. Either link is a Guideline 2.1 rejection.
+- ⛔ **BLOCKER 4 — `contentRightsDeclaration` is null.** "Does your app contain
+  third-party content?" is required before submission.
+- ⛔⛔ **BLOCKER 5 — THE APP PRIVACY QUESTIONNAIRE CANNOT BE CHECKED BY ANY SCRIPT.**
+  `/v1/appDataUsages` and `/v1/appDataUsagesPublishState` both answer **404 "does
+  not exist"** — App Privacy is simply not on the public API. **So its state is
+  unprovable from here and a green probe means nothing**; somebody must open
+  App Store Connect → App Privacy and look. It is a hard gate.
+- ⛔ **BUILD 57 HAS NEVER LEFT THE INTERNAL GROUP.** External testers
+  ("Loopcom Testers") have **56**; 57 has **no beta review and no external
+  group**. So 57 is the better code and the *less proven* build. Push it to the
+  external group and get one real answered call before attaching it.
+- ⏳ **Izzy's decisions, not engineering's:** individual vs organization seller
+  name (the account is still personal; the org migration is pending on D-U-N-S
+  case **DFC-656595**, so submitting today lists the seller as **Israel
+  Weinstock**, not Loopcom LLC — and the migration does not require
+  re-submitting later); which build; whether the support/privacy URLs move from
+  `connectcomunications.com` to `loopcom.net` (both answer 200); and that the
+  description says "Connect Communications" throughout while the app is named
+  Loopcom.
+- ⚠️ **Two things no API can answer:** the **Free Apps agreement** must be active
+  (an expired one silently blocks submission), and **account deletion
+  (Guideline 5.1.1(v))** applies to apps supporting account *creation* — Loopcom
+  is invite-only with no in-app sign-up, the standard exemption, worth one line
+  in the review notes.
+- ⏳ **NOT PROVEN: nothing has been submitted and no listing field has been
+  written.** This was a measurement pass only.
+
 ## ⛔⛔ AGENT HANDOFF — 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RACE permanently killed 3 voicemail emails and 5 mailboxes email NOBODY (2026-08-27) — READ FIRST before answering "did any voicemail/text fail", before reading `no_recording` as a real skip, or before proving the SMS reply half is alive
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_SMS_AUDIT_2026-08-27.md`**
@@ -265,6 +329,101 @@ Usually, they ring both."* Tenant `cmnlgryme000up9paz1w40fg0`, PBX **T25**, ext 
   two branches: *did the phone show a Connect incoming-call screen at all?* Then, on the
   device, put Connect in Samsung's **Never sleeping apps** (a throttled keepalive service is
   the classic cause of exactly this 10-minute rebuild pattern).
+
+## ⛔⛔ AGENT HANDOFF — the ORDER-AGENT TRAINING LOOP: corrections teach INSTANTLY without submitting, house rules ride BOTH brain passes, re-corrections supersede and roll back (2026-08-27) — READ FIRST before touching agentRules.ts / phraseTeaching.ts, before adding a teach gesture to the desk, or before "simplifying" the two-pass rules injection
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SUPERMARKET_MODE_2026-08-26.md` §14**
+(`f03d8ed0` on `feat/ivr-migration-takeover`. ✅✅ **api + portal DEPLOYED and
+container-verified** — both `.build-commit` = `f03d8ed0`; migration
+`20260827130000_supermarket_agent_training` applied and read back from the live
+DB (SupermarketAgentRule table + `SupermarketPhraseLesson.retiredAt`); the
+teach-page chunk ships "HOUSE RULES" and the desk's shared chunk ships the
+re-run confirm + fix-from-box hint; 0 restarts, /orders 200 on both hostnames.
+**Gesheft SEEDED (3 rules + 4 lessons) and the loop PROVEN LIVE** — see below.)
+Izzy, 2026-08-27, training the agent on the live Gesheft drafts: *"correct the
+agent without actually putting through the order… every time I correct
+something, it should update the agent right away… if I re-correct that same
+correction, I should be able to roll back"* — and *"confirm question marks or
+just change it right there on the spot."* Memory: [[supermarket-training-loop-built]].
+
+- ⛔⛔ **HOUSE RULES (`SupermarketAgentRule` + `agentRules.ts`) ARE INJECTED INTO
+  BOTH BRAIN PASSES — never one.** `EXTRACT_SYSTEM + rulesBlock` AND
+  `RESOLVE_SYSTEM + rulesBlock` (source-guarded, `agentTraining.test.ts`):
+  EXTRACT needs spelling/quantity conventions because the phrase it emits IS
+  what `searchCandidates` tokenizes — a brand spelled wrong never reaches the
+  candidate pool; RESOLVE needs the pick rules. Read FRESH per run
+  (`loadActiveRules`, best-effort — a missing table costs the rules, never the
+  draft), so a correction reaches the very next draft with no deploy. Bounds
+  40×300 chars / 4,000 total. **Every edit files the prior wording in
+  `history`; rollback restores it and is itself reversible.** Managed on
+  /orders/teach ("HOUSE RULES" card) + `/supermarket/agent-rules` routes.
+- ⛔⛔ **A TEACH SUPERSEDES THE PREVIOUS CORRECTION — soft, never a delete.**
+  `teachPhrase` retires (`SupermarketPhraseLesson.retiredAt`) any OTHER
+  product's active lesson on the same phrase; `loadLessons` filters
+  `retiredAt: null`, so **the brain sees only the newest correction, never two
+  rival hints**. `restoreLesson` toggles back (restoring phrase→A retires the
+  active phrase→B); the taught-table ✕ soft-retires. ⛔ **The rep-fix HARVEST
+  at submit deliberately does NOT supersede** — hints, not verdicts;
+  test-pinned. ⛔ The teach queue's `taughtKeys` counts ACTIVE lessons only,
+  or a retired lesson hides its phrase while nothing answers it.
+- ✅ **THE DESK TEACHES WITHOUT SUBMITTING — three gestures, all instant:**
+  the row SWAP (pre-existing); **fix-from-the-box** (clicking a skipped
+  checklist phrase arms `teachFor`, and the next add FROM THE BOX teaches
+  phrase→product with the search text as the meant-phrase — ⛔ suggestion
+  CHIPS deliberately do NOT teach: a chip is a one-off substitute, and under
+  supersede semantics a chip-taught lesson would retire a good one); and
+  **confirm-?** (clicking the "?" pill or the "✓ that's right" checklist chip
+  clears the ? AND teaches the pick). **"Re-run the agent"** replays ONE draft
+  (`POST /supermarket/drafts/:id/rerun` — ownership 404 before permission 403,
+  NEEDS_REVIEW only, stored YL translation reused so audio is never re-billed)
+  so he can watch the same order improve; the button renders only when the
+  draft GET's new `canManage` is true. The admin batch reprocess and the desk
+  re-run share ONE per-draft core (`reprocessOneDraft`).
+- ⛔⛔ **THE VOICEMAIL PLAYER 404 WAS THE TENANT SWITCH, NOT AUDIO.** Izzy:
+  "when I go inside the order… the voicemail is not playing." An `<audio>`
+  element sends NO custom headers, so `x-tenant-context` never reaches
+  `/supermarket/drafts/:id/audio` — on the SUPER_ADMIN login `tenantOf()`
+  resolved the ADMIN tenant and `ownDraft` 404'd (proven from one nginx line),
+  while the store's own reps played fine. Fixed: the player URL carries
+  `?tenantId=` (`browserTenantContext()`), which
+  `resolveEffectiveTenantBillingContext` reads FIRST and ignores for
+  non-supers. **Any new media URL behind a tenant-switched route needs the
+  same query param.**
+- ✅ **GESHEFT IS SEEDED with Izzy's dictated conventions** (3 rules + 4
+  lessons, via `teachPhrase` inside `app-api-1` so the normalizer matches):
+  a dozen eggs = ONE 12-pack of large eggs, cheapest in stock ("Eggs Large"
+  `6451` $3.99; Eggland "Eggs L" `3213`; bigger packs say so in the name);
+  milk with no brand = Golden Flow, **RED milk = whole ("Milk Red" `79645`),
+  BLUE milk = 2% ("Milk Blue" `79640`)** — ⛔ he stated blue both ways in one
+  message and CONFIRMED blue = 2% when asked; the catalog itself uses the
+  color names. Balabusta/Balebusta/Baal Habusta are ONE brand — ⛔ **the
+  catalog carries BOTH spellings as distinct brand strings**, so the rule
+  tells EXTRACT to write both spellings into the phrase. ⛔ A bare "milk"
+  lesson was deliberately NOT seeded — a single-stem lesson would inject a
+  learned whole-milk hint into every almond-milk and blue-milk line.
+- ✅✅ **PROVEN LIVE ON THE PEARL DRAFT** (`cmtbpxtco8wxxry14nlmslnm7`, the
+  exact order on Izzy's screen): re-run through the deployed route → 200
+  `brain:gpt-5+yl`, 27 items; **"2× whole milk, red cap" flipped from SKIPPED
+  ("No whole milk offered", kefir suggestions) to 2× Milk Red IN CART** — and
+  the "red milk" lesson's `timesUsed` gauge ticked to 1, proving the pick rode
+  the lesson; eggs flipped from "No eggs offered" (kichel suggestions) to a
+  large-egg dozen; the Golden Flow almond milk stopped resolving to Almond
+  Breeze. ⛔ **The eggs pick was "Organic Eggs Large White" with a "?", NOT
+  the $3.99 "Eggs Large" — because `onHand` reads -75 (register drift) so it
+  presents as out of stock and the rule says cheapest IN STOCK.** Not a bug;
+  either the register count gets fixed or one confirm/change on the desk
+  teaches the answer. `SUPERMARKET_DRAFT_RERUN` audit row verified.
+- ✅ **Proven as tests:** 132/132 supermarket api (8 new in
+  `agentTraining.test.ts` — the supersede/restore toggle on the faithful
+  FakeDb, rules skipping inactive + foreign tenants, a thrown rules-read never
+  blocking a draft); portal 372/374 (the two documented pre-existing); api
+  typecheck 76 = the exact baseline; portal 0. The three orderPipeline source
+  guards were repointed at the refactored structure (`reprocessOneDraft`).
+- ⏳ **NOT PROVEN: no human has driven it** — nobody has typed a rule on the
+  screen, clicked a "?", or pressed "Re-run the agent" in a browser.
+  ⛔ **An already-open desk tab/desktop window keeps the OLD bundle** — reload
+  (or fully reopen the desktop app) before judging any of it, including the
+  voicemail player fix.
 
 ## ⛔⛔ AGENT HANDOFF — "they left a voicemail and we never got it" was a caller hanging up inside a 24-SECOND greeting, and 11.7% of that customer's callers do the same (2026-08-27) — READ FIRST for ANY "we never got their voicemail", before trusting `disposition: "answered"`, and before telling a customer we lost anything
 

@@ -532,3 +532,118 @@ Commits `7fc674b1` (checklist + lessons) → `3d3b6e48` (Teach the Agent) →
 - ⏳ Still not proven by a human: the checklist, /orders/teach and the keyboard
   flow in a real browser (open tabs/desktop app keep the OLD bundle until fully
   reopened), and no lesson has auto-filled a real order yet.
+
+## §14 — the TRAINING LOOP (2026-08-27, `f03d8ed0`): house rules, superseding corrections with rollback, confirm-?, desk re-run — and the tenant-switch voicemail-player fix
+
+Izzy, dictating over the live Gesheft drafts: *"We need a lot better, more
+efficient way to train this agent… I need to be able to correct the agent
+without actually putting through the order… Every time I correct something, it
+should update the agent right away… If I make a mistake and I re-correct that
+same correction, I should be able to roll back."* Plus, mid-build: *"I should
+also be able to confirm question marks or just change it right there on the
+spot."*
+
+### House rules — `SupermarketAgentRule` + `agentRules.ts`
+
+- One plain-English sentence per rule, per tenant. Injected VERBATIM into
+  **BOTH** brain passes: `EXTRACT_SYSTEM + rulesBlock` and
+  `RESOLVE_SYSTEM + rulesBlock` (source-guarded in `agentTraining.test.ts`).
+  ⛔ **One pass alone leaves half of every rule unenforceable**: EXTRACT needs
+  spelling/quantity conventions because the phrase it emits IS what
+  `searchCandidates` tokenizes (a brand spelled wrong never reaches the
+  candidate pool); RESOLVE needs the pick rules ("no brand milk = Golden
+  Flow", "cheapest in-stock dozen").
+- Read fresh on every brain run (`loadActiveRules`, best-effort try/catch —
+  rules are an upgrade, never a gate). **That immediacy is the feature**: a
+  correction reaches the very next draft with no deploy and no cache.
+- Bounds: 40 rules × 300 chars, 4,000-char block total (`rulesPromptBlock`).
+- **Every edit keeps the prior wording** in `history` (cap 20); rollback
+  restores it and files the rolled-away wording, so rollback-of-a-rollback
+  flips back — a clean toggle. Routes: GET/POST `/supermarket/agent-rules`,
+  PUT `:id`, POST `:id/rollback`, POST `:id/active` (off = soft, restorable).
+  Reads need the view prefix; writes need `SUPERMARKET_MANAGE_KEY`.
+- UI: the **HOUSE RULES card** on `/orders/teach` — add / Change / Roll back /
+  Turn off / Turn back on, "was:" showing the previous wording.
+
+### Teach SUPERSEDES now — `retiredAt` on SupermarketPhraseLesson
+
+- `teachPhrase` retires (soft, `retiredAt`) any OTHER product's active lesson
+  on the same phrase key — the brain must see ONLY the newest correction, not
+  two rival hints. `loadLessons` filters `retiredAt: null`.
+- `restoreLesson` is the rollback: restoring phrase→A retires the active
+  phrase→B — symmetric, so a wrong re-correction is one click to undo. The
+  taught-table ✕ soft-retires (was a hard delete). The teach GET now returns
+  `retired` beside `taught`, and `taughtKeys` counts ACTIVE lessons only (a
+  retired lesson must not hide its phrase from the teaching queue).
+- ⛔ **The rep-fix HARVEST at submit deliberately does NOT supersede** — two
+  rep fixes are two hints; only an explicit teach declares a winner. Pinned by
+  test.
+
+### The desk teaches without submitting (training mode)
+
+- **Fix-from-the-box**: clicking a skipped checklist phrase already filled the
+  quick-add box; now it also arms `teachFor`, and the next add FROM THE BOX
+  (Enter, dropdown click, or exact item #) posts a teach — phrase → product,
+  search text as the meant-phrase. The footer hint shows "fixing: <phrase>".
+  ⛔ **Suggestion CHIPS deliberately do NOT teach** — a chip is a one-off
+  substitute ("no whole milk today → kefir"), and with supersede semantics a
+  chip-taught garbage lesson would retire a good one.
+- **Confirm-?**: clicking the "?" pill on a cart row, or the "✓ that's right"
+  chip on an unsure checklist line, clears the ? AND teaches phrase → product
+  — the strongest positive signal. Changing it instead goes through the
+  replace flow, which already taught.
+- **Re-run the agent**: `POST /supermarket/drafts/:id/rerun` — ownership (404)
+  before permission (403, `SUPERMARKET_MANAGE_KEY`), **NEEDS_REVIEW only**
+  (409 otherwise), audited `SUPERMARKET_DRAFT_RERUN`. Reuses the stored YL
+  translation (never re-bills audio); only the brain re-runs — which is what
+  makes it the feedback loop. The desk button (two-click inline confirm — it
+  REPLACES the cart) renders only when the draft GET's new `canManage` is
+  true, so a viewer never sees a control that would 403.
+- `reprocessOneDraft` extracted as the ONE shared per-draft core (admin batch
+  reprocess + desk rerun) — the orderPipeline source guards were repointed at
+  the new structure.
+
+### The voicemail player 404 (found live, same session)
+
+Izzy: *"when I go inside the order and I want to play the voicemail, it's not
+playing."* nginx showed exactly one request: `GET
+/api/supermarket/drafts/<id>/audio → 404`, while the draft AND its voicemail
+row were healthy and same-tenant. ⛔ **An `<audio>` element sends NO custom
+headers, so the SUPER_ADMIN workspace tenant switch (`x-tenant-context`)
+never reaches media routes** — `tenantOf()` resolved his ADMIN tenant and
+`ownDraft` 404'd. Only bites the SUPER_ADMIN login; the store's own reps were
+fine, which is why it read as flaky. Fix: the player URL now carries
+`?tenantId=` (from `browserTenantContext()`), which
+`resolveEffectiveTenantBillingContext` reads FIRST — and ignores entirely for
+non-super users. **Any new media URL behind a tenant-switched route needs the
+same query param.**
+
+### The Gesheft seed (Izzy's dictated conventions)
+
+- Blue milk was stated BOTH ways in one message ("blue would be two percent"
+  then "blue means 1%") — **asked, and he confirmed BLUE = 2%, RED = whole.**
+- The catalog literally names them: Golden Flow **"Milk Red"** (`79645`,
+  0.5 gal) / **"Milk Red Sm"** (1 qt) / **"Milk Blue"** (`79640`) /
+  **"Milk Blue Sm"** — the store itself uses the color convention.
+- Eggs: **"Eggs Large"** `6451` $3.99 (the cheapest dozen), Eggland
+  **"Eggs L"** `3213` $4.99, "Eggs Large 1 1/2 Dz" says its bigger count in
+  the name — exactly Izzy's rule.
+- ⛔ **Balabusta AND Balebusta both exist as distinct brand strings in the
+  catalog** — a rule that normalized to one spelling would hide the other
+  brand's products from the token search, so the seeded rule tells EXTRACT to
+  write BOTH spellings into the phrase.
+- Seeded: 3 rules + 4 lessons (red milk→79645, blue milk→79640, dozen
+  eggs→6451, eggs→6451), via `teachPhrase` inside `app-api-1` (same
+  normalizer as production writes). A bare "milk" lesson was deliberately NOT
+  seeded — a single-stem "milk"→Milk Red lesson would inject a learned
+  whole-milk hint into every almond-milk and blue-milk line.
+
+### Proven / not proven
+
+- 132/132 supermarket api tests (8 new in `agentTraining.test.ts`, incl. the
+  supersede/restore toggle on the faithful FakeDb and a thrown rules-read not
+  blocking the draft); portal 372/374 (the two documented pre-existing); api
+  typecheck 76 = baseline; portal 0. Deploy + live verification recorded in
+  CLAUDE.md's section.
+- ⏳ NOT PROVEN until Izzy drives it: no human has added a rule on the screen,
+  clicked a ?, or watched a re-run improve a draft.
