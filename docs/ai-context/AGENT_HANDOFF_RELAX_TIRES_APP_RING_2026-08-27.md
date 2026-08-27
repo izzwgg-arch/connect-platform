@@ -391,3 +391,106 @@ us.** Uploading those few fields with the existing quality report would make it 
 - ⛔ **Nothing here is a Connect bug in the sense of something being broken.** The PBX,
   the push and the SIP layer all did their jobs. It is a **design collision**: two legs of one
   call landing on one handset, where the carrier leg always wins the screen and the ringer.
+
+---
+
+## 10. FOLLOW-UP 2 — "he never had a problem, it's been like this for months". THE DATA SAYS OTHERWISE, AND THE CELL FORWARD IS WHY NOBODY NOTICED
+
+Izzy pushed back: the cell-forward-plus-app-on-one-phone arrangement has been in place for a
+long time and worked. **That is the right challenge — a standing condition cannot explain a new
+symptom — and it forced the measurement that actually explains this account.**
+
+### 10a. The app-answer rate by week (the one trustworthy long series)
+
+`CallInvite.status = ACCEPTED` can only be produced by the app claiming the invite, so the
+ACCEPTED share is a clean "did he answer on the app" series. ⛔ It is written by
+`mobile-ring-notify`, a **different pipeline from the CDR**, which is why it is usable this far
+back when the CDR is not (see 10c).
+
+| week | rings | answered on app | % |
+|---|---|---|---|
+| 2026-05-04 | 41 | 8 | 20% |
+| 2026-05-11 | 20 | 11 | **55%** |
+| 2026-05-18 | 14 | 11 | **79%** |
+| 2026-05-25 | 8 | 6 | **75%** |
+| 2026-06-01 | 20 | 9 | 45% |
+| 2026-06-08 | 23 | 8 | 35% |
+| 2026-06-15 | 24 | 5 | 21% |
+| 2026-06-22 | 23 | 10 | 43% |
+| 2026-06-29 | 28 | 12 | 43% |
+| **2026-07-06** | 26 | 3 | **12%** |
+| **2026-07-13** | 44 | 1 | **2%** |
+| 2026-07-20 | 19 | 1 | 5% |
+| 2026-07-27 | 49 | 5 | 10% |
+| 2026-08-03 | 39 | 1 | 3% |
+| **2026-08-10** | 53 | 0 | **0%** |
+| **2026-08-17** | 30 | 0 | **0%** |
+| **2026-08-24** | 22 | 8 | **36%** |
+
+⛔⛔ **So "he never had a problem" is not what happened. The app answered 43-79% of calls in
+May and June, collapsed in early July, and answered ZERO of 83 consecutive rings across the
+weeks of 2026-08-10 and 2026-08-17. It recovered to 36% on 2026-08-24.**
+
+### 10b. Why nobody reported a two-week total failure: the cell forward masked it
+
+**The cell forward did not exist before 2026-07-27.** First outgoing leg to `8455129339` ever
+is `2026-07-27 14:11:55`; there is **no earlier forward number** on this tenant (only
+`8455129339`, 162 legs, all since that date).
+
+So the sequence reads:
+
+1. **May-Jun** — no cell forward. The app is the only mobile leg and answers 43-79%.
+2. **Early Jul** — app answering collapses to 2-12%. With no cell forward, those calls are
+   simply **missed**.
+3. **2026-07-27** — the cell forward is added. ⚠️ **Very likely as a workaround for exactly
+   that**, three weeks into the failure — stated as the natural reading of the dates, not as
+   established fact.
+4. **Aug** — app answering runs 0-3%, but **every call is still answered, on the cell**, so the
+   failure produces no complaint. This is why it "was fine for months".
+5. **2026-08-23 20:28** — he signs in again (new `MobileDevice` row) on the current APK.
+6. **2026-08-24 onward** — app answering recovers to **36%**, and he starts noticing the calls
+   it still loses.
+
+⛔ **The lesson: a forward-to-cell is an excellent workaround and a perfect blindfold.** Once it
+was in place, a total app failure was indistinguishable from normal service. **When a customer
+has a cell forward on the same extension, the app-answer rate is the only thing that will tell
+you the app is dead** — nothing else will, because no call is ever missed.
+
+### 10c. ⛔ Do NOT read leg composition from the CDR before August
+
+Per-week `channelsSeen` counts show 0 app legs before 2026-07-27 and inbound volume jumping
+from ~15/wk to ~74/wk. **That is the documented CDR-loss bug, not reality** — calls were being
+silently erased until the 2026-08-04 fix, and the backfill covered **Aug 1-4 only, not earlier**
+(see `AGENT_HANDOFF_CDR_LIVESYNC_2026-08-04.md`). Any pre-August trend drawn from `ConnectCdr`
+for this account is an artifact. `CallInvite` is unaffected.
+
+### 10d. Current state: the app WORKS, and the rest is the race
+
+This week, call by call, the app answered **8 of 22** rings — in **4, 4, 4, 5, 6, 12, 13 and
+20 seconds**. Of the 13 cancelled: four ran 31-44 s (nobody answered at all, ordinary ring
+timeout) and **eight were cancelled in 2-12 s — the cell being picked up first**.
+
+**So the app is not broken today.** What remains is the one-handset race of §9: on roughly half
+his calls the carrier leg is answered within a few seconds, while Connect only ever had a
+heads-up banner behind the native call screen.
+
+⏳ **What caused the July-August failure is NOT established and probably never will be.**
+`PbxEndpointRegistrationEvent` retains **15 days** (so nothing before ~Aug 12 survives) and api
+`docker logs` are wiped by every deploy. What is visible: **28 hours totally dark 08-21 21:15 →
+08-23 01:13 UTC** plus 112 min on 08-20, and the recovery coincides exactly with his re-login.
+⛔ The 2026-08-22 warm-answer-deadline regression is **NOT** the explanation — it postdates the
+0% week of Aug 10. **Do not invent a cause for this window; say the data does not survive.**
+
+### 10e. What this changes about the recommendation
+
+The §9f recommendation stands and is now better supported: **stagger the ring — app alone for
+~10 s, then add the cell.** Today both fire simultaneously and the carrier leg wins a race it
+was never meant to be in.
+
+⚠️ **State the trade-off honestly:** with a stagger, a caller waits ~10 s before the cell rings,
+so on the ~3% of the day the app is dark (§4) the call reaches him later than it does now.
+⛔ Still a PBX change, still needs Izzy's mandate, still **NOT done**.
+
+✅ **And add the metric that would have caught this in July:** *app-answer rate per tenant per
+week*. Any extension with a cell forward can have a completely dead app and never miss a call
+— this is the only number that shows it.

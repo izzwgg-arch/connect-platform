@@ -419,6 +419,36 @@ Usually, they ring both."* Tenant `cmnlgryme000up9paz1w40fg0`, PBX **T25**, ext 
   done.** The 2-minute proof first: one test call with the cell leg removed from ext 101.
   ⚠ **Phone-side settings cannot beat a native call screen** — full-screen-intent permission
   and channel importance are worth setting but must not be presented as the fix.
+- ⛔⛔ **"HE NEVER HAD A PROBLEM, IT'S BEEN LIKE THIS FOR MONTHS" IS NOT WHAT THE DATA SAYS —
+  AND THE CELL FORWARD IS WHY NOBODY NOTICED (handoff §10).** `CallInvite.status='ACCEPTED'`
+  can only be produced by the app claiming an invite, so the ACCEPTED share per week is a clean
+  "did he answer on the app" series — and it is written by `mobile-ring-notify`, a **different
+  pipeline from the CDR**, so it is trustworthy this far back. It reads: **May 55–79%, June
+  35–45%, then a collapse in early July (07-06 12%, 07-13 2%), then ZERO of 83 consecutive
+  rings across the weeks of 08-10 and 08-17, then 36% from 08-24.**
+- ⛔⛔ **THE CELL FORWARD DID NOT EXIST BEFORE 2026-07-27** — first ever leg to `8455129339` is
+  `2026-07-27 14:11:55`, and there is no earlier forward number on the tenant. So: the app fails
+  from early July → calls are genuinely MISSED → the forward is added on 07-27 (⚠️ very likely
+  as the workaround, stated as the natural reading of the dates, not as fact) → from then on
+  **every call is answered on the cell and the total app failure produces no complaint** → he
+  re-signs in 08-23 and the app comes back → he starts noticing what it still loses.
+  ⛔ **THE LESSON: a forward-to-cell is an excellent workaround and a perfect blindfold. When an
+  extension has one, NO call is ever missed, so the app-answer rate is the ONLY thing that can
+  tell you the app is dead.** ✅ Worth a per-tenant weekly metric — it would have caught this in
+  July; not built.
+- ⛔ **DO NOT read leg composition from the CDR before August on this account** — per-week
+  `channelsSeen` shows 0 app legs before 07-27 and inbound jumping ~15→~74/wk. That is the
+  **documented CDR-loss bug**, backfilled for **Aug 1–4 only**, not an app-leg trend.
+- ✅ **CURRENT STATE: the app is NOT broken.** This week it answered **8 of 22** rings in
+  **4, 4, 4, 5, 6, 12, 13, 20 s**. Of the 13 cancelled, four ran 31–44 s (nobody answered —
+  ordinary timeout) and **eight were cancelled in 2–12 s, i.e. the cell was picked up first.**
+  What remains is the one-handset race, not a fault.
+- ⏳ **The cause of the July–August failure is NOT established and probably never will be** —
+  `PbxEndpointRegistrationEvent` retains **15 days** and api `docker logs` are wiped by every
+  deploy. Visible: **28 h totally dark 08-21 21:15 → 08-23 01:13 UTC** + 112 min on 08-20, and
+  recovery coincides with the re-login. ⛔ **The 08-22 warm-answer-deadline regression is NOT
+  the explanation — it postdates the 0% week of Aug 10. Do not invent a cause; say the data
+  does not survive.**
 - ✅ **The two cheap next steps, in order:** (a) **get the time of the call — it is
   perishable**, the PBX log holds today only; (b) ask him the one question that separates the
   two branches: *did the phone show a Connect incoming-call screen at all?* Then, on the
