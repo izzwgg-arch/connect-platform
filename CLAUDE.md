@@ -225,6 +225,43 @@ change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
   3 m 42 s voicemail that notified nobody.** ⛔ `no_recipient` deliberately never
   escalates (it is a standing condition, not a fault), so **only an audit finds
   this**; the fix is one address each in Settings and is Izzy's call.
+- ⛔⛔ **AND THE ALARMS THEMSELVES COULD EACH FIRE ONCE, EVER — FIXED
+  (`c5670bbb`). This is the most serious thing the audit found.**
+  `raiseGuardrailEscalation` suppressed on **any OPEN escalation with the same key
+  prefix, with NO time bound**, and **`AgentEscalationStatus` has no RESOLVED
+  value** — so a delivered alarm ends at `SENT` and nothing ever moves it.
+  **All six keys protecting the email pipeline were one-shot, and one was already
+  burned** (`Voicemail email watchdog has stopped`, 2026-08-21). The sweep dying
+  today would page; **dying again next month would be silent.** ✅ Bounded to
+  **`ESCALATION_REDUPE_WINDOW_MS` = 6 h**, restoring the STATED intent ("a
+  persistent fault texts once, not every tick") — the sibling
+  `voicemailMailboxGuardrail` already used 24 h for the same reason. ⛔ **The
+  burned key re-arms itself** (the row is days old); no data change was needed.
+  ⛔ A future-dated row cannot suppress forever. ⛔ Never go back to an unbounded
+  de-dupe, and never drop this to minutes — an alarm that texts through the night
+  gets muted, which is the same as no alarm.
+  ⛔⛔ **The fake db now stamps `createdAt` like Prisma's `@default(now())`, and
+  that is NOT a test convenience** — the new de-dupe READS that field, and a fake
+  missing a field the code depends on exercises a shape production never produces
+  (the turn-health class). **The one pre-existing test that failed was asserting
+  the OLD unbounded behaviour; it was read before it was made to pass.**
+- ✅✅ **A MAILBOX GOING BLIND IS NO LONGER SILENT (`c5670bbb`).** The addresses
+  still need Izzy, **but the silence did not** — three of the five appeared during
+  the audit week with no signal anywhere. `runBlindMailboxCheck` +
+  `decideNewlyBlindMailboxes` (hourly + a 4-min boot kick) escalate **once when a
+  mailbox JOINS the blind set**, never for one already in it.
+  ⛔ **Edge-triggered on purpose, not a nag** — `no_recipient` stays filtered out
+  of `gapsWorthAlerting`, because paging every 15 min about a standing condition
+  is how an alarm gets muted; what is worth hearing is a mailbox that has JUST
+  gone quiet. ⛔ **The FIRST run is a baseline and raises nothing**, so deploying
+  it does not page about the five already known (the payment-alert cutover
+  reasoning). ✅ **It re-arms by itself** — a mailbox leaves the set once it stops
+  producing `no_recipient` voicemails inside the 7-day window, so a later relapse
+  is genuinely new. State in `AgentAuditLog` (`voicemail_email.blind_mailboxes`),
+  written on EVERY run including clean ones — the row IS the state, and a run that
+  writes nothing leaves the next run unable to tell new from old.
+  ✅ **16 tests, 14 of which FAIL replayed against `HEAD`**; voicemail suite
+  **117/117**; api typecheck **76 = the exact baseline**.
 - ⛔⛔ **THE SMS REPLY HALF HAS NO HEARTBEAT, so "4 quiet days" and "the poller is
   dead" look IDENTICAL in the database — it took three checks to tell them
   apart.** Proven alive: `app-agent-1` up since 08-24 21:23 with **0 restarts**

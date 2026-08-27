@@ -216,11 +216,69 @@ Trimpro 104 did not recur in this window (Trimpro 102 was fixed 2026-08-20).
 3-minute-42-second voicemail that notified nobody.** A caller does not talk for
 nearly four minutes to leave nothing.
 
-**The fix is one address each in Settings, and it is Izzy's call, not an
-engineering one.** The `voicemail_mailbox.sweep` guardrail is a different check
-(mailboxes disabled on the PBX) and correctly reads `offenders: []`.
+**The addresses themselves are Izzy's call, not an engineering one** — ⛔ never
+substitute the owner's login email, on several extensions the two are different
+people. The `voicemail_mailbox.sweep` guardrail is a different check (mailboxes
+disabled on the PBX) and correctly reads `offenders: []`.
+
+### ✅ FIXED: a mailbox going blind is no longer silent (`c5670bbb`)
+
+The *addresses* still need Izzy, but **the silence did not**. Three of these five
+appeared during the audit week with **no signal anywhere** — which is the same
+class as the outage this whole file exists for. `runBlindMailboxCheck` +
+`decideNewlyBlindMailboxes` (`voicemailEmailGuardrails.ts`, hourly with a 4-minute
+boot kick) escalate **once when a mailbox JOINS the blind set**, never for one
+already in it.
+
+- ⛔ **Edge-triggered, deliberately, not a nag.** `no_recipient` is filtered out of
+  `gapsWorthAlerting` on purpose — paging every 15 minutes about a standing
+  condition is how an alarm gets muted, which is the same as having no alarm. The
+  thing worth hearing is a mailbox that has *just* gone quiet.
+- ⛔ **The FIRST run is a baseline and raises nothing**, so deploying it does not
+  page about the five that are already known and already have an owner. Same
+  reasoning as the payment-alert cutover constant.
+- ✅ **It re-arms by itself**: a mailbox leaves the set once it stops producing
+  `no_recipient` voicemails inside the 7-day window, so fixing the address means a
+  future relapse is genuinely new and is heard again.
+- The set lives in `AgentAuditLog` (`voicemail_email.blind_mailboxes`), written on
+  **every** run including clean ones — the row IS the state, and a run that writes
+  nothing leaves the next run unable to tell new from old.
 
 ---
+
+## 3b. ⛔⛔ THE ALARMS THEMSELVES COULD EACH FIRE ONCE, EVER — fixed (`c5670bbb`)
+
+Found while acting on §3, and it is the most serious thing in this file. It was
+already recorded as a known risk (CLAUDE.md, 2026-08-21, "Izzy's call") and is now
+closed.
+
+`raiseGuardrailEscalation` suppressed on **any OPEN escalation with the same key
+prefix, with no time bound** — and **`AgentEscalationStatus` has no RESOLVED
+value**, so a delivered alarm ends at `SENT` and *nothing ever moves it*.
+
+**So each of the six keys that protect the email pipeline could fire exactly ONCE,
+EVER — and one was already burned** (`Voicemail email watchdog has stopped`, row
+`cmt2wpqlz030jln12zxw1lhpw`, 2026-08-21). If the sweep died today the alarm would
+fire; **if it died again next month it would be silent**, on a pipeline whose
+entire stated requirement is that an email must never silently fail to go out.
+
+✅ **Fixed by bounding the de-dupe to `ESCALATION_REDUPE_WINDOW_MS` (6 hours)**,
+which restores the *stated* intent — "a persistent fault texts once, not every
+tick" — while letting a fault that recurs later be heard again. The sibling
+`voicemailMailboxGuardrail` already used a 24 h window for exactly this reason.
+⛔ **The burned key re-arms automatically**: that row is 6 days old, so it no
+longer suppresses. No data change was needed. ⛔ A future-dated row (clock skew)
+cannot suppress forever. ⛔ Do not go back to an unbounded de-dupe, and do not
+drop the window to minutes — an alarm that texts through the night gets muted.
+
+⛔ **The fake db now stamps `createdAt` the way Prisma does (`@default(now())`),
+and that was not a test convenience.** The time-bounded de-dupe reads that field;
+a fake missing a field the code depends on exercises a shape production never
+produces — the same class as the turn-health guard that logged nothing for weeks.
+The one pre-existing test that failed was asserting the old unbounded behaviour;
+it was read before it was made to pass.
+
+**16 tests, 14 of which fail replayed against `HEAD`.**
 
 ## 4. SMS forwarding, both directions: zero failures
 
