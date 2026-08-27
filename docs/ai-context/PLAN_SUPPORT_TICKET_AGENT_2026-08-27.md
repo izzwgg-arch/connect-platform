@@ -233,3 +233,89 @@ Unchanged: **Phase 0 is still proving the revert.** Then:
 4. Auto-approval (§5 Phase 3) last — after the revert is proven.
 
 Step 2 is worth doing even if he never turns the automation on.
+
+---
+
+# Round 3 (same day) — OpenAI keeps the customer, Claude does the work
+
+Izzy: *"I would also like the agent in LoopCom … we'll just leave in LoopCom the
+openai agent. The openai agent will communicate with claude through the MCP on
+what needs to be done, or what the problem is, and then OpenAI would communicate
+with the customer."*
+
+## 13. ✅ The split already exists — read `llm/router.ts` before building it
+
+`DEFAULT_ROUTES` (`apps/agent/src/llm/router.ts:63`):
+
+- `support_chat` → **openai** (`OPENAI_MODEL`), Anthropic as fallback
+- `diagnostics` → **anthropic** (`ANTHROPIC_MODEL_HEAVY`), OpenAI as fallback
+
+So "OpenAI talks to the customer, Claude does the technical work" is the routing
+table as shipped. The escalation researcher already runs on `diagnostics`, i.e.
+already on Claude. **This proposal is ~80% built; do not rebuild it.**
+
+## 14. What is genuinely new — and it is worth more than the plumbing
+
+**Today the loop does not close.** Claude researches, the api texts Izzy, and the
+customer is told "I've passed this to the team" and then hears nothing until a
+human acts. Nothing returns Claude's answer to the conversation.
+
+Izzy's design closes it: Claude writes the answer onto the ticket, and the
+OpenAI agent — which owns the customer relationship — reads it and speaks. That
+is the feature. The MCP question is secondary to it.
+
+## 15. Make the handoff EXPLICIT — this deletes a known-fragile mechanism
+
+Escalation is currently detected by regex-matching the assistant's **own reply**
+(`ESCALATION_RE`, `escalation/escalations.ts`). The file's own comments record
+that the model free-forms its phrasing and that the first pattern set matched
+**5 of 48** real promises before it was widened to the idiom.
+
+If the OpenAI agent instead **calls a tool** to hand off — `hand_to_claude(problem)`
+— the regex is not needed at all. A tool call is a fact; a phrase match is a
+guess about one. Keep the regex only as a safety net for a model that promises
+without calling the tool.
+
+## 16. ⛔ It should NOT be MCP — and the reason is the boundary
+
+MCP is a protocol for reaching **across a process boundary**. It earns its place
+where the client is OUTSIDE LoopCom:
+
+- Izzy's local Claude Code (§11, the live/local switch) — **yes, MCP**
+- the cloud CMA agent reaching back into LoopCom (§10) — **yes, MCP**
+- **OpenAI → Claude, both inside `apps/agent`** — **no.** The agent already has
+  `toolRegistry.ts` + `completeWithTools`, already on OpenAI `/v1/responses`
+  with tools. Adding one gated tool is a normal tool. Routing it through MCP is
+  a second implementation of a thing that already works, with its own auth,
+  transport and failure modes.
+
+## 17. ⛔⛔ THE DESIGN TRAP: a handoff tool must NOT block
+
+A Claude investigation takes minutes. If `hand_to_claude` blocks until Claude
+finishes, the OpenAI request times out and the customer is abandoned mid-sentence
+— the worst possible failure for the one surface the customer can see.
+
+**It returns a REFERENCE immediately**, and the answer arrives later. Which is
+exactly the ticket queue in §5: the tool writes the `AgentEscalation` row and
+returns its ref; the sweeper picks it up; the answer comes back onto the ticket.
+`my_requests` (already built) is how the customer asks where it got to.
+
+## 18. ⛔ Two audiences on the way back, or the translation loses it
+
+Claude's output must carry BOTH:
+
+- a **technical report** — for Izzy, the existing ISSUE / FINDINGS / PROPOSED FIX
+- a **customer-safe sentence** — which OpenAI relays **verbatim**, not paraphrased
+
+Without the second, OpenAI paraphrases a technical finding and
+*"T7_102_1 has no contact on the AOR"* reaches a customer as *"your phone is
+broken"*. The standing-knowledge docs already split exactly this way with
+`<!-- internal -->` markers (`knowledge/standingKnowledge.ts`) — reuse that rule
+rather than inventing a second one.
+
+## 19. The unstated argument FOR this design
+
+Keeping OpenAI as the mouth preserves the customer-facing half **exactly as it
+is** — the Yiddish Labs bridge in both directions, the degraded fallbacks, the
+tone, the `fallbackReply("yi")` behaviour. That half is tuned and proven, and
+this change does not touch it. Claude gets the hands; OpenAI keeps the voice.
