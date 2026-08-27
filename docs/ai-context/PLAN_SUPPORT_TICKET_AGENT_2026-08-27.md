@@ -394,3 +394,79 @@ it posts a technical report and a customer-safe sentence (§18) back onto the
 ticket; the OpenAI agent relays the second one to the customer.
 
 Nothing on that list needs the cloud, auto-approval, or a proven revert path.
+
+---
+
+# Round 5 (same day) — always-on, and the sandbox goes on loopcom
+
+Izzy: *"Put it in Claude in the cloud so even if my computer is not on, the agent
+could still do the work"*, and *"so pretty much is going to open a remote session."*
+
+Yes — a ticket opens a **remote session**. §22's laptop trap is answered.
+
+## 26. ✅ THE SHAPE: a SELF-HOSTED sandbox — cloud brain, local hands
+
+CMA environments come in two kinds. `config.type: "cloud"` runs the container on
+Anthropic's infrastructure; **`config.type: "self_hosted"` keeps the agent loop
+on Anthropic's orchestration layer but moves TOOL EXECUTION onto our own box.**
+
+That is the exact fit here, for three reasons:
+
+1. **Always on** — the loop is Anthropic's, so nothing depends on his laptop.
+2. **The knowledge is already there** — CLAUDE.md, the 172 handoffs, the repo,
+   the database and the PBX access all live on loopcom, which is where tools
+   would run. **Nothing has to be exported to make the agent知 the system.**
+3. ⛔ **Outbound-only.** Our worker long-polls Anthropic's queue; *"Anthropic
+   never dials into your network."* Given this platform's history with firewall
+   changes (the 2026-08-19 geo build that locked out the whole PBX), a design
+   needing **no inbound hole** is worth a great deal.
+
+Flow: create environment `{type:"self_hosted"}` → generate an environment key in
+Console → run a worker (`EnvironmentWorker.run()` or `ant beta:worker poll`) →
+sessions reference `environment_id` exactly as for cloud.
+
+⚠️ Stated plainly: tool inputs/outputs still flow to Anthropic's control plane —
+the model has to see results. What stays local is the **filesystem and the
+sandbox's network egress**. That is the same exposure as any Claude API call the
+agent already makes today, not a new class.
+
+## 27. ⛔ "In the cloud" means "not my laptop" — and loopcom already qualifies
+
+Worth naming, because it may collapse the decision: **loopcom is already an
+always-on server, and it is where the repo and the data live.** So there are two
+ways to get always-on, and they should be chosen knowingly:
+
+| | Claude Agent SDK on loopcom | CMA + self-hosted sandbox |
+|---|---|---|
+| Who runs the loop | us | **Anthropic** |
+| Setup | one long-running process | environment + key + worker + agent config |
+| Session budgets, versioning, resume, event stream | we build them | **built in** |
+| Time to first working ticket | **shortest** | longer |
+
+Both are "not his laptop"; both have the repo locally. For a **temporary bridge
+he needs working now**, the Agent SDK on loopcom is the shorter road. For the
+durable version, CMA self-hosted is less to maintain. ⛔ **The MCP server is the
+same either way, so starting with the simpler one wastes nothing.**
+
+## 28. ⛔⛔ THE THING THAT DOES NOT TRAVEL BY ITSELF — measured
+
+His argument is *"Claude over here already has all the memory."* Measured
+2026-08-27, that memory is **282 files, 1,092,456 bytes (~273k tokens)** in
+`~/.claude/projects/C--dev-projects-Connect-2/memory/` — **on his Windows
+machine, OUTSIDE the repo.** It is nearly as large as CLAUDE.md itself.
+
+CLAUDE.md and the 172 handoffs are in git and reach loopcom with every deploy.
+**The memory dir does not.** Copy it onto the box beside the working clone (or
+commit it) as part of standing this up, or the remote agent is missing half of
+what he is relying on — and it will not announce the gap, it will just be less
+right about things.
+
+## 29. Why still route through the MCP even when the agent is local to loopcom
+
+An agent running ON loopcom could read tickets straight from Postgres and skip
+MCP entirely. Use the MCP anyway, for one reason this codebase has paid for
+repeatedly: **one interface, one gate.** Two IVR publish paths, two invite paths,
+two SMS ingest paths — every one of those shipped half-broken because the same
+job had two implementations. His laptop needs the MCP regardless (§11, the
+live/local switch); giving the remote worker a second, direct path to the same
+data is how they drift.
