@@ -377,6 +377,48 @@ Usually, they ring both."* Tenant `cmnlgryme000up9paz1w40fg0`, PBX **T25**, ext 
   got the INVITE and never alerted him — the Android ring **screen is push-driven**, so the
   SIP stack can answer 180 while no screen or sound reaches the user, which is invisible from
   the server.
+- ✅✅ **ANSWERED SAME DAY — he answered on the CELL, and the app later showed a STALE ring
+  screen. The cause is that BOTH LEGS LAND ON ONE HANDSET (handoff §9).** The cell forward
+  rings the same physical phone the app is installed on, so the carrier call takes the screen
+  and the ringer and Connect's ring is never noticed.
+  ⛔⛔ **I first blamed Android Telecom arbitration (a self-managed `ConnectionService`
+  refused while a carrier call is up) and that was WRONG — read the code before asserting it.**
+  That path exists (`TelecomBridge.startIncomingCall`, `CAPABILITY_SELF_MANAGED`) but is
+  **disabled behind `if (false)` since 2026-05-07**, deliberately; `isIncomingCallPermitted` is
+  called **nowhere** in the repo.
+  ⛔ **What actually presents a call is a CallStyle notification + full-screen intent, and the
+  code states its own limit** (`IncomingCallFirebaseService.java:1713`): *"the OS only launches
+  the full-screen intent when the device is **locked / screen-off**; while the device is
+  unlocked and interactive it is shown as a **floating heads-up notification** instead."* So on
+  an in-use phone Connect's ring is a **banner competing with the native incoming-call screen**.
+  ⛔ **And the ringtone is on `STREAM_RING`** (`USAGE_NOTIFICATION_RINGTONE`) — the same stream
+  the carrier ringer uses and the one Android silences at `MODE_IN_CALL`, so answering the cell
+  kills Connect's ringtone outright.
+  ⛔ **The app checks native cellular call state NOWHERE** — `inActiveCall` is set only from JS
+  and means Connect's OWN call; there is no `TelephonyManager`/`getCallState()` anywhere in the
+  Android source, so the app cannot know it is competing and cannot adapt.
+- ⛔ **The stale screen PROVES the push landed:** `writeCacheFile()` persists every incoming
+  push to **`pending_call_native.json`** and JS replays it via `readCachedInvite()`
+  (`NotificationsContext.tsx:689`), so a stale ring screen on next open means the phone had the
+  invite all along. It is never a lost push.
+- ⛔⛔ **THE MEASUREMENT: of 38 cancelled rings in 10 days, 20 (53%) lasted UNDER 10 SECONDS
+  and 9 under 5** — commonest value **5 s**, mean 17 s (the 31–44 s tail is calls nobody
+  answered). **A heads-up banner behind a native call screen, for five seconds, is
+  indistinguishable from never ringing.**
+- ⛔⛔ **THE DIAGNOSTICS THAT WOULD SETTLE THIS NEVER LEAVE THE PHONE.**
+  `emitCallFlowNative()` (`IncomingCallFirebaseService.java:527`) ends in **`Log.i(...)` and
+  nothing else** — so `incoming_call_ui_displayed`, `NATIVE_NOTIFICATION_POSTED`,
+  `RINGTONE_START`, `preferFullScreen`, `channelImportance` and **`canUseFullScreenIntent`** are
+  logcat-only. **The whole class "the push arrived, the app had it, the user saw nothing" is
+  structurally invisible from the server.** ⏳ Uploading those few fields with the existing
+  quality report would make it diagnosable — not built.
+- ✅✅ **THE REAL FIX IS ON THE PBX: stop ringing both legs simultaneously.** Ext 101's dial
+  string fires all three legs at once, so the carrier call hits the handset at the same instant
+  as the app push. Ring the **app alone for ~10 s, then add the cell** — the app gets an
+  uncontested window and the cell stays as backup. ⛔ **PBX change, needs Izzy's mandate — NOT
+  done.** The 2-minute proof first: one test call with the cell leg removed from ext 101.
+  ⚠ **Phone-side settings cannot beat a native call screen** — full-screen-intent permission
+  and channel importance are worth setting but must not be presented as the fix.
 - ✅ **The two cheap next steps, in order:** (a) **get the time of the call — it is
   perishable**, the PBX log holds today only; (b) ask him the one question that separates the
   two branches: *did the phone show a Connect incoming-call screen at all?* Then, on the

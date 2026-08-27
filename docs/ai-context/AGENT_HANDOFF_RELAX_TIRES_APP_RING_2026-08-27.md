@@ -291,3 +291,103 @@ Two possibilities remain open and the data cannot separate them:
   is what caught the method. Grep by `userId` and filter by time instead.
 - ⛔ `ombu_devices` has **no `dial_string` column** (it is `user` / `technology` /
   `assigned_exten`), and `VoiceDiagEvent` uses **`type`**, not `eventType`.
+
+---
+
+## 9. FOLLOW-UP 2026-08-27 — he answered on the CELL, and the app showed a STALE ring screen later
+
+Izzy relayed the missing detail: **he answered the call on the virtual extension (his regular
+phone). Later, after the call, he opened the app, saw the incoming-call screen, and it went
+away "like it was stale" — and he insists it never actually rang.** He asked whether the cause
+is that both legs land on **one physical handset** (the cell forward rings the same phone the
+app is installed on).
+
+**Yes. That is almost certainly the mechanism, and it explains every observation in sections
+2-6 at once** — including why the PBX looked perfectly healthy.
+
+### 9a. What the stale screen proves
+
+`IncomingCallFirebaseService.writeCacheFile()` persists every incoming push to
+**`pending_call_native.json`** in the app cache, and JS reads it back via `readCachedInvite()`
+(`NotificationsContext.tsx:689`). So a stale incoming-call screen on next app open means **the
+push reached the handset and the native service ran** — it is not a lost push. That agrees
+with the server, which logged `FCM_DIRECT_DELIVERED` + Expo `ok` on every ring.
+
+### 9b. Why it never rang — the app's incoming UI is a HEADS-UP, not a screen takeover
+
+⛔⛔ **I first assumed Android Telecom arbitration (a self-managed `ConnectionService` being
+refused while a carrier call is up) and that was WRONG — check the code before asserting it.**
+The Telecom path exists (`TelecomBridge.startIncomingCall`, `CAPABILITY_SELF_MANAGED`) but is
+**disabled behind `if (false)` since 2026-05-07** (`IncomingCallFirebaseService.java:1155`),
+deliberately, because on Samsung One UI it drew the OS dialer screen before the SIP INVITE
+existed. `isIncomingCallPermitted` is called **nowhere** in the repo.
+
+What actually presents an incoming call is a **CallStyle notification + full-screen intent**,
+and the code states its own limitation (`IncomingCallFirebaseService.java:1713`):
+
+> "This does NOT force a screen takeover on the home screen: the OS only launches the
+> full-screen intent when the device is **locked / screen-off**; while the device is unlocked
+> and interactive it is shown as a **floating heads-up notification** instead (and if
+> `USE_FULL_SCREEN_INTENT` is not granted it is always demoted to a heads-up)."
+
+So on an unlocked, in-use phone, Connect's incoming call is **a heads-up banner competing with
+the native carrier incoming-call screen for the same handset** — and the carrier call owns the
+display.
+
+### 9c. And the ringtone is on the same audio stream telephony uses
+
+`startIncomingCallRingtone` plays on **`STREAM_RING`** with
+`USAGE_NOTIFICATION_RINGTONE` (`IncomingCallFirebaseService.java:2524-2538`) — the same stream
+the carrier ringer uses, and the stream Android suppresses once a call goes `MODE_IN_CALL`.
+**The moment he answers on the cell, Connect's ringtone is silenced by the platform**, even if
+it had started.
+
+⛔ **The app checks native cellular call state NOWHERE.** `inActiveCall` is set only from JS
+(`IncomingCallUiModule.kt:871`) and reflects Connect's OWN call, not a carrier call; there is
+no `TelephonyManager` / `getCallState()` reference anywhere in the Android source. So the app
+cannot know it is competing with a native call and cannot adapt.
+
+### 9d. The measurement that makes this concrete
+
+Of **38** cancelled rings in 10 days, **20 (53%) lasted under 10 seconds** and **9 under 5
+seconds** — the single commonest value is **5 s** (8 calls), then 4 s and 7 s (4 each). Mean
+17 s. The 31-44 s tail is the calls nobody answered at all.
+
+```sql
+select round(extract(epoch from ("canceledAt" - "createdAt")))::int as app_ring_seconds,
+       count(*) from "CallInvite"
+where "tenantId"='cmnlgryme000up9paz1w40fg0' and "canceledAt" is not null
+  and "createdAt" > now() - interval '10 days' group by 1 order by 1;
+```
+
+**On more than half his calls the app was only "ringing" for 2-8 seconds** before he picked up
+the cell and the PBX cancelled the invite. A heads-up banner behind a native incoming-call
+screen, for five seconds, is indistinguishable from never ringing.
+
+### 9e. ⛔ The diagnostics that would settle it NEVER LEAVE THE PHONE
+
+`emitCallFlowNative()` (`IncomingCallFirebaseService.java:527`) ends in **`Log.i(...)` and
+nothing else** — it is logcat-only. So `incoming_call_ui_displayed`,
+`NATIVE_NOTIFICATION_POSTED`, `RINGTONE_START`, `preferFullScreen`, `channelImportance` and
+**`canUseFullScreenIntent`** are all unreadable from the server. **This whole class of failure
+— "the push arrived, the app had it, and the user saw nothing" — is structurally invisible to
+us.** Uploading those few fields with the existing quality report would make it diagnosable.
+⏳ Not built.
+
+### 9f. What to do — the real fix is on the PBX, not the phone
+
+- ✅✅ **RECOMMENDED: stop ringing both legs simultaneously — give the app a head start.**
+  Today `/fcab1cd3482527c3/extensions/101/dial` fires all three legs at once, so the carrier
+  call reaches the handset at the same moment as the app push and takes the screen. Ringing the
+  app alone for ~10 s and only then adding the cell gives the app an uncontested window and
+  keeps the cell as backup. **This is a PBX change and needs Izzy's mandate — NOT done.**
+- **The 2-minute test that proves it before changing anything:** place a test call with the
+  cell leg temporarily removed from ext 101. If the app rings reliably with no carrier call
+  competing, the mechanism is confirmed.
+- ⚠️ **Phone-side settings cannot beat a native call screen** — granting full-screen intent or
+  raising the channel importance will not make a heads-up win against the carrier UI. Worth
+  setting anyway (and Samsung "Never sleeping apps" still helps the churn in section 4), but do
+  not present it as the fix.
+- ⛔ **Nothing here is a Connect bug in the sense of something being broken.** The PBX,
+  the push and the SIP layer all did their jobs. It is a **design collision**: two legs of one
+  call landing on one handset, where the carrier leg always wins the screen and the ringer.
