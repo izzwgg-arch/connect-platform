@@ -105,6 +105,12 @@ export function ViewportDropdown({
       if (!target) return;
       if (panelRef.current?.contains(target)) return;
       if (triggerRef.current?.contains(target)) return;
+      // A NESTED dropdown (e.g. a ConnectSelect inside a portaled popover that
+      // itself rides ViewportDropdown) portals its own panel to <body> — outside
+      // this panelRef in the DOM. Closing here would unmount the nested dropdown
+      // at pointerdown, before its option's click can fire (the mini dialer
+      // "closed without saving" bug, one level down).
+      if (isInsideViewportDropdown(target)) return;
       onClose();
     }
 

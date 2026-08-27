@@ -486,12 +486,23 @@ export function useTelephonyAudio() {
   /**
    * DTMF keypad tone — plays once for 120ms.
    * Should NOT start/stop ringback or ringtone.
+   *
+   * `outputDeviceId` = the CALL output device (the headset/speaker picked in
+   * settings), so keypad feedback plays where the call audio plays. ⛔ The sink
+   * is ALWAYS applied — including "" (the OS default) — because the shared tone
+   * AudioContext may still be routed at the RINGER device from the last ring;
+   * the applyCtxSink helper's skip-on-empty is wrong here.
    */
-  const playDtmfTone = useCallback((digit: string) => {
+  const playDtmfTone = useCallback((digit: string, outputDeviceId?: string) => {
     const freqs = DTMF_FREQS[digit.toUpperCase()];
     if (!freqs) return;
     const ctx = ensureCtx();
     if (!ctx) return;
+    if (typeof (ctx as unknown as { setSinkId?: unknown }).setSinkId === "function") {
+      void (ctx as unknown as { setSinkId: (id: string) => Promise<void> })
+        .setSinkId(outputDeviceId ?? "")
+        .catch(() => undefined);
+    }
     playToneBurst(ctx, freqs[0], freqs[1], 120, 0.15);
   }, []);
 

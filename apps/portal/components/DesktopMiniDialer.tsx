@@ -532,17 +532,39 @@ function VoicemailPlayer({ vmId, src, durationSec, onPlay }: { vmId?: string; sr
 export function DesktopMiniDialer() {
   const phone = useSipPhone();
   const { user, tenant, adminScope } = useAppContext();
-  // The pop-out is a separate BrowserWindow that can't reliably read the portal's
-  // theme directly, so the desktop main process pushes it: the initial value arrives
-  // as a ?miniTheme= query param (no flash on open), and live changes arrive over the
-  // connectDesktop.window.onMiniTheme channel. Falls back to dark (the base palette).
+  // The pop-out is a separate BrowserWindow. Initial theme, in order:
+  //  1. localStorage "cc-theme" — the user's ACTUAL portal choice. Same-origin
+  //     desktop windows share localStorage (the reload broadcast and sign-in
+  //     already rely on it), so this is authoritative and needs no IPC.
+  //  2. The ?miniTheme= query param the shell passes. ⛔ The shell's in-memory
+  //     miniTheme starts stale on every app launch and is only corrected once
+  //     the full window's portal loads and pushes — with the full window hidden
+  //     in the tray at boot that push can lag or never come, which is how the
+  //     mini "always opened in dark mode" (Izzy, 2026-08-27).
+  //  3. LIGHT — the portal's own default (useAppContext useState("light")).
+  //     Dark is opt-in everywhere; the mini must match.
+  // Live changes still arrive over connectDesktop.window.onMiniTheme.
   const [miniTheme, setMiniTheme] = useState<"dark" | "light">(() => {
-    if (typeof window === "undefined") return "dark";
-    return new URLSearchParams(window.location.search).get("miniTheme") === "light" ? "light" : "dark";
+    if (typeof window === "undefined") return "light";
+    try {
+      const stored = localStorage.getItem("cc-theme");
+      if (stored === "dark" || stored === "light") return stored;
+    } catch { /* storage disabled — fall through */ }
+    const fromShell = new URLSearchParams(window.location.search).get("miniTheme");
+    return fromShell === "dark" ? "dark" : "light";
   });
   useEffect(() => {
     const off = window.connectDesktop?.window?.onMiniTheme?.((t) => {
-      setMiniTheme(t === "light" ? "light" : "dark");
+      // ⛔ The shell re-asserts its own in-memory theme at did-finish-load, and
+      // that value starts "dark" on every app launch until the full window's
+      // portal pushes the real one — the stale re-assert is what kept flipping
+      // a light-mode user's mini to dark. Every GENUINE push is written to
+      // localStorage "cc-theme" (same effect, useAppContext) before it is sent,
+      // so when the stored value disagrees with the push, the store wins.
+      let stored: string | null = null;
+      try { stored = localStorage.getItem("cc-theme"); } catch { /* storage disabled */ }
+      const next = stored === "dark" || stored === "light" ? stored : t;
+      setMiniTheme(next === "light" ? "light" : "dark");
     });
     return () => { off?.(); };
   }, []);
@@ -656,7 +678,19 @@ export function DesktopMiniDialer() {
     if (name && prefix && name.trim().toLowerCase() === prefix.trim().toLowerCase()) name = null;
     return { prefix: prefix || null, name: name || null, number };
   }, [incomingLiveCall, phone.remoteParty, phone.remotePartyNumber, phone.remotePartyName, phone.remotePartyPrefix]);
-  const timerSec = useCallTimer(phone.callState === "connected" ? phone.callStartedAt : null);
+  // Timer anchor: callStartedAt (exact answer time), falling back to the live
+  // session's own startedAt when the top-level field is missing — the two ride
+  // the same IPC snapshot, but the top-level single-call fields can be stomped
+  // (e.g. a secondary session's "ended" handler nulls callStartedAt while
+  // another call continues), which froze the mini's timer at 0:00 ("the call
+  // timer stopped working", 2026-08-27). A timer anchored at session start is
+  // honest enough; a frozen 0:00 during a live call is not.
+  const liveTimerSession = phone.sessions.find((s) => s.isActive && (s.state === "connected" || s.state === "held")) || null;
+  const timerSec = useCallTimer(
+    phone.callState === "connected"
+      ? (phone.callStartedAt ?? liveTimerSession?.startedAt ?? null)
+      : null,
+  );
   // In-call sub-views for the active-call screen: the 6-control grid ("controls"),
   // a live DTMF keypad ("keypad"), or a number-entry pad for Transfer / Add call
   // ("entry"). Previously Keypad/Add-call switched tabs (hidden under the call

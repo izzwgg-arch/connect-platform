@@ -765,10 +765,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     startRingtone,
     startCallWaitingAlert,
     stopCallWaitingAlert,
-    playDtmfTone,
+    playDtmfTone: playDtmfToneRaw,
     playCallEndChime,
     stopAll: stopAllAudio,
   } = useTelephonyAudio();
+
+  // Keypad feedback plays on the CALL output device (the headset/speaker picked
+  // in settings), not whatever sink the shared tone context last had — before
+  // this it stayed on the OS default (or the ringer device) while the call
+  // itself played on the headset (Izzy, 2026-08-27). currentSinkIdRef is
+  // declared below; the callback only reads it at press time.
+  const playDtmfTone = useCallback(
+    (digit: string) => playDtmfToneRaw(digit, currentSinkIdRef.current),
+    [playDtmfToneRaw],
+  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const uaRef = useRef<any>(null);
@@ -2637,9 +2647,34 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // Cancel stale-hangup timer — call ended normally via SIP, no need for force cleanup
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       submitCallQualityReport("normal");
+      // ⛔⛔ Sessions that survive this one: the top-level single-call state
+      // (callState / callStartedAt / sessionRef / call audio) still describes a
+      // LIVE call and must NOT be reset. Before this guard, ANY session ending —
+      // a held call the far end hung up, a waiting call that gave up — ran the
+      // full reset below and stomped the live call's UI: timer frozen at 0:00,
+      // call screen dropped, and removeSessionMeta's LIFO-restored sessionRef
+      // nulled right after it was set (Izzy, 2026-08-27 — surfaced once call
+      // waiting made secondary sessions routine). Ringing sessions are NOT
+      // survivors: a leftover incoming ring never blocked the reset before.
+      const survivorsOnEnd = Array.from(sessionMetaRef.current.values())
+        .filter((m) => m.id !== mcId && (m.state === "connected" || m.state === "held"));
       // Multi-call: drop from map. If this was the active call and other
       // sessions are held, removeSessionMeta will auto-unhold the next LIFO.
       removeSessionMeta(mcId);
+      dialGuardRef.current = null;
+      if (survivorsOnEnd.length > 0) {
+        const activeMeta = Array.from(sessionMetaRef.current.values()).find((m) => m.isActive) ?? survivorsOnEnd[0]!;
+        if (sessionRef.current === session) {
+          sessionRef.current = sessionsByIdRef.current.get(activeMeta.id) ?? null;
+        }
+        setCallState("connected");
+        setRemoteParty(activeMeta.remoteParty);
+        setCallDirection(activeMeta.direction);
+        setOnHold(Boolean(sessionMetaRef.current.get(activeMeta.id)?.onHold));
+        setMutedState(false);
+        localRingbackActiveRef.current = false;
+        return;
+      }
       sessionRef.current = null;
       setOnHold(false);
       setCallDirection(null);
@@ -2651,7 +2686,6 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       clearCallDiag();
       callStartedAtRef.current = null;
       setCallStartedAt(null);
-      dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
       lastStatsRef.current = null;
@@ -2739,7 +2773,30 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // Cancel stale-hangup timer — call failed cleanly at SIP level
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       submitCallQualityReport(e.cause || "failed");
+      // ⛔⛔ Same survivor guard as "ended": a SECONDARY session failing — most
+      // commonly a WAITING call the caller abandoned or the user declined —
+      // must not reset the live call's top-level state (that froze the timer,
+      // flashed "Call failed" over a healthy conversation, and tore down the
+      // shared call audio). Ringing sessions are not survivors.
+      const survivorsOnFail = Array.from(sessionMetaRef.current.values())
+        .filter((m) => m.id !== mcId && (m.state === "connected" || m.state === "held"));
       removeSessionMeta(mcId);
+      dialGuardRef.current = null;
+      if (survivorsOnFail.length > 0) {
+        const activeMeta = Array.from(sessionMetaRef.current.values()).find((m) => m.isActive) ?? survivorsOnFail[0]!;
+        if (sessionRef.current === session) {
+          sessionRef.current = sessionsByIdRef.current.get(activeMeta.id) ?? null;
+        }
+        setCallState("connected");
+        setRemoteParty(activeMeta.remoteParty);
+        setCallDirection(activeMeta.direction);
+        setOnHold(Boolean(sessionMetaRef.current.get(activeMeta.id)?.onHold));
+        setMutedState(false);
+        localRingbackActiveRef.current = false;
+        // Deliberately NO setError: a waiting caller giving up is not a failure
+        // of the call the user is still on.
+        return;
+      }
       sessionRef.current = null;
       setOnHold(false);
       setCallDirection(null);
@@ -2754,7 +2811,6 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       clearCallDiag();
       callStartedAtRef.current = null;
       setCallStartedAt(null);
-      dialGuardRef.current = null;
       localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
       lastStatsRef.current = null;
@@ -2797,6 +2853,38 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     if (!anyRingingWaitingSession(excludeId)) stopCallWaitingAlert();
   }
 
+  /**
+   * A side session just ended/failed and was removed from the map. If it was
+   * the LAST live call, clear the top-level single-call state. Historically the
+   * PRIMARY session's own ended/failed handler reset that state unconditionally
+   * — which is exactly the bug the survivor guards above fix (it stomped a live
+   * call whenever a secondary session died). With those guards in place, a call
+   * bundle can now END on a side session (primary ended first, survivor took
+   * over), so the side handlers must close the loop or the dialer stays stuck
+   * "on a call" forever. No-ops when another live call remains, and no-ops when
+   * the top-level state is already clear (nothing to tear down twice).
+   */
+  function maybeTeardownTopLevelAfterSideEnd() {
+    const anyLive = Array.from(sessionMetaRef.current.values())
+      .some((m) => m.state === "connected" || m.state === "held");
+    if (anyLive) return;
+    const topLevelLive = sessionRef.current != null || callStartedAtRef.current != null;
+    if (!topLevelLive) return;
+    sessionRef.current = null;
+    setOnHold(false);
+    setCallDirection(null);
+    setCallState("ended");
+    setRemoteParty(null);
+    setMutedState(false);
+    stopLocalStream();
+    teardownRemoteAudioPlayback();
+    clearCallDiag();
+    callStartedAtRef.current = null;
+    setCallStartedAt(null);
+    dialGuardRef.current = null;
+    setTimeout(() => setCallState("idle"), 2000);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function bindSideSession(session: any, party: string, mcId: string) {
     session.on("progress", () => {
@@ -2828,11 +2916,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // another call is still waiting. Without this the alert repeated forever
       // (the old full-ringtone version of this bug looped until the 120 s cap).
       settleCallWaitingAlert();
+      maybeTeardownTopLevelAfterSideEnd();
     });
     session.on("failed", () => {
       console.log(`[MULTICALL] web side_session_failed=${mcId}`);
       removeSessionMeta(mcId);
       settleCallWaitingAlert();
+      maybeTeardownTopLevelAfterSideEnd();
     });
   }
 

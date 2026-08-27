@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, Voicemail, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
-import { isInsideViewportDropdown } from "./ViewportDropdown";
+import { isInsideViewportDropdown, ViewportDropdown } from "./ViewportDropdown";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
 import { useAsyncResource } from "../hooks/useAsyncResource";
@@ -303,14 +303,17 @@ function DesktopSettingsMenu({
   phone,
   settings,
   onToggle,
+  onClose,
   onUpdate,
 }: {
   open: boolean;
   phone: ReturnType<typeof useSipPhone>;
   settings: DesktopDialerSettings;
   onToggle: () => void;
+  onClose: () => void;
   onUpdate: (patch: Partial<DesktopDialerSettings>) => void;
 }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (open) void phone.refreshAudioDevices();
   }, [open, phone.refreshAudioDevices]);
@@ -325,9 +328,15 @@ function DesktopSettingsMenu({
     onUpdate({ selectedSpeakerDeviceId: deviceId });
   };
 
+  // ⛔ The popover rides ViewportDropdown (a portal to <body>) ON PURPOSE.
+  // Rendered inline it sat inside .fd-card, whose `overflow: hidden` CLIPPED it
+  // ("settings hidden underneath something", 2026-08-27) — and neither
+  // `position: fixed` nor z-index can escape that card: its backdrop-filter and
+  // the shell's persistent fdIn transform each make it a containing block.
   return (
     <div className="fd-settings-wrap">
       <button
+        ref={triggerRef}
         className="fd-icon-plain"
         type="button"
         onClick={onToggle}
@@ -336,8 +345,14 @@ function DesktopSettingsMenu({
       >
         <Settings size={16} />
       </button>
-      {open && (
-        <div className="fd-settings-popover">
+      <ViewportDropdown
+        open={open}
+        triggerRef={triggerRef}
+        onClose={onClose}
+        width={330}
+        sideOffset={8}
+        className="fd-settings-popover"
+      >
           <div className="fd-settings-title">
             <span className="fd-settings-icon"><Headphones size={15} /></span>
             <span>
@@ -396,8 +411,7 @@ function DesktopSettingsMenu({
             hint="Show floating dialer on startup"
             onChange={(checked) => onUpdate({ openMiniOnStartup: checked })}
           />
-        </div>
-      )}
+      </ViewportDropdown>
     </div>
   );
 }
@@ -1032,6 +1046,7 @@ export function FloatingDialer() {
                       phone={phone}
                       settings={desktopSettings}
                       onToggle={() => setSettingsOpen((value) => !value)}
+                      onClose={() => setSettingsOpen(false)}
                       onUpdate={updateDesktopSettings}
                     />
                     <button className="fd-icon-plain" type="button" onClick={popOutMiniDialer} title="Pop out mini dialer">
@@ -1338,20 +1353,36 @@ const DIALER_CSS = `
 .fd-chip-btn { padding: 0 9px; font-weight: 800; font-size: 11px; }
 .fd-chip-btn[data-active="true"] { color: #fff; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-color: transparent; }
 .fd-icon-plain { width: 27px; display: inline-flex; align-items: center; justify-content: center; }
-.fd-settings-popover { position: absolute; top: 34px; right: -36px; z-index: 40; width: min(330px, calc(100vw - 28px)); padding: 14px; border-radius: 24px; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.20), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)); border: 1px solid rgba(125,211,252,.20); box-shadow: 0 24px 70px rgba(0,0,0,.50); backdrop-filter: blur(22px); }
+/* Portaled to <body> via ViewportDropdown (never inline — .fd-card's
+   overflow:hidden clipped it, and its backdrop-filter + the shell's persistent
+   fdIn transform make position:fixed useless inside). !important beats the
+   globals.css .dropdown-panel base styles, the same way .cs-panel does.
+   ⛔ Outside .fd-shell, so the --fd-* vars do NOT reach it — it themes itself
+   via :root[data-theme="light"], which does reach a body portal. */
+.fd-settings-popover { padding: 14px !important; border-radius: 24px !important; background: radial-gradient(circle at 0% 0%, rgba(56,189,248,.20), transparent 42%), linear-gradient(145deg, rgba(12,20,36,.98), rgba(5,12,24,.98)) !important; border: 1px solid rgba(125,211,252,.20) !important; box-shadow: 0 24px 70px rgba(0,0,0,.50) !important; backdrop-filter: blur(22px); color: #f8fafc; }
+:root[data-theme="light"] .fd-settings-popover { background: rgba(255,255,255,.99) !important; border-color: rgba(15,23,42,.12) !important; box-shadow: 0 18px 54px rgba(15,23,42,.18) !important; color: #0f172a; }
 .fd-settings-title { display: flex; align-items: center; gap: 10px; color: #f8fafc; margin-bottom: 12px; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-title { color: #0f172a; }
 .fd-settings-title span:last-child { display: grid; gap: 2px; }
 .fd-settings-title strong { font-size: 13px; font-weight: 950; }
 .fd-settings-title small { color: #8fb3c8; font-size: 10px; font-weight: 750; line-height: 1.25; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-title small { color: #64748b; }
 .fd-settings-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 13px; background: linear-gradient(135deg, rgba(14,165,233,.26), rgba(34,197,94,.18)); color: #bae6fd; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-icon { background: linear-gradient(135deg, rgba(14,165,233,.14), rgba(34,197,94,.10)); color: #0369a1; }
 .fd-settings-field { display: grid; gap: 7px; margin-bottom: 10px; color: #9fb4c8; font-size: 11px; font-weight: 900; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-field { color: #475569; }
 .fd-settings-field select { width: 100%; min-width: 0; border: 1px solid rgba(148,163,184,.16); border-radius: 15px; padding: 10px 11px; color: #f8fafc; background: rgba(15,23,42,.88); outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
 .fd-settings-section-label { margin: 11px 0 3px; color: #64748b; font-size: 10px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-section-label { color: #94a3b8; }
 .fd-settings-popover .fd-settings-row { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 2px; border: 0; border-top: 1px solid rgba(148,163,184,.10); background: transparent; color: inherit; cursor: pointer; text-align: left; appearance: none; }
 .fd-settings-popover .fd-settings-row span { display: grid; gap: 2px; min-width: 0; }
 .fd-settings-popover .fd-settings-row strong { color: #e5eefb; font-size: 12px; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-row strong { color: #0f172a; }
 .fd-settings-popover .fd-settings-row small { color: #8fb3c8; font-size: 10px; line-height: 1.25; }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-row small { color: #64748b; }
 .fd-settings-popover .fd-settings-row i { position: relative; flex: 0 0 auto; width: 38px; height: 21px; border-radius: 999px; background: rgba(100,116,139,.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-row { border-top-color: rgba(15,23,42,.08); }
+:root[data-theme="light"] .fd-settings-popover .fd-settings-row i { background: rgba(100,116,139,.35); box-shadow: inset 0 0 0 1px rgba(15,23,42,.06); }
 .fd-settings-popover .fd-settings-row i:after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 999px; background: white; transition: transform .16s ease, background .16s ease; }
 .fd-settings-popover .fd-settings-row i[data-on="true"] { background: linear-gradient(135deg, #22c55e, #0ea5e9); }
 .fd-settings-popover .fd-settings-row i[data-on="true"]:after { transform: translateX(17px); }

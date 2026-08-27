@@ -60,7 +60,7 @@ test("mini dialer settings popover ignores mousedown inside a portaled dropdown 
 test("floating dialer shell ignores pointerdown inside a portaled dropdown panel", () => {
   const src = read("components/FloatingDialer.tsx");
   assert.ok(
-    src.includes('import { isInsideViewportDropdown } from "./ViewportDropdown"'),
+    /import \{[^}]*isInsideViewportDropdown[^}]*\} from "\.\/ViewportDropdown"/.test(src),
     "FloatingDialer must import isInsideViewportDropdown",
   );
   const handlerStart = src.indexOf("const handlePointerDown");

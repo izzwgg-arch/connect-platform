@@ -74,8 +74,12 @@ let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
 // evidence, not a reason to skip recovery.
 let lastPhoneStateAt = 0;
 // Last theme the full portal window reported. Forwarded to the mini pop-out so it
-// follows the portal's light/dark mode. Defaults to dark (the mini's base palette).
-let miniTheme: "dark" | "light" = "dark";
+// follows the portal's light/dark mode. Defaults to LIGHT — the portal's own
+// default (dark is opt-in), so a fresh launch's mini matches the app instead of
+// opening dark until the full window's portal pushes (Izzy, 2026-08-27). The
+// portal side also arbitrates every push against localStorage "cc-theme", so a
+// stale value here can no longer flip a user's mini either way.
+let miniTheme: "dark" | "light" = "light";
 // Power-save blocker held for the duration of a call so Windows never suspends the
 // app or throttles the CPU mid-call (another source of choppy desktop audio).
 let callPowerSaveBlockerId: number | null = null;
