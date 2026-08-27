@@ -319,3 +319,78 @@ Keeping OpenAI as the mouth preserves the customer-facing half **exactly as it
 is** — the Yiddish Labs bridge in both directions, the degraded fallbacks, the
 tone, the `fallbackReply("yi")` behaviour. That half is tuned and proven, and
 this change does not touch it. Claude gets the hands; OpenAI keeps the voice.
+
+---
+
+# Round 4 (same day) — MCP to Izzy's OWN Claude, as the temporary shape
+
+Izzy: *"I would prefer the MCP just because Claude over here already has all the
+memory and knows the system. The system over there is a new memory, and it's not
+even working properly … at least temporary until the internal Loopcom works."*
+
+## 20. ⛔ §16 ("it should NOT be MCP") DOES NOT SURVIVE THIS — and that is correct
+
+§16 argued against MCP because OpenAI and Claude were both inside `apps/agent`,
+so there was no boundary to cross. **Izzy has moved the boundary.** In this
+design the Claude doing the work is his own Claude Code session — a different
+machine, a different process, holding knowledge LoopCom does not have. That is a
+real boundary, and MCP is the right tool for it. §16 applies only to the case it
+described; it is not a general rule against MCP here.
+
+## 21. ✅ The premise checks out — measured on production 2026-08-27
+
+| | LoopCom's internal agent | This repo / a Claude Code session |
+|---|---|---|
+| Knowledge docs | **46** (16 hand-written with real content, 30 auto-generated tenant facts) | CLAUDE.md **1.2 MB** + **172** handoffs (4.4 MB) |
+| KB articles (`AgentKbArticle`) | **0** | — |
+| Memories (`AgentMemory`) | **0** | the memory dir + index |
+
+The two stores that would make the internal agent "know the system" are
+**literally empty**. He is right, and the hand-written docs are the only real
+knowledge it has. ⚠️ They have grown 6 → 16 since 2026-08-16, so the internal
+one IS being filled in — just not far enough to rely on. Escalations are
+**10 in 30 days** now (~2.3/week), up from 7.
+
+## 22. ⛔⛔ THE OPERATIONAL TRAP: his laptop becomes production
+
+If tickets route to a local Claude Code session, support works only while his
+machine is on, awake, and holding a session. A ticket at 2am reaches nobody, and
+the customer has already been told someone is looking.
+
+**So `routing_mode: "local"` MUST carry a timeout that falls back.** Unclaimed
+after N minutes → the existing SMS-to-Izzy path, which already works and is
+already capped. That single addition to the claim is what makes "temporary"
+safe rather than a hole that opens every night.
+
+## 23. ✅ THE PAYOFF: this takes the dangerous half OFF the critical path
+
+Auto-approval, the revert proof (Phase 0), CMA session budgets and vault
+credentials all exist for one reason — **nobody is watching.** If Izzy drives
+each ticket from his own session, he approves as himself through the
+password-gated `applyConfirmedAction` that already works and is already audited.
+
+So for v1: **no auto-approval, no cloud, no revert proof needed.** He gets this
+sooner, and the risky machinery waits until it is actually load-bearing.
+
+## 24. ✅ It has a clean exit, and the knowledge is portable
+
+The MCP server is the same one whichever Claude holds the other end — him today,
+the cloud CMA agent later, the internal LoopCom agent once its knowledge is real.
+**LoopCom's side never changes**, so building the temporary version now does not
+cost the permanent one.
+
+⛔ And the knowledge he is relying on is **in this repo** — CLAUDE.md, the 172
+handoffs — not locked inside a Claude. A cloud agent can mount the same files
+and read the same rules (§9). What is genuinely local-only is his own memory dir
+and the live session context. The eventual migration is therefore much smaller
+than it feels today.
+
+## 25. v1, concretely
+
+MCP server exposing `list_tickets`, `get_ticket`, `claim_ticket`, `post_answer`,
+`get_routing_mode` / `set_routing_mode`. He says *"work ticket Q2FJRK"* in his
+own Claude; it does what it already does well (repo + handoffs + SSH + memory);
+it posts a technical report and a customer-safe sentence (§18) back onto the
+ticket; the OpenAI agent relays the second one to the customer.
+
+Nothing on that list needs the cloud, auto-approval, or a proven revert path.
