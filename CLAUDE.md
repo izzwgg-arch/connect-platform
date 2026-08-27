@@ -71,6 +71,94 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RACE permanently killed 3 voicemail emails and 5 mailboxes email NOBODY (2026-08-27) — READ FIRST before answering "did any voicemail/text fail", before reading `no_recording` as a real skip, or before proving the SMS reply half is alive
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOICEMAIL_SMS_AUDIT_2026-08-27.md`**
+(**Read-only audit — no code, no deploy, no migration, no PBX write, no data
+change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
+
+- ✅ **THE HEADLINE: nothing is broken and both guardrails are alive.** Voicemail
+  email — **64 `VOICEMAIL_NOTIFICATION` jobs, ALL `SENT`**, 0 FAILED, 0
+  `emailError`, deliveries on **all 8 calendar days**, and **132 non-Gesheft
+  voicemails / 132 stamped / ZERO unstamped**. SMS forward — **349 inbound, 349
+  stamped, 0 lost, 0 errors that were not the deliberate skip**; the
+  `sms_forward.guardrail` ran **456 times, every one clean**. Outbound SMS — 37
+  sent, 0 errors. **No voicemail/SMS escalation fired.**
+- ⛔⛔ **THE ONE REAL FAILURE, AND IT IS A RACE NOBODY HAD SPOTTED: three good
+  voicemails were stamped `no_recording` and can NEVER be retried.**
+  `hasAudio` is `Boolean(localAudioPath) && !audioGoneAt`
+  (`voicemailEmailSender.ts:138`), and a false makes `voicemailEmail.ts:112`
+  write a **FINAL** skip. But the arrival audio copy is **fire-and-forget**
+  (`void copyFreshVoicemailAudioToStore(...)`, `server.ts:30905`, an HTTP fetch to
+  the PBX helper taking ~2 s) while the email sweep is an **independent 60-second
+  timer** (`server.ts:5534`). **Nothing sequences them**, so a sweep tick landing
+  in that 1–3 s window kills the email forever.
+  ⛔⛔ **THE PROOF IS THE TIMING, AND IT IS THE REUSABLE TRICK: compare
+  `createdAt` → `emailedAt` per outcome.** EMAILED avg **31.2 s**, `too_short`
+  **28.3 s**, `no_recipient` **29.8 s** — and `no_recording` **0.4 s** (0.2 /
+  0.3 / 0.7). That is not a different verdict on the same data, it is the
+  decision running **before the data existed**. All three rows carry a
+  `localAudioPath` and a null `audioGoneAt` **today**, and all 132 non-Gesheft
+  voicemails have local audio, so the skip was never true about the voicemail.
+  **Casualties:** A plus center 108 (08-23, Yiddish), Yossis 102 (08-24, sales),
+  **Trust Bookkeepings 106 (08-24, a real customer in Yiddish)**. Size: **~2/week
+  (2 the week of 08-24, 2 the week of 08-17), ≈2% of eligible** — matching the
+  mechanism (~2 s copy ÷ 60 s sweep ≈ 3%).
+  ⏳ **NOT FIXED, both halves Izzy's call:** the narrow fix is to make
+  `no_recording` **non-final while the voicemail is young** (leave `emailedAt`
+  null, let the next sweep re-decide, exactly as the watchdog rescues stranded
+  rows). ⛔ **Do NOT "fix" it by awaiting the copy inline** — that puts a PBX HTTP
+  fetch back on the ingest path, the 2026-08-12 helper FD-exhaustion class.
+  Releasing the three (clear `emailedAt` + `emailSkipReason`, the 2026-08-18
+  recipe) would email them, but they are 3–4 days old.
+  Ids `cmt5xnl6w01x7r013air2y6ex`, `cmt7jhgvr0c14r613opfjfv8f`,
+  `cmt7plqxg0l4dmj13zeyrvtkv`.
+- ⚠️⚠️ **FIVE BLIND MAILBOXES TOOK 15 VOICEMAILS THAT REACHED NOBODY, AND THE LIST
+  IN THIS FILE WAS OUT OF DATE.** Now: **A plus center 108 (10)**, **B Visible 105
+  (2)**, **B Visible 106 (1)**, **Create A Box 105 (1)**, **Landau Home 101 (1)** —
+  ⛔ B Visible 105/106 and Create A Box 105 are **NEW and were recorded nowhere**;
+  Trimpro 104 did not recur. All five confirmed truly unconfigured
+  (`Extension.pbxUserEmail` NULL **and** zero `VoicemailEmailRecipient` rows).
+  ⚠️ **The single most valuable loss of the week is Create A Box ext 105 — a
+  3 m 42 s voicemail that notified nobody.** ⛔ `no_recipient` deliberately never
+  escalates (it is a standing condition, not a fault), so **only an audit finds
+  this**; the fix is one address each in Settings and is Izzy's call.
+- ⛔⛔ **THE SMS REPLY HALF HAS NO HEARTBEAT, so "4 quiet days" and "the poller is
+  dead" look IDENTICAL in the database — it took three checks to tell them
+  apart.** Proven alive: `app-agent-1` up since 08-24 21:23 with **0 restarts**
+  and **`grep -c "sms reply pass failed"` over all 16,302 log lines = 0** (the
+  45 s IMAP poll has not thrown once), plus a **read-only IMAP probe** (connect +
+  `STATUS`, no fetch, so no `\Seen` change) reading `sms@loopcom.net` INBOX
+  **12 messages, 0 unseen** in 1.3 s. Nothing is sitting unprocessed; nobody has
+  replied since 08-23. ⏳ **Worth building: an `sms.reply_heartbeat` audit row per
+  pass** — every other sweep here has one.
+- ✅ **The Gmail lower-cased-`Delivered-To` bug is CONFIRMED DEAD.** The last
+  `ambiguous_reply_address` refusal is **2026-08-21**, before the 08-23 fix
+  (`6d9b9f33`); **none since.**
+- ⚠️ **ONE INVISIBLE FAILURE MODE, SEEN ONCE: a text-forward email BOUNCED after
+  Google had accepted it.** `sms.reply_ignored no_reply_address` from
+  `mailer-daemon@googlemail.com`, 2026-08-23 21:12 — and **no Connect `EmailJob`
+  was sent anywhere near that time** (the only rows are 8 `ADMIN_ALERT`s, all
+  `SKIPPED ALERTS_MUTED`), so it is a bounce of an email the **agent** sent as
+  `sms@loopcom.net`. ⛔ **`emailForwardedAt` is stamped on SMTP acceptance, so a
+  post-acceptance bounce leaves the row looking perfectly delivered** — `SENT`
+  means the provider took it, never that a human got it.
+- ⛔ **Gesheft's 287 voicemails are OUT OF SCOPE BY DESIGN and their null
+  `emailedAt` is NOT a failure** — they are the one tenant still on the PBX's own
+  voicemail-to-email, so Connect never stamps them. Their delivery is a postfix
+  question on the PBX, where **`mail.log` holds ONE DAY**, so six of the seven
+  days are unavailable at any price.
+- ⚠️ Noticed, not acted on: **Hanna has SMS-to-email OFF** (schema default — she
+  post-dates the 08-20 backfill), so her one inbound text on 08-23 emailed nobody;
+  `voicemail.transcribe_failed` ×15 (a different lane, not investigated); and
+  B Visible still gets carrier-side text emails via VoIP.ms `sms_email` +
+  `sms_forward` regardless of the Connect switch.
+- ⛔ **The four one-line queries that reproduce this whole audit are in §7 of the
+  handoff.** The two that matter most: a non-Gesheft voicemail with
+  `emailedAt is null` older than the grace = a lost notification; an INBOUND
+  `ConnectChatMessage` with `emailForwardedAt is null` older than 35 min = a lost
+  text email. **Both read 0 today.**
+
 ## ⛔⛔ AGENT HANDOFF — "they left a voicemail and we never got it" was a caller hanging up inside a 24-SECOND greeting, and 11.7% of that customer's callers do the same (2026-08-27) — READ FIRST for ANY "we never got their voicemail", before trusting `disposition: "answered"`, and before telling a customer we lost anything
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GESHEFT_MISSING_VOICEMAIL_2026-08-27.md`**
