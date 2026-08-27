@@ -647,3 +647,58 @@ same query param.**
   CLAUDE.md's section.
 - ⏳ NOT PROVEN until Izzy drives it: no human has added a rule on the screen,
   clicked a ?, or watched a re-run improve a draft.
+
+### §14a — the correction surface shipped INCOMPLETE, and that was the real ask (same day, `70e075d6`)
+
+Izzy, on the first cut: *"No, it's not good. Each item on each item line I
+should be able to correct. I'm not able to correct each item, whether it's a
+question mark, whether it's a check mark, whether it's anything. This is
+training, and every time I correct something, that means this is how it's
+supposed to be, that standard, right there."*
+
+He was right, and the gap is worth recording because it is a design failure,
+not a bug: **the first cut made corrections available only where the agent had
+already FAILED.** A ✗ line could be filled; a ? could only be confirmed; a ✓
+had no correction path at all except a hidden keyboard gesture on the cart
+table below. But while TRAINING, the most valuable correction is exactly the
+one on a line the agent thinks it got right — a confidently wrong ✓ is the
+thing that must be teachable, and it was the one thing that wasn't.
+
+**What shipped instead — one control set on every line, whatever its mark:**
+- **"Change"** (or **"Pick the item"** on a ✗) on EVERY line, opening an
+  inline catalog search. ⛔ It reuses `ReplaceBox`, the cart-row replace UI —
+  never a second search implementation.
+- `setLineItem(idx, line, hit, meant)` swaps the cart row, KEEPS the existing
+  quantity (the rep may have adjusted it), and teaches phrase → product with
+  the typed search text as the meant-phrase.
+- **"✓ that's right"** settles a ? and teaches the pick; the cart row's own
+  "?" pill does the same through `confirmPick`.
+- ⛔ Suggestion CHIPS still do NOT teach and are now labelled *"a one-off, not
+  taught"* — under supersede semantics a chip-taught lesson would RETIRE a
+  good one.
+
+**The two pieces of state that make it hold together:**
+- `lineFix: Map<lineIdx, posProductId>` — what a PERSON set for a line.
+  ⛔ Without it the checklist keeps judging the line against the AGENT's
+  product, so a corrected line falls straight back to ✗ the moment the swap
+  lands. `resolvedIdForLine` is the single reader: person's fix → agent's pick
+  → a suggestion the rep added by chip.
+- `lineOk: Set<lineIdx>` — lines a person settled, so a confirmed pick never
+  renders "?" again.
+- ⛔ **Both RESET in `loadDraft`.** A re-run rewrites `agentLines` and
+  renumbers them, so a surviving index would mark the WRONG line settled.
+- ⛔ Retiring the old cart row is skipped when another line still resolves to
+  it — two lines can legitimately want the same product, and yanking it would
+  leave the other line showing ✗ for something still on the order.
+
+⛔⛔ **THE TDZ TRAP, caught by typecheck and worth remembering: a `useCallback`
+dependency array is evaluated DURING RENDER.** `doReplace` was declared above
+the new helpers and listed `teachLine` / `resolvedIdForLine` as deps —
+`tsc` reported TS2448 "Block-scoped variable used before its declaration", and
+at runtime that is a **ReferenceError that crashes the entire desk on first
+render**, not a lint nit. The body may reference a later const safely; the dep
+array may not. `doReplace` moved below its dependencies.
+
+Teaching is centralised in `teachLine` (all four gestures route through it),
+and the source guard now pins that the Change control is **NOT** gated on the
+line being skipped — that gating IS the bug that shipped.

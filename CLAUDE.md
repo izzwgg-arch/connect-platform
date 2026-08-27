@@ -419,14 +419,36 @@ just change it right there on the spot."* Memory: [[supermarket-training-loop-bu
   at submit deliberately does NOT supersede** — hints, not verdicts;
   test-pinned. ⛔ The teach queue's `taughtKeys` counts ACTIVE lessons only,
   or a retired lesson hides its phrase while nothing answers it.
-- ✅ **THE DESK TEACHES WITHOUT SUBMITTING — three gestures, all instant:**
-  the row SWAP (pre-existing); **fix-from-the-box** (clicking a skipped
-  checklist phrase arms `teachFor`, and the next add FROM THE BOX teaches
-  phrase→product with the search text as the meant-phrase — ⛔ suggestion
-  CHIPS deliberately do NOT teach: a chip is a one-off substitute, and under
-  supersede semantics a chip-taught lesson would retire a good one); and
-  **confirm-?** (clicking the "?" pill or the "✓ that's right" checklist chip
-  clears the ? AND teaches the pick). **"Re-run the agent"** replays ONE draft
+- ⛔⛔ **EVERY CHECKLIST LINE IS CORRECTABLE, WHATEVER ITS MARK — the first cut
+  shipped this WRONG and Izzy caught it the same day** (*"each item on each
+  item line I should be able to correct… whether it's a question mark, whether
+  it's a check mark, whether it's anything"*). Only a ✗ line could be fixed: a
+  ✓ had NO way to say "that's wrong", and a ? could only be confirmed, never
+  changed — the gesture that matters most while training. Now **"Change" /
+  "Pick the item" on EVERY line** opens an inline catalog search (⛔ reusing
+  `ReplaceBox` — never a second search implementation) and `setLineItem` swaps
+  the cart row, keeps the quantity and TEACHES; **"✓ that's right"** settles a
+  ?; the cart row's own "?" pill does the same.
+  ⛔ **`lineFix` / `lineOk` track what a PERSON set** — without them a
+  corrected line falls back to the agent's own (wrong) product and goes on
+  showing ✗ — and both RESET on reload, because a re-run renumbers the lines
+  and a stale index would mark the wrong line settled. Retiring the old cart
+  row is skipped when another line still resolves to it.
+  ⛔ Suggestion CHIPS deliberately do NOT teach (labelled "not taught"): a chip
+  is a one-off substitute, and under supersede semantics a chip-taught lesson
+  would retire a good one.
+  ⛔⛔ **Teaching is centralised in `teachLine`, and a source guard now pins
+  that Change is NOT gated on the line being skipped** — that gating IS the
+  bug that shipped.
+  ⛔ **The TDZ trap it cost:** `doReplace`'s dependency array referenced
+  `teachLine`/`resolvedIdForLine` declared BELOW it. A dep array is evaluated
+  DURING render, so that is a ReferenceError crashing the whole desk, not a
+  lint nit — `tsc` caught it (TS2448). Helpers must precede any callback
+  listing them as deps.
+- ✅ **The other teach gestures, all instant and all without submitting:** the
+  row SWAP (pre-existing) and **fix-from-the-box** (clicking a checklist
+  phrase drops it in the quick-add box; the next add from the box teaches with
+  the search text as the meant-phrase). **"Re-run the agent"** replays ONE draft
   (`POST /supermarket/drafts/:id/rerun` — ownership 404 before permission 403,
   NEEDS_REVIEW only, stored YL translation reused so audio is never re-billed)
   so he can watch the same order improve; the button renders only when the
