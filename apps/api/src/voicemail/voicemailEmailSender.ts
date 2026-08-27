@@ -137,9 +137,21 @@ export async function processVoicemailForEmail(
     // ⛔ Audio must be present AND not proven gone.
     hasAudio: Boolean(vm.localAudioPath) && !vm.audioGoneAt,
     emailedAt: vm.emailedAt,
+    // ⛔ Load-bearing: without it every missing-audio voicemail ages as
+    // "unknown" and is stamped `no_recording` on the spot — the exact race
+    // this guards against.
+    receivedAt: vm.receivedAt,
   });
 
   if (!decision.send) {
+    // ⛔ A retry decision is NOT stamped: the audio copy is still in flight and
+    // the next sweep must be allowed to judge it again. Same reasoning as
+    // `excluded_tenant` above — a stamp here is permanent and would be wrong.
+    // The window is bounded (AUDIO_ARRIVAL_GRACE_MS), so the row cannot sit
+    // unstamped and block the sweep's ascending batch.
+    if (decision.retry) {
+      return { queued: false, voicemailId: vm.id, reason: decision.reason };
+    }
     await deps.markProcessed(vm.id, decision.reason);
     return { queued: false, voicemailId: vm.id, reason: decision.reason };
   }

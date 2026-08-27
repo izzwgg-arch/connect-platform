@@ -301,6 +301,16 @@ export async function runVoicemailEmailWatchdog(log: Log): Promise<VoicemailEmai
     // outbox has proven it can send again (bounded — see decideRequeue).
     await requeueDeadVoicemailEmails(log);
 
+    // ── SELF-HEAL 3: a `no_recording` stamp whose audio has SINCE ARRIVED is
+    // re-opened, so the next sweep emails it. This is what makes the promise
+    // "an email never fails to arrive" true even when the grace expires — a
+    // wedged PBX helper delays the audio past AUDIO_ARRIVAL_GRACE_MS, the row
+    // is stamped, and without this it would be lost for good.
+    const reopened = await reopenRecoveredNoRecordings(since, log);
+    if (reopened > 0) {
+      log.warn({ reopened }, "voicemail-email: re-opened voicemails whose recording arrived after they were skipped");
+    }
+
     const alertable = gapsWorthAlerting(gaps);
 
     if (gaps.length > 0) {
@@ -329,6 +339,69 @@ function countBy(gaps: VoicemailEmailGap[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const g of gaps) out[g.problem] = (out[g.problem] || 0) + 1;
   return out;
+}
+
+/** Most re-openable rows to take in one watchdog pass. Bounds the blast radius. */
+export const REOPEN_BATCH = 50;
+
+/**
+ * The re-open query, pure so a test can hold it to account.
+ *
+ * ⛔⛔ THE TERMINATION ARGUMENT, and it is the whole safety of this feature:
+ * a row is re-opened ONLY while it is stamped `no_recording` AND its audio is
+ * present. Once re-opened the sweep judges it again WITH audio, so it either
+ * emails (stamped null) or skips for a DIFFERENT reason (`too_short`,
+ * `no_recipient`, `disabled`) — and none of those match this query. So a row can
+ * be re-opened at most once and there is no loop. ⛔ If you ever widen the
+ * `emailSkipReason` filter, re-derive that argument first: matching a reason the
+ * re-decision can produce again is an infinite re-open/re-stamp cycle that
+ * emails a customer on every watchdog tick.
+ */
+export function buildNoRecordingReopenWhere(input: { since: Date; excludedTenantIds: Iterable<string> }): {
+  receivedAt: { gte: Date };
+  deletedAt: null;
+  tenantId: { not: null; notIn?: string[] };
+  emailSkipReason: "no_recording";
+  localAudioPath: { not: null };
+  audioGoneAt: null;
+} {
+  const excluded = Array.from(
+    new Set(Array.from(input.excludedTenantIds).map((s) => String(s || "").trim()).filter(Boolean)),
+  );
+  return {
+    receivedAt: { gte: input.since },
+    deletedAt: null,
+    tenantId: excluded.length > 0 ? { not: null, notIn: excluded } : { not: null },
+    emailSkipReason: "no_recording",
+    // ⛔ Both halves matter: a path proves intent, `audioGoneAt` proves absence.
+    // Re-opening a row whose audio is proven gone would email nothing.
+    localAudioPath: { not: null },
+    audioGoneAt: null,
+  };
+}
+
+async function reopenRecoveredNoRecordings(since: Date, log: Log): Promise<number> {
+  try {
+    const rows = await (db as any).voicemail.findMany({
+      where: buildNoRecordingReopenWhere({ since, excludedTenantIds: voicemailEmailExcludedTenantIds() }),
+      orderBy: { receivedAt: "desc" },
+      take: REOPEN_BATCH,
+      select: { id: true },
+    });
+    if (rows.length === 0) return 0;
+    // ⛔ Conditioned on the reason still being `no_recording` so a concurrent
+    // process (the other half of a blue/green pair) cannot re-open twice.
+    const res = await (db as any).voicemail.updateMany({
+      where: { id: { in: rows.map((r: any) => r.id) }, emailSkipReason: "no_recording" },
+      data: { emailedAt: null, emailSkipReason: null },
+    });
+    return Number(res?.count ?? 0);
+  } catch (err) {
+    // ⛔ Best effort: a failure here must never take the watchdog down with it —
+    // the watchdog's own alarm is worth more than this recovery.
+    log.warn({ err: (err as Error)?.message }, "voicemail-email: re-open pass failed");
+    return 0;
+  }
 }
 
 /**

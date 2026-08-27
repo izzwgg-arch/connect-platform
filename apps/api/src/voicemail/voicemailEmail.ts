@@ -44,6 +44,11 @@ export type VoicemailEmailSkipReason =
   | "disabled"
   /** Deliberate: audio is proven gone, so there is nothing to attach. */
   | "no_recording"
+  /**
+   * ⚠ NOT deliberate and NEVER stamped: the audio has not landed in the local
+   * store YET. The caller must retry, not record this. See `AUDIO_ARRIVAL_GRACE_MS`.
+   */
+  | "awaiting_recording"
   /** Deliberate: too short to be a real message (hang-up). */
   | "too_short"
   /** ⚠ Reported, NOT deliberate: nobody is configured to receive it. */
@@ -53,7 +58,18 @@ export type VoicemailEmailSkipReason =
 
 export type VoicemailEmailDecision =
   | { send: true; recipients: string[] }
-  | { send: false; reason: VoicemailEmailSkipReason; needsAttention: boolean };
+  | {
+      send: false;
+      reason: VoicemailEmailSkipReason;
+      needsAttention: boolean;
+      /**
+       * ⛔ TRUE means "ask again later" — the caller must NOT stamp the voicemail.
+       * Only `awaiting_recording` ever sets it, and only inside a bounded window,
+       * because an unstamped row stays permanently eligible and permanently the
+       * OLDEST, which is the 2026-08-18 head-of-line outage.
+       */
+      retry?: boolean;
+    };
 
 export type VoicemailEmailInput = {
   /** Address(es) an admin explicitly added for this extension. */
@@ -68,10 +84,39 @@ export type VoicemailEmailInput = {
   hasAudio: boolean;
   /** Set once the voicemail has been handed to the outbox. */
   emailedAt?: Date | null;
+  /** When the voicemail arrived. Decides whether missing audio is still in flight. */
+  receivedAt?: Date | null;
+  /** Injectable clock, so the grace window is testable. */
+  now?: Date;
 };
 
 /** Hang-up floor. 20% of voicemails are <= 1s; those are not messages. */
 export const MIN_VOICEMAIL_SECONDS_FOR_EMAIL = 2;
+
+/**
+ * ⛔⛔ How long a just-arrived voicemail may still be missing its audio before
+ * that becomes a FINAL `no_recording`.
+ *
+ * The arrival audio copy is fire-and-forget (`copyFreshVoicemailAudioToStore`,
+ * an ~2 s HTTP fetch to the PBX helper) and the email sweep is an independent
+ * 60-second timer. Nothing sequences them, so before this existed a sweep tick
+ * landing inside that ~2 s window judged a perfectly good voicemail as having no
+ * recording and stamped it FINAL. Measured over the week to 2026-08-27: the three
+ * casualties were decided 0.2 s / 0.3 s / 0.7 s after their row was created,
+ * where every other outcome averaged ~30 s — the decision ran before its input
+ * existed. ~2 a week, and unrecoverable.
+ *
+ * ⛔ The value is bounded from BOTH ends and neither bound is arbitrary:
+ *  - It must be comfortably ABOVE the ~2 s copy (5 minutes is ~150x headroom and
+ *    survives a briefly wedged helper).
+ *  - It MUST stay BELOW `NEVER_PROCESSED_GRACE_MS` (10 min, the watchdog's
+ *    "the sender never reached this" threshold), or a voicemail legitimately
+ *    waiting for its audio starts being reported as stranded.
+ *  - It must be FINITE at all, or the row is never stamped, stays permanently
+ *    eligible, is permanently the oldest, and fills the sweep's ascending batch
+ *    of 50 forever — the 2026-08-18 outage, exactly.
+ */
+export const AUDIO_ARRIVAL_GRACE_MS = 5 * 60_000;
 
 function normaliseEmail(value: unknown): string | null {
   const v = String(value ?? "").trim().toLowerCase();
@@ -109,7 +154,21 @@ export function resolveVoicemailRecipients(input: {
 export function decideVoicemailEmail(input: VoicemailEmailInput): VoicemailEmailDecision {
   if (input.emailedAt) return { send: false, reason: "already_queued", needsAttention: false };
   if (input.vmEmailEnabled === false) return { send: false, reason: "disabled", needsAttention: false };
-  if (!input.hasAudio) return { send: false, reason: "no_recording", needsAttention: false };
+  if (!input.hasAudio) {
+    // ⛔ Missing audio on a JUST-ARRIVED voicemail is almost always the arrival
+    // copy still in flight, not a missing recording. Ask again shortly rather
+    // than writing a stamp that can never be taken back. Bounded — see
+    // AUDIO_ARRIVAL_GRACE_MS for why it must be finite and under 10 minutes.
+    // ⛔ A row with no `receivedAt` cannot be aged, so it takes the FINAL branch:
+    // an unknown age must never buy an unbounded retry.
+    const ageMs = input.receivedAt
+      ? (input.now ?? new Date()).getTime() - input.receivedAt.getTime()
+      : Number.POSITIVE_INFINITY;
+    if (ageMs >= 0 && ageMs < AUDIO_ARRIVAL_GRACE_MS) {
+      return { send: false, reason: "awaiting_recording", needsAttention: false, retry: true };
+    }
+    return { send: false, reason: "no_recording", needsAttention: false };
+  }
 
   const seconds = Number(input.durationSec ?? 0);
   if (seconds < MIN_VOICEMAIL_SECONDS_FOR_EMAIL) {
