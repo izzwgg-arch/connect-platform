@@ -30,6 +30,7 @@ import { posPhoneDigits } from "./posWithLogic";
 import { detectWic, WIC_COMMENT, type DraftItem } from "./draftMatcher";
 import { loadLessons, matchLessonsToLines } from "./phraseLessons";
 import { loadActiveRules, rulesPromptBlock } from "./agentRules";
+import { catalogCodePrefix, catalogSearchWheres } from "./catalogSearch";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
 const BRAIN_TIMEOUT_MS = 90_000;
@@ -120,50 +121,27 @@ function normalizeQty(v: unknown): number {
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 99) : 1;
 }
 
-/** Server-side candidate search — name tokens against the tenant's own catalog. */
+/**
+ * Server-side candidate search — the SHARED catalog rule (catalogSearch.ts)
+ * against the tenant's own catalog.
+ *
+ * ⛔ The token/where logic lives in catalogSearch.ts because the DESK's own
+ * search boxes must behave identically: a rep correcting the agent has to be
+ * able to find at least everything the agent could (2026-08-27 — the desk
+ * was searching name-only and "golden flow orange juice" found nothing).
+ */
 export async function searchCandidates(db: any, tenantId: string, phrase: string): Promise<any[]> {
-  // ⛔ split drops apostrophes entirely — "Gold's" must arrive as "gold"
-  // (the register may store ' vs ’ differently; a contains() on either misses)
-  const tokens = String(phrase ?? "")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 3)
-    .slice(0, 4);
-  const numeric = String(phrase ?? "").match(/^\s*(\d{2,14})\s*$/);
-  if (numeric) {
+  const codePrefix = catalogCodePrefix(phrase);
+  if (codePrefix) {
     return db.posCatalogItem.findMany({
-      where: { tenantId, isActive: true, code: { startsWith: numeric[1] } },
+      where: { tenantId, isActive: true, code: { startsWith: codePrefix } },
       select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
       take: CANDIDATES_PER_LINE,
     });
   }
-  if (tokens.length === 0) return [];
+  const wheres = catalogSearchWheres(phrase);
+  if (wheres.length === 0) return [];
   const seen = new Map<string, any>();
-  // ⛔ each token may live in the NAME or the BRAND — "Ta'am Tov cream of
-  // lox" is brand "Ta'am Tov" + name "Cream Of Lox", and a name-only search
-  // filled the pool with cream-of-soup before "lox" ever ran (a real refused
-  // line, 2026-08-26). Most-specific first: all tokens, then PAIRS, then
-  // singles — pairs are what rescue a phrase whose extra words pollute.
-  // substring-match on the STEM so plural/singular both hit ("eggs" ⊃ "egg"
-  // matches "Eggs Cage Free" AND "Egg Medium"); apostrophes already dropped
-  // by the tokenizer so "gold's" arrives as "gold".
-  const stem = (t: string) => (t.length >= 4 && t.endsWith("es") ? t.slice(0, -2) : t.length >= 4 && t.endsWith("s") ? t.slice(0, -1) : t);
-  const tokenWhere = (raw: string) => {
-    const t = stem(raw);
-    return {
-      OR: [
-        { name: { contains: t, mode: "insensitive" } },
-        { brand: { contains: t, mode: "insensitive" } },
-      ],
-    };
-  };
-  const wheres: any[] = [{ AND: tokens.map(tokenWhere) }];
-  for (let i = 0; i < tokens.length; i++) {
-    for (let j = i + 1; j < tokens.length; j++) {
-      wheres.push({ AND: [tokenWhere(tokens[i]), tokenWhere(tokens[j])] });
-    }
-  }
-  for (const t of tokens) wheres.push(tokenWhere(t));
   for (const nameWhere of wheres) {
     if (seen.size >= CANDIDATES_PER_LINE) break;
     const rows = await db.posCatalogItem.findMany({

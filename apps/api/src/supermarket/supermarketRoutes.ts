@@ -37,6 +37,7 @@ import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase, retireLesson, restoreLesson } from "./phraseTeaching";
 import { applyRuleEdit, rollbackRule, MAX_RULE_CHARS } from "./agentRules";
+import { catalogCodePrefix, catalogSearchWheres, inStockFirst, rankCatalogRows } from "./catalogSearch";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
@@ -163,6 +164,11 @@ const payIvrStepSchema = z.object({
 
 export const SUPERMARKET_VIEW_KEY = "can_view_supermarket_orders";
 export const SUPERMARKET_MANAGE_KEY = "can_manage_supermarket_orders";
+
+/** How many suggestions the desk's search boxes offer. Bigger than the
+ *  brain's 8 on purpose: the brain pays prompt tokens per candidate, a
+ *  human picking between five sizes of one product pays nothing. */
+const DESK_SEARCH_LIMIT = 12;
 export const SUPERMARKET_SPECIALS_KEY = "can_manage_supermarket_specials";
 
 export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Promise<void> {
@@ -932,20 +938,52 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     const tenantId = tenantOf(req);
     const q = String((req.query as any)?.q ?? "").trim().slice(0, 60);
     if (q.length < 1) return reply.send({ items: [] });
-    const isNumeric = /^\d+$/.test(q);
-    const rows = await db.posCatalogItem.findMany({
-      where: isNumeric
-        ? { tenantId, isActive: true, code: { startsWith: q } }
-        : { tenantId, isActive: true, name: { contains: q, mode: "insensitive" } },
-      select: { posProductId: true, code: true, name: true, unitPriceCents: true, imageUrl: true, onHand: true },
-      orderBy: isNumeric ? { code: "asc" } : { name: "asc" },
-      take: 16,
-    });
+    // ⛔ THE SHARED rule (catalogSearch.ts), identical to the brain's — the
+    // old name-only `contains` on the whole typed string meant "golden flow
+    // orange juice" returned NOTHING, because Golden Flow is the BRAND.
+    // ⛔ Brand + size are SELECTED and shown: half this catalog's products are
+    // told apart only by brand and ounces ("Milk Red" ×4 sizes), so a
+    // suggestion list without them cannot be picked from.
+    const select = {
+      posProductId: true,
+      code: true,
+      name: true,
+      brand: true,
+      sizeText: true,
+      unitPriceCents: true,
+      imageUrl: true,
+      onHand: true,
+    };
+    const codePrefix = catalogCodePrefix(q);
+    if (codePrefix) {
+      const rows = await db.posCatalogItem.findMany({
+        where: { tenantId, isActive: true, code: { startsWith: codePrefix } },
+        select,
+        orderBy: { code: "asc" },
+        take: DESK_SEARCH_LIMIT,
+      });
+      return reply.send({ items: inStockFirst(rows as any[]).slice(0, DESK_SEARCH_LIMIT) });
+    }
+    const wheres = catalogSearchWheres(q);
+    if (wheres.length === 0) return reply.send({ items: [] });
+    // most-specific first: stop as soon as we have a full list
+    const seen = new Map<string, any>();
+    for (const where of wheres) {
+      if (seen.size >= DESK_SEARCH_LIMIT) break;
+      const rows = await db.posCatalogItem.findMany({
+        where: { tenantId, isActive: true, ...where },
+        select,
+        orderBy: { name: "asc" },
+        take: DESK_SEARCH_LIMIT,
+      });
+      for (const row of rows as any[]) {
+        if (!seen.has(row.posProductId)) seen.set(row.posProductId, row);
+        if (seen.size >= DESK_SEARCH_LIMIT) break;
+      }
+    }
     // in-stock (or unknown) first, out-of-stock at the bottom labelled — never
     // hidden (Izzy, 2026-08-26). null onHand = not yet synced = shown normally.
-    const inStock = (r: any) => r.onHand === null || r.onHand > 0;
-    const items = [...rows.filter(inStock), ...rows.filter((r: any) => !inStock(r))].slice(0, 8);
-    return reply.send({ items });
+    return reply.send({ items: rankCatalogRows([...seen.values()], q).slice(0, DESK_SEARCH_LIMIT) });
   });
 
   // ── Teach the Agent (Izzy 2026-08-26): the admin correction lane over the

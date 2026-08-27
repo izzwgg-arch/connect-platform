@@ -134,7 +134,14 @@ type DraftItem = {
   outOfStock?: boolean;
 };
 
-type CatalogHit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
+type CatalogHit = { posProductId: string; code: string; name: string; brand?: string | null; sizeText?: string | null; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
+
+/** Brand and size as one dim line under a suggestion. Half this catalog is
+ *  told apart ONLY by these (Milk Red 1/2 gal vs 1 qt), so a list without
+ *  them cannot be picked from (Izzy, 2026-08-27). */
+export function hitSubtitle(h: { brand?: string | null; sizeText?: string | null; code?: string }): string {
+  return [h.brand, h.sizeText, h.code].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ");
+}
 
 /** The brain's per-line checklist — what the customer asked for, in English. */
 type AskLine = {
@@ -476,6 +483,7 @@ function ReplaceBox({
               <span className="sm-replnm">
                 {h.name}
                 {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                {hitSubtitle(h) ? <span className="sm-sku" style={{ display: "block" }}>{hitSubtitle(h)}</span> : null}
               </span>
               <span className="sm-replpr">{money(h.unitPriceCents)}</span>
               {i === sel ? <span className="sm-payenter">↵</span> : null}
@@ -1515,6 +1523,11 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         <span style={{ minWidth: 0 }}>
                           {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
                           {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                          {h.brand || h.sizeText ? (
+                            <span className="sm-sku" style={{ display: "block", fontSize: ".72rem" }}>
+                              {[h.brand, h.sizeText].filter(Boolean).join(" · ")}
+                            </span>
+                          ) : null}
                         </span>
                         <span className="sm-amount">{money(h.unitPriceCents)}</span>
                       </div>

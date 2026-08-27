@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../../services/apiClient";
-import { SmItemPhoto, money } from "./OrdersDesk";
+import { SmItemPhoto, hitSubtitle, money } from "./OrdersDesk";
 
 export const SM_TEACH_PHRASES = [
   "Teach the Agent",
@@ -231,7 +231,7 @@ type TaughtRow = {
   product: { posProductId: string; code: string; name: string; brand?: string | null; unitPriceCents: number; imageUrl?: string | null };
 };
 
-type Hit = { posProductId: string; code: string; name: string; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
+type Hit = { posProductId: string; code: string; name: string; brand?: string | null; sizeText?: string | null; unitPriceCents: number; imageUrl?: string | null; onHand?: number | null };
 
 function ago(iso: string, t: (s: string) => string): string {
   const d = new Date(iso);
@@ -369,7 +369,7 @@ function TeachRow({
                     {h.name}
                     {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                   </b>
-                  <span>{h.code}</span>
+                  <span>{hitSubtitle(h) || h.code}</span>
                 </span>
                 <span className="sm-ta-pr">{money(h.unitPriceCents)}</span>
                 {i === sel ? <span className="sm-ta-enter">↵ Enter</span> : null}
