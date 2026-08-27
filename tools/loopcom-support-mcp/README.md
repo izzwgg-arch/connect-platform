@@ -60,3 +60,30 @@ internal one is genuinely stocked, the work is better done here.
 ⛔ The cost of that choice: this only runs while your computer is on. The plan
 doc (§22, §26–§28) covers moving it to loopcom or a Managed Agents self-hosted
 sandbox when that stops being acceptable — the server itself does not change.
+
+## Registered state (2026-08-27)
+
+Already registered in Izzy's Claude Code at `--scope local` (user config, not
+committed), pointing at `https://app.loopcom.net/api`, with a **30-day**
+SUPER_ADMIN token that expires **2026-09-26**.
+
+⛔⛔ **`claude mcp add` FROM GIT BASH REGISTERS UNDER THE WRONG PROJECT KEY.**
+`~/.claude.json` keys projects by the cwd string, and Git Bash reports
+`C:/dev/projects/Connect 2` (forward slashes) while Claude Code itself uses
+`C:\dev\projects\Connect 2`. The CLI then reports **✔ Connected** — because it
+is reading the same forward-slash key it just wrote — while the real session
+would find nothing at its own key on the next restart. It is registered under
+**both** spellings now. **After any `claude mcp add`, check which key it landed
+under before believing the health line.**
+
+To re-mint the token when it expires (it is minted on the server, so the value
+never touches a shell history or a transcript):
+
+```bash
+# on loopcom, inside app-api-1, from /app/packages/db  ⛔ NOT /app/apps/api —
+# @prisma/client does not resolve there
+node -e '<sign an HS256 JWT with JWT_SECRET for the SUPER_ADMIN user>'
+```
+
+Then `claude mcp remove loopcom-support` and add it again with the new value in
+a shell variable, never inline.
