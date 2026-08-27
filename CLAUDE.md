@@ -138,6 +138,37 @@ the past 24 hours … can you check if something like that exists and if it's tr
   mailbox 898 among the 17 loaded voicemail users — whether pressing 2 reaches
   anything is unproven.
 
+- ✅✅ **FOLLOW-UP, SAME DAY — "did that Tuesday 157-second voicemail go out as an
+  email?" ANSWER: unprovable directly (the record was destroyed), but three
+  independent lines say yes.** ⛔ **Gesheft is the ONE tenant still on the PBX's
+  own voicemail-to-email path**, so this is an Asterisk/postfix question, and
+  Connect's `Voicemail.emailedAt` is **null BY DESIGN** for Gesheft — never read
+  that null as a failure. (1) Ext 101 is configured
+  `Orders@gesheftkosher.com` with `attach=yes`. (2) ⛔⛔ **THE REUSABLE TRICK:
+  `maximal_queue_lifetime` is `5d` and the postfix queue is EMPTY** (0 files in
+  deferred/active/incoming/bounce/corrupt) — **so any email from the last five
+  days that failed on a temporary error would STILL be sitting there. An empty
+  queue rules out every deferral even with no log at all.** (3) The pipeline
+  reconciles **1:1 today**: ext 101 **28 recorded / 29 sent**, ext 102 **3 / 3**,
+  **32 sends, all `status=sent` with Gmail's `250 ... gsmtp`, 0 deferred, 0
+  bounced**. Size was never a risk (2.5 MB wav, 157 s). ⚠ **The one gap, stated
+  honestly: a hard 5xx would bounce, and bounces to `support@` are DELIBERATELY
+  DISCARDED here by the 2026-08-06 bounce-loop fix, so that failure mode is
+  invisible from the server.** ✅ **The check that settles it is Izzy's**, in
+  Orders@gesheftkosher.com incl. Spam/Trash:
+  `from:support@connectcomunications.com after:2026/08/25 before:2026/08/26`.
+- ⛔⛔ **AND LOGROTATE LIES ABOUT MAIL RETENTION ON THE PBX — this is WHY the
+  question had no definitive answer.** `/etc/logrotate.d/rsyslog` says `weekly` +
+  `rotate 4` and `/var/lib/logrotate/status` last rotated `mail.log` on
+  **2026-08-23**, so by config it should hold days. It holds **ONE DAY**:
+  `/var/log/mail.log` contains only today, 26 KB, no rotated siblings, no NUL
+  padding — emptied in place near midnight by something that is **NOT**
+  `/etc/cron.daily/vpbx_clean_old_logs` (that only touches
+  `/var/log/vitalpbx/log_*.log`). journald is **volatile** (no `/var/log/journal`),
+  so `journalctl --since` two days back returns **"No entries"**. ⏳ **Mechanism
+  not pinned down; fixing retention was already the highest-value follow-up in
+  `AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md` and is still not done.**
+
 ## ⛔⛔ AGENT HANDOFF — the support desk blamed a router while the real packet loss was on a DIFFERENT extension, and the proof was already in our own database (2026-08-26) — READ FIRST before accepting ANY call-quality diagnosis, before proposing a NAT/SIP-ALG fix, or before telling a customer their internet is filtered
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRIMPRO_105_AUDIO_2026-08-26.md`**

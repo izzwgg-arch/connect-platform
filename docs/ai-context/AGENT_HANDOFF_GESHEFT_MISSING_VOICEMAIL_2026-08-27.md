@@ -210,3 +210,76 @@ soxi -D /var/lib/vitalpbx/static/<tenant-hash>/recordings/<file>
 asterisk -rx "voicemail show users for <slug>-voicemail"
 grep -r maxmsg /etc/asterisk/vitalpbx/voicemail__*.conf
 ```
+
+---
+
+## 9. Follow-up: "did the Tuesday 157-second voicemail go out as an email?"
+
+Izzy, same day. **Gesheft is the ONE tenant still on the PBX's own
+voicemail-to-email path** (the 2026-08-17 cutover moved the other 26 to Connect
+and deliberately left Gesheft behind), so this is an Asterisk/postfix question,
+not a Connect one. ⛔ Connect's `Voicemail.emailedAt` is **null by design** for
+Gesheft and says nothing either way — do not read it as a failure.
+
+**Answer: it cannot be proven directly — the record was destroyed — but three
+independent lines of evidence say it went, and the queue evidence is strong.**
+
+### It was destroyed, not missing
+
+- `/var/log/mail.log` contains **only `2026-08-27`**. 25,990 bytes, no rotated
+  siblings, no NUL padding — it is emptied in place daily around midnight.
+- ⛔⛔ **And logrotate LIES about this.** `/etc/logrotate.d/rsyslog` says
+  `weekly` + `rotate 4` and `/var/lib/logrotate/status` last rotated it
+  **2026-08-23** — so by config it should hold 4 days plus 4 weekly archives.
+  It holds **one day**. Something else empties it; `/etc/cron.daily/vpbx_clean_old_logs`
+  is NOT the culprit (it only touches `/var/log/vitalpbx/log_*.log`). ⏳ **The
+  exact mechanism was not pinned down.**
+- journald is **volatile** (no `/var/log/journal`); `--list-boots` shows one
+  boot beginning `2026-08-27 00:00:02`. `journalctl --since "2026-08-25"` for
+  postfix returns **"No entries"**.
+
+### Why the answer is still "yes, almost certainly"
+
+1. **It was configured to send.** `voicemail__50-8-main.conf`:
+   `101 => <pin>,Phone Orders,Orders@gesheftkosher.com,,attach=yes|...`
+   — a real address with the recording attached.
+2. ⛔ **THE STRONGEST SIGNAL: `postconf maximal_queue_lifetime` = `5d`, and the
+   postfix queue is EMPTY** (`mailq` → "Mail queue is empty"; 0 files across
+   `deferred`/`active`/`incoming`/`bounce`/`corrupt`). Tuesday was **2 days
+   ago**. Had that email failed on a temporary (4xx) error, postfix would
+   **still be retrying it right now**. It is not there. **This is the reusable
+   trick: for any "did an email from the last 5 days go out", an empty queue
+   rules out every deferral, even with no log at all.**
+3. **The pipeline reconciles 1:1 today.** Recorded vs emailed, same day:
+   **ext 101 → 28 recorded / 29 sent** to `Orders@gesheftkosher.com` (the +1 is
+   a late-night message emailed at `00:00:08`), **ext 102 → 3 recorded / 3
+   sent** to `Orders@pileupny.com`. **32 sends today, every one `status=sent`
+   with Gmail's `250 ... gsmtp`, zero deferred, zero bounced.**
+4. **Size was never a risk:** `msg9643.wav` is **2,505,644 bytes (2.5 MB)** for
+   157 s at `format=wav`, far under any limit. `.wav` written 18:41, `.txt`
+   18:42 — the `.txt` is written last, at which point `mailcmd` fires.
+
+### ⚠ The one gap, stated honestly
+
+A **hard 5xx rejection** would produce a bounce — and bounces to
+`support@connectcomunications.com` are **deliberately DISCARDED** on this box by
+the 2026-08-06 bounce-loop fix (`support@… discard:` in `transport_maps`). So
+that one failure mode is invisible here. It is unlikely (the same address took
+29 emails today), but it cannot be excluded from the server side.
+
+### ✅ The check that settles it, and only Izzy can run it
+
+In **Orders@gesheftkosher.com**, including Spam and Trash:
+
+```
+from:support@connectcomunications.com after:2026/08/25 before:2026/08/26
+```
+
+Expect a message around **6:41 PM**, caller **718-782-3437**, duration **157**,
+with a ~2.5 MB `.wav` attached.
+
+⏳ **Worth fixing regardless:** one day of mail retention is why this question
+has no definitive answer. Restoring real rotation (or shipping mail.log
+off-box) would make the next "did that email go out?" answerable in one grep.
+This was already flagged on 2026-08-09 as the highest-value follow-up in
+`AGENT_HANDOFF_VOICEMAIL_EMAIL_PBX_2026-08-09.md` and is still not done.
