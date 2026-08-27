@@ -78,7 +78,7 @@ export const SM_ORDERS_PHRASES = [
   "Put order through & charge", "But the card was not charged:",
   "Sure you want to place this order?", "charging the card on file", "Not yet", "Place the order",
   "Closest match — check with the customer", "not in stock",
-  "WHAT THEY ASKED FOR", "Click to search the catalog for this", "Add this instead",
+  "WHAT THEY ASKED FOR",
   "Complete this order?", "pay & place", "No charge — put the order through without paying",
   "places it", "typing sets qty", "replacing:", "the swap is remembered — the agent learns it",
   "= qty", "= replace item", "remove", "checkout",
@@ -87,6 +87,8 @@ export const SM_ORDERS_PHRASES = [
   "The agent re-filled this order.", "The agent could not be re-run.",
   "fixing:", "the pick is remembered — the agent learns it",
   "Right? Click to confirm — the agent learns it", "that's right", "Confirms the pick and teaches the agent",
+  "Change", "Pick the item", "Set the right item — the agent learns it",
+  "Click to set the right item — the agent learns it", "Add this instead — a one-off, not taught",
 ] as string[];
 
 type DraftRow = {
@@ -657,6 +659,11 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
   // from the box is taught as phrase → product (the teach-page gesture,
   // brought onto the desk)
   const [teachFor, setTeachFor] = useState<string | null>(null);
+  // per-CHECKLIST-LINE correction state: which line's search box is open, the
+  // product a person set for a line, and the lines a person has settled
+  const [replaceLine, setReplaceLine] = useState<number | null>(null);
+  const [lineFix, setLineFix] = useState<Map<number, string>>(new Map());
+  const [lineOk, setLineOk] = useState<Set<number>>(new Set());
 
   // ── cards on file (built to the approved 2026-08-26 mockup) ──────────────
   const [cards, setCards] = useState<CardOnFile[]>([]);
@@ -765,6 +772,12 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     setNotes(res.draft.notes ?? "");
     setOrderMethod(res.draft.orderMethod === "Delivery" ? "Delivery" : "Pickup");
     setPhoneEdit(res.draft.customerPhone ?? "");
+    // ⛔ a re-run replaces the agent's own answer, so per-line fixes keyed on
+    // the OLD line order must not survive it — a stale index would mark the
+    // wrong line settled.
+    setLineFix(new Map());
+    setLineOk(new Set());
+    setReplaceLine(null);
   }, [draftId]);
 
   useEffect(() => {
@@ -1081,6 +1094,105 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     if (kbSel > last) setKbSel(items.length > 0 ? items.length - 1 : -1);
   }, [items.length, kbSel]);
 
+  /**
+   * EVERY checklist line is correctable, whatever its mark (Izzy, 2026-08-27:
+   * "each item on each item line I should be able to correct… whether it's a
+   * question mark, whether it's a check mark, whether it's anything. This is
+   * training, and every time I correct something, that means this is how it's
+   * supposed to be, that standard").
+   *
+   * `lineFix` remembers the product a PERSON set for a line, so the checklist
+   * keeps judging that line against the cart after the swap — without it a
+   * corrected line would fall back to the agent's own (wrong) product and go
+   * on showing ✗. `lineOk` marks the lines a person settled, so a confirmed
+   * pick never renders as "?" again.
+   */
+  const teachLine = useCallback((phrase: string, posProductId: string, meant?: string) => {
+    if (!phrase || !posProductId) return;
+    void apiPost("/supermarket/phrase-teaching/teach", {
+      phrase,
+      posProductId,
+      ...(meant && meant.trim() ? { meantPhrase: meant.trim() } : {}),
+    }).catch(() => {}); // teaching is a bonus — a 403 must never break the edit
+  }, []);
+
+  /** What this line currently resolves to: a person's fix wins, then the
+   *  agent's pick, then a suggestion the rep added by chip. */
+  const resolvedIdForLine = useCallback(
+    (l: AskLine, idx: number): string | undefined => {
+      const fixed = lineFix.get(idx);
+      if (fixed) return fixed;
+      if (l.posProductId) return l.posProductId;
+      return (l.suggestions ?? []).find((sg) => items.some((i) => i.posProductId === sg.posProductId))?.posProductId;
+    },
+    [lineFix, items],
+  );
+
+  /** Set (or replace) the item that satisfies one line, and TEACH it. */
+  const setLineItem = useCallback(
+    (idx: number, l: AskLine, hit: CatalogHit, meant: string) => {
+      const oldId = resolvedIdForLine(l, idx);
+      // ⛔ only retire the old row when NO other line needs it — two lines can
+      // legitimately resolve to the same product, and yanking it would leave
+      // the other line showing ✗ for something still ordered.
+      const neededElsewhere =
+        !!oldId &&
+        (draft?.agentLines ?? []).some((other, oi) => oi !== idx && resolvedIdForLine(other, oi) === oldId);
+      setItems((prev) => {
+        const oldRow = oldId && !neededElsewhere ? prev.find((i) => i.posProductId === oldId) : undefined;
+        const qty = oldRow?.qty ?? Math.max(1, Math.min(99, l.qty || 1));
+        const withoutOld = oldRow ? prev.filter((i) => i.posProductId !== oldRow.posProductId) : prev;
+        const existing = withoutOld.find((i) => i.posProductId === hit.posProductId);
+        if (existing) {
+          // Already in the cart. Carry the retired row's quantity over; with
+          // NO retired row this line was empty and the two lines are almost
+          // always the same request heard twice ("milk" + "red milk"), so
+          // adopt the existing row rather than doubling the customer's order.
+          return withoutOld.map((i) =>
+            i.posProductId === hit.posProductId
+              ? { ...i, qty: oldRow ? Math.min(99, i.qty + qty) : i.qty, unsure: undefined }
+              : i,
+          );
+        }
+        return [
+          ...withoutOld,
+          { posProductId: hit.posProductId, code: hit.code, name: hit.name, qty, unitPriceCents: hit.unitPriceCents, imageUrl: hit.imageUrl },
+        ];
+      });
+      setLineFix((prev) => new Map(prev).set(idx, hit.posProductId));
+      setLineOk((prev) => new Set(prev).add(idx));
+      setReplaceLine(null);
+      teachLine(l.phrase, hit.posProductId, meant);
+    },
+    [draft?.agentLines, resolvedIdForLine, teachLine],
+  );
+
+  /** "That's right" on an unsure line: clear the ?, and teach the pick. */
+  const confirmLine = useCallback(
+    (idx: number, l: AskLine) => {
+      const id = resolvedIdForLine(l, idx);
+      if (!id) return;
+      setItems((prev) => prev.map((it) => (it.posProductId === id ? { ...it, unsure: undefined } : it)));
+      setLineOk((prev) => new Set(prev).add(idx));
+      teachLine(l.phrase, id);
+    },
+    [resolvedIdForLine, teachLine],
+  );
+
+  /** The cart row's own "?" pill — same settle, found by product. */
+  const confirmPick = useCallback(
+    (posProductId: string) => {
+      setItems((prev) => prev.map((it) => (it.posProductId === posProductId ? { ...it, unsure: undefined } : it)));
+      const lines = draft?.agentLines ?? [];
+      const idx = lines.findIndex((l, i) => resolvedIdForLine(l, i) === posProductId);
+      if (idx >= 0) {
+        setLineOk((prev) => new Set(prev).add(idx));
+        teachLine(lines[idx].phrase, posProductId);
+      }
+    },
+    [draft?.agentLines, resolvedIdForLine, teachLine],
+  );
+
   // "it's not that item. It's this item" — swap the row, keep the qty, and
   // TEACH the swap: the customer's phrase for the old item -> the new item.
   const doReplace = useCallback(
@@ -1101,45 +1213,17 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
         );
       });
       setReplaceFor(null);
-      const line = (draft?.agentLines ?? [])?.find((l) => l.posProductId === oldId);
-      if (line?.phrase) {
-        void apiPost("/supermarket/phrase-teaching/teach", {
-          phrase: line.phrase,
-          posProductId: hit.posProductId,
-          ...(meant.trim() ? { meantPhrase: meant.trim() } : {}),
-        }).catch(() => {}); // teaching is a bonus — a 403 must never break the swap
+      // the swapped row may be what a checklist line resolves to — keep that
+      // line pointing at the new product, or it flips back to ✗
+      const lines = draft?.agentLines ?? [];
+      const idx = lines.findIndex((l, i) => resolvedIdForLine(l, i) === oldId);
+      if (idx >= 0) {
+        setLineFix((prev) => new Map(prev).set(idx, hit.posProductId));
+        setLineOk((prev) => new Set(prev).add(idx));
+        teachLine(lines[idx].phrase, hit.posProductId, meant);
       }
     },
-    [draft?.agentLines],
-  );
-
-  // "?" confirmation (Izzy 2026-08-27: "I should also be able to confirm
-  // question marks or just change it right there on the spot, and it would
-  // update in the agent"): confirming an unsure pick clears the ? AND teaches
-  // phrase → product immediately — the strongest positive signal there is.
-  // Changing it instead goes through the replace flow, which already teaches.
-  const confirmPick = useCallback(
-    (posProductId: string) => {
-      setItems((prev) => prev.map((it) => (it.posProductId === posProductId && it.unsure ? { ...it, unsure: undefined } : it)));
-      const line = (draft?.agentLines ?? []).find((l) => l.posProductId === posProductId && l.outcome === "unsure");
-      if (line?.phrase) {
-        void apiPost("/supermarket/phrase-teaching/teach", {
-          phrase: line.phrase,
-          posProductId,
-        }).catch(() => {}); // teaching is a bonus — a 403 must never break the confirm
-      }
-      setDraft((d) =>
-        d && Array.isArray(d.agentLines)
-          ? {
-              ...d,
-              agentLines: d.agentLines.map((l) =>
-                l.posProductId === posProductId && l.outcome === "unsure" ? { ...l, outcome: "in_cart" } : l,
-              ),
-            }
-          : d,
-      );
-    },
-    [draft?.agentLines],
+    [draft?.agentLines, resolvedIdForLine, teachLine],
   );
 
   const dismiss = useCallback(async () => {
@@ -1235,59 +1319,80 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
               <div className="sm-asklist">
                 <div className="sm-asklist-h">{t("WHAT THEY ASKED FOR")}</div>
                 {draft.agentLines.map((l, idx) => {
+                  const resolvedId = resolvedIdForLine(l, idx);
                   // judged LIVE against the current cart, so a fixed line flips to a check
-                  const inCart =
-                    (l.posProductId && items.some((i) => i.posProductId === l.posProductId)) ||
-                    (Array.isArray(l.suggestions) && l.suggestions.some((sg) => items.some((i) => i.posProductId === sg.posProductId)));
-                  const state = inCart ? (l.outcome === "unsure" ? "unsure" : "in") : "out";
+                  const inCart = Boolean(resolvedId && items.some((i) => i.posProductId === resolvedId));
+                  // a line a PERSON set or confirmed is settled — never a "?"
+                  const state = !inCart ? "out" : lineOk.has(idx) ? "in" : l.outcome === "unsure" ? "unsure" : "in";
+                  const shownName = items.find((i) => i.posProductId === resolvedId)?.name ?? l.name;
                   return (
                     <div key={idx} className={`sm-askline sm-askline--${state}`}>
                       <span className="sm-askmark" aria-hidden>{state === "in" ? "✓" : state === "unsure" ? "?" : "✗"}</span>
                       <span className="sm-askbody">
                         <span
                           className="sm-askphrase"
-                          role={!readOnly && state === "out" ? "button" : undefined}
-                          title={!readOnly && state === "out" ? t("Click to search the catalog for this") : undefined}
+                          role={!readOnly ? "button" : undefined}
+                          title={!readOnly ? t("Click to set the right item — the agent learns it") : undefined}
                           onClick={() => {
-                            if (readOnly || state !== "out") return;
-                            setQ(l.phrase);
-                            // the next add from the box teaches phrase → item
-                            setTeachFor(l.phrase);
-                            boxRef.current?.focus();
+                            if (readOnly) return;
+                            setReplaceLine((cur) => (cur === idx ? null : idx));
                           }}
                         >
                           {l.qty > 1 ? `${l.qty}× ` : ""}{l.phrase}
                           {l.constraints ? <span className="sm-askcon"> ({l.constraints})</span> : null}
                         </span>
-                        {state !== "out" && l.name ? <span className="sm-askto"> → {l.name}</span> : null}
-                        {state === "unsure" && !readOnly && l.posProductId ? (
-                          <button
-                            type="button"
-                            className="sm-asschip"
-                            style={{ marginLeft: 6 }}
-                            title={t("Confirms the pick and teaches the agent")}
-                            onClick={() => confirmPick(l.posProductId!)}
-                          >
-                            ✓ {t("that's right")}
-                          </button>
-                        ) : null}
+                        {state !== "out" && shownName ? <span className="sm-askto"> → {shownName}</span> : null}
                         {state === "out" && l.reason ? <span className="sm-askwhy"> — {l.reason}</span> : null}
-                        {state === "out" && !readOnly && Array.isArray(l.suggestions) && l.suggestions.length > 0 ? (
+
+                        {/* Every line is correctable — a ✓ can be wrong, a ? needs
+                            settling, a ✗ needs filling. Izzy, 2026-08-27: "each item
+                            on each item line I should be able to correct." */}
+                        {!readOnly ? (
                           <span className="sm-asksugg">
-                            {l.suggestions.slice(0, 4).map((sg) => (
+                            {state === "unsure" && resolvedId ? (
                               <button
-                                key={sg.posProductId}
                                 type="button"
                                 className="sm-asschip"
-                                title={t("Add this instead")}
-                                onClick={() => addHit({ posProductId: sg.posProductId, code: sg.code, name: sg.name, unitPriceCents: sg.unitPriceCents, imageUrl: sg.imageUrl }, l.qty)}
+                                title={t("Confirms the pick and teaches the agent")}
+                                onClick={() => confirmLine(idx, l)}
                               >
-                                <SmItemPhoto url={sg.imageUrl} size={20} />
-                                <span>{sg.name}</span>
-                                <b>{money(sg.unitPriceCents)}</b>
+                                ✓ {t("that's right")}
                               </button>
-                            ))}
+                            ) : null}
+                            <button
+                              type="button"
+                              className="sm-asschip"
+                              title={t("Set the right item — the agent learns it")}
+                              onClick={() => setReplaceLine((cur) => (cur === idx ? null : idx))}
+                            >
+                              {state === "out" ? t("Pick the item") : t("Change")}
+                            </button>
+                            {state === "out" && Array.isArray(l.suggestions)
+                              ? l.suggestions.slice(0, 4).map((sg) => (
+                                  <button
+                                    key={sg.posProductId}
+                                    type="button"
+                                    className="sm-asschip"
+                                    title={t("Add this instead — a one-off, not taught")}
+                                    onClick={() => addHit({ posProductId: sg.posProductId, code: sg.code, name: sg.name, unitPriceCents: sg.unitPriceCents, imageUrl: sg.imageUrl }, l.qty)}
+                                  >
+                                    <SmItemPhoto url={sg.imageUrl} size={20} />
+                                    <span>{sg.name}</span>
+                                    <b>{money(sg.unitPriceCents)}</b>
+                                  </button>
+                                ))
+                              : null}
                           </span>
+                        ) : null}
+
+                        {replaceLine === idx && !readOnly ? (
+                          <ReplaceBox
+                            initial={l.phrase}
+                            oldName={shownName || l.phrase}
+                            onCancel={() => setReplaceLine(null)}
+                            onPick={(hit, meant) => setLineItem(idx, l, hit, meant)}
+                            t={t}
+                          />
                         ) : null}
                       </span>
                     </div>

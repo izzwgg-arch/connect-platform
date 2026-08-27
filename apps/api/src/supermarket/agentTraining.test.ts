@@ -191,9 +191,20 @@ test("SOURCE GUARDS: rules ride BOTH passes; rerun + rules routes exist; teach q
   // the teach queue must not let a RETIRED lesson hide its phrase
   const queueBlock = routes.slice(routes.indexOf('"/supermarket/phrase-teaching"'), routes.indexOf('"/supermarket/phrase-teaching/teach"'));
   assert.match(queueBlock, /activeLessons/, "taughtKeys must come from ACTIVE lessons only");
-  // the desk teaches: fix-from-the-box, the ? confirm, and the row swap
+  // ⛔ EVERY checklist line must be correctable whatever its mark (Izzy
+  // 2026-08-27) — the teach POST is centralised in teachLine, and the line
+  // renderer must offer Change on every state, not only on a skipped line.
   const desk = read("../portal/app/(platform)/orders/OrdersDesk.tsx");
-  assert.equal((desk.match(/phrase-teaching\/teach/g) ?? []).length, 3, "the desk must teach from swap + box-fix + confirm");
+  assert.equal((desk.match(/phrase-teaching\/teach/g) ?? []).length, 2, "teaching must stay centralised (teachLine + the box-fix path)");
+  for (const fn of ["const teachLine", "const setLineItem", "const confirmLine", "const resolvedIdForLine"]) {
+    assert.ok(desk.includes(fn), `${fn} missing — a line state would lose its correction path`);
+  }
+  // the Change control is NOT gated on the line being skipped
+  const changeIdx = desk.indexOf('state === "out" ? t("Pick the item") : t("Change")');
+  assert.ok(changeIdx > 0, "every line must offer Change / Pick the item");
+  // a person's fix must survive: the checklist judges against lineFix
+  assert.match(desk, /resolvedIdForLine\(l, idx\)/, "the checklist must judge lines against a person's fix, not only the agent's pick");
+  assert.match(desk, /setLineFix\(new Map\(\)\)/, "per-line fixes must reset when the draft reloads");
   assert.match(desk, /drafts\/\$\{encodeURIComponent\(draft\.id\)\}\/rerun/, "the desk lost the re-run button");
   assert.match(desk, /tenantId/, "the voicemail player must carry the tenant switch in the URL");
 });
