@@ -160,10 +160,35 @@ exact baseline**, none in a voicemail file.
 
 **The three lost ones are recovered by (b) rather than by a hand edit** — the
 system heals itself, which is the point. Previewed read-only before deploying, so
-the outcome was known rather than discovered: **2 emails actually send** (Trust
-Bookkeepings 106 and Yossis 102, both have a recipient) and **A plus center 108
-correctly reclassifies to `no_recipient`** — its true reason — which
-`gapsWorthAlerting` never escalates, so no spurious page.
+the outcome was known rather than discovered.
+
+### ✅✅ DEPLOYED AND PROVEN ON PRODUCTION, 2026-08-27 18:19Z
+
+api container `1eed0444` (contains `6136f462`; both `AUDIO_ARRIVAL_GRACE_MS`,
+`awaiting_recording`, `decision.retry` and `reopenRecoveredNoRecordings` grepped
+**inside the running container**, never judged from the deploy's exit line).
+**0 restarts, 0 error-level lines, health 200 on both hostnames.**
+
+⛔ **And it is proven by the EMAILS, not by the greps** — the boot watchdog fired
+90 s after start and the recovery ran end to end in **16 seconds**:
+
+| Voicemail | Outcome | Email |
+|---|---|---|
+| Trust Bookkeepings 106 (08-24, the real customer) | **EMAILED** | `SENT` 18:20:13 → `cspilman@trustbookkeepingny.com`, *"New voicemail from LINX · 2125165469"* |
+| Yossis Wood Works 102 (08-24) | **EMAILED** | `SENT` 18:20:10 → `lea@yossiswoodworx.com` |
+| A plus center 108 (08-23) | **`no_recipient`** — its true reason | none, correctly: that mailbox has no address |
+
+**`no_recording` rows that still hold audio: 0.** Both guardrail heartbeats
+current afterwards, and **no escalation was raised by any of it** — A plus center
+108 reclassifying is exactly the case `gapsWorthAlerting` filters, so the fix did
+not buy a spurious page.
+
+⏳ **NOT PROVEN: nobody has watched a NEW voicemail take the retry path.** The
+recovery half is proven by two real delivered emails; the grace half is proven by
+19 tests and by the code in the container, not yet by a voicemail arriving during
+a copy. It is unobservable by design when it works — the tell would be a
+`no_recording` count that stays at 0 while voicemails keep flowing. Re-run the §7
+queries in a week.
 
 ---
 

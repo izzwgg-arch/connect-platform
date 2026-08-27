@@ -197,11 +197,24 @@ change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
   class. ✅ **19 tests, 12 of which FAIL replayed against `HEAD`** (all three
   source guards + the behavioural no-stamp test); voicemail suite **101/101**;
   api typecheck **76 = the exact baseline**, none in a voicemail file.
-  ✅ **The three lost ones are recovered BY THE CODE, not by a hand edit** —
-  previewed read-only before deploying so the outcome was known, not discovered:
-  **2 emails really send** (Trust Bookkeepings 106, Yossis 102 — both have a
-  recipient) and **A plus center 108 correctly reclassifies to `no_recipient`**,
-  its true reason, which `gapsWorthAlerting` never escalates, so no spurious page.
+  ✅✅ **DEPLOYED AND PROVEN ON PRODUCTION 2026-08-27 18:19Z — and the proof is
+  the EMAILS, not the greps.** api container `1eed0444` (⊇ `6136f462`; all four
+  fix markers grepped INSIDE the running container, 0 restarts, 0 error lines,
+  health 200 both hostnames). The boot watchdog fired 90 s after start and the
+  recovery ran end to end in **16 seconds**: **Trust Bookkeepings 106 `SENT`
+  18:20:13** to cspilman@trustbookkeepingny.com (*"New voicemail from LINX ·
+  2125165469"* — the real customer), **Yossis 102 `SENT` 18:20:10** to
+  lea@yossiswoodworx.com, and **A plus center 108 correctly reclassified to
+  `no_recipient`** with no email and — the check that matters — **no
+  escalation**, because that is exactly the case `gapsWorthAlerting` filters.
+  **`no_recording` rows still holding audio: 0.** Both guardrail heartbeats
+  current afterwards.
+  ⏳ **NOT PROVEN: no NEW voicemail has taken the retry path yet.** The recovery
+  half is proven by two delivered emails; the grace half is proven by 19 tests
+  and by the code in the container. ⛔ It is **unobservable when it works** — the
+  tell is a `no_recording`-with-audio count that STAYS at 0 while voicemails keep
+  flowing, so re-run the handoff's §7 queries in a week rather than expecting a
+  log line.
 - ⚠️⚠️ **FIVE BLIND MAILBOXES TOOK 15 VOICEMAILS THAT REACHED NOBODY, AND THE LIST
   IN THIS FILE WAS OUT OF DATE.** Now: **A plus center 108 (10)**, **B Visible 105
   (2)**, **B Visible 106 (1)**, **Create A Box 105 (1)**, **Landau Home 101 (1)** —
