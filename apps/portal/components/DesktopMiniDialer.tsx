@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { ConnectSelect } from "./ConnectSelect";
+import { isInsideViewportDropdown } from "./ViewportDropdown";
 import { useSipPhone } from "../hooks/useSipPhone";
 import { MiniDialerReloadBar } from "./DesktopUpdateNotice";
 import { useTelephonySocket } from "../hooks/useTelephonySocket";
@@ -596,6 +597,11 @@ export function DesktopMiniDialer() {
     if (!notifOpen && !settingsOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
+      // The settings popover's device pickers (ConnectSelect) portal their
+      // option list to <body> — logically inside the popover, outside it in
+      // the DOM. Closing on that mousedown unmounts the dropdown before the
+      // option's click fires, so the selection is never saved.
+      if (isInsideViewportDropdown(t)) return;
       if (notifOpen && notifWrapRef.current && !notifWrapRef.current.contains(t)) setNotifOpen(false);
       if (settingsOpen && settingsWrapRef.current && !settingsWrapRef.current.contains(t)) setSettingsOpen(false);
     };

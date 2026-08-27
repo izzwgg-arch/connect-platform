@@ -24,6 +24,24 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+/**
+ * True when an event target sits inside a portaled ViewportDropdown panel.
+ *
+ * The panel is portaled to <body>, so an ancestor popover with its own
+ * document-level "click outside closes me" listener sees a press on a
+ * dropdown option as OUTSIDE itself and closes — unmounting the dropdown at
+ * mousedown/pointerdown, before the option's click (mouseup) can fire, so
+ * the selection is silently lost. That is exactly how the mini dialer's
+ * Headset/Speaker/Ringer pickers "closed without saving". Every
+ * outside-close handler that can contain a ConnectSelect (or anything else
+ * riding ViewportDropdown) must early-return on this check.
+ */
+export function isInsideViewportDropdown(target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false;
+  const el = target instanceof Element ? target : target.parentElement;
+  return Boolean(el?.closest(".viewport-dropdown"));
+}
+
 export function ViewportDropdown({
   open,
   triggerRef,

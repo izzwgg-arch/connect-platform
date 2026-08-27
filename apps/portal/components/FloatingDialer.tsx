@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, Voicemail, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
+import { isInsideViewportDropdown } from "./ViewportDropdown";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
 import { useAsyncResource } from "../hooks/useAsyncResource";
@@ -867,6 +868,12 @@ export function FloatingDialer() {
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (shellRef.current?.contains(target) || toggleRef.current?.contains(target)) return;
+      // The settings menu's device pickers (ConnectSelect) portal their
+      // option list to <body> — inside the dialer logically, outside the
+      // shell in the DOM. Without this, picking a device closed the whole
+      // floating dialer at pointerdown, before the option's click could
+      // fire, and the selection was never saved.
+      if (isInsideViewportDropdown(target)) return;
       setOpen(false);
     };
 
