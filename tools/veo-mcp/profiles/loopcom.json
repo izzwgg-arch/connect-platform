@@ -70,10 +70,13 @@
     "Chain a multi-clip spot by first frame, and reuse the seed across the chain to keep the look stable.",
     "Veo audio is kept, but replace the music bed in post on any spot longer than one clip.",
     "No people. The brand language excludes them, and the market this serves commonly avoids depicting people in advertising.",
-    "Rendered text is opt-in through the with-text variant. It is the highest-risk configuration Veo runs, so draft it on lite and expect retries before committing a final.",
     "Nothing sits still. Keep every element drifting or breathing. On text shots the word moves as one block; letterforms never animate individually, which is where morphing starts.",
     "No negative prompts. Every exclusion is stated in the prompt itself, which keeps one instruction channel instead of two and lets any tier render a draft.",
-    "Keep the shot description under about 130 words. Stating exclusions in the prompt rather than a negative prompt costs roughly 40 words, so a resolved prompt lands near 300 against the 616-word original."
+    "Keep the shot description under about 130 words. Stating exclusions in the prompt rather than a negative prompt costs roughly 40 words, so a resolved prompt lands near 300 against the 616-word original.",
+    "Typography is composited in post. This is now an evidence-based rule, not a preference: rendered text is 0 for 3 on this project at a cost of $7.20, while non-text shots are 2 for 2 at $0.40.",
+    "If a shot must carry rendered text, keep the type sharp and blur only the background. Blur on letterforms is what produced ENGDISH.",
+    "Put a word that must survive at the start or the end of the clip. Both failures hit the mid-clip beat.",
+    "Never block on a generation call. Start it, record the operation name, then poll."
   ],
   "variants": {
     "with-text": {
@@ -83,7 +86,89 @@
         "draft": "veo-3.1-lite-generate-preview",
         "review": "veo-3.1-fast-generate-preview",
         "final": "veo-3.1-generate-preview"
-      }
+      },
+      "status": "experimental",
+      "record": "0 usable outputs from 3 attempts, $7.20 spent. Not approved for client deliverables."
     }
-  }
+  },
+  "evidence": {
+    "asOf": "2026-08-28",
+    "note": "Observed on this project, not vendor documentation. Update it as the record grows; the ledger only covers renders made after journaling was added.",
+    "renders": [
+      {
+        "shot": "abstract test, water drop",
+        "model": "lite",
+        "seconds": 4,
+        "text": false,
+        "usd": 0.2,
+        "outcome": "usable"
+      },
+      {
+        "shot": "abstract test, paper boat",
+        "model": "lite",
+        "seconds": 4,
+        "text": false,
+        "usd": 0.2,
+        "outcome": "usable"
+      },
+      {
+        "shot": "LOOPCOM v1",
+        "model": "standard",
+        "seconds": 8,
+        "text": true,
+        "usd": 3.2,
+        "outcome": "lost to a 60s client timeout before the operation name was recorded"
+      },
+      {
+        "shot": "LOOPCOM v1 retry",
+        "model": "standard",
+        "seconds": 8,
+        "text": true,
+        "usd": 3.2,
+        "outcome": "ENGLISH absent; YIDDISH and LOOPCOM rendered"
+      },
+      {
+        "shot": "VOICEMAIL draft",
+        "model": "fast",
+        "seconds": 8,
+        "text": true,
+        "usd": 0.8,
+        "outcome": "ENGLISH rendered as ENGDISH"
+      }
+    ],
+    "costPerAcceptedSecond": {
+      "withoutRenderedText": {
+        "spendUsd": 0.4,
+        "acceptedSeconds": 8,
+        "usd": 0.05
+      },
+      "withRenderedText": {
+        "spendUsd": 7.2,
+        "acceptedSeconds": 0,
+        "usd": null,
+        "note": "Three attempts, no usable output at any price."
+      }
+    },
+    "textFindings": [
+      "Two of two multi-word shots failed, and both failed on the same word: ENGLISH, the third word and the mid-clip beat. Position looks like the risk factor, not the word.",
+      "Two distinct failure modes. Without blur direction the word was omitted entirely. With blur and glow on the type it was malformed into ENGDISH.",
+      "Blur and bloom on typography are a direct cause of malformed letterforms. Defocus softens the stroke junction that separates an L from a D.",
+      "A misspelling guard in the negative prompt was active during the ENGDISH render and did not prevent it. Guards discourage, they do not enforce.",
+      "Shortening the prompt from 616 to 309 words changed the failure mode but did not remove it."
+    ],
+    "nonTextFindings": [
+      "Two of two abstract shots with no rendered text were usable on the first attempt, on the cheapest tier."
+    ],
+    "renderTimes": {
+      "lite4s": "31s",
+      "fast8s": "61s",
+      "standard8s": "91s"
+    }
+  },
+  "apiConstraints": [
+    "The lite tier rejects negativePrompt with HTTP 400 rather than ignoring it.",
+    "personGeneration 'dont_allow' is not supported and returns HTTP 400. Exclude people in the prompt instead.",
+    "An MCP tool call times out at 60s while an 8s render takes 61 to 91s. Always start the operation and poll; never block on a single call.",
+    "A timed-out call still bills. Record the operation name before waiting, then recover it rather than re-rendering."
+  ]
 }
