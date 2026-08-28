@@ -4,7 +4,10 @@
 
 import {
   DEFAULT_MODEL,
+  PRICING,
   downloadVideo,
+  estimateCost,
+  ledgerRead,
   extractFilterReasons,
   extractVideoUris,
   generateAndWait,
@@ -43,6 +46,21 @@ const GENERATION_PROPS = {
   },
   imageBase64: { type: 'string', description: 'Base64 image bytes, as an alternative to imagePath.' },
   imageMimeType: { type: 'string', description: 'Mime type for imageBase64, e.g. image/png.' },
+  lastFramePath: {
+    type: 'string',
+    description: 'Local image to use as the final frame, so the clip lands on a composition you already approved.',
+  },
+  lastFrameBase64: { type: 'string', description: 'Base64 final-frame image, as an alternative to lastFramePath.' },
+  lastFrameMimeType: { type: 'string', description: 'Mime type for lastFrameBase64.' },
+  seed: {
+    type: 'integer',
+    description:
+      'Holds most of the generation steady between runs. Not fully deterministic, but it lets a prompt edit be read as a real change instead of a fresh roll. Reuse the same seed while iterating.',
+  },
+  dryRun: {
+    type: 'boolean',
+    description: 'Validate the request and return the cost estimate without generating anything. Costs nothing.',
+  },
 };
 
 const TOOLS = [
@@ -103,6 +121,34 @@ const TOOLS = [
     },
   },
   {
+    name: 'veo_estimate_cost',
+    description:
+      'What a generation would cost in USD, before running it. Veo bills per second of output, so duration and sample count multiply directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        model: { type: 'string' },
+        resolution: { type: 'string', enum: ['720p', '1080p', '4k'] },
+        durationSeconds: { type: 'integer' },
+        sampleCount: { type: 'integer' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'veo_recover_operations',
+    description:
+      'List recent generations from the local ledger, flagging any that were started but never recorded as finished. Use this after a client timeout to reclaim a render you already paid for instead of running it again.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        unresolvedOnly: { type: 'boolean', description: 'Only show renders with no finish recorded (default true).' },
+        limit: { type: 'integer', description: 'How many to return (default 20).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'veo_download_video',
     description: 'Download a generated video URI to a local file. Veo URIs expire after about two days.',
     inputSchema: {
@@ -120,16 +166,47 @@ const TOOLS = [
 async function callTool(name, args = {}) {
   switch (name) {
     case 'veo_list_models':
-      return { models: await listVeoModels() };
+      return { models: await listVeoModels(), pricingUsdPerSecond: PRICING };
 
-    case 'veo_generate_video':
-      return generateAndWait(args);
+    case 'veo_estimate_cost':
+      return estimateCost(args);
+
+    case 'veo_recover_operations': {
+      const entries = ledgerRead();
+      const finished = new Set(entries.filter((e) => e.event === 'finished').map((e) => e.operationName));
+      const started = entries.filter((e) => e.event === 'started');
+      const unresolvedOnly = args.unresolvedOnly !== false;
+      const rows = started
+        .filter((e) => (unresolvedOnly ? !finished.has(e.operationName) : true))
+        .slice(-(args.limit || 20))
+        .reverse()
+        .map((e) => ({ ...e, finished: finished.has(e.operationName) }));
+      const spent = started.reduce((sum, e) => sum + (e.estimate?.usd || 0), 0);
+      return {
+        operations: rows,
+        totalRendersStarted: started.length,
+        estimatedSpendUsd: Number(spent.toFixed(2)),
+        note: rows.length
+          ? 'Pass an operationName to veo_get_operation to retrieve a render you already paid for.'
+          : 'Nothing unresolved.',
+      };
+    }
+
+    case 'veo_generate_video': {
+      const cost = estimateCost(args);
+      if (args.dryRun) return { dryRun: true, wouldCost: cost, note: 'Nothing was generated.' };
+      const result = await generateAndWait(args);
+      return { ...result, cost };
+    }
 
     case 'veo_start_generation': {
+      const cost = estimateCost(args);
+      if (args.dryRun) return { dryRun: true, wouldCost: cost, note: 'Nothing was generated.' };
       const op = await startGeneration(args);
       return {
         operationName: op.name,
         done: Boolean(op.done),
+        cost,
         note: 'Poll veo_get_operation with this operationName. Generation usually takes one to six minutes.',
       };
     }

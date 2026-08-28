@@ -1,7 +1,7 @@
 // Thin client for Google Veo video generation over the Gemini API.
 // No dependencies: Node 18+ global fetch only.
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +9,69 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_MODEL = 'veo-3.1-fast-generate-preview';
+
+/** USD per second of generated video, by model and resolution. */
+export const PRICING = {
+  'veo-3.1-generate-preview': { '720p': 0.4, '1080p': 0.4, '4k': 0.6 },
+  'veo-3.1-fast-generate-preview': { '720p': 0.1, '1080p': 0.12, '4k': 0.3 },
+  'veo-3.1-lite-generate-preview': { '720p': 0.05, '1080p': 0.08 },
+};
+
+const DEFAULT_DURATION = 8;
+
+/**
+ * What a generation will cost before you run it. Veo bills per second of
+ * output, so duration and sample count multiply directly.
+ */
+export function estimateCost({ model, resolution, durationSeconds, sampleCount } = {}) {
+  const m = model || DEFAULT_MODEL;
+  const res = resolution || '720p';
+  const seconds = durationSeconds || DEFAULT_DURATION;
+  const samples = sampleCount || 1;
+  const rate = PRICING[m]?.[res];
+  if (rate === undefined) {
+    return { model: m, resolution: res, seconds, samples, usd: null, note: `No published rate for ${m} at ${res}.` };
+  }
+  return {
+    model: m,
+    resolution: res,
+    seconds,
+    samples,
+    usdPerSecond: rate,
+    usd: Number((rate * seconds * samples).toFixed(4)),
+  };
+}
+
+const LEDGER_PATH = process.env.VEO_LEDGER_PATH || resolve(HERE, '.ledger.jsonl');
+
+/**
+ * Appends one line per render. This is what makes a lost call recoverable: the
+ * operation name is on disk before we start waiting, so a client-side timeout
+ * costs nothing but a lookup. It also gives you the billed-vs-accepted numbers
+ * you need to compute cost per accepted second.
+ */
+export function ledgerAppend(entry) {
+  try {
+    appendFileSync(LEDGER_PATH, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
+  } catch {
+    // Never let bookkeeping break a render.
+  }
+}
+
+export function ledgerRead() {
+  if (!existsSync(LEDGER_PATH)) return [];
+  return readFileSync(LEDGER_PATH, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
 
 /**
  * Reads KEY=VALUE lines from a dotenv-style file. Values may be quoted.
@@ -127,6 +190,12 @@ export async function startGeneration(args = {}) {
   const instance = { prompt: args.prompt };
   const image = buildImage(args);
   if (image) instance.image = image;
+  const lastFrame = buildImage({
+    imagePath: args.lastFramePath,
+    imageBase64: args.lastFrameBase64,
+    imageMimeType: args.lastFrameMimeType,
+  });
+  if (lastFrame) instance.lastFrame = lastFrame;
 
   const parameters = {};
   if (args.aspectRatio) parameters.aspectRatio = args.aspectRatio;
@@ -135,15 +204,33 @@ export async function startGeneration(args = {}) {
   if (args.personGeneration) parameters.personGeneration = args.personGeneration;
   if (args.durationSeconds) parameters.durationSeconds = args.durationSeconds;
   if (args.sampleCount) parameters.sampleCount = args.sampleCount;
+  // Not fully deterministic, but it holds most of the run steady so a prompt
+  // edit can be read as a real change rather than a fresh roll of the dice.
+  if (args.seed !== undefined && args.seed !== null) parameters.seed = args.seed;
 
   const body = { instances: [instance] };
   if (Object.keys(parameters).length) body.parameters = parameters;
 
-  return apiJson(`${API_BASE}/models/${model}:predictLongRunning`, {
+  const op = await apiJson(`${API_BASE}/models/${model}:predictLongRunning`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+  // Record before anything can time out, so a lost call is a lookup not a loss.
+  ledgerAppend({
+    event: 'started',
+    operationName: op.name,
+    model,
+    resolution: args.resolution || '720p',
+    durationSeconds: args.durationSeconds || null,
+    sampleCount: args.sampleCount || 1,
+    seed: args.seed ?? null,
+    estimate: estimateCost(args),
+    prompt: String(args.prompt).slice(0, 200),
+  });
+
+  return op;
 }
 
 /** Fetches the current state of a long-running operation by its full name. */
@@ -239,6 +326,15 @@ export async function generateAndWait(args = {}) {
     videoUris: uris,
     filteredReasons: filtered,
   };
+
+  ledgerAppend({
+    event: 'finished',
+    operationName: op.name,
+    videos: uris.length,
+    filtered: filtered.length,
+    elapsedSeconds: result.elapsedSeconds,
+    estimate: estimateCost(args),
+  });
 
   if (args.outputPath && uris.length) {
     const downloads = [];

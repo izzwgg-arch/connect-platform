@@ -60,3 +60,6 @@ _tmp_*/
 !/tools/**/.dev.vars.example
 .wrangler/
 **/.wrangler/
+
+# veo render ledger (local cost tracking)
+**/.ledger.jsonl
