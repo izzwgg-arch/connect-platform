@@ -67,7 +67,20 @@ export function loadProfile(name) {
  */
 export function applyProfile(args = {}) {
   if (!args.profile) return args;
-  const profile = loadProfile(args.profile);
+  const base = loadProfile(args.profile);
+
+  // A variant swaps parts of the profile wholesale. Merging would be wrong
+  // here: a shot that needs rendered text has to *undo* the base profile's
+  // text suppression, and you cannot undo a negative prompt by appending.
+  if (args.variant) {
+    const variant = base.variants?.[args.variant];
+    if (!variant) {
+      const known = Object.keys(base.variants || {}).join(', ') || 'none';
+      throw new Error(`Profile "${base.name}" has no variant "${args.variant}". Known variants: ${known}.`);
+    }
+    Object.assign(base, variant);
+  }
+  const profile = base;
   const out = { ...profile.defaults, ...args };
 
   if (!args.model) {
@@ -84,9 +97,15 @@ export function applyProfile(args = {}) {
       : profile.negativePrompt;
   }
 
-  out.appliedProfile = { name: profile.name, stage: args.stage || 'draft', model: out.model };
+  out.appliedProfile = {
+    name: profile.name,
+    variant: args.variant || null,
+    stage: args.stage || 'draft',
+    model: out.model,
+  };
   delete out.profile;
   delete out.stage;
+  delete out.variant;
   return out;
 }
 
