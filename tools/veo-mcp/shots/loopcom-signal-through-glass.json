@@ -1,0 +1,13 @@
+{
+  "profile": "loopcom",
+  "stage": "draft",
+  "seed": 20260829,
+  "note": "Video-first. One continuous idea, a voice made visible passing through glass and coming out clear, carrying the translation story with no icons and no words. Typography optional in post; the logo lands on the calm final frame.",
+  "prompt": "An eight-second vertical film shot on a long macro lens with shallow depth of field. A single luminous ribbon of mint and cyan light travels slowly through deep navy darkness, rippling and turbulent, like a voice made visible, its near edges falling softly out of focus. The camera drifts alongside it in one unbroken move. The ribbon enters a thick slab of clear glass suspended in the dark, and inside it refracts into fine parallel threads that bend, realign and gather together. It emerges on the far side as one brighter, steadier ribbon, its surface now calm where it was turbulent. Volumetric light blooms through the glass and soft caustics fall across the darkness. Fine particles hang in the air catching the light as the ribbon settles toward the centre.",
+  "postTypography": {
+    "note": "Optional. This cut is built to carry the story without words, so keep any type minimal and let the image lead.",
+    "elements": [
+      { "text": "logo", "position": "centre, over the calm final frame", "inSeconds": 6.5, "outSeconds": 8.0 }
+    ]
+  }
+}
