@@ -2,20 +2,17 @@
   "name": "loopcom",
   "title": "LOOPCOM",
   "description": "Yiddish-to-English call and voicemail translation. Telecom SaaS, WhatsApp-status-first vertical advertising, assembled into 15-30s spots.",
-
   "defaults": {
     "aspectRatio": "9:16",
     "durationSeconds": 8,
     "resolution": "720p",
     "sampleCount": 1
   },
-
   "models": {
     "draft": "veo-3.1-lite-generate-preview",
     "review": "veo-3.1-fast-generate-preview",
     "final": "veo-3.1-generate-preview"
   },
-
   "brand": {
     "colors": {
       "mint": "#5EEAD4",
@@ -25,7 +22,6 @@
       "background": "#020A12"
     }
   },
-
   "delivery": {
     "placement": "WhatsApp status",
     "safeZone": {
@@ -34,28 +30,40 @@
       "note": "WhatsApp overlays the sender row at the top and the reply bar at the bottom, and some devices clip the extremes. Keep every load-bearing element inside the middle 73% of the frame."
     },
     "assembly": {
-      "targetSeconds": [15, 30],
+      "targetSeconds": [
+        15,
+        30
+      ],
       "clipSeconds": 8,
-      "clipsPerSpot": { "15s": 2, "30s": 4 },
+      "clipsPerSpot": {
+        "15s": 2,
+        "30s": 4
+      },
       "method": "Chain clips by feeding the approved final frame of one shot in as the first frame of the next, so the spot flows instead of jump-cutting."
     },
     "typography": {
       "renderedByVeo": false,
-      "scripts": ["Hebrew", "Latin"],
+      "scripts": [
+        "Hebrew",
+        "Latin"
+      ],
       "note": "Copy ships in both Hebrew script and Latin depending on audience, so every render must stay language-neutral. Build one visual master and lay two text versions over it rather than rendering twice."
     },
     "audio": {
       "source": "Veo native",
       "caveat": "Each clip generates its own audio independently. In a chained 15-30s spot the music will restart and jump at every seam, so replace the bed with one continuous track in post and keep Veo's effects."
+    },
+    "logo": {
+      "renderedByVeo": false,
+      "addedInPost": "every finished spot",
+      "note": "Veo never renders the LOOPCOM mark, a wordmark, or anything that reads as a brand emblem. The logo is composited onto the assembled spot, so the final clip of a chain must resolve to a calm centred composition with clean space for it."
     }
   },
-
-  "styleSuffix": "Visual language: a sophisticated telecommunications interface in deep navy-black. Premium glass surfaces, precise cyan edge lighting, restrained glow, thin circuit paths, generous negative space, subtle particles, realistic reflections, polished commercial motion design. Use only these colors: luminous mint #5EEAD4, rich teal #14B8A6, bright technology blue #0EA5E9, white, and deep navy-black #020A12. One continuous controlled composition with a very slow small-amplitude push-in and no abrupt cuts. No people and no live-action footage. Render no on-screen text of any kind: no words, letters, numbers, captions, subtitles, labels, logos or watermarks anywhere in the frame. Hold the composition symmetric and centred, with all key motion inside the middle three quarters of the frame, leaving the top and bottom edges calm so typography can be composited over them in either Hebrew script or Latin. Audio: instrumental only, no voices and no lyrics. A clean futuristic electronic pulse with sub-bass, muted digital percussion and airy synthetic tones, plus precise interface sounds tied to the on-screen motion.",
-
-  "negativePrompt": "text, words, letters, numbers, typography, Hebrew letters, captions, subtitles, labels, logos, watermarks, signage, people, human figures, faces, hands, live-action footage, camera shake, abrupt cuts, extreme zoom, rotation, aspect-ratio change, purple, pink, orange, red, yellow, clutter, flicker, duplicated icons, morphing shapes, speech, singing, vocals",
-
+  "styleSuffix": "Visual language: a sophisticated telecommunications interface in deep navy-black. Premium glass surfaces, precise cyan edge lighting, restrained glow, thin circuit paths, generous negative space, subtle particles, realistic reflections, polished commercial motion design. Use only these colors: luminous mint #5EEAD4, rich teal #14B8A6, bright technology blue #0EA5E9, white, and deep navy-black #020A12. One continuous controlled composition with a very slow small-amplitude push-in and no abrupt cuts. No people and no live-action footage. Render no on-screen text or branding of any kind: no words, letters, numbers, captions, subtitles, labels, logos, wordmarks, brand emblems or watermarks anywhere in the frame. The brand mark is added afterwards, so leave the frame free of anything that reads as one. Hold the composition symmetric and centred, with all key motion inside the middle three quarters of the frame, leaving the top and bottom edges calm so typography can be composited over them in either Hebrew script or Latin. Audio: instrumental only, no voices and no lyrics. A clean futuristic electronic pulse with sub-bass, muted digital percussion and airy synthetic tones, plus precise interface sounds tied to the on-screen motion.",
+  "negativePrompt": "text, words, letters, numbers, typography, Hebrew letters, captions, subtitles, labels, logos, wordmark, brand mark, emblem, badge, watermarks, signage, people, human figures, faces, hands, live-action footage, camera shake, abrupt cuts, extreme zoom, rotation, aspect-ratio change, purple, pink, orange, red, yellow, clutter, flicker, duplicated icons, morphing shapes, speech, singing, vocals",
   "rules": [
     "Typography is composited in post, never rendered by Veo. Hebrew script especially, which Veo renders badly.",
+    "The LOOPCOM mark is composited onto the finished spot, never rendered. End a chain on a calm centred frame so the logo has somewhere clean to land.",
     "Every render must read the same under Hebrew and Latin copy. One visual master, two text versions, one render cost.",
     "Keep load-bearing motion inside the middle 73% of the frame. WhatsApp covers the top and bottom.",
     "Draft on the lite tier, approve the composition, then render once on the final tier.",
