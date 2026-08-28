@@ -5655,11 +5655,24 @@ on loopcom, backed up.)
   unblocked**, and the two older cases (`DFC-656595` 08-21, `DFC-614186` 07-08)
   are superseded — ⛔ leave them alone; two open applications for one entity is
   itself a manual-review trigger.
-  ⛔⛔ **ONE DEFECT ON THE RECORD, AND IT IS THE KIND THAT STALLS A
-  VERIFICATION: D&B recorded the legal form as `Corporation`.** NY DOS 8001109
-  says **DOMESTIC LIMITED LIABILITY COMPANY**, and Apple/Google/Meta all match
-  the D&B record against official filings character-for-character. **Ask D&B to
-  correct it while the record is fresh** — ⏳ not requested yet.
+  ⚠️ **D&B recorded the legal form as `Corporation` while NY DOS 8001109 says
+  DOMESTIC LIMITED LIABILITY COMPANY — inaccurate, and DELIBERATELY NOT BEING
+  CORRECTED.** ⛔⛔ **I first filed this as a blocker that would stall a store
+  verification. That was asserted without checking what reads the field, and it
+  is WRONG.** Apple's own D-U-N-S page states they verify **legal entity name,
+  headquarters address and mailing address** — not entity type — and their only
+  entity-type requirement is that you ARE a legal entity, listing "corporation,
+  limited partnership, or limited liability company" as equally acceptable. The
+  LLC fact travels in the NAME (`Loopcom LLC`), which is the field that is
+  actually matched. ⛔ It is **not** mere coarse bucketing either — D&B's model
+  has a distinct **Limited Liability Company code (18400)** beside Corporation
+  (451), so an analyst simply did not use it. **Inaccurate, inconsequential.**
+  ⛔ **Do NOT open a correction case to tidy it**: the record is days old and
+  still propagating, and a second open case for one entity is itself a
+  manual-review trigger. ✅ If a store ever refuses on entity STATUS (Apple's
+  wording is *"Your organization is not listed as a legal entity"* — a different
+  thing from entity type), the path exists: `support.dnb.com/?CUST=APPLEDEV`
+  with the registration documents, and updates reach Apple in ~2 business days.
   ⛔ **It is NOT queryable immediately** — D&B says the data appears in **24–48
   hours**; pasting it into a store form the same evening returns nothing and
   reads like a bad number. ✅ Everything else matches the state record: name
