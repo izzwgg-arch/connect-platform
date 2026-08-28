@@ -19,6 +19,13 @@ export const PRICING = {
 
 const DEFAULT_DURATION = 8;
 
+/** The lite tier rejects negativePrompt outright rather than ignoring it. */
+export const MODEL_SUPPORTS_NEGATIVE_PROMPT = {
+  'veo-3.1-generate-preview': true,
+  'veo-3.1-fast-generate-preview': true,
+  'veo-3.1-lite-generate-preview': false,
+};
+
 /**
  * What a generation will cost before you run it. Veo bills per second of
  * output, so duration and sample count multiply directly.
@@ -275,6 +282,14 @@ export async function startGeneration(args = {}) {
   // edit can be read as a real change rather than a fresh roll of the dice.
   if (args.seed !== undefined && args.seed !== null) parameters.seed = args.seed;
 
+  // Dropping an unsupported negative prompt beats a hard 400, but say so: a
+  // draft rendered without its guards is not a preview of the final.
+  const warnings = [];
+  if (parameters.negativePrompt && MODEL_SUPPORTS_NEGATIVE_PROMPT[model] === false) {
+    delete parameters.negativePrompt;
+    warnings.push(`${model} does not accept a negative prompt, so it was dropped. This render is missing the guards the final will have.`);
+  }
+
   const body = { instances: [instance] };
   if (Object.keys(parameters).length) body.parameters = parameters;
 
@@ -297,6 +312,7 @@ export async function startGeneration(args = {}) {
     prompt: String(args.prompt).slice(0, 200),
   });
 
+  if (warnings.length) op.warnings = warnings;
   return op;
 }
 

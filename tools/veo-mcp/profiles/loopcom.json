@@ -73,13 +73,19 @@
     "No people. The brand language excludes them, and the market this serves commonly avoids depicting people in advertising.",
     "Keep the shot description under about 130 words. The profile adds a standing style block of roughly 140, so a resolved prompt lands near 270. The 616-word original is what diluted attention and dropped elements.",
     "Rendered text is opt-in through the with-text variant. It is the highest-risk configuration Veo runs, so draft it on lite and expect retries before committing a final.",
-    "Nothing sits still. Keep every element drifting or breathing. On text shots the word moves as one block; letterforms never animate individually, which is where morphing starts."
+    "Nothing sits still. Keep every element drifting or breathing. On text shots the word moves as one block; letterforms never animate individually, which is where morphing starts.",
+    "The lite tier rejects negative prompts. Text shots draft on fast instead, because a draft without the spelling and branding guards is not a preview of the final."
   ],
   "variants": {
     "with-text": {
       "styleSuffix": "Visual language: a premium telecommunications interface in deep navy-black. Glass surfaces, precise cyan edge lighting, restrained glow, thin circuit paths, generous negative space, subtle particles, polished commercial motion design. Colors limited to mint #5EEAD4, teal #14B8A6, technology blue #0EA5E9, white and navy-black #020A12. One continuous composition, very slow push-in, no cuts. Nothing is ever completely still: particles drift, light breathes, and no element freezes or locks into place. No people, no live-action. Typography is clean bold uppercase geometric sans-serif in white with a restrained cyan glow. Words drift and pulse as whole blocks while the letterforms inside them stay rigid, sharp and unchanged. Render only the words named in the shot, each exactly once and correctly spelled, with no other text, labels, logos, wordmarks or watermarks. Keep text inside the middle three quarters of the frame. Audio: instrumental only, no voices, a futuristic electronic pulse with sub-bass and precise interface sounds.",
       "negativePrompt": "misspelled words, extra text, random characters, gibberish letters, duplicated words, morphing letters, flickering text, captions, subtitles, watermarks, logos, wordmark, brand mark, emblem, badge, signage, Hebrew letters, people, human figures, faces, hands, live-action footage, camera shake, abrupt cuts, extreme zoom, rotation, purple, pink, orange, red, yellow, clutter, flicker, duplicated icons, speech, singing, vocals",
-      "note": "For shots where Veo renders the words itself. Text suppression is lifted and replaced with spelling and duplication guards. Higher retry rate than the default post-typography route; budget for it."
+      "note": "For shots where Veo renders the words itself. Text suppression is lifted and replaced with spelling and duplication guards. Higher retry rate than the default post-typography route; budget for it.",
+      "models": {
+        "draft": "veo-3.1-fast-generate-preview",
+        "review": "veo-3.1-fast-generate-preview",
+        "final": "veo-3.1-generate-preview"
+      }
     }
   }
 }
