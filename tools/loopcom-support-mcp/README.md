@@ -87,3 +87,41 @@ node -e '<sign an HS256 JWT with JWT_SECRET for the SUPER_ADMIN user>'
 
 Then `claude mcp remove loopcom-support` and add it again with the new value in
 a shell variable, never inline.
+
+## Automatic mode — `watch.mjs`
+
+`node watch.mjs` polls for new tickets and starts a Claude agent per ticket by
+itself (`claude -p "Work LoopCom support ticket <REF>"`, cwd = this repo, so it
+reads CLAUDE.md and the handoffs). The MCP server cannot do this — MCP is
+pull-only; something has to watch and spawn.
+
+⛔⛔ **ONE-TIME SETUP REQUIRED, AND ONLY IZZY CAN DO IT: the spawned agent
+cannot log in.** A headless `claude -p` on this machine answers
+`Not logged in · Please run /login`. Diagnosed 2026-08-27:
+`~/.claude/.credentials.json` holds **only MCP OAuth state for Runway** — there
+are no Claude account credentials in it. The desktop app authenticates through
+its own store, which a spawned CLI cannot read, and stripping
+`CLAUDE_CODE_CHILD_SESSION` / `CLAUDE_CODE_ENTRYPOINT` makes no difference.
+
+Either fixes it:
+- run `claude login` once in a real interactive terminal, or
+- set `ANTHROPIC_API_KEY` in the watcher's environment (the usual headless path)
+
+⛔ Do not paste an API key into a Claude chat — it lands in the transcript.
+CLAUDE.md records a token leaking exactly that way.
+
+### Safety, all of it enforced in code rather than asked of the model
+
+- **Backfill is opt-in** (`WATCH_BACKFILL=1`). On first run it recorded all 10
+  existing tickets as `skipped_pre_existing` — without that, switching it on
+  would launch ten agents at once.
+- **The ticket is claimed BEFORE the agent spawns**, so a crash cannot re-run it.
+- The agent is handed a **reference only**, never the customer's prose — it
+  fetches their words through the MCP, where they arrive fenced as data.
+- `Edit`, `Write`, `NotebookEdit` are **disallowed** at the CLI.
+- An appended system prompt forbids deploying, restarting anything, writing to
+  the PBX, messaging a customer, and committing.
+- One agent at a time; `WATCH_DAILY_CAP` (default 10) per day.
+
+⛔ It writes a report to `reports/` and replies to NOBODY. What a customer is
+told stays a human decision.
