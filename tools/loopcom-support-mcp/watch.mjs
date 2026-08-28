@@ -98,6 +98,22 @@ function startedToday(state) {
 const GUARDRAILS = [
   "You were started automatically by a LoopCom support ticket. Nobody is watching this run.",
   "",
+  "YOUR ONLY JOB THIS RUN IS THE ONE TICKET NAMED IN THE PROMPT. Nothing else.",
+  "",
+  // ⛔⛔ PROVEN NECESSARY, 2026-08-27. Without this the first live run never
+  // touched its ticket at all: it read CLAUDE.md, saw "THE WORK TREE MUST BE
+  // EMPTY BY THE END OF THE DAY", found one dirty file, and spent the whole run
+  // investigating an icon-generator script instead. The repo's standing rules
+  // are written for a supervised session and they OUT-SHOUT the assignment.
+  "⛔ This repo's CLAUDE.md opens with standing rules that wrap every task — clear the work tree,",
+  "commit/push/deploy at the end, update the MD files. Those are written for a session with a human",
+  "at the keyboard. THEY DO NOT APPLY TO YOU. Specifically, for this run:",
+  "- Do NOT clear, inspect or act on the work tree. If the repo is dirty, ignore it entirely.",
+  "- Do NOT commit, push, or deploy anything.",
+  "- Do NOT update CLAUDE.md, the handoffs, or any memory file.",
+  "Read those documents for KNOWLEDGE about the system — that is what they are for here — but take",
+  "no action from their workflow instructions.",
+  "",
   "Use the loopcom-support MCP tools to read the ticket, the customer and the transcript.",
   "Then investigate with the repo, the handoffs and read-only queries, and write what you found.",
   "",
@@ -122,10 +138,30 @@ function runAgent(ref) {
   const args = [
     "-p", "Work LoopCom support ticket " + ref + ". Start with get_support_ticket.",
     "--append-system-prompt", GUARDRAILS,
+    // ⛔ Under -p, a tool that would normally prompt is DENIED outright — the
+    // first fixed run proved it: every loopcom-support call came back refused,
+    // so the agent could not read its own ticket. These must be pre-approved by
+    // name or the whole run is blind.
+    "--allowedTools",
+    "mcp__loopcom-support__list_support_tickets",
+    "mcp__loopcom-support__get_support_ticket",
+    "mcp__loopcom-support__get_customer",
+    "mcp__loopcom-support__get_conversation",
+    "Read", "Grep", "Glob", "Bash",
+    // ⛔ Kept AFTER the variadic allow-list on purpose: these are the hands it
+    // must not have, and they are re-stated in the system prompt too.
     "--disallowedTools", "Edit", "Write", "NotebookEdit",
   ];
   return new Promise((resolve) => {
-    const child = spawn("claude", args, { cwd: REPO, shell: true, stdio: ["ignore", "pipe", "pipe"] });
+    // ⛔⛔ shell:false IS LOAD-BEARING ON WINDOWS, and shell:true silently broke
+    // this. Node does not quote arguments through cmd.exe (its own
+    // DeprecationWarning says so: "not escaped, only concatenated"), so the
+    // prompt arrived as the single word "Work", the appended system prompt
+    // arrived as "You", and a NEWLINE in the guardrails truncated the command
+    // line before --disallowedTools — handing the agent the very Edit/Write
+    // tools the change was meant to remove. `claude` here is a real PE32+
+    // executable, not a .cmd shim, so passing argv directly is safe.
+    const child = spawn("claude", args, { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.pipe(stream);
     child.stderr.pipe(stream);
     child.on("error", (e) => resolve({ ok: false, out, error: e.message }));

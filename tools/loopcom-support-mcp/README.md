@@ -125,3 +125,31 @@ CLAUDE.md records a token leaking exactly that way.
 
 ⛔ It writes a report to `reports/` and replies to NOBODY. What a customer is
 told stays a human decision.
+
+### ⛔⛔ Two traps that made the first two live runs useless
+
+**1. `shell: true` on Windows silently destroys the arguments.** Node does not
+quote them through `cmd.exe` — its own DeprecationWarning says *"not escaped,
+only concatenated"*. The prompt arrived as the single word `Work`, the appended
+system prompt as `You`, and a **newline** in the guardrails truncated the command
+line before `--disallowedTools`, handing the agent the very Edit/Write tools the
+change was meant to take away. `claude` here is a real PE32+ executable, not a
+`.cmd` shim, so `shell: false` is correct and safe. **Never put it back.**
+
+⛔ And the misdiagnosis it caused is worth remembering: the run that ignored its
+ticket looked exactly like CLAUDE.md's standing rules out-shouting the
+assignment. It wasn't. **The assignment was never delivered.** A prompt of `Work`
+in this repo makes any session go clear the work tree, because that is the first
+thing CLAUDE.md tells it to do. Check the arguments actually arrived before
+theorising about the model's judgement.
+
+**2. Under `-p`, a tool that would normally prompt is DENIED, not asked.** Every
+`loopcom-support` call came back refused, so the agent could not read its own
+ticket. The MCP tools must be pre-approved by name in `--allowedTools`. Verified
+directly: `claude -p "call list_support_tickets…"` answers `DENIED` without it.
+
+### Acceptance test
+
+**The report must open by naming its ticket.** A report that begins `Work`, or
+that discusses the repo's work tree, means the arguments did not arrive — not
+that the agent misbehaved.
