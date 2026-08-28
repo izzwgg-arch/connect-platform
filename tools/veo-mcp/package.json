@@ -1,0 +1,15 @@
+{
+  "name": "@connect/veo-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency MCP server exposing Google Veo video generation via the Gemini API",
+  "type": "module",
+  "bin": {
+    "veo-mcp": "./server.mjs"
+  },
+  "main": "./server.mjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

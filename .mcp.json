@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "google-veo": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["tools/veo-mcp/server.mjs"]
+    }
+  }
+}

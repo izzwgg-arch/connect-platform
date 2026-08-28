@@ -52,3 +52,4 @@ tmp-link-repair-*.sql
 # diagnostic/temp folders (do not ship)
 _tmp_diag/
 _tmp_*/
+!/tools/**/.env.example
