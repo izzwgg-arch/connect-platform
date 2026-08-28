@@ -30,6 +30,7 @@ reads that file at startup, so a new session picks the server up automatically.
 | `veo_start_generation` | Starts a generation and returns immediately with an operation name |
 | `veo_get_operation` | Polls a long-running operation and returns video URIs once done |
 | `veo_download_video` | Downloads a video URI to a local file |
+| `veo_list_profiles` | Lists saved render profiles and their defaults |
 | `veo_estimate_cost` | What a render would cost, before you run it |
 | `veo_recover_operations` | Finds renders you paid for but never collected |
 
@@ -38,6 +39,29 @@ Generation parameters: `prompt` (required), `model`, `negativePrompt`, `aspectRa
 `personGeneration`, `sampleCount`, `seed`, `dryRun`, `imagePath` / `imageBase64` +
 `imageMimeType` for image-to-video, and `lastFramePath` / `lastFrameBase64` +
 `lastFrameMimeType` to land the clip on a frame you have already approved.
+
+## Profiles
+
+A profile is a saved set of house defaults so brand rules cannot be forgotten.
+Pass `profile: "loopcom"` and the call inherits the aspect ratio, duration,
+resolution, style block and negative prompt. Anything you pass explicitly still
+wins, so a profile constrains without trapping you.
+
+`stage` picks the tier: `draft` (lite), `review` (fast), `final` (standard).
+It defaults to `draft`, so the expensive tier is opt-in rather than accidental.
+
+```json
+{ "profile": "loopcom", "stage": "draft", "prompt": "A voicemail waveform dissolving into particles." }
+```
+
+Profiles live in `profiles/*.json`. `tools/veo-mcp/profiles/loopcom.json` is the
+worked example: telecom motion graphics, no people, no rendered text, brand
+palette locked.
+
+Note the inversion in that profile. Suppressing text in the negative prompt is
+what dropped a word from an earlier LOOPCOM render. Once typography moves to
+post, that same suppression becomes the desired behavior, and the style block
+asks for clean space where the words will go.
 
 ## Not wasting money
 

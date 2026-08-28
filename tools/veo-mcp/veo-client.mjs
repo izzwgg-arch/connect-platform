@@ -1,7 +1,7 @@
 // Thin client for Google Veo video generation over the Gemini API.
 // No dependencies: Node 18+ global fetch only.
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +40,54 @@ export function estimateCost({ model, resolution, durationSeconds, sampleCount }
     usdPerSecond: rate,
     usd: Number((rate * seconds * samples).toFixed(4)),
   };
+}
+
+const PROFILE_DIR = resolve(HERE, 'profiles');
+
+export function listProfiles() {
+  if (!existsSync(PROFILE_DIR)) return [];
+  return readdirSync(PROFILE_DIR)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => {
+      const p = JSON.parse(readFileSync(resolve(PROFILE_DIR, f), 'utf8'));
+      return { name: p.name, title: p.title, description: p.description, defaults: p.defaults, models: p.models };
+    });
+}
+
+export function loadProfile(name) {
+  const file = resolve(PROFILE_DIR, `${String(name).replace(/[^a-z0-9_-]/gi, '')}.json`);
+  if (!existsSync(file)) throw new Error(`No profile named "${name}". Call veo_list_profiles to see what exists.`);
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+/**
+ * Folds a profile into a request. Explicit arguments always win; the profile
+ * only fills what the caller left out. This is what stops a shot going out at
+ * the wrong ratio, on the wrong tier, or without the house negative prompt.
+ */
+export function applyProfile(args = {}) {
+  if (!args.profile) return args;
+  const profile = loadProfile(args.profile);
+  const out = { ...profile.defaults, ...args };
+
+  if (!args.model) {
+    const stage = args.stage || 'draft';
+    const chosen = profile.models?.[stage];
+    if (!chosen) throw new Error(`Profile "${profile.name}" has no model for stage "${stage}".`);
+    out.model = chosen;
+  }
+
+  if (profile.styleSuffix) out.prompt = `${args.prompt}\n\n${profile.styleSuffix}`;
+  if (profile.negativePrompt) {
+    out.negativePrompt = args.negativePrompt
+      ? `${args.negativePrompt}, ${profile.negativePrompt}`
+      : profile.negativePrompt;
+  }
+
+  out.appliedProfile = { name: profile.name, stage: args.stage || 'draft', model: out.model };
+  delete out.profile;
+  delete out.stage;
+  return out;
 }
 
 const LEDGER_PATH = process.env.VEO_LEDGER_PATH || resolve(HERE, '.ledger.jsonl');

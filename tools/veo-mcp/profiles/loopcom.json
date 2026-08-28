@@ -1,0 +1,40 @@
+{
+  "name": "loopcom",
+  "title": "LOOPCOM",
+  "description": "Yiddish-to-English call and voicemail translation. Telecom SaaS, vertical social-first advertising.",
+
+  "defaults": {
+    "aspectRatio": "9:16",
+    "durationSeconds": 8,
+    "resolution": "720p",
+    "sampleCount": 1
+  },
+
+  "models": {
+    "draft": "veo-3.1-lite-generate-preview",
+    "review": "veo-3.1-fast-generate-preview",
+    "final": "veo-3.1-generate-preview"
+  },
+
+  "brand": {
+    "colors": {
+      "mint": "#5EEAD4",
+      "teal": "#14B8A6",
+      "technology_blue": "#0EA5E9",
+      "white": "#FFFFFF",
+      "background": "#020A12"
+    }
+  },
+
+  "styleSuffix": "Visual language: a sophisticated telecommunications interface in deep navy-black. Premium glass surfaces, precise cyan edge lighting, restrained glow, thin circuit paths, generous negative space, subtle particles, realistic reflections, polished commercial motion design. Use only these colors: luminous mint #5EEAD4, rich teal #14B8A6, bright technology blue #0EA5E9, white, and deep navy-black #020A12. One continuous controlled composition with a very slow small-amplitude push-in and no abrupt cuts. No people and no live-action footage. Render no on-screen text of any kind: no words, letters, numbers, captions, subtitles, labels, logos or watermarks anywhere in the frame. Keep the centre and lower third visually calm and uncluttered so typography can be composited afterwards.",
+
+  "negativePrompt": "text, words, letters, numbers, typography, captions, subtitles, labels, logos, watermarks, signage, people, human figures, faces, hands, live-action footage, camera shake, abrupt cuts, extreme zoom, rotation, aspect-ratio change, purple, pink, orange, red, yellow, clutter, flicker, duplicated icons, morphing shapes",
+
+  "rules": [
+    "Typography is composited in post, never rendered by Veo. Leave clean space for it.",
+    "Draft on the lite tier, approve the composition, then render once on the final tier.",
+    "Hold a seed across iterations so a prompt edit reads as a real change.",
+    "No people. The brand language excludes them, and the Yiddish-speaking market this serves commonly avoids depicting people in advertising.",
+    "Keep prompts under roughly 200 words. Long prompts dilute attention and drop elements."
+  ]
+}

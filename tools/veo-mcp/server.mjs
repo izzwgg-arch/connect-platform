@@ -5,9 +5,11 @@
 import {
   DEFAULT_MODEL,
   PRICING,
+  applyProfile,
   downloadVideo,
   estimateCost,
   ledgerRead,
+  listProfiles,
   extractFilterReasons,
   extractVideoUris,
   generateAndWait,
@@ -60,6 +62,17 @@ const GENERATION_PROPS = {
   dryRun: {
     type: 'boolean',
     description: 'Validate the request and return the cost estimate without generating anything. Costs nothing.',
+  },
+  profile: {
+    type: 'string',
+    description:
+      'A saved render profile, e.g. "loopcom". It fills in aspect ratio, duration, resolution, the house style block and the house negative prompt, so none of them can be forgotten. Anything you pass explicitly still wins.',
+  },
+  stage: {
+    type: 'string',
+    enum: ['draft', 'review', 'final'],
+    description:
+      'Which tier of the profile to render on. Defaults to draft, the cheapest. Only move to final once the composition is approved.',
   },
 };
 
@@ -121,6 +134,12 @@ const TOOLS = [
     },
   },
   {
+    name: 'veo_list_profiles',
+    description:
+      'List saved render profiles and the defaults each one applies. Use a profile instead of restating brand rules on every call.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'veo_estimate_cost',
     description:
       'What a generation would cost in USD, before running it. Veo bills per second of output, so duration and sample count multiply directly.',
@@ -163,8 +182,15 @@ const TOOLS = [
   },
 ];
 
-async function callTool(name, args = {}) {
+async function callTool(name, rawArgs = {}) {
+  // Profiles resolve first, so cost estimates and ledger entries describe the
+  // request that will actually be sent rather than the one that was typed.
+  const args = ['veo_generate_video', 'veo_start_generation'].includes(name) ? applyProfile(rawArgs) : rawArgs;
+
   switch (name) {
+    case 'veo_list_profiles':
+      return { profiles: listProfiles() };
+
     case 'veo_list_models':
       return { models: await listVeoModels(), pricingUsdPerSecond: PRICING };
 
