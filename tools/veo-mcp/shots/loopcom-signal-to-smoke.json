@@ -1,0 +1,13 @@
+{
+  "profile": "loopcom",
+  "stage": "draft",
+  "seed": 20260829,
+  "note": "Variation on loopcom-signal-through-glass, sharing its seed so the glass and camera hold and the smoke reads as the real change. Light goes in one face, volumetric smoke unfurls out of the far face.",
+  "prompt": "An eight-second vertical film shot on a long macro lens with shallow depth of field. A single luminous ribbon of mint and cyan light travels slowly through deep navy darkness toward a thick slab of clear glass suspended in the dark. The camera drifts alongside it in one unbroken move. The ribbon enters the near face of the glass and refracts inside into fine parallel threads. Out of the far face it emerges transformed into slow volumetric smoke, lit from within in mint and cyan, unfurling in soft billowing curls that expand and drift across the darkness. Volumetric light blooms through the glass and soft caustics fall around it. Fine particles hang in the air catching the light as the smoke spreads and settles toward the centre.",
+  "postTypography": {
+    "note": "Optional. The image carries the story; keep any type minimal.",
+    "elements": [
+      { "text": "logo", "position": "centre, over the settled smoke", "inSeconds": 6.5, "outSeconds": 8.0 }
+    ]
+  }
+}
