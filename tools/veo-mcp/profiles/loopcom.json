@@ -1,6 +1,6 @@
 {
   "name": "loopcom",
-  "title": "LOOPCOM",
+  "title": "LOOPCOM Veo 3 Video Profile",
   "description": "Yiddish-to-English call and voicemail translation. Telecom SaaS, WhatsApp-status-first vertical advertising, assembled into 15-30s spots.",
   "defaults": {
     "aspectRatio": "9:16",
@@ -61,6 +61,7 @@
   },
   "styleSuffix": "Visual language: a premium telecommunications interface in deep navy-black. Glass surfaces, precise cyan edge lighting, restrained glow, thin circuit paths, generous negative space, subtle particles, polished commercial motion design. Colors limited to mint #5EEAD4, teal #14B8A6, technology blue #0EA5E9, white and navy-black #020A12, with no other hues. One continuous composition with a very slow push-in and a stable camera: no cuts, no shake, no rotation, no extreme zoom. Nothing is ever completely still, so particles drift and light breathes and no element freezes. Keep the frame clean and uncluttered, free of flicker and duplicated icons. No people and no live-action. The frame carries no text or branding at all: no words, letters, numbers, captions, labels, logos, wordmarks or emblems, because copy and the brand mark are composited afterwards in either Hebrew or Latin. Keep the composition symmetric with key motion inside the middle three quarters. Audio: instrumental only and free of voices, a futuristic electronic pulse with sub-bass and precise interface sounds.",
   "rules": [
+    "Veo renders no words, ever. Typography and the logo are composited in the editor.",
     "Typography is composited in post, never rendered by Veo. Hebrew script especially, which Veo renders badly.",
     "The LOOPCOM mark is composited onto the finished spot, never rendered. End a chain on a calm centred frame so the logo has somewhere clean to land.",
     "Every render must read the same under Hebrew and Latin copy. One visual master, two text versions, one render cost.",
@@ -74,7 +75,6 @@
     "No negative prompts. Every exclusion is stated in the prompt itself, which keeps one instruction channel instead of two and lets any tier render a draft.",
     "Keep the shot description under about 130 words. Stating exclusions in the prompt rather than a negative prompt costs roughly 40 words, so a resolved prompt lands near 300 against the 616-word original.",
     "Typography is composited in post. This is now an evidence-based rule, not a preference: rendered text is 0 for 3 on this project at a cost of $7.20, while non-text shots are 2 for 2 at $0.40.",
-    "If a shot must carry rendered text, keep the type sharp and blur only the background. Blur on letterforms is what produced ENGDISH.",
     "Put a word that must survive at the start or the end of the clip. Both failures hit the mid-clip beat.",
     "Never block on a generation call. Start it, record the operation name, then poll."
   ],
@@ -87,8 +87,9 @@
         "review": "veo-3.1-fast-generate-preview",
         "final": "veo-3.1-generate-preview"
       },
-      "status": "experimental",
-      "record": "0 usable outputs from 3 attempts, $7.20 spent. Not approved for client deliverables."
+      "record": "0 usable outputs from 3 attempts, $7.20 spent. Not approved for client deliverables.",
+      "retired": true,
+      "retiredReason": "Retired 2026-08-28. Typography is composited in post. Kept for the record: 0 usable outputs from 3 attempts at $7.20, failing once by omission and once as ENGDISH."
     }
   },
   "evidence": {
@@ -170,5 +171,16 @@
     "personGeneration 'dont_allow' is not supported and returns HTTP 400. Exclude people in the prompt instead.",
     "An MCP tool call times out at 60s while an 8s render takes 61 to 91s. Always start the operation and poll; never block on a single call.",
     "A timed-out call still bills. Record the operation name before waiting, then recover it rather than re-rendering."
-  ]
+  ],
+  "textPolicy": {
+    "renderedByVeo": false,
+    "decidedOn": "2026-08-28",
+    "rule": "Veo never renders words. All typography, in Hebrew script or Latin, is composited in the editor along with the logo.",
+    "rationale": [
+      "Rendered text is 0 usable from 3 attempts at $7.20; non-text shots are 2 from 2 at $0.40.",
+      "Veo has no font renderer, so a correctly spelled take is a lucky draw rather than a solved problem. Every render would need its spelling re-checked forever.",
+      "A post pass already happens on every finished spot to add the logo, so the words cost nothing extra there.",
+      "One language-neutral master serves both the Hebrew and Latin cuts instead of rolling separately for each."
+    ]
+  }
 }

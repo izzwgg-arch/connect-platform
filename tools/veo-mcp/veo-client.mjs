@@ -82,8 +82,13 @@ export function applyProfile(args = {}) {
   if (args.variant) {
     const variant = base.variants?.[args.variant];
     if (!variant) {
-      const known = Object.keys(base.variants || {}).join(', ') || 'none';
-      throw new Error(`Profile "${base.name}" has no variant "${args.variant}". Known variants: ${known}.`);
+      const known = Object.keys(base.variants || {})
+        .filter((k) => !base.variants[k].retired)
+        .join(', ') || 'none';
+      throw new Error(`Profile "${base.name}" has no variant "${args.variant}". Available: ${known}.`);
+    }
+    if (variant.retired) {
+      throw new Error(`Variant "${args.variant}" is retired and cannot be used. ${variant.retiredReason || ''}`.trim());
     }
     Object.assign(base, variant);
   }

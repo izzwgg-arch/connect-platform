@@ -54,14 +54,20 @@ It defaults to `draft`, so the expensive tier is opt-in rather than accidental.
 { "profile": "loopcom", "stage": "draft", "prompt": "A voicemail waveform dissolving into particles." }
 ```
 
-Profiles live in `profiles/*.json`. `tools/veo-mcp/profiles/loopcom.json` is the
-worked example: telecom motion graphics, no people, no rendered text, brand
-palette locked.
+Profiles live in `profiles/*.json`. `profiles/loopcom.json` is the LOOPCOM Veo 3
+Video Profile: telecom motion graphics, no people, no rendered text, brand
+palette locked. It also carries an `evidence` block recording every render made
+against it, so its rules can be traced to what actually happened rather than to
+taste.
 
-Note the inversion in that profile. Suppressing text in the negative prompt is
-what dropped a word from an earlier LOOPCOM render. Once typography moves to
-post, that same suppression becomes the desired behavior, and the style block
-asks for clean space where the words will go.
+A variant can be retired. `with-text` is, and requesting it now fails with the
+reason attached, which keeps the lesson without leaving the trap open.
+
+Veo renders no words under this profile. Typography is composited in the editor
+alongside the logo, and shot files carry a `postTypography` block naming the
+words, their positions and their timing, so the render brief and the edit brief
+stay in one place. Exclusions are stated in the prompt rather than a negative
+prompt, which keeps one instruction channel and lets any tier render a draft.
 
 ## Not wasting money
 
