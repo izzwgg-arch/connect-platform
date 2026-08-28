@@ -5648,8 +5648,26 @@ on loopcom, backed up.)
   connectcomunications.com Workspace, **Play Console reads "ON for everyone"**
   org-wide, and 2-step verification is on. ⛔ Admin console URLs need the
   `/u/3/` account index or Chrome falls back to a personal account.
-- ⏳⏳ **THE WHOLE THING NOW WAITS ON ONE D-U-N-S NUMBER — submitted
-  2026-08-21, case `DFC-656595`, "(Company pending)".** ⛔ **One D-U-N-S serves
+- ✅✅ **THE D-U-N-S ARRIVED 2026-08-28: `149921594`** (D&B case **10876236**,
+  tracking **10815203**, resolution *"D-U-N-S Number created — verified through a
+  company spokesperson plus outside sources"*). **So the Play Console
+  ORGANIZATION account and the Apple personal→organization request are both
+  unblocked**, and the two older cases (`DFC-656595` 08-21, `DFC-614186` 07-08)
+  are superseded — ⛔ leave them alone; two open applications for one entity is
+  itself a manual-review trigger.
+  ⛔⛔ **ONE DEFECT ON THE RECORD, AND IT IS THE KIND THAT STALLS A
+  VERIFICATION: D&B recorded the legal form as `Corporation`.** NY DOS 8001109
+  says **DOMESTIC LIMITED LIABILITY COMPANY**, and Apple/Google/Meta all match
+  the D&B record against official filings character-for-character. **Ask D&B to
+  correct it while the record is fresh** — ⏳ not requested yet.
+  ⛔ **It is NOT queryable immediately** — D&B says the data appears in **24–48
+  hours**; pasting it into a store form the same evening returns nothing and
+  reads like a bad number. ✅ Everything else matches the state record: name
+  `Loopcom LLC`, address `33 NY-17M Ste C, Harriman NY 10926` (byte-identical to
+  the DOS service-of-process address), start year 2026, principal Israel
+  Weinstock, phone 845-723-1213.
+- ⛔ **(HISTORY, kept for the reasoning) The whole thing used to wait on that
+  number.** ⛔ **One D-U-N-S serves
   BOTH stores** (it is a universal business identifier) — Izzy also wants the
   **Apple account converted personal → organization**, which is **NOT
   self-service**: it is a request at
