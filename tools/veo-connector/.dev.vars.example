@@ -1,0 +1,4 @@
+# Local `wrangler dev` values. Copy to .dev.vars (gitignored) to test locally.
+GEMINI_API_KEY=
+AUTH_PASSPHRASE=local-test
+SIGNING_SECRET=local-signing-secret-change-me

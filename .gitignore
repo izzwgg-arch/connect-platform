@@ -53,3 +53,10 @@ tmp-link-repair-*.sql
 _tmp_diag/
 _tmp_*/
 !/tools/**/.env.example
+
+# wrangler local secrets (never commit)
+.dev.vars
+**/.dev.vars
+!/tools/**/.dev.vars.example
+.wrangler/
+**/.wrangler/

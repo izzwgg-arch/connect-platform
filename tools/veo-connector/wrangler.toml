@@ -1,0 +1,8 @@
+name = "veo-connector"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Secrets are set with `wrangler secret put`, never committed:
+#   GEMINI_API_KEY   - Google AI Studio key with Veo access
+#   AUTH_PASSPHRASE  - what you type on the connector's login page
+#   SIGNING_SECRET   - long random string; signs tokens and video URLs
