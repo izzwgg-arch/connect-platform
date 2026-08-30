@@ -315,6 +315,24 @@ test("advance: a registry REJECTION fails the row loudly; a transient error reco
   }
 });
 
+test("advance: texting toggled OFF on the submission → the chain stops before the campaign (no carrier fees for an opt-out)", async () => {
+  const { db, state } = makeDb();
+  process.env.SIGNALWIRE_AUTO_PROVISION = "on";
+  try {
+    state.reg = { id: "reg-1", submissionId: "sub-1", tenantId: "ten-1", classification: "conversational", legalName: "X LLC", brandId: "brand-1", campaignId: null, status: "brand_filed", phoneE164: null };
+    state.submission = { id: "sub-1", answers: { addons: { smsEnabled: false } } };
+    clientState.brandState = "approved";
+    clientCalls.length = 0;
+    await advanceSmsRegistration(db, "reg-1");
+    assert.equal(state.reg.status, "brand_filed", "never advanced");
+    assert.equal(state.reg.error, "sms_disabled_on_submission");
+    assert.ok(!clientCalls.some((c) => c.fn === "createCampaign"), "no campaign filed for an opt-out");
+  } finally {
+    clientState.brandState = "pending";
+    delete process.env.SIGNALWIRE_AUTO_PROVISION;
+  }
+});
+
 test("advance: campaign approved but number NOT purchased yet → waits (the sweep retries after payment)", async () => {
   process.env.SIGNALWIRE_AUTO_PROVISION = "on";
   try {

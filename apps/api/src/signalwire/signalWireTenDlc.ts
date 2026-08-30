@@ -209,6 +209,25 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
   const reg = await db.tenantSmsRegistration.findUnique({ where: { id: registrationId } });
   if (!reg || TERMINAL.has(reg.status) || reg.status === "awaiting_manual_filing" || reg.status === "collected") return;
   if (!signalWireAutoProvisionEnabled()) return;
+  // The customer can toggle texting OFF after filing the step (go back on the
+  // wizard, untick, submit). The brand is already filed (harmless — identity
+  // only), but the CAMPAIGN carries recurring carrier fees, so the chain must
+  // not advance past it for someone who opted out. The wizard's final answer
+  // is the authority; an unreadable submission does NOT block (fail toward
+  // advancing — a read hiccup must not strand a paying customer's texting).
+  if (reg.submissionId) {
+    const sub = await db.onboardingSubmission
+      .findUnique({ where: { id: reg.submissionId }, select: { answers: true } })
+      .catch(() => null);
+    const smsEnabled = (sub?.answers as any)?.addons?.smsEnabled;
+    if (smsEnabled === false) {
+      await db.tenantSmsRegistration.update({
+        where: { id: reg.id },
+        data: { error: "sms_disabled_on_submission" },
+      }).catch(() => {});
+      return;
+    }
+  }
   const creds = await resolveSignalWireCredentials(db).catch(() => null);
   if (!creds) return;
 
