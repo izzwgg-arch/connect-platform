@@ -819,3 +819,105 @@ first harvest used the per-CATEGORY list endpoint (the flat products list
 that walks categories with the out-of-stock filter cleared is the highest-value
 next pass, and every photo it returns is the store's own product image.
 ⏳ Not done; it needs a browser session against their webstore.
+
+## §15 — the search finds the WHOLE catalog, and negative stock stops steering picks (2026-08-30, `e5b2711f`)
+
+Izzy, 2026-08-30, three complaints in one message: the desk's search dropdown
+for "bread" showed "sourdough … not actual bread", "rye bread" didn't come up
+at all, and the agent added ORGANIC eggs when plain "eggs" should mean the
+cheapest regular dozen — "he's got to use common sense."
+
+### The measured causes (all reproduced live on the Gesheft catalog before any edit)
+
+1. ⛔⛔ **THE RECALL BUG: per-tier `take: 12` (desk) / `take: 8` (brain),
+   ordered by NAME, with collection stopping at the display limit.** "bread"
+   matches **175** catalog rows; the first twelve alphabetically are bread
+   BAGS and bread CRUMBS, so the dropdown was ranked from a pool that never
+   contained a single loaf — "Rye Bread" (Korn's, $4.79, onHand 11) never
+   left the database. The brain was worse: an "eggs" line's whole candidate
+   pool was egg KICHEL and egg SALAD (alphabetically before "Eggs Large"),
+   so no prompt rule could have made the model pick right — the right answer
+   was never in front of it. **Ranking cannot rescue a truncated pool.**
+2. ⛔⛔ **THE STOCK BUG: `onHand <= 0` read register DRIFT as an empty
+   shelf.** 926 active items sit at an impossible NEGATIVE count. "Eggs
+   Large" at **-75** presented as out of stock, and the seeded house rule
+   says "cheapest IN STOCK" — which is exactly how the brain landed on the
+   organic dozen. This was §14's recorded open product question; **Izzy's
+   2026-08-30 instruction answers it** (pick the cheapest, organic only when
+   they say organic).
+3. **The substring pollution**: "egg" is a substring of "V-egg-ie" — the live
+   "eggs" dropdown really contained Veggie Chips and zero egg cartons.
+
+### What shipped (`e5b2711f`, api + portal)
+
+- ⛔ **ONE pool collector, `searchCatalogPool` in `catalogSearch.ts`** (240-row
+  pool → `rankCatalogRows` → cut to 12 desk / 8 brain), used by BOTH the desk
+  route and `searchCandidates` — the two hand-rolled copies of the tier loop
+  are gone. Never reintroduce a per-tier `take: <display limit>`.
+- ⛔ **`isKnownOutOfStock(row)` = `onHand === 0`, THE one stock rule.** Zero
+  is a real empty shelf; negative and null are UNKNOWN — shown normally,
+  never labelled "not in stock", never demoted in ranking, never reported to
+  the model as `inStock:false`. Applied at every site: `inStockFirst`,
+  `rankCatalogRows`, the draft-GET `outOfStock` decoration, the brain's
+  candidate flag, and the three portal pill sites (now `onHand === 0`).
+  A source guard forbids `onHand <= 0` returning anywhere in orderBrain /
+  supermarketRoutes / the two portal screens.
+- **Scoring got three new signals** (`scoreCatalogRow`): the word ITSELF
+  (stem-for-stem, +15) beats a word PREFIX (`\bread` in "Breaded", +9) beats
+  a bare substring (+2); a HEAD-NOUN hit (the token is the name's LAST word —
+  "Rye Bread" IS bread, +6) outweighs the starts-with bonus (dropped 8 → 4 —
+  "Bread Bags" starts with bread but is bags); and among equal relevance the
+  **CHEAPEST row wins** (unitPriceCents tie-break, before insertion order).
+- ⛔ **Taught phrases PIN the desk dropdown** — the search route looks up
+  active `SupermarketPhraseLesson` rows whose normalized phrase EXACTLY
+  equals the normalized query and pins those products to the top (max 3,
+  best-effort, never able to break the search). **Exact equality is
+  load-bearing**: a "bread" lesson must not hijack a "bread crumbs" search.
+- ⛔⛔ **Single-stem lessons now fire only on single-stem LINES**
+  (`matchLessonsToLines`: `ls.length === 1` ⇒ the line must be exactly that
+  one stem). This is what makes teaching a bare word SAFE at all — under the
+  old subset rule a "bread" lesson would have injected the rye loaf as a
+  *strongly-preferred* learned candidate into every "bread crumbs" and
+  "breadsticks" line, the precise pollution that kept the bare "milk" lesson
+  from being seeded on 2026-08-27. A qualified request ("whole wheat bread")
+  deliberately does NOT take the bare-word lesson.
+- **RESOLVE_SYSTEM grew the common-sense rules**, stated in words the model
+  can't misread: the words name the TYPE ("bread" = a loaf, never crumbs /
+  bags / breaded chicken; "eggs" = a carton, never kichel or salad; "milk" =
+  drinking milk, never milk chocolate); no brand/variety/grade named ⇒ the
+  PLAIN REGULAR version, cheapest in-stock among comparables, **never a
+  premium variant (organic, sugar-free, spelt, gluten-free) unless asked**.
+
+### Proof
+
+- **Simulated the deployed algorithm before AND after against the live
+  catalog** (read-only, in `app-api-1`): before — "bread" = 12 bags/crumbs,
+  "eggs" = veggie chips + eggplant + zero egg cartons, "milk" = almond milks
+  and toffee. After — "rye bread" = all 6 rye breads on top; "bread" = Rye
+  Bread (Korn's, in stock) first, all twelve are actual loaves; "eggs" =
+  Eggland "Eggs L" $4.99 first (the exact price Izzy quoted), organic
+  nowhere in the dozen; "milk" = plain Golden Flow milk first; "chocolate
+  milk" = six real chocolate milks cheapest-first.
+- 162/162 supermarket api tests + 9/9 portal guards; **all 9 new source
+  guards fail replayed against HEAD** (the desk-pins-lessons guard was
+  caught VACUOUS on the first replay — its window overran into the
+  phrase-teaching route — and was tightened to end at the next route).
+  api typecheck 76 = the exact baseline, 0 in supermarket files; portal 0.
+- Updated pinned tests honestly: the two `onHand: -1/-5` stock fixtures now
+  use a true `0` (the old assertions were pinning the drift bug).
+
+### Seeded live (after deploy — see §15b below)
+
+House rules + exact-phrase lessons carrying Izzy's dictated conventions:
+plain "bread" = a loaf of rye bread; plain "milk" = red (whole) milk;
+plain "eggs" = regular large eggs, cheapest in stock, never organic
+unless asked.
+
+### ⏳ NOT PROVEN
+
+Nobody has typed into the deployed dropdown, and no draft has been re-run
+through the new candidate pools. Acceptance: on the desk, search "bread"
+(loaves, rye first), "rye bread" (rye breads), "eggs" (egg cartons, cheap
+first, no organic on top); then re-run the agent on a draft asking for
+eggs — the pick must be the cheapest regular dozen with no "?" caused by
+phantom out-of-stock.
