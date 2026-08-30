@@ -36,6 +36,7 @@ import { canonicalApiBase } from "./publicOrigins";
 import { userCanAccessCrmContact } from "./crm/crmContactAccess";
 import { isAdminRole, loadCrmUserAccessRole } from "./crm/guard";
 import { crmInboundSmsHook } from "./crm/inboundSmsHook";
+import { registerInboundSmsIngest, type InboundSmsIngestInput, type InboundSmsIngestOutcome } from "./smsInboundIngest";
 import {
   assertStorageKeyForThread,
   isAllowedChatMime,
@@ -2318,45 +2319,31 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     return { ...q, ...b };
   }
 
-  async function handleVoipMsInbound(req: any, reply: any) {
-    const cfg = await getOrCreateGlobalVoipConfig();
-    // ⛔ FAIL CLOSED. This gate used to read `!cfg.webhookSecretEncrypted`, i.e.
-    // "no secret stored ⇒ authorized", and the 401 below was itself gated on the
-    // secret existing — so with no secret configured (which is the production
-    // state) this public endpoint accepted anything and let anyone who knew a
-    // customer's DID inject messages into their inbox. Real inbound SMS arrives
-    // via the worker's poll, not here. See apps/api/src/voipMsWebhookAuth.ts and
-    // docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md §2.
-    let webhookSecret: string | null = null;
-    if (cfg.webhookSecretEncrypted) {
-      try {
-        webhookSecret = decryptJson<{ secret: string }>(cfg.webhookSecretEncrypted).secret;
-      } catch {
-        webhookSecret = null;
-      }
-    }
-    const authPayload = mergeVoipMsPayload(req);
-    if (
-      !isVoipMsWebhookAuthorized({
-        secret: webhookSecret,
-        headerSignature: String(req.headers["x-voipms-signature"] || ""),
-        tokenParam: String(authPayload.token ?? ""),
-        signatureParam: String(authPayload.signature ?? ""),
-      })
-    ) {
-      app.log.warn(
-        { endpoint: "/webhooks/voipms/sms", secretConfigured: Boolean(webhookSecret) },
-        "voipms inbound webhook refused — set the webhook secret via PUT /admin/apps/voip-ms/credentials to enable it",
-      );
-      return reply.status(401).type("text/plain").send("unauthorized");
-    }
+  // ── ONE inbound-SMS ingest, shared by every carrier door ────────────────
+  // The VoIP.ms webhook below and the SignalWire webhook (signalWireRoutes.ts,
+  // via the smsInboundIngest registry) both land here AFTER their own
+  // authentication. ⛔ Never fork a second copy of this tail — the sender
+  // canonicalisation, thread dedupe, participants, MMS mirror, routing log,
+  // pushes and CRM hook must stay ONE implementation (the two-IVR-publish-paths
+  // lesson). `providerMessageId` arrives fully prefixed ("voipms:123",
+  // "signalwire:SM…").
+  async function ingestInboundSmsToChat(input: InboundSmsIngestInput): Promise<InboundSmsIngestOutcome> {
+    const { rawFrom, rawTo, message, providerMessageId, mmsUrls } = input;
+    const payload = input.payload as any;
+    const log: any = input.log ?? app.log;
 
-    const payload = mergeVoipMsPayload(req);
-    const rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
-    const rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
-    const message = String(payload.message ?? payload.body ?? payload.msg ?? "");
-    const providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
-    const mmsUrls = extractInboundMmsUrls(payload);
+    // Carrier webhooks RETRY on non-2xx responses and timeouts, so one inbound
+    // message can be delivered twice. The provider message id is unique per
+    // carrier and stored fully prefixed, so a redelivery is acknowledged and
+    // dropped — never a second bubble and a second push. (The VoIP.ms poll in
+    // the worker dedupes on the same column with the same prefix.)
+    if (providerMessageId) {
+      const dup = await db.connectChatMessage.findFirst({
+        where: { smsProviderMessageId: providerMessageId, direction: "INBOUND" },
+        select: { id: true },
+      });
+      if (dup) return "duplicate";
+    }
 
     // Sender may be a short code or an alphanumeric sender ID, never assume a
     // phone number; destination must be one of our DIDs, so it stays strict.
@@ -2375,7 +2362,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           payload: payload as object,
         },
       });
-      return reply.type("text/plain").send("ok");
+      return "invalid_to";
     }
 
     const num = await db.tenantSmsNumber.findUnique({
@@ -2398,7 +2385,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           payload: payload as object,
         },
       });
-      return reply.type("text/plain").send("ok");
+      return "unassigned";
     }
 
     const extE164 = nf.ok ? nf.sender : rawFrom;
@@ -2442,7 +2429,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         type: mmsUrls.length ? "IMAGE" : "TEXT",
         body: message,
         deliveryStatus: "delivered",
-        smsProviderMessageId: providerMessageId ? `voipms:${providerMessageId}` : null,
+        smsProviderMessageId: providerMessageId,
         metadata: mmsUrls.length ? { mms: { urls: mmsUrls } } : undefined,
       },
     });
@@ -2451,7 +2438,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       threadId: thread.id,
       messageId: msg.id,
       urls: mmsUrls,
-      log: req.log,
+      log,
     });
     await db.connectChatThread.update({
       where: { id: thread.id },
@@ -2478,7 +2465,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         select: { userId: true },
       });
       const tenantId = num.tenantId;
-      if (!tenantId) return reply.type("text/plain").send("ok");
+      if (!tenantId) return "routed";
       await Promise.all(recipients.map(async (recipient) =>
         recipient.userId &&
         // Ledger claim — exactly-once across fast paths + the reconciler.
@@ -2516,6 +2503,59 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       messageId: msg.id,
       smsProviderMessageId: msg.smsProviderMessageId ?? null,
     }).catch(() => {});
+    return "routed";
+  }
+  registerInboundSmsIngest(ingestInboundSmsToChat);
+
+  async function handleVoipMsInbound(req: any, reply: any) {
+    const cfg = await getOrCreateGlobalVoipConfig();
+    // ⛔ FAIL CLOSED. This gate used to read `!cfg.webhookSecretEncrypted`, i.e.
+    // "no secret stored ⇒ authorized", and the 401 below was itself gated on the
+    // secret existing — so with no secret configured (which is the production
+    // state) this public endpoint accepted anything and let anyone who knew a
+    // customer's DID inject messages into their inbox. Real inbound SMS arrives
+    // via the worker's poll, not here. See apps/api/src/voipMsWebhookAuth.ts and
+    // docs/ai-context/AGENT_HANDOFF_TENANT_ISOLATION_AUDIT_2026-08-17.md §2.
+    let webhookSecret: string | null = null;
+    if (cfg.webhookSecretEncrypted) {
+      try {
+        webhookSecret = decryptJson<{ secret: string }>(cfg.webhookSecretEncrypted).secret;
+      } catch {
+        webhookSecret = null;
+      }
+    }
+    const authPayload = mergeVoipMsPayload(req);
+    if (
+      !isVoipMsWebhookAuthorized({
+        secret: webhookSecret,
+        headerSignature: String(req.headers["x-voipms-signature"] || ""),
+        tokenParam: String(authPayload.token ?? ""),
+        signatureParam: String(authPayload.signature ?? ""),
+      })
+    ) {
+      app.log.warn(
+        { endpoint: "/webhooks/voipms/sms", secretConfigured: Boolean(webhookSecret) },
+        "voipms inbound webhook refused — set the webhook secret via PUT /admin/apps/voip-ms/credentials to enable it",
+      );
+      return reply.status(401).type("text/plain").send("unauthorized");
+    }
+
+    const payload = mergeVoipMsPayload(req);
+    const rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
+    const rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
+    const message = String(payload.message ?? payload.body ?? payload.msg ?? "");
+    const providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
+    const mmsUrls = extractInboundMmsUrls(payload);
+
+    await ingestInboundSmsToChat({
+      rawFrom,
+      rawTo,
+      message,
+      providerMessageId: providerMessageId ? `voipms:${providerMessageId}` : null,
+      mmsUrls,
+      payload,
+      log: req.log,
+    });
     return reply.type("text/plain").send("ok");
   }
 

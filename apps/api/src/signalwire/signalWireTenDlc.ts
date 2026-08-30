@@ -268,6 +268,33 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
     // Number assigned → ACTIVE: enforce the class cap and tell the customer.
     const fin = await db.tenantSmsRegistration.findUnique({ where: { id: registrationId } });
     if (fin?.status === "number_assigned") {
+      // Wire the number into the CHAT system before declaring it active: the
+      // TenantSmsNumber row is what routes an inbound SignalWire webhook to a
+      // thread AND what tells the worker to dispatch outbound through
+      // SignalWire (`provider: "SIGNALWIRE"`). VoIP.ms numbers get this row
+      // from the inventory sync; SignalWire has no sync, so activation creates
+      // it — without it every inbound text dies "unassigned". Deliberately NOT
+      // caught: a failed upsert leaves the row at number_assigned and the
+      // sweep retries the whole step.
+      if (fin.tenantId && fin.phoneE164) {
+        await db.tenantSmsNumber.upsert({
+          where: { phoneE164: fin.phoneE164 },
+          create: {
+            tenantId: fin.tenantId,
+            provider: "SIGNALWIRE",
+            phoneE164: fin.phoneE164,
+            phoneRaw: fin.phoneE164,
+            smsCapable: true,
+            mmsCapable: true,
+            isTenantDefault: true,
+            active: true,
+            lastSyncedAt: new Date(),
+          },
+          // An existing row keeps its assignment and default flag — only the
+          // ownership, provider and capabilities are corrected.
+          update: { tenantId: fin.tenantId, provider: "SIGNALWIRE", smsCapable: true, mmsCapable: true, active: true, lastSyncedAt: new Date() },
+        });
+      }
       await db.tenantSmsRegistration.update({ where: { id: fin.id }, data: { status: "active", activatedAt: new Date() } });
       const cap = DAILY_CAP_BY_CLASSIFICATION[(fin.classification as SmsClassification)] ?? DAILY_CAP_BY_CLASSIFICATION.conversational;
       if (fin.tenantId) {

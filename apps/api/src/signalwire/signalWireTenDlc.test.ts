@@ -82,8 +82,19 @@ function makeDb() {
     tenantUpdates: [] as any[],
     emailJobs: [] as any[],
     events: [] as string[],
+    smsNumberUpserts: [] as any[],
   };
   const db = {
+    tenantSmsNumber: {
+      // Activation wires the number into chat (provider: "SIGNALWIRE") before
+      // marking the row active — a fake missing this accessor exercises a
+      // shape production never produces (the turn-health class): the upsert
+      // throws into the retry catch and the row never activates.
+      upsert: async (args: any) => {
+        state.smsNumberUpserts.push(args);
+        return args.create;
+      },
+    },
     tenantSmsRegistration: {
       findUnique: async () => state.reg,
       findMany: async () => (state.reg ? [state.reg] : []),
@@ -264,6 +275,15 @@ test("advance: brand approved → campaign filed; campaign approved → number o
     assert.equal(state.tenantUpdates[0]?.data?.dailySmsCap, 2000);
     assert.equal(state.emailJobs[0]?.type, SMS_REGISTRATION_ACTIVE_EMAIL_TYPE);
     assert.notEqual(state.emailJobs[0]?.type, "ADMIN_ALERT");
+    // Activation wires the number into the CHAT system: the TenantSmsNumber
+    // row is what routes inbound webhooks and flips outbound to SignalWire.
+    const up = state.smsNumberUpserts[0];
+    assert.equal(up?.where?.phoneE164, "+18452195667");
+    assert.equal(up?.create?.provider, "SIGNALWIRE");
+    assert.equal(up?.create?.tenantId, "ten-1");
+    assert.equal(up?.create?.mmsCapable, true);
+    // An existing row must keep its assignment + default flag.
+    assert.ok(!("isTenantDefault" in (up?.update ?? {})), "update never stomps isTenantDefault");
   } finally {
     clientState.brandState = "pending";
     clientState.campaignState = "pending";

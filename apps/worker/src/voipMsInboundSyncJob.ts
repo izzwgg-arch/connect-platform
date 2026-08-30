@@ -694,7 +694,12 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
       return;
     }
     const numbers = await (db as any).tenantSmsNumber.findMany({
-      where: { tenantId: { not: null }, active: true, smsCapable: true },
+      // ⛔ `provider: "VOIPMS"` is load-bearing: this job polls VoIP.ms getSMS,
+      // so a SIGNALWIRE number here would burn a carrier query per cycle that
+      // can only ever answer no_sms (SignalWire inbound arrives by WEBHOOK —
+      // /webhooks/signalwire/sms — not by poll). The column is NOT NULL with
+      // default VOIPMS, so every pre-SignalWire row still matches.
+      where: { tenantId: { not: null }, active: true, smsCapable: true, provider: "VOIPMS" },
       select: {
         tenantId: true,
         phoneE164: true,

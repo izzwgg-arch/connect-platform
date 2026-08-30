@@ -61,6 +61,7 @@ import {
   updateNumberHandlers,
 } from "./signalWireClient";
 import { candidatePublicUrls, explainRefusal, isSignalWireWebhookAuthorized } from "./signalWireWebhookAuth";
+import { getInboundSmsIngest } from "../smsInboundIngest";
 
 export interface SignalWireRouteDeps {
   app: any;
@@ -636,9 +637,35 @@ export function registerSignalWireRoutes(deps: SignalWireRouteDeps): void {
     const numMedia = Number(p.NumMedia ?? 0) || 0;
     const media: string[] = [];
     for (let i = 0; i < numMedia; i += 1) if (p[`MediaUrl${i}`]) media.push(p[`MediaUrl${i}`]);
+    // Route the verified message into the chat system through the ONE shared
+    // ingest the VoIP.ms door uses (registered by registerConnectChatRoutes —
+    // sender canonicalisation, TenantSmsNumber lookup, thread dedupe, pushes,
+    // CRM hook all live there; see apps/api/src/smsInboundIngest.ts). This runs
+    // only AFTER webhookGate verified the SignalWire signature, and it must
+    // never fail the webhook: a thrown ingest is recorded and the carrier still
+    // gets its 200, because a 5xx makes SignalWire redeliver — and the ingest's
+    // own providerMessageId dedupe is what makes any redelivery harmless.
+    let ingestOutcome: string = "no_ingest_registered";
+    const ingest = getInboundSmsIngest();
+    if (ingest && (p.From || p.To)) {
+      try {
+        ingestOutcome = await ingest({
+          rawFrom: String(p.From ?? ""),
+          rawTo: String(p.To ?? ""),
+          message: String(p.Body ?? ""),
+          providerMessageId: p.MessageSid ? `signalwire:${p.MessageSid}` : null,
+          mmsUrls: media,
+          payload: p,
+          log: req.log,
+        });
+      } catch (err: any) {
+        ingestOutcome = "ingest_failed";
+        req.log?.warn?.({ err: String(err?.message || err).slice(0, 300), sid: p.MessageSid ?? null }, "signalwire inbound ingest failed");
+      }
+    }
     await recordSignalWireEvent(db, "inbound_sms", {
       from: p.From ?? null, to: p.To ?? null, body: String(p.Body ?? "").slice(0, 1600),
-      sid: p.MessageSid ?? null, numMedia, media,
+      sid: p.MessageSid ?? null, numMedia, media, chat: ingestOutcome,
     }, "system");
     // An empty cXML document = "received, do nothing" — no auto-reply.
     reply.header("content-type", "text/xml; charset=utf-8");
@@ -654,6 +681,22 @@ export function registerSignalWireRoutes(deps: SignalWireRouteDeps): void {
       sid: p.MessageSid ?? null, status: p.MessageStatus ?? null, from: p.From ?? null, to: p.To ?? null,
       errorCode: p.ErrorCode ?? null, segments: p.NumSegments ?? null,
     }, "system");
+    // Reflect the carrier's verdict onto the chat message. Only the FINAL
+    // states are written ("delivered" / a failure) — the worker already stamps
+    // "sent" on the 201, and a late out-of-order "sent" callback must never
+    // downgrade a "delivered". Best-effort: a status write can never fail the
+    // webhook (SignalWire would redeliver on a 5xx).
+    const statusSid = String(p.MessageSid ?? "");
+    const msgStatus = String(p.MessageStatus ?? "").toLowerCase();
+    if (statusSid && (msgStatus === "delivered" || msgStatus === "undelivered" || msgStatus === "failed")) {
+      const failed = msgStatus !== "delivered";
+      await db.connectChatMessage.updateMany({
+        where: { smsProviderMessageId: `signalwire:${statusSid}`, direction: "OUTBOUND" },
+        data: failed
+          ? { deliveryStatus: "failed", deliveryError: p.ErrorCode ? `SIGNALWIRE_${p.ErrorCode}` : "SIGNALWIRE_UNDELIVERED" }
+          : { deliveryStatus: "delivered", deliveryError: null },
+      }).catch(() => {});
+    }
     return reply.send({ ok: true });
   });
 

@@ -105,6 +105,25 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     return;
   }
 
+  const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: data.tenantId } });
+
+  // ⛔ PROVIDER DISPATCH — decided by the NUMBER's row, before any VoIP.ms
+  // concern (credentials included). A SignalWire number must never fail
+  // "VOIPMS_NOT_CONFIGURED", and its MMS capability is SignalWire's business,
+  // not the VoIP.ms `mmsCapable` sync flag. This is the "system sees it's a
+  // SignalWire number, so it uses this" switch (Izzy, 2026-08-29) — VoIP.ms
+  // numbers take the unchanged path below.
+  if (String((smsRow as any)?.provider || "") === "SIGNALWIRE") {
+    const { sendConnectChatMessageViaSignalWire } = await import("./signalWireChatSend");
+    await sendConnectChatMessageViaSignalWire({
+      msg: { id: msg.id, threadId: msg.threadId, body: msg.body, metadata: msg.metadata, attachments: msg.attachments as any },
+      tenantId: data.tenantId,
+      to: ext,
+      from: tenantDid,
+    });
+    return;
+  }
+
   const cfg = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
   const creds = await loadVoipMsCredsWorker();
   if (!creds) {
@@ -114,8 +133,6 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     });
     return;
   }
-
-  const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: data.tenantId } });
   const hasMedia = msg.attachments.length > 0;
   // API marks this when SMS should send signed media links instead of MMS.
   const metadata = msg.metadata && typeof msg.metadata === "object" && !Array.isArray(msg.metadata) ? msg.metadata as Record<string, any> : {};
