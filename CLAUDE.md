@@ -71,6 +71,65 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ AGENT HANDOFF — a SignalWire inbound call rang NOBODY: the one-shot ring push raced the tenant by 2ms and the api guessed the wrong company (2026-08-29) — READ FIRST for ANY "the app didn't ring" on a SignalWire-routed number, before touching MobilePushNotifier's one-shot, or before letting resolvePbxEventTarget run without tenant evidence
+
+(`ab33da33` on `feat/ivr-migration-takeover`. ✅ **api DEPLOYED and
+container-verified** (`.build-commit` = `ab33da33`, the refusal line grepped in
+the container); **telephony DEPLOYED via the queue** (job `2be2ce92`,
+container at `ab33da33`, the fix grepped in the running container's src, AMI
+reconnected, tenant map 29 entries, 0 restarts, 0 error lines, deployed at 0
+active calls). No migration, no PBX write, no env change.) Izzy, 2026-08-29: *"I just made a
+phone call to the Loopcom demo phone, and it ain't ringing... I tried three
+times."* Memory: [[signalwire-inbound-rang-nobody-tenant-race]].
+
+- ⛔⛔ **THE CHAIN, measured to the millisecond on linkedId `1788055211.42054`:**
+  he dialed the SignalWire number **(205) 351-3327**; the PBX side was PERFECT
+  (trk-132-in → T102 → wake-dial held 24s). But the SignalWire trunk leg has
+  **no DID in its exten** (request-URI user is `s`), so TenantResolver's DID
+  lookup finds nothing and the call reaches DialBegin with tenantId NULL —
+  and **DialBegin is the event that adds the extension AND fires
+  MobilePushNotifier's ONE-SHOT ring push**. Push fired at 22:00:12.366 with
+  `connectTenantId: null`; the wake Local channel's Newchannel resolved the
+  tenant at **.368 — 2 ms too late**. VoIP.ms inbound never hits this (the DID
+  resolves the tenant at the first trunk event), which is why the class was
+  invisible until someone called the SignalWire number expecting a mobile ring.
+- ⛔⛔ **THE API HALF WAS A CROSS-TENANT LEAK: `resolvePbxEventTarget` with no
+  tenant evidence took the FIRST LINKED tenant owning ext 101 platform-wide —
+  Trimpro** — so the CallInvite and the INCOMING_CALL push (carrying the
+  caller's number) went to ANOTHER COMPANY's user (who had 0 devices, so
+  nothing rang there either). The demo iPhone got only `INCOMING_CALL_WAKE`
+  (an Expo background push) — ⛔ **iOS renders NO ring UI for a wake push**;
+  CallKit needs the INCOMING_CALL VoIP push, which went to the wrong tenant.
+  The phone woke 31 s later, after the caller was gone.
+- ✅ **FIXES:** (1) `CallStateStore.onDialBegin` resolves the tenant from the
+  dialed leg's OWN T-code marker (`Local/T102_101_1@…`) via the existing
+  `tenantCodeToConnectIdResolver`, fill-only, BEFORE the callUpsert emit — so
+  the one-shot push carries the tenant on the very event that triggers it.
+  (2) `resolvePbxEventTarget` REFUSES (loud warn, TARGET_NOT_FOUND) when the
+  event carries neither `pbxTenantId` nor `pbxExtensionId` and the extension
+  number matches more than one tenant — a globally-unique extension still
+  resolves. ⛔ Refusing is strictly no worse: the wrong-tenant invite never
+  rang the right phone either.
+- ⛔ **THE GENERAL RULE THIS EARNS: a one-shot notifier keyed on "first event
+  where X appears" must verify the OTHER fields it sends are populated on that
+  same event** — the extension and the tenant arrived on different events 2 ms
+  apart, and the one-shot latched the wrong one.
+- ⛔ **Diagnosis recipe:** telephony `PIPE[1/6]` lines show tenant_RESOLVED vs
+  UNRESOLVED per channel; the api's `mobile-ring-notify: received` line shows
+  the `connectTenantId` that arrived; the CallInvite row's tenantId shows who
+  was actually rung. The CDR's `toNumber: "s"` is the SignalWire signature.
+- ✅ **Proven:** 3 new behavioral tests in `CallStateStore.tenantMarker.test.ts`
+  (the DialBegin test FAILS replayed against HEAD — proven by running HEAD's
+  file side-by-side) + source guard `ringNotifyTenantGuess.test.ts`;
+  typechecks at exact baselines (telephony 41, api 76, none in edited files);
+  wakeLegRedelivery + multiPartyBridgeStopRing suites 17/17.
+- ⏳ **NOT PROVEN: no call has exercised the fix.** Acceptance is one call to
+  **(205) 351-3327** with the demo iPhone asleep — it should show the CallKit
+  ring screen; the negative that matters: NO CallInvite row for tenant Trimpro,
+  and Trimpro's user must never again receive a demo-tenant push.
+- ⛔ **Interim fact stated to Izzy: the OLD demo number 347-978-0090 rings via
+  the VoIP.ms path and was never affected.**
+
 ## ⛔⛔ AGENT HANDOFF — the iPhone App Store submission: 4 of 5 blockers CLOSED, only SCREENSHOTS and two web-UI checks remain (2026-08-27) — READ FIRST before any App Store work, before "fixing" the reviewer demo account, before trusting a 200 from the ASC API, or before believing App Privacy can be checked by a script
 
 Full state: **`docs/ai-context/IOS_APP_STORE_READINESS.md`**
@@ -109,12 +168,13 @@ for the org migration), **submit build 57**, **move every URL to loopcom.net**.
   (`ITSAppUsesNonExemptEncryption`, `ios.privacyManifests` in `app.config.ts`).
   Confirmed on the artifact: build 57 carries `usesNonExemptEncryption: false`, so
   export compliance is auto-answered. Do not hunt for these in App Store Connect.
-- ⛔⛔ **BLOCKER — ZERO screenshots, and it is the only engineering one left.**
-  `appScreenshotSets` is empty and Apple hard-blocks the submit button. Needs a
-  **real iPhone** signed into the demo account (no Mac here, so no simulator
-  capture). ⛔ **Shoot them on the Loopcom Demo tenant ONLY** — a real customer's
-  call history or voicemail in a store screenshot is a data leak (same rule as the
-  Play Store handoff).
+- ✅ **SCREENSHOTS DONE 2026-08-29 — the engineering blocker is closed.** Izzy
+  shot six screens on a real iPhone on the Loopcom Demo tenant (verified clean —
+  demo people, 555 numbers); resized 1170×2532 → **1290×2796** and uploaded via
+  the ASC API (set APP_IPHONE_67 `cd530a7a…`, order Recents / Voicemail / Keypad
+  / Contacts / Team / Settings, all `COMPLETE`, read back fresh). Tooling:
+  `/root/.appstoreconnect/asc-upload-screenshots.mjs` + `shots/`. `asc-final.mjs`
+  now reports the real set count instead of a hardcoded blocker line.
 - ⛔⛔ **BLOCKER — THE APP PRIVACY QUESTIONNAIRE CANNOT BE CHECKED BY ANY SCRIPT.**
   `/v1/appDataUsages` and `/v1/appDataUsagesPublishState` both answer **404 "does
   not exist"** — App Privacy is not on the public API at all. **Its state is
@@ -134,9 +194,25 @@ for the org migration), **submit build 57**, **move every URL to loopcom.net**.
 - ⚠️ **Account deletion (Guideline 5.1.1(v))** applies to apps supporting account
   *creation*; Loopcom is invite-only with no in-app sign-up — the standard
   exemption, and the review notes now say so explicitly.
-- ⏳ **NOT SUBMITTED. Nothing has been sent to Apple.** Remaining: screenshots,
-  the App Privacy questionnaire, the agreement check, and the Submit press — which
-  is irreversible and Izzy's.
+- ⏳ **NOT SUBMITTED. Nothing has been sent to Apple for REVIEW.** Remaining:
+  the App Privacy questionnaire, the Free Apps agreement check (both web-UI
+  only), and the Submit press — which is irreversible and Izzy's. Screenshots
+  are DONE (see above).
+- ✅ **THE PERSONAL→ORGANIZATION MIGRATION REQUEST WAS SUBMITTED 2026-08-29**
+  (D-U-N-S **149921594** arrived 08-28) — Izzy filled + submitted the
+  "Individual to Organization Membership Update" form himself via the in-app
+  Browser pane: org **Loopcom LLC**, website loopcom.net, founder Yes, DBA No,
+  no org membership, Tax ID **None**, plus a note asking to migrate team
+  `PR63R6J84J` keeping app 6796392950 + TestFlight. ⛔ **It does NOT block
+  submitting the app for review** — the account converts in place; the seller
+  name flips Israel Weinstock → Loopcom LLC when it completes. ⚠️ Apple may say
+  the D-U-N-S can't be found for a day or two (D&B propagation) — that is not a
+  bad number. Full record: `docs/ai-context/IOS_APP_STORE_READINESS.md`.
+  ⛔ Browser traps hit filing it: the contact form demands its OWN idmsa
+  sign-in (a developer.apple.com session elsewhere does NOT carry over), and
+  its element refs GO STALE after any scroll — a stale-ref click landed on
+  founder="No" and collapsed the form; re-read refs after every scroll and
+  verify each radio by screenshot.
 
 ## ⛔⛔ AGENT HANDOFF — 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RACE permanently killed 3 voicemail emails and 5 mailboxes email NOBODY (2026-08-27) — READ FIRST before answering "did any voicemail/text fail", before reading `no_recording` as a real skip, or before proving the SMS reply half is alive
 

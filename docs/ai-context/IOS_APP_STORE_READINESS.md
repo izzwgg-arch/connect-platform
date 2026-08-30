@@ -64,15 +64,23 @@ rejection.
 
 ## ⛔ WHAT STILL BLOCKS THE SUBMIT BUTTON
 
-### 1. ZERO screenshots — the only engineering-side blocker left
-`appScreenshotSets` is **empty**. Apple hard-blocks submission without them.
-Needs a **real iPhone** signed into the demo account — there is no Mac here, so a
-simulator capture is not available.
-⛔ **Shoot them on the Loopcom Demo tenant ONLY.** A real customer's call history,
-voicemail or messages in a store screenshot is a data leak — the same rule the
-Play Store handoff records.
-Screens worth capturing: Recents (call history), an active call, Voicemail,
-Messages, Contacts/keypad.
+### 1. ~~ZERO screenshots~~ ✅ DONE 2026-08-29 — six screenshots UPLOADED and COMPLETE
+Izzy shot six screens on a real iPhone (1170×2532, iPhone 6.1") signed into the
+demo account on the **Loopcom Demo tenant** — all verified clean of customer data
+(demo people Alex Morgan / Maya Feldman, 555 numbers). Processed locally to
+Apple's **1290×2796** (scale-to-fill + center-crop, aspect delta ~0.15%) and
+uploaded through the ASC API from loopcom: set **APP_IPHONE_67**
+`cd530a7a-3698-4093-bbe4-9268e695900a` on the en-US version localization, order
+**Recents, Voicemail, Keypad, Contacts, Team, Settings**, every one polled to
+`assetDeliveryState COMPLETE`, and a fresh read of the checklist confirms 1 set.
+- Tooling: `/root/.appstoreconnect/asc-upload-screenshots.mjs` (reserve →
+  chunked PUT to `uploadOperations` → PATCH `uploaded:true` + md5 → poll);
+  source PNGs kept in `/root/.appstoreconnect/shots/`.
+- ⛔ `asc-final.mjs` used to hardcode the screenshots line as `[ ] <-- BLOCKER`;
+  fixed 2026-08-29 to report the real set count.
+- ⏳ No 6.5" set uploaded — ASC scales the 6.7" set down for smaller devices, so
+  one set suffices. An "active call" shot was skipped (needs a live call);
+  optional, can be added to the same set later.
 
 ### 2. App Privacy questionnaire — UNPROVABLE FROM HERE
 ⛔⛔ `/v1/appDataUsages` and `/v1/appDataUsagesPublishState` both answer
@@ -101,3 +109,38 @@ Irreversible and outward-facing. Izzy's.
   PATCH answered 200 and read back `null` on the immediate GET; a second read
   showed it had landed. **Read back twice, or on a fresh request, before
   believing a write failed.**
+
+---
+
+## ✅ 2026-08-29 — the personal→organization MIGRATION REQUEST IS SUBMITTED
+
+Izzy's D-U-N-S arrived (**149921594**, issued 2026-08-28) and the
+**Individual to Organization Membership Update** request was filed the next day
+at `developer.apple.com/contact/request/migrate-individual-account` — Izzy
+signed in (the developer identity displays as "max weiss" / iw5626644@gmail.com
+on team `israel weinstock - PR63R6J84J`) and pressed Submit himself; the form
+was filled through the in-app Browser pane:
+
+| Field | Value |
+|---|---|
+| Region | United States |
+| Organization Name | **Loopcom LLC** (exact NY DOS 8001109 form) |
+| Website | https://www.loopcom.net/ |
+| D-U-N-S | **149921594** |
+| Founder/co-founder | Yes |
+| Uses a DBA/trade name | **No** (no state DBA; "Loopcom" is just the brand) |
+| Org holds a membership | No (the individual one is what's being migrated) |
+| Tax ID on individual membership | **None** (free app, no paid-app tax forms) |
+| Note | NY DOS 8001109 · D-U-N-S issued 2026-08-28 may still be propagating · migrate team PR63R6J84J keeping app 6796392950 + TestFlight |
+
+- ⛔ **The migration does NOT block submitting the app for review** — it converts
+  the account in place; the app, listing, TestFlight and an in-flight review all
+  survive. Only cosmetic effect: seller shows "Israel Weinstock" until the
+  migration completes, then flips to Loopcom LLC.
+- ⚠️ Apple may reply that the D-U-N-S cannot be found — that is 24–48h D&B
+  propagation (issued 2026-08-28), not a bad number. Retry/answer, don't panic.
+- ⛔ Browser-driving traps hit: the contact form demands its OWN idmsa sign-in
+  (a developer.apple.com session from another tab does NOT carry into it), and
+  element refs on this form GO STALE after any scroll — a stale-ref click landed
+  on "No" for the founder question and collapsed the whole form. Re-read refs
+  after every scroll and verify each radio by screenshot before moving on.
