@@ -493,7 +493,7 @@ function ReplaceBox({
               <SmItemPhoto url={h.imageUrl} size={24} />
               <span className="sm-replnm">
                 {h.name}
-                {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                {h.onHand === 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                 {hitSubtitle(h) ? <span className="sm-sku" style={{ display: "block" }}>{hitSubtitle(h)}</span> : null}
               </span>
               <span className="sm-replpr">{money(h.unitPriceCents)}</span>
@@ -1575,7 +1575,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                         <span className="sm-sku" style={{ fontSize: ".74rem" }}>{h.code}</span>
                         <span style={{ minWidth: 0 }}>
                           {idx === hi ? <b>{h.name}</b> : <span>{h.name}</span>}
-                          {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                          {h.onHand === 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                           {h.brand || h.sizeText ? (
                             <span className="sm-sku" style={{ display: "block", fontSize: ".72rem" }}>
                               {[h.brand, h.sizeText].filter(Boolean).join(" · ")}

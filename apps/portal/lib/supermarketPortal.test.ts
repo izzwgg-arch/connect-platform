@@ -90,3 +90,11 @@ test("the twin page keeps its stay-until-done promise", () => {
   const twin = read("app/(platform)/orders/twin/TwinInner.tsx");
   assert.match(twin, /beforeunload/, "the twin must warn before closing while a draft is open — 'It should not disappear until they put in the order'");
 });
+
+test("⛔ the desk 'not in stock' pill fires on onHand === 0 ONLY — a NEGATIVE count is register drift, not an empty shelf (Izzy 2026-08-30)", () => {
+  for (const p of ["app/(platform)/orders/OrdersDesk.tsx", "app/(platform)/orders/TeachAgent.tsx"]) {
+    const src = read(p);
+    assert.ok(!/onHand\s*<=\s*0/.test(src), `${p} must not read a negative onHand as out of stock — that is how organic eggs beat the $3.99 dozen sitting at -75`);
+    assert.match(src, /onHand === 0 \? <span className="sm-stock-pill"/, `${p} must still label a true zero`);
+  }
+});

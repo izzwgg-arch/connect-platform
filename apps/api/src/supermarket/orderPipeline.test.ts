@@ -459,6 +459,26 @@ test("matchLessonsToLines: a stored garble matches the same garble next time", a
   assert.equal(m.has(1), false);
 });
 
+test("⛔ a SINGLE-stem lesson fires only on a bare single-stem line — 'bread' teaches 'bread', never 'bread crumbs'", async () => {
+  const { matchLessonsToLines, normalizePhrase } = await import("./phraseLessons");
+  const lessons = [{ phrase: normalizePhrase("bread"), posProductId: "rye1" }];
+  const m = matchLessonsToLines(lessons, ["bread", "bread crumbs", "breadsticks", "whole wheat bread", "2 breads"]);
+  assert.deepEqual(m.get(0), ["rye1"], "the bare word takes the lesson");
+  assert.equal(m.has(1), false, "'bread crumbs' must NOT get a strongly-preferred rye-loaf hint — the recorded milk-lesson pollution");
+  assert.equal(m.has(2), false, "'breadsticks' is a different stem entirely");
+  assert.equal(m.has(3), false, "a qualified request already says what it is");
+  assert.deepEqual(m.get(4), ["rye1"], "'2 breads' stems to the bare word — quantities don't defeat the lesson");
+});
+
+test("SOURCE GUARD: the RESOLVE prompt carries the type-literal + plain-cheapest common-sense rules (Izzy 2026-08-30)", async () => {
+  const fs = await import("node:fs");
+  const brain = fs.readFileSync("src/supermarket/orderBrain.ts", "utf8").replace(/\r\n/g, "\n");
+  assert.match(brain, /never bread crumbs, bread bags/, "'bread' must mean a loaf, stated to the model in so many words");
+  assert.match(brain, /PLAIN, REGULAR version/, "unqualified requests pick the regular product, never a premium variant");
+  assert.match(brain, /CHEAPEST one that is in stock/, "among comparable regular candidates the cheapest in-stock wins");
+  assert.match(brain, /"Organic eggs" selects organic; plain "eggs" never does/, "organic only when the customer says organic");
+});
+
 test("the brain returns the per-line checklist: in_cart, unsure and skipped-with-suggestions", async () => {
   const { runOrderBrain } = await import("./orderBrain");
   const db = fakeBrainDb();

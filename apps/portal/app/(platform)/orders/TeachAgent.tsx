@@ -367,7 +367,7 @@ function TeachRow({
                 <span className="sm-ta-nm">
                   <b>
                     {h.name}
-                    {h.onHand !== null && h.onHand !== undefined && h.onHand <= 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
+                    {h.onHand === 0 ? <span className="sm-stock-pill">{t("not in stock")}</span> : null}
                   </b>
                   <span>{hitSubtitle(h) || h.code}</span>
                 </span>

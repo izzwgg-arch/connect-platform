@@ -120,8 +120,19 @@ export async function harvestPhraseLessons(
 
 /**
  * Match stored lessons against the brain's extracted lines. A lesson matches
- * a line when they share ≥2 stems, or the lesson has ≤2 stems and ALL of
- * them appear in the line. Returns lineIdx → posProductIds (deduped).
+ * a line when they share ≥2 stems, or the lesson has exactly 2 stems and
+ * BOTH appear in the line.
+ *
+ * ⛔ A SINGLE-stem lesson matches only a single-stem LINE, exactly. This is
+ * what makes teaching a bare word safe at all ("bread" → the rye-bread
+ * loaf, Izzy 2026-08-30): under the old subset rule a "bread" lesson would
+ * have injected the loaf as a learned (strongly-preferred!) candidate into
+ * every "bread crumbs" and "breadsticks" line — the exact pollution that
+ * kept a bare "milk" lesson from being seeded on 2026-08-27. A qualified
+ * request ("whole wheat bread") deliberately does NOT take the bare-word
+ * lesson — its own words already say what it is.
+ *
+ * Returns lineIdx → posProductIds (deduped).
  */
 export function matchLessonsToLines(
   lessons: Array<{ phrase: string; posProductId: string }>,
@@ -134,7 +145,10 @@ export function matchLessonsToLines(
     if (ls.length === 0) continue;
     for (let i = 0; i < lineStems.length; i++) {
       const shared = overlap(ls, lineStems[i]);
-      const hit = shared >= 2 || (ls.length <= 2 && shared === ls.length);
+      const hit =
+        ls.length === 1
+          ? lineStems[i].length === 1 && shared === 1
+          : shared >= 2 || (ls.length === 2 && shared === ls.length);
       if (!hit) continue;
       const arr = out.get(i) ?? [];
       if (!arr.includes(lesson.posProductId)) arr.push(lesson.posProductId);

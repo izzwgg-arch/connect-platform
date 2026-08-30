@@ -30,7 +30,7 @@ import { posPhoneDigits } from "./posWithLogic";
 import { detectWic, WIC_COMMENT, type DraftItem } from "./draftMatcher";
 import { loadLessons, matchLessonsToLines } from "./phraseLessons";
 import { loadActiveRules, rulesPromptBlock } from "./agentRules";
-import { catalogCodePrefix, catalogSearchWheres } from "./catalogSearch";
+import { catalogCodePrefix, isKnownOutOfStock, rankCatalogRows, searchCatalogPool } from "./catalogSearch";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
 const BRAIN_TIMEOUT_MS = 90_000;
@@ -111,6 +111,7 @@ Customers identify their account by SPEAKING their phone number — always captu
 Rules: one line per distinct item; quantities default 1; keep item numbers/codes the customer spoke as the phrase; put "not brand X" / "only brand Y" / "the small one" style instructions into that line's constraints verbatim; do NOT invent items; at most ${MAX_BRAIN_LINES} lines.`;
 
 const RESOLVE_SYSTEM = `You fill a kosher-supermarket order from the store's own catalog. For each requested line you get the store's candidate products (id, name, brand, size, price). You may also get customerUsuals — products THIS customer ordered before. Pick the candidate that best honours the request AND its constraints — a "not brand X" constraint means you must pick a DIFFERENT brand. A brand the customer NAMES ("Gold's pads", "Ta'am Tov cream of lox") is a hard constraint: never pick another brand's product just because a generic word matches (pads, milk, cream). When a request is ambiguous ("cookie sheet" against several cookie-sheet products), prefer the one the customer usually buys, else the most LITERAL name match — "cookie sheet" is the plain cookie sheet, not "cookie sheet pan".
+The words name the TYPE of product — take them literally: "bread" means a loaf of bread, never bread crumbs, bread bags, breadsticks or breaded chicken; "eggs" means a carton of eggs, never egg kichel or egg salad; "milk" means drinking milk, never milk chocolate. When the customer names no brand, variety or grade, pick the PLAIN, REGULAR version — never a premium or specialty variant (organic, sugar-free, gluten-free, spelt, whole wheat) — and among comparable regular candidates prefer the CHEAPEST one that is in stock. "Organic eggs" selects organic; plain "eggs" never does.
 The request text comes from a speech transcription that GARBLES brand names phonetically ("Ostreicher's" arrives as "Schrieber's", "duck sauce" as "Doc's Sauce") — match brands by SOUND when a candidate's brand is phonetically close to what was asked. A candidate marked learned:true was chosen by a store rep for this same phrase on a past order — strongly prefer it.
 When the EXACT item isn't offered but a close variant is (a 5-pack when they asked for one, a different size, count or brand of the same TYPE of product), PICK the closest variant and set "unsure":true — the store rep will confirm it with the customer. A candidate marked inStock:false is out of stock — prefer an in-stock one; when only an out-of-stock candidate matches, still pick it with "unsure":true. REFUSING A LINE IS THE LAST RESORT: refuse only when nothing of that product type exists among the candidates at all — an empty line costs the store a sale, while an unsure pick just gets a question mark for the rep. Output STRICT JSON:
 {"picks":[{"line":<index>,"id":"<candidate id>","qty":<integer 1-99>,"unsure":<true ONLY for a close-variant pick>}],"refused":[{"line":<index>,"reason":"<one short sentence for the store rep, plain English>"}]}
@@ -139,22 +140,22 @@ export async function searchCandidates(db: any, tenantId: string, phrase: string
       take: CANDIDATES_PER_LINE,
     });
   }
-  const wheres = catalogSearchWheres(phrase);
-  if (wheres.length === 0) return [];
-  const seen = new Map<string, any>();
-  for (const nameWhere of wheres) {
-    if (seen.size >= CANDIDATES_PER_LINE) break;
-    const rows = await db.posCatalogItem.findMany({
-      where: { tenantId, isActive: true, ...nameWhere },
-      select: { posProductId: true, code: true, name: true, brand: true, sizeText: true, unitPriceCents: true, onHand: true },
-      take: CANDIDATES_PER_LINE,
-    });
-    for (const row of rows) {
-      if (!seen.has(row.posProductId)) seen.set(row.posProductId, row);
-      if (seen.size >= CANDIDATES_PER_LINE) break;
-    }
-  }
-  return [...seen.values()];
+  // ⛔ POOL then RANK then cut (searchCatalogPool) — never `take: 8` per
+  // tier. The 2026-08-30 bug: per-tier truncation ordered by NAME meant an
+  // "eggs" line's whole candidate pool was egg KICHEL and egg SALAD — the
+  // $3.99 "Eggs Large" never reached the model, so no prompt rule could
+  // make it pick right. Ranking also means the 8 candidates the model pays
+  // prompt tokens for are the 8 most relevant, cheapest-first among equals.
+  const pool = await searchCatalogPool(db, tenantId, phrase, {
+    posProductId: true,
+    code: true,
+    name: true,
+    brand: true,
+    sizeText: true,
+    unitPriceCents: true,
+    onHand: true,
+  });
+  return rankCatalogRows(pool, phrase).slice(0, CANDIDATES_PER_LINE);
 }
 
 export type BrainDeps = {
@@ -297,7 +298,10 @@ export async function runOrderBrain(deps: BrainDeps, tenantId: string, englishTe
     brand: c.brand ?? undefined,
     size: c.sizeText ?? undefined,
     price: (c.unitPriceCents / 100).toFixed(2),
-    ...(c.onHand !== null && c.onHand !== undefined && c.onHand <= 0 ? { inStock: false } : {}),
+    // ⛔ ZERO only — a NEGATIVE onHand is register drift (unknown), and
+    // telling the model it is out of stock is how "cheapest in stock" landed
+    // on organic eggs while the $3.99 dozen sat at onHand -75 (2026-08-30).
+    ...(isKnownOutOfStock(c) ? { inStock: false } : {}),
     ...(c.learned ? { learned: true } : {}),
   });
   const resolveUser = JSON.stringify({

@@ -75,52 +75,99 @@ export function catalogSearchWheres(phrase: string, maxTokens = 4): any[] {
 }
 
 /**
+ * ⛔⛔ THE ONE STOCK RULE: only an EXACT ZERO is "out of stock".
+ *
+ * Register drift makes `onHand` go NEGATIVE on hundreds of live items — an
+ * impossible count is a BROKEN count, not an empty shelf. Treating negative
+ * as out-of-stock is precisely how the brain picked ORGANIC eggs over the
+ * $3.99 "Eggs Large" sitting at onHand -75 (Izzy, 2026-08-30: "it should
+ * pick the cheapest one … instead of picking the most expensive one,
+ * organic" — his call closing the open question recorded 2026-08-27).
+ * Negative and null are both UNKNOWN: shown normally, never labelled,
+ * never demoted, never reported to the brain as inStock:false.
+ */
+export function isKnownOutOfStock(row: { onHand?: number | null }): boolean {
+  return row.onHand === 0;
+}
+
+/**
  * In-stock first, out-of-stock last but NEVER hidden (Izzy, 2026-08-26) —
- * `null` onHand means "not yet synced", which is shown normally, not as
- * missing. ⛔ Stable within each group, so the most-specific match still
- * leads its group.
+ * `null` onHand means "not yet synced" and NEGATIVE means "broken count";
+ * both are shown normally, not as missing. ⛔ Stable within each group, so
+ * the most-specific match still leads its group.
  */
 export function inStockFirst<T extends { onHand?: number | null }>(rows: T[]): T[] {
-  const ok = (r: T) => r.onHand === null || r.onHand === undefined || r.onHand > 0;
+  const ok = (r: T) => !isKnownOutOfStock(r);
   return [...rows.filter(ok), ...rows.filter((r) => !ok(r))];
 }
 
-export type ScoredRow = { name?: string | null; brand?: string | null; sizeText?: string | null; onHand?: number | null };
+export type ScoredRow = {
+  name?: string | null;
+  brand?: string | null;
+  sizeText?: string | null;
+  onHand?: number | null;
+  unitPriceCents?: number | null;
+};
 
 /**
  * ⛔⛔ WHY RANKING IS NOT OPTIONAL: the SQL match is `contains`, i.e. a bare
  * SUBSTRING — so the token "red" also matches "Cove**red**", "Sh**red**ded"
- * and "Hund**red**". Typing "milk red" really did return chocolate-covered
- * crackers ABOVE Golden Flow's "Milk Red" (measured on the live catalog,
- * 2026-08-27). Recall comes from the loose SQL; PRECISION has to come from
- * scoring the rows we got back.
+ * and "Hund**red**", and "egg" matches "V**egg**ie" (the live "eggs" search
+ * really returned veggie chips, 2026-08-30). Recall comes from the loose
+ * SQL; PRECISION has to come from scoring the rows we got back.
  *
- * A token scores as a WHOLE-WORD hit (`\bred`) or, far lower, as a bare
- * substring — so "Milk Red" beats "Chocolate Covered … Milk".
+ * Three tiers per token, best first:
+ *  - the WORD ITSELF, stem-for-stem ("eggs" IS a word of "Eggs Large") —
+ *    this is what puts real eggs above "Eggplant" and "Veggie Chips";
+ *  - a word PREFIX (`\bread` matches "Breaded") — related but weaker;
+ *  - a bare substring ("egg" inside "Veggie") — barely counts at all.
  */
 export function scoreCatalogRow(row: ScoredRow, phrase: string): number {
-  const hay = `${row.name ?? ""} ${row.brand ?? ""}`.toLowerCase();
+  const name = String(row.name ?? "");
+  const hay = `${name} ${row.brand ?? ""}`.toLowerCase();
+  const hayStems = new Set(
+    hay
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3)
+      .map(stemToken),
+  );
   const tokens = catalogSearchTokens(phrase, 6);
   if (tokens.length === 0) return 0;
   let score = 0;
-  let wholeWordHits = 0;
+  let wordHits = 0;
   for (const raw of tokens) {
     const t = stemToken(raw);
-    // tokens are [a-z0-9] by construction, so this is regex-safe
-    if (new RegExp(`\\b${t}`).test(hay)) {
-      score += 10;
-      wholeWordHits++;
+    if (hayStems.has(t)) {
+      score += 15;
+      wordHits++;
+    } else if (new RegExp(`\\b${t}`).test(hay)) {
+      // tokens are [a-z0-9] by construction, so this is regex-safe
+      score += 9;
+      wordHits++;
     } else if (hay.includes(t)) {
       score += 2;
     }
   }
-  if (wholeWordHits === tokens.length) score += 50;
+  if (wordHits === tokens.length) score += 50;
   // the typed phrase appearing intact ("orange juice") outranks scattered words
   const joined = tokens.join(" ");
   if (hay.includes(joined)) score += 40;
-  if ((row.name ?? "").toLowerCase().startsWith(tokens[0])) score += 8;
+  // ⛔ HEAD-NOUN over STARTS-WITH, in that order of weight. English compound
+  // names put the head LAST: "Rye Bread" IS bread, "Bread Bags" are bags —
+  // and on the live catalog the old starts-with-only bonus ranked twelve
+  // bread BAGS and CRUMBS above every actual loaf for the search "bread"
+  // (2026-08-30). Starts-with still counts (head-FIRST names like "Milk
+  // Red" / "Eggs Large" are real here too), just less.
+  const nameStems = name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3)
+    .map(stemToken);
+  const lastStem = nameStems[nameStems.length - 1];
+  if (lastStem && tokens.some((raw) => stemToken(raw) === lastStem)) score += 6;
+  if (name.toLowerCase().startsWith(tokens[0])) score += 4;
   // a shorter name is the more exact product ("Milk Red" over "Milk Red Uht")
-  score -= Math.min(8, Math.floor(String(row.name ?? "").length / 12));
+  score -= Math.min(8, Math.floor(name.length / 12));
   return score;
 }
 
@@ -133,7 +180,9 @@ export function isStrongMatch(row: ScoredRow, phrase: string): boolean {
 
 /**
  * The order a human sees: strong matches first, in-stock ahead of
- * out-of-stock WITHIN each relevance group, then by score.
+ * known-out-of-stock WITHIN each relevance group, then by score, then —
+ * everything else equal — CHEAPEST first (Izzy, 2026-08-30: an unqualified
+ * "eggs" means the cheapest regular eggs, never the organic ones).
  *
  * ⛔ Relevance outranks stock on purpose. Izzy's in-stock-first rule
  * (2026-08-26) is about choosing between comparable products — applied
@@ -141,19 +190,63 @@ export function isStrongMatch(row: ScoredRow, phrase: string): boolean {
  * under an in-stock item that merely shares a syllable.
  */
 export function rankCatalogRows<T extends ScoredRow>(rows: T[], phrase: string): T[] {
+  const priceOf = (r: ScoredRow) =>
+    Number.isFinite(Number(r.unitPriceCents)) && Number(r.unitPriceCents) > 0 ? Number(r.unitPriceCents) : Number.POSITIVE_INFINITY;
   const decorated = rows.map((row, i) => ({
     row,
     i,
     strong: isStrongMatch(row, phrase),
-    stocked: row.onHand === null || row.onHand === undefined || row.onHand > 0,
+    stocked: !isKnownOutOfStock(row),
     score: scoreCatalogRow(row, phrase),
+    price: priceOf(row),
   }));
   decorated.sort(
     (a, b) =>
       Number(b.strong) - Number(a.strong) ||
       Number(b.stocked) - Number(a.stocked) ||
       b.score - a.score ||
+      a.price - b.price ||
       a.i - b.i,
   );
   return decorated.map((d) => d.row);
+}
+
+/**
+ * ⛔⛔ THE RECALL RULE: collect a POOL far bigger than the display limit,
+ * and only THEN rank and cut. The 2026-08-30 bug this kills: each tier
+ * fetched `take: 12` ordered by NAME, and the collection stopped at 12 — so
+ * "bread" (175 catalog matches) returned twelve bread BAGS and bread
+ * CRUMBS, alphabetically first, and "Rye Bread" never left the database.
+ * Ranking cannot rescue a row SQL truncated away.
+ *
+ * ⛔ ONE implementation for the desk route AND the brain's candidate search
+ * — the recorded two-implementations hazard. `select` must include
+ * posProductId (the dedupe key).
+ */
+export const CATALOG_POOL_LIMIT = 240;
+
+export async function searchCatalogPool(
+  db: any,
+  tenantId: string,
+  phrase: string,
+  select: Record<string, boolean>,
+  poolLimit = CATALOG_POOL_LIMIT,
+): Promise<any[]> {
+  const wheres = catalogSearchWheres(phrase);
+  if (wheres.length === 0) return [];
+  const seen = new Map<string, any>();
+  for (const where of wheres) {
+    if (seen.size >= poolLimit) break;
+    const rows = await db.posCatalogItem.findMany({
+      where: { tenantId, isActive: true, ...where },
+      select,
+      orderBy: { name: "asc" },
+      take: poolLimit,
+    });
+    for (const row of rows as any[]) {
+      if (!seen.has(row.posProductId)) seen.set(row.posProductId, row);
+      if (seen.size >= poolLimit) break;
+    }
+  }
+  return [...seen.values()];
 }

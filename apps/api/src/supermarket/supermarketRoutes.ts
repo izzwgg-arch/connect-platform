@@ -37,7 +37,8 @@ import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
 import { buildTeachQueue, teachPhrase, dismissPhrase, undismissPhrase, retireLesson, restoreLesson } from "./phraseTeaching";
 import { applyRuleEdit, rollbackRule, MAX_RULE_CHARS } from "./agentRules";
-import { catalogCodePrefix, catalogSearchWheres, inStockFirst, rankCatalogRows } from "./catalogSearch";
+import { catalogCodePrefix, inStockFirst, isKnownOutOfStock, rankCatalogRows, searchCatalogPool } from "./catalogSearch";
+import { normalizePhrase } from "./phraseLessons";
 import { knownCustomerPhones, resolveCustomerPhone } from "./customerPhoneMatch";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
@@ -670,8 +671,10 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
           return {
             ...i,
             ...(row.imageUrl ? { imageUrl: row.imageUrl } : {}),
-            // "not in stock" on the order line — current as of the last tick
-            ...(row.onHand !== null && row.onHand <= 0 ? { outOfStock: true } : {}),
+            // "not in stock" on the order line — current as of the last tick.
+            // ⛔ ZERO only: a NEGATIVE count is register drift, i.e. unknown,
+            // never an empty shelf (isKnownOutOfStock, 2026-08-30).
+            ...(isKnownOutOfStock(row) ? { outOfStock: true } : {}),
           };
         };
         draft.items = items.map(decorate);
@@ -990,26 +993,47 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       });
       return reply.send({ items: inStockFirst(rows as any[]).slice(0, DESK_SEARCH_LIMIT) });
     }
-    const wheres = catalogSearchWheres(q);
-    if (wheres.length === 0) return reply.send({ items: [] });
-    // most-specific first: stop as soon as we have a full list
-    const seen = new Map<string, any>();
-    for (const where of wheres) {
-      if (seen.size >= DESK_SEARCH_LIMIT) break;
-      const rows = await db.posCatalogItem.findMany({
-        where: { tenantId, isActive: true, ...where },
-        select,
-        orderBy: { name: "asc" },
-        take: DESK_SEARCH_LIMIT,
-      });
-      for (const row of rows as any[]) {
-        if (!seen.has(row.posProductId)) seen.set(row.posProductId, row);
-        if (seen.size >= DESK_SEARCH_LIMIT) break;
+    // ⛔ POOL then rank then cut — never `take: 12` per tier. The 2026-08-30
+    // bug: "bread" has 175 catalog matches and the old per-tier take-12
+    // (ordered by NAME) returned twelve bread BAGS and CRUMBS while "Rye
+    // Bread" never left the database. Ranking cannot rescue a truncated pool.
+    const pool = await searchCatalogPool(db, tenantId, q, select);
+    if (pool.length === 0) return reply.send({ items: [] });
+    let items = rankCatalogRows(pool, q).slice(0, DESK_SEARCH_LIMIT);
+    // Taught phrases PIN to the top (Izzy, 2026-08-30: "when someone says
+    // bread, it means a loaf of rye bread"). ⛔ EXACT normalized-phrase
+    // equality only — a "bread" lesson must not hijack a "bread crumbs"
+    // search — and best-effort: a lessons failure never breaks the search.
+    try {
+      const nq = normalizePhrase(q);
+      if (nq) {
+        const lessons = await db.supermarketPhraseLesson.findMany({
+          where: { tenantId, retiredAt: null, phrase: nq },
+          orderBy: { lastConfirmedAt: "desc" },
+          take: 3,
+          select: { posProductId: true },
+        });
+        const taughtIds: string[] = (Array.isArray(lessons) ? lessons : []).map((l: any) => String(l.posProductId)).filter(Boolean);
+        if (taughtIds.length) {
+          const taughtRows = await db.posCatalogItem.findMany({
+            where: { tenantId, isActive: true, posProductId: { in: taughtIds } },
+            select,
+          });
+          const byId = new Map((taughtRows as any[]).map((r: any) => [r.posProductId, r]));
+          const pinned = taughtIds.map((id) => byId.get(id)).filter(Boolean);
+          if (pinned.length) {
+            const pinnedIds = new Set(pinned.map((r: any) => r.posProductId));
+            items = [...pinned, ...items.filter((r: any) => !pinnedIds.has(r.posProductId))].slice(0, DESK_SEARCH_LIMIT);
+          }
+        }
       }
+    } catch {
+      /* lessons are an upgrade, never a gate on the search working */
     }
-    // in-stock (or unknown) first, out-of-stock at the bottom labelled — never
-    // hidden (Izzy, 2026-08-26). null onHand = not yet synced = shown normally.
-    return reply.send({ items: rankCatalogRows([...seen.values()], q).slice(0, DESK_SEARCH_LIMIT) });
+    // in-stock (or unknown) first within each relevance group, ZERO-stock at
+    // the bottom labelled — never hidden (Izzy, 2026-08-26). null AND negative
+    // onHand = unknown = shown normally (isKnownOutOfStock).
+    return reply.send({ items });
   });
 
   // ── Teach the Agent (Izzy 2026-08-26): the admin correction lane over the
