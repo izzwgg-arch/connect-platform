@@ -209,9 +209,16 @@ Deploy state at the end of this section.)
 `feat/ivr-migration-takeover`, built to the approved mockups
 <https://claude.ai/code/artifact/1fd2575f-a7f5-424b-b5f6-2fd80f990ad2>
 ("approved, start building exactly, exactly like the mock-ups dark and light").
-Deploy state at the end of this section. Migration
-`20260830190000_signalwire_onboarding` — additive: `SIGNALWIRE` enum value +
-`TenantSmsRegistration` table.)
+✅ **FULL STACK DEPLOYED AND CONTAINER-VERIFIED 2026-08-30**: api at
+`e5066c27` (migration `20260830190000_signalwire_onboarding` applied — the
+`TenantSmsRegistration` table + `SIGNALWIRE` enum value read back from the
+live DB; `SIGNALWIRE_TENDLC_SWEEP_ARMED` boot line; the shared ingest, the
+registry webhook and the texting opt-out guard all grepped in the container),
+worker at `74426643` (SignalWire dispatch + `provider:"VOIPMS"` poll filter +
+`signalWireChatSend.ts` present; the VoIP.ms inbound poll verified still
+running after the deploy), portal at `2e5e34d2` (`ob-tx-card` in the shipped
+CSS, the texting-registration and Port-queue strings in the shipped chunks).
+0 restarts and 0 error-level lines on all three; health 200 both hostnames.)
 
 - ⛔⛔ **EVERYTHING IS INERT ON DEPLOY.** `ONBOARDING_NUMBER_PROVIDER` defaults
   `voipms` (the whole wizard keeps its VoIP.ms behavior byte-compatibly) and
