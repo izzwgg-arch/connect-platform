@@ -5,6 +5,15 @@ import { ApiError, apiGet, apiPut, apiPost, getPortalApiBaseUrl } from "../../..
 import { ConnectSelect } from "../../../components/ConnectSelect";
 import { SUPPORT_EMAIL } from "../../../lib/platformIdentity";
 import { NUMBER_SEARCH_FAILED_MESSAGE, numberSearchEmptyMessage } from "../../../lib/numberSearchMessage";
+import {
+  EMPTY_TEXTING,
+  TextingRegistrationCard,
+  US_STATE_CODES,
+  buildTextingRegistrationPayload,
+  validateTexting,
+  type TextingState,
+} from "./textingStep";
+import { MobileWizard } from "./mobileWizard";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,11 +37,16 @@ type PortingDetails = {
   portPin: string;
   loaFileName: string;
   billFileName: string;
+  // SignalWire requires a signed Letter of Authorization dated within 30 days;
+  // typing the full name here IS the signature — we generate and file the LOA.
+  loaSignature: string;
 };
 
 type NumberKind = "local" | "tollfree" | "vanity";
-type SearchMode = "starts" | "contains" | "ends";
-type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean; inStock?: boolean; kind?: NumberKind };
+// "areacode" is SignalWire's own first-class search; the VoIP.ms branch treats
+// it as the old auto behavior, so sending it is always safe.
+type SearchMode = "areacode" | "starts" | "contains" | "ends";
+type AvailableNumber = { number: string; location: string; sms: boolean; voice: boolean; mms?: boolean; fax?: boolean; inStock?: boolean; kind?: NumberKind };
 
 type FormData = {
   companyName: string;
@@ -56,6 +70,10 @@ type FormData = {
   porting: PortingDetails;
   extensions: Extension[];
   smsEnabled: boolean;
+  // The carrier-registration answers (10DLC). ⛔ The EIN is deliberately NOT
+  // in here — it lives in its own useState so the autosave structurally cannot
+  // persist it (see textingStep.tsx's header).
+  texting: TextingState;
 };
 
 const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "", cellMode: "", cellNumber: "", isOwner: false };
@@ -71,9 +89,10 @@ const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
   mainPhone: "", address: "", addressCity: "", addressState: "", addressZip: "", mainEmail: "", billingEmail: "",
   numberChoice: "", selectedNumber: "", numberKind: "",
-  porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", serviceCity: "", serviceState: "", serviceZip: "", isMobile: false, portPin: "", loaFileName: "", billFileName: "" },
+  porting: { carrier: "", numbers: "", accountNumber: "", nameOnAccount: "", serviceAddress: "", serviceCity: "", serviceState: "", serviceZip: "", isMobile: false, portPin: "", loaFileName: "", billFileName: "", loaSignature: "" },
   extensions: [{ ...EMPTY_EXT, isOwner: true }],
   smsEnabled: false,
+  texting: { ...EMPTY_TEXTING },
 };
 
 /**
@@ -181,6 +200,9 @@ function validateStep(step: number, f: FormData): string | null {
       if (!/^[A-Za-z]{2}$/.test(f.porting.serviceState.trim())) return "Enter the 2-letter state (like NY) from your carrier bill.";
       if (!/^\d{5}$/.test(f.porting.serviceZip.trim())) return "Enter the 5-digit ZIP code from your carrier bill.";
       if (f.porting.isMobile && !f.porting.portPin.trim()) return "Cell number transfers need the transfer PIN from your current carrier.";
+      // The signed Letter of Authorization is what lets us file the transfer —
+      // the typed full name IS the signature (we generate the LOA from it).
+      if (f.porting.loaSignature.trim().length < 3) return "Sign the transfer authorization by typing your full name.";
     }
   }
   if (step === 3) {
@@ -263,8 +285,25 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   // Local vs toll-free tab, where in the number the digits should sit, and the
   // "spell a word" input (toll-free vanity search).
   const [numbersTab, setNumbersTab] = useState<"local" | "tollfree">("local");
-  const [searchMode, setSearchMode] = useState<SearchMode>("starts");
+  const [searchMode, setSearchMode] = useState<SearchMode>("areacode");
   const [vanityWord, setVanityWord] = useState("");
+  // SignalWire-only filters (state + city). Read through a ref inside
+  // searchNumbers so the useCallback identity never churns on keystrokes.
+  const [searchRegion, setSearchRegion] = useState("");
+  const [searchCity, setSearchCity] = useState("");
+  const searchGeoRef = useRef({ region: "", city: "" });
+  searchGeoRef.current = { region: searchRegion, city: searchCity };
+  // Which carrier answered the last search — decides the search surface drawn
+  // (capability chips + state/city filters; no "Ready now" spare badge on
+  // SignalWire, spares are a VoIP.ms master-account concept).
+  const [numbersProvider, setNumbersProvider] = useState<"voipms" | "signalwire" | null>(null);
+
+  // ⛔ The EIN and the consent live OUTSIDE `form` so the autosave payload
+  // structurally cannot persist them (the "never saved on your account"
+  // promise in writing — see textingStep.tsx).
+  const [ein, setEin] = useState("");
+  const [textingConsent, setTextingConsent] = useState(false);
+  const [textingFiling, setTextingFiling] = useState(false);
 
   // Porting: portability check + document uploads
   const [portability, setPortability] = useState<"idle" | "checking" | "portable" | "unknown">("idle");
@@ -310,6 +349,24 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             porting:       { ...prev.porting, ...(a.phone?.details || {}) },
             extensions:    Array.isArray(a.extensions) && a.extensions.length ? withOneOwner(a.extensions.map((e: any) => ({ ...EMPTY_EXT, ...e }))) : prev.extensions,
             smsEnabled:    a.addons?.smsEnabled    ?? prev.smsEnabled,
+            // answers.texting is written server-side by the registration POST
+            // (never by autosave, and NEVER carrying the EIN) — rehydrate what
+            // exists so a returning draft doesn't re-ask everything.
+            texting: a.texting
+              ? {
+                  ...prev.texting,
+                  classification: a.texting.classification === "sole_prop" ? "conversational" : (a.texting.classification || prev.texting.classification),
+                  noEin: a.texting.classification === "sole_prop",
+                  senderSystem: a.texting.senderSystem || prev.texting.senderSystem,
+                  legalName: a.texting.legalName || prev.texting.legalName,
+                  entityType: a.texting.entityType || prev.texting.entityType,
+                  website: a.texting.website || prev.texting.website,
+                  vertical: a.texting.vertical || prev.texting.vertical,
+                  messageFlow: a.texting.messageFlow || prev.texting.messageFlow,
+                  sample1: a.texting.sample1 || prev.texting.sample1,
+                  sample2: a.texting.sample2 || prev.texting.sample2,
+                }
+              : prev.texting,
           }));
         }
         // The API stores the step as a string — parse either form.
@@ -416,18 +473,26 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       params.set("type", tab);
       if (opts.mode && tab === "local") params.set("mode", opts.mode);
       if (opts.vanity) params.set("vanity", opts.vanity);
-      const r = await apiGet<{ numbers?: AvailableNumber[]; error?: string; note?: string }>(
+      // SignalWire-only geo filters; the VoIP.ms branch ignores them.
+      if (tab === "local" && searchGeoRef.current.region) {
+        params.set("region", searchGeoRef.current.region);
+        if (searchGeoRef.current.city) params.set("city", searchGeoRef.current.city);
+      }
+      const r = await apiGet<{ numbers?: AvailableNumber[]; error?: string; note?: string; provider?: string }>(
         `/onboarding/${encodeURIComponent(token)}/numbers?${params.toString()}`,
         undefined,
         { timeoutMs: 45_000 },
       );
       const list = Array.isArray(r.numbers) ? r.numbers : [];
       setNumbers(list);
+      setNumbersProvider(r.provider === "signalwire" ? "signalwire" : "voipms");
       // A 200 carrying `error`/`note` is the provider having failed, not empty
       // stock — the API answers 200 either way, so the BODY is the only thing
       // that tells them apart. Read it, or an outage renders as "not available".
       if (!list.length) {
-        if (r.error || r.note) setNumbersError(NUMBER_SEARCH_FAILED_MESSAGE);
+        if (r.note === "pattern_too_short") {
+          setNumbersNone("Type at least 3 digits for a Starts with / Contains / Ends with search — or pick Area code.");
+        } else if (r.error || r.note) setNumbersError(NUMBER_SEARCH_FAILED_MESSAGE);
         else setNumbersNone(numberSearchEmptyMessage({ query, mode: opts.mode, tab, vanity: opts.vanity }));
       }
       track("number_search", { detail, count: list.length });
@@ -536,28 +601,67 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     }
   }
 
+  // ── Step side effects, shared by the desktop wizard AND the mobile
+  // micro-step wizard — ⛔ ONE implementation each; a second copy in the mobile
+  // path is exactly the two-publish-paths drift this repo keeps paying for.
+  //
+  // Leaving the number step: start setting up their number in the background
+  // (buy / route / temporary number for ports). Fire-and-forget — the customer
+  // keeps moving through the wizard while it happens.
+  const fireApplyNumber = useCallback((f: FormData) => {
+    void apiPost(`/onboarding/${encodeURIComponent(token)}/apply-number`, {
+      choice: f.numberChoice,
+      selectedNumber: f.numberChoice === "new" ? f.selectedNumber : undefined,
+      numberKind: f.numberChoice === "new" ? f.numberKind || "local" : undefined,
+      porting: f.numberChoice === "port" ? f.porting : undefined,
+      smsEnabled: f.smsEnabled,
+      companyName: f.companyName,
+    }).catch(() => { /* retried on final submit */ });
+  }, [token]);
+
+  // Files the carrier registration — the ONE moment the EIN leaves the browser
+  // (straight through to the registry, never stored — the lock note's promise).
+  // Returns the error to show, or null on success.
+  const fileTextingRegistration = useCallback(async (f: FormData): Promise<string | null> => {
+    const txErr = validateTexting(f.texting, ein, textingConsent);
+    if (txErr) return txErr;
+    setTextingFiling(true);
+    try {
+      await apiPost(
+        `/onboarding/${encodeURIComponent(token)}/texting-registration`,
+        buildTextingRegistrationPayload(f.texting, ein),
+        undefined,
+        { timeoutMs: 45_000 },
+      );
+      track("texting_registration", { detail: f.texting.noEin ? "sole_prop" : f.texting.classification });
+      return null;
+    } catch (e: any) {
+      return e?.body?.message || "We couldn't file your texting registration. Please check the fields and try again.";
+    } finally {
+      setTextingFiling(false);
+    }
+  }, [token, ein, textingConsent, track]);
+
   // ── Navigation ────────────────────────────────────────────────────────────
-  function goNext() {
+  async function goNext() {
     const err = validateStep(step, form);
     if (err) {
       setStepError(err);
       track("validation_blocked", { step: STEPS[step].label, detail: err });
       return;
     }
-    setStepError(null);
-    // Leaving the number step: start setting up their number in the background
-    // (buy / route / temporary number for ports). Fire-and-forget — the customer
-    // keeps moving through the wizard while it happens.
-    if (step === 2) {
-      void apiPost(`/onboarding/${encodeURIComponent(token)}/apply-number`, {
-        choice: form.numberChoice,
-        selectedNumber: form.numberChoice === "new" ? form.selectedNumber : undefined,
-        numberKind: form.numberChoice === "new" ? form.numberKind || "local" : undefined,
-        porting: form.numberChoice === "port" ? form.porting : undefined,
-        smsEnabled: form.smsEnabled,
-        companyName: form.companyName,
-      }).catch(() => { /* retried on final submit */ });
+    // Blocking on a failed registration is deliberate: silently advancing
+    // would strand a customer who thinks texting is coming.
+    if (step === 4 && form.smsEnabled) {
+      const txErr = await fileTextingRegistration(form);
+      if (txErr) {
+        setStepError(txErr);
+        track("validation_blocked", { step: STEPS[step].label, detail: `texting: ${txErr}` });
+        return;
+      }
     }
+    setStepError(null);
+    if (step === 2) fireApplyNumber(form);
     const next = step + 1;
     track("step_viewed", { step: STEPS[next].label, fromStep: STEPS[step].label, seconds: secondsOnStep() });
     stepEnteredAt.current = Date.now();
@@ -737,6 +841,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     else setThemeLabel(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   }, [loading]);
 
+  // Phone detection: the SCREEN decides, never the user agent — rotating a
+  // tablet just reflows it. Lazy initializer so the first client render already
+  // knows (this page is fully client-rendered, so there is no SSR mismatch).
+  const [isPhone, setIsPhone] = useState<boolean>(() => typeof window !== "undefined" && window.matchMedia("(max-width: 640px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const upd = () => setIsPhone(mq.matches);
+    mq.addEventListener("change", upd);
+    return () => mq.removeEventListener("change", upd);
+  }, []);
+
   // ── Render guards ─────────────────────────────────────────────────────────
   if (loading) {
     return (<div className="ob-loading"><div className="ob-spinner" /><span>Loading your setup…</span></div>);
@@ -769,6 +884,41 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         </p>
         <button className="ob-btn-next" onClick={() => window.location.reload()}>Reload this page</button>
       </div>
+    );
+  }
+
+  // ── The phone version — same link, screen-measured (mockup MOBILE section).
+  // Micro-screens over the SAME step state machine + side effects; someone can
+  // start on their phone and finish on a computer with nothing lost.
+  if (isPhone) {
+    return (
+      <MobileWizard
+        wiz={{
+          form, step, stepError, setStepError, updateForm, updateExt, addExt, removeExt, setOwnerExt,
+          validateStep: (s: number) => validateStep(s, form),
+          advance: (next: number) => {
+            track("step_viewed", { step: STEPS[next]?.label || `step ${next}`, fromStep: STEPS[step]?.label, seconds: secondsOnStep() });
+            stepEnteredAt.current = Date.now();
+            setStep(next);
+            scheduleAutosave(form, next);
+            window.scrollTo({ top: 0 });
+          },
+          goBack,
+          fireApplyNumber: () => fireApplyNumber(form),
+          fileTexting: () => fileTextingRegistration(form),
+          textingFiling,
+          numbers, numbersLoading, numbersError, numbersNone, numbersQuery, setNumbersQuery,
+          searchMode, setSearchMode, searchNumbers, numbersProvider, searchRegion, setSearchRegion,
+          portability, uploadPortDoc, uploading,
+          ein, setEin, textingConsent, setTextingConsent,
+          quote, money,
+          handleSubmit, submitting, submitError,
+          startCheckout,
+          retryCheckout: () => { checkoutFired.current = false; void startCheckout(); },
+          checkoutError,
+          saveState, themeLabel, toggleTheme,
+        }}
+      />
     );
   }
 
@@ -907,29 +1057,54 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
 
                 {numbersTab === "local" ? (
                   <>
-                    <label className="ob-label">Search by digits</label>
+                    {/* Where the digits should sit — every mode SignalWire
+                        offers, as chips (mockup screen A). The VoIP.ms branch
+                        reads "areacode" as its old auto behavior, so the same
+                        UI is safe on either carrier. */}
+                    <div className="ob-modes" role="radiogroup" aria-label="Where the digits appear in the number">
+                      {([
+                        ["areacode", "Area code"],
+                        ["starts", "Starts with"],
+                        ["contains", "Contains"],
+                        ["ends", "Ends with"],
+                      ] as [SearchMode, string][]).map(([m, label]) => (
+                        <button key={m} type="button" className={`ob-mode${searchMode === m ? " on" : ""}`}
+                          role="radio" aria-checked={searchMode === m}
+                          onClick={() => setSearchMode(m)}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                     <div className="ob-searchbar">
-                      {/* Where the digits should sit — VoIP.ms searches all three ways. */}
-                      <ConnectSelect
-                        style={{ width: 140, minWidth: 0, flexShrink: 0 }}
-                        value={searchMode}
-                        onChange={(v) => setSearchMode(v as SearchMode)}
-                        ariaLabel="Where the digits appear in the number"
-                        theme={themeLabel}
-                        options={[
-                          { value: "starts", label: "Starts with" },
-                          { value: "contains", label: "Contains" },
-                          { value: "ends", label: "Ends with" },
-                        ]}
-                      />
-                      <input className="ob-input" placeholder="e.g. 305" value={numbersQuery}
+                      <input className="ob-input" style={{ flex: 2, minWidth: 120 }}
+                        placeholder={searchMode === "areacode" ? "e.g. 845" : "Digits or letters — e.g. 5667 or LOOP"}
+                        value={numbersQuery}
                         onChange={(e) => setNumbersQuery(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery, { tab: "local", mode: searchMode })} />
+                      {numbersProvider === "signalwire" && (
+                        <>
+                          <ConnectSelect
+                            style={{ width: 128, minWidth: 0, flexShrink: 0 }}
+                            value={searchRegion}
+                            onChange={(v) => setSearchRegion(v)}
+                            ariaLabel="State"
+                            placeholder="State"
+                            theme={themeLabel}
+                            options={[{ value: "", label: "Any state" }, ...US_STATE_CODES.map((s) => ({ value: s, label: s }))]}
+                          />
+                          <input className="ob-input" style={{ width: 140, flex: "0 1 auto" }} placeholder="City (optional)"
+                            value={searchCity} onChange={(e) => setSearchCity(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && !numbersLoading && searchNumbers(numbersQuery, { tab: "local", mode: searchMode })} />
+                        </>
+                      )}
                       {/* Disabled while a search runs: each one can take 20s+, and
                           impatient re-clicks used to stack concurrent requests. */}
                       <button className="ob-btn-ghost" disabled={numbersLoading} onClick={() => searchNumbers(numbersQuery, { tab: "local", mode: searchMode })}>
                         {numbersLoading ? "Searching…" : "Search"}
                       </button>
+                    </div>
+                    <div className="ob-t9">
+                      Letters work too — type <code>LOOP</code> and we search <code>5667</code>, the way it dials on a keypad.
                     </div>
                   </>
                 ) : (
@@ -979,10 +1154,15 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                               <div className="ob-num-n">{n.number}</div>
                               {n.location && <div className="ob-num-loc">{n.location}</div>}
                               <div className="ob-caps">
-                                {n.inStock && <span className="ob-cap ob-cap-stock">Ready now</span>}
+                                {/* "Ready now" = spare stock, a VoIP.ms-only concept —
+                                    SignalWire's search is fast and stocked, so the badge
+                                    retires there (mockup screen A). */}
+                                {n.inStock && numbersProvider !== "signalwire" && <span className="ob-cap ob-cap-stock">Ready now</span>}
                                 {kind !== "local" && <span className="ob-cap ob-cap-stock">$15/mo</span>}
                                 {n.voice && <span className="ob-cap">Voice</span>}
                                 {n.sms && <span className="ob-cap">SMS</span>}
+                                {n.mms && <span className="ob-cap">MMS</span>}
+                                {n.fax === true && <span className="ob-cap ob-cap-dim">Fax</span>}
                               </div>
                             </div>
                             <div className="ob-num-tick"><IconTick /></div>
@@ -1039,13 +1219,6 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   <div className="ob-field-hint" style={{ marginTop: -6, marginBottom: 14 }}>Cell transfers need the transfer PIN from your carrier — dial 611 or check their app if you don&apos;t have it.</div>
                 )}
                 <div className="ob-uploads">
-                  <label className={`ob-upl${form.porting.loaFileName ? " done" : ""}`}>
-                    <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.loa}
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPortDoc("loa", f); }} />
-                    <div className="ob-upl-ic">{uploading.loa ? <div className="ob-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : form.porting.loaFileName ? <IconTick size={20} /> : <IconUpload />}</div>
-                    <b>{form.porting.loaFileName ? "Authorization added" : "Signed authorization"}</b>
-                    <span>{uploading.loa ? "Uploading…" : form.porting.loaFileName || "PDF or photo"}</span>
-                  </label>
                   <label className={`ob-upl${form.porting.billFileName ? " done" : ""}`}>
                     <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.bill}
                       onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPortDoc("bill", f); }} />
@@ -1053,8 +1226,31 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                     <b>{form.porting.billFileName ? "Bill added" : "Recent phone bill"}</b>
                     <span>{uploading.bill ? "Uploading…" : form.porting.billFileName || "PDF or photo"}</span>
                   </label>
+                  {/* A ready-signed LOA is welcome but optional — the typed
+                      signature below is what lets us prepare and file one. */}
+                  <label className={`ob-upl${form.porting.loaFileName ? " done" : ""}`}>
+                    <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.loa}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPortDoc("loa", f); }} />
+                    <div className="ob-upl-ic">{uploading.loa ? <div className="ob-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : form.porting.loaFileName ? <IconTick size={20} /> : <IconUpload />}</div>
+                    <b>{form.porting.loaFileName ? "Authorization added" : "Signed authorization"}</b>
+                    <span>{uploading.loa ? "Uploading…" : form.porting.loaFileName || "Optional — we prepare one from your signature"}</span>
+                  </label>
                 </div>
-                <div className="ob-field-hint" style={{ marginTop: 12 }}>Your number keeps working until the transfer completes — typically 3–5 business days.</div>
+                <div className="ob-tx-card" style={{ marginTop: 14 }}>
+                  <div className="ob-tx-head">Authorize the transfer</div>
+                  <p className="ob-tx-lead">
+                    Your current carrier requires a signed Letter of Authorization before releasing the number.
+                    Type your full name to sign — we prepare and file the paperwork for you.
+                  </p>
+                  <input className="ob-input ob-sig" placeholder="Type your full name to sign" autoComplete="name"
+                    value={form.porting.loaSignature}
+                    onChange={(e) => updateForm({ porting: { ...form.porting, loaSignature: e.target.value } })} />
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <div className="ob-tl-line"><span className="ob-tl-dot" />Today — you&apos;re up and running on a temporary number <span className="ob-tl-badge">TEMP</span></div>
+                  <div className="ob-tl-line"><span className="ob-tl-dot" />~7 business days — your number transfers (toll-free can take up to two weeks)</div>
+                  <div className="ob-tl-line"><span className="ob-tl-dot" />Transfer day — everything switches over by itself; nothing to do</div>
+                </div>
               </div>
               </>
             )}
@@ -1142,20 +1338,34 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
           </div>
         )}
 
-        {/* Step 4: Add-ons */}
+        {/* Step 4: Business texting — the toggle opens the full carrier
+            registration disclosure (mockup screen C). */}
         {step === 4 && (
           <div>
             <div className={`ob-toggle-row${form.smsEnabled ? " on" : ""}`} onClick={() => updateForm({ smsEnabled: !form.smsEnabled })} style={{ cursor: "pointer" }}>
               <div className="ob-toggle-info">
-                <div className="ob-toggle-title">Business SMS messaging</div>
-                <div className="ob-toggle-desc">Send &amp; receive texts from your business number, right from Connect.</div>
+                <div className="ob-toggle-title">Business text messaging</div>
+                <div className="ob-toggle-desc">Send and receive texts from your business number — $10/mo.</div>
               </div>
               <label className="ob-toggle-switch" onClick={(e) => e.stopPropagation()}>
                 <input type="checkbox" checked={form.smsEnabled} onChange={(e) => updateForm({ smsEnabled: e.target.checked })} />
                 <span className="ob-toggle-track" />
               </label>
             </div>
-            <div className="ob-field-hint" style={{ marginTop: 13 }}>Turn it on now or later from your account — either way it's ready on day one.</div>
+            {form.smsEnabled ? (
+              <TextingRegistrationCard
+                texting={form.texting}
+                onChange={(patch) => updateForm({ texting: { ...form.texting, ...patch } })}
+                ein={ein}
+                onEinChange={setEin}
+                consent={textingConsent}
+                onConsentChange={setTextingConsent}
+                theme={themeLabel}
+                serviceAddress={[form.address, form.addressCity].filter(Boolean).join(", ")}
+              />
+            ) : (
+              <div className="ob-field-hint" style={{ marginTop: 13 }}>Turn it on now or later from your account — either way it&apos;s ready on day one.</div>
+            )}
           </div>
         )}
 
@@ -1190,9 +1400,16 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   {form.numberChoice !== "port" && (form.numberKind === "tollfree" || form.numberKind === "vanity") && (
                     <span style={{ opacity: 0.75 }}> · $15.00/mo</span>
                   )}
+                  {form.numberChoice === "new" && <span style={{ opacity: 0.75 }}> · purchased after payment</span>}
                 </span>
               </div>
-              <div className="ob-review-row"><span className="ob-review-key">Server</span><span className="ob-review-val">New York 1{form.smsEnabled ? " · SMS on" : ""}</span></div>
+              <div className="ob-review-row">
+                <span className="ob-review-key">Emergency calling (E911)</span>
+                <span className="ob-review-val">
+                  {[form.address, form.addressCity, form.addressState].filter(Boolean).join(", ") || "—"}
+                  <span style={{ opacity: 0.75 }}> · registered after payment</span>
+                </span>
+              </div>
               {form.numberChoice === "port" && (
                 <div className="ob-field-hint" style={{ marginTop: 8 }}>
                   While your number transfers — typically <b>3–5 business days</b> — you&apos;ll be live on a
@@ -1228,7 +1445,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             </div>
             <div className="ob-review-section">
               <div className="ob-review-section-title">Add-ons</div>
-              <div className="ob-review-row"><span className="ob-review-key">SMS messaging</span><span className={`ob-review-val${form.smsEnabled ? " ob-auto" : ""}`}>{form.smsEnabled ? "Enabled" : "Not added"}</span></div>
+              <div className="ob-review-row">
+                <span className="ob-review-key">Business texting</span>
+                <span className={`ob-review-val${form.smsEnabled ? " ob-auto" : ""}`}>
+                  {form.smsEnabled ? <span className="ob-review-pill">Registration files at payment</span> : "Not added"}
+                </span>
+              </div>
+              {form.smsEnabled && (
+                <div className="ob-field-hint" style={{ marginTop: 6 }}>
+                  Carrier approval usually takes 1–5 business days — your phone service starts right away, and texting
+                  switches on automatically the moment carriers approve.
+                </div>
+              )}
             </div>
             <div className="ob-review-section">
               <div className="ob-review-section-title">What you&apos;ll pay</div>
@@ -1311,7 +1539,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         <div className="ob-actions">
           {step > 0 ? (<button className="ob-btn-back" onClick={goBack}><IconArrowLeft /> Back</button>) : <div />}
           {step < STEPS.length - 2 ? (
-            <button className="ob-btn-next" onClick={goNext}>Continue <IconArrowRight /></button>
+            <button className="ob-btn-next" onClick={() => void goNext()} disabled={textingFiling}>
+              {textingFiling ? "Filing your registration…" : <>Continue <IconArrowRight /></>}
+            </button>
           ) : step === STEPS.length - 2 ? (
             <button className="ob-btn-next ob-btn-submit" onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Saving…" : "Continue to payment"}{!submitting && <IconArrowRight />}

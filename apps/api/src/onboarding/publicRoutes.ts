@@ -236,10 +236,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         city: String((req.query as any)?.city || "").trim() || undefined,
         limit: 12,
       });
-      if (out.ok) return { numbers: out.numbers.slice(0, 12) };
-      if (out.reason === "unconfigured") return { numbers: [], note: "number_provider_unconfigured" };
-      if (out.reason === "pattern_too_short") return { numbers: [], note: "pattern_too_short" };
-      return { numbers: [], error: "number_search_failed" };
+      // `provider` tells the wizard which search surface to draw (capability
+      // chips + region/city filters, and no "Ready now" spare badge — spares
+      // are a VoIP.ms master-account concept).
+      if (out.ok) return { numbers: out.numbers.slice(0, 12), provider: "signalwire" };
+      if (out.reason === "unconfigured") return { numbers: [], provider: "signalwire", note: "number_provider_unconfigured" };
+      if (out.reason === "pattern_too_short") return { numbers: [], provider: "signalwire", note: "pattern_too_short" };
+      return { numbers: [], provider: "signalwire", error: "number_search_failed" };
     }
 
     // ── VoIP.ms branch (the default; byte-compatible with the pre-2026-08-30

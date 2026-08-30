@@ -20,7 +20,9 @@
  * outage tells a customer a perfectly buyable number does not exist.
  */
 
-export type NumberSearchMode = "starts" | "contains" | "ends";
+// "areacode" is the SignalWire-first mode the upgraded wizard sends; the
+// empty-state copy treats it exactly like a 3-digit starts-with search.
+export type NumberSearchMode = "areacode" | "starts" | "contains" | "ends";
 
 export type NumberSearchEmptyInput = {
   /** What the customer typed. Non-digits are ignored, exactly as the API does. */
@@ -42,6 +44,7 @@ export const NUMBER_SEARCH_FAILED_MESSAGE =
  * can act on, where "no numbers starting with 718" reads like a typo.
  */
 function isAreaCodeSearch(digits: string, mode: NumberSearchMode | undefined, tab: string): boolean {
+  if (mode === "areacode") return tab === "local" && digits.length === 3;
   return tab === "local" && digits.length === 3 && (mode ?? "starts") === "starts";
 }
 
