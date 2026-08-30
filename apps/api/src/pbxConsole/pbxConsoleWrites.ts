@@ -187,7 +187,9 @@ export function deviceOverrides(spec: DeviceSpec, form: ParsedForm, profiles: { 
   if (spec.secret) set["secret"] = spec.secret;
   if (spec.description != null) set["dev_description"] = spec.description;
   if (spec.maxContacts != null) set["max_contacts"] = spec.maxContacts;
-  else if (spec.kind === "webrtc" && !spec.id) set["max_contacts"] = "5";
+  // Izzy's rule (2026-08-30): a NEW device defaults to 5 contacts — desk pjsip
+  // and webrtc alike (virtual returned above; iax has no max_contacts field).
+  else if ((spec.kind === "webrtc" || spec.kind === "pjsip") && !spec.id) set["max_contacts"] = "5";
   /* ⛔ The rendered form has no "rfc4733" option — the panel's JS renames rfc2833
      to rfc4733 for pjsip devices after load, so a browser save of a desk phone
      always posts rfc4733. Re-posting the raw form value would silently flip
@@ -474,6 +476,9 @@ export async function createExtension(
     device_description: (first && first.description) || "",
     email: input.email || "", outgoing_rec: "yes", incoming_rec: "yes", vm_enabled: "yes", vm_password: input.vmPassword || "",
     ring_device: first && first.ringDevice === false ? "no" : "",
+    // Izzy's rule (2026-08-30): every device gets 5 contacts. An empty column
+    // takes the ombu_pjsip_devices default of 1.
+    max_contacts: first && first.maxContacts != null ? String(first.maxContacts) : "5",
   };
   if (first && first.secret) base.device_password = first.secret;
   const csv = CSV_HEADER + "\n" + rowOf(base) + "\n";

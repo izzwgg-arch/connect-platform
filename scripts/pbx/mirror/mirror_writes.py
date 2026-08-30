@@ -433,7 +433,7 @@ def add_extension(conn, tenant_id: int, ext: str, name: str, email: str = "",
                   language: str = "en", music_group_id: int = 1, outgoing_rec: str = "yes",
                   incoming_rec: str = "yes", desk_device: bool = True, webrtc_device: bool = True,
                   desk_dtmf: str = "rfc4733", webrtc_dtmf: str = "rfc2833",
-                  desk_max_contacts: int = 1, webrtc_max_contacts: int = 5) -> Plan:
+                  desk_max_contacts: int = 5, webrtc_max_contacts: int = 5) -> Plan:
     """
     Rows the panel's extension form / CSV import writes for one extension with a desk device
     (profile 1, user=<ext>) and a WebRTC device (profile 12, user=<ext>_1, vitxi_client=yes).

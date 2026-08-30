@@ -383,6 +383,11 @@ async function importExtension(s: PanelSession, person: PbxPerson): Promise<void
       technology: "pjsip",
       profile_name: "Default PJSIP Profile",
       device_user: person.ext,
+      // Izzy's rule (2026-08-30): every extension gets 5 contacts on the desk
+      // device AND 5 on the WebRTC device. Leaving this column empty takes the
+      // ombu_pjsip_devices column default, which is 1 — the whole fleet was
+      // backfilled 1→5 the same day.
+      max_contacts: "5",
       // "straight to cell": desk device exists but doesn't ring
       ring_device: straightToCell ? "no" : "",
       email: person.email || "",
