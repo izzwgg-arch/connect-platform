@@ -413,6 +413,10 @@ enum IntegrationProvider {
   /// Per-tenant OpenAI key for the conversational voice agent (sibling
   /// session's build — rides the same integrationCredentials vault).
   OPENAI
+  /// SignalWire — the carrier NEW sign-ups live on (2026-08-30 onboarding
+  /// switch). Numbers ride the master Space; chat send/receive dispatches on
+  /// this per-number value, VoIP.ms rows untouched.
+  SIGNALWIRE
 }
 
 enum SmsSendMode {
@@ -934,6 +938,7 @@ model Tenant {
   smsProviderLockedByUser         User?                             @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
   defaultSmsFromNumber            PhoneNumber?                      @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
   tenantSmsNumbers                TenantSmsNumber[]
+  smsRegistrations                TenantSmsRegistration[]
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
   voicemailIngestIncidents        VoicemailIngestIncident[]
@@ -4552,6 +4557,53 @@ model GlobalVoipMsConfig {
 }
 
 /// VoIP.ms SMS-capable number assigned to a tenant (optionally to one user/extension or a specific set of users).
+
+/// One 10DLC (carrier texting) registration per tenant/sign-up, filed with
+/// SignalWire's Campaign Registry API (brand -> campaign -> number order).
+/// ⛔ THERE IS NO EIN COLUMN AND THERE MUST NEVER BE ONE — the wizard promises
+/// "your EIN is never saved on your Loopcom account" in so many words; the EIN
+/// passes through the filing request to the registry and only the registry's
+/// ids/states live here. Same rule for a sole-proprietor's SSN digits.
+model TenantSmsRegistration {
+  id               String    @id @default(cuid())
+  tenantId         String?
+  /// The sign-up that collected it (one registration per submission).
+  submissionId     String?   @unique
+  provider         String    @default("signalwire")
+  /// "conversational" (LOW_VOLUME_MIXED) | "marketing" | "sole_prop".
+  classification   String
+  /// Marketing branch only: "loopcom" (we template the registry answers from
+  /// our own system's messages) | "own" (the customer wrote them).
+  senderSystem     String?
+  brandId          String?
+  brandState       String?
+  campaignId       String?
+  campaignState    String?
+  /// The number the campaign covers once assigned.
+  phoneE164        String?
+  numberAssignedAt DateTime?
+  activatedAt      DateTime?
+  legalName        String?
+  entityType       String?
+  vertical         String?
+  website          String?
+  /// Registry campaign content (marketing/own-system branch; templated for
+  /// the rest). Kept so a refiling never re-asks the customer.
+  messageFlow      String?
+  sample1          String?
+  sample2          String?
+  /// collected | awaiting_manual_filing | brand_filed | brand_approved |
+  /// campaign_filed | campaign_approved | number_assigned | active | failed
+  status           String    @default("collected")
+  error            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  tenant           Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([tenantId])
+}
+
 model TenantSmsNumber {
   id                  String                @id @default(cuid())
   /// Null until assigned to a Connect tenant (synced inventory row).

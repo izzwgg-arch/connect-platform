@@ -674,6 +674,21 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     }
     await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { createdTenantId: tenantId } });
 
+    // Link this sign-up's 10DLC texting registration (if one was collected) to
+    // the live tenant and give the chain a kick — the sweep would get there
+    // anyway, but the customer's texting should not wait ten extra minutes.
+    // Best-effort by design: a registration hiccup must never fail a build.
+    try {
+      const reg = await (db as any).tenantSmsRegistration.findUnique({ where: { submissionId } });
+      if (reg) {
+        await (db as any).tenantSmsRegistration.update({ where: { id: reg.id }, data: { tenantId } });
+        const { advanceSmsRegistration } = await import("../signalwire/signalWireTenDlc");
+        void advanceSmsRegistration(db as any, reg.id).catch(() => {});
+      }
+    } catch {
+      /* best-effort */
+    }
+
     // Whichever tenant the phone system landed on (checkout's, the auto-sync
     // race's, or a fresh one) must bill month 2 exactly like the sign-up quote:
     // E911 per number + the flat telecom fee. Guarded inside — a tenant whose

@@ -226,8 +226,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // FAIL CLOSED without a signing key (signalwire/signalWireWebhookAuth.ts).
       "/webhooks/signalwire/sms",
       "/webhooks/signalwire/sms-status",
+      // 10DLC registry status callback (2026-08-30): an untrusted TRIGGER
+      // only — every state written comes from an authenticated re-read of
+      // the registry API (signalwire/signalWireTenDlc.ts), and the handler
+      // throttles itself, so no signature is required for safety.
+      "/webhooks/signalwire/registry",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
     || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
+    || path.endsWith("/webhooks/signalwire/registry")
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")

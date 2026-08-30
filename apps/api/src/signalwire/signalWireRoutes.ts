@@ -72,6 +72,7 @@ export interface SignalWireRouteDeps {
 /** Public paths — both must be on the JWT bypass list (jwtPublicRouteBypass.ts). */
 export const SIGNALWIRE_INBOUND_SMS_PATH = "/webhooks/signalwire/sms";
 export const SIGNALWIRE_SMS_STATUS_PATH = "/webhooks/signalwire/sms-status";
+export const SIGNALWIRE_REGISTRY_STATUS_PATH = "/webhooks/signalwire/registry";
 
 /** Event names written to AgentAuditLog. The console filters on the prefix. */
 export const SW_EVENT_PREFIX = "signalwire.";
@@ -653,6 +654,32 @@ export function registerSignalWireRoutes(deps: SignalWireRouteDeps): void {
       sid: p.MessageSid ?? null, status: p.MessageStatus ?? null, from: p.From ?? null, to: p.To ?? null,
       errorCode: p.ErrorCode ?? null, segments: p.NumSegments ?? null,
     }, "system");
+    return reply.send({ ok: true });
+  });
+
+  // ── 10DLC registry status callback ─────────────────────────────────────
+  // ⛔ AN UNTRUSTED TRIGGER, NEVER A SOURCE OF TRUTH: the body's ids only
+  // select which registrations to re-check — every state written comes from
+  // an authenticated RE-READ of the registry API (signalWireTenDlc.ts). That
+  // is why this endpoint is safe without a signature (whether SignalWire
+  // signs these callbacks is undocumented): the worst a forged POST can do
+  // is make us re-read a row we own, and even that is throttled.
+  let lastRegistryKick = 0;
+  app.post(SIGNALWIRE_REGISTRY_STATUS_PATH, async (req: any, reply: any) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(body.id || body.brand_id || body.campaign_id || "").slice(0, 80);
+    const now = Date.now();
+    if (now - lastRegistryKick > 30_000) {
+      lastRegistryKick = now;
+      void (async () => {
+        const { advanceSmsRegistration } = await import("./signalWireTenDlc");
+        const rows = id
+          ? await db.tenantSmsRegistration.findMany({ where: { OR: [{ brandId: id }, { campaignId: id }] }, take: 5 })
+          : [];
+        for (const r of rows) await advanceSmsRegistration(db, r.id).catch(() => {});
+      })().catch(() => {});
+    }
+    await recordSignalWireEvent(db, "registry_callback", { id: id || null }, "system");
     return reply.send({ ok: true });
   });
 }

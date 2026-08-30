@@ -155,6 +155,7 @@ import {
 } from "./voicemail/voicemailEmailRuntime";
 import { startEmailGuardrails } from "./voicemail/voicemailEmailGuardrails";
 import { startSmsForwardGuardrail } from "./sms/smsForwardGuardrail";
+import { startSmsRegistrationSweep } from "./signalwire/signalWireTenDlc";
 import {
   readVoicemailAudio,
   saveVoicemailAudio,
@@ -5566,6 +5567,12 @@ registerShutdownTimer(setInterval(() => { void runVoicemailEmailWatchdog(app.log
 // Each escalates (never ADMIN_ALERT). See voicemailEmailGuardrails.ts.
 for (const t of startEmailGuardrails(app.log)) registerShutdownTimer(t);
 for (const t of startSmsForwardGuardrail(app.log)) registerShutdownTimer(t);
+// ── 10DLC registration sweep (SignalWire onboarding, 2026-08-30) ─────────────
+// Advances brand → campaign → number-assignment as the registry approves, and
+// flips the customer's texting on. Boot kick + interval inside; kill switch
+// SIGNALWIRE_TENDLC_SWEEP_DISABLED=1; inert while SIGNALWIRE_AUTO_PROVISION is
+// off (every advance re-checks the live gate).
+startSmsRegistrationSweep(db as any, app.log);
 
 // ── Hourly inbound-DID sync + unattributed-call alarm ────────────────────────
 // Owner directive 2026-08-02: "there should never be a reason why the system

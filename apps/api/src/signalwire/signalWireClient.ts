@@ -773,3 +773,149 @@ export async function lookupNumber(creds: StoredSignalWireCredentials, e164: str
     raw: d,
   };
 }
+
+// ── Campaign Registry (10DLC) — brands → campaigns → number orders ──────────
+//
+// The whole carrier-texting registration chain, on the beta registry API
+// (`/api/relay/rest/registry/beta/…` — doc-verified 2026-08-30). Every write
+// carries a status_callback_url when the caller supplies one, but the states
+// stored on our side are ALWAYS re-read from these GETs — a callback body is
+// an untrusted trigger, never a source of truth.
+//
+// ⛔ THE EIN PASSES THROUGH createBrand AND IS PERSISTED NOWHERE — the
+// wizard's "never saved on your account" promise depends on every caller of
+// this function discarding the value after the request. Do not log it, do not
+// audit it, do not put it on any row.
+
+export interface SwBrandInput {
+  /** Brand/marketing/DBA name (what recipients know the business as). */
+  name: string;
+  /** LEGAL business name — must match the EIN registration. */
+  companyName: string;
+  contactEmail: string;
+  contactPhone: string;
+  einIssuingCountry: string; // "US"
+  legalEntityType: "PRIVATE_PROFIT" | "PUBLIC_PROFIT" | "NON_PROFIT" | "GOVERNMENT";
+  /** Pass-through only — see the header. */
+  ein: string;
+  companyAddress: string;
+  companyWebsite: string;
+  companyVertical?: string;
+  statusCallbackUrl?: string;
+}
+
+export interface SwRegistryRecord {
+  id: string;
+  state: string;
+  raw: unknown;
+}
+
+function mapRegistry(r: any): SwRegistryRecord {
+  return { id: String(r?.id ?? ""), state: String(r?.state ?? r?.status ?? ""), raw: r };
+}
+
+export async function createBrand(creds: StoredSignalWireCredentials, input: SwBrandInput): Promise<SwRegistryRecord> {
+  const res = await swRequest(creds, {
+    family: "relay",
+    path: "/registry/beta/brands",
+    method: "POST",
+    json: {
+      name: input.name,
+      company_name: input.companyName,
+      contact_email: input.contactEmail,
+      contact_phone: input.contactPhone,
+      ein_issuing_country: input.einIssuingCountry,
+      legal_entity_type: input.legalEntityType,
+      ein: input.ein,
+      company_address: input.companyAddress,
+      company_website: input.companyWebsite,
+      ...(input.companyVertical ? { company_vertical: input.companyVertical } : {}),
+      ...(input.statusCallbackUrl ? { status_callback_url: input.statusCallbackUrl } : {}),
+    },
+    timeoutMs: 45_000,
+  });
+  return mapRegistry(res.data);
+}
+
+export async function getBrand(creds: StoredSignalWireCredentials, id: string): Promise<SwRegistryRecord> {
+  const res = await swRequest(creds, { family: "relay", path: `/registry/beta/brands/${encodeURIComponent(id)}` });
+  return mapRegistry(res.data);
+}
+
+export interface SwCampaignInput {
+  name: string;
+  /** e.g. "LOW_VOLUME_MIXED" | "MARKETING" — the class decides fees + caps. */
+  smsUseCase: string;
+  subUseCases?: string[];
+  /** ≥40 chars (registry rule). */
+  description: string;
+  /** ≥20 chars each (registry rule). */
+  sample1: string;
+  sample2: string;
+  messageFlow: string;
+  optInMessage?: string;
+  optOutMessage: string;
+  helpMessage: string;
+  embeddedLink?: boolean;
+  embeddedPhone?: boolean;
+  statusCallbackUrl?: string;
+}
+
+export async function createCampaign(
+  creds: StoredSignalWireCredentials,
+  brandId: string,
+  input: SwCampaignInput,
+): Promise<SwRegistryRecord> {
+  const res = await swRequest(creds, {
+    family: "relay",
+    path: `/registry/beta/brands/${encodeURIComponent(brandId)}/campaigns`,
+    method: "POST",
+    json: {
+      name: input.name,
+      brand_id: brandId,
+      sms_use_case: input.smsUseCase,
+      ...(input.subUseCases?.length ? { sub_use_cases: input.subUseCases } : {}),
+      description: input.description,
+      sample1: input.sample1,
+      sample2: input.sample2,
+      message_flow: input.messageFlow,
+      ...(input.optInMessage ? { opt_in_message: input.optInMessage } : {}),
+      opt_out_message: input.optOutMessage,
+      help_message: input.helpMessage,
+      // Boolean compliance attestations the registry requires on every
+      // campaign. Loopcom's platform behavior, stated truthfully: no number
+      // pooling, no direct lending, no age-gated content, no lead-gen buying.
+      number_pooling_required: false,
+      direct_lending: false,
+      embedded_link: input.embeddedLink ?? false,
+      embedded_phone: input.embeddedPhone ?? false,
+      age_gated_content: false,
+      lead_generation: false,
+      terms_and_conditions: true,
+      ...(input.statusCallbackUrl ? { status_callback_url: input.statusCallbackUrl } : {}),
+    },
+    timeoutMs: 45_000,
+  });
+  return mapRegistry(res.data);
+}
+
+export async function getCampaign(creds: StoredSignalWireCredentials, id: string): Promise<SwRegistryRecord> {
+  const res = await swRequest(creds, { family: "relay", path: `/registry/beta/campaigns/${encodeURIComponent(id)}` });
+  return mapRegistry(res.data);
+}
+
+/** Assign phone number(s) to an approved campaign (carrier connect ≤24h). */
+export async function createCampaignNumberOrder(
+  creds: StoredSignalWireCredentials,
+  campaignId: string,
+  phoneNumbers: string[],
+): Promise<SwRegistryRecord> {
+  const res = await swRequest(creds, {
+    family: "relay",
+    path: `/registry/beta/campaigns/${encodeURIComponent(campaignId)}/orders`,
+    method: "POST",
+    json: { phone_numbers: phoneNumbers },
+    timeoutMs: 45_000,
+  });
+  return mapRegistry(res.data);
+}

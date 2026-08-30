@@ -13,6 +13,8 @@ import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { onboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
+import { fileBrandForRegistration, LEGAL_ENTITY_TYPES } from "../signalwire/signalWireTenDlc";
+import { buildE911Address } from "./e911Address";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 import { isSetupStalled } from "./setupWatchdog";
 import { toPublicUrl } from "./provisioning";
@@ -666,6 +668,114 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // step. Persists the choice and kicks off VoIP.ms provisioning (subaccount +
   // DID / port + temporary number) in the background so it's usually done by
   // the time they hit "Launch".
+  // ── Business texting (10DLC) registration ────────────────────────────────
+  // The wizard's texting step posts here ONCE when the customer completes it.
+  // ⛔⛔ THE EIN IS A PASS-THROUGH: validated, forwarded into the registry
+  // filing in this same request, and DISCARDED — it never enters `answers`
+  // (which autosaves), never a row, never a log. That is the wizard's
+  // in-so-many-words promise to the customer.
+  const textingRegistrationSchema = z.object({
+    classification: z.enum(["conversational", "marketing", "sole_prop"]),
+    senderSystem: z.enum(["loopcom", "own"]).optional(),
+    legalName: z.string().trim().min(2).max(200),
+    entityType: z.enum(LEGAL_ENTITY_TYPES).optional(),
+    ein: z
+      .string()
+      .trim()
+      .regex(/^\d{2}-?\d{7}$/, "ein_format")
+      .optional(),
+    website: z.string().trim().max(200).optional(),
+    vertical: z.string().trim().max(60).optional(),
+    messageFlow: z.string().trim().max(2000).optional(),
+    sample1: z.string().trim().max(1000).optional(),
+    sample2: z.string().trim().max(1000).optional(),
+    consent: z.literal(true),
+  });
+  app.post("/onboarding/:token/texting-registration", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row || isReusableTemplate(row)) return reply.code(404).send({ error: "invalid_token" });
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked" });
+
+    const parsed = textingRegistrationSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const friendly =
+        first?.message === "ein_format"
+          ? "The EIN should be nine digits, like 82-1234567."
+          : "Please fill in the highlighted registration fields.";
+      return reply.code(400).send({ error: "validation", message: friendly });
+    }
+    const body = parsed.data;
+    if (body.classification !== "sole_prop" && !body.ein) {
+      return reply.code(400).send({ error: "validation", message: "The EIN is required — or choose “I don’t have an EIN”." });
+    }
+
+    // One registration per submission — re-submitting the step updates it.
+    const regData = {
+      classification: body.classification,
+      senderSystem: body.senderSystem || null,
+      legalName: body.legalName,
+      entityType: body.entityType || "PRIVATE_PROFIT",
+      vertical: body.vertical || null,
+      website: body.website || null,
+      messageFlow: body.messageFlow || null,
+      sample1: body.sample1 || null,
+      sample2: body.sample2 || null,
+      status: body.classification === "sole_prop" ? "awaiting_manual_filing" : "collected",
+    };
+    const reg = await (db as any).tenantSmsRegistration.upsert({
+      where: { submissionId: row.id },
+      create: { submissionId: row.id, provider: "signalwire", ...regData },
+      update: regData,
+    });
+
+    // The NON-SECRET half lands in answers (autosave-safe) + the sms switch.
+    const answers: any = { ...(row.answers as any || {}) };
+    answers.addons = { ...(answers.addons || {}), smsEnabled: true };
+    answers.texting = {
+      classification: body.classification,
+      senderSystem: body.senderSystem || null,
+      legalName: body.legalName,
+      entityType: body.entityType || "PRIVATE_PROFIT",
+      vertical: body.vertical || null,
+      website: body.website || null,
+      registrationId: reg.id,
+      consentAt: new Date().toISOString(),
+    };
+    await (db as any).onboardingSubmission.update({
+      where: { id: row.id },
+      data: { answers, smsEnabled: true },
+    });
+
+    if (body.classification === "sole_prop") {
+      return { ok: true, filed: false, status: "awaiting_manual_filing" };
+    }
+
+    // File the brand NOW — the one moment the EIN exists server-side.
+    const addr = buildE911Address({ ...row, answers });
+    const companyAddress = [
+      [addr.address.streetNumber, addr.address.streetName].filter(Boolean).join(" "),
+      addr.address.city,
+      [addr.address.state, addr.address.zip].filter(Boolean).join(" "),
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const outcome = await fileBrandForRegistration(db, {
+      registrationId: reg.id,
+      ein: body.ein!,
+      contactEmail: String(row.mainEmail || row.billingEmail || answers?.contact?.email || "").trim(),
+      contactPhone: String(answers?.contact?.phone || row.mainPhone || "").replace(/\D/g, "").slice(-10) || "8457231213",
+      companyAddress: companyAddress || "33 NY-17M Suite C, Harriman, NY 10926",
+    });
+    return {
+      ok: true,
+      filed: outcome.filed,
+      status: outcome.filed ? "brand_filed" : "collected",
+      ...(outcome.filed ? {} : { reason: (outcome as any).reason }),
+    };
+  });
+
   app.post("/onboarding/:token/apply-number", async (req: any, reply) => {
     const { token } = (req.params as any) as { token: string };
     const body = publicApplyNumberSchema.parse(req.body || {});
