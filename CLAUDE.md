@@ -5821,18 +5821,47 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   ⛔ The Data safety per-type dialogs STACK if you click every row's Start in
   one pass — process them top-down; the "Collected" checkbox in those dialogs
   only takes a REAL click (JS clicks work for everything else in them).
-- ⛔⛔ **THE ONE REMAINING DECLARATION — Foreground service permissions —
-  IS HARD-BLOCKED ON A DEMO VIDEO.** Every selected task (canned or Other)
-  demands a video link, one field per permission (DATA_SYNC, MICROPHONE,
-  PHONE_CALL; answers: data sync → Network processing/Other = the SIP
-  keepalive; microphone → Background audio input; phone call → VoIP/telecom
-  APIs). **One ~60s screen recording on an Android phone covers all three**
-  — receive a call (full-screen ring), answer and talk (mic), then background
-  the app with the keepalive notification visible (data sync) — uploaded to
-  YouTube unlisted, same URL pasted in all three fields. Needs Izzy's phone.
-- ⏳ **Then "Send for review" in Publishing overview — Izzy's press.**
+- ✅✅ **ALL 12 DECLARATIONS ARE DONE AND EVERYTHING IS QUEUED — "Submit 12
+  changes for review" is LIVE (2026-08-30).** The Foreground service
+  declaration is saved with Izzy's ~60s screen recording (splash → full-screen
+  incoming call from Ext 101 → answered call with mic controls → notification
+  shade with the Loopcom keepalive notification): **unlisted YouTube video
+  `https://www.youtube.com/watch?v=GxAA20WVQ98`** (Shorts link
+  `youtube.com/shorts/GxAA20WVQ98` — same video), the SAME url in all three
+  fields — Data sync → Network processing "Other", Microphone → "Background
+  audio input", Phone call → "VoIP, telecom APIs". ⛔ **The video lives on
+  izzwgg@gmail.com's "Peace and love" channel** (izzy@loopcom.net has no
+  YouTube session in that Chrome) — fine, any unlisted link satisfies Play; a
+  vertical ≤3-min video files under Studio's SHORTS tab, not Videos. ⛔ **A
+  first cut of the video (`HDy0Xtv6hFE`) contains content Izzy cut out and is
+  set PRIVATE, not deleted — never re-share or re-use that link.** No audio
+  track needed — reviewers only need to SEE the permissions in use.
+- ⛔⛔ **"SEND FOR REVIEW" WAS STILL LOCKED WITH EVERY DECLARATION DONE — a
+  NEW app's review runs through a PRODUCTION RELEASE.** The Publishing
+  overview lock ("complete the required steps in the app dashboard") means the
+  dashboard's "Create and publish a release" task list, not App content. Done
+  2026-08-30: **Countries/regions = ALL countries** on the production track
+  (deliberate — login-gated B2B app, and real users open it from abroad:
+  B Visible's Philippines employee), then **production release "100 (1.0.0)"
+  created from the LIBRARY** (Add from library — never re-upload the AAB; the
+  extension tool caps at 10 MB anyway), release notes filled, saved at the
+  Preview step (the one warning is the benign no-deobfuscation-mapping one).
+  **That unlocked the button.** Nothing is live: saving a release only queues
+  it in Publishing overview.
+- ⏳ **THE ONLY REMAINING STEP: Izzy presses "Submit 12 changes for review"
+  in Publishing overview.** Play runs ~14 min of pre-submission quick checks
+  first; the button sends listing + declarations + the production release as
+  one submission. ⛔ Managed publishing is OFF, so once Google APPROVES, the
+  app goes LIVE on Play in all countries automatically — if he wants to
+  control the go-live moment, turn Managed publishing ON before submitting.
   Internal testers see `com.connectcommunications.mobile (unreviewed)` until
   review completes.
+- ⛔ **The localhost fetch trick works on YouTube Studio too** — same CORS
+  server, page-JS fetch → File → assign to the upload dialog's one
+  `input[type=file]`; the 7.4 MB mp4 fetched in 67 ms. A first attempt hung
+  ("signal is aborted") — transient; a fresh server on a new port worked.
+  Studio's stepper is driveable by shadow-walker JS (`ytcp-button` by text,
+  `tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"|"UNLISTED"]`).
 - ✅ **The phone-screenshot swap is DONE and SAVED** — the 6 chat-pasted
   Android captures were recovered from the SESSION TRANSCRIPT
   (`~/.claude/projects/<proj>/<session>.jsonl`: pasted images live in
