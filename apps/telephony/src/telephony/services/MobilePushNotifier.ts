@@ -5,6 +5,16 @@ import type { NormalizedCall } from "../types";
 
 const log = childLogger("MobilePushNotifier");
 
+/**
+ * How long the ring one-shot may HOLD, waiting for the call's tenant to
+ * resolve, before sending the notify tenant-less anyway. The measured races
+ * (SignalWire trunk, exten "s") are 2–6 ms — the tenant arrives on the very
+ * next AMI event once the wake/T-code legs appear — so one second is two
+ * orders of magnitude of headroom while still being far shorter than any ring
+ * window. Overridable for tests only.
+ */
+export const RING_TENANT_WAIT_MS = Number(process.env.PBX_RING_TENANT_WAIT_MS ?? "") || 1000;
+
 // Short extension pattern: 2–6 digit numbers only (not trunk peer IDs like "344022_gesheft")
 const SHORT_EXT_RE = /^\d{2,6}$/;
 
@@ -161,6 +171,16 @@ export class MobilePushNotifier {
   private readonly answeredStopSent = new Set<string>();
   /** One-shot inbound pre-wake per call so we do not spam /internal/mobile-prewake. */
   private readonly preWoken = new Set<string>();
+  /**
+   * Ring notifies HELD because the destination extension appeared before the
+   * call's tenant resolved (the SignalWire "exten s" race — see the gate in
+   * `notify()`). Keyed by linkedId. `call`/`toExtensions` are refreshed on
+   * every subsequent upsert so the fallback timer sends the freshest snapshot.
+   */
+  private readonly ringTenantWait = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; call: NormalizedCall; toExtensions: string[] }
+  >();
   /** One-shot contact-liveness probe per call. */
   private readonly qualified = new Set<string>();
   /**
@@ -224,6 +244,13 @@ export class MobilePushNotifier {
       this.answeredStopSent.delete(call.linkedId);
       this.pushed.delete(call.linkedId);
       this.preWoken.delete(call.linkedId);
+      // A ring notify still held waiting for the tenant must die with the call —
+      // otherwise the fallback timer fires a "ringing" notify AFTER this hangup.
+      const held = this.ringTenantWait.get(call.linkedId);
+      if (held) {
+        clearTimeout(held.timer);
+        this.ringTenantWait.delete(call.linkedId);
+      }
       const payload: MobilePushRingPayload = {
         linkedId: call.linkedId,
         toExtension: "",
@@ -452,6 +479,78 @@ export class MobilePushNotifier {
       return;
     }
 
+    // ⛔⛔ THE ONE-SHOT MUST NOT LATCH WHILE THE TENANT IS STILL UNRESOLVED
+    // (2026-08-30). On a SignalWire-shaped trunk (request-URI user "s" — no DID
+    // in the exten, so TenantResolver's DID lookup finds nothing) the extension
+    // and the tenant arrive on DIFFERENT events, milliseconds apart — and not
+    // always the same PAIR of events: ab33da33 made onDialBegin resolve the
+    // tenant before its emit, and the very next live call latched from the
+    // recording __REC_FILENAME VarSet handler instead (linkedId
+    // 1788095464.42602: ext at .564, tenant at .570 — 6 ms late; the api
+    // refused the tenant-less notify, no CallInvite was created, and the demo
+    // iPhone got only a wake push, which renders NO ring UI). Per-event fixes
+    // will always miss the next event; the robust place to enforce "a one-shot
+    // must verify the OTHER fields it sends" is HERE, at the latch itself.
+    //
+    // When no tenant identity is known yet, HOLD the ring notify: the next
+    // callUpsert — which carries the tenant within milliseconds once the
+    // wake/T-code legs appear — re-enters this method and sends it complete.
+    // The fallback timer sends tenant-less at the deadline so a call whose
+    // tenant never resolves telephony-side (globally-unique extension,
+    // unattributed trunk) still rings exactly as it did before this change,
+    // just up to RING_TENANT_WAIT_MS later. VoIP.ms-shaped inbound resolves
+    // the tenant on the FIRST trunk event (DID lookup), so ordinary calls
+    // never enter the hold at all.
+    const pbxVitalTenantId =
+      (call.metadata?.pbxVitalTenantId as string | undefined) ?? null;
+    if (!call.tenantId && !pbxVitalTenantId) {
+      const held = this.ringTenantWait.get(call.linkedId);
+      if (held) {
+        // Already holding — just keep the freshest snapshot for the timer.
+        held.call = call;
+        held.toExtensions = toExtensions;
+        return;
+      }
+      const timer = setTimeout(() => {
+        const pending = this.ringTenantWait.get(call.linkedId);
+        this.ringTenantWait.delete(call.linkedId);
+        if (!pending || this.pushed.has(call.linkedId)) return;
+        log.warn(
+          {
+            linkedId: call.linkedId,
+            toExtensions: pending.toExtensions,
+            waitedMs: RING_TENANT_WAIT_MS,
+          },
+          "mobile-ring: tenant never resolved — notifying API tenant-less after grace",
+        );
+        this.sendRing(pending.call, pending.toExtensions);
+      }, RING_TENANT_WAIT_MS);
+      // Never keep the process alive for a held ring (Node returns a Timeout
+      // with .unref; the browser-lib typing returns a number — guard the call).
+      (timer as unknown as { unref?: () => void }).unref?.();
+      this.ringTenantWait.set(call.linkedId, { timer, call, toExtensions });
+      log.info(
+        { linkedId: call.linkedId, toExtensions, waitMs: RING_TENANT_WAIT_MS },
+        "mobile-ring: holding ring notify — extension known but tenant not yet resolved",
+      );
+      return;
+    }
+
+    const held = this.ringTenantWait.get(call.linkedId);
+    if (held) {
+      clearTimeout(held.timer);
+      this.ringTenantWait.delete(call.linkedId);
+    }
+    this.sendRing(call, toExtensions);
+  }
+
+  /**
+   * Send the one-shot ring notify for `toExtensions`. The `pushed` latch is set
+   * here, synchronously, BEFORE any async call — and this is the ONLY place it
+   * is set, so the hold above and the direct path cannot double-send.
+   */
+  private sendRing(call: NormalizedCall, toExtensions: string[]): void {
+    if (this.pushed.has(call.linkedId)) return;
     // Mark pushed BEFORE async calls so concurrent callUpsert events don't double-send.
     this.pushed.add(call.linkedId);
 
