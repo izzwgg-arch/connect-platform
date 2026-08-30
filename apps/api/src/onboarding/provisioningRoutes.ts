@@ -7,6 +7,7 @@ import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { resolveOnboardingStoragePath } from "./storage";
 import { runOnboardingSetup } from "./setupOrchestrator";
 import { registerOnboardingInvitationRoutes } from "./invitationRoutes";
+import { buildLoaPdf, buildPortQueueRow } from "./portQueue";
 
 function user(req: any): { sub?: string; role?: string } { return req.user as any; }
 async function requireSuperAdmin(req: any, reply: any): Promise<{ sub?: string; role?: string } | null> {
@@ -157,6 +158,95 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
       (db as any).onboardingSubmission.delete({ where: { id } }),
     ]);
     return { ok: true };
+  });
+
+  // ── The Port queue (SignalWire porting is a manual dashboard filing —
+  // mockup screen B). Lists every submission whose provisioning stamped a
+  // `portFiling` block; awaiting_manual_filing first, newest first inside
+  // each group. JSON-path filtering in Prisma is the awkward half, so this
+  // reads the recent rows and filters in JS — bounded, same as the list.
+  app.get("/admin/onboarding/port-queue", async (req: any, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const rows = await (db as any).onboardingSubmission.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 300,
+      select: { id: true, companyName: true, answers: true, submittedAt: true, provisionedDid: true, uploadedFiles: { select: { id: true, filename: true, kind: true } } },
+    });
+    const queue = rows.map(buildPortQueueRow).filter(Boolean) as any[];
+    queue.sort((a, b) => (a.status === b.status ? 0 : a.status === "awaiting_manual_filing" ? -1 : 1));
+    return { queue };
+  });
+
+  // The generated Letter of Authorization — what gets uploaded with the
+  // SignalWire dashboard filing (they require it signed + dated ≤30 days).
+  app.get("/admin/onboarding/submissions/:id/loa.pdf", async (req: any, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const row = await (db as any).onboardingSubmission.findUnique({
+      where: { id },
+      select: { id: true, companyName: true, answers: true, submittedAt: true, provisionedDid: true, uploadedFiles: { select: { id: true, filename: true, kind: true } } },
+    });
+    const pq = row ? buildPortQueueRow(row) : null;
+    if (!pq) return reply.code(404).send({ error: "not_found" });
+    const pdf = await buildLoaPdf(pq);
+    reply.header("content-type", "application/pdf");
+    reply.header("content-disposition", `attachment; filename="loa-${pq.portedDid.replace(/\D/g, "") || id}.pdf"`);
+    return reply.send(pdf);
+  });
+
+  // Mark a port package as filed at SignalWire. ⛔ Changes OUR record only —
+  // it never touches a carrier; the optional reference is their order id.
+  app.post("/admin/onboarding/submissions/:id/port-filed", async (req: any, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const body = z.object({ portReference: z.string().trim().max(80).optional() }).parse((req as any).body || {});
+    const row = await (db as any).onboardingSubmission.findUnique({ where: { id }, select: { id: true, answers: true } });
+    const a: any = row?.answers || {};
+    if (!a?.provisioning?.portFiling) return reply.code(404).send({ error: "not_found" });
+    a.provisioning.portFiling = {
+      ...a.provisioning.portFiling,
+      status: "filed",
+      filedAt: new Date().toISOString(),
+      ...(body.portReference ? { portReference: body.portReference } : {}),
+      filedBy: admin.sub || "admin",
+    };
+    await (db as any).onboardingSubmission.update({ where: { id }, data: { answers: a } });
+    await (db as any).onboardingEvent.create({
+      data: { submissionId: id, type: "STATUS_CHANGED", message: `Port filed at SignalWire${body.portReference ? ` (ref ${body.portReference})` : ""}.` },
+    });
+    return { ok: true };
+  });
+
+  // 10DLC registration status — the texting side of the same admin surface
+  // (includes the sole-proprietor rows that need a person to file).
+  app.get("/admin/onboarding/sms-registrations", async (req: any, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const regs = await (db as any).tenantSmsRegistration.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    });
+    const subIds = [...new Set(regs.map((r: any) => r.submissionId).filter(Boolean))] as string[];
+    const subs = subIds.length
+      ? await (db as any).onboardingSubmission.findMany({ where: { id: { in: subIds } }, select: { id: true, companyName: true } })
+      : [];
+    const nameOf = new Map(subs.map((s: any) => [s.id, s.companyName]));
+    return {
+      registrations: regs.map((r: any) => ({
+        id: r.id,
+        submissionId: r.submissionId,
+        companyName: r.submissionId ? nameOf.get(r.submissionId) || r.legalName : r.legalName,
+        legalName: r.legalName,
+        classification: r.classification,
+        senderSystem: r.senderSystem,
+        status: r.status,
+        brandState: r.brandState,
+        campaignState: r.campaignState,
+        phoneE164: r.phoneE164,
+        error: r.error,
+        activatedAt: r.activatedAt,
+        updatedAt: r.updatedAt,
+      })),
+    };
   });
 
   // File download (admin-only)

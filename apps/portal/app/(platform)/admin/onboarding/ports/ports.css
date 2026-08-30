@@ -1,0 +1,34 @@
+/* Admin → Onboarding → Port queue + texting registrations.
+   Rides the app shell's own theme tokens (--panel/--text/--border/--accent) —
+   never a private palette (billing-must-use-connect-theme-tokens). */
+
+.op-root { padding: 18px 22px 40px; max-width: 1080px; }
+.op-title { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; margin: 0 0 4px; color: var(--text); }
+.op-sub { font-size: 13px; color: var(--text-dim); margin: 0 0 18px; max-width: 78ch; line-height: 1.55; }
+.op-section { font-size: 14px; font-weight: 700; color: var(--text); margin: 22px 0 10px; }
+.op-empty { border: 1.5px dashed var(--border); border-radius: 11px; padding: 14px 16px; color: var(--text-dim); font-size: 13.5px; }
+.op-card { background: var(--panel); border: 1px solid var(--border); border-radius: 13px; padding: 15px 17px; margin: 0 0 12px; }
+.op-card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.op-company { font-size: 15px; font-weight: 750; color: var(--text); }
+.op-num { font-size: 13.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.op-pill { font-size: 10.5px; font-weight: 750; letter-spacing: 0.3px; border-radius: 12px; padding: 2px 9px; margin-left: auto; }
+.op-pill.wait { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.op-pill.filed { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+.op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 16px; margin-bottom: 10px; }
+.op-k { font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim); }
+.op-v { font-size: 13.5px; color: var(--text); word-break: break-word; }
+.op-sig { font-family: "Segoe Script", "Comic Sans MS", cursive; font-size: 16px; }
+.op-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--border); padding-top: 11px; }
+.op-btn { border: 1.5px solid var(--border); background: transparent; color: var(--text); border-radius: 9px; padding: 7px 13px; font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; text-decoration: none; }
+.op-btn:hover { border-color: var(--accent); }
+.op-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.op-ref-input { border: 1.5px solid var(--border); background: transparent; color: var(--text); border-radius: 9px; padding: 7px 11px; font: inherit; font-size: 12.5px; width: 190px; }
+.op-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.op-table th { text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim); padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.op-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text); }
+.op-table .st { font-size: 10.5px; font-weight: 750; border-radius: 12px; padding: 2px 8px; white-space: nowrap; }
+.op-table .st.ok { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+.op-table .st.pending { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.op-table .st.bad { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.op-err { color: var(--danger); font-size: 13px; margin: 8px 0; }
+.op-wrap-x { overflow-x: auto; }

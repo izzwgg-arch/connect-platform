@@ -199,7 +199,10 @@ export default function AdminOnboardingPage() {
   return (
     <div className="oi-root">
       <h1 className="oi-h1">Onboarding</h1>
-      <p className="oi-sub">Send a new customer the link that sets up their phone system.</p>
+      <p className="oi-sub">
+        Send a new customer the link that sets up their phone system.{" "}
+        <Link href="/admin/onboarding/ports" style={{ color: "var(--accent)", fontWeight: 600 }}>Port queue &amp; texting registrations →</Link>
+      </p>
 
       {sent ? (
         <div className="oi-card oi-sent">
