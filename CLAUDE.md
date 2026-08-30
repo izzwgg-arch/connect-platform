@@ -5753,13 +5753,32 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   the recipe for any future verification of a Connect-hosted number**: query
   `ConnectChatMessage` for `direction='INBOUND'` in the last few minutes —
   columns are `body`/`threadId`, there is NO `fromNumber` column.
-- ⏳ **NEXT (not started): create the app and upload.** ⛔ The package id
-  `com.connectcommunications.mobile` is PERMANENT once on Play — it is what
-  `loopcom-play-vc100.aab` is built as; do not "fix" it to a loopcom id.
-  Upload `apps/mobile/dist/loopcom-play-vc100.aab` to Internal testing with
-  the paste-ready copy in `docs/brand/loopcom/play/PLAY_LISTING.md`
-  (screenshots from the Loopcom Demo tenant ONLY + a reviewer demo login, no
-  self-signup in the app).
+- ✅✅ **THE APP IS CREATED AND BUILD 100 (1.0.0) IS LIVE ON INTERNAL TESTING
+  (2026-08-30).** App **Loopcom**, app id `4975651109887902716`, package
+  `com.connectcommunications.mobile` (⛔ PERMANENT now — first bundle
+  uploaded), Free, Play App Signing accepted. `loopcom-play-vc100.aab`
+  (81.7 MB → 41.4 MB installed) uploaded by Izzy through the native picker
+  (⛔ the Chrome-extension `file_upload` tool caps at 10 MB — an AAB always
+  needs his file-dialog click), parsed as **100 (1.0.0), API 24+, target 36**,
+  published to Internal testing; track **Active**. Tester list "Loopcom
+  internal testers" = izzy@loopcom.net + izzwgg@gmail.com + izzywkg@gmail.com;
+  **opt-in link
+  `https://play.google.com/apps/internaltest/4701258069997080030`**. The two
+  publish warnings were benign (no deobfuscation mapping; testers-not-set,
+  fixed same minute).
+- ⛔⛔ **A SIDELOADED PHONE CANNOT UPDATE INTO THE PLAY BUILD — the fleet app
+  is DEBUG-signed and the Play build is Play-App-Signing-signed.** Installing
+  from the opt-in link on a phone carrying the sideloaded Loopcom requires
+  UNINSTALLING the sideloaded app first (sign-in is lost and must be redone).
+  Izzy's own phone runs the fleet build — warn before he taps Install.
+- ⏳ **NEXT: the store-listing tasks gate any wider release** — internal
+  testers currently see the temporary name
+  `com.connectcommunications.mobile (unreviewed)` until app setup + review
+  complete. Dashboard tasks: store listing (paste from
+  `docs/brand/loopcom/play/PLAY_LISTING.md`; icon + feature graphic already in
+  that folder), screenshots (Loopcom Demo tenant ONLY), Data safety, content
+  rating, **App access reviewer demo login** (no self-signup in the app),
+  foreground-service declarations + demo video.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
 (`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
