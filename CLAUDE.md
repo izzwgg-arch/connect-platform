@@ -194,10 +194,27 @@ for the org migration), **submit build 57**, **move every URL to loopcom.net**.
 - ⚠️ **Account deletion (Guideline 5.1.1(v))** applies to apps supporting account
   *creation*; Loopcom is invite-only with no in-app sign-up — the standard
   exemption, and the review notes now say so explicitly.
-- ⏳ **NOT SUBMITTED. Nothing has been sent to Apple for REVIEW.** Remaining:
-  the App Privacy questionnaire, the Free Apps agreement check (both web-UI
-  only), and the Submit press — which is irreversible and Izzy's. Screenshots
-  are DONE (see above).
+- ✅✅ **SUBMITTED TO APPLE FOR REVIEW — 2026-08-29 23:12 ET, version 1.0 build 57,
+  state `WAITING_FOR_REVIEW` ("1 Item Submitted — up to 48 hours").** The last
+  mile was driven in Izzy's own Chrome (the "apple" browser via claude-in-chrome)
+  with his explicit "Accept + Submit for review" approval:
+  **(1) App Privacy PUBLISHED** — 11 data types (Name, Email, Phone, Contacts,
+  Emails/Text Messages, Photos or Videos, Audio Data, User ID, Device ID, Crash
+  Data, Performance Data), every one App Functionality only + linked to
+  identity + **NO tracking**; **(2)** Apple's NEW **social-media age-rating
+  questions** answered (Social Media No, under-13 API No — required for a new
+  app since Sept 2026; the 7-step wizard re-confirmed **4+**); **(3) Free Apps
+  agreement verified Active** (thru 2027-04-14); **(4)** the **updated Apple
+  Developer Program License Agreement was ACCEPTED** (it hard-blocks new-app
+  submission; ⛔ the first Agree click silently did nothing — re-done via
+  element ref and verified by the banner disappearing on a fresh load);
+  **(5) Copyright was EMPTY and failed submission validation** — filled as
+  `2026 Loopcom LLC` (⛔ the readiness doc's "✅ metadata done" table never
+  covered this field; Add for Review is the only validator that catches it).
+- ⚠️ **Two follow-ups seen in passing, neither blocks review:** the developer
+  account has **NO card on file for the $99 membership auto-renew** (apps come
+  off the store if it lapses), and the **DSA trader verification** for EU
+  distribution is unstarted (EU-only consequence).
 - ✅ **THE PERSONAL→ORGANIZATION MIGRATION REQUEST WAS SUBMITTED 2026-08-29**
   (D-U-N-S **149921594** arrived 08-28) — Izzy filled + submitted the
   "Individual to Organization Membership Update" form himself via the in-app

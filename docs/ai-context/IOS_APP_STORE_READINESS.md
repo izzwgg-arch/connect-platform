@@ -144,3 +144,52 @@ was filled through the in-app Browser pane:
   element refs on this form GO STALE after any scroll — a stale-ref click landed
   on "No" for the founder question and collapsed the whole form. Re-read refs
   after every scroll and verify each radio by screenshot before moving on.
+
+---
+
+## 🎉 2026-08-29 23:12 ET — SUBMITTED TO APPLE FOR REVIEW
+
+Version **1.0, build 57**, state **WAITING_FOR_REVIEW** ("1 Item Submitted — it
+can take up to 48 hours"). Driven in Izzy's Chrome with his explicit
+"Accept + Submit for review" approval. What the last mile actually took:
+
+1. **App Privacy — filled from scratch and PUBLISHED.** It had never been
+   started. Declared 11 data types, all "App Functionality" + "Linked to the
+   user's identity" + **no tracking**: Name, Email Address, Phone Number,
+   Contacts, Emails or Text Messages, Photos or Videos, Audio Data, User ID,
+   Device ID, Crash Data, Performance Data. ⛔ The per-type wizard is 5 modal
+   screens × 11 types; modal geometry shifts per type — verify each type ends
+   showing "Used for App Functionality / Linked to the user's identity" before
+   moving on. Published ("Published a few seconds ago by max weiss").
+2. **NEW since the 08-27 audit: social-media age-rating questions** — required
+   when submitting a NEW app (banner: answers optional until 2026-09-07
+   otherwise). Answered in the 7-step Age Ratings wizard: Social Media **No**
+   (no feed/redistribution), "Social Media Disabled for Users Under 13" **No**
+   (we don't implement the Declared Age Range API; no social features exist).
+   Everything else was pre-filled; calculated rating stayed **4+**.
+3. **Free Apps agreement: Active** (Jun 21 2026 – Apr 14 2027) — verified, no
+   action needed.
+4. **The updated Apple Developer Program License Agreement HARD-BLOCKED
+   submission** ("to submit new apps, the Account Holder must review and
+   accept"). Accepted at developer.apple.com/account. ⛔ **The first Agree
+   click silently did nothing** — the banner survived a fresh page load; the
+   second attempt clicked the button by element ref and the banner disappeared.
+   Verify acceptance by the banner's absence on a re-navigate, never by the
+   click having happened.
+5. **Copyright was EMPTY and failed "Add for Review" validation** — the one
+   field the metadata pass missed (it's on the version page, not appInfo).
+   Filled: `2026 Loopcom LLC`. ⛔ Add for Review is the only validator that
+   catches version-page gaps; run it expecting a red box, fix, re-press.
+6. **Add for Review → Draft Submission → Submit for Review** → ✅
+   "1 Item Submitted".
+
+**Icon note:** the App Store icon ships inside build 57's asset catalog (the
+Blue 2B refinement with light/dark variants) — nothing to change in the listing.
+
+### ⚠️ Follow-ups spotted (neither blocks review)
+- **No credit/debit card on the Apple account for the $99 membership
+  auto-renew** — if the membership lapses the apps come off the store.
+- **DSA trader verification unstarted** (Business → Agreements banner) — EU
+  distribution consequence only.
+- The **org migration** (Loopcom LLC) rides in parallel; seller name flips
+  after it completes. Review proceeds under Israel Weinstock.
