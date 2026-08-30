@@ -137,6 +137,52 @@ Deploy state at the end of this section.)
   onboarding sign-up (or console create) is the acceptance test: its DESK
   device row must read `max_contacts = 5` in `ombu_pjsip_devices`.
 
+## ⛔ AGENT HANDOFF — SIGNALWIRE ONBOARDING: mockups + design DONE, NOTHING BUILT (2026-08-30) — READ FIRST before building the SignalWire signup path, before touching the wizard's number/port/texting steps for it, or before promising 10DLC automation
+
+(**Mockups + research only — no code, no migration, no deploy, no SignalWire write.**
+Izzy, 2026-08-30: *"pretty much everything is changing to SignalWire. The whole
+onboarding should be SignalWire"* — and *"show me mock-ups before you build it."*
+Mockups he is choosing from:
+<https://claude.ai/code/artifact/1fd2575f-a7f5-424b-b5f6-2fd80f990ad2>.)
+
+- ⏳ **NOTHING IS APPROVED AND NOTHING IS BUILT.** Scope shown: number search
+  (all SignalWire modes + letters/T9 on local AND toll-free, region/city
+  filters, spare-pool badge retired), porting via SignalWire, E911 via
+  SignalWire, and a full 10DLC texting disclosure step. Existing customers stay
+  on VoIP.ms untouched; buy-only-after-payment unchanged.
+- ⛔ **Facts verified against SignalWire's docs 2026-08-30, so nobody
+  re-derives them:** number search takes `starts_with`/`contains`/`ends_with`
+  (3–7 DIGITS, mutually exclusive) + `areacode`/`region`/`city`/`number_type`
+  — letters are NOT accepted by the API (the bench client strips them;
+  T9-translate client-side). **Porting has NO API** — dashboard + signed LOA
+  dated ≤30 days, ~7 business days (toll-free/off-net up to 2 weeks) — so the
+  wizard collects a typed LOA signature and filing becomes an admin Port-queue
+  task; the watchdog redesign is “watch the number appear on the account”.
+  **10DLC is FULLY automatable**: `POST /api/relay/rest/registry/beta/brands`
+  (takes `ein` directly, `status_callback_url` for state changes) →
+  `…/brands/{id}/campaigns` (`LOW_VOLUME_MIXED`, 40-char description, 2×
+  20-char samples, opt-in/out fields) → `…/campaigns/{id}/orders`
+  (`phone_numbers`); campaign→carrier connect up to 24h, brand review ~1
+  business day, overall 3–5.
+- ⛔ **The EIN promise is a PASS-THROUGH design**: browser → one dedicated api
+  endpoint → SignalWire create-brand in the same request; never in the
+  autosaved draft, never in the DB, never logged — only the brand id + state
+  stored. That is what lets the disclaimer say “never saved on your account.”
+- ⛔ **The recon that maps the build** (in the 2026-08-30 session): search has
+  a provider INTERFACE (`NumberProvider`, one construction site
+  `publicRoutes.ts:233`) but purchase/route/E911/port are hard-wired `vms()`
+  calls in `voipMsProvisioning.ts` — that half needs a real abstraction. The
+  bench client (`apps/api/src/signalwire/signalWireClient.ts`) already has
+  search/purchase/release/E911-create+assign/SIP endpoints/phone-routes/SMS,
+  all creds-injected and reusable; 10DLC is greenfield; the inbound-SMS webhook
+  only audit-logs today. New-signup inbound rides the ONE existing
+  `loopcom-pbx` endpoint + trunk 132 + per-tenant DID routing — no per-customer
+  carrier subaccount (that was a VoIP.ms concept).
+- ⏳ **Decisions waiting on Izzy (in the artifact):** (1) hold the first real
+  signup until SignalWire grants attestation A (vetting in motion — outbound
+  signs C until then); (2) EIN pass-through vs encrypt-hold-delete;
+  (3) registration pricing (absorb vs itemize); (4) accept manual port filing.
+
 ## ⛔⛔ AGENT HANDOFF — a SignalWire inbound call rang NOBODY: the one-shot ring push raced the tenant, TWICE — first on DialBegin (2026-08-29), then on the recording VarSet (2026-08-30); the durable fix HOLDS AT THE LATCH — READ FIRST for ANY "the app didn't ring" on a SignalWire-routed number, before touching MobilePushNotifier's one-shot, or before letting resolvePbxEventTarget run without tenant evidence
 
 (`ab33da33` + **`ded5d412`** on `feat/ivr-migration-takeover`. ✅ **api at
