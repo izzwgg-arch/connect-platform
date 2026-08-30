@@ -67,7 +67,16 @@ export type PbxBuildJob = {
    * same-named second build could never even create its own).
    */
   label?: string;
-  voipms: { user: string; pass: string; server: string };
+  /**
+   * Which carrier this sign-up's number lives on. "voipms" (default, legacy)
+   * builds a per-tenant trunk from `voipms{}`; "signalwire" uses the ONE
+   * shared "SignalWire loopcom-pbx" trunk in Main (id 132 — inbound arrives
+   * there via [trk-132-in]'s exten-s lift into default-trunk, which routes by
+   * the tenant's DID list, so no per-customer trunk or subaccount exists).
+   */
+  numberProvider?: "voipms" | "signalwire";
+  /** Required for numberProvider "voipms" (the default); unused for SignalWire. */
+  voipms?: { user: string; pass: string; server: string };
   did: string;
   /**
    * Set when the sign-up is porting a number in: the customer's REAL number,
@@ -135,7 +144,7 @@ const TRUNK_SELECT = "trklist[]"; // in trunk_group (outbound route) add form
 const ROUTE_SELECT = /^members\[\d+\]\[outbound_route_id\]$/; // in ars add form
 const ARS_SELECT = "outbound_profiles[]"; // in tenants add form
 
-export async function createTrunk(s: PanelSession, label: string, vm: PbxBuildJob["voipms"]): Promise<string> {
+export async function createTrunk(s: PanelSession, label: string, vm: NonNullable<PbxBuildJob["voipms"]>): Promise<string> {
   // Idempotent resume: if a previous (interrupted) run already created this
   // trunk, reuse it instead of failing on the panel's duplicate-name error.
   // Safe only because the label is unique per submission — matching on the
@@ -194,6 +203,21 @@ export const SHARED_PRIMARY_TRUNK_NAME = "0001";
 async function findSharedPrimaryTrunkId(s: PanelSession): Promise<string | null> {
   const h = await s.loadForm("trunk_group", "add");
   return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === SHARED_PRIMARY_TRUNK_NAME);
+}
+
+/**
+ * The ONE shared SignalWire trunk every SignalWire-provisioned tenant dials
+ * out through (and whose [trk-132-in] custom block delivers their inbound).
+ * Description verified against the live PBX 2026-08-30: trunk 132,
+ * "SignalWire loopcom-pbx", tenant 1 (Main). Matched by NAME because panel ids
+ * are not stable across PBX rebuilds — the exact trap the doorway's pinned-id
+ * env taught (connect_destination_not_found, 2026-08-05).
+ */
+export const SIGNALWIRE_SHARED_TRUNK_NAME = "SignalWire loopcom-pbx";
+
+async function findSignalWireSharedTrunkId(s: PanelSession): Promise<string | null> {
+  const h = await s.loadForm("trunk_group", "add");
+  return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === SIGNALWIRE_SHARED_TRUNK_NAME);
 }
 
 export async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkIds: string[]): Promise<string> {
@@ -663,8 +687,12 @@ export async function buildPbxTenant(
   // company-derived names so they keep matching their existing objects).
   const slug = job.slug || slugify(co);
   const label = String(job.label || co).trim();
-  if (!co || !job.did || !job.voipms || !job.voipms.user || !job.voipms.pass || !job.voipms.server) {
-    throw new PanelStepError("input", "job needs company, did, voipms{user,pass,server}");
+  const numberProvider = job.numberProvider === "signalwire" ? "signalwire" : "voipms";
+  if (!co || !job.did) {
+    throw new PanelStepError("input", "job needs company and did");
+  }
+  if (numberProvider === "voipms" && (!job.voipms || !job.voipms.user || !job.voipms.pass || !job.voipms.server)) {
+    throw new PanelStepError("input", "job needs voipms{user,pass,server} for a VoIP.ms build");
   }
   if (!Array.isArray(job.people) || !job.people.length) {
     throw new PanelStepError("input", "job needs at least one person");
@@ -678,20 +706,37 @@ export async function buildPbxTenant(
   const tenantDids = portedDid ? [job.did, portedDid] : [job.did];
 
   s.setTenant(mainTenant);
-  const trunkId = await createTrunk(s, label, job.voipms);
-  log(`trunk ok (id ${trunkId})`);
-  // ⛔ The shared "0001" trunk goes FIRST on every outbound route; the
-  // tenant's VoIP.ms trunk is the backup (carriers filter VoIP.ms calls).
-  // Missing "0001" is NOT fatal — a build that dies here leaves a paid
-  // customer with no phone system at all, which is worse than backup-only
-  // outbound — but it is loud, and lands on the sign-up timeline.
-  const primaryTrunkId = await findSharedPrimaryTrunkId(s);
-  if (!primaryTrunkId) {
-    log(`⛔ shared primary trunk "${SHARED_PRIMARY_TRUNK_NAME}" not found on the PBX — outbound route carries ONLY the VoIP.ms trunk (carrier-filtered); add "${SHARED_PRIMARY_TRUNK_NAME}" to this route in the panel`);
+  let trunkId: string;
+  let routeTrunkIds: string[];
+  if (numberProvider === "signalwire") {
+    // ⛔ NO per-tenant trunk on SignalWire — every tenant shares trunk 132.
+    // Outbound dials SignalWire FIRST (the customer's number lives there, so
+    // their caller ID passes and — once the account's attestation-A grant
+    // lands — their calls sign A); the shared "0001" trunk is the backup.
+    const swTrunkId = await findSignalWireSharedTrunkId(s);
+    if (!swTrunkId) {
+      throw new PanelStepError("trunk", `shared SignalWire trunk "${SIGNALWIRE_SHARED_TRUNK_NAME}" not found on the PBX`);
+    }
+    trunkId = swTrunkId;
+    const backupId = await findSharedPrimaryTrunkId(s);
+    routeTrunkIds = backupId && backupId !== trunkId ? [trunkId, backupId] : [trunkId];
+    log(`using shared SignalWire trunk (id ${trunkId})${backupId ? ` with "${SHARED_PRIMARY_TRUNK_NAME}" backup` : ""} — no per-tenant trunk`);
+  } else {
+    trunkId = await createTrunk(s, label, job.voipms!);
+    log(`trunk ok (id ${trunkId})`);
+    // ⛔ The shared "0001" trunk goes FIRST on every outbound route; the
+    // tenant's VoIP.ms trunk is the backup (carriers filter VoIP.ms calls).
+    // Missing "0001" is NOT fatal — a build that dies here leaves a paid
+    // customer with no phone system at all, which is worse than backup-only
+    // outbound — but it is loud, and lands on the sign-up timeline.
+    const primaryTrunkId = await findSharedPrimaryTrunkId(s);
+    if (!primaryTrunkId) {
+      log(`⛔ shared primary trunk "${SHARED_PRIMARY_TRUNK_NAME}" not found on the PBX — outbound route carries ONLY the VoIP.ms trunk (carrier-filtered); add "${SHARED_PRIMARY_TRUNK_NAME}" to this route in the panel`);
+    }
+    routeTrunkIds = primaryTrunkId && primaryTrunkId !== trunkId ? [primaryTrunkId, trunkId] : [trunkId];
   }
-  const routeTrunkIds = primaryTrunkId && primaryTrunkId !== trunkId ? [primaryTrunkId, trunkId] : [trunkId];
   const routeId = await createOutboundRoute(s, label, co, outboundCid, routeTrunkIds);
-  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""}${primaryTrunkId ? `, trunks ${SHARED_PRIMARY_TRUNK_NAME}→VoIP.ms` : ""})`);
+  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""}, trunks [${routeTrunkIds.join(", ")}])`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
   let mirrorTenantId = 0;

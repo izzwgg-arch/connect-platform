@@ -12,6 +12,7 @@ import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
+import { onboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
 import { isSetupStalled } from "./setupWatchdog";
 import { toPublicUrl } from "./provisioning";
@@ -211,12 +212,38 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
     const q = String((req.query as any)?.q || "").trim();
     const modeParam = String((req.query as any)?.mode || "").toLowerCase();
-    const mode = (["starts", "contains", "ends"].includes(modeParam) ? modeParam : undefined) as
-      | "starts" | "contains" | "ends" | undefined;
+    const modeAny = (["areacode", "starts", "contains", "ends"].includes(modeParam) ? modeParam : undefined) as
+      | "areacode" | "starts" | "contains" | "ends" | undefined;
     const vanityWord = String((req.query as any)?.vanity || "").trim().slice(0, 40);
     const vanityDigits = vanityToDigits(vanityWord);
     const wantVanity = !!vanityDigits;
     const wantTollFree = wantVanity || String((req.query as any)?.type || "local").toLowerCase() === "tollfree";
+
+    // ── SignalWire branch (ONBOARDING_NUMBER_PROVIDER=signalwire) ─────────
+    // Same route, same response contract, different carrier. Letters are
+    // accepted in `q` on every mode (T9-translated in the module); region/city
+    // are SignalWire-only filters the upgraded wizard sends. No spare pool —
+    // that is a VoIP.ms master-account concept. The error contract is
+    // preserved: a provider failure is NEVER collapsed into an empty list.
+    if (onboardingNumberProvider() === "signalwire") {
+      const out = await searchSignalWireOnboardingNumbers(db, {
+        query: wantVanity ? vanityWord : q,
+        mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
+        type: wantTollFree ? "tollfree" : "local",
+        region: String((req.query as any)?.region || "").trim() || undefined,
+        city: String((req.query as any)?.city || "").trim() || undefined,
+        limit: 12,
+      });
+      if (out.ok) return { numbers: out.numbers.slice(0, 12) };
+      if (out.reason === "unconfigured") return { numbers: [], note: "number_provider_unconfigured" };
+      if (out.reason === "pattern_too_short") return { numbers: [], note: "pattern_too_short" };
+      return { numbers: [], error: "number_search_failed" };
+    }
+
+    // ── VoIP.ms branch (the default; byte-compatible with the pre-2026-08-30
+    // behavior). "areacode" is a SignalWire-only mode — treat it as the old
+    // auto behavior here.
+    const mode = modeAny === "areacode" ? undefined : modeAny;
     const creds = await loadGlobalVoipMsCreds();
     if (!creds) return { numbers: [], note: "number_provider_unconfigured" };
 
@@ -657,6 +684,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       // and picks the purchase method. A port has no kind.
       numberKind: body.choice === "port" ? undefined : body.numberKind || answers.phone?.numberKind || "local",
       details: body.porting ?? answers.phone?.details ?? {},
+      // ⛔ The carrier is PINNED at selection time. A submission whose number
+      // was searched on SignalWire must provision on SignalWire even if the
+      // platform default flips before payment lands (and vice versa) — an
+      // earlier stamp survives, so a resumed draft keeps its carrier.
+      provider: answers.phone?.provider || onboardingNumberProvider(),
     };
     await (db as any).onboardingSubmission.update({
       where: { id: row.id },

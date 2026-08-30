@@ -134,6 +134,10 @@ function generatePassword(): string {
 function tenDigits(v: unknown): string {
   return String(v ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
 }
+// Shared with the SignalWire provisioning sibling (signalWireProvisioning.ts)
+// so both carriers write the SAME event stream and provisioning state — one
+// implementation, never a fork. The local names stay for the call sites above.
+export { tenDigits as onboardingTenDigits, logEvent as logOnboardingEvent, mergeProvisioningState as mergeOnboardingProvisioningState };
 
 async function logEvent(submissionId: string, message: string): Promise<void> {
   try {
@@ -819,6 +823,18 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
   }
 
   await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { numberStatus: "provisioning" } });
+
+  // ── Carrier dispatch ─────────────────────────────────────────────────────
+  // The submission provisions on the carrier its number was PICKED from —
+  // stamped as answers.phone.provider at apply-number time — never on
+  // whatever the platform default happens to be by the time payment lands.
+  // Dynamic import on purpose: the SignalWire sibling imports helpers from
+  // THIS module, and a static import here would close the cycle at load time.
+  const numberProvider = String((row.answers as any)?.phone?.provider || "voipms");
+  if (numberProvider === "signalwire") {
+    const { applySignalWireOnboardingNumber } = await import("./signalWireProvisioning");
+    return applySignalWireOnboardingNumber(submissionId);
+  }
 
   const creds = await loadMasterCreds();
   if (!creds) {

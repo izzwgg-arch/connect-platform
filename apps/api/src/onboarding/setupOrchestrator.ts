@@ -529,9 +529,15 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
         throw new Error(`number_stage_not_ready (${res.detail})`);
       }
     }
-    const sub = readSubaccount(fresh);
+    // Which carrier this submission's number lives on (stamped at
+    // apply-number time — see publicRoutes). A SignalWire submission has NO
+    // subaccount: inbound rides the shared trunk 132 and is routed by DID.
+    const providerStamp = String((fresh.answers as any)?.phone?.provider || "voipms");
+    const isSignalWire = providerStamp === "signalwire";
+    const sub = isSignalWire ? null : readSubaccount(fresh);
     const did = String(fresh.provisionedDid || "");
-    if (!sub || did.length !== 10) throw new Error("number_stage_missing_subaccount_or_did");
+    if (did.length !== 10) throw new Error("number_stage_missing_did");
+    if (!isSignalWire && !sub) throw new Error("number_stage_missing_subaccount_or_did");
     if (!company) throw new Error("company_name_missing");
     if (!people.length) throw new Error("no_extensions_requested");
 
@@ -576,7 +582,8 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       label: identity.pbxLabel,
       did,
       portedDid,
-      voipms: { user: sub.username, pass: sub.password, server: sub.server },
+      numberProvider: isSignalWire ? "signalwire" : "voipms",
+      voipms: sub ? { user: sub.username, pass: sub.password, server: sub.server } : undefined,
       people,
       emergency,
     };
@@ -584,7 +591,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     if (!live) {
       await logEvent(
         submissionId,
-        `[dry-run] Build VitalPBX tenant "${company}": trunk ${sub.username}@${sub.server}, DID ${did}, ${people.length} extension(s)` +
+        `[dry-run] Build VitalPBX tenant "${company}": ${isSignalWire ? "shared SignalWire trunk" : `trunk ${sub!.username}@${sub!.server}`}, DID ${did}, ${people.length} extension(s)` +
           `${people.some((p) => p.cellNumber) ? ` (incl. ${people.filter((p) => p.cellNumber).length} with cell routing)` : ""}, inbound route → ext ${people[0].ext}.`,
       );
       await logEvent(submissionId, "[dry-run] Would sync extensions into Connect, verify users + SIP, and email every extension its invitation.");
