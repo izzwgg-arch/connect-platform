@@ -5743,14 +5743,23 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   then verified INSTANTLY because the requester IS the Search Console owner.
   ⛔⛔ **NEVER delete that TXT record** — Search Console ownership dies with it
   and Play's website verification hangs off it.
-- ⏳ **REMAINING, in order: (1) identity verification** — Izzy uploads his own
-  government ID under Home → "Verify your identity" (⛔ Google warns not to
-  edit/crop/manipulate the scan; processing takes days); **(2) phone
-  verification** unlocks only after the documents approve; **(3) app creation
-  is LOCKED until verifications complete** — then upload
-  `apps/mobile/dist/loopcom-play-vc100.aab` to Internal testing with the
-  paste-ready copy in `docs/brand/loopcom/play/PLAY_LISTING.md` (screenshots
-  from the Loopcom Demo tenant ONLY + a reviewer demo login).
+- ✅✅ **EVERY VERIFICATION COMPLETED THE SAME DAY (2026-08-29) — the account
+  is FULLY UNLOCKED and "Create app" is live.** Identity: Izzy's ID upload
+  verified within minutes (not the advertised days). Developer phone
+  `+18457231213`: Google's code text landed in **Connect's own SMS inbox** and
+  was read straight from `ConnectChatMessage` (*"Your Play Console
+  verification code is NNNNNN"* — the worker poll had it inside ~2 min); the
+  contact phone `+15622096644` Izzy verified himself. ⛔ **That inbox trick is
+  the recipe for any future verification of a Connect-hosted number**: query
+  `ConnectChatMessage` for `direction='INBOUND'` in the last few minutes —
+  columns are `body`/`threadId`, there is NO `fromNumber` column.
+- ⏳ **NEXT (not started): create the app and upload.** ⛔ The package id
+  `com.connectcommunications.mobile` is PERMANENT once on Play — it is what
+  `loopcom-play-vc100.aab` is built as; do not "fix" it to a loopcom id.
+  Upload `apps/mobile/dist/loopcom-play-vc100.aab` to Internal testing with
+  the paste-ready copy in `docs/brand/loopcom/play/PLAY_LISTING.md`
+  (screenshots from the Loopcom Demo tenant ONLY + a reviewer demo login, no
+  self-signup in the app).
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
 (`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
