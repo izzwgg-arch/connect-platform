@@ -5848,14 +5848,17 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   Preview step (the one warning is the benign no-deobfuscation-mapping one).
   **That unlocked the button.** Nothing is live: saving a release only queues
   it in Publishing overview.
-- ⏳ **THE ONLY REMAINING STEP: Izzy presses "Submit 12 changes for review"
-  in Publishing overview.** Play runs ~14 min of pre-submission quick checks
-  first; the button sends listing + declarations + the production release as
-  one submission. ⛔ Managed publishing is OFF, so once Google APPROVES, the
-  app goes LIVE on Play in all countries automatically — if he wants to
-  control the go-live moment, turn Managed publishing ON before submitting.
-  Internal testers see `com.connectcommunications.mobile (unreviewed)` until
-  review completes.
+- ✅✅ **SUBMITTED TO GOOGLE FOR REVIEW — 2026-08-30, on Izzy's explicit "I
+  wanted to go live right away."** All 12 changes (production release "100
+  (1.0.0)" full rollout, 176 countries + rest of world, store listing, every
+  App content declaration) sent in one submission; Publishing overview reads
+  **"Changes in review"**. Google's dialog: reviews typically complete within
+  7 days. ⛔ **Managed publishing is OFF BY IZZY'S CHOICE** — approval means
+  the app goes LIVE on Play worldwide automatically, nobody presses anything
+  else. Watch "Submission activity" on the Publishing overview for the
+  verdict. Internal testers see `com.connectcommunications.mobile
+  (unreviewed)` until review completes; ⛔ sideloaded phones still must
+  uninstall the debug-signed fleet app before installing from Play.
 - ⛔ **The localhost fetch trick works on YouTube Studio too** — same CORS
   server, page-JS fetch → File → assign to the upload dialog's one
   `input[type=file]`; the 7.4 MB mp4 fetched in 67 ms. A first attempt hung
