@@ -139,3 +139,86 @@ poll:
    VoIP.ms RECEIVED the message; anything earlier (sender's carrier, group-MMS
    relaying — and this customer is in a group-text mess, §3) is invisible and
    can be minutes on its own.
+
+## 8. THE FIXES ARE BUILT (2026-08-30, `78e6d827`) — media uncapped BOTH directions, notifications per MESSAGE in EVERY desktop window
+
+Izzy's orders: *"Fix the cap on how many photos you can send. There is no cap,
+and there shouldn't be a cap"* and *"Fix the notifications on Windows and make
+the mini dialer have notifications just like the phone… a little numbers pill…
+same on the quick action on the bottom."*
+
+**Worker half (`voipMsInboundSyncJob.ts` + `connectChatSmsJob.ts`):**
+- `parseMediaUrls` scans EVERY `col_mediaN`/`mediaN` key (numeric sort, so
+  media10 lands after media2) and keeps the whole `media` array — the old
+  1..3 scan + `.slice(0, 3)` was the photo loss. Only bound left is
+  `MAX_INBOUND_MMS_MEDIA = 50`, a runaway-input guard, not a cap.
+- The attachment mirror resumes by COUNT (`existing >= urls.length` return,
+  `urls.slice(existing)` mirror) — the old `existing > 0 → return` froze a
+  message at whatever the first pass stored. The metadata backfill grows an
+  existing url list (`> cur.length`, was `=== 0`).
+  ✅ **This combination self-heals the real lost message**: voipms:10166591
+  (5 images, 3 stored) is still inside the poll's date-based 2-day window on
+  deploy day, so the first worker cycle after deploy backfills its metadata to
+  5 urls and mirrors the 2 missing images. Verify: attachments on message
+  `cmtdeyyzo73tkti23jcipy60i` go 3 → 5. ⛔ The window's cutoff is the UTC
+  DATE two days back — after 2026-08-30 UTC-midnight the row falls out and the
+  recovery needs a hand-run.
+- **Outbound: >3 attachments ship as ceil(n/3) MMS messages.**
+  `MMS_MEDIA_PER_MESSAGE = 3` is VoIP.ms `sendMMS`'s media1..media3 parameter
+  surface — the carrier's shape, not ours. Body rides the FIRST chunk only.
+  ⛔ A failed chunk is never re-sent (duplicate-billing rule); the link
+  fallback covers ONLY undelivered attachments — `deliveredSourceIds` maps a
+  converted voice note back to its original via `convertedFromAttachmentId`,
+  and the body segments go out only when the body-carrying first chunk never
+  left (`sentMediaCount === 0`).
+
+**Portal half (`DesktopNotificationsBridge.tsx` + `desktopNotificationPoll.ts`
++ `DesktopMiniDialer.tsx`):**
+- Detection is per MESSAGE — `decideMessageToasts` keys on (threadId, lastAt)
+  from **`/chat/threads`** (⛔ never `/sms/messages`, which collapses every
+  inbound thread into one entry keyed by the tenant's OWN number). `isNew` is
+  the server's shared-unread verdict, so your own outbound reply never toasts.
+  First poll is a silent baseline (no login toast storm); max 3 toasts/poll.
+- ⛔ **Every desktop window polls now** — full, mini dialer AND the phone
+  engine — so notifications survive the full window being closed to the tray.
+  Cross-window dedupe is the existing `alreadyNotified` localStorage guard
+  (shared origin). Browser tabs still get nothing by design.
+- The mini's bottom tab bar carries **per-tab unread pills** (`tabBadges`):
+  Chat = unread conversations, Voicemail = unheard, Recents = missed calls —
+  red pill on the icon, bordered with `--mn-bg` so it works in both themes.
+  The bell popover ("open it and it shows them") already existed.
+
+**Proven:** 13 worker tests (`mmsMediaCaps.test.ts`, incl. a replay of the
+real five-image carrier row) + 12 portal tests (extended
+`desktopNotificationPoll.test.ts`); **every source guard replayed against
+HEAD's blobs and failing there** (slice(0,3) ×2 present, chunk loop absent,
+full-window gate ×2 present, old helper ×2 present). Worker suite 132/132 via
+`pnpm test`; portal typecheck 0 (`--incremental false` — the tracked
+tsbuildinfo was locked by a parallel session and was restored); worker tsc
+errors are the pre-existing baseline, none in an edited file.
+⛔ The comment-quoting guard trap hit AGAIN: the bridge's doc comment quoted
+the old gate literal and failed its own negative guard — reworded.
+
+**⏳ NOT PROVEN:** no human has seen a toast/pill, and no >3-photo MMS has been
+sent since. Acceptance: text the FixUp number from outside — a Windows toast
+names the SENDER (not 845-806-7040) within ~30 s of ingest on whichever
+window is open, incl. mini-only; the mini's Chat tab shows the red pill; send
+5 photos each way and count 5. ⛔ Open desktop windows keep the OLD bundle —
+fully close and reopen the app.
+
+## 9. Group texting — the design answer (NOT built, needs Izzy's word)
+
+Two honest tiers, because VoIP.ms has no group MMS:
+1. **Broadcast group (cheap, safe):** a Connect group thread holding N
+   external numbers; sending fans out N individual texts. Each recipient gets
+   a normal 1:1 from the business number — they cannot see each other, and
+   replies land 1:1 in Connect. Good for announcements; not a group chat.
+2. **True group experience = a DEDICATED DID per group (relay model):** buy a
+   number per group; anything inbound on it is group traffic BY CONSTRUCTION
+   (kills the private-vs-group ambiguity that makes relaying on the main
+   number dangerous), and every member message is re-broadcast to the others
+   prefixed with the sender's name. Costs: a DID + E911 per group, N-1
+   outbound segments per relayed message, STOP/opt-out handling, loop caps.
+   ⛔ Relaying on the MAIN number was considered and must not be built — a
+   member's PRIVATE text to the business is indistinguishable from a group
+   reply and would be broadcast to the whole group.

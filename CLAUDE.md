@@ -92,9 +92,25 @@ Memory: [[desktop-sms-notification-only-fires-on-new-threads]].
   = one externalPhone). **Not our bug; nothing to build on VoIP.ms.** If group
   texting ever matters commercially it is a carrier pivot question (Telnyx
   documents group MMS; SignalWire unverified).
-- ⛔ **Inbound MMS silently drops attachments past 3** — `parseMediaUrls`
-  (`voipMsInboundSyncJob.ts`) slices to 3; a real 5-image MMS stored 3. The cap
-  copies the OUTBOUND sendMMS limit and is wrong for receive. NOT fixed.
+- ✅✅ **BOTH FIXES ARE BUILT (`78e6d827`, 2026-08-30 — deploy state in the
+  handoff §8): MMS media is UNCAPPED both directions, and desktop
+  notifications fire per MESSAGE in EVERY desktop window.** Inbound:
+  `parseMediaUrls` scans every `col_mediaN` key (was 1..3 + slice-to-3 — the
+  photo loss); the mirror resumes by COUNT; the metadata backfill grows.
+  Outbound: >3 attachments ship as **ceil(n/3) MMS messages** —
+  `MMS_MEDIA_PER_MESSAGE = 3` is VoIP.ms `sendMMS`'s media1..3 parameter
+  surface, the carrier's shape, never ours; body on the FIRST chunk only; a
+  failed chunk is never re-sent and the link fallback covers ONLY undelivered
+  attachments. Notifications: `decideMessageToasts` keys on (threadId,
+  lastAt) from **`/chat/threads`** — ⛔ never `/sms/messages`, which collapses
+  every inbound thread into one entry keyed by the tenant's OWN number — the
+  first poll is a silent baseline, and the bridge runs in full + mini + phone
+  engine (cross-window dedupe = the shared localStorage guard). The mini's
+  tab bar carries per-tab unread pills (`tabBadges`).
+  ⛔ **Group texting stays a CARRIER limitation** — the design answer (§9 of
+  the handoff): broadcast-fanout groups are cheap and safe; a TRUE group
+  experience needs a dedicated DID per group; ⛔ never relay on the main
+  number (a member's private text is indistinguishable from a group reply).
 
 ## ⛔ AGENT HANDOFF — every extension gets FIVE contacts, desk AND WebRTC (2026-08-30, Izzy's standing rule) — READ FIRST before creating a device on any path, before touching `max_contacts`, or before "restoring" the ombu_pjsip_devices default
 
