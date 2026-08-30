@@ -5771,14 +5771,46 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   from the opt-in link on a phone carrying the sideloaded Loopcom requires
   UNINSTALLING the sideloaded app first (sign-in is lost and must be redone).
   Izzy's own phone runs the fleet build — warn before he taps Install.
-- ⏳ **NEXT: the store-listing tasks gate any wider release** — internal
-  testers currently see the temporary name
-  `com.connectcommunications.mobile (unreviewed)` until app setup + review
-  complete. Dashboard tasks: store listing (paste from
-  `docs/brand/loopcom/play/PLAY_LISTING.md`; icon + feature graphic already in
-  that folder), screenshots (Loopcom Demo tenant ONLY), Data safety, content
-  rating, **App access reviewer demo login** (no self-signup in the app),
-  foreground-service declarations + demo video.
+- ✅✅ **THE STORE LISTING IS SAVED AND STORE SETTINGS ARE PUBLISHED
+  (2026-08-30).** Default store listing: app name Loopcom, short + full
+  descriptions from `PLAY_LISTING.md` verbatim, 512 icon, 1024×500 feature
+  graphic, **6 phone screenshots** (order: recents, voicemail, keypad,
+  contacts, team, settings — Loopcom Demo tenant, letterboxed to exact 9:16
+  1431×2544 on #0C1218), 7-inch and 10-inch tablet slots each carry 2 of the
+  same letterboxed shots — saved ("Change saved. Send for review in Publishing
+  overview."). Store settings: category **App / Business** saved; contact
+  details **info@loopcom.net / +18457231213 / https://www.loopcom.net/**
+  — "Save and publish" → **Change published** (contact details go live
+  immediately, they do not wait for review).
+- ⛔⛔ **HOW IMAGES GET INTO PLAY CONSOLE WITHOUT A FILE DIALOG — the
+  CORS-drop technique, proven for all five image slots.** A Chrome-extension
+  synthesized click CANNOT open a native file picker (untrusted gesture), and
+  `file_upload` caps at 10 MB. What works: run a tiny CORS server on
+  `http://127.0.0.1:8123` over the asset folder (`http://127.0.0.1` is a
+  trustworthy origin, so the HTTPS page may fetch it), then in page JS fetch
+  the file → `File` → `DataTransfer` → dispatch dragenter/dragover/drop on the
+  slot's `LOCALIZED-IMAGE-UPLOADER` (debug-ids `icon-uploader`,
+  `feature-graphic-uploader`, `phone-screenshot-uploader`,
+  `small/regular-tablet-screenshot-uploader`) → the asset side panel opens →
+  assign `dt.files` to its hidden `<input type=file>` + fire input/change →
+  tick the thumbnail → click the panel's Add. ⛔ **The panel is SCOPED to the
+  slot that opened it** — a 1024×500 reads "too small" if the panel was opened
+  from the 512×512 icon slot; close and reopen from the right slot's own "Add
+  assets". ⛔ Play screenshots must be EXACT 16:9/9:16 — compute the canvas as
+  height = multiple of 16, width = h*9/16 (1431×2544), or rounding gives
+  0.5624 and a refusal. ⛔ Play takes ONE store icon — there is no light/dark
+  pair; the theme-following launcher icon lives in the AAB, not the listing.
+- ⏳ **STILL OPEN before review can be requested:** (1) the App content
+  declarations — privacy policy `https://app.loopcom.net/privacy`, Data
+  safety form, content rating, **App access reviewer demo login**
+  (loopcom.review on the Demo tenant), foreground-service declarations — all
+  answered in `PLAY_LISTING.md`; (2) ⚠️ **the 6 phone screenshots currently
+  on the listing are iPhone-status-bar captures** (Downloads IMG_2887–2892 —
+  the true Android shots exist only as chat pastes); cosmetic, swap once the
+  Android files land on this PC (save from chat to Downloads, or adb pull);
+  (3) "Send for review" in Publishing overview — Izzy's press. Internal
+  testers see `com.connectcommunications.mobile (unreviewed)` until review
+  completes.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
 (`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
