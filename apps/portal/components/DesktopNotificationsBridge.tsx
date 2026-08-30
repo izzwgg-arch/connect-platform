@@ -4,10 +4,11 @@ import { useEffect, useRef } from "react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useSipPhone } from "../hooks/useSipPhone";
 import { ApiError, apiGet, hasBrowserAuthToken } from "../services/apiClient";
-import { fetchTenantSmsInboxThreads, type SmsThread } from "../services/platformData";
 import {
   buildDesktopVoicemailInboxProbePath,
+  decideMessageToasts,
   NotificationProbeBackoff,
+  type ChatThreadProbe,
 } from "../lib/desktopNotificationPoll";
 
 type VoicemailProbe = {
@@ -51,11 +52,24 @@ function alreadyNotified(key: string): boolean {
   }
 }
 
+/**
+ * ⛔ EVERY desktop window polls (full, mini dialer, phone engine) — not only
+ * the full window. A customer who lives in the mini dialer got ZERO message
+ * notifications while the old full-window-only kind check stood (FixUp
+ * Group, 2026-08-30), and a full window hidden to the tray still notifies via
+ * the always-alive windows. The `alreadyNotified` localStorage guard is
+ * shared across windows, so one message fires one toast however many windows
+ * are polling.
+ */
+function isDesktopWindow(): boolean {
+  return typeof window !== "undefined" && Boolean(window.connectDesktop?.isDesktop);
+}
+
 export function DesktopNotificationsBridge() {
   const phone = useSipPhone();
   const { backendJwtRole, tenantId, can } = useAppContext();
   const previousCall = useRef({ state: phone.callState, direction: phone.callDirection, remoteParty: phone.remoteParty });
-  const knownThreadIds = useRef<Set<string> | null>(null);
+  const knownThreadActivity = useRef<Map<string, string> | null>(null);
   const knownVoicemailIds = useRef<Set<string> | null>(null);
   const backoffRef = useRef(new NotificationProbeBackoff());
 
@@ -64,12 +78,12 @@ export function DesktopNotificationsBridge() {
   }, [tenantId, backendJwtRole]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind !== "full") return;
+    if (!isDesktopWindow()) return;
     const prev = previousCall.current;
     if (prev.state === "ringing" && prev.direction === "inbound" && phone.callState === "ended") {
       const key = `missed:${(prev.remoteParty || "call").trim()}:${Math.floor(Date.now() / 60000)}`;
       if (!alreadyNotified(key)) {
-        void window.connectDesktop.notifications?.show({
+        void window.connectDesktop?.notifications?.show({
           kind: "missed-call",
           title: "Missed call",
           body: prev.remoteParty || "Connect call",
@@ -81,26 +95,25 @@ export function DesktopNotificationsBridge() {
   }, [phone.callDirection, phone.callState, phone.remoteParty]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.connectDesktop?.isDesktop || window.connectDesktop.windowKind !== "full") return;
+    if (!isDesktopWindow()) return;
 
     let cancelled = false;
     const backoff = backoffRef.current;
 
-    const applySmsNotifications = (threads: SmsThread[]) => {
-      const ids = new Set(threads.map((thread) => thread.id));
-      const previous = knownThreadIds.current;
-      if (previous) {
-        const newest = threads.find((thread) => !previous.has(thread.id));
-        if (newest && !alreadyNotified(`sms:${newest.id}`)) {
-          void window.connectDesktop?.notifications?.show({
-            kind: "message",
-            title: "New message",
-            body: `${newest.phone}: ${newest.preview}`,
-            route: `/sms?phone=${encodeURIComponent(newest.phone)}`,
-          });
-        }
+    const applyMessageNotifications = (threads: ChatThreadProbe[]) => {
+      // Per-message detection — see decideMessageToasts for why this is keyed
+      // on (threadId, lastAt) and why the first poll is a silent baseline.
+      const { next, toasts } = decideMessageToasts(knownThreadActivity.current, threads);
+      for (const toast of toasts) {
+        if (alreadyNotified(toast.key)) continue;
+        void window.connectDesktop?.notifications?.show({
+          kind: "message",
+          title: toast.title,
+          body: toast.body,
+          route: toast.route,
+        });
       }
-      knownThreadIds.current = ids;
+      knownThreadActivity.current = next;
     };
 
     const poll = async () => {
@@ -111,10 +124,15 @@ export function DesktopNotificationsBridge() {
       // trips the nginx auto-ban on the customer's office IP.
       if (!hasBrowserAuthToken()) return;
 
-      let smsThreads: SmsThread[] | null = null;
+      let chatThreads: ChatThreadProbe[] | null = null;
       if (!backoff.shouldSkip("sms")) {
         try {
-          smsThreads = await fetchTenantSmsInboxThreads();
+          // ⛔ /chat/threads, never /sms/messages: the latter collapses every
+          // inbound thread into ONE entry keyed by the tenant's OWN number, so
+          // the toast named the customer's own DID and threads shadowed each
+          // other. /chat/threads carries isNew + lastAt + the display name.
+          const res = await apiGet<{ threads?: ChatThreadProbe[] }>("/chat/threads");
+          chatThreads = Array.isArray(res?.threads) ? res.threads : [];
           backoff.recordSuccess("sms");
         } catch (e) {
           const st = e instanceof ApiError ? e.status : 599;
@@ -122,8 +140,8 @@ export function DesktopNotificationsBridge() {
         }
       }
 
-      if (smsThreads && !cancelled) {
-        applySmsNotifications(smsThreads);
+      if (chatThreads && !cancelled) {
+        applyMessageNotifications(chatThreads);
       }
 
       const vmPath =

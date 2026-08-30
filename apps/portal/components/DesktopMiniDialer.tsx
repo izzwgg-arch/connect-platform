@@ -816,6 +816,15 @@ export function DesktopMiniDialer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newChats, voicemails, calls, notifTick]);
 
+  // Per-tab unread counts for the bottom tab bar's pills — the same numbers
+  // the bell already aggregates: unread conversations / unheard voicemails /
+  // missed calls. Data is already polled every 30 s by refreshLists.
+  const tabBadges = useMemo<Partial<Record<TabKey, number>>>(() => ({
+    messages: newChats.length,
+    voicemail: (voicemails || []).filter((v) => !v.listened).length,
+    calls: notifItems.missed.length,
+  }), [newChats, voicemails, notifItems.missed]);
+
   const markAllNotifsRead = useCallback(async () => {
     const ids = newChats.map((c) => c.id);
     const vmIds = (voicemails || []).filter((v) => !v.listened).map((v) => v.id);
@@ -1456,13 +1465,22 @@ export function DesktopMiniDialer() {
           (a fixed overlay would sit on the dialpad). */}
       <MiniDialerReloadBar />
 
+      {/* Per-tab unread pills, like the phone app's tab bar: Chat = unread
+          conversations, Voicemail = unheard, Recents = missed calls. The pill
+          sits on the ICON so an unread count is visible whatever tab is open. */}
       <nav className="mini-tabs">
-        {([["dialer", Phone, "Dialer"], ["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["team", Users, "Team"]] as const).map(([key, Icon, label]) => (
-          <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
-            <Icon size={20} />
-            <span>{label}</span>
-          </button>
-        ))}
+        {([["dialer", Phone, "Dialer"], ["calls", Clock3, "Recents"], ["messages", MessageSquare, "Chat"], ["voicemail", Voicemail, "Voicemail"], ["team", Users, "Team"]] as const).map(([key, Icon, label]) => {
+          const badge = tabBadges[key as TabKey] ?? 0;
+          return (
+            <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key as TabKey)}>
+              <span className="mini-tab-iconwrap">
+                <Icon size={20} />
+                {badge > 0 && <span className="mini-tab-pill">{badge > 9 ? "9+" : badge}</span>}
+              </span>
+              <span>{label}</span>
+            </button>
+          );
+        })}
       </nav>
       <style jsx>{`
         * { box-sizing: border-box; }
@@ -1766,6 +1784,10 @@ export function DesktopMiniDialer() {
         .mini-tabs { display: flex; border-top: 0.5px solid var(--mn-line); background: var(--mn-bg); }
         .mini-tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 11px; border: 0; background: transparent; color: var(--mn-text-4); font-size: 10px; cursor: pointer; transition: color .16s ease; }
         .mini-tabs .active { color: #3b82f6; }
+        .mini-tab-iconwrap { position: relative; display: inline-flex; }
+        /* Border matches the tab bar surface via --mn-bg, so the pill reads
+           cleanly in BOTH themes without a per-theme override. */
+        .mini-tab-pill { position: absolute; top: -5px; right: -11px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 800; line-height: 1; display: grid; place-items: center; border: 1.5px solid var(--mn-bg); }
         .empty { text-align: center; color: var(--mn-text-3); padding: 40px 10px; font-size: 13px; }
 `}</style>
     </main>

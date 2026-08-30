@@ -55,17 +55,38 @@ function firstString(row: Record<string, unknown>, keys: string[]): string {
   return "";
 }
 
-function parseMediaUrls(row: Record<string, unknown>): string[] {
+/**
+ * ⛔ NOT a product cap — a pathological bound only (carriers reject an MMS long
+ * before 50 attachments). Izzy, 2026-08-30: "There is no cap, and there
+ * shouldn't be a cap." A hardcoded 1..3 scan here is how two of a customer's
+ * five photos silently vanished (FixUp Group, voipms:10166591 carried
+ * col_media1..col_media5 and Connect stored three).
+ */
+export const MAX_INBOUND_MMS_MEDIA = 50;
+
+export function parseMediaUrls(row: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    if (s) out.push(s);
+  };
   const direct = row.media ?? row.mms ?? row.media_urls ?? row.mediaUrls;
-  if (Array.isArray(direct)) return direct.map((x) => String(x).trim()).filter(Boolean).slice(0, 3);
-  const text = String(direct || "").trim();
-  const split = text ? text.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : [];
-  const numbered = [row.media1, row.media2, row.media3].map((x) => String(x || "").trim()).filter(Boolean);
-  // VoIP.ms getMMS returns col_media1..3 (HTTPS links to media.php, etc.)
-  const colNumbered = [row.col_media1, row.col_media2, row.col_media3, row.Col_Media1, row.Col_Media2, row.Col_Media3].map((x) =>
-    String(x || "").trim(),
-  ).filter(Boolean);
-  return [...split, ...numbered, ...colNumbered].slice(0, 6);
+  if (Array.isArray(direct)) direct.forEach(push);
+  else if (typeof direct === "string") direct.split(/[,\s]+/).forEach(push);
+  // Numbered keys — media1..N and col_media1..N in any case. VoIP.ms getMMS
+  // emits as many col_mediaN keys as the message has attachments; scan them
+  // ALL, in numeric order, never a hardcoded 1..3.
+  const numbered = Object.keys(row)
+    .map((k) => {
+      const m = /^(?:col_)?media(\d+)$/i.exec(k);
+      return m ? { k, n: Number(m[1]) } : null;
+    })
+    .filter((x): x is { k: string; n: number } => x !== null)
+    .sort((a, b) => a.n - b.n);
+  for (const { k } of numbered) push(row[k]);
+  // The array form and the numbered keys usually carry the SAME urls — dedupe
+  // preserving order (the old code returned early on the array form instead).
+  return [...new Set(out)].slice(0, MAX_INBOUND_MMS_MEDIA);
 }
 
 /** VoIP.ms returns bare `YYYY-MM-DD HH:MM:SS` in America/New_York wall time (no TZ suffix). */
@@ -326,11 +347,17 @@ async function mirrorInboundMmsToAttachments(input: {
   messageId: string;
   externalUrls: string[];
 }) {
-  const urls = input.externalUrls.filter((u) => /^https?:\/\//i.test(String(u || "").trim())).slice(0, 3);
+  const urls = input.externalUrls.filter((u) => /^https?:\/\//i.test(String(u || "").trim())).slice(0, MAX_INBOUND_MMS_MEDIA);
   if (!urls.length) return;
+  // Idempotency by COUNT, not by "any attachment exists": attachments are
+  // created in url order, so a message that already mirrored its first N urls
+  // resumes at N. The old `existing > 0 → return` froze a message at however
+  // many attachments the first pass stored — which, combined with the old
+  // 3-url parse cap, is exactly how extra photos stayed lost forever even
+  // after the metadata gained the full url list.
   const existing = await db.connectChatMessageAttachment.count({ where: { messageId: input.messageId } });
-  if (existing > 0) return;
-  for (const url of urls) {
+  if (existing >= urls.length) return;
+  for (const url of urls.slice(existing)) {
     const written = await fetchVoipMsMmsWithRetry({
       tenantId: input.tenantId,
       threadId: input.threadId,
@@ -394,7 +421,10 @@ async function importInboundMessage(input: {
         source?: string;
       };
       const cur = Array.isArray(meta.mms?.urls) ? meta.mms!.urls! : [];
-      if (input.row.mediaUrls.length > 0 && cur.length === 0) {
+      // Also grows an EXISTING url list: a message first seen through getSMS
+      // (or through the old 3-url cap) picks up the rest of its media on the
+      // next poll while the row is still inside the 2-day window.
+      if (input.row.mediaUrls.length > cur.length) {
         meta = { ...meta, mms: { urls: input.row.mediaUrls }, source: "voipms_getSMS_getMMS" };
         await db.connectChatMessage.update({
           where: { id: existingMsg.id },

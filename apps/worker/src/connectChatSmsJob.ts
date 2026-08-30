@@ -8,6 +8,15 @@ import { resolveSmsPublicApiBase } from "./smsPublicApiBase";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
 
+/**
+ * VoIP.ms `sendMMS` accepts media1..media3 — the CARRIER API's parameter
+ * surface, not a product cap. A message with more attachments is sent as
+ * ceil(n / 3) MMS messages (body on the first one only). ⛔ Never "simplify"
+ * back to one send that silently drops the tail — that is how two of a
+ * customer's five photos vanished on the INBOUND side (2026-08-30).
+ */
+export const MMS_MEDIA_PER_MESSAGE = 3;
+
 function bodyWithoutMediaLinks(body: string | null | undefined): string {
   return String(body || "")
     .split(/\r?\n/)
@@ -147,7 +156,11 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       const sourceAttachments = msg.attachments.filter((a) => !isMmsConvertedVoiceArtifact(a));
       const audioAttachments = sourceAttachments.filter((a) => String(a.mimeType || "").toLowerCase().startsWith("audio/"));
       const nonAudioAttachments = sourceAttachments.filter((a) => !String(a.mimeType || "").toLowerCase().startsWith("audio/"));
-      let mmsAttachments = nonAudioAttachments.map((a) => ({ id: a.id, storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }));
+      // `sourceId` = the ORIGINAL attachment id (a converted voice note maps
+      // back to the voice note it was made from) — it is what the link
+      // fallback needs to know which attachments were already delivered by a
+      // successful MMS chunk before a later chunk failed.
+      let mmsAttachments = nonAudioAttachments.map((a) => ({ id: a.id, sourceId: a.id, storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }));
       let forceFallbackErr: any = null;
       if (audioAttachments.length) {
         try {
@@ -166,7 +179,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
           for (const item of converted) {
             console.info(JSON.stringify({ event: "voipms_audio_converted", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, fromAttachmentId: item.convertedFromAttachmentId, toBytes: item.sizeBytes, toMime: item.mimeType }));
           }
-          mmsAttachments = [...mmsAttachments, ...converted.map((a) => ({ id: a.attachmentId, storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }))];
+          mmsAttachments = [...mmsAttachments, ...converted.map((a) => ({ id: a.attachmentId, sourceId: a.convertedFromAttachmentId, storageKey: a.storageKey, mimeType: a.mimeType, fileName: a.fileName, sizeBytes: a.sizeBytes }))];
         } catch (convertErr: any) {
           console.warn(JSON.stringify({ event: "voipms_audio_convert_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, err: String(convertErr?.message || convertErr).slice(0, 300) }));
           forceFallbackErr = convertErr;
@@ -188,20 +201,49 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       }));
       try {
         if (forceFallbackErr) throw forceFallbackErr;
-        r = await provider.sendMms({
-          tenantId: data.tenantId,
-          to: ext,
-          from: tenantDid,
-          body: providerBody,
-          mediaUrls,
-        });
-        console.info(JSON.stringify({ event: "voipms_response", ok: true, tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, providerMessageId: r.providerMessageId ?? null }));
+        // ⛔ VoIP.ms `sendMMS` carries at most media1..media3 — that is the
+        // CARRIER API's parameter surface, not our cap. More attachments are
+        // never dropped (Izzy 2026-08-30: "there shouldn't be a cap"): they
+        // ship as additional MMS messages, the body riding the FIRST one only.
+        // A failed chunk records how much already went out so the link
+        // fallback below covers ONLY the undelivered attachments — a chunk is
+        // never re-sent (a duplicate MMS bills and confuses; the rule is the
+        // same as "never retry a synthesis POST").
+        if (mediaUrls.length === 0) {
+          r = await provider.sendMms({ tenantId: data.tenantId, to: ext, from: tenantDid, body: providerBody, mediaUrls: [] });
+        } else {
+          let last: { providerMessageId?: string } | null = null;
+          for (let i = 0; i < mediaUrls.length; i += MMS_MEDIA_PER_MESSAGE) {
+            const chunk = mediaUrls.slice(i, i + MMS_MEDIA_PER_MESSAGE);
+            try {
+              last = await provider.sendMms({
+                tenantId: data.tenantId,
+                to: ext,
+                from: tenantDid,
+                body: i === 0 ? providerBody : "",
+                mediaUrls: chunk,
+              });
+            } catch (chunkErr: any) {
+              chunkErr.__sentMediaCount = i;
+              throw chunkErr;
+            }
+          }
+          r = last!;
+        }
+        console.info(JSON.stringify({ event: "voipms_response", ok: true, tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: mediaUrls.length, chunkCount: Math.max(1, Math.ceil(mediaUrls.length / MMS_MEDIA_PER_MESSAGE)), providerMessageId: r.providerMessageId ?? null }));
       } catch (mmsErr: any) {
-        console.warn(JSON.stringify({ event: "mms_send_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, err: String(mmsErr?.message || mmsErr).slice(0, 300), falling_back: true }));
+        const sentMediaCount = Math.max(0, Number(mmsErr?.__sentMediaCount ?? 0)) || 0;
+        console.warn(JSON.stringify({ event: "mms_send_failed", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, sentMediaCount, err: String(mmsErr?.message || mmsErr).slice(0, 300), falling_back: true }));
         // VoIP.ms often rejects MMS when carrier limits apply or media URLs are not reachable from their servers.
         // Fall back to one or more SMS segments with signed HTTPS links so delivery still succeeds.
-        const links = sourceAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(publicBase, a.id, 86_400));
-        const fallbackMessages = [...smsSegmentsForBody(msg.body), ...links];
+        // Only for what has NOT already been delivered: attachments covered by
+        // a successful earlier chunk are excluded (their sourceIds map converted
+        // voice notes back to the original), and the body segments go out only
+        // when the first chunk — which carries the body — never left.
+        const deliveredSourceIds = new Set(mmsAttachments.slice(0, sentMediaCount).map((a) => a.sourceId));
+        const undelivered = sourceAttachments.filter((a) => !deliveredSourceIds.has(a.id));
+        const links = undelivered.map((a) => buildChatAttachmentIdSignedDownloadUrl(publicBase, a.id, 86_400));
+        const fallbackMessages = [...(sentMediaCount === 0 ? smsSegmentsForBody(msg.body) : []), ...links];
         await db.connectChatMessage.update({
           where: { id: msg.id },
           data: {
@@ -209,6 +251,7 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
               ...metadata,
               smsLinkFallback: true,
               smsMediaLinks: links,
+              smsMmsDeliveredViaMms: sentMediaCount,
               smsMmsFallbackReason: String(mmsErr?.message || mmsErr).slice(0, 500),
             },
           },
