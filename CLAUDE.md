@@ -5704,7 +5704,53 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   ≤1440px, **no audio**, showing both the grant AND the use), plus **≥1
   successful API call per permission within 30 days** before submitting.
 
-## ⛔ AGENT HANDOFF — GOOGLE PLAY STORE: the app is BUILD-READY (signed AAB `loopcom-play-vc100.aab`), the developer account is NOT created yet (2026-08-20) — READ FIRST before any Play Console work, before touching Android signing/versioning, or before publishing the next sideload APK
+## ⛔ AGENT HANDOFF — GOOGLE PLAY STORE: the ORGANIZATION ACCOUNT EXISTS as of 2026-08-29 (Loopcom, ID 4801714522126873799, owner izzy@loopcom.net) and the app is BUILD-READY (signed AAB `loopcom-play-vc100.aab`) — READ FIRST before any Play Console work, before touching Android signing/versioning, or before publishing the next sideload APK
+
+- ✅✅ **THE PLAY CONSOLE ORGANIZATION ACCOUNT WAS CREATED 2026-08-29** — driven
+  end to end in Izzy's real Chrome (⛔ NEVER the in-app browser pane on this
+  machine — it crashes Claude Desktop's GPU process, see
+  [[claude-desktop-gpu-crash-loop]]; the extension route ran the whole flow with
+  zero crashes). Izzy typed the password, ticked the two Terms boxes and paid
+  the **$25** himself. **Developer name `Loopcom` (public), organization
+  account, Account ID `4801714522126873799`, owner `izzy@loopcom.net`** — the
+  console is at `/u/4/` in that Chrome. Details that cost effort:
+  **(1)** the signup page adopts whatever Google session is active and the
+  signed-in account owns the developer account PERMANENTLY — it first landed on
+  `support@connectcomunications.com` and was backed out via
+  `accounts.google.com/AddSession`; **(2)** izzy@loopcom.net's **2SV master
+  toggle was OFF** (Play refuses without it) — it already had a passkey +
+  Google prompt, so flipping the toggle at
+  `myaccount.google.com/signinoptions/twosv` took 30 seconds, no code;
+  **(3)** the **D-U-N-S `149921594` resolved at Google ONE DAY after
+  issuance** — the payments profile pulled `Loopcom LLC, 33 NY-17M Ste C,
+  Harriman, NY 10926` straight from D&B, so the 24–48 h propagation fear never
+  bit; **(4)** the org CONTACT email must DIFFER from the owner account AND be
+  on the website's domain — Izzy created **`info@loopcom.net`** as a free alias
+  on his own user in Google Admin and it verified by code minutes later;
+  **(5)** public profile = `Loopcom` / `+18457231213` / `izzy@loopcom.net`
+  (⛔ support@loopcom.net stays OUT until that mailbox provably exists);
+  private contact = Israel Weinstock / info@loopcom.net / his cell
+  `+15622096644`; declarations = 1–10 employees, 2–5 apps, **No** earning money
+  on Play, **None of the above** categories, **No** other Play Console
+  accounts — ⛔ **Firebase/Cloud Console use does NOT count as "other Play
+  Console access"**; Izzy almost declared Yes over the FCM/Maps setup.
+- ✅ **loopcom.net IS A VERIFIED SEARCH CONSOLE DOMAIN PROPERTY under
+  izzy@loopcom.net, and Play's website verification is DONE.** TXT
+  `google-site-verification=XyKYtIzs9i_qfbf39AcxEhZpcGe6-0D2HrcdSSfnbKc` was
+  added as a Squarespace custom record (Izzy clicked the "Verify to continue
+  as support@…" Google gate; ⛔ the form's SAVE button shifts position after
+  the first click — re-aim, don't re-type). Play's "Send verification request"
+  then verified INSTANTLY because the requester IS the Search Console owner.
+  ⛔⛔ **NEVER delete that TXT record** — Search Console ownership dies with it
+  and Play's website verification hangs off it.
+- ⏳ **REMAINING, in order: (1) identity verification** — Izzy uploads his own
+  government ID under Home → "Verify your identity" (⛔ Google warns not to
+  edit/crop/manipulate the scan; processing takes days); **(2) phone
+  verification** unlocks only after the documents approve; **(3) app creation
+  is LOCKED until verifications complete** — then upload
+  `apps/mobile/dist/loopcom-play-vc100.aab` to Internal testing with the
+  paste-ready copy in `docs/brand/loopcom/play/PLAY_LISTING.md` (screenshots
+  from the Loopcom Demo tenant ONLY + a reviewer demo login).
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
 (`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
