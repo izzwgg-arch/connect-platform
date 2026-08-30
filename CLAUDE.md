@@ -5800,17 +5800,51 @@ setting up their WhatsApp … For anything I need, I want to be verified."*
   height = multiple of 16, width = h*9/16 (1431×2544), or rounding gives
   0.5624 and a refusal. ⛔ Play takes ONE store icon — there is no light/dark
   pair; the theme-following launcher icon lives in the AAB, not the listing.
-- ⏳ **STILL OPEN before review can be requested:** (1) the App content
-  declarations — privacy policy `https://app.loopcom.net/privacy`, Data
-  safety form, content rating, **App access reviewer demo login**
-  (loopcom.review on the Demo tenant), foreground-service declarations — all
-  answered in `PLAY_LISTING.md`; (2) ⚠️ **the 6 phone screenshots currently
-  on the listing are iPhone-status-bar captures** (Downloads IMG_2887–2892 —
-  the true Android shots exist only as chat pastes); cosmetic, swap once the
-  Android files land on this PC (save from chat to Downloads, or adb pull);
-  (3) "Send for review" in Publishing overview — Izzy's press. Internal
-  testers see `com.connectcommunications.mobile (unreviewed)` until review
-  completes.
+- ✅✅ **11 OF 12 APP CONTENT DECLARATIONS ARE DONE (2026-08-30), and the
+  TRUE Android screenshots are on the listing.** Saved: privacy policy
+  (`https://app.loopcom.net/privacy`), Ads (No), **Sign in details** (Yes
+  restricted; reviewer demo `loopcom.review@example.com` + the same password
+  Apple's reviewer uses — read it from `/root/.appstoreconnect/asc-demo.mjs`
+  on loopcom; accounts created "through employment/enterprise"; full-access
+  box ticked), **Content ratings** (IARC: Social or Communication →
+  Communication one-on-one, all interaction questions No → all-ages ratings;
+  ⛔ the IARC Next button stays DISABLED until you click the form's own
+  "Save" first), **Target audience** (18+), Advertising ID (No), Government
+  apps (No), Financial features (none), Health (none), **Full-screen intent**
+  (making/receiving calls + pre-grant Yes), and **Data safety** (13 types:
+  Name/Email/User IDs/Phone [App functionality + Account management], SMS or
+  MMS/Other in-app messages/Voice recordings/Crash logs/Diagnostics/Device
+  IDs [App functionality], Contacts/Photos/Videos optional; all collected,
+  NONE shared — service-provider transfers are exempt; encrypted in transit;
+  no in-app account creation but external accounts Yes; delete-data URL = the
+  privacy page, whose "Retention and deletion" section qualifies).
+  ⛔ The Data safety per-type dialogs STACK if you click every row's Start in
+  one pass — process them top-down; the "Collected" checkbox in those dialogs
+  only takes a REAL click (JS clicks work for everything else in them).
+- ⛔⛔ **THE ONE REMAINING DECLARATION — Foreground service permissions —
+  IS HARD-BLOCKED ON A DEMO VIDEO.** Every selected task (canned or Other)
+  demands a video link, one field per permission (DATA_SYNC, MICROPHONE,
+  PHONE_CALL; answers: data sync → Network processing/Other = the SIP
+  keepalive; microphone → Background audio input; phone call → VoIP/telecom
+  APIs). **One ~60s screen recording on an Android phone covers all three**
+  — receive a call (full-screen ring), answer and talk (mic), then background
+  the app with the keepalive notification visible (data sync) — uploaded to
+  YouTube unlisted, same URL pasted in all three fields. Needs Izzy's phone.
+- ⏳ **Then "Send for review" in Publishing overview — Izzy's press.**
+  Internal testers see `com.connectcommunications.mobile (unreviewed)` until
+  review completes.
+- ✅ **The phone-screenshot swap is DONE and SAVED** — the 6 chat-pasted
+  Android captures were recovered from the SESSION TRANSCRIPT
+  (`~/.claude/projects/<proj>/<session>.jsonl`: pasted images live in
+  `attachment.prompt[]` records as base64 — NOT in `message.content`),
+  letterboxed to exact 9:16 (923×2000 → 1125×2000), and re-attached in order
+  recents/voicemail/keypad/contacts/team/settings, plus 2 each on both tablet
+  slots. Files: `docs/brand/loopcom/play/shots-android/android-*.png`.
+  ⛔ An unsaved Play form dies with its tab — the first swap was lost when
+  the tab closed before Save; SAVE THE LISTING before leaving it.
+  ⛔ Two Chromes are connected on this machine and the OTHER one's `/u/4/` is
+  izzwgg@gmail.com — `switch_browser` and confirm the account chip reads
+  Loopcom before any console write.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_PLAY_STORE_2026-08-20.md`**
 (`b338064d`, pushed as merge `c0e0fa55`. No deploy, no migration, no PBX
