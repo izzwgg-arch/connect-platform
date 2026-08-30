@@ -930,6 +930,39 @@ export class CallStateStore extends EventEmitter {
     // a fast 486 and is torn down before the live-leg gate can observe it.
     markExtensionLegSeen(call, params.destination);
 
+    // ── Authoritative tenant from the dialed leg's own name (2026-08-29) ──────
+    // On the SignalWire inbound path the trunk leg carries no DID in its exten
+    // (the request-URI user is literally "s"), so the call reaches DialBegin
+    // with tenantId still NULL — and THIS event is the one that adds the
+    // extension and triggers MobilePushNotifier's ONE-SHOT ring push. The
+    // tenant marker is sitting right here in params.destination
+    // (`Local/T102_101_1@connect-mobile-wake-dial/n`, `PJSIP/T102_101`);
+    // throwing it away meant the ring notify went out with connectTenantId
+    // null and the api guessed ext "101" across tenants — the Loopcom Demo
+    // call's INCOMING_CALL push was delivered to ANOTHER company's user
+    // (Trimpro) and the demo iPhone never rang (2026-08-29, linkedId
+    // 1788055211.42054; the tenant resolved 2 ms AFTER the push fired).
+    // Fill-only: never overrides a tenant already resolved, and
+    // extractPbxTenantCodeFromCallFields returns null on conflicting markers.
+    if (!call.tenantId && this.tenantCodeToConnectIdResolver) {
+      const dialTenantCode = extractPbxTenantCodeFromCallFields(
+        params.destination,
+        params.channel,
+        params.context,
+        params.exten,
+      );
+      if (dialTenantCode) {
+        const resolvedTenantId = this.tenantCodeToConnectIdResolver(dialTenantCode);
+        if (resolvedTenantId) {
+          call.tenantId = resolvedTenantId;
+          call.metadata["pbxTenantCode"] = dialTenantCode;
+          if (!call.metadata["pbxVitalTenantId"]) {
+            call.metadata["pbxVitalTenantId"] = dialTenantCode.replace(/^T/i, "");
+          }
+        }
+      }
+    }
+
     const callerDigits = (params.callerIDNum ?? "").replace(/\D/g, "");
     const callerShort = callerDigits.length >= 2 && callerDigits.length <= 6;
 

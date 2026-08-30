@@ -4207,13 +4207,36 @@ async function resolvePbxEventTarget(evt: NormalizedWirePbxEvent): Promise<{ ten
       take: 20
     });
 
-    const matched = candidates.find((c: any) => {
+    const eligible = candidates.filter((c: any) => {
       const tenantLink = c.tenant?.pbxTenantLink;
       if (!tenantLink || tenantLink.status !== "LINKED") return false;
       if (evt.pbxTenantId && tenantLink.pbxTenantId !== evt.pbxTenantId) return false;
       if (evt.pbxExtensionId && c.pbxLink?.pbxExtensionId !== evt.pbxExtensionId) return false;
       return true;
     });
+
+    // ⛔⛔ NO TENANT EVIDENCE → the extension number must be GLOBALLY UNAMBIGUOUS
+    // or we refuse (2026-08-29). This used to be `.find()` — first match wins —
+    // so an event carrying neither pbxTenantId nor pbxExtensionId resolved
+    // "101" to an ARBITRARY company: a Loopcom Demo call's CallInvite and
+    // INCOMING_CALL ring push (with the caller's number) were delivered to
+    // Trimpro's ext-101 user, and the phone that should have rung never got a
+    // ring push at all. A short extension number is shared by most tenants on
+    // this platform; picking one silently is a cross-tenant leak AND a lost
+    // ring in the same move. Refusing is strictly no worse for the caller —
+    // the wrong-tenant invite never rang the right phone either — and the
+    // refusal is loud at every call site (TARGET_NOT_FOUND / "extension owner
+    // not found").
+    const hasTenantEvidence = Boolean(evt.pbxTenantId || evt.pbxExtensionId);
+    const distinctTenants = new Set(eligible.map((c: any) => c.tenantId));
+    if (!hasTenantEvidence && distinctTenants.size > 1) {
+      app.log.warn(
+        { toExtension: evt.toExtension, candidateTenants: distinctTenants.size },
+        "resolvePbxEventTarget: refusing cross-tenant guess — extension number is ambiguous and the event carries no tenant evidence",
+      );
+      return null;
+    }
+    const matched = eligible[0];
 
     if (matched?.ownerUserId) {
       return {
