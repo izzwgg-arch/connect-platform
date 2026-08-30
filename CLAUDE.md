@@ -71,6 +71,31 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — FixUp's "Windows app gets no messages" is the desktop notifier only firing on NEW threads, and "the SMS group" is a VoIP.ms limitation (2026-08-30) — READ FIRST for ANY "the desktop app doesn't get texts" report or ANY group-text question
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIXUP_SMS_COMPLAINTS_2026-08-30.md`**
+(**Read-only investigation — no code, no deploy, no data change, no carrier write.**)
+Memory: [[desktop-sms-notification-only-fires-on-new-threads]].
+
+- ⛔⛔ **`DesktopNotificationsBridge.tsx` notifies only when a NEW THREAD ID
+  appears** — a new message in an existing conversation fires NO Windows
+  notification, ever, while the phones buzz on every one. That asymmetry IS the
+  complaint. Only the full window polls (`windowKind !== "full"` early-return);
+  mini-dialer-only setups get nothing. Ingestion itself is CLEAN — every carrier
+  row since 08-24 landed in Connect (proven by read-only getSMS/getMMS diff).
+  ⏳ Fix (watch `lastMessageAt`, dedupe on message id) designed, NOT built.
+- ⛔⛔ **Group texting on a Connect number is IMPOSSIBLE on VoIP.ms — their staff
+  say so in writing** ("does not include group interaction"). Inbound group
+  messages arrive as bare 1:1s (no group metadata; some arrive EMPTY at the
+  carrier), replies go 1:1 — the customer's own text says it: *"The arrived
+  Message to me in private."* Connect has no group-SMS model either (`type:"sms"`
+  = one externalPhone). **Not our bug; nothing to build on VoIP.ms.** If group
+  texting ever matters commercially it is a carrier pivot question (Telnyx
+  documents group MMS; SignalWire unverified).
+- ⛔ **Inbound MMS silently drops attachments past 3** — `parseMediaUrls`
+  (`voipMsInboundSyncJob.ts`) slices to 3; a real 5-image MMS stored 3. The cap
+  copies the OUTBOUND sendMMS limit and is wrong for receive. NOT fixed.
+
 ## ⛔⛔ AGENT HANDOFF — a SignalWire inbound call rang NOBODY: the one-shot ring push raced the tenant by 2ms and the api guessed the wrong company (2026-08-29) — READ FIRST for ANY "the app didn't ring" on a SignalWire-routed number, before touching MobilePushNotifier's one-shot, or before letting resolvePbxEventTarget run without tenant evidence
 
 (`ab33da33` on `feat/ivr-migration-takeover`. ✅ **api DEPLOYED and
