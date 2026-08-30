@@ -105,3 +105,37 @@ NOT fixed — one-line-ish worker change plus mirror check, needs its own pass.
 2. Mandate the desktop-notification fix (§2) — portal-only deploy.
 3. Mandate the inbound-MMS media cap fix (§4) — worker deploy.
 4. Tell the customer the group-text answer (§3) — nothing to build on VoIP.ms.
+
+## 7. Follow-up complaint (same day): "SMS arrives 10 minutes later or a lot later" — MEASURED, and the platform is not doing it
+
+⛔ **Never measure SMS lag from `ConnectChatMessage.createdAt`** — it is stamped
+with the CARRIER's timestamp. The honest ingest clock is
+`SmsRoutingLog.createdAt` (written at ingest) minus the carrier time; the honest
+push clock is `NotificationLedger.sentAt` (type `sms_message`).
+
+- **Ingest lag, all 23 inbound messages over 14 days: 2 s … 3 m 41 s, median
+  ~90 s.** That is the poll cadence, not a fault. Not one message anywhere near
+  10 minutes.
+- **Outbound is seconds too** — spot-checked our OUTBOUND `createdAt` against
+  the carrier's own `date` on the same messages: 10 s / 20 s / 25 s to VoIP.ms
+  acceptance, `carrier_status: "Message delivered to handset."`
+- **Push fan-out fired for every message** (23/23 ledger claims,
+  `fastpath:sms-poll`), and the iPhones ride DIRECT APNs: newest message was
+  carrier-received 20:38:10 → APNS_ALERT_OK 20:38:29 — **19 seconds** end to end.
+
+**So where can "10 minutes" really come from?** Three places, none of them our
+poll:
+1. **The Windows app never notifies on existing threads (§2)** — they discover
+   the message whenever they next look, and the bubble shows the original
+   carrier time. Discovery lag reads exactly as "it arrived late."
+2. **Android SMS pushes still ride the Expo relay as data-only pushes** — the
+   worker's `sendSmsPushNotification` has NO direct-FCM path (the documented
+   gap in [[sms-push-is-a-worker-side-duplicate]]), even though his SM-S916U
+   holds a `nativeFcmToken` and its CALL pushes go `fcm_direct_ok`. A data-only
+   Expo push on a dozing Samsung can genuinely sit for many minutes. This is
+   the one server-side fix available: give the worker's SMS push the same
+   direct-FCM path call pushes already have. NOT built.
+3. **Upstream carrier lag we cannot see** — the clock we measure from is when
+   VoIP.ms RECEIVED the message; anything earlier (sender's carrier, group-MMS
+   relaying — and this customer is in a group-text mess, §3) is invisible and
+   can be minutes on its own.
