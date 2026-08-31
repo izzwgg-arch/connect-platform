@@ -165,6 +165,24 @@ there is a message."*
   invented examples agree with the rules you just wrote.** Feed it real output.
   (Same pass: **"for two months" slipped through** because durations were matched
   as `\d+` only and people write them in words.)
+- ⛔⛔ **AND THE WORST THING IT DID WAS NOT A LEAK — IT TOLD A CUSTOMER WE HAD
+  FIXED SOMETHING WE HAD NOT.** Caught on the FIRST real ticket through the live
+  loop (`T6HMUQ`, Connect Communications). The agent's report opened
+  *"Investigated and reported only. Nothing was changed on Connect, the PBX, or
+  the customer's account."* — and the rewrite said **"We've made some
+  adjustments, and it should now be correctly hidden."** It was already sitting
+  in that customer's queue. ⛔ **The investigating agent CANNOT change anything,
+  so in this pipeline a claim of a change is ALWAYS false**; it is refused in the
+  GATE (`unearned_fix`), not merely discouraged in the prompt, because a prompt
+  is a request and a gate is a promise. `changeWasMade` (default **false**) is
+  the flag that lets a real fix say so, the day one rides this loop.
+  ⛔ **Two of the suite's own fixtures were themselves examples of the bug** —
+  the "good message" said *"We've made a change"* and the vocabulary list said
+  *"We've turned texting on"*. Both report a FINDING now; **do not fix them
+  back.** ⛔ **The general lesson: a rewrite layer will describe the outcome the
+  READER wants, not the one the source states.** Anywhere a model summarises
+  work for the person who asked for it, check that it cannot claim the work
+  succeeded.
 - ⛔ **EVERY FAILURE ENDS IN `held`, NEVER IN A MESSAGE GOING OUT:** no OpenAI key,
   a model error, an empty rewrite, or any objection from the gate. A **platform
   alarm never becomes a customer message** (checked twice — at triage and again
