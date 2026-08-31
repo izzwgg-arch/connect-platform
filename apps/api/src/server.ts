@@ -243,6 +243,7 @@ import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerSupportReportRoutes } from "./supportReport";
 import { registerSupportUpdateRoutes } from "./support/customerUpdateRoutes";
+import { registerAgentRunRoutes } from "./support/agentRunRoutes";
 import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerComplianceRoutes, startComplianceReminders } from "./complianceCalendar";
@@ -42356,6 +42357,8 @@ const port = Number(process.env.PORT || 3001);
   // machine-to-machine secret on a laptop. requireSuper is the console's own
   // gate, injected so there is ONE implementation of it.
   registerSupportUpdateRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
+  // Live visibility into the automatic support agent — the watcher pushes here.
+  registerAgentRunRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
   registerSupportConsoleRoutes({
     app,
     db,

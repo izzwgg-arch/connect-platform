@@ -8541,3 +8541,65 @@ model SupportUpdate {
   @@index([userId, status])
   @@index([status, createdAt])
 }
+
+/// One automatic agent run against one support ticket, pushed from the machine
+/// the watcher runs on so the support console can show it LIVE.
+///
+/// ⛔ The console cannot read the watcher's laptop. Everything a person needs to
+/// see has to be PUSHED here as it happens, which is why `steps` is appended to
+/// during the run rather than written once at the end. A run that only reported
+/// its result would leave the operator blind for the ten-plus minutes that
+/// actually matter.
+model SupportAgentRun {
+  id String @id @default(cuid())
+  ticketRef String
+  /// Resolved server-side from the reference. Null if the escalation is gone.
+  escalationId String?
+  /// Denormalised so a run stays readable even if the escalation is deleted.
+  tenantName String?
+  requestSummary String?
+  /// "customer" | "platform" — which lane the triage put it in.
+  lane String @default("customer")
+  /// "running" | "done" | "failed"
+  status String @default("running")
+  attempt Int @default(1)
+  /// Which machine ran it, so two watchers can never be confused for one.
+  host String?
+  /// The agent's own Claude session id — this is what makes the run resumable.
+  sessionId String?
+  startedAt DateTime @default(now())
+  endedAt DateTime?
+  /// Appended DURING the run: [{ at, kind, text }]. kind is tool | text | error.
+  steps Json?
+  /// The finished report, so the console never needs the file on disk.
+  report String? @db.Text
+  error String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, startedAt])
+  @@index([ticketRef, startedAt])
+}
+
+/// Is the watcher alive, and what has it used today? One row per machine.
+///
+/// ⛔ This exists because silence is the failure mode nobody notices: the
+/// watcher sat off for three days and three tickets went unseen, and "no new
+/// reports" looks exactly like "a quiet week" from the console.
+model SupportAgentWatcher {
+  host String @id
+  lastBeatAt DateTime
+  /// "starting" | "polled" | "working" | "idle" | "poll_failed"
+  state String @default("idle")
+  /// What it is working on right now, if anything.
+  currentTicket String?
+  /// { customer: n, platform: n } — runs started today, per lane.
+  usedToday Json?
+  /// { customer: n, platform: n } — the caps those are counted against.
+  caps Json?
+  lastError String?
+  /// Days until the watcher's LoopCom token expires, so the console can warn.
+  tokenExpiresAt DateTime?
+  version String?
+  updatedAt DateTime @updatedAt
+}

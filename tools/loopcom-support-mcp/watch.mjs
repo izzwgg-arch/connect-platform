@@ -33,7 +33,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listTickets, postAgentReport } from "./loopcom.mjs";
-import { decideTicket, DEFAULTS } from "./triage.mjs";
+import { decideTicket, DEFAULTS, startedToday } from "./triage.mjs";
+import { pushRun, pushWatcherBeat, stepFromEvent } from "./push.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -110,6 +111,14 @@ function note(state, ref, status, lane) {
  * days and three tickets went unseen. The heartbeat is what makes "it is not
  * running" a thing you can SEE rather than infer.
  */
+/**
+ * Set once main() knows the token. The heartbeat goes to the support console as
+ * well as to disk, because the file only helps somebody standing at this
+ * machine and the console is where a person actually looks.
+ */
+let pushCfg = null;
+let watcherStats = { usedToday: {}, caps: {}, tokenExpiresAt: null };
+
 function beat(extra = {}) {
   try {
     fs.writeFileSync(
@@ -119,7 +128,22 @@ function beat(extra = {}) {
   } catch {
     /* a heartbeat must never be able to stop the watcher */
   }
+  // Fire-and-forget: the console going stale must never stall the watcher.
+  if (pushCfg) {
+    pushWatcherBeat(pushCfg, {
+      host: os.hostname(),
+      state: String(extra.state ?? "idle"),
+      currentTicket: extra.ticket ?? null,
+      usedToday: watcherStats.usedToday,
+      caps: watcherStats.caps,
+      lastError: extra.error ?? null,
+      tokenExpiresAt: watcherStats.tokenExpiresAt,
+      version: WATCHER_VERSION,
+    }).catch(() => {});
+  }
 }
+
+export const WATCHER_VERSION = "2026.08.31.1";
 
 const GUARDRAILS = [
   "You were started automatically by a LoopCom support ticket. Nobody is watching this run.",
@@ -206,14 +230,65 @@ export function buildAgentArgs(ref) {
     ...ALLOWED_TOOLS,
     "--disallowedTools",
     ...DENIED_TOOLS,
+    // ⛔ THIS is what makes the support console live. Without a structured
+    // stream there is nothing to show while a 13-minute run is in flight, and
+    // "working" is indistinguishable from "nothing happened". --verbose is
+    // required alongside it or the stream carries only the final result.
+    "--output-format",
+    "stream-json",
+    "--verbose",
   ];
 }
 
-function runAgent(ref) {
+/**
+ * Runs the agent and REPORTS WHAT IT IS DOING WHILE IT DOES IT.
+ *
+ * ⛔ `onStep` is what makes the support console live. Without it an operator
+ * sees nothing for the ten-plus minutes a real ticket takes, which is
+ * indistinguishable from nothing happening — the exact complaint this answers.
+ *
+ * ⛔ The report file is still written, and still holds the readable report
+ * rather than the raw event stream, because the customer-facing hand-back reads
+ * that file. Changing the file's contents would silently break the return half.
+ */
+function runAgent(ref, onStep = () => {}) {
   fs.mkdirSync(REPORT_DIR, { recursive: true });
   const out = path.join(REPORT_DIR, ref + "-" + Date.now() + ".md");
-  const stream = fs.createWriteStream(out);
   const args = buildAgentArgs(ref);
+  const meta = { sessionId: null, costUsd: null, turns: null, denials: 0 };
+  let finalText = "";
+  let buf = "";
+  let stderr = "";
+
+  const consume = (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue; // not a frame; the stream is NDJSON and stray output is ignorable
+      }
+      const step = stepFromEvent(ev);
+      if (!step) continue;
+      if (step.sessionId) meta.sessionId = step.sessionId;
+      if (typeof step.costUsd === "number") meta.costUsd = step.costUsd;
+      if (typeof step.turns === "number") meta.turns = step.turns;
+      if (typeof step.denials === "number") meta.denials = step.denials;
+      if (step.final) finalText = step.final;
+      // ⛔ A failure in the live push must never break the run.
+      try {
+        onStep({ at: step.at, kind: step.kind, text: step.text }, meta);
+      } catch {
+        /* visibility is worth less than the investigation */
+      }
+    }
+  };
+
   return new Promise((resolve) => {
     // ⛔⛔ shell:false IS LOAD-BEARING ON WINDOWS, and shell:true silently broke
     // this. Node does not quote arguments through cmd.exe (its own
@@ -229,8 +304,15 @@ function runAgent(ref) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      stream.end();
-      resolve(r);
+      // ⛔ Write the READABLE report, not the event stream — the hand-back to
+      // LoopCom reads this file. Falling back to stderr means a crashed run
+      // still leaves something a person can read rather than an empty file.
+      try {
+        fs.writeFileSync(out, finalText || stderr || "(the agent produced no output)");
+      } catch {
+        /* the run's outcome matters more than the file */
+      }
+      resolve({ ...r, ...meta });
     };
     const timer = setTimeout(() => {
       try {
@@ -240,10 +322,14 @@ function runAgent(ref) {
       }
       finish({ ok: false, out, error: `run exceeded ${Math.round(RUN_TIMEOUT_MS / 60000)} min and was killed` });
     }, RUN_TIMEOUT_MS);
-    child.stdout.pipe(stream);
-    child.stderr.pipe(stream);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", consume);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
     child.on("error", (e) => finish({ ok: false, out, error: e.message }));
-    child.on("close", (code) => finish({ ok: code === 0, out, code }));
+    child.on("close", (code) => finish({ ok: code === 0 && !!finalText, out, code }));
   });
 }
 
@@ -261,6 +347,16 @@ async function main() {
   const state = loadState();
   const watchingSince = BACKFILL ? null : state.startedAt;
 
+  // Everything the support console shows about this watcher comes from here.
+  pushCfg = cfg;
+  watcherStats.caps = { customer: CFG.customerCap, platform: CFG.platformEnabled ? CFG.platformCap : 0 };
+  try {
+    const exp = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).exp;
+    if (exp) watcherStats.tokenExpiresAt = new Date(exp * 1000).toISOString();
+  } catch {
+    /* the console simply shows no expiry */
+  }
+
   log("watching every " + Math.round(POLL_MS / 1000) + "s   repo=" + REPO);
   log(BACKFILL ? "⛔ BACKFILL ON — existing tickets will be worked" : "only tickets raised after " + watchingSince);
   log(
@@ -274,6 +370,10 @@ async function main() {
     try {
       const res = await listTickets(cfg, { status: "all", take: 30 });
       const rows = (res && res.escalations) || [];
+      watcherStats.usedToday = {
+        customer: startedToday(state, new Date().toISOString().slice(0, 10), "customer"),
+        platform: startedToday(state, new Date().toISOString().slice(0, 10), "platform"),
+      };
       beat({ state: "polled", tickets: rows.length });
 
       for (const t of rows.slice().reverse()) {
@@ -293,8 +393,54 @@ async function main() {
         log(`${verb} [${d.lane}] ${t.reference} — ${t.tenantName}: ${String(t.requestSummary).slice(0, 60)}`);
         claim(state, t.reference, d.lane);
         beat({ state: "working", ticket: t.reference, lane: d.lane });
-        const r = await runAgent(t.reference); // one at a time, deliberately
-        settle(state, t.reference, r.ok ? "done" : "failed", { report: r.out, error: r.error });
+
+        // ── live view ──────────────────────────────────────────────────────
+        // One id for the whole run, so every push updates the same row instead
+        // of leaving a trail of duplicates on the dashboard.
+        const runId = `${t.reference}-${Date.now()}`;
+        const base = {
+          runId,
+          ticketRef: t.reference,
+          lane: d.lane,
+          attempt: state.claimed[t.reference]?.attempts ?? 1,
+          host: os.hostname(),
+          tenantName: t.tenantName,
+          requestSummary: String(t.requestSummary ?? "").slice(0, 2000),
+          startedAt: new Date().toISOString(),
+        };
+        const steps = [];
+        let lastPush = 0;
+        let runMeta = {};
+        await pushRun(pushCfg, { ...base, status: "running", steps }).catch(() => {});
+
+        const r = await runAgent(t.reference, (step, meta) => {
+          steps.push(step);
+          runMeta = meta;
+          // ⛔ Throttled. A chatty agent would otherwise post several times a
+          // second; 3s is live enough for a person and cheap enough for the api.
+          const now = Date.now();
+          if (now - lastPush < 3000) return;
+          lastPush = now;
+          pushRun(pushCfg, { ...base, status: "running", steps, sessionId: meta.sessionId ?? undefined }).catch(() => {});
+        }); // one at a time, deliberately
+
+        settle(state, t.reference, r.ok ? "done" : "failed", { report: r.out, error: r.error, sessionId: r.sessionId });
+        // The final push carries the report, so the console never needs the file.
+        await pushRun(pushCfg, {
+          ...base,
+          status: r.ok ? "done" : "failed",
+          steps,
+          endedAt: new Date().toISOString(),
+          sessionId: r.sessionId ?? runMeta.sessionId ?? undefined,
+          report: (() => {
+            try {
+              return fs.readFileSync(r.out, "utf8").slice(0, 200_000);
+            } catch {
+              return undefined;
+            }
+          })(),
+          error: r.error,
+        }).catch(() => {});
         log("  " + (r.ok ? "done" : "FAILED " + (r.error || "exit " + r.code)) + " -> " + path.relative(REPO, r.out));
 
         // Hand it back so the customer can be told. ⛔ CUSTOMER LANE ONLY: a

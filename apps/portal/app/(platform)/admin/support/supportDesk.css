@@ -329,3 +329,202 @@
   font-size: 11.5px; line-height: 1.5; color: var(--text-dim);
 }
 .sd-locked b { display: block; color: var(--text); font-size: 12px; margin-bottom: 3px; }
+
+
+/* ── Agent runs: the live view of the automatic support agent ────────────────
+   ⛔ INK vs FILL. Connect's --success / --warning / --danger are DISPLAY
+   colours: as 11-12px TEXT on the light panel they measure around 2-4:1 and are
+   effectively unreadable. So text uses the --sar-ink-* tokens (darkened for
+   light only) while fills, dots and edge stripes keep the display colour. This
+   repo has paid for that distinction twice — see the queue wallboard.          */
+.sar-root {
+  --sar-ink-ok: var(--success);
+  --sar-ink-warn: var(--warning);
+  --sar-ink-bad: var(--danger);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+:root[data-theme="light"] .sar-root {
+  --sar-ink-ok: #0f7a4a;
+  --sar-ink-warn: #8a5a00;
+  --sar-ink-bad: #a3231d;
+}
+
+.sar-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.sar-banner code {
+  font-family: var(--sd-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel);
+}
+/* ⛔ The loudest thing on the page. The failure that has actually happened is
+   the watcher being OFF, and silence used to look exactly like a quiet week. */
+.sar-dead {
+  border-color: var(--danger);
+  border-left-width: 4px;
+  color: var(--sar-ink-bad);
+}
+.sar-dead strong { color: var(--sar-ink-bad); }
+.sar-live { border-left: 4px solid var(--success); }
+.sar-live strong { color: var(--text); }
+.sar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: sar-pulse 2s ease-in-out infinite;
+}
+@keyframes sar-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .sar-dot { animation: none; } }
+.sar-meta { color: var(--text-dim); font-size: 12px; }
+.sar-warn { color: var(--sar-ink-warn); font-size: 12px; font-weight: 600; }
+
+.sar-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 900px) { .sar-body { grid-template-columns: 1fr; } }
+
+/* ⛔ Each pane scrolls itself. This screen sits in the full-height console
+   shell, which has turned the outer scroll off — a pane without its own
+   scroller strands its content off-screen at a short window. */
+.sar-list,
+.sar-detail {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow-y: auto;
+  min-height: 0;
+  padding: 10px;
+}
+.sar-list h3 {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 4px 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.sar-empty { color: var(--text-dim); font-size: 13px; padding: 10px 4px; }
+
+.sar-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  cursor: pointer;
+  color: var(--text);
+}
+.sar-item:hover { border-color: var(--accent); }
+.sar-item.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.sar-item.running { border-left: 3px solid var(--success); }
+.sar-item-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sar-ref { font-family: var(--sd-mono, ui-monospace, monospace); font-weight: 700; font-size: 13px; }
+.sar-who { font-size: 13px; margin-top: 3px; }
+.sar-ask {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sar-sub { font-size: 11px; color: var(--text-dim); margin-top: 5px; }
+.sar-lane {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: 6px;
+  color: var(--text-dim);
+}
+
+.sar-pill {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+}
+.sar-running { color: var(--sar-ink-ok); border-color: var(--success); }
+.sar-done { color: var(--text-dim); }
+.sar-failed { color: var(--sar-ink-bad); border-color: var(--danger); }
+
+.sar-detail { display: flex; flex-direction: column; gap: 10px; }
+.sar-detail-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.sar-detail-head h3 { margin: 0 0 3px; font-size: 15px; }
+.sar-detail-head p { margin: 0; font-size: 13px; color: var(--text-dim); }
+.sar-detail-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 11px; color: var(--text-dim); }
+
+/* The stream. Reads like a log tail on purpose — it is the thing being watched. */
+.sar-steps {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 8px;
+  overflow-y: auto;
+  max-height: 46vh;
+  font-family: var(--sd-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.sar-step { display: flex; gap: 8px; padding: 1px 0; }
+.sar-step-t { color: var(--text-dim); flex-shrink: 0; }
+.sar-step-k {
+  flex-shrink: 0;
+  width: 46px;
+  text-transform: uppercase;
+  font-size: 10px;
+  color: var(--text-dim);
+  padding-top: 2px;
+}
+.sar-step-x { word-break: break-word; }
+.sar-k-tool .sar-step-x { color: var(--accent); }
+.sar-k-error .sar-step-x { color: var(--sar-ink-bad); }
+.sar-k-system .sar-step-x { color: var(--sar-ink-ok); }
+
+.sar-report { border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); padding: 8px 10px; }
+.sar-report summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.sar-report pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.sar-resume { font-size: 12px; color: var(--text-dim); }
+.sar-resume code {
+  font-family: var(--sd-mono, ui-monospace, monospace);
+  background: var(--panel-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}

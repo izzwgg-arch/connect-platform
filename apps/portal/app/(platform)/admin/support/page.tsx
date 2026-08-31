@@ -43,18 +43,21 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import SupportDesk from "./SupportDesk";
 import SupportWorkbench from "./SupportWorkbench";
 import SupportRules from "./SupportRules";
+import SupportAgentRuns from "./SupportAgentRuns";
 import "./supportDesk.css";
 
-type View = "desk" | "workbench" | "rules";
+type View = "desk" | "agent" | "workbench" | "rules";
 
 const BLURB: Record<View, string> = {
   desk: "Everything the assistant passed to a person — as the conversation it came from, with the customer beside it.",
   workbench: "Read the code, run read-only commands, open a page, and ask the agent — every command checked against your ground rules.",
+  agent: "What the automatic agent is doing right now, ticket by ticket — and whether it is running at all.",
   rules: "What the agent may do, may never do, and must ask you about first.",
 };
 
 const TABS: Array<{ id: View; label: string }> = [
   { id: "desk", label: "Desk" },
+  { id: "agent", label: "Agent runs" },
   { id: "workbench", label: "Workbench" },
   { id: "rules", label: "Ground rules" },
 ];
@@ -85,6 +88,7 @@ function SupportDeskShell() {
       </header>
 
       {view === "desk" ? <SupportDesk /> : null}
+      {view === "agent" ? <SupportAgentRuns /> : null}
       {view === "workbench" ? <SupportWorkbench /> : null}
       {view === "rules" ? <SupportRules /> : null}
     </div>

@@ -29,6 +29,7 @@ import {
   PLATFORM_MONITOR_USERNAMES,
 } from "./triage.mjs";
 import { buildAgentArgs, ALLOWED_TOOLS, DENIED_TOOLS } from "./watch.mjs";
+import { stepFromEvent } from "./push.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DAY = "2026-09-01";
@@ -345,7 +346,13 @@ describe("F. a ticket written by someone hostile", () => {
     // A reference is server-generated, but never trust that from here.
     const argv = buildAgentArgs("--allowedTools Write");
     const flagArgs = argv.filter((a) => a.startsWith("--"));
-    assert.deepEqual(flagArgs, ["--append-system-prompt", "--allowedTools", "--disallowedTools"]);
+    assert.deepEqual(flagArgs, [
+      "--append-system-prompt",
+      "--allowedTools",
+      "--disallowedTools",
+      "--output-format",
+      "--verbose",
+    ]);
     // argv is passed with shell:false, so it lands as one literal argument.
     assert.ok(argv.includes("Work LoopCom support ticket --allowedTools Write. Start with get_support_ticket."));
   });
@@ -497,4 +504,66 @@ describe("H. it still cannot talk to a customer", () => {
     assert.ok(!/method:\s*"(POST|PUT|PATCH|DELETE)"/i.test(src));
     assert.ok(!/sendMessage|replyTo|notifyCustomer/i.test(src));
   });
+});
+
+// ─────────────────────────────────────────── I. the live view the console shows
+
+describe("I. what the dashboard is shown", () => {
+  test("the run streams structured events, or there is nothing to watch", () => {
+    // Without --output-format stream-json the console sees one lump at the end,
+    // and a 13-minute run is indistinguishable from nothing happening — which
+    // is the complaint this whole feature answers.
+    const args = buildAgentArgs("Q2FJRK");
+    assert.ok(args.includes("--output-format"));
+    assert.equal(args[args.indexOf("--output-format") + 1], "stream-json");
+    assert.ok(args.includes("--verbose"), "--verbose is required or only the result is streamed");
+  });
+
+  test("a tool call becomes a line a person would want to read", () => {
+    const s = stepFromEvent({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "Bash", input: { command: "grep -rn answer_unacked apps/portal" } }] },
+    });
+    assert.equal(s.kind, "tool");
+    assert.equal(s.text, "Bash: grep -rn answer_unacked apps/portal");
+  });
+
+  test("the MCP tool names are shortened, not shown raw", () => {
+    const s = stepFromEvent({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "mcp__loopcom-support__get_support_ticket", input: { reference: "Q2FJRK" } }] },
+    });
+    assert.equal(s.text, "get_support_ticket: Q2FJRK");
+  });
+
+  test("the result event carries the report, the session and what was REFUSED", () => {
+    // permission_denials is the agent trying something it was not allowed to do.
+    // On an unattended support run that is a signal, not a footnote.
+    const s = stepFromEvent({
+      type: "result",
+      subtype: "success",
+      result: "## Ticket Q2FJRK — the answer",
+      session_id: "abc-123",
+      total_cost_usd: 0.42,
+      num_turns: 17,
+      permission_denials: [{ tool_name: "Bash" }, { tool_name: "Write" }],
+    });
+    assert.equal(s.kind, "system");
+    assert.equal(s.final, "## Ticket Q2FJRK — the answer");
+    assert.equal(s.sessionId, "abc-123");
+    assert.equal(s.denials, 2);
+  });
+
+  test("noise is dropped rather than shown", () => {
+    for (const ev of [
+      { type: "rate_limit_event" },
+      { type: "system", subtype: "post_turn_summary" },
+      { type: "user", message: { content: [] } },
+      null,
+      "not an object",
+    ]) {
+      assert.equal(stepFromEvent(ev), null, JSON.stringify(ev));
+    }
+  });
+
 });
