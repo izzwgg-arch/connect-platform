@@ -37,7 +37,7 @@ import {
   Lightbulb,
 } from "lucide-react";
 import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, FEATURE_SUGGESTION_MIN, assistantGreetingLine } from "@connect/shared";
-import { apiGet, apiPost, ApiError } from "../services/apiClient";
+import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 
@@ -48,6 +48,10 @@ type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; 
  *  is floating over the conversation they were just having. The feature
  *  suggestion gets the same treatment for the same reason. */
 type PanelView = "chat" | "report" | "sent" | "suggest" | "suggestSent";
+
+/** An update on something the customer reported. `message` is the OpenAI rewrite
+ *  that passed the safety gate — the technical report never reaches the browser. */
+type SupportUpdate = { id: string; reference: string; message: string; at: string };
 
 type PendingFile = {
   localId: string;
@@ -163,6 +167,53 @@ export function FloatingAssistant() {
   const { user } = useAppContext();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<PanelView>("chat");
+
+  /**
+   * Updates on something they reported: we looked at it, and here is what
+   * changed, in plain English. The badge is the whole point — Izzy: "down by the
+   * widget, there is a message. Open it, they will test it, and let the agent
+   * know if it's good or not."
+   *
+   * ⛔ Two minutes, not seconds. The lesson from the voicemail flood is that a
+   * widget poll runs on every page for every customer forever; this is a note
+   * that arrives once a week at most, and nothing about it is urgent.
+   */
+  const [updates, setUpdates] = useState<SupportUpdate[]>([]);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [answered, setAnswered] = useState<Record<string, "fixed" | "not_fixed">>({});
+
+  useEffect(() => {
+    // ⛔ Gated on the token: a signed-out tab polling an authenticated route is
+    // how an office gets itself auto-banned at nginx (2026-08-17).
+    if (!hasBrowserAuthToken()) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await apiGet<{ updates: SupportUpdate[] }>("/support/updates");
+        if (!stop) setUpdates(Array.isArray(r?.updates) ? r.updates : []);
+      } catch {
+        /* transient — the next tick retries, and a badge is not worth an error */
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 120000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
+
+  const unanswered = useMemo(() => updates.filter((u) => !answered[u.id]), [updates, answered]);
+
+  const answerUpdate = useCallback(async (id: string, verdict: "fixed" | "not_fixed") => {
+    setAnswering(id);
+    try {
+      await apiPost<{ ok: boolean }>(`/support/updates/${encodeURIComponent(id)}/verdict`, { verdict });
+      setAnswered((m) => ({ ...m, [id]: verdict }));
+    } catch {
+      // Left unanswered on purpose: it stays on screen so they can try again,
+      // rather than silently looking like it was recorded when it was not.
+    } finally {
+      setAnswering(null);
+    }
+  }, []);
   const [showHint, setShowHint] = useState(true);
   /** Unheard voicemail, so the first suggestion carries a fact rather than a
    *  guess. Null until it answers — the row simply reads without a count. */
@@ -740,6 +791,44 @@ export function FloatingAssistant() {
           <div className="fa-msgs custom-scrollbar">
             {messages.length === 0 && (
               <div className="fa-open">
+                {unanswered.map((u) => (
+                  <div className="fa-upd" key={u.id}>
+                    <div className="fa-upd-top">
+                      <span className="fa-upd-ico"><Check size={14} /></span>
+                      <b>We looked into what you reported</b>
+                    </div>
+                    <p className="fa-upd-msg">{u.message}</p>
+                    <div className="fa-upd-btns">
+                      <button
+                        className="fa-upd-yes"
+                        disabled={answering === u.id}
+                        onClick={() => void answerUpdate(u.id, "fixed")}
+                      >
+                        Yes, it&apos;s working
+                      </button>
+                      <button
+                        className="fa-upd-no"
+                        disabled={answering === u.id}
+                        onClick={() => void answerUpdate(u.id, "not_fixed")}
+                      >
+                        No, still not right
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {updates.filter((u) => answered[u.id]).map((u) => (
+                  <div className="fa-upd fa-upd-done" key={u.id}>
+                    <div className="fa-upd-top">
+                      <span className="fa-upd-ico"><Check size={14} /></span>
+                      <b>{answered[u.id] === "fixed" ? "Thanks for checking" : "Thanks — we've reopened it"}</b>
+                    </div>
+                    <p className="fa-upd-msg">
+                      {answered[u.id] === "fixed"
+                        ? "Glad that's sorted."
+                        : "Someone will pick it up from here."}
+                    </p>
+                  </div>
+                ))}
                 <div className="fa-greet">
                   <h3>{greeting}</h3>
                   <p>What can I help with?</p>
@@ -910,7 +999,8 @@ export function FloatingAssistant() {
         {!open && showHint && <div className="fa-hint">Need help? I'm right here 👋</div>}
         <button className="fa-fab" title={open ? "Close assistant" : "Open assistant"} onClick={() => { uiEvent(open ? "close assistant" : "open assistant"); setOpen((v) => !v); setShowHint(false); }}>
           {open ? <X size={24} /> : <Bot size={26} />}
-          {!open && <span className="fa-dot" />}
+          {!open && unanswered.length > 0 && <span className="fa-badge">{unanswered.length}</span>}
+          {!open && unanswered.length === 0 && <span className="fa-dot" />}
         </button>
       </div>
     </>
@@ -979,6 +1069,29 @@ const faCss = `
 .fa-chev { color: var(--text-dim, #8b9ab2); flex: 0 0 auto; }
 
 /* ── report a problem / suggest a feature ───────────────────────────────── */
+.fa-upd {
+  margin: 0 12px 10px; padding: 11px 12px; border-radius: 12px;
+  border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+}
+.fa-upd-done { border-color: var(--border); background: var(--panel-2); }
+.fa-upd-top { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 5px; }
+.fa-upd-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 19px; height: 19px; border-radius: 50%; background: var(--accent); color: #04121d; flex: 0 0 auto;
+}
+.fa-upd-msg { margin: 0 0 9px; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.fa-upd-btns { display: flex; gap: 7px; }
+.fa-upd-btns button {
+  flex: 1; padding: 7px 9px; border-radius: 9px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.fa-upd-btns button:disabled { opacity: .55; cursor: default; }
+.fa-upd-yes { border-color: var(--accent) !important; background: var(--accent) !important; color: #04121d !important; font-weight: 600; }
+.fa-badge {
+  position: absolute; top: -3px; right: -3px; min-width: 19px; height: 19px; padding: 0 5px;
+  border-radius: 10px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg);
+}
 .fa-help-row { display: flex; gap: 7px; margin: 0 12px 10px; }
 .fa-help {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;

@@ -8499,3 +8499,45 @@ model VoiceAgentCall {
 
   @@index([tenantId, startedAt])
 }
+
+/// The return half of a support ticket: what the investigating agent found, and
+/// the plain-English version the customer is actually shown.
+///
+/// ⛔ `plainMessage` is the ONLY field that may ever reach a customer.
+/// `technicalReport` is ours and must never be rendered on a customer surface —
+/// it routinely names other tenants, file paths and internal systems.
+model SupportUpdate {
+  id String @id @default(cuid())
+  /// One update per escalation. The unique is what makes the watcher's post-back
+  /// idempotent: a retry updates the row rather than queueing a second message.
+  escalationId String @unique
+  tenantId String
+  /// Who filed the ticket, so the widget knows whose badge to light. Null when
+  /// the escalation carries no user (a platform alarm) — those are never shown.
+  userId String?
+  conversationId String?
+  ticketRef String
+  /// Ours. Never shown to a customer.
+  technicalReport String @db.Text
+  /// Theirs. Null until the rewrite has run AND passed the safety gate.
+  plainMessage String? @db.Text
+  /// draft | held | ready | delivered | answered
+  status String @default("draft")
+  /// Plain English, for the operator, when the safety gate refused it.
+  heldReason String?
+  /// The gate's findings, kept so a held message can be understood later.
+  safetyIssues Json?
+  /// Set when the customer's widget first served it to them.
+  deliveredAt DateTime?
+  readAt DateTime?
+  /// "fixed" | "not_fixed" — what the customer said after testing.
+  verdict String?
+  customerNote String?
+  answeredAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([userId, status])
+  @@index([status, createdAt])
+}

@@ -1,12 +1,18 @@
 /**
  * The LoopCom side of the support-ticket MCP server.
  *
- * ⛔ READ-ONLY, AND DELIBERATELY SO (v1, 2026-08-27).
+ * ⛔ ONE WRITE, AND IT CANNOT REACH A CUSTOMER (v2, 2026-08-31).
+ * Everything here reads, except `postAgentReport`, which hands the finished
+ * investigation back to LoopCom. That is not a message to a customer: the api
+ * gives it to OpenAI to rewrite in plain English and then runs a safety gate
+ * that decides whether a person may see it. Claude never writes the words a
+ * customer reads, and this client cannot make one appear — it has no route to
+ * the customer at all.
+ *
  * Izzy's design is that the OpenAI agent inside LoopCom keeps the customer
- * relationship and does all the talking; Claude does the technical work. So
- * nothing in this file writes, and in particular nothing sends a message to a
- * customer. Adding a customer-facing write here is a separate, deliberate
- * decision — not a convenience to slip in later.
+ * relationship and does all the talking; Claude does the technical work.
+ * Adding a customer-facing write here is still a separate, deliberate decision
+ * — not a convenience to slip in later.
  *
  * Every call goes through the EXISTING /admin/support/* routes, which are
  * SUPER_ADMIN-gated and audited server-side. This server adds no gate of its
@@ -105,4 +111,41 @@ export async function resolveReference(cfg, refOrId) {
   const hit = rows.find((r) => String(r.reference || "").toUpperCase() === needle.toUpperCase());
   if (!hit) throw new Error(`No open ticket with reference ${needle} in the last 50. Use list_support_tickets to see what is there.`);
   return hit.id;
+}
+
+/**
+ * Hand the finished investigation back to LoopCom.
+ *
+ * ⛔ This does NOT message the customer, and it cannot. The api rewrites it
+ * through OpenAI and runs a safety gate; a report that mentions another
+ * customer, an internal system or a secret is HELD there for a person, and the
+ * customer sees nothing. All this call decides is that we finished looking.
+ *
+ * ⛔ Idempotent server-side on the escalation, so a retry can never queue a
+ * second message. It still fails soft: losing the post-back costs the customer
+ * their update, never the report, which is already on disk.
+ */
+export async function postAgentReport(cfg, reference, report) {
+  const url = `${cfg.base}/admin/support/escalations/${encodeURIComponent(reference)}/agent-report`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ report: String(report ?? "") }),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    let body;
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    if (!res.ok) throw new LoopcomError(res.status, body, url);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
 }

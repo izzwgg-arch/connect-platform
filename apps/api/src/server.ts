@@ -242,6 +242,7 @@ import {
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerSupportReportRoutes } from "./supportReport";
+import { registerSupportUpdateRoutes } from "./support/customerUpdateRoutes";
 import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerComplianceRoutes, startComplianceReminders } from "./complianceCalendar";
@@ -42348,6 +42349,13 @@ const port = Number(process.env.PORT || 3001);
   // "Something not working?" in the assistant panel. Registered after the chat
   // routes because it files its customer-confirmation text through them.
   registerSupportReportRoutes(app, { smsQueue });
+  // The return half: the watcher posts an investigation back, OpenAI rewrites it
+  // in plain English, the safety gate decides, and the customer's widget shows
+  // it. ⛔ An /admin route rather than an /internal one, so the watcher can use
+  // the SUPER_ADMIN token it already has instead of putting the platform's
+  // machine-to-machine secret on a laptop. requireSuper is the console's own
+  // gate, injected so there is ONE implementation of it.
+  registerSupportUpdateRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
   registerSupportConsoleRoutes({
     app,
     db,

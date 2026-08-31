@@ -32,7 +32,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listTickets } from "./loopcom.mjs";
+import { listTickets, postAgentReport } from "./loopcom.mjs";
 import { decideTicket, DEFAULTS } from "./triage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -296,6 +296,21 @@ async function main() {
         const r = await runAgent(t.reference); // one at a time, deliberately
         settle(state, t.reference, r.ok ? "done" : "failed", { report: r.out, error: r.error });
         log("  " + (r.ok ? "done" : "FAILED " + (r.error || "exit " + r.code)) + " -> " + path.relative(REPO, r.out));
+
+        // Hand it back so the customer can be told. ⛔ CUSTOMER LANE ONLY: a
+        // platform alarm has no person on the other end, and the api refuses one
+        // anyway — this just avoids asking. ⛔ Fails soft: losing the
+        // post-back costs the update, never the report, which is on disk either way.
+        if (r.ok && d.lane === "customer") {
+          try {
+            const back = await postAgentReport(cfg, t.reference, fs.readFileSync(r.out, "utf8"));
+            settle(state, t.reference, "done", { handedBack: back?.status ?? "sent" });
+            log("  handed back to LoopCom -> " + (back?.status ?? "sent") + (back?.reason ? " (" + back.reason + ")" : ""));
+          } catch (e) {
+            settle(state, t.reference, "done", { handBackError: String(e?.message ?? e).slice(0, 200) });
+            log("  ⛔ hand-back failed (report is still on disk): " + String(e?.message ?? e).slice(0, 120));
+          }
+        }
         beat({ state: "idle" });
       }
     } catch (err) {
