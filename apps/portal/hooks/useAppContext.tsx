@@ -6,11 +6,15 @@ import { mapBackendRole, readJwtPayload, writeAuthToken } from "../services/sess
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
 import { PBX_TENANTS_REFRESHED_EVENT, PBX_SYNC_COMPLETE_EVENT } from "./useTenantOptions";
+import { EMPTY_NAV_VISIBILITY, normalizeNavVisibility, type PortalNavVisibility } from "@connect/shared";
 import {
   PORTAL_PERMISSIONS_HYDRATED_EVENT,
+  clearCachedNavVisibility,
   clearCachedPortalPermissions,
   notifyPortalPermissionsHydrated,
+  readCachedNavVisibility,
   readCachedPortalPermissions,
+  writeCachedNavVisibility,
   writeCachedPortalPermissions,
 } from "../services/portalPermissionHydration";
 import {
@@ -75,6 +79,12 @@ type AppContextType = {
   can: (permission: Permission) => boolean;
   /** False until GET /me (or login) has resolved portal permissions — gates nav deny flashes. */
   permissionsHydrated: boolean;
+  /**
+   * The platform owner's per-page sidebar switches, from GET /me. Separate
+   * from `can` on purpose: a permission says whether a person may USE a page,
+   * this says whether its link appears at all. Empty = nothing hidden.
+   */
+  navVisibility: PortalNavVisibility;
   setTheme: (theme: ThemeMode) => void;
   setTenantId: (tenantId: string) => void;
   setRole: (role: Role) => void;
@@ -113,6 +123,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(readInitialRole);
   const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(readInitialBackendJwtRole);
   const [permissionsHydrated, setPermissionsHydrated] = useState(readInitialPermissionsHydrated);
+  const [navVisibility, setNavVisibility] = useState<PortalNavVisibility>(
+    () => readCachedNavVisibility() || { ...EMPTY_NAV_VISIBILITY },
+  );
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
@@ -183,6 +196,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       name?: string | null;
       email?: string | null;
       extension?: MeExtension;
+      navVisibility?: unknown;
     }) => {
       if (!active) return;
       if (me.token) {
@@ -209,6 +223,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           name: me.tenantName ?? null,
         });
       }
+      // Older api builds omit it; a miss must mean "nothing hidden", never an
+      // empty sidebar, so the previous value is simply left alone.
+      if (me.navVisibility !== undefined) {
+        const nav = normalizeNavVisibility(me.navVisibility);
+        setNavVisibility(nav);
+        writeCachedNavVisibility(nav);
+      }
       if (me.avatarUrl) setUserAvatarUrl(me.avatarUrl);
       setMeUser({
         id: me.id ?? null,
@@ -228,6 +249,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!readJwtPayload()?.sub) {
         setPortalPermissionOverride(null);
         clearCachedPortalPermissions();
+        clearCachedNavVisibility();
+        setNavVisibility({ ...EMPTY_NAV_VISIBILITY });
         setPermissionsHydrated(true);
         return;
       }
@@ -246,6 +269,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         name?: string | null;
         email?: string | null;
         extension?: MeExtension;
+        navVisibility?: unknown;
       }>("/me")
         .then((me) => {
           window.clearTimeout(hydrateTimeout);
@@ -496,6 +520,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       adminScope,
       can: canPermission,
       permissionsHydrated,
+      navVisibility,
       setTheme: setThemeState,
       setTenantId,
       setRole,
@@ -511,6 +536,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       backendJwtRole,
       canPermission,
       permissionsHydrated,
+      navVisibility,
       meTenant,
       meUser,
       refreshPbxTenants,

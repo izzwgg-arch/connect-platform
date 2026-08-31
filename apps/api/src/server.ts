@@ -285,6 +285,7 @@ import {
 import { loopComShell, passwordChangedEmail, passwordCreatedConfirmationEmail, passwordResetEmail, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 import {
   getEffectivePortalPermissionSetForJwtRole,
+  getPortalNavVisibility,
   hasEffectivePortalPermission,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
@@ -6477,6 +6478,10 @@ app.get("/me", async (req, reply) => {
     user.sub,
     user.tenantId,
   );
+  // The owner's per-page sidebar switches. Rides the cached permission
+  // snapshot, so it costs no extra query; it can only HIDE a link, never
+  // grant one, and it fails open to "nothing hidden".
+  const navVisibility = await getPortalNavVisibility();
 
   // Resolve tenant display name so the portal can build its tenant object for
   // regular (non-super-admin) users. Without this, AppProvider falls back to
@@ -6506,6 +6511,7 @@ app.get("/me", async (req, reply) => {
     avatarUrl: (row as any)?.avatarUrl ?? null,
     ...(refreshedToken ? { token: refreshedToken } : {}),
     ...(portalPermissionSet ? { portalPermissionSet } : {}),
+    navVisibility,
   };
 });
 

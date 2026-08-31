@@ -23,14 +23,14 @@ function titleFromPath(pathname: string): string {
 }
 export function PageShell({ children, banners }: { children: ReactNode; banners?: ReactNode }) {
   const pathname = usePathname();
-  const { can, backendJwtRole, permissionsHydrated } = useAppContext();
+  const { can, backendJwtRole, permissionsHydrated, navVisibility } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail, settled: sidebarSettled } = useSidebarRail();
   const rawBadges = useNavBadges();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const visibleItems = useMemo(
-    () => navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole)),
-    [can, backendJwtRole],
+    () => navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole, navVisibility)),
+    [can, backendJwtRole, navVisibility],
   );
   const activeNavItem = useMemo(
     () => [...navItems]
@@ -39,7 +39,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
     [pathname],
   );
   const routeAllowed =
-    !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
+    !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole, navVisibility);
   const isCrmDashboardRoute = pathname === "/crm/dashboard";
   const isCrmReportsRoute = pathname === "/crm/reports" || pathname.startsWith("/crm/reports/");
   const isCrmQueueRoute =

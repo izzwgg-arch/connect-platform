@@ -71,6 +71,63 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔ AGENT HANDOFF — every sidebar page has its own “In sidebar” switch on /admin/permissions now, SEPARATE from the role permission (2026-08-31) — READ FIRST before adding a nav item, before adding a SUPER_ADMIN force line to isNavItemVisibleForUser, or for “I granted the permission and it still doesn’t show in the sidebar”
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIDEBAR_VISIBILITY_TOGGLES_2026-08-31.md`**
+(one commit on `feat/ivr-migration-takeover` — shared + api + portal. **No migration**
+— the setting rides the existing `PlatformRolePermissionSnapshot` row’s JSON as a
+`navVisibility` key. Deploy state at the end of this section.) Izzy, 2026-08-31:
+*“every single page, I should have a toggle on and off for view in the sidebar,
+aside from the custom role permission.”*
+
+- ⛔⛔ **TWO GAPS, and the first is the trap to remember: the Permissions screen
+  rendered the shared `SIDEBAR_ITEMS` catalog, which had drifted FAR behind the
+  real sidebar** — the whole Store section, Conference, Direct, Meetings, Desk
+  Phones, Queues and a dozen admin pages had NO row on the screen at all. **The
+  screen renders `navItems` from navConfig now** (the sidebar itself is the
+  catalog), so a page can never again exist in the sidebar and be missing from
+  the editor. The second gap: `workspace.meetings`/`workspace.direct` carry a
+  hard SUPER_ADMIN force line, so a granted permission was silently overridden
+  — the literal complaint.
+- ⛔⛔ **THE VISIBILITY LAYER IS SUBTRACT-ONLY AND FAILS OPEN**
+  (`packages/shared/src/portalNavVisibility.ts`): `hidden` ids are checked FIRST
+  in `isNavItemVisibleForUser` (new optional 4th arg — omitted = exact old
+  behaviour, test-pinned), but every permission check and every force line still
+  runs after it, so **no stored value can reveal a page the permissions refuse**;
+  and any read failure answers “nothing hidden” — a DB hiccup must never empty
+  every customer’s sidebar. It keys on NAV IDS, not permission keys, which is
+  what makes per-page hiding of shared-key siblings possible (Direct rides
+  Chat’s key, the five Store pages share one key…).
+- ⛔ **`admin.permissions` can NEVER be hidden** (`NAV_ITEMS_ALWAYS_VISIBLE`) —
+  PageShell denies the ROUTE for a hidden item, so hiding that page would lock
+  the owner out of the only screen that can undo it; the normalizer strips it on
+  read AND write, so a hand-edited row cannot cause the lockout.
+- ⛔⛔ **THE OWNER-ONLY FORCE LINES ARE CLASSIFIED NOW, and a source guard makes
+  an unclassified one a red test**: `OWNER_ONLY_LIFTABLE_NAV_ITEMS` (Meetings,
+  Direct — an “Owner only” toggle on the screen lifts the force line, and
+  ⛔ **lifting one IS that page’s launch**, deliberate and labelled) vs
+  `OWNER_ONLY_FIXED_NAV_ITEMS` (the console family, Support Desk, Compliance,
+  Migration, SignalWire, Admin Billing — a “Locked” chip, and they IGNORE the
+  lift entirely: platform-internal screens no stored value may open).
+- ⛔ **POST /admin/role-permissions: an OMITTED `navVisibility` PRESERVES the
+  stored value, never clears it** — an older portal build saving permissions
+  must not silently un-hide every page the owner switched off. Guard-tested.
+  GET returns it; **GET /me carries it to every user** off the cached snapshot
+  read (zero extra queries); the portal caches it in sessionStorage so the
+  first paint doesn’t flash hidden pages.
+- ⛔ **`navAuthoritativeWiring.test.ts` HAD NEVER RUN** — absent from the portal
+  package.json test list (the documented unregistered-test trap). Registered
+  now, beside the new `navigation/navVisibility.test.ts` (10 tests, **4 fail
+  replayed against HEAD’s navConfig**) and 4 new api snapshot tests. Suites:
+  portal 433/435 (the two documented pre-existing), shared 555/555; typechecks
+  portal 0, shared 0, api **76 = the exact baseline**.
+- ⏳ **NOT PROVEN: nobody has flipped a toggle in a browser.** Acceptance:
+  /admin/permissions shows a row for EVERY sidebar page incl. all five Store
+  pages; hide one Store page → Save → it leaves the sidebar for everybody and
+  its siblings stay; the admin.permissions row’s In-sidebar toggle is disabled;
+  “Owner only → off” on Meetings reveals it ONLY to roles whose permission is
+  on. ⛔ An open tab/desktop window keeps the OLD bundle until reloaded.
+
 ## ⛔⛔ AGENT HANDOFF — the supermarket search finds the WHOLE catalog now, and negative stock stopped steering picks (2026-08-30) — READ FIRST before touching catalogSearch.ts, before reading `onHand` anywhere in supermarket code, or for "the dropdown doesn't find X" / "the agent picked the wrong variant"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SUPERMARKET_MODE_2026-08-26.md` §15**
@@ -141,7 +198,10 @@ Memory: [[desktop-sms-notification-only-fires-on-new-threads]].
   Message to me in private."* Connect has no group-SMS model either (`type:"sms"`
   = one externalPhone). **Not our bug; nothing to build on VoIP.ms.** If group
   texting ever matters commercially it is a carrier pivot question (Telnyx
-  documents group MMS; SignalWire unverified).
+  documents group MMS — up to 8 participants, replies stay in the group;
+  SignalWire VERIFIED NO 2026-08-30: every send API is single-`To`, no group
+  endpoint exists, and their "Number Groups" is a sender pool, not group chat —
+  10DLC approval does not change this).
 - ✅✅ **BOTH FIXES ARE BUILT (`78e6d827`, 2026-08-30 — deploy state in the
   handoff §8): MMS media is UNCAPPED both directions, and desktop
   notifications fire per MESSAGE in EVERY desktop window.** Inbound:
@@ -2042,7 +2102,6 @@ Memory: [[dnssec-blocks-a-nameserver-move]].
   the server — “it is in git” is never proof of what the site is serving. And the
   build’s own `--check` verifies internal links, so removing a page it links from
   fails the build rather than shipping a dead link.
-
 
 
 ## ⛔⛔ AGENT HANDOFF — you can email a customer their sign-up link now, and read exactly what they did (2026-08-24) — READ FIRST before adding tracking to the onboarding wizard, before touching the invite email, before "resending" a sign-up link, or for "how far did that customer get?"

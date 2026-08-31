@@ -5,8 +5,8 @@ import { useAppContext } from "../hooks/useAppContext";
 import { SidebarNavGroup } from "./SidebarNavGroup";
 
 export function AppSidebar() {
-  const { can, backendJwtRole } = useAppContext();
-  const visible = navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole));
+  const { can, backendJwtRole, navVisibility } = useAppContext();
+  const visible = navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole, navVisibility));
 
   return (
     <aside className="sidebar">

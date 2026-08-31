@@ -5,6 +5,7 @@ export * from "./loopcomEmailShell";
 export * from "./voicemailIngest";
 export * from "./voicemailSyncFair";
 export * from "./portalPermissions";
+export * from "./portalNavVisibility";
 export * from "./smsInbox";
 export * from "./smsText";
 export * from "./voipMsWebhook";

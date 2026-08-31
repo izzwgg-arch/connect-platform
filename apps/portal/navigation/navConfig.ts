@@ -1,5 +1,10 @@
 import type { LucideIcon } from "lucide-react";
-import type { PortalSidebarSectionKey } from "@connect/shared";
+import {
+  isNavItemHiddenBySetting,
+  isNavItemOwnerOnlyLifted,
+  type PortalNavVisibility,
+  type PortalSidebarSectionKey,
+} from "@connect/shared";
 import {
   Activity,
   AlertTriangle,
@@ -274,12 +279,48 @@ export const navSectionMeta: Record<NavItem["section"], { label: string; railIco
   tracking: { label: "Tracking", railIcon: "TR" }
 };
 
+/**
+ * Pages hidden from everyone but the platform owner by DEFAULT.
+ *
+ * Two lists on purpose. LIFTABLE ones are finished customer-facing features
+ * held back for a first look (Izzy, 2026-08-21: "permissions off for
+ * everybody but me") — lifting one is their launch, so it is an explicit,
+ * labelled switch on the Permissions screen. FIXED ones are platform-internal
+ * screens that show or change EVERY customer's data (the console and its two
+ * doors, the support desk, migration, the compliance ledger, the carrier test
+ * bench); those have no switch at all, and consoleNavGuard.test.ts pins that.
+ */
+export const OWNER_ONLY_LIFTABLE_NAV_ITEMS: readonly string[] = ["workspace.meetings", "workspace.direct"];
+
+export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
+  "pbx.ivr_migration",
+  "apps.signalwire",
+  "admin.pbx_console",
+  "admin.integrations",
+  "admin.voice_agent",
+  "admin.pbx_routing",
+  "admin.pbx_teams",
+  "admin.support",
+  "admin.compliance",
+  "admin.billing",
+];
+
 /** Admin Billing nav + /admin/billing API require JWT SUPER_ADMIN (platform), not only portal permission. */
 export function isNavItemVisibleForUser(
   item: NavItem,
   can: (permission: Permission) => boolean,
   backendJwtRole: string | undefined,
+  /**
+   * The platform owner's per-page sidebar switches (GET /me). Optional, and
+   * omitting it means "nothing is hidden" — so every existing caller and
+   * every test keeps its exact previous behaviour.
+   */
+  visibility?: PortalNavVisibility | null,
 ): boolean {
+  // ⛔ This layer only ever SUBTRACTS. It is checked first because it is the
+  // owner's explicit decision, but it can never reveal a page the permission
+  // checks below would refuse.
+  if (isNavItemHiddenBySetting(item.id, visibility)) return false;
   if (!can(item.sectionPermission) || !can(item.permission)) return false;
   if (item.id === "crm.diagnostics") {
     const jwtAdmin =
@@ -306,7 +347,11 @@ export function isNavItemVisibleForUser(
   // ⛔ Hiding the nav item is presentation, NOT access: the /meetings page
   // refuses to render for anyone else, and the create/list routes refuse
   // server-side. All three must agree.
-  if (item.id === "workspace.meetings" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (
+    item.id === "workspace.meetings" &&
+    !isNavItemOwnerOnlyLifted(item.id, visibility) &&
+    backendJwtRole !== "SUPER_ADMIN"
+  ) return false;
   // Loopcom Direct: SUPER_ADMIN only for now, the same precedent as Meetings —
   // Izzy looks at a new customer-facing feature before it appears in every
   // customer's sidebar. ⛔ This is the ONLY thing standing between the built
@@ -314,7 +359,11 @@ export function isNavItemVisibleForUser(
   // ⛔ It is presentation only: the API gates on can_view_workspace_chat and the
   // real protection is that nobody has a verified number, so lifting this alone
   // exposes nothing that was not already refused.
-  if (item.id === "workspace.direct" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (
+    item.id === "workspace.direct" &&
+    !isNavItemOwnerOnlyLifted(item.id, visibility) &&
+    backendJwtRole !== "SUPER_ADMIN"
+  ) return false;
   // The routing/teams doors show and change every customer's trunks and dial
   // plans — SUPER_ADMIN only, same as the console they open into.
   if (item.id === "admin.pbx_routing" && backendJwtRole !== "SUPER_ADMIN") return false;

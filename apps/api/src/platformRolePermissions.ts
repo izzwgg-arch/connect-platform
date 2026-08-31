@@ -7,9 +7,12 @@ import {
   PROTECTED_PLATFORM_ADMIN_PERMISSIONS,
   SIDEBAR_ITEMS,
   SIDEBAR_SECTIONS,
+  EMPTY_NAV_VISIBILITY,
+  normalizeNavVisibility,
   expandLegacyPortalPermissions,
   isPortalPermissionKey,
   type PortalPermissionKey,
+  type PortalNavVisibility,
 } from "@connect/shared";
 import { portalBucketFromJwtRole, PORTAL_ROLE_BUCKETS as SHARED_PORTAL_ROLE_BUCKETS } from "./userManagementRoles";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
@@ -50,8 +53,15 @@ function normalizePermissionList(input: unknown): PortalPermissionKey[] {
     .filter(isPortalPermissionKey);
 }
 
-function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles; knownKeys: string[] | null } {
-  if (!raw || typeof raw !== "object") return { version: 1, roles: {}, knownKeys: null };
+function rolesPayload(raw: unknown): {
+  version: number;
+  roles: SnapshotRoles;
+  knownKeys: string[] | null;
+  navVisibility: PortalNavVisibility;
+} {
+  if (!raw || typeof raw !== "object") {
+    return { version: 1, roles: {}, knownKeys: null, navVisibility: { ...EMPTY_NAV_VISIBILITY } };
+  }
   const obj = raw as SnapshotPayload & { version?: unknown; roles?: unknown; knownKeys?: unknown };
   const version = typeof (obj as { version?: unknown }).version === "number"
     ? Number((obj as { version: number }).version)
@@ -62,7 +72,15 @@ function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles; kn
   const knownKeys = Array.isArray(obj.knownKeys)
     ? obj.knownKeys.map((x) => String(x).trim()).filter(Boolean)
     : null;
-  return { version, roles: roles || {}, knownKeys };
+  // Sidebar visibility rides the SAME snapshot row as the role lists: it is
+  // the same platform-wide navigation configuration, it is read on the same
+  // hot path, and sharing the row means one cache and no migration.
+  return {
+    version,
+    roles: roles || {},
+    knownKeys,
+    navVisibility: normalizeNavVisibility((obj as { navVisibility?: unknown }).navVisibility),
+  };
 }
 
 /**
@@ -174,12 +192,30 @@ function normalizeRolePermissionSet(input: unknown, bucket: PortalRoleBucket): P
  * this, so it is memoized behind a short TTL — see permissionCache.ts. Writers
  * (POST /admin/role-permissions) must invalidate.
  */
-async function loadSnapshotRoles(): Promise<{ version: number; roles: SnapshotRoles; knownKeys: string[] | null } | null> {
+async function loadSnapshotRoles(): Promise<ReturnType<typeof rolesPayload> | null> {
   return withCachedRoleSnapshot(async () => {
     const row = await db.platformRolePermissionSnapshot.findUnique({ where: { id: SNAPSHOT_ID } });
     if (!row || row.roles == null) return null;
     return rolesPayload(row.roles);
   });
+}
+
+/**
+ * The platform-wide sidebar visibility record, for EVERY signed-in user.
+ *
+ * Rides the cached snapshot read, so it costs no extra query on the /me hot
+ * path. ⛔ Fails OPEN: any read failure answers "nothing hidden", because a
+ * database hiccup must leave the sidebar exactly as it was rather than empty
+ * every customer's navigation. It can only ever hide a link — the permission
+ * set and every server-side route gate are computed elsewhere and untouched.
+ */
+export async function getPortalNavVisibility(): Promise<PortalNavVisibility> {
+  try {
+    const snapshot = await loadSnapshotRoles();
+    return snapshot ? snapshot.navVisibility : { ...EMPTY_NAV_VISIBILITY };
+  } catch {
+    return { ...EMPTY_NAV_VISIBILITY };
+  }
 }
 
 export async function getEffectivePortalPermissionListForBucket(bucket: PortalRoleBucket): Promise<PortalPermissionKey[]> {
@@ -270,7 +306,12 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
           ? normalizeStoredRoleList(snapshot.roles, snapshot.version, key, snapshot.knownKeys)
           : [...DEFAULT_ROLE_PERMISSIONS[key]];
       }
-      return { permissions, version: SNAPSHOT_VERSION, keys: PORTAL_PERMISSION_KEYS };
+      return {
+        permissions,
+        version: SNAPSHOT_VERSION,
+        keys: PORTAL_PERMISSION_KEYS,
+        navVisibility: snapshot ? snapshot.navVisibility : { ...EMPTY_NAV_VISIBILITY },
+      };
     } catch (err: any) {
       app.log.error({ err: err?.message }, "role-permissions: read failed");
       return reply.code(500).send({ error: "db_error" });
@@ -284,6 +325,16 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
     const body = z
       .object({
         permissions: z.record(z.string(), z.array(z.string())),
+        // Optional on purpose. ⛔ An omitted field must PRESERVE what is
+        // stored, never clear it: an older portal build (or any caller that
+        // only means to change permissions) would otherwise un-hide every
+        // page the owner had switched off, silently, on an unrelated save.
+        navVisibility: z
+          .object({
+            hidden: z.array(z.string()).optional(),
+            ownerOnlyLifted: z.array(z.string()).optional(),
+          })
+          .optional(),
       })
       .parse(req.body || {});
 
@@ -315,7 +366,16 @@ export async function registerPlatformRolePermissionRoutes(app: FastifyInstance)
       // knownKeys records which permission keys EXIST at save time. The reader's
       // forward-merge uses it to tell "added after this save" (grant the
       // default) from "deliberately removed by the admin" (stay removed).
-      const payload = { version: SNAPSHOT_VERSION, roles: normalized, knownKeys: [...PORTAL_PERMISSION_KEYS] };
+      const storedVisibility = (await loadSnapshotRoles().catch(() => null))?.navVisibility;
+      const navVisibility = body.navVisibility
+        ? normalizeNavVisibility(body.navVisibility)
+        : storedVisibility || { ...EMPTY_NAV_VISIBILITY };
+      const payload = {
+        version: SNAPSHOT_VERSION,
+        roles: normalized,
+        knownKeys: [...PORTAL_PERMISSION_KEYS],
+        navVisibility,
+      };
       await db.platformRolePermissionSnapshot.upsert({
         where: { id: SNAPSHOT_ID },
         create: { id: SNAPSHOT_ID, roles: payload },

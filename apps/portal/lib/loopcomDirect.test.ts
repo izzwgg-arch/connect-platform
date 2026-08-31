@@ -147,8 +147,8 @@ test("⛔ Direct is SUPER_ADMIN-only in the sidebar until Izzy launches it", () 
   const nav = readFileSync(path.join(__dirname, "..", "navigation", "navConfig.ts"), "utf8").replace(/\r\n/g, "\n");
   assert.match(
     nav,
-    /item\.id === "workspace\.direct" && backendJwtRole !== "SUPER_ADMIN"/,
-    "removing this line is the launch — it must be a deliberate act, not a side effect",
+    /item\.id === "workspace\.direct" &&[\s\S]{0,220}?backendJwtRole !== "SUPER_ADMIN"/,
+    "removing this gate is the launch — it must be a deliberate act (or the owner lifting it on the Permissions screen), not a refactor side effect",
   );
 });
 

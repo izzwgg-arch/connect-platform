@@ -243,3 +243,109 @@ test("round-trip stability: reading back a fresh save changes nothing", async ()
     "normalized read of a fresh save must equal the saved list exactly",
   );
 });
+
+// ─── Sidebar visibility (2026-08-31) ─────────────────────────────────────────
+// The owner's per-page "In sidebar" switches ride the SAME snapshot row. The
+// property that must never regress: a POST that omits navVisibility PRESERVES
+// what is stored — an older portal build saving permissions must not silently
+// un-hide every page the owner switched off.
+
+function routesHarness(m: Awaited<ReturnType<typeof load>>) {
+  const routes: Record<string, Function> = {};
+  const app = {
+    get: (p: string, h: Function) => { routes[`GET ${p}`] = h; },
+    post: (p: string, h: Function) => { routes[`POST ${p}`] = h; },
+    log: { error: () => {} },
+  };
+  return { routes, register: () => m.registerRoutes(app) };
+}
+
+const fullPermissionsBody = () => ({
+  END_USER: DEFAULT_ROLE_PERMISSIONS.END_USER,
+  TENANT_ADMIN: DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN,
+  SUPER_ADMIN: [...PORTAL_PERMISSION_KEYS],
+});
+
+test("POST stores a normalized navVisibility, dropping junk and the protected Permissions page", async () => {
+  const m = await load();
+  const { routes, register } = routesHarness(m);
+  await register();
+  m.resetCaches();
+  row = legacyLiveRow();
+  upserts.length = 0;
+  const reply = { code() { return this; }, send(x: unknown) { return x; } };
+  const res = await routes["POST /admin/role-permissions"](
+    {
+      user: { role: "SUPER_ADMIN" },
+      body: {
+        permissions: fullPermissionsBody(),
+        navVisibility: {
+          // admin.permissions is the way back to the settings screen — it must
+          // be stripped rather than stored; junk shapes are dropped.
+          hidden: ["store.orders", "admin.permissions", "not a nav id!", "store.orders"],
+          ownerOnlyLifted: ["workspace.meetings"],
+        },
+      },
+    },
+    reply,
+  );
+  assert.deepEqual(res, { ok: true });
+  const stored = upserts[0].update.roles;
+  assert.deepEqual(stored.navVisibility, { hidden: ["store.orders"], ownerOnlyLifted: ["workspace.meetings"] });
+});
+
+test("⛔ POST WITHOUT navVisibility preserves the stored switches (older-build save must not un-hide pages)", async () => {
+  const m = await load();
+  const { routes, register } = routesHarness(m);
+  await register();
+  m.resetCaches();
+  const withVis = legacyLiveRow();
+  (withVis.roles as any).navVisibility = { hidden: ["store.orders", "store.specials"], ownerOnlyLifted: ["workspace.direct"] };
+  row = withVis;
+  upserts.length = 0;
+  const reply = { code() { return this; }, send(x: unknown) { return x; } };
+  await routes["POST /admin/role-permissions"](
+    { user: { role: "SUPER_ADMIN" }, body: { permissions: fullPermissionsBody() } },
+    reply,
+  );
+  const stored = upserts[0].update.roles;
+  assert.deepEqual(
+    stored.navVisibility,
+    { hidden: ["store.orders", "store.specials"], ownerOnlyLifted: ["workspace.direct"] },
+    "an omitted navVisibility must carry the stored value forward, never clear it",
+  );
+});
+
+test("GET returns the stored navVisibility; an old row without one reads as nothing hidden", async () => {
+  const m = await load();
+  const { routes, register } = routesHarness(m);
+  await register();
+  const reply = { code() { return this; }, send(x: unknown) { return x; } };
+
+  m.resetCaches();
+  const withVis = legacyLiveRow();
+  (withVis.roles as any).navVisibility = { hidden: ["store.orders"], ownerOnlyLifted: [] };
+  row = withVis;
+  const res1: any = await routes["GET /admin/role-permissions"]({ user: { role: "SUPER_ADMIN" } }, reply);
+  assert.deepEqual(res1.navVisibility, { hidden: ["store.orders"], ownerOnlyLifted: [] });
+
+  m.resetCaches();
+  row = legacyLiveRow(); // pre-feature row: no navVisibility key at all
+  const res2: any = await routes["GET /admin/role-permissions"]({ user: { role: "SUPER_ADMIN" } }, reply);
+  assert.deepEqual(res2.navVisibility, { hidden: [], ownerOnlyLifted: [] }, "an old snapshot must read as nothing hidden");
+});
+
+test("getPortalNavVisibility fails OPEN: a throwing read answers nothing-hidden", async () => {
+  const m = await load();
+  const perms = await import("./platformRolePermissions");
+  m.resetCaches();
+  const original = fakeDb.platformRolePermissionSnapshot.findUnique;
+  (fakeDb.platformRolePermissionSnapshot as any).findUnique = async () => { throw new Error("db down"); };
+  try {
+    const vis = await perms.getPortalNavVisibility();
+    assert.deepEqual(vis, { hidden: [], ownerOnlyLifted: [] }, "a db failure must hide nothing, not empty the sidebar");
+  } finally {
+    (fakeDb.platformRolePermissionSnapshot as any).findUnique = original;
+    m.resetCaches();
+  }
+});
