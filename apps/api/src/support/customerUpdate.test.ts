@@ -38,11 +38,19 @@ const TENANTS = [
 const review = (text: string, tenantName = "Gesheft") =>
   reviewCustomerMessage({ text, tenantName, allTenantNames: TENANTS });
 
-/** A message that SHOULD pass — the shape we are actually trying to produce. */
+/**
+ * A message that SHOULD pass — the shape we are actually trying to produce.
+ *
+ * ⛔ This fixture used to say "We've made a change so the call connects
+ * properly", and the `unearned_fix` rule caught it the moment that rule
+ * existed. The fixture was itself an example of the bug: the investigating
+ * agent changes nothing, so an honest message reports what was FOUND and what
+ * happens next. Do not "fix" this back into a claim of a repair.
+ */
 const GOOD =
   "We had a look at the trouble you reported with answering calls on your computer. " +
-  "We've made a change so the call connects properly when you click answer. " +
-  "Could you try a call when you get a moment and let us know here if it's working?";
+  "We can see what is going wrong when you click answer, and it is with our team now. " +
+  "Could you try a call when you get a moment and let us know here how it goes?";
 
 // ─────────────────────────────────────────────────────── 1. the honest message
 
@@ -56,11 +64,15 @@ describe("1. it does not refuse the messages we are trying to send", () => {
     // Banning these would make every honest message fail — they are the words
     // the customer used in the ticket.
     const ok = [
-      "Your voicemail is working again — try leaving yourself one to check.",
-      "Calls to extension 102 now ring the desk phone as well as the app.",
-      "We've turned texting on for your main number. Send yourself a text to check.",
-      "The phone menu now sends callers to the right person after hours.",
-      "Your app should ring now even when the phone is locked. Give it a try.",
+      // ⛔ Every one of these reports a FINDING. An earlier version of this list
+      // said "We've turned texting on for your main number", and the
+      // unearned_fix rule correctly refused it — the fixture was claiming a
+      // change the investigating agent cannot make.
+      "Your voicemail is working on our side — try leaving yourself one to check.",
+      "Calls to extension 102 do reach the desk phone as well as the app.",
+      "Texting on your main number looks set up correctly. Send yourself a text to check.",
+      "The phone menu is sending callers to the right person after hours.",
+      "Your app should ring even when the phone is locked. Give it a try.",
     ];
     for (const t of ok) {
       const v = review(`${t} ${t} Please let us know how it goes.`);
@@ -551,5 +563,58 @@ describe("11. driving it hard", () => {
     );
     assert.equal(out.status, "held");
     assert.equal(db.state.updates[0].plainMessage, null);
+  });
+});
+
+// ───────────────────── 12. claiming a fix that never happened (found live)
+
+describe("12. it never tells a customer we fixed something we did not", () => {
+  // Caught on the FIRST real ticket through the live loop, 2026-08-31. The
+  // agent's report opened "Investigated and reported only. Nothing was
+  // changed." and the rewrite said "We've made some adjustments, and it should
+  // now be correctly hidden." That reached a real customer's queue.
+  const CLAIMS = [
+    "We've made some adjustments, and it should now be correctly hidden.",
+    "We have fixed the issue and it should be working now.",
+    "We've updated your account.",
+    "We changed the setting for you.",
+    "It has now been fixed.",
+    "That issue is resolved.",
+    "We've applied a fix.",
+    "We turned it on for you.",
+  ];
+
+  test("⛔ every claim of a change is refused when nothing changed", () => {
+    for (const c of CLAIMS) {
+      const v = review(`We looked into the trouble you reported. ${c} Please try it and let us know here.`);
+      assert.equal(v.ok, false, c);
+      assert.ok(v.issues.some((i) => i.kind === "unearned_fix"), `${c} -> ${JSON.stringify(v.issues)}`);
+    }
+  });
+
+  test("an honest findings message still passes", () => {
+    const honest =
+      "We looked into extension 2000 not showing in your Team directory. It isn't set up on the " +
+      "phone system yet, which is why it stays hidden. We're getting that sorted — nothing for you " +
+      "to do right now. Could you reply here and tell us whether that matches what you expected?";
+    const v = review(honest);
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+  });
+
+  test("and when a change really was made, the claim is allowed", () => {
+    // The flag exists so the day a real fix rides this loop, the message can say so.
+    const v = reviewCustomerMessage({
+      text: "We looked into it and we have fixed the issue. Please try a call and let us know here.",
+      tenantName: "Gesheft",
+      allTenantNames: TENANTS,
+      changeWasMade: true,
+    });
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+  });
+
+  test("the prompt itself forbids it, so the gate is not the only line", () => {
+    // A gate that refuses everything the model produces is a stalled loop.
+    assert.match(REWRITE_SYSTEM_PROMPT, /INVESTIGATION, not a repair/i);
+    assert.match(REWRITE_SYSTEM_PROMPT, /NEVER say we fixed it/i);
   });
 });

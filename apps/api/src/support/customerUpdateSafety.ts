@@ -25,6 +25,7 @@ export type SafetyIssue = {
     | "other_customer"
     | "internal_detail"
     | "blame"
+    | "unearned_fix"
     | "shape"
     | "empty";
   detail: string;
@@ -114,6 +115,33 @@ const BLAME_PATTERNS: Array<[RegExp, string]> = [
   [/\bshould\s+(?:never|not)\s+have\b/i, "an admission of fault"],
 ];
 
+/**
+ * ⛔⛔ CLAIMING A FIX THAT NEVER HAPPENED.
+ *
+ * Caught on the FIRST real ticket to go through the live loop, 2026-08-31. The
+ * agent's report opened *"Investigated and reported only. Nothing was changed on
+ * Connect, the PBX, or the customer's account."* — and the rewrite told the
+ * customer **"We've made some adjustments, and it should now be correctly
+ * hidden."** That is a false statement, in writing, to a customer.
+ *
+ * The investigating agent CANNOT change anything — its tools forbid it — so in
+ * this pipeline a claim of a change is always untrue. It is enforced here rather
+ * than merely discouraged in the prompt, because the prompt is a request and
+ * this is a promise. `changeWasMade` exists so the day a real fix rides this
+ * loop, the claim becomes allowed for that message only.
+ */
+const FIX_CLAIM_PATTERNS: Array<[RegExp, string]> = [
+  [/\bwe(?:'ve|'ve| have| had)?\s+(?:just\s+)?(?:fixed|resolved|corrected|repaired|sorted)\b/i, "that we fixed it"],
+  [/\bwe(?:'ve|'ve| have)?\s+(?:just\s+)?(?:made|applied|pushed|rolled out)\s+(?:some\s+)?(?:a\s+)?(?:adjustments?|changes?|updates?|fix(?:es)?)\b/i, "that we changed something"],
+  // ⛔ "We turned it on for you" — the object sits between the verb and the
+  // particle, so a contiguous "turned on" misses it. Match the verb alone.
+  [/\bwe(?:'ve|'ve| have)?\s+(?:just\s+)?(?:adjusted|changed|updated|switched|enabled|turned|moved|set|re-?configured)\b/i, "that we changed something"],
+  [/\bit\s+(?:has|'s)\s+(?:now\s+)?been\s+(?:fixed|resolved|corrected|updated|changed)\b/i, "that it was fixed"],
+  // "That issue is resolved" needs the optional noun between the determiner and
+  // the verb — the first version demanded them adjacent and missed it.
+  [/\b(?:this|that|the|it)(?:\s+(?:issue|problem|fault|trouble))?\s+(?:is|has been)\s+(?:now\s+)?(?:fixed|resolved|sorted|corrected)\b/i, "that it was fixed"],
+];
+
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -149,6 +177,12 @@ export function reviewCustomerMessage(input: {
   text: string;
   tenantName: string;
   allTenantNames?: string[];
+  /**
+   * Did anything actually change? ⛔ Defaults to FALSE, because the investigating
+   * agent is forbidden from changing anything — so unless a caller can prove
+   * otherwise, a message claiming a fix is refused.
+   */
+  changeWasMade?: boolean;
 }): SafetyVerdict {
   const text = String(input.text ?? "");
   const issues: SafetyIssue[] = [];
@@ -175,6 +209,12 @@ export function reviewCustomerMessage(input: {
     const m = re.exec(text);
     if (m) add("blame", `it volunteers ${detail}`, m[0]);
   }
+  if (!input.changeWasMade) {
+    for (const [re, detail] of FIX_CLAIM_PATTERNS) {
+      const m = re.exec(text);
+      if (m) add("unearned_fix", `it claims ${detail}, and nothing was changed`, m[0]);
+    }
+  }
   for (const hit of otherCustomerHits(text, input.tenantName, input.allTenantNames ?? [])) {
     add("other_customer", "it names another company on the platform", hit);
   }
@@ -192,10 +232,17 @@ export const REWRITE_SYSTEM_PROMPT = [
   "",
   "You are writing AS the phone company, to a small-business owner who is not technical.",
   "",
+  "⛔ THE MOST IMPORTANT RULE: this was an INVESTIGATION, not a repair. Nobody has changed anything.",
+  "NEVER say we fixed it, resolved it, adjusted it, updated it, changed it, or made any change —",
+  "unless the report explicitly states that a change WAS made. Saying so otherwise is telling the",
+  "customer something untrue, and it is the one mistake that matters most here.",
+  "",
   "WRITE:",
-  "- What they noticed, in their own terms.",
-  "- What is different now, in one or two plain sentences.",
-  "- Then ask them to try it and reply here to say whether it is working.",
+  "- What they reported, in their own terms.",
+  "- What we found, in one or two plain sentences.",
+  "- What happens next: either that it is working and they should try it, or that we are on it and",
+  "  they do not need to do anything, or what we need from them.",
+  "- Then ask them to reply here and tell us whether it looks right to them.",
   "",
   "NEVER INCLUDE:",
   "- Technical words of any kind: no server, database, deploy, code, commit, container, file, log, API.",
