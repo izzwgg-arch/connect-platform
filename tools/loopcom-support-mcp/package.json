@@ -8,7 +8,10 @@
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check loopcom.mjs",
-    "smoke": "node smoke.mjs"
+    "smoke": "node smoke.mjs",
+    "test": "node --test stress.test.mjs",
+    "status": "node status.mjs",
+    "watch": "node watch.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

@@ -2,3 +2,5 @@ node_modules/
 package-lock.json
 .watch-state.json
 reports/
+.watch-heartbeat.json
+logs/
