@@ -230,3 +230,69 @@ and the EIN in NO row, NO log, NO answers blob afterwards.
    submit races on the texting step (the server upserts by submissionId, so a
    double-submit updates), hostile 50k-char registration input (zod caps at
    200/2000), and a full fake-carrier end-to-end signup drive.
+
+## §9 — Scoped invite links: "just submit a port" / "just add extensions" (2026-08-31, `4dc33be5`)
+
+Izzy: *"in the onboarding page, I should have an option to send somebody a link
+just to submit a port or just to add an extension."* Built as a LINK PURPOSE,
+not a second wizard.
+
+**The mechanism.** `answers.linkKind` (`"full" | "port" | "extension"`, absent =
+full) is stamped when the link is created — both creation paths carry it:
+`POST /admin/onboarding/invitations` (`kind` in `createInvitationSchema`, the
+invite email gets per-kind subject/title/CTA/blurb) and the public-links route
+(`createPublicLinkSchema.kind`). The wizard reads it off `/validate`, which also
+returns `submitted` so a returning visitor on an already-submitted scoped link
+lands on the thank-you screen instead of a 409.
+
+- ⛔⛔ **A scoped link can NEVER reach money.** `refuseWrongLinkKind(reply, row,
+  "full")` gates **checkout, the full /submit, and /apply-number** — 409
+  `wrong_link_kind` before `prepareOnboardingCheckout` / `applyOnboardingNumber`
+  ever run. The test file's side-effect stubs THROW if those modules are
+  reached, so the refusal tests double as no-side-effect proofs.
+- ⛔⛔ **The autosave REPLACES `answers` wholesale, so the save route re-stamps
+  `linkKind`** — without that, the first autosave on a scoped link silently
+  turned it back into a full sign-up link. Behavior-tested.
+- **`POST /onboarding/:token/submit-port`** validates the same fields the wizard
+  does (cell ⇒ transfer PIN; typed LOA signature ≥3 chars), writes
+  `answers.phone {choice:"port", details, provider}` **plus the SAME
+  `answers.provisioning.portFiling {provider:"signalwire",
+  status:"awaiting_manual_filing", portedDid, scopedLink:true}` block the full
+  wizard writes** — which is why it appears in the admin **Port queue** with
+  zero new queue code (`buildPortQueueRow` matches on the portFiling block).
+  Status → SUBMITTED + `submittedAt`; a second submit hits the write-block.
+- **`POST /onboarding/:token/submit-extensions`** (1–50 people) writes
+  `OnboardingRequestedExtension` rows (deleteMany+createMany in a $transaction)
+  + `answers.extensions` + SUBMITTED. Blank email stores as **null**. Appears in
+  the ordinary submissions list.
+- ⛔⛔ **THE PORT FIELDS ARE ONE IMPLEMENTATION NOW —
+  `apps/portal/app/onboarding/[token]/scopedFlows.tsx`.** `PortDetailsSection`
+  (the carrier/account/address/isMobile/uploads/typed-signature block) and
+  `validatePortDetails` moved OUT of page.tsx; the full wizard's step-2 port
+  branch renders/validates through them, and so does `PortOnlyFlow`. **Never
+  reintroduce an inline copy in page.tsx** — the source guard
+  (`lib/scopedOnboardingLinks.test.ts`) fails on `ob-porting-details` appearing
+  there or the validation strings coming back.
+- **`ExtensionOnlyFlow`** renders its own compact person cards (ob-mperson) — ⛔
+  deliberately NOT the wizard's step-3 table, because the scoped flow has **no
+  owner concept** (these people join an EXISTING account; the owner-email rule
+  must NOT apply — pinned by a unit test).
+- ⛔ **The scoped render branch sits BEFORE the `isPhone` branch** in page.tsx
+  (source-guarded): a phone visitor on a scoped link gets the scoped card, never
+  the full mobile micro-step wizard.
+- **Admin card:** three-way chooser (Full sign-up / Transfer a number only /
+  Add extensions only) in the invite card, `kind` passed to the POST and reset
+  after; the "address already has a login" warning is suppressed on scoped kinds
+  (an existing customer HAVING a login is the expected case).
+- ✅ Proven: 10 api behavior tests (`scopedLinks.test.ts` — real Fastify +
+  mock.module fake db; **all 10 fail replayed against HEAD's publicRoutes**) +
+  10 portal tests (**all 5 source guards fail against HEAD's pages**); api
+  typecheck 0 errors in touched files; portal typecheck 0; portal suite 421/423
+  (the two documented pre-existing); onboarding suite's other failures are the
+  pre-existing setupOrchestrator `resolvePbxRouteHelperConfig` class +
+  `pbxTenantBuild` "job validation" (fails at full HEAD too — not this work).
+- ⏳ **NOT PROVEN: no scoped link has been created or submitted by a human.**
+  Acceptance: admin page → "Transfer a number only" → open the link (a short
+  port card, no steps, no payment) → submit → the package appears in
+  /admin/onboarding/ports; negative: hitting the checkout URL on that token
+  answers 409 `wrong_link_kind`.
