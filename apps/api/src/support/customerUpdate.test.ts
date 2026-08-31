@@ -618,3 +618,46 @@ describe("12. it never tells a customer we fixed something we did not", () => {
     assert.match(REWRITE_SYSTEM_PROMPT, /NEVER say we fixed it/i);
   });
 });
+
+// ───── 13. the synonyms a refused model reaches for (both found on live runs)
+
+describe("13. synonyms found only by running it for real", () => {
+  test("⛔ 'has been addressed' is a fix claim too", () => {
+    // A live run produced "We found that the issue has been addressed" once the
+    // obvious verbs were refused. A model reaches for the polite synonym.
+    for (const t of [
+      "We found that the issue has been addressed.",
+      "The problem has been handled.",
+      "It has been taken care of.",
+      "We have since addressed it.",
+    ]) {
+      const v = review(`We looked into what you reported. ${t} Please let us know how it goes.`);
+      assert.equal(v.ok, false, t);
+      assert.ok(v.issues.some((i) => i.kind === "unearned_fix"), `${t} -> ${JSON.stringify(v.issues)}`);
+    }
+  });
+
+  test("⛔ 'affecting multiple accounts' is still about other customers", () => {
+    // The first pattern matched the past tense only, and a live run walked
+    // straight through it with the present participle.
+    for (const t of [
+      "There was a similar issue affecting multiple accounts.",
+      "This affects several businesses.",
+      "It impacted other customers as well.",
+      "The same problem is affecting many accounts.",
+    ]) {
+      const v = review(`We looked into what you reported. ${t} Please let us know how it goes.`);
+      assert.equal(v.ok, false, t);
+      assert.ok(v.issues.some((i) => i.kind === "blame"), `${t} -> ${JSON.stringify(v.issues)}`);
+    }
+  });
+
+  test("and none of that refuses an honest message about THEIR account", () => {
+    const v = review(
+      "We looked into the voicemails you reported. We can see the ones that did not reach " +
+      "your inbox, and it is with our team now. Could you let us know here whether anything " +
+      "else looks wrong to you?",
+    );
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+  });
+});

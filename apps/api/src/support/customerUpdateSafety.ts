@@ -109,8 +109,10 @@ const BLAME_PATTERNS: Array<[RegExp, string]> = [
   // as \d+ only, and people write durations in words far more often than digits.
   [/\b(?:for|over|across)\s+(?:\d+|a couple of|a few|several|many|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:seconds|minutes|hours|days|weeks|months|years)\b/i, "how long it was wrong"],
   [/\bnobody\s+(?:noticed|caught|saw|checked)\b/i, "that it went unnoticed"],
-  [/\b(?:other|another|several|many)\s+customers?\b/i, "other customers"],
-  [/\b(?:affected|impacted)\s+(?:all|every|other|multiple)\b/i, "other customers"],
+  [/\b(?:other|another|several|many|multiple)\s+(?:customers?|accounts?|businesses|companies)\b/i, "other customers"],
+  // ⛔ "a similar issue affecting multiple accounts" got through the first cut:
+  // the pattern matched the past tense only. Caught on a live run, 2026-08-31.
+  [/\b(?:affect(?:ed|ing|s)?|impact(?:ed|ing|s)?)\s+(?:all|every|other|multiple|several|many)\b/i, "other customers"],
   [/\b(?:compensat|refund|credit your account|liab|negligen|lawsuit|legal)/i, "money or liability"],
   [/\bshould\s+(?:never|not)\s+have\b/i, "an admission of fault"],
 ];
@@ -136,7 +138,12 @@ const FIX_CLAIM_PATTERNS: Array<[RegExp, string]> = [
   // ⛔ "We turned it on for you" — the object sits between the verb and the
   // particle, so a contiguous "turned on" misses it. Match the verb alone.
   [/\bwe(?:'ve|'ve| have)?\s+(?:just\s+)?(?:adjusted|changed|updated|switched|enabled|turned|moved|set|re-?configured)\b/i, "that we changed something"],
-  [/\bit\s+(?:has|'s)\s+(?:now\s+)?been\s+(?:fixed|resolved|corrected|updated|changed)\b/i, "that it was fixed"],
+  // ⛔ "the issue has been addressed" reached a live run before this listed
+  // "addressed" — the model reaches for a synonym the moment the obvious verbs
+  // are refused, so the list has to cover the polite ones too.
+  // "It has NOW been fixed" — the adverb can sit either side of "been".
+  [/\b(?:has|have|had)\s+(?:now\s+)?been\s+(?:now\s+)?(?:fixed|resolved|corrected|updated|changed|addressed|handled|taken care of|sorted)\b/i, "that it was fixed"],
+  [/\bwe(?:'ve| have)?\s+(?:since\s+)?(?:addressed|handled|taken care of)\b/i, "that we fixed it"],
   // "That issue is resolved" needs the optional noun between the determiner and
   // the verb — the first version demanded them adjacent and missed it.
   [/\b(?:this|that|the|it)(?:\s+(?:issue|problem|fault|trouble))?\s+(?:is|has been)\s+(?:now\s+)?(?:fixed|resolved|sorted|corrected)\b/i, "that it was fixed"],
