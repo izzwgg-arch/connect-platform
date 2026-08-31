@@ -7,10 +7,12 @@ The Claude that runs already knows this system — CLAUDE.md, the handoffs, the
 memory dir, SSH to both servers, the database. That is the whole reason the work
 happens here rather than inside LoopCom's own assistant.
 
-**Status: v1, READ-ONLY, live.** It reads tickets, the customer behind them, and
-the chat they came out of. It writes nothing, and in particular it never messages
-a customer — per Izzy's design the OpenAI agent inside LoopCom keeps the customer
-relationship and does the talking.
+**Status: v2, live.** It reads tickets, the customer behind them, and the chat
+they came out of, and it hands the finished investigation back. It has exactly
+one write, and that write cannot reach a customer: the api rewrites the report
+through OpenAI and runs a safety gate before anyone sees a word of it. Per Izzy's
+design the OpenAI agent inside LoopCom keeps the customer relationship and does
+all the talking.
 
 Plan and rationale: `docs/ai-context/PLAN_SUPPORT_TICKET_AGENT_2026-08-27.md`.
 
@@ -34,7 +36,32 @@ customer hits "Report a problem"      apps/api/src/supportReport.ts
         |  reads the ticket through the MCP server, where the customer's
         |  words arrive fenced as DATA
         v
-  reports/<REF>-<ts>.md        ⛔ and replies to NOBODY
+  reports/<REF>-<ts>.md
+        |
+        v  postAgentReport()  -->  POST /admin/support/escalations/:ref/agent-report
+                                        |
+                                        |- OpenAI rewrites it in plain English
+                                        |- the safety gate decides  -->  held, for a person
+                                        v
+                                   a badge on the customer's assistant widget
+                                        |
+                                   they read it, TEST it, and answer
+                                        v
+                                   "Yes, it's working" / "No, still not right"
+```
+
+⛔ **Claude never writes the words a customer reads.** It hands back a technical
+report; the customer-facing voice stays OpenAI's. That report names other
+tenants, file paths and internal systems by construction, and never leaves the
+building — see `apps/api/src/support/`.
+
+⛔ **The safety gate refuses, it does not redact**, and everything fails closed:
+no OpenAI key, a model error, an empty rewrite or any objection all end in
+`held`, waiting for a person. A held message is invisible to the customer by
+design, so if updates stop appearing, look there first:
+
+```sql
+select status, count(*) from "SupportUpdate" group by 1;
 ```
 
 ## Setup
