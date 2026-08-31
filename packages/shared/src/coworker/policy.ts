@@ -16,10 +16,13 @@
  *  #13  calling reliability is never traded away
  *
  * ⛔ THE ORDER OF THE CHECKS IS ITSELF THE SAFETY PROPERTY. Kill switch → spec
- * validity → hard prohibition → call-protection → injection provenance → domain
- * grants → risk floor → tool floor. Reordering it changes what is reachable. In
- * particular, provenance is checked BEFORE grants so that a domain a user set to
- * "allow" cannot be exercised by a website that talked the model into it.
+ * validity → hard prohibition → call-protection → DOMAIN DENY → injection
+ * provenance → domain ASK → risk floor → approval. Reordering it changes what is
+ * reachable. Two orderings in particular are load-bearing:
+ *   - a domain the user set to "deny" is checked BEFORE provenance, so a denied
+ *     domain denies OUTRIGHT rather than first showing a confirmation prompt;
+ *   - provenance is checked BEFORE the domain ASK/allow, so a domain a user set to
+ *     "allow" cannot be exercised by a website that talked the model into it.
  */
 
 import {
@@ -168,7 +171,21 @@ export function decideToolCall(input: PolicyInput): PolicyDecision {
     }
   }
 
-  /* 5 ─ PROVENANCE. ⛔⛔ THE PROMPT-INJECTION GATE (invariant #7).
+  /* 5 ─ DOMAIN DENY. ⛔ A domain the user set to "never" is a HARD no, and it is
+        checked BEFORE provenance so that a denied domain denies outright rather
+        than first showing an external-content confirmation prompt. Moving this
+        earlier only ever makes more things deny — it can never weaken the gate. */
+  const deniedEarly = spec.domains.filter((d) => resolveGrant(permissions, d) === "deny");
+  if (deniedEarly.length) {
+    return {
+      verdict: "deny",
+      code: "domain_denied",
+      message: `Your Coworker permissions do not allow this (${list(deniedEarly)}). You can change this in Settings → AI Coworker → Permissions.`,
+      domains: deniedEarly,
+    };
+  }
+
+  /* 6 ─ PROVENANCE. ⛔⛔ THE PROMPT-INJECTION GATE (invariant #7).
         External content — a web page, an email, a document, an MCP tool result —
         is DATA. It may inform the model, and it may never confer authority. So an
         action whose instruction traces back to external content is held to a much
@@ -204,25 +221,14 @@ export function decideToolCall(input: PolicyInput): PolicyDecision {
     }
   }
 
-  /* 6 ─ domain grants. ALL declared domains must permit; the strictest wins. */
-  const denied: PermissionDomain[] = [];
+  /* 7 ─ remaining domain grants. Denies are already handled in step 5; here we
+        only collect the domains that require an approval. */
   const asked: PermissionDomain[] = [];
   for (const domain of spec.domains) {
-    const grant = resolveGrant(permissions, domain);
-    if (grant === "deny") denied.push(domain);
-    else if (grant === "ask") asked.push(domain);
+    if (resolveGrant(permissions, domain) === "ask") asked.push(domain);
   }
 
-  if (denied.length) {
-    return {
-      verdict: "deny",
-      code: "domain_denied",
-      message: `Your Coworker permissions do not allow this (${list(denied)}). You can change this in Settings → AI Coworker → Permissions.`,
-      domains: denied,
-    };
-  }
-
-  /* 7 ─ the risk floor. Independent of domains: a DESTRUCTIVE action always faces
+  /* 8 ─ the risk floor. Independent of domains: a DESTRUCTIVE action always faces
         a human, whatever the profile says, and however the domains resolved. */
   const needsApprovalForRisk = spec.destructive || spec.risk === "DESTRUCTIVE";
   const securityPosture = spec.domains.filter((d) => SECURITY_POSTURE_DOMAINS.includes(d));
@@ -238,7 +244,7 @@ export function decideToolCall(input: PolicyInput): PolicyDecision {
     return { verdict: "allow", code: "allowed", message: "", domains: spec.domains };
   }
 
-  /* 8 ─ an approval already given for THIS exact action satisfies the ask.
+  /* 9 ─ an approval already given for THIS exact action satisfies the ask.
         ⛔ The caller proves that by hash — see approvalHash() — never by a boolean
         the model can set. */
   if (input.approved) {
