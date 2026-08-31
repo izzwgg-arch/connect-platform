@@ -567,3 +567,16 @@ describe("I. what the dashboard is shown", () => {
   });
 
 });
+
+describe("J. the heartbeat during a long run", () => {
+  test("⛔ SOURCE GUARD: the watcher beats DURING a run, not only between runs", () => {
+    // Proven live 2026-08-31: a 13-minute investigation left the heartbeat 11
+    // minutes stale and `status.mjs` reported STALLED on a perfectly healthy
+    // watcher. A monitor that cries wolf during normal work is one people learn
+    // to ignore — and the next alarm, the real one, goes with it.
+    const src = fs.readFileSync(path.join(HERE, "watch.mjs"), "utf8").replace(/\r\n/g, "\n");
+    const code = src.split("\n").filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join("\n");
+    const onStep = code.slice(code.indexOf("const r = await runAgent("), code.indexOf("settle(state, t.reference"));
+    assert.ok(/beat\(\{\s*state: "working"/.test(onStep), "the step handler must beat, or a long run looks dead");
+  });
+});

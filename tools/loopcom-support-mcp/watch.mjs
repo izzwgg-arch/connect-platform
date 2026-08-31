@@ -422,6 +422,12 @@ async function main() {
           if (now - lastPush < 3000) return;
           lastPush = now;
           pushRun(pushCfg, { ...base, status: "running", steps, sessionId: meta.sessionId ?? undefined }).catch(() => {});
+          // ⛔⛔ AND BEAT. Without this the heartbeat only ticks BETWEEN runs, so
+          // a thirteen-minute investigation makes a perfectly healthy watcher
+          // report STALLED — proven live 2026-08-31. A monitor that cries wolf
+          // during normal work is one people learn to ignore, and the next
+          // alarm, the real one, goes with it.
+          beat({ state: "working", ticket: t.reference, lane: d.lane });
         }); // one at a time, deliberately
 
         settle(state, t.reference, r.ok ? "done" : "failed", { report: r.out, error: r.error, sessionId: r.sessionId });
