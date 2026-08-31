@@ -123,6 +123,10 @@ export type LiveCall = {
   endedAt: string | null;
   durationSec: number;
   billableSec: number;
+  /** Per-call monotonic message sequence (2026-08-31) — assigned by the
+   *  telephony broadcaster at emit time so clients can drop upserts delivered
+   *  after the call's remove. Absent on older server builds. */
+  seq?: number;
 };
 
 export type LiveExtensionState = {

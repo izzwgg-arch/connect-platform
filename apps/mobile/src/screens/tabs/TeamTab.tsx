@@ -22,51 +22,10 @@ import { radius, spacing } from '../../theme/spacing';
 
 type TeamFilter = 'all' | TeamPresence;
 
-/**
- * Does a live call involve this extension? Uses only the authoritative
- * `extensions[]` list the telephony service attaches to each call — NOT a
- * fuzzy from/to/connectedLine match, which previously flagged the wrong
- * person as "on a call" (e.g. when a DID or short code looked like an
- * extension number).
- */
-function callInvolvesExtension(call: LiveCall, extension: string, tenantId?: string | null): boolean {
-  const belongsToTenant = !tenantId || !call.tenantId || call.tenantId === tenantId;
-  if (!belongsToTenant) return false;
-  return (call.extensions || []).includes(extension);
-}
-
-/**
- * Real-time presence for a team member.
- *
- * Primary signal is the Asterisk device hint (`LiveExtensionState.status`) —
- * the exact same state desk-phone BLF lamps subscribe to — so the mobile dot
- * matches the desk phone and clears the instant a call ends (the hint returns
- * to `idle` and the live call is removed). Live calls are layered on top so a
- * ringing/answered call lights up immediately even before the hint settles.
- *
- * Precedence: ringing → on_call → available → offline.
- */
-function livePresence(member: TeamDirectoryMember, live: LiveTelephonyState | null): TeamPresence {
-  if (!live) return member.presence;
-
-  let onCall = false;
-  let ringing = false;
-  for (const call of live.calls.values()) {
-    if (!callInvolvesExtension(call, member.extension, member.tenantId)) continue;
-    if (call.state === 'ringing' || call.state === 'dialing') ringing = true;
-    else if (call.state === 'up' || call.state === 'held') onCall = true;
-  }
-
-  const direct = [...live.extensions.values()].find((ext) =>
-    ext.extension === member.extension && (!member.tenantId || !ext.tenantId || ext.tenantId === member.tenantId),
-  );
-  const hint = String(direct?.status || '').trim().toLowerCase();
-
-  if (ringing || hint === 'ringing') return 'ringing';
-  if (onCall || hint === 'inuse' || hint === 'busy' || hint === 'onhold') return 'on_call';
-  if (hint === 'idle') return 'available';
-  return 'offline';
-}
+// Presence rules live in ./teamPresence (pure, node-testable). ⛔ Live calls
+// are the ONLY source of "On Call"/"Ringing" — never OR the raw BLF hint back
+// in; the full reasoning is on livePresence's doc block.
+import { callInvolvesExtension, livePresence } from './teamPresence';
 
 function presenceColor(presence: TeamPresence, colors: ReturnType<typeof useTheme>['colors']) {
   if (presence === 'available') return colors.success;

@@ -54,6 +54,38 @@ const HANGUP_RETAIN_MS = 30_000;
 const RECONCILE_ABSENT_STRIKES_REQUIRED = 2;
 const RECONCILE_BRIDGE_GRACE_MS = 15_000;
 
+// ── ARI refutation of stale legs at hangup time (2026-08-31) ────────────────
+// When a Hangup event arrives for one leg but a SIBLING leg's Hangup was
+// missed (renamed channel, AMI gap), the call used to sit "On Call" until the
+// 60s sweep / ARI reconcile — the "hung up but stayed on screen for a minute"
+// complaint. reconcileLiveChannels caches the latest RAW ARI channel set; the
+// hangup handler consults it: a remaining indexed channel that (a) is absent
+// from that set, (b) provably PREDATES the snapshot (its uniqueid epoch is
+// older than the snapshot by a safety margin, so if it were alive it HAD to be
+// in the list), on (c) a fresh, non-empty snapshot, is refuted — and a call
+// whose every remaining leg is refuted is over NOW, not at the next sweep.
+// ⛔ The epoch guard is what makes this safe against the stale-snapshot lie
+// that caused the 2026-08-04 wrongful evictions: a channel created after the
+// snapshot can never be refuted by it.
+const ARI_SET_FRESH_MS = 20_000;
+const UNIQUEID_EPOCH_SAFETY_MS = 8_000;
+
+/**
+ * Parse the creation epoch (ms) out of an Asterisk uniqueid
+ * ("<epoch>.<seq>", optionally "<systemname>-<epoch>.<seq>").
+ * Returns null when the value doesn't carry a plausible epoch — callers must
+ * treat null as "cannot refute", never as "dead".
+ */
+export function uniqueidEpochMs(uid: string): number | null {
+  const m = /(?:^|-)(\d{10})\.\d+$/.exec(String(uid ?? "").trim());
+  if (!m) return null;
+  const epochMs = Number(m[1]) * 1000;
+  if (!Number.isFinite(epochMs)) return null;
+  // Sanity window: 2020 .. now + 1 day.
+  if (epochMs < 1_577_836_800_000 || epochMs > Date.now() + 86_400_000) return null;
+  return epochMs;
+}
+
 /** Max call duration (seconds) for duration-based stale cleanup. Only used when call has no live channel. */
 const MAX_CALL_DURATION_SECONDS = 8000;
 
@@ -1189,6 +1221,24 @@ export class CallStateStore extends EventEmitter {
         );
       }
       call.channels = [];
+    } else if (call.channels.length > 0 && this.ariRefutesCallChannels(call.id)) {
+      // ARI-refuted stale legs (2026-08-31): this Hangup is real, and every
+      // OTHER channel the store still holds for the call is provably absent
+      // from a fresh ARI snapshot it predates — i.e. its own Hangup was missed
+      // (rename/AMI gap). Ending the call NOW instead of waiting for the
+      // reconciler/60s sweep is what keeps Active Calls and Team Directory in
+      // exact sync with the wire. The refuted uids are dropped from the index
+      // so no ghost bookkeeping survives.
+      const staleUids = this.uniqueIdsForCall(call.id);
+      for (const uid of staleUids) {
+        this.channelIndex.delete(uid);
+        this.channelByUniqueId.delete(uid);
+      }
+      log.info(
+        { callId: call.id, staleUids, staleChannels: call.channels },
+        "live_call: ari_refuted_stale_legs_forced_hangup",
+      );
+      call.channels = [];
     }
 
     // Only mark call ended when all channels are gone
@@ -2022,10 +2072,43 @@ export class CallStateStore extends EventEmitter {
    */
   private reconcileAbsentStrikes = new Map<string, number>();
 
+  // Latest RAW ARI /channels snapshot, cached on every reconcile pass so the
+  // hangup handler can consult it synchronously (ariRefutesCallChannels).
+  private lastAriChannelSet: Set<string> | null = null;
+  private lastAriSetAtMs = 0;
+
+  /**
+   * True when a FRESH, non-empty ARI snapshot proves that every channel the
+   * store still indexes for this call is dead: each uniqueid is absent from
+   * the raw /channels list AND its creation epoch predates the snapshot by the
+   * safety margin (so, if alive, it HAD to appear in it).
+   *
+   * ⛔ Fails toward "cannot refute" on every doubt: no snapshot, stale
+   * snapshot, EMPTY snapshot (an ARI hiccup returning an empty list must not
+   * end every call at once — the strike-guarded reconciler covers a genuinely
+   * idle PBX within ~2 polls), unparseable uniqueid, or a channel younger than
+   * the snapshot.
+   */
+  private ariRefutesCallChannels(callId: string): boolean {
+    const set = this.lastAriChannelSet;
+    if (!set || set.size === 0) return false;
+    const setAt = this.lastAriSetAtMs;
+    if (Date.now() - setAt > ARI_SET_FRESH_MS) return false;
+    const uids = this.uniqueIdsForCall(callId);
+    if (uids.length === 0) return false;
+    return uids.every((uid) => {
+      if (set.has(uid)) return false;
+      const epochMs = uniqueidEpochMs(uid);
+      return epochMs !== null && epochMs <= setAt - UNIQUEID_EPOCH_SAFETY_MS;
+    });
+  }
+
   reconcileLiveChannels(rawChannelIds: Iterable<string>): void {
     const live = new Set(rawChannelIds);
     const seenThisRound = new Set<string>();
     const now = Date.now();
+    this.lastAriChannelSet = live;
+    this.lastAriSetAtMs = now;
 
     // uniqueids per call, from the index (the store's own liveness bookkeeping).
     const uidsByCall = new Map<string, string[]>();
@@ -2035,10 +2118,27 @@ export class CallStateStore extends EventEmitter {
       else uidsByCall.set(cid, [uid]);
     }
 
-    for (const call of this.getActive()) {
+    // WIDENED 2026-08-31: sweep EVERY tracked call in an active state, not just
+    // getActive(). getActive() keeps only up/held calls with a qualifying
+    // bridge — so a ringing/dialing call, or a call that dropped below two
+    // valid legs after a missed Hangup, vanished from snapshots but was never
+    // reconciled and never got a callRemove on the delta stream. Connected
+    // clients kept it (and the extension stuck "On Call") until the 60s ghost
+    // sweep. ARI's raw channel list is the liveness truth for ALL of them:
+    // if none of a call's channels exist there, the call is done.
+    // The 2-strike + young-call/young-bridge grace guards are unchanged.
+    for (const call of this.calls.values()) {
+      if (call.state === "hungup") continue;
+      if (!ACTIVE_STATES.includes(call.state)) continue;
       seenThisRound.add(call.id);
 
       const uids = uidsByCall.get(call.id) ?? [];
+      if (uids.length === 0) {
+        // Nothing indexed — ARI can neither confirm nor refute. The ghost
+        // sweep owns this shape (no_live_channel).
+        this.reconcileAbsentStrikes.delete(call.id);
+        continue;
+      }
       if (uids.some((uid) => live.has(uid))) {
         this.reconcileAbsentStrikes.delete(call.id);
         continue;

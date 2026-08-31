@@ -21,6 +21,31 @@ export class TelephonyBroadcaster {
   private debounceMap = new Map<string, NodeJS.Timeout>();
   private snapshotTimer: NodeJS.Timeout | null = null;
 
+  // ── Per-call message ordering (2026-08-31) ────────────────────────────────
+  // `call.remove` is broadcast synchronously but `call.upsert` can ride an
+  // async CRM-enrichment promise (up to 2.5s) — so a stale upsert could be
+  // DELIVERED after the hangup's remove and resurrect the dead call on every
+  // client until the next sweep ("hung up but stayed on screen for a minute").
+  // Every message for a call now carries a monotonically increasing `seq`,
+  // assigned SYNCHRONOUSLY at emit time; clients drop any call message whose
+  // seq is older than the last one they applied for that call.
+  private callSeqs = new Map<string, { seq: number; touchedMs: number }>();
+
+  /** Next per-call sequence number. MUST be called synchronously in the event
+   *  handler (before any await) so seq order == emit order. */
+  private nextCallSeq(callId: string): number {
+    const seq = (this.callSeqs.get(callId)?.seq ?? 0) + 1;
+    this.callSeqs.set(callId, { seq, touchedMs: Date.now() });
+    return seq;
+  }
+
+  private sweepCallSeqs(): void {
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [id, entry] of this.callSeqs) {
+      if (entry.touchedMs < cutoff) this.callSeqs.delete(id);
+    }
+  }
+
   constructor(
     private readonly socket: TelephonySocketServer,
     private readonly callStore: CallStateStore,
@@ -46,12 +71,15 @@ export class TelephonyBroadcaster {
 
   private bindCallStore(): void {
     this.callStore.on("callUpsert", (call: NormalizedCall) => {
+      // seq is assigned HERE, synchronously, even though the enriched send may
+      // complete later — that is the whole ordering contract.
+      const seq = this.nextCallSeq(call.id);
       // When a call transitions to "hungup" immediately send callRemove so the
       // frontend clears it in real-time.  Without this, the frontend map retains
       // the call until the 60-second stale cleanup fires, leaving the extension
       // stuck in "On Call" status for up to a minute after the call ends.
       if (call.state === "hungup") {
-        this.socket.broadcast("telephony.call.remove", { callId: call.id }, undefined);
+        this.socket.broadcast("telephony.call.remove", { callId: call.id, seq }, undefined);
         return;
       }
 
@@ -74,12 +102,16 @@ export class TelephonyBroadcaster {
         "PIPE[4/6]: broadcasting callUpsert to WS clients",
       );
 
-      void this.broadcastCallUpsert(call, filter);
+      void this.broadcastCallUpsert(call, filter, seq);
     });
 
     this.callStore.on("callRemove", (callId: string) => {
       // Broadcast remove to ALL clients (global + tenant-scoped) so everyone clears the row.
-      this.socket.broadcast("telephony.call.remove", { callId }, undefined);
+      this.socket.broadcast(
+        "telephony.call.remove",
+        { callId, seq: this.nextCallSeq(callId) },
+        undefined,
+      );
     });
   }
 
@@ -103,6 +135,7 @@ export class TelephonyBroadcaster {
 
   private startSnapshotTimer(): void {
     this.snapshotTimer = setInterval(() => {
+      this.sweepCallSeqs();
       if (this.socket.clientCount() === 0) return;
       this.socket.broadcast("telephony.health", this.health.getHealth());
       log.trace(
@@ -136,17 +169,31 @@ export class TelephonyBroadcaster {
   private broadcastCallUpsert(
     call: NormalizedCall,
     filter: ((client: WsClient) => boolean) | undefined,
+    seq: number,
   ): void {
     if (!this.crmEnricher?.enabled()) {
-      this.socket.broadcast("telephony.call.upsert", normalizeCallForClient(call), filter);
+      this.socket.broadcast(
+        "telephony.call.upsert",
+        { ...normalizeCallForClient(call), seq },
+        filter,
+      );
       return;
     }
     this.socket.forEachClient((client) => {
       void this.crmEnricher!.enrichForClient(call, client).then((enriched) => {
+        // ⛔ Ordering guard (2026-08-31): the enrichment round-trip can finish
+        // AFTER the call hung up and its synchronous `call.remove` already went
+        // out. Delivering this upsert then would resurrect the dead call on
+        // the client. Re-check the store at SEND time — hungup/gone ⇒ drop the
+        // stale upsert (the remove is authoritative). The seq the client
+        // receives is the one assigned at emit time, so even a survivor of
+        // this check is dropped client-side if a newer message beat it.
+        const current = this.callStore.getById(call.id);
+        if (!current || current.state === "hungup") return;
         this.socket.sendToClient(
           client,
           "telephony.call.upsert",
-          normalizeCallForClient(enriched),
+          { ...normalizeCallForClient(enriched), seq },
         );
       });
     }, filter);

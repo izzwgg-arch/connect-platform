@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { probeSessionAlive } from "../services/apiClient";
+import { createCallSeqTracker } from "../services/callStreamOrder";
 import type {
   LiveCall,
   LiveExtensionState,
@@ -97,6 +98,9 @@ export function useTelephonySocket(): TelephonySocketState {
   const [lastSnapshotAt, setLastSnapshotAt] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Per-call message ordering — drops call.upserts that were delivered after
+  // the call's remove (see services/callStreamOrder.ts). Reset on snapshot.
+  const seqTrackerRef = useRef(createCallSeqTracker());
   const backoffRef = useRef(MIN_BACKOFF_MS);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
@@ -107,6 +111,7 @@ export function useTelephonySocket(): TelephonySocketState {
       callCount: snap.calls.length,
       calls: snap.calls.map((c) => ({ id: c.id, state: c.state, tenantId: c.tenantId, from: c.from, to: c.to })),
     });
+    seqTrackerRef.current.reset();
     setCalls(new Map(snap.calls.map((c) => [c.id, c])));
     // Key extensions and queues by (tenantId, name) so two tenants that share
     // an extension/queue number do not overwrite each other's presence in the
@@ -135,6 +140,7 @@ export function useTelephonySocket(): TelephonySocketState {
 
         case "telephony.calls.snapshot": {
           const payload = envelope.data as Pick<TelephonySnapshot, "calls" | "health">;
+          seqTrackerRef.current.reset();
           setCalls(new Map(payload.calls.map((c) => [c.id, c])));
           if (payload.health) setHealth(payload.health);
           setLastSnapshotAt(new Date().toISOString());
@@ -143,6 +149,13 @@ export function useTelephonySocket(): TelephonySocketState {
 
         case "telephony.call.upsert": {
           const call = envelope.data as LiveCall;
+          if (!seqTrackerRef.current.acceptUpsert(call.id, call.seq)) {
+            // Stale delivery: this upsert was emitted BEFORE a message we
+            // already applied (usually the hangup's remove). Applying it would
+            // resurrect a dead call on Active Calls / Team Directory.
+            console.log("[PIPE:5b/6] WS callUpsert DROPPED (stale seq)", { id: call.id, seq: call.seq });
+            break;
+          }
           console.log("[PIPE:5b/6] WS callUpsert received", {
             id: call.id, state: call.state, tenantId: call.tenantId,
             tenantName: call.tenantName, from: call.from, to: call.to,
@@ -156,7 +169,8 @@ export function useTelephonySocket(): TelephonySocketState {
         }
 
         case "telephony.call.remove": {
-          const { callId } = envelope.data as { callId: string };
+          const { callId, seq } = envelope.data as { callId: string; seq?: number };
+          seqTrackerRef.current.noteRemove(callId, seq);
           console.log("[PIPE:5c/6] WS callRemove received", { callId });
           setCalls((prev: Map<string, LiveCall>) => {
             const next = new Map(prev);

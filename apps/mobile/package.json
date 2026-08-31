@@ -23,6 +23,7 @@
     "test:answer-budget": "tsx --test src/sip/answerAttemptBudget.test.ts",
     "test:warm-answer": "tsx --test src/sip/warmAnswerDeadline.test.ts",
     "test:dial-display": "tsx --test src/screens/tabs/dialDisplay.test.ts",
+    "test:team-presence": "tsx --test src/screens/tabs/teamPresence.test.ts",
     "test:caller-identity": "tsx --test src/calls/callerIdentity.test.ts",
     "test:notification-routing": "tsx --test src/notifications/notificationRouting.test.ts",
     "test:call-origin": "tsx --test src/navigation/callOrigin.test.ts",

@@ -1,3 +1,4 @@
+import { AppState, type AppStateStatus } from "react-native";
 import type { LiveCall, LiveExtensionState, TelephonySnapshot } from "../types";
 import { DEFAULT_TELEPHONY_WS_URL } from "../config/publicOrigin";
 
@@ -38,6 +39,13 @@ export function subscribeToLiveCalls(
   let ws: WebSocket | null = null;
   let calls = new Map<string, LiveCall>();
   let extensions = new Map<string, LiveExtensionState>();
+  // Per-call message ordering (2026-08-31): the server stamps every call
+  // message with a monotonic `seq` assigned at emit time. An upsert delivered
+  // AFTER the call's remove (the server enriches upserts asynchronously) must
+  // be dropped, or a hung-up call resurrects on the Team tab until the next
+  // sweep. Reset on every snapshot — a reconnected/restarted server restarts
+  // its counters. Messages without a seq (older server) are always applied.
+  let callSeqs = new Map<string, number>();
 
   const emit = () => onState({ calls: new Map(calls), extensions: new Map(extensions) });
 
@@ -63,6 +71,7 @@ export function subscribeToLiveCalls(
       switch (envelope.event) {
         case "telephony.snapshot": {
           const snap = envelope.data as TelephonySnapshot;
+          callSeqs = new Map();
           calls = new Map((snap.calls ?? []).map((call) => [call.id, call]));
           extensions = new Map((snap.extensions ?? []).map((ext) => [extKey(ext.tenantId, ext.extension), ext]));
           emit();
@@ -70,12 +79,21 @@ export function subscribeToLiveCalls(
         }
         case "telephony.call.upsert": {
           const call = envelope.data as LiveCall;
+          if (typeof call.seq === "number" && Number.isFinite(call.seq)) {
+            const last = callSeqs.get(call.id);
+            if (last !== undefined && call.seq <= last) break; // stale delivery — never resurrect a removed call
+            callSeqs.set(call.id, call.seq);
+          }
           calls.set(call.id, call);
           emit();
           break;
         }
         case "telephony.call.remove": {
-          const { callId } = envelope.data as { callId: string };
+          const { callId, seq } = envelope.data as { callId: string; seq?: number };
+          if (typeof seq === "number" && Number.isFinite(seq)) {
+            const last = callSeqs.get(callId);
+            if (last === undefined || seq > last) callSeqs.set(callId, seq);
+          }
           calls.delete(callId);
           emit();
           break;
@@ -105,8 +123,30 @@ export function subscribeToLiveCalls(
 
   connect();
 
+  // Foreground reconnect (2026-08-31): RN suspends JS timers in the
+  // background and the OS can kill the socket silently, so a user returning
+  // to the app could stare at a FROZEN presence list — no `call.remove` ever
+  // arrives and nothing reconnects until a suspended backoff timer finally
+  // fires. On foreground: if the socket is not already open/connecting,
+  // reconnect NOW with a fresh backoff. Reconnecting always yields a fresh
+  // server snapshot, so any removes missed while backgrounded are corrected
+  // immediately. ⛔ Never force-close a CONNECTING socket here — its late
+  // onclose would clobber the replacement and double-connect.
+  const onAppStateChange = (state: AppStateStatus) => {
+    if (stopped || state !== "active") return;
+    backoffMs = 1000;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    connect();
+  };
+  const appStateSub = AppState.addEventListener("change", onAppStateChange);
+
   return () => {
     stopped = true;
+    appStateSub.remove();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (ws) ws.close();
     ws = null;

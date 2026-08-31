@@ -38,6 +38,10 @@ export interface LiveCall {
   durationSec: number;
   billableSec: number;
   metadata: Record<string, unknown>;
+  /** Per-call monotonic message sequence (2026-08-31) — assigned by the
+   *  telephony broadcaster at emit time so clients can drop upserts delivered
+   *  after the call's remove. Absent on older server builds. */
+  seq?: number;
   /** Inbound CRM match — omitted when viewer lacks access or no contact matched. */
   crmContactId?: string;
   crmContactName?: string;

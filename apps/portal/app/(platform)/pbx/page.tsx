@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DetailCard } from "../../../components/DetailCard";
 import { EmptyState } from "../../../components/EmptyState";
 import { ErrorState } from "../../../components/ErrorState";
@@ -11,16 +11,63 @@ import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import {
-  loadPbxLiveCombined,
-  formatDurationSec,
-  directionLabel,
-  directionClass,
-  type PbxLiveCombined
-} from "../../../services/pbxLive";
+import { useTelephony } from "../../../contexts/TelephonyContext";
+import { loadPbxResource } from "../../../services/pbxData";
+import { callsForTenant } from "../../../services/liveCallState";
+import type { LiveCall } from "../../../types/liveCall";
+import { loadPbxLiveCombined, formatDurationSec, type PbxLiveCombined } from "../../../services/pbxLive";
+
+// LiveCall direction labels (the WS feed uses inbound/outbound/internal — the
+// old HTTP payload used incoming/outgoing, so pbxLive's helpers don't apply).
+function liveDirectionLabel(d: LiveCall["direction"]): string {
+  if (d === "inbound") return "Incoming";
+  if (d === "outbound") return "Outgoing";
+  if (d === "internal") return "Internal";
+  return "Call";
+}
+
+function liveDirectionClass(d: LiveCall["direction"]): string {
+  if (d === "inbound") return "success";
+  if (d === "outbound") return "info";
+  return "neutral";
+}
+
+function liveDurationSec(call: LiveCall, nowMs: number): number {
+  const ref = call.answeredAt || call.startedAt;
+  const refMs = ref ? new Date(ref).getTime() : NaN;
+  if (!Number.isFinite(refMs)) return call.durationSec ?? 0;
+  return Math.max(0, Math.floor((nowMs - refMs) / 1000));
+}
 
 export default function PbxOverviewPage() {
-  const { adminScope } = useAppContext();
+  const { adminScope, tenantId: contextTenantId, tenant } = useAppContext();
+  const isGlobal = adminScope === "GLOBAL";
+
+  // ── Active Calls: live WS feed (2026-08-31) ─────────────────────────────
+  // This table used to render from the 60s-polled HTTP combined payload (plus
+  // a ~30s server cache), so a hung-up call could sit on screen for well over
+  // a minute. It now rides the same push feed as the dashboard and Team
+  // Directory: a hangup's `telephony.call.remove` clears the row the moment
+  // the PBX reports it. The HTTP poll below survives ONLY for the CDR "today"
+  // metrics and endpoint registration counts — never for active calls.
+  const telephony = useTelephony();
+  const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
+    () => !isGlobal && contextTenantId ? loadPbxResource("extensions", contextTenantId) : Promise.resolve({ resource: "extensions", rows: [] }),
+    [adminScope, contextTenantId, tenant?.name],
+    { keepPreviousData: false },
+  );
+  const extensionRows = extState.status === "success" ? extState.data.rows : [];
+  const liveCalls = useMemo(
+    () => callsForTenant(telephony.activeCalls, isGlobal ? null : contextTenantId, extensionRows, tenant?.name),
+    [contextTenantId, extensionRows, isGlobal, telephony.activeCalls, tenant?.name],
+  );
+  // 1s duration tick — render-only, runs only while calls are on screen.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (liveCalls.length === 0) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [liveCalls.length > 0]);
 
   // Single combined tick — one HTTP call per interval; API caches combined payload ~30 s (see server PBX_LIVE_*).
   const [combinedTick, setCombinedTick] = useState(0);
@@ -36,7 +83,6 @@ export default function PbxOverviewPage() {
 
   const combined    = combinedState.status === "success" ? combinedState.data : null;
   const summary     = combined?.summary ?? null;
-  const activeCalls = combined?.activeCalls ?? null;
 
   const answerRate = summary && summary.callsToday > 0
     ? Math.round((summary.answeredToday / summary.callsToday) * 100)
@@ -47,7 +93,7 @@ export default function PbxOverviewPage() {
   const unregCount = summary?.unregisteredEndpoints;
 
   const kpiTiles = [
-    { label: "Active Calls",   value: summary?.activeCalls !== undefined ? String(summary.activeCalls) : "--",    meta: hasAri ? "Live from telephony" : "Live data unavailable" },
+    { label: "Active Calls",   value: String(liveCalls.length),                                                   meta: telephony.isLive ? "Live — updates instantly" : "Connecting to live feed…" },
     { label: "Calls Today",    value: summary?.callsToday !== undefined ? String(summary.callsToday) : "--",       meta: "Completed calls (CDR)" },
     { label: "Incoming",       value: summary?.incomingToday !== undefined ? String(summary.incomingToday) : "--", meta: "Inbound today" },
     { label: "Outgoing",       value: summary?.outgoingToday !== undefined ? String(summary.outgoingToday) : "--", meta: "Outbound today" },
@@ -62,7 +108,7 @@ export default function PbxOverviewPage() {
       <div className="stack compact-stack">
         <PageHeader
           title="PBX Operations"
-          subtitle="Live call activity, today's metrics, and registered endpoint status. Refreshes every 60 seconds."
+          subtitle="Live call activity (instant), today's metrics, and registered endpoint status (refreshed every 60 seconds)."
         />
 
         {combinedState.status === "loading" ? <LoadingSkeleton rows={1} /> : null}
@@ -76,10 +122,8 @@ export default function PbxOverviewPage() {
           ))}
         </section>
 
-        <DetailCard title={`Active Calls${activeCalls?.calls ? ` (${activeCalls.calls.length})` : ""}`}>
-          {combinedState.status === "loading" ? (
-            <LoadingSkeleton rows={2} />
-          ) : activeCalls?.calls && activeCalls.calls.length > 0 ? (
+        <DetailCard title={`Active Calls (${liveCalls.length})`}>
+          {liveCalls.length > 0 ? (
             <table className="data-table">
               <thead>
                 <tr>
@@ -92,37 +136,32 @@ export default function PbxOverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {activeCalls.calls.map((call) => (
-                  <tr key={call.channelId}>
-                    <td><span className={`chip ${directionClass(call.direction)}`}>{directionLabel(call.direction)}</span></td>
-                    <td className="mono">{call.caller || "—"}</td>
-                    <td className="mono">{call.callee || call.extension || "—"}</td>
-                    <td className="mono">{formatDurationSec(call.durationSeconds)}</td>
+                {liveCalls.map((call) => (
+                  <tr key={call.id}>
+                    <td><span className={`chip ${liveDirectionClass(call.direction)}`}>{liveDirectionLabel(call.direction)}</span></td>
+                    <td className="mono">{call.fromName || call.from || "—"}</td>
+                    <td className="mono">{call.to || (call.extensions ?? []).join(", ") || "—"}</td>
+                    <td className="mono">{formatDurationSec(liveDurationSec(call, nowMs))}</td>
                     <td><span className="chip info">{call.state}</span></td>
-                    <td className="muted">{call.queue || "—"}</td>
+                    <td className="muted">{call.queueId || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          ) : activeCalls?.source === "unavailable" ? (
-            <EmptyState
-              title="Active call list not available"
-              message="Real-time channel data requires Asterisk ARI. Set PBX_ARI_USER and PBX_ARI_PASS environment variables to enable live active call monitoring."
-            />
-          ) : (
+          ) : telephony.isLive ? (
             <EmptyState title="No active calls" message="All channels are idle right now." />
+          ) : (
+            <EmptyState
+              title="Connecting to the live call feed…"
+              message="Live calls appear here the moment the connection is up. If this doesn't clear, the telephony service may be unreachable."
+            />
           )}
           <div className="row-wrap" style={{ marginTop: "0.5rem" }}>
             <span className="chip neutral">
-              Source:{" "}
-              {activeCalls?.source === "telephony_redis"
-                ? "Telephony snapshot (Redis)"
-                : activeCalls?.source === "ari"
-                  ? "ARI (live)"
-                  : "Unavailable"}
+              Source: live telephony feed{telephony.isLive ? "" : " (reconnecting)"}
             </span>
             <span className="chip neutral">
-              Last updated: {activeCalls?.lastUpdatedAt ? new Date(activeCalls.lastUpdatedAt).toLocaleTimeString() : "--"}
+              Updates: instant on hangup
             </span>
           </div>
         </DetailCard>
@@ -166,8 +205,8 @@ export default function PbxOverviewPage() {
           <DetailCard title="Status">
             <ul className="list">
               <li>CDR data: completed calls, written at hangup</li>
-              <li>Active calls: requires ARI (PBX_ARI_USER / PBX_ARI_PASS)</li>
-              <li>Metrics update every 15 seconds</li>
+              <li>Active calls: live push feed — appears and clears instantly</li>
+              <li>Today's metrics refresh every 60 seconds</li>
               <li>Tenant scope: your tenant only</li>
             </ul>
           </DetailCard>
