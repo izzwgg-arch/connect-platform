@@ -10,6 +10,11 @@ import {
   ACTION_PERMISSION_KEYS,
   type PortalPermissionKey,
 } from "@connect/shared";
+import {
+  NAV_SECTION_ORDER,
+  navItems,
+  navSectionMeta,
+} from "../../../../../navigation/navConfig";
 import { PageHeader } from "../../../../../components/PageHeader";
 import { PermissionGate } from "../../../../../components/PermissionGate";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
@@ -39,10 +44,92 @@ type RoleResponse = {
   };
 };
 
-const SECTION_GROUPS = SIDEBAR_SECTIONS.map((section) => ({
-  section,
-  items: SIDEBAR_ITEMS.filter((item) => item.section === section.id),
-}));
+type MatrixItem = { id: string; label: string; permission: string };
+type MatrixSection = { id: string; label: string; permission: string };
+
+/**
+ * THE SIDEBAR ITSELF IS THE CATALOG (Izzy's standing rule, 2026-08-31).
+ *
+ * This screen rendered the shared SIDEBAR_ITEMS list, which had drifted 23
+ * pages behind the real sidebar - Direct, Meetings, Desk Phones, Install, the
+ * whole Store section and 13 admin pages had NO row here at all, so a custom
+ * role could not be given or denied any of them. /admin/permissions was moved
+ * off that list on 2026-08-31; this screen was left behind, which is the half
+ * that broke. Reading navItems means a page can never again exist in the
+ * sidebar and be missing from this matrix.
+ *
+ * Do NOT simplify this back to SIDEBAR_ITEMS, and do not drop the orphan group
+ * below - it carries permission keys that are real and grantable but whose page
+ * is not in the sidebar today (the billing sub-pages). Dropping it would
+ * silently remove the only place those can be granted.
+ */
+const SECTION_GROUPS: Array<{ section: MatrixSection; items: MatrixItem[] }> = (() => {
+  const present = [...new Set(navItems.map((item) => item.section))];
+  const ordered = [
+    ...NAV_SECTION_ORDER.filter((id) => present.includes(id)),
+    ...present.filter((id) => !NAV_SECTION_ORDER.includes(id)),
+  ];
+
+  const groups: Array<{ section: MatrixSection; items: MatrixItem[] }> = ordered.map((id) => ({
+    section: {
+      id,
+      label: navSectionMeta[id]?.label || id,
+      permission: navItems.find((item) => item.section === id)!.sectionPermission,
+    },
+    items: navItems
+      .filter((item) => item.section === id)
+      .map((item) => ({ id: item.id, label: item.label, permission: item.permission })),
+  }));
+
+  // Keys only the old catalog offered: keep a home for them so switching
+  // catalogs cannot take a grantable permission away from anyone.
+  const covered = new Set<string>([
+    ...navItems.map((item) => item.permission),
+    ...navItems.map((item) => item.sectionPermission),
+    ...(ACTION_PERMISSION_KEYS as readonly string[]),
+  ]);
+  const orphans = SIDEBAR_ITEMS.filter((item) => !covered.has(item.permission));
+  if (orphans.length) {
+    groups.push({
+      section: {
+        id: "legacy",
+        label: "Other pages",
+        permission:
+          SIDEBAR_SECTIONS.find((sec) => sec.id === orphans[0].section)?.permission
+          || orphans[0].permission,
+      },
+      items: orphans.map((item) => ({
+        id: item.id,
+        label: item.label,
+        permission: item.permission,
+      })),
+    });
+  }
+
+  return groups;
+})();
+
+/** Every item permission, by section id - used when a section is switched off. */
+const SECTION_ITEM_PERMISSIONS = new Map<string, string[]>(
+  SECTION_GROUPS.map(({ section, items }) => [section.id, items.map((i) => i.permission)]),
+);
+
+/**
+ * Several sidebar pages deliberately SHARE one access permission (Direct rides
+ * Chat's key, Meetings rides Overview's, Install rides Contacts', all five Store
+ * pages share one). Toggling such a row here moves its siblings too - so the row
+ * says so, rather than letting an admin switch Direct off and silently lose Chat.
+ * Per-PAGE hiding that does not touch siblings is the In-sidebar switch on
+ * /admin/permissions, which keys on nav ids instead of permission keys.
+ */
+const SHARED_KEY_SIBLINGS = new Map<string, string[]>(
+  SECTION_GROUPS.flatMap(({ items }) =>
+    items.map((item) => [
+      item.id,
+      items.filter((o) => o.id !== item.id && o.permission === item.permission).map((o) => o.label),
+    ] as [string, string[]]),
+  ),
+);
 
 const DANGEROUS_PERMISSIONS: Set<string> = new Set([
   "can_manage_global_settings",
@@ -200,8 +287,8 @@ export default function RoleEditPage() {
         next.add(sectionPermission);
       } else {
         next.delete(sectionPermission);
-        for (const item of SIDEBAR_ITEMS) {
-          if (item.section === sectionId) next.delete(item.permission);
+        for (const permission of SECTION_ITEM_PERMISSIONS.get(sectionId) || []) {
+          next.delete(permission);
         }
       }
       return next;
@@ -438,6 +525,15 @@ export default function RoleEditPage() {
                                       )}
                                     </div>
                                     <div className="muted" style={{ fontSize: 10 }}>{item.permission}</div>
+                                    {(SHARED_KEY_SIBLINGS.get(item.id) || []).length > 0 && (
+                                      <div
+                                        className="muted"
+                                        style={{ fontSize: 10, fontStyle: "italic", marginTop: 2 }}
+                                        title="These pages share one access permission, so this toggle moves all of them."
+                                      >
+                                        shares access with {(SHARED_KEY_SIBLINGS.get(item.id) || []).join(", ")}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </td>

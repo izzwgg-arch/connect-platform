@@ -71,6 +71,46 @@ ends: **commit → push → deploy.** Not "committed, will push later."
   change Izzy has to approve), say that explicitly in the reply instead of
   quietly leaving it — an unstated gap is how "it's fixed" becomes false.
 
+## ⛔⛔ THE FOURTH RULE THAT WRAPS EVERY TASK (2026-08-31, Izzy's standing instruction) — A NEW PAGE IS NOT DONE UNTIL IT HAS ITS TOGGLES
+
+Izzy, verbatim: *“whenever we build a new page, there should be a toggle for it
+in its section, on and off, and in custom roles, roles for everything, toggles
+for all permissions. Always, always, always.”*
+
+- ⛔⛔ **Shipping a page without its toggles is shipping half a page.** Three
+  things land in the SAME commit as any new sidebar page:
+  1. an entry in **`apps/portal/navigation/navConfig.ts`** (the sidebar IS the
+     catalog — everything else derives from it);
+  2. its **In-sidebar on/off switch** in its section on **`/admin/permissions`**;
+  3. its **permission toggle in its section** on **`/admin/roles/[id]`**, the
+     custom-role editor — plus a toggle for EVERY permission key the page adds.
+- ⛔⛔ **THE FAILURE THIS RULE IS MADE OF, and it is the shape to watch for:
+  there are TWO permission editors and fixing one is the default mistake.**
+  On 2026-08-31 `/admin/permissions` was moved off the drifted shared
+  `SIDEBAR_ITEMS` catalog and **`/admin/roles/[id]` was left on it** — so **23
+  real sidebar pages had no toggle anywhere in custom roles**: Direct, Meetings,
+  Desk Phones, Install, all five Store pages and 13 admin pages. It was reported
+  as “I don't have every single page in workspace” and it was correct.
+  **Never fix one of these screens without the other.**
+- ⛔ **Both screens read `navItems` from navConfig. Never rebuild either from
+  `SIDEBAR_SECTIONS`/`SIDEBAR_ITEMS`** — that shared catalog is 78 entries and
+  has drifted 23 pages behind the real sidebar; it is kept ONLY so its 3 orphan
+  billing keys stay grantable (the “Other pages” group at the bottom of the
+  custom-role matrix). Dropping that group removes the only place
+  `can_view_billing_invoices|payments|receipts` can be granted.
+- ⛔ **A page can share its permission key with a sibling** (Direct rides Chat's
+  key, Meetings rides Overview's, Install rides Contacts', all five Store pages
+  share one). The custom-role row says “shares access with …” because that
+  toggle moves the siblings too. **Per-PAGE hiding that does NOT touch siblings
+  is the In-sidebar switch on `/admin/permissions`, which keys on NAV IDS.**
+- ✅ **Enforced, not remembered:
+  `apps/portal/navigation/permissionToggleCoverage.test.ts`** (registered; 6
+  tests, **3 fail replayed against the pre-fix HEAD** via `PORTAL_GUARD_ROOT`).
+  It reads both screens' SOURCE, because a unit test of either page's helpers
+  passes straight through this bug — the defect was WHICH CATALOG the page
+  imported. It fails if either screen regresses to the shared catalog, if
+  `toggleSection` clears children from a different catalog than it rendered, or
+  if any `PORTAL_PERMISSION_KEYS` entry has no toggle anywhere.
 ## ⛔ AGENT HANDOFF — every sidebar page has its own “In sidebar” switch on /admin/permissions now, SEPARATE from the role permission (2026-08-31) — READ FIRST before adding a nav item, before adding a SUPER_ADMIN force line to isNavItemVisibleForUser, or for “I granted the permission and it still doesn’t show in the sidebar”
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIDEBAR_VISIBILITY_TOGGLES_2026-08-31.md`**
