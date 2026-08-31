@@ -3046,6 +3046,28 @@ refinement options. There is a favicon there to put in the browser on top."*
   redeploy, re-cut the artwork, or add a `<link>` to `layout.tsx` on this
   report — verify the served bytes on the hostname that "doesn't work" first**
   (recipe above: fetch `/favicon.ico` in that origin and compare size + hash).
+  ⛔⛔ **BUT ON 2026-08-31 THE SAME REPORT WAS A REAL ARTWORK PROBLEM, AND
+  READING IT AS THE CACHE TRAP WAS THE WRONG ANSWER.** Izzy: *"connectcommunications
+  has a nice favicon. That same favicon should go in loopcom.net."* The bytes
+  really were identical again (both hosts 200, 14,510 b, same sha256) — so the
+  first reply explained the per-origin cache and stopped there, which is
+  answering the mechanism instead of the man. **His connectcomunications tab
+  was caching the ORIGINAL PLATED icon (`23947f62`) and the plated one is
+  better**: measured at 16px it is **100% opaque, filling the box**, against
+  the cut-away version's **14%, ink confined to rows 3–11** — a thin wide band
+  that washes out in a tab strip. ✅ **REVERTED: the favicon is the designer's
+  hand-drawn plated frames again** (`scripts/portal-favicon-assets.py`
+  restored to embedding `blue-2b/favicon-16.png` + `favicon-32.png` VERBATIM,
+  48 synthesised from the 180). Regenerating reproduces `23947f62`'s file
+  **byte-for-byte** — that hash match is the proof it is the exact icon he
+  pointed at. ⛔ **Do not cut the background away again**, and do not resurrect
+  the optical-drop / centring-guard / flare-trim machinery that went with it —
+  a full-bleed square has nothing to centre. The script's header says so.
+  ⛔ **THE LESSON: identical bytes prove the two hostnames agree; they do NOT
+  prove the shipped artwork is right.** When someone says one side looks
+  better and both sides serve the same file, the thing they like is an OLDER
+  BUILD — go get it out of git and compare the renders, rather than closing
+  the report as a cache artifact.
 - ⚠️ **Noticed in passing, NOT touched:** `apps/desktop/assets/_f.ico` is
   untracked, 1,086 bytes and **not a valid image** — a stray from another
   session's desktop-icon work, unrelated to the portal.
