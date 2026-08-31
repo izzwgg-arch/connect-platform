@@ -103,6 +103,16 @@ for all permissions. Always, always, always.”*
   share one). The custom-role row says “shares access with …” because that
   toggle moves the siblings too. **Per-PAGE hiding that does NOT touch siblings
   is the In-sidebar switch on `/admin/permissions`, which keys on NAV IDS.**
+- ✅ **FIXED AND DEPLOYED 2026-08-31 (`4035b980`, portal).** Container-verified:
+  `app-portal-1` `.build-commit` = `4035b980`, 0 restarts, `/admin/roles` 200 on
+  both hostnames, and the SHIPPED CLIENT chunk for `/admin/roles/[id]` carries
+  “shares access with” + “Other pages”, with `workspace.direct` /
+  `workspace.meetings` / `workspace.desk_phones` / `workspace.install` /
+  `store.orders` all present (they had NO row before). The matrix goes
+  **78 → 97 rows**; Workspace **8 → 11**; the Store section appears for the
+  first time. ⏳ **NOT PROVEN: nobody has opened the screen or saved a custom
+  role since.** ⛔ An open tab or desktop window keeps the OLD bundle — the
+  desktop app needs a full close + reopen, tray included.
 - ✅ **Enforced, not remembered:
   `apps/portal/navigation/permissionToggleCoverage.test.ts`** (registered; 6
   tests, **3 fail replayed against the pre-fix HEAD** via `PORTAL_GUARD_ROOT`).
