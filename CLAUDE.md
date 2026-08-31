@@ -192,6 +192,74 @@ through."*
   make `calculateTenantBillingUsage` count real extensions **on top of** the
   manual virtual-extension quantity.
 
+## ⛔ AGENT HANDOFF — the public pay page is being redesigned: MOCKUP ONLY, nothing built (2026-08-31) — READ FIRST before touching pay-invoice.css, CardknoxIFieldsForm, PaymentTrustBadge, or the iFields options object
+
+Mockup Izzy is reviewing (light + dark, live at 1180 / 820 / 390 / 320):
+<https://claude.ai/code/artifact/2bba5d12-8a99-4d61-8879-beb40dc924f9>
+(**Read-only investigation — no code changed, nothing deployed, no migration, no PBX
+write.**) Memory: [[checkout-page-redesign-mockup]], [[ifields-config-must-be-copied-verbatim]].
+Izzy, 2026-08-31: *"The words are jumping off the page. The dropdown fields are
+overlapping each other… it should adjust itself to any screen… show me a mockup before
+you build anything"*, then *"they should be able to open the invoice from in there as
+well. There should be a breakdown as much as possible."*
+
+- ⛔⛔ **NOTHING IS APPROVED AND NOTHING IS BUILT.** Four decisions are still his and are
+  listed at the foot of the artifact: sign-off on the layout; whether “Open full invoice”
+  is the existing PDF or a new web view; whether the save-card box ships ticked (the
+  mockup ticks it, and ticking it turns on autopay — today it ships unticked); and the
+  name on the page (the mockup says **Connect Communications** because that is the live
+  tenant name, while the invoice PDF now says **Loopcom LLC**).
+- ⛔⛔ **THE iFIELDS CONFIG IS COPIED ACROSS UNCHANGED — his explicit instruction:**
+  *"copy the iFields the way it is right now. We worked hard to adjust it… Size
+  everything."* The `ifieldOptions` object in `CardknoxIFieldsForm.tsx` (46px
+  height/line-height, 14px/500, transparent background, per-theme colour, `autoFormat`,
+  `blockNonNumericInput`) styles type **inside a cross-origin iframe** that no stylesheet
+  of ours can reach, so a regression there is invisible until somebody looks at a live
+  card field. Move it byte-identical; only `.billing-ifields-host` and the field's
+  POSITION may change — and size every native input to the same **46px** so the hosted
+  fields sit flush.
+- **The six faults, each read out of the shipped source, not guessed from the screenshot:**
+  (1) `pay-invoice.css:325-332` pins every field to `grid-column: 1|2`, a two-column
+  checkerboard whose order carries no meaning; (2) City/State/ZIP share ONE 1fr column of
+  a 660px card (~90px each), as do Month/Year — that is the crowding; (3) DOM order is
+  cardholder → expiry → email → address → **card number** → **CVV**, so the two secure
+  fields end up in different rows on opposite sides; (4) the total prints twice
+  (`$90.00`, then `USD $90.00` under it); (5) no breakdown anywhere; (6)
+  `PaymentTrustBadge` renders the card brands as `<b>Visa</b>` coloured with CSS.
+- ⛔ **The breakdown is half-built already and nobody noticed: the SINGLE-invoice public
+  route returns `lineItems` and the page never renders them** (`publicPayRoutes.ts:392`).
+  The `pay-multi` loader does not `include` them at all — that is the one api addition the
+  breakdown needs, and it is token-scoped, so it exposes nothing the page could not
+  already show.
+- ⛔⛔ **“Open the invoice” NEEDS A NEW ROUTE — the existing one cannot serve a customer.**
+  `GET /billing/platform/invoices/:id/pdf` runs `requireTenantBilling`, so it is
+  **login-gated**, while `billingEmailLifecycle.ts:31` puts that exact URL into billing
+  emails. **A customer clicking “view PDF” in their invoice email today is asking for a
+  route they cannot pass.** The fix is a token-scoped sibling,
+  `GET …/pay-multi/:token/invoice/:id/pdf` — the pay token already proves access to
+  exactly those invoice ids.
+- ✅ **Live card-brand detection and a 4-digit Amex CVV are REAL, not wishful.**
+  `@cardknox/react-ifields`’ `index.d.ts` declares `UpdateData { isEmpty, isValid, length,
+  cardNumberLength, event, issuer, ifieldValueChanged }` on `onUpdate`, and `Props` accepts
+  an `issuer` — so the card iframe tells us the brand and validity, and the CVV field can be
+  told to expect four digits. ⏳ Documented in the package, **never proven with a live card**.
+- ⛔ **Three surfaces share the one form component and the one stylesheet** —
+  `/pay/invoices/[token]`, `/pay/invoice/[token]` and `/p/[code]` — plus the admin
+  one-time-charge drawer and `/billing/payments/add-card`. So the redesign lands in one
+  place and reaches all of them, and **a change made for the combined page changes the
+  sign-up checkout too**. Re-read the add-card section of this file before touching
+  `CardknoxIFieldsForm`.
+- ⛔ The real **Sola** logo is a 5.2 KB vector at
+  `apps/portal/public/assets/vendor/sola/sola-logo.svg` — two paths, `#0047FF` ring and a
+  `#020622` ink path that **must be recoloured white on dark** (there is a
+  `sola-logo-reverse-rgb.png` for exactly this, and nothing in the CSS currently reads the
+  `data-logo-theme` attribute `SolaLogo` sets). The **Loopcom** wordmark is
+  `brand/loopcom/loopcom-wordmark-email-336.png` (34 KB, the 2× the email shell uses);
+  Izzy’s instruction is that it sits **inside the card, not above it**.
+- ⏳ **NOT PROVEN: nobody has paid through any of this** — it is a mockup. The mockup itself
+  was measured rather than eyeballed: at 1180 / 820 / 520 / 390 / 320 there are **zero
+  elements overflowing the frame** and every field box measures exactly **46px**.
+
 ## ⛔⛔ AGENT HANDOFF — the support loop CLOSES now: the customer is told in plain English, tests it, and answers (2026-08-31) — READ FIRST before touching `apps/api/src/support/`, before letting anything write a customer-facing message, before adding an escalation creator, or for "a ticket was investigated and the customer heard nothing"
 
 (`4530eb3f` on `feat/ivr-migration-takeover`, building on `97112a90`. **api +
