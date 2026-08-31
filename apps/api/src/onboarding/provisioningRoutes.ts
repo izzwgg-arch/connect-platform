@@ -40,6 +40,10 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
         companyName: body.companyName || null,
         mainEmail: body.mainEmail || null,
         status: "INVITE_SENT",
+        // Scoped links ("just submit a port" / "just add extensions") carry
+        // their purpose in answers.linkKind — the wizard reads it off
+        // /validate and renders the single-purpose flow.
+        ...(body.kind && body.kind !== "full" ? { answers: { linkKind: body.kind } } : {}),
         events: { create: { type: "CREATED", message: "Admin-created link" } },
       },
     });

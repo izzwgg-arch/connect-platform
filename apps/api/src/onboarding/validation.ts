@@ -124,6 +124,7 @@ export function friendlySubmitError(err: z.ZodError): string {
 export const createPublicLinkSchema = z.object({
   companyName: z.string().min(1).max(200).optional(),
   mainEmail: z.string().email().optional(),
+  kind: z.enum(["full", "port", "extension"]).optional().default("full"),
 });
 
 // Admin status update

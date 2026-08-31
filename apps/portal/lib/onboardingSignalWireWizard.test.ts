@@ -87,7 +87,12 @@ test("every SignalWire search mode is offered, letters are explained, and the po
   }
   assert.ok(page.includes("Letters work too"), "the T9 hint is on the desktop search");
   assert.ok(page.includes("loaSignature"), "the typed LOA signature exists");
-  assert.ok(page.includes("Sign the transfer authorization by typing your full name."), "the signature is required for a port");
+  // The port fields + their validation moved into the shared scopedFlows
+  // module (the port-only link renders the SAME section) — the required
+  // signature now lives there, and the page must consume it.
+  const scoped = readSrc("app/onboarding/[token]/scopedFlows.tsx");
+  assert.ok(scoped.includes("Sign the transfer authorization by typing your full name."), "the signature is required for a port");
+  assert.ok(page.includes("validatePortDetails(f.porting)"), "the wizard runs the shared port validation");
 });
 
 test("the registration card carries the promises in writing", () => {

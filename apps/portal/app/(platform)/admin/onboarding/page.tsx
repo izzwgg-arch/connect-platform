@@ -64,6 +64,10 @@ export default function AdminOnboardingPage() {
 
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
+  // What the link is FOR: the full sign-up, or one scoped job — "just submit a
+  // port" / "just add extensions" (Izzy, 2026-08-30). Scoped links open a
+  // single short flow with no payment step.
+  const [kind, setKind] = useState<"full" | "port" | "extension">("full");
   const [busy, setBusy] = useState<"send" | "link" | null>(null);
   const [taken, setTaken] = useState<{ tenantName: string | null } | null>(null);
   const [sent, setSent] = useState<{ email: string | null; link: string } | null>(null);
@@ -120,7 +124,7 @@ export default function AdminOnboardingPage() {
     try {
       const res = await apiPost<{ link: string; sent: boolean; emailError: string | null }>(
         "/admin/onboarding/invitations",
-        { email: email.trim() || undefined, companyName: company.trim() || undefined, send },
+        { email: email.trim() || undefined, companyName: company.trim() || undefined, send, kind },
       );
       setSent({ email: send && res.sent ? email.trim() : null, link: res.link });
       if (send && !res.sent) {
@@ -128,6 +132,7 @@ export default function AdminOnboardingPage() {
       }
       setEmail("");
       setCompany("");
+      setKind("full");
       setTaken(null);
       await refresh();
     } catch (e: any) {
@@ -234,6 +239,29 @@ export default function AdminOnboardingPage() {
           <p className="oi-card-h">Invite a customer</p>
           <p className="oi-card-s">We'll email them the link. Or just make the link and send it yourself.</p>
 
+          {/* What the link is for — a scoped link opens one short flow with no
+              payment step, for a customer who already has an account. */}
+          <div className="oi-filters" style={{ margin: "0 0 12px" }} role="radiogroup" aria-label="What the link is for">
+            {(
+              [
+                ["full", "Full sign-up"],
+                ["port", "Transfer a number only"],
+                ["extension", "Add extensions only"],
+              ] as ["full" | "port" | "extension", string][]
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="radio"
+                aria-checked={kind === key}
+                className={`oi-filter${kind === key ? " oi-on" : ""}`}
+                onClick={() => setKind(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           <div className="oi-fields">
             <div className="oi-field">
               <label htmlFor="oi-email">Their email</label>
@@ -277,7 +305,10 @@ export default function AdminOnboardingPage() {
             </button>
           </div>
 
-          {taken ? (
+          {/* The already-has-a-login warning is a FULL-sign-up concern (it
+              kills the welcome email at the end). On a scoped link the address
+              having a login is expected — it's an existing customer. */}
+          {taken && kind === "full" ? (
             <div className="oi-warn">
               <span aria-hidden="true">⚠</span>
               <span>

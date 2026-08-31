@@ -14,6 +14,13 @@ import {
   type TextingState,
 } from "./textingStep";
 import { MobileWizard } from "./mobileWizard";
+import {
+  ExtensionOnlyFlow,
+  PortDetailsSection,
+  PortOnlyFlow,
+  validatePortDetails,
+  validateScopedExtensions,
+} from "./scopedFlows";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -190,19 +197,11 @@ function validateStep(step: number, f: FormData): string | null {
     if (!f.numberChoice) return "Please choose how you'd like to set up your number.";
     if (f.numberChoice === "new" && !f.selectedNumber) return "Please pick a number from the list.";
     if (f.numberChoice === "port") {
-      if (f.porting.numbers.trim().length < 7) return "Enter the number you'd like to bring over.";
-      if (f.porting.carrier.trim().length < 2) return "Your current carrier is required.";
-      if (f.porting.accountNumber.trim().length < 1) return "Your carrier account number is required.";
-      // The carrier rejects transfers whose address doesn't match their file —
-      // collect it in pieces so it can be filed exactly.
-      if (f.porting.serviceAddress.trim().length < 3) return "The street address from your carrier bill is required.";
-      if (f.porting.serviceCity.trim().length < 2) return "The city from your carrier bill is required.";
-      if (!/^[A-Za-z]{2}$/.test(f.porting.serviceState.trim())) return "Enter the 2-letter state (like NY) from your carrier bill.";
-      if (!/^\d{5}$/.test(f.porting.serviceZip.trim())) return "Enter the 5-digit ZIP code from your carrier bill.";
-      if (f.porting.isMobile && !f.porting.portPin.trim()) return "Cell number transfers need the transfer PIN from your current carrier.";
-      // The signed Letter of Authorization is what lets us file the transfer —
-      // the typed full name IS the signature (we generate the LOA from it).
-      if (f.porting.loaSignature.trim().length < 3) return "Sign the transfer authorization by typing your full name.";
+      // The carrier rejects transfers whose address doesn't match their file,
+      // and the typed full name IS the LOA signature — ONE validation, shared
+      // with the port-only scoped link so the two can never drift.
+      const portErr = validatePortDetails(f.porting);
+      if (portErr) return portErr;
     }
   }
   if (step === 3) {
@@ -309,6 +308,14 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   const [portability, setPortability] = useState<"idle" | "checking" | "portable" | "unknown">("idle");
   const [uploading, setUploading] = useState<{ loa: boolean; bill: boolean }>({ loa: false, bill: false });
 
+  // Scoped links: an admin can send a link for ONE job — "just submit a port"
+  // or "just add extensions" — instead of the full sign-up (answers.linkKind,
+  // stamped at creation). "full" renders the ordinary wizard.
+  const [linkKind, setLinkKind] = useState<"full" | "port" | "extension">("full");
+  const [scopedBusy, setScopedBusy] = useState(false);
+  const [scopedDone, setScopedDone] = useState(false);
+  const [scopedError, setScopedError] = useState<string | null>(null);
+
   // Review step: the itemized monthly price, fetched from the server so the
   // number shown is computed by the SAME pricing code as the first invoice.
   type QuoteLine = { key: string; label: string; quantity: number; unitCents: number; totalCents: number; note?: string };
@@ -319,11 +326,17 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   useEffect(() => {
     async function validate() {
       try {
-        const r = await apiGet<{ ok: boolean; exists?: boolean; submission?: { id: string; currentStep: number | string | null; answers: any } }>(
+        const r = await apiGet<{ ok: boolean; exists?: boolean; submission?: { id: string; currentStep: number | string | null; answers: any; submitted?: boolean } }>(
           `/onboarding/${encodeURIComponent(token)}/validate`,
         );
         if (r.exists === false) { setTokenError("not_active"); return; }
         const a = r.submission?.answers || {};
+        if (a.linkKind === "port" || a.linkKind === "extension") {
+          setLinkKind(a.linkKind);
+          // Already submitted? Land straight on the thank-you screen — the
+          // write-block would refuse a second submit anyway.
+          if (r.submission?.submitted) setScopedDone(true);
+        }
         if (a.submit || a.company || a.contact || a.phone || a.extensions || a.addons) {
           // A draft from before the address was collected in pieces keeps the
           // whole thing on one line — split it so the customer does not come
@@ -532,7 +545,8 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
 
   // Debounced portability check when the customer is porting a number in.
   useEffect(() => {
-    if (step !== 2 || form.numberChoice !== "port") return;
+    const onPortScreen = linkKind === "port" ? !scopedDone : step === 2 && form.numberChoice === "port";
+    if (!onPortScreen) return;
     const digits = form.porting.numbers.replace(/\D/g, "");
     if (digits.length < 10) { setPortability("idle"); return; }
     let cancelled = false;
@@ -554,7 +568,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     }, 700);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.porting.numbers, form.numberChoice, step]);
+  }, [form.porting.numbers, form.numberChoice, step, linkKind, scopedDone]);
 
   // Fetch the price on entering the review step. The wizard passes its live
   // extension count + SMS flag — autosave is debounced, so the server's stored
@@ -852,6 +866,62 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     return () => mq.removeEventListener("change", upd);
   }, []);
 
+  // ── Scoped-link submits ───────────────────────────────────────────────────
+  // "Just submit a port" / "just add extensions": one POST each, no payment,
+  // no checkout — the api refuses those outright on a scoped link.
+  async function submitScopedPort() {
+    const err = validatePortDetails(form.porting);
+    if (err) { setScopedError(err); return; }
+    setScopedError(null);
+    setScopedBusy(true);
+    try {
+      await apiPost(`/onboarding/${encodeURIComponent(token)}/submit-port`, {
+        numbers: form.porting.numbers,
+        carrier: form.porting.carrier,
+        accountNumber: form.porting.accountNumber,
+        nameOnAccount: form.porting.nameOnAccount,
+        serviceAddress: form.porting.serviceAddress,
+        serviceCity: form.porting.serviceCity,
+        serviceState: form.porting.serviceState,
+        serviceZip: form.porting.serviceZip,
+        isMobile: form.porting.isMobile,
+        portPin: form.porting.portPin,
+        loaSignature: form.porting.loaSignature,
+        loaFileName: form.porting.loaFileName,
+        billFileName: form.porting.billFileName,
+      }, undefined, { timeoutMs: 30_000 });
+      track("scoped_port_submitted", { detail: form.porting.numbers });
+      setScopedDone(true);
+    } catch (e: any) {
+      setScopedError(e?.body?.message || "We couldn't submit your transfer request. Please check the fields and try again.");
+    } finally {
+      setScopedBusy(false);
+    }
+  }
+  async function submitScopedExtensions() {
+    const err = validateScopedExtensions(form.extensions);
+    if (err) { setScopedError(err); return; }
+    setScopedError(null);
+    setScopedBusy(true);
+    try {
+      await apiPost(`/onboarding/${encodeURIComponent(token)}/submit-extensions`, {
+        extensions: form.extensions.map((e) => ({
+          displayName: e.displayName.trim(),
+          extNumber: e.extNumber.trim(),
+          email: e.email.trim(),
+          cellMode: e.cellMode,
+          cellNumber: e.cellNumber,
+        })),
+      }, undefined, { timeoutMs: 30_000 });
+      track("scoped_extensions_submitted", { detail: `${form.extensions.length} people` });
+      setScopedDone(true);
+    } catch (e: any) {
+      setScopedError(e?.body?.message || "We couldn't submit your request. Please check the fields and try again.");
+    } finally {
+      setScopedBusy(false);
+    }
+  }
+
   // ── Render guards ─────────────────────────────────────────────────────────
   if (loading) {
     return (<div className="ob-loading"><div className="ob-spinner" /><span>Loading your setup…</span></div>);
@@ -884,6 +954,64 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         </p>
         <button className="ob-btn-next" onClick={() => window.location.reload()}>Reload this page</button>
       </div>
+    );
+  }
+
+  // ── Scoped links render ONE short flow instead of the wizard — same header
+  // and theme, no step rail, and structurally no way to reach payment. The
+  // single card works on phones as-is, so it never enters the mobile wizard.
+  if (linkKind !== "full") {
+    return (
+      <>
+        <div className="ob-header">
+          <div className="ob-logo">
+            <div className="ob-logo-mark">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="3" fill="rgba(255,255,255,0.95)"/>
+                <circle cx="3" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/>
+                <circle cx="3" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/>
+              </svg>
+            </div>
+            <span className="ob-logo-text">Connect</span>
+          </div>
+          <div className="ob-header-tools">
+            <div className="ob-save-indicator" style={{ opacity: saveState !== "idle" ? 1 : 0 }}>
+              {saveState === "saving" && (<><div className="ob-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /><span>Saving…</span></>)}
+              {saveState === "saved" && (<><div className="ob-save-dot" /><span>Saved</span></>)}
+              {saveState === "retrying" && (<><div className="ob-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /><span className="ob-save-warn">Not saved — retrying…</span></>)}
+              {saveState === "failed" && (<><div className="ob-save-dot ob-save-dot-err" /><span className="ob-save-warn">Not saved</span></>)}
+            </div>
+            <button className="ob-theme-toggle" onClick={toggleTheme} aria-label="Toggle light or dark theme">
+              {themeLabel === "dark" ? <IconMoon /> : <IconSun />} {themeLabel === "dark" ? "Dark" : "Light"}
+            </button>
+          </div>
+        </div>
+        {linkKind === "port" ? (
+          <PortOnlyFlow
+            porting={form.porting}
+            onPatch={(patch) => updateForm({ porting: { ...form.porting, ...patch } })}
+            portability={portability}
+            uploading={uploading}
+            onUpload={uploadPortDoc}
+            onSubmit={submitScopedPort}
+            busy={scopedBusy}
+            done={scopedDone}
+            error={scopedError}
+          />
+        ) : (
+          <ExtensionOnlyFlow
+            extensions={form.extensions}
+            onUpdate={updateExt}
+            onAdd={addExt}
+            onRemove={removeExt}
+            theme={themeLabel === "dark" ? "dark" : "light"}
+            onSubmit={submitScopedExtensions}
+            busy={scopedBusy}
+            done={scopedDone}
+            error={scopedError}
+          />
+        )}
+      </>
     );
   }
 
@@ -1183,76 +1311,16 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
             )}
 
             {/* Port existing */}
+            {/* ONE render of the carrier-port fields, shared with the
+                port-only scoped link (scopedFlows.tsx) so they never drift. */}
             {form.numberChoice === "port" && (
-              <>
-                {portability === "checking" && (
-                  <div className="ob-field-hint" style={{ marginBottom: 14 }}>Checking whether this number can be transferred…</div>
-                )}
-                {portability === "portable" && (
-                  <div className="ob-port-check">
-                    <div className="ob-port-check-ok"><IconTick /></div>
-                    <div><b>{form.porting.numbers} can be transferred</b> <span>· typically 3–5 business days</span></div>
-                  </div>
-                )}
-              <div className="ob-porting-details">
-                <div className="ob-step-eyebrow" style={{ marginBottom: 14 }}>Details from your current carrier</div>
-                <div className="ob-field-row">
-                  <div><label className="ob-label">Number to bring over</label><input className="ob-input" placeholder="(555) 000-0000" value={form.porting.numbers} onChange={(e) => updateForm({ porting: { ...form.porting, numbers: e.target.value } })} /></div>
-                  <div><label className="ob-label">Current carrier</label><input className="ob-input" placeholder="AT&T, Spectrum…" value={form.porting.carrier} onChange={(e) => updateForm({ porting: { ...form.porting, carrier: e.target.value } })} /></div>
-                </div>
-                <div className="ob-field-row">
-                  <div><label className="ob-label">Account number</label><input className="ob-input" placeholder="Account #" value={form.porting.accountNumber} onChange={(e) => updateForm({ porting: { ...form.porting, accountNumber: e.target.value } })} /></div>
-                  <div><label className="ob-label">Porting PIN<span className="ob-label-optional">if any</span></label><input className="ob-input" placeholder="PIN" value={form.porting.portPin} onChange={(e) => updateForm({ porting: { ...form.porting, portPin: e.target.value } })} /></div>
-                </div>
-                <div className="ob-field"><label className="ob-label">Name on account</label><input className="ob-input" placeholder="As it appears on your phone bill" value={form.porting.nameOnAccount} onChange={(e) => updateForm({ porting: { ...form.porting, nameOnAccount: e.target.value } })} /></div>
-                <div className="ob-field"><label className="ob-label">Street address on the bill</label><input className="ob-input" placeholder="123 Main St, Suite 2" value={form.porting.serviceAddress} onChange={(e) => updateForm({ porting: { ...form.porting, serviceAddress: e.target.value } })} /></div>
-                <div className="ob-field-row" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
-                  <div><label className="ob-label">City</label><input className="ob-input" placeholder="City" value={form.porting.serviceCity} onChange={(e) => updateForm({ porting: { ...form.porting, serviceCity: e.target.value } })} /></div>
-                  <div><label className="ob-label">State</label><input className="ob-input" placeholder="NY" maxLength={2} value={form.porting.serviceState} onChange={(e) => updateForm({ porting: { ...form.porting, serviceState: e.target.value.toUpperCase().replace(/[^A-Z]/g, "") } })} /></div>
-                  <div><label className="ob-label">ZIP</label><input className="ob-input" placeholder="10952" inputMode="numeric" maxLength={5} value={form.porting.serviceZip} onChange={(e) => updateForm({ porting: { ...form.porting, serviceZip: e.target.value.replace(/\D/g, "") } })} /></div>
-                </div>
-                <label className="ob-field" style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
-                  <input type="checkbox" checked={form.porting.isMobile} onChange={(e) => updateForm({ porting: { ...form.porting, isMobile: e.target.checked } })} style={{ width: 16, height: 16, accentColor: "#2f6bff", cursor: "pointer" }} />
-                  <span className="ob-label" style={{ marginBottom: 0 }}>This is a cell phone (wireless) number</span>
-                </label>
-                {form.porting.isMobile && (
-                  <div className="ob-field-hint" style={{ marginTop: -6, marginBottom: 14 }}>Cell transfers need the transfer PIN from your carrier — dial 611 or check their app if you don&apos;t have it.</div>
-                )}
-                <div className="ob-uploads">
-                  <label className={`ob-upl${form.porting.billFileName ? " done" : ""}`}>
-                    <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.bill}
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPortDoc("bill", f); }} />
-                    <div className="ob-upl-ic">{uploading.bill ? <div className="ob-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : form.porting.billFileName ? <IconTick size={20} /> : <IconUpload />}</div>
-                    <b>{form.porting.billFileName ? "Bill added" : "Recent phone bill"}</b>
-                    <span>{uploading.bill ? "Uploading…" : form.porting.billFileName || "PDF or photo"}</span>
-                  </label>
-                  {/* A ready-signed LOA is welcome but optional — the typed
-                      signature below is what lets us prepare and file one. */}
-                  <label className={`ob-upl${form.porting.loaFileName ? " done" : ""}`}>
-                    <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} disabled={uploading.loa}
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPortDoc("loa", f); }} />
-                    <div className="ob-upl-ic">{uploading.loa ? <div className="ob-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : form.porting.loaFileName ? <IconTick size={20} /> : <IconUpload />}</div>
-                    <b>{form.porting.loaFileName ? "Authorization added" : "Signed authorization"}</b>
-                    <span>{uploading.loa ? "Uploading…" : form.porting.loaFileName || "Optional — we prepare one from your signature"}</span>
-                  </label>
-                </div>
-                <div className="ob-tx-card" style={{ marginTop: 14 }}>
-                  <div className="ob-tx-head">Authorize the transfer</div>
-                  <p className="ob-tx-lead">
-                    Your current carrier requires a signed Letter of Authorization before releasing the number.
-                    Type your full name to sign — we prepare and file the paperwork for you.
-                  </p>
-                  <input className="ob-input ob-sig" placeholder="Type your full name to sign" autoComplete="name"
-                    value={form.porting.loaSignature}
-                    onChange={(e) => updateForm({ porting: { ...form.porting, loaSignature: e.target.value } })} />
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <div className="ob-tl-line"><span className="ob-tl-dot" />Today — you&apos;re up and running on a temporary number <span className="ob-tl-badge">TEMP</span></div>
-                  <div className="ob-tl-line"><span className="ob-tl-dot" />~7 business days — your number transfers (toll-free can take up to two weeks)</div>
-                  <div className="ob-tl-line"><span className="ob-tl-dot" />Transfer day — everything switches over by itself; nothing to do</div>
-                </div>
-              </div>
-              </>
+              <PortDetailsSection
+                porting={form.porting}
+                onPatch={(patch) => updateForm({ porting: { ...form.porting, ...patch } })}
+                portability={portability}
+                uploading={uploading}
+                onUpload={uploadPortDoc}
+              />
             )}
           </div>
         )}

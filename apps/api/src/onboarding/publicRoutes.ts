@@ -123,6 +123,28 @@ function isTollFreeTenDigits(d: string): boolean {
 // be unit-tested without route plumbing.
 const isWriteBlocked = isSubmissionWriteBlocked;
 
+/**
+ * What a link is FOR. An admin can send a link scoped to ONE job — "just
+ * submit a port" or "just add extensions" (Izzy, 2026-08-30) — instead of the
+ * full sign-up. Stored at creation as `answers.linkKind`; absent = the full
+ * wizard. ⛔ A scoped link must NEVER reach checkout/submit/apply-number:
+ * those create tenants, invoices and carrier purchases, and a scoped link is
+ * for an EXISTING customer who already has all three.
+ */
+type OnboardingLinkKind = "full" | "port" | "extension";
+function linkKindOf(row: any): OnboardingLinkKind {
+  const k = String((row?.answers as any)?.linkKind || "");
+  return k === "port" || k === "extension" ? k : "full";
+}
+function refuseWrongLinkKind(reply: any, row: any, wanted: OnboardingLinkKind): boolean {
+  if (linkKindOf(row) === wanted) return false;
+  reply.code(409).send({
+    error: "wrong_link_kind",
+    message: "This link is for a different kind of request — ask us for a fresh link if you need something else.",
+  });
+  return true;
+}
+
 export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // Validate token exists (prod) or can be created (dev)
   app.get("/onboarding/:token/validate", async (req, reply) => {
@@ -148,6 +170,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         // back to step 1 with their answers filled in but their place lost.
         currentStep: Number(row.currentStep ?? 0) || 0,
         answers: row.answers ?? null,
+        // Lets a scoped link (port-only / extensions-only) land a returning
+        // visitor straight on its thank-you screen instead of a 409.
+        submitted: isSubmissionWriteBlocked(row),
       },
     };
   });
@@ -417,11 +442,19 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       });
     } else {
       if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
+      // The autosave REPLACES answers wholesale — carry the link's purpose
+      // through it, or the first autosave on a scoped link would silently turn
+      // it back into a full sign-up link.
+      const kind = linkKindOf(row);
+      const savedAnswers =
+        kind !== "full" && body.answers && typeof body.answers === "object"
+          ? { ...(body.answers as any), linkKind: kind }
+          : body.answers ?? null;
       await (db as any).onboardingSubmission.update({
         where: { id: row.id },
         data: {
           currentStep: body.currentStep || null,
-          answers: body.answers ?? null,
+          answers: savedAnswers,
           status: (row.status === "INVITE_SENT" ? ("IN_PROGRESS" as OnboardingStatus) : row.status),
           events: { create: { type: "AUTOSAVED", message: body.currentStep ? `Step ${body.currentStep}` : undefined } },
         },
@@ -636,6 +669,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const checkoutStatus = String((row as any).status || "");
     const checkoutAllowed =
       ["INVITE_SENT", "IN_PROGRESS", "SUBMITTED"].includes(checkoutStatus) || !!(row as any).paidAt;
+    // A scoped link (port-only / extensions-only) has no payment step — it can
+    // never create a tenant or an invoice.
+    if (refuseWrongLinkKind(reply, row, "full")) return;
     if (isReusableTemplate(row) || !checkoutAllowed) return reply.code(409).send({ error: "write_blocked" });
 
     const result = await prepareOnboardingCheckout(row.id);
@@ -677,6 +713,135 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
   // filing in this same request, and DISCARDED — it never enters `answers`
   // (which autosaves), never a row, never a log. That is the wizard's
   // in-so-many-words promise to the customer.
+  // ── Scoped links: "just submit a port" / "just add extensions" ────────────
+  // (Izzy, 2026-08-30.) Both end at SUBMITTED with a plain thank-you — no
+  // payment, no tenant, no purchase. The port lands in the admin Port queue
+  // automatically because it writes the SAME portFiling block the full wizard
+  // writes; the extension request lands in the submissions list.
+  const scopedPortSchema = z.object({
+    numbers: z.string().trim().min(7).max(40),
+    carrier: z.string().trim().min(2).max(120),
+    accountNumber: z.string().trim().min(1).max(80),
+    nameOnAccount: z.string().trim().max(160).optional().default(""),
+    serviceAddress: z.string().trim().min(3).max(240),
+    serviceCity: z.string().trim().min(2).max(120),
+    serviceState: z.string().trim().regex(/^[A-Za-z]{2}$/),
+    serviceZip: z.string().trim().regex(/^\d{5}$/),
+    isMobile: z.boolean().optional().default(false),
+    portPin: z.string().trim().max(40).optional().default(""),
+    loaSignature: z.string().trim().min(3).max(160),
+    loaFileName: z.string().trim().max(300).optional().default(""),
+    billFileName: z.string().trim().max(300).optional().default(""),
+  });
+  app.post("/onboarding/:token/submit-port", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row || isReusableTemplate(row)) return reply.code(404).send({ error: "invalid_token" });
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This request has already been submitted." });
+    if (refuseWrongLinkKind(reply, row, "port")) return;
+    const parsed = scopedPortSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      const f = parsed.error.issues[0]?.path?.[0];
+      const names: Record<string, string> = {
+        numbers: "the number you're bringing over", carrier: "your current carrier",
+        accountNumber: "your carrier account number", serviceAddress: "the street address from your bill",
+        serviceCity: "the city from your bill", serviceState: "the 2-letter state (like NY)",
+        serviceZip: "the 5-digit ZIP code", loaSignature: "your typed signature",
+      };
+      return reply.code(400).send({ error: "validation", message: `Please check ${names[String(f)] || "the highlighted fields"}.` });
+    }
+    const d = parsed.data;
+    if (d.isMobile && !d.portPin) {
+      return reply.code(400).send({ error: "validation", message: "Cell number transfers need the transfer PIN from your current carrier." });
+    }
+    const portedDigits = d.numbers.replace(/\D/g, "").replace(/^1/, "");
+    const answers: any = { ...((row.answers as any) || {}) };
+    answers.phone = {
+      ...(answers.phone || {}),
+      choice: "port",
+      details: d,
+      // Pin the carrier exactly as apply-number does — a stamped draft keeps it.
+      provider: answers.phone?.provider || onboardingNumberProvider(),
+    };
+    answers.provisioning = {
+      ...(answers.provisioning || {}),
+      portFiling: {
+        provider: "signalwire",
+        status: "awaiting_manual_filing",
+        portedDid: portedDigits,
+        requestedAt: new Date().toISOString(),
+        scopedLink: true,
+      },
+    };
+    await (db as any).onboardingSubmission.update({
+      where: { id: row.id },
+      data: { answers, status: "SUBMITTED", submittedAt: new Date() },
+    });
+    await (db as any).onboardingEvent.create({
+      data: { submissionId: row.id, type: "STATUS_CHANGED", message: `Port request submitted — ${portedDigits} from ${d.carrier}` },
+    }).catch(() => {});
+    return { ok: true };
+  });
+
+  const scopedExtensionSchema = z.object({
+    extensions: z.array(z.object({
+      displayName: z.string().trim().min(1).max(120),
+      extNumber: z.string().trim().regex(/^\d{3,6}$/),
+      email: z.string().trim().max(200).optional().default(""),
+      cellMode: z.enum(["", "also", "only"]).optional().default(""),
+      cellNumber: z.string().trim().max(30).optional().default(""),
+    })).min(1).max(50),
+  });
+  app.post("/onboarding/:token/submit-extensions", async (req: any, reply) => {
+    const { token } = (req.params as any) as { token: string };
+    const row = await ensureRowForToken(token);
+    if (!row || isReusableTemplate(row)) return reply.code(404).send({ error: "invalid_token" });
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This request has already been submitted." });
+    if (refuseWrongLinkKind(reply, row, "extension")) return;
+    const parsed = scopedExtensionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "validation", message: "Each person needs a name and an extension number of at least three digits, like 101." });
+    }
+    const exts = parsed.data.extensions;
+    const seen = new Set<string>();
+    for (const e of exts) {
+      if (seen.has(e.extNumber)) {
+        return reply.code(400).send({ error: "validation", message: `Extension number ${e.extNumber} is used more than once — they must be unique.` });
+      }
+      seen.add(e.extNumber);
+      if (e.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.email)) {
+        return reply.code(400).send({ error: "validation", message: `The email for ${e.displayName} doesn't look right — fix it or leave it blank.` });
+      }
+      if (e.cellMode && e.cellNumber.replace(/\D/g, "").replace(/^1/, "").length !== 10) {
+        return reply.code(400).send({ error: "validation", message: `Enter a full cell phone number for ${e.displayName}.` });
+      }
+    }
+    const answers: any = { ...((row.answers as any) || {}) };
+    answers.extensions = exts;
+    await (db as any).$transaction(async (tx: any) => {
+      await tx.onboardingRequestedExtension.deleteMany({ where: { submissionId: row.id } });
+      await tx.onboardingRequestedExtension.createMany({
+        data: exts.map((e) => ({
+          submissionId: row.id,
+          displayName: e.displayName,
+          extNumber: e.extNumber,
+          email: e.email || null,
+          cellMode: e.cellMode || null,
+          cellNumber: e.cellMode ? e.cellNumber || null : null,
+        })),
+        skipDuplicates: true,
+      });
+      await tx.onboardingSubmission.update({
+        where: { id: row.id },
+        data: { answers, status: "SUBMITTED", submittedAt: new Date() },
+      });
+    });
+    await (db as any).onboardingEvent.create({
+      data: { submissionId: row.id, type: "STATUS_CHANGED", message: `Extension request submitted — ${exts.length} ${exts.length === 1 ? "person" : "people"}` },
+    }).catch(() => {});
+    return { ok: true };
+  });
+
   const textingRegistrationSchema = z.object({
     classification: z.enum(["conversational", "marketing", "sole_prop"]),
     senderSystem: z.enum(["loopcom", "own"]).optional(),
@@ -785,6 +950,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
     if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked" });
+    if (refuseWrongLinkKind(reply, row, "full")) return;
 
     // Merge the number choice into answers so provisioning can read it even if
     // the autosave for this step hasn't landed yet.
@@ -839,6 +1005,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
     if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
+    if (refuseWrongLinkKind(reply, row, "full")) return;
 
     // ⛔ Company name and the 911 service address are MANDATORY, and they are
     // checked HERE rather than only in the browser. The wizard's own check can

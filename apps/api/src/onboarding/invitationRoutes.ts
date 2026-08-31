@@ -64,6 +64,10 @@ const createInvitationSchema = z.object({
   email: emailField.optional(),
   companyName: z.string().trim().max(COMPANY_MAX).optional(),
   send: z.boolean().optional().default(false),
+  // What the link is FOR (Izzy, 2026-08-30): the full sign-up, "just submit a
+  // port", or "just add extensions". Scoped links open a short single-purpose
+  // flow and can never reach payment/checkout.
+  kind: z.enum(["full", "port", "extension"]).optional().default("full"),
 });
 
 const resendSchema = z.object({ email: emailField.optional() });
@@ -195,6 +199,7 @@ export async function registerOnboardingInvitationRoutes(
     const email = parsed.data.email ?? "";
     const companyName = parsed.data.companyName ?? "";
     const send = parsed.data.send;
+    const kind = parsed.data.kind;
 
     if (send && !email) {
       return reply.code(400).send({ error: "email_required", message: "Enter an email address to send the invitation to." });
@@ -207,7 +212,10 @@ export async function registerOnboardingInvitationRoutes(
         companyName: companyName || null,
         mainEmail: email || null,
         status: "INVITE_SENT",
-        events: { create: { type: "CREATED", message: "Admin-created link" } },
+        // The kind lives in answers so the wizard can read it off /validate
+        // with no schema change; absent = the full wizard.
+        ...(kind !== "full" ? { answers: { linkKind: kind } } : {}),
+        events: { create: { type: "CREATED", message: kind === "port" ? "Admin-created link (port a number)" : kind === "extension" ? "Admin-created link (add extensions)" : "Admin-created link" } },
       },
     });
 
@@ -218,6 +226,7 @@ export async function registerOnboardingInvitationRoutes(
       publicToken: token,
       companyName: companyName || null,
       toEmail: email,
+      kind,
     });
     await (db as any).onboardingEvent
       .create({

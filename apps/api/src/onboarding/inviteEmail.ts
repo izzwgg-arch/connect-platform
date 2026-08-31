@@ -39,6 +39,8 @@ export type InviteEmailInput = {
   companyName?: string | null;
   /** Optional first name / contact name, when we have one worth greeting. */
   contactName?: string | null;
+  /** What the link is for — scoped links get their own subject/wording. */
+  kind?: "full" | "port" | "extension" | null;
 };
 
 export type BuiltInviteEmail = { subject: string; html: string; text: string; link: string };
@@ -53,7 +55,28 @@ function greetingName(input: InviteEmailInput): string | null {
 export function buildOnboardingInviteEmail(input: InviteEmailInput): BuiltInviteEmail {
   const link = onboardingLinkForToken(input.publicToken);
   const who = greetingName(input);
-  const subject = "Set up your Loopcom phone system";
+  const kind = input.kind === "port" || input.kind === "extension" ? input.kind : "full";
+  const copy = {
+    full: {
+      subject: "Set up your Loopcom phone system",
+      title: "Your phone system is ready to set up",
+      cta: "Start setting up",
+      blurb: "Here's your link to set up your new phone system. You'll choose your phone number and add the people on your team — it takes about five minutes, and we handle the rest.",
+    },
+    port: {
+      subject: "Transfer your number to Loopcom",
+      title: "Bring your phone number over",
+      cta: "Transfer my number",
+      blurb: "Here's your link to bring your phone number over to Loopcom. Have a recent phone bill handy — it takes about two minutes, you sign right on the page, and we file the whole transfer for you.",
+    },
+    extension: {
+      subject: "Add people to your phone system",
+      title: "Add your team",
+      cta: "Add my team",
+      blurb: "Here's your link to add people to your phone system. Just their names and extension numbers — it takes a minute, and we set everything up from there.",
+    },
+  }[kind];
+  const subject = copy.subject;
 
   // The button is built by hand here rather than through ctaButton() so the
   // wording and radius match the approved mock-up exactly; the VML half is the
@@ -66,11 +89,11 @@ export function buildOnboardingInviteEmail(input: InviteEmailInput): BuiltInvite
           <!--[if mso]>
           <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${safeLink}" style="height:48px;v-text-anchor:middle;width:220px;" arcsize="21%" stroke="f" fillcolor="#22a8ff">
             <w:anchorlock/>
-            <center style="color:#04121d;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">Start setting up</center>
+            <center style="color:#04121d;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">${escapeHtml(copy.cta)}</center>
           </v:roundrect>
           <![endif]-->
           <!--[if !mso]><!-- -->
-          <a href="${safeLink}" style="display:inline-block;padding:14px 30px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;color:#04121d;text-decoration:none;border-radius:10px;">Start setting up</a>
+          <a href="${safeLink}" style="display:inline-block;padding:14px 30px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;color:#04121d;text-decoration:none;border-radius:10px;">${escapeHtml(copy.cta)}</a>
           <!--<![endif]-->
         </td>
       </tr>
@@ -78,25 +101,25 @@ export function buildOnboardingInviteEmail(input: InviteEmailInput): BuiltInvite
 
   const body = `
     <p style="margin:0 0 16px;font-size:17px;line-height:26px;color:#1e293b;">Hi${who ? ` ${escapeHtml(who)}` : " there"},</p>
-    <p style="margin:0 0 16px;font-size:16px;line-height:25px;color:#475569;">Here's your link to set up your new phone system. You'll choose your phone number and add the people on your team — it takes about five minutes, and we handle the rest.</p>
+    <p style="margin:0 0 16px;font-size:16px;line-height:25px;color:#475569;">${escapeHtml(copy.blurb)}</p>
     ${button}
     <p style="margin:14px 0 20px;font-size:13px;line-height:20px;color:#64748b;">Or paste this into your browser:<br><span style="font-family:Consolas,'Courier New',monospace;color:#0b62b0;word-break:break-all;">${safeLink}</span></p>
     <p style="margin:0 0 6px;font-size:14px;line-height:22px;color:#64748b;">This link is just for you — please don't forward it.</p>
     <p style="margin:0;font-size:14px;line-height:22px;color:#64748b;">Questions? Reply to this email and a person will get back to you.</p>
   `;
 
-  const html = emailShell("Your phone system is ready to set up", body, resolveInvoiceEmailBranding({}, null), {
+  const html = emailShell(copy.title, body, resolveInvoiceEmailBranding({}, null), {
     eyebrow: "Getting started",
     footerNote: `Loopcom LLC · ${platformWebsite()}`,
     includeSupportBlock: false,
   });
 
   const text = [
-    "Your phone system is ready to set up",
+    copy.title,
     "",
     `Hi${who ? ` ${who}` : " there"},`,
     "",
-    "Here's your link to set up your new phone system. You'll choose your phone number and add the people on your team — it takes about five minutes, and we handle the rest.",
+    copy.blurb,
     "",
     link,
     "",
