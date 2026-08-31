@@ -281,6 +281,23 @@ CSS, the texting-registration and Port-queue strings in the shipped chunks).
   (source guard: the route never touches a carrier), and the 10DLC registration
   board incl. the sole-prop manual queue. Downloads carry `?token=` (a bare
   `<a>` sends no Authorization).
+- ✅ **SCOPED INVITE LINKS (2026-08-31, `4dc33be5` — handoff §9): the admin
+  invite card can send a link for ONE job** — "Transfer a number only" or
+  "Add extensions only" — stamped as `answers.linkKind` and read off
+  `/validate`. ⛔ **A scoped link can NEVER reach money**: checkout, the full
+  /submit and /apply-number all answer 409 `wrong_link_kind` before any side
+  effect (test stubs THROW if provisioning is reached). ⛔ **The save route
+  re-stamps `linkKind`** — autosave replaces `answers` wholesale, and without
+  the re-stamp the first autosave silently turned a scoped link back into a
+  full one. A scoped port writes the SAME `portFiling` block, so it lands in
+  the Port queue with zero new queue code; a scoped extension request writes
+  `OnboardingRequestedExtension` rows at SUBMITTED. ⛔ **The port fields +
+  validation live ONCE, in `scopedFlows.tsx`** (`PortDetailsSection` /
+  `validatePortDetails`) — the full wizard's step 2 renders the same section;
+  never reintroduce an inline copy in page.tsx (source-guarded), and the
+  scoped render branch must stay BEFORE the `isPhone` branch. The scoped
+  extension editor deliberately has NO owner-email rule (these people join an
+  EXISTING account). ⏳ NOT PROVEN: no scoped link has been sent to a human.
 - ✅ **Proven:** 62 SignalWire api tests + 7 worker + 8 portal wizard guards, all
   registered/globbed; **all replayed source guards fail against HEAD**; api/worker
   typechecks clean in every touched file; portal typecheck 0, suite 402/404 (the
