@@ -1,11 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
+import { CheckCircle2, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../components/billing/CardknoxIFieldsForm";
 import { PaymentTrustBadge } from "../../../components/billing/PaymentTrustBadge";
+import { PayCardTop } from "../../../components/billing/PayCardTop";
+import { PayInvoiceList, type PayInvoiceLine } from "../../../components/billing/PayInvoiceList";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { readAuthToken } from "../../../services/session";
 import { resolveSameOriginApiBase } from "../../../lib/publicApiBase";
@@ -17,14 +18,19 @@ import "./pay-link.css";
 const apiBase = resolveSameOriginApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 type PayLinkInvoiceRow = {
+  invoiceId?: string;
   invoiceNumber: string;
   status: string;
   alreadyPaid: boolean;
   periodStart: string;
   periodEnd: string;
   dueDate: string;
+  issueDate?: string | null;
+  subtotalCents?: number;
+  taxCents?: number;
   totalCents: number;
   balanceDueCents: number;
+  lineItems?: PayInvoiceLine[];
 };
 
 type PayLinkView = {
@@ -58,13 +64,6 @@ function billingXExp(billing: CardknoxBillingFields): string | null {
   return `${month}${year}`;
 }
 
-function fmtDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-  } catch {
-    return iso;
-  }
-}
 
 function normalizePayTheme(value: string | null | undefined): PayTheme | null {
   return value === "dark" || value === "light" ? value : null;
@@ -220,13 +219,9 @@ export default function PublicBillingPayLinkPage() {
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <div className="billing-pay-logo" aria-label="Loopcom">
-          <Image src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} priority />
-        </div>
-
         <section className="billing-pay-card" aria-label="Secure invoice payment">
+          <PayCardTop />
           <header className="billing-pay-header">
-            <p className="billing-pay-eyebrow"><Lock size={14} /> Secure payment</p>
             <h1>{view?.companyName || "Invoice payment"}</h1>
             {view ? (
               <p className="billing-pay-sub">
@@ -268,32 +263,36 @@ export default function PublicBillingPayLinkPage() {
             </section>
           ) : (
             <>
-              <ul className="billing-pay-invoice-list">
-                {view.invoices.map((inv) => (
-                  <li key={inv.invoiceNumber} className={`billing-pay-invoice-row${inv.alreadyPaid ? " inv-settled" : ""}`}>
-                    <span className="inv-meta">
-                      <span className="inv-number">{inv.invoiceNumber}</span>
-                      <span className="inv-period">
-                        {fmtDate(inv.periodStart)} – {fmtDate(inv.periodEnd)}
-                        {inv.dueDate && !inv.alreadyPaid ? <> · Due {fmtDate(inv.dueDate)}</> : null}
-                      </span>
-                    </span>
-                    {inv.alreadyPaid
-                      ? <span className="inv-paid-chip">Paid</span>
-                      : <span className="inv-amount">{dollars(inv.balanceDueCents)}</span>}
-                  </li>
-                ))}
-              </ul>
               <section className="billing-pay-summary">
                 <div className="billing-pay-amount">
                   <span>Total due</span>
-                  <strong>{amountDue}</strong>
-                </div>
-                <div className="billing-pay-currency">
-                  <span>{view.currency || "USD"}</span>
-                  <span>{amountDue}</span>
+                  <strong>
+                    {amountDue}
+                    <span className="billing-pay-cur">{view.currency || "USD"}</span>
+                  </strong>
                 </div>
               </section>
+
+              <PayInvoiceList
+                rows={view.invoices.map((inv) => ({
+                  invoiceId: inv.invoiceId ?? null,
+                  invoiceNumber: inv.invoiceNumber,
+                  dueDate: inv.dueDate,
+                  issueDate: inv.issueDate ?? null,
+                  periodStart: inv.periodStart,
+                  periodEnd: inv.periodEnd,
+                  totalCents: inv.totalCents,
+                  balanceDueCents: inv.balanceDueCents,
+                  payable: !inv.alreadyPaid,
+                  lineItems: inv.lineItems || [],
+                }))}
+                heading={`Invoices (${view.invoices.length})`}
+                pdfHref={(row) =>
+                  row.invoiceId && code
+                    ? `${apiBase}/billing/platform/pay-links/${encodeURIComponent(code)}/invoice/${encodeURIComponent(row.invoiceId)}/pdf`
+                    : null
+                }
+              />
               <CardknoxIFieldsForm
                 ifieldsKey={config.ifieldsKey}
                 variant="customer"

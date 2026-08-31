@@ -20082,6 +20082,73 @@ table tr:hover {
   font-size: 0.82rem;
 }
 
+/* The shared Sola form (CardknoxIFieldsForm) groups its fields into wrappers:
+   the card block, the billing-address block, and the Month/Year/CVV row. Inside
+   this two-column grid each wrapper is a single cell, so give them the full
+   width and their own inner grid — otherwise the address block stacks into one
+   narrow column.
+   ⛔ Scoped away from .billing-pay-form: the public pay pages carry BOTH
+   classes and own their layout in pay-invoice.css. */
+.billing-form:not(.billing-pay-form) .billing-pay-cardgroup,
+.billing-form:not(.billing-pay-form) .billing-pay-address-group,
+.billing-form:not(.billing-pay-form) .billing-pay-row {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-row {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-lab {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-lab-note {
+  color: var(--text-dim, var(--muted));
+  font-weight: 500;
+  font-size: 0.72rem;
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-group-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-live-brand {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.billing-form:not(.billing-pay-form) .billing-ifields-host { position: relative; }
+
+.billing-form:not(.billing-pay-form) .billing-pay-brand-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.billing-form:not(.billing-pay-form) .billing-pay-field-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #f87171;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
 .billing-form input,
 .billing-form select,
 .sola-ifield-frame {

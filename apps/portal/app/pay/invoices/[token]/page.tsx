@@ -5,12 +5,13 @@
    receipt and record, and the page reports the outcome per invoice rather than
    a single yes/no that could hide a half-success. */
 
-import Image from "next/image";
 import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
+import { CheckCircle2, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
 import { PaymentTrustBadge } from "../../../../components/billing/PaymentTrustBadge";
+import { PayCardTop } from "../../../../components/billing/PayCardTop";
+import { PayInvoiceList, type PayInvoiceLine } from "../../../../components/billing/PayInvoiceList";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { resolveSameOriginApiBase } from "../../../../lib/publicApiBase";
 import "../../invoice/[token]/pay-invoice.css";
@@ -24,9 +25,15 @@ type InvoiceRow = {
   invoiceNumber: string;
   status: string;
   dueDate: string;
+  issueDate?: string | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   totalCents: number;
+  subtotalCents?: number;
+  taxCents?: number;
   balanceDueCents: number;
   payable: boolean;
+  lineItems?: PayInvoiceLine[];
 };
 
 type MultiPayView = {
@@ -66,13 +73,6 @@ function billingXExp(billing: CardknoxBillingFields): string | null {
   return `${month}${year}`;
 }
 
-function fmtDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-  } catch {
-    return iso;
-  }
-}
 
 function normalizePayTheme(value: string | null | undefined): PayTheme | null {
   return value === "dark" || value === "light" ? value : null;
@@ -222,13 +222,9 @@ export default function PublicBillingMultiInvoicePayPage() {
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <div className="billing-pay-logo" aria-label="Loopcom">
-          <Image src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} priority />
-        </div>
-
         <section className="billing-pay-card" aria-label="Secure combined invoice payment">
+          <PayCardTop />
           <header className="billing-pay-header">
-            <p className="billing-pay-eyebrow"><Lock size={14} /> Secure payment</p>
             <h1>{view?.companyName || "Invoice payment"}</h1>
             {view ? (
               <p className="billing-pay-sub">
@@ -288,30 +284,22 @@ export default function PublicBillingMultiInvoicePayPage() {
               <section className="billing-pay-summary">
                 <div className="billing-pay-amount">
                   <span>Total due</span>
-                  <strong>{combinedDue}</strong>
-                </div>
-                <div className="billing-pay-currency">
-                  <span>{view.currency || "USD"}</span>
-                  <span>{combinedDue}</span>
+                  <strong>
+                    {combinedDue}
+                    <span className="billing-pay-cur">{view.currency || "USD"}</span>
+                  </strong>
                 </div>
               </section>
 
-              <section style={{ margin: "0 0 14px" }}>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                  {view.invoices.map((r) => (
-                    <li key={r.invoiceId} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid rgba(127,127,127,0.15)" }}>
-                      <span>
-                        Invoice <strong>{r.invoiceNumber}</strong>
-                        {r.dueDate ? <> · due {fmtDate(r.dueDate)}</> : null}
-                        {!r.payable ? <> · already settled</> : null}
-                      </span>
-                      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, opacity: r.payable ? 1 : 0.5 }}>
-                        {dollars(r.balanceDueCents)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
+              <PayInvoiceList
+                rows={view.invoices}
+                heading={`Invoices (${view.invoices.length})`}
+                pdfHref={(row) =>
+                  row.invoiceId && token
+                    ? `${apiBase}/billing/platform/invoices/pay-multi/${encodeURIComponent(token)}/invoice/${encodeURIComponent(row.invoiceId)}/pdf`
+                    : null
+                }
+              />
 
               <CardknoxIFieldsForm
                 ifieldsKey={config.ifieldsKey}

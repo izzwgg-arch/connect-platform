@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import IField, { CARD_TYPE, CVV_TYPE, type ErrorData, type TokenData } from "@cardknox/react-ifields";
 import { ConnectSelect } from "../ConnectSelect";
+import {
+  CardBrandMark,
+  CardBrandRow,
+  cardBrandFromIssuer,
+  cvvLengthForBrand,
+  type CardBrand,
+} from "./CardBrandMarks";
 
 export type CardknoxBillingFields = {
   cardholderName: string;
@@ -110,6 +117,19 @@ export function CardknoxIFieldsForm({
   const [expMonth, setExpMonth] = useState("");
   const [expYear, setExpYear] = useState("");
   const [expiryError, setExpiryError] = useState<string | null>(null);
+  /**
+   * Which network the card belongs to, as reported by Cardknox's own `onUpdate`
+   * from INSIDE the secure iframe (`UpdateData.issuer`).
+   *
+   * ⛔ Decoration only: it lights the matching brand mark and switches the CVV
+   * label between three digits and four. The number itself is never readable
+   * here and nothing about the charge depends on this.
+   * ⛔ And it is deliberately NOT passed back into the CVV <IField> as its
+   * `issuer` prop: that would change a prop on a live iframe mid-entry, which
+   * risks clearing a CVV the customer has already typed. The label is ours to
+   * change; the iframe is not.
+   */
+  const [cardIssuer, setCardIssuer] = useState<CardBrand | null>(null);
   const cardFieldRef = useRef<{ getToken?: () => void } | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const pendingRef = useRef<CardknoxBillingFields | null>(null);
@@ -151,6 +171,23 @@ export function CardknoxIFieldsForm({
       },
     }),
     [resolvedFieldTheme],
+  );
+
+  /**
+   * ⛔ The two per-field option objects are memoised so their identity is stable
+   * across re-renders. The VALUES are byte-identical to what shipped — the
+   * iFields configuration itself is never re-tuned (Izzy, 2026-08-31: "copy the
+   * iFields the way it is right now. We worked hard to adjust it"). Stable
+   * identity only means a re-render (an expiry pick, a detected brand) cannot
+   * hand the iframe a fresh options object.
+   */
+  const cardFieldOptions = useMemo(
+    () => ({ ...ifieldOptions, placeholder: "Card number", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }),
+    [ifieldOptions, enterAdvancesFocus],
+  );
+  const cvvFieldOptions = useMemo(
+    () => ({ ...ifieldOptions, placeholder: "CVV", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }),
+    [ifieldOptions, enterAdvancesFocus],
   );
 
   function readBilling(form: HTMLFormElement): CardknoxBillingFields {
@@ -277,136 +314,180 @@ export function CardknoxIFieldsForm({
           Card details are entered in a PCI-compliant secure field hosted by our payment processor. Connect never sees or stores your full card number or CVV.
         </p>
       )}
+
+      {/* ── The card, in the order it is read off the plastic ───────────────
+          Card number, then expiry and CVV on one line. Before this the DOM ran
+          cardholder → expiry → email → address → card → CVV, which put the two
+          secure fields in different rows on opposite sides of the form. */}
+      <div className="billing-pay-cardgroup">
+        <div className="billing-pay-cardgroup-head">
+          <span className="billing-pay-group-label">Card details</span>
+          <CardBrandRow active={cardIssuer} width={30} />
+        </div>
+
+        <label className="billing-ifields-card">
+          <span className="billing-pay-lab">
+            Card number
+            <span className="billing-pay-lab-note">Secure field</span>
+          </span>
+          <span className="billing-ifields-host" aria-required="true">
+            <IField
+              ref={cardFieldRef as any}
+              account={account}
+              type={CARD_TYPE}
+              options={cardFieldOptions}
+              onLoad={() => setIfieldsReady(true)}
+              onToken={handleCardToken}
+              onError={handleCardError}
+              onUpdate={(data: any) => {
+                // Cardknox reports the network from inside the iframe. Only
+                // commit a CHANGE — this fires on every keystroke and a
+                // setState per keystroke would re-render the form (and the
+                // sibling iframe) for nothing.
+                const next = cardBrandFromIssuer(data?.issuer);
+                setCardIssuer((prev) => (prev === next ? prev : next));
+              }}
+              {...(enterAdvancesFocus
+                ? {
+                    onSubmit: () => {
+                      // Enter inside the card iframe → the expiration picker
+                      const next = formRef.current?.querySelector<HTMLElement>(".billing-pay-row--expiration button, .billing-pay-row--expiration [tabindex]");
+                      next?.focus();
+                    },
+                  }
+                : {})}
+            />
+            {cardIssuer ? (
+              <span className="billing-pay-live-brand" aria-hidden="true">
+                <CardBrandMark brand={cardIssuer} width={32} />
+              </span>
+            ) : null}
+          </span>
+        </label>
+
+        <div className="billing-pay-row billing-pay-row--expiration billing-pay-row--cardline">
+          <label>
+            <span className="billing-pay-lab">Month</span>
+            <ConnectSelect
+              name="expMonth"
+              value={expMonth}
+              onChange={(v) => { setExpMonth(v); setExpiryError(null); }}
+              placeholder="MM"
+              ariaLabel="Expiration month"
+              disabled={disabled || busy}
+              theme={resolvedFieldTheme}
+              style={{ width: "100%" }}
+              options={Array.from({ length: 12 }, (_, idx) => {
+                const month = String(idx + 1).padStart(2, "0");
+                return { value: month, label: month };
+              })}
+            />
+          </label>
+          <label>
+            <span className="billing-pay-lab">Year</span>
+            <ConnectSelect
+              name="expYear"
+              value={expYear}
+              onChange={(v) => { setExpYear(v); setExpiryError(null); }}
+              placeholder="YYYY"
+              ariaLabel="Expiration year"
+              disabled={disabled || busy}
+              theme={resolvedFieldTheme}
+              style={{ width: "100%" }}
+              options={years.map((year) => ({ value: year, label: year }))}
+            />
+          </label>
+          <label className="billing-ifields-cvv">
+            <span className="billing-pay-lab">
+              CVV
+              <span className="billing-pay-lab-note">{cvvLengthForBrand(cardIssuer)} digits</span>
+            </span>
+            <span className="billing-ifields-host" aria-required="true">
+              <IField
+                account={account}
+                type={CVV_TYPE}
+                options={cvvFieldOptions}
+                onLoad={() => undefined}
+                onToken={() => undefined}
+                onError={() => undefined}
+                {...(enterAdvancesFocus
+                  ? {
+                      onSubmit: () => {
+                        // Enter inside the CVV iframe → the cardholder name
+                        const next = formRef.current?.querySelector<HTMLElement>('input[name="cardholderName"]');
+                        next?.focus();
+                      },
+                    }
+                  : {})}
+              />
+            </span>
+          </label>
+        </div>
+
+        {expiryError ? (
+          <p className="billing-pay-field-error" role="alert">{expiryError}</p>
+        ) : null}
+      </div>
+
       <label className="billing-field-cardholder">
-        Cardholder name
+        <span className="billing-pay-lab">Name on card</span>
         <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" required disabled={disabled || busy} />
       </label>
-      <div className="billing-pay-row billing-pay-row--expiration">
-        <label>
-          Month
-          <ConnectSelect
-            name="expMonth"
-            value={expMonth}
-            onChange={(v) => { setExpMonth(v); setExpiryError(null); }}
-            placeholder="Month"
-            ariaLabel="Expiration month"
-            disabled={disabled || busy}
-            theme={resolvedFieldTheme}
-            style={{ width: "100%" }}
-            options={Array.from({ length: 12 }, (_, idx) => {
-              const month = String(idx + 1).padStart(2, "0");
-              return { value: month, label: month };
-            })}
-          />
-        </label>
-        <label>
-          Exp. year
-          <ConnectSelect
-            name="expYear"
-            value={expYear}
-            onChange={(v) => { setExpYear(v); setExpiryError(null); }}
-            placeholder="Year"
-            ariaLabel="Expiration year"
-            disabled={disabled || busy}
-            theme={resolvedFieldTheme}
-            style={{ width: "100%" }}
-            options={years.map((year) => ({ value: year, label: year }))}
-          />
-        </label>
-      </div>
-      {expiryError ? (
-        <p className="billing-pay-error" role="alert" style={{ margin: "4px 0 0", fontSize: 12, color: "#dc2626" }}>
-          {expiryError}
-        </p>
-      ) : null}
+
       {showEmail ? (
         <label className="billing-field-email">
-          Billing email
+          <span className="billing-pay-lab">Email for the receipt</span>
           <input name="billingEmail" type="email" autoComplete="email" placeholder="billing@company.com" required disabled={disabled || busy} />
         </label>
       ) : null}
+
       {showPhone ? (
         <label className="billing-field-phone">
-          Phone <span className="muted">(optional)</span>
+          <span className="billing-pay-lab">
+            Phone
+            <span className="billing-pay-lab-note">optional</span>
+          </span>
           <input name="billingPhone" type="tel" autoComplete="tel" placeholder="(555) 555-0100" disabled={disabled || busy} />
         </label>
       ) : null}
+
       {showBillingAddress ? (
-        <>
+        /* Five inputs read as one decision when they sit in one box. */
+        <div className="billing-pay-address-group">
+          <span className="billing-pay-group-label">Billing address</span>
           <label className="billing-field-address1">
-            Address line 1
+            <span className="billing-pay-lab">Street address</span>
             <input name="billingAddress1" autoComplete="billing address-line1" placeholder="123 Main St" required disabled={disabled || busy} />
           </label>
           <label className="billing-field-address2">
-            Address line 2 <span className="muted">(optional)</span>
+            <span className="billing-pay-lab">
+              Apartment, suite
+              <span className="billing-pay-lab-note">optional</span>
+            </span>
             <input name="billingAddress2" autoComplete="billing address-line2" placeholder="Suite 100" disabled={disabled || busy} />
           </label>
           <div className="billing-pay-row billing-pay-row--address">
             <label>
-              City
+              <span className="billing-pay-lab">City</span>
               <input name="billingCity" autoComplete="billing address-level2" placeholder="New York" required disabled={disabled || busy} />
             </label>
             <label>
-              State
+              <span className="billing-pay-lab">State</span>
               <input name="billingState" autoComplete="billing address-level1" placeholder="NY" maxLength={2} required disabled={disabled || busy} />
             </label>
             <label>
-              ZIP
+              <span className="billing-pay-lab">ZIP</span>
               <input name="billingZip" autoComplete="postal-code" placeholder="10001" required disabled={disabled || busy} />
             </label>
           </div>
-        </>
+        </div>
       ) : (
         <label className="billing-field-zip-only">
-          Billing ZIP
+          <span className="billing-pay-lab">Billing ZIP</span>
           <input name="billingZip" autoComplete="postal-code" placeholder="10001" required disabled={disabled || busy} />
         </label>
       )}
-      <label className="billing-ifields-card">
-        Card number
-        <span className="billing-ifields-host" aria-required="true">
-          <IField
-            ref={cardFieldRef as any}
-            account={account}
-            type={CARD_TYPE}
-            options={{ ...ifieldOptions, placeholder: "Card number", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }}
-            onLoad={() => setIfieldsReady(true)}
-            onToken={handleCardToken}
-            onError={handleCardError}
-            {...(enterAdvancesFocus
-              ? {
-                  onSubmit: () => {
-                    // Enter inside the card iframe → the expiration picker
-                    const next = formRef.current?.querySelector<HTMLElement>(".billing-pay-row--expiration button, .billing-pay-row--expiration [tabindex]");
-                    next?.focus();
-                  },
-                }
-              : {})}
-          />
-        </span>
-      </label>
-      <label className="billing-ifields-cvv">
-        CVV
-        <span className="billing-ifields-host" aria-required="true">
-          <IField
-            account={account}
-            type={CVV_TYPE}
-            options={{ ...ifieldOptions, placeholder: "CVV", ...(enterAdvancesFocus ? { autoSubmit: true } : {}) }}
-            onLoad={() => undefined}
-            onToken={() => undefined}
-            onError={() => undefined}
-            {...(enterAdvancesFocus
-              ? {
-                  onSubmit: () => {
-                    // Enter inside the CVV iframe → the cardholder name
-                    const next = formRef.current?.querySelector<HTMLElement>('input[name="cardholderName"]');
-                    next?.focus();
-                  },
-                }
-              : {})}
-          />
-        </span>
-      </label>
+
       {childrenAfterCard}
       {showSaveOptions ? (
         <div className="billing-pay-checks">

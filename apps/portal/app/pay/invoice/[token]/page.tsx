@@ -1,11 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
 import { PaymentTrustBadge } from "../../../../components/billing/PaymentTrustBadge";
+import { PayCardTop } from "../../../../components/billing/PayCardTop";
+import { PayInvoiceList, type PayInvoiceLine } from "../../../../components/billing/PayInvoiceList";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { readAuthToken } from "../../../../services/session";
 import { resolveSameOriginApiBase } from "../../../../lib/publicApiBase";
@@ -27,7 +28,13 @@ type InvoicePayView = {
   totalCents: number;
   balanceDueCents: number;
   dueDate: string;
-  lineItems: Array<{ description: string; quantity: number; amountCents: number }>;
+  issueDate?: string | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  subtotalCents?: number;
+  taxCents?: number;
+  invoiceId?: string;
+  lineItems: PayInvoiceLine[];
 };
 
 type PublicConfig = {
@@ -52,8 +59,9 @@ function billingXExp(billing: CardknoxBillingFields): string | null {
 }
 
 function fmtDate(iso: string) {
+  // UTC — see payDate in PayInvoiceList: these are calendar days, not instants.
   try {
-    return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
   } catch {
     return iso;
   }
@@ -202,13 +210,9 @@ export default function PublicBillingInvoicePayPage() {
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <div className="billing-pay-logo" aria-label="Loopcom">
-          <Image src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} priority />
-        </div>
-
         <section className="billing-pay-card" aria-label="Secure invoice payment">
+          <PayCardTop />
           <header className="billing-pay-header">
-            <p className="billing-pay-eyebrow"><Lock size={14} /> Secure payment</p>
             <h1>{invoice?.companyName || "Invoice payment"}</h1>
             {invoice ? (
               <p className="billing-pay-sub">
@@ -253,13 +257,30 @@ export default function PublicBillingInvoicePayPage() {
               <section className="billing-pay-summary">
                 <div className="billing-pay-amount">
                   <span>Amount due</span>
-                  <strong>{amountDue}</strong>
-                </div>
-                <div className="billing-pay-currency">
-                  <span>{invoice.currency || "USD"}</span>
-                  <span>{amountDue}</span>
+                  <strong>
+                    {amountDue}
+                    <span className="billing-pay-cur">{invoice.currency || "USD"}</span>
+                  </strong>
                 </div>
               </section>
+
+              {/* The breakdown this page has always fetched and never shown. */}
+              <PayInvoiceList
+                rows={[{
+                  invoiceId: invoice.invoiceId ?? null,
+                  invoiceNumber: invoice.invoiceNumber,
+                  dueDate: invoice.dueDate,
+                  issueDate: invoice.issueDate ?? null,
+                  periodStart: invoice.periodStart ?? null,
+                  periodEnd: invoice.periodEnd ?? null,
+                  totalCents: invoice.totalCents,
+                  balanceDueCents: invoice.balanceDueCents,
+                  payable: true,
+                  lineItems: invoice.lineItems || [],
+                }]}
+                heading="What you are paying for"
+                pdfHref={() => (token ? `${apiBase}/billing/platform/invoices/pay/${encodeURIComponent(token)}/pdf` : null)}
+              />
               {invoice.continuePath ? (
                 /* Sign-up checkout: the card going on file is how every
                    following month is paid, so it is stated, not offered. The

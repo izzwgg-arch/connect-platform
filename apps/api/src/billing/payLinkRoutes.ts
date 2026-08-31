@@ -9,6 +9,8 @@ import { logBillingEvent, markBillingInvoicePaid } from "./invoiceEngine";
 import { queueReceiptEmailOnce } from "./billingEmailLifecycle";
 import { reserveBillingChargeOperation, updateBillingChargeOperationFromTransaction } from "./billingChargeOperations";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { publicInvoiceLines } from "./publicInvoiceView";
+import { sendBillingInvoicePdf } from "./billingInvoicePdfAccess";
 import {
   BILLING_PAY_LINK_TTL_MS,
   PAY_LINK_CODE_RE,
@@ -52,14 +54,22 @@ function payLinkView(loaded: LoadedPayLink) {
   const { link, payable, settled, totalDueCents, tenant } = loaded;
   const brand = resolveInvoiceEmailBranding(tenant?.billingSettings || {}, tenant?.name);
   const toRow = (inv: any, alreadyPaid: boolean) => ({
+    // The id is what the "open this invoice" link is built from. `loadPayLink`
+    // has always fetched the line items and this row dropped them, so the page
+    // had a total and nothing behind it.
+    invoiceId: inv.id,
     invoiceNumber: inv.invoiceNumber,
     status: inv.status,
     alreadyPaid,
     periodStart: inv.periodStart,
     periodEnd: inv.periodEnd,
     dueDate: inv.dueDate,
+    issueDate: inv.issueDate,
+    subtotalCents: Number(inv.subtotalCents ?? 0),
+    taxCents: Number(inv.taxCents ?? 0),
     totalCents: inv.totalCents,
     balanceDueCents: Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0),
+    lineItems: publicInvoiceLines(inv),
   });
   return {
     code: link.code,
@@ -134,6 +144,27 @@ export function registerBillingPayLinkRoutes(
       return reply.code(loaded.error === "pay_link_not_found" ? 404 : 410).send({ error: loaded.error });
     }
     return payLinkView(loaded);
+  });
+
+  // ---- Public: open / download one of the link's invoices --------------------
+  // Scoped by the link: the code already proves the holder may see exactly
+  // these invoices, and an id the link does not name is a 404.
+  app.get("/billing/platform/pay-links/:code/invoice/:invoiceId/pdf", async (req, reply) => {
+    const { code, invoiceId } = req.params as { code: string; invoiceId: string };
+    const loaded = await loadPayLink(code);
+    if ("error" in loaded) {
+      return reply.code(loaded.error === "pay_link_not_found" ? 404 : 410).send({ error: loaded.error });
+    }
+    if (!(loaded.link.invoiceIds || []).includes(invoiceId)) {
+      return reply.code(404).send({ error: "invoice_not_found" });
+    }
+    const invoice = await (db as any).billingInvoice.findFirst({
+      where: { id: invoiceId, tenantId: loaded.link.tenantId },
+      include: { lineItems: { orderBy: { createdAt: "asc" } }, tenant: { include: { billingSettings: true } } },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const { download } = req.query as { download?: string };
+    return sendBillingInvoicePdf(reply, invoice, { download: download === "1" });
   });
 
   // ---- Public: gateway config -----------------------------------------------

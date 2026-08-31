@@ -10,6 +10,14 @@ import { billingLiveChargesDisabled, chargeBillingInvoice, chargeBillingInvoiceW
 import { verifyBillingInvoicePayToken, verifyBillingMultiPayToken } from "./billingPayToken";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { publicInvoiceLines, publicInvoiceTotals } from "./publicInvoiceView";
+import { sendBillingInvoicePdf } from "./billingInvoicePdfAccess";
+
+/** Everything the invoice PDF renderer needs, and nothing else. */
+const PDF_INVOICE_INCLUDE = {
+  lineItems: { orderBy: { createdAt: "asc" as const } },
+  tenant: { include: { billingSettings: true } },
+};
 
 async function loadInvoiceForPayToken(token: string) {
   const parsed = verifyBillingInvoicePayToken(token);
@@ -50,7 +58,13 @@ async function loadInvoicesForMultiPayToken(token: string) {
   if (!parsed) return { error: "invoice_token_invalid" as const, code: 410 as const };
   const invoices = await (db as any).billingInvoice.findMany({
     where: { id: { in: parsed.invoiceIds }, tenantId: parsed.tenantId },
-    include: { tenant: { select: { name: true, billingSettings: true } } },
+    // The breakdown a customer opens on the page. The single-invoice route has
+    // always loaded these; this one did not, which is why the combined page had
+    // nothing to show but a total.
+    include: {
+      lineItems: { orderBy: { createdAt: "asc" } },
+      tenant: { select: { name: true, billingSettings: true } },
+    },
     orderBy: { dueDate: "asc" },
   });
   if (!invoices.length) return { error: "invoice_not_found" as const, code: 404 as const };
@@ -81,6 +95,8 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       totalCents: inv.totalCents,
       balanceDueCents: Math.max(0, inv.balanceDueCents ?? inv.totalCents ?? 0),
       payable: invoiceIsPayable(inv),
+      ...publicInvoiceTotals(inv),
+      lineItems: publicInvoiceLines(inv),
     }));
     const combinedDueCents = rows.reduce((sum: number, r: any) => sum + (r.payable ? r.balanceDueCents : 0), 0);
     // Mark link opens on every covered invoice that was texted/emailed out.
@@ -389,16 +405,48 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       totalCents: invoice.totalCents,
       balanceDueCents,
       dueDate: invoice.dueDate,
-      issueDate: invoice.issueDate,
-      lineItems: (invoice.lineItems || []).map((li: any) => ({
-        type: li.type,
-        description: li.description,
-        quantity: li.quantity,
-        unitPriceCents: li.unitPriceCents,
-        amountCents: li.amountCents,
-        metadata: li.metadata || null,
-      })),
+      ...publicInvoiceTotals(invoice),
+      lineItems: publicInvoiceLines(invoice),
     };
+  });
+
+  // ── Open / download the invoice itself ─────────────────────────────────────
+  //
+  // ⛔ The ordinary PDF route (/billing/platform/invoices/:id/pdf) runs
+  // requireTenantBilling, so it needs a LOGIN — while the billing emails put
+  // that exact URL in front of customers. Someone paying from an emailed link
+  // could not open their own invoice. These two routes are the token-scoped
+  // siblings: the pay token already proves the holder may see exactly these
+  // invoices, so it is the same authority the page above already granted.
+  app.get("/billing/platform/invoices/pay/:token/pdf", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const parsed = verifyBillingInvoicePayToken(token);
+    if (!parsed) return reply.code(410).send({ error: "invoice_token_invalid" });
+    const invoice = await (db as any).billingInvoice.findFirst({
+      where: { id: parsed.invoiceId, tenantId: parsed.tenantId },
+      include: PDF_INVOICE_INCLUDE,
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const { download } = req.query as { download?: string };
+    return sendBillingInvoicePdf(reply, invoice, { download: download === "1" });
+  });
+
+  app.get("/billing/platform/invoices/pay-multi/:token/invoice/:invoiceId/pdf", async (req, reply) => {
+    const { token, invoiceId } = req.params as { token: string; invoiceId: string };
+    const parsed = verifyBillingMultiPayToken(token);
+    if (!parsed) return reply.code(410).send({ error: "invoice_token_invalid" });
+    // The id must be one the token itself names — a valid token for OTHER
+    // invoices must never open this one.
+    if (!parsed.invoiceIds.includes(invoiceId)) {
+      return reply.code(404).send({ error: "invoice_not_found" });
+    }
+    const invoice = await (db as any).billingInvoice.findFirst({
+      where: { id: invoiceId, tenantId: parsed.tenantId },
+      include: PDF_INVOICE_INCLUDE,
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const { download } = req.query as { download?: string };
+    return sendBillingInvoicePdf(reply, invoice, { download: download === "1" });
   });
 
   app.get("/billing/platform/invoices/pay/:token/public-config", async (req, reply) => {

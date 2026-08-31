@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CheckCircle2, Lock, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../../components/billing/CardknoxIFieldsForm";
 import { PaymentTrustBadge } from "../../../../../components/billing/PaymentTrustBadge";
+import { PayCardTop } from "../../../../../components/billing/PayCardTop";
 import { PermissionGate } from "../../../../../components/PermissionGate";
 import { billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -123,13 +123,9 @@ export default function BillingAddCardPage() {
       <main className="billing-pay-page billing-payments-addcard" data-pay-theme={payTheme}>
         <div className="billing-pay-bg" aria-hidden="true" />
         <div className="billing-pay-shell">
-          <div className="billing-pay-logo" aria-label="Loopcom">
-            <Image src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} priority />
-          </div>
-
           <section className="billing-pay-card" aria-label="Add a payment card">
+            <PayCardTop label="Secure card entry" />
             <header className="billing-pay-header">
-              <p className="billing-pay-eyebrow"><Lock size={14} /> Secure card entry</p>
               <h1>Add a payment card</h1>
               <p className="billing-pay-sub">
                 Your card is saved for invoice payments and autopay. Nothing is charged now.

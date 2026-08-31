@@ -30,9 +30,19 @@ export async function findBillingInvoiceForPdf(
   });
 }
 
-export async function sendBillingInvoicePdf(reply: FastifyReply, invoice: { invoiceNumber?: string | null; id: string }) {
+export async function sendBillingInvoicePdf(
+  reply: FastifyReply,
+  invoice: { invoiceNumber?: string | null; id: string },
+  /** `download` switches the disposition so "Download PDF" saves the file while
+   *  "Open full invoice" still opens it in a tab. Default stays `inline`, which
+   *  is what every existing caller relied on. */
+  options?: { download?: boolean },
+) {
   const pdf = await renderBillingInvoicePdf(invoice);
   reply.header("content-type", "application/pdf");
-  reply.header("content-disposition", `inline; filename="${safePdfFilename(invoice)}"`);
+  reply.header(
+    "content-disposition",
+    `${options?.download ? "attachment" : "inline"}; filename="${safePdfFilename(invoice)}"`,
+  );
   return reply.send(pdf);
 }
