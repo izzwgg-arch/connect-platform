@@ -14,6 +14,14 @@ export type DesktopSettings = {
     x?: number;
     y?: number;
   };
+  /**
+   * The always-on-top floating AI Coworker bubble. ⛔ OFF by default: an existing
+   * customer's update must not silently sprout a new floating window. Opt-in from
+   * the tray. `coworkerWidgetPosition` is re-validated against the current displays
+   * at every launch (a monitor may have been unplugged) — see widgetGeometry.ts.
+   */
+  coworkerWidgetEnabled?: boolean;
+  coworkerWidgetPosition?: { x: number; y: number };
 };
 
 /** Auto-update lifecycle state, broadcast to renderers for the in-app "Install" UX. */

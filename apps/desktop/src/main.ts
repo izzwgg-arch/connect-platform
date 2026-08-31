@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -8,6 +8,7 @@ import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
+import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -451,6 +452,11 @@ function rebuildTray(): void {
       click: () => toggleAlwaysOnTop(),
     },
     { type: "separator" },
+    {
+      label: settings.coworkerWidgetEnabled ? "Hide Coworker Bubble" : "Show Coworker Bubble",
+      click: () => toggleCoworkerWidget(),
+    },
+    { type: "separator" },
     { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
     { type: "separator" },
     {
@@ -463,6 +469,48 @@ function rebuildTray(): void {
   ]));
 
   tray.on("double-click", () => createFullWindow(true));
+}
+
+// ── Floating Coworker bubble ──────────────────────────────────────────
+// ⛔ Every entry point is wrapped: a fault in the decorative bubble must never
+// reach the phone. widgetDeps() is the one place that adapts the desktop's
+// settings store + window helpers to the widget module's injected shape.
+function widgetDeps() {
+  return {
+    BrowserWindow,
+    ipcMain,
+    screen,
+    app,
+    assetPath,
+    preloadPath,
+    openFullRoute: (route: string) => {
+      const win = createFullWindow(true);
+      loadPortal(win, route);
+    },
+    getSaved: () => ({
+      position: settings.coworkerWidgetPosition ?? null,
+      enabled: settings.coworkerWidgetEnabled,
+    }),
+    setSaved: (next: { position?: { x: number; y: number }; enabled?: boolean }) => {
+      const patch: Partial<DesktopSettings> = {};
+      if (next.position) patch.coworkerWidgetPosition = next.position;
+      if (typeof next.enabled === "boolean") patch.coworkerWidgetEnabled = next.enabled;
+      writeSettings({ ...settings, ...patch });
+    },
+    log: (line: string) => diag("coworker-widget", line),
+  };
+}
+
+function toggleCoworkerWidget(): void {
+  try {
+    const enabled = !settings.coworkerWidgetEnabled;
+    writeSettings({ ...settings, coworkerWidgetEnabled: enabled });
+    if (enabled) createCoworkerWidget(widgetDeps());
+    else destroyCoworkerWidget();
+    rebuildTray();
+  } catch (err) {
+    diag("coworker-widget", `toggle failed: ${String(err)}`);
+  }
 }
 
 function toggleAlwaysOnTop(): DesktopSettings {
@@ -564,6 +612,10 @@ function registerIpc(): void {
     return settings;
   });
   ipcMain.handle("desktop:notification", (_event, payload: DesktopNotificationPayload) => showDesktopNotification(payload));
+
+  // Floating Coworker bubble IPC (open-chat, enable/disable, is-open). Registered
+  // once; the module wraps every handler.
+  try { registerCoworkerWidgetIpc(widgetDeps()); } catch (err) { diag("coworker-widget", `ipc register failed: ${String(err)}`); }
 
   // Desk phone setup. ⛔ ONE channel, one allowlisted operation shape - the renderer
   // loads the hosted portal, so anything it can express is something a compromised
@@ -766,6 +818,13 @@ if (!gotSingleInstanceLock) {
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
+  // Restore the floating Coworker bubble if the user had it on. ⛔ Wrapped: the
+  // bubble must never be able to stop the app from starting.
+  try {
+    if (settings.coworkerWidgetEnabled) createCoworkerWidget(widgetDeps());
+  } catch (err) {
+    diag("coworker-widget", `startup create failed: ${String(err)}`);
+  }
   // In-app auto-update: check the feed on launch (and periodically), download in
   // the background, and prompt the user to restart when an update is ready.
   initAutoUpdater(diag);

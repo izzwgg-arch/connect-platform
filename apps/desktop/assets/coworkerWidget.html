@@ -1,0 +1,91 @@
+<!doctype html>
+<!--
+  The floating Coworker bubble's renderer.
+
+  ⛔ This window is FRAMELESS + TRANSPARENT + ALWAYS-ON-TOP. It has no Node access
+  (contextIsolation on, nodeIntegration off) — it talks to the main process only
+  through the tiny preload bridge (widget.*). Its whole job is: draw a round button,
+  tell main when it is pressed (a click, not a drag), and let the user drag it.
+
+  ⛔ The drag is done with CSS -webkit-app-region on the bubble and a JS click/drag
+  discriminator that matches widgetGeometry.CLICK_SLOP_PX, so a nudge while dragging
+  does not open the chat and a tap does.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+    <style>
+      :root { --bubble: 64px; }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        background: transparent; overflow: hidden; user-select: none;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      #bubble {
+        position: absolute; inset: 0; margin: auto;
+        width: var(--bubble); height: var(--bubble); border-radius: 50%;
+        /* The drag handle. A click that does not move opens the chat. */
+        -webkit-app-region: drag;
+        cursor: grab;
+        background: radial-gradient(circle at 32% 28%, #34a7ff 0%, #1e4fd6 78%);
+        box-shadow: 0 6px 20px rgba(6, 20, 45, 0.45), inset 0 1px 2px rgba(255,255,255,0.35);
+        display: flex; align-items: center; justify-content: center;
+        transition: transform 120ms ease, box-shadow 120ms ease;
+      }
+      #bubble:hover { transform: scale(1.06); box-shadow: 0 8px 26px rgba(6,20,45,0.55); }
+      #bubble:active { cursor: grabbing; transform: scale(0.97); }
+      /* The mark. An inline SVG infinity glyph, white, no external asset. */
+      #bubble svg { width: 34px; height: 34px; pointer-events: none; }
+      /* Unread / working indicator — a small dot the main process can toggle. */
+      #badge {
+        position: absolute; top: 6px; right: 6px; width: 14px; height: 14px;
+        border-radius: 50%; background: #ff5c5c; border: 2px solid #0b1f3a;
+        display: none;
+      }
+      #badge.show { display: block; }
+      #badge.working { background: #f0b655; animation: pulse 1.2s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    </style>
+  </head>
+  <body>
+    <div id="bubble" title="Loopcom Coworker — click to chat, drag to move">
+      <svg viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M30 30 C30 14, 8 14, 8 30 C8 46, 30 46, 50 30 C70 14, 92 14, 92 30 C92 46, 70 46, 50 30 Z"
+              stroke="white" stroke-width="7" stroke-linejoin="round" fill="none" />
+      </svg>
+      <div id="badge"></div>
+    </div>
+    <script>
+      (function () {
+        var bubble = document.getElementById("bubble");
+        var badge = document.getElementById("badge");
+        var api = window.coworkerWidget; // exposed by preload; may be absent in a bare browser
+        var SLOP = 4; // mirrors widgetGeometry.CLICK_SLOP_PX
+
+        // Click-vs-drag: -webkit-app-region:drag moves the OS window, so we never
+        // see intermediate mousemove. We compare the screen position at mousedown
+        // and mouseup; if it barely moved, it was a click and we open the chat.
+        var downX = 0, downY = 0, downT = 0;
+        bubble.addEventListener("mousedown", function (e) {
+          downX = e.screenX; downY = e.screenY; downT = Date.now();
+        });
+        bubble.addEventListener("mouseup", function (e) {
+          var dx = e.screenX - downX, dy = e.screenY - downY;
+          var moved = Math.sqrt(dx * dx + dy * dy);
+          if (moved <= SLOP && api && api.openChat) api.openChat();
+        });
+
+        // Main pushes badge state: "none" | "unread" | "working".
+        if (api && api.onBadge) {
+          api.onBadge(function (state) {
+            badge.className = "";
+            if (state === "unread") badge.className = "show";
+            else if (state === "working") badge.className = "show working";
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

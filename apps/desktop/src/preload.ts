@@ -85,3 +85,19 @@ const desktopApi = {
 };
 
 contextBridge.exposeInMainWorld("connectDesktop", desktopApi);
+
+// ── Floating Coworker widget bridge ───────────────────────────────────
+// ⛔ Exposed to EVERY renderer but only meaningful in the tiny frameless bubble
+// window (coworkerWidget.html). It carries exactly two verbs: "the bubble was
+// clicked, open the chat" and "tell me when the badge state changes". There is no
+// data in, no privileged capability — the same dumb-hands posture as phoneSetup.
+const coworkerWidgetApi = {
+  openChat: () => ipcRenderer.send("coworker-widget:open-chat"),
+  onBadge: (listener: (state: "none" | "unread" | "working") => void) => {
+    const wrapped = (_: unknown, state: "none" | "unread" | "working") => listener(state);
+    ipcRenderer.on("coworker-widget:badge", wrapped);
+    return () => ipcRenderer.removeListener("coworker-widget:badge", wrapped);
+  },
+};
+
+contextBridge.exposeInMainWorld("coworkerWidget", coworkerWidgetApi);

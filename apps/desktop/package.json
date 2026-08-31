@@ -10,7 +10,7 @@
     "dev": "pnpm build && electron .",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/*.test.ts src/phoneSetup/*.test.ts",
+    "test": "node --import tsx --test src/*.test.ts src/phoneSetup/*.test.ts src/coworkerWidget/*.test.ts",
     "verify:icon": "node --import tsx scripts/verify-built-icon.ts",
     "dist": "pnpm build && electron-builder --win && pnpm verify:icon"
   },
