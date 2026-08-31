@@ -166,3 +166,60 @@ In-sidebar toggle is disabled**; hiding a page does NOT hide its shared-key
 siblings; and a page revealed by "Owner only → off" still refuses anyone whose
 role permission is off. ⛔ An already-open portal tab or desktop window keeps
 the OLD bundle until reloaded.
+
+## §9 — DEPLOY STATE, verified 2026-08-31 (read-only check)
+
+Asked as “was anything in the permission toggles changed and deployed today,
+because I don't see the fixes?” — the answer is **yes, deployed**, and the
+report was almost certainly a stale bundle.
+
+✅ **api + portal BOTH at `4f03b006`**, which contains `06e699ba` (verified with
+`git merge-base --is-ancestor`). 0 restarts on either. `/admin/permissions`
+answers **200** on `app.loopcom.net` and `app.connectcomunications.com`.
+Portal container `StartedAt` **14:20:41Z**; the question arrived **14:34Z**.
+
+Proven INSIDE the running containers, never off the deploy log:
+
+| check | result |
+| --- | --- |
+| api `packages/shared/src/portalNavVisibility.ts` | present, 4,641 b |
+| api `navVisibility` in `platformRolePermissions.ts` | 10 |
+| api `NAV_ITEMS_ALWAYS_VISIBLE` | 2 |
+| portal `“In sidebar”` in the shipped CLIENT chunk | present |
+| portal `ownerOnlyLifted` in the shipped CLIENT chunk | present |
+| page chunk graph includes navConfig | ✅ `6051` + `4427` |
+
+⛔⛔ **The chunk-graph check is the one that matters, and the naive version of it
+lies.** Grepping the permissions PAGE chunk for `workspace.conference` reads
+**0** — navConfig is imported from a SHARED chunk, so the nav ids are not
+inlined into the page chunk, and a 0 reads exactly like “the old catalog
+shipped”. Verify through `.next/app-build-manifest.json`:
+
+```
+node -e 'const m=require("/app/apps/portal/.next/app-build-manifest.json");
+const k=Object.keys(m.pages).find(x=>x.includes("admin/permissions"));
+console.log(m.pages[k].filter(f=>/6051|4427|6247/.test(f)))'
+```
+
+`6051`/`4427` are the chunks carrying `workspace.conference` (navConfig);
+`6247` carries `ownerOnlyLifted`. All three are in the page's list — that is
+the proof the screen renders the REAL sidebar catalog, not `SIDEBAR_ITEMS`.
+
+⛔⛔ **NO TOGGLE HAS EVER BEEN SAVED.** `PlatformRolePermissionSnapshot` reads
+`updatedAt = 2026-07-06` with **no `navVisibility` key**, so no permissions save
+of any kind has reached the server since July. Correct inert state (subtract-only
++ fails open ⇒ nothing hidden) — but it also means a toggle that was flipped and
+saved **did not land**. Cheapest check:
+
+```sql
+select id, "updatedAt", (roles ? 'navVisibility') from "PlatformRolePermissionSnapshot";
+```
+
+⛔ That table has columns **`id` / `roles` / `updatedAt` only** — no `version`,
+no `permissions`. Querying either errors and reads like the feature is absent.
+
+⛔ **Triage order for a repeat of “I don't see it”:** (1) container `StartedAt`
+vs when the tab was opened — desktop app needs a full close+reopen, not a
+reload; (2) WHICH SCREEN — the switches are on `/admin/permissions` (built-in
+roles), **not** `/admin/roles/[id]` (custom roles); (3) only then the snapshot
+row above. Nothing was changed by this check.

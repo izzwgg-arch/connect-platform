@@ -121,6 +121,35 @@ aside from the custom role permission.”*
   replayed against HEAD’s navConfig**) and 4 new api snapshot tests. Suites:
   portal 433/435 (the two documented pre-existing), shared 555/555; typechecks
   portal 0, shared 0, api **76 = the exact baseline**.
+- ✅ **DEPLOYED AND CONTAINER-VERIFIED 2026-08-31** — api + portal BOTH at
+  `4f03b006` (contains `06e699ba`), 0 restarts, /admin/permissions 200 on both
+  hostnames. Proven INSIDE the containers, never off a deploy log: the api
+  carries `portalNavVisibility.ts` + 10 `navVisibility` refs; the portal's
+  SHIPPED CLIENT chunk carries “In sidebar” + `ownerOnlyLifted`; and the page's
+  chunk graph pulls navConfig (`6051`/`4427`, the chunks holding
+  `workspace.conference`) — ⛔ **that last check is the one that matters: it is
+  the proof the screen renders the REAL sidebar catalog and not the stale
+  `SIDEBAR_ITEMS` list.** Grepping the page chunk alone for a nav id reads 0 and
+  looks like a failed deploy; navConfig lives in a SHARED chunk, so verify via
+  `.next/app-build-manifest.json` → the page's chunk list.
+- ⛔⛔ **NO TOGGLE HAS EVER BEEN SAVED: `PlatformRolePermissionSnapshot` still
+  reads `updatedAt = 2026-07-06` and has NO `navVisibility` key at all** — so no
+  permissions save of ANY kind has reached the server since July. That is the
+  correct inert state (subtract-only + fails open ⇒ nothing hidden), but it also
+  means a toggle someone flipped and saved **did not land**. ⛔ Read that row's
+  `updatedAt` before believing any save; it is the cheapest check there is:
+  `select id, "updatedAt", (roles ? 'navVisibility') from "PlatformRolePermissionSnapshot";`
+  ⛔ The table has columns `id` / `roles` / `updatedAt` ONLY — there is no
+  `version` and no `permissions` column; querying those errors out and reads like
+  the feature is missing.
+- ⛔ **“I changed it and I don't see the fixes” was asked 14 minutes after the
+  portal container rebuilt (2026-08-31 14:20Z, asked 14:34Z).** The deploy was
+  fine; the likeliest answer is a STALE BUNDLE in an already-open tab/window.
+  ⏳ Not confirmed by the reporter at the time of writing. **Judge this class by
+  the container's `StartedAt` vs when the tab was opened, before touching code.**
+  ⛔ The desktop app needs a full close + reopen, not a reload. ⛔ And check WHICH
+  SCREEN: the In-sidebar switches are on `/admin/permissions` (built-in roles),
+  **not** `/admin/roles/[id]` (custom roles), which never got them.
 - ⏳ **NOT PROVEN: nobody has flipped a toggle in a browser.** Acceptance:
   /admin/permissions shows a row for EVERY sidebar page incl. all five Store
   pages; hide one Store page → Save → it leaves the sidebar for everybody and
