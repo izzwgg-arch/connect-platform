@@ -35,7 +35,7 @@ export const legalIndex = {
   url: '/legal/',
   title: 'Legal & Compliance',
   description:
-    'Loopcom terms of service, privacy policy, acceptable use policy, emergency calling policy, messaging terms, CPNI notice and accessibility statement.',
+    'Loopcom terms of service, privacy policy, acceptable use policy, emergency calling policy, messaging terms and accessibility statement.',
   crumbs: [['Legal', null]],
   body: `
 ${pageHead('Legal', 'Our terms, policies and the notices that apply to telephone service.', [['Legal', null]])}
@@ -45,7 +45,6 @@ ${pageHead('Legal', 'Our terms, policies and the notices that apply to telephone
   <div class="card"><h3><a href="/legal/acceptable-use/">Acceptable use policy &rarr;</a></h3><p>What the service may and may not be used for.</p></div>
   <div class="card"><h3><a href="/e911/">Emergency calling &rarr;</a></h3><p>How 911 works and your responsibility for the registered address.</p></div>
   <div class="card"><h3><a href="/legal/messaging/">Messaging terms &rarr;</a></h3><p>Terms for texting, consent and opt-out handling.</p></div>
-  <div class="card"><h3><a href="/legal/cpni/">CPNI notice &rarr;</a></h3><p>How we protect information about your calling.</p></div>
   <div class="card"><h3><a href="/legal/accessibility/">Accessibility &rarr;</a></h3><p>Our approach and how to report a barrier.</p></div>
 </div></div></section>`,
 };
@@ -82,7 +81,7 @@ export const privacy = legalDoc({
     ['Who we are', `<p>${LEGAL}, ${ADDR}. Questions about this policy may be sent to <a href="mailto:${E}">${E}</a>.</p>`],
     ['Information we collect', '<p>Account and contact details for your business and its users; information you provide when requesting a quote or sending us a message; records of calls and messages carried on the service, including numbers, times and durations; voicemail and, where enabled, call recordings and transcripts; and technical information from the applications and devices you use.</p>'],
     ['Why we use it', '<p>To provide and support the service, to bill for it, to register numbers for emergency calling, to meet regulatory obligations, to detect fraud and abuse, and &mdash; where you have separately agreed &mdash; to contact you about Loopcom products.</p>'],
-    ['Information about your calling', '<p>Information about the telephone service you buy and the calls you make is treated as Customer Proprietary Network Information and handled under federal rules for telephone companies. See the <a href="/legal/cpni/">CPNI notice</a>.</p>'],
+    ['Information about your calling', '<p>Information about the telephone service you buy and the calls you make is treated as Customer Proprietary Network Information and handled under federal rules for telephone companies.</p>'],
     ['Quote requests and messages', '<p>Details submitted through the quote form or the message box on this website are used to prepare and send your quote and to contact you about that request. Any marketing contact is a separate optional choice, is never pre-selected, and declining it does not affect your quote.</p>'],
     ['Who we share it with', '<p>Carriers who deliver your calls and messages; emergency service databases where required for 911; providers who deliver email and process payments on our behalf; and where the law requires. We do not sell your information.</p>'],
     ['How long we keep it', '<p>Account records are kept while you are a customer and afterwards where retention is required for regulatory or accounting purposes. Call records, recordings and voicemail are retained according to your account configuration.</p>'],
@@ -124,21 +123,6 @@ export const messagingTerms = legalDoc({
     ['Prohibited content', '<p>You may not send content prohibited by carriers or by law, including unlawful goods, high-risk lending offers, and content prohibited under the <a href="/legal/acceptable-use/">Acceptable Use Policy</a>.</p>'],
     ['Delivery', '<p>Mobile carriers filter messaging traffic independently. Loopcom does not guarantee delivery, delivery speed, freedom from filtering, or any particular sending rate.</p>'],
     ['Your responsibility', '<p>Compliance with the laws governing your messaging &mdash; including consent, revocation and record keeping &mdash; is your responsibility.</p>'],
-  ],
-});
-
-export const cpni = legalDoc({
-  url: '/legal/cpni/',
-  title: 'CPNI Notice',
-  description: 'How Loopcom protects Customer Proprietary Network Information about your telephone service, and the choices you have.',
-  lede: 'How Loopcom protects information about your telephone service, and the choices you have.',
-  sections: [
-    ['What CPNI is', '<p>Customer Proprietary Network Information is information about the telephone service you buy and how you use it &mdash; the numbers you call and are called from, when, for how long, and the services on your account. Federal law requires telephone companies to protect it.</p>'],
-    ['How we use it', '<p>To provide, configure, support, bill and repair your service, and where the law requires or permits. We do not sell it.</p>'],
-    ['Sharing', '<p>With carriers and vendors who help deliver your service, with emergency services in connection with a 911 call, and where required by law or legal process.</p>'],
-    ['Marketing', '<p>Where we wish to use this information to market services beyond those you already buy, we will seek your approval first in the manner the rules require. Declining does not affect your existing service.</p>'],
-    ['Protecting your account', '<p>We authenticate callers before discussing account information, restrict internal access to staff who need it, keep records of access and disclosure, and notify you and the authorities of unauthorised disclosure as required.</p>'],
-    ['Your choices', `<p>You may ask what information we hold, ask us to restrict its use for marketing, and ask about disclosures. Write to <a href="mailto:${E}">${E}</a> or the address above.</p>`],
   ],
 });
 

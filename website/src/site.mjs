@@ -89,7 +89,6 @@ export const FOOTER = [
       ['Acceptable use', '/legal/acceptable-use/'],
       ['Emergency calling', '/e911/'],
       ['Messaging terms', '/legal/messaging/'],
-      ['CPNI notice', '/legal/cpni/'],
       ['Accessibility', '/legal/accessibility/'],
     ],
   },

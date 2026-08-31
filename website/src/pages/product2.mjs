@@ -224,7 +224,7 @@ ${pageHead('Security', 'How we protect your account, your calls and the informat
     'We verify who you are before discussing your account',
     'You can ask what we hold and how it is used',
   ])}
-  <div style="margin-top:26px"><a class="tlink" href="/legal/cpni/">Read the CPNI notice &rarr;</a> &nbsp; <a class="tlink" href="/legal/privacy/">Privacy policy &rarr;</a></div>
+  <div style="margin-top:26px"><a class="tlink" href="/legal/privacy/">Privacy policy &rarr;</a></div>
 </div></section>
 
 ${cta()}`,

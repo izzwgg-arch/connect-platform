@@ -28,7 +28,7 @@ const PAGES = [
   M.home, M.businessPhone, M.apps, M.deskPhones, M.messaging, P2.tenDlc,
   M.meetings, M.reporting, P2.custom, M.solutions, P2.e911, P2.security,
   M.about, M.support, M.contact, Q.quote,
-  L.legalIndex, L.terms, L.privacy, L.aup, L.messagingTerms, L.cpni, L.accessibility,
+  L.legalIndex, L.terms, L.privacy, L.aup, L.messagingTerms, L.accessibility,
   Q.quoteThanks, Q.notFound,
 ];
 
