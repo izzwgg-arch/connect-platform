@@ -7539,6 +7539,111 @@ enum RemoteSupportSignalRole {
   CLIENT
 }
 
+enum RemoteSupportRevocationScope {
+  /// One staff member loses remote support everywhere, at once.
+  TECHNICIAN
+  /// One computer stops accepting sessions until it is re-enrolled.
+  DEVICE
+  /// A whole customer is switched off — used when THEY ask, or during an incident.
+  TENANT
+}
+
+/// The kill switch (Phase 30). A single row, id "global".
+///
+/// ⛔⛔ THIS LIVES IN THE DATABASE AND NOT IN A MODULE VARIABLE, AND THAT IS THE
+/// WHOLE POINT. This codebase has twice shipped state that lived in a Map and
+/// silently re-armed on the next deploy (the admin-alert cooldown; the TURN
+/// watcher's streak). A deploy in the middle of a security incident must not
+/// quietly switch remote support back on.
+///
+/// ⛔ A MISSING ROW MEANS ENABLED, deliberately — see controls.ts. This flag only
+/// ever subtracts from what the permission policy already allowed, so defaulting
+/// it to "off" would take the feature away with no audit trail saying who did it.
+model RemoteSupportControl {
+  /// Always "global". A singleton, so there is exactly one switch to find.
+  id String @id @default("global")
+
+  enabled          Boolean   @default(true)
+  /// Shown verbatim to the technician, so a refusal is never a mystery.
+  disabledReason   String?
+  disabledByUserId String?
+  disabledAt       DateTime?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+/// A standing block on one technician, one machine or one customer.
+///
+/// ⛔ A LIST, NOT A FLAG ON THE SESSION ROW. A revocation has to outlive the
+/// session it was aimed at — otherwise revoking someone mid-incident only stops
+/// the session you happened to know about, and their next request sails through.
+///
+/// ⛔ Lifting is a soft `liftedAt` rather than a delete: "who was revoked, when,
+/// by whom, and who lifted it" is exactly the question asked after an incident,
+/// and a deleted row cannot answer it.
+model RemoteSupportRevocation {
+  id    String                       @id @default(cuid())
+  scope RemoteSupportRevocationScope
+
+  /// userId for TECHNICIAN, deviceId for DEVICE, tenantId for TENANT.
+  /// Deliberately a plain column with no FK — the same audit-trail reasoning as
+  /// RemoteSupportSession.targetUserId.
+  subjectId String
+  reason    String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  liftedAt       DateTime?
+  liftedByUserId String?
+
+  /// The partial-index shape the gate actually queries: live revocations only.
+  @@index([scope, subjectId, liftedAt])
+  @@index([liftedAt])
+}
+
+/// The chronological record of one session: system events and chat, in one
+/// table (Phases 21 and 22).
+///
+/// ⛔ THEY ARE ONE TABLE ON PURPOSE. The support conversation and the audit trail
+/// describe the same sequence, and keeping them apart produces two orderings
+/// that disagree about what happened when — which is precisely the thing an
+/// audit is for.
+///
+/// ⛔⛔ WHAT MUST NEVER LAND IN HERE: raw keystrokes, clipboard contents,
+/// screen contents, or a password. `body` carries deliberate chat text and
+/// nothing else. Non-negotiable rules #12 and #13.
+model RemoteSupportEvent {
+  id        String @id @default(cuid())
+  sessionId String
+  tenantId  String
+
+  /// "system" | "chat"
+  kind String
+
+  /// ADMIN | CLIENT | SYSTEM — who caused it.
+  actorRole   String
+  actorUserId String?
+
+  /// Machine-readable: "requested" | "consented" | "capability_granted" | ...
+  /// Rendered to a sentence at the edge, never printed raw at a human.
+  code String
+
+  /// Chat text, or a short human sentence for a system event. Never secret.
+  body String?
+
+  /// Structured detail for the audit view (which capabilities, which reason).
+  meta Json?
+
+  at DateTime @default(now())
+
+  session RemoteSupportSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, at])
+  @@index([tenantId, at])
+}
+
 model RemoteSupportSession {
   id       String @id @default(cuid())
   tenantId String
@@ -7564,6 +7669,28 @@ model RemoteSupportSession {
   /// view-only session cannot become a control session without asking again.
   controlRequested Boolean @default(false)
   controlGranted   Boolean @default(false)
+
+  /// Everything beyond looking and typing, as two lists (Phases 11 and 12).
+  ///
+  /// ⛔ SEPARATE FROM controlRequested/controlGranted, NOT A REPLACEMENT FOR
+  /// THEM. Those two booleans are read by shipped, tested code and by the
+  /// consent route that is the only writer of controlGranted; widening them
+  /// into a list would rewrite the one decision this feature most depends on.
+  /// These carry clipboard and file transfer, which control does NOT imply.
+  ///
+  /// Values are drawn from REMOTE_CAPABILITIES in remoteSupport/controls.ts.
+  /// ⛔ "admin" is not among them and cannot be granted by this version.
+  capabilitiesRequested String[] @default([])
+  capabilitiesGranted   String[] @default([])
+
+  /// The customer's machine, when the desktop app identified itself.
+  /// A plain column, no FK — it is here so a device revocation can match.
+  deviceId String?
+
+  /// Reported by the customer's app on every heartbeat, so the technician's
+  /// screen budget can yield to a live phone call (Phase 37).
+  /// ⛔ Advisory to the encoder, never a permission.
+  clientOnCall Boolean @default(false)
 
   /// Why the admin needed in. Shown to the customer in the consent dialog
   /// verbatim — a support request the customer cannot understand is not
@@ -7600,11 +7727,15 @@ model RemoteSupportSession {
 
   tenant  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   signals RemoteSupportSignal[]
+  events  RemoteSupportEvent[]
 
   @@index([tenantId, status])
   @@index([targetUserId, status])
   @@index([requestedByUserId])
   @@index([status, expiresAt])
+  /// The rate limiter's own query: this actor's recent requests.
+  @@index([requestedByUserId, createdAt])
+  @@index([deviceId])
 }
 
 /// WebRTC signalling relay. Deliberately a table and not a socket: setting up

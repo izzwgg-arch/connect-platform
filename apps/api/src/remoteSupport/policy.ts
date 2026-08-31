@@ -109,12 +109,29 @@ export function sessionLapseReason(session: SessionFacts, now: Date): string | n
   // Heartbeats only bind once the session is live. Between consent and the
   // first beat there is a legitimate gap while the peer connection is built.
   if (session.status === "ACTIVE") {
-    const adminSilent =
-      !session.lastSeenAdminAt || now.getTime() - session.lastSeenAdminAt.getTime() > HEARTBEAT_STALE_MS;
-    const clientSilent =
-      !session.lastSeenClientAt || now.getTime() - session.lastSeenClientAt.getTime() > HEARTBEAT_STALE_MS;
-    if (clientSilent) return "customer_disconnected";
-    if (adminSilent) return "support_disconnected";
+    // ⛔⛔ A SIDE THAT HAS NEVER BEEN SEEN IS "NOT HERE YET", NOT "GONE SILENT",
+    // and conflating the two was a bug that killed roughly half of all sessions.
+    //
+    // The session flips to ACTIVE on the FIRST heartbeat from EITHER side. Under
+    // the old rule, the instant that happened the other side — which by
+    // definition had never beaten, so its `lastSeen*At` was still null — read as
+    // silent, and its very first heartbeat was refused with
+    // `support_disconnected` before it could ever record one. Whichever side
+    // arrived second could never join, and which side that was came down to a
+    // race between the customer's app and the technician's console.
+    //
+    // So an absent heartbeat is measured against `startedAt` instead: a side has
+    // the same grace window to ARRIVE that it would have to go quiet. The
+    // ceiling is unchanged — nobody gets longer than HEARTBEAT_STALE_MS — so a
+    // session still cannot outlive the window showing the customer's banner.
+    const sinceStart = session.startedAt ? now.getTime() - session.startedAt.getTime() : Number.POSITIVE_INFINITY;
+    const silent = (lastSeen: Date | null) =>
+      lastSeen ? now.getTime() - lastSeen.getTime() > HEARTBEAT_STALE_MS : sinceStart > HEARTBEAT_STALE_MS;
+
+    // ⛔ The customer is checked first on purpose. If both sides have gone, the
+    // useful thing to say is that the customer's machine went away.
+    if (silent(session.lastSeenClientAt)) return "customer_disconnected";
+    if (silent(session.lastSeenAdminAt)) return "support_disconnected";
   }
 
   return null;

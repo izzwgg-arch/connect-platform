@@ -373,3 +373,92 @@ test("⛔ every refusal reason has a real sentence — screens never print a slu
     assert.ok(!text.includes("_"), `${r} leaked a slug into the message`);
   }
 });
+
+/* ─────────────── the second-arrival deadlock (2026-08-31) ─────────── */
+
+/**
+ * ⛔⛔ A REAL BUG, FOUND BY DRIVING THE ROUTES RATHER THAN THE FUNCTIONS.
+ *
+ * The session flips to ACTIVE on the FIRST heartbeat from EITHER side. Under the
+ * original rule, the other side's `lastSeen*At` was still null at that instant
+ * and read as "silent", so its very first heartbeat was refused before it could
+ * record one. Whichever side arrived second could never join — decided by a race
+ * between the customer's app and the technician's console, so roughly half of
+ * all real sessions would have died immediately after consent with
+ * "The support connection dropped".
+ *
+ * These pin both halves: arriving late is fine, going quiet is not.
+ */
+const liveSession = (over: Partial<SessionFacts> = {}): SessionFacts => ({
+  id: "s1",
+  tenantId: "t1",
+  targetUserId: "customer",
+  requestedByUserId: "admin",
+  status: "ACTIVE",
+  controlRequested: true,
+  controlGranted: true,
+  expiresAt: new Date("2026-08-31T12:00:00Z"),
+  startedAt: new Date("2026-08-31T12:00:00Z"),
+  lastSeenAdminAt: null,
+  lastSeenClientAt: null,
+  ...over,
+});
+
+test("⛔⛔ the side that heartbeats SECOND can still join", () => {
+  const started = new Date("2026-08-31T12:00:00Z");
+  // The customer beat first, flipping the session live. The admin has not yet.
+  const s = liveSession({ startedAt: started, lastSeenClientAt: started, lastSeenAdminAt: null });
+  // One second later the admin arrives.
+  const now = new Date(started.getTime() + 1000);
+  assert.equal(sessionLapseReason(s, now), null, "the admin was locked out of a live session");
+});
+
+test("⛔⛔ and the same holds with the roles reversed", () => {
+  const started = new Date("2026-08-31T12:00:00Z");
+  const s = liveSession({ startedAt: started, lastSeenAdminAt: started, lastSeenClientAt: null });
+  const now = new Date(started.getTime() + 1000);
+  assert.equal(sessionLapseReason(s, now), null, "the customer was locked out of a live session");
+});
+
+test("⛔ a side that never arrives at all still ends the session at the deadline", () => {
+  const started = new Date("2026-08-31T12:00:00Z");
+  const late = new Date(started.getTime() + HEARTBEAT_STALE_MS + 1000);
+  // ⛔ The customer must be beating NORMALLY here, or the customer's own silence
+  // is what fires and the test proves nothing about the absent admin. (It caught
+  // me out exactly that way on the first pass.)
+  const s = liveSession({
+    startedAt: started,
+    lastSeenClientAt: new Date(late.getTime() - 1000),
+    lastSeenAdminAt: null,
+  });
+  // Past the grace window with no admin beat: the grace is a window, not a hole.
+  assert.equal(sessionLapseReason(s, late), "support_disconnected");
+});
+
+test("⛔ a side that arrived and then went quiet is still detected", () => {
+  const started = new Date("2026-08-31T12:00:00Z");
+  const s = liveSession({
+    startedAt: started,
+    lastSeenAdminAt: new Date(started.getTime() + 1000),
+    lastSeenClientAt: new Date(started.getTime() + 1000),
+  });
+  const later = new Date(started.getTime() + 1000 + HEARTBEAT_STALE_MS + 1);
+  assert.equal(sessionLapseReason(s, later), "customer_disconnected");
+});
+
+test("⛔ neither side ever gets longer than the stale window to arrive", () => {
+  const started = new Date("2026-08-31T12:00:00Z");
+  const s = liveSession({ startedAt: started, lastSeenAdminAt: null, lastSeenClientAt: null });
+  assert.equal(sessionLapseReason(s, new Date(started.getTime() + HEARTBEAT_STALE_MS - 1)), null);
+  assert.equal(
+    sessionLapseReason(s, new Date(started.getTime() + HEARTBEAT_STALE_MS + 1)),
+    "customer_disconnected",
+  );
+});
+
+test("⛔ a live session with no startedAt fails closed rather than running forever", () => {
+  // Should be impossible (consent stamps it), but if it ever happened the
+  // session must die rather than become immortal.
+  const s = liveSession({ startedAt: null, lastSeenAdminAt: null, lastSeenClientAt: null });
+  assert.equal(sessionLapseReason(s, new Date("2026-08-31T12:00:01Z")), "customer_disconnected");
+});

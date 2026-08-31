@@ -90,3 +90,18 @@ export * from "./jewishCalendar/holidayNames";
 export * from "./jewishCalendar/calendarView";
 export * from "./inviteEmailList";
 export * from "./deskPhoneSetup/index";
+
+/**
+ * The Coworker's diagnostic vocabulary.
+ *
+ * ⛔ ONLY the diagnostics half is re-exported here, deliberately — the policy,
+ * trust-boundary and redaction modules are the security core and are imported
+ * by their own path so that a consumer has to mean it. What remote support needs
+ * is the RESULT shape, so a technician can be shown what the AI already found.
+ *
+ * ⛔ Safe for the portal bundle because `packages/shared` declares
+ * `sideEffects: false` — the 2026-08-21 lesson, when 117 KB of holiday table
+ * shipped to every browser because webpack could not prove a module was pure.
+ */
+export * from "./coworker/diagnostics/signals";
+export * from "./coworker/diagnostics/rules";

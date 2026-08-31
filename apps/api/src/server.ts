@@ -2910,6 +2910,29 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // tenant's mode without holding the orders key.
   { prefix: "/supermarket", permission: "can_view_supermarket_orders" },
   { prefix: "/supermarket/mode", permission: null },
+  // ⛔⛔ REMOTE SUPPORT. Registered so the prefix MATCHES A RULE at all — without
+  // an entry the global preHandler runs for nothing, which is the
+  // /admin/wake-health class, on the most invasive capability on the platform.
+  //
+  // ⛔⛔ IT IS `null` (AUTHENTICATED ONLY) AND MUST STAY THAT WAY. Requiring
+  // `can_remote_support` here would 403 EVERY CUSTOMER: the person whose screen
+  // it is holds no key — they are the one being helped — and `/pending`,
+  // `/consent`, `/heartbeat`, `/signal`, `/chat` and `/end` are all called by
+  // them. The same reasoning as `/voice/diag` (2026-08-24): a self-report
+  // surface gated on a viewing permission silences exactly the people with the
+  // problem. Authorisation for these routes is per-route and per-participant in
+  // `remoteSupport/policy.ts`, which re-reads keys live on every call.
+  //
+  // ⛔ And it cannot be narrowed by sub-prefix either: `POST /remote-support/
+  // sessions` is staff-only while `POST /remote-support/sessions/:id/consent` is
+  // the customer answering, so any rule on `/remote-support/sessions` breaks
+  // consent. The split is by METHOD and PARTICIPANT, which a prefix cannot say.
+  { prefix: "/remote-support", permission: null },
+  // The EMERGENCY surface is a different thing with a different key, plus
+  // `requireSuperAdmin` inside every handler. Deliberately separated: the switch
+  // that turns remote support off must not be reachable by the people who use
+  // remote support. Longest prefix wins, so this beats the entry above.
+  { prefix: "/admin/remote-support", permission: "can_manage_global_settings" },
   { prefix: "/admin/integrations", permission: "can_manage_global_settings" },
   { prefix: "/admin/desk-phones", permission: "can_manage_global_settings" },
   { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
