@@ -254,6 +254,27 @@ there is a message."*
   READER wants, not the one the source states.** Anywhere a model summarises
   work for the person who asked for it, check that it cannot claim the work
   succeeded.
+  ⚠️ **TWO messages carrying that false claim really did reach a customer queue
+  before the gate landed — both on Connect Communications (Izzy's own tenant),
+  so no outside customer was misled.** `UXN2E6` was re-run through the corrected
+  gate and now reads honestly; **`T6HMUQ` had already been READ AND ANSWERED by
+  a person, so it was left as the record of what happened** — it is `answered`,
+  which the customer route does not serve, so it is no longer visible. ⛔ Deleting
+  the evidence of a mistake is worse than the mistake.
+  ⛔ **The reprocess recipe, if this is ever needed again:** set the row back to
+  `status: "draft"` and re-POST its stored `technicalReport` to
+  `/admin/support/escalations/:ref/agent-report`. **A `delivered` or `answered`
+  row is deliberately refused** by `recordAgentReport` — never rewrite something
+  a customer has already been shown — so the reset is the explicit, deliberate
+  step that allows it.
+- ⛔ **THREE ROUNDS OF LIVE RUNS EACH BEAT THE TEST SUITE**, which is the pattern
+  worth carrying: the gate passed a real agent report clean (round 1); it then
+  let *"a similar issue affecting multiple accounts"* through because the rule
+  matched only the past tense, and *"the issue has been addressed"* because the
+  banned-verb list covered the centre of the neighbourhood and not its edges
+  (round 3 — **a model reaches for a softer synonym the moment the obvious verb
+  is refused**). Final live result: **10 adversarial reports, 0 leaks, 8 ready /
+  2 correctly held.**
 - ⛔ **EVERY FAILURE ENDS IN `held`, NEVER IN A MESSAGE GOING OUT:** no OpenAI key,
   a model error, an empty rewrite, or any objection from the gate. A **platform
   alarm never becomes a customer message** (checked twice — at triage and again
