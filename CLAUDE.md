@@ -1993,6 +1993,40 @@ Memory: [[dnssec-blocks-a-nameserver-move]].
   `sed -i "/^TURNSTILE_SECRET_KEY=/d" /etc/loopcom/website.env`, append the new
   value, `systemctl restart loopcom-web`, and re-run the differential-refusal
   check above.
+- ✅✅ **THE CPNI NOTICE IS GONE FROM THE SITE (2026-08-31, Izzy's ask) — and the
+  deploy recipe it forced out is worth more than the change.** `/legal/cpni/`, its
+  footer link, its Legal-centre card and its `build.mjs` entry are removed; the two
+  pages that linked to it (the privacy policy and `/security/`) KEEP their CPNI
+  wording and lost only the dead link. Live over https: `/legal/cpni/` **404**,
+  `/legal/` + `/legal/accessibility/` + `/security/` **200**, sitemap **22 urls, 0
+  cpni**, `loopcom-web` `active` with **0 restarts**. ⚠️ **Stated, not acted on:
+  CPNI is an FCC duty and the compliance calendar still carries its 2027-03-01
+  recert — the NOTICE PAGE is gone, the OBLIGATION is not.** Rollback:
+  `/root/loopcom-dist-backup-20260831T113124Z.tar.gz` on the web server.
+- ⛔⛔ **THE WEBSITE HAS NO DEPLOY QUEUE AND NO DEPLOY SCRIPT — this is the whole
+  recipe, and it was written down nowhere until now.** Build locally (`cd website
+  && node build.mjs --check`), `tar -czf` the `dist/`, `scp` to **31.220.77.60**
+  (ssh host `website`, user root, key `.connect-ssh/loopcom_web_ed25519`), extract
+  to `/var/www/loopcom/dist.new`, `chown -R loopcom:loopcom`, then
+  `mv dist dist.old && mv dist.new dist`. ⛔ **No restart is needed and none
+  should be done** — `server.mjs` does a `readFile` PER REQUEST and serves html
+  `no-cache`, so the swap is live the instant it lands. Back up first:
+  `tar -czf /root/loopcom-dist-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz -C
+  /var/www/loopcom dist`.
+- ⛔⛔ **DIFF THE BUILT TREE AGAINST THE LIVE ONE BEFORE ANY SWAP — it caught a file
+  that existed ONLY on the server.** `comm -23` over `find . -type f | sort` from
+  both sides showed a live root **`/favicon.ico`** (692 b, hand-copied 2026-08-24)
+  that the build had NEVER emitted — while every page links it — so a straight swap
+  would have silently deleted the site’s favicon and nothing would have failed.
+  Fixed at the source (`website/public/favicon.ico`, byte-identical to
+  `assets/img/favicon.ico`), after which the ONLY difference was the CPNI page.
+  **Never swap a web root you have not diffed.**
+- ⛔ `website/dist/` is **gitignored**, so the built tree exists only locally and on
+  the server — “it is in git” is never proof of what the site is serving. And the
+  build’s own `--check` verifies internal links, so removing a page it links from
+  fails the build rather than shipping a dead link.
+
+
 
 ## ⛔⛔ AGENT HANDOFF — you can email a customer their sign-up link now, and read exactly what they did (2026-08-24) — READ FIRST before adding tracking to the onboarding wizard, before touching the invite email, before "resending" a sign-up link, or for "how far did that customer get?"
 
