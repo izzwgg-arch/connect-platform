@@ -382,10 +382,12 @@ Size everything."*, *"make sure the breakdown is really collapsible"*, and the a
   path shapes. ⛔ The login-gated route is UNTOUCHED (test-pinned).
 - ✅ **The wordmark sits INSIDE the card** (`PayCardTop.tsx` — the band with the
   secure-payment chip, on all four surfaces incl. add-card; `billing-pay-logo` is gone).
-  **The Sola mark is inline SVG now** (`SolaLogo.tsx`, GENERATED from the vendor file by
-  `scripts/portal-sola-logo.py` — never hand-edit 4 KB of path data): ring keeps
-  `#0047FF`, ink takes `currentColor` (white on dark — the old `<img>` was near-black on
-  the dark card and the `data-logo-theme` attribute it set was read by nothing).
+  ⛔ **The Sola mark is a DIFFERENT VENDOR FILE per theme (`2928ddea`, Izzy 2026-09-01:
+  "dark mode and light mode should have different sola logos")** — light renders
+  `sola-logo-positive-rgb.png`, dark renders `sola-logo-reverse-rgb.png` (white wordmark +
+  the same `#0047FF` ring; Sola ships the pair and their README forbids recoloring). The
+  earlier inline currentColor SVG and its generator `scripts/portal-sola-logo.py` are
+  DELETED — the guard now fails on any re-tint/filter fake of the reverse.
   **Card brands are vector marks** (`CardBrandMarks.tsx` — self-contained SVGs, no
   clipPath/`<use>` ids because the marks repeat per page and ids collide). Live brand
   detection rides Cardknox's own `onUpdate.issuer` (decoration ONLY — the mark beside
