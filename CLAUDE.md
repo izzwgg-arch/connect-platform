@@ -627,13 +627,38 @@ agent kicks open an agent in here on my computer."*
   at all on those four capabilities** (`permissionGrantCapability.ts` only tells a
   human "you can undo this under Roles"). **Build the undo first, when a ticket
   actually calls for one.**
-- ⏳ **NOT PROVEN: no REAL customer ticket has gone through the automatic path
-  yet** — both live proofs were drills, and the one genuine ticket ever worked
-  (`QP7APH`, 2026-08-28) was on the older, weaker build. **The acceptance test is
-  the next real "Report a problem"**: a report should appear in `reports/` within
-  a few minutes of the SMS. ⏳ It also only runs **while this computer is on** —
-  the cloud move is §26–§29 of the plan doc, and ⛔ §28's trap stands: the memory
-  dir lives outside the repo on this machine and does not travel with a deploy.
+- ✅✅ **PROVEN ON REAL TICKETS 2026-08-31 — 10 worked in one day, and 4 closed the
+  whole loop** (report → OpenAI rewrite → widget → customer verdict: XMQARY +
+  Y7FNA2 "fixed", T6HMUQ + UXN2E6 "not fixed"). Audited 2026-09-01.
+- ⛔⛔ **AND THE ALWAYS-ON FAILURE HAPPENED AGAIN THE SAME NIGHT: a Ctrl+C in the
+  watcher's console killed the watcher AND `run-watcher.cmd`** (the wrapper dies
+  with its console — its restart-after-crash covers a crashed CHILD, not a killed
+  console; the logon task then reads "Ready" and re-fires only at next logon).
+  Dead 20:25 Aug 31 → 14:31 Sep 1 (~18 h), 3 tickets stranded (9EFNKF cap-deferred,
+  DJH8XK, AFVGHU) — and **nothing alerted, because `status.mjs` is the alarm and
+  nothing runs it on a timer**. Restarted via `Start-ScheduledTask`; it picked up
+  9EFNKF within a minute — ✅ **cap-deferred tickets ARE retried when caps reset**.
+  ⛔ Tickets raised before the watcher's FIRST start are never examined (the
+  watermark persists across restarts) — 9QMRTR (08-31 02:20) is one. ⛔ Durable
+  fixes still unbuilt: a scheduled status.mjs watchdog → AgentEscalation on stale
+  heartbeat; a SERVER-side "escalation unworked > N hours" guardrail (catches every
+  PC-side failure); running the watcher windowless; the cloud move (§26–§29 of the
+  plan doc — the memory-dir trap in §28 stands).
+- ⛔⛔ **A "not fixed" VERDICT GOES NOWHERE AND THE CUSTOMER IS TOLD OTHERWISE.**
+  `POST /support/updates/:id/verdict` replies *"We've reopened it and someone will
+  pick it up"* while `recordVerdict` only stamps the row — no reopen, no re-queue,
+  no notification, and the watcher never reads verdicts. That is the
+  unearned-promise class the safety gate refuses, living in our own route. T6HMUQ
+  and UXN2E6 both ended there 08-31. Fix = honest wording, or a real reopen
+  (follow-up escalation with a loop cap) + a "needs a person" surface.
+- ⛔ **THERE IS NO ADMIN SCREEN FOR ANY OF THIS.** `SupportUpdate` has zero portal
+  surface (grep: only the customer widget's routes exist — the desk shows
+  escalations, never the maintenance loop, held rows, verdicts or watcher health,
+  which lives only on this PC). K3JG3K/ARH3P6/YACZXD were worked 08-31 BEFORE the
+  hand-back shipped, so their reports never reached the customer and no screen
+  shows that. Proposed "Maintenance" tab mockup (real 08-31 data):
+  <https://claude.ai/code/artifact/d7386a5d-1059-423d-915a-3b53cb413220> —
+  awaiting Izzy's word before building.
 
 ## ⛔ AGENT HANDOFF — every sidebar page has its own “In sidebar” switch on /admin/permissions now, SEPARATE from the role permission (2026-08-31) — READ FIRST before adding a nav item, before adding a SUPER_ADMIN force line to isNavItemVisibleForUser, or for “I granted the permission and it still doesn’t show in the sidebar”
 
