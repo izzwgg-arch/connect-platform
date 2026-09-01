@@ -2,6 +2,7 @@ import { db } from "@connect/db";
 import {
   backfillLegacyPageVisibility,
   crmLegacyPermissionKeysForAccess,
+  customRoleGrantsAccountOwner,
   expandLegacyPortalPermissions,
   isCrmPortalPermissionKey,
   type PortalPermissionKey,
@@ -93,8 +94,22 @@ async function resolvePortalPermissionsUncached(
   // weakened by a custom role), so platform owners can never lock themselves out.
   if (bucket !== "SUPER_ADMIN" && userId) {
     const customPerms = await loadCustomPerms();
-    const authoritative = computeAuthoritativePortalPermissions(bucket, customPerms);
-    if (authoritative) return authoritative;
+    // ── Account owner ────────────────────────────────────────────────
+    // A role carrying the owner key does NOT become authoritative-literal — it
+    // widens instead: the holder's base set becomes the LIVE TENANT_ADMIN
+    // bucket (so pages added to that bucket in the future reach owners with no
+    // re-save), then falls through to the ordinary CRM gating and the tail
+    // union of the role's explicit keys. ⛔ Never satisfy this from the
+    // holder's own bucket — a USER-jwt owner must still resolve TENANT_ADMIN.
+    if (customRoleGrantsAccountOwner(customPerms)) {
+      const ownerSet = await getEffectivePortalPermissionSetForJwtRole("TENANT_ADMIN");
+      if (ownerSet) {
+        portalPermissionSet = [...new Set([...portalPermissionSet, ...ownerSet])] as PortalPermissionKey[];
+      }
+    } else {
+      const authoritative = computeAuthoritativePortalPermissions(bucket, customPerms);
+      if (authoritative) return authoritative;
+    }
   }
 
   let crmTenantEnabled = false;

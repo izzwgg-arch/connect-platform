@@ -128,7 +128,30 @@ export const SIDEBAR_ITEMS = [
   { id: "settings.messaging", section: "settings", label: "Messaging Settings", href: "/settings/messaging", permission: "can_view_settings_messaging" },
 ] as const;
 
+/**
+ * ACCOUNT OWNER (Izzy, 2026-09-01): "a toggle in custom roles that is owner —
+ * if I turn it on, I give that role owner status so they have full admin
+ * status in their account."
+ *
+ * A custom role carrying this key makes the holder's effective portal
+ * permission set the UNION of the live TENANT_ADMIN bucket and the role's own
+ * explicit keys — computed at RESOLVE time, so pages added to the tenant-admin
+ * bucket in the future reach owners automatically (no re-save needed).
+ *
+ * ⛔ Portal permissions only. It does NOT change the holder's JWT role, so
+ * platform-staff surfaces (SUPER_ADMIN force lines, /admin/billing, the
+ * console family) stay closed — which is the point: owner of THEIR account,
+ * never of the platform.
+ */
+export const ACCOUNT_OWNER_PERMISSION_KEY = "can_act_as_account_owner";
+
+/** Does this custom-role permission list grant account-owner status? */
+export function customRoleGrantsAccountOwner(perms: readonly string[]): boolean {
+  return perms.includes(ACCOUNT_OWNER_PERMISSION_KEY);
+}
+
 export const ACTION_PERMISSION_KEYS = [
+  "can_act_as_account_owner",
   "can_view_dashboard",
   "can_view_team",
   "can_edit_team",

@@ -7,7 +7,12 @@ import {
   PORTAL_PERMISSION_KEYS,
   SIDEBAR_ITEMS,
 } from "@connect/shared";
-import { navItems } from "./navConfig";
+import {
+  OWNER_ONLY_FIXED_NAV_ITEMS,
+  OWNER_ONLY_LIFTABLE_NAV_ITEMS,
+  isNavItemVisibleForUser,
+  navItems,
+} from "./navConfig";
 
 /**
  * IZZY'S STANDING RULE, 2026-08-31, verbatim:
@@ -127,4 +132,64 @@ test("legacy sidebar keys are not dropped by the catalog switch", () => {
       `the orphan group must exist to carry: ${orphans.map((o) => o.permission).join(", ")}`,
     );
   }
+});
+
+/**
+ * THE HONESTY INVARIANT (Izzy, 2026-09-01: "I've turned on toggles for people,
+ * and they don't see it" — he had granted pages whose visibility is FORCED to
+ * platform staff in isNavItemVisibleForUser, and the matrix offered live
+ * toggles for them anyway).
+ *
+ * For EVERY sidebar page and EVERY jwt role a custom-role holder can have:
+ * granting the page's keys either actually shows the page, or the editor
+ * declares the gate on the row (Locked chip / launch-gated note / jwt note).
+ * A toggle that cannot take effect and says nothing is forbidden.
+ */
+test("no lying toggle: every togglable row is really visible when granted", () => {
+  const src = stripComments(read(CUSTOM_ROLE_PAGE));
+  const locked = new Set<string>(OWNER_ONLY_FIXED_NAV_ITEMS);
+  const launchGated = new Set<string>(OWNER_ONLY_LIFTABLE_NAV_ITEMS);
+  const notedIds = [...src.matchAll(/"([a-z0-9_.]+)":\s*"[^"]+"/g)]
+    .map((m) => m[1])
+    .filter((id) => id.includes("."));
+  const noted = new Set<string>(notedIds);
+
+  // The editor must actually mark the locked/launch-gated classes.
+  assert.match(src, /LOCKED_NAV_ITEMS/, "the editor must have a locked-row concept");
+  assert.match(src, /OWNER_ONLY_FIXED_NAV_ITEMS/, "locked rows must derive from the force-line list");
+  assert.match(src, /LAUNCH_GATED_NAV_ITEMS/, "launch-gated rows must be noted");
+
+  const liars: string[] = [];
+  for (const item of navItems) {
+    const granted = new Set<string>([item.permission, item.sectionPermission]);
+    const can = (perm: string) => granted.has(perm);
+    for (const jwt of ["TENANT_ADMIN", "USER"]) {
+      const visible = isNavItemVisibleForUser(item, can as never, jwt, null);
+      const declared = locked.has(item.id) || launchGated.has(item.id) || noted.has(item.id);
+      if (!visible && !declared) liars.push(`${item.id} (jwt ${jwt})`);
+    }
+  }
+  assert.deepEqual(
+    liars,
+    [],
+    `rows whose toggle cannot take effect and say nothing: ${liars.join(", ")}`,
+  );
+});
+
+test("locked rows never render a live toggle", () => {
+  const src = stripComments(read(CUSTOM_ROLE_PAGE));
+  assert.match(
+    src,
+    /const disabled = locked \|\| !itemGrantable \|\| !sectionOn;/,
+    "a locked row must disable its toggle",
+  );
+  assert.match(src, /Locked<\/span>/, "a locked row must carry the Locked chip");
+});
+
+test("the Owner toggle exists and the key is kept out of the generic action panel", () => {
+  const src = stripComments(read(CUSTOM_ROLE_PAGE));
+  assert.match(src, /ACCOUNT_OWNER_PERMISSION_KEY/, "the editor must render the owner toggle");
+  assert.match(src, /Owner — full access to their account/, "the owner card must exist");
+  const hidden = src.match(/HIDDEN_ACTION_KEYS[\s\S]*?\]\)/)?.[0] || "";
+  assert.match(hidden, /ACCOUNT_OWNER_PERMISSION_KEY/, "the owner key must not double-render as a generic action row");
 });

@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { AlertTriangle, ArrowLeft, Shield } from "lucide-react";
 import Link from "next/link";
 import {
+  ACCOUNT_OWNER_PERMISSION_KEY,
   SIDEBAR_SECTIONS,
   SIDEBAR_ITEMS,
   ACTION_PERMISSION_KEYS,
@@ -12,6 +13,8 @@ import {
 } from "@connect/shared";
 import {
   NAV_SECTION_ORDER,
+  OWNER_ONLY_FIXED_NAV_ITEMS,
+  OWNER_ONLY_LIFTABLE_NAV_ITEMS,
   navItems,
   navSectionMeta,
 } from "../../../../../navigation/navConfig";
@@ -148,7 +151,26 @@ const DANGEROUS_PERMISSIONS: Set<string> = new Set([
  *  - Legacy "view" keys superseded by the granular sidebar section/item keys
  *    above — visibility is driven by those, so these are dead duplicates here.
  */
+/**
+ * Sidebar pages whose visibility is FORCED to platform staff in
+ * isNavItemVisibleForUser regardless of any granted permission. Offering a
+ * toggle for them here is a toggle that lies — the save lands, the server
+ * grants the key, and the sidebar refuses anyway (the exact complaint of
+ * 2026-09-01: "I've turned on toggles for people and they don't see it").
+ * They render as Locked instead.
+ */
+const LOCKED_NAV_ITEMS = new Set<string>(OWNER_ONLY_FIXED_NAV_ITEMS);
+
+/** Pages hidden until the platform owner launches them (In-sidebar "Owner only" switch). */
+const LAUNCH_GATED_NAV_ITEMS = new Set<string>(OWNER_ONLY_LIFTABLE_NAV_ITEMS);
+
+/** Per-row honesty notes for gates a permission cannot open. */
+const NAV_ITEM_NOTES: Record<string, string> = {
+  "crm.diagnostics": "Only shows for admin accounts",
+};
+
 const HIDDEN_ACTION_KEYS: Set<string> = new Set([
+  ACCOUNT_OWNER_PERMISSION_KEY, // rendered as the dedicated Owner card, never a generic row
   "can_manage_call_forwarding",
   "can_manage_blfs",
   "can_edit_team",
@@ -449,6 +471,35 @@ export default function RoleEditPage() {
 
         {!loading && (
           <>
+            {/* Owner — full account access */}
+            {(() => {
+              const ownerGrantable = grantable.has(ACCOUNT_OWNER_PERMISSION_KEY as PortalPermissionKey);
+              const ownerOn = selectedPerms.has(ACCOUNT_OWNER_PERMISSION_KEY);
+              return (
+                <div className="panel" style={{ padding: "14px 16px", border: ownerOn ? "1px solid var(--accent)" : undefined }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <PermissionToggle
+                      checked={ownerOn}
+                      disabled={!ownerGrantable}
+                      title={!ownerGrantable ? "You cannot grant owner status" : "Owner — full access to their account"}
+                      onChange={(v) => togglePerm(ACCOUNT_OWNER_PERMISSION_KEY, v)}
+                    />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>
+                        Owner — full access to their account
+                        <span className="chip warning" style={{ fontSize: 10, marginLeft: 8 }}>Elevated</span>
+                      </div>
+                      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                        Everyone with this role gets every tenant-admin permission in their own account —
+                        including pages added in the future, with no re-save. The toggles below still add
+                        extras on top. It never grants platform-staff screens.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="panel" style={{ padding: "12px 16px" }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Permission Matrix</div>
               <div className="muted" style={{ fontSize: 12 }}>
@@ -492,7 +543,10 @@ export default function RoleEditPage() {
                         {items.map((item, idx) => {
                           const itemGrantable = grantable.has(item.permission);
                           const checked = selectedPerms.has(item.permission);
-                          const disabled = !itemGrantable || !sectionOn;
+                          const locked = LOCKED_NAV_ITEMS.has(item.id);
+                          const launchGated = LAUNCH_GATED_NAV_ITEMS.has(item.id);
+                          const navNote = NAV_ITEM_NOTES[item.id];
+                          const disabled = locked || !itemGrantable || !sectionOn;
                           const isDangerous = DANGEROUS_PERMISSIONS.has(item.permission);
                           return (
                             <tr
@@ -506,10 +560,12 @@ export default function RoleEditPage() {
                               <td style={{ padding: "9px 16px" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <PermissionToggle
-                                    checked={checked}
+                                    checked={locked ? false : checked}
                                     disabled={disabled}
                                     title={
-                                      !itemGrantable
+                                      locked
+                                        ? "Platform staff only — no permission can open this page"
+                                        : !itemGrantable
                                         ? "You cannot grant this permission"
                                         : !sectionOn
                                         ? `Enable the ${section.label} section first`
@@ -523,8 +579,24 @@ export default function RoleEditPage() {
                                       {isDangerous && (
                                         <span className="chip warning" style={{ fontSize: 10, marginLeft: 6 }}>Elevated</span>
                                       )}
+                                      {locked && (
+                                        <span className="chip" style={{ fontSize: 10, marginLeft: 6 }} title="Platform staff only — no permission can open this page">Locked</span>
+                                      )}
                                     </div>
                                     <div className="muted" style={{ fontSize: 10 }}>{item.permission}</div>
+                                    {locked && (
+                                      <div className="muted" style={{ fontSize: 10, fontStyle: "italic", marginTop: 2 }}>
+                                        Platform staff only — granting a permission cannot show this page
+                                      </div>
+                                    )}
+                                    {!locked && launchGated && (
+                                      <div className="muted" style={{ fontSize: 10, fontStyle: "italic", marginTop: 2 }}>
+                                        Hidden for everyone until the platform owner launches this page (Admin → Permissions → Owner only)
+                                      </div>
+                                    )}
+                                    {!locked && navNote && (
+                                      <div className="muted" style={{ fontSize: 10, fontStyle: "italic", marginTop: 2 }}>{navNote}</div>
+                                    )}
                                     {(SHARED_KEY_SIBLINGS.get(item.id) || []).length > 0 && (
                                       <div
                                         className="muted"
