@@ -1,0 +1,170 @@
+# AGENT HANDOFF — the customer pay page, rebuilt end to end (2026-08-31 → 09-01)
+
+Commit `7f79f4bd` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and proven on
+the LIVE page with a real customer's real invoices.** No migration, no PBX write, no env
+change, no tenant row touched, and **no money moved** — every probe was a GET; the one
+route that stamps anything (`invoice_link_opened`) was verified to have stamped nothing
+(YS Plumbing's `lastEmailStatus` is null, which the stamp branch skips).
+
+Approved mockup, updated in place to its as-built status:
+<https://claude.ai/code/artifact/2bba5d12-8a99-4d61-8879-beb40dc924f9>
+
+Izzy, 2026-08-31, in sequence: *"The words are jumping off the page. The dropdown fields
+are overlapping each other… it should adjust itself to any screen… show me a mockup
+before you build anything: Light Mode and Dark Mode."* → *"they should be able to open the
+invoice from in there as well. There should be a breakdown as much as possible."* →
+*"I wanted to have the real Sola logo… the real logo on it as well, the Loopcom logo, and
+should be in the same card, not on top."* → *"copy the iFields the way it is right now. We
+worked hard to adjust it… Size everything."* → *"make sure the breakdown is really
+collapsible."* → the approval: *"Exactly on the duct like the markups. It's perfect. Do it
+on the dot like the mock cups."*
+
+## §1 — The six faults of the old page (all read from source, then fixed)
+
+1. `pay-invoice.css` pinned every form field to `grid-column: 1|2` — a hand-assigned
+   two-column checkerboard whose order carried no meaning.
+2. City/State/ZIP shared ONE 1fr column of a 660px card (~90px each); so did Month/Year.
+3. DOM order was cardholder → expiry → email → address → card number → CVV — the two
+   secure fields in different rows on opposite sides.
+4. The total printed twice (`$90.00`, then `USD $90.00` under it).
+5. No breakdown anywhere — the single-invoice route LOADED `lineItems` and the page never
+   rendered them; the combined loader did not `include` them at all.
+6. `PaymentTrustBadge` rendered the card brands as `<b>Visa</b>` coloured with CSS.
+
+Plus two the mockup could not see, found only by driving the BUILT page (§5).
+
+## §2 — What shipped, file by file
+
+**api (`apps/api/src/billing/`):**
+- `publicInvoiceView.ts` (NEW) — the ONE public projection. `publicInvoiceLines` drops
+  line-item `metadata` (internal ids must not ride an unauthenticated response);
+  `publicInvoiceTotals` deliberately emits NO `totalCents` (every caller has its own —
+  a spread would silently overwrite it; TS2783 caught exactly that once).
+- `publicPayRoutes.ts` — pay-multi loader now includes `lineItems`; both view routes
+  project through the shared helper; TWO new token-scoped PDF routes
+  (`…/pay/:token/pdf`, `…/pay-multi/:token/invoice/:invoiceId/pdf`).
+- `payLinkRoutes.ts` — the pay-link row gains `invoiceId`, `issueDate`, sub-totals and
+  `lineItems` (its loader had always fetched them and the row dropped them); a third
+  PDF route (`…/pay-links/:code/invoice/:invoiceId/pdf`).
+- `billingInvoicePdfAccess.ts` — `sendBillingInvoicePdf` gains `{download}`: attachment
+  vs inline disposition. Default stays inline; every old caller byte-identical.
+
+**portal (`apps/portal/`):**
+- `components/billing/PayInvoiceList.tsx` (NEW) — the collapsible breakdown, native
+  `<details>/<summary>`, one component for all three pay surfaces. UTC dates (§5).
+- `components/billing/PayCardTop.tsx` (NEW) — the wordmark INSIDE the card + the
+  secure-payment chip, one component for all four surfaces.
+- `components/billing/CardBrandMarks.tsx` (NEW) — vector acceptance marks
+  (self-contained SVGs — no clipPath/`<use>` ids, they repeat per page and ids collide),
+  `detectCardBrand` / `cardBrandFromIssuer` / `cvvLengthForBrand` (decoration only).
+- `components/billing/SolaLogo.tsx` — REGENERATED as inline SVG from the vendor file by
+  `scripts/portal-sola-logo.py` (never hand-edit the 4 KB ink path). Ring `#0047FF`,
+  ink `currentColor` → white on dark. The old `<img>` was near-black on the dark card
+  and its `data-logo-theme` attribute was read by no stylesheet, ever.
+- `components/billing/PaymentTrustBadge.tsx` — three labelled trust panels; the text
+  brands became `CardBrandRow`.
+- `components/billing/CardknoxIFieldsForm.tsx` — field ORDER only: card number (with the
+  live brand mark), Month · Year · CVV in one row, name, email, bordered address group.
+  `onUpdate` wired for the issuer. **`ifieldOptions` values byte-identical**; the two
+  per-field option objects are memoised for identity so a re-render can't hand the
+  iframe a new object.
+- `app/pay/invoice/[token]/pay-invoice.css` — the layout rewrite: one column, the two
+  sub-grids, the group boxes, the breakdown accordion, the brand-mark states, the
+  one-height rule (`--pay-field-h: 48px`), breakpoints 640/480/430.
+- `app/globals.css` — group-wrapper rules for the NON-pay surfaces (admin drawer, desk),
+  scoped `.billing-form:not(.billing-pay-form)` so the pay pages keep their own layout.
+- The four pages (`pay/invoices/[token]`, `pay/invoice/[token]`, `p/[code]`,
+  `(platform)/billing/payments/add-card`) — PayCardTop, single-statement amount,
+  PayInvoiceList wiring, dead helpers removed.
+
+## §3 — The rules that must not be unlearned
+
+- ⛔⛔ **The iFields options are frozen.** All 21 keys pinned byte-for-byte by
+  `payPageRedesign.test.ts`. They style type inside a cross-origin iframe nothing else
+  can reach; a drift is invisible until a live card field looks wrong.
+- ⛔ **Never pass the detected `issuer` into the CVV `<IField>`** — a prop change on a
+  live iframe mid-entry risks clearing a typed CVV. The digit hint is our label.
+- ⛔⛔ **One field height, 48px outside** — the frozen 46px iframe plus our 1px border
+  each side. ConnectSelect ships 36px and globals' admin host is 42px; the pay page
+  out-specifies both under `.billing-pay-page`. Fix mismatches OUR side, never the iframe.
+- ⛔⛔ **A PDF route serves only invoice ids its own token names** — membership check
+  BEFORE the DB read, then tenant-scoped `findFirst`. Proven live with the negative.
+- ⛔ **No `jwtPublicRouteBypass.ts` change was needed** — all three PDF paths sit under
+  prefixes already bypassed. A test pins all six shapes anyway, because a path that
+  falls off the bypass 401s before its handler and reads as a broken link.
+- ⛔ **The public projection never carries line-item `metadata`.**
+
+## §4 — Traps hit while building (each cost a round)
+
+- **The heredoc trap, twice more.** A `cat > file <<'EOF'` with the mockup's CSS died on
+  quoting; the CLAUDE.md patch heredoc died the same way. Both were rewritten through
+  the editor. (Documented in CLAUDE.md several times; it still bites.)
+- **`import.meta` is TS1343 in apps/api** (CommonJS) — the api guard test uses
+  `__dirname`. The portal (bundler resolution) takes `fileURLToPath(import.meta.url)`.
+- **`_`-prefixed app folders are PRIVATE in Next** — `app/pay/_preview` never routed
+  (404 forever); renamed to `preview-local` for the session, then deleted. Its stale
+  `.next/types` entry then read as a typecheck regression until removed.
+- **Two of my own guards were wrong on first run**: a key-count that missed the
+  top-level options, and a negative `clipPath` match that hit the comment explaining
+  why there is no clipPath (the comment-match trap, again). Fixed the tests.
+- **The registration anchor**: apps/api names billing test files EXPLICITLY; the JSON
+  edit had to match the escaped string inside package.json, not the bare filename.
+
+## §5 — The two defects only the BUILT page could show
+
+1. **Dates rendered a day early.** `toLocaleDateString` with no timeZone formats the
+   stored UTC-midnight calendar date in the reader's zone — "Due Jul 9" on an invoice
+   whose PDF says Jul 10, for everyone west of UTC. All pay-page dates now pin
+   `timeZone: "UTC"`, matching `billing/pdf.ts`.
+2. **The reported "overlapping dropdowns" was ConnectSelect's `min-width: 160px`.**
+   At 320px the Year trigger overflowed the card by 6px onto its neighbour. The mockup
+   used plain selects and could never reproduce it. Every grid child on the form now
+   carries `min-width: 0`. Measured fixed: expiry cells 125/125/262 at 320px, zero
+   elements outside the card.
+
+## §6 — Deploy record + the .build-commit gotcha
+
+- api: `deploy-direct.sh api --branch feat/ivr-migration-takeover`, blue/green complete,
+  `verify: container commit 7f79f4bd3602 matches target`, 0 restarts, health 200 both
+  hostnames. The one error-level line after boot was the pre-existing pino
+  `dispatchAgentEscalationsBatch` TypeError — unrelated to billing.
+- portal: same route, `done 7f79f4bd`, full rollout (candidate → cutover → stable
+  recreate → drain).
+- ⛔ **Both containers NOW read `.build-commit = 875bd560`** — the remote-support
+  session deployed later that night pinned to their commit. **`875bd560` is a
+  DESCENDANT of `7f79f4bd`** (`git merge-base --is-ancestor 7f79f4bd 875bd560` → yes),
+  so the redesign is inside it. The authoritative check is the container grep:
+  `billing-pay-cardtop` in the shipped CSS, `billing-pay-invoice[open]`, the
+  "Open full invoice" chunk — all present.
+
+## §7 — Live proof (2026-09-01, production)
+
+- Bogus tokens: all three PDF routes + the combined view answer their handlers' own
+  refusals (410/404), not the JWT hook's 401.
+- Real tokens (minted inside `app-api-1` with `createBillingMultiPayToken` /
+  `createBillingInvoicePayToken` against YS Plumbing's OPEN invoices):
+  - combined PDF → 200 `application/pdf`, `inline; filename="CC-202608-00025.pdf"`,
+    144,858 bytes, `%PDF` magic; `?download=1` → `attachment`.
+  - single-token PDF → 200 `%PDF`.
+  - **negative**: the same valid token asked for ANOTHER tenant's invoice id → 404.
+  - combined view → invoiceId, issueDate, period, sub-totals, lineItems all present.
+- The deployed PAGE, opened with the real token: YS Plumbing, "Pay $43.26", 2
+  collapsible invoices with real line items (Virtual extensions $20.00 + Sales tax
+  $1.63 = $21.63 — exactly their billing config), 4 PDF links, real Cardknox iframes
+  from `cdn.cardknox.com/ifields/3.4.2602.2001` at 46px inside 48px hosts, 3 trust
+  panels, real Sola vector, 4 brand marks, zero horizontal overflow at 760/390/320,
+  light and dark both rendered and screenshotted.
+- Data hygiene: `lastEmailStatus` on both probed invoices is still null — the
+  link-opened stamp never fired (it requires QUEUED/SENT/SMS_SENT).
+
+## §8 — What is still open
+
+- ⏳ **Nobody has PAID through the new page** — the charge path is untouched code, but
+  the acceptance test is the next real customer payment (decline included).
+- ⏳ Save-card default stays UNTICKED (mockup showed ticked; flipping turns on autopay —
+  Izzy's call, one line in each pay page's `useState(false)`).
+- ⏳ A styled WEB invoice view (instead of the PDF) remains an option, not built.
+- ⏳ The supermarket desk and admin drawer re-render fine under the new order (guards +
+  typecheck), but no human has driven a card save on them since.
+- ⏳ The mockup's side-by-side phone frames and interactive widgets remain in the
+  artifact for reference; the artifact now states the as-built status.
