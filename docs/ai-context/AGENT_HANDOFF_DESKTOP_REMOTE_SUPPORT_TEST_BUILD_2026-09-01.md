@@ -184,11 +184,65 @@ been touched. Do not upload it.
 
 ---
 
+## 6b. ✅ INSTALLED ON IZZY'S WORKSTATION — 2026-09-01 15:26Z
+
+Installed silently (`/S`, exit 0, 20.4 s) at his explicit request. Verified from
+the machine, not from the exit code:
+
+- `Loopcom.exe` → `FileVersion 0.1.17-rc.1`, `CompanyName Loopcom LLC`.
+- The uninstall registry entry now reads **0.1.17-rc.1**.
+- The installed `app.asar` carries every marker: the IPC channels,
+  `--connect-remote-support=1`, `setDisplayMediaRequestHandler`, the tray label,
+  and the coworker bubble.
+- Log banner `=== log start v0.1.17-rc.1 win32 ===`, user agent
+  `Loopcom/0.1.17-rc.1`, **zero error lines** on that launch.
+
+⛔⛔ **THE GATE IS PROVEN OFF ON THE LIVE PROCESS, NOT INFERRED.** Electron puts
+`additionalArguments` into each renderer's command line, so it can be read from
+outside the app: of **6 running Loopcom processes, 0 carry
+`--connect-remote-support=1`**, while `--connect-window-kind=full` IS present on
+the renderer. That second half is the non-vacuity control — it proves argv is
+readable, so the flag's absence is the gate working rather than an empty
+command line. His `settings.json` (which predates the key entirely) still has no
+`remoteSupportEnabled`, which is exactly the shape every customer's file has.
+
+**What the install replaced, and this matters:** his machine was running
+**0.99.0** — the leftover local build from 2026-08-31, whose asar had the
+coworker bubble and **zero** remote-support markers. ⛔ Its uninstall entry still
+read `0.1.16` while the exe read `0.99.0`, so it had been put there by copying
+rather than by running an installer. That machine could never have auto-updated
+(0.1.16 < 0.99.0); **this install fixed that wedge as a side effect** and the
+registry is consistent again.
+
+⚠️ **Also found installed: "Loopcom Support 0.0.2"** — the separate
+`apps/desktop-support` app really is on that machine (not running). So the
+statement "no installer anywhere contains the remote desktop" was **wrong for
+this workstation**; what was true is that it was never in the CONNECT app and
+was never published to customers.
+
+⚠️⚠️ **PRE-EXISTING AND NOT CAUSED BY THIS BUILD: the softphone logs
+`[SipPhone][conn] init-failed` on startup and repeatedly afterwards.** Checked
+against the previous launch before reporting: the **0.99.0** launch at 03:38Z
+shows the identical pattern (init-failed at +4 s, then again at 03:39:50,
+03:41:54, 03:45:41). ⛔ Do not read this as a regression from the remote-support
+lift. The documented cause is almost certainly the account fact already recorded
+in CLAUDE.md — the SUPER_ADMIN login (`izzywgg@gmail.com`) sits on
+`connect-admin-tenant-v1`, which has **no PBX link and no extension**, so it
+structurally cannot register; his phone identity is the separate Landau Home
+login. **Confirm which account that window is signed into before treating it as
+a fault.**
+
+⛔ **The silent install did NOT relaunch the app** — `/S` closed Loopcom and left
+it closed, so the phone was down until it was started by hand. Budget for that,
+or launch it explicitly, when installing on a machine somebody is using.
+
+---
+
 ## 7. ⏳ NOT PROVEN — and this is the whole remaining gap
 
-**Nobody has run the installer, and no remote support session has ever taken
-place between two machines.** Everything above is the artifact and the tests; not
-one pixel of a shared screen has crossed a wire through the Connect app.
+**Remote support has still never been switched on, and no session has ever taken
+place between two machines.** The build is installed and the OFF state is proven;
+not one pixel of a shared screen has crossed a wire through the Connect app.
 
 **Acceptance test, and it needs TWO machines:**
 
