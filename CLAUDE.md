@@ -243,6 +243,31 @@ for all permissions. Always, always, always.”*
   first time. ⏳ **NOT PROVEN: nobody has opened the screen or saved a custom
   role since.** ⛔ An open tab or desktop window keeps the OLD bundle — the
   desktop app needs a full close + reopen, tray included.
+- ⛔⛔ **“I turned on toggles and they don't see it” (2026-09-01) WAS TWO THINGS,
+  and neither was the save.** The EZra save landed (PUT 200, 105 keys) and the
+  deployed resolver hands every holder exactly those keys — 46 pages show on a
+  fresh load. What stayed hidden: **(a)** pages force-lined to platform staff in
+  `isNavItemVisibleForUser` while the matrix offered LIVE TOGGLES for them — a
+  toggle that lies; **(b)** holders on stale sessions (an open window re-reads
+  `/me` only on mount — reload, or fully reopen the desktop app).
+  ✅ Fixed (`bbb6be8c`): rows in `OWNER_ONLY_FIXED_NAV_ITEMS` render a **Locked**
+  chip + disabled toggle; `OWNER_ONLY_LIFTABLE` rows say they stay hidden until
+  the owner launches them; `crm.diagnostics` notes its admin-account gate. The
+  **honesty invariant** is a test now: for every page × every holder jwt,
+  granting the page's keys either really shows it (simulated through
+  `isNavItemVisibleForUser`) or the row declares its gate.
+- ✅ **THE OWNER TOGGLE EXISTS (`bbb6be8c`, Izzy's ask): a custom role carrying
+  `ACCOUNT_OWNER_PERMISSION_KEY` (`can_act_as_account_owner`) resolves to the
+  UNION of the LIVE TENANT_ADMIN bucket and the role's own keys**, computed at
+  resolve time — pages added to the tenant-admin bucket later reach owners with
+  no re-save. ⛔ Portal permissions ONLY — it never changes the JWT role, so
+  platform-staff surfaces (SUPER_ADMIN force lines, /admin/billing, the console
+  family) stay closed, and jwt-role-gated routes still refuse a USER jwt.
+  ⛔ The owner branch FALLS THROUGH to the ordinary CRM gating instead of
+  returning the literal set, and runs BEFORE the authoritative-literal branch —
+  both source-guarded (`accountOwnerGrant.test.ts`, 7 tests). In no default
+  bucket; deliberately NOT platform-protected, so an account owner may delegate
+  ownership of their own account.
 - ✅ **Enforced, not remembered:
   `apps/portal/navigation/permissionToggleCoverage.test.ts`** (registered; 6
   tests, **3 fail replayed against the pre-fix HEAD** via `PORTAL_GUARD_ROOT`).
