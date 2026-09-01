@@ -1392,6 +1392,56 @@ change, no email sent.** Window 2026-08-20 17:44Z → 2026-08-27 17:44Z.)
   `ConnectChatMessage` with `emailForwardedAt is null` older than 35 min = a lost
   text email. **Both read 0 today.**
 
+## ⛔⛔ AGENT HANDOFF — Relax Tires round 2: "vibrating but no incoming call until I opened the app" is ANDROID DELAYING THE RING PUSH 7–29 s, and the cell-forward backup is GONE (2026-09-01) — READ FIRST for any repeat of this report, before blaming the push senders, or before touching ext 101's dial string
+
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.**
+Same tenant/user/device as the 08-27 section below: tenant `cmnlgryme000up9paz1w40fg0`,
+PBX T25 ext 101, `relaxtires@gmail.com`, Samsung SM-S938U on T-Mobile, fleet APK
+`1.0.0+20260823-175041` — current, do not tell him to update.)
+Memory: [[relax-tires-app-ring-is-a-client-side-question]] (updated in place).
+
+- ⛔⛔ **THE HEADLINE, measured from the device's own `pushReceivedAt` against the invite's
+  `createdAt`: the ring push reaches his phone 7.5–29 SECONDS after the invite, and our side
+  is proven fast** — on the 09-01 13:43Z call the api handed INCOMING_CALL to Google **3 s**
+  after the invite (`[CALL_TIMELINE] PUSH_SEND` + `FCM_DIRECT_DELIVERED` in the api log), the
+  device received it 4.4 s later. **The delay is Google→device**, almost certainly the same
+  connectivity flap that rebuilds his SIP stack every ~14 min (361 registration events in
+  19 h, T-Mobile CGNAT) also killing FCM's socket, so pushes wait for the phone's reconnect.
+- ⛔⛔ **THE COMPLAINT DECODED, on the 08-31 19:52Z call (invite `cmthnn0xc…`):** caller rang
+  31.6 s and hung up; the push landed on the phone at 19:52:37 — **2.6 s before the cancel** —
+  so the notification buzzed and was immediately (correctly) dismissed by the cancel push.
+  That near-instant buzz-and-vanish IS "vibrating with no incoming call". He opened the app at
+  ~19:53:05 and `pending_call_native.json` replayed the dead invite's ring screen (`UI_SHOWN`
+  logged 25 s AFTER the cancel) — "I only saw the call when I opened the app", literally true.
+  The caller's retry (19:52:54) was DECLINED 1.3 s after its own late push arrived — likely a
+  tap on the stale screen. Two more calls (20:02, 22:04, both canceled after 41 s/32 s) left
+  **ZERO device telemetry** — push deferred past the ring entirely. **12 CANCELED invites in
+  7 days** on this tenant; this is not twice.
+- ⛔⛔ **THE CELL-FORWARD LEG (845-512-9339) WAS REMOVED FROM EXT 101'S DIAL STRING ~08-27/28**
+  (last CDR to it 2026-08-27T22:02Z; AstDB dial key now
+  `PJSIP/T25_101&Local/T25_101_1@connect-mobile-wake-dial/n` — dead desk + app wake-dial only).
+  The 08-27 recommendation was app-first-THEN-cell, not removal. **With it gone there is no
+  backup path: a deferred push is now a fully missed call**, where in August the cell caught
+  it. That removal is exactly why he started noticing this week. Restoring a delayed cell leg
+  is a PBX write — Izzy's call.
+- ⛔ **The stale duplicate `MobileDevice` row (`cms4omoi01jmoro12bzrood5x`, lastSeen 08-23) is
+  STILL active and now provably dead: FCM answers `NotRegistered` (404) for it on EVERY push**,
+  after which the sender falls back to Expo (which accepts the ticket for the dead token). One
+  doomed FCM attempt + one pointless Expo send per push, forever, and it keeps the row's
+  `updatedAt` moving so it never looks abandoned. Flagged 08-27 and again now — deactivating
+  it is a one-row update needing Izzy's word.
+- ✅ **What worked today (09-01 13:43Z), for calibration:** prewake at IVR entry woke the phone
+  and it registered in **2 s** (`DEVICE_REGISTERED`); ring push server→Google 3 s, on-device
+  4.4 s later; the app **cold-started** (`SESSION_START` right after `UI_SHOWN`), ring UI at
+  ~10 s, answered at 14 s, 3-minute conversation. So when FCM's socket is alive the chain is
+  healthy — the failures are the calls that land while the socket is dead.
+- ⛔ **What the server cannot see is still the 08-27 gap:** whether the notification RENDERED
+  for the 20:02/22:04 calls is logcat-only (`emitCallFlowNative` never uploads). Do not claim
+  the notification showed or didn't for a call with no telemetry.
+- ⏳ **Remedies, none applied (his phone, his call):** on the handset — Loopcom battery =
+  Unrestricted, Samsung "Never sleeping apps", full-screen-notification permission (the exact
+  class for this device); decide on a backup ring leg; deactivate the dead device row.
+
 ## ⛔⛔ AGENT HANDOFF — Relax Tires "it only rang my cell, not the app": the PBX rang the app on EVERY call for 24 days, and the app rebuilds its SIP stack every 10 minutes (2026-08-27) — READ FIRST for ANY "the app didn't ring" report, before trusting a VoiceDiagEvent gap, or before moving a cellular tenant to the 443 route
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_RELAX_TIRES_APP_RING_2026-08-27.md`**
