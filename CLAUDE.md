@@ -11943,10 +11943,14 @@ Memory: [[blank-app-means-check-the-ban-first]], [[prefetch-must-fit-its-cache]]
 ## ⛔⛔ AGENT HANDOFF — remote support grew a KILL SWITCH, capability tiers and a transcript; attacking it found a bug that would have killed HALF of all sessions (2026-08-31) — READ FIRST before touching `apps/api/src/remoteSupport/`, before gating `/remote-support` on a permission, before adding a gate to the `end` route, or before quoting a concurrent-session capacity
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_HARDENING_2026-08-31.md`**
-(`b29d8240` + the `events.ts` NUL fix + `a3a3da07` on `feat/ivr-migration-takeover`.
-⛔ **NOT DEPLOYED, MIGRATION NOT APPLIED, NO HUMAN HAS RUN A SESSION.** No api
-deploy, no portal deploy, no desktop build. Every claim below is tests,
-typechecks and generated DDL.)
+(`b29d8240` → `a3a3da07` → **`875bd560` the screens**, on `feat/ivr-migration-takeover`.
+✅ **api + portal DEPLOYED and container-verified 2026-09-01** — both
+`.build-commit` = `875bd5606a95`, 0 restarts, 0 error-level lines, health 200 on
+both hostnames, all five new screen strings in the shipped `.next`. **Migration
+`20260831120000_remote_support_controls` applied 2026-08-31 13:11:20Z**, read
+back from the live DB: 3 new tables, 4 new columns, `rolled_back_at` null,
+`RemoteSupportSession` **0 rows**. ⛔ **NO HUMAN HAS OPENED A SCREEN AND NO
+SESSION HAS EVER RUN BETWEEN TWO PEOPLE.** No desktop build.)
 
 - ⛔⛔ **THE BUG THAT MATTERS, AND IT WAS INVISIBLE TO EVERY UNIT TEST: whichever
   side heartbeat SECOND could never join.** A session flips to `ACTIVE` on the
@@ -12029,12 +12033,76 @@ typechecks and generated DDL.)
   <https://claude.ai/code/artifact/8c634f18-4501-436f-8f0e-e1ac1c9a23d7>);
   cryptographic device identity and presence (Phases 3/4 — `deviceId` is recorded
   and revocable but is self-reported, an identifier not an attestation);
-  clipboard/file **transport** (the tiers, refusals and audit exist, the data
-  channel does not); TURN/relay for remote support (**media is direct-P2P only,
-  so a doubly-firewalled pair will fail to connect**); remote terminal; session
-  recording. ⛔ And the desktop half still lives in **`apps/desktop-support`**, an
-  app that has never shipped — lifting it into `apps/desktop` is the remaining
-  packaging work.
+  clipboard/file **transport** (the tiers, refusals, the customer's question and
+  the audit all exist; the data channel that would carry the bytes does not);
+  remote terminal; session recording. ⛔ And the desktop half still lives in
+  **`apps/desktop-support`**, an app that has never shipped — lifting it into
+  `apps/desktop` is the remaining packaging work.
+- ⛔ **CORRECTION (2026-09-01): remote support is NOT direct-P2P only — an
+  earlier version of this section said so and it is wrong.** `RemoteSupportPeer`
+  fetches **`/voice/ice-servers`** and builds its `RTCPeerConnection` with
+  whatever that returns, so it already inherits the platform's **coturn TURN**
+  with the same HMAC time-limited credentials the softphone uses; a
+  Google STUN server is only the fallback when that call fails. **Do not go
+  looking for a missing relay** — a doubly-firewalled pair relays like any call.
+
+- ⛔⛔ **BUILDING THE SCREENS (`875bd560`) PROVED THREE SERVER PROTECTIONS DEAD.
+  All three were correct, tested and deployed — and unreachable, because nothing
+  ever called them. Each is a CALLER-side omission, which a test of the policy,
+  the route or the service passes straight through.**
+  **(1) NON-NEGOTIABLE RULE 15 WAS ENFORCED AGAINST AN INPUT THAT NEVER ARRIVED.**
+  `decideMediaBudget` returns the small on-call budget the moment `callInProgress`
+  reads true, and a grep of the whole portal found that field in exactly two
+  places — the service function's own signature and its return type. **Nobody set
+  it**, so "remote support yields to an active phone call" could not happen.
+  ⛔ Only the CUSTOMER's machine knows a call is up; it now supplies it, via
+  **`useOptionalSipPhone()`** (⛔ the *optional* hook — this component is mounted
+  globally, including outside the SIP provider) and through a **ref**, because
+  the peer's closure is built once and the interesting case is a call that starts
+  *later*.
+  **(2) THE ADAPTIVE BUDGET HAD NO NUMBERS** — `packetLoss >= 0.03 || rtt >= 300`
+  chooses the constrained budget and neither was ever sent. The peer now reads its
+  own `getStats()`. ⛔ **Loss is a DELTA between beats, never a lifetime ratio**
+  (a lifetime figure is dominated by the first seconds and keeps the encoder
+  clamped long after recovery), and a sample **under 30 packets reports nothing**
+  — one lost packet in three is noise, not 33% loss.
+  **(3) THE MID-SESSION ASK REACHED NOBODY.** A technician could ask for the
+  clipboard or a file, the server recorded it, and **the customer was never shown
+  the question** — `answerCapability` existed and no screen called it, so the
+  rail would have waited forever. The ask is **derived** on the customer's side
+  from requested-minus-granted, so a refresh or a reconnect reaches the same
+  answer and a dropped message cannot lose it.
+  ✅ **Guarded by `apps/portal/lib/remoteSupportWiring.test.ts` (registered, reads
+  SOURCE because the defect is a missing call site): 15 tests, and ALL 15 FAIL
+  replayed against `HEAD`.**
+- ⛔ **The rail draws tools from `granted`, NEVER from `requested`** — asking is a
+  button, being allowed is a fact from the server, and `requestCapability`
+  deliberately returns `granted` unchanged so a screen cannot render a request as
+  success. **Administrator windows are DRAWN as unavailable rather than omitted**
+  (Windows silently refuses injected input to elevated windows, so a technician
+  offered it would watch clicks do nothing on a UAC prompt and blame us). The
+  connection readout has a **third state** — *Measuring…* — because stats need two
+  samples and a green light meaning "we have not looked yet" is the reading
+  somebody trusts while a customer struggles. And the customer is told **why** the
+  picture softened, or they conclude remote support broke their phone.
+- ⛔⛔ **THE PERMISSION MODEL IS PROVEN LIVE WITH REAL ACCOUNTS, and the first row
+  is the check that matters most** — a wrong rule here 403s **every customer's
+  consent flow**: `/remote-support/pending` → **200 for an ordinary customer**,
+  200 for SUPER_ADMIN; `/admin/remote-support/controls` → **403 for the customer**,
+  200 for SUPER_ADMIN (`enabled:true`). Re-run it after any change to the rules.
+  ⛔ **A 401 without a token proves NOTHING about whether a route exists** (the JWT
+  hook runs before routing) — my first probe used an invented path and got a clean
+  401 unauthenticated and a **404** with a real token. The path is
+  **`/remote-support/pending`**, not `/remote-support/sessions/pending`.
+- ⛔ **The api deploy logged `prisma: no schema/migrations changes -> skipping
+  migrate deploy` and that was CORRECT** — the schema landed in an earlier commit
+  already an ancestor of the previous container build. **Never read that line as a
+  skipped migration; read `_prisma_migrations`.**
+- ⛔ **The native-dropdown sweep flagged the COMMENT explaining its own rule** —
+  the sixth time this trap has been hit here. **The guard was NOT weakened**: it
+  drops only comment-shaped LINES and deliberately has no block-stripper, because
+  one opening a fake comment at a regex literal would turn a negative assertion
+  into a **false PASS**. The prose was reworded instead.
 
 ## ⛔⛔ AGENT HANDOFF — remote support: we can now watch and drive a customer's Windows machine (2026-08-16) — READ FIRST before touching remote support, the desktop app's capture/input code, the LAN phone inventory, or before adding ANY capability that observes or acts on a customer's computer
 

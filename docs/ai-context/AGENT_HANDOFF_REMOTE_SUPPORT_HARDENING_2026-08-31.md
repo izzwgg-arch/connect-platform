@@ -258,3 +258,144 @@ api typecheck **76 = the exact baseline**, none in an edited file. shared 0.
    when clicked; a technician pressing "request clipboard" must put the dialog
    back on the customer's screen and grant nothing until they answer; and the
    customer's End must work with the kill switch already off.
+
+---
+
+# PART TWO — the screens, and three protections that were wired to nothing (2026-09-01)
+
+Commit `875bd560`. **api + portal DEPLOYED and container-verified**; both read
+`.build-commit` = `875bd5606a95`, 0 restarts, 0 error-level lines.
+
+## 9. ⛔⛔ THE HEADLINE: BUILDING THE UI IS WHAT PROVED THE SERVER RULES DEAD
+
+Three protections were correct, unit-tested, deployed — and unreachable, because
+nothing ever called them. Each is the same shape: **a CALLER-side omission**,
+which a test of the policy, the route or the service passes straight through.
+
+**(1) NON-NEGOTIABLE RULE 15 WAS ENFORCED AGAINST AN INPUT THAT NEVER ARRIVED.**
+`decideMediaBudget` returns the small on-call budget the instant `callInProgress`
+reads true. Grepping the whole portal for that field found it in exactly two
+places — the service function's own signature and its return type. **Nobody set
+it.** So "remote support yields to an active phone call" was a rule the system
+could not act on, because nothing told it a call was happening.
+
+⛔ Only the CUSTOMER's machine knows. The technician's browser cannot see the
+customer's phone, and the server cannot either. It is supplied there now, from
+`useOptionalSipPhone()` — ⛔ the *optional* hook, never `useSipPhone()`: this
+component is mounted globally including outside the SIP provider, and chrome must
+never crash the app over a missing provider.
+
+⛔ Read through a **ref**, not a captured value. The peer's closure is built once,
+when the session starts; the interesting case is a call that begins *later*.
+
+**(2) THE ADAPTIVE BUDGET HAD NO NUMBERS.** `packetLoss >= 0.03 || rtt >= 300`
+chooses the constrained budget. Neither was ever sent, so that branch could not
+be reached. The peer now reads its own `getStats()` and carries the result.
+
+⛔ **Loss is a DELTA between beats, never a lifetime ratio.** A lifetime figure is
+dominated by the connection's first seconds and would keep reporting a bad link
+long after it recovered — the encoder would stay clamped for the rest of the
+session. ⛔ And a sample under 30 packets reports **nothing**: one lost packet out
+of three is not 33% loss, it is noise, and acting on it clamps a healthy call.
+
+**(3) THE MID-SESSION ASK REACHED NOBODY.** A technician could ask for the
+clipboard or file transfer; the server recorded it; **the customer was never shown
+the question.** `answerCapability` existed on the server and in the service layer
+and was called by no screen at all. The rail would have sat on "Waiting for them
+to answer…" forever, for a question that was never asked.
+
+⛔ The ask is **derived**, never pushed: anything REQUESTED that is not yet
+GRANTED is outstanding. A refresh, a reconnect or a second window all reach the
+same answer, and a dropped message cannot lose it.
+
+## 9a. ⛔ The guards read SOURCE, and all 15 fail against HEAD
+
+`apps/portal/lib/remoteSupportWiring.test.ts` (registered). Because every one of
+these was a missing *call site*, only a test that looks for the call site can see
+it. Replayed against the pre-fix files from `git show HEAD:...`: **15 of 15 fail
+there, 15 of 15 pass on the fix.** Not one is decorative.
+
+⛔ CRLF is normalised on every read — `core.autocrlf=true` here means a multi-line
+pattern otherwise matches nothing and the guard passes for the wrong reason.
+
+## 10. What the screens do, and the decisions inside them
+
+- **The rail draws tools from `granted`, never from `requested`.** Asking is a
+  button; being allowed is a fact that arrives from the server. `requestCapability`
+  deliberately returns `granted` unchanged so a screen *cannot* render a request
+  as success.
+- **Administrator windows are DRAWN as unavailable, not omitted.** Windows
+  silently refuses injected input to elevated windows. A technician offered this
+  would watch their clicks do nothing on a UAC prompt and conclude the product is
+  broken. The server has no `admin` capability at all, so it cannot be granted.
+- **The connection readout has a THIRD state.** Stats need two samples before loss
+  means anything, so the first seconds legitimately know nothing — and a green
+  light meaning "we have not looked yet" is exactly the reading somebody would
+  trust while a customer struggles. It says *Measuring…*.
+- **The customer is told WHY the picture softened.** Otherwise their screen share
+  degrades the moment a call connects and they reasonably conclude that remote
+  support broke their phone. It is the opposite: sharing stepped aside.
+- **The capability question sits INSIDE the always-on-top banner, not a popup.**
+  A popup can be behind another window, and a permission question nobody sees is
+  one nobody can refuse. "No" is a real, equal button.
+- **Chat renders as text.** The body is sanitised server-side; this is the second
+  half of that promise. A transcript that interprets markup is one somebody can
+  write into.
+- **Activity is not filtered to "interesting" events.** The whole value of a
+  record is that it is complete.
+
+## 11. ⛔ The native-dropdown guard flagged its own explanation
+
+The controls page used a native dropdown; the platform-wide sweep caught it and it
+is a `ConnectSelect` now. The sweep **then flagged the comment explaining the
+rule** — the sixth time this trap has been hit here.
+
+⛔ **The guard was NOT weakened.** It drops only comment-shaped LINES and
+deliberately has no block-stripper, because one opening a fake comment at a regex
+literal would turn a negative assertion into a **false PASS**. The comment was
+reworded instead. When a negative source guard flags correct code, fix the prose,
+not the guard — unless the guard is genuinely wrong.
+
+## 12. Deploy state, verified in the containers
+
+- api + portal both `.build-commit` = **`875bd5606a95`**, **0 restarts**, **0
+  error-level lines**.
+- Migration `20260831120000_remote_support_controls` **applied 2026-08-31
+  13:11:20Z**, `rolled_back_at` null; all 3 new tables and all 4 new columns read
+  back from the live database; `RemoteSupportSession` holds **0 rows**.
+- ⛔ **The api deploy logged `prisma: no schema/migrations changes -> skipping
+  migrate deploy`, and that was CORRECT** — the schema landed in an earlier
+  commit that was already an ancestor of the previous container build. **Do not
+  read that line as a skipped migration; read `_prisma_migrations`.**
+- Health 200 and portal 200 on **both** hostnames; all five new screen strings
+  present in the shipped `.next` bundle.
+
+**The permission model, proven live with real accounts:**
+
+| route | ordinary customer | SUPER_ADMIN |
+|---|---|---|
+| `/remote-support/pending` | **200** `{"sessions":[]}` | **200** |
+| `/admin/remote-support/controls` | **403** | **200** `enabled:true` |
+
+⛔⛔ That first row is the check that matters most. A wrong permission rule here
+403s **every customer's consent flow**, which is a total outage of the feature for
+the people it exists to help. Re-run it after any change to the rules.
+
+⛔ **A 401 without a token proves NOTHING about whether a route exists** — the JWT
+hook runs before routing. My first probe used an invented path
+(`/remote-support/sessions/pending`; the real one is `/remote-support/pending`)
+and got a clean 401 unauthenticated and a 404 with a token. **Probe with a real
+token, and read the path off the route registration.**
+
+## 13. ⏳ STILL NOT PROVEN — and this has not moved
+
+**Nobody has opened any of these screens in a browser, and no session has ever
+run between two humans.** Everything above is proven as deployed code, live route
+probes, container greps and tests. None of it is proven as a technician watching
+a customer's screen.
+
+Deliberately not built: a customer-facing "Technical Support" landing page. The
+consent dialog is mounted globally, so the customer half works without one; the
+page would add discoverability, not capability.
+
+The acceptance test in section 8 is unchanged and is still the thing to run.
