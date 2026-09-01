@@ -78,10 +78,12 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
 $wdArg    = "/c node `"$Watchdog`" >> `"$Here\logs\watchdog.log`" 2>&1"
 $wdAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $wdArg -WorkingDirectory $Here
 
-# Once-in-the-past with infinite repetition keeps firing every 10 minutes
-# forever, including after reboots (StartWhenAvailable catches missed starts).
+# Once-now with a decade of repetition keeps firing every 10 minutes across
+# reboots (StartWhenAvailable catches missed starts). NOT [TimeSpan]::MaxValue:
+# Windows PowerShell 5.1 serialises that as P99999999DT23H59M59S and the task
+# XML validator rejects it - the watchdog silently never registers.
 $wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration ([TimeSpan]::MaxValue)
+  -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $wdSettings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
