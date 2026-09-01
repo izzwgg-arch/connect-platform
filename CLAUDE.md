@@ -78,9 +78,33 @@ being published on the install link."*
   against `preferredDisplaySurface`, which is read into `wanted` *above* the sliced
   block, so it matched nothing and asserted nothing. **Read the source before
   believing a source-reading guard.**
-- ⏳ **NOT PROVEN, and it is the whole gap: nobody has run the installer and no
-  session has ever taken place between two machines.** Acceptance needs TWO
-  machines and is in §7 of the handoff. ⛔ **The negative that matters most: on a
+- ✅✅ **INSTALLED ON IZZY'S WORKSTATION 2026-09-01 15:26Z** (silent, exit 0,
+  20.4 s, at his explicit request). Verified from the machine: exe
+  `FileVersion 0.1.17-rc.1`, registry entry now `0.1.17-rc.1`, every marker in
+  the installed asar, log banner `v0.1.17-rc.1`, **0 error lines**.
+  ⛔⛔ **THE GATE IS PROVEN OFF ON THE LIVE PROCESS, NOT INFERRED** — Electron
+  puts `additionalArguments` in each renderer's command line, so of **6 running
+  Loopcom processes, 0 carry `--connect-remote-support=1`** while
+  `--connect-window-kind=full` IS present (that second half is the non-vacuity
+  control: argv is readable, so the flag's absence is the gate working).
+  ✅ **It replaced the wedged 0.99.0** — that build's asar had the coworker
+  bubble and ZERO remote-support markers, and its uninstall entry still read
+  `0.1.16` while the exe read `0.99.0` (copied in, never installed), so it could
+  never have auto-updated. Fixed as a side effect.
+  ⚠️ **"Loopcom Support 0.0.2" is ALSO installed on that machine** — so "no
+  installer anywhere has the remote desktop" was wrong for this workstation;
+  what is true is that it was never in the CONNECT app and never published.
+  ⚠️⚠️ **PRE-EXISTING, NOT FROM THIS BUILD: `[SipPhone][conn] init-failed` on
+  startup and repeatedly after.** Compared against the previous launch before
+  reporting — **0.99.0 shows the identical pattern** (03:38, 03:39, 03:41,
+  03:45). ⛔ Do not read it as a regression; the documented cause is that the
+  SUPER_ADMIN login sits on a tenant with no PBX link and no extension, so it
+  structurally cannot register. **Check which account the window is signed into
+  first.** ⛔ And `/S` does NOT relaunch the app — it closed Loopcom and left it
+  closed, so the phone was down until started by hand.
+- ⏳ **NOT PROVEN, and it is the whole gap: remote support has never been
+  switched on, and no session has ever taken place between two machines.**
+  Acceptance needs TWO machines and is in §7 of the handoff. ⛔ **The negative that matters most: on a
   machine where remote support was never turned on, the consent dialog must NEVER
   appear and there must be ZERO `/remote-support/pending` traffic** — that is the
   fleet gate doing its job. ⛔ Expect **antivirus noise** (PowerShell calling
@@ -763,21 +787,58 @@ agent kicks open an agent in here on my computer."*
   heartbeat; a SERVER-side "escalation unworked > N hours" guardrail (catches every
   PC-side failure); running the watcher windowless; the cloud move (§26–§29 of the
   plan doc — the memory-dir trap in §28 stands).
-- ⛔⛔ **A "not fixed" VERDICT GOES NOWHERE AND THE CUSTOMER IS TOLD OTHERWISE.**
-  `POST /support/updates/:id/verdict` replies *"We've reopened it and someone will
-  pick it up"* while `recordVerdict` only stamps the row — no reopen, no re-queue,
-  no notification, and the watcher never reads verdicts. That is the
-  unearned-promise class the safety gate refuses, living in our own route. T6HMUQ
-  and UXN2E6 both ended there 08-31. Fix = honest wording, or a real reopen
-  (follow-up escalation with a loop cap) + a "needs a person" surface.
-- ⛔ **THERE IS NO ADMIN SCREEN FOR ANY OF THIS.** `SupportUpdate` has zero portal
-  surface (grep: only the customer widget's routes exist — the desk shows
-  escalations, never the maintenance loop, held rows, verdicts or watcher health,
-  which lives only on this PC). K3JG3K/ARH3P6/YACZXD were worked 08-31 BEFORE the
-  hand-back shipped, so their reports never reached the customer and no screen
-  shows that. Proposed "Maintenance" tab mockup (real 08-31 data):
-  <https://claude.ai/code/artifact/d7386a5d-1059-423d-915a-3b53cb413220> —
-  awaiting Izzy's word before building.
+- ✅✅ **ALL OF THE ABOVE IS FIXED — 2026-09-01, `58ed5a24` + `28ec7d47`, full
+  handoff `docs/ai-context/AGENT_HANDOFF_SUPPORT_LOOP_BOTH_WAYS_2026-09-01.md`.**
+  Read it before touching supportMessageRoutes / supportLoopGuardrail /
+  recordVerdict / the watcher tasks. The short version:
+  **(1) THE VISIBILITY SCREEN EXISTS AND IS DEPLOYED — the "Agent runs" tab on
+  /admin/support** (`727a4d18`, watcher `2026.08.31.1` pushes live runs +
+  heartbeats to `/admin/support/agent-runs|agent-watcher`; proven live with
+  DJH8XK streaming 36 steps). ⛔ An earlier bullet here said "no admin screen
+  exists" — WRONG; the grep searched `SupportUpdate` and the screen is named
+  `SupportAgentRuns`. It now also shows per-run CUSTOMER chips (delivered /
+  read / ✓fixed / ✗not fixed / **never told** / held), a **Needs a person**
+  rail (`GET /admin/support/loop-health`), and a message composer per run.
+  **(2) ADMIN→CUSTOMER MESSAGING IS A NEW CHANNEL, `SupportMessage`**
+  (migration `20260901170000`): the desk's old reply wrote into the assistant
+  CONVERSATION and **nothing ever notified the customer** — that is what Izzy
+  hit. `POST /admin/support/escalations/:ref/message` now lands in the widget's
+  2-min poll with a **pop-up beside the bubble** (`.fa-nudge`), read receipts,
+  and a customer reply box (capped 20/day; replies land on the desk and unread
+  ones alarm after 2h). ⛔ Human words deliberately bypass the OpenAI
+  rewrite + safety gate — the gate exists for model rewrites, not signed human
+  messages. ⛔ The customer projection is explicit; `sentByUserId` never leaves.
+  **(3) "NO, STILL NOT RIGHT" FILES A FOLLOW-UP ESCALATION** — dispatcher texts
+  Izzy, the watcher re-investigates ONCE (the follow-up copies the customer's
+  own `userName` so triage keeps the lane); a second not_fixed is created with
+  the **`[needs a person]` marker**, which triage skips. Route wording is keyed
+  on what actually happened; the old sentence is guard-tested gone.
+  **(4) `supportLoopGuardrail.ts` — THE SERVER WATCHES THE WATCHER** (15-min
+  sweep + boot kick, `SUPPORT_LOOP_GUARDRAIL_ARMED`, kill switch
+  `SUPPORT_LOOP_GUARDRAIL_DISABLED=1`, cutover 2026-09-01T12:00Z): stale
+  heartbeat ≥30 min, escalations unworked >3h (= NO SupportAgentRun), held
+  updates, unread customer replies, token ≤7 days (own 3-day window).
+  Escalation-only, windowed de-dupe on `contains` (the marker prefix breaks
+  startsWith), audit row `support_loop.sweep` every pass, own alarms excluded
+  from the unworked query.
+  **(5) THE WATCHER RUNS HIDDEN + A WATCHDOG TASK** ("Loopcom support watcher
+  watchdog", every 10 min, Stop+Start on a ≥10-min-stale heartbeat). ⛔ The
+  VBS's wait=True is load-bearing (else IgnoreNew stops preventing DOUBLE
+  watchers and Stop can't kill the tree), and ⛔ `[TimeSpan]::MaxValue` as a
+  RepetitionDuration is REJECTED by PS 5.1 — the watchdog silently never
+  registers (`New-TimeSpan -Days 3650` now). Both hit live.
+  **(6) DRIVE-BY: `smsForwardGuardrail` + `voicemailMailboxGuardrail` passed
+  `proposedFix: null` into a REQUIRED column — a swallowed
+  PrismaClientValidationError; NEITHER ALARM COULD EVER FIRE.** Now `""`,
+  guard-tested. Copy `supportReport.ts`'s create shape, never a guardrail's.
+  **(7) Cleanup:** K3JG3K/ARH3P6/YACZXD re-posted through the live agent-report
+  route — all three `ready`, so Ezra's widget badges them. The mockup that
+  preceded the build:
+  <https://claude.ai/code/artifact/d7386a5d-1059-423d-915a-3b53cb413220>.
+  Proven: 130 api support + 47 watcher tests, portal 481/483 (2 documented
+  pre-existing), all 10 source guards fail replayed against HEAD; one hidden
+  watcher process, task Running, watchdog registered. ⏳ Deploy state + the
+  acceptance list live in the handoff §7.
 
 ## ⛔ AGENT HANDOFF — every sidebar page has its own “In sidebar” switch on /admin/permissions now, SEPARATE from the role permission (2026-08-31) — READ FIRST before adding a nav item, before adding a SUPER_ADMIN force line to isNavItemVisibleForUser, or for “I granted the permission and it still doesn’t show in the sidebar”
 
