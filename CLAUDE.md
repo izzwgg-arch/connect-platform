@@ -851,8 +851,23 @@ agent kicks open an agent in here on my computer."*
   <https://claude.ai/code/artifact/d7386a5d-1059-423d-915a-3b53cb413220>.
   Proven: 130 api support + 47 watcher tests, portal 481/483 (2 documented
   pre-existing), all 10 source guards fail replayed against HEAD; one hidden
-  watcher process, task Running, watchdog registered. ⏳ Deploy state + the
-  acceptance list live in the handoff §7.
+  watcher process, task Running, watchdog registered.
+  ✅✅ **DEPLOYED AND PROVEN LIVE 2026-09-01 EVENING:** api at `58ed5a24`
+  (migration applied — `SupportMessage` in the live DB; boot line
+  `SUPPORT_LOOP_GUARDRAIL_ARMED`; **the first sweep fired exactly at the 5-min
+  boot kick and wrote `support_loop.sweep` — all clean**: beat 0 min, 0
+  unworked/held/unread, token 25d); portal at `8f1d2e3c` ⊇ `58ed5a24`
+  (bundle-verified by STRING: the nudge copy in the layout chunk, "customer
+  never told" in the support page chunk, `fa-nudge` ×2, `sar-needs` in the
+  shipped CSS; 0 restarts, both hostnames 200). **A real admin message was sent
+  through the live route on 9EFNKF** (row `cmtitxoi10135qk1hbmtszjfn`,
+  to_customer, correct user, correctly no conversation mirror — the exact
+  former dead-end case). ⏳ NOT PROVEN: no customer has SEEN the pop-up
+  (`deliveredAt` stamps only once a widget on the NEW bundle polls — open
+  tabs/desktop keep the old bundle until fully reloaded); no real not_fixed has
+  exercised the follow-up; the watchdog has not yet revived a killed watcher
+  (acceptance: kill the hidden `node watch.mjs`, expect a restart line in
+  `logs/watchdog.log` within 10 min).
 
 ## ⛔ AGENT HANDOFF — every sidebar page has its own “In sidebar” switch on /admin/permissions now, SEPARATE from the role permission (2026-08-31) — READ FIRST before adding a nav item, before adding a SUPER_ADMIN force line to isNavItemVisibleForUser, or for “I granted the permission and it still doesn’t show in the sidebar”
 
