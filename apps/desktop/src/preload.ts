@@ -1,9 +1,40 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopSettings, DesktopUpdateState, DesktopWindowKind, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
+import type {
+  DesktopMachineInfo,
+  DesktopScreenSource,
+  DesktopSettings,
+  DesktopUpdateState,
+  DesktopWindowKind,
+  PhoneEngineCommand,
+  PhoneEngineEnvelope,
+  RemoteSupportBannerState,
+} from "./types";
 
 function windowKind(): DesktopWindowKind | undefined {
   const arg = process.argv.find((item) => item.startsWith("--connect-window-kind="));
   return arg?.split("=")[1] as DesktopWindowKind | undefined;
+}
+
+/**
+ * ⛔⛔ THE FLEET GATE. Whether this window publishes the `remoteSupport` key at
+ * all.
+ *
+ * The portal's RemoteSupportConsent is mounted for every signed-in user, and it
+ * decides whether remote support exists by looking for exactly this key. Publish
+ * it unconditionally and every customer's app begins polling for support
+ * requests every five seconds the day this ships.
+ *
+ * So it is published only when main.ts passed the launch argument, which it does
+ * only when the user turned remote support on in the tray. Default off means an
+ * update changes nothing for anybody, and the customer-wide decision stays a
+ * decision.
+ *
+ * ⛔ Read from argv rather than by asking the main process, because the key must
+ * be present or absent at the moment the bridge is built — a promise resolved
+ * later cannot make a key that the portal already looked for and did not find.
+ */
+function remoteSupportEnabled(): boolean {
+  return process.argv.includes("--connect-remote-support=1");
 }
 
 const desktopApi = {
@@ -84,7 +115,56 @@ const desktopApi = {
   },
 };
 
-contextBridge.exposeInMainWorld("connectDesktop", desktopApi);
+/**
+ * Remote support — the three things a web page cannot do for itself.
+ *
+ * ⛔ Nothing here starts on its own. Every call is the result of the customer
+ * having answered the consent prompt: the portal asks for screens to show them
+ * in the dialog, and everything after that needs a session id the server only
+ * issues once they pressed Allow.
+ *
+ * ⛔ `sendInput` is a `send`, not an `invoke`, on purpose — it is the hot path
+ * during control and must not build a promise per mouse move. The main process
+ * re-validates every command and drops anything that does not name the session
+ * control was granted for.
+ */
+const remoteSupportApi = {
+  listScreens: () => ipcRenderer.invoke("remote-support:list-screens") as Promise<DesktopScreenSource[]>,
+  machineInfo: () => ipcRenderer.invoke("remote-support:machine-info") as Promise<DesktopMachineInfo>,
+
+  /**
+   * ⛔ Must be called BEFORE getDisplayMedia, or Electron picks a screen for
+   * the customer — which on a two-monitor machine can share the wrong one.
+   */
+  setScreen: (sourceId: string) =>
+    ipcRenderer.invoke("remote-support:set-screen", sourceId) as Promise<void>,
+
+  /**
+   * Starts input injection. Resolves false when it is unavailable, which the
+   * caller must surface — a control session where nothing moves reads as a
+   * broken product rather than an honest limitation.
+   */
+  enableControl: (sessionId: string) =>
+    ipcRenderer.invoke("remote-support:enable-control", sessionId) as Promise<boolean>,
+  disableControl: () => ipcRenderer.invoke("remote-support:disable-control") as Promise<void>,
+  sendInput: (command: unknown) => ipcRenderer.send("remote-support:input", command),
+
+  setBanner: (state: RemoteSupportBannerState) =>
+    ipcRenderer.invoke("remote-support:set-banner", state) as Promise<void>,
+  onStopRequested: (listener: () => void) => {
+    const wrapped = () => listener();
+    ipcRenderer.on("remote-support:stop-requested", wrapped);
+    return () => ipcRenderer.removeListener("remote-support:stop-requested", wrapped);
+  },
+};
+
+contextBridge.exposeInMainWorld(
+  "connectDesktop",
+  // ⛔ The key is ABSENT, not empty, when remote support is off. The portal tests
+  // for `bridge?.remoteSupport?.listScreens`, so an object of no-ops would pass
+  // that test and start the polling this gate exists to prevent.
+  remoteSupportEnabled() ? { ...desktopApi, remoteSupport: remoteSupportApi } : desktopApi,
+);
 
 // ── Floating Coworker widget bridge ───────────────────────────────────
 // ⛔ Exposed to EVERY renderer but only meaningful in the tiny frameless bubble

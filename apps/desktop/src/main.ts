@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -9,6 +9,11 @@ import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateSt
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
 import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
+import {
+  getPreferredSourceId,
+  registerRemoteSupportIpc,
+  stopRemoteSupport,
+} from "./remoteSupport/mainWiring";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -249,7 +254,16 @@ function webPreferences(windowKind: string) {
     // processing) — that is what makes desktop call audio choppy/breaking-up while the
     // web and mobile apps are fine. Disable throttling so audio keeps full CPU when hidden.
     backgroundThrottling: false,
-    additionalArguments: [`--connect-window-kind=${windowKind}`],
+    // ⛔ The remote-support flag is read HERE, at window creation, and becomes a
+    // launch argument the preload reads to decide whether to publish its
+    // `remoteSupport` key at all. That is why turning it on in the tray takes
+    // effect at the next app start: the alternative is reloading the window,
+    // which tears down the SIP phone — a support feature must never be able to
+    // drop a call.
+    additionalArguments: [
+      `--connect-window-kind=${windowKind}`,
+      ...(settings.remoteSupportEnabled ? ["--connect-remote-support=1"] : []),
+    ],
   };
 }
 
@@ -456,6 +470,15 @@ function rebuildTray(): void {
       label: settings.coworkerWidgetEnabled ? "Hide Coworker Bubble" : "Show Coworker Bubble",
       click: () => toggleCoworkerWidget(),
     },
+    {
+      // ⛔ The label says "after restart" because it is true, and a toggle that
+      // silently does nothing until later is how somebody concludes the feature
+      // is broken. See webPreferences() for why it cannot apply immediately.
+      label: settings.remoteSupportEnabled
+        ? "Turn Off Remote Support (after restart)"
+        : "Allow Remote Support (after restart)",
+      click: () => toggleRemoteSupport(),
+    },
     { type: "separator" },
     { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
     { type: "separator" },
@@ -510,6 +533,26 @@ function toggleCoworkerWidget(): void {
     rebuildTray();
   } catch (err) {
     diag("coworker-widget", `toggle failed: ${String(err)}`);
+  }
+}
+
+/**
+ * Opt this installation in or out of answering remote support requests.
+ *
+ * ⛔ Turning it OFF stops any session that is running right now, immediately and
+ * locally. The flag itself only takes effect at the next launch — but "I have
+ * withdrawn permission" must never be something the customer has to restart to
+ * mean, so the teardown does not wait for it.
+ */
+function toggleRemoteSupport(): void {
+  try {
+    const enabled = !settings.remoteSupportEnabled;
+    writeSettings({ ...settings, remoteSupportEnabled: enabled });
+    if (!enabled) stopRemoteSupport();
+    rebuildTray();
+    diag("remote-support", `${enabled ? "allowed" : "turned off"} — applies to windows opened from now on`);
+  } catch (err) {
+    diag("remote-support", `toggle failed: ${String(err)}`);
   }
 }
 
@@ -622,6 +665,29 @@ function registerIpc(): void {
   // server could express too. Credentials live behind a reference in the OS keystore
   // and never cross this boundary.
   registerPhoneSetup({ ipcMain, safeStorage });
+
+  // Remote support. ⛔ Registering the handlers is NOT the same as switching the
+  // feature on: the portal never calls any of this unless the preload published
+  // the `remoteSupport` key, which it only does when the user opted in. Handlers
+  // nothing calls are inert, and registering them here keeps the wiring in one
+  // place rather than conditionally half-present.
+  try {
+    registerRemoteSupportIpc({
+      onStopRequested: () => {
+        // ⛔ Stop locally FIRST, then tell the renderer. The customer pressed
+        // Stop; the sharing must end whether or not the page is still alive to
+        // hear about it.
+        diag("remote-support", "customer pressed Stop on the banner");
+        stopRemoteSupport();
+        for (const win of [fullWindow, miniWindow]) {
+          if (!win || win.isDestroyed()) continue;
+          win.webContents.send("remote-support:stop-requested");
+        }
+      },
+    });
+  } catch (err) {
+    diag("remote-support", `ipc register failed: ${String(err)}`);
+  }
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
     if (envelope.type === "state") {
@@ -777,6 +843,52 @@ if (!gotSingleInstanceLock) {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media" || permission === "notifications");
   });
+  // ⛔⛔ WITHOUT THIS, SCREEN SHARING SILENTLY DOES NOT WORK. Electron does not
+  // implement getDisplayMedia on its own — the call hangs or rejects in the
+  // renderer with nothing useful in the console. It is the single easiest piece
+  // to leave out and then spend an afternoon debugging in the portal, where the
+  // bug is not.
+  //
+  // Registered unconditionally, even when remote support is switched off,
+  // because it grants nothing: it only answers a getDisplayMedia call, and the
+  // only thing in the portal that makes one is a session the customer has
+  // already consented to. A handler that exists but is never called is cheaper
+  // than a handler whose absence is invisible until someone needs it.
+  try {
+    session.defaultSession.setDisplayMediaRequestHandler(
+      (request, callback) => {
+        desktopCapturer
+          .getSources({ types: ["screen", "window"] })
+          .then((sources) => {
+            const wanted = (request as { preferredDisplaySurface?: string })?.preferredDisplaySurface;
+            // The customer's own pick from the consent dialog wins. Falling back
+            // to a whole screen rather than the first window keeps a mis-pick
+            // boring instead of revealing.
+            const chosen =
+              sources.find((s) => s.id === getPreferredSourceId()) ||
+              sources.find((s) => s.id === wanted) ||
+              sources.find((s) => s.id.startsWith("screen:")) ||
+              sources[0];
+            if (!chosen) {
+              diag("remote-support", "no screen sources — refusing rather than sending a black frame");
+              callback({ video: undefined, audio: undefined });
+              return;
+            }
+            diag("remote-support", `sharing source ${chosen.id} (${chosen.name})`);
+            // ⛔ Audio is never captured. Support needs to see the screen, not
+            // listen to the room the customer is sitting in.
+            callback({ video: chosen, audio: undefined });
+          })
+          .catch((err) => {
+            diag("remote-support", `getSources failed: ${String(err)}`);
+            callback({ video: undefined, audio: undefined });
+          });
+      },
+      { useSystemPicker: false },
+    );
+  } catch (err) {
+    diag("remote-support", `display media handler not installed: ${String(err)}`);
+  }
   // Flush the HTTP cache on startup so freshly deployed portal code is picked up.
   // This clears ONLY the network cache — cookies and localStorage are untouched, so
   // the user stays signed in. (Electron was otherwise serving a stale mini-dialer
@@ -856,4 +968,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  // ⛔ Tear down the input helper and the banner on the way out. Leaving the
+  // helper alive after the app has gone is a process on the customer's machine
+  // that can move their mouse and that nothing is watching.
+  try { stopRemoteSupport(); } catch { /* quitting anyway */ }
 });
