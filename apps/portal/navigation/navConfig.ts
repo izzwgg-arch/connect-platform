@@ -44,6 +44,8 @@ import {
   AtSign,
   MessagesSquare,
   LifeBuoy,
+  MonitorSmartphone,
+  ShieldAlert,
   Mic2,
   Music,
   Network,
@@ -203,6 +205,19 @@ export const navItems: NavItem[] = [
   // PORTAL_API_PERMISSION_RULES entry for /admin/pbx-console already demands,
   // so the nav key and the server gate now say the same thing.
   { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  // Remote support (2026-08-16, hardened 2026-08-31). Built with no nav entry at
+  // all, so it was reachable only by typing the URL; these two put it in the
+  // catalog, which is what gives it an In-sidebar switch on /admin/permissions
+  // AND a row in the custom-role matrix — both screens render from navItems.
+  //
+  // ⛔ The two entries carry DIFFERENT keys on purpose. Watching a customer's
+  // screen is `can_remote_support`, which sits in NO default bucket and is
+  // granted one person at a time. The emergency controls take
+  // `can_manage_global_settings` AND re-check SUPER_ADMIN inside every handler:
+  // the switch that turns remote support off must not be reachable by the
+  // people who use remote support.
+  { id: "admin.remote_support", href: "/admin/remote-support", label: "Remote Support", icon: "RS", lucide: MonitorSmartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_remote_support" },
+  { id: "admin.remote_support_controls", href: "/admin/remote-support/controls", label: "Remote Support Controls", icon: "RC", lucide: ShieldAlert, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
   // Per-tenant integration keys + CRM modes (supermarket plan Phase 5) —
   // SUPER_ADMIN only, forced in isNavItemVisibleForUser like the console.
   { id: "admin.integrations", href: "/admin/integrations", label: "Integrations", icon: "IK", lucide: KeyRound, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },

@@ -18,10 +18,17 @@ import {
   RemoteSupportPeer,
   endSession,
   getSession,
+  listEvents,
   listSessions,
   reportInputCount,
+  requestCapability,
   requestSession,
+  sendChat,
+  type LinkQuality,
+  type MediaBudget,
+  type RemoteCapability,
   type RemoteSupportSession,
+  type SessionEvent,
 } from "../../../../services/remoteSupport";
 import {
   elementPointToScreenFraction,
@@ -64,10 +71,21 @@ function RemoteSupportConsole() {
   const [error, setError] = useState<string | null>(null);
   const [controlOn, setControlOn] = useState(false);
 
+  /* ── the rail: what we hold, what we asked for, what the link looks like ── */
+  const [granted, setGranted] = useState<RemoteCapability[]>([]);
+  const [pendingCap, setPendingCap] = useState<RemoteCapability | null>(null);
+  const [quality, setQuality] = useState<LinkQuality | null>(null);
+  const [budget, setBudget] = useState<MediaBudget | null>(null);
+  const [onCall, setOnCall] = useState(false);
+  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [draft, setDraft] = useState("");
+  const [rail, setRail] = useState<"chat" | "activity">("chat");
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<RemoteSupportPeer | null>(null);
   const lastMoveRef = useRef<{ x: number; y: number } | null>(null);
   const inputCountRef = useRef(0);
+  const railBodyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     apiGet<{ users?: TeamMember[] }>("/team/members")
@@ -98,6 +116,12 @@ function RemoteSupportConsole() {
     setSession(null);
     setControlOn(false);
     setStatus("");
+    setGranted([]);
+    setPendingCap(null);
+    setQuality(null);
+    setBudget(null);
+    setOnCall(false);
+    setEvents([]);
     void refreshHistory();
   }, [session, refreshHistory]);
 
@@ -167,10 +191,16 @@ function RemoteSupportConsole() {
               peerRef.current = null;
               void refreshHistory();
             },
+            onHeartbeat: ({ quality: q, mediaBudget, callInProgress }) => {
+              setQuality(q);
+              if (mediaBudget) setBudget(mediaBudget);
+              setOnCall(Boolean(callInProgress));
+            },
           });
           peerRef.current = peer;
           await peer.start();
           setControlOn(fresh.controlGranted && mayControl);
+          setGranted((fresh.capabilitiesGranted ?? []) as RemoteCapability[]);
         }
       } catch {
         /* transient — the next tick tries again */
@@ -181,6 +211,82 @@ function RemoteSupportConsole() {
   }, [session, mayControl, refreshHistory]);
 
   useEffect(() => () => { try { peerRef.current?.stop(); } catch { /* noop */ } }, []);
+
+  /*
+   * The transcript, and with it the answer to "did they say yes to the extra
+   * thing I asked for".
+   *
+   * ⛔ `capabilitiesGranted` from the SERVER is the only thing that flips a tool
+   * on. `requestCapability` deliberately returns `granted` unchanged, so the
+   * rail cannot draw a tool as available merely because it was asked for — that
+   * is the whole point of keeping requested and granted apart.
+   */
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    let since: string | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const { events: fresh } = await listEvents(session.id, since);
+        if (cancelled || fresh.length === 0) return;
+        since = fresh[fresh.length - 1]!.at;
+        setEvents((prev) => {
+          const seen = new Set(prev.map((e) => e.id));
+          return [...prev, ...fresh.filter((e) => !seen.has(e.id))];
+        });
+      } catch {
+        /* the transcript is a readout; a missed poll costs nothing */
+      }
+      try {
+        const { session: fresh } = await getSession(session.id);
+        if (cancelled) return;
+        const g = (fresh.capabilitiesGranted ?? []) as RemoteCapability[];
+        setGranted(g);
+        setControlOn(fresh.controlGranted && mayControl);
+        // The answer arrived — stop showing the question as outstanding.
+        setPendingCap((p) => (p && g.includes(p) ? null : p));
+      } catch {
+        /* transient */
+      }
+    };
+
+    void tick();
+    const timer = setInterval(() => void tick(), 3_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [session, mayControl]);
+
+  /** Keep the newest message in view without yanking the page around. */
+  useEffect(() => {
+    const el = railBodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [events, rail]);
+
+  const askFor = useCallback(async (capability: RemoteCapability) => {
+    if (!session) return;
+    setError(null);
+    try {
+      const res = await requestCapability(session.id, capability);
+      // ⛔ Reflect the SERVER's answer, never the optimistic one.
+      setGranted(res.granted as RemoteCapability[]);
+      setPendingCap(res.granted.includes(capability) ? null : capability);
+    } catch (err: any) {
+      setError(err?.body?.message || err?.message || "That request could not be sent.");
+    }
+  }, [session]);
+
+  const say = useCallback(async () => {
+    const body = draft.trim();
+    if (!session || body.length === 0) return;
+    setDraft("");
+    try {
+      await sendChat(session.id, body);
+    } catch (err: any) {
+      setDraft(body); // put their words back rather than losing them
+      setError(err?.body?.message || err?.message || "That message did not send.");
+    }
+  }, [session, draft]);
 
   /** Where on the customer's screen a browser event points. Null in the letterbox. */
   const pointFor = useCallback((e: { clientX: number; clientY: number }) => {
@@ -263,6 +369,7 @@ function RemoteSupportConsole() {
       )}
 
       {live && (
+        <div className="rs-live-grid">
         <section className="rs-stage">
           {status && <div className="rs-stage-status">{status}</div>}
           <video
@@ -319,8 +426,126 @@ function RemoteSupportConsole() {
               {controlOn ? "You can control this computer" : "Watching only"}
             </span>
             {controlOn && <span className="rs-hint">Click the screen first, then type.</span>}
+            <span className="rs-link" title={linkTitle(quality, budget)}>
+              <i className={`rs-link-dot is-${linkGrade(quality)}`} aria-hidden />
+              {linkLabel(quality)}
+            </span>
           </footer>
         </section>
+
+        {/* ── the rail ─────────────────────────────────────────────────── */}
+        <aside className="rs-rail">
+          {/*
+            ⛔ EVERY TOOL DRAWS FROM `granted`, WHICH ONLY THE CUSTOMER CAN FILL.
+            Asking is a button; being allowed is a fact that arrives from the
+            server. Nothing here may enable itself on click.
+          */}
+          <div className="rs-rail-tools">
+            <h3>Tools</h3>
+            {onCall && (
+              <p className="rs-rail-yield">
+                They are on a phone call — the picture is using less bandwidth until it ends.
+              </p>
+            )}
+            {(["clipboard", "files"] as RemoteCapability[]).map((cap) => {
+              const have = granted.includes(cap);
+              const waiting = pendingCap === cap;
+              return (
+                <button
+                  key={cap}
+                  type="button"
+                  className={`rs-tool${have ? " is-on" : ""}`}
+                  disabled={have || waiting}
+                  onClick={() => void askFor(cap)}
+                >
+                  <span className="rs-tool-t">{cap === "clipboard" ? "Shared clipboard" : "Send a file"}</span>
+                  <span className="rs-tool-h">
+                    {have ? "Allowed" : waiting ? "Waiting for them to answer…" : "Ask them for this"}
+                  </span>
+                </button>
+              );
+            })}
+            {/*
+              ⛔ Drawn, and drawn as UNAVAILABLE. Elevated control needs a Windows
+              service running as SYSTEM, which this version does not ship. Windows
+              silently refuses input to elevated windows, so a technician who was
+              offered this would watch their clicks do nothing on a UAC prompt and
+              conclude the product is broken. Saying so is the honest option; the
+              server has no `admin` capability at all, so it cannot be granted.
+            */}
+            <div className="rs-tool is-unavailable" aria-disabled>
+              <span className="rs-tool-t">Administrator windows</span>
+              <span className="rs-tool-h">Not available in this version</span>
+            </div>
+          </div>
+
+          <div className="rs-rail-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={rail === "chat"}
+              className={rail === "chat" ? "is-on" : ""}
+              onClick={() => setRail("chat")}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={rail === "activity"}
+              className={rail === "activity" ? "is-on" : ""}
+              onClick={() => setRail("activity")}
+            >
+              Activity
+            </button>
+          </div>
+
+          <div className="rs-rail-body" ref={railBodyRef}>
+            {visibleEvents(events, rail).length === 0 ? (
+              <p className="rs-rail-empty">
+                {rail === "chat" ? "No messages yet." : "Nothing has happened yet."}
+              </p>
+            ) : (
+              visibleEvents(events, rail).map((e) => (
+                <div key={e.id} className={`rs-ev is-${e.kind} is-${e.actorRole.toLowerCase()}`}>
+                  {e.kind === "chat" ? (
+                    <>
+                      <b>{e.actorRole === "ADMIN" ? "You" : session?.targetUserName || "Them"}</b>
+                      {/*
+                        ⛔ Rendered as TEXT. The body is sanitised server-side, and
+                        this is the second half of that promise — a transcript that
+                        interprets markup is a transcript somebody can write into.
+                      */}
+                      <span>{e.body}</span>
+                    </>
+                  ) : (
+                    <span className="rs-ev-sys">{e.body || e.code}</span>
+                  )}
+                  <time dateTime={e.at}>{new Date(e.at).toLocaleTimeString()}</time>
+                </div>
+              ))
+            )}
+          </div>
+
+          {rail === "chat" && (
+            <form
+              className="rs-rail-say"
+              onSubmit={(e) => { e.preventDefault(); void say(); }}
+            >
+              <input
+                type="text"
+                value={draft}
+                maxLength={2000}
+                placeholder="Type a message to them…"
+                onChange={(e) => setDraft(e.target.value)}
+              />
+              <button type="submit" className="btn btn-primary" disabled={draft.trim().length === 0}>
+                Send
+              </button>
+            </form>
+          )}
+        </aside>
+        </div>
       )}
 
       <section className="card rs-history">
@@ -352,6 +577,51 @@ function RemoteSupportConsole() {
       </section>
     </div>
   );
+}
+
+/**
+ * Chat shows only what people said; Activity shows everything.
+ *
+ * ⛔ Activity is not filtered down to "interesting" events. It is the record of
+ * what happened, and the whole value of a record is that it is complete.
+ */
+function visibleEvents(events: SessionEvent[], rail: "chat" | "activity"): SessionEvent[] {
+  return rail === "chat" ? events.filter((e) => e.kind === "chat") : events;
+}
+
+/**
+ * The link, in words rather than numbers.
+ *
+ * ⛔ "Measuring…" is a THIRD state and must never be drawn as "good". Stats need
+ * two samples before loss means anything, so the first seconds of every session
+ * legitimately know nothing — and a green light that means "we have not looked
+ * yet" is the reading a technician would trust while a customer struggles.
+ */
+function linkGrade(q: LinkQuality | null): "unknown" | "good" | "fair" | "poor" {
+  if (!q || (q.packetLoss == null && q.roundTripMs == null)) return "unknown";
+  const loss = q.packetLoss ?? 0;
+  const rtt = q.roundTripMs ?? 0;
+  if (loss >= 0.03 || rtt >= 300) return "poor";
+  if (loss >= 0.01 || rtt >= 150) return "fair";
+  return "good";
+}
+
+function linkLabel(q: LinkQuality | null): string {
+  const grade = linkGrade(q);
+  if (grade === "unknown") return "Measuring…";
+  if (grade === "good") return "Good connection";
+  if (grade === "fair") return "Connection is a bit slow";
+  return "Poor connection";
+}
+
+/** The numbers, for the hover, for whoever wants them. */
+function linkTitle(q: LinkQuality | null, budget: MediaBudget | null): string {
+  const bits: string[] = [];
+  if (q?.roundTripMs != null) bits.push(`${q.roundTripMs} ms round trip`);
+  if (q?.packetLoss != null) bits.push(`${(q.packetLoss * 100).toFixed(1)}% packet loss`);
+  if (q?.kbps != null) bits.push(`${q.kbps} kbps`);
+  if (budget?.note) bits.push(budget.note);
+  return bits.length > 0 ? bits.join(" · ") : "Still measuring the connection";
 }
 
 function describeOutcome(s: RemoteSupportSession): string {

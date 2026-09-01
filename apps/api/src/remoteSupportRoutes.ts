@@ -140,6 +140,10 @@ function publicView(row: any, names: { target?: string | null; requester?: strin
     status: row.status,
     controlRequested: row.controlRequested,
     controlGranted: row.controlGranted,
+    // ⛔ Both lists, kept apart. `Requested` tells the consent dialog which rows
+    // to SHOW; `Granted` is the only one that authorises anything.
+    capabilitiesRequested: row.capabilitiesRequested ?? [],
+    capabilitiesGranted: row.capabilitiesGranted ?? [],
     requestReason: row.requestReason,
     deviceLabel: row.deviceLabel,
     targetUserId: row.targetUserId,

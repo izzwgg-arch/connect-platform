@@ -25,6 +25,15 @@ export type RemoteSupportSession = {
   status: RemoteSupportStatus;
   controlRequested: boolean;
   controlGranted: boolean;
+  /**
+   * ⛔ Two separate lists, and they are not interchangeable. `Requested` is what
+   * the technician asked for and drives which rows the consent dialog SHOWS;
+   * `Granted` is what the customer agreed to and is the only one that authorises
+   * anything. A screen that reads Requested as permission is the bug this
+   * separation exists to make impossible.
+   */
+  capabilitiesRequested?: string[];
+  capabilitiesGranted?: string[];
   requestReason: string;
   deviceLabel: string | null;
   targetUserId: string;
@@ -46,10 +55,38 @@ export const HEARTBEAT_MS = 10_000;
 /** Signalling poll interval while the connection is being established. */
 export const SIGNAL_POLL_MS = 1_000;
 
+/**
+ * The extras a session can carry beyond looking and typing.
+ *
+ * ⛔ Mirrors REMOTE_CAPABILITIES on the server. `admin` is deliberately absent
+ * and must stay absent — elevated control needs a Windows service running as
+ * SYSTEM, which this version does not ship, and offering a control that silently
+ * would not work is worse than not offering it.
+ */
+export type RemoteCapability = "view" | "control" | "clipboard" | "files";
+
+/** What the screen tells the encoder. Advisory — never a permission. */
+export type MediaBudget = {
+  maxBitrateKbps: number;
+  maxFramerate: number;
+  maxHeight: number;
+  note: string | null;
+};
+
+export type SessionEvent = {
+  id: string;
+  at: string;
+  kind: "system" | "chat";
+  code: string;
+  actorRole: "ADMIN" | "CLIENT" | "SYSTEM";
+  body: string | null;
+};
+
 export async function requestSession(input: {
   targetUserId: string;
   reason: string;
   requestControl: boolean;
+  capabilities?: RemoteCapability[];
 }): Promise<{ ok: boolean; session: RemoteSupportSession }> {
   return apiPost("/remote-support/sessions", input as any);
 }
@@ -68,13 +105,128 @@ export async function getSession(id: string): Promise<{ session: RemoteSupportSe
 
 export async function answerConsent(
   id: string,
-  input: { allow: boolean; allowControl?: boolean; deviceLabel?: string },
+  input: {
+    allow: boolean;
+    allowControl?: boolean;
+    allowCapabilities?: RemoteCapability[];
+    deviceLabel?: string;
+    deviceId?: string;
+  },
 ): Promise<{ ok: boolean; allowed: boolean; session?: RemoteSupportSession }> {
   return apiPost(`/remote-support/sessions/${id}/consent`, input as any);
 }
 
-export async function heartbeat(id: string): Promise<{ ok: boolean; role: string; canControl: boolean }> {
-  return apiPost(`/remote-support/sessions/${id}/heartbeat`, {});
+/**
+ * ⛔ The customer's heartbeat carries whether a phone call is up, and ONLY the
+ * customer's does. The server ignores the claim from the support side, so a
+ * technician cannot buy bitrate back on somebody else's machine.
+ */
+export async function heartbeat(
+  id: string,
+  input: { callInProgress?: boolean; packetLoss?: number; roundTripMs?: number } = {},
+): Promise<{
+  ok: boolean;
+  role: string;
+  canControl: boolean;
+  capabilities?: RemoteCapability[];
+  mediaBudget?: MediaBudget;
+  callInProgress?: boolean;
+}> {
+  return apiPost(`/remote-support/sessions/${id}/heartbeat`, input as any);
+}
+
+/* ─────────────── the transcript, chat, and asking for more ─────────── */
+
+export async function listEvents(id: string, since?: string): Promise<{ events: SessionEvent[] }> {
+  const q = since ? `?since=${encodeURIComponent(since)}` : "";
+  return apiGet(`/remote-support/sessions/${id}/events${q}`);
+}
+
+export async function sendChat(id: string, body: string): Promise<{ ok: boolean }> {
+  return apiPost(`/remote-support/sessions/${id}/chat`, { body } as any);
+}
+
+/**
+ * ⛔ ASKS. DOES NOT GRANT. The server records the request and puts the question
+ * back on the customer's screen; `granted` comes back unchanged, deliberately,
+ * so a screen cannot render this as success.
+ */
+export async function requestCapability(
+  id: string,
+  capability: RemoteCapability,
+): Promise<{ ok: boolean; pending: RemoteCapability; granted: RemoteCapability[] }> {
+  return apiPost(`/remote-support/sessions/${id}/request-capability`, { capability } as any);
+}
+
+/** The customer answering a mid-session request. Only they can call this. */
+export async function answerCapability(
+  id: string,
+  capability: RemoteCapability,
+  allow: boolean,
+): Promise<{ ok: boolean; granted: RemoteCapability[] }> {
+  return apiPost(`/remote-support/sessions/${id}/answer-capability`, { capability, allow } as any);
+}
+
+/** Records that a capability was used, as a COUNT. Never the content. */
+export async function reportCapabilityUse(
+  id: string,
+  capability: RemoteCapability,
+  count: number,
+): Promise<void> {
+  await apiPost(`/remote-support/sessions/${id}/use-capability`, { capability, count } as any).catch(() => {});
+}
+
+/* ─────────────────── the emergency controls (Phase 30) ────────────── */
+
+export type RemoteSupportControls = {
+  controls: { enabled: boolean; disabledReason: string | null };
+  revocations: Array<{
+    id: string;
+    scope: "TECHNICIAN" | "DEVICE" | "TENANT";
+    subjectId: string;
+    reason: string | null;
+    createdAt: string;
+    createdByUserId: string;
+  }>;
+  liveSessions: Array<{
+    id: string;
+    tenantId: string;
+    status: RemoteSupportStatus;
+    controlGranted: boolean;
+    capabilitiesGranted: string[];
+    startedAt: string | null;
+    requestedByUserId: string;
+    requestedByName: string | null;
+    targetUserId: string;
+    targetUserName: string | null;
+    deviceLabel: string | null;
+  }>;
+};
+
+export async function getControls(): Promise<RemoteSupportControls> {
+  return apiGet("/admin/remote-support/controls");
+}
+
+export async function setControls(input: {
+  enabled: boolean;
+  reason?: string;
+}): Promise<{ ok: boolean; controls: RemoteSupportControls["controls"]; sessionsEnded: number }> {
+  return apiPost("/admin/remote-support/controls", input as any);
+}
+
+export async function addRevocation(input: {
+  scope: "TECHNICIAN" | "DEVICE" | "TENANT";
+  subjectId: string;
+  reason?: string;
+}): Promise<{ ok: boolean; sessionsEnded: number }> {
+  return apiPost("/admin/remote-support/revocations", input as any);
+}
+
+export async function terminateSessions(input: {
+  sessionId?: string;
+  all?: boolean;
+}): Promise<{ ok: boolean; sessionsEnded: number }> {
+  return apiPost("/admin/remote-support/terminate", input as any);
 }
 
 export async function endSession(id: string): Promise<{ ok: boolean }> {
@@ -118,6 +270,19 @@ export type PeerHandlers = {
   onInput?: (command: InputCommand) => void;
   onStateChange?: (state: RTCPeerConnectionState) => void;
   onClosed?: (reason: string) => void;
+  /**
+   * What the last heartbeat learned. The support side draws it; the customer
+   * side APPLIES the budget to its encoder — see `applyBudget`.
+   */
+  onHeartbeat?: (info: { mediaBudget?: MediaBudget; callInProgress?: boolean; quality: LinkQuality | null }) => void;
+};
+
+/** What the receiving end can measure about the link. All optional, all advisory. */
+export type LinkQuality = {
+  /** 0..1. */
+  packetLoss: number | null;
+  roundTripMs: number | null;
+  kbps: number | null;
 };
 
 /**
@@ -136,6 +301,24 @@ export class RemoteSupportPeer {
   private stopped = false;
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private remoteDescriptionSet = false;
+  private lastPacketsLost = 0;
+  private lastPacketsReceived = 0;
+  private lastBytes = 0;
+  private lastBytesAt = 0;
+  private appliedBudget: string | null = null;
+
+  /**
+   * ⛔ Answers "is this person on a phone call right now?" — supplied by the
+   * CUSTOMER side only, because only their machine knows.
+   *
+   * Non-negotiable rule 15 (remote support yields to an active call) is enforced
+   * on the server by `decideMediaBudget`, which returns the small on-call budget
+   * the instant this reads true. Until 2026-08-31 nothing ever set it, so the
+   * rule was enforced against an input that never arrived — the whole protection
+   * was dead. It is a supplier rather than a constructor value because the
+   * answer changes DURING a session, which is exactly when it matters.
+   */
+  onCall: (() => boolean) | null = null;
 
   constructor(
     private sessionId: string,
@@ -188,10 +371,133 @@ export class RemoteSupportPeer {
     }
 
     this.pollTimer = setInterval(() => void this.poll(), SIGNAL_POLL_MS);
-    this.beatTimer = setInterval(() => {
-      void heartbeat(this.sessionId).catch(() => {});
-    }, HEARTBEAT_MS);
-    void heartbeat(this.sessionId).catch(() => {});
+    this.beatTimer = setInterval(() => void this.beat(), HEARTBEAT_MS);
+    void this.beat();
+  }
+
+  /**
+   * One heartbeat: prove we are still here, and carry what we measured.
+   *
+   * ⛔ Never allowed to throw. A heartbeat is the liveness signal, and a fault
+   * in the OPTIONAL telemetry beside it must not stop the beat — that would
+   * make the session look disconnected because a stats read failed.
+   */
+  private async beat(): Promise<void> {
+    let quality: LinkQuality | null = null;
+    let onCall: boolean | undefined;
+    try {
+      quality = await this.readQuality();
+    } catch {
+      /* stats are advisory; a failed read is not a failed heartbeat */
+    }
+    try {
+      onCall = this.onCall ? this.onCall() : undefined;
+    } catch {
+      onCall = undefined;
+    }
+
+    try {
+      const res = await heartbeat(this.sessionId, {
+        ...(onCall === undefined ? {} : { callInProgress: onCall }),
+        ...(quality?.packetLoss == null ? {} : { packetLoss: quality.packetLoss }),
+        ...(quality?.roundTripMs == null ? {} : { roundTripMs: quality.roundTripMs }),
+      });
+      this.handlers.onHeartbeat?.({
+        mediaBudget: res.mediaBudget,
+        callInProgress: res.callInProgress,
+        quality,
+      });
+      if (res.mediaBudget) this.applyBudget(res.mediaBudget);
+    } catch {
+      /* the next beat tries again; the server's stale window is 3 beats wide */
+    }
+  }
+
+  /**
+   * Ask the sender to stay inside the budget the server chose.
+   *
+   * ⛔ ONLY the customer side can do this — the budget limits an ENCODER, and
+   * the support side has no outgoing video track. Calling it there is a silent
+   * no-op rather than an error, so a shared code path stays honest.
+   *
+   * ⛔ Advisory, never a permission. Nothing here decides what may be seen; it
+   * decides how much bandwidth is spent showing it. A failure to apply must
+   * never end a session.
+   */
+  private applyBudget(budget: MediaBudget): void {
+    if (this.role !== "customer" || !this.pc) return;
+    const key = `${budget.maxBitrateKbps}/${budget.maxFramerate}/${budget.maxHeight}`;
+    if (key === this.appliedBudget) return; // nothing changed — don't churn the encoder
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      for (const e of params.encodings) {
+        e.maxBitrate = budget.maxBitrateKbps * 1000;
+        e.maxFramerate = budget.maxFramerate;
+      }
+      void sender.setParameters(params).then(
+        () => { this.appliedBudget = key; },
+        () => { /* some browsers refuse mid-negotiation; the next beat retries */ },
+      );
+    } catch {
+      /* never fatal */
+    }
+  }
+
+  /**
+   * What the link looks like from here, from the peer connection's own stats.
+   *
+   * ⛔ Loss is measured as a DELTA between beats, not a lifetime ratio. A
+   * lifetime figure is dominated by the connection's first seconds and would
+   * keep reporting a bad link long after it recovered — the budget would then
+   * stay clamped for the rest of the session.
+   */
+  async readQuality(): Promise<LinkQuality | null> {
+    if (!this.pc) return null;
+    const stats = await this.pc.getStats();
+    let lost: number | null = null;
+    let received: number | null = null;
+    let bytes: number | null = null;
+    let rtt: number | null = null;
+
+    stats.forEach((report: any) => {
+      if (report.type === "inbound-rtp" && report.kind === "video") {
+        if (typeof report.packetsLost === "number") lost = report.packetsLost;
+        if (typeof report.packetsReceived === "number") received = report.packetsReceived;
+        if (typeof report.bytesReceived === "number") bytes = report.bytesReceived;
+      } else if (report.type === "outbound-rtp" && report.kind === "video") {
+        if (typeof report.bytesSent === "number" && bytes == null) bytes = report.bytesSent;
+      } else if (report.type === "candidate-pair" && report.state === "succeeded") {
+        if (typeof report.currentRoundTripTime === "number") rtt = Math.round(report.currentRoundTripTime * 1000);
+      }
+    });
+
+    let packetLoss: number | null = null;
+    if (lost != null && received != null) {
+      const dLost = Math.max(0, lost - this.lastPacketsLost);
+      const dRecv = Math.max(0, received - this.lastPacketsReceived);
+      this.lastPacketsLost = lost;
+      this.lastPacketsReceived = received;
+      const total = dLost + dRecv;
+      // ⛔ A tiny sample is noise, not a verdict — one lost packet out of three
+      // would read as 33% loss and clamp the encoder for no reason.
+      if (total >= 30) packetLoss = dLost / total;
+    }
+
+    let kbps: number | null = null;
+    if (bytes != null) {
+      const now = Date.now();
+      if (this.lastBytesAt > 0 && now > this.lastBytesAt) {
+        const dBytes = Math.max(0, bytes - this.lastBytes);
+        kbps = Math.round((dBytes * 8) / (now - this.lastBytesAt));
+      }
+      this.lastBytes = bytes;
+      this.lastBytesAt = now;
+    }
+
+    return { packetLoss, roundTripMs: rtt, kbps };
   }
 
   /** Support side: send one input command. No-op unless the channel is open. */

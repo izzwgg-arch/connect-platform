@@ -27,16 +27,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   RemoteSupportPeer,
+  answerCapability,
   answerConsent,
   desktopBridge,
   endSession,
+  getSession,
   isDesktopShell,
   pendingForMe,
   reportInputCount,
+  type RemoteCapability,
   type RemoteSupportSession,
 } from "../services/remoteSupport";
 import { sanitizeIncomingInput } from "../lib/remoteSupportGuards";
 import { hasBrowserAuthToken } from "../services/apiClient";
+import { useOptionalSipPhone } from "../hooks/useSipPhone";
 
 type Screen = { id: string; name: string; thumbnailDataUrl: string; isScreen: boolean };
 
@@ -48,13 +52,35 @@ export default function RemoteSupportConsent() {
   const [screens, setScreens] = useState<Screen[]>([]);
   const [chosenScreen, setChosenScreen] = useState<string | null>(null);
   const [allowControl, setAllowControl] = useState(false);
+  /**
+   * ⛔ The extras the customer has ticked, and it starts EMPTY every time.
+   * There is no "remember this choice" and no standing consent — a session is
+   * agreed to one at a time, every time.
+   */
+  const [allowCaps, setAllowCaps] = useState<RemoteCapability[]>([]);
   const [live, setLive] = useState<RemoteSupportSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True while the server has clamped the picture because a call is up. */
+  const [yieldingToCall, setYieldingToCall] = useState(false);
+  /** A mid-session ask the technician has made and this person has not answered. */
+  const [capAsk, setCapAsk] = useState<RemoteCapability | null>(null);
 
   const peerRef = useRef<RemoteSupportPeer | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inputCountRef = useRef(0);
+
+  /**
+   * ⛔ `useOptionalSipPhone`, never `useSipPhone`. This component is mounted
+   * globally — including on pages that render OUTSIDE the SIP provider — and
+   * chrome must never crash the whole app over a missing provider. Null here
+   * simply means "this window has no phone", which is not the same as "no call
+   * is happening" but is the best this window can honestly say.
+   */
+  const phone = useOptionalSipPhone();
+  const onCall = phone?.callState === "connected" || phone?.callState === "ringing";
+  const onCallRef = useRef(onCall);
+  onCallRef.current = onCall;
 
   const bridge = desktopBridge();
 
@@ -123,6 +149,55 @@ export default function RemoteSupportConsent() {
     return () => { cancelled = true; clearInterval(timer); };
   }, [live, supported]);
 
+  /*
+   * ⛔ THE OTHER HALF OF "ASK FOR MORE", AND WITHOUT IT THE FEATURE IS A LIE.
+   *
+   * A technician can ask mid-session for the clipboard or file transfer. The
+   * server records that ask and puts it on this screen — but only if this screen
+   * looks. Until it did, the request landed nowhere, the customer was never
+   * asked, and the technician's rail sat on "Waiting for them to answer…"
+   * forever. The permission model was sound and simply unreachable.
+   *
+   * The question is derived, never pushed: anything REQUESTED that is not yet
+   * GRANTED is outstanding. That means a refresh, a reconnect or a second window
+   * all arrive at the same answer, and a dropped message cannot lose the ask.
+   */
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || !hasBrowserAuthToken()) return;
+      try {
+        const { session } = await getSession(live.id);
+        if (cancelled) return;
+        const asked = (session.capabilitiesRequested ?? []) as RemoteCapability[];
+        const has = new Set(session.capabilitiesGranted ?? []);
+        // ⛔ `view` and `control` were settled by the consent dialog. Re-asking
+        // for them here would be a second, weaker prompt for a decision that
+        // was already made properly.
+        setCapAsk(asked.find((c) => c !== "view" && c !== "control" && !has.has(c)) ?? null);
+      } catch {
+        /* transient — the next tick asks again */
+      }
+    };
+    void tick();
+    const timer = setInterval(tick, PENDING_POLL_MS);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [live]);
+
+  const answerCap = useCallback(async (capability: RemoteCapability, allow: boolean) => {
+    if (!live) return;
+    setCapAsk(null); // the question is answered the moment they press, not when the network agrees
+    try {
+      await answerCapability(live.id, capability, allow);
+    } catch {
+      // ⛔ A failed NO must not silently become a yes. Nothing was granted —
+      // the server only ever grants on an explicit allow — so putting the
+      // question back is the honest recovery.
+      if (!allow) setCapAsk(capability);
+    }
+  }, [live]);
+
   // Offer the screen list as soon as there is something to answer.
   useEffect(() => {
     if (!request || !bridge?.remoteSupport?.listScreens) return;
@@ -178,7 +253,12 @@ export default function RemoteSupportConsent() {
       const answer = await answerConsent(request.id, {
         allow: true,
         allowControl,
+        // ⛔ Sent as what the CUSTOMER ticked. The server still requires that the
+        // technician asked for each one and holds the control key right now, so
+        // this list can only ever narrow what is granted, never widen it.
+        allowCapabilities: allowCaps,
         deviceLabel,
+        deviceId: machine?.deviceId || undefined,
       });
       if (!answer.allowed || !answer.session) throw new Error("consent_not_recorded");
       const session = answer.session;
@@ -216,7 +296,14 @@ export default function RemoteSupportConsent() {
           bridge?.remoteSupport?.sendInput?.({ sessionId: session.id, command });
         },
         onClosed: () => { void teardown(session.id); },
+        onHeartbeat: ({ callInProgress }) => setYieldingToCall(Boolean(callInProgress)),
       });
+      // ⛔ Non-negotiable rule 15: remote support yields to a phone call. The
+      // customer's machine is the ONLY side that knows a call is up, so it is
+      // the only side that can answer this — and until it did, the server's
+      // on-call budget could never be chosen. Read through a REF so a call that
+      // starts mid-session is seen: the closure is built once, the ref is not.
+      peer.onCall = () => onCallRef.current;
       peerRef.current = peer;
       await peer.start(stream);
 
@@ -260,10 +347,43 @@ export default function RemoteSupportConsent() {
         <span className="rs-live-dot" aria-hidden />
         <span>
           {live.requestedByName || "Loopcom support"} {live.controlGranted ? "can see and control" : "can see"} your screen
+          {/*
+            ⛔ Say WHY the picture got softer. Without this the customer sees
+            their screen share degrade at the exact moment a call connects and
+            reasonably concludes that remote support broke their phone. It is
+            the opposite: the sharing stepped aside so the call keeps its
+            bandwidth.
+          */}
+          {yieldingToCall && (
+            <em className="rs-live-note"> — using less of your internet while you are on a call</em>
+          )}
         </span>
         <button type="button" className="btn" onClick={() => void teardown(live.id)}>
           Stop sharing
         </button>
+
+        {/*
+          ⛔ The mid-session ask. It sits INSIDE the always-visible banner rather
+          than in a popup on purpose: a popup can be behind another window, and a
+          permission question the customer never sees is one they cannot refuse.
+
+          ⛔ "No" is a real, equal button — not a dismissal, not an X in a corner.
+          Nothing is granted unless this person presses Allow.
+        */}
+        {capAsk && (
+          <div className="rs-live-ask" role="alert">
+            <span>
+              {live.requestedByName || "Loopcom support"} is asking to{" "}
+              {capAsk === "clipboard" ? "share your clipboard" : "send you a file"}.
+            </span>
+            <button type="button" className="btn" onClick={() => void answerCap(capAsk, false)}>
+              No
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => void answerCap(capAsk, true)}>
+              Allow
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -278,20 +398,106 @@ export default function RemoteSupportConsent() {
   }
 
   const askedForControl = request.controlRequested;
+  const askedFor = new Set(request.capabilitiesRequested ?? []);
+  const canControlHere = isDesktopShell();
+
+  const toggleCap = (cap: RemoteCapability) => {
+    setAllowCaps((prev) => (prev.includes(cap) ? prev.filter((c) => c !== cap) : [...prev, cap]));
+  };
 
   return (
     <div className="rs-backdrop" role="dialog" aria-modal="true" aria-labelledby="rs-title">
       <div className="rs-card">
+        <div className="rs-brand">
+          <span className="rs-brand-mark" aria-hidden />
+          Loopcom Technical Support
+        </div>
+
         <h2 id="rs-title" className="rs-title">
-          {request.requestedByName || "Loopcom support"} would like to see your screen
+          {request.requestedByName || "Loopcom support"} is asking to connect to this computer
         </h2>
 
         {/* The reason, verbatim. This is what makes it informed consent. */}
         <p className="rs-reason">“{request.requestReason}”</p>
 
+        {/*
+          ⛔ EVERY CAPABILITY IS ITS OWN TICK, AND EVERY ONE STARTS OFF.
+          Seeing the screen is the only thing implied by allowing at all; control
+          does not imply clipboard, and clipboard does not imply files. The rows
+          shown are exactly what was ASKED for, so the dialog can never offer
+          something the technician was not allowed to request.
+        */}
+        <div className="rs-label">What {request.requestedByName || "they"} are asking for</div>
+        <div className="rs-caps">
+          <div className="rs-cap is-locked">
+            <span className="rs-cap-box" aria-hidden>✓</span>
+            <span>
+              <span className="rs-cap-t">See my screen</span>
+              <span className="rs-cap-h">Required. They see only the screen you pick below.</span>
+            </span>
+          </div>
+
+          {askedForControl && (
+            <label className={`rs-cap${allowControl ? " is-on" : ""}${canControlHere ? "" : " is-dis"}`}>
+              <input
+                type="checkbox"
+                className="rs-cap-input"
+                checked={allowControl}
+                disabled={!canControlHere}
+                onChange={(e) => setAllowControl(e.target.checked)}
+              />
+              <span className="rs-cap-box" aria-hidden>{allowControl ? "✓" : ""}</span>
+              <span>
+                <span className="rs-cap-t">Use my mouse and keyboard</span>
+                <span className="rs-cap-h">
+                  {canControlHere
+                    ? "They can click and type on this computer. Yours always wins."
+                    : "Not available in a web browser — only in the Loopcom desktop app."}
+                </span>
+              </span>
+            </label>
+          )}
+
+          {CAPABILITY_ROWS.filter((row) => askedFor.has(row.id)).map((row) => (
+            <label
+              key={row.id}
+              className={`rs-cap${allowCaps.includes(row.id) ? " is-on" : ""}${canControlHere ? "" : " is-dis"}`}
+            >
+              <input
+                type="checkbox"
+                className="rs-cap-input"
+                checked={allowCaps.includes(row.id)}
+                disabled={!canControlHere}
+                onChange={() => toggleCap(row.id)}
+              />
+              <span className="rs-cap-box" aria-hidden>{allowCaps.includes(row.id) ? "✓" : ""}</span>
+              <span>
+                <span className="rs-cap-t">{row.title}</span>
+                <span className="rs-cap-h">{row.hint}</span>
+              </span>
+            </label>
+          ))}
+
+          {/*
+            ⛔ ALWAYS SHOWN, ALWAYS UNAVAILABLE, ON PURPOSE. Reaching an elevated
+            window needs a Windows service running as SYSTEM, which this version
+            does not ship. Drawing the row honestly is better than leaving the
+            customer to wonder, and far better than offering something that would
+            silently do nothing. Removing this row is not the fix; building the
+            service is.
+          */}
+          <div className="rs-cap is-dis">
+            <span className="rs-cap-box" aria-hidden />
+            <span>
+              <span className="rs-cap-t">Administrator actions</span>
+              <span className="rs-cap-h">Not available. Loopcom never runs as administrator.</span>
+            </span>
+          </div>
+        </div>
+
         {screens.length > 0 && (
           <div className="rs-screens">
-            <div className="rs-label">Choose what to share</div>
+            <div className="rs-label">Which screen</div>
             <div className="rs-screen-grid">
               {screens.map((s) => (
                 <button
@@ -313,25 +519,10 @@ export default function RemoteSupportConsent() {
           </div>
         )}
 
-        {askedForControl && (
-          <label className="rs-control">
-            <input
-              type="checkbox"
-              checked={allowControl}
-              onChange={(e) => setAllowControl(e.target.checked)}
-            />
-            <span>
-              <strong>Also let them control this computer.</strong>
-              <br />
-              They will be able to move your mouse and type. Leave this unticked and they can only watch.
-            </span>
-          </label>
-        )}
-
-        {!isDesktopShell() && (
+        {!canControlHere && (
           <p className="rs-note">
-            You are signed in through a web browser, so the support person can only watch — controlling
-            is only possible in the Connect desktop app.
+            You are signed in through a web browser, so the support person can only watch — anything
+            beyond that is only possible in the Loopcom desktop app.
           </p>
         )}
 
@@ -339,15 +530,38 @@ export default function RemoteSupportConsent() {
 
         <div className="rs-actions">
           <button type="button" className="btn" onClick={() => void decline()} disabled={busy}>
-            No thanks
+            Not now
           </button>
           <button type="button" className="btn btn-primary" onClick={() => void allow()} disabled={busy}>
-            {busy ? "Starting…" : allowControl ? "Allow watching and control" : "Allow watching"}
+            {busy ? "Starting…" : "Allow for this session"}
           </button>
         </div>
 
-        <p className="rs-footnote">You can stop this at any time, and they will be disconnected straight away.</p>
+        <p className="rs-footnote">
+          You can stop this at any time. Loopcom does not record your screen, and nothing you share is
+          stored on our servers.
+        </p>
       </div>
     </div>
   );
 }
+
+/**
+ * The extra capabilities a customer can tick, in the order they appear.
+ *
+ * ⛔ Wording is written for a person who is not technical and who is being asked
+ * to let a stranger onto their computer. "Share clipboard text" says what it
+ * does; "enable clipboard synchronisation" does not.
+ */
+const CAPABILITY_ROWS: Array<{ id: RemoteCapability; title: string; hint: string }> = [
+  {
+    id: "clipboard",
+    title: "Share clipboard text",
+    hint: "Copy and paste between their machine and yours.",
+  },
+  {
+    id: "files",
+    title: "Send and receive files",
+    hint: "Files arrive in Documents → Loopcom Support.",
+  },
+];

@@ -38596,6 +38596,124 @@ table tr:hover {
 .rs-status { color: var(--text-dim); font-size: 13px; margin: 0 0 12px; }
 .rs-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .rs-footnote { margin: 14px 0 0; font-size: 11px; color: var(--text-dim); }
+/* ── Remote support: consent capability rows + the emergency controls ──────
+   Added 2026-08-31 with the capability tiers and the kill switch.
+
+   ⛔ Every colour here is a Connect theme token, never a literal. The billing
+   lesson: a section with its own palette follows the OPERATING SYSTEM rather
+   than the app's own light/dark switch, and the two disagree routinely. The
+   `.rs-*` block above already does this; these follow it.
+
+   ⛔ Class names checked against the whole stylesheet before they were written
+   (`.rsc-`, `.rs-cap`, `.rs-brand` were all 0 occurrences). A silent collision
+   is how the support console's terminal container and its stdout LINE ended up
+   sharing a selector.                                                       */
+
+.rs-brand {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase;
+  font-weight: 700; color: var(--accent); margin-bottom: 14px;
+}
+.rs-brand-mark { width: 17px; height: 17px; border-radius: 5px; background: var(--accent); flex: none; }
+
+.rs-caps { display: flex; flex-direction: column; gap: 2px; margin: 0 0 16px; }
+.rs-cap {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer; position: relative;
+}
+.rs-cap.is-on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.rs-cap.is-dis { opacity: .5; cursor: default; }
+.rs-cap.is-locked { cursor: default; }
+/* The real checkbox stays in the accessibility tree and keeps keyboard focus;
+   only its painting is replaced. */
+.rs-cap-input { position: absolute; opacity: 0; width: 0; height: 0; }
+.rs-cap-box {
+  width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border);
+  flex: none; margin-top: 1px; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #fff; background: var(--panel-2);
+}
+.rs-cap.is-on .rs-cap-box,
+.rs-cap.is-locked .rs-cap-box { background: var(--accent); border-color: var(--accent); }
+.rs-cap.is-locked .rs-cap-box { opacity: .55; }
+.rs-cap-input:focus-visible + .rs-cap-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rs-cap-t { font-size: 13.5px; font-weight: 600; line-height: 1.35; display: block; }
+.rs-cap-h { font-size: 12px; color: var(--text-dim); margin-top: 2px; line-height: 1.45; display: block; }
+
+/* ── the emergency controls screen ─────────────────────────────────────── */
+
+.rsc-page { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 14px; max-width: 1000px; }
+.rsc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.rsc-head h1 { margin: 0 0 3px; font-size: 20px; }
+.rsc-head p { margin: 0; color: var(--text-dim); font-size: 13px; }
+
+.rsc-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px;
+}
+.rsc-card--flush { padding: 0; overflow: hidden; }
+.rsc-card h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.rsc-hint { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); }
+
+.rsc-master { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.rsc-master-text { flex: 1; min-width: 240px; }
+.rsc-master-text p { margin: 0 0 10px; font-size: 13px; color: var(--text-dim); max-width: 58ch; }
+/* ⛔ A left stripe rather than a full wash: the screen must read as "switched
+   off", not as "broken", and a page-wide red says the wrong thing. */
+.rsc-master.is-off { border-left: 3px solid var(--danger); }
+
+.rsc-section-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px 11px;
+}
+.rsc-section-head h2 { margin: 0; flex: 1; }
+
+.rsc-rows {
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--border); border-top: 1px solid var(--border);
+}
+.rsc-rows--tight { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-top: 12px; }
+.rsc-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 11px 16px; background: var(--panel); font-size: 13px;
+}
+.rsc-who { flex: 1; min-width: 180px; }
+.rsc-who b { display: block; font-weight: 600; }
+.rsc-who span { color: var(--text-dim); font-size: 12px; }
+
+.rsc-pill {
+  display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text-dim); white-space: nowrap;
+}
+/* ⛔ Status colour is INK on a soft fill, not the raw display token as text.
+   Measured on the light panel, `--success` as 11px text is unreadable; these
+   are the same hues darkened enough to pass on both grounds. */
+.rsc-pill.is-live { background: color-mix(in srgb, var(--success) 16%, transparent); border-color: transparent; color: var(--success); }
+.rsc-pill.is-bad { background: color-mix(in srgb, var(--danger) 14%, transparent); border-color: transparent; color: var(--danger); }
+:root[data-theme="light"] .rsc-pill.is-live { color: #0f7a4a; }
+:root[data-theme="light"] .rsc-pill.is-bad { color: #b3261e; }
+
+.rsc-empty { margin: 0; padding: 0 16px 16px; color: var(--text-dim); font-size: 13px; }
+
+.rsc-input {
+  font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  width: 100%; max-width: 460px;
+}
+.rsc-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.rsc-revoke { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rsc-revoke .rsc-input { width: auto; flex: 1 1 180px; max-width: none; }
+
+.rsc-alert { padding: 11px 14px; border-radius: 9px; font-size: 13px; line-height: 1.5; }
+.rsc-alert--bad { background: color-mix(in srgb, var(--danger) 12%, transparent); border-left: 3px solid var(--danger); }
+.rsc-alert--ok { background: color-mix(in srgb, var(--success) 12%, transparent); border-left: 3px solid var(--success); }
+
+@media (max-width: 640px) {
+  .rsc-page { padding: 16px 14px 40px; }
+  .rsc-revoke .rsc-input { flex-basis: 100%; }
+}
+
 
 /* The in-app reminder. The unmissable one is the always-on-top banner the
    Electron main process draws, which this deliberately does not duplicate. */
@@ -38608,6 +38726,16 @@ table tr:hover {
 }
 .rs-live--error { border-color: var(--warning); }
 .rs-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: rs-pulse 1.6s ease-in-out infinite; }
+/* Why the picture softened, said plainly and quietly beside the banner text. */
+.rs-live-note { font-style: normal; color: var(--text-dim); }
+/* ⛔ The mid-session ask. `flex-basis: 100%` puts it on its own line INSIDE the
+   banner, so it inherits the banner's always-on-top placement — a permission
+   question that can end up behind another window is one nobody can refuse. */
+.rs-live-ask {
+  flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 9px; border-top: 1px solid var(--border);
+}
+.rs-live-ask > span { flex: 1; min-width: 180px; }
 @keyframes rs-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
 
 .rs-console { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 18px; }
@@ -38730,3 +38858,98 @@ table tr:hover {
 .cf-empty-t { font-weight: 700; color: var(--text); margin-bottom: 4px; }
 .cf-empty .qb-btn { margin-top: 12px; }
 .cf-input-narrow { max-width: 120px; }
+
+/* ── Remote support: the live stage and its rail (2026-08-31) ──────────────
+   ⛔ Every colour is a Connect theme token. The billing lesson: a section with
+   its own palette follows the OPERATING SYSTEM rather than the app's own
+   light/dark switch, and the two disagree routinely.
+
+   ⛔ Class names checked against the whole stylesheet before they were written
+   (`.rs-live-grid`, `.rs-rail`, `.rs-tool`, `.rs-ev`, `.rs-link` all read 0).  */
+
+.rs-live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+}
+/* One column under a laptop width — the screen is the feature, so it keeps the
+   full width and the rail moves below it rather than squeezing both. */
+@media (max-width: 1100px) {
+  .rs-live-grid { grid-template-columns: minmax(0, 1fr); }
+  .rs-rail { max-height: 420px; }
+}
+
+.rs-rail {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden;
+}
+
+.rs-rail-tools { padding: 12px 12px 10px; border-bottom: 1px solid var(--border); }
+.rs-rail-tools h3 {
+  margin: 0 0 8px; font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim);
+}
+.rs-rail-yield {
+  margin: 0 0 8px; font-size: 12px; line-height: 1.45; color: var(--text-dim);
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  border-left: 3px solid var(--warning); border-radius: 6px; padding: 7px 9px;
+}
+
+.rs-tool {
+  display: block; width: 100%; text-align: left; font: inherit;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  border-radius: 9px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer;
+}
+.rs-tool:last-child { margin-bottom: 0; }
+.rs-tool:hover:not(:disabled):not(.is-unavailable) { border-color: var(--accent); }
+.rs-tool:disabled { cursor: default; }
+.rs-tool.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* ⛔ Visibly present, visibly not offered. It is drawn rather than hidden so a
+   technician learns the limit here instead of on a customer's UAC prompt. */
+.rs-tool.is-unavailable { opacity: .5; cursor: default; }
+.rs-tool-t { display: block; font-size: 13px; font-weight: 600; }
+.rs-tool-h { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+
+.rs-rail-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.rs-rail-tabs button {
+  flex: 1; font: inherit; font-size: 12.5px; font-weight: 600; padding: 9px 8px;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-dim); cursor: pointer;
+}
+.rs-rail-tabs button.is-on { color: var(--text); border-bottom-color: var(--accent); }
+
+.rs-rail-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.rs-rail-empty { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+
+.rs-ev { font-size: 12.5px; line-height: 1.45; }
+.rs-ev b { display: block; font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
+.rs-ev span { display: block; word-break: break-word; }
+.rs-ev time { font-size: 10.5px; color: var(--text-dim); }
+.rs-ev.is-chat.is-admin b { color: var(--accent); }
+/* A system line is the record speaking, not a person — set apart, never styled
+   to look like something somebody said. */
+.rs-ev-sys { color: var(--text-dim); font-style: italic; }
+
+.rs-rail-say { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.rs-rail-say input {
+  flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 7px 10px;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text);
+}
+.rs-rail-say input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── the connection readout ──────────────────────────────────────────────
+   ⛔ Never colour alone: the dot carries the same verdict the words do, so a
+   colourblind reader loses nothing. */
+.rs-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+.rs-link-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-dim); }
+.rs-link-dot.is-good { background: var(--success); }
+.rs-link-dot.is-fair { background: var(--warning); }
+.rs-link-dot.is-poor { background: var(--danger); }
+.rs-link-dot.is-unknown { background: var(--text-dim); opacity: .6; }
