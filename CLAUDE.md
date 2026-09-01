@@ -11940,6 +11940,102 @@ Memory: [[blank-app-means-check-the-ban-first]], [[prefetch-must-fit-its-cache]]
   ⏳ The temporary `allow 38.105.207.69;` line **can now be removed** — it was
   insurance while the fix was undeployed.
 
+## ⛔⛔ AGENT HANDOFF — remote support grew a KILL SWITCH, capability tiers and a transcript; attacking it found a bug that would have killed HALF of all sessions (2026-08-31) — READ FIRST before touching `apps/api/src/remoteSupport/`, before gating `/remote-support` on a permission, before adding a gate to the `end` route, or before quoting a concurrent-session capacity
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_HARDENING_2026-08-31.md`**
+(`b29d8240` + the `events.ts` NUL fix + `a3a3da07` on `feat/ivr-migration-takeover`.
+⛔ **NOT DEPLOYED, MIGRATION NOT APPLIED, NO HUMAN HAS RUN A SESSION.** No api
+deploy, no portal deploy, no desktop build. Every claim below is tests,
+typechecks and generated DDL.)
+
+- ⛔⛔ **THE BUG THAT MATTERS, AND IT WAS INVISIBLE TO EVERY UNIT TEST: whichever
+  side heartbeat SECOND could never join.** A session flips to `ACTIVE` on the
+  first beat from EITHER side; the other side's `lastSeen*At` is still null at
+  that instant, and the old rule read null as "gone silent" rather than "not here
+  yet" — so its very first heartbeat was refused `support_disconnected` before it
+  could record one. Which side lost came down to a race between the customer's
+  app and the technician's console, so it would have presented as **"the support
+  connection dropped" immediately after consent, on roughly half of all sessions,
+  apparently at random.** ⛔ The code's own comment already promised the grace it
+  did not deliver — that grace only held while status was `CONSENTED`, and the
+  first beat destroyed it for the other party. **Fixed:** an absent beat is
+  measured against `startedAt`, so a side gets the same window to ARRIVE that it
+  has to go quiet; the `HEARTBEAT_STALE_MS` ceiling is unchanged, so a session
+  still cannot outlive the banner showing it. **3 of the new tests fail replayed
+  against the pre-fix file.**
+  ⛔ **THE LESSON: it was found by driving the ROUTES, not the functions.** The
+  policy layer had 47 passing tests and every one of them was right.
+- ⛔⛔ **THE PERMISSION RULE IS `{ prefix: "/remote-support", permission: null }`
+  AND MUST STAY THAT WAY.** Gating it on `can_remote_support` would **403 EVERY
+  CUSTOMER** — the person whose screen it is holds no key, and `/pending`,
+  `/consent`, `/heartbeat`, `/signal`, `/chat` and `/end` are all theirs. Same
+  lesson as `/voice/diag`. ⛔ **And it cannot be narrowed by sub-prefix either:**
+  `POST /remote-support/sessions` is staff-only while
+  `POST /remote-support/sessions/:id/consent` is the customer answering, so any
+  rule on `/remote-support/sessions` breaks consent — the split is by METHOD and
+  PARTICIPANT, which a prefix cannot say. The entry exists so the prefix MATCHES
+  A RULE at all (the `/admin/wake-health` class). `/admin/remote-support` has its
+  own entry **and** `requireSuperAdmin` in every handler.
+- ⛔⛔ **THE KILL SWITCH NEVER BLOCKS STOPPING.** It gates request, consent,
+  heartbeat, signal and input — and **never** `end`. A switch that could refuse
+  `end` would, in the exact emergency it exists for, leave a live session running
+  with no way to close it. There is a comment saying so in the `end` handler; do
+  not "tidy" a gate call into it. ⛔ And **off ENDS what is running**, not merely
+  refuses the next one — proven at 100 live sessions across 100 tenants in 14 ms.
+- ⛔ **A failed control READ fails CLOSED; a MISSING ROW means enabled.** Opposite
+  on purpose: no row means nobody ever touched the switch (absence of a setting
+  is a fact), a throw means we cannot tell whether someone is revoked (absence of
+  an answer is not). State is in the DATABASE, never a module variable — this
+  repo has twice shipped state in a `Map` that re-armed on the next deploy.
+- ⛔ **`admin` is NOT in `REMOTE_CAPABILITIES` and its absence is the feature.**
+  Elevated control needs a Windows service running as SYSTEM, which this version
+  does not ship. Adding the string is not sufficient — it needs its own local
+  elevation prompt, audit event and technician role. The consent dialog draws the
+  row as unavailable so the customer is told the truth.
+- ⛔ **A system event STRUCTURALLY cannot carry a secret.** The only free text in
+  the surface is a chat line a human typed; every system sentence is composed
+  from a closed vocabulary. Input is a **count**, clipboard is a **length**
+  (non-negotiable #12, Phase 22). A test renders every code with hostile facts
+  and asserts nothing leaks.
+- ⛔ **Only the CUSTOMER may report that a call is in progress.** A technician
+  claiming otherwise cannot buy bitrate back on someone else's machine — remote
+  support yields to calls, always, and no input can raise the on-call budget.
+- ⛔⛔ **THE NUL TRAP AGAIN, TWICE IN ONE SESSION.** `events.ts` committed as
+  `Bin 0 -> 10655 bytes` from two LITERAL control bytes inside a regex character
+  class where escapes were intended, and **`sed -i` injected a NUL** into
+  `attack.test.ts`. A file git calls binary has no reviewable diff, ever. **Check
+  `git show --stat` for `Bin` on every new source file, and never use `sed -i` on
+  source in this repo** — use the editor, or python with explicit encoding.
+- ✅ **Measured (broker only): 120 concurrent sessions at 97/sec, scaling ×1.22
+  from 20→80 (linear, not quadratic), 440 cycles at 16.6 ms with heap −10.9 MB,
+  1,000 heartbeats with no row growth.** 179/179 remoteSupport tests; full
+  apps/api 3,697 tests / 3,664 pass / 33 fail — **all 33 pre-existing and
+  documented**, proven by the cited `publicOrigins` hostname literal existing at
+  my commit's parent. api typecheck **76 = the exact baseline**.
+  ⛔⛔ **THESE NUMBERS ARE THE BROKER, NOT VIDEO. The screen and every input event
+  ride a peer connection and never touch our servers, so encoder throughput, GPU
+  cost, frame rate and relay bandwidth are UNMEASURED and need two real machines.
+  Nobody may quote a concurrent-session capacity for the media path.** The
+  database in those runs is an in-memory fake, so they are a ceiling on the
+  application layer with the database removed.
+- ⛔ **Two findings came from the stress test failing FIRST, both kept in the
+  file:** a single-technician soak is **impossible** and correctly so (440 cycles
+  through one actor was refused at cycle 0 by the abuse protection — a real desk
+  is many people), and 1,760 undrained signalling rows looked like a leak and was
+  the SIMULATION being unrealistic; the real guard (age-based purge of an
+  abandoned negotiation) is now its own test.
+- ⏳ **NOT BUILT, deliberately:** the UI (mockups published and awaiting the
+  owner's approval per his standing rule —
+  <https://claude.ai/code/artifact/8c634f18-4501-436f-8f0e-e1ac1c9a23d7>);
+  cryptographic device identity and presence (Phases 3/4 — `deviceId` is recorded
+  and revocable but is self-reported, an identifier not an attestation);
+  clipboard/file **transport** (the tiers, refusals and audit exist, the data
+  channel does not); TURN/relay for remote support (**media is direct-P2P only,
+  so a doubly-firewalled pair will fail to connect**); remote terminal; session
+  recording. ⛔ And the desktop half still lives in **`apps/desktop-support`**, an
+  app that has never shipped — lifting it into `apps/desktop` is the remaining
+  packaging work.
+
 ## ⛔⛔ AGENT HANDOFF — remote support: we can now watch and drive a customer's Windows machine (2026-08-16) — READ FIRST before touching remote support, the desktop app's capture/input code, the LAN phone inventory, or before adding ANY capability that observes or acts on a customer's computer
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_LAN_PHONES_2026-08-16.md`**
