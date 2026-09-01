@@ -292,6 +292,20 @@ for all permissions. Always, always, always.”*
   both source-guarded (`accountOwnerGrant.test.ts`, 7 tests). In no default
   bucket; deliberately NOT platform-protected, so an account owner may delegate
   ownership of their own account.
+- ✅ **BOTH DEPLOYED AND PROVEN 2026-09-01.** api ships in `58ed5a24`, portal in
+  `8f1d2e3c` (both contain `bbb6be8c`; 0 restarts; 200 on both hostnames; the
+  page chunk carries “Owner — full access to their account” + “Locked” +
+  “Platform staff only”; the key literal lives in shared chunk 6051, so grepping
+  the page chunk for it reads 0 — not a failed deploy). **The grant is proven
+  LIVE, not just by test**: a throwaway owner role on Loopcom Demo assigned to a
+  USER-jwt user resolved through the deployed resolver to a set BYTE-IDENTICAL
+  to the same person resolved as a real TENANT_ADMIN (101 = 101, zero divergence
+  either way, CRM gating included); probe rows deleted and verified gone.
+  ⛔ **“Owner = the TENANT_ADMIN bucket” is NOT “every bucket key”** — the CRM
+  keys still gate on tenant CRM + CrmUserAccess exactly as they do for a real
+  tenant admin; a naive superset assertion reads that as a failure and it is the
+  correct behaviour. ⏳ NOT PROVEN: nobody has flipped the Owner toggle in a
+  browser, and no EZra holder has signed in since the grant.
 - ✅ **Enforced, not remembered:
   `apps/portal/navigation/permissionToggleCoverage.test.ts`** (registered; 6
   tests, **3 fail replayed against the pre-fix HEAD** via `PORTAL_GUARD_ROOT`).
