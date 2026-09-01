@@ -1646,6 +1646,26 @@ Memory: [[relax-tires-app-ring-is-a-client-side-question]] (updated in place).
 - ⏳ **Remedies, none applied (his phone, his call):** on the handset — Loopcom battery =
   Unrestricted, Samsung "Never sleeping apps", full-screen-notification permission (the exact
   class for this device); decide on a backup ring leg; deactivate the dead device row.
+- ⛔⛔ **ROUND 3 (2026-09-01, same day): THE DEEPER CAUSE IS OUR OWN HIGH-PRIORITY PUSH
+  VOLUME — full census in
+  `docs/ai-context/AGENT_HANDOFF_HIGH_PRIORITY_PUSH_CENSUS_2026-09-01.md`. READ IT before
+  touching ANY wake/push sender.** Android budgets high-priority FCM per app per day by
+  standby bucket (~10 for a rarely-opened app) and demotes over-budget pushes to normal =
+  Doze-deferred. This device receives ~70–90 INVISIBLE high-priority WAKEs/day: the worker
+  registration watchdog alone delivered **119 in 46 h** (⛔ its own comment says it was
+  built FOR "the T25/ext101/S25 incident" — the cure feeds the disease), plus 4 invisible
+  WAKEs + 1 visible INCOMING_CALL per call. Every WAKE has been 100% invisible since the
+  placeholder heads-up was disabled 2026-07-07 (Izzy's request). ⛔ **Five WAKE senders
+  exist** (ring-notify, telephony prewake `9c8d6a87`, wake-dial UserEvent consumer
+  `e08e62a5` — the one wake-and-wait HOLDS for, worker watchdog `cdd5bbdd`, admin
+  force-reregister + legacy wake-extension door) — each was a real fix; **none may be
+  REMOVED**: the ring-notify WAKE is the ONLY wake on internal ext→ext calls (prewake is
+  inbound-only). Proposed, NOT executed: watchdog wake → NORMAL priority; one WAKE per
+  (call,user) gate across all senders; auto-deactivate NotRegistered tokens; on-device
+  `getPriority()` vs `getOriginalPriority()` telemetry (the demotion proof — the app reads
+  neither today). ⏳ The FCM Data API (priority-lowered %) is DISABLED on the Firebase
+  project and the SA cannot enable it — one click for Izzy, project 853620654316.
+  ⚠️ Demotion/quota is the best-fitting theory, NOT yet proven on-device.
 
 ## ⛔⛔ AGENT HANDOFF — Relax Tires "it only rang my cell, not the app": the PBX rang the app on EVERY call for 24 days, and the app rebuilds its SIP stack every 10 minutes (2026-08-27) — READ FIRST for ANY "the app didn't ring" report, before trusting a VoiceDiagEvent gap, or before moving a cellular tenant to the 443 route
 
