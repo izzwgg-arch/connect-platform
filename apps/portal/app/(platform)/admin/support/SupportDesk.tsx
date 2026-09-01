@@ -52,6 +52,8 @@ type Detail = Row & {
 };
 type FixAction = { id: string; status: string; summary: string | null; approvalConsumedAt: string | null } | null;
 type Msg = { role: string; content: string; contentEn: string | null; createdAt: string; model: string | null };
+/** A direct support↔customer message — the channel that actually NOTIFIES them. */
+type CaseMsg = { id: string; direction: string; body: string; createdAt: string; readAt: string | null };
 type Customer = {
   tenant: { name: string };
   counts: { extensions: number | null; users: number | null; numbers: number | null };
@@ -133,6 +135,7 @@ export default function SupportDesk() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ escalation: Detail; fixAction: FixAction; messages: Msg[] } | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [caseMsgs, setCaseMsgs] = useState<CaseMsg[]>([]);
   const [takenOver, setTakenOver] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -181,6 +184,13 @@ export default function SupportDesk() {
       } else {
         setTakenOver(false);
       }
+      // The direct-message thread for this ticket. Reading it here also marks
+      // the customer's replies as read (that is the route's contract).
+      apiGet<{ messages: CaseMsg[] }>(
+        `/admin/support/escalations/${encodeURIComponent(out.escalation.reference)}/messages`,
+      )
+        .then((m) => selRef.current === id && setCaseMsgs(Array.isArray(m.messages) ? m.messages : []))
+        .catch(() => setCaseMsgs([]));
     } catch {
       if (selRef.current === id) setDetail(null);
     }
@@ -216,12 +226,22 @@ export default function SupportDesk() {
     } catch (e) { setErr(errorText(e)); } finally { setBusy(false); }
   }
 
+  /**
+   * ⛔⛔ Sends a SUPPORT MESSAGE, not a conversation message. The old composer
+   * posted into the assistant conversation, which nothing ever notified the
+   * customer about — Izzy replied to a real ticket and the customer never got
+   * it (2026-09-01). This route lands in the widget with a pop-up beside the
+   * bubble, and mirrors into the chat server-side when one exists.
+   */
   async function send() {
-    if (!convId || !draft.trim() || busy) return;
+    if (!esc || !draft.trim() || busy) return;
     setBusy(true); setErr("");
     try {
-      await apiPost(`/admin/support/conversations/${encodeURIComponent(convId)}/message`, { body: draft.trim() });
+      await apiPost(`/admin/support/escalations/${encodeURIComponent(esc.reference)}/message`, {
+        message: draft.trim(),
+      });
       setDraft("");
+      setNotice(`Sent — ${esc.userName} gets a notification beside their assistant bubble.`);
       void loadDetail(selectedId!);
     } catch (e) { setErr(errorText(e)); } finally { setBusy(false); }
   }
@@ -369,26 +389,40 @@ export default function SupportDesk() {
                   </div>
                   {esc.fixResult ? <div className="sd-dim">{esc.fixResult}</div> : null}
                 </div>
+
+                {/* Direct support↔customer messages on this ticket — the
+                    channel that actually notifies them. Their replies land
+                    here too, and reading this thread marks them read. */}
+                {caseMsgs.map((m) => (
+                  <div
+                    key={m.id}
+                    className={"sd-msg " + (m.direction === "from_customer" ? "sd-msg-user" : "sd-msg-agent")}
+                    style={m.direction !== "from_customer" ? { borderColor: "var(--success)", alignSelf: "flex-end" } : undefined}
+                  >
+                    <span className="sd-msg-who">
+                      {m.direction === "from_customer" ? `${esc.userName} · reply` : "Loopcom support"}
+                      {" · "}{timeAgo(m.createdAt)}
+                      {m.direction !== "from_customer" ? (m.readAt ? " · read" : " · not read yet") : ""}
+                    </span>
+                    {m.body}
+                  </div>
+                ))}
               </div>
 
-              {convId ? (
-                takenOver ? (
-                  <div className="sd-composer">
-                    <input
-                      value={draft}
-                      placeholder={`Write to ${esc.userName} as a real person…`}
-                      disabled={busy}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => (e.key === "Enter" ? void send() : null)}
-                    />
-                    <button className="sd-btn sd-btn-primary" disabled={busy || !draft.trim()} onClick={() => void send()}>Send</button>
-                  </div>
-                ) : (
-                  <div className="sd-state" style={{ padding: 10 }}>Take over to reply as a person — the assistant is handling it right now.</div>
-                )
-              ) : (
-                <div className="sd-state" style={{ padding: 10 }}>This one came from the &ldquo;something isn&apos;t working&rdquo; form, so there is no chat to reply into.</div>
-              )}
+              {/* ⛔ ALWAYS a way to write to the person — with or without a
+                  chat, taken over or not. The old dead ends ("no chat to reply
+                  into" / "take over first") were exactly where a real reply
+                  went missing. */}
+              <div className="sd-composer">
+                <input
+                  value={draft}
+                  placeholder={`Message ${esc.userName} — lands by their assistant bubble with a notification…`}
+                  disabled={busy}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => (e.key === "Enter" ? void send() : null)}
+                />
+                <button className="sd-btn sd-btn-primary" disabled={busy || !draft.trim()} onClick={() => void send()}>Send</button>
+              </div>
             </>
           ) : null}
         </main>

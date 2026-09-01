@@ -38,7 +38,7 @@ export type SupportUpdateRouteDeps = {
  * carries. Resolve it the same way the console does rather than making the
  * caller find a cuid.
  */
-async function resolveEscalationId(db: any, reference: string): Promise<string | null> {
+export async function resolveEscalationId(db: any, reference: string): Promise<string | null> {
   const needle = String(reference || "").trim().toUpperCase();
   if (!needle) return null;
   if (needle.length > 20) return needle; // already an id
@@ -127,25 +127,34 @@ export function registerSupportUpdateRoutes(app: FastifyInstance, deps: SupportU
       });
     }
 
-    const out = await recordVerdict(db, {
-      updateId: String((req.params as any)?.id ?? ""),
-      userId: user.sub,
-      tenantId: user.tenantId,
-      verdict: parsed.data.verdict,
-      note: parsed.data.note,
-    });
+    const out = await recordVerdict(
+      db,
+      {
+        updateId: String((req.params as any)?.id ?? ""),
+        userId: user.sub,
+        tenantId: user.tenantId,
+        verdict: parsed.data.verdict,
+        note: parsed.data.note,
+      },
+      deps.log,
+    );
     if (!out.ok) return reply.status(409).send({ error: "not_applicable", message: out.reason });
 
     deps.log?.info?.(
-      { updateId: (req.params as any)?.id, verdict: parsed.data.verdict },
+      { updateId: (req.params as any)?.id, verdict: parsed.data.verdict, followUp: out.followUp ?? "none" },
       "support-update: customer answered",
     );
-    return reply.send({
-      ok: true,
-      message:
-        parsed.data.verdict === "fixed"
-          ? "Thanks for checking — glad that's sorted."
-          : "Thanks for telling us. We've reopened it and someone will pick it up.",
-    });
+    // ⛔ Every sentence here is TRUE by construction. "reinvestigate" means a
+    // follow-up ticket really was filed (texted to the owner, re-worked by the
+    // agent); "needs_person"/"failed" promise only what actually happened.
+    const message =
+      parsed.data.verdict === "fixed"
+        ? "Thanks for checking — glad that's sorted."
+        : out.followUp === "reinvestigate"
+          ? "Thanks for telling us — we've sent it back to the team for another look."
+          : out.followUp === "needs_person"
+            ? "Thanks for telling us. A person is being notified and will take it from here."
+            : "Thanks for telling us.";
+    return reply.send({ ok: true, message });
   });
 }

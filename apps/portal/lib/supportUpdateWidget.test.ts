@@ -80,8 +80,11 @@ describe("what it shows and what it cannot", () => {
     );
   });
 
-  test("the badge only counts updates that still need an answer", () => {
-    assert.match(CODE, /unanswered\.length > 0 && <span className="fa-badge">/);
+  test("the badge counts what still needs the customer: unanswered updates + unread support messages", () => {
+    // Widened 2026-09-01: direct messages from support joined the widget, and
+    // an unread one must light the badge exactly like an unanswered update.
+    assert.match(CODE, /unanswered\.length \+ unreadSupportMsgs\.length > 0 && \(/);
     assert.match(CODE, /updates\.filter\(\(u\) => !answered\[u\.id\]\)/);
+    assert.match(CODE, /direction === "to_customer" && !m\.readAt && !readLocally\[m\.id\]/);
   });
 });

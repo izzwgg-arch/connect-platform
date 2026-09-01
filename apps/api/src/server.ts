@@ -243,7 +243,9 @@ import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerSupportReportRoutes } from "./supportReport";
 import { registerSupportUpdateRoutes } from "./support/customerUpdateRoutes";
+import { registerSupportMessageRoutes } from "./support/supportMessageRoutes";
 import { registerAgentRunRoutes } from "./support/agentRunRoutes";
+import { startSupportLoopGuardrail } from "./support/supportLoopGuardrail";
 import { registerSupportConsoleRoutes } from "./supportConsole";
 import { registerFeatureSuggestionRoutes } from "./featureSuggestion";
 import { registerComplianceRoutes, startComplianceReminders } from "./complianceCalendar";
@@ -5593,6 +5595,10 @@ registerShutdownTimer(setInterval(() => { void runVoicemailEmailWatchdog(app.log
 // Each escalates (never ADMIN_ALERT). See voicemailEmailGuardrails.ts.
 for (const t of startEmailGuardrails(app.log)) registerShutdownTimer(t);
 for (const t of startSmsForwardGuardrail(app.log)) registerShutdownTimer(t);
+// The server watches the whole support-ticket loop, because the watcher on
+// Izzy's PC cannot watch itself — it died to a Ctrl+C for 18h on 2026-08-31
+// and nothing said so. Escalates (never ADMIN_ALERT); needs-person marked.
+for (const t of startSupportLoopGuardrail(app.log)) registerShutdownTimer(t);
 // ── 10DLC registration sweep (SignalWire onboarding, 2026-08-30) ─────────────
 // Advances brand → campaign → number-assignment as the registry approves, and
 // flips the customer's texting on. Boot kick + interval inside; kill switch
@@ -42357,6 +42363,10 @@ const port = Number(process.env.PORT || 3001);
   // machine-to-machine secret on a laptop. requireSuper is the console's own
   // gate, injected so there is ONE implementation of it.
   registerSupportUpdateRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
+  // Direct support↔customer messages — the reliable, NOTIFIED channel. The old
+  // conversation reply reached nobody (the widget never polled it); this is
+  // what the widget polls and pops up on.
+  registerSupportMessageRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
   // Live visibility into the automatic support agent — the watcher pushes here.
   registerAgentRunRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
   registerSupportConsoleRoutes({

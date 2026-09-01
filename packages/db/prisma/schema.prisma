@@ -8603,3 +8603,38 @@ model SupportAgentWatcher {
   version String?
   updatedAt DateTime @updatedAt
 }
+
+/// A direct message between LoopCom support and the person who filed a ticket.
+///
+/// ⛔ WHY THIS TABLE EXISTS: the desk's old "reply" wrote into the assistant
+/// CONVERSATION, which nothing ever notified the customer about — the message
+/// landed in the database and the person was never told (found 2026-09-01,
+/// after Izzy tried it and the customer never got it). The widget polls THESE
+/// and shows a notification beside the bubble; serving one stamps deliveredAt,
+/// so "delivered" means a browser really received it.
+model SupportMessage {
+  id             String    @id @default(cuid())
+  tenantId       String
+  /// The customer this thread is with. Always a real person — a platform
+  /// alarm has nobody to message, and the admin route refuses one.
+  userId         String
+  escalationId   String?
+  ticketRef      String?
+  conversationId String?
+  /// "to_customer" | "from_customer"
+  direction      String
+  body           String    @db.Text
+  /// The admin who wrote it (to_customer only). Audit trail — the customer is
+  /// shown "Loopcom support", never an id.
+  sentByUserId   String?
+  createdAt      DateTime  @default(now())
+  /// to_customer: stamped the first time the customer's widget served it.
+  deliveredAt    DateTime?
+  /// to_customer: the customer saw it. from_customer: an admin read it —
+  /// the support-loop guardrail alarms on from_customer rows nobody reads.
+  readAt         DateTime?
+
+  @@index([userId, tenantId, createdAt])
+  @@index([escalationId, createdAt])
+  @@index([direction, readAt, createdAt])
+}

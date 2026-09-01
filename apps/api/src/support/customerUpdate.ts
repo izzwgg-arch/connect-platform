@@ -238,16 +238,109 @@ export async function markDelivered(db: any, ids: string[]) {
 }
 
 /**
+ * ── The follow-up loop for "No, still not right" ────────────────────────────
+ *
+ * ⛔⛔ THE BUG THIS CLOSES: the verdict route used to tell the customer "We've
+ * reopened it and someone will pick it up" while `recordVerdict` only stamped
+ * the row — no reopen, no re-queue, no notification. That is the exact
+ * unearned-promise class the safety gate refuses, in our own route (found
+ * 2026-09-01; two customers got it the day before). A not_fixed verdict now
+ * CREATES a follow-up escalation, which the dispatcher texts to Izzy and the
+ * watcher re-investigates — so "sent back to the team" is a fact.
+ */
+export const FOLLOWUP_PREFIX = "Customer says it is still not right";
+/**
+ * ⛔ THE LOOP CAP. A summary carrying this marker is for a HUMAN: the watcher's
+ * triage skips it (it still reaches Izzy's phone via the dispatcher). Without
+ * it, agent-investigates → customer says no → agent investigates the same thing
+ * again would ping-pong forever.
+ */
+export const NEEDS_PERSON_MARKER = "[needs a person]";
+
+export type FollowUpKind = "none" | "reinvestigate" | "needs_person";
+
+/** PURE. Whether a verdict spawns a re-investigation, a hand-to-human, or nothing. */
+export function decideVerdictFollowUp(input: {
+  verdict: "fixed" | "not_fixed";
+  escalationSummary: string;
+}): FollowUpKind {
+  if (input.verdict !== "not_fixed") return "none";
+  const s = String(input.escalationSummary ?? "");
+  // Already a follow-up (or already flagged for a person): one automatic
+  // re-investigation is the budget. The second "still not right" goes to a human.
+  if (s.startsWith(FOLLOWUP_PREFIX) || s.includes(NEEDS_PERSON_MARKER)) return "needs_person";
+  return "reinvestigate";
+}
+
+/** ⛔ Plain ASCII, single line: one emoji flips the whole SMS to UCS-2. */
+function asciiLine(s: string, max = 300): string {
+  const flat = String(s).replace(/[^\x20-\x7e]/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}.` : flat;
+}
+
+/**
+ * Creates the follow-up escalation. ⛔ Copies the ORIGINAL customer's identity
+ * fields, so the watcher's classifier (which keys on userName) keeps it in the
+ * customer lane, and the new ticket still names the right person.
+ */
+async function createFollowUpEscalation(
+  db: any,
+  args: { esc: any; ticketRef: string; note: string | null; kind: FollowUpKind },
+): Promise<void> {
+  const { esc, ticketRef, note, kind } = args;
+  const said = note ? `Their note: "${String(note).slice(0, 400)}"` : "They left no note.";
+  const marker = kind === "needs_person" ? `${NEEDS_PERSON_MARKER} ` : "";
+  const secondLook =
+    kind === "needs_person"
+      ? "This has already had an automatic second look, so it now needs a person."
+      : "Re-investigate it: read the previous report below, work out why the customer still sees the problem, and report again.";
+  await db.agentEscalation.create({
+    data: {
+      conversationId: esc.conversationId ?? null,
+      tenantId: esc.tenantId,
+      tenantName: esc.tenantName,
+      clientUserId: esc.clientUserId,
+      userName: esc.userName,
+      userEmail: esc.userEmail ?? null,
+      requestSummary: `${marker}${FOLLOWUP_PREFIX} — ${ticketRef}: ${String(esc.requestSummary ?? "").slice(0, 400)}`,
+      smsBody: asciiLine(
+        `Loopcom: ${esc.tenantName} tested the fix for ${ticketRef} and says it is STILL NOT RIGHT. ${note ? "Note: " + note : ""}`,
+      ),
+      report: [
+        `The customer tested the outcome of ticket ${ticketRef} and answered "No, still not right".`,
+        said,
+        "",
+        secondLook,
+        "",
+        `Original request: ${String(esc.requestSummary ?? "")}`,
+        "",
+        "── The previous investigation's report ──",
+        String(esc.previousReport ?? "(none recorded)").slice(0, 20000),
+      ].join("\n"),
+      // ⛔ Required column. `null` here is a PrismaClientValidationError that a
+      // swallowed catch turns into an alarm that never fires.
+      proposedFix: "",
+      researchDegraded: false,
+      status: "QUEUED",
+    },
+  });
+}
+
+/**
  * Step 3 — the customer tested it and said whether it worked.
  *
  * ⛔ Scoped to their own row by userId AND tenantId, and only from a state where
  * answering makes sense. A verdict on someone else's ticket must be impossible,
  * not merely unlikely.
+ *
+ * Returns `followUp` so the route can tell the customer THE TRUTH about what
+ * happens next — "sent back to the team" only when a ticket really was.
  */
 export async function recordVerdict(
   db: any,
   input: { updateId: string; userId: string; tenantId: string; verdict: "fixed" | "not_fixed"; note?: string },
-): Promise<{ ok: boolean; reason?: string }> {
+  log?: { warn?: (o: any, m?: string) => void },
+): Promise<{ ok: boolean; reason?: string; followUp?: FollowUpKind | "failed" }> {
   const res = await db.supportUpdate.updateMany({
     where: {
       id: input.updateId,
@@ -264,5 +357,36 @@ export async function recordVerdict(
     },
   });
   if (res.count === 0) return { ok: false, reason: "that update is not yours, or it has already been answered" };
-  return { ok: true };
+  if (input.verdict !== "not_fixed") return { ok: true, followUp: "none" };
+
+  // ⛔ FAILS SOFT past this point: the verdict is recorded either way, and the
+  // route's wording degrades honestly when no follow-up could be filed.
+  try {
+    const row = await db.supportUpdate.findUnique({
+      where: { id: input.updateId },
+      select: { escalationId: true, ticketRef: true, technicalReport: true },
+    });
+    const esc = row?.escalationId
+      ? await db.agentEscalation.findUnique({
+          where: { id: row.escalationId },
+          select: {
+            id: true, conversationId: true, tenantId: true, tenantName: true,
+            clientUserId: true, userName: true, userEmail: true, requestSummary: true,
+          },
+        })
+      : null;
+    if (!esc) return { ok: true, followUp: "failed" };
+    const kind = decideVerdictFollowUp({ verdict: "not_fixed", escalationSummary: esc.requestSummary });
+    await createFollowUpEscalation(db, {
+      esc: { ...esc, previousReport: row?.technicalReport ?? null },
+      ticketRef: String(row?.ticketRef ?? ""),
+      note: input.note ? String(input.note).slice(0, 2000) : null,
+      kind,
+    });
+    return { ok: true, followUp: kind };
+  } catch (err: any) {
+    log?.warn?.({ err: String(err?.message ?? err).slice(0, 200), updateId: input.updateId },
+      "support-update: verdict recorded but the follow-up could not be filed");
+    return { ok: true, followUp: "failed" };
+  }
 }

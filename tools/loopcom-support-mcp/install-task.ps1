@@ -1,9 +1,16 @@
-# Install the support-ticket watcher as a logon task.
+# Install the support-ticket watcher as a logon task, plus its watchdog.
 #
 #   powershell -ExecutionPolicy Bypass -File install-task.ps1
 #   powershell -ExecutionPolicy Bypass -File install-task.ps1 -Remove
 #
-# Registers run-watcher.cmd to start at logon, and to keep running.
+# Registers TWO tasks:
+#   1. "Loopcom support ticket watcher"  - run-watcher.cmd, launched HIDDEN via
+#      run-watcher-hidden.vbs. Hidden on purpose: on 2026-08-31 a Ctrl+C in the
+#      watcher's console killed the watcher AND the restart wrapper, and it sat
+#      dead for 18 hours. With no window there is nothing to close by accident.
+#   2. "Loopcom support watcher watchdog" - watchdog.mjs every 10 minutes, which
+#      restarts task 1 when the heartbeat goes stale. The server-side guardrail
+#      (supportLoopGuardrail.ts) is the alarm of last resort beyond both.
 #
 # NOTE: this file is deliberately PURE ASCII. Windows PowerShell 5.1 reads a
 # BOM-less script as ANSI, so a single non-ASCII character (an em-dash, or one
@@ -20,23 +27,32 @@
 param([switch]$Remove)
 
 $ErrorActionPreference = "Stop"
-$TaskName = "Loopcom support ticket watcher"
-$Here     = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Cmd      = Join-Path $Here "run-watcher.cmd"
+$TaskName     = "Loopcom support ticket watcher"
+$WatchdogName = "Loopcom support watcher watchdog"
+$Here         = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Cmd          = Join-Path $Here "run-watcher.cmd"
+$Vbs          = Join-Path $Here "run-watcher-hidden.vbs"
+$Watchdog     = Join-Path $Here "watchdog.mjs"
 
 if ($Remove) {
-  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Host "Removed '$TaskName'. The watcher will not start at logon any more."
-  } else {
-    Write-Host "'$TaskName' was not installed."
+  foreach ($name in @($TaskName, $WatchdogName)) {
+    if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+      Unregister-ScheduledTask -TaskName $name -Confirm:$false
+      Write-Host "Removed '$name'."
+    } else {
+      Write-Host "'$name' was not installed."
+    }
   }
   return
 }
 
-if (-not (Test-Path $Cmd)) { throw "Cannot find $Cmd" }
+if (-not (Test-Path $Cmd))      { throw "Cannot find $Cmd" }
+if (-not (Test-Path $Vbs))      { throw "Cannot find $Vbs" }
+if (-not (Test-Path $Watchdog)) { throw "Cannot find $Watchdog" }
 
-$action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Cmd`"" -WorkingDirectory $Here
+# ---- 1. the watcher, hidden ------------------------------------------------
+
+$action  = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$Vbs`"" -WorkingDirectory $Here
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 
 # RunOnlyIfNetworkAvailable is left off on purpose: the poll retries by itself,
@@ -53,13 +69,37 @@ $settings = New-ScheduledTaskSettingsSet `
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
-
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-  -Settings $settings -Description "Starts a Claude agent on each new LoopCom support ticket." | Out-Null
+  -Settings $settings -Description "Starts a Claude agent on each new LoopCom support ticket. Runs hidden; watch it from logs\watcher.log or the Agent runs tab." | Out-Null
 
-Write-Host "Installed '$TaskName' - starts at logon for $env:USERNAME."
+# ---- 2. the watchdog, every 10 minutes -------------------------------------
+
+# cmd /c so the watchdog's own output lands in a log rather than nowhere.
+$wdArg    = "/c node `"$Watchdog`" >> `"$Here\logs\watchdog.log`" 2>&1"
+$wdAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $wdArg -WorkingDirectory $Here
+
+# Once-in-the-past with infinite repetition keeps firing every 10 minutes
+# forever, including after reboots (StartWhenAvailable catches missed starts).
+$wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration ([TimeSpan]::MaxValue)
+
+$wdSettings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+  -MultipleInstances IgnoreNew
+
+if (Get-ScheduledTask -TaskName $WatchdogName -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName $WatchdogName -Confirm:$false
+}
+Register-ScheduledTask -TaskName $WatchdogName -Action $wdAction -Trigger $wdTrigger `
+  -Settings $wdSettings -Description "Restarts the Loopcom support ticket watcher when its heartbeat goes stale." | Out-Null
+
+Write-Host "Installed '$TaskName' (hidden, starts at logon for $env:USERNAME)"
+Write-Host "Installed '$WatchdogName' (every 10 minutes)"
 Write-Host ""
 Write-Host "  Start it now:  Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host "  Is it alive:   node status.mjs"
-Write-Host "  Its log:       logs\watcher.log"
-Write-Host "  Remove it:     powershell -File install-task.ps1 -Remove"
+Write-Host "  Its log:       logs\watcher.log   (watchdog: logs\watchdog.log)"
+Write-Host "  Remove both:   powershell -File install-task.ps1 -Remove"

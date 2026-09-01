@@ -180,7 +180,10 @@ export async function raiseMailboxEscalation(
       requestSummary: verdict.summary,
       smsBody: verdict.sms,
       report: verdict.report,
-      proposedFix: null,
+      // ⛔ `proposedFix` is a REQUIRED column. `null` here was a
+      // PrismaClientValidationError the caller's catch swallowed — the alarm
+      // could never fire, silently (found 2026-09-01).
+      proposedFix: "",
       researchDegraded: false,
       status: "QUEUED",
     },

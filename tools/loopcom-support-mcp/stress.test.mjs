@@ -580,3 +580,46 @@ describe("J. the heartbeat during a long run", () => {
     assert.ok(/beat\(\{\s*state: "working"/.test(onStep), "the step handler must beat, or a long run looks dead");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// K. needs-a-person tickets are for a HUMAN, never the agent (2026-09-01)
+// ─────────────────────────────────────────────────────────────────────────────
+import { NEEDS_PERSON_MARKER } from "./triage.mjs";
+
+describe("K. the needs-person marker", () => {
+  const marked = {
+    reference: "MKR001",
+    tenantName: "Gesheft",
+    userName: "Orders",
+    requestSummary: NEEDS_PERSON_MARKER + " Customer says it is still not right - T6HMUQ: unread badge",
+    createdAt: DAY + "T10:00:00.000Z",
+  };
+
+  test("a marked ticket is skipped, whatever the lane or budget", () => {
+    const d = decideTicket({ ticket: marked, state: { claimed: {} }, now: NOW, cfg: {}, watchingSince: null });
+    assert.equal(d.action, "skip_needs_person");
+  });
+
+  test("the skip never consumes the daily cap", () => {
+    const state = { claimed: { MKR001: { at: DAY + "T10:01:00.000Z", status: "skipped_needs_person", lane: "customer" } } };
+    assert.equal(startedToday(state, DAY, "customer"), 0);
+  });
+
+  test("once noted, later polls skip it as claimed rather than re-noting every 60s", () => {
+    const state = { claimed: { MKR001: { at: DAY + "T10:01:00.000Z", status: "skipped_needs_person", lane: "customer" } } };
+    const d = decideTicket({ ticket: marked, state, now: NOW, cfg: {}, watchingSince: null });
+    assert.equal(d.action, "skip_claimed");
+  });
+
+  test("an UNMARKED follow-up ticket is worked normally - one automatic re-investigation is the budget", () => {
+    const followUp = { ...marked, reference: "MKR002", requestSummary: "Customer says it is still not right - T6HMUQ: unread badge" };
+    const d = decideTicket({ ticket: followUp, state: { claimed: {} }, now: NOW, cfg: {}, watchingSince: null });
+    assert.equal(d.action, "work");
+    assert.equal(d.lane, "customer");
+  });
+
+  test("the api-side guardrail's own alarms classify as platform, by userName", () => {
+    const c = classifyTicket({ userName: "support loop guardrail", tenantName: "Loopcom platform" });
+    assert.equal(c.lane, "platform");
+  });
+});

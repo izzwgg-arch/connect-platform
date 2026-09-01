@@ -207,7 +207,10 @@ export async function raiseSmsForwardEscalation(
         requestSummary: alarm.summary,
         smsBody: alarm.sms,
         report: alarm.report,
-        proposedFix: null,
+        // ⛔ `proposedFix` is a REQUIRED column. `null` here was a
+        // PrismaClientValidationError that the catch below swallowed — the
+        // alarm could never fire, silently (found 2026-09-01).
+        proposedFix: "",
         researchDegraded: false,
         status: "QUEUED",
       },

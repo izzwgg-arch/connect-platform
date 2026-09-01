@@ -52,6 +52,14 @@ type PanelView = "chat" | "report" | "sent" | "suggest" | "suggestSent";
 /** An update on something the customer reported. `message` is the OpenAI rewrite
  *  that passed the safety gate — the technical report never reaches the browser. */
 type SupportUpdate = { id: string; reference: string; message: string; at: string };
+type SupportMsg = {
+  id: string;
+  ticketRef: string | null;
+  direction: "to_customer" | "from_customer" | string;
+  body: string;
+  createdAt: string;
+  readAt: string | null;
+};
 
 type PendingFile = {
   localId: string;
@@ -182,6 +190,18 @@ export function FloatingAssistant() {
   const [answering, setAnswering] = useState<string | null>(null);
   const [answered, setAnswered] = useState<Record<string, "fixed" | "not_fixed">>({});
 
+  /**
+   * Direct messages from a PERSON at Loopcom support, and the customer's own
+   * replies. ⛔ This is the channel the desk's "message the customer" lands in —
+   * the old conversation reply reached nobody (nothing polled it, 2026-09-01).
+   * Unread ones pop up beside the bubble; reading happens when the panel opens.
+   */
+  const [supportMsgs, setSupportMsgs] = useState<SupportMsg[]>([]);
+  const [readLocally, setReadLocally] = useState<Record<string, true>>({});
+  const [msgReply, setMsgReply] = useState("");
+  const [msgReplying, setMsgReplying] = useState(false);
+  const [msgReplyDone, setMsgReplyDone] = useState(false);
+
   useEffect(() => {
     // ⛔ Gated on the token: a signed-out tab polling an authenticated route is
     // how an office gets itself auto-banned at nginx (2026-08-17).
@@ -194,6 +214,12 @@ export function FloatingAssistant() {
       } catch {
         /* transient — the next tick retries, and a badge is not worth an error */
       }
+      try {
+        const m = await apiGet<{ messages: SupportMsg[] }>("/support/messages");
+        if (!stop) setSupportMsgs(Array.isArray(m?.messages) ? m.messages : []);
+      } catch {
+        /* same rule — a missed poll is a slightly later badge, never an error */
+      }
     };
     void tick();
     const t = setInterval(() => void tick(), 120000);
@@ -201,6 +227,44 @@ export function FloatingAssistant() {
   }, []);
 
   const unanswered = useMemo(() => updates.filter((u) => !answered[u.id]), [updates, answered]);
+  const unreadSupportMsgs = useMemo(
+    () => supportMsgs.filter((m) => m.direction === "to_customer" && !m.readAt && !readLocally[m.id]),
+    [supportMsgs, readLocally],
+  );
+
+  // Opening the panel IS reading them — stamp each once, so the pop-up beside
+  // the bubble stands down and the desk can see the message landed.
+  useEffect(() => {
+    if (!open || view !== "chat" || unreadSupportMsgs.length === 0) return;
+    for (const m of unreadSupportMsgs) {
+      setReadLocally((r) => ({ ...r, [m.id]: true }));
+      void apiPost(`/support/messages/${encodeURIComponent(m.id)}/read`, {}).catch(() => {});
+    }
+  }, [open, view, unreadSupportMsgs]);
+
+  const sendSupportReply = useCallback(async () => {
+    const text = msgReply.trim();
+    if (!text || msgReplying) return;
+    setMsgReplying(true);
+    try {
+      const latest = supportMsgs.find((m) => m.direction === "to_customer");
+      await apiPost<{ ok: boolean }>("/support/messages/reply", {
+        message: text,
+        ...(latest ? { replyToId: latest.id } : {}),
+      });
+      setMsgReply("");
+      setMsgReplyDone(true);
+      // Show it immediately rather than waiting out the 2-minute poll.
+      setSupportMsgs((list) => [
+        { id: `local-${Date.now()}`, ticketRef: latest?.ticketRef ?? null, direction: "from_customer", body: text, createdAt: new Date().toISOString(), readAt: null },
+        ...list,
+      ]);
+    } catch {
+      /* left in the box so they can try again — a swallowed reply must not LOOK sent */
+    } finally {
+      setMsgReplying(false);
+    }
+  }, [msgReply, msgReplying, supportMsgs]);
 
   const answerUpdate = useCallback(async (id: string, verdict: "fixed" | "not_fixed") => {
     setAnswering(id);
@@ -791,6 +855,43 @@ export function FloatingAssistant() {
           <div className="fa-msgs custom-scrollbar">
             {messages.length === 0 && (
               <div className="fa-open">
+                {supportMsgs.length > 0 && (
+                  <div className="fa-sm-card">
+                    <div className="fa-upd-top">
+                      <span className="fa-upd-ico"><Sparkles size={14} /></span>
+                      <b>Messages from Loopcom support</b>
+                    </div>
+                    <div className="fa-sm-thread">
+                      {supportMsgs.slice(0, 6).reverse().map((m) => (
+                        <div key={m.id} className={"fa-sm" + (m.direction === "from_customer" ? " fa-sm-mine" : "")}>
+                          <span className="fa-sm-who">
+                            {m.direction === "from_customer" ? "You" : "Loopcom support"}
+                            {m.ticketRef ? ` · ${m.ticketRef}` : ""}
+                          </span>
+                          {m.body}
+                        </div>
+                      ))}
+                    </div>
+                    {msgReplyDone && <div className="fa-sm-sent">Sent — a person at Loopcom will see it.</div>}
+                    <div className="fa-sm-replyrow">
+                      <input
+                        className="fa-sm-input"
+                        value={msgReply}
+                        placeholder="Reply to support…"
+                        disabled={msgReplying}
+                        onChange={(e) => { setMsgReply(e.target.value); setMsgReplyDone(false); }}
+                        onKeyDown={(e) => (e.key === "Enter" ? void sendSupportReply() : null)}
+                      />
+                      <button
+                        className="fa-sm-send"
+                        disabled={msgReplying || !msgReply.trim()}
+                        onClick={() => void sendSupportReply()}
+                      >
+                        Reply
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {unanswered.map((u) => (
                   <div className="fa-upd" key={u.id}>
                     <div className="fa-upd-top">
@@ -996,11 +1097,26 @@ export function FloatingAssistant() {
       )}
 
       <div className="fa-fab-wrap">
-        {!open && showHint && <div className="fa-hint">Need help? I'm right here 👋</div>}
+        {/* ⛔ A message from a PERSON at support outranks the greeting hint —
+            it pops up beside the bubble until the panel is opened. This is the
+            notification the old conversation-reply path never had. */}
+        {!open && unreadSupportMsgs.length > 0 ? (
+          <button
+            className="fa-nudge"
+            onClick={() => { uiEvent("open support message"); setView("chat"); setOpen(true); setShowHint(false); }}
+          >
+            <b>Loopcom support sent you a message</b>
+            <span>Tap to read and reply</span>
+          </button>
+        ) : (
+          !open && showHint && <div className="fa-hint">Need help? I&apos;m right here 👋</div>
+        )}
         <button className="fa-fab" title={open ? "Close assistant" : "Open assistant"} onClick={() => { uiEvent(open ? "close assistant" : "open assistant"); setOpen((v) => !v); setShowHint(false); }}>
           {open ? <X size={24} /> : <Bot size={26} />}
-          {!open && unanswered.length > 0 && <span className="fa-badge">{unanswered.length}</span>}
-          {!open && unanswered.length === 0 && <span className="fa-dot" />}
+          {!open && unanswered.length + unreadSupportMsgs.length > 0 && (
+            <span className="fa-badge">{unanswered.length + unreadSupportMsgs.length}</span>
+          )}
+          {!open && unanswered.length + unreadSupportMsgs.length === 0 && <span className="fa-dot" />}
         </button>
       </div>
     </>
@@ -1021,6 +1137,40 @@ const faCss = `
   background: var(--panel, #16233a); color: var(--text, #cfe0ff); border: 1px solid var(--border, #29406b);
   font-size: 12px; padding: 7px 12px; border-radius: 10px 10px 2px 10px; box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: 210px;
 }
+.fa-nudge {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; cursor: pointer; text-align: left;
+  background: var(--panel, #16233a); color: var(--text, #cfe0ff);
+  border: 1px solid var(--accent, #2f6df6); border-radius: 12px 12px 2px 12px;
+  padding: 10px 14px; max-width: 240px; box-shadow: 0 8px 24px rgba(0,0,0,.3);
+  animation: fa-nudge-in .25s ease;
+}
+.fa-nudge b { font-size: 12.5px; }
+.fa-nudge span { font-size: 11px; color: var(--text-dim, #8fa3c8); }
+@keyframes fa-nudge-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fa-nudge { animation: none; } }
+.fa-sm-card {
+  background: var(--panel-2, #131f33); border: 1px solid var(--border, #23344f);
+  border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.fa-sm-thread { display: flex; flex-direction: column; gap: 6px; }
+.fa-sm {
+  background: var(--panel, #0f1928); border: 1px solid var(--border, #23344f);
+  border-radius: 10px; padding: 7px 10px; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;
+  align-self: flex-start; max-width: 95%;
+}
+.fa-sm-mine { align-self: flex-end; border-color: var(--accent, #2f6df6); }
+.fa-sm-who { display: block; font-size: 10.5px; color: var(--text-dim, #8fa3c8); margin-bottom: 2px; }
+.fa-sm-sent { font-size: 11.5px; color: var(--success, #22c55e); }
+.fa-sm-replyrow { display: flex; gap: 6px; }
+.fa-sm-input {
+  flex: 1; min-width: 0; background: var(--panel, #0f1928); color: var(--text, #cfe0ff);
+  border: 1px solid var(--border, #23344f); border-radius: 8px; padding: 7px 10px; font-size: 12.5px;
+}
+.fa-sm-send {
+  border: none; border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: var(--accent, #2f6df6); color: #fff;
+}
+.fa-sm-send:disabled { opacity: .55; cursor: default; }
 
 .fa-panel {
   position: fixed; right: 22px; bottom: 92px; z-index: 1199;

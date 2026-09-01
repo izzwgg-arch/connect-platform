@@ -457,7 +457,11 @@ describe("10. the customer tests it and answers", () => {
 
   test("a verdict is recorded", async () => {
     const db = ready();
-    assert.deepEqual(await recordVerdict(db, { updateId: "u1", userId: "u-real", tenantId: "t1", verdict: "fixed" }), { ok: true });
+    // `followUp` joined the contract 2026-09-01 — "fixed" spawns nothing.
+    assert.deepEqual(
+      await recordVerdict(db, { updateId: "u1", userId: "u-real", tenantId: "t1", verdict: "fixed" }),
+      { ok: true, followUp: "none" },
+    );
     assert.equal(db.state.updates[0].status, "answered");
     assert.equal(db.state.updates[0].verdict, "fixed");
   });

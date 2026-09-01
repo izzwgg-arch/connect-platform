@@ -380,8 +380,12 @@ async function main() {
         const d = decideTicket({ ticket: t, state, now: Date.now(), cfg: CFG, watchingSince });
 
         if (d.action === "skip_claimed") continue;
-        if (d.action === "skip_pre_existing" || d.action === "skip_lane_off") {
-          note(state, t.reference, d.action === "skip_lane_off" ? "skipped_lane_off" : "skipped_pre_existing", d.lane);
+        if (d.action === "skip_pre_existing" || d.action === "skip_lane_off" || d.action === "skip_needs_person") {
+          const status =
+            d.action === "skip_lane_off" ? "skipped_lane_off"
+            : d.action === "skip_needs_person" ? "skipped_needs_person"
+            : "skipped_pre_existing";
+          note(state, t.reference, status, d.lane);
           continue;
         }
         if (d.action === "defer_cap") {

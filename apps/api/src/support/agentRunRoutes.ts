@@ -171,12 +171,103 @@ export function registerAgentRunRoutes(app: FastifyInstance, deps: AgentRunRoute
       select: { id: true, steps: true },
     });
     const stepCount = new Map(counts.map((c: any) => [c.id, Array.isArray(c.steps) ? c.steps.length : 0]));
+    // The CUSTOMER half of each run — was the person told, did they read it,
+    // what did they answer. ⛔ This is the difference between "the agent worked"
+    // and "the loop closed": three runs on 2026-08-31 were done and the customer
+    // was never told, and no screen could say so.
+    const escIds = rows.map((r: any) => r.escalationId).filter(Boolean);
+    const updates = escIds.length
+      ? await db.supportUpdate.findMany({
+          where: { escalationId: { in: escIds } },
+          select: {
+            escalationId: true, status: true, verdict: true,
+            deliveredAt: true, readAt: true, answeredAt: true, heldReason: true,
+          },
+        })
+      : [];
+    const updateByEsc = new Map<string, any>(updates.map((u: any) => [u.escalationId, u]));
     return reply.send({
-      runs: rows.map((r: any) => ({
-        ...r,
-        steps: stepCount.get(r.id) ?? 0,
-        elapsedMs: (r.endedAt ? new Date(r.endedAt).getTime() : Date.now()) - new Date(r.startedAt).getTime(),
+      runs: rows.map((r: any) => {
+        const u = r.escalationId ? updateByEsc.get(r.escalationId) : null;
+        return {
+          ...r,
+          steps: stepCount.get(r.id) ?? 0,
+          elapsedMs: (r.endedAt ? new Date(r.endedAt).getTime() : Date.now()) - new Date(r.startedAt).getTime(),
+          customer: u
+            ? {
+                status: u.status,
+                verdict: u.verdict ?? null,
+                deliveredAt: u.deliveredAt ?? null,
+                readAt: u.readAt ?? null,
+                answeredAt: u.answeredAt ?? null,
+                heldReason: u.heldReason ?? null,
+              }
+            : null,
+        };
+      }),
+    });
+  });
+
+  /**
+   * The loop's loose ends — everything on this list is waiting for a PERSON.
+   * Powers the "Needs a person" rail on the Agent runs tab.
+   */
+  app.get("/admin/support/loop-health", async (req: any, reply: any) => {
+    const actor = await deps.requireSuper(req, reply);
+    if (!actor) return reply;
+
+    const now = Date.now();
+    const [held, notFixed, unreadReplies, doneRuns] = await Promise.all([
+      db.supportUpdate.findMany({
+        where: { status: "held" },
+        orderBy: { updatedAt: "desc" },
+        take: 10,
+        select: { id: true, ticketRef: true, heldReason: true, updatedAt: true },
+      }),
+      db.supportUpdate.findMany({
+        where: { status: "answered", verdict: "not_fixed", answeredAt: { gte: new Date(now - 14 * 86_400_000) } },
+        orderBy: { answeredAt: "desc" },
+        take: 10,
+        select: { id: true, ticketRef: true, customerNote: true, answeredAt: true },
+      }),
+      db.supportMessage.findMany({
+        where: { direction: "from_customer", readAt: null },
+        orderBy: { createdAt: "asc" },
+        take: 10,
+        select: { id: true, ticketRef: true, body: true, createdAt: true, tenantId: true },
+      }),
+      // Customer-lane runs that finished but never produced a customer update —
+      // the "worked, and the person was never told" class.
+      db.supportAgentRun.findMany({
+        where: { status: "done", lane: "customer", escalationId: { not: null } },
+        orderBy: { startedAt: "desc" },
+        take: 30,
+        select: { id: true, ticketRef: true, escalationId: true, tenantName: true, endedAt: true },
+      }),
+    ]);
+
+    const doneEscIds = doneRuns.map((r: any) => r.escalationId).filter(Boolean);
+    const toldRows = doneEscIds.length
+      ? await db.supportUpdate.findMany({
+          where: { escalationId: { in: doneEscIds } },
+          select: { escalationId: true },
+        })
+      : [];
+    const told = new Set(toldRows.map((u: any) => u.escalationId));
+    const seenRef = new Set<string>();
+    const neverTold = doneRuns.filter((r: any) => {
+      if (told.has(r.escalationId) || seenRef.has(r.ticketRef)) return false;
+      seenRef.add(r.ticketRef);
+      return true;
+    });
+
+    return reply.send({
+      held: held.map((h: any) => ({ ticketRef: h.ticketRef, heldReason: h.heldReason ?? null, at: h.updatedAt })),
+      notFixed: notFixed.map((n: any) => ({ ticketRef: n.ticketRef, note: n.customerNote ?? null, at: n.answeredAt })),
+      unreadReplies: unreadReplies.map((m: any) => ({
+        id: m.id, ticketRef: m.ticketRef ?? null, preview: String(m.body ?? "").slice(0, 160), at: m.createdAt,
       })),
+      neverTold: neverTold.map((r: any) => ({ ticketRef: r.ticketRef, tenantName: r.tenantName ?? null, at: r.endedAt })),
     });
   });
 

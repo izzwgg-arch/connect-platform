@@ -38,7 +38,21 @@ export const PLATFORM_MONITOR_USERNAMES = Object.freeze([
   "email guardrail",
   "yiddish labs monitor",
   "voicemail watchdog",
+  // The api-side monitor of THIS loop (supportLoopGuardrail.ts). Its alarms
+  // also carry the needs-person marker, so this entry is the belt to that
+  // brace — either alone keeps the agent off its own down-detector.
+  "support loop guardrail",
 ]);
+
+/**
+ * ⛔ A summary carrying this marker is for a HUMAN, deliberately. Two writers
+ * stamp it (apps/api/src/support/customerUpdate.ts + supportLoopGuardrail.ts):
+ * a ticket that already had its one automatic re-investigation and the customer
+ * STILL says is broken, and the guardrail's own alarms — including "the watcher
+ * is down", which an agent run could only investigate circularly. The
+ * dispatcher still texts these to the owner; the agent leaves them alone.
+ */
+export const NEEDS_PERSON_MARKER = "[needs a person]";
 
 /** Every alarm but the trap above stamps this literally. Kept as a second, independent signal. */
 export const PLATFORM_TENANT_NAME = "loopcom platform";
@@ -86,6 +100,7 @@ export function startedToday(state, day, lane) {
       // deferred every REAL ticket that arrived afterwards. The feature would
       // have looked switched-on and quietly done nothing.
       c && c.status !== "skipped_pre_existing" && c.status !== "skipped_lane_off" &&
+      c.status !== "skipped_needs_person" &&
       String(c.at ?? "").slice(0, 10) === day &&
       (lane ? c.lane === lane : true),
   ).length;
@@ -94,7 +109,8 @@ export function startedToday(state, day, lane) {
 /**
  * The whole decision for one ticket.
  * Returns { action, lane, why } where action is one of:
- *   work | skip_claimed | skip_pre_existing | skip_lane_off | defer_cap | requeue
+ *   work | skip_claimed | skip_pre_existing | skip_lane_off | skip_needs_person |
+ *   defer_cap | requeue
  */
 export function decideTicket({ ticket, state, now, cfg = {}, watchingSince }) {
   const c = { ...DEFAULTS, ...cfg };
@@ -104,6 +120,13 @@ export function decideTicket({ ticket, state, now, cfg = {}, watchingSince }) {
   const { lane, why } = classifyTicket(ticket);
   const prior = state?.claimed?.[ref];
   const day = new Date(now).toISOString().slice(0, 10);
+
+  // ⛔ A needs-person ticket must never be claimed, requeued or counted — a
+  // person is the assignee. After the prior-check would re-note it every poll;
+  // before it, the note is written once and skip_claimed covers the rest.
+  if (!prior && String(ticket?.requestSummary ?? "").includes(NEEDS_PERSON_MARKER)) {
+    return { action: "skip_needs_person", lane, why: "marked for a person, not the agent" };
+  }
 
   if (prior) {
     // ⛔ A run killed mid-flight (reboot, Ctrl-C, a hung agent) leaves "running"

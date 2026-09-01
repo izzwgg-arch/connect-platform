@@ -15,7 +15,17 @@
  * an empty list.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet } from "../../../../services/apiClient";
+import { apiGet, apiPost } from "../../../../services/apiClient";
+
+/** The customer half of a run — was the person told, and what did they say. */
+type CustomerLoop = {
+  status: string;
+  verdict: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  answeredAt: string | null;
+  heldReason: string | null;
+} | null;
 
 type Run = {
   id: string;
@@ -32,6 +42,15 @@ type Run = {
   error: string | null;
   steps: number;
   elapsedMs: number;
+  customer: CustomerLoop;
+};
+
+/** Everything on this list is waiting for a PERSON. */
+type LoopHealth = {
+  held: Array<{ ticketRef: string; heldReason: string | null; at: string }>;
+  notFixed: Array<{ ticketRef: string; note: string | null; at: string }>;
+  unreadReplies: Array<{ id: string; ticketRef: string | null; preview: string; at: string }>;
+  neverTold: Array<{ ticketRef: string; tenantName: string | null; at: string | null }>;
 };
 
 type Step = { at: string; kind: string; text: string };
@@ -58,20 +77,26 @@ const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s ago` : `${
 export default function SupportAgentRuns() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [watchers, setWatchers] = useState<Watcher[]>([]);
+  const [health, setHealth] = useState<LoopHealth | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sentNote, setSentNote] = useState("");
   const stepsEnd = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [r, w] = await Promise.all([
+      const [r, w, h] = await Promise.all([
         apiGet<{ runs: Run[] }>("/admin/support/agent-runs?take=40"),
         apiGet<{ watchers: Watcher[] }>("/admin/support/agent-watcher"),
+        apiGet<LoopHealth>("/admin/support/loop-health").catch(() => null),
       ]);
       setRuns(r.runs ?? []);
       setWatchers(w.watchers ?? []);
+      if (h) setHealth(h);
       setError(null);
     } catch (e: any) {
       setError(e?.body?.message ?? e?.message ?? "Could not load the agent runs.");
@@ -79,6 +104,23 @@ export default function SupportAgentRuns() {
       setLoaded(true);
     }
   }, []);
+
+  /** Message the customer straight from the run — same route the desk uses. */
+  const sendToCustomer = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || !detail || sending) return;
+    setSending(true);
+    setSentNote("");
+    try {
+      await apiPost(`/admin/support/escalations/${encodeURIComponent(detail.ticketRef)}/message`, { message: text });
+      setDraft("");
+      setSentNote("Sent — they get a notification beside their assistant bubble.");
+    } catch (e: any) {
+      setSentNote(e?.body?.message ?? "Could not send it — try from the desk tab.");
+    } finally {
+      setSending(false);
+    }
+  }, [draft, detail, sending]);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
@@ -160,6 +202,33 @@ export default function SupportAgentRuns() {
 
       {error ? <div className="sar-banner sar-dead">{error}</div> : null}
 
+      {/* ── waiting for a PERSON — nothing automatic will move these ───── */}
+      {health && (health.held.length || health.notFixed.length || health.unreadReplies.length || health.neverTold.length) ? (
+        <div className="sar-needs">
+          <b>Needs a person</b>
+          {health.unreadReplies.map((r) => (
+            <span key={r.id} className="sar-need sar-need-bad">
+              {r.ticketRef ?? "message"}: customer replied — &ldquo;{r.preview.slice(0, 60)}&rdquo;
+            </span>
+          ))}
+          {health.notFixed.map((n) => (
+            <span key={`nf-${n.ticketRef}-${n.at}`} className="sar-need sar-need-bad">
+              {n.ticketRef}: customer says still not right{n.note ? ` — “${String(n.note).slice(0, 50)}”` : ""}
+            </span>
+          ))}
+          {health.held.map((h) => (
+            <span key={`h-${h.ticketRef}`} className="sar-need sar-need-warn">
+              {h.ticketRef}: reply held by the safety gate{h.heldReason ? ` — ${h.heldReason.slice(0, 60)}` : ""}
+            </span>
+          ))}
+          {health.neverTold.map((n) => (
+            <span key={`nt-${n.ticketRef}`} className="sar-need sar-need-warn">
+              {n.ticketRef}: report done, customer never told — open it and message them
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <div className="sar-body">
         {/* ── the runs ──────────────────────────────────────────────────── */}
         <aside className="sar-list">
@@ -176,6 +245,8 @@ export default function SupportAgentRuns() {
               onClick={() => {
                 setOpenId(r.id);
                 setDetail(null);
+                setDraft("");
+                setSentNote("");
               }}
             >
               <div className="sar-item-top">
@@ -194,6 +265,29 @@ export default function SupportAgentRuns() {
                 {new Date(r.startedAt).toLocaleString()} · {r.steps} steps
                 {r.status !== "running" ? ` · took ${clock(r.elapsedMs)}` : ""}
               </div>
+              {(() => {
+                // The loop chip: the difference between "the agent worked" and
+                // "the person was told". Absence of an update on a finished
+                // customer run is itself the finding.
+                if (r.lane !== "customer" || r.status === "running") return null;
+                const c = r.customer;
+                const chip = !c
+                  ? r.status === "done"
+                    ? { cls: "warn", text: "customer never told" }
+                    : null
+                  : c.status === "held"
+                    ? { cls: "warn", text: "reply held by the gate" }
+                    : c.status === "answered"
+                      ? c.verdict === "fixed"
+                        ? { cls: "ok", text: "customer confirmed: working" }
+                        : { cls: "bad", text: "customer: still not right" }
+                      : c.readAt
+                        ? { cls: "ok", text: "read by the customer" }
+                        : c.deliveredAt
+                          ? { cls: "ok", text: "delivered to the customer" }
+                          : { cls: "dim", text: "reply waiting to be seen" };
+                return chip ? <div className={`sar-cchip sar-cchip-${chip.cls}`}>{chip.text}</div> : null;
+              })()}
             </button>
           ))}
         </aside>
@@ -243,6 +337,24 @@ export default function SupportAgentRuns() {
                   <summary>The report</summary>
                   <pre>{detail.report}</pre>
                 </details>
+              ) : null}
+
+              {/* Message the person about this ticket, right from the run —
+                  the same notified channel the desk uses. */}
+              {detail.lane === "customer" ? (
+                <div className="sar-msgrow">
+                  <input
+                    value={draft}
+                    placeholder={`Message ${detail.tenantName ?? "the customer"} about ${detail.ticketRef}…`}
+                    disabled={sending}
+                    onChange={(e) => { setDraft(e.target.value); setSentNote(""); }}
+                    onKeyDown={(e) => (e.key === "Enter" ? void sendToCustomer() : null)}
+                  />
+                  <button disabled={sending || !draft.trim()} onClick={() => void sendToCustomer()}>
+                    Send
+                  </button>
+                  {sentNote ? <span className="sar-sent">{sentNote}</span> : null}
+                </div>
               ) : null}
 
               {detail.sessionId ? (

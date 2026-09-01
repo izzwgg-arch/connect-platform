@@ -28,10 +28,13 @@ test("⛔⛔ the Inbox is DELETED, not hidden", () => {
   assert.ok(!shell.includes("SupportInbox"), "the shell still references the Inbox");
 });
 
-test("the desk is three tabs, and the work is the first one", () => {
+test("the desk is four tabs, and the work is the first one", () => {
+  // "agent" joined 2026-08-31 (727a4d18) — the live view of the automatic
+  // support agent. This guard lagged a day behind; the shape it pins now is
+  // desk-first with the agent's runs one click away.
   const shell = code("page.tsx");
   const ids = [...shell.matchAll(/\{\s*id:\s*"([a-z]+)"\s*,\s*label:/g)].map((m) => m[1]);
-  assert.deepEqual(ids, ["desk", "workbench", "rules"]);
+  assert.deepEqual(ids, ["desk", "agent", "workbench", "rules"]);
   assert.match(shell, /useState<View>\("desk"\)/, "the desk must be what opens");
 });
 
