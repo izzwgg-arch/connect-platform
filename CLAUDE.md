@@ -1,5 +1,43 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ BROWSE IN REAL CHROME, NEVER THE IN-APP BROWSER PANE (2026-08-31, Izzy's standing instruction) — the pane CRASHES CLAUDE DESKTOP on this machine
+
+Izzy, 2026-08-31: *"always use the browser that doesn't crash Claude Desktop."*
+
+- ✅ **USE `mcp__claude-in-chrome__*`** — his real Chrome, driven by the
+  extension. It renders in **Chrome's** process tree, so if its GPU dies Chrome
+  recovers by itself and Claude Desktop never notices. Measured: **836 calls in
+  one day, zero attributable crashes.**
+- ⛔⛔ **NEVER USE `mcp__Claude_Browser__*` (the in-app Browser pane) — it kills
+  the app, usually within seconds.** It renders inside Claude Desktop's OWN
+  process tree, so its compositing goes through Claude's GPU process, and this
+  machine's **Intel HD Graphics 4000 driver (2012, `10.18.10.5161`, terminal —
+  Intel will never ship another)** cannot survive it. Every death is the same
+  `GPU process gone … exitCode: 101457950` and the app is gone.
+  **Live evidence, last five days: 4 pane opens → 3 crashes, gaps 57s / 62s /
+  1s. All-time: every single crash ever recorded was preceded by a pane open.**
+- ⛔⛔ **THE TOOL'S OWN DESCRIPTION TELLS YOU TO DO THE DANGEROUS THING —
+  `mcp__Claude_Browser__*` reads *"the in-app browser… Default to this."*** That
+  is what makes this rule necessary: every fresh session reads that line and
+  reaches for the pane. **This file overrides it.** Telling one conversation
+  protects one conversation; the rule lives here so it survives all of them.
+- ⛔ **Two "fixes" are already spent — do not re-try them.**
+  `isHardwareAccelerationDisabled: true` **is set and is INERT** (verified
+  2026-08-31: still `true`, still crashing — it disables GPU *compositing*, it
+  does not take the display driver out of the process), and the app's own
+  auto-disable **has never fired in its life** (`grep -c gpu-recovery` = 0
+  across every log) because it needs 3 deaths inside 5 minutes and these are
+  hours apart. **Behaviour is the only lever that works.**
+- ⛔ **A single clean pane open proves NOTHING** — the pane's failure rate sits
+  around 40–90%, so surviving once is the expected outcome. That reasoning error
+  is what produced a retracted "PROVEN FIXED" on 2026-08-23.
+  See [[claude-desktop-gpu-crash-loop]] and [[quiet-log-is-not-a-fixed-bug]].
+- **Triage recipe if it recurs:** the live log is
+  `%LOCALAPPDATA%\Claude\Logs\main.log` (⛔ the older `%APPDATA%\Claude\logs\`
+  stopped 2026-08-21 and gives a stale answer);
+  `grep -aE "Created browser preview|GPU process gone" main.log` gives the
+  trigger→crash timeline in one command.
+
 ## ⛔⛔ THE TWO RULES THAT WRAP EVERY TASK (2026-08-16, Izzy's standing instruction) — these are not optional and they are never waived by "it's a small change"
 
 **START of every prompt / every task — READ THE MD FILES FIRST.** Before any
