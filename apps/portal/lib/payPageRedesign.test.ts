@@ -203,9 +203,14 @@ test("the card brands are vectors, not styled words", () => {
   assert.ok(!/clipPath/.test(marks), "cross-referenced ids collide when a mark repeats on one page");
 });
 
-test("the Sola logo is readable on dark — its ink follows the theme", () => {
+test("the Sola mark is a DIFFERENT vendor file per theme (Izzy, 2026-09-01)", () => {
   const sola = read("components/billing/SolaLogo.tsx");
-  assert.match(sola, /fill="currentColor"/, "the wordmark path must take the theme colour");
-  assert.match(sola, /theme === "dark" \? "#ffffff" : "#020622"/);
-  assert.match(sola, /#0047FF/, "the ring keeps Sola's blue on both themes");
+  // Sola ships the pair themselves; their README forbids recoloring, so dark
+  // mode must render the vendor's own reverse file, never a re-tinted copy.
+  assert.match(sola, /sola-logo-positive-rgb\.png/, "light mode uses the vendor's positive file");
+  assert.match(sola, /sola-logo-reverse-rgb\.png/, "dark mode uses the vendor's reverse file");
+  assert.match(sola, /theme === "dark" \? SOLA_DARK : SOLA_LIGHT/, "the theme picks the file");
+  const code = sola.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/filter\s*:/.test(code), "never fake the reverse with a CSS filter");
+  assert.ok(!/currentColor/.test(code), "never re-tint one file per theme — use both vendor files");
 });
