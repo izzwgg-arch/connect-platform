@@ -156,3 +156,59 @@ would end this; that is a credential only Izzy should place.
   stops, the app stays up, **no dialog**.
 - Why the helper died on 2026-09-02 is unknown; the stderr tail exists to
   answer that next time — once `main.ts` passes the `log` sink.
+
+## 10. Administrator access — BUILT the same day (`d4fa4836`, desktop `0.1.17-rc.5`)
+
+Izzy: *"Build the administrator access with the UAC prompt option also."* The
+row in §6 is real now.
+
+**How it works, end to end.** `admin` is a capability like clipboard and files
+(`controls.ts`): it rides the control key, both sides must say yes, it is
+re-checked live. The technician asks for it from the tools rail. On the
+customer's machine the consent component calls
+`bridge.remoteSupport.enableElevatedControl(sessionId)` FIRST: `mainWiring.ts`
+refuses unless ordinary control is already enabled for that session, then
+`ElevatedInputInjector` (`inputInjector.ts`) writes the elevated helper script
+and runs `Start-Process powershell -Verb RunAs -Wait` — Windows shows the UAC
+prompt, the customer clicks Yes — and the elevated helper opens a named pipe
+`\.\pipe\loopcom-rs-<random>`. The app connects, sends a one-time token as
+the first line, and only when the helper answers `ok elevated` does
+`enableElevatedControl` resolve true; only THEN does the consent component send
+the grant (`answerCapability(..., true)`). A declined prompt resolves false and
+the component records a refusal, so the technician never sees "Allowed" for
+something that cannot act. The plain helper is stopped only after the elevated
+one is up. Input then routes to the elevated helper for every window.
+
+**Why a named pipe.** An elevated process cannot inherit the non-elevated
+parent's stdio; the launcher hands the helper only arguments.
+
+**How the pipe is locked.** ACL = current user's SID only; token handshake or
+exit; exactly one client for the helper's life; exits on client disconnect,
+60 s with no client, and a 4 h ceiling. The app cannot kill an elevated
+process, so `stop()` writes `{"kind":"stop"}` and ends the socket.
+
+**What it still cannot do.** The UAC prompt itself and the lock screen run on
+the secure desktop (SYSTEM / UIAccess only). The rail's "Allowed" line says
+"Windows prompts (UAC) still need them"; the consent hint says Windows will
+show its own prompt. The helper script is split into `HELPER_PRELUDE` +
+`HELPER_DISPATCH` shared by both helpers so a key or click can never differ
+between the plain and elevated paths.
+
+**Proof.** 6 tests in `elevatedInjector.test.ts` (fake launcher + fake pipe:
+token-first, declined prompt → false, refused token → not trusted, timeout →
+false once, stop() asks over the pipe, mid-session pipe break reported once);
+`controls.test.ts` flips its old "admin is never a capability" pin; two portal
+guards (elevation precedes the grant; the rail states the remaining limit).
+Desktop 170/170, api remote-support 142/142, portal guards 22/22, all three
+typechecks clean. rc.5 built from a clean worktree at `4eb5bd03`;
+`ok elevated` ×5 / `enable-elevated-control` ×2 in the packed `app.asar`;
+byte-identical copy on Izzy's Desktop as `Loopcom-Setup-0.1.17-rc.5.exe`.
+api deployed at `d4fa4836` (refusal string grepped in the container).
+
+⏳ **NOT PROVEN ON A REAL MACHINE — nobody has clicked Yes on the real UAC
+prompt through this path.** Acceptance: technician asks → the customer sees
+the ask bar, then Windows' own prompt → Yes → rail reads "Allowed — Windows
+prompts (UAC) still need them" → a click lands in an admin-elevated window.
+Negatives: No on the prompt → the rail never says Allowed and ordinary control
+keeps working; antivirus may flag the elevated PowerShell exactly as it does
+the plain one.
