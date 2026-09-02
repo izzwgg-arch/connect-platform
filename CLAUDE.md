@@ -4,7 +4,13 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_BUBBLE_DEAD_2026-09-02.m
 (one commit on `feat/ivr-migration-takeover` across shared + agent + api + portal +
 desktop. Deploy state at the end of this section. No migration — the record is the
 existing `AgentAction` table under `capabilityId: coworker.task.v1`; no PBX write;
-no env change. Izzy, 2026-09-02: *"Approved, build the hands through the co-worker."*)
+no env change. Izzy, 2026-09-02: *"Approved, build the hands through the co-worker."*
+✅ **api + portal DEPLOYED and container-verified at `a39d5a22` 2026-09-02 13:53Z, agent
+REBUILT and healthy** — `GET /coworker/tasks/pending` answers 200 with a real token and 401
+without, `/desktop/coworker` 200 on both hostnames, the knowledge row rewritten 13:28Z, 0
+`AgentAction` rows written by any probe. ⛔ **Desktop `Connect-Setup-0.1.17-rc.6.exe` is BUILT
+and artifact-verified but NOT installed and NOT published** (feed stays 0.1.16) — both are
+Izzy's call. Full deploy state: handoff §10.5.)
 Memory: [[coworker-hands-built-three-tasks]] (replaces [[coworker-cannot-act-on-the-computer-yet]]).
 
 - ✅ **THE CHAIN: agent PROPOSES → person APPROVES → desktop RUNS → api RECORDS.**
@@ -60,7 +66,7 @@ Memory: [[coworker-hands-built-three-tasks]] (replaces [[coworker-cannot-act-on-
   `HEAD`.** Typechecks: shared/desktop/portal 0, agent 14 = baseline, api 81 with 0 in
   any touched file (+5 are another session's remoteSupport/webrtc files).
 - ⏳ **NOT PROVEN: nobody has typed "organize my Downloads" into the bubble and
-  pressed the button.** The desktop half rides a NEW rc build and is on no machine
+  pressed the button.** The desktop half rides rc.6 and is on no machine
   until Izzy says install; the fleet feed stays 0.1.16. Acceptance (§10.4): from a
   browser tab the assistant must say it only works from the bubble; from the bubble a
   folder count lands in chat and the row reads EXECUTED; an organize moves files into
