@@ -291,6 +291,9 @@ function openChatPanel(): void {
       placeChatBesideBubble(chatWindow);
       chatWindow.show();
       chatWindow.focus();
+      // Logged too: the first live run showed one "opened" and three "closed"
+      // lines because re-shows were silent, which read like the toggle was broken.
+      d.log("chat panel shown again");
       return;
     }
 
