@@ -1,3 +1,56 @@
+## ⛔⛔ AGENT HANDOFF — Gesheft ticket Y7FK8P "the phone isn't ringing and voicemails don't come up" (2026-09-02): the app is rung and never answers, voicemail is healthy, and MAILBOX 101 IS ONE DAY FROM THE 9,999 WALL — READ FIRST for ANY Gesheft "no voicemail" report, before believing a healthy voicemail pipeline means voicemail works, or before touching mailbox 101
+
+(**Read-only investigation — no code, no deploy, no PBX write, no data change.** The one write:
+the technical report was handed back through `POST /admin/support/escalations/Y7FK8P/agent-report`
+→ OpenAI rewrite → safety gate **`ready`** (SupportUpdate row 17:18:19Z), so a plain-English
+update is queued on her widget. Report on disk:
+`tools/loopcom-support-mcp/reports/Y7FK8P-1788370500000.md`. ⛔ The watcher's own run for this
+ticket died at 56 s — `exit 1`, the Claude session limit — and posted nothing; the 65-byte
+`Y7FK8P-1788368664432.md` is that failure, not a report.) Memory:
+[[gesheft-101-mailbox-nearly-full]] (re-measured). Same person as Q2FJRK (08-24) and QP7APH
+(08-27): ext 101 "Phone Orders", `yisraelweinstock@gmail.com`.
+
+- ⛔⛔ **THE CLIFF, and it is what will make this ticket TRUE tomorrow: mailbox 101 INBOX holds
+  9,951 messages (Asterisk counts 9,983 with Urgent) against `maxmsg=9999`, which is
+  `app_voicemail`'s HARD ceiling and cannot be raised.** ~48 slots at 29–61/day = about one day.
+  Then Asterisk plays "mailbox full" and records NOTHING — no PBX message, no Connect row, no
+  email, no log line — and every pipeline check reads healthy. `grep -c vm-mailboxfull
+  /var/log/asterisk/full` = 0 today, so it has not happened yet. **Needs Izzy's mandate today:**
+  delete/archive old INBOX messages (Connect has local audio for 788 of the last 989 on 101;
+  older Connect rows will read `voicemail_audio_gone` once their spool files go).
+- ✅ **"The phone isn't ringing" — it IS rung, for 10–15 s per call, and the Windows app answers
+  none of it.** Today to 17:10Z: 49 calls into `T8_Q750`, ext 101 dialled on each, desk phone
+  `T8_101` answered 13, colleagues the rest. App endpoint `T8_101_1` (4 windows on the 443 route,
+  all Avail, RTT ~230 ms): **286 "is ringing" legs today, 359 yesterday, 0 answered both days**
+  (desk answered 37 yesterday). Traces: app + desk ring at 12:51:34, desk answers 12:51:45.
+  Whether the window shows/sounds the ring is invisible from the server (documented gap). She
+  still runs TWO shells at once (`@connect/desktop/0.1.3` 8,087 requests + `Loopcom/0.1.16`
+  13,867) and the softphone rebuilt its stack 8× today. The portal `answer_unacked` rescue is
+  still unbuilt (`grep -rn answer_unacked apps/portal` = 0).
+- ✅ **"Voicemails don't come up" — recording, ingest and email are all healthy.** 39 voicemails
+  on 101 in 24 h; the newest landed **17:06:52Z, two minutes AFTER the ticket**, in Connect 84 s
+  later; her window fetches the list (200, 100 rows) every few seconds; since the 15:53Z cutover
+  **5 of 5 emailable voicemails SENT to orders@gesheftkosher.com** (one 0-s hang-up correctly
+  `too_short`). ONE helper spool-scan timeout at 15:54:01Z (`upserted_count 0`), self-healed on
+  the next sync — do not read it as the cause. Unknown and unaskable from the server: whether she
+  means the list, the desktop toast, or the email.
+- ⛔ **Ruled out, so nobody re-derives it:** the VoIP.ms outage (trunk `344022_gesheft` never
+  lost registration; inbound ran 21–42/10 min straight through 15:40–16:10Z); a ban (office IP
+  38.105.207.69 absent from the denylist, 0 × 401/429 — its 4,866 × 403 are the
+  `/crm/notifications` + `/desk-phones/pending` background polls); DND (`CustomDevstate/DND_101
+  = UNAVAILABLE` = off); the dial string (intact, wake-dial shape).
+- ⛔⛔ **SHE HAS FILED THIS THREE TIMES AND NEVER BEEN ANSWERED: `SupportUpdate` held ZERO rows
+  for any Gesheft ticket until this one.** Q2FJRK and QP7APH were investigated (handoffs exist)
+  and nothing ever reached her widget. This report is the first.
+- ⛔ **Posting a report by hand:** `postAgentReport` in `tools/loopcom-support-mcp/loopcom.mjs`
+  takes `{token, base}`; the token lives in `~/.claude.json` under the project's
+  `mcpServers["loopcom-support"].env`. Run the script FROM that folder with a relative import —
+  a `C:/…` absolute path in an ESM import throws `ERR_UNSUPPORTED_ESM_URL_SCHEME` on Windows.
+- ⏳ **NOT PROVEN:** she has not read the update (`deliveredAt` null); the OpenAI rewrite dropped
+  the "one window, current version" advice and the voicemail reassurance from the technical
+  report — a human should say those on the open text thread with 845-248-6206; and the
+  mailbox-101 decision is untaken.
+
 ## ⛔⛔ AGENT HANDOFF — GESHEFT'S VOICEMAIL EMAIL IS ON CONNECT NOW; NO TENANT IS ON THE PBX'S OWN VOICEMAIL-TO-EMAIL ANY MORE (2026-09-02) — READ FIRST before touching `VOICEMAIL_EMAIL_EXCLUDED_TENANT_IDS`, before un-excluding ANY tenant, before blanking a PBX voicemail email, or for "Gesheft didn't get their voicemail email"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_GESHEFT_VOICEMAIL_EMAIL_CUTOVER_2026-09-02.md`**
