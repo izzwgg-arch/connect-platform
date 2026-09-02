@@ -87,6 +87,35 @@ wake must not eat the call's one allowed wake), the wake-extension door answers
 AS-IF-QUEUED on suppression so dialplan wait behaviour is byte-identical, and
 the api itself may never pass NORMAL — both pinned by tests.
 
+### 3b. Deploy state — ✅ api + worker DEPLOYED and container-verified 2026-09-02
+
+- **api** `deploy-direct.sh api` → `done c16ce81c`; `app-api-1` `.build-commit` =
+  `c16ce81c`, `wakePushGateCheck` ×4 / `fcm_unregistered_deactivated` ×1 /
+  `FcmSendError` ×2 grepped in the container, 0 restarts, 0 `level:50/60` lines,
+  health **200 on both hostnames**.
+- **worker** `DEPLOY_BRANCH=… DEPLOY_FORCE_RESTART=1 deploy-worker.sh` →
+  `done c16ce81c`; container carries `fcmPriority: "NORMAL"` ×1 +
+  `fcm_unregistered_deactivated` ×1 + the new `priority, ttl` line in the shared
+  fcmDirect; 0 restarts; boot line `FCM_DIRECT_ARMED` with the SA file readable.
+- ⛔ GitHub 401'd the server clone's fetch AGAIN (the documented per-IP pack
+  throttle) — deployed via incremental bundle → `/root/connect-mirror.git` →
+  `set-url origin <mirror>` → deploy → **origin restored to GitHub and the
+  mirror removed** (verified).
+- ✅✅ **THE GATE FIRED ON REAL CALLS WITHIN 25 MINUTES OF CUTOVER**: 2 ×
+  `CallWakeEvent` stage `WAKE_SUPPRESSED_DUPLICATE` (both `path:
+  "mobile_prewake"` — the exact S2/S3 double-prewake this census measured),
+  while the wake chain stayed healthy (`WAKE_PUSH_DELIVERED` ×35,
+  `DEVICE_REGISTER_COMPLETE` ×3 in the same window).
+- ⚠️ **Relax Tires' dead 08-23 device row (`cms4omoi01…`) was ALREADY
+  `active: false`** when probed post-deploy — the heartbeat-expiry pass retired
+  it sometime after 09-01, so the doomed-FCM noise from it had ceased on its
+  own and the UNREGISTERED-retirement path was NOT exercised live (the probe
+  script correctly refused to send at a dead row). It stays proven by the typed
+  tests; the tell in the wild is `lastPushStatus = "fcm_unregistered_deactivated"`.
+- ⏳ **Acceptance over the next week**: Relax Tires' `pushReceivedAt −
+  invite.createdAt` distribution (was 7.5–29 s on failing calls) — plus the
+  §3.4 mobile telemetry when the next app build ships.
+
 ### 3a. FCM Data API postscript (2026-09-02)
 
 Enabled + viewer role granted in Izzy's Chrome on 09-01; queried twice. It
