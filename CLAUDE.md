@@ -1,3 +1,81 @@
+## ⛔⛔ AGENT HANDOFF — a factory-reset Yealink gets its provisioning folder FROM THE OFFICE MACHINE now: `set_provisioning` has an executor (Yealink PnP), desktop 0.1.17-rc.7 (2026-09-02) — READ FIRST before touching `apps/desktop/src/phoneSetup/pnp.ts`, before widening `isLoopcomProvisioningUrl`, before adding a seventh capability op, or for "the reset phone sits on Preparing"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md` §20**
+(`ba20d717` on `feat/ivr-migration-takeover` — desktop + api + portal. ✅ **api DEPLOYED
+and container-verified** (`.build-commit` = `ba20d717`, `set_provisioning` ×5 +
+`provisioningUrlFor` ×2 grepped in the running routes file, 0 restarts, health 200 both
+hostnames). ✅ **portal DEPLOYED and container-verified** (`.build-commit` = `ba20d717`, the driver chunk carries `set_provisioning` and the *Unplug this phone* hint, `dps-hintline` in the shipped CSS, 0 restarts, `/settings/desk-phones` 200 on both hostnames). ⛔ Both deploys ran through the bundle → bare mirror route (GitHub still 401s the server's `git-upload-pack`); origin restored to GitHub and the mirror removed afterwards. ✅ **Desktop `Connect-Setup-0.1.17-rc.7.exe` BUILT
+and artifact-verified** (100,329,304 bytes, sha256 `7a622190fff8513c…`, `verify:icon`
+OK, the packed asar carries `pnp.js` with the multicast group and `set_provisioning` in
+the capability) — ⛔ **NOT installed on any machine and NOT published** (feed stays
+0.1.16); like rc.5/rc.6 it also carries the unpublished remote-desktop, coworker-hands and
+elevated-support work, so publishing is fleet-wide. Both are Izzy's call. No migration,
+no PBX write, no env change.) Memory: [[yealink-pnp-hands-a-reset-phone-its-folder]].
+Izzy, 2026-09-02: *"Build the desktop operation that writes the URL into the phone."*
+
+- ⛔⛔ **THE MECHANISM IS PnP, NOT THE WEB UI.** A reset Yealink multicasts a SIP
+  `SUBSCRIBE` for `Event: ua-profile` to `224.0.1.75:5060` **once per boot** and obeys
+  whoever answers with a `NOTIFY` carrying a URL (`application/url`) — no password, no
+  login. The web interface needs a per-firmware-line encrypted login (unbuildable
+  blind); the PBX cannot NOTIFY a phone that is not registered to it. So the OFFICE
+  MACHINE answers: `apps/desktop/src/phoneSetup/pnp.ts` (`startPnpHandoff`) binds
+  0.0.0.0:5060, joins the group on the interface that sits on the phone's network,
+  answers 200 OK + NOTIFY, and the phone fetches `<folder><mac>.cfg` — the exact file
+  the PBX already serves (`f3df739ac62197cd/805e0c4d796d.cfg` exists today).
+- ⛔⛔ **LISTEN FIRST, THEN REBOOT — the order is the feature.** PnP fires once per boot,
+  so the sixth capability op `set_provisioning { ip, mac, url, credentialRef?, reboot? }`
+  resolves `listening` BEFORE it sends the Action-URI reboot (default `admin/admin` on a
+  reset phone, or the stored password by reference). A responder started after the
+  reboot misses a fast phone. A refused reboot is not a failure: attempts 3–5 are
+  listen-only with the hint *"Unplug this phone's power … we are listening for it"*.
+- ⛔⛔ **THE URL IS THE ONE URL-SHAPED ARGUMENT THE CAPABILITY HAS EVER ACCEPTED, AND IT
+  IS FENCED TWICE.** `isLoopcomProvisioningUrl` (`yealink.ts`): https only, a Loopcom
+  host (`connectcomunications.com` / `loopcom.net` + sub-domains; lookalikes refused),
+  pathname exactly `/phoneprov/<16 hex>/`, no port/userinfo/query/fragment — checked in
+  the capability before any socket exists AND inside the NOTIFY builder. The host list is
+  a deliberate COPY of the api's `ourProvisioningHosts`: the desktop must not take its
+  fence from the server it is fencing. **Never widen it** — a phone downloads its whole
+  config, including SIP credentials, from that folder. ⛔ **Only the TARGET phone is
+  answered** (by MAC when the SUBSCRIBE names one — so a phone that came back on a new
+  DHCP address still counts — else by the address it was found at), **and only once**; a
+  stranger's SUBSCRIBE gets nothing.
+- ⛔ **The api hands the URL out with the decision, best-effort.** `advance` returns
+  `provisioningUrl` beside `set_provisioning` (new optional dep `provisioningUrlFor`;
+  default reads `ombu_tenants.path` through connect_read on the photos' origin —
+  `PBX_PHONEPROV_BASE_URL`, else `PBX_PHONE_IMAGE_BASE`'s origin + `/phoneprov`; cached
+  10 min **on a hit only**). No URL ⇒ the driver waits; never a wrong URL. On `delivered`
+  the driver reports the folder through the EXISTING `/discovered` path, so `advance`
+  reads `provisioningIsOurs` off the row and climbs to `trigger_autop` /
+  `verify_registration` by itself.
+- ⛔ **Restarts are bounded and the give-up is server-side.** Two restarts from the
+  machine, listen-only to five, then the driver sends `provisioningHandoffFailed: true`
+  and `advance` turns `set_provisioning` into a **halt → Loopcom Support** (*"We could not
+  point this phone at Loopcom from your computer."*). ⛔ The shared ladder
+  (`escalation.ts`) is UNTOUCHED on purpose — the exhaustive invariant suite enumerates
+  every `PhoneCondition` field and a new one doubles a 12.6M-decision run; the one
+  caller-observed fact is acted on in the route.
+- ⚠️ **WINDOWS FIREWALL WILL PROMPT ON THE FIRST INBOUND LISTEN, and Allow needs an
+  administrator on that machine.** Every earlier UDP use was reply traffic; binding
+  5060 to receive multicast is new. The hint says so; a machine that cannot bind answers
+  `cannot_listen` and the wizard says that in plain words. The per-user NSIS installer
+  cannot add a firewall rule (no elevation) — if this bites in the field, an elevated
+  firewall-rule step is the durable fix and is Izzy's call.
+- ✅ **Proven:** desktop 219/219 (27 new in `pnp.test.ts` against a fake socket — the
+  full SUBSCRIBE → 200 OK → NOTIFY → ack exchange, a phone recognised on a new address, a
+  stranger never answered, answered once, listen-before-reboot ORDER, the URL fence
+  sweep, cannot-bind, spacing); portal 49/49 (delivered → `/discovered`, no URL → nothing,
+  bounded restarts → listen-only → give-up, cannot-listen wording); api 91/91 (URL on the
+  decision, no URL on other decisions, the give-up halt, folder-URL hex/base rules).
+  Typechecks desktop 0 / portal 0 / api 81 = baseline; all four new source guards fail
+  replayed against HEAD.
+- ⏳ **NOT PROVEN: NO YEALINK HAS SEEN IT.** Nothing here has run against a handset.
+  Acceptance is the A plus center T53W (ext 103, `80:5E:0C:4D:79:6D`, 192.168.0.121):
+  install rc.7 on that machine over AnyDesk → tick only that phone → the live row should
+  read "restarting … where Loopcom is", then Ready once `T2_103` registers. The negatives
+  that matter: the sibling T53W (already registered) is NEVER answered or restarted, and
+  a Windows "Block" on the firewall prompt must read as "could not listen", not as a dead
+  phone.
+
 ## ⛔ AGENT HANDOFF — the desk-phone wizard lets the person PICK which phones to set up; an unticked phone is never touched and never blocks "done" (2026-09-02) — READ FIRST before touching the found/match screens, any `summarizeRun` call in `deskPhoneRoutes.ts`, the driver's skip line, or before "simplifying" `skippedAt`
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md` §19**
@@ -52,22 +130,14 @@ provision all at once … it should pick up 'Not Connected' automatically."*
 - ✅✅ **PROVEN BY IZZY THE SAME HOUR (21:34Z): he restarted the app and ran it on A plus
   center — `DESK_PHONE_SELECTION_SET {selected: 1, skipped: 12}`, only Jacob 103 in the
   setup, twelve rows skipped and untouched, the screen reading "0 of 1 phones ready".**
-- ⛔⛔ **AND IT FOUND THE NEXT WALL, WHICH PREDATES TODAY: a factory-reset phone sits on
-  "Preparing" forever because the ladder's rung-3 instruction `set_provisioning`
-  ("reachable + unlocked + not pointed at us → tell it where Loopcom is") HAS NO
-  EXECUTOR** — the desktop's five ops are discover/fingerprint/test_credentials/
-  reboot/trigger_autop, the driver marks it a stall, and the handoff recorded the gap on
-  2026-08-22 (Part 4 §7). The PBX already holds that MAC's config
-  (`f3df739ac62197cd/805e0c4d796d.cfg`) and the sibling T53W fetches from
-  `https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` daily; the phone
-  needs that one URL. **Options, none built, Izzy's call (handoff §19):** (A) a sixth
-  desktop op that writes the auto-provision URL (host checked against
-  `ourProvisioningHosts`) — a real build against a handset + a fleet publish; (B) Yealink
-  RPS/YMCS registration of customer MACs — zero-touch for reset phones, needs the
-  Yealink account; (C) DHCP option 66 per office. **By hand today:** set that URL in the
-  phone's Auto Provision menu and press Autoprovision Now — once T2_103 registers the
-  row flips to REGISTERED and the wizard goes Ready by itself.
-
+- ✅ **THE NEXT WALL IT FOUND IS CLOSED THE SAME DAY (`ba20d717`, the section above):
+  a factory-reset phone used to sit on "Preparing" forever because the ladder's rung-3
+  instruction `set_provisioning` had NO EXECUTOR (recorded as a gap on 2026-08-22, Part 4
+  §7). The desktop's sixth op now hands the phone its folder over Yealink PnP. ⛔ Until
+  rc.7 is on the office machine the OLD app still stalls there — **by hand today:** set
+  `https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` in the phone's Auto
+  Provision menu and press Autoprovision Now; once `T2_103` registers the row flips to
+  REGISTERED and the wizard goes Ready by itself.
 ## ⛔ AGENT HANDOFF — Create A Box 102 "answers, no audio either side": the app's 200 OK never reaches the PBX through the OFFICE TUNNEL (2026-09-02) — READ FIRST for ANY "I answered and it's dead" on a tenant behind a WireGuard peer, before telling him to update the app, or before reading `session_not_found_timeout` as the cause
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_102_ANSWER_LOST_ON_TUNNEL_2026-09-02.md`**

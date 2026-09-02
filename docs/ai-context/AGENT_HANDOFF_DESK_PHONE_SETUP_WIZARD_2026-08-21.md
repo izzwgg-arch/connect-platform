@@ -1435,3 +1435,97 @@ close and reopen the Loopcom app, Settings → Desk Phones → run the wizard �
 match screen shows one row → Set Up 1 Phone → Jacob's row goes to Ready. The negatives
 that matter: the eight Connected phones keep working throughout, their rows never leave
 ASSIGNED, and no `DESK_PHONE_RESET_REQUESTED` audit row names any of them.
+
+---
+
+## §20 — `set_provisioning` has an executor: the office machine hands a reset Yealink its folder over PnP (2026-09-02, `ba20d717`, desktop 0.1.17-rc.7)
+
+Izzy, after §19's live run left the reset T53W on "Preparing": *"Build the desktop
+operation that writes the URL into the phone."*
+
+### The mechanism, and why it is this one
+
+A factory-reset Yealink knows nothing and, **once per boot**, multicasts a SIP
+`SUBSCRIBE` for the `ua-profile` event to `224.0.1.75:5060`; it obeys whoever answers
+with a `NOTIFY` carrying a URL — no password, no web login. That is the documented
+zero-touch mechanism (RFC 6080 / Yealink "PnP"), proven on current firmware by the 2026
+"reclaim second-hand Yealinks" tooling (T43U 108.8x, T46S 66.8x). The alternatives were
+worse: the web interface needs a per-firmware-line encrypted login (unbuildable blind,
+brittle after), and the PBX cannot `NOTIFY` a phone that is not registered to it.
+⛔ **PnP fires once per boot**, so the responder must be listening BEFORE the phone
+restarts — the op listens, then sends the Action-URI reboot (documented default
+`admin/admin` on a reset phone, or the customer's stored password by reference), then
+answers. If the reboot is refused, the person power-cycles the phone while it listens.
+
+### What shipped
+
+- **`apps/desktop/src/phoneSetup/pnp.ts`** — `parsePnpSubscribe` (compact headers
+  understood; MAC read from the request URI / From / User-Agent), `buildPnpOk`,
+  `buildPnpNotify` (`Event: ua-profile;effective-by=0`, `Subscription-State:
+  terminated`, body `application/url`), `startPnpHandoff` (bind 0.0.0.0:5060 with
+  reuseAddr, join the group on the interface that sits on the phone's network,
+  `listening` resolves before `outcome`). ⛔ **Only the target phone is answered** — by
+  hardware address when the SUBSCRIBE names one (so a phone that came back on a new
+  DHCP address is still recognised), else by the address it was found at — **and only
+  once**; a stranger's SUBSCRIBE is never replied to. An ack is confirmation, not a
+  requirement.
+- **A SIXTH capability op, `set_provisioning { ip, mac, url, credentialRef?, reboot?,
+  waitMs? }`.** ⛔⛔ Its `url` is the one URL-shaped argument the capability has ever
+  accepted, and `isLoopcomProvisioningUrl` fences it: **https only, a Loopcom host
+  (`connectcomunications.com` / `loopcom.net` and sub-domains, lookalikes refused),
+  exactly `/phoneprov/<16 hex>/`, no port, no userinfo, no query, no fragment** — checked
+  in the capability before a socket exists AND again inside the NOTIFY builder. The
+  allowlist is a deliberate COPY of the api's `ourProvisioningHosts`: the desktop must
+  not take its fence from the server it is fencing. The "five operations" guards read
+  six now; the "preload exposes nothing URL-shaped" guard still passes because the
+  preload is unchanged (the request object is opaque).
+- **Driver:** on `set_provisioning` with a server-supplied `provisioningUrl`, runs the
+  op; on `delivered` it reports the folder through the EXISTING `/discovered` path (so
+  `advance` then reads `provisioningIsOurs` off the row and moves to `trigger_autop` /
+  `verify_registration`). Two attempts restart the phone from here; attempts three to
+  five listen only with the hint *"Unplug this phone's power … plug it back in — we are
+  listening for it. If Windows asks whether to allow Loopcom on your network, choose
+  Allow."*; after five it sets `provisioningHandoffFailed` and never attempts again.
+- **API:** `advance` returns `provisioningUrl` beside a `set_provisioning` decision
+  (new optional dep `provisioningUrlFor`; the default reads `ombu_tenants.path` through
+  connect_read on the photos' origin — `PBX_PHONEPROV_BASE_URL` or
+  `PBX_PHONE_IMAGE_BASE`'s origin + `/phoneprov` — cached 10 min on a HIT only), and
+  `provisioningHandoffFailed` in the observed body turns `set_provisioning` into a halt
+  with hand-off `support` (*"We could not point this phone at Loopcom from your
+  computer. Loopcom Support can finish this one with you."*). ⛔ The shared ladder is
+  untouched: the exhaustive invariant suite enumerates every `PhoneCondition` field,
+  so a new field there would double a 12.6M-decision run; the one caller-observed fact
+  is acted on in the route instead.
+- **Wizard:** a `hints` line per phone under the live rows.
+
+### ⛔ Windows Firewall, stated plainly
+
+Every earlier UDP use in this app was reply traffic to something the app sent, so no
+prompt was ever seen. Binding 5060 to RECEIVE multicast is the first inbound listen, and
+Windows Defender Firewall will show its "allow this app on private networks" prompt
+the first time — and **Allow needs an administrator on that machine**. The hint says
+so; a machine whose user cannot allow it answers `cannot_listen` and the wizard says
+that in plain words. The per-user NSIS installer cannot add a firewall rule (no
+elevation). If this bites in the field, the durable fix is a firewall rule added by an
+elevated step, and it is Izzy's call.
+
+### Proven
+
+- desktop **219/219** (27 new in `pnp.test.ts`: the full SUBSCRIBE → 200 OK → NOTIFY →
+  200 OK exchange against a fake socket, a phone recognised on a new address, a
+  stranger never answered, answered once, delivered-without-ack, cannot-bind, the URL
+  fence sweep, listen-before-reboot ORDER, default vs stored password, reboot:false,
+  spacing); portal **49/49** (driver: delivered → `/discovered`, no URL → nothing,
+  bounded restarts → listen-only → give-up flag, cannot-listen wording); api **91/91**
+  (URL on the decision, other decisions carry none, the give-up halt, the folder URL
+  builder's hex/base rules). Typechecks desktop 0 / portal 0 / api 81 = baseline.
+  All four new source guards fail replayed against HEAD.
+- ⛔ **Not yet run against a real handset.** Nothing here has seen a Yealink. The
+  acceptance test is §21 below once the installer is on the A plus center machine.
+
+### Deploy / build state
+
+- api ✅ DEPLOYED + container-verified at `ba20d717` (`set_provisioning` ×5, `provisioningUrlFor` ×2 in the running routes file, 0 restarts, health 200 both hostnames).
+- ✅ **portal DEPLOYED and container-verified** (`.build-commit` = `ba20d717`, the driver chunk carries `set_provisioning` and the *Unplug this phone* hint, `dps-hintline` in the shipped CSS, 0 restarts, `/settings/desk-phones` 200 on both hostnames). ⛔ Both deploys ran through the bundle → bare mirror route (GitHub still 401s the server's `git-upload-pack`); origin restored to GitHub and the mirror removed afterwards.
+- desktop ✅ `apps/desktop/release/Connect-Setup-0.1.17-rc.7.exe` built from the committed tree (100,329,304 bytes, sha256 `7a622190fff8513c…`, `verify:icon` OK, asar carries `pnp.js` + `set_provisioning`). ⛔ NOT installed anywhere, NOT published (feed 0.1.16). Carries rc.5/rc.6's unpublished work too — Izzy's call.
+- ⏳ No handset has exercised it. Acceptance = §21 (the A plus center T53W).
