@@ -12786,6 +12786,52 @@ SESSION HAS EVER RUN BETWEEN TWO PEOPLE.** No desktop build.)
   `https://github.com/izzwgg-arch/connect-platform.git` afterwards** (done, mirror
   removed). ⛔ Leaving the mirror as origin silently freezes every future deploy
   at that tip. Memory: [[remote-support-people-list-asked-a-route-that-never-existed]].
+- ⛔⛔ **THE FIRST REAL SESSION RAN 2026-09-02 AND FOUND FOUR THINGS — all fixed in
+  `8c6a79dd` + desktop `0.1.17-rc.3` (`e074ad93`); full detail
+  `docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_FIRST_LIVE_SESSION_2026-09-02.md`.**
+  Deploy state: api `99d14c0e` (people route, live-probed); portal container a6fc0dbc (contains 8c6a79dd) — bundle strings Exit full screen / picture has paused / whole screen all present, shipped CSS rs-video.is-controllable{cursor:default}, 0 restarts, 200 both hostnames;
+  desktop rc.3 built from a CLEAN WORKTREE (the shared tree carried another
+  session's uncommitted desktop work), `helper_pipe_broken` grepped ×2 in the
+  packed `app.asar`, on Izzy's Desktop as `Loopcom-Setup-0.1.17-rc.3.exe`,
+  **NOT published** (feed still 0.1.16).
+  **(1) "A JavaScript error occurred in the main process — write EPIPE."** A
+  mouse move was written to the PowerShell input helper after it had died.
+  ⛔⛔ **The EPIPE is ASYNCHRONOUS** — the write "succeeds" and the error arrives
+  later as an `"error"` EVENT on the child's stdin; with no listener Node raises
+  it as an uncaught exception in Electron's MAIN process (the phone's process)
+  and the crash dialog lands on the customer's screen. The `try/catch` around
+  `write()` can never see it. Now: stdin/stdout/stderr error listeners, one
+  idempotent `die()`, `available` = `writable && !destroyed` (a helper that died
+  on its own leaves `killed` false), stderr tail rides the exit reason (⛔ `main.ts`
+  does not yet pass the optional `log` sink — one line, that file was another
+  session's in-flight work). Spawn injectable; 4 fake-child tests.
+  **(2) The picture froze when the shared window was minimised** — he had shared
+  ONE WINDOW; window capture stops on minimise and the viewer showed the last
+  frame beside a green "Good connection". The viewer now listens for the remote
+  track's `mute`/`unmute` and SAYS the picture paused; the consent picker sorts
+  whole screens first, labels them, and warns about single windows.
+  **(3) Full screen** — a button on the STAGE, not the `<video>` (browser video
+  fullscreen takes the keyboard and footer away).
+  **(4) "A plus out of sync with the mouse"** was `cursor: crosshair` beside the
+  customer's own cursor, which arrives INSIDE the video a fraction late and
+  cannot be excluded from Chromium's capture. Normal arrow now; the offset that
+  remains is video latency.
+  ⛔ **Administrator windows stay unavailable ON PURPOSE** — Windows refuses
+  injected input to elevated windows from a non-elevated process; a selectable
+  row would be a checkbox that does nothing. Middle path (elevated helper, one
+  UAC "Yes", named-pipe channel — still cannot drive the UAC prompt itself) and
+  full path (SYSTEM service) are both Izzy's call, neither built.
+  ⛔⛔ **GitHub 401'd the server's `git-upload-pack` fetch TWICE today** (per-IP
+  throttling of unauthenticated pack downloads; the workstation fetches fine).
+  Route: incremental bundle → bare mirror `/root/connect-mirror.git` →
+  `git remote set-url origin <mirror>` → deploy → set it back. **Two sessions did
+  this in the same hour and each one's "set it back" killed the other's
+  in-flight git-sync** — check `git remote get-url origin` + `ps` for a running
+  deploy before touching either. A token on the server ends it; Izzy's to place.
+  ⏳ **NOT PROVEN:** nobody has used Full screen, seen the paused line or the
+  arrow on the new build, and no session has run on rc.3 — the injector's death
+  path is proven by a fake child only. Acceptance: a session where the helper
+  is killed → control stops, app stays up, **no dialog**.
 - ⛔⛔ **BUILDING THE SCREENS (`875bd560`) PROVED THREE SERVER PROTECTIONS DEAD.
   All three were correct, tested and deployed — and unreachable, because nothing
   ever called them. Each is a CALLER-side omission, which a test of the policy,
