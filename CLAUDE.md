@@ -59,12 +59,13 @@ for like 15 minutes."*
   ⚠️ The deploy shipped the branch tip, which carried another session's `53fb9c52` (manual-pay
   invoice automation) — checked first: opt-in, exactly one tenant flagged (Yossis Wood Works, the
   tenant it was written for). Stated so nobody is surprised.
-- ⏳ **NOT PROVEN AT THE TIME OF WRITING: no Gesheft voicemail had arrived in the 20+ minutes
-  after the PBX went quiet** (12:11 ET, a lunchtime lull). Acceptance is the next one: `Voicemail`
-  row → EMAILED → `EmailJob` SENT to the gesheftkosher address, **and zero PBX `status=sent`
-  lines for Gesheft in `mail.log` after 12:11 local** — that second half is the check that
-  matters. ⛔ The `Extension.pbxUserEmail` mirror for the 7 mailboxes had also not yet blanked
-  (REST cache); harmless (dedupe), and the eventual promotion is a no-op.
+- ✅✅ **PROVEN END TO END: the first voicemail after the PBX went quiet (ext 101, 16:35:07Z, 144 s)
+  was emailed by Connect alone** — `EmailJob` SENT 16:37:59 to `orders@gesheftkosher.com`, and
+  the PBX's `mail.log` shows **0** Gesheft sends after 12:11 local. ⛔ A query 4 s before the job
+  row existed showed the `Voicemail` EMAILED with no job — the two writes land in the same sweep
+  pass seconds apart; re-read before filing that as a fault. ⚠️ The `Extension.pbxUserEmail`
+  mirror for the 7 mailboxes may lag the blank for a while (REST cache); harmless (dedupe), and
+  the eventual promotion is a no-op.
 
 ## ⛔⛔ AGENT HANDOFF — the Coworker HAS HANDS: three allowlisted tasks, approved on a card, run by the desktop app from its OWN allowlist (2026-09-02) — READ FIRST before adding a task kind, before touching `coworker_task`, `/coworker/tasks/*`, `apps/desktop/src/coworker/`, or before letting ANY message carry a path or a command to the desktop
 

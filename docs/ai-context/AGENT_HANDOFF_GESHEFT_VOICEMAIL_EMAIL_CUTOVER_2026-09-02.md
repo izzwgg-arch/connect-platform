@@ -164,7 +164,14 @@ email. When the cache refreshes, the promotion upserts `gesheftkosher` (already 
 
 ### 4a. First voicemail after the switch-off
 
-_(stamped at the end of the session — see the CLAUDE.md section for the final line)_
+✅ **PROVEN.** ext 101, received **16:35:07Z** (144 s, from 8453253408) — 24 minutes after the PBX went
+quiet. Connect's sweep logged `queued: 1`; `EmailJob` created **16:37:48**, **SENT 16:37:59** to
+`orders@gesheftkosher.com`, no error. The PBX's `mail.log` shows **0** voicemail sends for Gesheft
+after 12:11 local. **Connect alone delivers; the PBX is off.**
+
+⛔ Method note: a query at 16:37:44 found the `Voicemail` row EMAILED but NO `EmailJob` — the job
+was created at 16:37:48, four seconds later. `markProcessed` and `queueEmail` are two writes in one
+sweep pass; read both again before calling an EMAILED-without-a-job a fault.
 
 ## 5. What is deliberately NOT changed
 
