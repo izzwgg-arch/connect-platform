@@ -57,6 +57,22 @@ schema `RemoteSupportSession`):
   staleness, the global kill switch (must end Remote Desktop sessions too), the argv gate
   (a SECOND tray switch, OFF by default, key absent when off).
 
+## 2b. ✅ Izzy's clarifications, 2026-09-02 (mockups updated to match, same URL)
+
+Verbatim: *"for somebody that wants to have unattended online access to his computer it
+has to set a username and password. The ID and password are only from Loopcom to Loopcom
+app."*
+
+- **Own computers: a USERNAME and password**, set at the machine from the tray dialog,
+  asked on every connect, separate from the Loopcom login, hash kept only on that machine.
+  Not a bare PIN/password. Decision C is therefore settled for own computers (standing by
+  nature) and open only for the shared-password expiry on someone else's computer.
+- **Connect ID + password is Loopcom app → Loopcom app ONLY.** The connect-by-ID card is
+  live in the Windows app and reads as a note ("Open the Loopcom app on this computer to
+  connect by ID") in a browser tab. Decision E is settled for the ID path; the one residual
+  question is whether OWN computers may be reached from a browser (recommendation: app-only
+  for now, one rule everywhere).
+
 ## 3. The six decisions (verbatim from the mockup)
 
 - **A · Mic into the remote computer.** Recommend two steps: (1) sound follows you + the

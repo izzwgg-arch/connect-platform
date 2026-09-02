@@ -15,8 +15,11 @@ Show me mockups before you build anything."*
   owner issues with expiry Once / 24 h / Until removed and scope Only-my-company /
   Anyone-on-Loopcom), a share-this-computer dialog, a live-session toolbar where Sound and
   Mic are two switches saying where each is, a SECOND tray toggle "Allow Remote Desktop to
-  this computer" with an access password set AT the machine, and the same always-on-top
-  banner + Stop. Remote Support stays under Admin; one engine, one kill switch.
+  this computer" with a **USERNAME AND PASSWORD set AT the machine** (Izzy, 2026-09-02 —
+  not a bare PIN; separate from the Loopcom login), and the same always-on-top banner +
+  Stop. ⛔ **Connect ID + password is Loopcom app → Loopcom app ONLY** (Izzy, same day) —
+  the ID card is inert in a browser tab. Remote Support stays under Admin; one engine, one
+  kill switch.
 - ⛔⛔ **THIS IS NOT A RE-SKIN OF REMOTE SUPPORT — three engine rules stand in its way and
   must be EXTENDED, not loosened:** the engine refuses standing consent by design (own-PC
   unattended access IS standing consent → a new grant type verified at the machine);
