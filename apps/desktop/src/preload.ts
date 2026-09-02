@@ -173,6 +173,15 @@ contextBridge.exposeInMainWorld(
 // data in, no privileged capability — the same dumb-hands posture as phoneSetup.
 const coworkerWidgetApi = {
   openChat: () => ipcRenderer.send("coworker-widget:open-chat"),
+  /** The docked assistant's Minimize button: hide the chat popover. */
+  closeChat: () => ipcRenderer.send("coworker-widget:close-chat"),
+  // ⛔ The drag is driven by the MAIN process reading the real cursor. The
+  // renderer only says "pressed", "still held", "released" — it sends no
+  // coordinates, so it cannot put the window anywhere. A press that never travels
+  // is a click, decided in widgetGeometry.isClick, and opens the chat.
+  dragStart: () => ipcRenderer.send("coworker-widget:drag-start"),
+  dragMove: () => ipcRenderer.send("coworker-widget:drag-move"),
+  dragEnd: () => ipcRenderer.send("coworker-widget:drag-end"),
   onBadge: (listener: (state: "none" | "unread" | "working") => void) => {
     const wrapped = (_: unknown, state: "none" | "unread" | "working") => listener(state);
     ipcRenderer.on("coworker-widget:badge", wrapped);

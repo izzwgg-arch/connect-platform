@@ -1,4 +1,11 @@
-export type DesktopWindowKind = "full" | "mini" | "phone-engine";
+/**
+ * ⛔ "coworker-widget" is the 64px bubble and "coworker-chat" is the popover it
+ * opens. Both are PASSIVE windows to the portal (anything that is not "full"): they
+ * never run a SIP phone, never redirect to /login, and wait for the main window's
+ * token. The portal's useSipPhone treats "coworker-chat" as a proxy window for that
+ * reason — a chat popover must never register a second phone.
+ */
+export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat";
 
 export type DesktopSettings = {
   alwaysOnTop: boolean;

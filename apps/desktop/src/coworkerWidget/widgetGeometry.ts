@@ -136,3 +136,31 @@ export function dragTo(origin: Point, grabOffset: Point, pointer: Point, workAre
   const clamped = clampToWorkArea({ ...next, width: WIDGET_SIZE, height: WIDGET_SIZE }, workArea);
   return { x: clamped.x, y: clamped.y };
 }
+
+/**
+ * A drag in progress, as the main process tracks it. Pure data: where the window
+ * was when the press began, where the cursor was, and the cursor's offset inside
+ * the bubble (so the bubble does not jump to put its corner under the pointer).
+ */
+export type DragSession = { origin: Point; grabOffset: Point; startCursor: Point };
+
+export function beginDrag(windowPos: Point, cursorAt: Point): DragSession {
+  return {
+    origin: { x: windowPos.x, y: windowPos.y },
+    grabOffset: { x: cursorAt.x - windowPos.x, y: cursorAt.y - windowPos.y },
+    startCursor: { x: cursorAt.x, y: cursorAt.y },
+  };
+}
+
+/**
+ * The work area of the display a point is on — so a bubble dragged onto a second
+ * monitor clamps to THAT monitor, instead of snapping back to the primary one the
+ * moment it crosses the edge. Falls back to the given area when the point is on no
+ * display at all (between screens, or a display that just went away).
+ */
+export function workAreaContaining(point: Point, workAreas: readonly Rect[], fallback: Rect): Rect {
+  for (const wa of workAreas) {
+    if (point.x >= wa.x && point.x < wa.x + wa.width && point.y >= wa.y && point.y < wa.y + wa.height) return wa;
+  }
+  return fallback;
+}

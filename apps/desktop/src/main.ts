@@ -521,6 +521,9 @@ function widgetDeps() {
       writeSettings({ ...settings, ...patch });
     },
     log: (line: string) => diag("coworker-widget", line),
+    // Without this the bubble's renderer is a black box in the log — the dead first
+    // build produced ZERO coworker lines because nothing captured its console.
+    attachDiag: (win: BrowserWindow, tag: string) => attachConsoleCapture(win, tag),
   };
 }
 

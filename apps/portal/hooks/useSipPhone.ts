@@ -359,7 +359,7 @@ export interface MultiCallSession {
 
 type ConnectDesktopApi = {
   isDesktop: boolean;
-  windowKind?: "full" | "mini" | "phone-engine";
+  windowKind?: "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat";
   phone: {
     sendFromEngine: (envelope: { type: "state" | "event"; payload?: unknown; event?: string }) => void;
     sendCommand: (command: { command: string; args: unknown[] }) => Promise<unknown>;
@@ -3826,10 +3826,15 @@ const SipPhoneContext = createContext<(SipPhoneState & SipPhoneActions) | null>(
 
 function isDesktopProxyWindow(): boolean {
   if (typeof window === "undefined") return false;
-  // Only the mini window is a proxy — it receives state from the full window via IPC.
+  // The mini window is a proxy — it receives state from the full window via IPC.
   // The full window runs LocalSipPhoneProvider directly (same as the web app),
   // so it always works even if the hidden phone-engine window has issues.
-  return window.connectDesktop?.windowKind === "mini";
+  // ⛔ The desktop Coworker chat popover ("coworker-chat") is a proxy too: any
+  // window kind that fell through here ran a FULL SIP engine — a second
+  // registration on the same extension that would ring and answer in a chat
+  // popover. A chat window must never be a phone.
+  const kind = window.connectDesktop?.windowKind;
+  return kind === "mini" || kind === "coworker-chat";
 }
 
 function localStateSnapshot(phone: SipPhoneState & SipPhoneActions): SipPhoneState & Pick<SipPhoneActions, "dialpadInput" | "sessions" | "activeSessionId" | "heldSessionIds" | "ringingSessionIds"> {

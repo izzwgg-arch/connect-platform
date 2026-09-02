@@ -170,11 +170,26 @@ function pageLabel(pathname: string): string {
   return map[seg] || seg.charAt(0).toUpperCase() + seg.slice(1).replace(/-/g, " ");
 }
 
-export function FloatingAssistant() {
+/**
+ * `docked` = the desktop app's Coworker popover (/desktop/coworker). There the
+ * panel IS the window: it starts open, fills the window, has no corner bubble,
+ * and Minimize hides the window through the desktop bridge instead of collapsing
+ * to a bubble that does not exist in that window.
+ */
+export function FloatingAssistant({ docked = false }: { docked?: boolean } = {}) {
   const pathname = usePathname() || "/";
   const { user } = useAppContext();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(docked);
   const [view, setView] = useState<PanelView>("chat");
+  const minimize = () => {
+    uiEvent("minimize");
+    if (docked) {
+      const w = window as unknown as { coworkerWidget?: { closeChat?: () => void } };
+      try { w.coworkerWidget?.closeChat?.(); } catch { /* not inside the desktop app */ }
+      return;
+    }
+    setOpen(false);
+  };
 
   /**
    * Updates on something they reported: we looked at it, and here is what
@@ -655,7 +670,7 @@ export function FloatingAssistant() {
   const micAvailable = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof window !== "undefined" && "MediaRecorder" in window;
 
   return (
-    <>
+    <div className={docked ? "fa-docked" : undefined}>
       <style>{faCss}</style>
 
       {grant && (
@@ -672,7 +687,7 @@ export function FloatingAssistant() {
             <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
             <div className="fa-title"><b>Report a problem</b></div>
             <div className="fa-head-actions">
-              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+              <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
 
@@ -756,7 +771,7 @@ export function FloatingAssistant() {
             <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
             <div className="fa-title"><b>Report a problem</b></div>
             <div className="fa-head-actions">
-              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+              <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
           <div className="fa-done">
@@ -785,7 +800,7 @@ export function FloatingAssistant() {
             <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
             <div className="fa-title"><b>Suggest a feature</b></div>
             <div className="fa-head-actions">
-              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+              <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
 
@@ -825,7 +840,7 @@ export function FloatingAssistant() {
             <button className="fa-back" title="Back to the assistant" onClick={backToChat}><ArrowLeft size={18} /></button>
             <div className="fa-title"><b>Suggest a feature</b></div>
             <div className="fa-head-actions">
-              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+              <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
           <div className="fa-done">
@@ -844,11 +859,11 @@ export function FloatingAssistant() {
             <div className="fa-avatar"><Sparkles size={17} /></div>
             <div className="fa-title">
               <b>Assistant</b>
-              <small><Eye size={12} /> Looking at {label} with you</small>
+              {docked ? <small>Loopcom Coworker · here to help</small> : <small><Eye size={12} /> Looking at {label} with you</small>}
             </div>
             <div className="fa-head-actions">
               <button title="New chat" onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
-              <button title="Minimize" onClick={() => { uiEvent("minimize"); setOpen(false); }}><X size={16} /></button>
+              <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
 
@@ -1096,6 +1111,7 @@ export function FloatingAssistant() {
         </div>
       )}
 
+      {!docked && (
       <div className="fa-fab-wrap">
         {/* ⛔ A message from a PERSON at support outranks the greeting hint —
             it pops up beside the bubble until the panel is opened. This is the
@@ -1119,7 +1135,8 @@ export function FloatingAssistant() {
           {!open && unanswered.length + unreadSupportMsgs.length === 0 && <span className="fa-dot" />}
         </button>
       </div>
-    </>
+      )}
+    </div>
   );
 }
 
@@ -1328,6 +1345,12 @@ const faCss = `
 .fa-send { background: var(--accent, #2f6df6); border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .fa-send:disabled { opacity: .5; cursor: default; }
 .fa-foot { text-align: center; font-size: 10.5px; color: var(--text-dim, #5c6b84); padding: 5px 0 8px; background: var(--bg, #0e1826); }
+
+/* Docked = the desktop Coworker popover: the panel is the whole window. The head
+   doubles as the frameless window's drag handle (its buttons stay clickable). */
+.fa-docked .fa-panel { top: 0; left: 0; right: 0; bottom: 0; width: auto; height: auto; max-width: none; max-height: none; border-radius: 0; border: none; box-shadow: none; }
+.fa-docked .fa-head { -webkit-app-region: drag; }
+.fa-docked .fa-head button { -webkit-app-region: no-drag; }
 
 @media (max-width: 560px) {
   .fa-panel { right: 12px; bottom: 84px; width: calc(100vw - 24px); height: calc(100vh - 110px); }
