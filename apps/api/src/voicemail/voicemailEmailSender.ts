@@ -29,7 +29,15 @@ export function voicemailEmailEnabled(): boolean {
 /**
  * Tenants Connect must NOT email, because the PBX is still emailing them.
  * ⛔ Both must never be on for the same tenant, or that customer gets two emails
- * per voicemail. Gesheft is the deliberate hold-back during the trial.
+ * per voicemail.
+ *
+ * ✅ EMPTY IN PRODUCTION SINCE 2026-09-02. Gesheft was the last hold-back and is
+ * now cut over to Connect, so NO tenant is excluded and the PBX emails nobody.
+ * ⛔⛔ Before you ever add a tenant back to this list, or take one off it, read
+ * the backlog trap in buildVoicemailSweepWhere below — an excluded tenant's
+ * voicemails are never stamped, so un-excluding one with a backlog emails every
+ * message in the 7-day window at once (334 rows for Gesheft, which is why they
+ * were stamped `predates_feature` before the switch was flipped).
  */
 export function voicemailEmailExcludedTenantIds(): Set<string> {
   return new Set(

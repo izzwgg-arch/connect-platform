@@ -45,7 +45,7 @@ export const SWEEP_BATCH = 50;
 /**
  * The sweep's query, as one pure function so a test can hold it to account.
  *
- * ⛔⛔ Excluded tenants (Gesheft, still emailed by the PBX) MUST be filtered
+ * ⛔⛔ Excluded tenants MUST be filtered
  * HERE, in the query — never after the batch is chosen. Their voicemails are
  * deliberately never stamped (so they stay eligible the day they are
  * un-excluded), which makes them permanently `emailedAt: null`, permanently the
@@ -54,6 +54,15 @@ export const SWEEP_BATCH = 50;
  * `skipped: { excluded_tenant: 50 }` and no other tenant's voicemail was ever
  * looked at. Gesheft alone produces ~50 voicemails a day inside a 7-day window,
  * so the block can never clear on its own.
+ *
+ * ✅ The list is EMPTY as of 2026-09-02 — Gesheft was cut over to Connect and no
+ * tenant is excluded any more. ⛔ The hazard survives the list being empty: an
+ * excluded tenant's voicemails are deliberately never stamped, so the day one is
+ * un-excluded its whole 7-day backlog becomes eligible in a single sweep. Gesheft
+ * had 334 such rows (272 on one mailbox) and they were stamped `predates_feature`
+ * BEFORE the switch was flipped. Anyone un-excluding a tenant must stamp the
+ * backlog first, or the sweep emails a week of old voicemails at once and spends
+ * the platform's shared 500/day mail allowance on them.
  *
  * `tenantId: null` (unresolved) rows are filtered for the same reason: the
  * sender cannot process them and never stamps them.
