@@ -22,6 +22,9 @@
       "@connect/shared/smsText": [
         "packages/shared/src/smsText.ts"
       ],
+      "@connect/shared/coworker": [
+        "packages/shared/src/coworker/index.ts"
+      ],
       "@connect/shared/chatPermissionGrantHash": [
         "packages/shared/src/chatPermissionGrantHash.ts"
       ],

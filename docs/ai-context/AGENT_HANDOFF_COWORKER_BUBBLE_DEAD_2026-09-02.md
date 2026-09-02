@@ -160,3 +160,45 @@ Not built, deliberately. The order that keeps the platform's own rules:
 4. **Verified results back to the agent** (`taskState.decideCompletion` — "no unverified success"), so it can say what happened rather than what it hoped.
 
 ⛔ At the time of writing another session had `apps/api/src/remoteDesktop/`, `apps/desktop/src/remoteDesktop/` and migration `20260902120000_remote_desktop` uncommitted in the shared tree. Check whether that work IS the hands before designing them a second time.
+
+## 10. THE HANDS ARE BUILT — three allowlisted tasks, approved on a card, run by the desktop (2026-09-02, "Approved, build the hands through the co-worker")
+
+Izzy, after the §9 "he couldn't do it" round: *"Approved, build the hands through the
+co-worker."* This section is the build. §9's "the hands are NOT built" is now history;
+the prompts, the knowledge doc and the memory file all say the new truth.
+
+### 10.1 The shape, in one paragraph
+
+The agent PROPOSES, the person APPROVES, the desktop RUNS, the api RECORDS. Four
+pieces, one allowlist:
+
+| Piece | File | What it may do |
+|---|---|---|
+| The allowlist | `packages/shared/src/coworker/tasks.ts` | THREE kinds — `folder_summary`, `organize_folder`, `system_snapshot` — on THREE folders by NAME — `downloads`, `desktop`, `documents`. Specs feed the existing `decideToolCall` policy; the card (`describeCoworkerTask`) answers what / where / why / can it be undone; `parseCoworkerTask` refuses any unknown kind, folder or EXTRA KEY (`unexpected_field:path`). |
+| Propose | `apps/agent/src/tools/coworkerTaskTools.ts` | `coworker_task` (customer tier) refuses unless `ctx.viewingPath` starts with `/desktop/coworker`; parses via shared; a policy `deny` never drafts; ONE live DRAFT per person; writes `AgentAction` `capabilityId: coworker.task.v1` with `params.{task, decision}`; the reply text says "on their screen — do not say it is done". `my_computer_tasks` reads the record so "did it finish?" is answered from the row. |
+| Record | `apps/api/src/coworkerTaskRoutes.ts` | `GET /coworker/tasks/pending`, `POST …/:id/approve` (atomic `updateMany` DRAFT→APPROVED, single-use, 410 + EXPIRED past the 30-min TTL, returns the task the DESKTOP runs), `…/dismiss` (→DENIED), `…/result` (once, APPROVED only, → EXECUTED / FAILED with `resultSnapshot`). Self-scoped: `tenantId` + `requestedBy = sub`; a colleague's row is **404**, never 403. `/coworker` is in `PORTAL_API_PERMISSION_RULES` with `permission: null`. |
+| Approve | `apps/portal/components/CoworkerTaskCard.tsx` | Mounted in `FloatingAssistant` ONLY when `docked`; polls after each assistant reply and on open, never on a timer. The card: title, Read-only/Moves-files pill, What/Where/Why/Undo, "Show me what moves", the action button, No. "Do it" → approve route → `window.coworkerWidget.runTask({id, task})` with the task the **approve response** returned → result route → `sayInChat("✅ …")`. `CoworkerPermissionsView` (shield button in the head): Safe / Trusted radio stored in `DesktopSettings.coworkerPermissions`, plus the table with the "Never" rows. |
+| Run | `apps/desktop/src/coworker/{tasks,executor,mainWiring}.ts` | Its OWN copy of the allowlist (drift-guarded against the shared one), `decideLocally` (reads allow; a write asks under SAFE or during a live call, allows under TRUSTED), local gate 30/hour + 60 s per folder for writes, `runCoworkerTask` resolving the folder from its NAME under `os.homedir()`, realpath re-checked to still be inside home, `planOrganize` (top-level FILES only), moves by `rename` with " (2)" on a collision, a locked file is skipped and named. Two IPC channels — `coworker:decide`, `coworker:run` — re-decide at run time and strip the move paths before anything goes back to the page. |
+
+### 10.2 ⛔ The rules a future change must keep
+
+- ⛔⛔ **The desktop takes the task from the API's approve response and validates it AGAIN.** The renderer is the hosted portal; anything it could compose a compromised server could compose. `parseTask` refuses extra keys, `decideLocally` runs again at `coworker:run`, and the folder comes from `app`-side `os.homedir()` + a NAME — there is no path in any message.
+- ⛔⛔ **Moves only.** `executor.ts` never calls `unlink`/`rm`/`writeFile`; the desktop test greps for them. A collision gets " (2)"; a folder, symlink, hidden file, `~$` lock file, `desktop.ini` or an in-flight `.crdownload` is never touched. The `moves` list (full paths) stays on the desktop side for the log and a future undo; the renderer gets names and counts.
+- ⛔ **`coworker_task` refuses outside the bubble window** (`not_in_coworker_window`). A draft made from a browser tab would sit forever with nothing to run it, and "I've put it on your screen" would be the unearned-fix class.
+- ⛔ **A policy `deny` never becomes a card**; a write is `ask` under the SAFE profile; the seven `NEVER_AUTO_DOMAINS` are not on any spec. `provenance: "external"` never yields `allow` on its own (the policy lets the PERSON's own approval override it — that is by design, the card IS that approval).
+- ⛔ **The api runs nothing** (`coworkerTaskRoutes.test.ts` greps it for `node:fs`/`child_process`/`node:os`). Approve is single-use by `updateMany` on DRAFT + `approvalConsumedAt: null`; a second report of a result is 409, so a retried IPC cannot turn FAILED into EXECUTED.
+- ⛔ **The prompt was rewritten, not appended.** §9's "cannot act on the computer" wording is gone from `SYSTEM_PROMPT`, `STAFF_SYSTEM_PROMPT`, both `viewingBlock` branches and `docs/agent-knowledge/system.md`; the tests that pinned the old wording were updated to pin the new one (`coworkerAwareness.test.ts`, `agentKnowledgeCoworker.test.ts`). A prompt that still says "cannot" beside a tool that can is the a-capability-the-prompt-denies class.
+- ⛔ **`@connect/shared/coworker` is a new SUBPATH** (package.json `exports` + `tsconfig.base.json` `paths`). The root index still exports only diagnostics; apps/api and apps/agent import the core by subpath.
+
+### 10.3 Proven
+
+- Tests: shared `coworker/tasks.test.ts` 10/10 (registered); desktop `coworker/coworker.test.ts` 15/15 (registered; whole desktop suite 192/192); agent `coworkerTaskTools.test.ts` + `coworkerAwareness.test.ts` 15/15; api `coworkerTaskRoutes.test.ts` + `agentKnowledgeCoworker.test.ts` 11/11 (real Fastify, fake db); portal `coworkerHands.test.ts` + `coworkerChatWindow.test.ts` 9/9 (registered).
+- **Every source guard is non-vacuous: eleven asserted symbols each read 0 in `HEAD`** (`registerCoworkerHands`, `coworker:run`, `coworkerPermissions`, `viewingPath: ctx.viewingPath`, `buildCoworkerTaskTools`, `registerCoworkerTaskRoutes`, `prefix: "/coworker"`, `usePendingCoworkerTasks`, `./tasks`, `coworker.task.v1`, `viewingPath` on ToolContext).
+- Typechecks: shared 0, desktop 0, portal 0, agent **14 = the exact baseline**, api 81 with **0 in any file this work touched** (the +5 over the 76 baseline are another session's `remoteSupport/attack.test.ts` + `webrtc*` files).
+- Two test defects found by running, both mine: the desktop gate test started its clock at 0 so the per-folder spacing tripped on the FIRST call; and the shared test assumed external provenance beats an explicit approval — it does not, the policy's own order is documented and the card is exactly that approval.
+
+### 10.4 ⏳ NOT PROVEN (deploy state in §7 is updated when it moves)
+
+- Nobody has typed "organize my Downloads" into the bubble and pressed the button. The whole chain is proven as tests + typechecks + container greps, never as a moved file.
+- The desktop half rides a NEW rc build (rc.6) and is on no machine until Izzy says install; the fleet feed stays 0.1.16.
+- Acceptance, in order: (1) from a BROWSER tab ask for a folder summary — the assistant must say it only works from the bubble; (2) from the bubble, "how many files are in my Downloads?" — a card appears, press it, the count lands in the chat, `AgentAction` reads EXECUTED; (3) "organize my Downloads" — the card says "Moves files", Safe asks, press it, files land in subfolders, nothing deleted, a name clash got " (2)"; (4) the negatives: press No → DENIED and no file moved; on a live call the write shows "will wait for your OK"; a second bubble window pressing the same card gets "already answered".

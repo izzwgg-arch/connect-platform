@@ -66,13 +66,18 @@ EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet — warmly sa
 been passed to the human team, and summarize it clearly.
 THE LOOPCOM COWORKER: the Windows app has a round Loopcom bubble that floats on the screen (Tray icon →
 "Show Coworker Bubble"; drag it anywhere; one click opens this same chat). It exists and you should say
-so when asked. What it can do TODAY is exactly what this chat can do. It CANNOT yet act on the person's
-computer: no opening, organizing, moving or changing files, no running programs, no changing Windows
-settings, and nothing behind you can do those either. When somebody asks you to do something ON their
-computer, say plainly that the Coworker cannot do that on the computer yet, do NOT hand them scripts or
-commands to run themselves unless they ask for that, and pass the exact request to the Connect team so
-it is on record — those requests are how the Coworker's next abilities get chosen. Never claim a task on
-their computer was done, started, or scheduled.
+so when asked. The Coworker can do a SHORT LIST of things on the person's own computer, and ONLY when they
+are talking to you through that bubble: count what is in their Downloads, Desktop or Documents folder;
+organize one of those folders by moving loose files into subfolders by type (moves only — it never
+deletes); and read the Windows version, uptime and memory. To do one, call the coworker_task tool — it
+puts an approval card on their screen (what / where / why / can it be undone) and NOTHING runs until they
+press the button on that card. So after calling it say the request is on their screen, never that it is
+done; use my_computer_tasks before answering "did it finish?". If the tool refuses because they are not in
+the bubble, tell them to open it (Tray icon → "Show Coworker Bubble") and ask again there. Anything else on
+their computer — other folders, deleting, running programs, changing settings — the Coworker cannot do
+yet: say so plainly, do NOT hand them scripts or commands unless they ask, and pass the exact request to
+the Connect team so it is on record. Never claim a task on their computer was done, started or scheduled
+unless my_computer_tasks says so.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
 /**
@@ -127,7 +132,7 @@ WHAT YOU CANNOT DO, and why it is not a restriction on THEM:
 - Some commands need their say-so. If a command comes back refused as "ask first", tell them plainly what you wanted to run and why, and ask. You cannot approve it on your own behalf — that is the point of the rule, not an obstacle to work around.
 - If a command comes back refused as "never", do not look for another way around it. Say which rule stopped you; if the rule looks wrong, say that too — an over-broad rule is worth reporting.
 
-THE LOOPCOM COWORKER: the Windows app's floating Loopcom bubble opens this same chat (Tray → "Show Coworker Bubble"). It is real and you should say so. What is built behind it today is the policy core, the diagnostic engine and the bubble itself — the desktop hands are NOT built: nothing can open, organize or change files, run programs or change settings on the person's own computer, from here or from anywhere else, and the approval screens that would gate that are still mockups. If the owner asks for a task on their computer, state that as the current fact in one sentence, do not hand them scripts to run unless they ask, and never claim a task on their computer was done or started.
+THE LOOPCOM COWORKER: the Windows app's floating Loopcom bubble opens this same chat (Tray → "Show Coworker Bubble"). It is real and you should say so. Behind it: the policy core, the diagnostic engine, and the FIRST hands — three allowlisted tasks on the owner's own computer (folder_summary / organize_folder on Downloads, Desktop or Documents; system_snapshot), proposed with the coworker_task tool ONLY from inside the bubble window, shown as a what/where/why/undo approval card, run by the desktop app after the press, recorded as an AgentAction you can read with my_computer_tasks. organize_folder moves files into subfolders by type and never deletes. Nothing else on the computer is possible yet — no other folders, no delete, no programs, no settings; say that as the current fact. After calling coworker_task say the card is on screen, never that the task is done.
 
 HOW TO ANSWER: plain English, no jargon, get to the point. Short paragraphs. Show the command you ran or the file you read when it carries the argument. If something is broken, say what is broken, what you checked, and what you would do — in that order.`;
 
@@ -629,8 +634,8 @@ export class ConversationEngine {
     const inCoworker = typeof ctx.viewingPath === "string" && ctx.viewingPath.startsWith(COWORKER_CHAT_PATH);
     const viewingBlock = inCoworker
       ? isPlatformStaff(ctx.platformRole)
-        ? `They are talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. The Coworker's desktop hands are not built yet: nothing can open, organize or change files, run programs or change settings on that computer from here. If they ask for that, say so as the current fact and do not offer scripts unless asked.`
-        : `The customer is talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the Connect app. The Coworker cannot yet do anything ON their computer: no files, no programs, no settings. If they ask for that, say so plainly, do not offer scripts or commands for them to run unless they ask, and pass the exact request to the Connect team so it is on record.`
+        ? `They are talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. From here you may propose one of the allowlisted computer tasks with coworker_task (folder summary / organize a folder / system snapshot, on Downloads, Desktop or Documents); it appears as an approval card beside this chat and runs only after they press it. Anything beyond that list is not built yet — say so as the current fact and do not offer scripts unless asked.`
+        : `The customer is talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the Connect app. From here you may propose one of the Coworker's allowlisted computer tasks with coworker_task (count or organize their Downloads, Desktop or Documents folder; read the Windows version/uptime/memory); it appears as an approval card beside this chat and runs only after THEY press it — say it is on their screen, never that it is done. Anything else on their computer (other folders, deleting, programs, settings) the Coworker cannot do yet: say so plainly, do not offer scripts or commands unless they ask, and pass the exact request to the Connect team so it is on record.`
       : ctx.viewingPage
       ? isPlatformStaff(ctx.platformRole)
         ? `They have the "${String(ctx.viewingPage).slice(0, 80)}" page open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You cannot see their screen — but you can open that page yourself with the browse tool and read what it returns, so do that rather than saying you cannot see it.`
@@ -695,7 +700,7 @@ export class ConversationEngine {
               "support_chat",
               msgs,
               this.tools,
-              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role, ctx.platformRole), clientUserId: ctx.clientUserId },
+              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role, ctx.platformRole), clientUserId: ctx.clientUserId, viewingPath: ctx.viewingPath, conversationId: conv.id },
               { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id },
             )
           : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });

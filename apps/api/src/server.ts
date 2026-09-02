@@ -297,6 +297,7 @@ import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
+import { registerCoworkerTaskRoutes } from "./coworkerTaskRoutes";
 import { registerRemoteDesktopRoutes } from "./remoteDesktopRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
@@ -2933,6 +2934,9 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // the customer answering, so any rule on `/remote-support/sessions` breaks
   // consent. The split is by METHOD and PARTICIPANT, which a prefix cannot say.
   { prefix: "/remote-support", permission: null },
+  // The Coworker task record. Authenticated only: the customer whose computer it
+  // is holds no admin key, and every route is self-scoped to the caller.
+  { prefix: "/coworker", permission: null },
   // ⛔ REMOTE DESKTOP (2026-09-02), same shape and same reasoning. The MACHINE
   // side (register, poll, accept, login-result, heartbeat, signal) is the
   // signed-in person on that computer, who may hold no key at all; the per-route
@@ -42193,6 +42197,9 @@ const port = Number(process.env.PORT || 3001);
   // user, because the whole audit trail is "which named person watched which
   // named person's screen".
   await registerRemoteSupportRoutes(app, { audit });
+  // The Coworker's hands: the record of proposed/approved/finished tasks on a
+  // customer's own computer. Self-scoped; the api runs nothing.
+  await registerCoworkerTaskRoutes(app, { audit });
   // Remote Desktop rides the same engine (sessions, kill switch, transcript) and
   // registers right beside it so the two can never be half-present.
   await registerRemoteDesktopRoutes(app, { audit });

@@ -27,10 +27,13 @@ test("the customer half tells the assistant the Coworker bubble exists and how i
   assert.match(customerHalf, /one click opens this chat/);
 });
 
-test("the customer half says plainly that the Coworker cannot yet act on the computer", () => {
-  assert.match(customerHalf, /cannot yet do anything on the person's computer/);
-  assert.match(customerHalf, /Never say a task on someone's computer was done, started, or scheduled/);
-  assert.match(customerHalf, /pass the exact request to the Connect team/, "the request must be recorded, not dropped");
+test("the customer half says exactly what the Coworker can do on the computer, that nothing runs without the press, and that it never deletes", () => {
+  assert.match(customerHalf, /short list of\n  things on the person's own computer/);
+  assert.match(customerHalf, /Nothing runs until the\n  person presses that button/);
+  assert.match(customerHalf, /It moves; it never deletes/);
+  assert.match(customerHalf, /Everything else on the computer is not possible yet/);
+  assert.match(customerHalf, /Never say a task on someone's computer was done unless the task record says\n  so/);
+  assert.match(customerHalf, /pass the exact request to\s+the\s+Connect team/, "the request must be recorded, not dropped");
 });
 
 test("the customer half names nothing it should not", () => {
@@ -40,6 +43,7 @@ test("the customer half names nothing it should not", () => {
 });
 
 test("the staff half records the true build state so the escalation report does not investigate a non-fault", () => {
-  assert.match(staffHalf, /desktop hands[\s\S]{0,120}do not/);
+  assert.match(staffHalf, /the FIRST hands exist/);
+  assert.match(staffHalf, /coworker\.task\.v1/);
   assert.match(staffHalf, /feature request to record, not a fault to investigate/);
 });

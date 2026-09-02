@@ -259,6 +259,13 @@ const coworkerWidgetApi = {
   dragStart: () => ipcRenderer.send("coworker-widget:drag-start"),
   dragMove: () => ipcRenderer.send("coworker-widget:drag-move"),
   dragEnd: () => ipcRenderer.send("coworker-widget:drag-end"),
+  // ⛔ THE HANDS. Two verbs, both taking a task from the fixed allowlist that the
+  // main process validates again on arrival. There is no verb that takes a path,
+  // a command or a host. `decideTask` asks what this machine would do (Safe /
+  // Trusted / on a call); `runTask` runs the task the API's approve route handed
+  // back — the renderer never composes one.
+  decideTask: (task: unknown) => ipcRenderer.invoke("coworker:decide", task),
+  runTask: (payload: { id: string; task: unknown }) => ipcRenderer.invoke("coworker:run", payload),
   onBadge: (listener: (state: "none" | "unread" | "working") => void) => {
     const wrapped = (_: unknown, state: "none" | "unread" | "working") => listener(state);
     ipcRenderer.on("coworker-widget:badge", wrapped);

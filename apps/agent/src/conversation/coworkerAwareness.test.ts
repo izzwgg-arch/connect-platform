@@ -34,8 +34,9 @@ test("the viewing block knows the bubble, for customers AND for staff", () => {
   const view = stripComments(code.slice(code.indexOf("const inCoworker ="), code.indexOf("const staffMode =")));
   assert.match(view, /ctx\.viewingPath\.startsWith\(COWORKER_CHAT_PATH\)/);
   assert.match(view, /talking to you through the Loopcom Coworker/);
-  assert.match(view, /cannot yet do anything ON their computer/, "the customer branch must say what the bubble cannot do");
-  assert.match(view, /desktop hands are not built yet/, "the staff branch must state the build fact");
+  assert.match(view, /propose one of the Coworker's allowlisted computer tasks with coworker_task/, "the customer branch must name the tool");
+  assert.match(view, /runs only after THEY press it/, "the customer branch must say nothing runs without the press");
+  assert.match(view, /Anything beyond that list is not built yet/, "the staff branch must state the build fact");
   assert.match(view, /pass the exact request to the Connect team/, "a customer's computer task must be recorded");
   assert.ok(!/They have the "\$\{String\(ctx\.viewingPage\)[^`]*Loopcom Coworker/.test(view), "the page wording must not leak into the coworker branch");
 });
@@ -49,16 +50,17 @@ test("the customer prompt says the Coworker exists and what it cannot do yet", (
   const p = promptBody("SYSTEM_PROMPT");
   assert.match(p, /THE LOOPCOM COWORKER/);
   assert.match(p, /Show Coworker Bubble/);
-  assert.match(p, /CANNOT yet act on the person's\ncomputer/);
-  assert.match(p, /Never claim a task on\ntheir computer was done, started, or scheduled/);
-  assert.match(p, /pass the exact request to the Connect team/);
+  assert.match(p, /call the coworker_task tool/);
+  assert.match(p, /NOTHING runs until they\npress the button on that card/);
+  assert.match(p, /Never claim a task on their computer was done, started or scheduled\nunless my_computer_tasks says so/);
+  assert.match(p, /pass the exact request to\s+the Connect team/);
 });
 
 test("the staff prompt says the Coworker exists and states the build fact without the customer refusals", () => {
   const p = promptBody("STAFF_SYSTEM_PROMPT");
   assert.match(p, /THE LOOPCOM COWORKER/);
-  assert.match(p, /desktop hands are NOT built/);
-  assert.match(p, /approval screens .* still mockups/);
+  assert.match(p, /the FIRST hands — three allowlisted tasks/);
+  assert.match(p, /never that the task is done/);
   assert.ok(!p.toLowerCase().includes("you cannot do it yet"), "the staff prompt must not regrow the customer refusal");
 });
 

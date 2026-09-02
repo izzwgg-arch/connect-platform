@@ -18,6 +18,7 @@ export * from "./redaction";
 export * from "./paths";
 export * from "./resourceGuard";
 export * from "./audit";
+export * from "./tasks";
 
 // The evidence-based diagnostic engine. Kept as a subpath rather than a flat
 // re-export so a consumer that only needs policy does not pull in the rule set.

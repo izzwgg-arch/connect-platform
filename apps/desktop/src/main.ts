@@ -7,6 +7,7 @@ import { buildWindowsToastXml, type DesktopNotificationPayload } from "./notific
 import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
+import { registerCoworkerHands } from "./coworker/mainWiring";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
 import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
 import {
@@ -684,6 +685,13 @@ function showDesktopNotification(payload: DesktopNotificationPayload): boolean {
   }
 }
 
+/** True while the softphone engine reports a live or ringing call (the same read the SIP heartbeat uses). */
+function isPhoneOnCall(): boolean {
+  const state = (latestPhoneStateEnvelope?.payload ?? {}) as { callState?: string; ringingSessionIds?: unknown[] };
+  return state.callState === "ringing" || state.callState === "dialing" || state.callState === "connected"
+    || (Array.isArray(state.ringingSessionIds) && state.ringingSessionIds.length > 0);
+}
+
 function registerIpc(): void {
   // In-app update UX: the portal sidebar shows "New Update — Install"; these
   // two handlers let it read the updater state and trigger the one-click
@@ -733,6 +741,16 @@ function registerIpc(): void {
   // server could express too. Credentials live behind a reference in the OS keystore
   // and never cross this boundary.
   registerPhoneSetup({ ipcMain, safeStorage });
+
+  // The Coworker's hands. ⛔ Two channels, one allowlist (src/coworker/tasks.ts),
+  // re-validated here on arrival; the profile comes from the tray-side settings and
+  // a live call always turns a file move into an ask. Nothing here takes a path.
+  registerCoworkerHands({
+    ipcMain,
+    getProfile: () => settings.coworkerPermissions,
+    isCallActive: () => isPhoneOnCall(),
+    log: (line) => diag("coworker", line),
+  });
 
   // Remote support. ⛔ Registering the handlers is NOT the same as switching the
   // feature on: the portal never calls any of this unless the preload published

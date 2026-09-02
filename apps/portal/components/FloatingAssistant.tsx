@@ -35,11 +35,13 @@ import {
   Languages,
   AlertTriangle,
   Lightbulb,
+  ShieldCheck,
 } from "lucide-react";
 import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, FEATURE_SUGGESTION_MIN, assistantGreetingLine } from "@connect/shared";
 import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
+import { CoworkerTaskCard, CoworkerPermissionsView, usePendingCoworkerTasks, COWORKER_TASK_STYLES } from "./CoworkerTaskCard";
 
 type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; pending?: boolean };
 
@@ -333,6 +335,10 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   // becomes real after the password dialog below, which talks to the API
   // directly — the assistant never sees the password.
   const { grant, refresh: refreshGrant, clear: clearGrant } = usePendingGrant();
+  // The Coworker's hands — only the docked popover can run anything, so only it asks.
+  const { tasks: coworkerTasks, refresh: refreshCoworkerTasks, drop: dropCoworkerTask } = usePendingCoworkerTasks(docked);
+  const [showCoworkerPerms, setShowCoworkerPerms] = useState(false);
+  useEffect(() => { if (docked && open) void refreshCoworkerTasks(); }, [docked, open, refreshCoworkerTasks]);
 
   const label = useMemo(() => pageLabel(pathname), [pathname]);
   // Re-read on every open so a panel left open overnight is not still saying
@@ -456,13 +462,16 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
         // If that turn prepared a permission change, the confirmation is now
         // waiting on the API. Ask — the assistant is not trusted to say so.
         void refreshGrant();
+        // Same for a task on the computer: the card comes from the API's record,
+        // never from the assistant's reply.
+        void refreshCoworkerTasks();
       } catch {
         setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
       } finally {
         setSending(false);
       }
     },
-    [input, sending, typeOut, label, pathname, pendingFiles, refreshGrant],
+    [input, sending, typeOut, label, pathname, pendingFiles, refreshGrant, refreshCoworkerTasks],
   );
 
   /** Drop a line into the transcript from outside the model — e.g. the result
@@ -862,12 +871,19 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
               {docked ? <small>Loopcom Coworker · here to help</small> : <small><Eye size={12} /> Looking at {label} with you</small>}
             </div>
             <div className="fa-head-actions">
+              {docked && <button title="What the Coworker may do on this computer" onClick={() => { uiEvent("coworker permissions"); setShowCoworkerPerms((v) => !v); }}><ShieldCheck size={16} /></button>}
               <button title="New chat" onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
               <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
 
+          {docked && showCoworkerPerms ? (
+            <div className="fa-msgs custom-scrollbar"><CoworkerPermissionsView onBack={() => setShowCoworkerPerms(false)} /></div>
+          ) : (<>
           <div className="fa-msgs custom-scrollbar">
+            {docked && coworkerTasks.map((t) => (
+              <CoworkerTaskCard key={t.id} task={t} sayInChat={sayInChat} onDone={dropCoworkerTask} onDismissed={dropCoworkerTask} />
+            ))}
             {messages.length === 0 && (
               <div className="fa-open">
                 {supportMsgs.length > 0 && (
@@ -1030,6 +1046,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
               </span>
             </button>
           </div>
+          </>)}
 
           {pendingFiles.length > 0 && (
             <div className="fa-files">
@@ -1351,6 +1368,7 @@ const faCss = `
 .fa-docked .fa-panel { top: 0; left: 0; right: 0; bottom: 0; width: auto; height: auto; max-width: none; max-height: none; border-radius: 0; border: none; box-shadow: none; }
 .fa-docked .fa-head { -webkit-app-region: drag; }
 .fa-docked .fa-head button { -webkit-app-region: no-drag; }
+${COWORKER_TASK_STYLES}
 
 @media (max-width: 560px) {
   .fa-panel { right: 12px; bottom: 84px; width: calc(100vw - 24px); height: calc(100vh - 110px); }

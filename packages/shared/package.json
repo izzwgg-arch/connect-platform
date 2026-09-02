@@ -83,6 +83,10 @@
       "types": "./src/chatPermissionGrants.ts",
       "default": "./src/chatPermissionGrants.ts"
     },
+    "./coworker": {
+      "types": "./src/coworker/index.ts",
+      "default": "./src/coworker/index.ts"
+    },
     "./deskPhoneSetup": {
       "types": "./src/deskPhoneSetup/index.ts",
       "default": "./src/deskPhoneSetup/index.ts"
@@ -95,7 +99,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/deskPhoneSetup/deskPhoneSetup.test.ts src/deskPhoneSetup/deskPhoneInvariants.test.ts src/inviteEmailList.test.ts src/chatSignedUrl.test.ts src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts src/portalPermissions.crm.test.ts src/portalPermissions.customRoles.test.ts src/portalPermissions.individualPages.test.ts src/portalPermissions.queues.test.ts src/portalPermissions.conference.test.ts src/portalPermissions.tenantComm.test.ts src/portalPermissions.remoteSupport.test.ts src/portalPermissions.deskPhones.test.ts src/portalPermissions.voiceChanger.test.ts src/crmEmailTemplates.test.ts src/smsInbox.test.ts src/smsText.test.ts src/webrtcCallDiagnostics.test.ts src/webrtcBlackbox.test.ts src/webrtcIncidentAlerts.test.ts src/webrtcGlobalOutageAlerts.test.ts src/apnsVoipPush.test.ts src/mohCallSource.test.ts src/mohSourcePublish.test.ts src/mohScenarios.test.ts src/mohAdminSchedule.test.ts src/ivrPlainLanguage.test.ts src/teamNumbering.test.ts src/teamNumbering.conference.test.ts src/onboardingPricing.test.ts src/elevenLabsKeyFormat.test.ts src/supportReport.test.ts src/assistantGreeting.test.ts src/personDisplayName.test.ts src/loopcomEmailShell.test.ts src/jewishCalendar/zmanim.test.ts src/jewishCalendar/jewishCalendar.test.ts src/jewishCalendar/calendarView.test.ts",
+    "test": "tsx --test src/deskPhoneSetup/deskPhoneSetup.test.ts src/deskPhoneSetup/deskPhoneInvariants.test.ts src/coworker/tasks.test.ts src/inviteEmailList.test.ts src/chatSignedUrl.test.ts src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts src/portalPermissions.crm.test.ts src/portalPermissions.customRoles.test.ts src/portalPermissions.individualPages.test.ts src/portalPermissions.queues.test.ts src/portalPermissions.conference.test.ts src/portalPermissions.tenantComm.test.ts src/portalPermissions.remoteSupport.test.ts src/portalPermissions.deskPhones.test.ts src/portalPermissions.voiceChanger.test.ts src/crmEmailTemplates.test.ts src/smsInbox.test.ts src/smsText.test.ts src/webrtcCallDiagnostics.test.ts src/webrtcBlackbox.test.ts src/webrtcIncidentAlerts.test.ts src/webrtcGlobalOutageAlerts.test.ts src/apnsVoipPush.test.ts src/mohCallSource.test.ts src/mohSourcePublish.test.ts src/mohScenarios.test.ts src/mohAdminSchedule.test.ts src/ivrPlainLanguage.test.ts src/teamNumbering.test.ts src/teamNumbering.conference.test.ts src/onboardingPricing.test.ts src/elevenLabsKeyFormat.test.ts src/supportReport.test.ts src/assistantGreeting.test.ts src/personDisplayName.test.ts src/loopcomEmailShell.test.ts src/jewishCalendar/zmanim.test.ts src/jewishCalendar/jewishCalendar.test.ts src/jewishCalendar/calendarView.test.ts",
     "lint": "echo lint-shared"
   },
   "dependencies": {

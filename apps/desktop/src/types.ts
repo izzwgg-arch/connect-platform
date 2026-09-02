@@ -30,6 +30,12 @@ export type DesktopSettings = {
   coworkerWidgetEnabled?: boolean;
   coworkerWidgetPosition?: { x: number; y: number };
   /**
+   * The Coworker's hands profile, chosen in the popover's Permissions view.
+   * SAFE (absent) = a file move asks first; TRUSTED = it runs. Reads are always
+   * allowed under both; the never-allowed rows are not a profile at all.
+   */
+  coworkerPermissions?: "SAFE" | "TRUSTED";
+  /**
    * Remote support: whether this installation will answer a request to share
    * its screen. ⛔⛔ OFF BY DEFAULT, AND THAT IS THE WHOLE FLEET-SAFETY STORY.
    *

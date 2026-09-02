@@ -41,6 +41,10 @@ export interface ToolContext {
   tenantId: string;
   role: ToolRole;
   clientUserId?: string | null;
+  /** Which portal page the person is on; the coworker_task tool refuses unless it is the desktop Coworker bubble. */
+  viewingPath?: string;
+  /** The conversation this turn belongs to — stamped on a drafted AgentAction so its card can be traced back. */
+  conversationId?: string;
 }
 
 export interface JsonSchema {

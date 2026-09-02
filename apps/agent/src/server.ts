@@ -23,6 +23,7 @@ import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { buildSelfServiceTools } from "./tools/selfServiceTools";
 import { buildPortStatusTools } from "./tools/portStatusTools";
+import { buildCoworkerTaskTools } from "./tools/coworkerTaskTools";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
 import { buildWorkbenchTools } from "./tools/workbenchTools";
@@ -274,6 +275,10 @@ async function main() {
       // from Connect's own mirror of the port watchdog's polling. NEVER from
       // the carrier directly; see portStatusTools.ts.
       ...buildPortStatusTools({ prisma }),
+      // The Coworker's hands: PROPOSES a task on the person's own computer (a DRAFT
+      // AgentAction); the desktop runs it only after they press the card. Refuses
+      // itself outside the Coworker bubble window.
+      ...buildCoworkerTaskTools({ prisma }),
       // The read-only investigation workspace on BOTH production databases.
       // ⛔ minRole "internal", so `toolsForRole` keeps it out of every
       // customer-facing conversation — the door is deliberately not
