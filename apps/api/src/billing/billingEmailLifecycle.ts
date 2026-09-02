@@ -312,6 +312,60 @@ export async function queueInvoiceSentOnFinalize(invoice: {
   if (await hasBillingEmailJob({ tenantId: invoice.tenantId, invoiceId: invoice.id, type: "BILLING_INVOICE_SENT" })) {
     return { queued: false, reason: "already_sent" };
   }
+  return queueInvoiceSentEmailNow(invoice, null);
+}
+
+/**
+ * Payment-day re-send of the invoice email for MANUAL-pay tenants (autopay off,
+ * they pay the link themselves — Izzy for Yossis, 2026-09-02: "send in the
+ * reminder and then the invoice again on the day of payment").
+ *
+ * ⛔ Deduped ONCE PER PAYMENT DATE against the EmailJob table itself (a
+ * BILLING_INVOICE_SENT job for this invoice created at/after the payment day's
+ * local midnight), never a best-effort log row — the manual sweep runs hourly,
+ * and a dedupe that can silently fail to record would email the customer every
+ * hour of their payment day.
+ */
+export async function queueInvoicePaymentDayResendOnce(
+  invoice: {
+    id: string;
+    tenantId: string;
+    invoiceNumber: string;
+    totalCents: number;
+    balanceDueCents?: number;
+    dueDate: Date;
+    periodStart?: Date | null;
+    periodEnd?: Date | null;
+  },
+  scheduledChargeAt: Date,
+): Promise<{ queued: boolean; reason?: string }> {
+  const marker = `connect-billing-invoice:${invoice.id}`;
+  const recent = await (db as any).emailJob.findFirst({
+    where: {
+      tenantId: invoice.tenantId,
+      type: "BILLING_INVOICE_SENT",
+      status: { in: ["QUEUED", "RUNNING", "SENT"] },
+      htmlBody: { contains: marker },
+      createdAt: { gte: scheduledChargeAt },
+    },
+  });
+  if (recent) return { queued: false, reason: "already_resent_today" };
+  return queueInvoiceSentEmailNow(invoice, "payment_day_resend");
+}
+
+async function queueInvoiceSentEmailNow(
+  invoice: {
+    id: string;
+    tenantId: string;
+    invoiceNumber: string;
+    totalCents: number;
+    balanceDueCents?: number;
+    dueDate: Date;
+    periodStart?: Date | null;
+    periodEnd?: Date | null;
+  },
+  resendReason: string | null,
+): Promise<{ queued: boolean; reason?: string }> {
   const recipient = await resolveBillingEmailRecipient({ tenantId: invoice.tenantId, invoiceId: invoice.id });
   const to = recipient.to;
   if (!to) {
@@ -352,7 +406,12 @@ export async function queueInvoiceSentOnFinalize(invoice: {
     where: { id: invoice.id },
     data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date() },
   });
-  await logLifecycle("invoice_emailed", invoice.tenantId, invoice.id, null, { emailType: "BILLING_INVOICE_SENT", to, recipientSource: recipient.source });
+  await logLifecycle("invoice_emailed", invoice.tenantId, invoice.id, null, {
+    emailType: "BILLING_INVOICE_SENT",
+    to,
+    recipientSource: recipient.source,
+    ...(resendReason ? { resendReason } : {}),
+  });
   return { queued: true };
 }
 

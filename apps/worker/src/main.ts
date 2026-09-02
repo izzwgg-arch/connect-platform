@@ -25,7 +25,9 @@ import {
   clearInvoiceDunningMetadata,
   queueAutopayReminderEmailOnce,
   queueInvoiceSentOnFinalize,
+  queueInvoicePaymentDayResendOnce,
 } from "../../api/src/billing/billingEmailLifecycle";
+import { runManualInvoiceAutomationCore } from "./manualInvoiceAutomation";
 import { sweepMissingReceiptEmails } from "../../api/src/billing/receiptReconciliation";
 import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
@@ -4564,6 +4566,40 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 runMonthlyBillingAutomation().catch((err) => console.error("initial monthly billing cycle failed", err?.message || err));
+
+// Manual-pay invoice automation — tenants whose autopay is deliberately OFF
+// (opt-in via TenantBillingSettings.metadata.billingManualInvoiceAutomation).
+// Invoice + email at T-3, re-send on the payment day, NEVER a charge. The
+// autopay sweep above cannot see these tenants (it filters
+// autoBillingEnabled: true), which is why Yossis got no September invoice
+// until it was made by hand. See manualInvoiceAutomation.ts.
+let _manualInvoiceAutomationRunning = false;
+async function runManualInvoiceAutomation(): Promise<void> {
+  if (_manualInvoiceAutomationRunning) return;
+  _manualInvoiceAutomationRunning = true;
+  try {
+    const results = await runManualInvoiceAutomationCore({
+      db,
+      buildBillingSchedule,
+      buildUpcomingBillingSchedule,
+      findPaidBillingPeriodCoverage,
+      checkActiveSolaScheduleBlock,
+      findPeriodInvoice: findAutopayPeriodInvoice,
+      createInvoice: (setting, schedule) => createWorkerBillingInvoice(setting, schedule),
+      queueInvoiceSentOnFinalize,
+      queueInvoicePaymentDayResendOnce,
+    });
+    if (results.length > 0) console.log("[billing.manual] manual invoice automation", JSON.stringify(results));
+  } finally {
+    _manualInvoiceAutomationRunning = false;
+  }
+}
+
+setInterval(() => {
+  runManualInvoiceAutomation().catch((err) => console.error("manual invoice cycle failed", err?.message || err));
+}, 60 * 60 * 1000);
+
+runManualInvoiceAutomation().catch((err) => console.error("initial manual invoice cycle failed", err?.message || err));
 
 // Receipt reconciliation sweep — redundant safety net (also runs in the API
 // every 10 min): guarantees every approved payment gets a receipt email even
