@@ -37,6 +37,63 @@ Show me mockups before you build anything."*
   custom-role toggles for `can_use_remote_desktop` / `can_connect_by_id` /
   `can_share_own_computer`.
 
+## ⛔⛔ AGENT HANDOFF — the Coworker BUBBLE was DEAD: its drag region ate every click, its chat was the OWNER CONSOLE, and any new desktop window kind ran a SECOND SIP PHONE (2026-09-02) — READ FIRST before touching `apps/desktop/src/coworkerWidget/`, `coworkerWidget.html`, before adding ANY `DesktopWindowKind`, or before making anything in Electron both draggable and clickable
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_BUBBLE_DEAD_2026-09-02.md`**
+(`3a52c370` on `feat/ivr-migration-takeover`. ✅ **portal DEPLOYED and container-verified 2026-09-02**: `app-portal-1`
+`.build-commit` = `3a52c370`, 0 restarts, `.next/server/app/desktop/coworker` present,
+`fa-docked` + `coworker-chat` in the shipped chunks, `/desktop/coworker` **200 on both
+hostnames**.
+Desktop: **`apps/desktop/release/Connect-Setup-0.1.17-rc.2.exe`** built + `verify:icon` OK
++ asar-verified — ⛔ **NOT installed, NOT published, feed still 0.1.16**.) Memory:
+[[app-region-drag-swallows-clicks]], [[desktop-window-kinds-run-a-sip-phone-by-default]].
+Izzy, 2026-09-02: *"The widget is dead. It doesn't do anything. Plus, it doesn't
+have the real Loopcom logo. For the co-workers."*
+
+- ⛔⛔ **THE CAUSE, and it was on his machine before any code was read: the bubble
+  had been DRAGGED (settings held a saved position) but its log had ZERO coworker
+  lines.** The bubble was an `-webkit-app-region: drag` handle with a mousedown/
+  mouseup click detector ON THAT SAME ELEMENT. On Windows a drag region is the window
+  CAPTION — the renderer never receives the press — so dragging worked and clicking
+  reached nothing. **Not fixable in the renderer.** The drag is now driven by MAIN:
+  the renderer reports press/release only (no coordinates), main reads
+  `screen.getCursorScreenPoint()` on a 16 ms timer (⛔ a timer, not renderer
+  `pointermove` — a window moving under the pointer sees few move events), clamps to
+  the display under the cursor so it crosses monitors, and `isClick` decides on
+  release. A click while the chat is open CLOSES it (`BLUR_CLICK_GRACE_MS` — the
+  blur-hide fires before the release). Both coworker windows now log their console.
+- ⛔⛔ **THE CLICK WOULD HAVE OPENED `/assistant` — the SUPER_ADMIN OWNER CONSOLE
+  inside the full sidebar shell — in a 400px popover.** `CHAT_ROUTE` is
+  **`/desktop/coworker`** now: a new portal page docking the SAME `FloatingAssistant`
+  every page carries (`docked` prop: starts open, no corner bubble, fills the window,
+  Minimize hides the window via `window.coworkerWidget.closeChat()`). Under `/desktop/`
+  the portal treats it as a PASSIVE window (AuthGate waits for the token, no /login
+  redirect). ⛔ `?widget=1` was read by nothing.
+- ⛔⛔ **AND `isDesktopProxyWindow()` WAS `windowKind === "mini"` — EVERY OTHER
+  DESKTOP WINDOW KIND RAN A FULL SIP ENGINE.** The chat popover would have registered
+  a SECOND PHONE on the same extension and rung inside a chat window. It now lists
+  `"mini" || "coworker-chat"`; `DesktopWindowKind` carries `coworker-widget` +
+  `coworker-chat` on both sides. ⛔ **Any new window kind that loads the portal must
+  be added to that check in the same commit** (source-guarded), and proven live with
+  `pjsip show endpoint T<t>_<ext>_1` not growing a contact.
+- ✅ **THE LOGO IS THE REAL ONE**: the Blue 2B tile (the app icon's own artwork) cut
+  to a 128px circle and embedded as a data URI by
+  `scripts/desktop-coworker-bubble-asset.py` (`--check` pins it to the brand kit).
+  The hand-drawn SVG glyph is gone and a guard fails if `<svg` returns. Rendered in
+  headless Chrome and LOOKED AT: round, transparent corners, the white infinity band.
+- ✅ **Proven:** desktop 160/160 (13 new, **ALL 13 fail replayed against HEAD** —
+  the html guards strip HTML *and* JS comments, because the file quotes the rule it
+  forbids), typecheck 0; portal 487/489 (the 2 documented pre-existing), typecheck 0,
+  4 of 5 new guards fail against HEAD; asar of the built exe carries the data-URI
+  html, `desktop/coworker`, `getCursorScreenPoint` and the drag verbs.
+- ⏳ **NOT PROVEN, and it is the whole gap: nobody has CLICKED the rebuilt bubble on
+  a real screen** — the failure was a Windows-native input behaviour no test can
+  see. Acceptance is §5 of the handoff: install rc.2 (`/S` closes the app and does
+  NOT relaunch it — phone down until started by hand), see the round logo, drag it
+  across monitors, **click → the assistant panel opens, not a sidebar**, click again
+  → closes; the negative that matters: the endpoint's contact list must NOT grow.
+  ⛔ The bubble stays opt-in (tray); Izzy's is ON. The badge is wired to nothing yet.
+
 ## ⛔⛔ AGENT HANDOFF — remote support is INSIDE the real Windows app now, OFF by default, and there is a test installer nobody has run (2026-09-01) — READ FIRST before adding ANY key to the desktop preload, before publishing a desktop build, before retiring `apps/desktop-support`, or for "is the remote desktop app deployed?"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESKTOP_REMOTE_SUPPORT_TEST_BUILD_2026-09-01.md`**
