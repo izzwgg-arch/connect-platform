@@ -139,6 +139,27 @@ was filled through the in-app Browser pane:
   migration completes, then flips to Loopcom LLC.
 - ⚠️ Apple may reply that the D-U-N-S cannot be found — that is 24–48h D&B
   propagation (issued 2026-08-28), not a bad number. Retry/answer, don't panic.
+- ✅ **2026-09-02 — APPLE ANSWERED: the migration is READY TO START on our word.**
+  Developer Support (Natalie, **case 20000151453845**, replying to
+  iw5626644@gmail.com) did NOT reject the D-U-N-S; she listed six preconditions
+  and said "respond when you're ready to start". Checked against our state:
+  (1) 2FA on the Apple Account — Apple already requires it for every developer
+  account, and the Account Holder signed in to submit the request; confirm at
+  `appleid.apple.com` before replying. (2) Public org website whose domain is
+  the org's — `https://www.loopcom.net/` answers **200** and its markup names
+  **Loopcom LLC** (verified 2026-09-02). (3) ⛔ **Certificates, Identifiers &
+  Profiles is UNAVAILABLE during the migration — an EAS iOS build needs that
+  portal for signing, so do NOT start an iOS build (build 58+) until Apple
+  confirms the migration finished.** App Store Connect itself stays up, and
+  build 57 is still `WAITING_FOR_REVIEW` (4 days in, checked the same day) —
+  the review is not blocked. (4) The legal entity name (Loopcom LLC) replaces
+  "Israel Weinstock" on the store — the whole point. (5) Sales & Trends history
+  lost — irrelevant, the app is free with zero sales. (6) Paid-app earnings /
+  bank account — irrelevant, no paid apps, no IAP, no bank account.
+  ⛔ **A pre-existing blank stays open and is unrelated to the migration: no card
+  on file for the $99 renewal.** ⚠️ The Apple ID's display name is "max weiss"
+  while the founder is Israel Weinstock; Apple may ask the Account Holder to
+  verify identity — answer with the NY DOS 8001109 filing if they do.
 - ⛔ Browser-driving traps hit: the contact form demands its OWN idmsa sign-in
   (a developer.apple.com session from another tab does NOT carry into it), and
   element refs on this form GO STALE after any scroll — a stale-ref click landed
