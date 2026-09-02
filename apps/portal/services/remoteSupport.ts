@@ -63,7 +63,7 @@ export const SIGNAL_POLL_MS = 1_000;
  * SYSTEM, which this version does not ship, and offering a control that silently
  * would not work is worse than not offering it.
  */
-export type RemoteCapability = "view" | "control" | "clipboard" | "files";
+export type RemoteCapability = "view" | "control" | "clipboard" | "files" | "admin";
 
 /** What the screen tells the encoder. Advisory — never a permission. */
 export type MediaBudget = {

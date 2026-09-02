@@ -193,16 +193,25 @@ test("⛔ clipboard is not implied by control, and files are not implied by clip
 
 test("⛔ junk and unknown capabilities are dropped, not passed through", () => {
   const g = resolveCapabilityGrant({
-    requested: ["control", "admin", "root", "__proto__", "", "VIEW"],
-    customerAllowed: ["control", "admin", "root", "__proto__", "", "VIEW"],
+    requested: ["control", "root", "__proto__", "", "VIEW", "ADMIN"],
+    customerAllowed: ["control", "root", "__proto__", "", "VIEW", "ADMIN"],
     actorMayControl: true,
   });
   assert.deepEqual(g, ["view", "control"]);
 });
 
-test("⛔ 'admin' is not a capability this version can ever grant", () => {
-  assert.equal(isRemoteCapability("admin"), false);
-  assert.ok(!(REMOTE_CAPABILITIES as readonly string[]).includes("admin"));
+test("'admin' (administrator access, 2026-09-02) is a real capability that rides the control key", () => {
+  assert.equal(isRemoteCapability("admin"), true);
+  // Both sides must say yes, like every other capability…
+  assert.ok(!resolveCapabilityGrant({ requested: ["admin"], customerAllowed: [], actorMayControl: true }).includes("admin"));
+  assert.ok(!resolveCapabilityGrant({ requested: [], customerAllowed: ["admin"], actorMayControl: true }).includes("admin"));
+  // …and a technician without the control key can never be granted it.
+  assert.ok(!resolveCapabilityGrant({ requested: ["admin"], customerAllowed: ["admin"], actorMayControl: false }).includes("admin"));
+  assert.ok(resolveCapabilityGrant({ requested: ["admin"], customerAllowed: ["admin"], actorMayControl: true }).includes("admin"));
+  // Revoking the control key revokes it live.
+  assert.equal(decideCapability({ capability: "admin", granted: ["view", "control", "admin"], actorMayControl: false }).ok, false);
+  assert.equal(decideCapability({ capability: "admin", granted: ["view", "control"], actorMayControl: true }).ok, false);
+  assert.equal(decideCapability({ capability: "admin", granted: ["view", "control", "admin"], actorMayControl: true }).ok, true);
 });
 
 test("the grant is stable and deduplicated however the request is ordered", () => {

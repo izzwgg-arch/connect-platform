@@ -188,6 +188,21 @@ export default function RemoteSupportConsent() {
   const answerCap = useCallback(async (capability: RemoteCapability, allow: boolean) => {
     if (!live) return;
     setCapAsk(null); // the question is answered the moment they press, not when the network agrees
+    // ⛔ ADMINISTRATOR ACCESS IS DELIVERED BEFORE IT IS RECORDED. The elevated
+    // helper is started first — Windows shows the UAC prompt now — and only a
+    // helper that is really running lets the grant reach the server. A declined
+    // prompt records a refusal, so the technician never sees "Allowed" for
+    // something that cannot act.
+    if (capability === "admin" && allow) {
+      const up = await bridge?.remoteSupport?.enableElevatedControl?.(live.id).catch(() => false);
+      if (!up) {
+        setError(
+          "Administrator access was not turned on. If a Windows prompt appeared, it was closed or declined; " +
+          "the support person can ask again.",
+        );
+        allow = false;
+      }
+    }
     try {
       await answerCapability(live.id, capability, allow);
     } catch {
@@ -249,6 +264,20 @@ export default function RemoteSupportConsent() {
         await bridge.remoteSupport.setScreen(chosenScreen);
       }
 
+      // Administrator access ticked at consent time: the Windows prompt comes
+      // first, and a declined prompt simply removes the tick before anything is
+      // recorded. (Ordinary control is not affected either way.)
+      let allowCapsFinal = allowCaps;
+      if (allowCaps.includes("admin") && allowControl && bridge?.remoteSupport?.enableElevatedControl) {
+        // Control must be enabled first — elevation upgrades a control session.
+        const plain = await bridge.remoteSupport.enableControl(request.id).catch(() => false);
+        const up = plain ? await bridge.remoteSupport.enableElevatedControl(request.id).catch(() => false) : false;
+        if (!up) {
+          allowCapsFinal = allowCaps.filter((c) => c !== "admin");
+          setError("Administrator access was not turned on (the Windows prompt was declined or closed). Everything else you allowed still applies.");
+        }
+      }
+
       const machine = await bridge?.remoteSupport?.machineInfo?.().catch(() => null);
       const deviceLabel = machine
         ? `${machine.hostname} (${machine.platform} ${machine.release}, app ${machine.appVersion})`
@@ -260,7 +289,7 @@ export default function RemoteSupportConsent() {
         // ⛔ Sent as what the CUSTOMER ticked. The server still requires that the
         // technician asked for each one and holds the control key right now, so
         // this list can only ever narrow what is granted, never widen it.
-        allowCapabilities: allowCaps,
+        allowCapabilities: allowCapsFinal,
         deviceLabel,
         deviceId: machine?.deviceId || undefined,
       });
@@ -378,7 +407,7 @@ export default function RemoteSupportConsent() {
           <div className="rs-live-ask" role="alert">
             <span>
               {live.requestedByName || "Loopcom support"} is asking to{" "}
-              {capAsk === "clipboard" ? "share your clipboard" : "send you a file"}.
+              {CAPABILITY_ASK_TEXT[capAsk] ?? capAsk}.
             </span>
             <button type="button" className="btn" onClick={() => void answerCap(capAsk, false)}>
               No
@@ -408,6 +437,10 @@ export default function RemoteSupportConsent() {
   const toggleCap = (cap: RemoteCapability) => {
     setAllowCaps((prev) => (prev.includes(cap) ? prev.filter((c) => c !== cap) : [...prev, cap]));
   };
+  // Administrator access can only be delivered by the desktop app, and only as
+  // an upgrade of control — so its tick is live only when both hold.
+  const canElevateHere = canControlHere && Boolean(bridge?.remoteSupport?.enableElevatedControl);
+  const canTick = (cap: RemoteCapability) => (cap === "admin" ? canElevateHere && allowControl : canControlHere);
 
   return (
     <div className="rs-backdrop" role="dialog" aria-modal="true" aria-labelledby="rs-title">
@@ -465,13 +498,13 @@ export default function RemoteSupportConsent() {
           {CAPABILITY_ROWS.filter((row) => askedFor.has(row.id)).map((row) => (
             <label
               key={row.id}
-              className={`rs-cap${allowCaps.includes(row.id) ? " is-on" : ""}${canControlHere ? "" : " is-dis"}`}
+              className={`rs-cap${allowCaps.includes(row.id) ? " is-on" : ""}${canTick(row.id) ? "" : " is-dis"}`}
             >
               <input
                 type="checkbox"
                 className="rs-cap-input"
                 checked={allowCaps.includes(row.id)}
-                disabled={!canControlHere}
+                disabled={!canTick(row.id)}
                 onChange={() => toggleCap(row.id)}
               />
               <span className="rs-cap-box" aria-hidden>{allowCaps.includes(row.id) ? "✓" : ""}</span>
@@ -483,20 +516,11 @@ export default function RemoteSupportConsent() {
           ))}
 
           {/*
-            ⛔ ALWAYS SHOWN, ALWAYS UNAVAILABLE, ON PURPOSE. Reaching an elevated
-            window needs a Windows service running as SYSTEM, which this version
-            does not ship. Drawing the row honestly is better than leaving the
-            customer to wonder, and far better than offering something that would
-            silently do nothing. Removing this row is not the fix; building the
-            service is.
+            Administrator access (2026-09-02) renders through CAPABILITY_ROWS
+            like the rest. It is offered only where it can really be delivered —
+            the Connect desktop app on Windows, with control allowed — because
+            elevation is an upgrade of control, never a way to obtain it.
           */}
-          <div className="rs-cap is-dis">
-            <span className="rs-cap-box" aria-hidden />
-            <span>
-              <span className="rs-cap-t">Administrator actions</span>
-              <span className="rs-cap-h">Not available. Loopcom never runs as administrator.</span>
-            </span>
-          </div>
         </div>
 
         {screens.length > 0 && (
@@ -574,4 +598,16 @@ const CAPABILITY_ROWS: Array<{ id: RemoteCapability; title: string; hint: string
     title: "Send and receive files",
     hint: "Files arrive in Documents → Loopcom Support.",
   },
+  {
+    id: "admin",
+    title: "Administrator access",
+    hint: "Lets them work in windows that need administrator rights. Windows will show its own prompt — click Yes to allow it.",
+  },
 ];
+
+/** What a live mid-session ask says, per capability, in the customer's words. */
+const CAPABILITY_ASK_TEXT: Record<string, string> = {
+  clipboard: "share your clipboard",
+  files: "send you a file",
+  admin: "use administrator access on this computer. Windows will show its own prompt — click Yes to allow it",
+};

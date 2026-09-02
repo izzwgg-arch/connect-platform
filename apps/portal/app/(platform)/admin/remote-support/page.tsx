@@ -493,7 +493,7 @@ function RemoteSupportConsole() {
                 They are on a phone call — the picture is using less bandwidth until it ends.
               </p>
             )}
-            {(["clipboard", "files"] as RemoteCapability[]).map((cap) => {
+            {(["clipboard", "files", "admin"] as RemoteCapability[]).map((cap) => {
               const have = granted.includes(cap);
               const waiting = pendingCap === cap;
               return (
@@ -504,25 +504,25 @@ function RemoteSupportConsole() {
                   disabled={have || waiting}
                   onClick={() => void askFor(cap)}
                 >
-                  <span className="rs-tool-t">{cap === "clipboard" ? "Shared clipboard" : "Send a file"}</span>
+                  <span className="rs-tool-t">
+                    {cap === "clipboard" ? "Shared clipboard" : cap === "files" ? "Send a file" : "Administrator access"}
+                  </span>
                   <span className="rs-tool-h">
-                    {have ? "Allowed" : waiting ? "Waiting for them to answer…" : "Ask them for this"}
+                    {have
+                      ? cap === "admin" ? "Allowed — Windows prompts (UAC) still need them" : "Allowed"
+                      : waiting
+                        ? cap === "admin" ? "Waiting — Windows is asking them to confirm…" : "Waiting for them to answer…"
+                        : cap === "admin" ? "Ask them for this — they will see a Windows prompt" : "Ask them for this"}
                   </span>
                 </button>
               );
             })}
             {/*
-              ⛔ Drawn, and drawn as UNAVAILABLE. Elevated control needs a Windows
-              service running as SYSTEM, which this version does not ship. Windows
-              silently refuses input to elevated windows, so a technician who was
-              offered this would watch their clicks do nothing on a UAC prompt and
-              conclude the product is broken. Saying so is the honest option; the
-              server has no `admin` capability at all, so it cannot be granted.
+              Administrator access (2026-09-02) is an askable tool above. What it
+              still cannot do is the UAC prompt itself and the lock screen — those
+              run on Windows' secure desktop, which only SYSTEM may drive — so the
+              "Allowed" line says the customer still answers those.
             */}
-            <div className="rs-tool is-unavailable" aria-disabled>
-              <span className="rs-tool-t">Administrator windows</span>
-              <span className="rs-tool-h">Not available in this version</span>
-            </div>
           </div>
 
           <div className="rs-rail-tabs" role="tablist">

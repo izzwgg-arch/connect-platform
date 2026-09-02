@@ -143,7 +143,7 @@ export function decideSupportGate(input: {
  * The support consent dialog only ever shows rows that were REQUESTED, so these
  * two never appear there.
  */
-export const REMOTE_CAPABILITIES = ["view", "control", "clipboard", "files", "sound", "mic"] as const;
+export const REMOTE_CAPABILITIES = ["view", "control", "clipboard", "files", "sound", "mic", "admin"] as const;
 export type RemoteCapability = (typeof REMOTE_CAPABILITIES)[number];
 
 export function isRemoteCapability(v: unknown): v is RemoteCapability {
@@ -151,14 +151,21 @@ export function isRemoteCapability(v: unknown): v is RemoteCapability {
 }
 
 /**
- * ⛔⛔ `admin` IS NOT IN THE LIST ABOVE, AND ITS ABSENCE IS THE FEATURE.
+ * `admin` — ADMINISTRATOR ACCESS (2026-09-02, Izzy's ask).
  *
- * Elevated control needs a Windows service running as SYSTEM, which this version
- * deliberately does not ship (see the handoff §6). The consent dialog draws the
- * row as unavailable so the customer is told the truth rather than offered
- * something that silently would not work. If that service is ever built, adding
- * "admin" here is NOT sufficient on its own — it needs its own local elevation
- * prompt, its own audit event, and its own technician role.
+ * Windows refuses injected input to an elevated window from a non-elevated
+ * process, so until now a technician could only watch a UAC-launched installer
+ * or an admin console. The capability is granted like any other — the
+ * technician asks, the customer allows — and the CUSTOMER'S MACHINE then starts
+ * the input helper through Windows' own elevation prompt (UAC). The desktop app
+ * reports the grant only after that prompt was accepted, so `admin` in
+ * `capabilitiesGranted` means a High-integrity helper is really running.
+ *
+ * ⛔ It rides the control permission like clipboard and files, and it never
+ * grants control on its own: elevation is an upgrade of a consented control
+ * session, never a way to obtain one. ⛔ It still cannot drive the UAC prompt
+ * itself or the lock screen (the secure desktop is SYSTEM/UIAccess only); the
+ * consent dialog says so in words.
  */
 
 export type CapabilityState = {
@@ -228,6 +235,7 @@ const CAPABILITY_REFUSALS: Record<RemoteCapability, string> = {
   control: "The customer allowed you to watch, but not to control.",
   clipboard: "The customer has not shared their clipboard.",
   files: "The customer has not allowed file transfer.",
+  admin: "The customer has not allowed administrator access.",
   sound: "Sound from that computer is not allowed on this connection.",
   mic: "Your microphone is not allowed on that computer.",
 };

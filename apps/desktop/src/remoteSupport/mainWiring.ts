@@ -30,12 +30,15 @@ import path from "node:path";
 import type { DesktopMachineInfo, DesktopScreenSource, RemoteSupportBannerState } from "../types";
 import {
   PowerShellInputInjector,
+  ElevatedInputInjector,
+  elevatedHelperScriptPath,
+  type InputInjector,
   helperScriptPath,
   inputInjectionSupported,
   sanitizeCommand,
 } from "./inputInjector";
 
-let injector: PowerShellInputInjector | null = null;
+let injector: InputInjector | null = null;
 /** The session control was enabled for. Input for any other session is dropped. */
 let controllingSessionId: string | null = null;
 let bannerWindow: BrowserWindow | null = null;
@@ -293,8 +296,9 @@ export function registerRemoteSupportIpc(options: {
 
     // Never leave a previous session's helper running.
     injector?.stop();
-    injector = new PowerShellInputInjector(helperScriptPath(app.getPath("userData")));
-    const started = injector.start((reason) => {
+    const plainInjector = new PowerShellInputInjector(helperScriptPath(app.getPath("userData")));
+    injector = plainInjector;
+    const started = plainInjector.start((reason) => {
       // If the helper dies mid-session, control is over. Fail closed and let
       // the renderer notice rather than silently dropping every event. The
       // reason carries the helper's last stderr, which is how "antivirus killed
@@ -311,6 +315,44 @@ export function registerRemoteSupportIpc(options: {
     injector?.stop();
     injector = null;
     controllingSessionId = null;
+  });
+
+  /**
+   * Administrator access (2026-09-02): swap the input helper for one started
+   * through Windows' own elevation prompt, so the technician can act on
+   * elevated windows. Resolves true only once the customer has accepted the
+   * UAC prompt and the elevated helper is really taking commands.
+   *
+   * ⛔ Only for the session control is ALREADY enabled for. Elevation is an
+   * upgrade of a consented control session, never a way to obtain control.
+   * ⛔ The plain helper is stopped only AFTER the elevated one is up — a
+   * declined prompt must leave ordinary control exactly as it was.
+   */
+  ipcMain.handle("remote-support:enable-elevated-control", async (_event, sessionId: unknown): Promise<boolean> => {
+    const id = String(sessionId || "");
+    if (!id || !inputInjectionSupported()) return false;
+    if (!injector || controllingSessionId !== id) return false;
+    if (injector instanceof ElevatedInputInjector) return injector.available;
+
+    const elevated = new ElevatedInputInjector(elevatedHelperScriptPath(app.getPath("userData")));
+    const ok = await elevated.start((reason) => {
+      options.log?.(`elevated input helper stopped: ${reason}`);
+      // Fail closed: when the elevated helper dies, control is over for this
+      // session. The technician sees their clicks stop and asks again.
+      if (injector === elevated) {
+        injector = null;
+        controllingSessionId = null;
+      }
+    });
+    if (!ok) {
+      options.log?.("elevated input helper did not start (prompt declined or timed out)");
+      return false;
+    }
+    const plain = injector;
+    injector = elevated;
+    try { plain?.stop(); } catch { /* already gone */ }
+    options.log?.("input helper is elevated for this session");
+    return true;
   });
 
   /**

@@ -37,6 +37,11 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:ch
 export type SpawnLike = (cmd: string, args: string[], opts: any) => ChildProcessWithoutNullStreams;
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { connect as netConnect, type Socket } from "node:net";
+import { randomBytes } from "node:crypto";
+
+/** Injectable so the elevated helper's pipe can be rehearsed without Windows. */
+export type ConnectLike = (path: string) => Socket;
 
 export type PointerButton = "left" | "right" | "middle";
 
@@ -67,7 +72,8 @@ export interface InputInjector {
  * and the single most malware-shaped thing a process can do. A plain script on
  * disk can at least be inspected by whoever is asking what this program does.
  */
-const HELPER_SCRIPT = String.raw`
+/** The C# SendInput bridge and the key table — shared by both helpers. */
+const HELPER_PRELUDE = String.raw`
 $ErrorActionPreference = 'Stop'
 
 Add-Type -TypeDefinition @"
@@ -168,10 +174,15 @@ $VK = @{
   'f8'=0x77; 'f9'=0x78; 'f10'=0x79; 'f11'=0x7A; 'f12'=0x7B
 }
 
-while ($true) {
-  $line = [Console]::In.ReadLine()
-  if ($null -eq $line) { break }
-  if ($line.Trim().Length -eq 0) { continue }
+`;
+
+/**
+ * One command, performed. Shared verbatim by the stdin helper and the elevated
+ * (named-pipe) helper so the two can never drift in what a key or click does.
+ */
+const HELPER_DISPATCH = String.raw`
+function Invoke-ConnectCommand([string]$line) {
+  if ($line.Trim().Length -eq 0) { return }
   try {
     $c = $line | ConvertFrom-Json
     switch ($c.kind) {
@@ -202,14 +213,274 @@ while ($true) {
         }
       }
     }
-    [Console]::Out.WriteLine('ok')
+    return 'ok'
   } catch {
     # ⛔ Never rethrow. One malformed command must not take the helper down and
     # strand a live support session with a frozen mouse.
-    [Console]::Out.WriteLine('err ' + $_.Exception.Message)
+    return ('err ' + $_.Exception.Message)
   }
 }
 `;
+
+/** The plain helper: one JSON command per line on stdin. */
+const HELPER_SCRIPT = HELPER_PRELUDE + HELPER_DISPATCH + String.raw`
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  [Console]::Out.WriteLine((Invoke-ConnectCommand $line))
+}
+`;
+
+/**
+ * The ELEVATED helper — "Administrator access" (2026-09-02).
+ *
+ * Windows refuses injected input to an elevated window from a non-elevated
+ * process, so a technician driving a UAC-launched installer or an admin
+ * console watched their clicks do nothing. This helper is the same SendInput
+ * bridge, started through Windows' own elevation prompt: the CUSTOMER clicks
+ * Yes on the UAC dialog (or types an administrator password), and only then
+ * does a High-integrity process exist to perform the technician's input.
+ *
+ * ⛔ WHY A NAMED PIPE AND NOT STDIN. An elevated process cannot inherit the
+ * non-elevated parent's stdio handles — the elevation boundary drops them —
+ * so the launcher (`Start-Process -Verb RunAs`) hands the helper nothing but
+ * arguments. The helper therefore opens a named pipe and the app connects to it.
+ *
+ * ⛔ THE PIPE IS LOCKED THREE WAYS, and all three matter: (1) its ACL admits
+ * only the current user's own SID — no other account on the machine can even
+ * open it; (2) the first line the client sends MUST be a one-time random token
+ * that the app generated and passed as a launch argument, or the helper exits
+ * without performing anything; (3) the helper accepts exactly ONE client for
+ * its whole life, and exits when that client disconnects. An elevated process
+ * that keeps accepting connections would be a privilege escalation left running
+ * on the customer's machine.
+ *
+ * ⛔ IT CANNOT BE KILLED BY THE APP. A non-elevated process cannot terminate an
+ * elevated one, so `stop()` asks it to exit over the pipe, and it also exits on
+ * its own on client disconnect, after 60 seconds with no client, and after a
+ * hard 4-hour ceiling that matches the session limit.
+ *
+ * ⛔ WHAT IT STILL CANNOT DO, and the consent dialog says so: the UAC prompt
+ * ITSELF and the lock screen run on the secure desktop, which only SYSTEM /
+ * UIAccess processes may drive. The customer answers those.
+ */
+const ELEVATED_HELPER_SCRIPT = HELPER_PRELUDE + HELPER_DISPATCH + String.raw`
+$pipeName = $args[0]
+$token = $args[1]
+if (-not $pipeName -or -not $token) { exit 2 }
+
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$sec = New-Object System.IO.Pipes.PipeSecurity
+$rule = New-Object System.IO.Pipes.PipeAccessRule($sid, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
+$sec.AddAccessRule($rule)
+
+$server = New-Object System.IO.Pipes.NamedPipeServerStream($pipeName, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096, $sec)
+$deadline = (Get-Date).AddHours(4)
+
+# Wait for exactly one client, but never forever: 60 s with nobody on the
+# other end means the app gave up, and an elevated helper must not outlive it.
+$wait = $server.BeginWaitForConnection($null, $null)
+if (-not $wait.AsyncWaitHandle.WaitOne(60000)) { $server.Dispose(); exit 3 }
+$server.EndWaitForConnection($wait)
+
+$reader = New-Object System.IO.StreamReader($server)
+$writer = New-Object System.IO.StreamWriter($server)
+$writer.AutoFlush = $true
+
+$first = $reader.ReadLine()
+if ($first -ne $token) { $writer.WriteLine('err bad token'); $server.Dispose(); exit 4 }
+$writer.WriteLine('ok elevated')
+
+while ($true) {
+  if ((Get-Date) -gt $deadline) { break }
+  $line = $reader.ReadLine()
+  if ($null -eq $line) { break }
+  if ($line.Trim() -eq '{"kind":"stop"}') { break }
+  $writer.WriteLine((Invoke-ConnectCommand $line))
+}
+$server.Dispose()
+exit 0
+`;
+
+/** Where the elevated helper script is written. */
+export function elevatedHelperScriptPath(userDataDir: string): string {
+  return join(userDataDir, "remote-support", "input-helper-elevated.ps1");
+}
+
+/** The app-side view of the elevated helper: a pipe client plus a launcher. */
+export class ElevatedInputInjector implements InputInjector {
+  private socket: Socket | null = null;
+  private launcher: ChildProcessWithoutNullStreams | null = null;
+  private stopped = false;
+  private dead = false;
+  private stderrTail = "";
+  private onExit: ((reason: string) => void) | undefined;
+  private readonly scriptPath: string;
+  private readonly spawnImpl: SpawnLike;
+  private readonly connectImpl: ConnectLike;
+  /** Random per-launch; passed to the helper as an argument, sent as the pipe's first line. */
+  readonly token: string;
+  readonly pipeName: string;
+
+  constructor(
+    scriptPath: string,
+    spawnImpl: SpawnLike = nodeSpawn as unknown as SpawnLike,
+    connectImpl: ConnectLike = ((path: string) => netConnect(path)) as ConnectLike,
+    ids: { token?: string; pipeName?: string } = {},
+  ) {
+    this.scriptPath = scriptPath;
+    this.spawnImpl = spawnImpl;
+    this.connectImpl = connectImpl;
+    this.token = ids.token ?? randomBytes(24).toString("hex");
+    this.pipeName = ids.pipeName ?? `loopcom-rs-${randomBytes(8).toString("hex")}`;
+  }
+
+  get available(): boolean {
+    const s = this.socket;
+    return !this.dead && s !== null && !s.destroyed && s.writable;
+  }
+
+  private die(reason: string): void {
+    if (this.dead) return;
+    this.dead = true;
+    const s = this.socket;
+    this.socket = null;
+    try { s?.destroy(); } catch { /* already gone */ }
+    if (this.stopped) return;
+    const tail = this.stderrTail.trim();
+    this.onExit?.(tail ? `${reason}: ${tail.slice(-300)}` : reason);
+  }
+
+  /**
+   * Launch the helper through Windows' elevation prompt and connect to its pipe.
+   *
+   * Resolves TRUE only once the pipe is open and the token was accepted — i.e.
+   * the customer clicked Yes and an elevated process is really taking commands.
+   * Resolves FALSE when the prompt was declined, the launcher failed, or nothing
+   * answered on the pipe within the wait; never throws.
+   */
+  async start(onExit?: (reason: string) => void, waitMs = 90_000): Promise<boolean> {
+    if (!inputInjectionSupported()) return false;
+    this.onExit = onExit;
+    try {
+      mkdirSync(dirname(this.scriptPath), { recursive: true });
+      writeFileSync(this.scriptPath, ELEVATED_HELPER_SCRIPT, "utf8");
+    } catch {
+      return false;
+    }
+
+    // The launcher is NOT elevated; it only asks Windows to start the helper
+    // elevated. `-Wait` keeps it alive as long as the helper, so its exit is
+    // the helper's exit as far as the app can see. A declined UAC prompt
+    // throws inside Start-Process and the launcher exits non-zero at once.
+    const inner = [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", `"${this.scriptPath}"`, this.pipeName, this.token,
+    ].join(" ");
+    const launch =
+      `$p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -PassThru -Wait ` +
+      `-ArgumentList '${inner.replace(/'/g, "''")}'; exit $p.ExitCode`;
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = this.spawnImpl(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", launch],
+        { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    } catch {
+      return false;
+    }
+    this.launcher = child;
+    this.stderrTail = "";
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      this.stderrTail = (this.stderrTail + String(chunk)).slice(-600);
+    });
+    child.stdin?.on("error", () => { /* we never write to it */ });
+    child.stdout?.on("error", () => { /* read side */ });
+    child.stderr?.on("error", () => { /* read side */ });
+    let launcherExited: number | string | null | undefined;
+    child.on("exit", (code, signal) => {
+      launcherExited = code ?? signal ?? "unknown";
+      this.die(`elevated_helper_exited_${launcherExited}`);
+    });
+    child.on("error", () => this.die("elevated_launcher_failed"));
+
+    // Connect to the pipe. The customer may take a while over the UAC prompt,
+    // so retry until the wait is spent or the launcher has already given up.
+    const started = Date.now();
+    const pipePath = `\\\\.\\pipe\\${this.pipeName}`;
+    while (Date.now() - started < waitMs) {
+      if (launcherExited !== undefined || this.dead) return false;
+      const ok = await this.tryConnect(pipePath);
+      if (ok) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    this.die("elevated_helper_timeout");
+    return false;
+  }
+
+  private tryConnect(pipePath: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
+      let sock: Socket;
+      try {
+        sock = this.connectImpl(pipePath);
+      } catch {
+        settle(false);
+        return;
+      }
+      sock.setEncoding("utf8");
+      sock.once("error", () => { try { sock.destroy(); } catch { /* gone */ } settle(false); });
+      sock.once("connect", () => {
+        // ⛔ Token first, before anything else. A pipe the helper answers but
+        // whose token it refuses is one it will close immediately.
+        sock.write(`${this.token}\n`);
+      });
+      let buf = "";
+      const onData = (chunk: string) => {
+        buf += chunk;
+        if (!buf.includes("\n")) return;
+        sock.off("data", onData);
+        if (!buf.startsWith("ok elevated")) {
+          try { sock.destroy(); } catch { /* gone */ }
+          settle(false);
+          return;
+        }
+        this.socket = sock;
+        sock.on("error", () => this.die("elevated_pipe_broken"));
+        sock.on("close", () => this.die("elevated_pipe_closed"));
+        settle(true);
+      };
+      sock.on("data", onData);
+    });
+  }
+
+  send(command: InputCommand): void {
+    if (!this.available) return;
+    try {
+      this.socket!.write(`${JSON.stringify(command)}\n`, () => { /* errors arrive on "error" */ });
+    } catch {
+      /* dropping one event beats throwing inside a live session */
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    const s = this.socket;
+    this.socket = null;
+    if (s && !s.destroyed) {
+      // Ask, because we cannot kill an elevated process. It also exits by
+      // itself the moment this socket closes.
+      try { s.write('{"kind":"stop"}\n'); } catch { /* gone */ }
+      try { s.end(); } catch { /* gone */ }
+    }
+    this.dead = true;
+    // The launcher is ours and not elevated; it exits when the helper does.
+    try { this.launcher?.kill(); } catch { /* already gone */ }
+    this.launcher = null;
+  }
+}
 
 /** Keys the helper knows by name. Anything else is typed as a character. */
 export const NAMED_KEYS = new Set([

@@ -172,13 +172,14 @@ test("asking reflects the server's answer, not an optimistic one", () => {
 
 /* ── the elevated-windows limit is stated, not hidden ─────────────────── */
 
-test("administrator windows are drawn as unavailable rather than omitted", () => {
+test("what administrator access still cannot do is stated on the rail, not hidden", () => {
   const src = panel();
-  // Windows silently refuses injected input to elevated windows. A technician
-  // who was offered this would watch their clicks do nothing on a UAC prompt
-  // and conclude the product is broken. Saying so is the honest option.
-  assert.match(src, /is-unavailable/, "the limit must be visible on the rail");
-  assert.match(src, /Not available in this version/, "and must say so in words");
+  // Administrator access is real now (2026-09-02, an elevated helper behind the
+  // customer's own UAC "Yes"), but the UAC prompt itself and the lock screen
+  // run on Windows' secure desktop, which only SYSTEM may drive. A technician
+  // who was not told would watch their clicks do nothing on that prompt and
+  // conclude the product is broken. Saying so is the honest option.
+  assert.ok(/Windows prompts \(UAC\) still need them/.test(src), "the remaining limit must be stated in words on the rail");
 });
 
 test("the connection readout has a third state and never guesses good", () => {
@@ -228,5 +229,25 @@ test("the customer's picker puts whole screens first and warns about sharing one
   const src = consent();
   assert.match(src, /Number\(b\.isScreen\) - Number\(a\.isScreen\)/, "whole screens must sort first");
   assert.match(src, /minimised/, "the window caveat must be stated where the choice is made");
+});
+
+/* ── administrator access (2026-09-02) ───────────────────────────────── */
+
+test("administrator access is askable, and the grant is recorded only AFTER the Windows prompt was accepted", () => {
+  const src = consent();
+  assert.match(src, /id:\s*"admin"/, "the consent dialog must carry the admin row");
+  assert.doesNotMatch(src, /Loopcom never runs as administrator/, "the old unavailable row must be gone");
+  // The elevation call must precede answerCapability in the mid-session handler:
+  // a declined UAC prompt must never reach the server as a grant.
+  const handler = src.slice(src.indexOf("const answerCap = useCallback"), src.indexOf("await answerCapability(live.id, capability, allow)"));
+  assert.match(handler, /enableElevatedControl/, "the elevated helper is started before the grant is sent");
+  assert.match(handler, /allow = false/, "a declined prompt turns the answer into a refusal");
+});
+
+test("the technician's rail offers administrator access and says what it still cannot do", () => {
+  const src = panel();
+  assert.match(src, /"clipboard", "files", "admin"/, "admin must be an askable tool");
+  assert.doesNotMatch(src, /Not available in this version/, "the unavailable row must be gone");
+  assert.match(src, /UAC/, "the limit (the UAC prompt itself) must be stated to the technician");
 });
 

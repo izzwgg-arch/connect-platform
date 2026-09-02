@@ -159,6 +159,9 @@ const remoteSupportApi = {
    */
   enableControl: (sessionId: string) =>
     ipcRenderer.invoke("remote-support:enable-control", sessionId) as Promise<boolean>,
+  /** Administrator access: Windows shows its own prompt; true only once accepted. */
+  enableElevatedControl: (sessionId: string) =>
+    ipcRenderer.invoke("remote-support:enable-elevated-control", sessionId) as Promise<boolean>,
   disableControl: () => ipcRenderer.invoke("remote-support:disable-control") as Promise<void>,
   sendInput: (command: unknown) => ipcRenderer.send("remote-support:input", command),
 
