@@ -261,3 +261,63 @@ test("a phone the person left unticked on the found screen is never advanced, ev
   // does not send the flag keeps every phone in the setup.
   assert.match(read("setupDriver.ts"), /phone\.selected === false/);
 });
+
+/* ── handing a reset phone its folder (2026-09-02) ──────────────────────── */
+
+test("set_provisioning: listen+restart, then the delivered folder is reported to the server through /discovered", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, rebooted: true, delivered: true, acknowledged: true, waitedMs: 3 }; };
+  const d = createSetupDriver("r1", api, bridge);
+  const out = await d.tick();
+  assert.deepEqual(bridge.ops.map((o) => o.op), ["set_provisioning"]);
+  assert.equal(bridge.ops[0].url, "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/");
+  assert.equal(bridge.ops[0].mac, "805e0c4d796d");
+  assert.equal(bridge.ops[0].reboot, true);
+  const discovered = api.calls.find((c) => c.path.endsWith("/discovered"));
+  assert.ok(discovered, "the folder is recorded the way a scan would record it");
+  assert.deepEqual(discovered!.body, { phones: [{ mac: "805e0c4d796d", ip: "192.168.1.20", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" }] });
+  assert.deepEqual(out.performed, [{ phoneId: "p1", action: "set_provisioning" }]);
+  assert.match(out.hints.p1, /where Loopcom is/);
+});
+
+test("set_provisioning: without a URL from the server nothing is attempted", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning" } });
+  const bridge = fakeBridge();
+  const d = createSetupDriver("r1", api, bridge);
+  await d.tick();
+  assert.equal(bridge.ops.length, 0);
+});
+
+test("set_provisioning: restarts are bounded, then listen-only with a power-cycle ask, then the server is told to stop", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, rebooted: req.reboot !== false, delivered: false, acknowledged: false, waitedMs: 90 }; };
+  const d = createSetupDriver("r1", api, bridge);
+  const hints: string[] = [];
+  for (let i = 0; i < 6; i += 1) hints.push((await d.tick()).hints.p1);
+  assert.deepEqual(bridge.ops.map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-only, then stop");
+  assert.match(hints[0], /restarting/);
+  assert.match(hints[2], /Unplug/);
+  assert.match(hints[2], /Windows asks/);
+  const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
+  assert.equal(advances[5].body.provisioningHandoffFailed, true, "the sixth advance carries the give-up so the server halts kindly");
+  assert.equal(advances[0].body.provisioningHandoffFailed, false);
+  assert.equal(bridge.ops.length, 5, "no sixth attempt is made");
+});
+
+test("set_provisioning: a machine that cannot listen says so in plain words, and never reboots the phone", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  (bridge as any).run = async (req: any) => { bridge.ops.push(req); return { ok: false, refused: "cannot_listen" }; };
+  const d = createSetupDriver("r1", api, bridge);
+  const out = await d.tick();
+  assert.match(out.hints.p1, /could not listen/);
+  assert.match(out.hints.p1, /Windows/);
+});

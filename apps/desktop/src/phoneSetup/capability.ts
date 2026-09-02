@@ -3,9 +3,11 @@
  *
  * ⛔⛔ THIS FILE IS THE SECURITY BOUNDARY. Everything above it — the server, the AI,
  * the wizard — can only ever ask for one of the operations named here, with a shape
- * this file validates. There is no "send this request", no "run this command", no
- * URL parameter. That absence is the whole point: a compromised Loopcom account must
- * not become a way to reach arbitrary things on a customer's network.
+ * this file validates. There is no "send this request", no "run this command", and
+ * the ONE URL-shaped argument that exists (`set_provisioning.url`) is fenced to a
+ * Loopcom provisioning folder by `isLoopcomProvisioningUrl` before anything reads
+ * it. That narrowness is the whole point: a compromised Loopcom account must not
+ * become a way to reach arbitrary things on a customer's network.
  *
  * ⛔ The server decides WHAT to do. This decides whether it is allowed AT ALL, and
  * then does exactly that and nothing else. A dumb hands, a smart head — so that
@@ -15,9 +17,10 @@
 import { scanLan, type ScanResult } from "./lanScan";
 import { sipOptionsProbe, type SipProbeResult } from "./sipProbe";
 import {
-  buildStatusRequest, fingerprintFromResponse, isPrivateIpv4, sendAction, testCredentials,
+  buildStatusRequest, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, sendAction, testCredentials,
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
 } from "./yealink";
+import { normalizeMac, PNP_DEFAULT_WAIT_MS, PNP_MAX_WAIT_MS, startPnpHandoff, type PnpHandoff, type PnpHandoffOptions } from "./pnp";
 
 /** Every operation that exists. Adding one is a deliberate act with its own test. */
 export const PHONE_OPERATIONS = [
@@ -26,6 +29,9 @@ export const PHONE_OPERATIONS = [
   "test_credentials",
   "reboot",
   "trigger_autop",
+  // 2026-09-02: hand a factory-reset phone its provisioning folder over PnP.
+  // The URL it takes is fenced to a Loopcom PBX folder — see isLoopcomProvisioningUrl.
+  "set_provisioning",
 ] as const;
 
 export type PhoneOperation = (typeof PHONE_OPERATIONS)[number];
@@ -35,13 +41,29 @@ export type OperationRequest =
   | { op: "fingerprint"; ip: string; credentialRef?: string | null }
   | { op: "test_credentials"; ip: string; credentialRef?: string | null; useDefault?: boolean }
   | { op: "reboot"; ip: string; credentialRef?: string | null }
-  | { op: "trigger_autop"; ip: string; credentialRef?: string | null };
+  | { op: "trigger_autop"; ip: string; credentialRef?: string | null }
+  | {
+      op: "set_provisioning"; ip: string; mac: string; url: string; credentialRef?: string | null;
+      /** Restart the phone so it asks (PnP fires once per boot). Default true. */
+      reboot?: boolean;
+      waitMs?: number;
+    };
 
 export type OperationResult =
   | { ok: true; op: "discover"; scan: ScanResult }
   | { ok: true; op: "fingerprint"; fingerprint: DeviceFingerprint }
   | { ok: true; op: "test_credentials"; accepted: boolean; reason?: string }
   | { ok: true; op: "reboot" | "trigger_autop" }
+  | {
+      ok: true; op: "set_provisioning";
+      /** The restart request was accepted by the phone's web interface. */
+      rebooted: boolean; rebootRefused?: string;
+      /** The phone asked and was told the folder. */
+      delivered: boolean;
+      /** The phone answered our NOTIFY (confirmation, not a requirement). */
+      acknowledged: boolean;
+      waitedMs: number;
+    }
   | { ok: false; refused: string };
 
 /**
@@ -62,6 +84,8 @@ export type CapabilityDeps = {
   now?: () => number;
   /** The SIP identity probe, injectable for tests. Read-only: one OPTIONS packet. */
   sipProbe?: (ip: string) => Promise<SipProbeResult>;
+  /** The PnP responder, injectable for tests. */
+  pnp?: (opts: PnpHandoffOptions) => PnpHandoff;
 };
 
 /**
@@ -105,7 +129,7 @@ export function createPhoneCapability(deps: CapabilityDeps) {
     if (gate.actionTimes.length >= MAX_ACTIONS_PER_MINUTE) return { ok: false, refused: "rate_limited" };
     const last = gate.lastActionAt.get(ip) ?? 0;
     // ⛔ Reads are cheap and safe; only things that CHANGE a phone are spaced out.
-    const mutating = req.op === "reboot" || req.op === "trigger_autop";
+    const mutating = req.op === "reboot" || req.op === "trigger_autop" || req.op === "set_provisioning";
     if (mutating && t - last < MIN_MS_BETWEEN_ACTIONS_PER_PHONE) {
       return { ok: false, refused: "too_soon_for_this_phone" };
     }
@@ -162,6 +186,35 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         const r = await sendAction(deps.http, ip, action, creds);
         if (!r.ok) return { ok: false, refused: r.reason };
         return { ok: true, op: req.op };
+      }
+      case "set_provisioning": {
+        // ⛔⛔ THE URL FENCE, before a socket exists. Only a Loopcom PBX folder.
+        if (!isLoopcomProvisioningUrl((req as any).url)) return { ok: false, refused: "not_a_loopcom_provisioning_url" };
+        const mac = normalizeMac((req as any).mac);
+        if (!mac) return { ok: false, refused: "bad_hardware_address" };
+        const waitMs = Math.min(PNP_MAX_WAIT_MS, Math.max(5_000, Number((req as any).waitMs) || PNP_DEFAULT_WAIT_MS));
+        // ⛔ LISTEN FIRST, THEN RESTART. PnP fires once per boot; a responder that
+        // starts after the reboot request can miss a fast phone entirely.
+        const handoff = (deps.pnp ?? startPnpHandoff)({ ip, mac, url: (req as any).url, waitMs });
+        if (!(await handoff.listening)) {
+          await handoff.outcome.catch(() => null);
+          return { ok: false, refused: "cannot_listen" };
+        }
+        let rebooted = false;
+        let rebootRefused: string | undefined;
+        if ((req as any).reboot !== false) {
+          // A reset phone is on the documented default; a phone the customer gave us
+          // a password for uses that. Either way the reboot is the same one verb.
+          const r = await sendAction(deps.http, ip, "reboot", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+          rebooted = r.ok;
+          if (!r.ok) rebootRefused = r.reason;
+        }
+        const out = await handoff.outcome;
+        if (!out.ok) return { ok: false, refused: out.refused };
+        return {
+          ok: true, op: "set_provisioning", rebooted, ...(rebootRefused ? { rebootRefused } : {}),
+          delivered: out.delivered, acknowledged: out.delivered ? out.acknowledged : false, waitedMs: out.waitedMs,
+        };
       }
       default:
         return { ok: false, refused: "unknown_operation" };

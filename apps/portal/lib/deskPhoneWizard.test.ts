@@ -291,3 +291,15 @@ test("the found screen lets the person pick which phones to set up, and every la
   assert.doesNotMatch(exec, /\{phones\.map\(\(p\) => \(\s*<div key=\{p\.id\} className="dps-st">/,
     "the done screen must list the chosen phones, not every phone found");
 });
+
+test("the live screen shows what this computer is doing for each phone (the power-cycle ask lives there)", () => {
+  const exec = stripComments(WIZARD);
+  assert.match(exec, /setHints\(out\.hints \?\? \{\}\)/);
+  assert.match(exec, /hints\[p\.id\] && <span className="dps-hintline">/);
+  const DRIVER = read("components", "deskPhones", "setupDriver.ts");
+  assert.match(DRIVER, /op: "set_provisioning"/);
+  assert.match(DRIVER, /provisioningHandoffFailed: m\.provisioningHandoffFailed/);
+  // the hint copy is customer language
+  assert.match(DRIVER, /Unplug this phone/);
+  assert.ok(!/PnP|SUBSCRIBE|NOTIFY|multicast/.test(stripComments(DRIVER).split("\n").filter((l) => /HINT_/.test(l)).join("\n")), "no protocol words in a hint");
+});

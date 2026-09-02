@@ -33,6 +33,8 @@ export type DiagnosticPhone = {
   id: string;
   status: string;
   state: string;
+  /** The raw hardware address (the diagnostics view carries it unformatted). */
+  mac?: string | null;
   ip: string | null;
   vendor: string | null;
   extNumber: string | null;
@@ -55,6 +57,8 @@ export type TickResult = {
   needs: NeedsPerson[];
   /** Actions performed this tick, for diagnostics and for tests. */
   performed: Array<{ phoneId: string; action: string }>;
+  /** One plain-English line per phone about what this machine is doing for it right now. */
+  hints: Record<string, string>;
 };
 
 type PhoneMemo = {
@@ -69,6 +73,10 @@ type PhoneMemo = {
   /** How many consecutive ticks produced the same non-executable action. */
   stalledOn: string | null;
   stalledCount: number;
+  /** PnP hand-offs attempted for this phone (each one may restart the phone). */
+  provisioningAttempts: number;
+  /** We gave up handing this phone its folder; the server ends its setup kindly. */
+  provisioningHandoffFailed: boolean;
 };
 
 const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
@@ -81,6 +89,25 @@ const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
  */
 const MAX_CONSECUTIVE_STALLS = 3;
 
+/**
+ * ⛔ A PnP hand-off restarts the phone. The first two attempts restart it from here;
+ * later ones only listen and ask the person to power-cycle it. After this many the
+ * driver tells the server, which ends that phone's setup with a hand-off to Loopcom
+ * instead of rebooting somebody's phone all afternoon — a loop is not persistence.
+ */
+export const MAX_PROVISIONING_HANDOFF_ATTEMPTS = 5;
+export const PROVISIONING_REBOOT_ATTEMPTS = 2;
+
+export const HINT_HANDED_OFF =
+  "Told this phone where Loopcom is. It is fetching its settings and will restart on its own.";
+export const HINT_RESTARTING =
+  "This phone is restarting. We are listening for it to ask for its settings.";
+export const HINT_POWER_CYCLE =
+  "Unplug this phone's power (or its network cable) and plug it back in — we are listening for it. " +
+  "If Windows asks whether to allow Loopcom on your network, choose Allow.";
+export const HINT_CANNOT_LISTEN =
+  "This computer could not listen for the phone. If Windows asked whether to allow Loopcom on your network, choose Allow, then try again.";
+
 export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge) {
   const memos = new Map<string, PhoneMemo>();
 
@@ -91,6 +118,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         defaultCredentialsTried: false, locked: false, haveCustomerCredentials: false,
         credentialRef: null, passwordUnavailable: false, resetDeclined: false,
         stalledOn: null, stalledCount: 0,
+        provisioningAttempts: 0, provisioningHandoffFailed: false,
       };
       memos.set(id, m);
     }
@@ -135,6 +163,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
     const needs: NeedsPerson[] = [];
     const performed: Array<{ phoneId: string; action: string }> = [];
     const resetWanted: Array<{ id: string; message: string }> = [];
+    const hints: Record<string, string> = {};
 
     for (const phone of out.phones as DiagnosticPhone[]) {
       // Unassigned phones were left blank on purpose; terminal phones are done;
@@ -149,6 +178,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         haveCustomerCredentials: m.haveCustomerCredentials,
         passwordUnavailable: m.passwordUnavailable,
         resetDeclined: m.resetDeclined,
+        provisioningHandoffFailed: m.provisioningHandoffFailed,
         reachableOnLan: Boolean(phone.ip),
       }).catch(() => null);
       if (!decision?.ok) continue;
@@ -202,6 +232,37 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         else markStall(m, action);
         continue;
       }
+      if (action === "set_provisioning") {
+        // ⛔ The folder URL comes from the SERVER (it knows the tenant's PBX folder);
+        // the desktop fences it to a Loopcom PBX before a byte goes out. No URL,
+        // nothing to do — wait for the next tick rather than invent one.
+        const url = typeof decision.provisioningUrl === "string" ? decision.provisioningUrl : null;
+        if (!url || !phone.mac) { markStall(m, action); continue; }
+        // ⛔ Once we have given up, we have given up — the server ends the phone's
+        // setup on the next advance, and no further restart is ever sent.
+        if (m.provisioningHandoffFailed) { markStall(m, action); continue; }
+        m.provisioningAttempts += 1;
+        const reboot = m.provisioningAttempts <= PROVISIONING_REBOOT_ATTEMPTS;
+        const r = await bridge.run({
+          op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
+          ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+        }).catch(() => null);
+        if (r?.ok && r.delivered) {
+          // The phone now knows the folder. Tell the server the same way a scan
+          // would — the record is what `advance` reads, never this memory.
+          await api.post(`/desk-phones/runs/${runId}/discovered`, {
+            phones: [{ mac: phone.mac, ip: phone.ip, provisioningUrl: url }],
+          }).catch(() => null);
+          performed.push({ phoneId: phone.id, action });
+          hints[phone.id] = HINT_HANDED_OFF;
+          clearStall(m);
+          continue;
+        }
+        hints[phone.id] = !r?.ok ? HINT_CANNOT_LISTEN : r.rebooted ? HINT_RESTARTING : HINT_POWER_CYCLE;
+        if (m.provisioningAttempts >= MAX_PROVISIONING_HANDOFF_ATTEMPTS) m.provisioningHandoffFailed = true;
+        markStall(m, action);
+        continue;
+      }
       if (action === "rediscover") {
         const scan = await bridge.run({ op: "discover" }).catch(() => null);
         if (scan?.ok) {
@@ -217,7 +278,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         continue;
       }
 
-      // Everything else — reset_over_sip, set_provisioning, generate_template,
+      // Everything else — reset_over_sip, generate_template,
       // verify_registration, do_nothing, halt — is the server's or the PBX's to do,
       // or is a wait. The next tick looks again.
       markStall(m, action);
@@ -241,6 +302,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
       phones: fresh.phones,
       needs,
       performed,
+      hints,
     };
   }
 

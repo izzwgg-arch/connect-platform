@@ -125,6 +125,8 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   // as context on the found screen so a short list never reads as lost phones.
   const [knownElsewhere, setKnownElsewhere] = useState<Array<{ mac: string; model: string | null; vendor: string | null; name: string | null; connectedNow?: boolean | null }>>([]);
   const [needs, setNeeds] = useState<NeedsPerson[]>([]);
+  /** Per-phone, plain-English: what this computer is doing for that phone right now. */
+  const [hints, setHints] = useState<Record<string, string>>({});
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
   const [clearTicks, setClearTicks] = useState<Record<string, boolean>>({});
@@ -277,6 +279,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setPhones(out.phones);
         setSummary(out.summary);
         setNeeds(out.needs);
+        setHints(out.hints ?? {});
         if (out.finished) {
           if (pollRef.current) clearInterval(pollRef.current);
           setStep("done");
@@ -849,6 +852,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <div className="dps-pmeta">
                     <b>{p.displayName ? `${p.displayName} — ${p.extNumber}` : (p.model ?? "Desk phone")}</b>
                     {p.note && <span>{p.note}</span>}
+                    {/* What this computer is doing for the phone right now — the
+                        power-cycle ask lives here, where the person is looking. */}
+                    {!p.note && hints[p.id] && <span className="dps-hintline">{hints[p.id]}</span>}
                     {p.mac && <span className="dps-mac">{p.mac}</span>}
                   </div>
                   <span className={`dps-pill ${p.status === "Ready" ? "dps-pill-ok" : p.needsAttention ? "dps-pill-hm" : "dps-pill-br"}`}>

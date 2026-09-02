@@ -129,8 +129,8 @@ test("ADVERSARIAL: an operation name outside the list is refused before its argu
   assert.equal(seen.length, 0, "not one request should have left the machine");
 });
 
-test("ADVERSARIAL: the allowlist is exactly five operations and reset is not one", () => {
-  assert.equal(PHONE_OPERATIONS.length, 5);
+test("ADVERSARIAL: the allowlist is exactly six operations and reset is not one", () => {
+  assert.equal(PHONE_OPERATIONS.length, 6);
   for (const forbidden of ["factory_reset", "reset", "run_command", "http", "request"]) {
     assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes(forbidden));
   }

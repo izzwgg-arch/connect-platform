@@ -305,6 +305,36 @@ export function classifyProvisioningUrl(
   return "other";
 }
 
+/**
+ * The hosts a phone may be POINTED AT from this machine. ⛔ This list is the fence
+ * on the one URL-shaped thing the capability accepts: a provisioning folder on a
+ * Loopcom PBX, and nothing else. It is a copy of the api's `ourProvisioningHosts`
+ * on purpose — the desktop must not take an allowlist from the server it is
+ * fencing. Sub-domains count (`m.connectcomunications.com`), lookalikes do not.
+ */
+export const LOOPCOM_PROVISIONING_HOSTS = ["connectcomunications.com", "loopcom.net"] as const;
+
+/**
+ * Is this the ONE kind of URL a phone may be handed: `https://<Loopcom host>/phoneprov/<16-hex tenant folder>/`?
+ *
+ * ⛔⛔ THIS IS THE WHOLE SECURITY ARGUMENT FOR `set_provisioning`. A phone believes
+ * whatever URL it is told and downloads a full configuration from it — SIP
+ * credentials, dial plans, everything. A capability that accepted any URL would be
+ * a way to hijack every handset on a customer's network from a compromised
+ * account. So: https only, our hosts only, exactly the PBX's per-tenant folder
+ * path, no port, no userinfo, no query, no fragment. Anything else is refused
+ * before a socket is opened.
+ */
+export function isLoopcomProvisioningUrl(url: unknown): url is string {
+  if (typeof url !== "string" || url.length > 200) return false;
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:") return false;
+  if (u.username || u.password || u.port || u.search || u.hash) return false;
+  if (classifyProvisioningUrl(u.href, [...LOOPCOM_PROVISIONING_HOSTS]) !== "ours") return false;
+  return /^\/phoneprov\/[0-9a-f]{16}\/$/.test(u.pathname);
+}
+
 export type ActionOutcome =
   | { ok: true }
   | { ok: false; reason: "locked" | "unreachable" | "refused"; status?: number };

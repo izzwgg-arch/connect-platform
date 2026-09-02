@@ -23,6 +23,7 @@ import {
   summarizeRun, type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
+import { connectOmbutelMysql } from "../pbxQueueDirectory";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -47,7 +48,74 @@ export type DeskPhoneDeps = {
    * consumed — a PBX that cannot be read must never fail a discovery ingest.
    */
   provisionedPhones?: (tenantId: string) => Promise<PbxProvisionedPhone[]>;
+  /**
+   * The tenant's provisioning FOLDER on the PBX — the one URL a factory-reset
+   * phone needs (`https://<pbx>/phoneprov/<ombu_tenants.path>/`). Handed to the
+   * office machine with the `set_provisioning` instruction; the desktop fences it
+   * to a Loopcom PBX before sending it to a phone. Optional and injectable; the
+   * default reads `ombu_tenants.path` through the read-only connect_read user.
+   * ⛔ Best-effort: no URL means the instruction goes out without one and the
+   * driver waits, never a wrong URL.
+   */
+  provisioningUrlFor?: (tenantId: string) => Promise<string | null>;
 };
+
+/**
+ * The base of every tenant folder. `PBX_PHONEPROV_BASE_URL` when set, else the
+ * origin the handset PHOTOS are already served from (`PBX_PHONE_IMAGE_BASE`, set
+ * in production) plus `/phoneprov`, else null. A phone fetches
+ * `<base>/<folder>/<mac>.cfg` — the exact path a registered handset in the same
+ * office fetches today.
+ */
+export function phoneprovBaseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = String(env.PBX_PHONEPROV_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+  const images = String(env.PBX_PHONE_IMAGE_BASE ?? "").trim();
+  if (!images) return null;
+  try { return `${new URL(images).origin}/phoneprov`; } catch { return null; }
+}
+
+/** The folder URL, or null unless the folder is exactly the PBX's 16-hex tenant path. */
+export function buildPhoneprovUrl(base: string | null, tenantPath: unknown): string | null {
+  if (!base) return null;
+  const folder = String(tenantPath ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{16}$/.test(folder)) return null;
+  return `${base.replace(/\/+$/, "")}/${folder}/`;
+}
+
+const provisioningUrlCache = new Map<string, { url: string | null; at: number }>();
+const PROVISIONING_URL_CACHE_MS = 10 * 60_000;
+
+async function defaultProvisioningUrlFor(tenantId: string): Promise<string | null> {
+  const hit = provisioningUrlCache.get(tenantId);
+  if (hit && Date.now() - hit.at < PROVISIONING_URL_CACHE_MS) return hit.url;
+  let url: string | null = null;
+  try {
+    const base = phoneprovBaseUrl();
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
+    const pbxTenant = resolvePbxTenantNumber(link as any);
+    if (base && link?.pbxInstanceId && pbxTenant) {
+      const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
+      const connected = await connectOmbutelMysql((instance as any)?.ombuMysqlUrlEncrypted);
+      if (connected.ok) {
+        try {
+          const [rows] = (await connected.conn.query(
+            "SELECT path FROM ombutel.ombu_tenants WHERE tenant_id = ? LIMIT 1", [pbxTenant],
+          )) as unknown as [Array<{ path?: string }>];
+          url = buildPhoneprovUrl(base, rows?.[0]?.path);
+        } finally {
+          try { await connected.conn.end(); } catch { /* best-effort */ }
+        }
+      }
+    }
+  } catch {
+    url = null;
+  }
+  // ⛔ Only a FOUND folder is cached. A miss is retried next time — a PBX blip must
+  // not silence the instruction for ten minutes.
+  if (url) provisioningUrlCache.set(tenantId, { url, at: Date.now() });
+  return url;
+}
 
 /**
  * Default provisionedPhones: Connect tenant -> TenantPbxLink -> PbxInstance ->
@@ -589,6 +657,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       // only make LESS happen to a phone, never more.
       passwordUnavailable: z.boolean().optional(),
       resetDeclined: z.boolean().optional(),
+      // The office machine tried to hand this phone its folder over PnP and gave
+      // up (bounded restarts, then listen-only). Can only make LESS happen.
+      provisioningHandoffFailed: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!observed.success) return reply.status(400).send({ error: "invalid_request" });
 
@@ -639,12 +710,29 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       resetDeclined: observed.data.resetDeclined ?? false,
     };
 
-    const decision = nextEscalation(condition, {
+    let decision = nextEscalation(condition, {
       state: phone.state as PhoneState,
       resetCount: phone.resetCount,
       resetAuthorizedAt: run.resetAuthorizedAt ? run.resetAuthorizedAt.toISOString() : null,
       attempts: phone.attempts,
     });
+    // ⛔ A hand-off the office machine has given up on is ended here, not retried:
+    // every further "set_provisioning" would restart somebody's phone again. The
+    // ladder itself stays pure; this is the one caller-observed fact it acts on.
+    if (decision.action === "set_provisioning" && observed.data.provisioningHandoffFailed) {
+      decision = {
+        action: "halt", rung: -1, halted: true, handOff: "support",
+        reason: "office machine could not hand the phone its provisioning folder over PnP (bounded restarts, then listen-only)",
+        customerMessage: "We could not point this phone at Loopcom from your computer. Loopcom Support can finish this one with you.",
+      };
+    }
+    // The folder a reset phone needs, resolved only when the instruction is to
+    // point the phone at us. Null means "no URL known" — the driver waits.
+    let provisioningUrl: string | null = null;
+    if (decision.action === "set_provisioning") {
+      try { provisioningUrl = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(user.tenantId); }
+      catch { provisioningUrl = null; }
+    }
 
     // ⛔ A reset instruction is issued only if the stored record still allows it.
     // The ladder already checked; this checks again against the row, because the row
@@ -714,6 +802,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       halted: Boolean(decision.halted),
       handOff: decision.handOff ?? null,
       customerMessage: decision.customerMessage ?? null,
+      ...(decision.action === "set_provisioning" ? { provisioningUrl } : {}),
       phone: customerPhoneView(fresh),
     });
   });

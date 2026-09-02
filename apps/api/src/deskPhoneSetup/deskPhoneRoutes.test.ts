@@ -712,3 +712,67 @@ test("a pick naming a phone that is not in this run is refused, and another cust
   });
   assert.equal(x.statusCode, 404, "404 and not 403: a 403 confirms the run exists");
 });
+
+/* ── handing a reset phone its folder (2026-09-02) ──────────────────────── */
+
+test("advance answers set_provisioning WITH the tenant's folder URL, and a failed hand-off halts kindly", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async (tenantId: string) => (tenantId === "t_abc" ? "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" : null),
+  });
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:4D:79:6D", ip: "192.168.0.121", vendor: "yealink", model: "T53W" }]);
+  const phone = state.phones[0];
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  // Izzy's reset T53W: reachable, unlocked, not registered, no folder yet.
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  assert.equal(adv.action, "set_provisioning");
+  assert.equal(adv.provisioningUrl, "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/");
+  assert.equal(phone.state, "ASSIGNED", "asking for the folder changes nothing on the row");
+
+  // Any other instruction carries no URL at all.
+  const other = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: false },
+  }));
+  assert.ok(!("provisioningUrl" in other));
+
+  // The office machine gave up: the phone ends at Needs attention with a hand-off,
+  // never another restart.
+  const halt = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`,
+    payload: { reachableOnLan: true, provisioningHandoffFailed: true },
+  }));
+  assert.equal(halt.action, "halt");
+  assert.equal(halt.handOff, "support");
+  assert.match(halt.customerMessage, /Loopcom Support/);
+  assert.equal(phone.state, "NEEDS_ATTENTION");
+  assert.equal(phone.resetCount, 0);
+});
+
+test("a folder resolver that throws or knows nothing leaves the instruction without a URL", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { provisioningUrlFor: async () => { throw new Error("pbx down"); } });
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:4D:79:6D", ip: "192.168.0.121" }]);
+  const phone = state.phones[0];
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  const adv = body(await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true } }));
+  assert.equal(adv.action, "set_provisioning");
+  assert.equal(adv.provisioningUrl, null);
+});
+
+test("the folder URL is built only from the PBX's 16-hex tenant path, on the photos' origin", () => {
+  routes();
+  const { buildPhoneprovUrl, phoneprovBaseUrl } = routesModule;
+  assert.equal(phoneprovBaseUrl({ PBX_PHONE_IMAGE_BASE: "https://m.connectcomunications.com/provisioning_resources" } as any), "https://m.connectcomunications.com/phoneprov");
+  assert.equal(phoneprovBaseUrl({ PBX_PHONEPROV_BASE_URL: "https://pbx.loopcom.net/phoneprov/" } as any), "https://pbx.loopcom.net/phoneprov");
+  assert.equal(phoneprovBaseUrl({} as any), null);
+  assert.equal(buildPhoneprovUrl("https://m.connectcomunications.com/phoneprov", "f3df739ac62197cd"), "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/");
+  assert.equal(buildPhoneprovUrl("https://m.connectcomunications.com/phoneprov", "F3DF739AC62197CD"), "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/");
+  for (const bad of ["", null, "f3df739ac62197c", "../etc", "f3df739ac62197cd/x", "not-hex-not-hex!"]) {
+    assert.equal(buildPhoneprovUrl("https://m.connectcomunications.com/phoneprov", bad), null, String(bad));
+  }
+  assert.equal(buildPhoneprovUrl(null, "f3df739ac62197cd"), null);
+});
