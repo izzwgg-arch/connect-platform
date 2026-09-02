@@ -21,18 +21,29 @@ import type { BillingSchedule } from "./billingSchedule";
  *      made by hand) the finalize email is re-attempted — its own dedupe makes
  *      that a no-op when the email already went.
  *   2. Payment day (current.due): re-send the invoice email ONCE if the bill
- *      is still unpaid.
+ *      is still unpaid — ⛔ DORMANT unless the SECOND flag below is set. Izzy
+ *      first asked for the day-of resend and then withdrew it the same day
+ *      ("don't resend the email to Yossi's Woodworks"), so no tenant carries
+ *      the resend flag today; the phase stays built for the day he wants it.
  *
  * ⛔ OPT-IN PER TENANT via TenantBillingSettings.metadata
  * `billingManualInvoiceAutomation: true`. A blanket "every autopay-off tenant"
  * sweep would start emailing monthly invoices to a dozen companies nobody
- * decided to bill this way.
+ * decided to bill this way. The payment-day resend needs
+ * `billingManualInvoicePaymentDayResend: true` AS WELL.
  */
 export function manualInvoiceAutomationEnabled(metadata: unknown): boolean {
   const meta = metadata && typeof metadata === "object" && !Array.isArray(metadata)
     ? (metadata as Record<string, unknown>)
     : {};
   return meta.billingManualInvoiceAutomation === true;
+}
+
+export function paymentDayResendEnabled(metadata: unknown): boolean {
+  const meta = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : {};
+  return meta.billingManualInvoicePaymentDayResend === true;
 }
 
 type InvoiceEmailShape = {
@@ -145,7 +156,7 @@ export async function runManualInvoiceAutomationCore(deps: ManualInvoiceAutomati
       // Sep 5 → Oct 4, payment day the 4th) STARTS after the payment instant,
       // so the containment lookup finds the previous month's PAID invoice
       // instead of the bill actually being paid today.
-      if (current.due) {
+      if (current.due && paymentDayResendEnabled(setting.metadata)) {
         const openBill = await db.billingInvoice.findFirst({
           where: {
             tenantId: setting.tenantId,

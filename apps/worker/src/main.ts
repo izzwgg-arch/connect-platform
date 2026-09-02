@@ -4364,6 +4364,14 @@ async function createWorkerBillingInvoice(
     periodStart: schedule.periodStart,
     periodEnd: schedule.periodEnd,
     status: "OPEN",
+    // ⛔ The due date IS the payment date (Izzy, 2026-09-02: "The due date is
+    // always the day of payment. The day the card is supposed to be charged,
+    // that's the due date. That's what it should say in the email."). Without
+    // this, createBillingInvoice defaults to now + paymentTermsDays and the
+    // customer's email says a date 12 days after the money actually moves.
+    // scheduledChargeAt is local midnight of the payment day, so the UTC-
+    // rendered date in emails/PDFs reads the payment day itself.
+    dueDate: schedule.scheduledChargeAt,
     skipInvoiceEmail: opts?.skipInvoiceEmail ?? false,
     invoiceCreatedEventMetadata: {
       source: opts?.skipInvoiceEmail ? "worker_autopay_t3" : "worker_monthly",

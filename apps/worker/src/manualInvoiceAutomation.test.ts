@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildBillingSchedule, buildUpcomingBillingSchedule } from "./billingSchedule";
-import { manualInvoiceAutomationEnabled, runManualInvoiceAutomationCore, type ManualInvoiceAutomationDeps } from "./manualInvoiceAutomation";
+import { manualInvoiceAutomationEnabled, paymentDayResendEnabled, runManualInvoiceAutomationCore, type ManualInvoiceAutomationDeps } from "./manualInvoiceAutomation";
 
 // Yossis Wood Works shapes (the tenant this feature was built for): billing day
 // 4, America/New_York, and — the regression case — a TRANSITION-month invoice
@@ -129,8 +129,17 @@ test("T-3: a paid-covered period creates nothing (the skip-a-cycle guard is hono
   assert.ok(results.some((r) => r.skipped === "period_already_paid"));
 });
 
-test("payment day: the TRANSITION invoice (period starts AFTER the payment instant) is still found and re-sent", async () => {
+const RESEND_META = { billingManualInvoiceAutomation: true, billingManualInvoicePaymentDayResend: true };
+
+test("payment day: WITHOUT the resend flag nothing is re-sent — Izzy withdrew the day-of resend for Yossis", async () => {
   const { deps, calls } = makeDeps({ settings: [baseSetting()], now: DUE_NOW, openBill: transitionInvoice() });
+  const results = await runManualInvoiceAutomationCore(deps);
+  assert.equal(calls.resends.length, 0);
+  assert.equal(results.filter((r) => r.phase === "manual_payment_day").length, 0);
+});
+
+test("payment day: the TRANSITION invoice (period starts AFTER the payment instant) is still found and re-sent", async () => {
+  const { deps, calls } = makeDeps({ settings: [baseSetting({ metadata: RESEND_META })], now: DUE_NOW, openBill: transitionInvoice() });
   const results = await runManualInvoiceAutomationCore(deps);
   assert.equal(calls.resends.length, 1);
   assert.equal(calls.resends[0].invoice.id, "inv-sep");
@@ -149,7 +158,7 @@ test("payment day: the TRANSITION invoice (period starts AFTER the payment insta
 
 test("payment day: a deduped resend (already sent today) does not write the resent event log", async () => {
   const { deps, calls } = makeDeps({
-    settings: [baseSetting()],
+    settings: [baseSetting({ metadata: RESEND_META })],
     now: DUE_NOW,
     openBill: transitionInvoice(),
     resendResult: { queued: false, reason: "already_resent_today" },
@@ -161,11 +170,17 @@ test("payment day: a deduped resend (already sent today) does not write the rese
 });
 
 test("not in any window (mid-month): nothing happens at all", async () => {
-  const { deps, calls } = makeDeps({ settings: [baseSetting()], now: new Date("2026-09-20T15:00:00Z"), openBill: transitionInvoice() });
+  const { deps, calls } = makeDeps({ settings: [baseSetting({ metadata: RESEND_META })], now: new Date("2026-09-20T15:00:00Z"), openBill: transitionInvoice() });
   const results = await runManualInvoiceAutomationCore(deps);
   assert.equal(calls.created.length, 0);
   assert.equal(calls.resends.length, 0);
   assert.equal(results.length, 0);
+});
+
+test("resend flag reader accepts only the literal true", () => {
+  assert.equal(paymentDayResendEnabled({ billingManualInvoicePaymentDayResend: true }), true);
+  assert.equal(paymentDayResendEnabled({ billingManualInvoiceAutomation: true }), false);
+  assert.equal(paymentDayResendEnabled({}), false);
 });
 
 test("flag reader accepts only the literal true", () => {
@@ -189,6 +204,15 @@ test("source guard: the manual automation can NEVER charge — no charge call, n
   for (const banned of ["chargeBillingInvoice", "chargeWorkerInvoice", "paymentMethod", "PaymentTransaction", "chargeToken"]) {
     assert.equal(code.includes(banned), false, `manualInvoiceAutomation.ts must not reference ${banned}`);
   }
+});
+
+test("source guard: worker-created invoices carry dueDate = the payment date (Izzy: the due date IS the day of payment)", () => {
+  const src = readSource("main.ts");
+  const nl = String.fromCharCode(10);
+  const fn = src.slice(src.indexOf("async function createWorkerBillingInvoice"));
+  const body = fn.slice(0, fn.indexOf(nl + "}"));
+  const code = body.split(nl).filter((l) => !l.trim().startsWith("//")).join(nl);
+  assert.ok(code.includes("dueDate: schedule.scheduledChargeAt"), "createWorkerBillingInvoice must pin dueDate to the payment date");
 });
 
 test("source guard: main.ts wires the manual sweep with its own interval AND a boot run (a bare interval is starved by deploy churn)", () => {
