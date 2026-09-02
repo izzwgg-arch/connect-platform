@@ -3007,7 +3007,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // number; with no verified identity every route answers "not on Loopcom".
   // ⛔ WITHOUT THIS LINE THE PREFIX HAS NO PERMISSION GATE AT ALL — the
   // /admin/wake-health bug. Any new /direct/* route inherits it automatically.
-  { prefix: "/direct", permission: "can_view_workspace_chat" },
+  { prefix: "/direct", permission: "can_view_workspace_direct" },
   { prefix: "/contacts", permission: "can_view_workspace_contacts" },
 
   { prefix: "/pbx/extensions", permission: "can_view_pbx_extensions" },

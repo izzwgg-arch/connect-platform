@@ -133,22 +133,33 @@ test("⛔ the shell owns its own scrolling with a definite height", () => {
 
 /* --------------------------------------------------------- wiring guards */
 
-test("⛔ Direct is in the sidebar and reuses the chat permission key", () => {
+test("⛔ Direct is in the sidebar on its OWN permission key (2026-09-02)", () => {
+  // It used to ride Chat's key behind a SUPER_ADMIN force line, so a custom-role
+  // toggle for Direct moved Chat and still revealed nothing. One key per page.
   const nav = readFileSync(path.join(__dirname, "..", "navigation", "navConfig.ts"), "utf8").replace(/\r\n/g, "\n");
   assert.match(nav, /id:\s*"workspace\.direct"/, "the nav item must exist");
   assert.match(
     nav,
-    /id:\s*"workspace\.direct"[^}]*permission:\s*"can_view_workspace_chat"/,
-    "a new key would not reach TENANT_ADMIN without a live snapshot refresh",
+    /id:\s*"workspace\.direct"[^}]*permission:\s*"can_view_workspace_direct"/,
+    "Direct must gate on its own key, never a sibling's",
   );
+  const page = readFileSync(path.join(__dirname, "..", "app", "(platform)", "direct", "page.tsx"), "utf8");
+  assert.match(page, /permission="can_view_workspace_direct"/, "the page must gate on the same key as the sidebar");
 });
 
-test("⛔ Direct is SUPER_ADMIN-only in the sidebar until Izzy launches it", () => {
+test("⛔ the launch gate is the KEY: can_view_workspace_direct is in no default bucket", async () => {
+  // Nobody has Direct until an owner grants it in a role — that is the launch,
+  // one person at a time. A force line is no longer needed and must not return
+  // (it is the second lever that made a granted permission show nothing).
+  const { DEFAULT_ROLE_PERMISSIONS } = await import("@connect/shared");
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.END_USER.includes("can_view_workspace_direct"), false);
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN.includes("can_view_workspace_direct"), false);
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.SUPER_ADMIN.includes("can_view_workspace_direct"), true);
   const nav = readFileSync(path.join(__dirname, "..", "navigation", "navConfig.ts"), "utf8").replace(/\r\n/g, "\n");
-  assert.match(
+  assert.doesNotMatch(
     nav,
     /item\.id === "workspace\.direct" &&[\s\S]{0,220}?backendJwtRole !== "SUPER_ADMIN"/,
-    "removing this gate is the launch — it must be a deliberate act (or the owner lifting it on the Permissions screen), not a refactor side effect",
+    "a jwt force line on Direct would make a granted key show nothing again",
   );
 });
 

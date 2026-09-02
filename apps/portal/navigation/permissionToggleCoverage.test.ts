@@ -193,3 +193,77 @@ test("the Owner toggle exists and the key is kept out of the generic action pane
   const hidden = src.match(/HIDDEN_ACTION_KEYS[\s\S]*?\]\)/)?.[0] || "";
   assert.match(hidden, /ACCOUNT_OWNER_PERMISSION_KEY/, "the owner key must not double-render as a generic action row");
 });
+
+/**
+ * ONE KEY PER PAGE (Izzy, 2026-09-02: "Every toggle should be individual ...
+ * they're all separated"). Before this, 16 sidebar rows shared a key with a
+ * sibling, so a toggle for one moved the others on BOTH editors — and Direct /
+ * Meetings additionally hid behind a SUPER_ADMIN force line, so a granted key
+ * showed nothing ("I gave Ezra permission, and he doesn't see it").
+ */
+test("⛔ no two sidebar pages share a permission key — every toggle is individual", () => {
+  const byKey = new Map<string, string[]>();
+  for (const item of navItems) {
+    const list = byKey.get(item.permission as string) || [];
+    list.push(item.id);
+    byKey.set(item.permission as string, list);
+  }
+  const shared = [...byKey.entries()].filter(([, ids]) => ids.length > 1).map(([k, ids]) => `${k}: ${ids.join(", ")}`);
+  assert.deepEqual(shared, [], `these pages would move together on both editors: ${shared.join(" | ")}`);
+});
+
+test("⛔ an action key that is also a sidebar page renders ONE toggle in the custom-role editor, not two", () => {
+  // Desk Phones rides can_setup_desk_phones and Remote Support rides
+  // can_remote_support; both are also ACTION_PERMISSION_KEYS. Drawing them in
+  // the Action Permissions panel too is two toggles bound to one key.
+  const src = stripComments(read(CUSTOM_ROLE_PAGE));
+  assert.match(src, /const NAV_BOUND_ACTION_KEYS = new Set<string>\(navItems\.map\(\(item\) => item\.permission as string\)\)/);
+  assert.match(
+    src,
+    /ACTION_PERMISSION_KEYS\.filter\(\(k\) => [^\n]*!NAV_BOUND_ACTION_KEYS\.has\(k\)\)/,
+    "the Action Permissions panel must skip keys already rendered as a sidebar row",
+  );
+  const navBound = navItems.map((i) => i.permission as string).filter((k) => (ACTION_PERMISSION_KEYS as readonly string[]).includes(k));
+  assert.ok(navBound.includes("can_setup_desk_phones") && navBound.includes("can_remote_support"), "the two known nav-bound action keys must still be nav-bound");
+});
+
+test("⛔ the Owner-only lift is retired: Direct and Meetings gate on their own keys with no jwt force line", () => {
+  assert.deepEqual([...OWNER_ONLY_LIFTABLE_NAV_ITEMS], []);
+  const direct = navItems.find((i) => i.id === "workspace.direct")!;
+  const meetings = navItems.find((i) => i.id === "workspace.meetings")!;
+  assert.equal(direct.permission, "can_view_workspace_direct");
+  assert.equal(meetings.permission, "can_view_workspace_meetings");
+  for (const item of [direct, meetings]) {
+    const granted = new Set<string>([item.permission, item.sectionPermission]);
+    const can = ((p: string) => granted.has(p)) as never;
+    for (const jwt of ["TENANT_ADMIN", "USER"]) {
+      assert.equal(isNavItemVisibleForUser(item, can, jwt, null), true, `${item.id} must show for a ${jwt} who holds its key`);
+    }
+  }
+  // The Permissions screen no longer draws the lift toggle at all.
+  const perms = stripComments(read(PERMISSIONS_PAGE));
+  assert.doesNotMatch(perms, /setOwnerOnly\(/, "the Owner-only lift toggle must not come back");
+  assert.doesNotMatch(perms, /OWNER_ONLY_LIFTABLE/, "the Permissions screen must not read the retired list");
+});
+
+test("granting exactly one page's keys reveals exactly that page (or nothing, for a Locked platform page)", () => {
+  // The separation property, exhaustively: for every nav item, a role holding
+  // ONLY [section key, item key] sees that item and no other. A Locked item is
+  // allowed to show nothing to a non-super jwt; it must still never leak a
+  // sibling.
+  const locked = new Set<string>(OWNER_ONLY_FIXED_NAV_ITEMS);
+  const leaks: string[] = [];
+  for (const item of navItems) {
+    const granted = new Set<string>([item.permission, item.sectionPermission]);
+    const can = ((p: string) => granted.has(p)) as never;
+    for (const jwt of ["TENANT_ADMIN", "USER", "SUPER_ADMIN"]) {
+      const visible = navItems.filter((other) => isNavItemVisibleForUser(other, can, jwt, null)).map((o) => o.id);
+      const others = visible.filter((id) => id !== item.id);
+      if (others.length) leaks.push(`${item.id} (jwt ${jwt}) also reveals ${others.join(", ")}`);
+      const selfVisible = visible.includes(item.id);
+      const mayHide = jwt !== "SUPER_ADMIN" && (locked.has(item.id) || (item.id === "crm.diagnostics" && jwt === "USER"));
+      if (!selfVisible && !mayHide) leaks.push(`${item.id} (jwt ${jwt}) does not show when granted`);
+    }
+  }
+  assert.deepEqual(leaks, []);
+});

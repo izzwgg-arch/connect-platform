@@ -16,12 +16,27 @@ const navSrc = read("navigation/navConfig.ts");
 const popSrc = read("components/SupermarketOrderPop.tsx");
 const providersSrc = read("app/providers.tsx");
 
-test("the Store section's items gate on can_view_supermarket_orders under can_view_section_store — both in NO default bucket (only SUPER_ADMIN sees Store)", () => {
-  for (const id of ["store.orders", "store.deliveries", "store.drivers", "store.specials"]) {
+test("every Store page has its OWN key under can_view_section_store — all in NO default bucket (only SUPER_ADMIN sees Store)", async () => {
+  // 2026-09-02: the five pages used to share can_view_supermarket_orders, so
+  // one toggle moved all five. That key stays as the /supermarket DATA
+  // capability; each page now decides its own link and render.
+  const { DEFAULT_ROLE_PERMISSIONS } = await import("@connect/shared");
+  const expected: Record<string, string> = {
+    "store.orders": "can_view_store_orders",
+    "store.deliveries": "can_view_store_deliveries",
+    "store.drivers": "can_view_store_drivers",
+    "store.specials": "can_view_store_specials",
+    "store.teach": "can_view_store_teach",
+  };
+  for (const [id, key] of Object.entries(expected)) {
     const line = navSrc.split("\n").find((l) => l.includes(`id: "${id}"`));
     assert.ok(line, `${id} missing from navConfig`);
-    assert.ok(line!.includes('permission: "can_view_supermarket_orders"'), `${id} gates on the wrong key — a visible door that refuses on click`);
+    assert.ok(line!.includes(`permission: "${key}"`), `${id} must gate on its own key ${key}`);
     assert.ok(line!.includes('section: "store"') && line!.includes('sectionPermission: "can_view_section_store"'), `${id} must live in the Store section`);
+    assert.equal(DEFAULT_ROLE_PERMISSIONS.END_USER.includes(key as never), false, `${key} must not be an END_USER default`);
+    assert.equal(DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN.includes(key as never), false, `${key} must not be a TENANT_ADMIN default`);
+    const page = read(`app/(platform)/${id === "store.orders" ? "orders" : "orders/" + id.split(".")[1]}/page.tsx`);
+    assert.ok(page.includes(`"${key}"`), `${id}'s page must gate on the same key as its sidebar row`);
   }
 });
 

@@ -17,9 +17,13 @@ const PAGE = read(join(__dirname, "..", "app", "(platform)", "admin", "complianc
 const DASH = read(join(__dirname, "..", "app", "(platform)", "dashboard", "page.tsx"));
 const BANNER = read(join(__dirname, "..", "components", "dashboard", "ComplianceReminders.tsx"));
 
-test("the nav entry exists and carries the owner-only key", () => {
+test("the nav entry exists and carries its own platform-only key", () => {
+  // 2026-09-02: its own key (was can_manage_global_settings, shared with six
+  // other admin pages so one toggle moved seven rows). Still in no default
+  // bucket and still SUPER_ADMIN-forced below — the key is per-page, the lock
+  // is unchanged.
   assert.match(NAV, /id: "admin\.compliance", href: "\/admin\/compliance"/);
-  assert.match(NAV, /id: "admin\.compliance"[^\n]*permission: "can_manage_global_settings"/);
+  assert.match(NAV, /id: "admin\.compliance"[^\n]*permission: "can_view_admin_compliance"/);
 });
 
 test("the nav entry is ALSO SUPER_ADMIN-forced — the key alone is not the fence", () => {

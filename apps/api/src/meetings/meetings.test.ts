@@ -141,7 +141,7 @@ function fakeDb() {
   };
 }
 
-async function buildApp(opts: { user?: any; configured?: boolean; roomCalls?: any[] } = {}) {
+async function buildApp(opts: { user?: any; configured?: boolean; roomCalls?: any[]; mayStart?: boolean } = {}) {
   const app = Fastify();
   const db = fakeDb();
   app.addHook("preHandler", async (req) => {
@@ -149,6 +149,8 @@ async function buildApp(opts: { user?: any; configured?: boolean; roomCalls?: an
   });
   registerMeetingRoutes(app, {
     db,
+    // Hermetic stand-in for the live can_view_workspace_meetings check.
+    mayStartMeeting: async () => opts.mayStart === true,
     config: () => (opts.configured === false ? null : (CFG as any)),
     roomService: (async (_cfg: any, method: string, body: any) => {
       opts.roomCalls?.push({ method, body });
@@ -333,4 +335,29 @@ test("server.ts registers registerMeetingRoutes", () => {
   const src = readFileSync(path.join(__dirname, "..", "server.ts"), "utf8").replace(/\r\n/g, "\n");
   assert.ok(src.includes('from "./meetings/meetingRoutes"'), "server.ts must import the meetings module");
   assert.ok(/registerMeetingRoutes\(app/.test(src), "server.ts must call registerMeetingRoutes(app…)");
+});
+
+test("2026-09-02: a non-super user who HOLDS can_view_workspace_meetings may create and list", async () => {
+  // The key is the launch gate: granted → the sidebar, the page and these two
+  // routes all open together. Join routes were never gated and stay open.
+  const { app } = await buildApp({
+    user: { sub: "u10", tenantId: "t1", email: "ezra@x.c", role: "TENANT_ADMIN" },
+    mayStart: true,
+  });
+  const create = await app.inject({ method: "POST", url: "/meetings", payload: { title: "Granted" } });
+  assert.equal(create.statusCode, 200, create.body);
+  const list = await app.inject({ method: "GET", url: "/meetings" });
+  assert.equal(list.statusCode, 200);
+});
+
+test("2026-09-02: the default mayStartMeeting fails CLOSED when the resolver throws", async () => {
+  // Wire the real default (no stub) against a db that cannot answer: an
+  // unknown answer must be a 403, never an open door.
+  const app = Fastify();
+  app.addHook("preHandler", async (req) => {
+    (req as any).user = { sub: "u11", tenantId: "t1", email: "n@x.c", role: "TENANT_ADMIN" };
+  });
+  registerMeetingRoutes(app, { db: fakeDb(), config: () => CFG as any, roomService: (async () => ({ ok: true, status: 200, body: "{}" })) as any });
+  const list = await app.inject({ method: "GET", url: "/meetings" });
+  assert.equal(list.statusCode, 403);
 });

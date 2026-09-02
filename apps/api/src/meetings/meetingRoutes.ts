@@ -40,11 +40,20 @@ import {
   parseInviteEmails,
 } from "./meetingSchedule";
 import { meetingJoinUrl, meetingWhen, sendMeetingInvites } from "./meetingInviteSend";
+import { hasEffectivePortalPermission } from "../platformRolePermissions";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 export type MeetingRoutesDeps = {
   db?: any;
+  /**
+   * May this (non-SUPER_ADMIN) user start and list meetings? Defaults to the
+   * live portal-permission resolver asking for can_view_workspace_meetings —
+   * the SAME key the sidebar item and the /meetings page gate on, so the three
+   * can never disagree. Injectable so tests stay hermetic. ⛔ A throwing check
+   * answers false: an unknown answer must never open the door.
+   */
+  mayStartMeeting?: (user: JwtUser) => Promise<boolean>;
   /** Injectable for tests; defaults to reading process.env at call time. */
   config?: () => LiveKitConfig | null;
   roomService?: typeof roomServiceRequest;
@@ -108,6 +117,15 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
   const db = deps.db ?? realDb;
   const config = deps.config ?? (() => getLiveKitConfig());
   const roomService = deps.roomService ?? roomServiceRequest;
+  const mayStartMeeting =
+    deps.mayStartMeeting ??
+    (async (user: JwtUser) => {
+      try {
+        return await hasEffectivePortalPermission(user, "can_view_workspace_meetings");
+      } catch {
+        return false;
+      }
+    });
 
   async function findMeetingByCode(codeRaw: unknown) {
     const code = String(codeRaw || "").trim().toLowerCase();
@@ -121,7 +139,10 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
 
   /**
    * Who may START a meeting. Izzy's instruction 2026-08-21: "Permissions off
-   * for everybody but me" — SUPER_ADMIN only.
+   * for everybody but me" — SUPER_ADMIN only. Widened 2026-09-02 to whoever
+   * holds can_view_workspace_meetings (its own key, in no default bucket, so
+   * still nobody until an owner grants it): "I gave Ezra permission, and he
+   * doesn't see it."
    *
    * ⛔ This gates CREATE and LIST only, never JOIN. A guest has no account at
    * all and an ordinary signed-in colleague must still be able to open a link;
@@ -133,8 +154,10 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
    * same rule. Those are presentation; THIS is the enforcement — a typed URL or
    * a raw curl lands here.
    */
-  function requireMeetingCreator(req: FastifyRequest, reply: FastifyReply): boolean {
-    if (String(getUser(req).role) === "SUPER_ADMIN") return true;
+  async function requireMeetingCreator(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+    const user = getUser(req);
+    if (String(user.role) === "SUPER_ADMIN") return true;
+    if (await mayStartMeeting(user)) return true;
     reply.code(403).send({
       error: "forbidden",
       message: "Only a platform administrator can start a meeting.",
@@ -228,7 +251,7 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
 
   // ── Create (instant, or scheduled with invites) ───────────────────────
   app.post("/meetings", async (req, reply) => {
-    if (!requireMeetingCreator(req, reply)) return reply;
+    if (!(await requireMeetingCreator(req, reply))) return reply;
     if (!config()) return notConfigured(reply);
     const user = getUser(req);
     const parsed = z
@@ -312,7 +335,7 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
 
   // ── Invite more people to an existing meeting ─────────────────────────
   app.post("/meetings/:code/invite", async (req, reply) => {
-    if (!requireMeetingCreator(req, reply)) return reply;
+    if (!(await requireMeetingCreator(req, reply))) return reply;
     const user = getUser(req);
     const meeting = await findMeetingByCode((req.params as any).code);
     if (!meeting) return badCode(reply);
@@ -366,7 +389,7 @@ export function registerMeetingRoutes(app: FastifyInstance, deps: MeetingRoutesD
   // ── My meetings (creator-scoped on purpose — a meeting link is private to
   //    whoever made it until they share it) ─────────────────────────────────
   app.get("/meetings", async (req, reply) => {
-    if (!requireMeetingCreator(req, reply)) return reply;
+    if (!(await requireMeetingCreator(req, reply))) return reply;
     const user = getUser(req);
     const rows = await db.videoMeeting.findMany({
       where: { tenantId: user.tenantId, createdByUserId: user.sub },

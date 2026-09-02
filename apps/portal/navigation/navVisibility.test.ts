@@ -105,24 +105,31 @@ test("the Permissions page itself can never be hidden — even by a hand-edited 
   );
 });
 
-test("liftable owner-only pages really lift: Meetings/Direct reach a TENANT_ADMIN once lifted", () => {
-  for (const id of OWNER_ONLY_LIFTABLE_NAV_ITEMS) {
+test("the liftable list is RETIRED: Meetings/Direct reach a permission-holding TENANT_ADMIN with no lift at all", () => {
+  // 2026-09-02: the "Owner only" lift was the second lever that made a granted
+  // permission show nothing ("I gave Ezra permission, and he doesn't see it").
+  // Each page has its own key now, in no default bucket — the key is the gate.
+  assert.deepEqual([...OWNER_ONLY_LIFTABLE_NAV_ITEMS], [], "do not repopulate the liftable list");
+  for (const id of ["workspace.meetings", "workspace.direct"]) {
     const item = navItems.find((i) => i.id === id);
     assert.ok(item, `${id} must exist in the nav`);
-    // Default: hidden from a tenant admin who holds the permission.
     assert.equal(
       isNavItemVisibleForUser(item!, can(fullSet(item!)), "TENANT_ADMIN"),
-      false,
-      `${id} must default to owner-only`,
-    );
-    // Lifted: visible to that same tenant admin.
-    const lifted = vis({ ownerOnlyLifted: [id] });
-    assert.equal(
-      isNavItemVisibleForUser(item!, can(fullSet(item!)), "TENANT_ADMIN", lifted),
       true,
-      `${id} must reach a permission-holding TENANT_ADMIN once its owner-only default is lifted`,
+      `${id} must be visible to a TENANT_ADMIN who holds its key, with no lift`,
     );
-    assert.equal(isNavItemOwnerOnlyLifted(id, lifted), true);
+    assert.equal(
+      isNavItemVisibleForUser(item!, can(fullSet(item!)), "USER"),
+      true,
+      `${id} must be visible to an ordinary user who holds its key`,
+    );
+    assert.equal(
+      isNavItemVisibleForUser(item!, can(new Set([item!.sectionPermission as string])), "TENANT_ADMIN"),
+      false,
+      `${id} must stay hidden without its own key`,
+    );
+    // A stale stored lift is inert either way.
+    assert.equal(isNavItemOwnerOnlyLifted(id, vis({ ownerOnlyLifted: [id] })), true);
   }
 });
 

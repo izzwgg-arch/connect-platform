@@ -15,7 +15,7 @@ import { SpecialsInner } from "./SpecialsInner";
 export default function SupermarketSpecialsPage() {
   return (
     <PermissionGate
-      permission={"can_view_supermarket_orders" as never}
+      permission={"can_view_store_specials" as never}
       fallback={<div className="card" style={{ margin: 24, padding: 24 }}><p>This screen is switched off for your account.</p></div>}
     >
       <Suspense fallback={null}>

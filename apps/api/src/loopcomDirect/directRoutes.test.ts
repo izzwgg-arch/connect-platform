@@ -479,7 +479,7 @@ const serverSrc = readFileSync(path.join(__dirname, "..", "server.ts"), "utf8").
 test("⛔ the /direct prefix has a permission rule — without it there is NO gate at all", () => {
   assert.match(
     serverSrc,
-    /\{\s*prefix:\s*"\/direct",\s*permission:\s*"can_view_workspace_chat"\s*\}/,
+    /\{\s*prefix:\s*"\/direct",\s*permission:\s*"can_view_workspace_direct"\s*\}/,
     "PORTAL_API_PERMISSION_RULES must carry /direct (the /admin/wake-health bug)",
   );
 });

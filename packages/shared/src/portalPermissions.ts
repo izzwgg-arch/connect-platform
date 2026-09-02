@@ -40,6 +40,31 @@ export const SIDEBAR_ITEMS = [
   // 2026-08-20. The page gates on can_view_conferences; managing rooms needs
   // can_manage_conferences (see the action keys below).
   { id: "workspace.conference", section: "workspace", label: "Conference", href: "/conference", permission: "can_view_workspace_conference" },
+  // ⛔ EVERY SIDEBAR PAGE HAS ITS OWN KEY (Izzy, 2026-09-02: "every toggle should
+  // be individual"). Direct rode Chat's key, Meetings rode Overview's, Install
+  // rode Contacts', the five Store pages shared one, and eleven admin/platform
+  // pages shared can_manage_global_settings or can_view_admin_assistant — so a
+  // toggle for one page silently moved its siblings, and for Direct/Meetings a
+  // SUPER_ADMIN force line hid the page anyway ("I gave Ezra permission, and he
+  // doesn't see it"). Direct and Meetings are in NO default bucket on purpose:
+  // the key's absence IS the launch gate, and granting it is the launch, one
+  // person at a time. SUPER_ADMIN holds every key via the force-add bucket.
+  { id: "workspace.direct", section: "workspace", label: "Direct", href: "/direct", permission: "can_view_workspace_direct" },
+  { id: "workspace.meetings", section: "workspace", label: "Meetings", href: "/meetings", permission: "can_view_workspace_meetings" },
+  // The desktop installer link. Granted to END_USER (and so TENANT_ADMIN) in
+  // END_USER_ACTIONS below, so no existing customer loses the download link.
+  { id: "workspace.install", section: "workspace", label: "Install", href: "/desktop/Connect-Setup-latest.exe", permission: "can_view_workspace_install" },
+
+  // Store (supermarket mode): one key PER PAGE. can_view_supermarket_orders
+  // stays as the DATA capability every Store page's api calls require (the
+  // /supermarket prefix rule in server.ts); these keys decide which links
+  // appear and which pages render. Both are needed for a working page, and the
+  // custom-role editor says so on each Store row.
+  { id: "store.orders", section: "store", label: "Orders", href: "/orders", permission: "can_view_store_orders" },
+  { id: "store.deliveries", section: "store", label: "Deliveries", href: "/orders/deliveries", permission: "can_view_store_deliveries" },
+  { id: "store.drivers", section: "store", label: "Drivers", href: "/orders/drivers", permission: "can_view_store_drivers" },
+  { id: "store.specials", section: "store", label: "Specials", href: "/orders/specials", permission: "can_view_store_specials" },
+  { id: "store.teach", section: "store", label: "Teach the Agent", href: "/orders/teach", permission: "can_view_store_teach" },
 
   { id: "pbx.extensions", section: "pbx", label: "Extensions", href: "/pbx/extensions", permission: "can_view_pbx_extensions" },
   { id: "pbx.time_conditions", section: "pbx", label: "Time Conditions", href: "/pbx/time-conditions", permission: "can_view_pbx_time_conditions" },
@@ -50,6 +75,9 @@ export const SIDEBAR_ITEMS = [
   // deliberately keeps its old name — renaming it would silently strip the
   // page from every custom role that already grants it.
   { id: "pbx.ivr_routing", section: "pbx", label: "IVR Studio", href: "/pbx/ivr-studio", permission: "can_view_pbx_ivr_routing" },
+  // Platform-only (SUPER_ADMIN force line in navConfig); own key so its toggle
+  // no longer moves IVR Studio's. In no default bucket.
+  { id: "pbx.ivr_migration", section: "pbx", label: "IVR Migration", href: "/pbx/ivr-migration", permission: "can_view_pbx_ivr_migration" },
   { id: "pbx.did_routing", section: "pbx", label: "DID Routing", href: "/pbx/did-routing", permission: "can_view_pbx_did_routing" },
   { id: "pbx.moh_scheduling", section: "pbx", label: "MOH Scheduling", href: "/pbx/moh-scheduling", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", section: "pbx", label: "Call Recordings", href: "/pbx/call-recordings", permission: "can_view_pbx_call_recordings" },
@@ -75,11 +103,17 @@ export const SIDEBAR_ITEMS = [
   { id: "crm.funders", section: "crm", label: "Funders", href: "/crm/funders", permission: "can_view_crm_funders" },
   { id: "crm.wallboard", section: "crm", label: "Live Wallboard", href: "/crm/wallboard", permission: "can_view_crm_wallboard" },
   { id: "crm.settings", section: "crm", label: "CRM Settings", href: "/crm/settings", permission: "can_view_crm_settings" },
+  // Rode CRM Settings' key; own key now, carried by the can_manage_crm_admin
+  // expansion so CRM admins keep it. The page itself also requires an admin
+  // jwt role (the editor notes that on the row).
+  { id: "crm.diagnostics", section: "crm", label: "CRM Diagnostics", href: "/crm/admin/diagnostics", permission: "can_view_crm_diagnostics" },
 
   { id: "apps.home", section: "apps", label: "Apps", href: "/apps", permission: "can_view_apps_home" },
   { id: "apps.sms_campaigns", section: "apps", label: "SMS Campaigns", href: "/apps/sms-campaigns", permission: "can_view_apps_sms_campaigns" },
   { id: "apps.whatsapp", section: "apps", label: "WhatsApp Inbox", href: "/apps/whatsapp", permission: "can_view_apps_whatsapp_inbox" },
   { id: "apps.voip_ms", section: "apps", label: "VoIP.ms", href: "/apps/voip-ms", permission: "can_view_apps_voip_ms" },
+  // Platform-only carrier test bench (SUPER_ADMIN force line); own key.
+  { id: "apps.signalwire", section: "apps", label: "SignalWire", href: "/apps/signalwire", permission: "can_view_apps_signalwire" },
   { id: "apps.customers", section: "apps", label: "Customer Hub", href: "/apps/customers", permission: "can_view_apps_customer_hub" },
 
   { id: "tracking.dashboard", section: "tracking", label: "Dashboard", href: "/tracking/dashboard", permission: "can_view_tracking_dashboard" },
@@ -120,6 +154,22 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.phone_numbers", section: "admin", label: "Phone Numbers", href: "/admin/phone-numbers", permission: "can_view_admin_phone_numbers" },
   { id: "admin.onboarding", section: "admin", label: "Onboarding", href: "/admin/onboarding", permission: "can_view_admin_onboarding" },
   { id: "admin.assistant", section: "admin", label: "AI Assistant", href: "/assistant", permission: "can_view_admin_assistant" },
+  // The three assistant tooling pages used to ride can_view_admin_assistant.
+  { id: "admin.ai_trainer", section: "admin", label: "AI Trainer", href: "/ai-trainer", permission: "can_view_admin_ai_trainer" },
+  { id: "admin.elevenlabs", section: "admin", label: "ElevenLabs", href: "/elevenlabs", permission: "can_view_admin_elevenlabs" },
+  { id: "admin.polly", section: "admin", label: "Amazon Polly", href: "/polly", permission: "can_view_admin_polly" },
+  // Platform-internal screens (every one SUPER_ADMIN-forced in navConfig and
+  // requireSuperAdmin/can_manage_global_settings at the api). Own keys so the
+  // rows on both permission editors stop moving together; none is in any
+  // default bucket, and the editors render them Locked.
+  { id: "admin.support", section: "admin", label: "Support Desk", href: "/admin/support", permission: "can_view_admin_support" },
+  { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
+  { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
+  { id: "admin.pbx_routing", section: "admin", label: "Trunks & Routing", href: "/admin/pbx-console?mod=routing", permission: "can_view_admin_pbx_routing" },
+  { id: "admin.pbx_teams", section: "admin", label: "Ring Groups & Queues", href: "/admin/pbx-console?mod=teams", permission: "can_view_admin_pbx_teams" },
+  { id: "admin.remote_support_controls", section: "admin", label: "Remote Support Controls", href: "/admin/remote-support/controls", permission: "can_view_admin_remote_support_controls" },
+  { id: "admin.integrations", section: "admin", label: "Integrations", href: "/admin/integrations", permission: "can_view_admin_integrations" },
+  { id: "admin.voice_agent", section: "admin", label: "Voice Agent", href: "/admin/voice-agent", permission: "can_view_admin_voice_agent" },
 
   { id: "settings.tenant", section: "settings", label: "Tenant Settings", href: "/settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", section: "settings", label: "Email Settings", href: "/settings/email", permission: "can_view_settings_email" },
@@ -465,7 +515,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   // ADMIN  → can_manage_crm + can_manage_crm_admin (full CRM access incl. settings + wallboard)
   can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_forms", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
   can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_forms", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
-  can_manage_crm_admin: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_forms", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_wallboard", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
+  can_manage_crm_admin: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_forms", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_diagnostics", "can_view_crm_wallboard", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [
@@ -478,6 +528,10 @@ const END_USER_ACTIONS: PortalPermissionKey[] = [
   "can_view_live_calls",
   "can_view_voicemail",
   "can_view_contacts",
+  // The desktop installer link got its own key on 2026-09-02 (it rode
+  // Contacts' key before). Every ordinary user could download the app; the
+  // forward-merge hands this to the live buckets, so nobody loses the link.
+  "can_view_workspace_install",
   "can_view_recordings",
   "can_download_recordings",
   "can_view_settings",

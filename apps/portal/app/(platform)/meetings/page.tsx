@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { CalendarClock, Copy, Plus, Video, Zap } from "lucide-react";
-import { useAppContext } from "../../../hooks/useAppContext";
+import { PermissionGate } from "../../../components/PermissionGate";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { meetingLink, type MeetingSummary } from "../../../lib/meetings";
@@ -238,14 +238,21 @@ export default function MeetingsPage() {
   // server-side. All three must name the same rule or one of them is a lie.
   // ⛔ This restricts STARTING a meeting only. Joining by link is deliberately
   // open — guests have no account at all, and that is the whole feature.
-  const { backendJwtRole } = useAppContext();
-  if (backendJwtRole !== "SUPER_ADMIN") {
-    return (
-      <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim, #64748b)" }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Not available</h2>
-        <p style={{ fontSize: 14 }}>Meetings is restricted to platform administrators.</p>
-      </div>
-    );
-  }
-  return <MeetingsPageInner />;
+  // 2026-09-02: the gate is the page's OWN permission key, not the jwt role.
+  // can_view_workspace_meetings is in no default bucket, so nothing changes for
+  // anyone until an owner grants it — and once granted, the sidebar, this page
+  // and POST/GET /meetings all agree (the api checks the same key).
+  return (
+    <PermissionGate
+      permission="can_view_workspace_meetings"
+      fallback={
+        <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim, #64748b)" }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Not available</h2>
+          <p style={{ fontSize: 14 }}>Meetings has not been switched on for your account.</p>
+        </div>
+      }
+    >
+      <MeetingsPageInner />
+    </PermissionGate>
+  );
 }

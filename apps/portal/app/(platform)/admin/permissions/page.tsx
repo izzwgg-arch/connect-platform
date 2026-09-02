@@ -19,7 +19,6 @@ import { ROLE_PERMISSION_MAP } from "../../../../permissions/permissionMap";
 import {
   NAV_SECTION_ORDER,
   OWNER_ONLY_FIXED_NAV_ITEMS,
-  OWNER_ONLY_LIFTABLE_NAV_ITEMS,
   navItems,
   navSectionMeta,
   type NavItem,
@@ -41,7 +40,6 @@ const ROLES: { role: Role; label: string; description: string; color: string }[]
 const PROTECTED = new Set<PortalPermissionKey>(PROTECTED_PLATFORM_ADMIN_PERMISSIONS);
 const ALWAYS_VISIBLE = new Set<string>(NAV_ITEMS_ALWAYS_VISIBLE);
 const OWNER_ONLY_FIXED = new Set<string>(OWNER_ONLY_FIXED_NAV_ITEMS);
-const OWNER_ONLY_LIFTABLE = new Set<string>(OWNER_ONLY_LIFTABLE_NAV_ITEMS);
 
 /**
  * THE SIDEBAR ITSELF IS THE CATALOG.
@@ -73,7 +71,15 @@ const SECTION_GROUPS = (() => {
   }));
 })();
 
-/** Which OTHER sidebar pages share this page's access permission. */
+/**
+ * Which OTHER sidebar pages share this page's access permission.
+ *
+ * ⛔ Since 2026-09-02 this is EMPTY for every page and a test keeps it so
+ * (permissionToggleCoverage.test.ts): every sidebar page has its own key, so a
+ * role toggle here never moves another page. Kept as a live check rather than
+ * deleted — if a future nav item reuses a key, the row says so instead of
+ * silently coupling two toggles again.
+ */
 const SHARED_KEY_SIBLINGS = new Map<string, string[]>(
   navItems.map((item) => [
     item.id,
@@ -231,16 +237,6 @@ export default function PermissionsPage() {
     markDirty();
   }
 
-  function setOwnerOnly(navItemId: string, ownerOnly: boolean) {
-    setOwnerOnlyLifted((prev) => {
-      const next = new Set(prev);
-      if (ownerOnly) next.delete(navItemId);
-      else next.add(navItemId);
-      return next;
-    });
-    markDirty();
-  }
-
   async function handleSave() {
     setSaving(true);
     setSaveError("");
@@ -316,7 +312,8 @@ export default function PermissionsPage() {
           <div className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
             <strong>In sidebar</strong> decides whether a page&rsquo;s link appears at all, for everybody, whatever their role.
             The three role columns decide who is allowed to open it. A page needs both: switched off here it is hidden from
-            everyone, and switched on it still only shows for roles whose access is on.
+            everyone, and switched on it still only shows for roles whose access is on. Every page has its own permission,
+            so no toggle on this screen ever moves another page.
             {hiddenCount > 0 ? (
               <>
                 {" "}
@@ -416,7 +413,7 @@ export default function PermissionsPage() {
               >
                 <div>Sidebar page</div>
                 <div style={{ textAlign: "center" }}>In sidebar</div>
-                <div style={{ textAlign: "center" }}>Owner only</div>
+                <div style={{ textAlign: "center" }}>Platform only</div>
                 {ROLES.map((r) => (
                   <div key={r.role} style={{ textAlign: "center", fontWeight: 700, color: r.color }}>
                     {r.label}
@@ -428,7 +425,6 @@ export default function PermissionsPage() {
                 const isHidden = hidden.has(item.id);
                 const alwaysVisible = ALWAYS_VISIBLE.has(item.id);
                 const fixedOwnerOnly = OWNER_ONLY_FIXED.has(item.id);
-                const liftable = OWNER_ONLY_LIFTABLE.has(item.id);
                 const siblings = SHARED_KEY_SIBLINGS.get(item.id) || [];
                 return (
                   <div
@@ -480,16 +476,6 @@ export default function PermissionsPage() {
                         >
                           Locked
                         </span>
-                      ) : liftable ? (
-                        <Toggle
-                          checked={!ownerOnlyLifted.has(item.id)}
-                          onChange={(value) => setOwnerOnly(item.id, value)}
-                          title={
-                            ownerOnlyLifted.has(item.id)
-                              ? `${item.label} is open to anyone whose role allows it.`
-                              : `${item.label} shows for the platform owner only. Switch off to release it to the roles on the right.`
-                          }
-                        />
                       ) : (
                         <span className="muted" style={{ fontSize: 12 }}>&mdash;</span>
                       )}
@@ -544,13 +530,13 @@ export default function PermissionsPage() {
               ever hides a link: it can never grant access, and the server checks permissions again on every request either way.
             </p>
             <p style={{ marginTop: 8 }}>
-              <strong>Owner only</strong> marks a finished page deliberately held back to the platform owner. Switching it off
-              releases that page to every role whose access is on, so it is a deliberate step. Pages marked <em>Locked</em> show
-              or change every customer&rsquo;s data and have no switch.
+              Pages marked <em>Locked</em> show or change every customer&rsquo;s data, so they are held to the platform owner and no
+              switch can open them to a customer role.
             </p>
             <p style={{ marginTop: 8 }}>
-              Some pages deliberately share one access permission, which is why their role toggles move together. Their sidebar
-              switches are still independent.
+              Every page has its own permission. Turning a page on or off for a role never changes any other page, and a page
+              held back for a first look (Meetings, Direct) simply starts with every role off &mdash; switching a role on is its
+              launch for that role.
             </p>
             <p style={{ marginTop: 8 }}>
               Platform Admin access to this page is protected so the platform cannot be locked out of its own settings.

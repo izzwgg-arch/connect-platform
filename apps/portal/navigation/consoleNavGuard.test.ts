@@ -51,11 +51,26 @@ test("the api still gates the whole /admin/pbx-console prefix on can_manage_glob
   );
 });
 
-test("every console nav item is keyed on the api's own console permission", () => {
+test("every console nav item is keyed on its OWN per-page key, and no default bucket holds it", async () => {
+  // 2026-09-02: one key per sidebar page (Izzy: "every toggle should be
+  // individual"). The three console doors used to share can_manage_global_settings
+  // with four other admin pages, so one toggle moved seven rows. Each now has
+  // its own key; the property that protects customers is that NO default
+  // bucket (END_USER / TENANT_ADMIN) holds any of them — the api prefix rule
+  // (asserted above) and the SUPER_ADMIN force line (asserted below) are the
+  // other two locks.
+  const { DEFAULT_ROLE_PERMISSIONS } = await import("@connect/shared");
+  const expected: Record<string, string> = {
+    "admin.pbx_console": "can_view_admin_pbx_console",
+    "admin.pbx_routing": "can_view_admin_pbx_routing",
+    "admin.pbx_teams": "can_view_admin_pbx_teams",
+  };
   for (const id of CONSOLE_ITEMS) {
     const line = navItemLine(id);
     const key = (line.match(/permission:\s*"([^"]+)"/) || [])[1];
-    assert.equal(key, CONSOLE_API_KEY, `${id} must be keyed on ${CONSOLE_API_KEY}, not ${key}`);
+    assert.equal(key, expected[id], `${id} must be keyed on its own key ${expected[id]}, not ${key}`);
+    assert.equal(DEFAULT_ROLE_PERMISSIONS.END_USER.includes(key as never), false, `${key} must not be an END_USER default`);
+    assert.equal(DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN.includes(key as never), false, `${key} must not be a TENANT_ADMIN default`);
   }
 });
 

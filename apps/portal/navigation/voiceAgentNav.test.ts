@@ -16,7 +16,10 @@ test("admin.voice_agent exists and points at /admin/voice-agent", () => {
   const item = navItems.find((n) => n.id === "admin.voice_agent");
   assert.ok(item, "admin.voice_agent nav item must exist");
   assert.equal(item!.href, "/admin/voice-agent");
-  assert.equal(item!.permission, "can_manage_global_settings");
+  // Its own key since 2026-09-02 (was can_manage_global_settings, shared with
+  // six other admin rows). Still in no default bucket; the force line below is
+  // the lock.
+  assert.equal(item!.permission, "can_view_admin_voice_agent");
   assert.equal(item!.sectionPermission, "can_view_section_admin");
 });
 
@@ -30,7 +33,7 @@ test("admin.voice_agent is SUPER_ADMIN-forced in isNavItemVisibleForUser (source
 
 test("a non-super admin never sees admin.voice_agent even with both permissions", () => {
   const item = navItems.find((n) => n.id === "admin.voice_agent")!;
-  const holdsBoth = ((p: string) => p === "can_view_section_admin" || p === "can_manage_global_settings") as any;
+  const holdsBoth = ((p: string) => p === "can_view_section_admin" || p === "can_view_admin_voice_agent") as any;
   assert.equal(isNavItemVisibleForUser(item, holdsBoth, "TENANT_ADMIN"), false, "TENANT_ADMIN must not see it");
   assert.equal(isNavItemVisibleForUser(item, holdsBoth, "SUPER_ADMIN"), true, "SUPER_ADMIN sees it");
 });

@@ -1,7 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
   isNavItemHiddenBySetting,
-  isNavItemOwnerOnlyLifted,
   type PortalNavVisibility,
   type PortalSidebarSectionKey,
 } from "@connect/shared";
@@ -98,19 +97,15 @@ export const navItems: NavItem[] = [
   { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail", badgeKey: "voicemail" },
   { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat", badgeKey: "chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
-  // Loopcom Direct (2026-08-21) — cross-company chat by phone number. Rides the
-  // SAME key as Chat: anybody who may use Workspace chat may use Direct, and the
-  // real gate is that a person has verified their own mobile number (with no
-  // verified identity every screen shows the "verify to get started" state).
-  // ⛔ A dedicated key would not reach TENANT_ADMIN without a live permission
-  // snapshot refresh — see the Meetings note below.
-  { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat" },
-  // Loopcom Meetings (2026-08-20). Reuses the overview key on purpose — a
-  // dedicated can_view_workspace_meetings key needs the live permission
-  // snapshot updated (custom-roles-are-authoritative: code defaults do NOT
-  // reach the live PlatformRolePermissionSnapshot row), which is a follow-up
-  // with Izzy. Same precedent as the Install link reusing the contacts key.
-  { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_overview" },
+  // ⛔ ONE KEY PER PAGE (Izzy, 2026-09-02: "every toggle should be individual").
+  // Direct used to ride Chat's key and Meetings Overview's, each behind a
+  // SUPER_ADMIN force line the owner had to lift on a second screen — so
+  // granting either in a custom role moved a sibling and still showed nothing.
+  // Now each has its own key, in NO default bucket: granting the key is the
+  // launch, and the Permissions screen's role columns + the custom-role editor
+  // are the only two levers. The keys live in @connect/shared SIDEBAR_ITEMS.
+  { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_direct" },
+  { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_meetings" },
   // Desk phone setup — Izzy, 2026-08-22: "add an option in the workspace sidebar
   // to connect my desk phones … only system owners should see it". Placed
   // ABOVE Conference: Conference's slot "immediately before Install" is
@@ -123,29 +118,28 @@ export const navItems: NavItem[] = [
   // and because it is an ACTION key, the custom-roles editor already offers it,
   // and this nav entry is what makes it appear in /admin/permissions too.
   { id: "workspace.desk_phones", href: "/settings/desk-phones", label: "Desk Phones", icon: "DP", lucide: PhoneCall, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_setup_desk_phones" },
-  // Supermarket mode (Gesheft plan). All four keys are in NO default bucket, so
-  // only supermarket reps who were granted them (and SUPER_ADMIN via force-add)
-  // ever see these — classic tenants keep an unchanged sidebar. The nav key IS
-  // the page + api key (a-gate-must-agree-with-the-gate-behind-it).
-  { id: "store.orders", href: "/orders", label: "Orders", icon: "OR", lucide: Package, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
-  { id: "store.deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
-  { id: "store.drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
-  { id: "store.specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
-  { id: "store.teach", href: "/orders/teach", label: "Teach the Agent", icon: "TA", lucide: GraduationCap, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_supermarket_orders" },
+  // Store (supermarket mode): one key per page, in no default bucket. The
+  // /supermarket api prefix still requires can_view_supermarket_orders (the
+  // data capability) — the custom-role editor notes that on every Store row.
+  { id: "store.orders", href: "/orders", label: "Orders", icon: "OR", lucide: Package, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_store_orders" },
+  { id: "store.deliveries", href: "/orders/deliveries", label: "Deliveries", icon: "DL", lucide: Truck, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_store_deliveries" },
+  { id: "store.drivers", href: "/orders/drivers", label: "Drivers", icon: "DR", lucide: Users, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_store_drivers" },
+  { id: "store.specials", href: "/orders/specials", label: "Specials", icon: "SP", lucide: Tag, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_store_specials" },
+  { id: "store.teach", href: "/orders/teach", label: "Teach the Agent", icon: "TA", lucide: GraduationCap, section: "store", sectionPermission: "can_view_section_store", permission: "can_view_store_teach" },
   // Conference rooms — right before Install, per Izzy (2026-08-20). Visible to
   // whoever holds can_view_conferences (TENANT_ADMIN by default): the nav key
   // rides that action key's expansion in @connect/shared.
   { id: "workspace.conference", href: "/conference", label: "Conference", icon: "CN", lucide: UsersRound, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_conference" },
   // Stable alias (server keeps it pointing at the newest installer) so this
   // link never goes stale when a new version is published.
-  { id: "workspace.install", href: "/desktop/Connect-Setup-latest.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
+  { id: "workspace.install", href: "/desktop/Connect-Setup-latest.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_install", download: true },
 
   { id: "pbx.extensions", href: "/pbx/extensions", label: "Extensions", icon: "EX", lucide: UserCog, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_extensions" },
   { id: "pbx.time_conditions", href: "/pbx/time-conditions", label: "Time Conditions", icon: "TC", lucide: Clock, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_time_conditions" },
   { id: "pbx.softphone", href: "/pbx/softphone", label: "WebRTC Softphone", icon: "SP", lucide: Headphones, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_softphone" },
   { id: "pbx.sbc_connectivity", href: "/pbx/sbc-connectivity", label: "SBC Connectivity", icon: "SB", lucide: Network, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_sbc_connectivity" },
   { id: "pbx.ivr_routing", href: "/pbx/ivr-studio", label: "IVR Studio", icon: "IR", lucide: GitBranch, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_ivr_routing" },
-  { id: "pbx.ivr_migration", href: "/pbx/ivr-migration", label: "IVR Migration", icon: "IM", lucide: GitBranch, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_ivr_routing" },
+  { id: "pbx.ivr_migration", href: "/pbx/ivr-migration", label: "IVR Migration", icon: "IM", lucide: GitBranch, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_ivr_migration" },
   { id: "pbx.did_routing", href: "/pbx/did-routing", label: "DID Routing", icon: "DR", lucide: Route, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_did_routing" },
   { id: "pbx.moh_scheduling", href: "/pbx/moh-scheduling", label: "MOH Scheduling", icon: "MH", lucide: Music, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_moh_scheduling" },
   { id: "pbx.call_recordings", href: "/pbx/call-recordings", label: "Call Recordings", icon: "CR", lucide: Disc, section: "pbx", sectionPermission: "can_view_section_pbx", permission: "can_view_pbx_call_recordings" },
@@ -167,7 +161,7 @@ export const navItems: NavItem[] = [
   { id: "crm.reports", href: "/crm/reports", label: "Reports", icon: "CR", lucide: BarChart3, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
   { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_wallboard" },
   { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
-  { id: "crm.diagnostics", href: "/crm/admin/diagnostics", label: "CRM Diagnostics", icon: "DX", lucide: Stethoscope, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
+  { id: "crm.diagnostics", href: "/crm/admin/diagnostics", label: "CRM Diagnostics", icon: "DX", lucide: Stethoscope, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_diagnostics" },
 
   { id: "settings.tenant", href: "/settings", label: "Tenant Settings", icon: "TS", lucide: Building2, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", href: "/settings/email", label: "Email Settings", icon: "EM", lucide: Mail, section: "settings", sectionPermission: "can_view_section_settings", permission: "can_view_settings_email" },
@@ -181,12 +175,12 @@ export const navItems: NavItem[] = [
   // ⛔ SUPER_ADMIN-only in isNavItemVisibleForUser (the pbx-console pattern):
   // it shows every company's escalations, so it shares an owner-held key and
   // there is deliberately no grantable one yet.
-  { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
+  { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_support" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
   // /admin/compliance PORTAL_API_PERMISSION_RULES entry say the same thing.
-  { id: "admin.compliance", href: "/admin/compliance", label: "Compliance", icon: "CO", lucide: CalendarCheck, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.compliance", href: "/admin/compliance", label: "Compliance", icon: "CO", lucide: CalendarCheck, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_compliance" },
   { id: "admin.console", href: "/admin", label: "Admin Console", icon: "AD", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_console" },
   { id: "admin.users", href: "/admin/users", label: "Users", icon: "US", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_users" },
   { id: "admin.tenants", href: "/admin/tenants", label: "Tenants", icon: "TN", lucide: Building, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_tenants" },
@@ -204,7 +198,7 @@ export const navItems: NavItem[] = [
   // held by SUPER_ADMIN alone and is exactly what the api's
   // PORTAL_API_PERMISSION_RULES entry for /admin/pbx-console already demands,
   // so the nav key and the server gate now say the same thing.
-  { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.pbx_console", href: "/admin/pbx-console", label: "PBX Console", icon: "PC", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_console" },
   // Remote support (2026-08-16, hardened 2026-08-31). Built with no nav entry at
   // all, so it was reachable only by typing the URL; these two put it in the
   // catalog, which is what gives it an In-sidebar switch on /admin/permissions
@@ -217,15 +211,15 @@ export const navItems: NavItem[] = [
   // the switch that turns remote support off must not be reachable by the
   // people who use remote support.
   { id: "admin.remote_support", href: "/admin/remote-support", label: "Remote Support", icon: "RS", lucide: MonitorSmartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_remote_support" },
-  { id: "admin.remote_support_controls", href: "/admin/remote-support/controls", label: "Remote Support Controls", icon: "RC", lucide: ShieldAlert, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.remote_support_controls", href: "/admin/remote-support/controls", label: "Remote Support Controls", icon: "RC", lucide: ShieldAlert, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_remote_support_controls" },
   // Per-tenant integration keys + CRM modes (supermarket plan Phase 5) —
   // SUPER_ADMIN only, forced in isNavItemVisibleForUser like the console.
-  { id: "admin.integrations", href: "/admin/integrations", label: "Integrations", icon: "IK", lucide: KeyRound, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.integrations", href: "/admin/integrations", label: "Integrations", icon: "IK", lucide: KeyRound, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_integrations" },
   // Conversational order-taking voice agent settings (2026-08-26) — SUPER_ADMIN
   // only, forced in isNavItemVisibleForUser like the console. The OpenAI key
   // itself is entered on admin.integrations (one writer, one ProviderCredential
   // row); this screen is voice/greeting/caps/enable + per-call history.
-  { id: "admin.voice_agent", href: "/admin/voice-agent", label: "Voice Agent", icon: "VA", lucide: Bot, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.voice_agent", href: "/admin/voice-agent", label: "Voice Agent", icon: "VA", lucide: Bot, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_voice_agent" },
   // Trunks & Routing + Ring Groups & Queues (2026-08-20, Izzy: "add them all
   // to the sidebar with permissions off for everybody but me") — direct doors
   // into the console's routing and teams modules. SUPER_ADMIN only, forced in
@@ -233,8 +227,8 @@ export const navItems: NavItem[] = [
   // key (the ivr_migration pattern): these screens carry every customer's
   // trunks and dial plans, and a permission that could grant them would be one
   // ticked box away from handing a tenant admin the whole platform's routing.
-  { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
-  { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_manage_global_settings" },
+  { id: "admin.pbx_routing", href: "/admin/pbx-console?mod=routing", label: "Trunks & Routing", icon: "TR", lucide: Server, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_routing" },
+  { id: "admin.pbx_teams", href: "/admin/pbx-console?mod=teams", label: "Ring Groups & Queues", icon: "RQ", lucide: Users, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_teams" },
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
@@ -251,9 +245,9 @@ export const navItems: NavItem[] = [
   { id: "admin.phone_numbers", href: "/admin/phone-numbers", label: "Phone Numbers", icon: "PN", lucide: Hash, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_phone_numbers" },
   { id: "admin.onboarding", href: "/admin/onboarding", label: "Onboarding", icon: "OB", lucide: ClipboardList, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_onboarding" },
   { id: "admin.assistant", href: "/assistant", label: "AI Assistant", icon: "AS", lucide: Bot, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
-  { id: "admin.ai_trainer", href: "/ai-trainer", label: "AI Trainer", icon: "TR", lucide: GraduationCap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
-  { id: "admin.elevenlabs", href: "/elevenlabs", label: "ElevenLabs", icon: "EL", lucide: Mic2, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
-  { id: "admin.polly", href: "/polly", label: "Amazon Polly", icon: "PY", lucide: AudioLines, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_assistant" },
+  { id: "admin.ai_trainer", href: "/ai-trainer", label: "AI Trainer", icon: "TR", lucide: GraduationCap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_ai_trainer" },
+  { id: "admin.elevenlabs", href: "/elevenlabs", label: "ElevenLabs", icon: "EL", lucide: Mic2, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_elevenlabs" },
+  { id: "admin.polly", href: "/polly", label: "Amazon Polly", icon: "PY", lucide: AudioLines, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_polly" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
 
@@ -265,7 +259,7 @@ export const navItems: NavItem[] = [
   // replace VoIP.ms. Shares VoIP.ms's view key in the catalog, but is forced
   // SUPER_ADMIN-only in isNavItemVisibleForUser (like pbx.ivr_migration): it
   // spends the platform's own money and there is deliberately no grantable key.
-  { id: "apps.signalwire", href: "/apps/signalwire", label: "SignalWire", icon: "SW", lucide: Radio, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_voip_ms" },
+  { id: "apps.signalwire", href: "/apps/signalwire", label: "SignalWire", icon: "SW", lucide: Radio, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_signalwire" },
   { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" },
 
   { id: "tracking.dashboard", href: "/tracking/dashboard", label: "Dashboard", icon: "TD", lucide: LayoutDashboard, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_dashboard" },
@@ -305,7 +299,16 @@ export const navSectionMeta: Record<NavItem["section"], { label: string; railIco
  * doors, the support desk, migration, the compliance ledger, the carrier test
  * bench); those have no switch at all, and consoleNavGuard.test.ts pins that.
  */
-export const OWNER_ONLY_LIFTABLE_NAV_ITEMS: readonly string[] = ["workspace.meetings", "workspace.direct"];
+/**
+ * RETIRED 2026-09-02 — deliberately empty, kept so the two permission editors
+ * and their guards keep one contract. Meetings and Direct used to sit here,
+ * force-hidden until the owner flipped "Owner only" on the Permissions screen;
+ * that second lever is exactly what made "I gave Ezra permission and he doesn't
+ * see it" true. Each page now has its OWN permission key in no default bucket,
+ * so granting the key is the launch. ⛔ Do not repopulate this list — a page
+ * that must stay platform-internal belongs in OWNER_ONLY_FIXED_NAV_ITEMS.
+ */
+export const OWNER_ONLY_LIFTABLE_NAV_ITEMS: readonly string[] = [];
 
 export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "pbx.ivr_migration",
@@ -318,6 +321,9 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.support",
   "admin.compliance",
   "admin.billing",
+  // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every
+  // handler, so a granted key could only ever draw a door that refuses.
+  "admin.remote_support_controls",
 ];
 
 /** Admin Billing nav + /admin/billing API require JWT SUPER_ADMIN (platform), not only portal permission. */
@@ -356,29 +362,10 @@ export function isNavItemVisibleForUser(
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.integrations" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.voice_agent" && backendJwtRole !== "SUPER_ADMIN") return false;
-  // Meetings: Izzy only, by his instruction 2026-08-21 ("Permissions off for
-  // everybody but me"). Only STARTING a meeting is restricted — anyone with a
-  // link still joins, which is the whole point of the feature.
-  // ⛔ Hiding the nav item is presentation, NOT access: the /meetings page
-  // refuses to render for anyone else, and the create/list routes refuse
-  // server-side. All three must agree.
-  if (
-    item.id === "workspace.meetings" &&
-    !isNavItemOwnerOnlyLifted(item.id, visibility) &&
-    backendJwtRole !== "SUPER_ADMIN"
-  ) return false;
-  // Loopcom Direct: SUPER_ADMIN only for now, the same precedent as Meetings —
-  // Izzy looks at a new customer-facing feature before it appears in every
-  // customer's sidebar. ⛔ This is the ONLY thing standing between the built
-  // feature and every user seeing it, so removing this line IS the launch.
-  // ⛔ It is presentation only: the API gates on can_view_workspace_chat and the
-  // real protection is that nobody has a verified number, so lifting this alone
-  // exposes nothing that was not already refused.
-  if (
-    item.id === "workspace.direct" &&
-    !isNavItemOwnerOnlyLifted(item.id, visibility) &&
-    backendJwtRole !== "SUPER_ADMIN"
-  ) return false;
+  // Meetings and Direct have NO force line since 2026-09-02: each has its own
+  // permission key in no default bucket, and holding the key is the launch.
+  // Remote Support Controls' api is requireSuperAdmin on every handler.
+  if (item.id === "admin.remote_support_controls" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The routing/teams doors show and change every customer's trunks and dial
   // plans — SUPER_ADMIN only, same as the console they open into.
   if (item.id === "admin.pbx_routing" && backendJwtRole !== "SUPER_ADMIN") return false;

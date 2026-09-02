@@ -263,6 +263,9 @@ function buildApp(opts: { user?: any } = {}) {
   });
   registerMeetingRoutes(app, {
     db,
+    // Hermetic stand-in for the live can_view_workspace_meetings check: this
+    // harness grants nobody, so a non-super user still gets the 403 below.
+    mayStartMeeting: async () => false,
     config: () => CFG as any,
     roomService: (async () => ({ ok: true, status: 200, body: "{}" })) as any,
   });
@@ -366,7 +369,7 @@ test("route: only the host may invite; a non-creator is refused", async () => {
   // Re-register against the same db with a different, non-super user.
   const { app: app2, db: db2 } = buildApp({ user: { sub: "u2", tenantId: "t1", email: "z@z.z", role: "TENANT_ADMIN" } });
   const res = await app2.inject({ method: "POST", url: `/meetings/${code}/invite`, payload: { invites: "x@y.com" } });
-  assert.equal(res.statusCode, 403, "a tenant admin cannot invite — Meetings is SUPER_ADMIN only");
+  assert.equal(res.statusCode, 403, "a tenant admin without can_view_workspace_meetings cannot invite");
   assert.equal(db2.emailJobs.length, 0);
   void other;
   void shared;

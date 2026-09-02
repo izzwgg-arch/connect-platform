@@ -51,7 +51,7 @@ function Avatar({ name, seed }: { name: string; seed: string }) {
 export default function DirectPage() {
   return (
     <PermissionGate
-      permission="can_view_workspace_chat"
+      permission="can_view_workspace_direct"
       /* ⛔ An explicit fallback, never the default null: a blank page reads as a
          broken app, where a sentence reads as a permission. */
       fallback={

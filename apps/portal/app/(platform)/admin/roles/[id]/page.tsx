@@ -134,6 +134,15 @@ const SHARED_KEY_SIBLINGS = new Map<string, string[]>(
   ),
 );
 
+/**
+ * Keys that already render as a sidebar-page row above (Desk Phones rides
+ * can_setup_desk_phones, Remote Support rides can_remote_support). Rendering
+ * them again in the Action Permissions panel would be two toggles bound to ONE
+ * key that flip together — exactly the coupling Izzy ruled out on 2026-09-02
+ * ("every toggle should be individual"). One key, one toggle.
+ */
+const NAV_BOUND_ACTION_KEYS = new Set<string>(navItems.map((item) => item.permission as string));
+
 const DANGEROUS_PERMISSIONS: Set<string> = new Set([
   "can_manage_global_settings",
   "can_switch_tenants",
@@ -165,8 +174,15 @@ const LOCKED_NAV_ITEMS = new Set<string>(OWNER_ONLY_FIXED_NAV_ITEMS);
 const LAUNCH_GATED_NAV_ITEMS = new Set<string>(OWNER_ONLY_LIFTABLE_NAV_ITEMS);
 
 /** Per-row honesty notes for gates a permission cannot open. */
+const STORE_DATA_NOTE =
+  "Shows the page; loading its data also needs can_view_supermarket_orders under Action Permissions";
 const NAV_ITEM_NOTES: Record<string, string> = {
   "crm.diagnostics": "Only shows for admin accounts",
+  "store.orders": STORE_DATA_NOTE,
+  "store.deliveries": STORE_DATA_NOTE,
+  "store.drivers": STORE_DATA_NOTE,
+  "store.specials": STORE_DATA_NOTE,
+  "store.teach": STORE_DATA_NOTE,
 };
 
 const HIDDEN_ACTION_KEYS: Set<string> = new Set([
@@ -627,7 +643,7 @@ export default function RoleEditPage() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <tbody>
-                  {ACTION_PERMISSION_KEYS.filter((k) => !TENANT_COMM_PERMS.some((t) => t.key === k) && !HIDDEN_ACTION_KEYS.has(k)).map((key, idx) => {
+                  {ACTION_PERMISSION_KEYS.filter((k) => !TENANT_COMM_PERMS.some((t) => t.key === k) && !HIDDEN_ACTION_KEYS.has(k) && !NAV_BOUND_ACTION_KEYS.has(k)).map((key, idx) => {
                     const isGrantable = grantable.has(key);
                     const checked = selectedPerms.has(key);
                     const isDangerous = DANGEROUS_PERMISSIONS.has(key);
