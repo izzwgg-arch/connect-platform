@@ -1365,7 +1365,67 @@ answer: the match screen lets you say WHO uses a phone, not WHETHER to touch it.
 
 ### Deploy state
 
-See the CLAUDE.md section for this date — filled in after the containers were verified.
+api + portal DEPLOYED and container-verified 2026-09-02: both containers at `0dbad8a8`
+(⊇ `1193a07a`), migration `20260902140000_desk_phone_selection` applied by the api
+deploy and read back, the selection route + `skippedAt` grepped in the running api,
+`dps-linkbtn`/`dps-unpicked` in the shipped CSS and the four new strings in the chunks,
+0 restarts, 200 on both hostnames. Live probe inside `app-api-1`: no token → 401,
+SUPER_ADMIN on an unknown run → 404, nothing written. GitHub 401'd the server's fetch
+again — bundle → bare mirror → deploy → origin restored, mirror removed.
+
+### ✅ The first live run, 2026-09-02 21:34Z — the selection WORKS, and it found the next wall
+
+Izzy restarted the app himself and ran it on A plus center (run `cmt8v34vb005bpc13popbg5cs`,
+the same run open since 08-25, 13 phones). The audit row reads
+`DESK_PHONE_SELECTION_SET {selected: 1, skipped: 12}`; only **Jacob Weinstock — 103**
+(`805e0c4d796d`, Yealink T53W fw 96.87.0.16, 192.168.0.121) is ASSIGNED and unskipped,
+every other row is `skippedAt`-stamped, still IDENTIFIED, attempts 0. The screen reads
+"0 of 1 phones ready". **That is the feature, proven by a person.**
+
+⛔⛔ **THEN THE PHONE SAT ON "Preparing", AND THAT IS THE WALL — NOT TODAY'S CHANGE.**
+The driver posts `advance` every 4 s (nginx: one POST per tick, 200, 254 bytes). For
+this phone's exact condition — `registeredToUs: false` (T2_103 UNREGISTERED in the
+mirror, `pjsip show endpoint T2_103` Unavailable), `provisioningIsOurs: false`
+(`provisioningUrl` empty — a factory-reset phone knows no server), `reachableOnLan: true`,
+`locked: false` — the ladder answers **`set_provisioning` (rung 3, "reachable and
+unlocked; redirect without a reset")**. ⛔ **NOTHING PERFORMS THAT INSTRUCTION.** The
+desktop's capability list is exactly `discover / fingerprint / test_credentials /
+reboot / trigger_autop`; the driver's own comment files `set_provisioning` under
+"the server's or the PBX's to do, or a wait" and marks a stall; and Part 4 §7 of this
+document recorded on 2026-08-22 that *`reset_over_sip` / `set_provisioning` /
+`check_sync` / `generate_template` have no executor*. So a factory-reset phone can be
+found, named, ticked and assigned — and then nobody tells it where Loopcom is.
+
+**What is already in place, so the missing piece is small in scope:** the PBX holds
+the config for that MAC — `/var/lib/vitalpbx/provisioning/provisioning_templates/
+f3df739ac62197cd/805e0c4d796d.cfg` (185,332 bytes, rendered 08-20) — and the other
+T53W in the same office (Leah, `805ec0bf8c62`) fetched from exactly
+`https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` twice today. **The
+phone needs one fact: that URL.** `ourProvisioningHosts()` already names
+`m.connectcomunications.com`, so an executor can validate the host before writing it.
+
+**Three ways to give it that fact — none built, Izzy's call:**
+- **(A) A desktop executor** — a sixth op that writes the auto-provision URL to a
+  reachable Yealink and triggers AutoP, with the URL's host checked against
+  `ourProvisioningHosts` before anything is sent (the capability fence says no free
+  URL parameter; an allowlisted host is the honest version of that). ⛔ Yealink v86+
+  web UIs use an encrypted login, so this is a real build against a real handset, plus
+  a desktop PUBLISH (fleet auto-update) and the office machine taking it.
+- **(B) Yealink RPS / YMCS** — register the customer's MACs to our provisioning URL at
+  Yealink; a factory-reset Yealink asks RPS on boot and is pointed at us with no office
+  access at all. True zero-touch for reset phones; needs Loopcom's Yealink account.
+- **(C) DHCP option 66** on the office router — per-office, router-dependent.
+
+**To finish THIS test by hand:** on the T53W, Menu → Advanced (admin password) → Auto
+Provision → URL `https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` →
+Autoprovision Now (or the same on its web page at 192.168.0.121). The moment T2_103
+registers, `advance` reads registered + ours and flips the row to REGISTERED, and the
+wizard's own screen goes to Ready — the whole tail is already proven by test.
+
+⛔ **The skipped rows carry `state: IDENTIFIED` although they hold an extension** — that
+run predates the ASSIGNED write on record-derived assignment and is harmless (skipped
+rows are never advanced); a fresh run assigns from records into IDENTIFIED too, and
+the driver only checks `extNumber`, not the state, so it is cosmetic.
 
 ### ⏳ Not proven
 

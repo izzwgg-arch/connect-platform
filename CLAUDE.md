@@ -49,13 +49,24 @@ provision all at once … it should pick up 'Not Connected' automatically."*
   Live probe inside `app-api-1`: no token → 401, SUPER_ADMIN on an unknown run → 404,
   nothing written. ⛔ GitHub 401'd the server's fetch AGAIN (bundle → bare mirror →
   deploy → origin restored + mirror removed, verified).
-- ⏳ **NOT PROVEN: nobody has ticked a phone on the deployed screen.** Acceptance
-  is Izzy's own test: fully close + reopen the Loopcom app (an open window keeps
-  the old bundle), Settings → Desk Phones → run the wizard → only **Jacob
-  Weinstock — ext 103** is ticked by default → "Set up this phone" → one row on
-  the match screen → Set Up 1 Phone → his row goes Ready. **The negatives that
-  matter: the eight Connected phones keep working, their rows never leave
-  ASSIGNED, and no `DESK_PHONE_RESET_REQUESTED` audit row names any of them.**
+- ✅✅ **PROVEN BY IZZY THE SAME HOUR (21:34Z): he restarted the app and ran it on A plus
+  center — `DESK_PHONE_SELECTION_SET {selected: 1, skipped: 12}`, only Jacob 103 in the
+  setup, twelve rows skipped and untouched, the screen reading "0 of 1 phones ready".**
+- ⛔⛔ **AND IT FOUND THE NEXT WALL, WHICH PREDATES TODAY: a factory-reset phone sits on
+  "Preparing" forever because the ladder's rung-3 instruction `set_provisioning`
+  ("reachable + unlocked + not pointed at us → tell it where Loopcom is") HAS NO
+  EXECUTOR** — the desktop's five ops are discover/fingerprint/test_credentials/
+  reboot/trigger_autop, the driver marks it a stall, and the handoff recorded the gap on
+  2026-08-22 (Part 4 §7). The PBX already holds that MAC's config
+  (`f3df739ac62197cd/805e0c4d796d.cfg`) and the sibling T53W fetches from
+  `https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` daily; the phone
+  needs that one URL. **Options, none built, Izzy's call (handoff §19):** (A) a sixth
+  desktop op that writes the auto-provision URL (host checked against
+  `ourProvisioningHosts`) — a real build against a handset + a fleet publish; (B) Yealink
+  RPS/YMCS registration of customer MACs — zero-touch for reset phones, needs the
+  Yealink account; (C) DHCP option 66 per office. **By hand today:** set that URL in the
+  phone's Auto Provision menu and press Autoprovision Now — once T2_103 registers the
+  row flips to REGISTERED and the wizard goes Ready by itself.
 
 ## ⛔ AGENT HANDOFF — Create A Box 102 "answers, no audio either side": the app's 200 OK never reaches the PBX through the OFFICE TUNNEL (2026-09-02) — READ FIRST for ANY "I answered and it's dead" on a tenant behind a WireGuard peer, before telling him to update the app, or before reading `session_not_found_timeout` as the cause
 
