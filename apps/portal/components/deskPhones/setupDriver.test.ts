@@ -321,3 +321,31 @@ test("set_provisioning: a machine that cannot listen says so in plain words, and
   assert.match(out.hints.p1, /could not listen/);
   assert.match(out.hints.p1, /Windows/);
 });
+
+test("set_provisioning: an OLD desktop app (unknown_operation) is told to update, and no attempt is ever spent on it", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  (bridge as any).run = async (req: any) => { bridge.ops.push(req); return { ok: false, refused: "unknown_operation" }; };
+  const d = createSetupDriver("r1", api, bridge);
+  const hints: string[] = [];
+  for (let i = 0; i < 8; i += 1) hints.push((await d.tick()).hints.p1 ?? "");
+  assert.match(hints[0], /older than this step/);
+  assert.match(hints[0], /Update Loopcom/);
+  const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
+  assert.ok(advances.every((c) => c.body.provisioningHandoffFailed === false), "a refusal is never counted, so the server is never told to give up");
+  assert.ok(bridge.ops.every((o) => o.reboot === true), "the restart budget is untouched while nothing has run");
+});
+
+test("set_provisioning: cannot_listen does not spend an attempt either, and the hint names Windows", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  (bridge as any).run = async (req: any) => { bridge.ops.push(req); return { ok: false, refused: "cannot_listen" }; };
+  const d = createSetupDriver("r1", api, bridge);
+  for (let i = 0; i < 7; i += 1) await d.tick();
+  const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
+  assert.ok(advances.every((c) => c.body.provisioningHandoffFailed === false));
+});

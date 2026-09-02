@@ -107,6 +107,14 @@ export const HINT_POWER_CYCLE =
   "If Windows asks whether to allow Loopcom on your network, choose Allow.";
 export const HINT_CANNOT_LISTEN =
   "This computer could not listen for the phone. If Windows asked whether to allow Loopcom on your network, choose Allow, then try again.";
+// ⛔ The office machine's Loopcom app predates this step (its allowlist answers
+// `unknown_operation`). That is not a failed attempt and must never spend one —
+// the first live run (2026-09-02, Loopcom/0.1.16) burned all five on it in twenty
+// seconds and told the person "could not listen", which was false.
+export const HINT_APP_TOO_OLD =
+  "This computer's Loopcom app is older than this step. Update Loopcom on this computer, then come back here — the setup continues by itself.";
+export const HINT_REFUSED =
+  "This computer could not hand the phone its settings just now. We will try again shortly.";
 
 export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge) {
   const memos = new Map<string, PhoneMemo>();
@@ -241,13 +249,24 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         // ⛔ Once we have given up, we have given up — the server ends the phone's
         // setup on the next advance, and no further restart is ever sent.
         if (m.provisioningHandoffFailed) { markStall(m, action); continue; }
-        m.provisioningAttempts += 1;
-        const reboot = m.provisioningAttempts <= PROVISIONING_REBOOT_ATTEMPTS;
+        const reboot = m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
         const r = await bridge.run({
           op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
-        if (r?.ok && r.delivered) {
+        if (!r?.ok) {
+          // ⛔ A REFUSAL is not an attempt: nothing listened and nothing restarted.
+          // Counting it would give up on a phone that was never tried — an old app
+          // answers `unknown_operation`, a blocked firewall `cannot_listen`.
+          hints[phone.id] = r?.refused === "unknown_operation" ? HINT_APP_TOO_OLD
+            : r?.refused === "cannot_listen" ? HINT_CANNOT_LISTEN
+            : HINT_REFUSED;
+          markStall(m, action);
+          continue;
+        }
+        // The op ran (listened, maybe restarted the phone): that is an attempt.
+        m.provisioningAttempts += 1;
+        if (r.delivered) {
           // The phone now knows the folder. Tell the server the same way a scan
           // would — the record is what `advance` reads, never this memory.
           await api.post(`/desk-phones/runs/${runId}/discovered`, {
@@ -258,7 +277,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
           clearStall(m);
           continue;
         }
-        hints[phone.id] = !r?.ok ? HINT_CANNOT_LISTEN : r.rebooted ? HINT_RESTARTING : HINT_POWER_CYCLE;
+        hints[phone.id] = r.rebooted ? HINT_RESTARTING : HINT_POWER_CYCLE;
         if (m.provisioningAttempts >= MAX_PROVISIONING_HANDOFF_ATTEMPTS) m.provisioningHandoffFailed = true;
         markStall(m, action);
         continue;
