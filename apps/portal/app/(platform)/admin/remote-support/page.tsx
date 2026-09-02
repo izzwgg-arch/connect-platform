@@ -39,7 +39,7 @@ import {
 } from "../../../../lib/remoteSupportInput";
 import { apiGet } from "../../../../services/apiClient";
 
-type TeamMember = { id: string; firstName?: string | null; lastName?: string | null; email: string };
+type Person = { id: string; name: string; email: string; tenantId: string | null; tenantName: string | null };
 
 export default function RemoteSupportPage() {
   return (
@@ -61,7 +61,8 @@ function RemoteSupportConsole() {
   const { can } = useAppContext();
   const mayControl = can("can_control_remote_support" as any);
 
-  const [people, setPeople] = useState<TeamMember[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const manyTenants = new Set(people.map((p) => p.tenantId)).size > 1;
   const [targetUserId, setTargetUserId] = useState("");
   const [reason, setReason] = useState("");
   const [wantControl, setWantControl] = useState(false);
@@ -88,8 +89,12 @@ function RemoteSupportConsole() {
   const railBodyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    apiGet<{ users?: TeamMember[] }>("/team/members")
-      .then((r) => setPeople(r.users ?? []))
+    // ⛔ `/remote-support/people` — the SAME scoping the request route applies
+    // (super admin: every approved customer; anyone else: own company). This
+    // used to ask `/team/members`, a route that does not exist, and the swallowed
+    // 404 left "Choose a person…" empty for everyone.
+    apiGet<{ people?: Person[] }>("/remote-support/people")
+      .then((r) => setPeople(r.people ?? []))
       .catch(() => setPeople([]));
     void refreshHistory();
   }, []);
@@ -332,7 +337,10 @@ function RemoteSupportConsole() {
                 { value: "", label: "Choose a person…" },
                 ...people.map((p) => ({
                   value: p.id,
-                  label: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.email,
+                  // The company is named only when the list spans more than one,
+                  // i.e. for a super admin — a technician inside one company
+                  // gains nothing from seeing their own name repeated on every row.
+                  label: manyTenants && p.tenantName ? `${p.name} — ${p.tenantName}` : p.name,
                 })),
               ]}
             />

@@ -833,6 +833,41 @@ export async function registerRemoteSupportRoutes(app: FastifyInstance, deps: Re
    * The audit view: who watched whose screen, and did they touch anything.
    * Scoped to the caller's tenant unless they are a super admin.
    */
+  /**
+   * Who a technician may connect to — the list behind "Choose a person…".
+   *
+   * ⛔ THE SCOPING IS THE SAME RULE AS `POST /remote-support/sessions`, on
+   * purpose: a super admin sees every person on every approved customer tenant,
+   * anyone else sees only their own company. A list wider than the request
+   * route would offer people the request then refuses; a narrower one would hide
+   * people the technician is allowed to reach. Change one, change both.
+   *
+   * ⛔ The portal used to ask `/team/members` for this list. That route has
+   * never existed, so every load was a swallowed 404 and the dropdown was empty
+   * for everybody, always. If this list ever reads empty again, check the route
+   * NAME the screen calls before anything else.
+   */
+  app.get("/remote-support/people", async (req: any, reply: any) => {
+    const user = getUser(req);
+    const actor = await actorFacts(user);
+    if (!actor.canRemoteSupport) {
+      return reply.status(403).send({ error: "missing_permission", message: explainReason("missing_permission") });
+    }
+    const rows = await db.user.findMany({
+      where: actor.isSuperAdmin
+        ? { status: { not: "DISABLED" as any }, role: { not: "SUPER_ADMIN" as any }, tenant: { kind: "CUSTOMER" as any, isApproved: true, pbxRemovedAt: null } }
+        : { status: { not: "DISABLED" as any }, tenantId: user.tenantId },
+      select: { id: true, firstName: true, lastName: true, email: true, tenant: { select: { id: true, name: true } } },
+      orderBy: [{ tenant: { name: "asc" } }, { firstName: "asc" }, { email: "asc" }],
+      take: 1000,
+    });
+    const people = rows.map((u: any) => {
+      const full = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+      return { id: u.id, name: full || u.email, email: u.email, tenantId: u.tenant?.id ?? null, tenantName: u.tenant?.name ?? null };
+    });
+    return reply.send({ people });
+  });
+
   app.get("/remote-support/sessions", async (req: any, reply: any) => {
     const user = getUser(req);
     const actor = await actorFacts(user);

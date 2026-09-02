@@ -189,3 +189,14 @@ test("the connection readout has a third state and never guesses good", () => {
   assert.match(src, /"unknown"/, "must distinguish not-yet-measured");
   assert.match(src, /Measuring…/, "and must say so rather than claiming a verdict");
 });
+
+/* ── the people list asks a route that EXISTS (2026-09-02) ───────────── */
+
+test("the technician's people list is fed by the remote-support people route, not a route that does not exist", () => {
+  const src = panel();
+  // "/team/members" never existed in the API. The page asked for it, swallowed
+  // the 404 into an empty list, and "Choose a person…" showed nobody, always.
+  assert.doesNotMatch(src, /["'`]\/team\/members["'`]/, "the page must not ask /team/members — that route does not exist");
+  assert.match(src, /apiGet<[^>]*>\("\/remote-support\/people"\)/, "the page must load people from /remote-support/people");
+  assert.match(src, /setPeople\(r\.people/, "the list must be read from the route's `people` key");
+});
