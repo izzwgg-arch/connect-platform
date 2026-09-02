@@ -128,6 +128,9 @@ export async function registerCoworkerTaskRoutes(app: FastifyInstance, deps: Cow
     if (!p.success) return reply.code(404).send({ error: "task_not_found" });
     const result = boundTaskResult(req.body);
     if (!result) return reply.code(400).send({ error: "bad_result", message: "The result must say ok (true/false) and a one-line summary." });
+    // Ownership first: a row that is not mine reads exactly like one that does not exist.
+    const mine = await prisma.agentAction.findFirst({ where: own(actor, p.data.id), select: { id: true } });
+    if (!mine) return reply.code(404).send({ error: "task_not_found" });
     const done = await prisma.agentAction.updateMany({
       where: { ...own(actor, p.data.id), status: "APPROVED", executedAt: null },
       data: {

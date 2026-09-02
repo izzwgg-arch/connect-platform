@@ -202,3 +202,37 @@ pieces, one allowlist:
 - Nobody has typed "organize my Downloads" into the bubble and pressed the button. The whole chain is proven as tests + typechecks + container greps, never as a moved file.
 - The desktop half rides a NEW rc build (rc.6) and is on no machine until Izzy says install; the fleet feed stays 0.1.16.
 - Acceptance, in order: (1) from a BROWSER tab ask for a folder summary — the assistant must say it only works from the bubble; (2) from the bubble, "how many files are in my Downloads?" — a card appears, press it, the count lands in the chat, `AgentAction` reads EXECUTED; (3) "organize my Downloads" — the card says "Moves files", Safe asks, press it, files land in subfolders, nothing deleted, a name clash got " (2)"; (4) the negatives: press No → DENIED and no file moved; on a live call the write shows "will wait for your OK"; a second bubble window pressing the same card gets "already answered".
+
+### 10.5 Deploy state (2026-09-02 13:53Z)
+
+- **api** `app-api-1` `.build-commit` = `a39d5a22` (`deploy-direct.sh api --commit …`, log
+  `/var/log/connect-deploys/direct-api-20260902T131948Z.log`), healthy, 0 restarts;
+  `registerCoworkerTaskRoutes` ×2 + `prefix: "/coworker"` grepped in the container. Live
+  probes with a throwaway `USER` token against `127.0.0.1:3001`: `GET /coworker/tasks/pending`
+  → **200 `{"tasks":[]}`**; approve / dismiss on an unknown id → **404**; no token → **401** on
+  both public hostnames. **0 `AgentAction` rows under `coworker.task.v1`** — the probes wrote
+  nothing. ⛔ The first probe also showed `/result` on an unknown id answering **409**, not 404
+  — fixed the same hour (ownership `findFirst` before the `updateMany`), redeployed; see the
+  commit after `a39d5a22`.
+- **Knowledge doc:** `AgentKnowledgeDoc` slug `system` rewritten **13:28:43Z** by the api boot
+  sync; the customer body carries "It moves; it never deletes", the staff body carries
+  `coworker.task.v1`, and the old "cannot yet do anything on the person's computer" wording is
+  gone (checked by `position()` in psql).
+- **portal** `app-portal-1` `.build-commit` = `a39d5a22`, 0 restarts; the shipped chunks carry
+  "Task approval", "What the Coworker may do on this computer" and `fa-cw-card`;
+  `/desktop/coworker` **200 on both hostnames**.
+- **agent** rebuilt via `docker compose … build agent && up -d agent` after the clone was
+  hard-reset to `a39d5a22` (build log `/root/hands-agent-build.log`): healthy, 0 restarts, 0
+  error-level lines; `buildCoworkerTaskTools` ×2 in `server.ts`, `coworker_task` ×4 in
+  `engine.ts`, "cannot act on" ×0.
+- **desktop** `apps/desktop/release/Connect-Setup-0.1.17-rc.6.exe` (100,317,227 bytes,
+  `verify:icon` OK, exe `FileVersion 0.1.17-rc.6`); the packed `app.asar` carries
+  `dist/coworker/{tasks,executor,mainWiring}.js`, `main.js` has `registerCoworkerHands` +
+  `isPhoneOnCall`, `preload.js` has `coworker:run` + `coworker:decide`, and the only `unlink` in
+  the packed executor is the doc comment. ⛔ **NOT installed on any machine and NOT published**;
+  the fleet feed stays 0.1.16. Both are Izzy's call. ⛔ The build ran from the shared worktree,
+  which at that moment carried only `CLAUDE.md` and `scripts/mobile-loopcom-android-assets.py`
+  as foreign dirt — neither is in the desktop package.
+- ⛔ **The server clone's `origin` now points at GitHub again** (another session restored it);
+  its fetch works for `--commit` deploys because the bundle route had already put the objects in
+  the clone. The bare mirror `/root/connect-mirror.git` was refreshed to `a39d5a22` anyway.
