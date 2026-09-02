@@ -2197,6 +2197,31 @@ Memory: [[relax-tires-app-ring-is-a-client-side-question]] (updated in place).
   neither today). ⏳ The FCM Data API (priority-lowered %) is DISABLED on the Firebase
   project and the SA cannot enable it — one click for Izzy, project 853620654316.
   ⚠️ Demotion/quota is the best-fitting theory, NOT yet proven on-device.
+- ✅✅ **ROUND 4 (2026-09-02): THE SERVER-SIDE FIX IS BUILT (`c16ce81c`, on Izzy's "I need
+  a solution") — census §3 has the detail; deploy state in §3b of that doc.** Three
+  changes, none touching INCOMING_CALL / INVITE_CANCELED / INVITE_CLAIMED: (1) the worker
+  watchdog's recovery wake rides **NORMAL priority + 300s ttl** (`fcmPriority` option —
+  everything else defaults HIGH; a guard pins the api at HIGH-only, and ⛔ never "fix" a
+  slow recovery by putting the watchdog back to HIGH); (2) **one caller-less WAKE per
+  (call, user)** — `apps/api/src/wakePushGate.ts`, consulted by all three api senders
+  (ring-notify WAKE, `/internal/mobile-prewake` where BOTH prewake sources converge, and
+  the legacy wake-extension door, which answers AS-IF-QUEUED on suppression so dialplan
+  wait behaviour is byte-identical); check() and record() are SPLIT so a cooldown-refused
+  wake never eats the call's one allowed wake; kill switch `WAKE_PUSH_GATE_DISABLED=1`;
+  suppressions land as `CallWakeEvent` stage `WAKE_SUPPRESSED_DUPLICATE`; (3) **FCM 404
+  UNREGISTERED retires the device row** (typed `FcmSendError.unregistered`, 404-only —
+  ⛔ never a 400, which can be our bug) in BOTH api and worker senders; self-healing
+  because `/mobile/devices/register` sets `active: true` on every branch. 17 new tests
+  (13 api + 4 worker), every guard family reads 0 replayed at the pre-change HEAD; worker
+  143/143; typechecks add 0 in touched files. ⛔ The FCM Data API was enabled + queried
+  and is a **dead end at our volume** (HTTP 200, `data: {}` on every day incl. a fresh
+  one — Google withholds breakdowns below a volume floor); the on-device
+  `getPriority()`-vs-`getOriginalPriority()` telemetry (next mobile build) is the
+  demotion proof. ⏳ Acceptance: Relax Tires' `pushReceivedAt − invite.createdAt` over
+  the next week (was 7.5–29 s on the failing calls), plus `WAKE_SUPPRESSED_DUPLICATE`
+  rows appearing on real inbound calls and his dead 08-23 device row reading
+  `fcm_unregistered_deactivated`. Phone-side settings (battery Unrestricted etc.)
+  are still worth setting and still not applied.
 
 ## ⛔⛔ AGENT HANDOFF — Relax Tires "it only rang my cell, not the app": the PBX rang the app on EVERY call for 24 days, and the app rebuilds its SIP stack every 10 minutes (2026-08-27) — READ FIRST for ANY "the app didn't ring" report, before trusting a VoiceDiagEvent gap, or before moving a cellular tenant to the 443 route
 

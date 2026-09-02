@@ -67,7 +67,37 @@ notifications (visible). The vm-greeting record flow already uses NO wake on pur
 | vm-greeting record | no wake by design | unchanged |
 | Genuinely dead device, no calls (Luxure class) | S4 every 5 min | S4 still fires, at normal priority (and/or truly-dark gate) |
 
-## 3. The proposed change set (NOT executed — awaiting Izzy)
+## 3. The change set — ✅ BUILT 2026-09-02 (`c16ce81c`), on Izzy's "I need a solution"
+
+Items 1–3 below shipped exactly as designed (deploy state in §3b). Item 4 (the
+mobile priority telemetry + stale-replay fix) still rides the next app build.
+Where it lives: `apps/api/src/wakePushGate.ts` (+ its 13-test file, all source
+guards replay-proven failing at the pre-change HEAD), `apps/api/src/fcmDirect.ts`
+(`FcmSendOptions` — HIGH stays the default; typed `FcmSendError.unregistered`,
+404-only), the three gated send sites in `apps/api/src/server.ts`, and the
+worker's `fcmPriority: "NORMAL"` watchdog send + UNREGISTERED retirement in
+`apps/worker/src/main.ts` (4-test guard file). Kill switch:
+`WAKE_PUSH_GATE_DISABLED=1` (api env + restart). Suppressions are visible as
+`CallWakeEvent` stage `WAKE_SUPPRESSED_DUPLICATE`; retirements as
+`lastPushStatus = "fcm_unregistered_deactivated"` (row re-activates itself on
+the next `/mobile/devices/register`).
+
+⛔ The gate's check() and record() are SPLIT on purpose (a cooldown-refused
+wake must not eat the call's one allowed wake), the wake-extension door answers
+AS-IF-QUEUED on suppression so dialplan wait behaviour is byte-identical, and
+the api itself may never pass NORMAL — both pinned by tests.
+
+### 3a. FCM Data API postscript (2026-09-02)
+
+Enabled + viewer role granted in Izzy's Chrome on 09-01; queried twice. It
+answers HTTP 200 with rows (Aug 21–28) and **every day's `data` is `{}`** —
+Google withholds the percentage breakdowns below a minimum daily message
+volume, and our Android direct-FCM fleet is under it. A fresh day arriving
+empty settles that this is a volume floor, not lag. **Dead end at our size**;
+left enabled (read-only, costs nothing). The proofs that remain: the §3.4
+on-device priority telemetry, and the acceptance metric in §4.
+
+## 3-orig. The proposed change set (as designed 2026-09-01)
 
 1. **S4 watchdog wake → NORMAL priority** (and optionally gate on "no REGISTERED event in
    ≥ 30–60 min" instead of 300 s stale). A recovery wake is not time-critical: a
