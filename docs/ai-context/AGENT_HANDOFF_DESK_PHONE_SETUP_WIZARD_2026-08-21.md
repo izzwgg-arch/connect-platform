@@ -1293,3 +1293,85 @@ registered unseen phone reads connected), typechecks at baseline. ⏳ NOT
 PROVEN: the reset T53W has not yet been walked through discovery → assignment
 → setup → REGISTERED — that walk (on desktop 0.1.16) is the feature's true
 end-to-end acceptance test, and it is exactly what Izzy is doing.
+
+---
+
+## §19 — "It is only letting me provision all at once": the person picks WHICH phones now (2026-09-02, `1193a07a`)
+
+Izzy, testing the wizard on A plus center from the Loopcom desktop app (over AnyDesk),
+with one T53W he had factory-reset — ext 103, reading **Not connected** on the found
+screen while eight others read **Connected**:
+
+> *"I want to be able to select the phone to provision. It is only letting me
+> provision all at once … it should pick up 'Not Connected' automatically."*
+
+### Why it was all-at-once
+
+Three things, none of which knew about a per-phone choice:
+
+1. `POST …/discovered` pre-assigns every phone the PBX provisioning records name
+   (§14 — that is what puts the names and photos on the list), so in a nine-phone
+   office all nine rows carry an extension the moment they are found.
+2. `setupDriver.tick()` advanced every phone with an `extNumber` that was not
+   terminal.
+3. `summarizeRun` was built from EVERY row of the run, so leaving a phone out (by
+   un-assigning it) kept `finished` false forever and the wizard never reached its
+   last screen. "Leave a phone blank to skip it for now" was true of the driver and
+   false of the summary.
+
+The §18 note that the assignment step "already existed" was correct and was not the
+answer: the match screen lets you say WHO uses a phone, not WHETHER to touch it.
+
+### What shipped
+
+- **`DeskPhoneSetupPhone.skippedAt DateTime?`** — migration
+  `20260902140000_desk_phone_selection`, one nullable column generated with
+  `prisma migrate diff`. Null = in the setup. Stored on the row so a reopened window,
+  a second machine or a stale tab cannot silently widen what a person chose.
+- **`POST /desk-phones/runs/:id/selection { phoneIds }`** — `ownRun` → `allowedToSetUp`
+  → body, so it satisfies `deskPhoneRouteOrder.test.ts` without a change to that guard.
+  The list REPLACES the whole pick (idempotent; pressing Continue twice or coming back
+  with different ticks lands the same way). An id not in the run → 400
+  `phone_list_mismatch`. Audited as `DESK_PHONE_SELECTION_SET`.
+- **`customerPhoneView` carries `selected`**, and a new `inSetup()` filter feeds every
+  `summarizeRun` call (run GET, `/state`, the admin run view) — a skipped phone counts
+  toward nothing, so one ticked phone registering is enough for the run to read done.
+- **`advance` on a skipped phone answers `do_nothing, skipped: true` from the ROW**,
+  before the registration question and before the reset gate — no reset can ever be
+  spent on a phone the person left alone, whatever a driver sends.
+- **The driver skips `selected === false` only.** A row without the flag (an older api)
+  is driven exactly as before — the check is deliberately not `!== true`.
+- **The wizard:** every row on the found screen is one big tick target (the clearing
+  screen's `dps-clear-row` + `dps-check` shape). Default: `connectedNow !== true` is
+  ticked (a reset or unplugged phone is what the wizard is for), a Connected phone is
+  left alone unless ticked. A selection line shows the count with three plain links —
+  *Only the ones not connected · Select all · Select none*. The button reads **"Set up
+  this phone"** / **"Set up these N phones"** and is disabled with nothing ticked. The
+  pick is saved server-side BEFORE the match screen; match, ready, live and done
+  iterate the CHOSEN phones only, and say how many were left as they are.
+
+### Proven
+
+- api desk-phone suites **88/88** (85 + 3 new in `deskPhoneRoutes.test.ts`: the pick
+  stores on the rows / the unticked phone is never advanced / one registered phone
+  finishes the run; the pick replaces; a foreign id refuses and another tenant sees
+  404).
+- portal `deskPhoneWizard.test.ts` + `setupDriver.test.ts` + `nativeSelectSweep`
+  **44/44** (2 new). **All 5 new source guards fail replayed against HEAD.**
+- portal typecheck **0**; api typecheck **81 = the baseline**, none in a touched file.
+- ⛔ Deliberately unchanged: an ASSIGNED phone that is not skipped and is never
+  advanced still holds `finished` open (pre-existing; the driver always advances
+  every in-setup assigned phone, so it does not bite today).
+
+### Deploy state
+
+See the CLAUDE.md section for this date — filled in after the containers were verified.
+
+### ⏳ Not proven
+
+Nobody has ticked a phone on the deployed screen. Acceptance is exactly Izzy's test:
+close and reopen the Loopcom app, Settings → Desk Phones → run the wizard → only
+**Jacob Weinstock — ext 103** should be ticked by default → "Set up this phone" → the
+match screen shows one row → Set Up 1 Phone → Jacob's row goes to Ready. The negatives
+that matter: the eight Connected phones keep working throughout, their rows never leave
+ASSIGNED, and no `DESK_PHONE_RESET_REQUESTED` audit row names any of them.

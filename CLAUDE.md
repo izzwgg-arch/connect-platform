@@ -1,3 +1,62 @@
+## ⛔ AGENT HANDOFF — the desk-phone wizard lets the person PICK which phones to set up; an unticked phone is never touched and never blocks "done" (2026-09-02) — READ FIRST before touching the found/match screens, any `summarizeRun` call in `deskPhoneRoutes.ts`, the driver's skip line, or before "simplifying" `skippedAt`
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md` §19**
+(`1193a07a` on `feat/ivr-migration-takeover` — api + portal + one migration.
+Deploy state at the end of this section. No PBX write, no env change, no tenant
+row.) Memory: [[desk-phone-wizard-pick-which-phones]].
+Izzy, 2026-09-02, testing on ONE factory-reset T53W (ext 103) at A plus center:
+*"I want to be able to select the phone to provision. It is only letting me
+provision all at once … it should pick up 'Not Connected' automatically."*
+
+- ⛔⛔ **WHY IT WAS ALL-AT-ONCE, three places:** discovery pre-assigns every phone
+  the PBX records name (§14 — that is what puts names + photos on the list), the
+  driver advanced every assigned phone, and **`summarizeRun` counted EVERY row of
+  the run** — so un-assigning a phone (the old "leave it blank to skip") kept
+  `finished` false forever. The §18 "the assignment step already existed" note
+  was true and was not the answer: match says WHO, not WHETHER.
+- ✅ **THE CHOICE LIVES ON THE ROW: `DeskPhoneSetupPhone.skippedAt`** (migration
+  `20260902140000_desk_phone_selection`, one nullable column, null = in the
+  setup). `POST /desk-phones/runs/:id/selection { phoneIds }` — ownRun →
+  permission → body (the route-order guard passes untouched), **REPLACES the
+  whole pick**, 400 `phone_list_mismatch` on an id outside the run, audited
+  `DESK_PHONE_SELECTION_SET`. The customer view carries `selected`; `inSetup()`
+  feeds every summary (run GET, `/state`, admin view) so one ticked phone
+  registering finishes the run. ⛔ **`advance` on a skipped phone answers
+  `do_nothing, skipped:true` from the ROW** before the registration question and
+  the reset gate — no reset can be spent on it whatever a driver sends.
+- ⛔ **The driver skips `selected === false` ONLY** — an older api that sends no
+  flag drives everything as before; never tighten it to `!== true`.
+- ✅ **The screen:** every found row is one big tick target (the clearing
+  screen's shape). **Default: Not connected / Found ticked, Connected left
+  alone.** Three links — *Only the ones not connected · Select all · Select
+  none*. Button reads **"Set up this phone" / "Set up these N phones"**,
+  disabled with nothing ticked; the pick is saved server-side BEFORE the match
+  screen; match/ready/live/done iterate the CHOSEN phones only and say how many
+  were left as they are.
+- ⛔ **Deliberately unchanged:** an ASSIGNED, un-skipped phone that is never
+  advanced still holds `finished` open (pre-existing; the driver always advances
+  every in-setup assigned phone, so it does not bite).
+- ✅ **Proven:** api desk-phone suites 88/88 (3 new), portal wizard + driver +
+  select-sweep 44/44 (2 new), **all 5 new source guards fail replayed against
+  HEAD**, portal tsc 0, api tsc 81 = baseline with none in a touched file.
+- ✅ **api + portal DEPLOYED and container-verified 2026-09-02 (both `app-api-1` and
+  `app-portal-1` at `0dbad8a8` ⊇ `1193a07a`, 0 restarts, health + `/settings/desk-phones`
+  200 on both hostnames).** Migration `20260902140000_desk_phone_selection` applied by
+  the api deploy and read back (`skippedAt timestamp NULL`, 14 rows, 0 skipped); the
+  selection route + `skippedAt` grepped in the running api; the shipped portal CSS
+  carries `dps-linkbtn`/`dps-unpicked` and the chunks carry "Set up this phone",
+  "Only the ones not connected", "Tick the phones you want set up" and `/selection`.
+  Live probe inside `app-api-1`: no token → 401, SUPER_ADMIN on an unknown run → 404,
+  nothing written. ⛔ GitHub 401'd the server's fetch AGAIN (bundle → bare mirror →
+  deploy → origin restored + mirror removed, verified).
+- ⏳ **NOT PROVEN: nobody has ticked a phone on the deployed screen.** Acceptance
+  is Izzy's own test: fully close + reopen the Loopcom app (an open window keeps
+  the old bundle), Settings → Desk Phones → run the wizard → only **Jacob
+  Weinstock — ext 103** is ticked by default → "Set up this phone" → one row on
+  the match screen → Set Up 1 Phone → his row goes Ready. **The negatives that
+  matter: the eight Connected phones keep working, their rows never leave
+  ASSIGNED, and no `DESK_PHONE_RESET_REQUESTED` audit row names any of them.**
+
 ## ⛔ AGENT HANDOFF — Create A Box 102 "answers, no audio either side": the app's 200 OK never reaches the PBX through the OFFICE TUNNEL (2026-09-02) — READ FIRST for ANY "I answered and it's dead" on a tenant behind a WireGuard peer, before telling him to update the app, or before reading `session_not_found_timeout` as the cause
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_102_ANSWER_LOST_ON_TUNNEL_2026-09-02.md`**
