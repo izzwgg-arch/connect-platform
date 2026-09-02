@@ -8226,6 +8226,14 @@ model DeskPhoneSetupPhone {
   /// Set when the ladder stopped and why, so nothing retries it in a loop.
   haltedReason String?
 
+  /// ⛔ Set when the PERSON left this phone unticked on the "we found N phones"
+  /// screen (2026-09-02, Izzy: "I want to be able to select which phone I want
+  /// to provision"). A skipped phone keeps its identity and its live-connection
+  /// reading on the screen, but it is never advanced, never reset, and does not
+  /// count towards the run finishing. Null = in the setup. Stored on the row,
+  /// not in the app, so a reopened window cannot silently widen the selection.
+  skippedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

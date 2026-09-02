@@ -188,9 +188,23 @@
 .dps-input::placeholder { color: var(--dps-dim); }
 .dps-input:focus { outline: 2px solid var(--dps-accent); outline-offset: 1px; }
 
-/* The clearing screen's per-device rows. A row is one big click target. */
+/* The clearing screen's per-device rows. A row is one big click target.
+   The found screen reuses the same shape for "which phones do you want set up". */
 .dps-clear-row { cursor: pointer; }
 .dps-clear-row:hover { border-color: var(--dps-accent); }
+.dps-picked { border-color: color-mix(in srgb, var(--dps-accent) 55%, var(--dps-border)); }
+/* An unticked phone is still listed in full — dimmed, never hidden, so a person
+   can see what they are leaving alone and change their mind. */
+.dps-unpicked { opacity: 0.62; }
+.dps-unpicked:hover { opacity: 1; }
+/* The selection line under the found heading: a count and three plain links. */
+.dps-picks { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-top: 12px; font-size: 13px; }
+.dps-picks b { font: 600 13px/1.4 Inter, sans-serif; }
+.dps-linkbtn {
+  background: none; border: 0; padding: 0; cursor: pointer; font: 500 13px/1.4 Inter, sans-serif;
+  font-family: inherit; color: var(--dps-accent); text-decoration: underline; text-underline-offset: 2px;
+}
+.dps-linkbtn:hover { color: var(--dps-text); }
 .dps-check {
   width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--dps-accent); cursor: pointer;
 }

@@ -194,7 +194,21 @@ function customerPhoneView(row: any) {
     status: customerStateFor(row.state as PhoneState),
     note: row.customerNote || null,
     needsAttention: row.state === "NEEDS_ATTENTION" || row.state === "FAILED",
+    // ⛔ Whether the PERSON ticked this phone on the found screen. False = "left
+    // exactly as it is": never advanced, never reset, not counted towards done.
+    selected: !row.skippedAt,
   };
+}
+
+/**
+ * The phones a run is actually working on: the ones the person did not untick.
+ * ⛔ Every summary is built from THIS list, never from every row of the run —
+ * otherwise a phone deliberately left alone keeps "finished" false forever and the
+ * wizard never reaches its last screen (the "only lets me provision all at once"
+ * report, 2026-09-02).
+ */
+function inSetup<T extends { skippedAt?: Date | null }>(rows: T[]): T[] {
+  return rows.filter((r) => !r.skippedAt);
 }
 
 /**
@@ -452,6 +466,67 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     return reply.send({ ok: true, phone: customerPhoneView(updated) });
   });
 
+  /* ── which phones to set up at all ─────────────────────────────────────── */
+
+  /**
+   * The person's pick from the found screen: exactly these phones are in the
+   * setup, every other phone in the run is left alone (2026-09-02, Izzy testing
+   * on a factory-reset phone: "I want to be able to select which phone I want
+   * to provision. It is only letting me provision all at once.").
+   *
+   * ⛔ Whole-run, idempotent: the list REPLACES the selection, so pressing
+   * Continue twice or coming back from the next screen with different ticks
+   * lands the same way. ⛔ Stored on the rows, not in the app — a reopened window
+   * or a second machine cannot silently widen what a person chose. ⛔ A phone
+   * being deselected is never failed and never loses its name: `skippedAt` is
+   * the only thing that moves.
+   */
+  app.post("/desk-phones/runs/:id/selection", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    const body = z.object({ phoneIds: z.array(z.string().min(1)).max(500) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+
+    const wanted = new Set(body.data.phoneIds);
+    const rows = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id, tenantId: user.tenantId } });
+    const known = new Set(rows.map((r: any) => String(r.id)));
+    // ⛔ The pick covers exactly the phones the person was shown. An id that is
+    // not in this run is a stale screen or a guess; either way, ask again.
+    for (const id of wanted) {
+      if (!known.has(id)) return reply.status(400).send({ error: "phone_list_mismatch" });
+    }
+
+    const now = new Date();
+    const chosen = rows.filter((r: any) => wanted.has(String(r.id))).map((r: any) => r.id);
+    const skipped = rows.filter((r: any) => !wanted.has(String(r.id))).map((r: any) => r.id);
+    if (chosen.length) {
+      await db.deskPhoneSetupPhone.updateMany({
+        where: { runId: run.id, tenantId: user.tenantId, id: { in: chosen } },
+        data: { skippedAt: null },
+      });
+    }
+    if (skipped.length) {
+      await db.deskPhoneSetupPhone.updateMany({
+        where: { runId: run.id, tenantId: user.tenantId, id: { in: skipped } },
+        data: { skippedAt: now },
+      });
+    }
+    await deps.audit({
+      tenantId: user.tenantId, action: "DESK_PHONE_SELECTION_SET",
+      entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub,
+      metadata: { selected: chosen.length, skipped: skipped.length },
+    });
+
+    const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
+    return reply.send({
+      ok: true,
+      selected: chosen.length,
+      skipped: skipped.length,
+      phones: await withConnectedNow(deps, user.tenantId, phones.map(customerPhoneView)),
+    });
+  });
+
   /* ── permission to wipe ────────────────────────────────────────────────── */
 
   app.post("/desk-phones/runs/:id/authorize-reset", async (req: any, reply: any) => {
@@ -521,6 +596,17 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
     });
     if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    // ⛔ A phone the person left unticked is not in the setup. Nothing is asked
+    // of it, nothing is written to it, and no reset can ever be spent on it —
+    // whatever the driver sends. The driver skips these itself; this is the
+    // server refusing on its own record, which is the only copy that counts.
+    if (phone.skippedAt) {
+      return reply.send({
+        ok: true, action: "do_nothing", rung: 0, halted: false, handOff: null,
+        skipped: true, customerMessage: null, phone: customerPhoneView(phone),
+      });
+    }
 
     // ⛔⛔ REGISTRATION IS ASKED OF ASTERISK, NEVER INFERRED. A phone that accepted
     // our settings is not a working phone; only the PBX reporting the endpoint
@@ -640,7 +726,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     if (!(await allowedToSetUp(user, reply))) return;
     const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
     const wantsDiagnostics = String((req.query || {}).view || "") === "diagnostics";
-    const summary = summarizeRun(phones.map((p: any) => p.state as PhoneState));
+    const summary = summarizeRun(inSetup(phones).map((p: any) => p.state as PhoneState));
     return reply.send({
       ok: true,
       run: { id: run.id, status: run.status, subnet: run.subnet, startedAt: run.startedAt, origin: run.origin },
@@ -667,7 +753,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     const phones = run
       ? await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } })
       : [];
-    const summary = summarizeRun(phones.map((p: any) => p.state as PhoneState));
+    const summary = summarizeRun(inSetup(phones).map((p: any) => p.state as PhoneState));
     return reply.send({
       ok: true,
       hasActiveRun: Boolean(run),
@@ -841,7 +927,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         officeAgentLabel: run.officeAgentLabel || null,
         officeAgentSeenAt: run.officeAgentSeenAt || null,
       },
-      summary: summarizeRun(phones.map((p: any) => p.state as PhoneState)),
+      summary: summarizeRun(inSetup(phones).map((p: any) => p.state as PhoneState)),
       // The technician sees everything the customer does not.
       phones: phones.map(diagnosticPhoneView),
     });

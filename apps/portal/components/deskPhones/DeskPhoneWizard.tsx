@@ -18,7 +18,7 @@
  * with a blank list, which would read as "you have no phones".
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { classifyDiscoveredHosts, shouldFingerprint, deviceKindFor, describeKind } from "@connect/shared";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
@@ -41,6 +41,8 @@ type CustomerPhone = {
    * — the record says whose phone it is, only this says it is connected. A
    * factory-reset phone keeps its name and loses this (ext-103 test, 2026-08-25). */
   connectedNow?: boolean | null;
+  /** False once the person left this phone unticked on the found screen. */
+  selected?: boolean;
   status: "Finding" | "Preparing" | "Restarting" | "Connecting" | "Ready" | "Needs attention";
   note: string | null;
   needsAttention: boolean;
@@ -126,6 +128,16 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
   const [clearTicks, setClearTicks] = useState<Record<string, boolean>>({});
+  /**
+   * Which phones the person wants set up, from the found screen. ⛔ A partial
+   * override map: a phone with no entry takes the default — TICKED when it is not
+   * connected right now (a factory-reset or unplugged phone is exactly what this
+   * wizard is for), UNTICKED when it is already connected (a working phone is left
+   * alone unless the person asks). Izzy, 2026-09-02, testing on one reset phone:
+   * "I want to be able to select which phone I want to provision … it should pick
+   * up 'Not Connected' automatically."
+   */
+  const [picks, setPicks] = useState<Record<string, boolean>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const driverRef = useRef<ReturnType<typeof createSetupDriver> | null>(null);
   const tickingRef = useRef(false);
@@ -331,8 +343,34 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     }
   }, [passwordDrafts]);
 
-  const assigned = useMemo(() => phones.filter((p) => p.extNumber), [phones]);
+  const isPicked = useCallback(
+    (p: CustomerPhone) => picks[p.id] ?? (p.connectedNow !== true),
+    [picks],
+  );
+  /** The phones going into the setup — every later screen is about these only. */
+  const chosen = useMemo(() => phones.filter(isPicked), [phones, isPicked]);
+  const leftAlone = phones.length - chosen.length;
+  const assigned = useMemo(() => chosen.filter((p) => p.extNumber), [chosen]);
   const stepIndex = Math.max(0, STEP_ORDER.indexOf(step));
+
+  /**
+   * Found → match. ⛔ The pick is SAVED ON THE SERVER before the next screen, so
+   * the run itself knows which phones are in — the driver, the progress numbers
+   * and the reset gate all read the row, never this window's memory.
+   */
+  const commitSelection = useCallback(async () => {
+    if (!runId || chosen.length === 0) return;
+    setBusy(true); setError(null);
+    try {
+      const out = await apiPost<{ phones: CustomerPhone[] }>(`/desk-phones/runs/${runId}/selection`, {
+        phoneIds: chosen.map((p) => p.id),
+      });
+      setPhones(out.phones);
+      setStep("match");
+    } catch {
+      setError("Your choice could not be saved. Try again.");
+    } finally { setBusy(false); }
+  }, [runId, chosen]);
 
   return (
     <div className="dps-root">
@@ -515,14 +553,34 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 <>
                   <h3>{phones.length === 1 ? "We found 1 desk phone" : `We found ${phones.length} desk phones`}</h3>
                   <p className="dps-sub">
-                    {phones.filter((p) => !p.needsAttention).length} ready to go
-                    {phones.some((p) => p.needsAttention) ? ". Some will need a moment — we will explain those when we get to them." : "."}
+                    Tick the phones you want set up. Phones that are already connected are left
+                    exactly as they are unless you tick them.
                   </p>
+                  {phones.length > 0 && (
+                    <div className="dps-picks">
+                      <b>{chosen.length === 1 ? "1 phone selected" : `${chosen.length} phones selected`}</b>
+                      <button type="button" className="dps-linkbtn"
+                        onClick={() => setPicks(Object.fromEntries(phones.map((p) => [p.id, p.connectedNow !== true])))}>
+                        Only the ones not connected
+                      </button>
+                      <button type="button" className="dps-linkbtn"
+                        onClick={() => setPicks(Object.fromEntries(phones.map((p) => [p.id, true])))}>
+                        Select all
+                      </button>
+                      <button type="button" className="dps-linkbtn"
+                        onClick={() => setPicks(Object.fromEntries(phones.map((p) => [p.id, false])))}>
+                        Select none
+                      </button>
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
                   <h3>Who uses each phone?</h3>
-                  <p className="dps-sub">Pick the person who sits at each desk. Leave a phone blank to skip it for now.</p>
+                  <p className="dps-sub">
+                    Pick the person who sits at each desk. Leave a phone blank to skip it for now.
+                    {leftAlone > 0 && ` ${leftAlone === 1 ? "1 phone you did not tick is" : `${leftAlone} phones you did not tick are`} left exactly as they are.`}
+                  </p>
                 </>
               )}
               {step === "found" && othersCount > 0 && (
@@ -541,9 +599,14 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   We looked on this office&rsquo;s network. Phones in another building need this run again over there.
                 </p>
               )}
+              {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
               <div className="dps-plist">
-                {phones.map((p) => (
-                  <div key={p.id} className="dps-prow dps-found">
+                {(step === "found" ? phones : chosen).map((p) => (
+                  /* ⛔ On the found screen the whole row is one big tick target, the
+                     same shape as the clearing screen — a person picks phones here. */
+                  <RowShell key={p.id} pick={step === "found"} picked={isPicked(p)}
+                    onPick={(v) => setPicks((t) => ({ ...t, [p.id]: v }))}
+                    label={`Set up ${p.displayName || p.model || "this phone"}`}>
                     <div className="dps-pimg">
                       <PhonePhoto model={p.model} alt={p.model ? `${p.vendor ?? ""} ${p.model}`.trim() : "Desk phone"} />
                     </div>
@@ -579,7 +642,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                           : "Found"}
                       </span>
                     )}
-                  </div>
+                  </RowShell>
                 ))}
                 {knownElsewhere.length > 0 && (
                   <div className="dps-known">
@@ -628,9 +691,11 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               <span className="dps-sp" />
               <button
                 className="dps-btn dps-btn-p"
-                onClick={() => (step === "found" ? setStep("match") : setStep("ready"))}
-                disabled={phones.length === 0}
-              >{step === "found" ? "Choose who uses each phone" : "Continue"}</button>
+                onClick={() => (step === "found" ? void commitSelection() : setStep("ready"))}
+                disabled={busy || (step === "found" ? chosen.length === 0 : phones.length === 0)}
+              >{step === "found"
+                ? (busy ? "Saving…" : chosen.length === 1 ? "Set up this phone" : `Set up these ${chosen.length} phones`)
+                : "Continue"}</button>
             </div>
           </>
         )}
@@ -649,6 +714,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               </div>
               <p className="dps-hint" style={{ marginTop: 16 }}>
                 If somebody is on a call right now, that phone waits its turn.
+                {leftAlone > 0 && ` The ${leftAlone === 1 ? "phone" : `${leftAlone} phones`} you did not tick will not be touched.`}
               </p>
             </div>
             <div className="dps-wz-foot">
@@ -775,7 +841,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               <i style={{ width: `${summary && summary.total ? Math.round((summary.ready / summary.total) * 100) : 0}%` }} />
             </div>
             <div className="dps-plist">
-              {phones.map((p) => (
+              {chosen.map((p) => (
                 <div key={p.id} className="dps-prow">
                   <div className="dps-pimg">
                     <PhonePhoto model={p.model} />
@@ -823,7 +889,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   : "Your office is working. The rest can wait until you have a minute."}
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(158px,1fr))", gap: 8, marginTop: 22, textAlign: "left" }}>
-                {phones.map((p) => (
+                {chosen.map((p) => (
                   <div key={p.id} className="dps-st">
                     <span className={p.status === "Ready" ? "dps-tick" : ""}>{p.status === "Ready" ? "✓" : "⚠"}</span>{" "}
                     {p.displayName ?? p.model ?? "Desk phone"}
@@ -840,6 +906,24 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One phone row. On the found screen it is a LABEL wrapping a tick, so the whole
+ * card is the click target (the clearing screen's proven shape); everywhere else
+ * it is the plain row it always was.
+ */
+function RowShell({ pick, picked, onPick, label, children }: {
+  pick: boolean; picked: boolean; onPick: (v: boolean) => void; label: string; children: ReactNode;
+}) {
+  if (!pick) return <div className="dps-prow dps-found">{children}</div>;
+  return (
+    <label className={`dps-prow dps-found dps-clear-row${picked ? " dps-picked" : " dps-unpicked"}`}>
+      <input type="checkbox" className="dps-check" checked={picked}
+        onChange={(e) => onPick(e.target.checked)} aria-label={label} />
+      {children}
+    </label>
   );
 }
 

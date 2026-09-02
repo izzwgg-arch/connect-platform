@@ -39,6 +39,8 @@ export type DiagnosticPhone = {
   displayName: string | null;
   attempts: number;
   resetCount: number;
+  /** False when the person left this phone unticked on the found screen. */
+  selected?: boolean;
 };
 
 /** What the wizard must put in front of a person before anything continues. */
@@ -135,8 +137,10 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
     const resetWanted: Array<{ id: string; message: string }> = [];
 
     for (const phone of out.phones as DiagnosticPhone[]) {
-      // Unassigned phones were left blank on purpose; terminal phones are done.
-      if (!phone.extNumber || TERMINAL.has(phone.state)) continue;
+      // Unassigned phones were left blank on purpose; terminal phones are done;
+      // ⛔ an UNTICKED phone (selected === false) is one the person chose to leave
+      // exactly as it is — never advanced, so never reset (2026-09-02).
+      if (!phone.extNumber || phone.selected === false || TERMINAL.has(phone.state)) continue;
       const m = memo(phone.id);
 
       const decision = await api.post<any>(`/desk-phones/runs/${runId}/phones/${phone.id}/advance`, {

@@ -625,3 +625,90 @@ test("the screen tells the live truth about a factory-reset phone, records notwi
   const known = out.knownElsewhere.find((k: any) => k.mac === "80:5E:C0:BF:8C:62");
   assert.equal(known.connectedNow, true, "a genuinely registered unseen phone reads connected");
 });
+
+/* ── which phones are in the setup at all (2026-09-02) ──────────────────── */
+
+async function assignTo(app: any, runId: string, phoneId: string, extensionId: string) {
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/assign`, payload: { extensionId },
+  });
+  assert.equal(r.statusCode, 200);
+}
+
+test("the person's pick is stored on the rows: an unticked phone is never advanced and does not block done", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }, { mac: "80:5E:0C:BD:13:5B" }]);
+  const [inSetup, leftAlone] = state.phones;
+  await assignTo(app, runId, inSetup.id, "e1");
+  await assignTo(app, runId, leftAlone.id, "e2");
+
+  // Izzy's exact case: nine phones on the list, ONE reset phone to set up.
+  const pick = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [inSetup.id] },
+  });
+  assert.equal(pick.statusCode, 200);
+  assert.equal(body(pick).selected, 1);
+  assert.equal(body(pick).skipped, 1);
+  assert.equal(inSetup.skippedAt, null);
+  assert.ok(leftAlone.skippedAt instanceof Date, "the unticked phone is marked on its own row");
+  // ⛔ Deselecting never fails a phone and never loses its identity.
+  assert.equal(leftAlone.state, "ASSIGNED");
+  assert.equal(leftAlone.extNumber, "102");
+
+  const view = body(await app.inject({ method: "GET", url: `/desk-phones/runs/${runId}` }));
+  assert.deepEqual(view.phones.map((p: any) => p.selected), [true, false]);
+  assert.equal(view.summary.total, 1, "only the ticked phone counts");
+
+  // The server refuses to touch the unticked phone whatever a driver sends.
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${leftAlone.id}/advance`, payload: {},
+  }));
+  assert.equal(adv.action, "do_nothing");
+  assert.equal(adv.skipped, true);
+  assert.equal(leftAlone.state, "ASSIGNED");
+  assert.equal(leftAlone.attempts, 0);
+
+  // The ticked phone registering is enough for the whole run to read finished —
+  // before this, the eight untouched phones kept "finished" false forever.
+  registered = new Set(["101"]);
+  inSetup.provisioningUrl = "https://m.connectcomunications.com/phoneprov/x/x.cfg";
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${inSetup.id}/advance`, payload: {} });
+  const done = body(await app.inject({ method: "GET", url: `/desk-phones/runs/${runId}` }));
+  assert.equal(done.summary.ready, 1);
+  assert.equal(done.summary.finished, true, "a phone left alone must not hold the run open");
+  assert.equal(done.summary.headline, "Your phone is ready");
+});
+
+test("the pick REPLACES the previous pick, so a change of mind lands cleanly", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }, { mac: "80:5E:0C:BD:13:5B" }]);
+  const [a, b] = state.phones;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [a.id] } });
+  assert.ok(b.skippedAt);
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [a.id, b.id] } });
+  assert.equal(a.skippedAt, null);
+  assert.equal(b.skippedAt, null, "re-ticking a phone brings it back");
+});
+
+test("a pick naming a phone that is not in this run is refused, and another customer sees 404", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A" }]);
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [state.phones[0].id, "ph_not_here"] },
+  });
+  assert.equal(r.statusCode, 400);
+  assert.equal(body(r).error, "phone_list_mismatch");
+  assert.equal(state.phones[0].skippedAt, undefined, "a refused pick changes nothing");
+
+  const theirs = await makeApp(OTHER);
+  const x = await theirs.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [state.phones[0].id] },
+  });
+  assert.equal(x.statusCode, 404, "404 and not 403: a 403 confirms the run exists");
+});

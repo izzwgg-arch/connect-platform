@@ -242,3 +242,22 @@ test("a non-Yealink device is never poked with Yealink mechanisms", async () => 
   assert.equal(bridge.ops.length, 1, `expected 1 local action, saw ${bridge.ops.length}`);
   assert.deepEqual(out.performed.map((p) => p.phoneId), ["yl"]);
 });
+
+test("a phone the person left unticked on the found screen is never advanced, even though it is assigned", async () => {
+  // 2026-09-02: Izzy's nine-phone office, ONE factory-reset phone to set up. The
+  // other eight carry an extension from the PBX records and used to be driven too.
+  const api = fakeApi(
+    [phone("left", { selected: false }), phone("live", { selected: true }), phone("legacy")],
+    { live: { action: "do_nothing" }, legacy: { action: "do_nothing" } },
+  );
+  const d = createSetupDriver("r1", api, fakeBridge());
+  await d.tick();
+  const advanced = api.calls.filter((c) => c.path.includes("/advance")).map((c) => c.path);
+  assert.equal(advanced.length, 2, "the unticked phone is not asked about");
+  assert.ok(advanced.some((p) => p.includes("/live/")));
+  assert.ok(advanced.some((p) => p.includes("/legacy/")), "a row with no selected flag (older api) is driven as before");
+  assert.ok(!advanced.some((p) => p.includes("/left/")));
+  // ⛔ Source-pinned: the skip is on `selected === false`, so an older api that
+  // does not send the flag keeps every phone in the setup.
+  assert.match(read("setupDriver.ts"), /phone\.selected === false/);
+});

@@ -264,3 +264,30 @@ test("a FAILED scan is never shown as an empty office", () => {
   assert.ok(branch.includes('setStep("network")'),
     "a failed scan must land back on the network step, never on the found list");
 });
+
+/* ── the person picks WHICH phones (2026-09-02) ──────────────────────────── */
+
+test("the found screen lets the person pick which phones to set up, and every later screen follows that pick", () => {
+  // Izzy, testing on one factory-reset phone in a nine-phone office: "I want to
+  // be able to select which phone I want to provision. It is only letting me
+  // provision all at once."
+  const exec = stripComments(WIZARD);
+  // Every found row is one big tick target.
+  assert.match(exec, /<RowShell key=\{p\.id\} pick=\{step === "found"\}/);
+  assert.match(exec, /type="checkbox" className="dps-check" checked=\{picked\}/);
+  // The default: not connected = ticked, already connected = left alone.
+  assert.match(exec, /picks\[p\.id\] \?\? \(p\.connectedNow !== true\)/);
+  // The pick is SAVED ON THE SERVER before the next screen, never kept in memory.
+  assert.match(exec, /\/desk-phones\/runs\/\$\{runId\}\/selection/);
+  assert.match(exec, /step === "found" \? void commitSelection\(\)/);
+  // With nothing ticked, the button refuses.
+  assert.match(exec, /step === "found" \? chosen\.length === 0/);
+  // Match, ready, live and done are about the CHOSEN phones only.
+  assert.match(exec, /const chosen = useMemo\(\(\) => phones\.filter\(isPicked\)/);
+  assert.match(exec, /const assigned = useMemo\(\(\) => chosen\.filter/);
+  assert.match(exec, /\(step === "found" \? phones : chosen\)\.map/);
+  assert.doesNotMatch(exec, /\{phones\.map\(\(p\) => \(\s*<div key=\{p\.id\} className="dps-prow">/,
+    "the live progress list must show the chosen phones, not every phone found");
+  assert.doesNotMatch(exec, /\{phones\.map\(\(p\) => \(\s*<div key=\{p\.id\} className="dps-st">/,
+    "the done screen must list the chosen phones, not every phone found");
+});
