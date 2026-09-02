@@ -44,8 +44,9 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_BUBBLE_DEAD_2026-09-02.m
 `.build-commit` = `3a52c370`, 0 restarts, `.next/server/app/desktop/coworker` present,
 `fa-docked` + `coworker-chat` in the shipped chunks, `/desktop/coworker` **200 on both
 hostnames**.
-Desktop: **`apps/desktop/release/Connect-Setup-0.1.17-rc.2.exe`** built + `verify:icon` OK
-+ asar-verified — ⛔ **NOT installed, NOT published, feed still 0.1.16**.) Memory:
+Desktop: **`Connect-Setup-0.1.17-rc.2.exe` INSTALLED ON IZZY'S WORKSTATION 2026-09-02
+11:45Z at his request** (`/S`, exit 0; registry + exe read `0.1.17-rc.2`; it closed the app
+and it was restarted by hand) — ⛔ **NOT published, feed still 0.1.16**.) Memory:
 [[app-region-drag-swallows-clicks]], [[desktop-window-kinds-run-a-sip-phone-by-default]].
 Izzy, 2026-09-02: *"The widget is dead. It doesn't do anything. Plus, it doesn't
 have the real Loopcom logo. For the co-workers."*
@@ -86,9 +87,14 @@ have the real Loopcom logo. For the co-workers."*
   forbids), typecheck 0; portal 487/489 (the 2 documented pre-existing), typecheck 0,
   4 of 5 new guards fail against HEAD; asar of the built exe carries the data-URI
   html, `desktop/coworker`, `getCursorScreenPoint` and the drag verbs.
-- ⏳ **NOT PROVEN, and it is the whole gap: nobody has CLICKED the rebuilt bubble on
-  a real screen** — the failure was a Windows-native input behaviour no test can
-  see. Acceptance is §5 of the handoff: install rc.2 (`/S` closes the app and does
+- ✅✅ **PROVEN ON THE REAL SCREEN 2026-09-02 11:45Z**: the log reads `bubble shown at
+  2639,857` → `chat panel opened` 17 s later (a real press) → the coworker-chat window
+  loaded the portal → three `bubble click closed the chat` lines. Re-shows of an
+  existing chat window were SILENT in that build (`9237f53e` adds `chat panel shown
+  again`, rides the next build) — so a log of one open + N closes is the toggle
+  WORKING, not failing. ⏳ Still unproven: the no-second-registration negative —
+  his SUPER_ADMIN login has no extension, so it cannot register at all; check it on a
+  tenant login with `pjsip show endpoint T<t>_<ext>_1`. Acceptance is §5 of the handoff: install rc.2 (`/S` closes the app and does
   NOT relaunch it — phone down until started by hand), see the round logo, drag it
   across monitors, **click → the assistant panel opens, not a sidebar**, click again
   → closes; the negative that matters: the endpoint's contact list must NOT grow.

@@ -104,4 +104,12 @@ then start Loopcom from the Start menu.
 ## 7. Deploy state
 
 - **Portal:** ✅ DEPLOYED 2026-09-02 via `deploy-direct.sh portal --branch feat/ivr-migration-takeover` (14 min). Container-verified: `app-portal-1` `.build-commit` = `3a52c370`, 0 restarts, `.next/server/app/desktop/coworker.html` present, `fa-docked` and `coworker-chat` grepped in the shipped client chunks, `https://app.connectcomunications.com/desktop/coworker` and `https://app.loopcom.net/desktop/coworker` both **200**, `/api/health` 200 on both. ⛔ The rc.1 desktop build on Izzy's machine still points its chat at `/assistant` and still has the dead click — the portal half alone changes nothing he can see until rc.2 is installed.
-- **Desktop:** `Connect-Setup-0.1.17-rc.2.exe` built on this workstation; NOT installed, NOT published, `latest.yml` untouched (feed stays 0.1.16).
+- **Desktop:** ✅ `Connect-Setup-0.1.17-rc.2.exe` **INSTALLED on Izzy's workstation 2026-09-02 11:45Z at his request** (`/S`, exit 0, ~20 s; it closed the 7 running Loopcom processes and did not relaunch — started by hand from `%LOCALAPPDATA%\Programs\@connectdesktop\Loopcom.exe`). ⛔ The uninstall registry key is **`9c961ed2-7c38-5e70-aee9-98a0b8c0908d`** (not the appId) and carries no `InstallLocation`; the install dir is `%LOCALAPPDATA%\Programs\@connectdesktop\`. Registry `DisplayVersion` and the exe's `FileVersion` both read `0.1.17-rc.2`. NOT published; `latest.yml` untouched (feed stays 0.1.16).
+
+## 8. ✅ Proven on the real screen (2026-09-02 11:45Z)
+
+`connect.log` after the restart, in order: `=== log start v0.1.17-rc.2 ===` → `[coworker-widget] bubble shown at 2639,857` (the saved spot) → **`[coworker-widget] chat panel opened`** 17 s later (a real press on the bubble — nothing else can log that line) → `[coworker-chat] console.1: … WS snapshot received` (the popover loaded the hosted portal and its telephony feed) → three `bubble click closed the chat` lines. No `render-process-gone`, no console errors, no `preload bridge missing`. The phone line shows the documented `[SipPhone][conn] init-failed` pattern for the SUPER_ADMIN login — unchanged and pre-existing.
+
+⛔ **Read that sequence correctly:** in this build a re-show of an already-created chat window logged NOTHING, so "one opened, three closed" is the toggle working (open → close → open → close …), not failing. `9237f53e` adds `chat panel shown again` and rides the next build.
+
+⏳ Still unproven: the no-second-registration negative. The SUPER_ADMIN login carries no extension, so nothing on that machine registers either way; prove it on a tenant login by opening the popover and reading `pjsip show endpoint T<t>_<ext>_1` before and after.
