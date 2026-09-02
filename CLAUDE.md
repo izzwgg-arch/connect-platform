@@ -1,5 +1,72 @@
 # Connect 2 — working rules for Claude
 
+## ⛔⛔ AGENT HANDOFF — every sidebar page has its OWN permission key now, and the "Owner only" lift is GONE (2026-09-02) — READ FIRST before adding a nav item, before reusing a permission key on a second page, before adding a `backendJwtRole` force line, or for "I granted the permission and they don't see it"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ONE_KEY_PER_PAGE_2026-09-02.md`**
+(`37f7e0f3` on `feat/ivr-migration-takeover`. ✅ **api + portal DEPLOYED and
+container-verified** — both at `24a41e26` ⊇ `37f7e0f3`, 0 restarts, 200 on both
+hostnames. Two additive, backed-up data changes: 8 custom roles gained the new
+per-page keys for pages they already showed, and Ezra got an additive role with
+Direct + Meetings.) Memory: [[every-sidebar-page-has-its-own-key]].
+Izzy: *"I gave Ezra permission, and he doesn't see it in the sidebar … some
+toggles are connected together … Every toggle should be individual … bring the
+proof that each and every one is working 100% and they're all separated."*
+
+- ⛔⛔ **THE RULE: a nav item has a permission key NO OTHER nav item uses.**
+  Sixteen rows shared a sibling's key (Direct rode Chat's, Meetings Overview's,
+  Install Contacts', five Store pages one key, four assistant pages one key,
+  seven platform pages `can_manage_global_settings`) — so one toggle moved its
+  siblings on BOTH editors. 22 new keys live in shared `SIDEBAR_ITEMS`; navConfig
+  is 96 items / 96 keys and `permissionToggleCoverage.test.ts` fails on any
+  reuse. ⛔ A new page needs its key IN THE SHARED CATALOG — the POST normalizer
+  silently drops unknown keys, so a toggle on an unlisted key saves nothing
+  (guard-tested).
+- ⛔⛔ **THE KEY IS THE LAUNCH GATE — NEVER A jwt FORCE LINE ON A CUSTOMER PAGE.**
+  Direct and Meetings hid behind `backendJwtRole !== "SUPER_ADMIN"` that only the
+  "Owner only" switch on a second screen could lift; that is exactly why the key
+  Izzy granted showed nothing. `OWNER_ONLY_LIFTABLE_NAV_ITEMS` is `[]` on purpose
+  (do not repopulate), the two force lines are gone, and both keys are in NO
+  default bucket — granting one in a role IS the launch, one person at a time.
+  The Meetings page gates on the key, and `requireMeetingCreator` accepts
+  SUPER_ADMIN or a holder of it (`deps.mayStartMeeting`, default fails CLOSED).
+  A page that must stay platform-internal goes in `OWNER_ONLY_FIXED_NAV_ITEMS`
+  (Locked on both editors); `admin.remote_support_controls` joined it because its
+  api is `requireSuperAdmin` — the four EZra-role holders lost a link that
+  always refused, the only visible change for any existing holder.
+- ⛔ **Store pages: page key ≠ data capability, and both are needed.** Each of the
+  five has its own nav/page key; the `/supermarket` api prefix still demands
+  `can_view_supermarket_orders`. The custom-role editor notes it on every Store
+  row. Existing holders were migrated to hold all six.
+- ⛔ **An action key drawn as a sidebar row is drawn ONCE** — the Action
+  Permissions panel skips `NAV_BOUND_ACTION_KEYS` (Desk Phones, Remote Support).
+  Two toggles bound to one key flip together; that is the coupling he ruled out.
+- ✅ **PROVEN LIVE, all 96 pages**: a DISABLED probe user + throwaway role on
+  Loopcom Demo, one `[section, item]` grant per page through the DEPLOYED
+  resolver, rendered with the real navConfig — **96 OK, 0 leaks, 0 dead** (Locked
+  pages show nothing to a non-super jwt and leak nothing). All 18 custom-role
+  holders' sidebars diffed before/after: **identical**, except Ezra (+Direct
+  +Meetings) and the dead Remote Support Controls link. Routes driven: Ezra
+  `GET /meetings` **200** (was 403 for every non-super), key-less user **403**;
+  one real In-sidebar hide/unhide round trip with bucket sets byte-identical.
+  ⛔ That round trip was the FIRST permissions save since 2026-07-06 — the
+  snapshot row now carries `knownKeys` and `updatedAt 2026-09-02`; the old
+  "no toggle has ever been saved" line below is history.
+- ⛔⛔ **THE EZra ROLE IS HELD BY FOUR PEOPLE IN THREE TENANTS** (Ezra, two Ribit
+  Capital users, Izzy's Landau Home login). Ezra got Direct + Meetings through an
+  ADDITIVE second role (`Direct + Meetings — Ezra`) assigned to him alone —
+  editing EZra would have launched both for Ribit Capital. Run
+  `GET /admin/custom-roles/:id/users` before editing ANY custom role.
+- ⛔ **Deploy trap, hit again: the server clone cannot fetch GitHub (HTTPS 401).**
+  Bundle → bare mirror → `set-url origin <mirror>` → deploy → **restore origin
+  and delete the mirror** (done). Check the mirror branch's tip contains your
+  commit before trusting the deploy — it can already hold another session's
+  commits that GitHub does not.
+- ⏳ **NOT PROVEN: nobody has opened either editor in a browser since**, and Ezra
+  has not signed in. Acceptance: Ezra reloads (desktop: full close + reopen) →
+  Direct and Meetings in Workspace, `/meetings` renders. ⚠️ Another session is
+  adding `workspace.remote_desktop` on `can_use_remote_desktop` — covered by the
+  uniqueness + dedupe guards once that key is in `ACTION_PERMISSION_KEYS`.
+
 ## ⛔ AGENT HANDOFF — REMOTE DESKTOP as a CUSTOMER feature is MOCKUPS ONLY, six decisions open (2026-09-02) — READ FIRST before building any customer-facing remote access, before loosening `decideConsent`, or before adding audio to a remote session
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_REMOTE_DESKTOP_MOCKUPS_2026-09-02.md`**
@@ -99,6 +166,36 @@ have the real Loopcom logo. For the co-workers."*
   across monitors, **click → the assistant panel opens, not a sidebar**, click again
   → closes; the negative that matters: the endpoint's contact list must NOT grow.
   ⛔ The bubble stays opt-in (tray); Izzy's is ON. The badge is wired to nothing yet.
+- ⛔⛔ **THE FIRST QUESTION THROUGH THE BUBBLE WAS "Can you organize files on my
+  computer?" AND THE ANSWER IS STILL NO (2026-09-02, `a6fc0dbc`).** The Coworker has NO
+  desktop hands: nothing can open/organize/change files, run programs or change settings
+  on the customer's PC — the 08-31 handoff §8 lists it as unbuilt, and the approval /
+  permissions screens that would gate it are still mockups. What shipped is AWARENESS,
+  not ability: `engine.ts` `COWORKER_CHAT_PATH` — when `viewingPath` starts with
+  `/desktop/coworker` the viewing block says "you are talking through the Loopcom
+  Coworker on their Windows computer", what that window can do (this chat) and cannot
+  (files/programs/settings); BOTH prompts carry a THE LOOPCOM COWORKER paragraph (exists,
+  how to switch it on, never claim a computer task was done, customers: pass the exact
+  request to the Connect team — phrased so `ESCALATION_RE` catches it and texts Izzy);
+  `docs/agent-knowledge/system.md` has a customer section + a staff-only note ("a
+  feature request to record, not a fault to investigate"). ⛔ **The api image BAKES
+  `docs/agent-knowledge/`, and a knowledge-only edit was `skip=unrelated_paths`** —
+  `deploy-common.sh` now lists it for api (takes effect from the NEXT deploy after this
+  one). ⛔ **The server's `origin` is `/root/connect-mirror.git`, a LOCAL mirror the
+  clone cannot refresh from GitHub itself (https, no credentials)** — a push to GitHub is
+  invisible to `deploy-direct.sh` until the mirror is refreshed; `skip=no_changes` seconds
+  after a push IS that. Recipe: `git bundle create x.bundle <old>..<branch>` → scp →
+  `git fetch /root/x.bundle <branch> && git push origin FETCH_HEAD:refs/heads/<branch>`.
+  COWORKER_KNOWLEDGE_DEPLOY_STATE_PLACEHOLDER
+  ⏳ **What "run a task on my computer through the Coworker" needs, and it is Izzy's
+  decision, not a build to start quietly:** (1) approve the approval + permissions
+  screens (mockups: <https://claude.ai/code/artifact/4f37d49b-0c9b-4bde-a990-a6063a1df0d6>);
+  (2) a `coworker_task` tool the agent gets ONLY inside the bubble window; (3) a desktop
+  executor with a fixed task allowlist gated by `packages/shared/src/coworker/policy.ts`
+  (`decideToolCall`, NEVER_AUTO_DOMAINS, call protection) and an approval card in the
+  popover; (4) verified results back to the agent. ⛔ A separate session was mid-build
+  on `apps/*/src/remoteDesktop/` + migration `20260902120000_remote_desktop` at the time
+  — check whether that IS the hands before designing them twice.
 
 ## ⛔⛔ AGENT HANDOFF — remote support is INSIDE the real Windows app now, OFF by default, and there is a test installer nobody has run (2026-09-01) — READ FIRST before adding ANY key to the desktop preload, before publishing a desktop build, before retiring `apps/desktop-support`, or for "is the remote desktop app deployed?"
 
