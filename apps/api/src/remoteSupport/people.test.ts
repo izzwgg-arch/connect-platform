@@ -181,7 +181,7 @@ test("each row carries a name a person can pick from — full name, else the ema
   const app = await buildApp();
   as("root");
   const { body } = await people(app);
-  const byId = new Map(body.people.map((p: Row) => [p.id, p]));
+  const byId = new Map<string, Row>(body.people.map((p: Row) => [p.id, p] as [string, Row]));
   assert.equal(byId.get("alice")?.name, "Alice Aaron");
   assert.equal(byId.get("noname")?.name, "noname@example.test");
   assert.equal(byId.get("bob")?.tenantName, "Company T_B");
