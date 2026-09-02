@@ -352,6 +352,22 @@ export const ACTION_PERMISSION_KEYS = [
   // inventory is not the same as watching somebody work, and the people who
   // provision phones are not necessarily the people who do support calls.
   "can_view_lan_phones",
+  // ── Remote Desktop (2026-09-02, the customer-facing feature) ──────────────
+  // THREE keys, one per door on the Remote Desktop page:
+  //   can_use_remote_desktop  — open the page and reach your OWN computers
+  //                             (each of which still asks for the username and
+  //                             password set at that machine);
+  //   can_connect_by_id       — connect to someone ELSE's computer with a
+  //                             Connect ID + password its owner issued;
+  //   can_share_own_computer  — issue a Connect ID password for the computer
+  //                             you are sitting at.
+  // Unlike the support pair above these are ordinary customer capabilities:
+  // an END_USER may reach their own machines, a TENANT_ADMIN holds all three.
+  // Reaching a machine is gated a second time AT the machine (its own login or
+  // an issued password), so a key alone never opens a screen.
+  "can_use_remote_desktop",
+  "can_connect_by_id",
+  "can_share_own_computer",
   // Desk phone setup (2026-08-21). TWO keys, and the split is the whole point:
   // running the wizard is reading a network and pointing phones at us, while
   // authorising a reset ERASES a customer device. Plenty of people should be able
@@ -548,10 +564,18 @@ const END_USER_ACTIONS: PortalPermissionKey[] = [
   // says that if it IS offered, an ordinary user may use it. Revoke per-user
   // or per-role like any other permission.
   "can_use_yiddish",
+  // Remote Desktop: reaching your OWN computers is an ordinary thing to want.
+  // Every machine still demands the username and password set at it, so this
+  // key alone opens nothing.
+  "can_use_remote_desktop",
 ];
 
 const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_edit_team",
+  // Remote Desktop: connecting to a colleague's computer by Connect ID, and
+  // issuing a password for your own, are admin-tier by default.
+  "can_connect_by_id",
+  "can_share_own_computer",
   "can_delete_voicemail",
   "can_manage_contacts",
   "can_view_reports",

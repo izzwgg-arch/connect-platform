@@ -275,6 +275,14 @@ test("⛔⛔ SystemEventFacts has no field that could carry screen or key conten
     "ai_suggested",
     "quality_degraded",
     "ended",
+    // Remote Desktop (2026-09-02): the connecting side's own label for where it
+    // sits ("Office PC") and the machine's name — bounded strings the sentence is
+    // composed around, never screen or key content.
+    "desktop_connected",
+    "machine_accepted",
+    "share_used",
+    "sound_routed",
+    "mic_routed",
   ]);
   for (const code of SYSTEM_EVENT_CODES) {
     const s = renderSystemEvent(code, facts);

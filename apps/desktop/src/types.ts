@@ -51,6 +51,53 @@ export type DesktopSettings = {
    * down the SIP phone, and a support tool must never be able to drop a call.
    */
   remoteSupportEnabled?: boolean;
+  /**
+   * Remote Desktop (2026-09-02): whether THIS computer may be reached by its
+   * owner when nobody is at it, and by anyone the owner issues a Connect ID
+   * password to. ⛔⛔ OFF BY DEFAULT, same fleet-safety story as remote support:
+   * the portal's RemoteDesktopHost is mounted for every signed-in user and decides
+   * the feature exists by looking for `connectDesktop.remoteDesktop`, so the
+   * preload publishes that key only when this is on. Applies at the NEXT LAUNCH
+   * (same reason: a reload tears down the SIP phone); turning it OFF stops a
+   * running session immediately.
+   */
+  remoteDesktopEnabled?: boolean;
+  /**
+   * The identity and login of this installation. ⛔ `accessLogin` is a scrypt
+   * hash + salt, never a password; it is checked HERE, on this machine, over the
+   * peer connection, and no server ever sees the credentials. `machineKey` is the
+   * secret this install proves itself with; the server keeps only its hash.
+   * Both are minted the first time Remote Desktop is switched on.
+   */
+  remoteDesktop?: {
+    deviceId?: string;
+    machineKey?: string;
+    /** What the owner called this computer. Defaults to the hostname. */
+    name?: string;
+    accessLogin?: {
+      username: string;
+      salt: string;
+      hash: string;
+      failures: number;
+      lockedUntil: number | null;
+      setAt: string;
+    } | null;
+  };
+};
+
+/** What the renderer may learn about this install's Remote Desktop state. ⛔ Never the hash, never the key's hash. */
+export type RemoteDesktopIdentity = {
+  enabled: boolean;
+  deviceId: string;
+  /** The raw machine key — the renderer sends it as `x-machine-key` on machine-side calls. */
+  machineKey: string;
+  name: string;
+  hostname: string;
+  osLabel: string;
+  appVersion: string;
+  monitors: number;
+  locked: boolean;
+  login: { set: boolean; username: string | null; lockedForMs: number };
 };
 
 /**
@@ -82,6 +129,16 @@ export type RemoteSupportBannerState = {
   visible: boolean;
   supportName?: string;
   controlGranted?: boolean;
+  /**
+   * Remote Desktop (2026-09-02). "support" is the original wording ("can see
+   * your screen"); "desktop" says who is connected from where and where the
+   * sound and microphone are, and its Stop reads "Stop". An optional question
+   * (a mid-session ask) sits INSIDE the banner so it can never be behind a window.
+   */
+  mode?: "support" | "desktop";
+  fromLabel?: string;
+  audioNote?: string;
+  ask?: { capability: string; text: string } | null;
 };
 
 /** Auto-update lifecycle state, broadcast to renderers for the in-app "Install" UX. */

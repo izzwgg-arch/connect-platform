@@ -86,15 +86,20 @@ function showBanner(state: RemoteSupportBannerState): void {
 
   if (bannerWindow && !bannerWindow.isDestroyed()) {
     bannerWindow.webContents.send("banner:update", state);
+    // The desktop-mode ask adds a second row; give it room rather than clipping it.
+    try {
+      const [w] = bannerWindow.getSize();
+      bannerWindow.setSize(w, state.ask ? 108 : 60);
+    } catch { /* window going away */ }
     return;
   }
 
   const primary = screen.getPrimaryDisplay();
-  const width = Math.min(560, primary.workAreaSize.width - 40);
+  const width = Math.min(state.mode === "desktop" ? 640 : 560, primary.workAreaSize.width - 40);
 
   bannerWindow = new BrowserWindow({
     width,
-    height: 60,
+    height: state.ask ? 108 : 60,
     x: Math.round(primary.workArea.x + (primary.workAreaSize.width - width) / 2),
     y: primary.workArea.y + 12,
     frame: false,
@@ -127,17 +132,44 @@ function showBanner(state: RemoteSupportBannerState): void {
   bannerWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(bannerHtml(state))}`);
 }
 
+/**
+ * The sentence the banner shows.
+ *
+ * Support mode: "<who> can see (and control) your screen". Desktop mode
+ * (2026-09-02): "<who> is connected from <where>", with the audio routing
+ * beside it, because the person at the machine may be the owner's own family and
+ * "sound → their computer" is the fact that explains the silence.
+ */
+function bannerSentence(state: RemoteSupportBannerState): { what: string; sub: string } {
+  const who = state.supportName ? escapeHtml(state.supportName) : (state.mode === "desktop" ? "Someone" : "Loopcom support");
+  if (state.mode === "desktop") {
+    const from = state.fromLabel ? ` from ${escapeHtml(state.fromLabel)}` : "";
+    const what = `${who} is connected${from}`;
+    const bits = [state.controlGranted ? "view and control" : "view only"];
+    if (state.audioNote) bits.push(escapeHtml(state.audioNote));
+    return { what, sub: bits.join(" · ") };
+  }
+  return {
+    what: state.controlGranted ? `${who} can see and control your screen` : `${who} can see your screen`,
+    sub: "You can stop this at any time.",
+  };
+}
+
 function bannerHtml(state: RemoteSupportBannerState): string {
-  const who = state.supportName ? escapeHtml(state.supportName) : "Loopcom support";
-  const what = state.controlGranted
-    ? `${who} can see and control your screen`
-    : `${who} can see your screen`;
+  const { what, sub } = bannerSentence(state);
+  const stopLabel = state.mode === "desktop" ? "Stop" : "Stop sharing";
   return `<!doctype html>
 <meta charset="utf-8">
 <style>
   html,body{margin:0;height:100%;font-family:Segoe UI,system-ui,sans-serif;}
-  body{display:flex;align-items:center;gap:12px;padding:0 14px;background:#7f1d1d;color:#fff;
+  body{display:flex;flex-direction:column;justify-content:center;gap:8px;padding:0 14px;background:#7f1d1d;color:#fff;
        border:2px solid #fca5a5;border-radius:10px;box-sizing:border-box;-webkit-app-region:drag;}
+  .row{display:flex;align-items:center;gap:12px;}
+  .ask{display:none;align-items:center;gap:10px;background:rgba(255,255,255,.1);border-radius:8px;padding:6px 10px;font-size:12.5px;}
+  .ask.on{display:flex;}
+  .ask span{flex:1;}
+  .ask button{padding:5px 11px;}
+  .ask .yes{background:#22a8ff;color:#fff;}
   .dot{width:10px;height:10px;border-radius:50%;background:#fca5a5;flex:none;
        animation:pulse 1.6s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -147,9 +179,12 @@ function bannerHtml(state: RemoteSupportBannerState): string {
          padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;}
   button:hover{background:#fee2e2;}
 </style>
-<div class="dot"></div>
-<div class="text"><div id="what">${what}</div><div class="sub">You can stop this at any time.</div></div>
-<button id="stop">Stop sharing</button>
+<div class="row">
+  <div class="dot"></div>
+  <div class="text"><div id="what">${what}</div><div class="sub" id="sub">${sub}</div></div>
+  <button id="stop">${stopLabel}</button>
+</div>
+<div class="ask" id="ask"><span id="askText"></span><button id="no">No</button><button id="yes" class="yes">Yes, allow</button></div>
 <script>
   // connectBanner comes from bannerPreload.js. Guarded so that if the preload
   // ever failed to load, the button is visibly broken rather than silently
@@ -162,10 +197,31 @@ function bannerHtml(state: RemoteSupportBannerState): string {
       btn.textContent = 'Stopping…';
       window.connectBanner.stop();
     });
+    var askCap = null;
+    document.getElementById('no').addEventListener('click', function () { if (askCap) window.connectBanner.answer(askCap, false); askCap = null; document.getElementById('ask').className = 'ask'; });
+    document.getElementById('yes').addEventListener('click', function () { if (askCap) window.connectBanner.answer(askCap, true); askCap = null; document.getElementById('ask').className = 'ask'; });
     window.connectBanner.onUpdate(function (state) {
-      document.getElementById('what').textContent =
-        (state && state.supportName ? state.supportName : 'Loopcom support') +
-        (state && state.controlGranted ? ' can see and control your screen' : ' can see your screen');
+      state = state || {};
+      var who = state.supportName ? state.supportName : (state.mode === 'desktop' ? 'Someone' : 'Loopcom support');
+      if (state.mode === 'desktop') {
+        document.getElementById('what').textContent = who + ' is connected' + (state.fromLabel ? ' from ' + state.fromLabel : '');
+        var bits = [state.controlGranted ? 'view and control' : 'view only'];
+        if (state.audioNote) bits.push(state.audioNote);
+        document.getElementById('sub').textContent = bits.join(' · ');
+        btn.textContent = 'Stop';
+      } else {
+        document.getElementById('what').textContent = who + (state.controlGranted ? ' can see and control your screen' : ' can see your screen');
+        document.getElementById('sub').textContent = 'You can stop this at any time.';
+      }
+      // ⛔ "No" is a real, equal button. Nothing is granted unless Yes is pressed.
+      if (state.ask && state.ask.capability) {
+        askCap = String(state.ask.capability);
+        document.getElementById('askText').textContent = state.ask.text || 'They are asking for more access.';
+        document.getElementById('ask').className = 'ask on';
+      } else {
+        askCap = null;
+        document.getElementById('ask').className = 'ask';
+      }
     });
   } else {
     btn.textContent = 'Stop unavailable';
@@ -282,6 +338,18 @@ export function registerRemoteSupportIpc(options: {
   // The banner's Stop button posts here through its own tiny bridge.
   ipcMain.on("remote-support:banner-stop", () => {
     options.onStopRequested();
+  });
+
+  // The banner's yes/no answer to a mid-session ask (Remote Desktop). Forwarded
+  // to every window; the one that owns the session turns it into the server
+  // call. Carries only a capability name and a boolean.
+  ipcMain.on("remote-support:banner-answer", (_event, raw: unknown) => {
+    const body = (raw ?? {}) as { capability?: unknown; allow?: unknown };
+    const payload = { capability: String(body.capability || "").slice(0, 32), allow: body.allow === true };
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try { win.webContents.send("remote-support:banner-answer", payload); } catch { /* going away */ }
+    }
   });
 }
 

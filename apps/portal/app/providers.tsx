@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { DesktopNotificationsBridge } from "../components/DesktopNotificationsBridge";
 import { PortalReloadNotice } from "../components/DesktopUpdateNotice";
 import RemoteSupportConsent from "../components/RemoteSupportConsent";
+import RemoteDesktopHost from "../components/RemoteDesktopHost";
 import { LoopcomSetupRequest } from "../components/deskPhones/LoopcomSetupRequest";
 import { SupermarketOrderPop } from "../components/SupermarketOrderPop";
 import { AppProvider } from "../hooks/useAppContext";
@@ -22,6 +23,8 @@ export function Providers({ children }: { children: ReactNode }) {
               one page, a customer sitting on any other screen would never see
               that they had been asked, and the request would silently expire. */}
           <RemoteSupportConsent />
+          {/* ⛔ Renders nothing unless the Windows app published `remoteDesktop` (the tray switch is ON). */}
+          <RemoteDesktopHost />
           {/* ⛔ Mounted globally, beside the remote-support consent it mirrors: the
               person in that office is looking at their dashboard, not at a settings
               page somebody else opened. */}

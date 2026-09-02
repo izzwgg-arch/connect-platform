@@ -995,6 +995,7 @@ model Tenant {
   whatsAppContactPreferences      WhatsAppContactPreference[]
   whatsAppPolicyAuditEvents       WhatsAppPolicyAuditEvent[]
   remoteSupportSessions           RemoteSupportSession[]
+  remoteDesktopMachines           RemoteDesktopMachine[]
   lanDiscoveryRuns                LanDiscoveryRun[]
   lanDiscoveredPhones             LanDiscoveredPhone[]
   deskPhoneSetupRuns              DeskPhoneSetupRun[]
@@ -7687,6 +7688,23 @@ model RemoteSupportSession {
   /// A plain column, no FK — it is here so a device revocation can match.
   deviceId String?
 
+  /// ── Remote Desktop (2026-09-02) ────────────────────────────────────────
+  /// "support" = a Loopcom technician asked and the person consented (every
+  /// row before this column existed). "desktop" = the customer reached one of
+  /// their own computers, or a computer whose owner issued a Connect ID
+  /// password. Same table on purpose: one kill switch, one transcript, one
+  /// heartbeat watchdog, one history a customer reads.
+  kind String @default("support")
+  /// The enrolled computer being reached (desktop sessions only). Plain column,
+  /// no FK, for the same audit reasons as targetUserId.
+  machineId String?
+  /// The issued password that authorised this session, when it was one.
+  shareId String?
+  /// True once the remote computer verified the connecting person's username
+  /// and password (own-computer sessions). A share-password session is
+  /// authenticated by the share itself and starts true.
+  clientAuthenticated Boolean @default(false)
+
   /// Reported by the customer's app on every heartbeat, so the technician's
   /// screen budget can yield to a live phone call (Phase 37).
   /// ⛔ Advisory to the encoder, never a permission.
@@ -7736,6 +7754,122 @@ model RemoteSupportSession {
   /// The rate limiter's own query: this actor's recent requests.
   @@index([requestedByUserId, createdAt])
   @@index([deviceId])
+  @@index([machineId, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Remote Desktop (2026-09-02): a customer's own computers, and computers a
+// colleague opened with a Connect ID + password.
+//
+// ⛔ THIS IS NOT REMOTE SUPPORT WITH THE CONSENT DIALOG REMOVED. Support binds a
+// session to a PERSON who is present and answers a prompt. Remote Desktop binds
+// it to a MACHINE that may have nobody at it — so the machine needs an identity
+// nobody else can claim (machineKeyHash), and consent is standing: a username
+// and password set AT that machine (verified there, never here), or a password
+// its owner issued (verified here). The session rows still live in
+// RemoteSupportSession with kind = "desktop".
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One computer that has switched on "Allow Remote Desktop to this computer".
+model RemoteDesktopMachine {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// Whoever was signed in to the Loopcom app on it when it enrolled (or last
+  /// registered). No FK — the audit trail must outlive the account.
+  ownerUserId String
+
+  /// The desktop app's own install id. One row per installation.
+  deviceId String @unique
+
+  /// The permanent nine-digit id a colleague types. Unique platform-wide.
+  connectId String @unique
+
+  /// ⛔ MACHINE IDENTITY. sha256 of a key the app minted on first enrollment
+  /// and keeps in its own settings. Every machine-side call proves possession;
+  /// a different install claiming this deviceId is refused. The key itself is
+  /// never stored here.
+  machineKeyHash String
+
+  name       String
+  osLabel    String?
+  monitors   Int     @default(1)
+  appVersion String?
+
+  /// The tray switch on that computer. Off = nobody can reach it, even its owner.
+  unattendedEnabled Boolean @default(false)
+  /// Whether a username + password have been set AT the machine. ⛔ Only the
+  /// fact is recorded — the credentials live on the machine as a hash and are
+  /// checked there, over the peer connection, never by this server.
+  hasAccessLogin Boolean @default(false)
+  /// Windows reports the session locked. A locked machine shows a black
+  /// picture and refuses injected input (secure desktop), so it is shown as a
+  /// state rather than discovered by failing.
+  locked Boolean @default(false)
+
+  /// Presence: the app polls while the switch is on. Online = seen in the last
+  /// 40 seconds.
+  lastSeenAt DateTime?
+
+  /// Password guesses against this machine's Connect ID, and the lockout they
+  /// earn. ⛔ Kept on the machine row, not the share: guessing is aimed at the
+  /// id, whichever password is live.
+  shareFailCount  Int       @default(0)
+  shareLockedUntil DateTime?
+
+  /// Soft delete: "Remove this computer". The rows it appears in stay.
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shares RemoteDesktopShare[]
+
+  @@index([tenantId, ownerUserId])
+  @@index([ownerUserId, revokedAt])
+}
+
+/// A password the owner of a computer handed to someone else.
+model RemoteDesktopShare {
+  id        String @id @default(cuid())
+  machineId String
+  tenantId  String
+
+  createdByUserId String
+
+  /// sha256(id + password). The clear password is shown once, at creation,
+  /// and exists nowhere after that.
+  passwordHash String
+
+  /// "company" = the connecting person must be signed in on the same tenant;
+  /// "anyone" = any signed-in Loopcom app (another company, or Loopcom support).
+  scope String @default("company")
+
+  /// Dies after the first connection.
+  oneTime   Boolean   @default(false)
+  /// Null = standing, until the owner removes it.
+  expiresAt DateTime?
+
+  /// What the holder may do. Sight is implied; nothing else is.
+  allowControl   Boolean @default(true)
+  allowSound     Boolean @default(true)
+  allowMic       Boolean @default(false)
+  allowClipboard Boolean @default(false)
+
+  usedCount    Int       @default(0)
+  lastUsedAt   DateTime?
+  lastUsedById String?
+
+  revokedAt       DateTime?
+  revokedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  machine RemoteDesktopMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@index([machineId, revokedAt])
+  @@index([tenantId])
 }
 
 /// WebRTC signalling relay. Deliberately a table and not a socket: setting up

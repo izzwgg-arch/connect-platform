@@ -106,6 +106,15 @@ export const navItems: NavItem[] = [
   // are the only two levers. The keys live in @connect/shared SIDEBAR_ITEMS.
   { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_direct" },
   { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_meetings" },
+  // Remote Desktop (Izzy, 2026-09-02): a customer's own computers, and a
+  // colleague's computer by Connect ID + password. Right after Meetings, per the
+  // approved mockups. ⛔ The permission is the SAME action key the page and every
+  // /remote-desktop route gate on (can_use_remote_desktop), exactly as Desk
+  // Phones rides can_setup_desk_phones — a different nav key would be a door
+  // that refuses on click. END_USER holds it by default: reaching your own
+  // computers is an ordinary thing to want, and each machine still asks for the
+  // username and password set at it.
+  { id: "workspace.remote_desktop", href: "/remote-desktop", label: "Remote Desktop", icon: "RD", lucide: MonitorSmartphone, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_use_remote_desktop" },
   // Desk phone setup — Izzy, 2026-08-22: "add an option in the workspace sidebar
   // to connect my desk phones … only system owners should see it". Placed
   // ABOVE Conference: Conference's slot "immediately before Install" is

@@ -7,6 +7,7 @@ import type {
   DesktopWindowKind,
   PhoneEngineCommand,
   PhoneEngineEnvelope,
+  RemoteDesktopIdentity,
   RemoteSupportBannerState,
 } from "./types";
 
@@ -35,6 +36,18 @@ function windowKind(): DesktopWindowKind | undefined {
  */
 function remoteSupportEnabled(): boolean {
   return process.argv.includes("--connect-remote-support=1");
+}
+
+/**
+ * ⛔⛔ THE SECOND FLEET GATE (Remote Desktop, 2026-09-02). Same shape, same
+ * reasoning: the portal's RemoteDesktopHost decides the feature exists by
+ * looking for `connectDesktop.remoteDesktop`, and once it finds it the machine
+ * registers itself and polls for connections every five seconds. So the key is
+ * published only behind the launch argument main.ts passes when the owner
+ * switched Remote Desktop on for THIS computer. Off = ABSENT, never a stub.
+ */
+function remoteDesktopEnabled(): boolean {
+  return process.argv.includes("--connect-remote-desktop=1");
 }
 
 const desktopApi = {
@@ -158,12 +171,73 @@ const remoteSupportApi = {
   },
 };
 
+/**
+ * Remote Desktop SETUP — always published. Setting a username and password,
+ * naming the computer and flipping the switch are things the person at THIS
+ * machine does before the feature exists for it, so they cannot sit behind the
+ * gate. None of them shares anything: no screen, no input, no network polling.
+ */
+const remoteDesktopSetupApi = {
+  identity: () => ipcRenderer.invoke("remote-desktop:identity") as Promise<RemoteDesktopIdentity>,
+  setLogin: (username: string, password: string) =>
+    ipcRenderer.invoke("remote-desktop:set-login", { username, password }) as Promise<
+      { ok: true; login: RemoteDesktopIdentity["login"] } | { ok: false; reason: string; message: string }
+    >,
+  clearLogin: () => ipcRenderer.invoke("remote-desktop:clear-login") as Promise<{ ok: boolean }>,
+  setEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke("remote-desktop:set-enabled", enabled) as Promise<{ ok: boolean; enabled: boolean; message?: string }>,
+  setName: (name: string) => ipcRenderer.invoke("remote-desktop:set-name", name) as Promise<{ ok: boolean; name: string }>,
+  reportConnectId: (connectId: string) => ipcRenderer.invoke("remote-desktop:report-connect-id", connectId) as Promise<{ ok: boolean }>,
+  lockState: () => ipcRenderer.invoke("remote-desktop:lock-state") as Promise<boolean>,
+  onLockChanged: (listener: (locked: boolean) => void) => {
+    const wrapped = (_: unknown, locked: boolean) => listener(locked);
+    ipcRenderer.on("remote-desktop:lock-changed", wrapped);
+    return () => ipcRenderer.removeListener("remote-desktop:lock-changed", wrapped);
+  },
+};
+
+/**
+ * Remote Desktop HOST — this computer being reached. Behind the gate. Screen
+ * enumeration, input injection and the banner are the remote-support handlers,
+ * reused; the two new verbs are the login check (credentials stay in main) and
+ * whether a session's capture may include the computer's sound.
+ */
+const remoteDesktopHostApi = {
+  listScreens: remoteSupportApi.listScreens,
+  setScreen: remoteSupportApi.setScreen,
+  machineInfo: remoteSupportApi.machineInfo,
+  enableControl: remoteSupportApi.enableControl,
+  disableControl: remoteSupportApi.disableControl,
+  sendInput: remoteSupportApi.sendInput,
+  setBanner: remoteSupportApi.setBanner,
+  onStopRequested: remoteSupportApi.onStopRequested,
+  /** The banner's yes/no to a mid-session ask. */
+  onBannerAnswer: (listener: (answer: { capability: string; allow: boolean }) => void) => {
+    const wrapped = (_: unknown, answer: { capability: string; allow: boolean }) => listener(answer);
+    ipcRenderer.on("remote-support:banner-answer", wrapped);
+    return () => ipcRenderer.removeListener("remote-support:banner-answer", wrapped);
+  },
+  /** ⛔ The verdict only. The hash never crosses this bridge. */
+  verifyLogin: (username: string, password: string) =>
+    ipcRenderer.invoke("remote-desktop:verify-login", { username, password }) as Promise<
+      { ok: boolean; attemptsLeft: number; lockedForMs: number; reason?: string }
+    >,
+  allowAudio: (sessionId: string, allow: boolean) =>
+    ipcRenderer.invoke("remote-desktop:allow-audio", { sessionId, allow }) as Promise<{ ok: boolean }>,
+};
+
 contextBridge.exposeInMainWorld(
   "connectDesktop",
-  // ⛔ The key is ABSENT, not empty, when remote support is off. The portal tests
-  // for `bridge?.remoteSupport?.listScreens`, so an object of no-ops would pass
-  // that test and start the polling this gate exists to prevent.
-  remoteSupportEnabled() ? { ...desktopApi, remoteSupport: remoteSupportApi } : desktopApi,
+  // ⛔ Each key is ABSENT, not empty, when its feature is off. The portal tests
+  // for `bridge?.remoteSupport?.listScreens` / `bridge?.remoteDesktop?.listScreens`,
+  // so an object of no-ops would pass that test and start the polling these
+  // gates exist to prevent. Setup is always present: it polls nothing.
+  {
+    ...desktopApi,
+    remoteDesktopSetup: remoteDesktopSetupApi,
+    ...(remoteSupportEnabled() ? { remoteSupport: remoteSupportApi } : {}),
+    ...(remoteDesktopEnabled() ? { remoteDesktop: remoteDesktopHostApi } : {}),
+  },
 );
 
 // ── Floating Coworker widget bridge ───────────────────────────────────

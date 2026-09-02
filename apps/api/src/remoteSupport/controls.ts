@@ -135,7 +135,15 @@ export function decideSupportGate(input: {
  * A customer who agreed to someone moving their mouse has not agreed to that
  * person reading what they copied.
  */
-export const REMOTE_CAPABILITIES = ["view", "control", "clipboard", "files"] as const;
+/**
+ * `sound` and `mic` (2026-09-02) exist for REMOTE DESKTOP sessions only — the
+ * remote computer's audio played on the connecting side, and the connecting
+ * side's microphone used at the remote computer. ⛔ Remote SUPPORT never
+ * requests either: support looks at a screen and does not listen to the room.
+ * The support consent dialog only ever shows rows that were REQUESTED, so these
+ * two never appear there.
+ */
+export const REMOTE_CAPABILITIES = ["view", "control", "clipboard", "files", "sound", "mic"] as const;
 export type RemoteCapability = (typeof REMOTE_CAPABILITIES)[number];
 
 export function isRemoteCapability(v: unknown): v is RemoteCapability {
@@ -220,6 +228,8 @@ const CAPABILITY_REFUSALS: Record<RemoteCapability, string> = {
   control: "The customer allowed you to watch, but not to control.",
   clipboard: "The customer has not shared their clipboard.",
   files: "The customer has not allowed file transfer.",
+  sound: "Sound from that computer is not allowed on this connection.",
+  mic: "Your microphone is not allowed on that computer.",
 };
 
 /* ─────────────── call priority (Phase 37 — non-negotiable #15) ────── */

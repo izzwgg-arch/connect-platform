@@ -297,6 +297,7 @@ import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerAgentGrantRoutes } from "./agentGrantRoutes";
 import { registerRemoteSupportRoutes } from "./remoteSupportRoutes";
+import { registerRemoteDesktopRoutes } from "./remoteDesktopRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
 import { registerSupermarketRoutes } from "./supermarket/supermarketRoutes";
@@ -2932,6 +2933,14 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // the customer answering, so any rule on `/remote-support/sessions` breaks
   // consent. The split is by METHOD and PARTICIPANT, which a prefix cannot say.
   { prefix: "/remote-support", permission: null },
+  // ⛔ REMOTE DESKTOP (2026-09-02), same shape and same reasoning. The MACHINE
+  // side (register, poll, accept, login-result, heartbeat, signal) is the
+  // signed-in person on that computer, who may hold no key at all; the per-route
+  // policy in remoteDesktop/policy.ts decides who may connect (own computer =
+  // can_use_remote_desktop, by ID = can_connect_by_id, issuing a password =
+  // can_share_own_computer), re-read live. A prefix rule here would 403 every
+  // enrolled machine's presence poll.
+  { prefix: "/remote-desktop", permission: null },
   // The EMERGENCY surface is a different thing with a different key, plus
   // `requireSuperAdmin` inside every handler. Deliberately separated: the switch
   // that turns remote support off must not be reachable by the people who use
@@ -42184,6 +42193,9 @@ const port = Number(process.env.PORT || 3001);
   // user, because the whole audit trail is "which named person watched which
   // named person's screen".
   await registerRemoteSupportRoutes(app, { audit });
+  // Remote Desktop rides the same engine (sessions, kill switch, transcript) and
+  // registers right beside it so the two can never be half-present.
+  await registerRemoteDesktopRoutes(app, { audit });
   await registerLanPhoneRoutes(app, { audit });
   // ⛔ Desk phone setup. The office machine discovers and performs; every decision
   // -- may this phone be touched, may it be wiped, what is the customer told -- is

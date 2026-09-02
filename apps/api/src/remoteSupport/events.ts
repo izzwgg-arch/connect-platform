@@ -50,6 +50,20 @@ export const SYSTEM_EVENT_CODES = [
   "ended",
   "revoked",
   "killed",
+  // ── Remote Desktop (2026-09-02) ──────────────────────────────────────────
+  // The connecting side reached one of its OWN computers, or a computer whose
+  // owner issued a Connect ID password. ⛔ None of these carries the username,
+  // the password, or the Connect ID password — a login is recorded as a verdict.
+  "desktop_connected",
+  "machine_accepted",
+  "login_ok",
+  "login_failed",
+  "login_locked",
+  "share_used",
+  "sound_routed",
+  "sound_stopped",
+  "mic_routed",
+  "mic_stopped",
 ] as const;
 export type SystemEventCode = (typeof SYSTEM_EVENT_CODES)[number];
 
@@ -145,6 +159,29 @@ export function renderSystemEvent(code: SystemEventCode, facts: SystemEventFacts
       return "Access was withdrawn by a Loopcom administrator.";
     case "killed":
       return "Remote support was switched off platform-wide.";
+    case "desktop_connected":
+      return facts.detail ? `${who} connected from ${facts.detail}.` : `${who} connected.`;
+    case "machine_accepted":
+      return facts.screenName ? `${facts.screenName} accepted the connection.` : "The computer accepted the connection.";
+    case "login_ok":
+      return "The computer's username and password were accepted.";
+    case "login_failed":
+      // ⛔ A COUNT of tries left. Never the username that was tried.
+      return typeof facts.count === "number"
+        ? `Wrong username or password (${facts.count} ${facts.count === 1 ? "try" : "tries"} left).`
+        : "Wrong username or password.";
+    case "login_locked":
+      return "Too many wrong passwords — that computer is locked for 15 minutes.";
+    case "share_used":
+      return `${who} connected with a Connect ID password.`;
+    case "sound_routed":
+      return facts.detail ? `Sound is playing on ${facts.detail}.` : "Sound is playing on the connecting computer.";
+    case "sound_stopped":
+      return "Sound is playing on the remote computer again.";
+    case "mic_routed":
+      return facts.detail ? `${facts.detail}'s microphone is in use on this computer.` : "The connecting computer's microphone is in use here.";
+    case "mic_stopped":
+      return "This computer is using its own microphone again.";
     default: {
       // Exhaustiveness: adding a code without a sentence is a compile error.
       const never: never = code;

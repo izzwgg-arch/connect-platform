@@ -53,8 +53,16 @@ test("the preload publishes remoteSupport only behind the launch flag", () => {
   // exposeInMainWorld object is precisely the customer-wide switch-on.
   assert.match(
     code,
-    /remoteSupportEnabled\(\)\s*\?[\s\S]{0,120}remoteSupport:/,
+    /\.\.\.\(remoteSupportEnabled\(\)\s*\?\s*\{\s*remoteSupport:\s*remoteSupportApi\s*\}\s*:\s*\{\}\)/,
     "the remoteSupport key must be attached only when the gate says so",
+  );
+  // Remote Desktop (2026-09-02): the SECOND gate, same shape. The host key
+  // registers the machine and polls every five seconds once the portal sees it.
+  assert.match(code, /--connect-remote-desktop=1/, "the preload must decide Remote Desktop from its own launch argument");
+  assert.match(
+    code,
+    /\.\.\.\(remoteDesktopEnabled\(\)\s*\?\s*\{\s*remoteDesktop:\s*remoteDesktopHostApi\s*\}\s*:\s*\{\}\)/,
+    "the remoteDesktop host key must be attached only when its gate says so",
   );
 });
 
@@ -64,11 +72,23 @@ test("remote support off means the key is ABSENT, not an object of no-ops", () =
   // The portal tests `bridge?.remoteSupport?.listScreens`. An empty object, or a
   // stubbed one, passes that test and starts the polling — so the false branch
   // must hand over the plain api with no remoteSupport key at all.
+  // Each gated key spreads `{}` when off, so the object literally lacks the key.
   assert.match(
     code,
-    /remoteSupportEnabled\(\)\s*\?\s*\{\s*\.\.\.desktopApi,\s*remoteSupport:\s*remoteSupportApi\s*\}\s*:\s*desktopApi/,
-    "when off, expose desktopApi itself — anything with a remoteSupport key would pass the portal's check",
+    /\.\.\.\(remoteSupportEnabled\(\)\s*\?\s*\{\s*remoteSupport:\s*remoteSupportApi\s*\}\s*:\s*\{\}\)/,
+    "when off, spread nothing — anything with a remoteSupport key would pass the portal's check",
   );
+  assert.match(
+    code,
+    /\.\.\.\(remoteDesktopEnabled\(\)\s*\?\s*\{\s*remoteDesktop:\s*remoteDesktopHostApi\s*\}\s*:\s*\{\}\)/,
+    "when off, spread nothing — anything with a remoteDesktop key would pass the portal's check",
+  );
+  // ⛔ No unconditional `remoteSupport:` / `remoteDesktop:` inside the exposed object.
+  const exposed = code.slice(code.indexOf("contextBridge.exposeInMainWorld("));
+  assert.doesNotMatch(exposed, /^\s*remoteSupport:\s*remoteSupportApi,?\s*$/m, "remoteSupport published unconditionally");
+  assert.doesNotMatch(exposed, /^\s*remoteDesktop:\s*remoteDesktopHostApi,?\s*$/m, "remoteDesktop published unconditionally");
+  // The SETUP bridge is deliberately unconditional: it polls nothing and shares nothing.
+  assert.match(exposed, /remoteDesktopSetup:\s*remoteDesktopSetupApi/);
 });
 
 test("main passes the flag only when the setting is on", () => {
@@ -78,6 +98,11 @@ test("main passes the flag only when the setting is on", () => {
     code,
     /settings\.remoteSupportEnabled\s*\?\s*\["--connect-remote-support=1"\]\s*:\s*\[\]/,
     "the launch argument must be conditional on the stored opt-in",
+  );
+  assert.match(
+    code,
+    /settings\.remoteDesktopEnabled\s*\?\s*\["--connect-remote-desktop=1"\]\s*:\s*\[\]/,
+    "the Remote Desktop launch argument must be conditional on its own stored opt-in",
   );
 });
 
@@ -97,22 +122,29 @@ test("the setting is opt-in: nothing defaults it to true", () => {
     "a default of true switches remote support on for everybody who updates",
   );
   assert.doesNotMatch(main, /remoteSupportEnabled:\s*true/);
+  assert.match(types, /remoteDesktopEnabled\?:\s*boolean/);
+  assert.doesNotMatch(main, /remoteDesktopEnabled\s*(\?\?|\|\|)\s*true/, "a default of true switches Remote Desktop on for everybody who updates");
+  assert.doesNotMatch(main, /remoteDesktopEnabled:\s*true/);
 });
 
-test("the display media handler is installed, and never captures audio", () => {
+test("the display media handler is installed, and captures audio ONLY as system loopback for a granted Remote Desktop session", () => {
   const code = executableLines(readSource("main.ts"));
 
   // Without this, getDisplayMedia hangs or rejects with nothing in the console
   // and the bug looks like it is in the portal.
   assert.match(code, /setDisplayMediaRequestHandler/);
 
-  // Support looks at a screen; it does not listen to the room. Every callback
-  // path must pass audio: undefined.
+  // Remote SUPPORT never listens to the room. Remote DESKTOP may carry what the
+  // computer PLAYS — the loopback device — and only when the renderer recorded a
+  // session the server granted `sound`. ⛔ Never a microphone on any path.
   const callbacks = code.match(/callback\(\{[^}]*\}\)/g) ?? [];
   assert.ok(callbacks.length >= 2, "expected the handler's success and refusal callbacks");
   for (const call of callbacks) {
-    assert.match(call, /audio:\s*undefined/, `a display-media callback must never grant audio: ${call}`);
+    assert.ok(/audio:\s*undefined/.test(call) || /audio(\s*:\s*audio)?\s*[,}]/.test(call), `a display-media callback must grant audio only through the loopback decision: ${call}`);
+    assert.doesNotMatch(call, /audio:\s*true/, "audio: true would capture a MICROPHONE — never");
   }
+  assert.match(code, /remoteDesktopAudioAllowed\(\)\s*\?\s*\("loopback" as const\)\s*:\s*undefined/, "system audio only as loopback, only when a granted session allowed it");
+  assert.doesNotMatch(code, /loopbackWithMute/, "the person at the machine must keep hearing their own computer");
 });
 
 test("the customer's own screen choice wins over Electron's guess", () => {
@@ -149,6 +181,7 @@ test("quitting tears the helper down", () => {
     /stopRemoteSupport\(\)/,
     "a PowerShell helper that can move the mouse must not outlive the app that started it",
   );
+  assert.match(beforeQuit, /stopRemoteDesktop\(\)/, "the system-audio allowance must not outlive the app either");
 });
 
 test("turning remote support off stops what is running now", () => {

@@ -145,6 +145,14 @@ export function browserTenantContext(): string {
 
 type ApiRequestOptions = {
   timeoutMs?: number;
+  /**
+   * Extra request headers. Added 2026-09-02 for Remote Desktop, whose MACHINE
+   * side proves which installation it is with `x-machine-key` on every call —
+   * a header rather than a body field so GET routes (the signal drain) can
+   * carry it too. The bearer token, content type and tenant context are set by
+   * this client and cannot be overridden from here.
+   */
+  headers?: Record<string, string>;
 };
 
 function isAbortError(err: unknown): boolean {
@@ -175,6 +183,7 @@ async function apiRequest<T>(
     const res = await fetch(`${baseUrl()}${path}`, {
       method,
       headers: {
+        ...(options.headers ?? {}),
         ...(body ? { "content-type": "application/json" } : {}),
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {})

@@ -14,6 +14,11 @@ import {
   registerRemoteSupportIpc,
   stopRemoteSupport,
 } from "./remoteSupport/mainWiring";
+import {
+  registerRemoteDesktopIpc,
+  remoteDesktopAudioAllowed,
+  stopRemoteDesktop,
+} from "./remoteDesktop/mainWiring";
 
 // Chromium blocks media playback in windows the user has never interacted with.
 // The FULL window runs the real SIP phone and plays the ringtone — but users who
@@ -263,6 +268,9 @@ function webPreferences(windowKind: string) {
     additionalArguments: [
       `--connect-window-kind=${windowKind}`,
       ...(settings.remoteSupportEnabled ? ["--connect-remote-support=1"] : []),
+      // ⛔ The second gate, same rules: Remote Desktop's host key is published only
+      // behind this flag, and only the setup page (via IPC) flips the setting.
+      ...(settings.remoteDesktopEnabled ? ["--connect-remote-desktop=1"] : []),
     ],
   };
 }
@@ -470,6 +478,28 @@ function rebuildTray(): void {
       label: settings.coworkerWidgetEnabled ? "Hide Coworker Bubble" : "Show Coworker Bubble",
       click: () => toggleCoworkerWidget(),
     },
+    { type: "separator" },
+    // Remote Desktop (2026-09-02). The switch needs a username and password
+    // first, so "Allow" opens the setup page rather than flipping blindly;
+    // turning OFF is immediate (it stops any session now) and applies to new
+    // windows at the next launch, exactly like remote support.
+    {
+      label: settings.remoteDesktopEnabled
+        ? "Remote Desktop to this computer: On (after restart)"
+        : "Allow Remote Desktop to this computer…",
+      click: () => openRemoteDesktopSetup(),
+    },
+    ...(settings.remoteDesktopEnabled
+      ? [{ label: "Turn Off Remote Desktop (stops now)", click: () => turnOffRemoteDesktop() }]
+      : []),
+    {
+      label: settings.remoteDesktop?.accessLogin ? "Change username or password…" : "Set username and password…",
+      click: () => openRemoteDesktopSetup(),
+    },
+    ...((settings.remoteDesktop as { connectId?: string } | undefined)?.connectId
+      ? [{ label: `Connect ID: ${formatConnectIdForTray((settings.remoteDesktop as { connectId?: string }).connectId!)}`, enabled: false }]
+      : []),
+    { type: "separator" },
     {
       // ⛔ The label says "after restart" because it is true, and a toggle that
       // silently does nothing until later is how somebody concludes the feature
@@ -556,6 +586,41 @@ function toggleRemoteSupport(): void {
     diag("remote-support", `${enabled ? "allowed" : "turned off"} — applies to windows opened from now on`);
   } catch (err) {
     diag("remote-support", `toggle failed: ${String(err)}`);
+  }
+}
+
+function formatConnectIdForTray(id: string): string {
+  return /^\d{9}$/.test(id) ? `${id.slice(0, 3)} ${id.slice(3, 6)} ${id.slice(6)}` : id;
+}
+
+/** The setup page lives in the portal; the tray just opens it. */
+function openRemoteDesktopSetup(): void {
+  try {
+    const win = createFullWindow(true);
+    loadPortal(win, "/remote-desktop/this-computer");
+  } catch (err) {
+    diag("remote-desktop", `open setup failed: ${String(err)}`);
+  }
+}
+
+/**
+ * Off from the tray: stops any running session NOW and tells every window, then
+ * the flag takes effect for windows opened from now on. Withdrawing permission
+ * is never something the owner should have to restart to mean.
+ */
+function turnOffRemoteDesktop(): void {
+  try {
+    writeSettings({ ...settings, remoteDesktopEnabled: false });
+    stopRemoteDesktop();
+    stopRemoteSupport();
+    for (const win of [fullWindow, miniWindow]) {
+      if (!win || win.isDestroyed()) continue;
+      win.webContents.send("remote-support:stop-requested");
+    }
+    rebuildTray();
+    diag("remote-desktop", "turned off from the tray — session stopped, applies to windows opened from now on");
+  } catch (err) {
+    diag("remote-desktop", `turn off failed: ${String(err)}`);
   }
 }
 
@@ -690,6 +755,27 @@ function registerIpc(): void {
     });
   } catch (err) {
     diag("remote-support", `ipc register failed: ${String(err)}`);
+  }
+
+  // Remote Desktop: identity, the username/password kept on this machine, lock
+  // state and the system-audio allowance. ⛔ Registering is not switching on —
+  // the host key that makes the portal use any of it sits behind the launch flag.
+  try {
+    registerRemoteDesktopIpc({
+      getSettings: () => settings,
+      writeSettings: (next) => writeSettings(next),
+      log: (line) => diag("remote-desktop", line),
+      onDisabled: () => {
+        stopRemoteSupport();
+        for (const win of [fullWindow, miniWindow]) {
+          if (!win || win.isDestroyed()) continue;
+          win.webContents.send("remote-support:stop-requested");
+        }
+      },
+      rebuildTray: () => rebuildTray(),
+    });
+  } catch (err) {
+    diag("remote-desktop", `ipc register failed: ${String(err)}`);
   }
 
   ipcMain.on("phone:engine-event", (_event, envelope: PhoneEngineEnvelope) => {
@@ -877,10 +963,14 @@ if (!gotSingleInstanceLock) {
               callback({ video: undefined, audio: undefined });
               return;
             }
-            diag("remote-support", `sharing source ${chosen.id} (${chosen.name})`);
-            // ⛔ Audio is never captured. Support needs to see the screen, not
-            // listen to the room the customer is sitting in.
-            callback({ video: chosen, audio: undefined });
+            // ⛔ Audio is never captured for remote SUPPORT — support needs to see
+            // the screen, not listen to the room. Remote DESKTOP may carry the
+            // computer's own sound (what it PLAYS — the loopback device, never a
+            // microphone) and only for a session the server granted `sound`, which
+            // the renderer records via remote-desktop:allow-audio before capture.
+            const audio = remoteDesktopAudioAllowed() ? ("loopback" as const) : undefined;
+            diag("remote-support", `sharing source ${chosen.id} (${chosen.name})${audio ? " + system audio" : ""}`);
+            callback({ video: chosen, audio });
           })
           .catch((err) => {
             diag("remote-support", `getSources failed: ${String(err)}`);
@@ -975,4 +1065,5 @@ app.on("before-quit", () => {
   // helper alive after the app has gone is a process on the customer's machine
   // that can move their mouse and that nothing is watching.
   try { stopRemoteSupport(); } catch { /* quitting anyway */ }
+  try { stopRemoteDesktop(); } catch { /* quitting anyway */ }
 });

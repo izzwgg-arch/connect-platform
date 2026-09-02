@@ -344,6 +344,16 @@ export type SipPhoneActions = {
   hangupSession: (id: string) => void;
   /** Atomic swap: put active on hold, resume the given held session. */
   swapToSession: (id: string) => void;
+  /**
+   * Remote Desktop (2026-09-02): use a microphone track that arrived over a peer
+   * connection as THIS phone's microphone — the connecting person's voice, spoken
+   * into their own computer, answers a call on this one. Null restores the local
+   * microphone. Applies to the live call at once (replaceTrack) and to every call
+   * answered or dialled while it is set. ⛔ Never an IPC proxy action: a
+   * MediaStream cannot cross windows, so only the window that runs the engine
+   * (where RemoteDesktopHost also runs) may call it.
+   */
+  setExternalMicrophoneStream: (stream: MediaStream | null) => void;
 };
 
 /** Multi-call session snapshot for UI. */
@@ -933,6 +943,47 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const callDirectionRef = useRef<"outbound" | "inbound">("outbound");
   /** Local microphone stream — stopped explicitly on call end to release the mic indicator. */
   const localStreamRef = useRef<MediaStream | null>(null);
+  /**
+   * Remote Desktop: a microphone handed to this phone from the connecting
+   * computer. While set, every answer/dial uses a CLONE of its track instead of
+   * getUserMedia, and the live call swaps to it at once. Clones, so the
+   * hangup path's track.stop() ends the call's copy and never the connection's.
+   */
+  const externalMicRef = useRef<MediaStream | null>(null);
+  const acquireMicStream = useCallback((): Promise<MediaStream> => {
+    const ext = externalMicRef.current?.getAudioTracks().find((t) => t.readyState === "live") ?? null;
+    if (ext) return Promise.resolve(new MediaStream([ext.clone()]));
+    return navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false });
+  }, []);
+  const setExternalMicrophoneStream = useCallback((stream: MediaStream | null) => {
+    externalMicRef.current = stream;
+    const pc = (sessionRef.current as { connection?: RTCPeerConnection } | null)?.connection;
+    if (!pc) return;
+    const sender = pc.getSenders().find((snd) => snd.track?.kind === "audio");
+    if (!sender) return;
+    const ext = stream?.getAudioTracks().find((t) => t.readyState === "live") ?? null;
+    if (ext) {
+      const clone = ext.clone();
+      void sender.replaceTrack(clone).then(() => {
+        // The call's stream now carries the remote microphone; keep the phone's
+        // own bookkeeping (mute, teardown) pointed at what is actually sending.
+        const cur = localStreamRef.current;
+        if (cur) { for (const t of cur.getAudioTracks()) { try { t.stop(); } catch { /* already */ } cur.removeTrack(t); } cur.addTrack(clone); }
+      }).catch(() => { try { clone.stop(); } catch { /* noop */ } });
+      return;
+    }
+    // Back to the local microphone.
+    navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
+      .then((local) => {
+        const track = local.getAudioTracks()[0];
+        if (!track) return;
+        return sender.replaceTrack(track).then(() => {
+          const cur = localStreamRef.current;
+          if (cur) { for (const t of cur.getAudioTracks()) { try { t.stop(); } catch { /* already */ } cur.removeTrack(t); } cur.addTrack(track); }
+        });
+      })
+      .catch(() => { /* the next call re-acquires normally */ });
+  }, []);
   /** Accumulator for the latest inbound-rtp packetsReceived count for the quality report. */
   const packetsReceivedRef = useRef<number | null>(null);
   /** Latest raw stat snapshot stored in a ref so end-of-call report always has real values. */
@@ -3062,8 +3113,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           const bb = beginOutboundBlackbox(normalised, sipTarget, selectedOutboundRoute?.name || "none");
           const mediaConstraints = voiceAudioConstraints(currentMicDeviceIdRef.current);
           bb.setMedia({ constraints: mediaConstraints, inputDeviceId: currentMicDeviceIdRef.current ?? null });
-          return navigator.mediaDevices
-            .getUserMedia({ audio: mediaConstraints, video: false })
+          return acquireMicStream()
             .then((localStream) => {
           localStreamRef.current = localStream;
           bb.mark("getusermedia_granted");
@@ -3169,8 +3219,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     if (!sessionRef.current) return;
     answerLatency.tap(sessionRef.current);
     stopAllAudio(); // Stop ringtone immediately on answer
-    navigator.mediaDevices
-      .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
+    acquireMicStream()
       .then((localStream) => {
         localStreamRef.current = localStream;
         try {
@@ -3670,8 +3719,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       internalHold(active.id);
     }
     stopAllAudio();
-    navigator.mediaDevices
-      .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
+    acquireMicStream()
       .then((localStream) => {
         localStreamRef.current = localStream;
         try {
@@ -3797,6 +3845,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     resumeSession,
     hangupSession,
     swapToSession,
+    setExternalMicrophoneStream,
   };
 }
 
@@ -3932,6 +3981,7 @@ const DEFAULT_PHONE_CONTEXT: SipPhoneState & SipPhoneActions = {
   resumeSession: () => undefined,
   hangupSession: () => undefined,
   swapToSession: () => undefined,
+  setExternalMicrophoneStream: () => undefined,
 };
 
 function LocalSipPhoneProvider({ children }: { children: ReactNode }) {
@@ -4012,6 +4062,8 @@ function DesktopSipPhoneProxyProvider({ children }: { children: ReactNode }) {
     ...snapshot,
     dial: (target) => { void send("dial", [target]); },
     answer: () => { void send("answer"); },
+    // A MediaStream cannot cross the IPC boundary; only the engine window routes an external microphone.
+    setExternalMicrophoneStream: () => undefined,
     hangup: () => { void send("hangup"); },
     setMute: (mute) => { void send("setMute", [mute]); },
     toggleHold: () => { void send("toggleHold"); },
