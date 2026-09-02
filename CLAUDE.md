@@ -12586,6 +12586,39 @@ SESSION HAS EVER RUN BETWEEN TWO PEOPLE.** No desktop build.)
   Google STUN server is only the fallback when that call fails. **Do not go
   looking for a missing relay** — a doubly-firewalled pair relays like any call.
 
+- ⛔⛔ **"CHOOSE A PERSON" WAS EMPTY FOR EVERYONE, ALWAYS — the page asked a route
+  that never existed (`99d14c0e`, 2026-09-02; api + portal DEPLOYED and
+  container-verified: both `.build-commit` = `99d14c0e`, the page chunk carries
+  `remote-support/people` and `team/members` greps **0**, 0 restarts, 200 on both
+  hostnames).** Found the first time Izzy tried to start a real session. The
+  technician screen loaded its people from **`/team/members`**, which `grep -rn`
+  in apps/api returns NOTHING for, and `.catch(() => setPeople([]))` turned the
+  404 into an empty dropdown — no log line, no error on screen, since the day
+  the screen shipped. ✅ New **`GET /remote-support/people`** (gated on
+  `can_remote_support`), scoped by **exactly the rule the request route
+  applies**: SUPER_ADMIN sees every non-disabled person on every approved, live
+  CUSTOMER tenant (never the admin tenant, never a SUPER_ADMIN row); anyone else
+  sees only their own company. The row names the company only when the list
+  spans more than one. **Proven live inside `app-api-1`: SUPER_ADMIN → 200, 63
+  people across 25 companies; an ordinary USER → 403.** ⛔ **When a dropdown fed
+  by `apiGet` reads empty, grep apps/api for the route STRING before anything
+  else.** Guards: `remoteSupport/people.test.ts` (4 route tests, own fake db that
+  follows the nested tenant filter — the attack harness's evaluator throws on
+  it) + a source guard in `remoteSupportWiring.test.ts` that fails replayed
+  against the pre-fix page.
+  ⛔⛔ **DEPLOY TRAP HIT THE SAME HOUR: GitHub answered the server's
+  `git-upload-pack` POST with 401** (`www-authenticate: Basic realm="GitHub"`)
+  while `info/refs` GET was 200, `ls-remote` worked, and the same unauthenticated
+  clone succeeded from the workstation — **per-IP throttling of unauthenticated
+  pack downloads from loopcom**. The repo is PUBLIC and the clone has only
+  `credential.helper cache`; no token exists on the box. `deploy_common_git_sync`
+  fetches `origin` unconditionally, so the way through was: incremental
+  `git bundle` → `scp` → bare mirror `/root/connect-mirror.git` (cloned from the
+  app clone, bundle fetched in) → `git remote set-url origin /root/connect-mirror.git`
+  → `deploy-direct.sh` → **set the URL back to
+  `https://github.com/izzwgg-arch/connect-platform.git` afterwards** (done, mirror
+  removed). ⛔ Leaving the mirror as origin silently freezes every future deploy
+  at that tip. Memory: [[remote-support-people-list-asked-a-route-that-never-existed]].
 - ⛔⛔ **BUILDING THE SCREENS (`875bd560`) PROVED THREE SERVER PROTECTIONS DEAD.
   All three were correct, tested and deployed — and unreachable, because nothing
   ever called them. Each is a CALLER-side omission, which a test of the policy,
