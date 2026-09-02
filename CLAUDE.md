@@ -186,7 +186,14 @@ have the real Loopcom logo. For the co-workers."*
   invisible to `deploy-direct.sh` until the mirror is refreshed; `skip=no_changes` seconds
   after a push IS that. Recipe: `git bundle create x.bundle <old>..<branch>` → scp →
   `git fetch /root/x.bundle <branch> && git push origin FETCH_HEAD:refs/heads/<branch>`.
-  COWORKER_KNOWLEDGE_DEPLOY_STATE_PLACEHOLDER
+  ✅ **DEPLOYED AND VERIFIED 2026-09-02 12:10Z**: api `app-api-1` at `a6fc0dbc` (0 restarts,
+  health 200 both hostnames) and the published `AgentKnowledgeDoc` system row updated
+  12:10:21Z carrying the Coworker section + the staff note; **agent REBUILT** (manual
+  compose, container healthy, 0 restarts, 0 error lines, both prompt paragraphs +
+  `COWORKER_CHAT_PATH` grepped inside it). ⏳ NOT PROVEN: nobody has asked the rebuilt
+  assistant through the bubble yet — acceptance is one more "can you organize my files?"
+  in the bubble: it must name the Coworker, say it cannot do that on the computer yet, and
+  the reply must land as an escalation text (the `pass … to the Connect team` phrasing).
   ⏳ **What "run a task on my computer through the Coworker" needs, and it is Izzy's
   decision, not a build to start quietly:** (1) approve the approval + permissions
   screens (mockups: <https://claude.ai/code/artifact/4f37d49b-0c9b-4bde-a990-a6063a1df0d6>);

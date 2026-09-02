@@ -113,3 +113,50 @@ then start Loopcom from the Start menu.
 ⛔ **Read that sequence correctly:** in this build a re-show of an already-created chat window logged NOTHING, so "one opened, three closed" is the toggle working (open → close → open → close …), not failing. `9237f53e` adds `chat panel shown again` and rides the next build.
 
 ⏳ Still unproven: the no-second-registration negative. The SUPER_ADMIN login carries no extension, so nothing on that machine registers either way; prove it on a tenant login by opening the popover and reading `pjsip show endpoint T<t>_<ext>_1` before and after.
+
+---
+
+## 9. The first question through the bubble, and what was taught (2026-09-02, `a6fc0dbc`)
+
+Izzy, minutes after installing rc.2: *"I opened it, and I asked him to run a task on my computer, and he couldn't do it. 1. The agent needs to be trained that we have that feature now. 2. How does it access that feature? He needs to know that when someone asks him a task, it's got to do it through a co-worker."*
+
+The conversation (`AgentConversation cmtk15jsa010sn30y50f6w7lf`, 11:46Z): **"Can you organize files on my computer?"** → *"I can't reach or change files on your local computer from here"* plus PowerShell scripts to run by hand.
+
+### 9a. The answer was true, and that is the fact to hold onto
+
+The Coworker has **no desktop hands**. `AGENT_HANDOFF_AI_COWORKER_2026-08-31.md` §8: Phases 6–9 (filesystem/shell/Windows/browser tools), 17–20 (job system, executors), 21–23 (Coworker UI, approval UI) and 29 (worker process) are **not started**. The policy core that would gate them exists and is exhaustively tested; nothing calls it. So "organize my files" cannot be carried out by anything on the platform today, and an assistant that said otherwise would be the `unearned_fix` class the support-loop gate exists to stop.
+
+What WAS wrong is that the assistant had no idea where it was or that the bubble existed:
+
+- the bubble's window loads `/desktop/coworker`, and the engine's viewing block described that as *"the Desktop page of the Connect app"*;
+- neither `SYSTEM_PROMPT` nor `STAFF_SYSTEM_PROMPT` mentioned the Coworker;
+- `docs/agent-knowledge/system.md` (published to the assistant at api boot) had no Coworker section.
+
+### 9b. What shipped
+
+- **`engine.ts`**: `COWORKER_CHAT_PATH = "/desktop/coworker"` (a test pins it to the desktop's `CHAT_ROUTE`). When `viewingPath` starts with it, the viewing block — for customers AND staff — says they are talking through the Loopcom Coworker on their own Windows computer, what that window can do (this chat) and cannot (files, programs, settings), and, for customers, to pass the exact request to the Connect team. Checked BEFORE the page branch.
+- **Both prompts** carry a `THE LOOPCOM COWORKER` paragraph: it exists, how it is switched on (tray → "Show Coworker Bubble"), what it can and cannot do, never claim a computer task was done/started/scheduled, no scripts unless asked. The customer wording "pass the exact request to the Connect team" is chosen so `ESCALATION_RE` (widened 2026-08-19 to accept a qualified team name) catches the reply and the request reaches Izzy by text — **those requests are how the next abilities get chosen**. The staff paragraph states the build fact without any of the customer refusals the staff-prompt guard forbids.
+- **`docs/agent-knowledge/system.md`**: a customer-facing section (passes `check-docs`: 30 documents, 0 problems) and a staff-only note so the escalation researcher treats "do X on my computer" as a feature request, not a fault.
+- **`scripts/lib/deploy-common.sh`**: `docs/agent-knowledge/` added to the api path list. ⛔ The api image bakes that directory and publishes it at boot, yet a knowledge-only edit was skipped as `unrelated_paths` — the assistant kept the old document. Takes effect from the next deploy after this one (the rollout script is sourced pre-sync).
+- Tests: `apps/agent/src/conversation/coworkerAwareness.test.ts` (6, source guards on both prompts + the viewing branch + the escalation regex) and `apps/api/src/agentKnowledgeCoworker.test.ts` (4; HEAD's `system.md` mentions the Coworker 0 times). Agent suites 39/39, agent typecheck 14 = baseline.
+
+### 9c. ⛔ The deploy mirror trap, hit while shipping this
+
+`deploy-direct.sh api` answered `skip=no_changes` / *"deployed commit already at 24a41e26"* seconds after `a6fc0dbc` was pushed. The clone's `origin` is **`/root/connect-mirror.git`**, a bare local mirror, and the clone's GitHub remote (`izzwgg`) is https with no credentials in a non-interactive shell (`could not read Username`). A push to GitHub is invisible to every deploy until the mirror is refreshed. Recipe used: `git bundle create x.bundle 24a41e26..feat/ivr-migration-takeover` → scp → `git fetch /root/x.bundle feat/ivr-migration-takeover && git push origin FETCH_HEAD:refs/heads/feat/ivr-migration-takeover`. ⛔ The "agent rebuild" recipe's `git fetch origin && git reset --hard origin/<branch>` has the same hole — it resets to the mirror.
+
+### 9d. Deploy state
+
+- **api:** ✅ deployed 2026-09-02 (chain script behind another session's portal build): `app-api-1` `.build-commit` = `a6fc0dbc`, healthy, 0 restarts, `/api/health` 200 on both hostnames, `/app/docs/agent-knowledge/system.md` inside the container carries the Coworker section, and the published `AgentKnowledgeDoc` **system row was rewritten at 12:10:21Z** — `body` contains "Loopcom Coworker", `internalBody` contains the staff note. That row is what the assistant reads; the file alone proves nothing.
+- **agent:** ✅ rebuilt 2026-09-02 12:22Z (`docker compose … build agent && up -d agent` after `git reset --hard origin/…` on the refreshed mirror): `app-agent-1` healthy, 0 restarts, 0 error-level lines in the first 3 minutes, `THE LOOPCOM COWORKER` ×2 and `COWORKER_CHAT_PATH` ×2 grepped inside the running container.
+- ⏳ **NOT PROVEN:** nobody has asked the rebuilt assistant anything through the bubble. Acceptance: ask "can you organize my files?" in the bubble — it must name the Coworker, say it cannot do that on the computer yet, offer no scripts unprompted, and the reply must land as an `AgentEscalation` (text to Izzy).
+
+### 10. What "do it through the Coworker" actually needs — Izzy's decision
+
+Not built, deliberately. The order that keeps the platform's own rules:
+
+1. **Approve the approval + permissions screens** (mockups from 2026-08-31: <https://claude.ai/code/artifact/4f37d49b-0c9b-4bde-a990-a6063a1df0d6>). The 08-31 handoff's own words: those two screens decide whether anyone trusts this. Izzy's standing rule is mockups before UI.
+2. **A `coworker_task` tool** the agent receives ONLY when `viewingPath` is the bubble window, `minRole: "customer"`, that files a task with a declared `ToolSpec` (category, risk, domains) — never free text.
+3. **A desktop executor** behind the existing `phoneSetup`-style fence: a fixed allowlist of task kinds (e.g. "sort Downloads into folders by type"), each decided by `packages/shared/src/coworker/policy.ts` `decideToolCall()` (NEVER_AUTO_DOMAINS, call protection, provenance) and shown as an approval card in the popover before it runs. Credentials by reference only; every run audited through `coworker/audit.ts`.
+4. **Verified results back to the agent** (`taskState.decideCompletion` — "no unverified success"), so it can say what happened rather than what it hoped.
+
+⛔ At the time of writing another session had `apps/api/src/remoteDesktop/`, `apps/desktop/src/remoteDesktop/` and migration `20260902120000_remote_desktop` uncommitted in the shared tree. Check whether that work IS the hands before designing them a second time.
