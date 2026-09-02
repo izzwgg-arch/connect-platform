@@ -415,3 +415,39 @@ from either tenant.** Their handoff suggests dialling **8457831212** rather than
   pre-date this work) despite CLAUDE.md discouraging it in this shared tree. It
   round-tripped cleanly and the stash list was verified unchanged — but the rule
   stands and the safer route is inspecting which files the failures land in.
+
+## 2026-09-02 — the backfill rule for EXISTING tenants, and the read-only census
+
+Izzy, 2026-09-02: *"if they have more than one phone number, you're not sure. Ask
+me, and I'll tell you which one. For A+ Center, they're on a different voip.ms
+account, so when you're ready for them, let me know, and we'll drive it through
+the browser."* Memory: `e911-one-number-per-tenant-ask-izzy-which`.
+
+**The rule:** ONE registered number per tenant (per SITE for multi-site tenants) —
+the number the 911 call goes OUT on. Never sweep-register every DID; routing-only
+numbers (inbound → another tenant, ring-group feeders, "V" forwards) get nothing.
+A multi-number tenant is a QUESTION for Izzy, not a guess.
+
+**Census 2026-09-02 (read-only: one `getDIDsInfo` on master 344022 + the
+`PbxTenantInboundDid` table). `e911` column values seen: `0` off, `1` on, `2`
+undocumented (Create A Box's three numbers all read `2` — check in the portal
+before trusting either reading).**
+
+| Tenant (PBX) | Numbers | VoIP.ms E911 | Verdict |
+|---|---|---|---|
+| Matamim T104 | 9293598299 | 1 | done (2026-08-17) |
+| RSBK T34 | 8453050203 | 1 | done (pre-existing) |
+| B Visible T9 | 8452380478, 8457761311, 866-579-7575 | 1, 1, — (toll-free) | two registered; ask if one should stay |
+| ADDB T4 | 8452433057, 3146280823 (routes to subaccount `actual`, MO) | 1, 0 | main done; ask about the 314 |
+| Create A Box T7 | 8452019889, 8454506721, 8457826722 | 2, 2, 2 | ask which + resolve state 2 |
+| Trust Bookkeepings T18 | 8452441708 + eight 845-288-228x block numbers routed to trust104/trus105/trust106/trustSGE/Sterlion/Koznitsc/Trusttrimpro/trimprotrust | all 0 | ask (likely 8452441708; the 228x block looks routing-only) |
+| Displaydex T6 | 2128880885, 8452003535, 8453647474, 8454143736 | all 0 | ask |
+| Gesheft T8 | 8452449666, 8453050021 (routes to subaccount `relax2`) | 0, 0 | ask (likely 8452449666) |
+| Landau Home T21 | 8452510249 (NOT on master 344022), 8455577768 (now the admin escalation number) | —, 0 | ask; ⛔ their outbound CID is a number no longer theirs |
+| inii mini T105 | 6469846023, 8452605692 (retired temp, back on master pool) | 0, 0 | register 6469846023 (port landed 08-12, before the E911 step existed) |
+| A plus center T2 | 8457823064, 8457826775, 8458279585, 8458376001 (VoIP.ms acct **355362**), 8456372330 (master, door CID, e911=1 — registered under Comfort control, an erased tenant) | — | browser session with Izzy |
+| Single-number, e911=0 | Connect Communications 8457231213 · Fixup Group 8458067040 · Hanna 8455577194 · Luxure 8455378318 · McNamara Lion 3477730349 · NY Garden Sprinkler 8456622530 · Relax Tires 8457761765 · Secro 8457518493 · Smooth Leasing 8452521213 · Solidify 8455577879 · Trimpro 8452483973 · TYH 9298524026 (cancelled 08-18, needs their real address) · Yossis 8458279500 | 0 | no question — need a SERVICE ADDRESS for each (legacy tenants were never onboarded through the wizard, so Connect holds none) |
+| Test/demo | Loopcom Demo T102, Loopcom Demo 2 T140, Ezra stress test T101 | 0 | skip unless told otherwise |
+
+⛔ Registration is a paid, irreversible carrier write — every row above is a
+PROPOSAL; nothing was written on 2026-09-02.
