@@ -15898,8 +15898,28 @@ current to 2026-08-09; §7 and §11 re-verified 2026-08-12.)
   **108 of 2,674 voicemails in 30 days (4%) never notified anyone.** Worst: **A
   Plus ext 108 "Home" 45**, **Gesheft ext 112 11**, Create A Box ext 101 8 (one
   255s). Gesheft's blind mailboxes: **103,104,105,106,108,112,116,117,118,897**.
-  ⛔ **Gesheft ext 102 emails to `Orders@pileupny.com`** — another company's
-  domain; delivers fine, **needs Izzy's confirmation it's intentional.**
+  ⛔⛔ **Gesheft ext 102 "Customer Service" STILL emails every voicemail to
+  `Orders@pileupny.com` — the OLD domain, and it is LIVE, not a leftover string**
+  (re-verified read-only 2026-09-02). It is the ONE place on the platform where the
+  old domain survives: `ombu_extensions.email` for tenant 8 AND the generated
+  `voicemail__50-8-main.conf` both carry it, Asterisk has the mailbox loaded, and
+  **14 messages were delivered to it in the last 24 h (`status=sent`)**. Ext 102 takes
+  **235 voicemails / 30 days (60 in the last 7)** — their second-busiest mailbox after
+  101. ⛔ **It is live precisely BECAUSE Gesheft is the one tenant left on the PBX's
+  own voicemail-to-email** (the 2026-08-17 cutover switched every other tenant off), so
+  it was untouched by that pass and cannot be fixed from Connect — it is a PBX write.
+  ✅ **The rest of Gesheft is CLEAN**: no `VoicemailEmailRecipient` row, no billing
+  address, no `EmailJob` ever sent there (0, all time), and **texts never touch it** —
+  all 6 Gesheft users have `smsEmailForwardEnabled = false` and the carrier's own
+  `sms_email` on 845-244-9666 is `Orders@gesheftkosher.com`. A sweep of EVERY
+  email-shaped column in the whole database returns exactly TWO pileupny hits, both
+  inert mirrors of the PBX value: `User.email` and `Extension.pbxUserEmail`.
+  ⚠ `pileupny.com` still has live Google MX, so the mail is landing somewhere —
+  **needs Izzy's word on whether that mailbox is still read.**
+  ⚠ There is also a Connect LOGIN `orders@pileupny.com` (ACTIVE, created 2026-04-06
+  by the PBX sync, never invited, never signed in) owning ext 102 — the documented
+  April-sync trap. ⛔ Do NOT "fix" it with `resend-invite`: that would send a
+  create-your-password mail to the old domain.
 - **The mechanism itself is healthy — do not re-litigate transport.** On
   2026-08-09: **33 voicemails → 29 in email-configured mailboxes → 29 sent, 30/30
   postfix deliveries `status=sent`, zero failures**, all queues empty, and
