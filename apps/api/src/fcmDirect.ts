@@ -89,18 +89,67 @@ export function buildFcmDataFromPayload(payload: Record<string, unknown>): Recor
   return data;
 }
 
-/** Send one high-priority data message. Throws on any failure — caller falls back to Expo. */
-export async function sendFcmDirectData(deviceToken: string, data: Record<string, string>): Promise<void> {
+/**
+ * Error thrown by sendFcmDirectData, carrying enough structure for callers to
+ * act on Google's token contract without string-matching the message.
+ * `unregistered: true` means FCM answered HTTP 404 UNREGISTERED — the token is
+ * PERMANENTLY dead per Google's documented contract (app uninstalled / data
+ * cleared / token rotated away). A live install re-registers on its next app
+ * open (`/mobile/devices/register` sets active:true on every branch), so
+ * callers may retire the device row on this signal.
+ */
+export class FcmSendError extends Error {
+  status: number;
+  unregistered: boolean;
+  constructor(message: string, status: number, unregistered: boolean) {
+    super(message);
+    this.status = status;
+    this.unregistered = unregistered;
+  }
+}
+
+export type FcmSendOptions = {
+  /**
+   * Android delivery priority. Defaults to HIGH — the Doze-exempt channel that
+   * call-critical pushes (INCOMING_CALL, ring-time WAKEs, INVITE_CANCELED)
+   * REQUIRE to beat the ring window. ⛔ Never default this to NORMAL.
+   *
+   * NORMAL exists for the worker's registration-watchdog recovery wakes ONLY:
+   * Android budgets high-priority pushes per app per day (standby buckets,
+   * ~10/day for a rarely-opened app) and silently demotes the overflow — the
+   * watchdog alone burned ~62 invisible HIGH pushes/day on one device
+   * (Relax Tires T25_101, census 2026-09-01), spending the quota the actual
+   * ring pushes needed. A recovery wake is not time-critical: a Doze-deferred
+   * delivery still revives a truly dead device within minutes, which is all
+   * the Luxure 2026-07-30 incident needed.
+   */
+  priority?: "HIGH" | "NORMAL";
+  /** FCM ttl string, e.g. "45s". Defaults to 45s (the invite window). */
+  ttl?: string;
+};
+
+/** Send one data message. Throws on any failure — caller falls back to Expo. */
+export async function sendFcmDirectData(
+  deviceToken: string,
+  data: Record<string, string>,
+  options?: FcmSendOptions,
+): Promise<void> {
   const sa = loadServiceAccount();
   if (!sa) throw new Error("fcm direct not configured");
   const accessToken = await getAccessToken(sa);
+  const priority = options?.priority ?? "HIGH";
+  const ttl = options?.ttl ?? "45s";
   const res = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(sa.project_id)}/messages:send`, {
     method: "POST",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ message: { token: deviceToken, data, android: { priority: "HIGH", ttl: "45s" } } }),
+    body: JSON.stringify({ message: { token: deviceToken, data, android: { priority, ttl } } }),
   });
   if (!res.ok) {
     const text = (await res.text().catch(() => "")).slice(0, 300);
-    throw new Error(`fcm send ${res.status}: ${text}`);
+    // FCM v1 answers 404 with errorCode UNREGISTERED for a dead token. Only a
+    // 404 counts — a 400 INVALID_ARGUMENT can be OUR bug and must never retire
+    // a device row.
+    const unregistered = res.status === 404 && /UNREGISTERED/i.test(text);
+    throw new FcmSendError(`fcm send ${res.status}: ${text}`, res.status, unregistered);
   }
 }

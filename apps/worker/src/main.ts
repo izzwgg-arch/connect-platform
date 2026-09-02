@@ -31,7 +31,7 @@ import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
-import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "../../api/src/fcmDirect";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload, FcmSendError } from "../../api/src/fcmDirect";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { runNotificationReconcileCycle, runNotificationCanaryCycle } from "./notificationReconciler";
@@ -728,6 +728,17 @@ async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
   payload: WorkerMobilePushPayload;
+  /**
+   * Direct-FCM Android delivery priority for THIS send. Omitted = HIGH (the
+   * Doze-exempt channel every call-critical push requires — never change the
+   * default). "NORMAL" is for the registration watchdog's recovery wakes ONLY:
+   * they are invisible, not time-critical (a Doze-deferred delivery still
+   * revives a dead device within minutes), and at HIGH they burned the
+   * standby-bucket quota real ring pushes needed (119 in 46h on one device —
+   * 2026-09-01 census). Applies to the direct-FCM path only; the Expo relay
+   * path is deliberately untouched (shared builder, 5 call sites).
+   */
+  fcmPriority?: "HIGH" | "NORMAL";
 }) {
   // `active: true` — parity with the api's buildMobileDevicePushWhere. Without
   // it the worker pushed to deactivated rows too (the Luxure user reported
@@ -779,7 +790,15 @@ async function sendPushToUserDevices(input: {
       await Promise.all(
         directTargets.map(async (d: any) => {
           try {
-            await sendFcmDirectData(String((d as any).nativeFcmToken), fcmData);
+            await sendFcmDirectData(
+              String((d as any).nativeFcmToken),
+              fcmData,
+              // NORMAL priority gets a longer ttl (the watchdog's per-endpoint
+              // cooldown window) — a deferred recovery wake arriving a few
+              // minutes late is still useful; a 45s ttl would expire it inside
+              // the very Doze window it is allowed to wait for.
+              input.fcmPriority === "NORMAL" ? { priority: "NORMAL", ttl: "300s" } : undefined,
+            );
             directServedIds.add(d.id);
             console.info(
               JSON.stringify({
@@ -816,6 +835,35 @@ async function sendPushToUserDevices(input: {
                 error: String(err?.message || err).slice(0, 200),
               }),
             );
+            // FCM 404 UNREGISTERED = permanently dead token (Google's
+            // contract). Retire the row so future fan-outs stop paying a
+            // doomed FCM attempt + a pointless Expo fallback on every push.
+            // Recoverable: /mobile/devices/register re-activates on the next
+            // app open. This call's Expo fallback still runs (the device is
+            // not in directServedIds). ⛔ Only the typed 404 signal — never a
+            // 400 (could be our bug) or a transient 5xx.
+            if (err instanceof FcmSendError && err.unregistered) {
+              void db.mobileDevice.update({
+                where: { id: d.id },
+                data: {
+                  active: false,
+                  deactivatedAt: new Date(),
+                  lastPushStatus: "fcm_unregistered_deactivated",
+                  lastPushError: String(err.message).slice(0, 200),
+                } as any,
+              }).then(() => {
+                console.warn(
+                  JSON.stringify({
+                    event: "MOBILE_PUSH_AUDIT",
+                    stage: "FCM_UNREGISTERED_DEVICE_DEACTIVATED",
+                    source: "worker",
+                    tenantId: input.tenantId,
+                    userId: input.userId,
+                    deviceId: d.id,
+                  }),
+                );
+              }).catch(() => undefined);
+            }
           }
         }),
       );
@@ -1609,6 +1657,15 @@ async function runDeviceRegistrationAlertCycle(): Promise<void> {
               timestamp: wakeRequestedAt,
               wakeRequestedAt,
             },
+            // ⛔ NORMAL on purpose — a recovery wake is not time-critical, and
+            // at HIGH this watchdog alone burned ~62 invisible pushes/day of
+            // one device's ~10/day standby-bucket quota, demoting the REAL
+            // ring pushes to Doze-deferred (Relax Tires, 2026-09-01 census —
+            // the watchdog's own header says it was built for that extension).
+            // A Doze-deferred wake still revives a truly dead device within
+            // minutes, which is all the Luxure 2026-07-30 case needed. Never
+            // "fix" a slow recovery by putting this back to HIGH.
+            fcmPriority: "NORMAL",
           });
           await db.callWakeEvent.create({
             data: {

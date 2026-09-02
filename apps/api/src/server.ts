@@ -218,7 +218,8 @@ import {
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant, setTenantClaimRejectionHandler } from "./pbxTenantResolve";
 import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
-import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload } from "./fcmDirect";
+import { isFcmDirectConfigured, sendFcmDirectData, buildFcmDataFromPayload, FcmSendError } from "./fcmDirect";
+import { wakePushGateCheck, wakePushGateRecord } from "./wakePushGate";
 import {
   buildMohClassName,
   buildMohPbxWavStorageKey,
@@ -3789,6 +3790,32 @@ async function sendPushToUserDevices(input: {
             callWake: true, stage: "FCM_DIRECT_FAILED", tenantId: input.tenantId,
             deviceId: d.id, payloadType, err: String(err?.message || err).slice(0, 200),
           }, "[CALL_WAKE] FCM_DIRECT_FAILED — falling back to Expo for this device");
+          // FCM 404 UNREGISTERED = the token is PERMANENTLY dead per Google's
+          // contract (uninstall / data clear / rotated away). Retire the row so
+          // future fan-outs stop paying a doomed FCM attempt + a pointless Expo
+          // fallback on every push (Relax Tires' dead 08-23 row, census
+          // 2026-09-01). Recoverable by design: /mobile/devices/register sets
+          // active:true on every branch, so a live install re-activates itself
+          // the next time the app opens. This call's Expo fallback still runs
+          // (failedIds above) — only FUTURE sends skip the row. ⛔ Only the
+          // typed 404 signal may do this — never a 400 (could be our bug) and
+          // never a transient 5xx.
+          if (err instanceof FcmSendError && err.unregistered) {
+            void db.mobileDevice.update({
+              where: { id: d.id },
+              data: {
+                active: false,
+                deactivatedAt: new Date(),
+                lastPushStatus: "fcm_unregistered_deactivated",
+                lastPushError: String(err.message).slice(0, 200),
+              } as any,
+            }).then(() => {
+              app.log.warn({
+                callWake: true, stage: "FCM_UNREGISTERED_DEVICE_DEACTIVATED", source: "api",
+                tenantId: input.tenantId, userId: input.userId, deviceId: d.id,
+              }, "[CALL_WAKE] device row deactivated — FCM token UNREGISTERED (re-activates on next app open)");
+            }).catch(() => undefined);
+          }
         }
       }));
       directServedCount = directTargets.length - failedIds.size;
@@ -35716,14 +35743,33 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       });
 
   // ── Send Expo push to all registered devices for this user ───────────────────
+  // One caller-less WAKE per (call, user): if the prewake path already woke
+  // this user for this call (S2 at IVR entry / S3 at dial time), a second
+  // invisible HIGH-priority copy buys nothing — the app's consumer is
+  // idempotent — and burns the standby-bucket quota the INCOMING_CALL push
+  // (sent unconditionally below) needs. See wakePushGate.ts + the 2026-09-01
+  // high-priority push census. The suppression is RECORDED as a wake event so
+  // a call timeline explains the missing WAKE instead of reading like a bug.
   const wakeRequestedAt = new Date().toISOString();
-  try {
+  const wakeCallId = invite.pbxCallId ?? input.linkedId;
+  if (!wakePushGateCheck(wakeCallId, target.userId)) {
+    await recordWakeEvent({
+      tenantId: target.tenantId,
+      pbxCallId: wakeCallId,
+      stage: "WAKE_SUPPRESSED_DUPLICATE",
+      source: "api",
+      userId: target.userId,
+      extensionId: target.extensionId,
+      details: { path: "mobile_ring_notify" },
+    }).catch(() => undefined);
+  } else try {
+    wakePushGateRecord(wakeCallId, target.userId);
     await sendPushToUserDevices({
       tenantId: target.tenantId,
       userId: target.userId,
       payload: {
         type: "INCOMING_CALL_WAKE",
-        pbxCallId: invite.pbxCallId ?? input.linkedId,
+        pbxCallId: wakeCallId,
         fromNumber: invite.fromNumber,
         fromDisplay: invite.fromDisplay,
         fromPrefix: invite.fromPrefix,
@@ -35736,7 +35782,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     });
     await recordWakeEvent({
       tenantId: target.tenantId,
-      pbxCallId: invite.pbxCallId ?? input.linkedId,
+      pbxCallId: wakeCallId,
       stage: "WAKE_PUSH_QUEUED",
       source: "api",
       userId: target.userId,
@@ -35960,8 +36006,27 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
   const wakeRequestedAt = new Date().toISOString();
   let woken = 0;
   for (const userId of candidateUserIds) {
+    // One WAKE per (call, user): both prewake senders (telephony maybePreWake
+    // at IVR entry AND ConnectWakeConsumer at dial time) converge on this
+    // route with the SAME linkedId, so without this the second one rode
+    // through the 12s per-user cooldown ~15s later (measured 2026-09-01) —
+    // a duplicate invisible HIGH push burning the standby-bucket quota.
+    // ⛔ Check BEFORE the cooldown gate (pure read) so a refused wake never
+    // burns the cooldown; record only right before the actual send.
+    if (!wakePushGateCheck(input.linkedId, userId)) {
+      await recordWakeEvent({
+        tenantId,
+        pbxCallId: input.linkedId,
+        stage: "WAKE_SUPPRESSED_DUPLICATE",
+        source: "api",
+        userId,
+        details: { path: "mobile_prewake" },
+      }).catch(() => undefined);
+      continue;
+    }
     if (!prewakeCooldownGate(tenantId, userId)) continue;
     try {
+      wakePushGateRecord(input.linkedId, userId);
       const res = await sendPushToUserDevices({
         tenantId,
         userId,
@@ -36508,8 +36573,35 @@ app.post("/internal/pbx/wake-extension", async (req, reply) => {
   // ── Send the wake push ────────────────────────────────────────────────────
   // We send synchronously so the dialplan knows whether the push was queued
   // before it starts its Wait(). Worst case Expo accepts in <300 ms.
+  //
+  // One WAKE per (call, user): if a prewake/ring wake already went out for
+  // this call, answer AS IF QUEUED — the wake IS in flight from that earlier
+  // push, and the dialplan's hold waits on the device REGISTERING, not on
+  // this response — so any wait behaviour stays byte-identical while the
+  // duplicate HIGH-priority push is not spent (2026-09-01 census).
+  if (!wakePushGateCheck(input.pbxCallId, target.userId)) {
+    await recordWakeEvent({
+      tenantId: target.tenantId,
+      pbxCallId: input.pbxCallId,
+      stage: "WAKE_SUPPRESSED_DUPLICATE",
+      source: "api",
+      userId: target.userId,
+      extensionId: target.extensionId,
+      details: { path: "wake_extension" },
+    }).catch(() => undefined);
+    return reply.code(200).send({
+      ok: true,
+      devicesNotified: devices.length,
+      suppressedDuplicate: true,
+      tenantId: target.tenantId,
+      userId: target.userId,
+      extensionId: target.extensionId,
+      elapsedMs: Date.now() - t0,
+    });
+  }
   let pushResult: { queued?: number; simulated?: boolean } | null = null;
   try {
+    wakePushGateRecord(input.pbxCallId, target.userId);
     pushResult = await sendPushToUserDevices({
       tenantId: target.tenantId,
       userId: target.userId,
