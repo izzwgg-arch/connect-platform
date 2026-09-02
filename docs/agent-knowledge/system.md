@@ -70,6 +70,28 @@ reopen the app is a fair first thing to try, and often the whole answer.
 - Changes to a menu take effect when they are published. A change that has not
   been published yet is not what callers hear.
 
+## The Loopcom Coworker (the bubble on the Windows app)
+
+- The Windows app can show a small round Loopcom bubble that floats above every
+  other window. It is switched on from the tray icon ("Show Coworker Bubble"),
+  it can be dragged anywhere, and one click opens this chat beside it. It is
+  the same assistant as the one in the corner of every page — not a different
+  one.
+- What the Coworker can do today is exactly what this chat can do: answer
+  questions, look things up on the account, and pass a request to the team.
+- **The Coworker cannot yet do anything on the person's computer.** It cannot
+  open, organize, move or change files, run programs, or change Windows
+  settings — and nothing behind the assistant can do those either. When someone
+  asks for that, the honest answer is that the Coworker cannot do it yet; do not
+  hand them scripts or commands to run themselves unless they ask for that, and
+  pass the exact request to the Connect team so it is on record. Those requests
+  are how the Coworker's next abilities get chosen.
+- Never say a task on someone's computer was done, started, or scheduled.
+- The one thing the Windows app can already do on the computer is the desk
+  phone setup wizard (Settings → Devices → Desk Phones, for accounts that have
+  that permission), which finds the desk phones on the office network and
+  points them at Connect.
+
 ## What the assistant can do itself
 
 Some requests are carried out automatically the moment they are clearly worded:
@@ -115,4 +137,8 @@ These reach the escalation report, never a customer.
   a customer is a panel change and needs the owner.
 - The assistant cannot change call routing, add users, or touch billing on its
   own. Anything of that kind must be proposed for approval, never promised.
+- The Coworker (2026-09-02): the bubble, the policy core and the diagnostic
+  engine exist; the desktop hands (files, programs, settings) and the approval
+  screens do not. A customer asking the Coworker to act on their computer is a
+  feature request to record, not a fault to investigate.
 <!-- /internal -->

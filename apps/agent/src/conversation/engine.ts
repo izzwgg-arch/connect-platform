@@ -19,6 +19,9 @@ import { isPlatformStaff } from "../authRoles";
 
 export const AUTO_CLOSE_HOURS = 12;
 
+/** The portal route the desktop Coworker bubble's chat window loads (apps/desktop widgetWindow.ts CHAT_ROUTE). */
+export const COWORKER_CHAT_PATH = "/desktop/coworker";
+
 const SYSTEM_PROMPT = `You are the Connect Communications support agent ("Shammes").
 You help phone-system clients in English or Yiddish — always reply in the language the client used.
 WHAT YOU CAN DO TODAY (via a separate automated system, not by you directly):
@@ -61,6 +64,15 @@ documents (PDFs, spreadsheets, photos, videos) are saved and passed to the human
 receipt by filename and ask what they need.
 EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet — warmly say the request has
 been passed to the human team, and summarize it clearly.
+THE LOOPCOM COWORKER: the Windows app has a round Loopcom bubble that floats on the screen (Tray icon →
+"Show Coworker Bubble"; drag it anywhere; one click opens this same chat). It exists and you should say
+so when asked. What it can do TODAY is exactly what this chat can do. It CANNOT yet act on the person's
+computer: no opening, organizing, moving or changing files, no running programs, no changing Windows
+settings, and nothing behind you can do those either. When somebody asks you to do something ON their
+computer, say plainly that the Coworker cannot do that on the computer yet, do NOT hand them scripts or
+commands to run themselves unless they ask for that, and pass the exact request to the Connect team so
+it is on record — those requests are how the Coworker's next abilities get chosen. Never claim a task on
+their computer was done, started, or scheduled.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
 /**
@@ -114,6 +126,8 @@ WHAT YOU CANNOT DO, and why it is not a restriction on THEM:
 - You cannot edit, write or delete files, and you cannot deploy. Code reaches production only through the deploy queue. Propose the change in full and let them ship it.
 - Some commands need their say-so. If a command comes back refused as "ask first", tell them plainly what you wanted to run and why, and ask. You cannot approve it on your own behalf — that is the point of the rule, not an obstacle to work around.
 - If a command comes back refused as "never", do not look for another way around it. Say which rule stopped you; if the rule looks wrong, say that too — an over-broad rule is worth reporting.
+
+THE LOOPCOM COWORKER: the Windows app's floating Loopcom bubble opens this same chat (Tray → "Show Coworker Bubble"). It is real and you should say so. What is built behind it today is the policy core, the diagnostic engine and the bubble itself — the desktop hands are NOT built: nothing can open, organize or change files, run programs or change settings on the person's own computer, from here or from anywhere else, and the approval screens that would gate that are still mockups. If the owner asks for a task on their computer, state that as the current fact in one sentence, do not hand them scripts to run unless they ask, and never claim a task on their computer was done or started.
 
 HOW TO ANSWER: plain English, no jargon, get to the point. Short paragraphs. Show the command you ran or the file you read when it carries the argument. If something is broken, say what is broken, what you checked, and what you would do — in that order.`;
 
@@ -606,7 +620,18 @@ export class ConversationEngine {
     // customer" is the same category error that made the model refuse them on
     // privacy grounds. And staff CAN have the page looked at — `browse` opens
     // it — so telling them it is impossible would be false.
-    const viewingBlock = ctx.viewingPage
+    // ⛔ The Coworker bubble's chat window loads /desktop/coworker. "They have the
+    // Desktop page open" is the wrong picture — they are inside the bubble on their
+    // own Windows computer — and the first live question asked there was "can you
+    // organize files on my computer?" (Izzy, 2026-09-02). The honest answer today
+    // is no: the desktop hands are not built. Say where they are, and what that
+    // window can and cannot do, instead of describing a page.
+    const inCoworker = typeof ctx.viewingPath === "string" && ctx.viewingPath.startsWith(COWORKER_CHAT_PATH);
+    const viewingBlock = inCoworker
+      ? isPlatformStaff(ctx.platformRole)
+        ? `They are talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. The Coworker's desktop hands are not built yet: nothing can open, organize or change files, run programs or change settings on that computer from here. If they ask for that, say so as the current fact and do not offer scripts unless asked.`
+        : `The customer is talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the Connect app. The Coworker cannot yet do anything ON their computer: no files, no programs, no settings. If they ask for that, say so plainly, do not offer scripts or commands for them to run unless they ask, and pass the exact request to the Connect team so it is on record.`
+      : ctx.viewingPage
       ? isPlatformStaff(ctx.platformRole)
         ? `They have the "${String(ctx.viewingPage).slice(0, 80)}" page open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You cannot see their screen — but you can open that page yourself with the browse tool and read what it returns, so do that rather than saying you cannot see it.`
         : `The customer currently has the "${String(ctx.viewingPage).slice(0, 80)}" page of the Connect app open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You know which page they are on — answer page-related questions in that light — but you cannot see the page's contents, live data, or their screen; say so if asked about specifics.`

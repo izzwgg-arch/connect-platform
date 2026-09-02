@@ -298,7 +298,10 @@ _deploy_common_service_paths() {
   local service="$1"
   case "$service" in
     api)
-      echo "apps/api/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
+      # docs/agent-knowledge/ is here on purpose: the api image COPIES it and publishes it to the
+      # assistant at boot, so a knowledge edit with no api code change was silently skipped as
+      # "unrelated_paths" and the assistant kept the old document (2026-09-02).
+      echo "apps/api/ docs/agent-knowledge/ packages/db/ packages/shared/ packages/integrations/ packages/security/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
       ;;
     portal)
       echo "apps/portal/ scripts/deploy-portal.sh scripts/lib/deploy-portal-rollout.sh packages/shared/ packages/integrations/ pnpm-lock.yaml package.json docker-compose.app.yml Dockerfile* .dockerignore tsconfig*.json"
