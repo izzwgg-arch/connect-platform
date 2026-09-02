@@ -2080,6 +2080,18 @@ for the org migration), **submit build 57**, **move every URL to loopcom.net**.
   account has **NO card on file for the $99 membership auto-renew** (apps come
   off the store if it lapses), and the **DSA trader verification** for EU
   distribution is unstarted (EU-only consequence).
+- ⛔⛔ **2026-09-02: THE REPLY TELLING APPLE TO START THE MIGRATION WENT OUT BLANK.**
+  Apple (case 20000151453845, 12:13 PM) wrote back that the 11:44 AM message from
+  iw5626644@gmail.com was empty and asked us to reply again. The thread confirms
+  it: no body at all. The earlier "verified in the Sent folder" claim was wrong —
+  only the prefilled COMPOSE was read, never the SENT message. A replacement reply
+  was prefilled the same day (`?view=cm&body=` again, text confirmed on the page).
+  ⛔ **A Gmail `body=` prefill can render on screen and still SEND EMPTY** when
+  Send is pressed before Gmail's draft model has picked the text up. Rule: click
+  into the body, wait for "Draft saved", then Send — and prove a sent email by
+  opening it in Sent (or by the other side's acknowledgement), never by reading
+  the compose window. Until Apple acknowledges the go-ahead, the migration has
+  NOT started; the no-iOS-build rule stands either way.
 - ✅ **THE PERSONAL→ORGANIZATION MIGRATION REQUEST WAS SUBMITTED 2026-08-29**
   (D-U-N-S **149921594** arrived 08-28) — Izzy filled + submitted the
   "Individual to Organization Membership Update" form himself via the in-app

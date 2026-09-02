@@ -165,7 +165,21 @@ was filled through the in-app Browser pane:
   subject `Re: [20000151453845] Migration to a company account`; body = the six
   points answered + "please go ahead and migrate team PR63R6J84J to Loopcom LLC
   (D-U-N-S 149921594), keeping app 6796392950 and its TestFlight builds").
-  Verified in the mailbox's Sent folder. Two-factor was confirmed ON at
+  ⛔⛔ **THAT MESSAGE WENT OUT BLANK.** Apple (Natalie, 12:13 PM the same day)
+  replied: *"The email you sent was a blank message wasn't sure if it was sent on
+  accident. If you are ready for the migration to start please reply back."*
+  The thread in iw5626644@gmail.com shows the 11:44 AM message from Izzy to
+  devprograms with NO body at all. The line that used to stand here — "Verified
+  in the mailbox's Sent folder" — was wrong: what was verified was the text in
+  the prefilled compose window, not the message that was sent. **The
+  `?view=cm&body=` prefill populates the compose box on screen and can still
+  send empty** — Gmail's draft model had not picked the text up when Send was
+  pressed. A replacement reply (the six points answered + the go-ahead + an
+  apology for the blank) was prefilled again on 2026-09-02 ~12:40 ET; this
+  time the rule is: **click INTO the body, wait for "Draft saved", THEN Send**,
+  and afterwards open the message in Sent and confirm the text is really in it
+  (or wait for Apple's acknowledgement) before recording it as sent.
+  Two-factor was confirmed ON at
   account.apple.com → Sign-In & Security (1 trusted phone, 1 trusted device).
   ⛔ **From this moment until Apple confirms completion: NO iOS/EAS build** —
   Certificates, Identifiers & Profiles is dark during the migration.
