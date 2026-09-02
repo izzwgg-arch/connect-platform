@@ -206,8 +206,12 @@ export default function RemoteSupportConsent() {
       .listScreens()
       .then((list: Screen[]) => {
         if (cancelled) return;
-        setScreens(list);
-        setChosenScreen(list.find((s) => s.isScreen)?.id ?? list[0]?.id ?? null);
+        // Whole screens first. A single window is offered, but it stops
+        // updating the moment it is minimised — the technician sees a frozen
+        // picture and both people conclude the session broke (2026-09-02).
+        const ordered = [...list].sort((a, b) => Number(b.isScreen) - Number(a.isScreen));
+        setScreens(ordered);
+        setChosenScreen(ordered.find((s) => s.isScreen)?.id ?? ordered[0]?.id ?? null);
       })
       .catch(() => { /* the browser picker is the fallback */ });
     return () => { cancelled = true; };
@@ -512,10 +516,16 @@ export default function RemoteSupportConsent() {
                   ) : (
                     <div className="rs-screen-blank" />
                   )}
-                  <span>{s.name}</span>
+                  <span>{s.isScreen ? `${s.name} — whole screen` : s.name}</span>
                 </button>
               ))}
             </div>
+            {screens.some((s) => !s.isScreen) && (
+              <p className="rs-note">
+                Sharing the whole screen is the safe choice. If you share one window, the picture stops for the
+                support person whenever that window is minimised.
+              </p>
+            )}
           </div>
         )}
 

@@ -183,6 +183,8 @@ function escapeHtml(input: string): string {
 export function registerRemoteSupportIpc(options: {
   /** Called when the customer presses Stop on the banner. */
   onStopRequested: () => void;
+  /** Diagnostics sink. Optional so an older main.ts keeps compiling. */
+  log?: (line: string) => void;
 }): void {
   /**
    * Screens available to share. Thumbnails are included so the customer sees
@@ -236,9 +238,12 @@ export function registerRemoteSupportIpc(options: {
     // Never leave a previous session's helper running.
     injector?.stop();
     injector = new PowerShellInputInjector(helperScriptPath(app.getPath("userData")));
-    const started = injector.start(() => {
+    const started = injector.start((reason) => {
       // If the helper dies mid-session, control is over. Fail closed and let
-      // the renderer notice rather than silently dropping every event.
+      // the renderer notice rather than silently dropping every event. The
+      // reason carries the helper's last stderr, which is how "antivirus killed
+      // it" is told apart from "it crashed" after the fact.
+      options.log?.(`input helper stopped: ${reason}`);
       controllingSessionId = null;
       injector = null;
     });

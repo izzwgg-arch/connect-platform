@@ -31,7 +31,10 @@
  *   2. The helper runs as the signed-in user, so it can do exactly what that
  *      user can do, and nothing more.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+
+/** Injectable so the death of the helper can be rehearsed without PowerShell. */
+export type SpawnLike = (cmd: string, args: string[], opts: any) => ChildProcessWithoutNullStreams;
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
@@ -308,13 +311,32 @@ export class PowerShellInputInjector implements InputInjector {
   private child: ChildProcessWithoutNullStreams | null = null;
   private scriptPath: string;
   private stopped = false;
+  /** The helper's last words, so "why did control stop" has an answer. */
+  private stderrTail = "";
+  private onExit: ((reason: string) => void) | undefined;
+  private readonly spawnImpl: SpawnLike;
 
-  constructor(scriptPath: string) {
+  constructor(scriptPath: string, spawnImpl: SpawnLike = nodeSpawn as unknown as SpawnLike) {
     this.scriptPath = scriptPath;
+    this.spawnImpl = spawnImpl;
   }
 
   get available(): boolean {
-    return this.child !== null && !this.child.killed;
+    const c = this.child;
+    return c !== null && !c.killed && c.stdin.writable && !c.stdin.destroyed;
+  }
+
+  /**
+   * ⛔ The ONE place the helper is declared dead. Every failure path funnels
+   * here so the owner hears about it exactly once, whatever order the pipe
+   * error, the exit event and a stop() arrive in.
+   */
+  private die(reason: string): void {
+    if (this.child === null) return;
+    this.child = null;
+    if (this.stopped) return;
+    const tail = this.stderrTail.trim();
+    this.onExit?.(tail ? `${reason}: ${tail.slice(-300)}` : reason);
   }
 
   start(onExit?: (reason: string) => void): boolean {
@@ -323,7 +345,7 @@ export class PowerShellInputInjector implements InputInjector {
       mkdirSync(dirname(this.scriptPath), { recursive: true });
       writeFileSync(this.scriptPath, HELPER_SCRIPT, "utf8");
 
-      this.child = spawn(
+      this.child = this.spawnImpl(
         "powershell.exe",
         [
           "-NoProfile",
@@ -336,13 +358,29 @@ export class PowerShellInputInjector implements InputInjector {
         { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
       );
 
-      this.child.on("exit", (code) => {
-        this.child = null;
-        if (!this.stopped) onExit?.(`helper_exited_${code ?? "unknown"}`);
+      this.onExit = onExit;
+      this.stderrTail = "";
+      this.child.stderr?.on("data", (chunk: Buffer | string) => {
+        this.stderrTail = (this.stderrTail + String(chunk)).slice(-600);
+      });
+      // ⛔⛔ THE PIPE ERROR IS ASYNCHRONOUS. A write to a helper that has just
+      // died does not throw — it succeeds, and the EPIPE arrives later as an
+      // "error" EVENT on stdin. With no listener, Node turns that event into an
+      // uncaught exception in Electron's MAIN process, which is the
+      // "A JavaScript error occurred in the main process — write EPIPE" dialog
+      // seen on the first real session (2026-09-02). The try/catch around
+      // write() in send() cannot see it. This listener is what stops the phone
+      // app's main process from being taken down by a mouse move.
+      this.child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+        this.die(`helper_pipe_broken_${err?.code || "unknown"}`);
+      });
+      this.child.stdout?.on("error", () => { /* read side — nothing to do */ });
+      this.child.stderr?.on("error", () => { /* read side — nothing to do */ });
+      this.child.on("exit", (code, signal) => {
+        this.die(`helper_exited_${code ?? signal ?? "unknown"}`);
       });
       this.child.on("error", () => {
-        this.child = null;
-        if (!this.stopped) onExit?.("helper_failed_to_start");
+        this.die("helper_failed_to_start");
       });
       return true;
     } catch {
@@ -352,25 +390,33 @@ export class PowerShellInputInjector implements InputInjector {
   }
 
   send(command: InputCommand): void {
-    if (!this.child || this.child.killed) return;
+    // ⛔ `writable`/`destroyed` are checked, not just `killed`: a helper that
+    // died on its own leaves `killed` false while the pipe is already closed.
+    if (!this.available) return;
     try {
-      this.child.stdin.write(`${JSON.stringify(command)}\n`);
+      this.child!.stdin.write(`${JSON.stringify(command)}\n`, () => {
+        /* a write error is delivered to the stdin "error" listener above */
+      });
     } catch {
-      // A dead pipe is handled by the exit handler; dropping one event is
-      // always better than throwing inside a live session.
+      // Dropping one event is always better than throwing inside a live session.
     }
   }
 
   stop(): void {
     this.stopped = true;
-    if (!this.child) return;
+    const c = this.child;
+    if (!c) return;
+    this.child = null;
     try {
-      this.child.stdin.end();
-      this.child.kill();
+      if (c.stdin.writable && !c.stdin.destroyed) c.stdin.end();
     } catch {
       /* already gone */
     }
-    this.child = null;
+    try {
+      c.kill();
+    } catch {
+      /* already gone */
+    }
   }
 }
 

@@ -7,7 +7,12 @@ import {
   sanitizeCommand,
   helperScriptPath,
   NAMED_KEYS,
+  PowerShellInputInjector,
+  type SpawnLike,
 } from "./inputInjector";
+import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * `sanitizeCommand` is a trust boundary, not a formality: it is the last thing
@@ -154,4 +159,92 @@ test("the helper script lives under the app's own data directory", () => {
   const p = helperScriptPath("C:\\Users\\someone\\AppData\\Roaming\\Connect");
   assert.ok(p.includes("remote-support"));
   assert.ok(p.endsWith("input-helper.ps1"));
+});
+
+/* ── the helper dying must never reach Electron's main process ───────── */
+
+/**
+ * A stand-in for the PowerShell child: EventEmitter stdio, no real process.
+ * The real failure (2026-09-02, first live session) was an EPIPE delivered as
+ * an "error" EVENT on stdin after a write to a helper that had already died —
+ * nothing listened, so Node raised it as an uncaught exception in the main
+ * process and Electron showed its crash dialog over the customer's screen.
+ */
+function fakeChild() {
+  const child: any = new EventEmitter();
+  const stdin: any = new EventEmitter();
+  stdin.writable = true;
+  stdin.destroyed = false;
+  stdin.writes = [] as string[];
+  stdin.write = (chunk: string, cb?: () => void) => { stdin.writes.push(chunk); cb?.(); return true; };
+  stdin.end = () => { stdin.writable = false; };
+  child.stdin = stdin;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.killed = false;
+  child.kill = () => { child.killed = true; };
+  return child;
+}
+
+function injectorWithFake() {
+  const child = fakeChild();
+  const spawnImpl: SpawnLike = () => child;
+  const injector = new PowerShellInputInjector(join(tmpdir(), "connect-injector-test", "helper.ps1"), spawnImpl);
+  return { child, injector };
+}
+
+test("⛔ a broken pipe on the helper's stdin is caught, reported ONCE, and never thrown", () => {
+  const { child, injector } = injectorWithFake();
+  const reasons: string[] = [];
+  assert.equal(injector.start((r: string) => reasons.push(r)), true);
+  assert.equal(injector.available, true);
+
+  injector.send({ kind: "move", x: 0.5, y: 0.5 });
+  assert.equal(child.stdin.writes.length, 1);
+
+  // The write "succeeded"; the EPIPE arrives afterwards, as an event.
+  const epipe: any = new Error("write EPIPE");
+  epipe.code = "EPIPE";
+  // No listener would make this an uncaught exception; with one it must not throw.
+  assert.doesNotThrow(() => child.stdin.emit("error", epipe));
+  // The process then exits too — the owner must still hear about it exactly once.
+  child.emit("exit", null, "SIGTERM");
+
+  assert.deepEqual(reasons, ["helper_pipe_broken_EPIPE"]);
+  assert.equal(injector.available, false);
+
+  // After death every event is dropped, never written to a dead pipe.
+  injector.send({ kind: "move", x: 0.6, y: 0.6 });
+  assert.equal(child.stdin.writes.length, 1);
+});
+
+test("the helper's last stderr rides along with the exit reason", () => {
+  const { child, injector } = injectorWithFake();
+  const reasons: string[] = [];
+  injector.start((r: string) => reasons.push(r));
+  child.stderr.emit("data", "Access is denied by policy" + String.fromCharCode(10));
+  child.emit("exit", 1, null);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /^helper_exited_1: /);
+  assert.match(reasons[0], /Access is denied by policy/);
+});
+
+test("a helper whose pipe closed on its own is not 'available', even though it was never killed", () => {
+  const { child, injector } = injectorWithFake();
+  injector.start(() => {});
+  child.stdin.writable = false;
+  assert.equal(child.killed, false);
+  assert.equal(injector.available, false);
+  injector.send({ kind: "move", x: 0.5, y: 0.5 });
+  assert.equal(child.stdin.writes.length, 0);
+});
+
+test("stop() after the helper already died does not throw and reports nothing more", () => {
+  const { child, injector } = injectorWithFake();
+  const reasons: string[] = [];
+  injector.start((r: string) => reasons.push(r));
+  child.emit("exit", 0, null);
+  assert.doesNotThrow(() => injector.stop());
+  assert.doesNotThrow(() => injector.stop());
+  assert.equal(reasons.length, 1);
 });

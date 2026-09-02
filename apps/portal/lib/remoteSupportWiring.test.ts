@@ -55,6 +55,7 @@ function code(src: string): string {
 const service = () => code(read("services", "remoteSupport.ts"));
 const consent = () => code(read("components", "RemoteSupportConsent.tsx"));
 const panel = () => code(read("app", "(platform)", "admin", "remote-support", "page.tsx"));
+const css = () => read("app", "globals.css");
 
 /* ── rule 15: the call-yield input actually gets supplied ─────────────── */
 
@@ -200,3 +201,32 @@ test("the technician's people list is fed by the remote-support people route, no
   assert.match(src, /apiGet<[^>]*>\("\/remote-support\/people"\)/, "the page must load people from /remote-support/people");
   assert.match(src, /setPeople\(r\.people/, "the list must be read from the route's `people` key");
 });
+
+/* ── what the first live session taught (2026-09-02) ─────────────────── */
+
+test("the viewer's pointer is a normal arrow, never a crosshair", () => {
+  const rule = css().split("\n").find((l) => l.startsWith(".rs-video.is-controllable"));
+  assert.ok(rule, "the controllable-video rule must exist");
+  assert.doesNotMatch(rule!, /crosshair/, "a crosshair beside the customer's own late cursor reads as a broken mouse");
+});
+
+test("the viewer can go full screen, on the stage rather than the <video>", () => {
+  const src = panel();
+  assert.match(src, /requestFullscreen\(\)/, "there must be a full-screen action");
+  assert.match(src, /ref=\{stageRef\}/, "full screen must target the stage so the footer and keyboard stay");
+  assert.match(src, /Exit full screen/, "there must be a way back that says so");
+});
+
+test("a paused picture is SAID, not shown as a frozen frame beside a green light", () => {
+  const src = panel();
+  assert.match(src, /addEventListener\("mute"/, "the remote track's mute event is the only signal that frames stopped");
+  assert.match(src, /addEventListener\("unmute"/, "and it must clear itself when frames resume");
+  assert.match(src, /picture has paused/i, "the technician is told in words");
+});
+
+test("the customer's picker puts whole screens first and warns about sharing one window", () => {
+  const src = consent();
+  assert.match(src, /Number\(b\.isScreen\) - Number\(a\.isScreen\)/, "whole screens must sort first");
+  assert.match(src, /minimised/, "the window caveat must be stated where the choice is made");
+});
+

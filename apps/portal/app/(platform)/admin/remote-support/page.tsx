@@ -83,6 +83,16 @@ function RemoteSupportConsole() {
   const [rail, setRail] = useState<"chat" | "activity">("chat");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const stageRef = useRef<HTMLElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  /**
+   * The customer's picture has stopped arriving. Chromium raises `mute` on the
+   * remote video track when frames stop — which is exactly what happens when
+   * the customer shared ONE WINDOW and then minimised it. Without this the
+   * viewer shows the last frame forever with a green "Good connection" beside
+   * it, and reads as frozen (2026-09-02, first live session).
+   */
+  const [pictureStalled, setPictureStalled] = useState(false);
   const peerRef = useRef<RemoteSupportPeer | null>(null);
   const lastMoveRef = useRef<{ x: number; y: number } | null>(null);
   const inputCountRef = useRef(0);
@@ -97,6 +107,20 @@ function RemoteSupportConsole() {
       .then((r) => setPeople(r.people ?? []))
       .catch(() => setPeople([]));
     void refreshHistory();
+  }, []);
+
+  // Full screen is on the STAGE, not the <video>: the browser's own video
+  // fullscreen would take the keyboard and the footer away from the session.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(stageRef.current !== null && document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    else void el.requestFullscreen().catch(() => {});
   }, []);
 
   const refreshHistory = useCallback(async () => {
@@ -185,6 +209,11 @@ function RemoteSupportConsole() {
             onStream: (stream) => {
               if (videoRef.current) videoRef.current.srcObject = stream;
               setStatus("");
+              setPictureStalled(false);
+              for (const track of stream.getVideoTracks()) {
+                track.addEventListener("mute", () => setPictureStalled(true));
+                track.addEventListener("unmute", () => setPictureStalled(false));
+              }
             },
             onStateChange: (state) => {
               if (state === "connected") setStatus("");
@@ -378,8 +407,14 @@ function RemoteSupportConsole() {
 
       {live && (
         <div className="rs-live-grid">
-        <section className="rs-stage">
+        <section className={`rs-stage${isFullscreen ? " is-fullscreen" : ""}`} ref={stageRef}>
           {status && <div className="rs-stage-status">{status}</div>}
+          {pictureStalled && !status && (
+            <div className="rs-stage-status rs-stage-status--stalled">
+              Their picture has paused. They probably minimised the window they are sharing, or the screen is locked.
+              It resumes by itself when the window is back; sharing the whole screen avoids this.
+            </div>
+          )}
           <video
             ref={videoRef}
             autoPlay
@@ -434,6 +469,9 @@ function RemoteSupportConsole() {
               {controlOn ? "You can control this computer" : "Watching only"}
             </span>
             {controlOn && <span className="rs-hint">Click the screen first, then type.</span>}
+            <button type="button" className="btn btn-secondary btn-sm rs-fullscreen" onClick={toggleFullscreen}>
+              {isFullscreen ? "Exit full screen" : "Full screen"}
+            </button>
             <span className="rs-link" title={linkTitle(quality, budget)}>
               <i className={`rs-link-dot is-${linkGrade(quality)}`} aria-hidden />
               {linkLabel(quality)}
