@@ -5,8 +5,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_BUBBLE_DEAD_2026-09-02.m
 desktop. Deploy state at the end of this section. No migration — the record is the
 existing `AgentAction` table under `capabilityId: coworker.task.v1`; no PBX write;
 no env change. Izzy, 2026-09-02: *"Approved, build the hands through the co-worker."*
-✅ **api + portal DEPLOYED and container-verified at `a39d5a22` 2026-09-02 13:53Z, agent
-REBUILT and healthy** — `GET /coworker/tasks/pending` answers 200 with a real token and 401
+✅ **portal DEPLOYED at `a39d5a22`, api at `8decf1fe` (the 404-first `/result` fix, 14:05Z), both
+container-verified 2026-09-02, agent REBUILT and healthy** — `GET /coworker/tasks/pending` answers 200 with a real token and 401
 without, `/desktop/coworker` 200 on both hostnames, the knowledge row rewritten 13:28Z, 0
 `AgentAction` rows written by any probe. ⛔ **Desktop `Connect-Setup-0.1.17-rc.6.exe` is BUILT
 and artifact-verified but NOT installed and NOT published** (feed stays 0.1.16) — both are
