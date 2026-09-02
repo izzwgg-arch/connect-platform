@@ -160,6 +160,23 @@ was filled through the in-app Browser pane:
   on file for the $99 renewal.** ⚠️ The Apple ID's display name is "max weiss"
   while the founder is Israel Weinstock; Apple may ask the Account Holder to
   verify identity — answer with the NY DOS 8001109 filing if they do.
+- ✅ **2026-09-02 — WE TOLD APPLE TO START. Izzy sent the reply on case
+  20000151453845 from iw5626644@gmail.com** (recipient devprograms@apple.com,
+  subject `Re: [20000151453845] Migration to a company account`; body = the six
+  points answered + "please go ahead and migrate team PR63R6J84J to Loopcom LLC
+  (D-U-N-S 149921594), keeping app 6796392950 and its TestFlight builds").
+  Verified in the mailbox's Sent folder. Two-factor was confirmed ON at
+  account.apple.com → Sign-In & Security (1 trusted phone, 1 trusted device).
+  ⛔ **From this moment until Apple confirms completion: NO iOS/EAS build** —
+  Certificates, Identifiers & Profiles is dark during the migration.
+  Build 57 stays in review untouched. ⏳ Watch that inbox for Apple's next
+  message (completion, or an identity check on the Account Holder).
+  ⛔ Browser trap: a Gmail add-on extension in Izzy's Chrome injects a frame
+  into every compose window, and the Claude extension then cannot click, type
+  or run JS on that tab ("Cannot access a chrome-extension:// URL of different
+  extension") — reads still work. Workaround used: prefill a standalone compose
+  via `mail.google.com/mail/u/N/?view=cm&fs=1&to=…&su=…&body=…`, verify the
+  text by reading the page, and have Izzy press Send himself.
 - ⛔ Browser-driving traps hit: the contact form demands its OWN idmsa sign-in
   (a developer.apple.com session from another tab does NOT carry into it), and
   element refs on this form GO STALE after any scroll — a stale-ref click landed
