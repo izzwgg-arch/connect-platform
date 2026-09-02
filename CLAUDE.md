@@ -12860,6 +12860,40 @@ SESSION HAS EVER RUN BETWEEN TWO PEOPLE.** No desktop build.)
   `https://github.com/izzwgg-arch/connect-platform.git` afterwards** (done, mirror
   removed). ⛔ Leaving the mirror as origin silently freezes every future deploy
   at that tip. Memory: [[remote-support-people-list-asked-a-route-that-never-existed]].
+- ✅✅ **ADMINISTRATOR ACCESS IS BUILT (2026-09-02, `d4fa4836`; desktop
+  `0.1.17-rc.5`; handoff §10) — the customer's OWN UAC "Yes" starts the input
+  helper elevated.** Deploy state: api `d4fa4836` (refusal string grepped in the
+  container); portal container 4eb5bd03 (contains d4fa4836) — consent admin hint + rail UAC line in the shipped chunks, 0 restarts, 200 both hostnames; the one remaining 'Not available in this version' string is the OTHER session's /remote-desktop page, not remote support; rc.5 built from a clean worktree at
+  `4eb5bd03`, `ok elevated` ×5 / `enable-elevated-control` ×2 in the packed
+  `app.asar`, on Izzy's Desktop as `Loopcom-Setup-0.1.17-rc.5.exe`, **NOT
+  published**. ⛔ **rc.4 was the OTHER session's remote-desktop build** — check
+  HEAD's `apps/desktop/package.json` before choosing a version.
+  **How:** `admin` is a capability like clipboard/files (`controls.ts`): rides
+  the control key, both sides must say yes, re-checked live. The technician
+  asks from the rail; the customer's consent component calls
+  `enableElevatedControl(sessionId)` **FIRST** — `mainWiring.ts` refuses unless
+  control is already enabled for that session — and `ElevatedInputInjector`
+  runs `Start-Process powershell -Verb RunAs -Wait` (Windows shows the UAC
+  prompt) and connects to the helper's **named pipe**; only when the pipe
+  answers the one-time launch token with `ok elevated` does the grant reach the
+  server. **A declined prompt records a REFUSAL**, and the plain helper is
+  stopped only after the elevated one is up, so ordinary control is untouched.
+  ⛔ **Why a pipe:** an elevated process cannot inherit the non-elevated parent's
+  stdio. ⛔ **The pipe is locked three ways** — ACL = current user's SID only,
+  token-first handshake or exit, exactly ONE client for the helper's life — and
+  it exits on disconnect / 60 s with no client / a 4 h ceiling. **The app cannot
+  kill an elevated process**: `stop()` asks over the pipe.
+  ⛔ **What it still cannot do, stated on the rail's "Allowed" line:** the UAC
+  prompt itself and the lock screen (secure desktop, SYSTEM/UIAccess only).
+  The helper script is `HELPER_PRELUDE` + `HELPER_DISPATCH`, shared by both
+  helpers so a key or click can never differ between them. Proven: 6
+  fake-launcher/fake-pipe tests, `controls.test.ts` flipped, 2 portal guards;
+  desktop 170/170, api remote-support 142/142, portal guards 22/22.
+  ⏳ **NOT PROVEN ON A REAL MACHINE — nobody has clicked Yes on the real UAC
+  prompt through this path.** Acceptance: ask → customer sees the ask bar then
+  Windows' prompt → Yes → "Allowed — Windows prompts (UAC) still need them" → a
+  click lands in an admin-elevated window; negative: No → never "Allowed",
+  ordinary control keeps working.
 - ⛔⛔ **THE FIRST REAL SESSION RAN 2026-09-02 AND FOUND FOUR THINGS — all fixed in
   `8c6a79dd` + desktop `0.1.17-rc.3` (`e074ad93`); full detail
   `docs/ai-context/AGENT_HANDOFF_REMOTE_SUPPORT_FIRST_LIVE_SESSION_2026-09-02.md`.**
