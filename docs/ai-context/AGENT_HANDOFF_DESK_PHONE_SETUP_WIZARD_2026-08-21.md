@@ -1629,3 +1629,120 @@ shows `805e0c4d796d.cfg` fetched → `T2_103` registers → the row flips REGIST
 (wizard or no wizard). The negatives: the sibling T53W (`80:5E:0C:C8:98:82`, already
 registered) is answered only when IT boots and only with the same folder it already
 uses; a stranger's Yealink on that LAN is never answered.
+
+## §22 — Panasonic: found, named, and honestly un-provisionable (2026-09-03)
+
+Izzy put a Panasonic KX-TGP500 (DECT base, S/N 6GAXM047389, label "KX-TGP500B04")
+on his desk and the wizard did not see it: "This phone is not on my network. The
+automated test phone setup is not detecting it." He then asked for full support.
+
+### What was structurally true before this change
+
+A Panasonic could not produce ANY of the three kinds of evidence the discovery
+filter accepts:
+
+1. **Hardware block** — `VENDOR_PREFIXES` in `deviceIdentity.ts` knew only
+   Yealink/Grandstream/Fanvil. (The api's `lanPhoneVendors.ts` DID know
+   Panasonic's `0080f0` — but that file feeds the never-used lan-phones screen,
+   not the wizard. Two vendor lists, one live.)
+2. **HTTP fingerprint** — the KX-TGP500 ships with its embedded web server OFF
+   (enabled from a paired handset, menu #534), so the HTTP probe gets silence.
+3. **SIP banner** — the base answers OPTIONS as
+   `Panasonic-KX-TGP500B04/22.116…`, but `identityFromBanner` knew only the
+   three vendors and `MODEL_PATTERN` had no KX family → vendor "unknown",
+   model null, confidence "none" → not a phone.
+
+Best case it was counted into "…and N other devices, which we left alone".
+
+### The fact that caps what "full support" can mean
+
+⛔⛔ **The PBX's provisioning catalog has NO Panasonic brand at all.** Read-only
+check on the live PBX, 2026-09-03: `provisioning.brands` lists 20 brands
+(Yealink, Grandstream, Fanvil, Htek, Polycom, Snom, Vtech, Flying Voice,
+Alcatel-Lucent, ClearlyIP, Atcom, LVSwitches, Aastra-Mitel, Dinstar, Cisco,
+Nurivoice, Hanyang Digitech, Sangoma, Attimo, Gigaset) — no Panasonic; and
+`provisioning.phone_models` has zero KX/TGP/HDV rows. So VitalPBX's own
+generator — the ONE provisioning implementation this platform uses, by house
+rule — cannot produce a config file for this phone. There is no
+`<folder><mac>.cfg` to point it at, ever, until either VitalPBX ships the brand
+or somebody deliberately builds a Panasonic template renderer (a real project:
+config keys captured off the real device, a serving path, a second renderer —
+all the things this repo's rules say not to do blind).
+
+Two consequences the code now enforces (`vendorSupportsPbxProvisioning` in
+`deviceKinds.ts`, consumed by the advance route):
+
+- ⛔⛔ **A reset must NEVER be issued or even requested for a Panasonic.** Such a
+  phone's only possible configuration is a hand-typed SIP account; a factory
+  reset would erase the one thing that could ever make it work, and we could not
+  re-provision it afterwards.
+- ⛔ **A provisioning-flavored instruction can structurally never complete**, so
+  the driver would have stalled on `set_provisioning` forever and the run would
+  never finish.
+
+### What shipped (commit on `feat/ivr-migration-takeover`, 2026-09-03)
+
+- **Shared `deviceIdentity.ts`**: `panasonic` in `VENDOR_PREFIXES` (IEEE blocks
+  `0080f0`, `080023` — Panasonic Communications, the KX terminals' blocks) and
+  in the `VendorGuess` union.
+- **Shared `discoveryFilter.ts`**: `panasonic` in `PHONE_MAKERS` — a quiet
+  Panasonic is admitted on its hardware block alone (its web UI ships off, so
+  OUI is often the only evidence).
+- **Shared `deviceKinds.ts`**: KX families in `KIND_PATTERNS` — KX-TGP500/600 →
+  `cordless_base`, KX-TGP550 → `desk_phone` (corded set; listed BEFORE the TGP
+  catch-all), KX-UT1xx/2xx and KX-HDV → `desk_phone`. New
+  **`vendorSupportsPbxProvisioning(vendor)`** — false ONLY for panasonic;
+  ⛔ an UNKNOWN vendor answers true on purpose (an unidentified device may be a
+  locked Yealink and must keep the full ladder).
+- **Desktop `yealink.ts`**: `DeviceFingerprint.vendor` union + `identityFromBanner`
+  gained panasonic — matched on the word OR the bare KX model family, because
+  the phone's web page titles itself "KX-TGP500" without the maker's name — and
+  `MODEL_PATTERN` gained `KX-?(TGP|UT|HDV)\d{3}([A-Z]\d{0,2})?` (the suffix is
+  the region/colour code, "B04", which the SIP banner carries).
+  ⛔ Rides the NEXT desktop build — 0.1.16 in the field still fingerprints a
+  Panasonic as unknown; the server's OUI fill covers the vendor either way.
+- **api `deskPhoneRoutes.ts` advance**: a route-level override in the exact
+  shape of the `provisioningHandoffFailed` one (the pure ladder and its
+  12.6M-decision invariant suite are UNTOUCHED):
+  - registered → `do_nothing` and the row flips **REGISTERED** — the flip
+    condition gained `(provisioningIsOurs || handConfiguredVendor)`, because a
+    Panasonic can never point at our provisioning and demanding both would
+    leave a working phone amber forever;
+  - not registered and the ladder wanted to DO anything → **halt → support**:
+    "Loopcom can't set this model of phone up automatically yet. Loopcom
+    Support can connect it for you — the rest of your phones keep going."
+    The ladder's own halts (unreachable, attempt cap) keep their more specific
+    wording.
+- **api `lanPhoneVendors.ts`**: `080023` added beside `0080f0`.
+
+### Proven
+
+Shared 97/97 (incl. the new PANASONIC block: both OUIs, quiet-host admission,
+banner-identified admission, kinds incl. "KXTGP500B04", provisionability incl.
+the unknown-stays-true negative, no buttons for the base), desktop phoneSetup
+69/69 (real banner shapes: `Panasonic-KX-TGP500B04/22.116.0.10`, the bare-model
+web title, KX-UT136), api routes 47/47 + chaos/stress/route-order 50/50 (four
+new: the halt with no reset spent and no provisioningUrl leaked; registered →
+REGISTERED; unknown vendor keeps `set_provisioning`; OUI fill). Typechecks:
+shared 0, desktop 0, portal 0, api 81 = the exact baseline with none in a
+touched file. Non-vacuity is structural: every new test exercises symbols or
+branches that did not exist at HEAD (a HEAD replay fails on
+`vendorSupportsPbxProvisioning` not existing and on vendor "unknown").
+
+### NOT proven / open
+
+- ⏳ **The physical phone has still not been seen on the network.** "Not on my
+  network" may be literal: the TGP500 base is NOT PoE (needs its PQLV219
+  adapter), and if it holds no DHCP lease nothing can ever find it. Check the
+  router's DHCP table for a `00:80:F0`/`08:00:23` MAC first.
+- ⏳ Acceptance after deploy: rescan → the KX-TGP500 appears on the found screen
+  ("Phone equipment" on desktop 0.1.16, named "panasonic KXTGP500B04 —
+  Cordless phone base station" once a desktop build with the banner parser is
+  installed) → assign it → advance answers the honest support halt; the
+  negative: no reset authorization screen ever names it.
+- ⏳ Actually CONNECTING it remains a hand job (SIP account typed into its web
+  UI — enable with #534 from a paired handset; the credentials live in
+  `ombu_devices`); once it registers, a run finds it Ready. Building a real
+  Panasonic template renderer is a separate decision with the device in hand.
+- ⛔ The desktop-side banner parsing ships with the next installer — the rc
+  0.1.17 line is unpublished and publishing is Izzy's call, as ever.

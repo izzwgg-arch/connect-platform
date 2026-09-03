@@ -34,6 +34,12 @@ const KIND_PATTERNS: Array<{ kind: DeviceKind; re: RegExp }> = [
   { kind: "pager", re: /^PA\d/i },                           // Fanvil PA2/PA3 paging gateway
   { kind: "ata", re: /^HT\d{3}/i },                          // Grandstream HT801/802/812/814…
   { kind: "cordless_base", re: /^W\d{2}B/i },                // Yealink W60B/W70B/W80B/W90B bases
+  // Panasonic SIP families (separators already stripped: "KX-TGP500" -> "KXTGP500").
+  // ⛔ TGP550 before the TGP catch-all: the 550 is a corded desk set, the
+  // 500/600 are DECT bases whose handsets roam.
+  { kind: "desk_phone", re: /^KXTGP55\d/i },                 // Panasonic KX-TGP550 corded desk set
+  { kind: "cordless_base", re: /^KXTGP\d{3}/i },             // Panasonic KX-TGP500/600 DECT bases
+  { kind: "desk_phone", re: /^KX(UT|HDV)\d{3}/i },           // Panasonic KX-UT1xx/2xx, KX-HDV desk phones
   { kind: "desk_phone", re: /^(SIP)?T\d{2}/i },              // Yealink T-series (separators already stripped)
   { kind: "desk_phone", re: /^CP\d{3}/i },                   // Yealink conference phones
   { kind: "desk_phone", re: /^(GXP|GRP)\d{4}/i },            // Grandstream desk phones
@@ -82,6 +88,28 @@ export function kindSupportsButtons(kind: DeviceKind): boolean {
  */
 export function vendorSupportsLocalActions(vendor: string | null | undefined): boolean {
   return String(vendor ?? "").trim().toLowerCase() === "yealink";
+}
+
+/**
+ * Can the PBX generate a settings file for this vendor at all?
+ *
+ * ⛔⛔ THE AUTHORITY IS THE PBX's OWN PROVISIONING CATALOG, not our wishes.
+ * `provisioning.brands` on the live PBX (read-only check, 2026-09-03) lists 20
+ * brands — Yealink, Grandstream, Fanvil, Polycom, Cisco, Snom and the rest — and
+ * NO Panasonic. A vendor with no brand has no template, so there is no file to
+ * point the phone at: a `set_provisioning` for it can structurally never complete,
+ * and — worse — a factory reset would ERASE the hand-typed SIP account that is such
+ * a phone's only possible configuration.
+ *
+ * ⛔ An UNKNOWN vendor answers TRUE on purpose. This gate exists to stop the wizard
+ * making destructive or unfinishable moves on a device we have POSITIVELY
+ * identified as unsupported; a device we never identified may well be a locked
+ * Yealink, and giving up on it here would be giving up on exactly the phone the
+ * wizard is for. Failing "open" costs nothing destructive — every reset still
+ * needs a person's approval regardless.
+ */
+export function vendorSupportsPbxProvisioning(vendor: string | null | undefined): boolean {
+  return String(vendor ?? "").trim().toLowerCase() !== "panasonic";
 }
 
 /**

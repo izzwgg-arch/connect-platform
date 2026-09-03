@@ -195,7 +195,7 @@ export function buildStatusRequest(
 }
 
 export type DeviceFingerprint = {
-  vendor: "yealink" | "grandstream" | "fanvil" | "unknown";
+  vendor: "yealink" | "grandstream" | "fanvil" | "panasonic" | "unknown";
   model: string | null;
   firmware: string | null;
   /**
@@ -211,10 +211,13 @@ export type DeviceFingerprint = {
  * ⛔ Every family here is a vendor's own published model naming, extended 2026-08-22
  * when Izzy widened the scope to any VoIP device: Grandstream HT ATAs, GXP/GRP desk
  * phones and GDS door systems; Fanvil PA paging gateways, X-series desk phones and
- * i-series intercoms. Anything that matches none of them is honestly "unknown".
+ * i-series intercoms; (2026-09-03) Panasonic KX-TGP DECT bases and KX-UT/KX-HDV
+ * desk phones — their SIP User-Agent reads like "Panasonic-KX-TGP500B04/22.116",
+ * model plus a region/colour suffix, which is why the KX branch allows the
+ * trailing letter+digits. Anything that matches none of them is honestly "unknown".
  */
 const MODEL_PATTERN =
-  /\b(SIP-)?(T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}(?:SV|SW|[SVWD])?)\b/i;
+  /\b(SIP-)?(KX-?(?:TGP|UT|HDV)\d{3}(?:[A-Z]\d{0,2})?|T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}(?:SV|SW|[SVWD])?)\b/i;
 
 /**
  * What is this thing, from whatever it said.
@@ -243,6 +246,9 @@ export function identityFromBanner(haystack: string): DeviceFingerprint {
     /yealink/i.test(haystack) ? "yealink"
     : /grandstream/i.test(haystack) ? "grandstream"
     : /fanvil/i.test(haystack) ? "fanvil"
+    // The word, or a KX SIP family — a Panasonic web page titles itself by bare
+    // model ("KX-TGP500") without the maker's name anywhere on it.
+    : /panasonic|\bKX-?(?:TGP|UT|HDV)\d{3}/i.test(haystack) ? "panasonic"
     : "unknown";
   const model = MODEL_PATTERN.exec(haystack)?.[2] ?? null;
   const firmware = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)\b/.exec(haystack)?.[1] ?? null;

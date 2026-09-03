@@ -57,8 +57,10 @@ export function shouldFingerprint(host: { mac: string; respondedOnHttp?: boolean
 
 /** The makers whose devices belong in the list. ⛔ Widened 2026-08-22: any VoIP
  * device — Grandstream HT boxes and door systems, Fanvil speakers and intercoms —
- * not only Yealink desk phones. */
-const PHONE_MAKERS = new Set(["yealink", "grandstream", "fanvil"]);
+ * not only Yealink desk phones. Widened 2026-09-03 with Panasonic (KX-TGP/UT/HDV
+ * SIP families): a found Panasonic is SHOWN honestly even though the PBX cannot
+ * generate settings for it — invisible was the worse failure. */
+const PHONE_MAKERS = new Set(["yealink", "grandstream", "fanvil", "panasonic"]);
 
 /** Is there evidence this specific device is VoIP equipment we should show? */
 export function looksLikePhone(host: ScannedHost): boolean {

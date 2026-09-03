@@ -20,7 +20,7 @@ import { userHasActionPermission } from "../permissionGates";
 import {
   buildButtonLayout, serializeButtonLayout, customerStateFor, decideReset, formatMac,
   guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
-  summarizeRun, type PhoneCondition, type PhoneState,
+  summarizeRun, vendorSupportsPbxProvisioning, type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
@@ -726,6 +726,36 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         customerMessage: "We could not point this phone at Loopcom from your computer. Loopcom Support can finish this one with you.",
       };
     }
+    // ⛔⛔ A vendor with NO brand in the PBX's provisioning catalog (Panasonic —
+    // checked read-only against provisioning.brands, 2026-09-03) has exactly two
+    // honest outcomes, decided here like the hand-off override above so the pure
+    // ladder and its 12.6M-decision invariant suite stay untouched.
+    //   • REGISTERED wins outright: such a phone's only possible configuration is
+    //     a hand-typed SIP account, so "not pointed at our provisioning" is its
+    //     normal working shape, never something to re-sync out of it.
+    //   • Anything else goes to a person NOW: there is no template to point the
+    //     phone at, so a provisioning step would stall forever, a password would
+    //     buy the power to do nothing, and a reset would ERASE the one
+    //     configuration that could ever make it work.
+    // The ladder's own halts (unreachable, attempt cap) keep their more specific
+    // wording; only actions that would DO something are converted.
+    const handConfiguredVendor = !vendorSupportsPbxProvisioning(phone.vendor);
+    if (handConfiguredVendor) {
+      if (registeredToUs) {
+        decision = {
+          action: "do_nothing", rung: 0, halted: false,
+          reason: "registered; this model is configured by hand and registration is the whole test",
+        };
+      } else if (decision.action !== "do_nothing" && decision.action !== "halt") {
+        decision = {
+          action: "halt", rung: -1, halted: true, handOff: "support",
+          reason: `no provisioning template exists for vendor "${sanitizeDeviceText(phone.vendor, 40)}" — the PBX provisioning catalog has no such brand`,
+          customerMessage:
+            "Loopcom can't set this model of phone up automatically yet. " +
+            "Loopcom Support can connect it for you — the rest of your phones keep going.",
+        };
+      }
+    }
     // The folder a reset phone needs, resolved only when the instruction is to
     // point the phone at us. Null means "no URL known" — the driver waits.
     let provisioningUrl: string | null = null;
@@ -787,7 +817,11 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           haltedReason: decision.handOff || "support",
         },
       });
-    } else if (decision.action === "do_nothing" && registeredToUs && provisioningIsOurs) {
+    } else if (decision.action === "do_nothing" && registeredToUs && (provisioningIsOurs || handConfiguredVendor)) {
+      // ⛔ `handConfiguredVendor` joins `provisioningIsOurs` here on purpose: a
+      // Panasonic can never point at our provisioning, so registration alone is
+      // the green light for it — demanding both would leave a working phone
+      // amber forever.
       await db.deskPhoneSetupPhone.update({
         where: { id: phone.id },
         data: { state: "REGISTERED", registeredAt: phone.registeredAt ?? new Date(), customerNote: null },

@@ -55,8 +55,9 @@ const OUI_VENDORS: Record<string, string> = {
   "0c383e": "Fanvil",
   // Aastra / Mitel
   "00085d": "Mitel",
-  // Panasonic
+  // Panasonic (both Panasonic Communications blocks their KX SIP terminals use)
   "0080f0": "Panasonic",
+  "080023": "Panasonic",
 };
 
 /**

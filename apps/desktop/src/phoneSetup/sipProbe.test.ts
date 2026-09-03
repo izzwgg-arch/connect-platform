@@ -64,6 +64,16 @@ test("the real vendors' SIP banners resolve to make and model", () => {
   assert.deepEqual([yl.vendor, yl.model], ["yealink", "T42S"]);
   const ht = identityFromBanner("Grandstream HT812 1.0.29.8");
   assert.deepEqual([ht.vendor, ht.model], ["grandstream", "HT812"]);
+  // Panasonic's real User-Agent shape: maker-model with the region suffix, then
+  // firmware — from a KX-TGP500B04 DECT base (2026-09-03).
+  const pana = identityFromBanner("Panasonic-KX-TGP500B04/22.116.0.10 (0080f0aabbcc)");
+  assert.deepEqual([pana.vendor, pana.model], ["panasonic", "KXTGP500B04"]);
+  // Its web page titles itself by bare model, no maker's name anywhere — the KX
+  // family alone must be enough to name the vendor.
+  const panaWeb = identityFromBanner("KX-TGP500 Web Console");
+  assert.deepEqual([panaWeb.vendor, panaWeb.model], ["panasonic", "KXTGP500"]);
+  const ut = identityFromBanner("Panasonic KX-UT136 01.303");
+  assert.deepEqual([ut.vendor, ut.model], ["panasonic", "KXUT136"]);
   // An unknown stays honestly unknown.
   assert.equal(identityFromBanner("Some PBX thing").vendor, "unknown");
 });

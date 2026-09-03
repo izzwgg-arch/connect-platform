@@ -594,11 +594,55 @@ test("KINDS: every family lands in the right kind, and junk is honestly unknown"
     ["W60B", "cordless_base"], ["W70B", "cordless_base"], ["W80B", "cordless_base"],
     ["PA2", "pager"], ["PA3", "pager"],
     ["GDS3710", "doorbell"], ["i16V", "doorbell"], ["i31S", "doorbell"],
+    // Panasonic: the TGP500/600 are DECT bases, the TGP550 is a corded desk set,
+    // the UT and HDV families are desk phones. The B04 tail is the region/colour
+    // suffix the device's own label and SIP banner carry ("KX-TGP500B04").
+    ["KX-TGP500", "cordless_base"], ["KXTGP500B04", "cordless_base"], ["KX-TGP600", "cordless_base"],
+    ["KX-TGP550", "desk_phone"], ["KX-UT136", "desk_phone"], ["KX-HDV230", "desk_phone"],
     ["", "unknown"], ["FOO99", "unknown"], ["not a model", "unknown"],
   ];
   for (const [model, want] of cases) {
     assert.equal(deviceKindFor(model), want, `${model} classified wrong`);
   }
+});
+
+/* ── Panasonic: found honestly, provisioned never (2026-09-03) ───────────── */
+
+test("PANASONIC: the hardware blocks are recognised and the device is shown", () => {
+  // A KX-TGP500 on Izzy's own desk was structurally invisible to the wizard —
+  // no OUI, no banner branch, so at best it was "some other device, left alone".
+  const { guessVendorFromMac } = require("./deviceIdentity");
+  for (const mac of ["00:80:F0:AA:BB:CC", "08:00:23:00:11:22"]) {
+    assert.equal(guessVendorFromMac(mac).vendor, "panasonic", `${mac} not recognised`);
+    assert.equal(guessVendorFromMac(mac).confidence, "prefix");
+  }
+  // A quiet Panasonic (its web server ships OFF by default) is still admitted on
+  // the hardware block alone, and is worth one fingerprint call.
+  assert.equal(looksLikePhone({ mac: "00:80:F0:AA:BB:CC", ip: "192.168.1.30" }), true);
+  assert.equal(shouldFingerprint({ mac: "00:80:F0:AA:BB:CC", respondedOnHttp: false }), true);
+  // And one identified purely by its SIP banner, off an unknown block, is a phone.
+  assert.equal(looksLikePhone({
+    mac: "a4:5d:36:00:00:07", ip: "10.0.0.9",
+    fingerprint: { vendor: "panasonic", model: "KXTGP500B04", confidence: "banner" },
+  }), true);
+});
+
+test("PANASONIC: detection does not imply provisionability — the PBX catalog decides", () => {
+  // ⛔ provisioning.brands on the live PBX (read-only, 2026-09-03) has NO
+  // Panasonic brand: there is no template, so no file to point the phone at, and
+  // a reset would erase the hand-typed SIP account that is such a phone's only
+  // possible configuration. The route uses this to send the phone to a person
+  // instead of stalling forever — and an UNKNOWN vendor stays provisionable, so
+  // an unidentified (possibly locked Yealink) phone is never given up on.
+  const { vendorSupportsPbxProvisioning } = require("./deviceKinds");
+  assert.equal(vendorSupportsPbxProvisioning("panasonic"), false);
+  assert.equal(vendorSupportsPbxProvisioning("Panasonic"), false);
+  for (const v of ["yealink", "grandstream", "fanvil", "unknown", "", null, undefined]) {
+    assert.equal(vendorSupportsPbxProvisioning(v as any), true, `${v} read as unprovisionable`);
+  }
+  // A cordless base is not a desk phone: no buttons, ever.
+  const { deviceKindFor, kindSupportsButtons } = require("./deviceKinds");
+  assert.equal(kindSupportsButtons(deviceKindFor("KXTGP500B04")), false);
 });
 
 test("KINDS: nothing but a desk phone ever gets buttons", () => {
@@ -639,7 +683,7 @@ test("KINDS: only Yealink may be driven locally; every kind may be CLEARED", () 
   const { vendorSupportsLocalActions } = require("./deviceKinds");
   assert.equal(vendorSupportsLocalActions("yealink"), true);
   assert.equal(vendorSupportsLocalActions("Yealink"), true);
-  for (const v of ["grandstream", "fanvil", "unknown", "", null, undefined]) {
+  for (const v of ["grandstream", "fanvil", "panasonic", "unknown", "", null, undefined]) {
     assert.equal(vendorSupportsLocalActions(v as any), false, `${v} allowed local actions`);
   }
   // ⛔ Clearing is decided by the RECORD, never the kind — an HT box and a doorbell

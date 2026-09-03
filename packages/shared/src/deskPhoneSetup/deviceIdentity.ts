@@ -47,17 +47,27 @@ export function formatMac(mac: string): string {
  * Widened 2026-08-22 when Izzy widened the scope to any VoIP device — a Grandstream
  * HT under a desk and a Fanvil speaker on a ceiling both had to stop reading as
  * "some other device, left alone".
+ *
+ * Widened again 2026-09-03 with Panasonic (a KX-TGP500 DECT base on Izzy's desk was
+ * structurally invisible to the wizard). ⛔ Recognising a Panasonic does NOT mean we
+ * can provision one — the PBX's provisioning catalog has no Panasonic brand at all
+ * (checked read-only against provisioning.brands, 2026-09-03). Detection and
+ * provisionability are separate questions; `vendorSupportsPbxProvisioning` in
+ * deviceKinds.ts answers the second one.
  */
-const VENDOR_PREFIXES: Array<{ vendor: "yealink" | "grandstream" | "fanvil"; prefixes: string[] }> = [
+const VENDOR_PREFIXES: Array<{ vendor: "yealink" | "grandstream" | "fanvil" | "panasonic"; prefixes: string[] }> = [
   { vendor: "yealink", prefixes: ["805e0c", "805ec0", "001565", "249ad8", "805e18"] },
   // IEEE registrations for Grandstream Networks.
   { vendor: "grandstream", prefixes: ["000b82", "c074ad"] },
   // IEEE registration for Fanvil Technology.
   { vendor: "fanvil", prefixes: ["0c383e"] },
+  // IEEE registrations for Panasonic Communications Co., Ltd. — the blocks their
+  // KX-series SIP terminals ship on (0080f0 is the classic KX phone prefix).
+  { vendor: "panasonic", prefixes: ["0080f0", "080023"] },
 ];
 
 export type VendorGuess = {
-  vendor: "yealink" | "grandstream" | "fanvil" | "unknown";
+  vendor: "yealink" | "grandstream" | "fanvil" | "panasonic" | "unknown";
   confidence: "prefix" | "none";
 };
 

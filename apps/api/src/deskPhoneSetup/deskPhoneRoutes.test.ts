@@ -805,3 +805,76 @@ test("pnp-config with no folder or a failing PBX read still answers — url null
   const out = body(await app.inject({ method: "GET", url: "/desk-phones/pnp-config" }));
   assert.deepEqual(out, { ok: true, url: null, macs: [] });
 });
+
+/* ── Panasonic: shown honestly, never reset, registration wins (2026-09-03) ─ */
+
+test("a Panasonic that is not registered goes to a person — never a reset, never a password prompt", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async () => "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/",
+  });
+  const runId = await startRun(app);
+  // A KX-TGP500 as the scan reports it: Panasonic OUI, SIP banner named the model.
+  await discover(app, runId, [{ mac: "00:80:F0:AA:BB:CC", ip: "192.168.1.60", vendor: "panasonic", model: "KXTGP500B04" }]);
+  const phone = state.phones[0];
+  assert.equal(phone.vendor, "panasonic");
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+
+  // Reachable and unlocked would be set_provisioning for a Yealink; for a vendor
+  // the PBX has no template for, that instruction can structurally never finish —
+  // and a reset would erase the hand-typed SIP account that is this phone's only
+  // possible configuration. So: halt to support, in plain words, immediately.
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  assert.equal(adv.action, "halt");
+  assert.equal(adv.handOff, "support");
+  assert.match(adv.customerMessage, /can't set this model .* up automatically/i);
+  assert.match(adv.customerMessage, /rest of your phones keep going/i);
+  assert.equal(phone.state, "NEEDS_ATTENTION");
+  assert.equal(phone.resetCount, 0, "a reset was spent on a phone we can never re-provision");
+  assert.ok(!("provisioningUrl" in adv), "a folder URL for a vendor with no template is a lie");
+});
+
+test("a Panasonic that IS registered is simply Ready — registration is the whole test", async () => {
+  reset(); registered = new Set(["101"]);
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "00:80:F0:AA:BB:CC", ip: "192.168.1.60", vendor: "panasonic", model: "KXTGP500B04" }]);
+  const phone = state.phones[0];
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  // ⛔ A hand-configured Panasonic can never point at OUR provisioning, so
+  // demanding provisioningIsOurs would leave a working phone amber forever.
+  assert.equal(adv.action, "do_nothing");
+  assert.equal(adv.halted, false);
+  assert.equal(phone.state, "REGISTERED");
+});
+
+test("the Panasonic gate fires only on a POSITIVE identification — an unknown vendor keeps the full ladder", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async () => "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/",
+  });
+  const runId = await startRun(app);
+  // Unknown OUI, no fingerprint: could be a locked Yealink. Giving up here would
+  // be giving up on exactly the phone the wizard is for.
+  await discover(app, runId, [{ mac: "AA:BB:CC:00:11:22", ip: "192.168.1.61" }]);
+  const phone = state.phones[0];
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  assert.equal(adv.action, "set_provisioning", "an unidentified device still gets the ordinary ladder");
+  assert.notEqual(phone.state, "NEEDS_ATTENTION");
+});
+
+test("a Panasonic OUI fills the vendor server-side when the scan could not say", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  const out = await discover(app, runId, [{ mac: "00:80:F0:AA:BB:CC", ip: "192.168.1.60" }]);
+  assert.equal(out.phones[0].vendor, "panasonic", "the hardware block names the maker even when the device is silent");
+});
