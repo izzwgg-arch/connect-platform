@@ -6,6 +6,7 @@ import { PortalReloadNotice } from "../components/DesktopUpdateNotice";
 import RemoteSupportConsent from "../components/RemoteSupportConsent";
 import RemoteDesktopHost from "../components/RemoteDesktopHost";
 import { LoopcomSetupRequest } from "../components/deskPhones/LoopcomSetupRequest";
+import { PnpResidentHost } from "../components/deskPhones/PnpResidentHost";
 import { SupermarketOrderPop } from "../components/SupermarketOrderPop";
 import { AppProvider } from "../hooks/useAppContext";
 import { TelephonyProvider } from "../contexts/TelephonyContext";
@@ -29,6 +30,11 @@ export function Providers({ children }: { children: ReactNode }) {
               person in that office is looking at their dashboard, not at a settings
               page somebody else opened. */}
           <LoopcomSetupRequest />
+          {/* ⛔ Renders nothing outside the desktop FULL window. Keeps the office
+              computer's standing phone-provisioning listener armed with this
+              customer's folder + their own phones, so a reset phone is provisioned
+              the moment it is plugged in — wizard or no wizard. */}
+          <PnpResidentHost />
           {/* ⛔ Passive observer of phone.callState for SUPERMARKET tenants only:
               answering an inbound call opens the order twin / new-order page.
               Inert for every classic tenant (one /supermarket/mode probe), and

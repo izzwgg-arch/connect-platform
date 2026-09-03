@@ -10,8 +10,7 @@ import {
   buildPnpNotify, buildPnpOk, isNotifyAck, normalizeMac, notifyTarget, parsePnpSubscribe,
   pickLocalAddressFor, startPnpHandoff, PNP_MULTICAST_GROUP, PNP_PORT, type PnpSocket,
 } from "./pnp";
-import { createPhoneCapability, PHONE_OPERATIONS } from "./capability";
-import { isLoopcomProvisioningUrl, type HttpRequest, type HttpResponse } from "./yealink";
+import { isLoopcomProvisioningUrl } from "./yealink";
 
 const URL_OK = "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/";
 const MAC = "80:5E:0C:4D:79:6D";
@@ -257,108 +256,6 @@ test("normalizeMac is strict", () => {
   assert.equal(normalizeMac(null), null);
 });
 
-/* ── through the capability ───────────────────────────────────────────────── */
-
-function res(over: Partial<HttpResponse> = {}): HttpResponse { return { status: 200, headers: {}, body: "", ...over }; }
-
-function capWithPnp(pnpOutcome: any = { ok: true, delivered: true, acknowledged: true, agent: "Yealink", waitedMs: 1 }, listening = true) {
-  const seen: HttpRequest[] = [];
-  const pnpCalls: any[] = [];
-  const order: string[] = [];
-  let t = 1_000_000;
-  const api = createPhoneCapability({
-    http: async (req) => { seen.push(req); order.push("http"); return res({ status: 200 }); },
-    resolveCredential: async (ref) => (ref === "phone:1" ? { username: "admin", password: "given" } : null),
-    now: () => (t += 10_000),
-    pnp: (opts) => {
-      pnpCalls.push(opts); order.push("listen");
-      return { listening: Promise.resolve(listening), outcome: Promise.resolve(pnpOutcome) };
-    },
-  });
-  return { api, seen, pnpCalls, order };
-}
-
-test("the allowlist now has six operations and set_provisioning is one of them", () => {
-  assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["discover", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
-});
-
-test("set_provisioning listens FIRST, then restarts the phone with the documented default, then reports", async () => {
-  const { api, seen, pnpCalls, order } = capWithPnp();
-  const out = await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK });
-  assert.deepEqual(out, { ok: true, op: "set_provisioning", rebooted: true, delivered: true, acknowledged: true, waitedMs: 1 });
-  assert.deepEqual(order, ["listen", "http"], "a responder that starts after the reboot can miss a fast phone");
-  assert.equal(pnpCalls[0].url, URL_OK);
-  assert.equal(pnpCalls[0].mac, "805e0c4d796d");
-  assert.match(seen[0].url, /servlet\?key=Reboot$/);
-  const decoded = Buffer.from(seen[0].headers.Authorization.slice(6), "base64").toString("utf8");
-  assert.equal(decoded, "admin:admin", "a reset phone is on the documented default");
-});
-
-test("set_provisioning uses the customer's stored password by reference when there is one", async () => {
-  const { api, seen } = capWithPnp();
-  await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK, credentialRef: "phone:1" });
-  const decoded = Buffer.from(seen[0].headers.Authorization.slice(6), "base64").toString("utf8");
-  assert.equal(decoded, "admin:given");
-});
-
-test("reboot:false only listens — the person is power-cycling the phone", async () => {
-  const { api, seen } = capWithPnp({ ok: true, delivered: false, reason: "no_subscribe", waitedMs: 5 });
-  const out = await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK, reboot: false });
-  assert.equal(seen.length, 0, "no HTTP request left the machine");
-  assert.deepEqual(out, { ok: true, op: "set_provisioning", rebooted: false, delivered: false, acknowledged: false, waitedMs: 5 });
-});
-
-test("⛔ set_provisioning refuses every URL that is not a Loopcom folder before touching the network", async () => {
-  const { api, seen, pnpCalls } = capWithPnp();
-  for (const bad of [
-    "http://m.connectcomunications.com/phoneprov/f3df739ac62197cd/",
-    "https://evil.example/phoneprov/f3df739ac62197cd/",
-    "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/../../",
-    "https://m.connectcomunications.com/", "", undefined, 7,
-  ]) {
-    const out = await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: bad as any } as any);
-    assert.deepEqual(out, { ok: false, refused: "not_a_loopcom_provisioning_url" }, String(bad));
-  }
-  assert.equal(seen.length, 0);
-  assert.equal(pnpCalls.length, 0);
-});
-
-test("a public address is refused for set_provisioning like every other operation", async () => {
-  const { api, pnpCalls } = capWithPnp();
-  assert.deepEqual(await api.run({ op: "set_provisioning", ip: "8.8.8.8", mac: MAC, url: URL_OK }), { ok: false, refused: "not_a_private_address" });
-  assert.deepEqual(await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: "bad", url: URL_OK }), { ok: false, refused: "bad_hardware_address" });
-  assert.equal(pnpCalls.length, 0);
-});
-
-test("when the machine cannot listen, nothing is rebooted and the caller is told", async () => {
-  const { api, seen } = capWithPnp({ ok: false, refused: "cannot_listen" }, false);
-  const out = await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK });
-  assert.deepEqual(out, { ok: false, refused: "cannot_listen" });
-  assert.equal(seen.length, 0, "a phone must not be restarted for a hand-off that cannot happen");
-});
-
-test("a refused reboot still reports the listen result — the person can power-cycle instead", async () => {
-  const pnp = { ok: true, delivered: true, acknowledged: false, agent: "Yealink", waitedMs: 9 };
-  const seen: HttpRequest[] = [];
-  const api = createPhoneCapability({
-    http: async (req) => { seen.push(req); return res({ status: 401 }); },
-    resolveCredential: async () => null,
-    pnp: () => ({ listening: Promise.resolve(true), outcome: Promise.resolve(pnp as any) }),
-  });
-  const out = await api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK });
-  assert.deepEqual(out, { ok: true, op: "set_provisioning", rebooted: false, rebootRefused: "locked", delivered: true, acknowledged: false, waitedMs: 9 });
-});
-
-test("set_provisioning is spaced like the other things that change a phone", async () => {
-  const { api } = capWithPnp();
-  let t = 100_000;
-  const api2 = createPhoneCapability({
-    http: async () => res({ status: 200 }), resolveCredential: async () => null, now: () => t,
-    pnp: () => ({ listening: Promise.resolve(true), outcome: Promise.resolve({ ok: true, delivered: true, acknowledged: true, agent: null, waitedMs: 1 } as any) }),
-  });
-  void api;
-  assert.equal((await api2.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK })).ok, true);
-  t = 101_000;
-  assert.deepEqual(await api2.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK }), { ok: false, refused: "too_soon_for_this_phone" });
-});
+/* The capability-level tests live in pnpResident.test.ts — the capability rides the
+   standing responder now (2026-09-02, same evening). The one-shot responder above is
+   kept as the proven building block and its tests are unchanged. */

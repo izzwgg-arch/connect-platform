@@ -14,6 +14,7 @@
  */
 
 import { createPhoneCapability, type OperationRequest, type OperationResult } from "./capability";
+import { createPnpResident, type PnpResident } from "./pnpResident";
 import type { HttpRequest, HttpResponse, YealinkCredentials } from "./yealink";
 
 /** The pieces of Electron this needs, injected so the wiring itself is testable. */
@@ -25,6 +26,10 @@ export type WiringDeps = {
     decryptString(cipher: Buffer): string;
   };
   http?: (req: HttpRequest) => Promise<HttpResponse>;
+  /** The standing PnP responder; injectable for tests. */
+  pnpResident?: PnpResident;
+  /** Where to say what the responder did (never packet contents). */
+  log?: (line: string) => void;
 };
 
 export const PHONE_SETUP_CHANNEL = "phoneSetup:run";
@@ -40,7 +45,7 @@ export const PHONE_SETUP_FORGET_CREDENTIALS_CHANNEL = "phoneSetup:forget-credent
  */
 type Vault = Map<string, Buffer | string>;
 
-export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void } {
+export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void; disarmPnp: () => void } {
   const vault: Vault = new Map();
   const canEncrypt = Boolean(deps.safeStorage?.isEncryptionAvailable?.());
 
@@ -63,9 +68,11 @@ export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void } 
     }
   };
 
+  const pnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const capability = createPhoneCapability({
     http: deps.http ?? nodeHttp,
     resolveCredential: async (ref) => get(ref),
+    pnpResident,
   });
 
   deps.ipcMain.handle(PHONE_SETUP_CHANNEL, async (_e: unknown, req: OperationRequest): Promise<OperationResult> => {
@@ -97,29 +104,39 @@ export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void } 
     return { ok: true as const };
   });
 
-  return { forgetAll: () => vault.clear() };
+  return { forgetAll: () => vault.clear(), disarmPnp: () => pnpResident.disarm() };
 }
 
 /**
  * The real transport.
  *
- * ⛔ Deliberately built on node:http rather than fetch: a desk phone answers plain
- * HTTP on the office LAN with a self-signed certificate at best, and this must never
- * follow a redirect. A redirect from a device is a device choosing where our request
- * goes next, which is exactly the thing the private-address fence exists to prevent.
+ * ⛔ Deliberately built on node:http / node:https rather than fetch: a desk phone
+ * answers on the office LAN with a self-signed certificate at best, and this must
+ * never follow a redirect. A redirect from a device is a device choosing where our
+ * request goes next, which is exactly the thing the private-address fence exists to
+ * prevent.
+ *
+ * ⛔ HTTPS to a phone accepts ANY certificate (`rejectUnauthorized: false`) ON
+ * PURPOSE: a handset's web interface presents a self-signed, per-device cert and
+ * there is nothing to verify it against. That is safe only because every request
+ * here is fenced to a PRIVATE IPv4 address by the builders in yealink.ts — the
+ * certificate is not what keeps this from reaching the internet, the fence is.
  */
 async function nodeHttp(req: HttpRequest): Promise<HttpResponse> {
-  const http = await import("node:http");
+  const url = new URL(req.url);
+  const secure = url.protocol === "https:";
+  if (!secure && url.protocol !== "http:") throw new Error("refused: unsupported scheme");
+  const mod = secure ? await import("node:https") : await import("node:http");
   return new Promise<HttpResponse>((resolve, reject) => {
-    const url = new URL(req.url);
-    const r = http.request(
+    const r = mod.request(
       {
         host: url.hostname,
-        port: url.port || 80,
+        port: url.port || (secure ? 443 : 80),
         path: url.pathname + url.search,
         method: req.method,
         headers: req.headers,
         timeout: req.timeoutMs,
+        ...(secure ? { rejectUnauthorized: false } : {}),
       },
       (response) => {
         const chunks: Buffer[] = [];

@@ -776,3 +776,32 @@ test("the folder URL is built only from the PBX's 16-hex tenant path, on the pho
   }
   assert.equal(buildPhoneprovUrl(null, "f3df739ac62197cd"), null);
 });
+
+/* ── the standing listener's config (2026-09-02, same evening) ─────────── */
+
+test("pnp-config hands the office app the tenant's folder and ITS phones' hardware addresses, and nothing else", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async (tenantId: string) => (tenantId === "t_abc" ? "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" : null),
+    provisionedPhones: async () => ([
+      { mac: "805e0c4d796d", macRaw: "80:5E:0C:4D:79:6D", pbxTenant: 2, description: "103", model: "T53W", brand: "yealink" },
+      { mac: "805E0CC89882", macRaw: "80:5E:0C:C8:98:82", pbxTenant: 2, description: "105", model: "T42S", brand: "yealink" },
+      { mac: "805e0c4d796d", macRaw: "dup", pbxTenant: 2, description: "dup", model: null, brand: null },
+      { mac: "not-a-mac", macRaw: "junk", pbxTenant: 2, description: null, model: null, brand: null },
+    ] as any),
+  });
+  const out = body(await app.inject({ method: "GET", url: "/desk-phones/pnp-config" }));
+  assert.equal(out.ok, true);
+  assert.equal(out.url, "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/");
+  assert.deepEqual(out.macs, ["805e0c4d796d", "805e0cc89882"], "normalised, de-duplicated, junk dropped");
+});
+
+test("pnp-config with no folder or a failing PBX read still answers — url null, macs empty — never a 500", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async () => { throw new Error("pbx down"); },
+    provisionedPhones: async () => { throw new Error("pbx down"); },
+  });
+  const out = body(await app.inject({ method: "GET", url: "/desk-phones/pnp-config" }));
+  assert.deepEqual(out, { ok: true, url: null, macs: [] });
+});

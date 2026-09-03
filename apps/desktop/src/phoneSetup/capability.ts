@@ -17,10 +17,11 @@
 import { scanLan, type ScanResult } from "./lanScan";
 import { sipOptionsProbe, type SipProbeResult } from "./sipProbe";
 import {
-  buildStatusRequest, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, sendAction, testCredentials,
+  buildStatusRequest, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, requestWithSchemeFallback, sendAction, testCredentials,
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
 } from "./yealink";
-import { normalizeMac, PNP_DEFAULT_WAIT_MS, PNP_MAX_WAIT_MS, startPnpHandoff, type PnpHandoff, type PnpHandoffOptions } from "./pnp";
+import { normalizeMac } from "./pnp";
+import { createPnpResident, PNP_RESIDENT_MAX_MACS, type PnpResident } from "./pnpResident";
 
 /** Every operation that exists. Adding one is a deliberate act with its own test. */
 export const PHONE_OPERATIONS = [
@@ -32,6 +33,12 @@ export const PHONE_OPERATIONS = [
   // 2026-09-02: hand a factory-reset phone its provisioning folder over PnP.
   // The URL it takes is fenced to a Loopcom PBX folder — see isLoopcomProvisioningUrl.
   "set_provisioning",
+  // 2026-09-02 (same evening): the STANDING responder. `arm_pnp` hands the resident
+  // listener the customer's folder + their own phones' hardware addresses; from then
+  // on any of those phones that boots on this network is told its folder, wizard or
+  // no wizard. `disarm_pnp` is sign-out. Both take the same fenced URL and nothing else.
+  "arm_pnp",
+  "disarm_pnp",
 ] as const;
 
 export type PhoneOperation = (typeof PHONE_OPERATIONS)[number];
@@ -42,6 +49,8 @@ export type OperationRequest =
   | { op: "test_credentials"; ip: string; credentialRef?: string | null; useDefault?: boolean }
   | { op: "reboot"; ip: string; credentialRef?: string | null }
   | { op: "trigger_autop"; ip: string; credentialRef?: string | null }
+  | { op: "arm_pnp"; url: string; macs: string[] }
+  | { op: "disarm_pnp" }
   | {
       op: "set_provisioning"; ip: string; mac: string; url: string; credentialRef?: string | null;
       /** Restart the phone so it asks (PnP fires once per boot). Default true. */
@@ -56,14 +65,18 @@ export type OperationResult =
   | { ok: true; op: "reboot" | "trigger_autop" }
   | {
       ok: true; op: "set_provisioning";
+      /** The resident listener is bound and armed for this phone. */
+      listening: true;
       /** The restart request was accepted by the phone's web interface. */
       rebooted: boolean; rebootRefused?: string;
-      /** The phone asked and was told the folder. */
+      /** The phone asked and was told the folder (now, or earlier while armed). */
       delivered: boolean;
       /** The phone answered our NOTIFY (confirmation, not a requirement). */
       acknowledged: boolean;
-      waitedMs: number;
+      deliveredAt: number | null;
     }
+  | { ok: true; op: "arm_pnp"; listening: boolean; macs: number; deliveries: number }
+  | { ok: true; op: "disarm_pnp" }
   | { ok: false; refused: string };
 
 /**
@@ -84,9 +97,13 @@ export type CapabilityDeps = {
   now?: () => number;
   /** The SIP identity probe, injectable for tests. Read-only: one OPTIONS packet. */
   sipProbe?: (ip: string) => Promise<SipProbeResult>;
-  /** The PnP responder, injectable for tests. */
-  pnp?: (opts: PnpHandoffOptions) => PnpHandoff;
+  /** The standing PnP responder, injectable for tests. */
+  pnpResident?: PnpResident;
 };
+
+/** How long `set_provisioning` waits for the phone to ask before answering the wizard. */
+export const SET_PROVISIONING_DEFAULT_WAIT_MS = 3_000;
+export const SET_PROVISIONING_MAX_WAIT_MS = 15_000;
 
 /**
  * ⛔ Rate limits are here rather than on the server because the server is the thing
@@ -101,6 +118,7 @@ const MIN_MS_BETWEEN_SCANS = 15_000;
 type Gate = { lastActionAt: Map<string, number>; actionTimes: number[]; lastScanAt: number };
 
 export function createPhoneCapability(deps: CapabilityDeps) {
+  const resident: PnpResident = deps.pnpResident ?? createPnpResident();
   const now = deps.now ?? (() => Date.now());
   const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0 };
 
@@ -119,6 +137,23 @@ export function createPhoneCapability(deps: CapabilityDeps) {
       return { ok: true, op: "discover", scan };
     }
 
+    if (req.op === "arm_pnp") {
+      // ⛔ The same fence as set_provisioning; the list is the customer's OWN phones
+      // as the PBX records them, and it is capped. The resident answers nothing else.
+      const url = (req as any).url;
+      if (!isLoopcomProvisioningUrl(url)) return { ok: false, refused: "not_a_loopcom_provisioning_url" };
+      const list = Array.isArray((req as any).macs) ? (req as any).macs : [];
+      if (list.length > PNP_RESIDENT_MAX_MACS) return { ok: false, refused: "too_many_hardware_addresses" };
+      const macs = list.map(normalizeMac).filter((m: string | null): m is string => Boolean(m));
+      const listening = await resident.arm({ url, macs });
+      const st = resident.status();
+      return { ok: true, op: "arm_pnp", listening, macs: st.macs, deliveries: st.deliveries.length };
+    }
+    if (req.op === "disarm_pnp") {
+      resident.disarm();
+      return { ok: true, op: "disarm_pnp" };
+    }
+
     // Everything else targets one phone, and the address is checked here rather than
     // trusted from the caller.
     const ip = (req as any).ip;
@@ -129,7 +164,10 @@ export function createPhoneCapability(deps: CapabilityDeps) {
     if (gate.actionTimes.length >= MAX_ACTIONS_PER_MINUTE) return { ok: false, refused: "rate_limited" };
     const last = gate.lastActionAt.get(ip) ?? 0;
     // ⛔ Reads are cheap and safe; only things that CHANGE a phone are spaced out.
-    const mutating = req.op === "reboot" || req.op === "trigger_autop" || req.op === "set_provisioning";
+    // set_provisioning only changes the phone when it is asked to restart it; a
+    // listen-and-check call is a read and rides the wizard's 4-second tick.
+    const mutating = req.op === "reboot" || req.op === "trigger_autop"
+      || (req.op === "set_provisioning" && (req as any).reboot !== false);
     if (mutating && t - last < MIN_MS_BETWEEN_ACTIONS_PER_PHONE) {
       return { ok: false, refused: "too_soon_for_this_phone" };
     }
@@ -157,8 +195,8 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         const probeSip = deps.sipProbe ?? sipOptionsProbe;
         let http: DeviceFingerprint | null = null;
         try {
-          const res = await deps.http(buildStatusRequest(ip, creds));
-          http = fingerprintFromResponse(res);
+          const res = await requestWithSchemeFallback(deps.http, buildStatusRequest(ip, creds), () => buildStatusRequest(ip, creds, { https: true }));
+          http = res ? fingerprintFromResponse(res) : null;
         } catch { http = null; }
         if (http && http.model && http.vendor !== "unknown") {
           return { ok: true, op: "fingerprint", fingerprint: http };
@@ -189,31 +227,33 @@ export function createPhoneCapability(deps: CapabilityDeps) {
       }
       case "set_provisioning": {
         // ⛔⛔ THE URL FENCE, before a socket exists. Only a Loopcom PBX folder.
-        if (!isLoopcomProvisioningUrl((req as any).url)) return { ok: false, refused: "not_a_loopcom_provisioning_url" };
+        const url = (req as any).url;
+        if (!isLoopcomProvisioningUrl(url)) return { ok: false, refused: "not_a_loopcom_provisioning_url" };
         const mac = normalizeMac((req as any).mac);
         if (!mac) return { ok: false, refused: "bad_hardware_address" };
-        const waitMs = Math.min(PNP_MAX_WAIT_MS, Math.max(5_000, Number((req as any).waitMs) || PNP_DEFAULT_WAIT_MS));
-        // ⛔ LISTEN FIRST, THEN RESTART. PnP fires once per boot; a responder that
-        // starts after the reboot request can miss a fast phone entirely.
-        const handoff = (deps.pnp ?? startPnpHandoff)({ ip, mac, url: (req as any).url, waitMs });
-        if (!(await handoff.listening)) {
-          await handoff.outcome.catch(() => null);
-          return { ok: false, refused: "cannot_listen" };
-        }
+        const waitMs = Math.min(SET_PROVISIONING_MAX_WAIT_MS, Math.max(0, Number((req as any).waitMs) || SET_PROVISIONING_DEFAULT_WAIT_MS));
+        // ⛔ LISTEN FIRST, THEN RESTART. The resident listener is armed (or re-armed)
+        // for this folder + this phone BEFORE any restart is asked for; PnP fires
+        // once per boot and a responder that starts late misses a fast phone.
+        const since = t;
+        const already = resident.deliveryFor(mac, 0);
+        const listening = await resident.arm({ url, macs: [mac] });
+        if (!listening) return { ok: false, refused: "cannot_listen" };
         let rebooted = false;
         let rebootRefused: string | undefined;
         if ((req as any).reboot !== false) {
           // A reset phone is on the documented default; a phone the customer gave us
-          // a password for uses that. Either way the reboot is the same one verb.
+          // a password for uses that. Either way the restart is the same one verb.
           const r = await sendAction(deps.http, ip, "reboot", creds ?? YEALINK_DEFAULT_CREDENTIALS);
           rebooted = r.ok;
           if (!r.ok) rebootRefused = r.reason;
         }
-        const out = await handoff.outcome;
-        if (!out.ok) return { ok: false, refused: out.refused };
+        // A delivery that already happened (the phone booted while the resident was
+        // armed by the app itself, before the wizard asked) counts — that is the point.
+        const d = already ?? (await resident.waitForDelivery(mac, waitMs, since));
         return {
-          ok: true, op: "set_provisioning", rebooted, ...(rebootRefused ? { rebootRefused } : {}),
-          delivered: out.delivered, acknowledged: out.delivered ? out.acknowledged : false, waitedMs: out.waitedMs,
+          ok: true, op: "set_provisioning", listening: true, rebooted, ...(rebootRefused ? { rebootRefused } : {}),
+          delivered: Boolean(d), acknowledged: Boolean(d?.acknowledged), deliveredAt: d ? d.at : null,
         };
       }
       default:

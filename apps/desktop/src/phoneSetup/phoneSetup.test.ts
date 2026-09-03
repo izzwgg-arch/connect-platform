@@ -175,7 +175,7 @@ test("factory reset is deliberately not a local capability", () => {
 test("there is no way to express an arbitrary request", () => {
   // the shape of the allowlist IS the security property
   assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["discover", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
+    ["arm_pnp", "disarm_pnp", "discover", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
 });
 
 test("a public address is refused even when the server asked for it", async () => {

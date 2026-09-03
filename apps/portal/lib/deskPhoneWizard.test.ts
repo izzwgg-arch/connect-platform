@@ -300,6 +300,20 @@ test("the live screen shows what this computer is doing for each phone (the powe
   assert.match(DRIVER, /op: "set_provisioning"/);
   assert.match(DRIVER, /provisioningHandoffFailed: m\.provisioningHandoffFailed/);
   // the hint copy is customer language
-  assert.match(DRIVER, /Unplug this phone/);
+  assert.match(DRIVER, /Plug this phone in/);
   assert.ok(!/PnP|SUBSCRIBE|NOTIFY|multicast/.test(stripComments(DRIVER).split("\n").filter((l) => /HINT_/.test(l)).join("\n")), "no protocol words in a hint");
+});
+
+test("the office computer keeps a STANDING provisioning listener armed — desktop full window only, stops on a 403", () => {
+  const HOST = read("components", "deskPhones", "PnpResidentHost.tsx");
+  const exec = stripComments(HOST);
+  assert.match(exec, /windowKind !== "full"/, "the mini/coworker proxies never arm a listener");
+  assert.match(exec, /op: "arm_pnp"/);
+  assert.match(exec, /op: "disarm_pnp"/, "sign-out disarms it");
+  assert.match(exec, /=== 403\) stop\(\)/, "a login without the key is never polled hourly");
+  assert.match(exec, /hasBrowserAuthToken\(\)/, "never polled signed out");
+  const PROVIDERS = read("app", "providers.tsx");
+  assert.match(PROVIDERS, /<PnpResidentHost \/>/, "mounted globally, like the setup-request card");
+  const DRIVER = read("components", "deskPhones", "setupDriver.ts");
+  assert.match(DRIVER, /MAX_PROVISIONING_WAIT_MS = 60 \* 60_000/, "the wizard waits an hour for a person, not five minutes");
 });

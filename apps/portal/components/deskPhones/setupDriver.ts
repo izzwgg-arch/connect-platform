@@ -73,8 +73,10 @@ type PhoneMemo = {
   /** How many consecutive ticks produced the same non-executable action. */
   stalledOn: string | null;
   stalledCount: number;
-  /** PnP hand-offs attempted for this phone (each one may restart the phone). */
+  /** PnP hand-offs attempted for this phone (only the first two may restart it). */
   provisioningAttempts: number;
+  /** When this phone was first asked to take its folder — the give-up clock. */
+  provisioningFirstAskedAt: number | null;
   /** We gave up handing this phone its folder; the server ends its setup kindly. */
   provisioningHandoffFailed: boolean;
 };
@@ -90,16 +92,15 @@ const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
 const MAX_CONSECUTIVE_STALLS = 3;
 
 /**
- * ⛔ A PnP hand-off may restart the phone. Only the first two attempts restart it
- * from here; every later one ONLY listens and asks the person to power-cycle it —
- * so the bounded thing is the RESTART, not the listening. Listening costs nothing,
- * and the first live run (2026-09-02) showed a reset phone refusing the restart
- * command outright, so the whole job rests on somebody walking over to unplug it,
- * which can take a while. Each listen-only attempt is ~90 s; forty of them is about
- * an hour, after which the driver tells the server, which ends that phone's setup
- * with a hand-off to Loopcom rather than listening all night.
+ * ⛔ The desktop's STANDING listener does the waiting now (it stays armed after
+ * this window closes), so what the driver bounds is (1) how often it asks the phone
+ * to RESTART — twice, ever, from here — and (2) how long this WIZARD keeps a phone
+ * on its live list before telling the server to halt it kindly: an hour from the
+ * first ask. The first live run (2026-09-02) showed a reset phone refusing the
+ * restart outright, so the hand-off rests on somebody plugging the phone in; that
+ * can take a while, and it costs nothing to wait.
  */
-export const MAX_PROVISIONING_HANDOFF_ATTEMPTS = 40;
+export const MAX_PROVISIONING_WAIT_MS = 60 * 60_000;
 export const PROVISIONING_REBOOT_ATTEMPTS = 2;
 
 export const HINT_HANDED_OFF =
@@ -107,8 +108,8 @@ export const HINT_HANDED_OFF =
 export const HINT_RESTARTING =
   "This phone is restarting. We are listening for it to ask for its settings.";
 export const HINT_POWER_CYCLE =
-  "Unplug this phone's power (or its network cable) and plug it back in — we are listening for it. " +
-  "If Windows asks whether to allow Loopcom on your network, choose Allow.";
+  "Plug this phone in now (or unplug it and plug it back in) — this computer is listening for it, " +
+  "and keeps listening after you close this window. If Windows asks whether to allow Loopcom on your network, choose Allow.";
 export const HINT_CANNOT_LISTEN =
   "This computer could not listen for the phone. If Windows asked whether to allow Loopcom on your network, choose Allow, then try again.";
 // ⛔ The office machine's Loopcom app predates this step (its allowlist answers
@@ -120,7 +121,7 @@ export const HINT_APP_TOO_OLD =
 export const HINT_REFUSED =
   "This computer could not hand the phone its settings just now. We will try again shortly.";
 
-export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge) {
+export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge, now: () => number = () => Date.now()) {
   const memos = new Map<string, PhoneMemo>();
 
   const memo = (id: string): PhoneMemo => {
@@ -130,7 +131,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         defaultCredentialsTried: false, locked: false, haveCustomerCredentials: false,
         credentialRef: null, passwordUnavailable: false, resetDeclined: false,
         stalledOn: null, stalledCount: 0,
-        provisioningAttempts: 0, provisioningHandoffFailed: false,
+        provisioningAttempts: 0, provisioningFirstAskedAt: null, provisioningHandoffFailed: false,
       };
       memos.set(id, m);
     }
@@ -253,6 +254,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         // ⛔ Once we have given up, we have given up — the server ends the phone's
         // setup on the next advance, and no further restart is ever sent.
         if (m.provisioningHandoffFailed) { markStall(m, action); continue; }
+        if (m.provisioningFirstAskedAt === null) m.provisioningFirstAskedAt = now();
         const reboot = m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
         const r = await bridge.run({
           op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
@@ -282,7 +284,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
           continue;
         }
         hints[phone.id] = r.rebooted ? HINT_RESTARTING : HINT_POWER_CYCLE;
-        if (m.provisioningAttempts >= MAX_PROVISIONING_HANDOFF_ATTEMPTS) m.provisioningHandoffFailed = true;
+        if (now() - m.provisioningFirstAskedAt >= MAX_PROVISIONING_WAIT_MS) m.provisioningHandoffFailed = true;
         markStall(m, action);
         continue;
       }

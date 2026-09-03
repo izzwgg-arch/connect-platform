@@ -172,22 +172,22 @@ export async function testCredentials(
   let req: HttpRequest;
   try { req = buildStatusRequest(ip, creds); }
   catch { return { ok: false, reason: "unexpected", status: 0 }; }
-  let res: HttpResponse;
-  try {
-    res = await http(req);
-  } catch {
-    return { ok: false, reason: "unreachable" };
-  }
+  const res = await requestWithSchemeFallback(http, req, () => buildStatusRequest(ip, creds, { https: true }));
+  if (!res) return { ok: false, reason: "unreachable" };
   if (res.status === 401 || res.status === 403) return { ok: false, reason: "locked" };
   if (res.status >= 200 && res.status < 400) return { ok: true };
   return { ok: false, reason: "unexpected", status: res.status };
 }
 
-export function buildStatusRequest(ip: string, creds: YealinkCredentials | null): HttpRequest {
+export function buildStatusRequest(
+  ip: string,
+  creds: YealinkCredentials | null,
+  opts: { https?: boolean } = {},
+): HttpRequest {
   const host = canonicalPrivateIpv4(ip);
   if (!host) throw new Error("refused: not a private office address");
   return {
-    url: `http://${host}/`,
+    url: `${opts.https ? "https" : "http"}://${host}/`,
     method: "GET",
     headers: creds ? { Authorization: basicAuth(creds) } : {},
     timeoutMs: PHONE_HTTP_TIMEOUT_MS,
@@ -358,15 +358,43 @@ export async function sendAction(
   let req: HttpRequest;
   try { req = buildActionRequest(ip, action, creds); }
   catch { return { ok: false, reason: "refused" }; }
-  let res: HttpResponse;
-  try {
-    res = await http(req);
-  } catch {
-    return { ok: false, reason: "unreachable" };
-  }
+  const res = await requestWithSchemeFallback(http, req, () => buildActionRequest(ip, action, creds, { https: true }));
+  if (!res) return { ok: false, reason: "unreachable" };
   if (res.status === 401 || res.status === 403) return { ok: false, reason: "locked", status: res.status };
   if (res.status >= 200 && res.status < 400) return { ok: true };
   return { ok: false, reason: "refused", status: res.status };
+}
+
+/**
+ * ⛔⛔ HTTP FIRST, THEN HTTPS — AND THE HTTPS LEG IS NOT OPTIONAL. On the first live
+ * run (2026-09-02, a factory-reset T53W on 96.87) port 80 was CLOSED and only 443
+ * answered: current Yealink firmware ships with plain HTTP off. Every web-interface
+ * verb here used to be http-only, so on such a phone "restart", "fetch now" and the
+ * fingerprint all read as "unreachable" while the phone sat there answering on 443.
+ * A phone that REFUSES the plain-HTTP connection (port closed — nothing was received)
+ * is retried once over HTTPS. A phone that ANSWERS on HTTP (any status) is never
+ * retried — a 401 is an answer — and ⛔ neither is a TIMEOUT: a reboot that timed out
+ * was very likely received (the phone stops answering BECAUSE it is doing what it was
+ * told), and retrying it over another scheme turns one restart into two.
+ */
+export async function requestWithSchemeFallback(
+  http: HttpTransport,
+  first: HttpRequest,
+  buildHttps: () => HttpRequest,
+): Promise<HttpResponse | null> {
+  try { return await http(first); } catch (err) {
+    if (!isConnectionRefused(err)) return null;
+  }
+  let second: HttpRequest;
+  try { second = buildHttps(); } catch { return null; }
+  try { return await http(second); } catch { return null; }
+}
+
+/** Only an outright refusal — the port is closed — says "nothing reached the phone". */
+export function isConnectionRefused(err: unknown): boolean {
+  const code = String((err as any)?.code ?? "");
+  const msg = String((err as any)?.message ?? err ?? "");
+  return code === "ECONNREFUSED" || /ECONNREFUSED/.test(msg);
 }
 
 /**

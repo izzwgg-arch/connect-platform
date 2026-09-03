@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSetupDriver, MAX_PROVISIONING_HANDOFF_ATTEMPTS } from "./setupDriver";
+import { createSetupDriver, MAX_PROVISIONING_WAIT_MS } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
 
@@ -269,7 +269,7 @@ test("set_provisioning: listen+restart, then the delivered folder is reported to
     p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
   });
   const bridge = fakeBridge();
-  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, rebooted: true, delivered: true, acknowledged: true, waitedMs: 3 }; };
+  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, listening: true, rebooted: true, delivered: true, acknowledged: true, deliveredAt: 5 }; };
   const d = createSetupDriver("r1", api, bridge);
   const out = await d.tick();
   assert.deepEqual(bridge.ops.map((o) => o.op), ["set_provisioning"]);
@@ -291,26 +291,29 @@ test("set_provisioning: without a URL from the server nothing is attempted", asy
   assert.equal(bridge.ops.length, 0);
 });
 
-test("set_provisioning: restarts are bounded, then listen-only with a power-cycle ask, then the server is told to stop", async () => {
+test("set_provisioning: two restarts from here, then listen-and-check with a plug-it-in ask, and an hour later the server is told to stop", async () => {
   const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
     p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
   });
   const bridge = fakeBridge();
-  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, rebooted: req.reboot !== false, delivered: false, acknowledged: false, waitedMs: 90 }; };
-  const d = createSetupDriver("r1", api, bridge);
+  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, listening: true, rebooted: req.reboot !== false, delivered: false, acknowledged: false, deliveredAt: null }; };
+  let t = 1_000_000;
+  const d = createSetupDriver("r1", api, bridge, () => t);
   const hints: string[] = [];
-  const N = MAX_PROVISIONING_HANDOFF_ATTEMPTS;
-  for (let i = 0; i < N + 1; i += 1) hints.push((await d.tick()).hints.p1);
-  assert.deepEqual(bridge.ops.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-only");
+  // ticks every 4 s, as the wizard does — an hour is 900 of them
+  const ticksPerHour = Math.ceil(MAX_PROVISIONING_WAIT_MS / 4000);
+  for (let i = 0; i < ticksPerHour + 2; i += 1) { hints.push((await d.tick()).hints.p1); t += 4000; }
+  assert.deepEqual(bridge.ops.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-and-check");
   assert.ok(bridge.ops.slice(2).every((o) => o.reboot === false), "no third restart, ever");
   assert.match(hints[0], /restarting/);
-  assert.match(hints[2], /Unplug/);
+  assert.match(hints[2], /Plug this phone in/);
+  assert.match(hints[2], /keeps listening/);
   assert.match(hints[2], /Windows asks/);
   const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
-  assert.equal(advances[N].body.provisioningHandoffFailed, true, "after the budget the server is told to halt kindly");
-  assert.equal(advances[N - 1].body.provisioningHandoffFailed, false, "not before");
-  assert.equal(bridge.ops.length, N, "no attempt past the budget");
-  assert.ok(N * 90 >= 3000, "the listen-only budget is at least ~50 minutes of waiting for a person");
+  assert.equal(advances[advances.length - 1].body.provisioningHandoffFailed, true, "after an hour the server is told to halt kindly");
+  assert.equal(advances[10].body.provisioningHandoffFailed, false, "not early");
+  const firstFailed = advances.findIndex((c) => c.body.provisioningHandoffFailed === true);
+  assert.ok(firstFailed * 4000 >= MAX_PROVISIONING_WAIT_MS, "the give-up waits the full hour");
 });
 
 test("set_provisioning: a machine that cannot listen says so in plain words, and never reboots the phone", async () => {

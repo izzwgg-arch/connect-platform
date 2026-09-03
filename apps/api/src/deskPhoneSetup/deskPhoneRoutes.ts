@@ -853,6 +853,26 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     });
   });
 
+  /**
+   * What the office app's STANDING PnP listener needs: this tenant's provisioning
+   * folder and the hardware addresses of the phones the PBX records for them. The
+   * desktop answers those phones — and only those — whenever they boot on the office
+   * network, so a factory-reset phone is provisioned the moment it is plugged in.
+   * ⛔ Same gate as the wizard (`can_setup_desk_phones`); best-effort on both reads —
+   * no folder means `url: null` and the app arms nothing.
+   */
+  app.get("/desk-phones/pnp-config", async (req: any, reply: any) => {
+    const user = await mayRunSetup(req, reply); if (!user) return;
+    let url: string | null = null;
+    try { url = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(user.tenantId); } catch { url = null; }
+    let phones: PbxProvisionedPhone[] = [];
+    try { phones = await (deps.provisionedPhones ?? defaultProvisionedPhones)(user.tenantId); } catch { phones = []; }
+    const macs = Array.from(new Set(
+      phones.map((ph) => String(ph.mac ?? "").toLowerCase()).filter((m) => /^[0-9a-f]{12}$/.test(m)),
+    ));
+    return reply.send({ ok: true, url, macs });
+  });
+
   /* ── the Loopcom side ──────────────────────────────────────────────────── */
 
   app.post("/admin/desk-phones/send-setup", async (req: any, reply: any) => {
