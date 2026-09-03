@@ -1529,3 +1529,103 @@ elevated step, and it is Izzy's call.
 - ✅ **portal DEPLOYED and container-verified** (`.build-commit` = `ba20d717`, the driver chunk carries `set_provisioning` and the *Unplug this phone* hint, `dps-hintline` in the shipped CSS, 0 restarts, `/settings/desk-phones` 200 on both hostnames). ⛔ Both deploys ran through the bundle → bare mirror route (GitHub still 401s the server's `git-upload-pack`); origin restored to GitHub and the mirror removed afterwards.
 - desktop ✅ `apps/desktop/release/Connect-Setup-0.1.17-rc.7.exe` built from the committed tree (100,329,304 bytes, sha256 `7a622190fff8513c…`, `verify:icon` OK, asar carries `pnp.js` + `set_provisioning`). ⛔ NOT installed anywhere, NOT published (feed 0.1.16). Carries rc.5/rc.6's unpublished work too — Izzy's call.
 - ⏳ No handset has exercised it. Acceptance = §21 (the A plus center T53W).
+
+---
+
+## §21 — THE FIRST LIVE RUN OF §20, AND WHAT IT CHANGED: a STANDING listener and HTTPS to phones (2026-09-02 evening, `4d421587` → `c10a2b00` → `c54a333f`, desktop 0.1.17-rc.8)
+
+Izzy ran §20 on the A plus center machine the same evening. It did not work, three
+times over, and each miss taught the design something. His verdict, verbatim: *"if
+you have to do all that on the user's computer, that's not automated"* and *"The goal
+is to get the automated provisioning up and running and working efficiently,
+sustainably, hard, and to last all of the years to come."*
+
+### What happened, measured
+
+1. **The office ran Loopcom 0.1.16.** rc.7 had never been installed there. The old
+   capability answered `unknown_operation` to `set_provisioning`; the driver counted
+   five of those as failed attempts in twenty seconds and halted the phone to Support
+   with the words "could not listen" — false. Fixed in `4d421587`: a REFUSAL is never an
+   attempt; `unknown_operation` says "update Loopcom on this computer", `cannot_listen`
+   names Windows, anything else says "we will try again shortly".
+2. **rc.7 was then installed over AnyDesk** (downloaded from
+   `https://app.loopcom.net/desktop/Connect-Setup-0.1.17-rc.7.exe`, sha256 verified on
+   the machine, `/S`, relaunched). Windows Firewall showed `loopcom.exe Inbound Allow
+   Private` rules and UDP 5060 was bound — the listener worked. The phone was **never
+   restarted**: the wizard fell straight to the "unplug it" hint because the restart
+   command was refused. Diagnostic from the office machine: **port 80 CLOSED, port 443
+   OPEN** on the reset T53W (96.87). The adapter was http-only. ⛔ **Current Yealink
+   firmware ships with plain HTTP off.** Every web verb (restart, fetch-now,
+   fingerprint) read "unreachable" while the phone answered on 443.
+3. **The 5 × 90 s budget expired** while nobody was at the phone, and the OLD bundle
+   in that window halted it again (`c10a2b00` widened the budget; then §21 replaced the
+   shape entirely).
+
+### The design now (`c54a333f`)
+
+- **HTTPS to phones.** `requestWithSchemeFallback` in `yealink.ts`: plain HTTP first;
+  a REFUSED connection (`ECONNREFUSED` — the port is closed, nothing was received) is
+  retried once over HTTPS; an answer on HTTP (any status) is never retried; ⛔ **a
+  TIMEOUT is never retried** — the phone may already be restarting (the two "never
+  retried inside the adapter" guards enforce exactly this). `nodeHttp` in
+  `mainWiring.ts` speaks https with `rejectUnauthorized: false` — a handset's cert is
+  self-signed and per-device; the private-address fence, not the certificate, is what
+  keeps it off the internet. `sendAction`, `testCredentials` and the fingerprint all
+  ride it.
+- **The STANDING responder, `apps/desktop/src/phoneSetup/pnpResident.ts`.** One UDP
+  socket on 5060, armed with ONE folder URL and the customer's OWN phones' hardware
+  addresses; any listed phone that boots on the office network and asks is told its
+  folder — once per boot (per Call-ID), wizard or no wizard. ⛔ Only listed MACs; a
+  SUBSCRIBE that does not name its MAC is NOT answered by the resident (the one-shot
+  in `pnp.ts` may match by address because a person just found the phone there — a
+  standing listener has no such fact). Re-arming the same folder keeps the socket and
+  the delivery log; a different folder (a super-admin switching tenants) starts over.
+- **Two new capability ops** (eight total): `arm_pnp { url, macs[] }` (URL fenced by
+  `isLoopcomProvisioningUrl`, list capped at 512, normalised) and `disarm_pnp`.
+  `set_provisioning` now ARMS the resident for that phone, optionally asks it to
+  restart (`reboot !== false`), then waits a short `waitMs` (3 s default, 15 s max)
+  for a delivery — and a delivery that happened EARLIER while armed counts. Only a
+  restart is rate-gated; a listen-and-check is a read.
+- **`GET /desk-phones/pnp-config`** (api, `mayRunSetup` gate) → `{ url, macs }` from
+  `provisioningUrlFor` + the PBX's provisioned-phone records, de-duplicated, junk
+  dropped; never a 500 (a dead PBX read answers `url: null, macs: []`).
+- **`PnpResidentHost`** (portal, mounted in `providers.tsx`): desktop FULL window
+  only; fetches the config on load and hourly, arms the resident, stops for the
+  session on a 403 (no hourly 403 stream), disarms on `cc-session-expired`.
+- **The wizard** restarts a phone at most twice, ever; asks "Plug this phone in now
+  (or unplug it and plug it back in) — this computer is listening for it, and keeps
+  listening after you close this window"; gives up an HOUR after the first ask, not
+  five minutes.
+
+### ⛔ What is still a person's job, and why
+
+A factory-reset Yealink on defaults asks the person AT THE PHONE before it obeys an
+Action-URI restart from an unlisted address (the "Allow remote control?" prompt), so
+"restart it from the computer" is not zero-touch on a phone that has never had our
+config. That is Yealink's security default, not ours to defeat. The standing listener
+makes the unavoidable physical step the ONLY step: plug the phone in (or into power),
+and it is provisioned. Everything after that — fetch, reboot, register — the phone does
+itself and Asterisk confirms.
+
+### Proven
+
+desktop **231/231** (18 new in `pnpResident.test.ts`: listed phone answered once per
+boot, stranger and MAC-less SUBSCRIBEs never answered, ack marks the delivery, same
+folder re-arm keeps state / other folder resets it, fence, cannot-bind, cap; the
+capability: arm/disarm, arm-then-restart order, an earlier delivery counts, HTTPS-only
+phone restart, timeout never retried, refusals); portal **50/50**; api desk-phone
+**43/43**. Typechecks: desktop 0, portal 0, api 81 = baseline.
+
+### Deploy / build state
+
+✅ **api + portal DEPLOYED and container-verified 2026-09-02 (both `app-api-1` and `app-portal-1` `.build-commit` = `c54a333f`, `verify: container commit c54a333f2299 matches target`, 0 restarts each; `pnp-config` grepped in the running api routes; the shipped portal chunks carry `arm_pnp` and "Plug this phone in now"; health + `/settings/desk-phones` 200 on both hostnames).** ⛔ Both deploys ran through the bundle → bare mirror route (GitHub still 401s the server's `git-upload-pack`); origin restored to GitHub afterwards. ✅ **Desktop `Connect-Setup-0.1.17-rc.8.exe` BUILT and artifact-verified** (100,337,297 bytes, sha256 `a3b8387ccdf394b1…`, `verify:icon` OK, the packed asar is version 0.1.17-rc.8 and carries `pnpResident.js`, `arm_pnp` ×8 in the capability, `node:https` in mainWiring), staged at `https://app.loopcom.net/desktop/Connect-Setup-0.1.17-rc.8.exe` — ⛔ **NOT installed on the A plus center machine and NOT published (feed stays 0.1.16)**; like rc.5–rc.7 it carries the unpublished remote-desktop, coworker-hands and elevated-support work, so publishing is fleet-wide. Both are Izzy's call. No migration, no PBX write, no env change.
+
+### ⏳ NOT PROVEN
+
+No handset has been provisioned by the resident. Acceptance: rc.8 on the office
+machine, Loopcom open, the customer plugs the reset T53W in → the desktop log reads
+`pnp resident: told 805e0c4d796d at 192.168.0.x its folder` → the PBX's nginx log
+shows `805e0c4d796d.cfg` fetched → `T2_103` registers → the row flips REGISTERED
+(wizard or no wizard). The negatives: the sibling T53W (`80:5E:0C:C8:98:82`, already
+registered) is answered only when IT boots and only with the same folder it already
+uses; a stranger's Yealink on that LAN is never answered.
