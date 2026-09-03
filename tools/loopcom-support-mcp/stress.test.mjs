@@ -180,10 +180,33 @@ describe("B. the daily caps", () => {
 
 describe("C. exactly once, and recovering a run that died", () => {
   test("a ticket already worked is never worked again", () => {
-    for (const status of ["done", "failed", "running", "skipped_pre_existing", "skipped_lane_off"]) {
+    // "failed" is NOT in this list any more — a freshly-failed run is still
+    // skipped (asserted below), but an old failure gets ONE bounded retry.
+    for (const status of ["done", "running", "skipped_pre_existing", "skipped_lane_off"]) {
       const state = mkState({ REF001: { at: DAY + "T11:59:00.000Z", status, lane: "customer", attempts: 1 } });
       assert.equal(decide(mkTicket(), state).action, "skip_claimed", status);
     }
+  });
+
+  test("⛔ a run that EXITED with an error is retried once after the cooldown — a 529 must not lose the ticket forever", () => {
+    // UVW3Y7 (2026-09-03): the spawned agent died on Anthropic's 529 Overloaded
+    // 3.5 minutes in, the claim settled "failed", and the old rule skipped the
+    // ticket for good — a customer's request lost to a transient outage.
+    const old = new Date(NOW - DEFAULTS.failedRetryMs - 60_000).toISOString();
+    const state = mkState({ REF001: { at: old, endedAt: old, status: "failed", lane: "customer", attempts: 1 } });
+    assert.equal(decide(mkTicket(), state).action, "requeue");
+  });
+
+  test("a fresh failure is NOT retried immediately — the cooldown lets an API-side burst pass", () => {
+    const recent = new Date(NOW - 60_000).toISOString();
+    const state = mkState({ REF001: { at: recent, endedAt: recent, status: "failed", lane: "customer", attempts: 1 } });
+    assert.equal(decide(mkTicket(), state).action, "skip_claimed");
+  });
+
+  test("⛔ the failed retry is bounded by the same attempts cap — never a loop", () => {
+    const old = new Date(NOW - DEFAULTS.failedRetryMs - 60_000).toISOString();
+    const state = mkState({ REF001: { at: old, endedAt: old, status: "failed", lane: "customer", attempts: DEFAULTS.maxAttempts } });
+    assert.equal(decide(mkTicket(), state).action, "skip_claimed");
   });
 
   test("⛔ a run killed mid-flight is retried — the old code lost it forever", () => {
@@ -374,7 +397,9 @@ describe("G. driving the whole decision space", () => {
       { at: stale, status: "running", attempts: 1 },
       { at: stale, status: "running", attempts: 2 },
       { at: fresh, status: "done", attempts: 1 },
-      { at: fresh, status: "failed", attempts: 1 },
+      { at: fresh, endedAt: fresh, status: "failed", attempts: 1 },
+      { at: stale, endedAt: stale, status: "failed", attempts: 1 },
+      { at: stale, endedAt: stale, status: "failed", attempts: 2 },
       { at: fresh, status: "skipped_pre_existing" },
       { at: fresh, status: "skipped_lane_off" },
     ];
@@ -409,8 +434,16 @@ describe("G. driving the whole decision space", () => {
               assert.ok(typeof d.why === "string" && d.why.length > 0);
               // 3. the lane never disagrees with the classifier
               assert.equal(d.lane, l.lane);
-              // 4. a settled ticket is never re-run
-              if (prior && ["done", "failed"].includes(prior.status)) assert.equal(d.action, "skip_claimed");
+              // 4. a DONE ticket is never re-run; a FAILED one is revisited only
+              //    past the cooldown AND under the attempt cap (one bounded retry)
+              if (prior && prior.status === "done") assert.equal(d.action, "skip_claimed");
+              if (prior && prior.status === "failed") {
+                const age = NOW - new Date(prior.endedAt ?? prior.at).getTime();
+                const expected =
+                  age > DEFAULTS.failedRetryMs && (prior.attempts ?? 1) < DEFAULTS.maxAttempts
+                    ? "requeue" : "skip_claimed";
+                assert.equal(d.action, expected);
+              }
               // 5. running is only ever revisited when stale AND under the attempt cap
               if (prior && prior.status === "running") {
                 const expected = prior.at === stale && prior.attempts < DEFAULTS.maxAttempts ? "requeue" : "skip_claimed";
@@ -423,7 +456,7 @@ describe("G. driving the whole decision space", () => {
                 if (l.lane === "platform") assert.ok(pe);
               }
             }
-    assert.equal(combos, 2 * 8 * 2 * 4 * 2);
+    assert.equal(combos, 2 * 10 * 2 * 4 * 2);
   });
 
   test("fuzz — 400 seeded queues, no ticket worked twice, no cap exceeded", () => {

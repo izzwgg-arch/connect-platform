@@ -86,6 +86,12 @@ export const DEFAULTS = Object.freeze({
   platformEnabled: true,
   /** A run that has not settled in this long is presumed dead and requeued once. */
   staleRunMs: 30 * 60 * 1000,
+  /**
+   * A run that EXITED with an error waits this long before its one retry —
+   * long enough for an API-side burst (529 Overloaded) to pass, short enough
+   * that the customer's ticket is still fresh when the retry lands.
+   */
+  failedRetryMs: 10 * 60 * 1000,
   /** ⛔ Bounded on purpose. Requeue-once recovers a crash; requeue-forever is a loop. */
   maxAttempts: 2,
 });
@@ -137,6 +143,19 @@ export function decideTicket({ ticket, state, now, cfg = {}, watchingSince }) {
       now - new Date(prior.at ?? 0).getTime() > c.staleRunMs &&
       (prior.attempts ?? 1) < c.maxAttempts;
     if (stale) return { action: "requeue", lane, why: "previous run never finished" };
+    // ⛔ A run that EXITED with an error is usually a transient upstream
+    // condition, not a verdict on the ticket — Anthropic's 529 Overloaded
+    // (UVW3Y7, 2026-09-03) and the session limit (Y7FK8P, 2026-09-02) each
+    // permanently lost a customer ticket while the state read "already failed".
+    // Retry ONCE, after a cooldown long enough for an API-side burst to pass,
+    // under the SAME attempts bound as the stale-run recovery — a deterministic
+    // failure costs exactly one extra bounded run, never a loop. `done` stays
+    // terminal forever.
+    const failedRetryable =
+      prior.status === "failed" &&
+      now - new Date(prior.endedAt ?? prior.at ?? 0).getTime() > c.failedRetryMs &&
+      (prior.attempts ?? 1) < c.maxAttempts;
+    if (failedRetryable) return { action: "requeue", lane, why: "previous run failed — one bounded retry" };
     return { action: "skip_claimed", lane, why: `already ${prior.status}` };
   }
 
