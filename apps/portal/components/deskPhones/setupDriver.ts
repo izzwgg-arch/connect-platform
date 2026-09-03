@@ -90,12 +90,16 @@ const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
 const MAX_CONSECUTIVE_STALLS = 3;
 
 /**
- * ⛔ A PnP hand-off restarts the phone. The first two attempts restart it from here;
- * later ones only listen and ask the person to power-cycle it. After this many the
- * driver tells the server, which ends that phone's setup with a hand-off to Loopcom
- * instead of rebooting somebody's phone all afternoon — a loop is not persistence.
+ * ⛔ A PnP hand-off may restart the phone. Only the first two attempts restart it
+ * from here; every later one ONLY listens and asks the person to power-cycle it —
+ * so the bounded thing is the RESTART, not the listening. Listening costs nothing,
+ * and the first live run (2026-09-02) showed a reset phone refusing the restart
+ * command outright, so the whole job rests on somebody walking over to unplug it,
+ * which can take a while. Each listen-only attempt is ~90 s; forty of them is about
+ * an hour, after which the driver tells the server, which ends that phone's setup
+ * with a hand-off to Loopcom rather than listening all night.
  */
-export const MAX_PROVISIONING_HANDOFF_ATTEMPTS = 5;
+export const MAX_PROVISIONING_HANDOFF_ATTEMPTS = 40;
 export const PROVISIONING_REBOOT_ATTEMPTS = 2;
 
 export const HINT_HANDED_OFF =

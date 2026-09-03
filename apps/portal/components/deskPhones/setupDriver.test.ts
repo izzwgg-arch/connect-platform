@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSetupDriver } from "./setupDriver";
+import { createSetupDriver, MAX_PROVISIONING_HANDOFF_ATTEMPTS } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
 
@@ -299,15 +299,18 @@ test("set_provisioning: restarts are bounded, then listen-only with a power-cycl
   bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, rebooted: req.reboot !== false, delivered: false, acknowledged: false, waitedMs: 90 }; };
   const d = createSetupDriver("r1", api, bridge);
   const hints: string[] = [];
-  for (let i = 0; i < 6; i += 1) hints.push((await d.tick()).hints.p1);
-  assert.deepEqual(bridge.ops.map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-only, then stop");
+  const N = MAX_PROVISIONING_HANDOFF_ATTEMPTS;
+  for (let i = 0; i < N + 1; i += 1) hints.push((await d.tick()).hints.p1);
+  assert.deepEqual(bridge.ops.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-only");
+  assert.ok(bridge.ops.slice(2).every((o) => o.reboot === false), "no third restart, ever");
   assert.match(hints[0], /restarting/);
   assert.match(hints[2], /Unplug/);
   assert.match(hints[2], /Windows asks/);
   const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
-  assert.equal(advances[5].body.provisioningHandoffFailed, true, "the sixth advance carries the give-up so the server halts kindly");
-  assert.equal(advances[0].body.provisioningHandoffFailed, false);
-  assert.equal(bridge.ops.length, 5, "no sixth attempt is made");
+  assert.equal(advances[N].body.provisioningHandoffFailed, true, "after the budget the server is told to halt kindly");
+  assert.equal(advances[N - 1].body.provisioningHandoffFailed, false, "not before");
+  assert.equal(bridge.ops.length, N, "no attempt past the budget");
+  assert.ok(N * 90 >= 3000, "the listen-only budget is at least ~50 minutes of waiting for a person");
 });
 
 test("set_provisioning: a machine that cannot listen says so in plain words, and never reboots the phone", async () => {
