@@ -235,14 +235,19 @@ ticket died at 56 s — `exit 1`, the Claude session limit — and posted nothin
 [[gesheft-101-mailbox-nearly-full]] (re-measured). Same person as Q2FJRK (08-24) and QP7APH
 (08-27): ext 101 "Phone Orders", `yisraelweinstock@gmail.com`.
 
-- ⛔⛔ **THE CLIFF, and it is what will make this ticket TRUE tomorrow: mailbox 101 INBOX holds
-  9,951 messages (Asterisk counts 9,983 with Urgent) against `maxmsg=9999`, which is
-  `app_voicemail`'s HARD ceiling and cannot be raised.** ~48 slots at 29–61/day = about one day.
-  Then Asterisk plays "mailbox full" and records NOTHING — no PBX message, no Connect row, no
-  email, no log line — and every pipeline check reads healthy. `grep -c vm-mailboxfull
-  /var/log/asterisk/full` = 0 today, so it has not happened yet. **Needs Izzy's mandate today:**
-  delete/archive old INBOX messages (Connect has local audio for 788 of the last 989 on 101;
-  older Connect rows will read `voicemail_audio_gone` once their spool files go).
+- ✅✅ **THE CLIFF IS RESOLVED — TRIMMED 2026-09-03 UNDER IZZY'S EXPLICIT MANDATE ("leave four
+  weeks and delete everything else"), six slots from the wall (9,993/9,999 at execution).**
+  A fleet-wide sweep confirmed 101 was the ONLY overloaded mailbox on the whole PBX (next
+  largest: Gesheft 102 at 2,789, then 652). **9,068 messages older than 28 days were MOVED —
+  not unlinked — to `/root/gesheft101-vm-trim-20260903T123910Z/` on the PBX** (6.5 GB, 18,136
+  files); 926 recent messages kept, renumbered contiguously from msg0000, `voicemail reload`
+  run, Asterisk reads **959** (926 INBOX + ~33 Urgent). `vm-mailboxfull` = 0 all time, so
+  nothing was ever lost. ⛔ **Consequences to expect:** old Connect `Voicemail` rows whose
+  spool file moved will read `voicemail_audio_gone` on play (Connect holds local audio for
+  most recent ones); restore = move files back from the backup dir and renumber. ⛔ The Urgent
+  folder (~33) and Gesheft 102 (2,789, 28% of cap) were deliberately NOT touched — not
+  overloaded. At ~30–60 msgs/day the mailbox refills the 9,999 cap in ~5 months; re-trim then
+  or decide a standing rotation (Izzy's call).
 - ✅ **"The phone isn't ringing" — it IS rung, for 10–15 s per call, and the Windows app answers
   none of it.** Today to 17:10Z: 49 calls into `T8_Q750`, ext 101 dialled on each, desk phone
   `T8_101` answered 13, colleagues the rest. App endpoint `T8_101_1` (4 windows on the 443 route,
