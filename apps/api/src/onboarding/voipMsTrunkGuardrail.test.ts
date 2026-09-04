@@ -66,6 +66,19 @@ test("the master account (spare pool) never counts, and a registered trunk never
   assert.equal(v.offenders.length, 0);
 });
 
+test("a number routed to a subaccount that no longer exists counts as down (found live: 877-220-5058 → 344022_fox)", () => {
+  const v = decideTrunkVerdict({
+    state: state({
+      didsByAccount: new Map([["344022_fox", ["8772205058"]]]),
+      registration: new Map([["344022_fox", "error:voipms getRegistrationStatus failed: invalid_account (This is not a valid account)"]]),
+    }),
+    previousUnregistered: ["344022_fox"],
+  });
+  assert.deepEqual(v.unregisteredNow, ["344022_fox"]);
+  assert.equal(v.offenders.length, 1);
+  assert.match(v.unregisteredSms, /877-220-5058/);
+});
+
 test("a provider error on one account is not 'no' — it neither alarms nor becomes a candidate", () => {
   const v = decideTrunkVerdict({
     state: state({ registration: new Map([["344022_iniimi92gh2m", "error:timeout"], ["344022_Hannaeneh5c", "yes"]]) }),

@@ -90,9 +90,14 @@ export function decideTrunkVerdict(input: {
     .map(([account, rows]) => ({ account, rows }))
     .sort((a, b) => a.account.localeCompare(b.account));
 
+  // "no" = the trunk is not registered. "invalid_account" = the subaccount the
+  // number routes to does not exist at all (found live 2026-09-04: toll-free
+  // 877-220-5058 routed to a deleted subaccount) — every call to it fails just
+  // the same, so it counts. Any OTHER provider error is unknown, not "no".
+  const isDown = (v: string) => v === "no" || /invalid_account/i.test(v);
   const unregisteredNow = [...state.didsByAccount]
     .filter(([acct]) => acct !== state.master)
-    .filter(([acct]) => String(state.registration.get(acct) ?? "").toLowerCase() === "no")
+    .filter(([acct]) => isDown(String(state.registration.get(acct) ?? "").toLowerCase()))
     .map(([acct]) => acct)
     .sort();
 
