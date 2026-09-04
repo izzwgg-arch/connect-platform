@@ -85,6 +85,7 @@ import {
 } from "./voice/iceServers";
 import { probeTurnAllocate, parseRelayUrlForProbe } from "./voice/turnProbe";
 import { breachingTenants as relayBreachingTenants } from "./voice/relayUsage";
+import { normalizeClientTraceBatch, MAX_EVENTS_PER_BATCH as CLIENT_TRACE_MAX_EVENTS } from "./voice/clientTraceBatch";
 import {
   canAttemptMobileInviteRequeue,
   isPendingMobileInviteEligible,
@@ -11772,7 +11773,7 @@ app.post("/voice/diag/event", async (req, reply) => {
     // (CALLKEEP_*, INVITE_RESTORE*, SIP_ANSWER_*, PBX_*, ANSWER_DEFERRED_*) were
     // previously absent here (→ 400) or in Prisma (→ 500), dropping the telemetry
     // needed to debug the iOS cold-killed "answers but doesn't connect" path.
-    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN", "CALL_QUALITY_REPORT", "PUSH_RECEIVED", "UI_SHOWN", "INCOMING_PUSH_RECEIVED", "CALLKEEP_UI_SHOWN", "CALLKEEP_ANSWER_TAPPED", "APP_FOREGROUNDED_FROM_CALL", "INVITE_RESTORED", "INVITE_RESTORE_FAILED", "SIP_ANSWER_REQUESTED", "SIP_ANSWER_SENT", "SIP_ANSWER_CONFIRMED", "SIP_ANSWER_FAILED", "PBX_CALL_ANSWERED", "PBX_STILL_RINGING_AFTER_ANSWER", "ANSWER_DESYNC_DETECTED", "UI_SWITCHED_TO_CONNECTING", "UI_SWITCHED_TO_ACTIVE", "ANSWER_DEFERRED_AWAITING_SIP", "ANSWER_DEFERRED_EXECUTED", "ANSWER_DEFERRED_TIMEOUT", "ANSWER_DEFERRED_STALE_CALL"]),
+    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN", "CALL_QUALITY_REPORT", "PUSH_RECEIVED", "UI_SHOWN", "INCOMING_PUSH_RECEIVED", "CALLKEEP_UI_SHOWN", "CALLKEEP_ANSWER_TAPPED", "APP_FOREGROUNDED_FROM_CALL", "INVITE_RESTORED", "INVITE_RESTORE_FAILED", "SIP_ANSWER_REQUESTED", "SIP_ANSWER_SENT", "SIP_ANSWER_CONFIRMED", "SIP_ANSWER_FAILED", "PBX_CALL_ANSWERED", "PBX_STILL_RINGING_AFTER_ANSWER", "ANSWER_DESYNC_DETECTED", "UI_SWITCHED_TO_CONNECTING", "UI_SWITCHED_TO_ACTIVE", "ANSWER_DEFERRED_AWAITING_SIP", "ANSWER_DEFERRED_EXECUTED", "ANSWER_DEFERRED_TIMEOUT", "ANSWER_DEFERRED_STALE_CALL", "CLIENT_TRACE"]),
     payload: z.any().optional()
   }).parse(req.body || {});
 
@@ -11820,6 +11821,49 @@ app.post("/voice/diag/event", async (req, reply) => {
   }
 
   return { ok: true, eventId: event.id };
+});
+
+/**
+ * Client-trace BATCH — the web/desktop softphone's account of every device
+ * event and every press on the call path (apps/portal/lib/clientTrace.ts).
+ * One POST carries up to CLIENT_TRACE_MAX_EVENTS rows of type CLIENT_TRACE.
+ *
+ * ⛔ Self-report: identity comes from the TOKEN and the session must belong to
+ * it (the voiceDiagSelfReport guard). ⛔ Rate-limited per SESSION on the batch
+ * count, separately from single events, so a chatty device-change storm is
+ * bounded at the server whatever the client does. ⛔ Every row is sanitised by
+ * the same `sanitizeDiagPayload` as every other diag event.
+ */
+app.post("/voice/diag/events", async (req, reply) => {
+  const user = getUser(req);
+  const batch = normalizeClientTraceBatch(req.body, Date.now());
+  if (!batch.sessionId) return reply.status(400).send({ error: "bad_body", message: "sessionId and an events list are required." });
+
+  const session = await db.voiceClientSession.findFirst({ where: { id: batch.sessionId, tenantId: user.tenantId, userId: user.sub } });
+  if (!session) return reply.status(404).send({ error: "SESSION_NOT_FOUND" });
+
+  if (!checkVoiceDiagEventLimit(`batch:${session.id}`, 20, 60_000)) {
+    return reply.status(429).send({ error: "VOICE_DIAG_RATE_LIMITED" });
+  }
+
+  if (batch.rows.length > 0) {
+    await db.voiceDiagEvent.createMany({
+      data: batch.rows.map((r) => ({
+        tenantId: user.tenantId,
+        userId: user.sub,
+        sessionId: session.id,
+        type: "CLIENT_TRACE" as any,
+        createdAt: r.createdAt,
+        payload: sanitizeDiagPayload(r.payload) as any,
+      })),
+    });
+    await db.voiceClientSession.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } }).catch(() => undefined);
+  }
+
+  if (batch.dropped > 0 || batch.overflow > 0) {
+    app.log.warn({ userId: user.sub, sessionId: session.id, dropped: batch.dropped, overflow: batch.overflow, max: CLIENT_TRACE_MAX_EVENTS }, "client_trace_batch_partial");
+  }
+  return { ok: true, stored: batch.rows.length, dropped: batch.dropped, overflow: batch.overflow };
 });
 
 app.get("/voice/diag/sessions", async (req, reply) => {
@@ -12125,6 +12169,15 @@ app.post("/voice/diag/call-quality-report", async (req, reply) => {
     audioRoute: z.string().max(32).optional().nullable(),
     networkType: z.string().max(24).optional().nullable(),
     deviceModel: z.string().max(64).optional().nullable(),
+    // ── 2026-09-03: the fields the headset tickets were missing ──────────────
+    // ⛔ zod STRIPS unknown keys, so a field the client sends and this schema
+    // does not name is silently dropped (the /voice/voicemail pageSize trap).
+    lastCallError: z.string().max(200).optional().nullable(),
+    micLabel: z.string().max(120).optional().nullable(),
+    micId: z.string().max(16).optional().nullable(),
+    speakerLabel: z.string().max(120).optional().nullable(),
+    speakerId: z.string().max(16).optional().nullable(),
+    speakerOn: z.boolean().optional(),
   }).parse(req.body);
 
   const payload: Record<string, unknown> = { ...input };
@@ -13380,7 +13433,10 @@ app.get("/admin/voice/diag/timeline", async (req, reply) => {
     orderBy: { startedAt: "desc" },
     take: 20,
     include: {
-      events: { orderBy: { createdAt: "asc" }, take: 200 },
+      // 600, not 200: CLIENT_TRACE rows (device inventory, every press) are
+      // deliberately chatty, and a truncated timeline hides the very event
+      // that explains the ticket.
+      events: { orderBy: { createdAt: "asc" }, take: 600 },
       user: { select: { email: true } },
     },
   });

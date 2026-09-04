@@ -56,7 +56,100 @@ const EVENT_ICONS: Record<string, string> = {
   ERROR: "🚨",
   MEDIA_TEST_RUN: "🎙",
   CALL_QUALITY_REPORT: "📊",
+  CLIENT_TRACE: "🎧",
 };
+
+// ── Client trace (CLIENT_TRACE rows, structured by payload.kind) ──────────────
+// What the softphone itself wrote down: device inventory, every mic/speaker/
+// ringer pick and whether it APPLIED, the devices a call really used, remote
+// audio attach/play, one-way detection, registration state, every press.
+
+const TRACE_ICONS: Record<string, string> = {
+  device_inventory: "🔌",
+  mic_auto_picked: "🎤",
+  mic_selected: "🎤",
+  mic_select_failed: "🚫",
+  speaker_selected: "🔊",
+  speaker_select_failed: "🚫",
+  speaker_toggle: "📣",
+  ringer_selected: "🔔",
+  mic_opened: "🎤",
+  mic_open_failed: "🚫",
+  remote_audio_attached: "🔊",
+  remote_audio_play_blocked: "🔇",
+  one_way_audio: "🔇",
+  incoming_audio_resumed: "🔊",
+  remote_track_muted: "🔇",
+  remote_track_unmuted: "🔊",
+  remote_track_ended: "🔇",
+  call_end: "🔴",
+  reg_state: "📶",
+  press: "👆",
+  settings_opened: "⚙️",
+  shell_info: "🖥",
+};
+
+const TRACE_BAD = new Set(["mic_select_failed", "speaker_select_failed", "mic_open_failed", "remote_audio_play_blocked", "one_way_audio", "remote_track_muted", "remote_track_ended"]);
+
+function traceKind(p: Record<string, unknown>): string {
+  return typeof p.kind === "string" ? p.kind : "";
+}
+
+function devList(v: unknown): string {
+  if (!Array.isArray(v) || v.length === 0) return "none";
+  return v.map((d) => (d && typeof d === "object" ? String((d as { label?: unknown }).label || "(no label)") : "?")).join(" · ");
+}
+
+/** One human line per trace kind — the thing support reads first. */
+function traceSummary(p: Record<string, unknown>): string {
+  const s = (k: string) => (p[k] === undefined || p[k] === null ? "" : String(p[k]));
+  switch (traceKind(p)) {
+    case "device_inventory":
+      return `Mics: ${devList(p.inputs)} — Speakers: ${devList(p.outputs)}${s("why") ? ` (${s("why")})` : ""}`;
+    case "mic_auto_picked":
+      return `App auto-picked mic "${s("label")}" — speaker left on "${s("speakerLabel")}"`;
+    case "mic_selected":
+      return `Mic set to "${s("label")}"`;
+    case "mic_select_failed":
+      return `Mic "${s("label")}" could not be selected: ${s("error")}`;
+    case "speaker_selected":
+      return `Speaker set to "${s("label")}" (${s("why")})${p.applied === false ? " — browser has no setSinkId, OS default plays" : ""}`;
+    case "speaker_select_failed":
+      return `⛔ Speaker "${s("label")}" FAILED to apply: ${s("error")} (${s("why")}) — call audio is on the Windows default output`;
+    case "speaker_toggle":
+      return p.on ? `Speaker button ON → "${s("to")}"` : `Speaker button OFF → back to "${s("backTo")}"`;
+    case "ringer_selected":
+      return `Ringer set to "${s("label") || "System default"}"`;
+    case "mic_opened":
+      return `Call mic: "${s("label")}"${s("source") === "remote_desktop" ? " (from remote desktop)" : ""}${p.muted ? " — track MUTED" : ""}`;
+    case "mic_open_failed":
+      return `⛔ Could not open mic "${s("label")}": ${s("error")}`;
+    case "remote_audio_attached":
+      return `Caller audio playing on "${s("sinkLabel")}"${p.live === false ? " — no live track" : ""}${p.muted ? " — element muted" : ""}`;
+    case "remote_audio_play_blocked":
+      return `⛔ Browser blocked playback on "${s("sinkLabel")}": ${s("error")}`;
+    case "one_way_audio":
+      return `⛔ No incoming audio for 8s (RTT ${s("rttMs")}ms, ${s("packetsReceived")} pkts) — nothing arriving from the network`;
+    case "incoming_audio_resumed":
+      return "Incoming audio resumed";
+    case "remote_track_muted":
+      return "⛔ Remote audio track muted (PBX stopped sending / hold)";
+    case "remote_track_unmuted":
+      return "Remote audio track resumed";
+    case "remote_track_ended":
+      return "⛔ Remote audio track ended";
+    case "call_end":
+      return `Call ended: ${s("endReason")} · ${Math.round(Number(p.durationMs || 0) / 1000)}s · mic "${s("micLabel")}" · speaker "${s("speakerLabel")}"${p.remoteAudioSeen === false ? " · ⛔ remote audio never attached" : ""}${s("lastCallError") ? ` · ${s("lastCallError")}` : ""}`;
+    case "reg_state":
+      return `Registration: ${s("state")}`;
+    case "press":
+      return `Pressed ${s("action")}${p.hadSession === false ? " — ⛔ no call session (silent no-op)" : ""}${s("callState") ? ` while ${s("callState")}` : ""}`;
+    case "settings_opened":
+      return `Opened settings (${s("surface")})`;
+    default:
+      return traceKind(p) || "trace";
+  }
+}
 
 const EVENT_COLORS: Record<string, string> = {
   CALL_CONNECTED: "#16a34a",
@@ -97,9 +190,12 @@ function gradeColor(g: string | null) {
 
 function EventDetail({ event, sessionStart }: { event: TimelineEvent; sessionStart: string }) {
   const [open, setOpen] = useState(false);
-  const icon = EVENT_ICONS[event.type] ?? "•";
-  const color = EVENT_COLORS[event.type] ?? "#6b7280";
   const p = event.payload;
+  const isTrace = event.type === "CLIENT_TRACE";
+  const kind = isTrace ? traceKind(p) : "";
+  const icon = isTrace ? (TRACE_ICONS[kind] ?? "🎧") : (EVENT_ICONS[event.type] ?? "•");
+  const color = isTrace ? (TRACE_BAD.has(kind) ? "#dc2626" : kind === "press" ? "#94a3b8" : "#0ea5e9") : (EVENT_COLORS[event.type] ?? "#6b7280");
+  const title = isTrace ? kind.replace(/_/g, " ") : event.type.replace(/_/g, " ");
   const grade = typeof p["qualityGrade"] === "string" ? p["qualityGrade"] : null;
   const rcaRaw = p["rca"];
   const rca: Record<string, string> | null =
@@ -119,7 +215,7 @@ function EventDetail({ event, sessionStart }: { event: TimelineEvent; sessionSta
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: color }}>
-            {icon} {event.type.replace(/_/g, " ")}
+            {icon} {title}
           </span>
           {grade && (
             <span style={{ fontSize: 11, padding: "1px 6px", borderRadius: 4, background: gradeColor(grade) + "33", color: gradeColor(grade), fontWeight: 700 }}>
@@ -150,6 +246,9 @@ function EventDetail({ event, sessionStart }: { event: TimelineEvent; sessionSta
         )}
         {event.type === "ERROR" && (
           <div style={{ fontSize: 12, color: "#f87171", marginTop: 2 }}>{String(p["message"] ?? p["error"] ?? "")}</div>
+        )}
+        {isTrace && (
+          <div style={{ fontSize: 12, color: TRACE_BAD.has(kind) ? "#fca5a5" : "#9ca3af", marginTop: 2, whiteSpace: "pre-wrap" }}>{traceSummary(p)}</div>
         )}
 
         {/* RCA block */}
@@ -240,6 +339,92 @@ function AiExplainPanel({ sessionId, tenantId }: { sessionId: string; tenantId?:
           </div>
 
           <div style={{ fontSize: 11, color: "#4b5563" }}>Confidence: {explain.confidence}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Devices & audio card — the headset ticket, answered from the database ────
+
+function lastTrace(events: TimelineEvent[], kind: string): Record<string, unknown> | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.type === "CLIENT_TRACE" && traceKind(e.payload) === kind) return e.payload;
+  }
+  return null;
+}
+
+function countTrace(events: TimelineEvent[], kind: string): number {
+  return events.filter((e) => e.type === "CLIENT_TRACE" && traceKind(e.payload) === kind).length;
+}
+
+function DevicesCard({ events }: { events: TimelineEvent[] }) {
+  const hasTrace = events.some((e) => e.type === "CLIENT_TRACE");
+  if (!hasTrace) {
+    return (
+      <div style={{ background: "#1f2937", border: "1px dashed #374151", borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 12, color: "#9ca3af" }}>
+        🎧 No client trace on this session yet — the app records devices and presses only from the build shipped 2026-09-03; an already-open window keeps the old bundle until it is fully closed and reopened.
+      </div>
+    );
+  }
+  const inv = lastTrace(events, "device_inventory");
+  const micOpened = lastTrace(events, "mic_opened");
+  const micAuto = lastTrace(events, "mic_auto_picked");
+  const spk = lastTrace(events, "speaker_selected");
+  const spkFail = lastTrace(events, "speaker_select_failed");
+  const attached = lastTrace(events, "remote_audio_attached");
+  const ringer = lastTrace(events, "ringer_selected");
+  const reg = lastTrace(events, "reg_state");
+  const nSpkFail = countTrace(events, "speaker_select_failed");
+  const nMicFail = countTrace(events, "mic_open_failed") + countTrace(events, "mic_select_failed");
+  const nOneWay = countTrace(events, "one_way_audio");
+  const nBlocked = countTrace(events, "remote_audio_play_blocked");
+  const s = (o: Record<string, unknown> | null, k: string) => (o && o[k] !== undefined && o[k] !== null ? String(o[k]) : "");
+
+  const callMic = s(micOpened, "label") || s(micAuto, "label") || "—";
+  const callSpeaker = s(attached, "sinkLabel") || s(spk, "label") || s(micAuto, "speakerLabel") || "System default";
+  const splitDevices = callMic !== "—" && callSpeaker && !callSpeaker.toLowerCase().includes("default") && callMic.toLowerCase().split(" ")[0] !== callSpeaker.toLowerCase().split(" ")[0];
+  const defaultSpeaker = /system default/i.test(callSpeaker);
+
+  const Row = ({ label, value, warn }: { label: string; value: string; warn?: boolean }) => (
+    <div style={{ display: "flex", gap: 10, fontSize: 12, padding: "3px 0" }}>
+      <span style={{ width: 150, color: "#64748b", flexShrink: 0 }}>{label}</span>
+      <span style={{ color: warn ? "#fca5a5" : "#e2e8f0", wordBreak: "break-word" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ background: "#0f172a", border: `1px solid ${nSpkFail || nOneWay || nBlocked || nMicFail ? "#7f1d1d" : "#1e3a5f"}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+      <div style={{ color: "#93c5fd", fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎧 Devices & audio — what the app itself recorded</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+        <div>
+          <Row label="Microphone on last call" value={callMic} />
+          <Row label="Speaker on last call" value={callSpeaker} warn={defaultSpeaker && callMic !== "—"} />
+          <Row label="Ringer" value={s(ringer, "label") || "System default"} />
+          <Row label="Registration (client view)" value={s(reg, "state") || "—"} />
+        </div>
+        <div>
+          <Row label="Speaker apply failures" value={String(nSpkFail)} warn={nSpkFail > 0} />
+          <Row label="Mic failures" value={String(nMicFail)} warn={nMicFail > 0} />
+          <Row label="No-incoming-audio detections" value={String(nOneWay)} warn={nOneWay > 0} />
+          <Row label="Playback blocked" value={String(nBlocked)} warn={nBlocked > 0} />
+        </div>
+      </div>
+      {inv && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#9ca3af" }}>
+          <div><span style={{ color: "#64748b" }}>Mics seen: </span>{devList(inv.inputs)}</div>
+          <div><span style={{ color: "#64748b" }}>Speakers seen: </span>{devList(inv.outputs)}</div>
+        </div>
+      )}
+      {(splitDevices || defaultSpeaker) && callMic !== "—" && (
+        <div style={{ marginTop: 10, padding: "8px 10px", background: "#1f2937", borderRadius: 6, borderLeft: "3px solid #f59e0b", fontSize: 12, color: "#fde68a" }}>
+          Mic and speaker are on DIFFERENT devices ({callMic} / {callSpeaker}). This is the "caller hears me, I don't hear them" shape: the app auto-pairs the mic to a headset but the speaker stays on the Windows default until it is picked explicitly. For a Bluetooth headset, pick its <b>Hands-Free</b> entry for both.
+        </div>
+      )}
+      {spkFail && (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: "#1f2937", borderRadius: 6, borderLeft: "3px solid #dc2626", fontSize: 12, color: "#fca5a5" }}>
+          Last speaker failure: "{s(spkFail, "label")}" — {s(spkFail, "error")} ({s(spkFail, "why")}). The settings still show that device while the call audio plays on the Windows default output.
         </div>
       )}
     </div>
@@ -367,6 +552,9 @@ export default function CallTimelinePage() {
                   </div>
                 </div>
               </div>
+
+              {/* Devices & audio — the client trace, summarised */}
+              <DevicesCard events={selected.events} />
 
               {/* AI explanation */}
               <AiExplainPanel sessionId={selected.id} tenantId={undefined} />

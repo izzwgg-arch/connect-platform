@@ -91,6 +91,16 @@ export function hasBrowserAuthToken(): boolean {
 }
 
 /**
+ * The stored bearer, for the ONE caller that cannot go through `apiPost`: the
+ * client-trace flush on `pagehide`, which must use a keepalive `fetch` so the
+ * batch survives the window closing. Everything else uses the request helpers
+ * below so the global 401 handling stays in one place.
+ */
+export function peekBrowserAuthToken(): string {
+  return browserToken();
+}
+
+/**
  * ⛔ THE GLOBAL 401 HANDLER. Every authenticated request in this file funnels
  * its non-2xx response through here. A `401 { error: "unauthorized" }` on a
  * request that carried a bearer token means the api no longer accepts our

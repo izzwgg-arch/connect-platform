@@ -714,6 +714,14 @@ enum VoiceDiagEventType {
   ANSWER_DEFERRED_EXECUTED
   ANSWER_DEFERRED_TIMEOUT
   ANSWER_DEFERRED_STALE_CALL
+  // ── Web/desktop softphone client trace (2026-09-03) ─────────────────────────
+  // ONE type, structured by `payload.kind` (device_inventory, speaker_selected,
+  // speaker_select_failed, mic_opened, remote_audio_attached, press, …) so the
+  // next thing worth recording never needs another enum value + migration.
+  // Batched by apps/portal/lib/clientTrace.ts → POST /voice/diag/events.
+  // Built after weeks of headset tickets that could only be diagnosed by screen
+  // share — every device event and every press on the call path lands here.
+  CLIENT_TRACE
 }
 
 enum MediaTestStatus {

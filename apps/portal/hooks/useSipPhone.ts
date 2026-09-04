@@ -3,6 +3,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
+import { trace, shortDeviceId, labelFor, summarizeDevices } from "../lib/clientTrace";
+import { ensureVoiceDiagSession } from "../lib/voiceDiagSession";
 import { AnswerLatencyTracker, type AnswerLatencyReport } from "../lib/answerLatency";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 import { useTelephonySocket } from "./useTelephonySocket";
@@ -952,8 +954,33 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const externalMicRef = useRef<MediaStream | null>(null);
   const acquireMicStream = useCallback((): Promise<MediaStream> => {
     const ext = externalMicRef.current?.getAudioTracks().find((t) => t.readyState === "live") ?? null;
-    if (ext) return Promise.resolve(new MediaStream([ext.clone()]));
-    return navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false });
+    if (ext) {
+      trace("mic_opened", { source: "remote_desktop", label: ext.label || "", requestedId: shortDeviceId(currentMicDeviceIdRef.current) });
+      return Promise.resolve(new MediaStream([ext.clone()]));
+    }
+    const requestedId = currentMicDeviceIdRef.current;
+    return navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(requestedId), video: false }).then(
+      (stream) => {
+        // The microphone the call REALLY got — the track's own label and
+        // settings, not the id we asked for. This is the fact the settings
+        // screen cannot show.
+        const t = stream.getAudioTracks()[0];
+        const settings = (t?.getSettings?.() ?? {}) as { deviceId?: string };
+        trace("mic_opened", {
+          source: "local",
+          requestedId: shortDeviceId(requestedId),
+          id: shortDeviceId(settings.deviceId),
+          label: t?.label ?? "",
+          enabled: t?.enabled !== false,
+          muted: !!t?.muted,
+        });
+        return stream;
+      },
+      (err: any) => {
+        trace("mic_open_failed", { requestedId: shortDeviceId(requestedId), label: labelFor(devicesRef.current.inputs, requestedId), error: String(err?.name ?? err ?? "unknown") });
+        throw err;
+      },
+    );
   }, []);
   const setExternalMicrophoneStream = useCallback((stream: MediaStream | null) => {
     externalMicRef.current = stream;
@@ -986,6 +1013,16 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   }, []);
   /** Accumulator for the latest inbound-rtp packetsReceived count for the quality report. */
   const packetsReceivedRef = useRef<number | null>(null);
+  /**
+   * Client-trace support (lib/clientTrace.ts). The device lists as last
+   * enumerated, kept in a ref so trace lines and the end-of-call report can
+   * name devices without waiting for a render; and whether a live remote audio
+   * track was ever attached on the CURRENT call — read through this ref, never
+   * `diag`, because the report is built after teardown has reset diag (which is
+   * exactly why `remoteAudioReceiving` read false in 53 of 53 web reports).
+   */
+  const devicesRef = useRef<{ inputs: MediaDeviceInfo[]; outputs: MediaDeviceInfo[] }>({ inputs: [], outputs: [] });
+  const remoteAudioSeenRef = useRef<boolean | null>(null);
   /** Latest raw stat snapshot stored in a ref so end-of-call report always has real values. */
   const lastStatsRef = useRef<FullStatSnapshot | null>(null);
   /** Previous bytesReceived for bitrate calculation. */
@@ -1149,6 +1186,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           if (oneWayAudioWarnedRef.current) {
             oneWayAudioWarnedRef.current = false;
             console.log("[SipPhone] incoming_audio_resumed after gap");
+            remoteAudioSeenRef.current = true;
+            trace("incoming_audio_resumed", { packetsReceived: s.packetsReceived, rttMs: s.rttMs });
             patchDiag({ remoteAudioReceiving: true });
           }
         } else if (lastBytesGrowthTsRef.current !== null && now - lastBytesGrowthTsRef.current > 8_000) {
@@ -1156,6 +1195,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             oneWayAudioWarnedRef.current = true;
             const warnMsg = "No incoming audio for 8 s — possible one-way audio or RTP path issue";
             console.warn("[SipPhone] one_way_audio_detected rttMs=" + s.rttMs + " isRelay=" + (s.selectedCandidateType === "relay"));
+            remoteAudioSeenRef.current = false;
+            // ⛔ This warning used to live only in the browser console — the
+            // server never heard it, so "no incoming audio" tickets had no
+            // evidence. It is a timeline event now (the RTP-level "nothing is
+            // arriving" case; a sink on the wrong device is the OTHER case,
+            // and remote_audio_attached carries the sink for that).
+            trace("one_way_audio", { rttMs: s.rttMs, relay: s.selectedCandidateType === "relay", packetsReceived: s.packetsReceived, bytesReceived: s.bytesReceived });
             patchDiag({ remoteAudioReceiving: false, lastCallError: warnMsg });
           }
         }
@@ -1298,14 +1344,40 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // which may already be null when teardown clears it.
       iceConnectionState: lastKnownIceStateRef.current ?? diag.iceConnectionState,
       micPermission: diag.micPermission,
-      remoteAudioReceiving: diag.remoteAudioReceiving,
+      // ⛔ Through the REF, not `diag`: teardown resets diag before this runs,
+      // which is why this field read false in 53 of 53 web reports. null = no
+      // remote audio was ever attached on this call.
+      remoteAudioReceiving: remoteAudioSeenRef.current === true,
       audioCodec: s?.audioCodec ?? diag.audioCodec,
       networkType,
       endReason,
       qualityGrade: grade,
+      // ── 2026-09-03: the facts the headset tickets were missing ─────────────
+      lastCallError: diagRef.current?.lastCallError ?? diag.lastCallError ?? null,
+      micId: shortDeviceId(currentMicDeviceIdRef.current),
+      micLabel: labelFor(devicesRef.current.inputs, currentMicDeviceIdRef.current),
+      speakerId: shortDeviceId(currentSinkIdRef.current),
+      speakerLabel: labelFor(devicesRef.current.outputs, currentSinkIdRef.current),
+      speakerOn,
     }).catch(() => {
       // Non-fatal — telemetry loss is acceptable
     });
+
+    // The same facts as a trace row, flushed NOW: the next thing the person
+    // does after a bad call is often close the window.
+    trace("call_end", {
+      endReason,
+      direction: callDirectionRef.current,
+      durationMs,
+      remoteAudioSeen: remoteAudioSeenRef.current,
+      lastCallError: diagRef.current?.lastCallError ?? null,
+      micLabel: labelFor(devicesRef.current.inputs, currentMicDeviceIdRef.current),
+      speakerLabel: labelFor(devicesRef.current.outputs, currentSinkIdRef.current),
+      speakerOn,
+      packetsReceived: s?.packetsReceived ?? packetsReceivedRef.current,
+      rttMs: s?.rttMs ?? null,
+      grade,
+    }, { flush: true });
 
     // Clear the live-call ping so the dashboard removes this call
     apiPost("/voice/diag/call-quality-ping/clear", {}).catch(() => {});
@@ -2317,17 +2389,34 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     resumeOutputAfterRingback();
     el.srcObject = stream;
     const tracks = stream.getAudioTracks();
-    patchDiag({ remoteAudioReceiving: tracks.some((t) => t.readyState === "live") });
-    el.play().catch((err) => {
-      const resume = () => {
-        audioRef.current?.play().catch(() => undefined);
-        document.removeEventListener("click", resume);
-        document.removeEventListener("touchend", resume);
-      };
-      document.addEventListener("click", resume, { once: true });
-      document.addEventListener("touchend", resume, { once: true });
-      patchDiag({ lastCallError: `audio autoplay blocked: ${err?.name} — tap screen to hear audio` });
-    });
+    const live = tracks.some((t) => t.readyState === "live");
+    remoteAudioSeenRef.current = live;
+    patchDiag({ remoteAudioReceiving: live });
+    // Which OUTPUT the call audio is really on, as the browser reports it —
+    // `el.sinkId` is the truth; currentSinkIdRef is what we asked for.
+    const sinkNow = String((el as HTMLAudioElement & { sinkId?: string }).sinkId ?? currentSinkIdRef.current ?? "");
+    const attachedFacts = {
+      tracks: tracks.length,
+      live,
+      sinkId: shortDeviceId(sinkNow),
+      sinkLabel: labelFor(devicesRef.current.outputs, sinkNow),
+      requestedSinkId: shortDeviceId(currentSinkIdRef.current),
+      muted: el.muted,
+      volume: el.volume,
+    };
+    el.play()
+      .then(() => trace("remote_audio_attached", { ...attachedFacts, play: "ok" }))
+      .catch((err) => {
+        const resume = () => {
+          audioRef.current?.play().catch(() => undefined);
+          document.removeEventListener("click", resume);
+          document.removeEventListener("touchend", resume);
+        };
+        document.addEventListener("click", resume, { once: true });
+        document.addEventListener("touchend", resume, { once: true });
+        patchDiag({ lastCallError: `audio autoplay blocked: ${err?.name} — tap screen to hear audio` });
+        trace("remote_audio_play_blocked", { ...attachedFacts, error: String(err?.name ?? "unknown") });
+      });
   }
 
   function syncReceiversToAudio(pc: RTCPeerConnection) {
@@ -2372,16 +2461,21 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // Monitor remote track lifecycle for mid-call audio drops
       e.track.addEventListener("mute", () => {
         console.warn("[SipPhone] remote_track_muted — PBX stopped sending audio");
+        remoteAudioSeenRef.current = false;
+        trace("remote_track_muted", {});
         patchDiag({ remoteAudioReceiving: false, lastCallError: "Remote audio muted by PBX (hold or network issue?)" });
       });
       e.track.addEventListener("unmute", () => {
         console.log("[SipPhone] remote_track_unmuted — audio resumed");
+        remoteAudioSeenRef.current = true;
+        trace("remote_track_unmuted", {});
         patchDiag({ remoteAudioReceiving: true, lastCallError: null });
         // Re-attach the stream after unmute to ensure the audio element is playing
         attachRemoteStream(stream);
       });
       e.track.addEventListener("ended", () => {
         console.warn("[SipPhone] remote_track_ended — audio path terminated");
+        trace("remote_track_ended", {});
         patchDiag({ remoteAudioReceiving: false, lastCallError: "Remote audio track ended unexpectedly" });
       });
     });
@@ -3000,6 +3094,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   const dial = useCallback(
     (target: string) => {
+      // Digit COUNT only — the number itself is business data the CDR holds.
+      trace("press", { action: "dial", digits: String(target ?? "").replace(/\D/g, "").length, callState });
       // ── Which line does this call go out on? ────────────────────────────
       // Explicit dropdown selection ("acct:<id>" / "acct:<id>|<routeId>")
       // wins; otherwise, with no selection at all, a caller we last heard
@@ -3216,6 +3312,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   );
 
   const answer = useCallback(() => {
+    // Recorded BEFORE the guard: an Answer press that finds no session is the
+    // silent no-op behind "I hit answer and nothing happened".
+    trace("press", { action: "answer", hadSession: !!sessionRef.current, callState });
     if (!sessionRef.current) return;
     answerLatency.tap(sessionRef.current);
     stopAllAudio(); // Stop ringtone immediately on answer
@@ -3245,6 +3344,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   }, []);
 
   const hangup = useCallback(() => {
+    trace("press", { action: "hangup", hadSession: !!sessionRef.current, callState });
     stopAllAudio();
     userInitiatedHangupRef.current = true;
     playCallEndChime();
@@ -3336,6 +3436,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   }, [teardownRemoteAudioPlayback, clearCallDiag, playCallEndChime, stopAllAudio]);
 
   const toggleHold = useCallback(() => {
+    trace("press", { action: onHold ? "unhold" : "hold", hadSession: !!sessionRef.current, callState });
     if (!sessionRef.current || callState !== "connected") return;
     try {
       if (onHold) {
@@ -3362,6 +3463,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   }, [callState, onHold]);
 
   const setMute = useCallback((mute: boolean) => {
+    trace("press", { action: mute ? "mute" : "unmute", hadSession: !!sessionRef.current });
     if (!sessionRef.current) return;
     try {
       if (mute) sessionRef.current.mute({ audio: true });
@@ -3372,6 +3474,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   const sendDtmf = useCallback(
     (digit: string) => {
+      // Never the digit — a keypad press during a call can be an account
+      // number. Count and context only.
+      trace("press", { action: "dtmf", hadSession: !!sessionRef.current, callState });
       // Always play local keypad tone for tactile feedback
       playDtmfTone(digit);
       if (!sessionRef.current || callState !== "connected") return;
@@ -3383,17 +3488,32 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   // ── Audio device routing ───────────────────────────────────────────────────
 
   /** Enumerate audio input/output devices and refresh state. */
-  const refreshAudioDevices = useCallback(async () => {
+  const refreshAudioDevices = useCallback(async (why: "mount" | "devicechange" | "call_connected" | "mic_selected" = "mount") => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter((d) => d.kind === "audioinput");
       const outputs = devices.filter((d) => d.kind === "audiooutput");
+      devicesRef.current = { inputs, outputs };
       setAudioInputDevices(inputs);
       setAudioOutputDevices(outputs);
+      // The whole device list, with labels, every time it changes — the first
+      // thing a headset ticket needs and the thing nobody could see before.
+      trace("device_inventory", { ...summarizeDevices(devices), why });
       if (!currentMicDeviceIdRef.current) {
         const preferred = preferHeadsetDevice(inputs);
-        if (preferred?.deviceId) setCurrentMicDeviceId(preferred.deviceId);
+        if (preferred?.deviceId) {
+          setCurrentMicDeviceId(preferred.deviceId);
+          // ⛔ The MIC is auto-paired to a headset by this label heuristic; the
+          // SPEAKER is not (preferredSinkIdRef is only ever set by an explicit
+          // pick). Record both sides so the split is visible on the timeline.
+          trace("mic_auto_picked", {
+            id: shortDeviceId(preferred.deviceId),
+            label: preferred.label || "",
+            speakerId: shortDeviceId(preferredSinkIdRef.current),
+            speakerLabel: labelFor(outputs, preferredSinkIdRef.current),
+          });
+        }
       }
     } catch { /* permissions not granted yet */ }
   }, []);
@@ -3404,10 +3524,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
     try {
       const probe = await navigator.mediaDevices.getUserMedia({ audio: voiceAudioConstraints(deviceId), video: false });
+      const probeTrack = probe.getAudioTracks()[0];
+      trace("mic_selected", { id: shortDeviceId(deviceId), label: probeTrack?.label ?? labelFor(devicesRef.current.inputs, deviceId) });
       probe.getTracks().forEach((track) => track.stop());
       patchDiag({ micPermission: "granted", lastCallError: null });
-      await refreshAudioDevices();
+      await refreshAudioDevices("mic_selected");
     } catch (err: any) {
+      trace("mic_select_failed", { id: shortDeviceId(deviceId), label: labelFor(devicesRef.current.inputs, deviceId), error: String(err?.name ?? "unknown") });
       patchDiag({ micPermission: "denied", lastCallError: `mic_select_failed: ${err?.name ?? "unknown"}` });
       throw err;
     }
@@ -3415,17 +3538,29 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   // Low-level: route the call audio element to a specific output device. Does NOT
   // touch speaker-mode or the preferred base device — callers decide those.
-  const applySink = useCallback(async (deviceId: string) => {
+  const applySink = useCallback(async (deviceId: string, why: "setting" | "speaker_on" | "speaker_off" | "call_end_reset" = "setting") => {
     const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
-    if (!el) return;
+    const label = labelFor(devicesRef.current.outputs, deviceId);
+    if (!el) {
+      // No element yet (mount-time apply before the phone has rendered): the
+      // preference is kept in preferredSinkIdRef and re-applied on call end.
+      trace("speaker_select_failed", { id: shortDeviceId(deviceId), label, why, error: "no_audio_element" });
+      return;
+    }
     try {
       if (typeof el.setSinkId === "function") {
         await el.setSinkId(deviceId);
       }
       currentSinkIdRef.current = deviceId;
       setCurrentSinkId(deviceId);
-    } catch (e) {
+      trace("speaker_selected", { id: shortDeviceId(deviceId), label, why, applied: typeof el.setSinkId === "function" });
+    } catch (e: any) {
+      // ⛔ This used to be the ONLY record of a headset that silently stopped
+      // being the call's speaker — a console line nobody ever saw. It is a
+      // timeline event now: the person's settings still SAY headset while the
+      // call audio is really on the Windows default output.
       console.warn("[SipPhone] setSinkId failed:", e);
+      trace("speaker_select_failed", { id: shortDeviceId(deviceId), label, why, error: String(e?.name ?? e ?? "unknown") });
     }
   }, []);
 
@@ -3437,13 +3572,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const setAudioSinkId = useCallback(async (sinkId: string) => {
     preferredSinkIdRef.current = sinkId;
     setSpeakerOn(false);
-    await applySink(sinkId);
+    await applySink(sinkId, "setting");
   }, [applySink]);
 
   useEffect(() => {
     void refreshAudioDevices();
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.addEventListener) return undefined;
-    const handleDeviceChange = () => void refreshAudioDevices();
+    const handleDeviceChange = () => void refreshAudioDevices("devicechange");
     navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
     return () => navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
   }, [refreshAudioDevices]);
@@ -3484,8 +3619,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const toggleSpeaker = useCallback(async () => {
     if (speakerOn) {
       // Turn loudspeaker OFF → back to the headset / base output device.
+      trace("speaker_toggle", { on: false, backTo: labelFor(devicesRef.current.outputs, preferredSinkIdRef.current) });
       setSpeakerOn(false);
-      await applySink(preferredSinkIdRef.current || "");
+      await applySink(preferredSinkIdRef.current || "", "speaker_off");
       return;
     }
     // Turn loudspeaker ON → find the built-in speaker (NOT the headset).
@@ -3504,13 +3640,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       devices.find((d) => d.deviceId !== base && d.deviceId !== "communications" && d.label.toLowerCase().includes("speaker") && !isHeadset(d.label.toLowerCase())) ??
       devices.find((d) => d.deviceId !== base && d.deviceId !== "default" && d.deviceId !== "communications" && !isHeadset(d.label.toLowerCase()));
     setSpeakerOn(true);
+    trace("speaker_toggle", { on: true, to: loudspeaker ? loudspeaker.label || shortDeviceId(loudspeaker.deviceId) : "System default", candidates: devices.length });
     // If we can't identify a distinct speaker, fall back to OS default ("").
-    await applySink(loudspeaker ? loudspeaker.deviceId : "");
+    await applySink(loudspeaker ? loudspeaker.deviceId : "", "speaker_on");
   }, [speakerOn, audioOutputDevices, applySink]);
 
   // Enumerate devices whenever a call connects
   useEffect(() => {
-    if (callState === "connected") void refreshAudioDevices();
+    if (callState === "connected") void refreshAudioDevices("call_connected");
   }, [callState, refreshAudioDevices]);
 
   // Enrich the incoming caller with the ring-group/queue prefix + clean name from the
@@ -3696,10 +3833,17 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   useEffect(() => {
     if (callState === "idle" || callState === "ended") {
       setSpeakerOn(false);
-      void applySink(preferredSinkIdRef.current || "");
+      void applySink(preferredSinkIdRef.current || "", "call_end_reset");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callState]);
+
+  // Registration state as the CLIENT sees it — beside the PBX's own contact
+  // list this is what tells "the app thought it was registered" apart from
+  // "the app knew it was not". Cheap: it changes a handful of times an hour.
+  useEffect(() => {
+    trace("reg_state", { state: regState });
+  }, [regState]);
 
   // ── Blind transfer ──────────────────────────────────────────────────────────
 
@@ -4121,19 +4265,17 @@ export function SipPhoneProvider({ children }: { children: ReactNode }) {
  * never cost a call.
  */
 const answerLatency = new AnswerLatencyTracker();
-let diagSessionPromise: Promise<string | null> | null = null;
 
-/** Opened lazily on the FIRST answered call, so an idle client costs nothing. */
+/**
+ * ONE diagnostics session per window, shared with the client trace and the
+ * desktop shell census (lib/voiceDiagSession.ts). This used to mint its own
+ * session on the first answered call, so a person's answer-latency rows and
+ * shell rows sat on two different sessions on /admin/call-timeline.
+ * ⛔ `iceHasTurn` is deliberately NOT sent by that module either — the server
+ * defaults it to false, and "iceHasTurn:false" has misled investigations.
+ */
 function ensureDiagSession(): Promise<string | null> {
-  if (!diagSessionPromise) {
-    // ⛔ `iceHasTurn` is deliberately NOT sent. The server defaults it to false,
-    // and CLAUDE.md records that the resulting "iceHasTurn:false" has misled
-    // investigations. Sending nothing is honest; sending a guess is not.
-    diagSessionPromise = apiPost<{ sessionId?: string }>("/voice/diag/session/start", { platform: "WEB" })
-      .then((r) => r?.sessionId ?? null)
-      .catch(() => null);
-  }
-  return diagSessionPromise;
+  return ensureVoiceDiagSession();
 }
 
 function reportAnswerLatency(report: AnswerLatencyReport | null): void {

@@ -40,6 +40,7 @@ import { useAppContext } from "../hooks/useAppContext";
 import { ConnectSelect } from "./ConnectSelect";
 import { isInsideViewportDropdown } from "./ViewportDropdown";
 import { useSipPhone } from "../hooks/useSipPhone";
+import { trace, shortDeviceId } from "../lib/clientTrace";
 import { MiniDialerReloadBar } from "./DesktopUpdateNotice";
 import { useTelephonySocket } from "../hooks/useTelephonySocket";
 import { apiGet, apiPatch, apiPost, getPortalApiBaseUrl } from "../services/apiClient";
@@ -917,7 +918,10 @@ export function DesktopMiniDialer() {
   const updateRingerDevice = useCallback((deviceId: string) => {
     setRingerDeviceId(deviceId);
     setWebRingerOutputDeviceId(deviceId);
-  }, []);
+    // The third picker. A person who set the RINGER to their headset and
+    // believes that is the call speaker is a common shape of this ticket.
+    trace("ringer_selected", { id: shortDeviceId(deviceId), label: phone.audioOutputDevices.find((d) => d.deviceId === deviceId)?.label ?? (deviceId ? "" : "System default") });
+  }, [phone.audioOutputDevices]);
   const updateRingerVolume = useCallback((value: number) => {
     setRingerVolume(value);
     setWebRingerVolume(value);
@@ -1084,7 +1088,7 @@ export function DesktopMiniDialer() {
             )}
           </div>
           <div className="settings-wrap" ref={settingsWrapRef}>
-            <button title="Settings" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
+            <button title="Settings" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => { if (!settingsOpen) trace("settings_opened", { surface: "mini" }); setSettingsOpen((v) => !v); }}>
               <Settings size={15} />
             </button>
             {settingsOpen && (

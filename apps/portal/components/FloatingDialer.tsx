@@ -10,6 +10,7 @@ import { useAppContext } from "../hooks/useAppContext";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useSipPhone, type SipRegState } from "../hooks/useSipPhone";
+import { trace } from "../lib/clientTrace";
 import type { LiveCall } from "../types/liveCall";
 import {
   getWebRingerEnabled,
@@ -1045,7 +1046,7 @@ export function FloatingDialer() {
                       open={settingsOpen}
                       phone={phone}
                       settings={desktopSettings}
-                      onToggle={() => setSettingsOpen((value) => !value)}
+                      onToggle={() => { if (!settingsOpen) trace("settings_opened", { surface: "floating" }); setSettingsOpen((value) => !value); }}
                       onClose={() => setSettingsOpen(false)}
                       onUpdate={updateDesktopSettings}
                     />
