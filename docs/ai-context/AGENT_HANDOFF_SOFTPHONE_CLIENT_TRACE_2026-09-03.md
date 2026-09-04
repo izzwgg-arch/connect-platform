@@ -244,3 +244,140 @@ The negatives that matter: **no** `/api/voice/diag/events` request from a signed
 window (grep nginx for that path with a 401 — after the two probes, there must be none),
 and no `dropped > 0` warn lines in the api log (`grep "client trace batch"`), which
 would mean a client is sending a kind the allowlist does not know.
+
+### ✅ Closed the next morning — the first real customer rows (2026-09-04 01:59Z)
+
+Ezra's desktop app (Connect Communications) reloaded at 01:59Z and produced **527 rows
+across three sessions** by 06:03Z: device inventories with real labels, `speaker_selected`
+with `applied: true`, `mic_selected`. Two defects were visible in that data and are fixed
+in round two below: **518 of 527 rows were `reg_state`** (one per registration flap on a
+filtered line), and a speaker applied at mount, before the first device enumeration,
+recorded as `"(unnamed 9cc05138)"`. Meanwhile **~4,100 desktop-window polls hit
+`/version` overnight and exactly ONE window reloaded** — the reload strip was not
+getting anyone to restart. That measurement drove the banner change in §9.
+
+---
+
+## 9. Round two (2026-09-04, `7f73086a`) — audio levels, the VERDICT, the watcher, the shell log, and a strip people act on
+
+Izzy: *"in whatever you said that's not built yet, build it, commit, push, install, and
+deploy it all."* Everything §5 listed as deliberately unbuilt, except the product change
+(auto-pairing the speaker), is built here.
+
+### 9.1 Media samples — the number every call platform runs on
+
+Every 10 s during a call the existing 2-second stats loop (`startStatsPolling`) traces a
+**`media_sample`**: `rxPkts` / `txPkts` / `lost` (deltas since the last sample),
+`rxLevel` / `txLevel` (RMS over the interval = √(Δ`totalAudioEnergy` /
+Δ`totalSamplesDuration`) from `inbound-rtp` and `media-source`), `concealed`, `rttMs`,
+`jitterMs`, `relay`, `cand`, `codec`, and the `sink` label the audio element is on.
+`pollCallStats` gained the five cumulative counters. Silence is RMS < **0.004**
+(≈ −48 dBFS; speech sits 0.02–0.2). The sampler's state is local to one poll run, so a
+new call always starts clean.
+
+### 9.2 The verdict — one plain-English conclusion per call, server-authored
+
+`apps/api/src/voice/callVerdict.ts` (pure, 11 tests). When a batch carries `call_end`,
+`POST /voice/diag/events` reads that session's rows back (bounded to the call's own
+window: from the last `mic_opened` / answer press before the end, never a previous call
+— test-pinned) and stores ONE `CLIENT_TRACE` row of kind **`verdict`** with `source:
+"server"`, `code`, `headline`, `evidence[]` and `facts`. ⛔ **`verdict` is in
+`SERVER_ONLY_KINDS`**: a client batch carrying it is dropped and counted (proven live —
+`stored: 5, dropped: 1`). ⛔ Best-effort: a verdict failure logs `call verdict failed` and
+never fails the batch that carried the evidence.
+
+The ladder, in priority — earlier codes are things the person could not have heard
+through, later ones are degradations:
+
+| code | meaning |
+|---|---|
+| `short_call` | < 3 s — not judged |
+| `mic_open_failed` | getUserMedia failed — the caller heard nothing |
+| `playback_blocked` | the browser refused `play()` — the person heard nothing |
+| `speaker_apply_failed` | `setSinkId` refused (not the mount-time `no_audio_element`) — audio on the Windows default |
+| `no_inbound_rtp` | ≥ 50 packets sent, < 50 received — **network/PBX, not the headset** |
+| `inbound_silent` | packets arrived, peak `rxLevel` below silence — far end's mic / muted track |
+| `mic_silent` | packets sent, peak `txLevel` below silence — this mic captured silence |
+| `remote_track_lost` | remote track ended/muted and never resumed |
+| `split_devices` | mic label looks like a headset, speaker label does not — the headset-ticket shape |
+| `poor_network` | loss > 5 %, median RTT > 400 ms, or jitter > 60 ms |
+| `no_data` | a call with no samples — old bundle, or under 10 s |
+| `ok` | audio both ways with sound on the line |
+
+### 9.3 The support watcher reads the verdict first
+
+`tools/loopcom-support-mcp`: new tool **`get_call_diagnostics(q)`** (login email or
+session id → the SUPER_ADMIN `/admin/voice/diag/timeline` route), formatted verdict-first
+by `formatCallDiagnostics`; on the watcher's `ALLOWED_TOOLS`; the spawn prompt tells
+the agent to call it BEFORE anything else on any audio/headset ticket and to quote the
+verdict rather than propose a screen share. ⛔ Editing `.watch-state.json` while the
+watcher runs is useless — the process rewrites it from memory on the next poll (that is
+how yesterday's "done" marks were lost). And ⛔ `Stop-ScheduledTask` did NOT stop the
+old `node watch.mjs`; it kept running the old code beside a new wrapper. Kill the
+process tree, then start the task, and confirm a fresh `==== started` banner.
+⛔ A PowerShell one-liner that greps for `watch.mjs` matches ITS OWN command line and
+killed the shell — build the pattern from two strings.
+
+### 9.4 The desktop shell log (0.1.17-rc.9)
+
+`apps/desktop/src/shellLog.ts` (pure, 4 tests): a bounded tail of
+`userData/logs/connect.log` — fixed file, ≤ 60 lines, ≤ 300 chars each, last 15 min,
+clamped in MAIN whatever the renderer asks (`boundRequest`). Preload publishes
+`connectDesktop.diagnostics = { info, shellLogTail }`; main answers
+`desktop:diag-info` / `desktop:shell-log-tail`. The portal traces `shell_info` once per
+window and `shell_log` at `call_end` (40 lines around the call). ⛔ The page names no
+file and cannot widen the window — the hosted portal is the renderer.
+
+### 9.5 The update strip
+
+`DesktopUpdateNotice.tsx`: the ✕ is a **one-hour snooze** (`cc-portal-reload-snoozed.*`),
+the strip re-arms itself when it runs out, and only the Reload click acknowledges a
+build for good; an **idle window reloads itself** — no call (`busyRef`) and no
+pointer/key/wheel/touch input for **20 minutes**, checked once a minute, acknowledged
+BEFORE reloading; wording *"Loopcom was updated — reload for the latest fixes"*. All the
+2026-08-20 guards kept, two added (`portalReloadNotice.test.ts`).
+⛔ **This takes TWO deploys to reach the whole fleet**: a window still on the
+pre-`762d055f` bundle runs the old dismiss-forever strip until its person reloads once;
+from then on it snoozes and self-reloads.
+
+### 9.6 Fixes from the first real data
+
+`reg_state` is coalesced to one row per 60 s carrying `changes` and `windowS`; a speaker
+applied before enumeration resolves its label lazily via `enumerateDevices()`.
+
+### 9.7 Deploy state and proof
+
+- **api DEPLOYED** `7f73086a` (verify matched, 0 restarts, 0 error lines, health 200 on both
+  hostnames; `callVerdict.ts` + `SERVER_ONLY_KINDS` + the `call verdict stored` line
+  grepped in the container). **Probe on production** (`scratchpad/ct-probe2.mjs`, own
+  sessions, all rows deleted after): three call shapes → **`split_devices`**,
+  **`no_inbound_rtp`**, **`ok`**, each exactly ONE `source: "server"` row, the admin
+  timeline returning it, and the forged client `verdict` dropped.
+- **portal DEPLOYED** `7f73086a` (0 restarts; `media_sample` / `shell_log` in 2 chunks,
+  `shellLogTail` in 1, the snooze key and the new wording in the notice chunk, the
+  timeline chunk carrying "Last call verdict"; `/` and `/admin/call-timeline` 200 on both
+  hostnames; build id `I3uOUBn64rsU4MGX91VEt`).
+- **desktop `Connect-Setup-0.1.17-rc.9.exe` BUILT** (100,341,039 bytes, sha256
+  `380388fe3c2e0ce9…`, `verify:icon` OK, asar carries `shellLog`, both IPC channels and the
+  bridge key) from a clean `apps/desktop` tree, and **INSTALLED on Izzy's workstation**
+  (`/S`, exit 0, registry + exe `0.1.17-rc.9`, relaunched by hand — `/S` leaves the app
+  closed). ⛔ **NOT published** (feed stays 0.1.16); like rc.5–rc.8 it carries other
+  sessions' unpublished remote-desktop / coworker / elevated-support work, so publishing
+  is fleet-wide and Izzy's call.
+- **Proven from a REAL client**: this workstation's rc.9 app, restarted onto the new
+  bundle, wrote `shell_info {version 0.1.17-rc.9, electron 41.5.0, os win32 10.0.26200,
+  windowKind full}`, a real device inventory and a coalesced `reg_state` within 4 s.
+- **Proven through the support loop**: the restarted watcher retried Y7FK8P, UVW3Y7 and
+  47CUTJ (the bounded failed-run retry from `ab5f5ee1`, live for the first time); on
+  UVW3Y7 the agent called `get_call_diagnostics` FIRST, found *"no verdict on any of her
+  6 sessions — that window was never restarted"*, and wrote that instead of asking for a
+  screen; 47CUTJ's report passed the gate (`ready`).
+
+### 9.8 ⏳ Still not proven
+
+No customer call has produced a `media_sample` or a `verdict` yet — that needs a customer
+window on the new bundle AND a call ≥ 10 s. The one-query check:
+`select payload->>'kind', count(*) from "VoiceDiagEvent" where type='CLIENT_TRACE' and payload->>'kind' in ('media_sample','verdict','shell_log','shell_info') group by 1;`
+No `shell_log` has landed from a real call (this workstation's login has no extension).
+The idle self-reload has not been observed firing. And the product fix the data points
+at — auto-pairing the speaker with the auto-picked headset mic — is still Izzy's call.

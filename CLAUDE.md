@@ -80,13 +80,43 @@ half-assed broken shit."*
   call); surfacing the `setSinkId` failure IN the UI; desktop shell log upload
   (`shell_info` reserved); Windows' own Bluetooth Stereo↔Hands-Free profile flip
   (invisible to the browser; the label carrying "(Hands-Free)" is the tell).
-- ✅ **portal DEPLOYED and bundle-verified 2026-09-04 01:35Z** — `app-portal-1`
-  `.build-commit` = `762d055f`, 0 restarts; the client chunks carry `/voice/diag/events`
-  and every trace kind (hook + both dialers), the `/admin/call-timeline` chunk carries
-  the CLIENT_TRACE renderer + Devices card, `/` and `/admin/call-timeline` 200 on both
-  hostnames. ⏳ **0 customer rows at 01:38Z — expected**: every open window is on the
-  old bundle until fully restarted; the two batch POSTs in nginx are my own
-  unauthenticated probes (401). First restarted window = the acceptance test (handoff §8).
+- ✅✅ **ROUND TWO, SAME DAY (`7f73086a`, handoff §9) — "in whatever you said that's not
+  built yet, build it, commit, push, install, and deploy it all." api + portal DEPLOYED and
+  container-verified at `7f73086a`; desktop `Connect-Setup-0.1.17-rc.9.exe` BUILT,
+  icon-verified and INSTALLED on Izzy's workstation (⛔ NOT published — the feed stays
+  0.1.16 and rc.9 carries other sessions' unpublished work).** What it adds:
+  **(1) `media_sample` every 10 s of a call** — packet deltas, loss, jitter, RTT, ICE path
+  and **audio LEVELS both ways** (RMS from getStats energy deltas; silence < 0.004).
+  **(2) A server-authored per-call `verdict`** (`voice/callVerdict.ts`, pure, 11 tests),
+  stored the moment a `call_end` batch lands, ladder `mic_open_failed > playback_blocked >
+  speaker_apply_failed > no_inbound_rtp > inbound_silent > mic_silent > remote_track_lost >
+  split_devices > poor_network > ok` (+ `short_call` / `no_data`); ⛔ `verdict` is
+  SERVER-ONLY — a client batch carrying it is dropped and counted (proven live). Shown at
+  the top of the Devices card. **(3) The support watcher reads it first** — MCP tool
+  `get_call_diagnostics` on the allowlist + prompt rule; ⛔ never edit
+  `.watch-state.json` while the watcher runs (it rewrites from memory), and
+  `Stop-ScheduledTask` did NOT stop the old `node watch.mjs` — kill the tree, start the
+  task, look for a fresh `==== started` banner. **(4) Desktop shell log** —
+  `connectDesktop.diagnostics.{info,shellLogTail}`, a BOUNDED tail of `connect.log`
+  clamped in main (≤ 60 lines / 300 chars / 15 min; the page names no file), traced as
+  `shell_info` per window + `shell_log` at call end. **(5) The update strip people act
+  on** — measured ~4,100 `/version` polls and ONE reload overnight: the ✕ is a 1-hour
+  SNOOZE now, an idle window (no call, no input 20 min) reloads ITSELF, wording says what
+  to do; ⛔ it takes TWO deploys to reach a window still on the pre-`762d055f` bundle.
+  **(6) Fixes from the first real rows** (Ezra, 527): `reg_state` coalesced to one row a
+  minute with a change count (518 of 527 were flaps); a mount-time speaker apply resolves
+  its label lazily (was "(unnamed 9cc05138)").
+  ✅ **PROVEN:** production probe → `split_devices` / `no_inbound_rtp` / `ok`, one
+  server row each, admin timeline returns it, forged verdict dropped; **this
+  workstation's rc.9 app on the new bundle wrote `shell_info` + a real device inventory
+  within 4 s**; the restarted watcher retried Y7FK8P / UVW3Y7 / 47CUTJ (the bounded retry,
+  live for the first time) and on UVW3Y7 **called `get_call_diagnostics` first and wrote
+  "that window was never restarted" instead of asking for a screen**. Suites: api 31/31,
+  portal 27/27, desktop 235/235, MCP 50/50; typechecks portal/desktop 0, api 81 = baseline.
+  ⏳ **NOT PROVEN: no customer call has produced a `media_sample` or `verdict` yet** (needs
+  a customer window on the new bundle + a call ≥ 10 s); no real `shell_log`; the idle
+  self-reload has not been seen firing. Auto-pairing the speaker with the auto-picked
+  headset mic (the product fix the data points at) is still Izzy's call.
 
 ## ⛔⛔ AGENT HANDOFF — a factory-reset Yealink gets its provisioning folder FROM THE OFFICE MACHINE now: a STANDING PnP listener in the desktop app + HTTPS to phones (2026-09-02, `ba20d717` → `c54a333f`, desktop 0.1.17-rc.8) — READ FIRST before touching `apps/desktop/src/phoneSetup/pnp*.ts`, `PnpResidentHost`, before widening `isLoopcomProvisioningUrl`, before adding a capability op, or for "the reset phone sits on Preparing"
 
