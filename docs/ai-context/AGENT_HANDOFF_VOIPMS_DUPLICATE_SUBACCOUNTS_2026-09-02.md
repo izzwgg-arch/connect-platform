@@ -220,3 +220,41 @@ authenticating.
 **If Matamim is ever asked for:** expect the same shape — delete 836853/836854, and if REGISTER
 still 403s on the unchanged password, rotate 836852 (⛔ carry `default_e911 = 9293598299` in the
 full update) and apply it to trunk 129 the same way.
+
+## 10. 2026-09-04 — how, when, where, why; Matamim fixed; the safeguards (Izzy: "put safeguards and blockers that something like this can never happen again, and fix all others affected")
+
+### 10.1 The full chain, with the evidence for each link
+
+| When (UTC) | What | Where it is written down |
+|---|---|---|
+| **2026-08-05 17:52 → 18:29** | Matamim's paid sign-up hit VoIP.ms's write-path degradation. `createSubAccount` "failed: provider_unreachable (timeout)" — but `vms()` retried transport failures **3×** and each timed-out create **LANDED** at VoIP.ms: ids **836852, 836853, 836854**, all named `344022_Matamih8gmrh`. The watchdog re-ran twice; `findExistingSubaccount` used `.find()` (first match), `reuseSubaccount` rotated only **836852**'s password. The other two kept their create-time password. | `OnboardingEvent` for `cmsey1yel0002o4xoogh8gmrh`; ids consecutive at VoIP.ms |
+| **2026-08-05 21:04 → 22:37** | Same for inii mini: ids **837032, 837033** under `344022_iniimi92gh2m` (`used_username` on the later attempt is why only two). | `OnboardingEvent` for `cmsey1ydz0000o4xoxu92gh2m` |
+| 2026-08-05 → 09-02 | Both trunks registered fine for four weeks — VoIP.ms's registrar happened to resolve each login to the row whose password the PBX held. **Nothing on the platform could see the duplicates** (first-match lookup) and nothing watched carrier-side registration. | §2 |
+| **2026-09-02 ~16:05** | VoIP.ms outage + recovery. Their registrar now refuses the PBX's password for both logins: `401 → digest → 403 Forbidden`. Izzy asked for "reset all registrations"; the forced re-register **exposed** it (the hourly refresh would have hit it anyway). | §1–§2, wire capture |
+| 2026-09-02 15:49 EDT | **First lost call** on 646-984-6023 (`NO ANSWER 0s` at the carrier = busy tone). | carrier CDR |
+| 2026-09-02 16:55 → 09-03 ~05:00 | The interim fix ("clone the real password onto the duplicates") ran every 10 min and **every attempt was refused `used_password`** — VoIP.ms forbids reusing a password on a login name, so the fix was impossible by policy. | `/root/voipms-dup-fix-retry-20260902.log` |
+| **2026-09-03 12:48:33 EDT** | Asterisk: *"Fatal response '403' … stopping outbound registration"* — `max_retries` reached. **The PBX stopped trying, silently.** | `/var/log/asterisk/full` |
+| 2026-09-03 ~12:05Z | An api deploy recreated `app-api-1` and deleted `fix-dups.ts` (a `docker cp` into the container); the loopcom loop died `ERR_MODULE_NOT_FOUND` every 10 min. | `/root/voipms-dup-fix-retry-20260902.log` |
+| 2026-09-03 16:51Z / 16:58Z | Both watchers hit their 24 h caps and exited. **No alarm anywhere.** | both logs |
+| 2026-09-04 ~15:00Z | inii mini complains. ~**146** calls to 646-984-6023 had been busy (30 / 71 / 45 per day). Matamim: 1 lost call (their volume is low). | carrier CDR |
+
+**Why, in one paragraph:** a non-idempotent carrier write was retried on timeout (created the duplicates); the lookup that should have seen them was first-match (hid them for a month); the 09-02 fix rested on a VoIP.ms policy nobody had checked (impossible); the two watchers were hand-run scripts with 24 h caps and no alarm on their own death (died the next day); and no monitor on the platform ever asked the carrier whether a number's trunk was registered (two days of busy signals until the customer called). Five gaps, one outcome.
+
+### 10.2 Matamim fixed the same way (Izzy's mandate)
+
+`delSubAccount 836853` + `836854` → success, only **836852** (`e29dcc32695f`, `default_e911 9293598299`) left; `setDIDRouting 9293598299 → account:344022_Matamih8gmrh` re-asserted. `pjsip send register 344022_Matamih8gmrh` → **still 403** after the delete (same as inii mini — deleting alone never clears it). Rotated 836852 to a new password (full-update shape **carrying `default_e911`**), read back `3cbf8647717a`; stored on `cmsey1yel0002o4xoogh8gmrh`; trunk **129** `outgoing_remotesecret` + conf `password=` line replaced (backup `/root/matamim-trunk129-backup-20260904T163314Z/`, ACL mask `rw-` preserved); `module reload res_pjsip.so`; register → **Registered**. 65/65 VoIP.ms trunks up, 150 contacts. Proof: `channel originate Local/9293598299@T102_cos-all` → out via Telocall (`trk-72-dial`) → back in → `default-trunk` "Forwarding call to Matamim tenant" → `T104_incoming-calls` "Main ported" → `T104_cos-all,101`; carrier CDR `ANSWERED 11s`. Password transit file shredded on both boxes.
+
+### 10.3 Fleet sweep (read-only, `getSubAccounts` + `getDIDsInfo` + `getRegistrationStatus` on every subaccount holding a number)
+
+61 subaccounts, **0 duplicate names**; 74 DIDs, 60 on subaccounts, 8 on the master spare pool; **59 of 60 registered**. The one exception: toll-free **877-220-5058** routes to `344022_fox`, which VoIP.ms answers `invalid_account` for (the subaccount no longer exists). It is an orphan — no PBX inbound route, no `ombu_tenant_dids` row, no Connect tenant, `TenantSmsNumber` unassigned, 0 calls — so no customer is affected; it needs a decision (release it, or route it) and the guardrail below will text about it once.
+
+### 10.4 The safeguards (`74d10754` + `edf36905`, api)
+
+1. **`vms()` never retries a creating write.** `NON_IDEMPOTENT_METHODS` (`createSubAccount`, `delSubAccount`, `orderDID`, `orderTollFree`, `orderVanity`, `backOrderDID`, `cancelDID`, `addLNPPort`, `addLNPFile`, `e911Provision`, `sendSMS`, `sendMMS`) get ONE attempt; a transport failure throws `provider_unreachable_write_uncertain` ("the write may have landed; re-list before trying again"). Reads and full-update writes keep the 3× outage retry. The test that used to pin the 3× createSubAccount retry now pins ONE.
+2. **Duplicates can no longer hide.** `findSubaccountRows` reads every row for a login; `chooseSubaccountRow` adopts the **lowest id** (the row the PBX trunk was built against) and names the duplicates; `findExistingSubaccount` writes that onto the customer's timeline (`⚠ VoIP.ms holds N subaccount rows … duplicate id(s) … must be deleted`) and to the api log.
+3. **`voipMsTrunkGuardrail.ts`** — every 30 min (boot kick 3 min; `VOIPMS_TRUNK_GUARDRAIL_DISABLED=1` kills it): `getSubAccounts` → any login name held twice is an alarm on the spot; `getDIDsInfo` → every subaccount holding a live number → `getRegistrationStatus`; **unregistered (`no`, or `invalid_account`) on two consecutive sweeps = alarm**. Alarms are `AgentEscalation` rows (SMS to Izzy's two phones + the escalation email — the only channel that reaches a person; ⛔ never `ADMIN_ALERT`), de-duped over a 6 h window per key, naming the number, the company, and the repair recipe. State = the previous sweep's audit row (`voipms_trunk.sweep`, written every run with `actor` + `hash`); a carrier outage logs `sweep FAILED` and writes nothing (an outage at VoIP.ms is not "every trunk is down"). Armed in `server.ts`; boot line `VOIPMS_TRUNK_GUARDRAIL_ARMED`.
+4. **Tests:** 14 guardrail (`voipMsTrunkGuardrail.test.ts`, incl. the real incident as a fixture, the two-sweep rule, the window re-arm, provider-outage silence, the `invalid_account` case, and a source guard that `server.ts` actually arms it) + 5 new/rewritten provisioning tests (write-once, the lowest-id adoption with the duplicate named). Onboarding suite 405 pass; the 25 failures are the documented pre-existing `resolvePbxRouteHelperConfig` orchestrator mock breakage. api typecheck 81 = baseline.
+
+### 10.5 Deploy state
+
+See the CLAUDE.md section for the container verification recorded at deploy time.
