@@ -177,3 +177,46 @@ Postgres). The one staged action was NOT run.
   count only the bare rows or every figure doubles.
 - `ombu_outbound_route_trunks` does not exist; find a trunk's users by grepping the rendered
   Main dialplan for `Gosub(trk-<id>,` and reading the enclosing `[trk-group-N]`.
+
+## 9. 2026-09-04 — 646-984-6023 FIXED (Izzy's mandate: "Run it, and delete the junk rows" → "only the 646 number, focus on one thing")
+
+**Sequence, with what each step proved**
+1. `delSubAccount 837033` → `{"status":"success"}`; `getSubAccounts` then lists only
+   `837032:eac2287db3f6`. Routing re-asserted `setDIDRouting 6469846023 → account:344022_iniimi92gh2m`
+   (→ `success`; read back). ⛔ The reroute onto `344022_iniimini` was **withdrawn** — Izzy:
+   845-288-0994 "was supposed to be removed a long time ago"; the number must run on its own
+   subaccount. `/root/reroute-inii-did.ts` on loopcom is inert.
+2. `pjsip send register 344022_iniimi92gh2m` (⛔ not `…-oauth`, which answers "Unable to retrieve
+   registration") → **still 403**, again after 45 s. The PBX secret's hash (`eac2287db3f6`) equals the
+   surviving row's; `auth_type 1`, `enable_ip_restriction 0`, `enable_pop_restriction 0`, codecs, nat,
+   protocol all identical to two working subaccounts. So the 09-02 "registrar resolves to the
+   duplicate" theory was at best half of it — VoIP.ms's registrar did not accept the old credential
+   even with one row left.
+3. **Rotation is what worked.** `setSubAccount` on 837032 with a fresh 20-char password (generated
+   in-container, `reuseSubaccount`'s exact full-update shape) → `success`, read back `8feee72bf2b3`.
+   Stored on the submission (`voipmsSubaccountEncrypted`, `cmsey1ydz0000o4xoxu92gh2m`) so a future
+   `applyOnboardingNumber` retry reuses it instead of rotating again.
+4. PBX (Izzy's mandate): backup `/root/inii-trunk130-backup-20260904T155412Z/` (conf + old secret,
+   600); `update ombu_trunk_parameters … trunk_id=130 and param='outgoing_remotesecret' and
+   value=<old>` (1 row); `password=` line in `[344022_iniimi92gh2m-oauth]` of
+   `pjsip__50-1-trunks.conf` replaced via `cat tmp > file` (owner `www-data:www-data`, ACL mask
+   `rw-` preserved — verified after); `module reload res_pjsip.so`; `pjsip send register
+   344022_iniimi92gh2m` → **Registered (exp. 3585s)** within 10 s. 64/64 VoIP.ms trunks registered,
+   150 phone contacts Avail (149 before the reload).
+5. Proof: `channel originate Local/6469846023@T102_cos-all application Wait 10` → arrived
+   `trk-37-in` (Comfort Control — any VoIP.ms trunk's identify can match; irrelevant) →
+   `default-trunk` "Forwarding call to Inii Mini tenant" → `T105_incoming-calls` "Main ported" →
+   `connect-doorway` → `connect-menu,mcmsgxycu3019ns1139yvetiih`. Carrier CDR: `2026-09-04 12:55:09
+   ANSWERED 11s` — the first answered call on the number since 09-02 11:44. VoIP.ms
+   `getRegistrationStatus` → `registered: yes` on New York 1.
+6. Cleanup: every staged `.ts` removed from `app-api-1`; the password transit file shredded on
+   loopcom and the PBX; no password ever printed.
+
+**Not touched, on purpose** — Matamim's 836853/836854 and 929-359-8299 (still Rejected), the orphan
+845-288-0994 / `344022_iniimini` / trunk 64, `e911 0` on the ported number, and inii mini's own
+unregistered phone. T105's 911 route (`Gosub(trk-130)`) works again as a side effect of the trunk
+authenticating.
+
+**If Matamim is ever asked for:** expect the same shape — delete 836853/836854, and if REGISTER
+still 403s on the unchanged password, rotate 836852 (⛔ carry `default_e911 = 9293598299` in the
+full update) and apply it to trunk 129 the same way.

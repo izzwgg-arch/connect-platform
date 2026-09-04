@@ -501,13 +501,38 @@ Memory: [[voipms-duplicate-subaccounts-403]].
   240 by NUMBER) is the leftover of deleted PBX tenant 27 — its only DID 845-288-0994 has no
   inbound route, no `ombu_tenant_dids` row, no ARS uses `trk-group-59`, 0 calls; nothing live
   shares it. `setDIDRouting 6469846023 → account:344022_iniimini` is ONE reversible carrier
-  write (SMS is per-DID and untouched). Staged, dry-run proven, NOT applied:
-  `docker exec -w /app/apps/api app-api-1 npx tsx reroute-inii-did.ts apply` (source
-  `/root/reroute-inii-did.ts` on loopcom; rollback = same script with the old name). ⛔ It fixes
-  INBOUND only — T105's `emergency-calls` still `Gosub(trk-130)` (the dead trunk), so 911 from
-  inii mini AND Matamim stays refused until the junk rows 837033 / 836853 / 836854 are deleted
-  (`delSubAccount`, or a VoIP.ms ticket) — VoIP.ms's write path answers today, so that is
-  runnable; both are Izzy's call. ⛔ The ported number also reads `e911: 0` at the carrier.
+  write. ⛔ **NOT USED — Izzy (2026-09-04): 845-288-0994 "was supposed to be removed a long
+  time ago" and the 646 number must run on its OWN subaccount, the way it did before.** The
+  staged `/root/reroute-inii-did.ts` on loopcom is inert; delete it rather than run it.
+- ✅✅ **FIXED 2026-09-04 15:55Z UNDER IZZY'S MANDATE ("Run it, and delete the junk rows"; then
+  "only the 646 number… focus on one thing") — 646-984-6023 IS BACK: first answered call since
+  09-02 11:44 EDT, proven by the carrier CDR (`12:55:09 ANSWERED 11s`), VoIP.ms
+  `getRegistrationStatus registered: yes`, PBX trunk 130 `Registered (exp. 3585s)`, 64/64 VoIP.ms
+  trunks up, 150 phone contacts (149 before — none dropped), and a real originated call
+  traced into `T105_incoming-calls` "Main ported" → `connect-doorway` → `connect-menu`.**
+  ⛔⛔ **DELETING THE JUNK ROW WAS NOT ENOUGH — THE 09-02 THEORY WAS INCOMPLETE.** After
+  `delSubAccount 837033` (`status: success`, only 837032 left, DID routing re-asserted to
+  `account:344022_iniimi92gh2m`), REGISTER with the UNCHANGED password — whose hash
+  `eac2287db3f6` matched the surviving row exactly, and whose every other field matched two
+  healthy subaccounts — **still answered 403** after a 45 s wait. Whatever VoIP.ms's registrar
+  holds for that login was not refreshed by the delete. **What worked: ROTATE the real row to
+  a brand-new password** (`setSubAccount` on 837032, the exact `reuseSubaccount` shape) and put
+  it on the PBX — `ombu_trunk_parameters` trunk 130 `outgoing_remotesecret` (guarded on the old
+  value) + the `password=` line in `pjsip__50-1-trunks.conf` (`cat tmp > file`, owner
+  `www-data:www-data` + ACL mask `rw-` preserved) + `module reload res_pjsip.so` +
+  `pjsip send register 344022_iniimi92gh2m`. Registered within 10 s. The new password also
+  went into `OnboardingSubmission.voipmsSubaccountEncrypted` for `cmsey1ydz0000o4xoxu92gh2m`
+  (so a setup retry cannot rotate it back) and was never printed anywhere; the transit file
+  was shredded on both boxes. Backup: PBX `/root/inii-trunk130-backup-20260904T155412Z/`
+  (conf + old secret, 600). ⛔ The registration object is `344022_iniimi92gh2m` — `pjsip send
+  register <name>-oauth` answers "Unable to retrieve registration" and reads like a broken
+  trunk. ⛔ An inbound VoIP.ms call can arrive on ANY VoIP.ms trunk's `trk-N-in` (the test
+  landed on `trk-37-in` Comfort Control — all share newyork1's IP and pjsip matches the first
+  identify); harmless, `default-trunk` routes by DID. **Deliberately NOT touched (Izzy's
+  "one thing"):** Matamim's 836853/836854 (929 still `Rejected`), the orphan 845-288-0994 /
+  `344022_iniimini`, T105's `emergency-calls` (still `Gosub(trk-130)` — now WORKS again because
+  trunk 130 authenticates), the ported number's `e911: 0`, and the customer's unregistered
+  phone (`sales@iniimini.com` last login 08-06 — callers reach the menu/voicemail, not a person).
 - ⚠️ **Seen, not changed:** Telocall `0001` registration has been Rejected/"no response"
   since ~Aug 30 and gave up — `server_uri` port **700** vs the working contact on
   **7000** (typo in `pjsip__50-1-trunks.conf`); calls flow both ways regardless (IP-auth).
