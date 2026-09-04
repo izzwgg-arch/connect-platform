@@ -771,21 +771,37 @@ test("attachments that DID reach the carrier are not re-sent on retry", async ()
 
 // ── Outage resilience (Cloudflare 521/522 HTML, timeouts) ────────────────────
 
-test("OUTAGE: HTML error pages from VoIP.ms are retried and the call succeeds when the API comes back", async () => {
+test("OUTAGE: HTML error pages from VoIP.ms are retried on a READ and the stage succeeds when the API comes back", async () => {
   reset({ live: true });
   let attempts = 0;
-  vmsHandlers.createSubAccount = (p) => {
+  vmsHandlers.getSubAccounts = () => {
     attempts++;
     if (attempts <= 2) return "<html>521 Web server is down</html>" as any; // Cloudflare page, not JSON
-    return { status: "success", account: `344022_${p.username}` };
+    return { status: "success", accounts: [] };
   };
   const id = seedSubmission();
   const res = await mod.applyOnboardingNumber(id);
   assert.equal(res.ok, true);
-  assert.equal(calls("createSubAccount").length, 3); // two outage pages + one real answer
+  assert.equal(calls("getSubAccounts").length, 3); // two outage pages + one real answer
+  assert.equal(calls("createSubAccount").length, 1);
 });
 
-test("OUTAGE: a dead provider fails the stage with provider_unreachable after 3 attempts — it does not hang or lie", async () => {
+// ⛔ This test used to assert createSubAccount was retried THREE times on a
+// timeout — i.e. it pinned the exact mechanism that created the 2026-08-05
+// duplicate subaccount rows (each timed-out attempt LANDED at VoIP.ms) and
+// took inii mini's number down for two days on 2026-09-02. A creating write
+// is sent exactly once.
+test("OUTAGE: a timed-out createSubAccount is sent EXACTLY ONCE — it may have landed, so it is never retried", async () => {
+  reset({ live: true });
+  vmsHandlers.createSubAccount = () => "<html>522 Connection timed out</html>" as any;
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, false);
+  assert.match(state.submissions.get(id).setupError, /provider_unreachable_write_uncertain/);
+  assert.equal(calls("createSubAccount").length, 1);
+});
+
+test("OUTAGE: a dead provider fails the stage with provider_unreachable — bounded, no hang, no lie", async () => {
   reset({ live: true });
   vmsHandlers.getSubAccounts = () => "<html>522 Connection timed out</html>" as any;
   vmsHandlers.createSubAccount = () => "<html>522 Connection timed out</html>" as any;
@@ -793,7 +809,39 @@ test("OUTAGE: a dead provider fails the stage with provider_unreachable after 3 
   const res = await mod.applyOnboardingNumber(id);
   assert.equal(res.ok, false);
   assert.match(state.submissions.get(id).setupError, /provider_unreachable/);
-  assert.equal(calls("createSubAccount").length, 3); // bounded — no infinite retry
+  assert.equal(calls("getSubAccounts").length, 3); // reads retry
+  assert.equal(calls("createSubAccount").length, 1); // creates do not
+});
+
+test("every creating/ordering method is on the write-once list", () => {
+  for (const m of ["createSubAccount", "orderDID", "orderTollFree", "orderVanity", "addLNPPort", "addLNPFile", "e911Provision", "delSubAccount"]) {
+    assert.ok(mod.NON_IDEMPOTENT_METHODS.has(m), m + " must never be retried");
+  }
+  for (const m of ["getSubAccounts", "getDIDsInfo", "setSubAccount", "setDIDRouting", "searchDIDsUSA"]) {
+    assert.ok(!mod.NON_IDEMPOTENT_METHODS.has(m), m + " is idempotent and may retry");
+  }
+});
+
+// The 2026-08-05 aftermath: VoIP.ms holds TWO rows under one login. The build
+// must use the LOWEST id (the row the PBX trunk was built against), name the
+// duplicate on the customer's timeline, and never silently pick whichever
+// row the API listed first.
+test("duplicate subaccount rows: the lowest id is adopted and the duplicate is named on the timeline", async () => {
+  reset({ live: true });
+  vmsHandlers.getSubAccounts = () => ({
+    status: "success",
+    accounts: [
+      { id: "837033", account: "344022_BobsPlumsub1" }, // listed first, but the duplicate
+      { id: "837032", account: "344022_BobsPlumsub1" },
+    ],
+  });
+  const id = seedSubmission();
+  const res = await mod.applyOnboardingNumber(id);
+  assert.equal(res.ok, true);
+  assert.equal(calls("createSubAccount").length, 0);
+  assert.equal(calls("setSubAccount")[0]?.params.id, "837032");
+  assert.ok(state.events.some((e) => e.submissionId === id && /duplicate id\(s\) 837033/.test(e.message)), "timeline must name the duplicate");
+  assert.deepEqual(mod.chooseSubaccountRow([{ id: "5" }, { id: "3" }, { id: "4" }]), { hit: { id: "3" }, duplicateIds: ["4", "5"] });
 });
 
 test("a REAL VoIP.ms rejection (JSON error status) is NOT retried", async () => {

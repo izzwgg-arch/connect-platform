@@ -82,7 +82,35 @@ export async function loadMasterCreds(): Promise<VmsCreds | null> {
  * body starts with "<" so it isn't JSON) — are retried up to 3 times with
  * exponential backoff. A real API answer with a non-success status is NOT
  * retried; that's VoIP.ms saying no, not an outage.
+ *
+ * ⛔⛔ EXCEPT A WRITE THAT CREATES SOMETHING, WHICH IS SENT EXACTLY ONCE.
+ * 2026-08-05: every createSubAccount timed out on OUR side and LANDED at
+ * VoIP.ms anyway; the retry created it again. Matamim got three subaccount
+ * rows under one login name and inii mini two. From 2026-09-02 VoIP.ms's
+ * registrar refused the PBX's password for both logins (403 after a valid
+ * digest) and inii mini's number gave callers a busy signal for two days
+ * (~146 lost calls) until the customer complained. See
+ * docs/ai-context/AGENT_HANDOFF_VOIPMS_DUPLICATE_SUBACCOUNTS_2026-09-02.md.
+ * A timeout is "I stopped listening", never "it did not happen": for the
+ * methods in NON_IDEMPOTENT_METHODS a transport failure throws
+ * `provider_unreachable_write_uncertain` after ONE attempt, and the caller
+ * must re-list and adopt what may already exist (ensureSubaccount does).
  */
+export const NON_IDEMPOTENT_METHODS: ReadonlySet<string> = new Set([
+  "createSubAccount",
+  "delSubAccount",
+  "orderDID",
+  "orderTollFree",
+  "orderVanity",
+  "backOrderDID",
+  "cancelDID",
+  "addLNPPort",
+  "addLNPFile",
+  "e911Provision",
+  "sendSMS",
+  "sendMMS",
+]);
+
 export async function vms(creds: VmsCreds, method: string, params: Record<string, string> = {}, timeoutMs = 30_000): Promise<any> {
   const base = (creds.apiBaseUrl || VMS_BASE_DEFAULT).replace(/\/$/, "");
   const url = new URL(base);
@@ -91,7 +119,8 @@ export async function vms(creds: VmsCreds, method: string, params: Record<string
   url.searchParams.set("method", method);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-  const attempts = 3;
+  const writeOnce = NON_IDEMPOTENT_METHODS.has(method);
+  const attempts = writeOnce ? 1 : 3;
   const backoffBase = Number(process.env.VOIPMS_RETRY_BASE_MS || 1000);
   let lastTransport = "";
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -105,6 +134,11 @@ export async function vms(creds: VmsCreds, method: string, params: Record<string
       if (attempt < attempts) {
         await new Promise((r) => setTimeout(r, backoffBase * 2 ** (attempt - 1)));
         continue;
+      }
+      if (writeOnce) {
+        // The request may have LANDED (2026-08-05 proved it does). Say so, and
+        // never let anything upstream turn this into a second attempt.
+        throw new Error(`voipms ${method} failed: provider_unreachable_write_uncertain (${lastTransport}) — the write may have landed; re-list before trying again`);
       }
       throw new Error(`voipms ${method} failed: provider_unreachable (${lastTransport})`);
     }
@@ -218,7 +252,7 @@ async function ensureSubaccount(
   // self-heals on used_username by re-looking-up and reusing.
   let hit: any = null;
   try {
-    hit = await findExistingSubaccount(creds, subName);
+    hit = await findExistingSubaccount(creds, subName, submissionId);
   } catch {
     /* transient — fall through to create, which self-heals */
   }
@@ -248,17 +282,56 @@ async function ensureSubaccount(
     // Live 2026-07-27: "Ezra Store 1" failed three times in a row on exactly
     // this, permanently blocking the submission.
     if (String(e?.message || "").includes("used_username")) {
-      const again = await findExistingSubaccount(creds, subName);
+      const again = await findExistingSubaccount(creds, subName, submissionId);
       if (again) return await reuseSubaccount(creds, submissionId, again, password);
     }
+    // A timed-out create is sent ONCE (NON_IDEMPOTENT_METHODS). It may have
+    // landed; the next run's pre-lookup adopts whatever exists. Never retry
+    // the create here — that is the 2026-08-05 duplicate-row mechanism.
     throw e;
   }
 }
 
-async function findExistingSubaccount(creds: VmsCreds, subName: string): Promise<any | null> {
+/**
+ * Every VoIP.ms row carrying this submission's login name, lowest id first.
+ * ⛔ More than one row is a FAULT (see NON_IDEMPOTENT_METHODS): the PBX trunk
+ * can only hold one password and VoIP.ms's registrar answers 403 for a login
+ * whose rows disagree. Callers must read the whole list, never `.find()` —
+ * the old first-match lookup is what kept the 2026-08-05 duplicates invisible
+ * for four weeks.
+ */
+export async function findSubaccountRows(creds: VmsCreds, subName: string): Promise<any[]> {
   const existing = await vms(creds, "getSubAccounts");
   const list: any[] = Array.isArray(existing?.accounts) ? existing.accounts : [];
-  return list.find((a) => String(a?.account || "").toLowerCase().endsWith(`_${subName.toLowerCase()}`)) || null;
+  return list
+    .filter((a) => String(a?.account || "").toLowerCase().endsWith(`_${subName.toLowerCase()}`))
+    .sort((x, y) => Number(x?.id) - Number(y?.id));
+}
+
+/**
+ * Pick the row a build must use when VoIP.ms holds several for one login:
+ * the LOWEST id (the original create — the one the PBX trunk was built
+ * against), and name every other id so a person can delete it. Pure so the
+ * rule is testable; the caller logs and escalates.
+ */
+export function chooseSubaccountRow(rows: any[]): { hit: any | null; duplicateIds: string[] } {
+  const sorted = [...rows].sort((x, y) => Number(x?.id) - Number(y?.id));
+  return { hit: sorted[0] || null, duplicateIds: sorted.slice(1).map((r) => String(r?.id)) };
+}
+
+async function findExistingSubaccount(creds: VmsCreds, subName: string, submissionId?: string): Promise<any | null> {
+  const rows = await findSubaccountRows(creds, subName);
+  const { hit, duplicateIds } = chooseSubaccountRow(rows);
+  if (duplicateIds.length && submissionId) {
+    // Loud, on the customer's own timeline AND in the api log — the hourly
+    // voipMsTrunkGuardrail sweep turns this into a text to the owner.
+    await logEvent(
+      submissionId,
+      `⚠ VoIP.ms holds ${rows.length} subaccount rows named ${hit?.account} — using id ${hit?.id}; duplicate id(s) ${duplicateIds.join(", ")} must be deleted at VoIP.ms or the trunk will stop registering.`,
+    );
+    console.warn(`[voipms] duplicate subaccount rows for ${hit?.account}: keeping ${hit?.id}, duplicates ${duplicateIds.join(",")}`);
+  }
+  return hit;
 }
 
 /**

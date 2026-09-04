@@ -356,6 +356,7 @@ import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
 import { startYiddishLabsCreditWatch } from "./yiddishLabsCreditWatch";
 import { startTurnHealthWatch } from "./turnHealthWatch";
 import { startVoicemailMailboxSweep } from "./pbx/voicemailMailboxGuardrail";
+import { startVoipmsTrunkGuardrail } from "./onboarding/voipMsTrunkGuardrail";
 import { syncAgentKnowledgeDocs, resolveAgentKnowledgeDir } from "./agentKnowledgeSync";
 // The Watchman's read-only PBX probe (Phase 5b) — the same connect_read door
 // the PBX Console reads through, never a second credential path.
@@ -39863,6 +39864,15 @@ const turnHealthTimer = startTurnHealthWatch(app.log);
 // which read 122 == 122 through the whole incident because the casualties were
 // excluded from both sides. Boot line: VOICEMAIL_MAILBOX_SWEEP_ARMED.
 startVoicemailMailboxSweep(app.log);
+// VoIP.ms trunk guardrail (2026-09-04). inii mini's number gave callers a busy
+// signal for TWO DAYS (~146 lost calls) because its VoIP.ms subaccount had no
+// registration — the PBX had given up REGISTERing after ten 403s and nothing
+// on the platform watched the carrier side. This sweep asks VoIP.ms itself
+// (getRegistrationStatus) for every subaccount that holds a live number, and
+// texts the owner (AgentEscalation) when one has been unregistered on two
+// consecutive sweeps, or when a login name exists twice (the 2026-08-05
+// duplicate rows that caused it). Boot line: VOIPMS_TRUNK_GUARDRAIL_ARMED.
+startVoipmsTrunkGuardrail(app.log);
 if (yiddishCreditTimer) registerShutdownTimer(yiddishCreditTimer);
 
 // "Fix it!" — the owner's reply to an escalation text. Inbound SMS arrives by
