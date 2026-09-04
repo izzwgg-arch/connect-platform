@@ -63,7 +63,10 @@ test("⛔ the one-way-audio detector and the remote-track lifecycle reach the se
   assert.match(hook, /trace\("remote_track_muted"/);
   assert.match(hook, /trace\("remote_track_unmuted"/);
   assert.match(hook, /trace\("remote_track_ended"/);
-  assert.match(hook, /trace\("reg_state", \{ state: regState \}\)/);
+  // Coalesced (2026-09-04): one row per window carrying the change count — a
+  // flapping client must never write one row per flap (518 rows in 4 h, live).
+  assert.match(hook, /trace\("reg_state", \{ state: regState, changes: regTrace\.changes/);
+  assert.match(hook, /if \(now - regTrace\.at < REG_TRACE_WINDOW_MS\) return;/);
 });
 
 test("⛔ every press on the call path is recorded — and DTMF carries a COUNT, never the digit", () => {

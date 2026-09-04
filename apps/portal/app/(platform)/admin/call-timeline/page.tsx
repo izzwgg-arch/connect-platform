@@ -83,13 +83,22 @@ const TRACE_ICONS: Record<string, string> = {
   remote_track_unmuted: "🔊",
   remote_track_ended: "🔇",
   call_end: "🔴",
+  media_sample: "📈",
+  verdict: "🧭",
   reg_state: "📶",
   press: "👆",
   settings_opened: "⚙️",
   shell_info: "🖥",
+  shell_log: "📜",
 };
 
 const TRACE_BAD = new Set(["mic_select_failed", "speaker_select_failed", "mic_open_failed", "remote_audio_play_blocked", "one_way_audio", "remote_track_muted", "remote_track_ended"]);
+/** Verdict codes that mean the person could not have heard / been heard. */
+const VERDICT_BAD = new Set(["mic_open_failed", "playback_blocked", "speaker_apply_failed", "no_inbound_rtp", "inbound_silent", "mic_silent", "remote_track_lost"]);
+const VERDICT_WARN = new Set(["split_devices", "poor_network"]);
+function pctLevel(v: unknown): string {
+  return typeof v === "number" ? `${(v * 100).toFixed(1)}%` : "n/a";
+}
 
 function traceKind(p: Record<string, unknown>): string {
   return typeof p.kind === "string" ? p.kind : "";
@@ -140,8 +149,16 @@ function traceSummary(p: Record<string, unknown>): string {
       return "⛔ Remote audio track ended";
     case "call_end":
       return `Call ended: ${s("endReason")} · ${Math.round(Number(p.durationMs || 0) / 1000)}s · mic "${s("micLabel")}" · speaker "${s("speakerLabel")}"${p.remoteAudioSeen === false ? " · ⛔ remote audio never attached" : ""}${s("lastCallError") ? ` · ${s("lastCallError")}` : ""}`;
+    case "media_sample":
+      return `t+${s("t")}s · in ${s("rxPkts")} pkts / level ${pctLevel(p.rxLevel)} · out ${s("txPkts")} pkts / level ${pctLevel(p.txLevel)} · loss ${s("lost")} · RTT ${s("rttMs")}ms · jitter ${s("jitterMs")}ms${p.relay ? " · relay" : ""}`;
+    case "verdict":
+      return `${VERDICT_BAD.has(s("code")) ? "⛔ " : VERDICT_WARN.has(s("code")) ? "⚠️ " : "✅ "}VERDICT ${s("code")}: ${s("headline")}`;
+    case "shell_info":
+      return `Desktop app ${s("version")} · ${s("os")} · window ${s("windowKind")}${s("electron") ? ` · Electron ${s("electron")}` : ""}`;
+    case "shell_log":
+      return `Desktop shell log: ${Array.isArray(p.lines) ? p.lines.length : 0} lines${Number(p.truncated) > 0 ? ` (+${s("truncated")} cut)` : ""}`;
     case "reg_state":
-      return `Registration: ${s("state")}`;
+      return `Registration: ${s("state")}${Number(p.changes) > 1 ? ` (${s("changes")} changes in the last ${s("windowS")}s)` : ""}`;
     case "press":
       return `Pressed ${s("action")}${p.hadSession === false ? " — ⛔ no call session (silent no-op)" : ""}${s("callState") ? ` while ${s("callState")}` : ""}`;
     case "settings_opened":
@@ -394,9 +411,27 @@ function DevicesCard({ events }: { events: TimelineEvent[] }) {
     </div>
   );
 
+  const verdict = lastTrace(events, "verdict");
+  const vCode = s(verdict, "code");
+  const vTone = VERDICT_BAD.has(vCode) ? "#dc2626" : VERDICT_WARN.has(vCode) ? "#f59e0b" : vCode === "ok" ? "#16a34a" : "#64748b";
+  const vEvidence = Array.isArray(verdict?.evidence) ? (verdict!.evidence as unknown[]).map(String) : [];
+  const shell = lastTrace(events, "shell_info");
+  const nSamples = countTrace(events, "media_sample");
+
   return (
     <div style={{ background: "#0f172a", border: `1px solid ${nSpkFail || nOneWay || nBlocked || nMicFail ? "#7f1d1d" : "#1e3a5f"}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-      <div style={{ color: "#93c5fd", fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎧 Devices & audio — what the app itself recorded</div>
+      {verdict && (
+        <div style={{ marginBottom: 12, padding: "10px 12px", background: "#111827", borderRadius: 8, borderLeft: `4px solid ${vTone}` }}>
+          <div style={{ fontSize: 11, letterSpacing: 0.6, color: vTone, fontWeight: 700, textTransform: "uppercase" }}>Last call verdict · {vCode}</div>
+          <div style={{ fontSize: 14, color: "#f1f5f9", fontWeight: 600, marginTop: 2 }}>{s(verdict, "headline")}</div>
+          {vEvidence.length > 0 && (
+            <ul style={{ margin: "6px 0 0 0", paddingLeft: 18, fontSize: 12, color: "#cbd5e1" }}>
+              {vEvidence.map((l, i) => <li key={i}>{l}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+      <div style={{ color: "#93c5fd", fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎧 Devices & audio — what the app itself recorded{shell ? <span style={{ color: "#64748b", fontWeight: 400, fontSize: 12 }}> · desktop app {s(shell, "version")} on {s(shell, "os")}</span> : null}{nSamples ? <span style={{ color: "#64748b", fontWeight: 400, fontSize: 12 }}> · {nSamples} media samples</span> : null}</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
         <div>
           <Row label="Microphone on last call" value={callMic} />

@@ -394,6 +394,12 @@ type ConnectDesktopApi = {
   notifications?: {
     show: (payload: { kind: string; title: string; body?: string; route?: string }) => Promise<unknown>;
   };
+  // 2026-09-04: the shell's own facts for the client trace. Read-only, bounded
+  // in the MAIN process (a page can never widen the window or name a file).
+  diagnostics?: {
+    info: () => Promise<{ version: string; os: string; windowKind: string; electron: string; arch: string }>;
+    shellLogTail: (req: { sinceMs?: number; maxLines?: number }) => Promise<{ lines: string[]; truncated: number; fileBytes: number }>;
+  };
 };
 
 type DesktopWindowSettings = {
@@ -519,7 +525,20 @@ interface FullStatSnapshot {
   bytesReceived: number | null;
   bytesSent: number | null;
   audioLevel: number | null;
+  // 2026-09-04 — cumulative audio ENERGY both ways (getStats totalAudioEnergy /
+  // totalSamplesDuration). The 10-second media_sample trace turns the deltas
+  // into an RMS level: "sound arrived" vs "packets arrived carrying silence" vs
+  // "nothing arrived" — the number every call platform's diagnosis rests on.
+  remoteAudioEnergy: number | null;
+  remoteSamplesDuration: number | null;
+  localAudioEnergy: number | null;
+  localSamplesDuration: number | null;
+  concealedSamples: number | null;
 }
+
+/** reg_state trace coalescing — one row per window, see the effect below. */
+const REG_TRACE_WINDOW_MS = 60_000;
+const regTrace = { at: 0, state: "", changes: 0 };
 
 /** Scrape getStats() for all audio quality + ICE fields. Non-fatal. */
 async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
@@ -535,6 +554,11 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
     bytesReceived: null,
     bytesSent: null,
     audioLevel: null,
+    remoteAudioEnergy: null,
+    remoteSamplesDuration: null,
+    localAudioEnergy: null,
+    localSamplesDuration: null,
+    concealedSamples: null,
   };
   try {
     const stats = await pc.getStats();
@@ -558,6 +582,9 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
           result.jitterBufferMs = Math.round(ir.jitterBufferDelay * 1000);
         }
         if (typeof ir.bytesReceived === "number") result.bytesReceived = ir.bytesReceived;
+        if (typeof ir.totalAudioEnergy === "number") result.remoteAudioEnergy = ir.totalAudioEnergy;
+        if (typeof ir.totalSamplesDuration === "number") result.remoteSamplesDuration = ir.totalSamplesDuration;
+        if (typeof ir.concealedSamples === "number") result.concealedSamples = ir.concealedSamples;
         if (ir.codecId && codecMap.has(ir.codecId)) {
           result.audioCodec = codecMap.get(ir.codecId)!.replace("audio/", "");
         }
@@ -566,6 +593,11 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
         const or = r as any;
         if (typeof or.packetsSent === "number") result.packetsSent = or.packetsSent;
         if (typeof or.bytesSent === "number") result.bytesSent = or.bytesSent;
+      }
+      if (r.type === "media-source" && (r as any).kind === "audio") {
+        const ms = r as any;
+        if (typeof ms.totalAudioEnergy === "number") result.localAudioEnergy = ms.totalAudioEnergy;
+        if (typeof ms.totalSamplesDuration === "number") result.localSamplesDuration = ms.totalSamplesDuration;
       }
       if (r.type === "candidate-pair" && (r as any).nominated === true) {
         const cp = r as any;
@@ -1155,11 +1187,52 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   function startStatsPolling(pc: RTCPeerConnection) {
     stopStatsPolling();
+    // ── media_sample (2026-09-04) ─────────────────────────────────────────
+    // Every 10 s, the DELTAS since the previous sample: packets in/out, loss,
+    // and the RMS audio level both ways derived from the cumulative energy
+    // counters. Local to this poll run so a new call always starts clean.
+    const sampleStartedAt = Date.now();
+    let prevSample: { at: number; rx: number; tx: number; lost: number; rxE: number; rxD: number; txE: number; txD: number; conc: number } | null = null;
+    let lastSampleAt = sampleStartedAt;
+    const rms = (dE: number, dD: number) => (dD > 0 && dE >= 0 ? Math.round(Math.sqrt(dE / dD) * 10000) / 10000 : null);
     // Poll every 2 s for live metrics; send a background ping every 10 s
     statsIntervalRef.current = setInterval(async () => {
       const s = await pollCallStats(pc);
       lastStatsRef.current = s;
       packetsReceivedRef.current = s.packetsReceived;
+
+      {
+        const nowS = Date.now();
+        const cur = {
+          at: nowS,
+          rx: s.packetsReceived ?? 0, tx: s.packetsSent ?? 0, lost: s.packetsLost ?? 0,
+          rxE: s.remoteAudioEnergy ?? 0, rxD: s.remoteSamplesDuration ?? 0,
+          txE: s.localAudioEnergy ?? 0, txD: s.localSamplesDuration ?? 0,
+          conc: s.concealedSamples ?? 0,
+        };
+        if (prevSample === null) {
+          prevSample = cur;
+        } else if (nowS - lastSampleAt >= 10_000) {
+          const p = prevSample;
+          trace("media_sample", {
+            t: Math.round((nowS - sampleStartedAt) / 1000),
+            rxPkts: Math.max(0, cur.rx - p.rx),
+            txPkts: Math.max(0, cur.tx - p.tx),
+            lost: Math.max(0, cur.lost - p.lost),
+            rxLevel: s.remoteSamplesDuration === null ? null : rms(cur.rxE - p.rxE, cur.rxD - p.rxD),
+            txLevel: s.localSamplesDuration === null ? null : rms(cur.txE - p.txE, cur.txD - p.txD),
+            concealed: Math.max(0, cur.conc - p.conc),
+            rttMs: s.rttMs,
+            jitterMs: s.jitterMs,
+            relay: s.selectedCandidateType === "relay",
+            cand: s.selectedCandidateType,
+            codec: s.audioCodec,
+            sink: labelFor(devicesRef.current.outputs, currentSinkIdRef.current || ""),
+          });
+          prevSample = cur;
+          lastSampleAt = nowS;
+        }
+      }
 
       // Compute bitrate from byte delta
       let bitrateKbps: number | null = null;
@@ -1363,6 +1436,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // Non-fatal — telemetry loss is acceptable
     });
 
+    // 2026-09-04: on the desktop, attach the shell's own log for this call —
+    // renderer crashes, the engine window's console, audio/power events that
+    // only ever existed on the customer's disk. Bounded in the main process.
+    {
+      const diagApi = typeof window !== "undefined" ? window.connectDesktop?.diagnostics : undefined;
+      if (diagApi?.shellLogTail) {
+        const sinceMs = Date.now() - Math.max(0, durationMs) - 30_000;
+        diagApi.shellLogTail({ sinceMs, maxLines: 40 })
+          .then((t) => { if (t && Array.isArray(t.lines) && t.lines.length > 0) trace("shell_log", { lines: t.lines, truncated: t.truncated, fileBytes: t.fileBytes }, { flush: true }); })
+          .catch(() => undefined);
+      }
+    }
     // The same facts as a trace row, flushed NOW: the next thing the person
     // does after a bad call is often close the window.
     trace("call_end", {
@@ -3540,7 +3625,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   // touch speaker-mode or the preferred base device — callers decide those.
   const applySink = useCallback(async (deviceId: string, why: "setting" | "speaker_on" | "speaker_off" | "call_end_reset" = "setting") => {
     const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
-    const label = labelFor(devicesRef.current.outputs, deviceId);
+    let label = labelFor(devicesRef.current.outputs, deviceId);
+    // 2026-09-04: a mount-time apply runs BEFORE the first enumerateDevices, so
+    // the inventory is empty and the trace read "(unnamed 9cc05138)" for every
+    // real customer. Resolve the label lazily from the browser itself — a
+    // name is the whole point of the row.
+    if (deviceId && /^\(unnamed /.test(label)) {
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const hit = devs.find((d) => d.kind === "audiooutput" && d.deviceId === deviceId);
+        if (hit?.label) label = hit.label;
+      } catch { /* the trace keeps the id */ }
+    }
     if (!el) {
       // No element yet (mount-time apply before the phone has rendered): the
       // preference is kept in preferredSinkIdRef and re-applied on call end.
@@ -3841,9 +3937,29 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   // Registration state as the CLIENT sees it — beside the PBX's own contact
   // list this is what tells "the app thought it was registered" apart from
   // "the app knew it was not". Cheap: it changes a handful of times an hour.
+  //
+  // ⛔ 2026-09-04: "a handful of times an hour" was wrong for a client behind a
+  // filtering proxy — one real desktop wrote 518 reg_state rows in four hours,
+  // one per flap, and buried everything else. Coalesced: at most ONE row per
+  // REG_TRACE_WINDOW_MS carrying the CURRENT state and how many changes the
+  // window swallowed, so a flapping client reads as "flapping" in one line.
   useEffect(() => {
-    trace("reg_state", { state: regState });
+    const now = Date.now();
+    regTrace.changes += 1;
+    regTrace.state = regState;
+    if (now - regTrace.at < REG_TRACE_WINDOW_MS) return;
+    trace("reg_state", { state: regState, changes: regTrace.changes, windowS: Math.round((now - (regTrace.at || now)) / 1000) || 0 });
+    regTrace.at = now;
+    regTrace.changes = 0;
   }, [regState]);
+
+  // The desktop shell's own facts, once per window (version, OS, window kind).
+  // A browser tab has no shell and records nothing here.
+  useEffect(() => {
+    const diag = (typeof window !== "undefined" ? window.connectDesktop?.diagnostics : undefined);
+    if (!diag?.info) return;
+    diag.info().then((i) => trace("shell_info", { version: i.version, os: i.os, windowKind: i.windowKind, electron: i.electron, arch: i.arch })).catch(() => undefined);
+  }, []);
 
   // ── Blind transfer ──────────────────────────────────────────────────────────
 

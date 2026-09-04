@@ -185,6 +185,7 @@ export const ALLOWED_TOOLS = Object.freeze([
   "mcp__loopcom-support__get_support_ticket",
   "mcp__loopcom-support__get_customer",
   "mcp__loopcom-support__get_conversation",
+  "mcp__loopcom-support__get_call_diagnostics",
   "Read",
   "Grep",
   "Glob",
@@ -223,7 +224,10 @@ export function buildAgentArgs(ref) {
     // agent through the MCP, fenced as data — never spliced into the
     // instruction it is following.
     "-p",
-    "Work LoopCom support ticket " + ref + ". Start with get_support_ticket.",
+    "Work LoopCom support ticket " + ref + ". Start with get_support_ticket. " +
+      "If the ticket is about audio, a headset, not hearing or not being heard, or a call that 'did nothing', " +
+      "call get_call_diagnostics with the person's login email BEFORE anything else and quote its VERDICT in your report — " +
+      "never propose a screen share when the verdict answers the question.",
     "--append-system-prompt",
     GUARDRAILS,
     "--allowedTools",

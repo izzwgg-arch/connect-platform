@@ -149,6 +149,43 @@ function acknowledgeBuild(buildId: string): void {
   }
 }
 
+/**
+ * ⛔ 2026-09-04: the ✕ used to acknowledge the build FOREVER — one click and
+ * that window never reloaded for that deploy. Measured overnight after the
+ * client-trace deploy: ~4,100 desktop-window polls hit /version and exactly
+ * ONE window reloaded. Izzy: "put the update banner on the mini dialer so they
+ * can see it." So the ✕ is a SNOOZE now — an hour, then the strip is back.
+ * Only the Reload click (acknowledgeBuild) settles a build for good.
+ */
+const SNOOZE_PREFIX = "cc-portal-reload-snoozed.";
+const SNOOZE_MS = 60 * 60 * 1000;
+function snoozeBuild(buildId: string): void {
+  try {
+    localStorage.setItem(SNOOZE_PREFIX + buildId, String(Date.now()));
+  } catch {
+    /* storage disabled — the strip simply comes back on the next poll */
+  }
+}
+function snoozeRemainingMs(buildId: string): number {
+  try {
+    const at = Number(localStorage.getItem(SNOOZE_PREFIX + buildId) || 0);
+    return at > 0 ? Math.max(0, at + SNOOZE_MS - Date.now()) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * ⛔ 2026-09-04: a window nobody is using reloads ITSELF. The passive design
+ * ("never auto-reload") existed to protect a live call; an office PC left
+ * signed in overnight has no call and no person, and it is exactly the window
+ * that otherwise stays on the old bundle for weeks. Rule: no call (busyRef)
+ * AND no keyboard/mouse/touch input for IDLE_RELOAD_MS. The window on a call
+ * or in use still waits for the person, exactly as before.
+ */
+const IDLE_RELOAD_MS = 20 * 60 * 1000;
+const IDLE_CHECK_MS = 60 * 1000;
+
 /** True in the pop-out mini dialer, whose window is far too narrow for the card. */
 function isMiniDialerWindow(): boolean {
   if (typeof window === "undefined") return false;
@@ -241,14 +278,36 @@ export function usePortalUpdate(): {
   // build never flashes the notice for a frame.
   useEffect(() => {
     if (!newBuildId) return;
-    setDismissed(isBuildAcknowledged(newBuildId));
+    const remaining = snoozeRemainingMs(newBuildId);
+    setDismissed(isBuildAcknowledged(newBuildId) || remaining > 0);
+    if (remaining <= 0) return;
+    // Re-arm when the snooze runs out — the strip comes back by itself.
+    const t = setTimeout(() => setDismissed(isBuildAcknowledged(newBuildId)), remaining + 1000);
+    return () => clearTimeout(t);
   }, [newBuildId]);
+
+  // ── Idle self-reload (see IDLE_RELOAD_MS) ─────────────────────────────────
+  const lastInputRef = useRef(Date.now());
+  useEffect(() => {
+    const touch = () => { lastInputRef.current = Date.now(); };
+    const evs: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "wheel", "touchstart"];
+    for (const e of evs) window.addEventListener(e, touch, { passive: true });
+    const timer = setInterval(() => {
+      if (!pendingRef.current) return;
+      if (busyRef.current) return;
+      if (document.visibilityState === "visible" && Date.now() - lastInputRef.current < IDLE_RELOAD_MS) return;
+      if (Date.now() - lastInputRef.current < IDLE_RELOAD_MS) return;
+      acknowledgeBuild(pendingRef.current);
+      window.location.reload();
+    }, IDLE_CHECK_MS);
+    return () => { clearInterval(timer); for (const e of evs) window.removeEventListener(e, touch); };
+  }, []);
 
   if (!newBuildId || dismissed || isBuildAcknowledged(newBuildId)) return null;
 
   const dismiss = () => {
     setDismissed(true);
-    acknowledgeBuild(newBuildId);
+    snoozeBuild(newBuildId);
   };
 
   const reloadEverything = () => {
@@ -309,7 +368,7 @@ export function MiniDialerReloadBar() {
           textOverflow: "ellipsis",
         }}
       >
-        Connect was updated
+        Loopcom was updated — reload for the latest fixes
       </span>
       <button
         type="button"

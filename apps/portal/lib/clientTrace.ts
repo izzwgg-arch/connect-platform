@@ -43,10 +43,12 @@ export type TraceKind =
   | "remote_track_unmuted"
   | "remote_track_ended"
   | "call_end"
+  | "media_sample"
   | "reg_state"
   | "press"
   | "settings_opened"
-  | "shell_info";
+  | "shell_info"
+  | "shell_log";
 
 export interface TraceEvent {
   at: string;

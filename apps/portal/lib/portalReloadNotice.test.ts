@@ -121,6 +121,27 @@ test("the strip is thin", () => {
   assert.ok(h > 0 && h <= 32, `the strip must stay thin, got ${h}px`);
 });
 
+// ── 2026-09-04: the ✕ is a snooze, and an idle window reloads itself ────────
+test("⛔ the ✕ SNOOZES the notice — only a Reload click acknowledges a build for good", () => {
+  // Only the dismiss body — reloadEverything right below it DOES acknowledge, by design.
+  const body = bodyOf("const dismiss = () => {", 400).split("const reloadEverything")[0]!;
+  assert.ok(/snoozeBuild\(newBuildId\)/.test(body), "dismiss must snooze");
+  assert.ok(!/acknowledgeBuild\(newBuildId\)/.test(body), "dismiss must NOT acknowledge the build forever (one ✕ used to silence a deploy for that window for good)");
+  assert.ok(/const SNOOZE_MS = 60 \* 60 \* 1000;/.test(src), "the snooze is one hour");
+  assert.ok(/setTimeout\(\(\) => setDismissed\(isBuildAcknowledged\(newBuildId\)\), remaining \+ 1000\)/.test(src), "the strip must re-arm by itself when the snooze runs out");
+});
+
+test("⛔ an idle window reloads ITSELF — but never on a call, never while in use", () => {
+  const body = bodyOf("const lastInputRef = useRef(Date.now());", 1200);
+  assert.ok(/if \(busyRef\.current\) return;/.test(body), "the idle reload must bail out while the phone is busy");
+  assert.ok(/IDLE_RELOAD_MS/.test(body), "the idle reload must wait for the idle window");
+  const ack = body.indexOf("acknowledgeBuild(pendingRef.current)");
+  const reload = body.indexOf("window.location.reload()");
+  assert.ok(ack > 0 && reload > ack, "the idle reload must acknowledge the build BEFORE reloading");
+  assert.ok(/const IDLE_RELOAD_MS = 20 \* 60 \* 1000;/.test(src), "idle means 20 minutes without input");
+  for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) assert.ok(body.includes(`"${ev}"`), `${ev} must count as input`);
+});
+
 test("both surfaces share one update source", () => {
   // Two independent pollers would double the /version traffic and could disagree.
   assert.ok(/export function usePortalUpdate\(\)/.test(src), "one shared hook");

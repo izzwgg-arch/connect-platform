@@ -27,6 +27,75 @@ export const when = (v, withTime = true) => {
   return withTime ? `${s.slice(0, 10)} ${s.slice(11, 16)}` : s.slice(0, 10);
 };
 
+const hhmmss = (v) => (v ? new Date(v).toISOString().slice(11, 19) : "--:--:--");
+const CLIENT_TRACE_BAD = new Set(["mic_select_failed", "speaker_select_failed", "mic_open_failed", "remote_audio_play_blocked", "one_way_audio", "remote_track_muted", "remote_track_ended"]);
+
+/**
+ * The softphone's own account of a person's calls — VERDICT FIRST (2026-09-04).
+ * One block per diagnostics session (one per app window): the api's per-call
+ * verdict + evidence, then the devices, then the failures and presses in order.
+ * Media samples are summarised, not listed (12 lines per minute of call).
+ * A session with no CLIENT_TRACE rows says so — that window is on the old build
+ * and needs a restart, which is a fact worth telling the customer.
+ */
+export function formatCallDiagnostics(data, q) {
+  const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+  if (!sessions.length) return `No diagnostics sessions for "${q}". Either the person has never opened the softphone on this login, or the search term is wrong (a login email or a session id).`;
+  const out = [`CALL DIAGNOSTICS for ${q} — ${sessions.length} session(s), newest first. Read the VERDICT lines before anything else.`, ""];
+  for (const s of sessions.slice(0, 6)) {
+    const events = Array.isArray(s.events) ? s.events : [];
+    const traces = events.filter((e) => e.type === "CLIENT_TRACE" && e.payload && typeof e.payload === "object");
+    out.push(`SESSION ${s.id}  ${s.platform || ""} ${s.appVersion || ""}  started ${when(s.startedAt)}  last seen ${when(s.lastSeenAt)}  reg ${s.lastRegState || "?"}`);
+    if (!traces.length) {
+      out.push("  (no client trace — this window is on the build from before 2026-09-03; the app must be fully closed and reopened to report anything)", "");
+      continue;
+    }
+    const kind = (e) => String(e.payload.kind || "");
+    const verdicts = traces.filter((e) => kind(e) === "verdict");
+    for (const v of verdicts.slice(-3)) {
+      const p = v.payload;
+      out.push(`  VERDICT ${hhmmss(v.createdAt)}  [${p.code}]  ${p.headline}`);
+      for (const line of (Array.isArray(p.evidence) ? p.evidence : []).slice(0, 6)) out.push(`      · ${line}`);
+    }
+    if (!verdicts.length) out.push("  (no verdict yet — no call has ended on this window since the verdict shipped, or the calls were under 10 s)");
+    const last = (k) => [...traces].reverse().find((e) => kind(e) === k)?.payload ?? null;
+    const inv = last("device_inventory");
+    const micOpened = last("mic_opened");
+    const spk = last("speaker_selected");
+    const attached = last("remote_audio_attached");
+    const shell = last("shell_info");
+    if (shell) out.push(`  Desktop app ${shell.version} on ${shell.os} (window ${shell.windowKind})`);
+    if (inv) out.push(`  Mics seen: ${(inv.inputs || []).map((d) => d.label).join(" · ") || "none"}`, `  Speakers seen: ${(inv.outputs || []).map((d) => d.label).join(" · ") || "none"}`);
+    if (micOpened) out.push(`  Last call mic: ${micOpened.label}`);
+    if (attached || spk) out.push(`  Last call speaker: ${attached?.sinkLabel || spk?.label}`);
+    const bad = traces.filter((e) => CLIENT_TRACE_BAD.has(kind(e)));
+    if (bad.length) {
+      out.push(`  FAILURES (${bad.length}):`);
+      for (const e of bad.slice(-8)) {
+        const p = e.payload;
+        out.push(`    ${hhmmss(e.createdAt)}  ${p.kind}  ${p.label || p.sinkLabel || ""}  ${p.error || ""}  ${p.why || ""}`.replace(/\s+/g, " ").trimEnd());
+      }
+    }
+    const presses = traces.filter((e) => kind(e) === "press");
+    if (presses.length) out.push(`  Presses (${presses.length}): ${presses.slice(-12).map((e) => `${hhmmss(e.createdAt)} ${e.payload.action}`).join(", ")}`);
+    const samples = traces.filter((e) => kind(e) === "media_sample");
+    if (samples.length) {
+      const rx = samples.reduce((n, e) => n + (Number(e.payload.rxPkts) || 0), 0);
+      const tx = samples.reduce((n, e) => n + (Number(e.payload.txPkts) || 0), 0);
+      const rxL = Math.max(...samples.map((e) => Number(e.payload.rxLevel) || 0));
+      const txL = Math.max(...samples.map((e) => Number(e.payload.txLevel) || 0));
+      out.push(`  Media: ${samples.length} samples, ${rx} pkts in / ${tx} out, peak level in ${(rxL * 100).toFixed(1)}% / out ${(txL * 100).toFixed(1)}% (silence < 0.4%)`);
+    }
+    const shellLog = last("shell_log");
+    if (shellLog && Array.isArray(shellLog.lines)) {
+      out.push(`  Desktop shell log (last ${shellLog.lines.length} lines around the call):`);
+      for (const l of shellLog.lines.slice(-12)) out.push(`    ${String(l).slice(0, 200)}`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+
 export function formatTicket(e, id) {
   const customerReported = isCustomerReport(e.report);
   const head = [

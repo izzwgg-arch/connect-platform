@@ -40,14 +40,33 @@ export const CLIENT_TRACE_KINDS = [
   "remote_track_unmuted",
   "remote_track_ended",
   "call_end",
+  // 2026-09-04: the 10-second media sample — packets in/out, loss, jitter, RTT,
+  // ICE path AND audio LEVELS both ways (rxLevel/txLevel = RMS over the
+  // interval, from getStats totalAudioEnergy/totalSamplesDuration deltas).
+  // This is the number every big call platform runs on: "audio energy arrived"
+  // vs "nothing arrived" vs "it arrived and was silent".
+  "media_sample",
   // signalling / ui
   "reg_state",
   "press",
   "settings_opened",
+  // the desktop shell's own facts (version, OS, window kind) and a bounded
+  // tail of its log file at call end (apps/desktop connect.log)
   "shell_info",
+  "shell_log",
+  // ⛔ SERVER-AUTHORED. The api computes a verdict for each call from the rows
+  // above (voice/callVerdict.ts) and stores it as its own CLIENT_TRACE row.
+  // A client may never write it — see SERVER_ONLY_KINDS.
+  "verdict",
 ] as const;
 
 export type ClientTraceKind = (typeof CLIENT_TRACE_KINDS)[number];
+
+/**
+ * Kinds only the api itself writes. A client batch carrying one is DROPPED and
+ * counted — a page must not be able to forge the conclusion support reads.
+ */
+export const SERVER_ONLY_KINDS: ReadonlySet<string> = new Set(["verdict"]);
 
 export const MAX_EVENTS_PER_BATCH = 50;
 /** A buffered event older than this is stamped `now` — it is still kept. */
@@ -121,7 +140,7 @@ export function normalizeClientTraceBatch(input: unknown, nowMs: number): Normal
     if (!ev || typeof ev !== "object" || Array.isArray(ev)) { dropped++; continue; }
     const e = ev as Record<string, unknown>;
     const kind = typeof e.kind === "string" ? e.kind : "";
-    if (!KIND_SET.has(kind)) { dropped++; continue; }
+    if (!KIND_SET.has(kind) || SERVER_ONLY_KINDS.has(kind)) { dropped++; continue; }
     const facts = trimValue(e.facts && typeof e.facts === "object" && !Array.isArray(e.facts) ? e.facts : {}, 0) as Record<string, unknown>;
     // `kind` always wins over anything a client put in facts under the same name.
     const payload: Record<string, unknown> = { ...facts, kind };

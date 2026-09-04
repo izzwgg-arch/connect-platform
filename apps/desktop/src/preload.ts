@@ -126,6 +126,15 @@ const desktopApi = {
       return () => ipcRenderer.removeListener("desktop:update-state", wrapped);
     },
   },
+
+  // Client-trace support (2026-09-04): the shell's own facts and a BOUNDED tail
+  // of its diagnostic log, attached to a call's trace by the hosted portal.
+  // ⛔ Read-only. The page names no file and cannot widen the window — main
+  // clamps every request (shellLog.ts). Nothing here writes or executes.
+  diagnostics: {
+    info: () => ipcRenderer.invoke("desktop:diag-info"),
+    shellLogTail: (req: { sinceMs?: number; maxLines?: number }) => ipcRenderer.invoke("desktop:shell-log-tail", req ?? {}),
+  },
 };
 
 /**

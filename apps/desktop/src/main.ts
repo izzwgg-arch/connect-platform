@@ -10,6 +10,8 @@ import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { registerCoworkerHands } from "./coworker/mainWiring";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
 import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
+import { readShellLogTail } from "./shellLog";
+import { release as osRelease } from "node:os";
 import {
   getPreferredSourceId,
   registerRemoteSupportIpc,
@@ -698,6 +700,27 @@ function registerIpc(): void {
   // install (quitAndInstall) once the download is complete.
   ipcMain.handle("desktop:update-get-state", () => getUpdateState());
   ipcMain.handle("desktop:update-install", () => installDownloadedUpdate());
+  // Client trace (2026-09-04): the shell's facts + a bounded log tail for the
+  // hosted portal to attach to a call. ⛔ The FILE is fixed here — the page
+  // names nothing — and shellLog.ts clamps lines/window whatever it asks.
+  ipcMain.handle("desktop:diag-info", (event) => ({
+    version: app.getVersion(),
+    os: `${process.platform} ${osRelease()}`,
+    arch: process.arch,
+    electron: process.versions.electron ?? "",
+    windowKind: (() => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return "unknown";
+      if (win === miniWindow) return "mini";
+      if (win === fullWindow) return "full";
+      return "other";
+    })(),
+  }));
+  ipcMain.handle("desktop:shell-log-tail", (_event, req: unknown) => {
+    const tail = readShellLogTail(path.join(logDir(), "connect.log"), req);
+    diag("main", `shell-log-tail served ${tail.lines.length} lines (+${tail.truncated} cut)`);
+    return tail;
+  });
   ipcMain.handle("desktop:open-mini", () => createMiniWindow(true).id);
   ipcMain.handle("desktop:open-full", (_event, route?: string | null) => {
     const win = createFullWindow(true);

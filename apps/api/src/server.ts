@@ -86,6 +86,7 @@ import {
 import { probeTurnAllocate, parseRelayUrlForProbe } from "./voice/turnProbe";
 import { breachingTenants as relayBreachingTenants } from "./voice/relayUsage";
 import { normalizeClientTraceBatch, MAX_EVENTS_PER_BATCH as CLIENT_TRACE_MAX_EVENTS } from "./voice/clientTraceBatch";
+import { computeCallVerdict } from "./voice/callVerdict";
 import {
   canAttemptMobileInviteRequeue,
   isPendingMobileInviteEligible,
@@ -11858,6 +11859,43 @@ app.post("/voice/diag/events", async (req, reply) => {
       })),
     });
     await db.voiceClientSession.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } }).catch(() => undefined);
+  }
+
+  // ── The verdict (2026-09-04) ──────────────────────────────────────────────
+  // A `call_end` row closes a call: read that call's rows back, compute ONE
+  // plain-English verdict (voice/callVerdict.ts, pure) and store it as a
+  // server-authored CLIENT_TRACE row of kind "verdict" — the line support and
+  // the ticket watcher read first. ⛔ Best-effort: a verdict failure must never
+  // fail the batch that carried the evidence.
+  const callEnd = batch.rows.find((r) => r.payload.kind === "call_end");
+  if (callEnd) {
+    try {
+      const durationMs = typeof callEnd.payload.durationMs === "number" ? callEnd.payload.durationMs : 0;
+      const since = new Date(callEnd.createdAt.getTime() - Math.min(Math.max(durationMs, 0), 4 * 60 * 60_000) - 60_000);
+      const rows = await db.voiceDiagEvent.findMany({
+        where: { sessionId: session.id, type: "CLIENT_TRACE" as any, createdAt: { gte: since, lte: new Date(callEnd.createdAt.getTime() + 1000) } },
+        orderBy: { createdAt: "asc" },
+        take: 600,
+        select: { createdAt: true, payload: true },
+      });
+      const verdict = computeCallVerdict(
+        rows.map((r) => ({ createdAt: r.createdAt, payload: (r.payload ?? {}) as Record<string, unknown> })),
+        { createdAt: callEnd.createdAt, payload: callEnd.payload },
+      );
+      await db.voiceDiagEvent.create({
+        data: {
+          tenantId: user.tenantId,
+          userId: user.sub,
+          sessionId: session.id,
+          type: "CLIENT_TRACE" as any,
+          createdAt: new Date(callEnd.createdAt.getTime() + 1),
+          payload: sanitizeDiagPayload({ kind: "verdict", source: "server", ...verdict, evidence: verdict.evidence.slice(0, 12) }) as any,
+        },
+      });
+      app.log.info({ userId: user.sub, sessionId: session.id, verdict: verdict.code, samples: verdict.facts.samples }, "call verdict stored");
+    } catch (err) {
+      app.log.warn({ err: String((err as Error)?.message ?? err), sessionId: session.id }, "call verdict failed");
+    }
   }
 
   if (batch.dropped > 0 || batch.overflow > 0) {

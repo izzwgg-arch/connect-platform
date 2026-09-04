@@ -23,9 +23,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   readConfig, configurationProblem, listTickets, getTicket,
-  getCustomer, getConversation, resolveReference,
+  getCustomer, getConversation, resolveReference, getCallDiagnostics,
 } from "./loopcom.mjs";
-import { formatTicket, formatCustomer, formatConversation, isCustomerReport, when } from "./format.mjs";
+import { formatTicket, formatCustomer, formatConversation, formatCallDiagnostics, isCustomerReport, when } from "./format.mjs";
 
 const cfg = readConfig();
 
@@ -137,6 +137,23 @@ server.registerTool(
   handler(async ({ conversationId }) => {
     return formatConversation(await getConversation(cfg, conversationId));
   })
+);
+
+server.registerTool(
+  "get_call_diagnostics",
+  {
+    title: "What the person's softphone itself recorded",
+    description:
+      "The web/desktop softphone's own report for a login: the api's per-call VERDICT (no_inbound_rtp, inbound_silent, " +
+      "mic_silent, split_devices, speaker_apply_failed, playback_blocked, poor_network, ok…) with its evidence, the mic and " +
+      "speaker each call really used, every failed device apply, the audio-level media samples and every press, plus the " +
+      "desktop shell's log around the call. ⛔ For ANY 'can't hear / can't be heard / headset / audio' ticket call this " +
+      "FIRST, before get_customer, and quote the verdict in the report — it replaces asking for a screen share. " +
+      "A session with no client trace means that window is on the old build and needs a full app restart; say so. " +
+      "Takes the person's login email (from get_support_ticket) or a diagnostics session id.",
+    inputSchema: { q: z.string().min(3).max(120).describe("Login email or diag session id.") },
+  },
+  handler(async ({ q }) => formatCallDiagnostics(await getCallDiagnostics(cfg, q), q))
 );
 
 const transport = new StdioServerTransport();

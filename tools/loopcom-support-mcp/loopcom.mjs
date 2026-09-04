@@ -99,6 +99,16 @@ export async function getConversation(cfg, conversationId) {
 }
 
 /**
+ * The softphone's own account of a person's recent calls (2026-09-04): the
+ * per-call VERDICT the api computed, the devices the app really used, every
+ * failed speaker/mic apply, the media samples and every press. Rides the
+ * SUPER_ADMIN timeline route; `q` is a login email or a diag session id.
+ */
+export async function getCallDiagnostics(cfg, q) {
+  return call(cfg, `/admin/voice/diag/timeline?q=${encodeURIComponent(q)}`);
+}
+
+/**
  * ⛔ A reference (e.g. Q2FJRK) is what Izzy sees in the SMS, so it is what he
  * will type. Resolve it to a row id rather than making him find a cuid.
  */
