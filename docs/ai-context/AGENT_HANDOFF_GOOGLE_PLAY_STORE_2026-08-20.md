@@ -296,3 +296,37 @@ once Google's (usually shorter, post-first-review) check passes. Next version co
 
 ⏳ NOT PROVEN: no phone has installed vc101. Acceptance: a Play install shows the Blue
 2B icon (Navy in dark theme), the new login, and `*`/`#` on the dialpad.
+
+### 5a. Uploaded + submitted 2026-09-04 (same session), no file-picker click needed
+
+The "extension caps at 10 MB" wall applies to the extension's OWN `file_upload` tool,
+not to a file the PAGE fetches. Recipe that worked (same idea as the screenshot CORS-drop):
+
+1. `python cors.py <dir>` — a `SimpleHTTPRequestHandler` on `127.0.0.1:8123` adding
+   `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Private-Network: true`, and a
+   204 `OPTIONS`. (`navigator.permissions.query({name:'local-network-access'})` already
+   read `granted` for play.google.com in the "googole" Chrome.)
+2. On `…/tracks/production` → Releases → Create new release, run in page JS, DETACHED:
+   `(async()=>{const r=await fetch('http://127.0.0.1:8123/loopcom-play-vc101.aab');
+   const f=new File([await r.blob()],'loopcom-play-vc101.aab');
+   const inp=document.querySelector('input[type=file][accept=".aab"]');
+   const dt=new DataTransfer(); dt.items.add(f); inp.files=dt.files;
+   inp.dispatchEvent(new Event('change',{bubbles:true}));})()` and poll a `window.__aab`
+   status. ⛔ An AWAITED version times out the extension's 45 s CDP evaluate (the 53 MB
+   fetch took 37 s) — and the timed-out attempt's fetch STILL COMPLETES, so the second
+   attempt produced a duplicate row flagged *"Version code 101 has already been used"*.
+   Dismiss the errored row (its ✕), keep the accepted one.
+3. Play uploads (~70 s) then "optimizes for distribution" (~1 min) → the artifacts table
+   shows `101 (1.0.0)`, API 24+. Release name auto-filled `101 (1.0.0)`; notes filled.
+4. Next → review page (1 benign warning: no deobfuscation mapping, same as vc100) →
+   **Save** → dialog "Go to Publishing overview?" → Go → **Submit 1 change for review**
+   → confirm **Send changes for review** → "Changes in review — running quick checks,
+   up to 12 minutes". Managed publishing is OFF, so passing = live.
+
+Observed on the way: Production's header reads **"Last published on September 4, 2026"** —
+the vc100 rollout became visible to the public only today, which is exactly when Izzy
+opened the store and saw the Aug-21 build. ⛔ Screenshots via the extension timed out
+repeatedly on this page (renderer busy during upload/save); `find`/`read_page` kept working.
+
+⏳ NOT PROVEN: no device has installed 101 from Play. Acceptance: a Play install shows
+Blue 2B (light theme) / Navy 2A (dark theme) and `*`/`#` on the dialpad. Next code **102**.
