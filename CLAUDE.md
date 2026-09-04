@@ -290,6 +290,54 @@ provision all at once … it should pick up 'Not Connected' automatically."*
   `https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/` in the phone's Auto
   Provision menu and press Autoprovision Now; once `T2_103` registers the row flips to
   REGISTERED and the wizard goes Ready by itself.
+## ⛔ AGENT HANDOFF — the wizard finds PANASONIC phones now, and the PBX can NEVER provision one (2026-09-03) — READ FIRST before adding ANY vendor to `PHONE_MAKERS`, before "fixing" a Panasonic stuck on Needs attention, or for "the setup isn't detecting my phone"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md` §22**
+(one commit on `feat/ivr-migration-takeover` — shared + desktop + api. Deploy state
+recorded at the end of §22. No migration, no PBX write, no env change. Read-only PBX
+check only.) Memory: [[panasonic-found-honestly-never-pbx-provisioned]].
+Izzy, 2026-09-03, a KX-TGP500 on his desk: *"This phone is not on my network. The
+automated test phone setup is not detecting it."* → *"full support."*
+
+- ⛔⛔ **DETECTION AND PROVISIONABILITY ARE TWO QUESTIONS, and for Panasonic they
+  answer opposite ways.** The wizard now recognises Panasonic three ways (OUIs
+  `0080f0`/`080023` in the shared `VENDOR_PREFIXES`, `panasonic` in `PHONE_MAKERS`,
+  KX-TGP/UT/HDV in the banner parser + `KIND_PATTERNS` — TGP500/600 cordless_base,
+  TGP550/UT/HDV desk_phone). **But `provisioning.brands` on the live PBX has NO
+  Panasonic brand** (20 brands, read-only check) — no template can ever exist, so
+  `vendorSupportsPbxProvisioning()` (shared deviceKinds.ts) is false ONLY for
+  panasonic and the advance route acts on it, route-level, in the exact shape of the
+  `provisioningHandoffFailed` override — **the pure ladder and its 12.6M-decision
+  invariant suite are untouched.**
+- ⛔⛔ **A PANASONIC IS NEVER RESET AND NEVER ASKED FOR A PASSWORD.** Its only
+  possible configuration is a hand-typed SIP account; a factory reset would erase
+  the one thing that could make it work, with no way to re-provision after. Not
+  registered → **halt → support immediately** ("Loopcom can't set this model of
+  phone up automatically yet…") instead of stalling on `set_provisioning` forever.
+  **Registered → REGISTERED outright**: the flip condition gained
+  `(provisioningIsOurs || handConfiguredVendor)` because a hand-configured Panasonic
+  can never point at our provisioning — demanding both leaves a working phone amber
+  forever. ⛔ An UNKNOWN vendor stays provisionable=true on purpose — an
+  unidentified device may be a locked Yealink and keeps the full ladder.
+- ⛔ **The api's `lanPhoneVendors.ts` knowing Panasonic was a decoy** — it feeds the
+  never-used lan-phones screen, not the wizard; the wizard reads
+  `deskPhoneSetup/deviceIdentity.ts`. Two vendor lists, one live. Any NEW vendor
+  added to `PHONE_MAKERS` must be checked against the PBX's `provisioning.brands`
+  first, and denied in `vendorSupportsPbxProvisioning` if absent — or the wizard
+  stalls forever / wipes a phone it cannot restore.
+- ✅ **Proven:** shared 97/97, desktop phoneSetup 69/69 (real banner
+  `Panasonic-KX-TGP500B04/22.116.0.10`, the maker-less web title), api routes 47/47
+  + chaos/stress/order 50/50 (4 new: the support halt with resetCount 0 and no
+  provisioningUrl leaked; registered→REGISTERED; unknown vendor keeps the ladder;
+  OUI fill). Typechecks shared/desktop/portal 0, api 81 = baseline.
+- ⏳ **NOT PROVEN: the physical KX-TGP500 has still never been SEEN on a network** —
+  "not on my network" may be literal (the base is not PoE; check the router's DHCP
+  table for a `00:80:F0` MAC before anything else). ⛔ The desktop banner parsing
+  rides the NEXT installer (0.1.16 fingerprints it unknown; the server's OUI fill
+  names the vendor anyway). ⛔ CONNECTING one stays a hand job (web UI via #534,
+  credentials in `ombu_devices`) — once it registers, the wizard turns it green by
+  itself; a Panasonic template renderer is a separate decision, device in hand.
+
 ## ⛔ AGENT HANDOFF — Create A Box 102 "answers, no audio either side": the app's 200 OK never reaches the PBX through the OFFICE TUNNEL (2026-09-02) — READ FIRST for ANY "I answered and it's dead" on a tenant behind a WireGuard peer, before telling him to update the app, or before reading `session_not_found_timeout` as the cause
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CREATEABOX_102_ANSWER_LOST_ON_TUNNEL_2026-09-02.md`**
@@ -400,6 +448,74 @@ ticket died at 56 s — `exit 1`, the Claude session limit — and posted nothin
   the "one window, current version" advice and the voicemail reassurance from the technical
   report — a human should say those on the open text thread with 845-248-6206; and the
   mailbox-101 decision is untaken.
+
+## ⛔ AGENT HANDOFF — "VoIP.ms was down, reset all registrations" → two trunks CANNOT register because VoIP.ms holds DUPLICATE subaccount rows (2026-09-02) — READ FIRST for Matamim / inii mini "calls don't come in", before any subaccount write, or before trusting `findExistingSubaccount`
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_VOIPMS_DUPLICATE_SUBACCOUNTS_2026-09-02.md`**
+(**No code, no deploy, no PBX config change.** PBX: `pjsip send register *all` under
+Izzy's mandate + a REGISTER-only watcher loop. VoIP.ms: one `setSubAccount` attempt on
+the junk duplicate rows — **did not land, their write path is timing out today**; backup
+`/root/voipms-dup-subaccounts-backup-20260902T163107Z.json` on loopcom.)
+Memory: [[voipms-duplicate-subaccounts-403]].
+
+- ✅ **The request itself: all 63 VoIP.ms trunks were already Registered** (they all
+  re-registered together ~16:05 UTC when VoIP.ms returned; the PBX logged no failure
+  during the outage), 149 phone contacts up, and the forced `*all` re-register brought
+  **61 of 63** back cleanly.
+- ⛔⛔ **THE OTHER TWO — `344022_Matamih8gmrh` and `344022_iniimi92gh2m` — answer 403
+  AFTER a valid digest, because VoIP.ms holds the SAME LOGIN 3× and 2×** (ids 836852 real
+  / 836853+836854 junk; 837032 real / 837033 junk), each with a different password. The
+  PBX sends the lowest-id row's password (hash-compared); after their outage the registrar
+  resolves the name to a duplicate. Both DIDs route by NAME, so the ambiguity is theirs.
+  Origin proven from `OnboardingEvent`: the 2026-08-05 `createSubAccount` timeouts that
+  LANDED, then `reuseSubaccount` rotating only the first match. **Check `getSubAccounts`
+  for duplicate names before any subaccount write** — `findExistingSubaccount` is a
+  `.find()` and cannot see them.
+- ⛔ **Impact NOW:** inbound to 929-359-8299 and 646-984-6023 dead (VoIP.ms CDR: one call
+  today, 15:44 UTC, answered — nothing lost yet); **911 on T104/T105 rides that same
+  trunk and is very likely refused**; outbound fine (Telocall primary). ⛔ The forced
+  re-register did not cause it — the hourly refresh would have hit the same 403.
+- ⏳ **Two watchers are running unattended**: PBX `/root/reregister-voipms-dups-20260902.sh`
+  (re-sends REGISTER only while Rejected, exits when both Registered, 24 h cap) and loopcom
+  `/root/voipms-dup-fix-retry-20260902.sh` (every 10 min re-runs the guarded clone-the-real-
+  row fix until every row carries the real hash, 24 h cap). Logs sit beside each script.
+  **Durable fix is a VoIP.ms ticket deleting 836853 / 836854 / 837033 — Izzy's.**
+- ⛔⛔ **2026-09-04 — inii mini "busy signal" IS THIS, and BOTH watchers died two days ago. Full detail: handoff §8.**
+  Read-only re-check: `344022_iniimi92gh2m` (id 837032 real / 837033 junk) and
+  `344022_Matamih8gmrh` are still `Rejected`; Asterisk **gave up REGISTERing at 09-03 16:48Z**
+  (`max_retries`), VoIP.ms `getRegistrationStatus` reads `registered: no` on both, and the
+  carrier CDR shows **every call to 646-984-6023 since 09-02 15:49 EDT ending `NO ANSWER 0s`
+  — 30 on 09-02, 71 on 09-03, 45 on 09-04 by 11:00 EDT** (last answered 09-02 11:44). With no
+  registration and `failover_busy: none` VoIP.ms hands the caller a busy tone. Matamim's DID
+  had 1 lost call in the window. ⛔ **The clone-the-real-password fix CAN NEVER WORK**: every
+  `setSubAccount` on a duplicate answered `used_password` ("This password has been used
+  previously by this account") — VoIP.ms forbids reusing a password on a login name, so two
+  rows of one name can never share one. The loopcom retry loop then died `ERR_MODULE_NOT_FOUND`
+  when a deploy recreated `app-api-1` and took `fix-dups.ts` with it (a `docker cp` into the
+  container does not survive a deploy — keep long-running probes on the HOST and copy per
+  run); the PBX loop hit its 24 h cap. ⛔ **The customer's own phone is ALSO gone**: `T105_101_1`
+  unregistered since 2026-08-18, `sales@iniimini.com` last login 2026-08-06, 0 MobileDevice
+  rows — so even a fixed trunk lands on voicemail/menu until they sign in again.
+  ✅ **Clean landing spot found, blast radius traced**: `344022_iniimini` (id 802609, ONE row,
+  `Registered`, PBX trunk 64 `trk-64-in` → `default-trunk`, which routes the DID to T105 route
+  240 by NUMBER) is the leftover of deleted PBX tenant 27 — its only DID 845-288-0994 has no
+  inbound route, no `ombu_tenant_dids` row, no ARS uses `trk-group-59`, 0 calls; nothing live
+  shares it. `setDIDRouting 6469846023 → account:344022_iniimini` is ONE reversible carrier
+  write (SMS is per-DID and untouched). Staged, dry-run proven, NOT applied:
+  `docker exec -w /app/apps/api app-api-1 npx tsx reroute-inii-did.ts apply` (source
+  `/root/reroute-inii-did.ts` on loopcom; rollback = same script with the old name). ⛔ It fixes
+  INBOUND only — T105's `emergency-calls` still `Gosub(trk-130)` (the dead trunk), so 911 from
+  inii mini AND Matamim stays refused until the junk rows 837033 / 836853 / 836854 are deleted
+  (`delSubAccount`, or a VoIP.ms ticket) — VoIP.ms's write path answers today, so that is
+  runnable; both are Izzy's call. ⛔ The ported number also reads `e911: 0` at the carrier.
+- ⚠️ **Seen, not changed:** Telocall `0001` registration has been Rejected/"no response"
+  since ~Aug 30 and gave up — `server_uri` port **700** vs the working contact on
+  **7000** (typo in `pjsip__50-1-trunks.conf`); calls flow both ways regardless (IP-auth).
+- ⛔ **Traps re-earned:** a `grep -q "<name>"` inside `docker exec sh -c` matches its own
+  `sh` command line (two poll loops waited on nothing); `pkill -f "<script>"` over ssh
+  kills the ssh session (exit 255, no output) — use `name-2026090[2].sh`; `vms()` retries
+  3× per call so a 120 s write is up to 6 min and the container process outlives a dead
+  ssh client with its stdout gone — run carrier scripts detached with a log.
 
 ## ⛔⛔ AGENT HANDOFF — GESHEFT'S VOICEMAIL EMAIL IS ON CONNECT NOW; NO TENANT IS ON THE PBX'S OWN VOICEMAIL-TO-EMAIL ANY MORE (2026-09-02) — READ FIRST before touching `VOICEMAIL_EMAIL_EXCLUDED_TENANT_IDS`, before un-excluding ANY tenant, before blanking a PBX voicemail email, or for "Gesheft didn't get their voicemail email"
 
@@ -869,6 +985,69 @@ have the real Loopcom logo. For the co-workers."*
   popover; (4) verified results back to the agent. ⛔ A separate session was mid-build
   on `apps/*/src/remoteDesktop/` + migration `20260902120000_remote_desktop` at the time
   — check whether that IS the hands before designing them twice.
+
+## ⛔ AGENT HANDOFF — the Google OAuth app is FOUND, rebranded Loopcom, PUBLISHED, and the brand is under verification (2026-09-02) — READ FIRST before touching the Google OAuth client, the Gmail/Drive scopes, or answering "why does Gmail connect fail / show unverified"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_GOOGLE_OAUTH_VERIFICATION_2026-09-02.md`**
+(**Console-only, driven in Izzy's real Chrome. No code, no deploy, no migration, no PBX
+write, no env change.** Writes: Google Auth Platform settings, one IAM grant, one TXT
+record in Cloudflare. Every value confirmed with Izzy first.) Memory:
+[[google-oauth-app-found-and-published]].
+
+- ⛔ **The D-U-N-S has NOTHING to do with Google OAuth** (it gated Play + Apple, both done).
+  OAuth verification gates on Search Console domain ownership + privacy/home pages + scope
+  class. Izzy's "I got my DUNS, start Google Auth" was answered by doing the OAuth work.
+- ✅ **THE UNKNOWN OWNER IS KNOWN: project `connect-497316` (number 1004420523742), under
+  the connectcomunications.com Workspace org, owned by `support@connectcomunications.com` —
+  and now ALSO by `izzy@loopcom.net` (IAM Owner, 2026-09-02).** The client is `connect
+  production`, created 2026-05-24. izzwgg@gmail.com's four projects (incl. Firebase
+  `connect-app-23d4f`) hold NO OAuth client — don't look there.
+- ⛔⛔ **IT HAD BEEN IN TESTING SINCE MAY: 4 test users, 7-day refresh-token expiry.** That
+  is why all 5 `CrmEmailConnection` rows were stale and why any non-test customer's Gmail
+  connect was refused by Google. **Published to production 2026-09-02.** Branding was also
+  incomplete (app name literally `onnect communications`, no links, one domain) and the
+  Data Access page declared ZERO scopes.
+- ✅ **DONE AND RE-READ AFTER RELOAD:** app name **Loopcom**; home `https://www.loopcom.net/`;
+  privacy `/legal/privacy/`, terms `/legal/terms/` on www.loopcom.net; authorized domains
+  **connectcomunications.com AND loopcom.net**; client origins + redirect URIs for BOTH
+  `app.loopcom.net` and `app.connectcomunications.com` (the redirect-URI bug flagged in the
+  publicOrigins section is CLOSED — proven live: the consent chooser reads *"to continue to
+  loopcom.net"* with the loopcom callback). ⛔ There is ONE callback path in code —
+  `driveRoutes.ts` reuses `GOOGLE_OAUTH_REDIRECT_URI` — so no Drive callback exists to register.
+- ⛔⛔ **THE SCOPE CLASSIFICATION IS NOW A FACT, read off Google's own page:** `openid` /
+  `email` / `profile` non-sensitive; **`gmail.send` SENSITIVE** (ordinary free review);
+  **`gmail.readonly` and `drive.readonly` RESTRICTED** (annual paid CASA assessment, ~$540–
+  1,800/yr). **Izzy chose to DROP both restricted scopes** — the declared set is sign-in +
+  `gmail.send`. ⛔ **THE CODE STILL REQUESTS THEM** (`crm/emailRoutes.ts:453` adds
+  `gmail.readonly` when reply-tracking is on; `crm/driveService.ts:25` pins `drive.readonly`).
+  Until those are removed / moved to `drive.file`, a reply-tracking connect or a Drive import
+  asks for an UNDECLARED restricted scope and shows Google's unverified-app interstitial.
+  That is an api change + deploy, not done.
+- ⛔⛔ **THE TRAP THAT COST AN HOUR: the "Verify branding" button is evaluated against the
+  SIGNED-IN USER's Search Console ownership, not the project's owner list.** Signed in as
+  support@ (zero Search Console properties) the Branding page shows no verification card and
+  the Verification Center dead-ends on *"You need to verify and publish your branding"* —
+  the exact loop the Google dev forum thread describes. Signed in as **izzy@loopcom.net**
+  (project Owner + Search Console owner of BOTH domains) the card appears. **Do all Auth
+  Platform work for this project as izzy@loopcom.net.** ⛔ The card is lazy-loaded and
+  repeated reloads trip Google's *"excessive automated requests"* throttle (the console
+  then can't load gstatic JS and the card never renders) — load ONCE, wait; the `&jsmode`
+  link the page offers loaded it when the normal mode would not.
+- ✅ **connectcomunications.com is VERIFIED in Search Console under izzy@loopcom.net** (Domain
+  property, TXT `google-site-verification=bvDui_4CBX9VxHubQ5twjJ2UI9-L-Km_JiQM0OV4GAA` on the
+  apex in Cloudflare — ⛔ never delete it). `loopcom.net` was already verified there.
+- ⏳ **Brand verification SUBMITTED 2026-09-02 ("Verification in progress… up to 5 minutes").**
+  Next: **Publish branding** (7-day window after a pass — miss it and it says "Need to
+  re-verify"), then Verification Center → **Prepare for verification → Confirm** for
+  `gmail.send`. The final state is recorded at the end of the handoff doc.
+- ⛔ **Console driving traps:** the client page's `Add URI` textbox IS the existing URI field
+  (form_input overwrote URI 1 — re-read every URI before Save); the scope panel needs REAL
+  clicks on Add-to-table / Update / the row checkboxes (JS clicks and the row trash icons
+  did nothing, and a JS-opened panel left two stacked in the DOM); Search Console's "Verify
+  your ownership" returns silently to the access page after passing — check the property
+  overview URL.
+- ⏳ **NOT BUILT: "Sign in with Google" for the portal login** — it needs only the
+  non-sensitive scopes, so the OAuth app is ready for it today with no further Google review.
 
 ## ⛔⛔ AGENT HANDOFF — remote support is INSIDE the real Windows app now, OFF by default, and there is a test installer nobody has run (2026-09-01) — READ FIRST before adding ANY key to the desktop preload, before publishing a desktop build, before retiring `apps/desktop-support`, or for "is the remote desktop app deployed?"
 
