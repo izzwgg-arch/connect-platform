@@ -248,3 +248,51 @@ Izzy: *"I'm gonna want to use this DUNS number for Apple as well, so both"* and
 - The audit's "IOS_WORK_ANDROID_GUARDRAILS.md says the app is on the Play
   Store" claim is WRONG (it never was — that doc means "distributed via
   sideload").
+
+## 5. 2026-09-04 — Play went live with the WRONG (old) build; vc101 built, not yet uploaded
+
+**What happened.** `loopcom-play-vc100.aab` was built **2026-08-21 06:29** (right after
+the upload key was regenerated as `O=Loopcom LLC`) and sat on disk. When the Play
+Console account unlocked on **2026-08-30**, that same file was uploaded and submitted
+as build 100 (1.0.0) **without a rebuild**. Google approved it and, with managed
+publishing off, it went live worldwide — nine days behind the fleet APK
+(`1.0.0+20260823-175041`, built 2026-08-23).
+
+**What vc100 lacks vs the fleet APK** (every mobile commit 08-22 → 09-03): Blue 2B
+launcher + theme-following icon (`4e3655f4`), the new login/splash (`a7eaf8e7`,
+`185cd7b7`, `52885e85`), contact names on incoming calls (`57ab7c71`), the `*`/`#`/`+`
+dialpad display (`3ac07f1f`), the boot-flash shield (`fca10c32`), the arm64-only
+packaging (`097563da`), the 08-31 instant hangup sync (`2e4ebdbb`). It also predates
+the 08-22 warm-answer regression (`83a5728c`) and its fix (`8c78b2c0`), so **answering
+works on vc100** — it is old, not broken.
+
+**Why nobody caught it.** §2 of this doc and the CLAUDE.md section recorded only the
+artifact's FILE NAME, never its commit or build date, so there was nothing to compare
+against the fleet build. The fix is procedural and is now written into CLAUDE.md:
+**never upload an AAB whose mtime is older than `apps/mobile/ship-proof.json`'s
+`completedAt`; rebuild first; record commit + sha256.**
+
+**vc101 — built, verified, NOT uploaded.**
+
+| field | value |
+|---|---|
+| file | `apps/mobile/dist/loopcom-play-vc101.aab` |
+| built | 2026-09-04 06:40 local, `scripts/android-play-bundle.ps1 -VersionCode 101`, 9 m 04 s |
+| source | branch tip `0580856d` (`apps/mobile` clean in `git status` before the build) |
+| size | 55,797,582 bytes |
+| sha256 | `84b066adbea3ea43a83a2ffb5d272440beae2b461dc4f1f89b2bb1774fcfccad` |
+| manifest | `versionCode 101`, `versionName 1.0.0` (read from `base/manifest/AndroidManifest.xml`) |
+| signer | `CN=Loopcom, O=Loopcom LLC, C=US` (`jarsigner -verify`: jar verified) |
+| ABIs | `base/lib/armeabi-v7a`, `base/lib/arm64-v8a` |
+| new-code proof | manifest carries `LauncherNavy` ×1 / `LauncherBlue` ×1; vc100's manifest carries **0**; 22 `ic_launcher_navy*` resources present |
+
+**Upload recipe (Izzy, in the Loopcom Chrome `/u/4/`):** Play Console → Loopcom →
+Release → Production → **Create new release** → upload `loopcom-play-vc101.aab` through
+the native file picker (the extension's `file_upload` caps at 10 MB) → release notes →
+Save → Review release → **Start rollout to production**. Internal testing can take the
+same bundle "from the library" afterwards. Existing Play installs update automatically
+once Google's (usually shorter, post-first-review) check passes. Next version code is
+**102**.
+
+⏳ NOT PROVEN: no phone has installed vc101. Acceptance: a Play install shows the Blue
+2B icon (Navy in dark theme), the new login, and `*`/`#` on the dialpad.
