@@ -100,6 +100,7 @@ import {
 } from "../sip/mobileAnswerTiming";
 import type { SipAnswerTraceEvent } from "../sip/types";
 import { loadKeepAliveGate } from "../sip/keepAliveGate";
+import { decideRingRegister } from "../sip/mobileWakeRegistration";
 import {
   shouldSuppressForegroundPush,
   shouldPresentForegroundUserAlert,
@@ -1501,7 +1502,32 @@ export function NotificationsProvider({
         const hasActiveUaSession = hasOngoingCallRef.current || activeCallIdRef.current !== null;
         if (!hasActiveUaSession) {
           const regState = sip.registrationState;
-          if (regState !== "registered" && regState !== "registering") {
+          // ⛔ iOS STALE-REGISTRATION FIX (2026-09-04, Fixup Group / B Visible /
+          // Loopcom Demo — 6 of 15 iOS answer failures platform-wide).
+          // A suspended iPhone keeps believing it is "registered" while the
+          // PBX dropped its contact at the first missed qualify (≤33 s after
+          // backgrounding). Every guard here used to SKIP on "registered", so
+          // the PBX never dialed the phone and the answer tap died
+          // INBOUND_INVITE_NOT_RECEIVED. decideRingRegister() forces a fresh
+          // REGISTER when the app is not active and the registration is older
+          // than the qualify window; jssip's inInviteAnswerWindow() guard still
+          // refuses the restart once an INVITE has already landed.
+          let registrationAgeMs: number | null = null;
+          try {
+            const singleton = require("../sip/sipClientSingleton") as typeof import("../sip/sipClientSingleton");
+            const client = singleton.peekSipClient() as any;
+            const age = client?.getRegistrationAgeMs?.();
+            registrationAgeMs = typeof age === "number" ? age : null;
+          } catch {
+            registrationAgeMs = null;
+          }
+          const decision = decideRingRegister({
+            platform: Platform.OS,
+            registrationState: regState,
+            registrationAgeMs,
+            appState: AppState.currentState,
+          });
+          if (decision === "register") {
             console.log(
               '[ANSWER_PIPELINE] eager_preregister inviteId=' + invite.id +
               ' regState=' + regState,
@@ -1512,10 +1538,23 @@ export function NotificationsProvider({
                 e instanceof Error ? e.message : String(e),
               );
             });
+          } else if (decision === "force_restart") {
+            console.log(
+              '[ANSWER_PIPELINE] eager_preregister_stale_ios_force_restart inviteId=' + invite.id +
+              ' regState=' + regState + ' registrationAgeMs=' + registrationAgeMs +
+              ' appState=' + AppState.currentState,
+            );
+            sip.register({ forceRestart: true }).catch((e) => {
+              console.warn(
+                "[ANSWER_PIPELINE] eager_preregister_stale_ios_force_restart failed:",
+                e instanceof Error ? e.message : String(e),
+              );
+            });
           } else {
             console.log(
               '[ANSWER_PIPELINE] eager_preregister_skipped_already_registered inviteId=' + invite.id +
-              ' regState=' + regState,
+              ' regState=' + regState + ' registrationAgeMs=' + registrationAgeMs +
+              ' appState=' + AppState.currentState,
             );
           }
         }
