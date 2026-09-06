@@ -7,7 +7,6 @@ import {
   Animated,
   BackHandler,
   Modal,
-  Dimensions,
   Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -36,8 +35,11 @@ import { CallsDrawer } from './CallsDrawer';
 import { TransferModal } from './TransferModal';
 import { typography } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
+import { usePhoneLayoutWidth } from '../../ui/usePhoneLayoutWidth';
 
-const { width } = Dimensions.get('window');
+// Window width is read LIVE inside the component (usePhoneLayoutWidth); a
+// module-scope Dimensions.get() is baked in at bundle load, which on a
+// push-started process can be the landscape width. See ui/phoneLayoutWidth.ts.
 
 const DTMF_KEYS = [
   { digit: '1', sub: '' },
@@ -125,6 +127,7 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
 // ─── Main screen ─────────────────────────────────────────────────────────────
 
 export function ActiveCallScreen() {
+  const layoutWidth = usePhoneLayoutWidth();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const sip = useSip();
@@ -634,7 +637,7 @@ export function ActiveCallScreen() {
         </Animated.View>
 
         <Text
-          style={[styles.callerName, { color: pal.name }]}
+          style={[styles.callerName, { color: pal.name, maxWidth: layoutWidth - spacing['8'] * 2 }]}
           numberOfLines={1}
           adjustsFontSizeToFit
         >
@@ -785,7 +788,7 @@ export function ActiveCallScreen() {
               {DTMF_KEYS.map(({ digit, sub }) => (
                 <TouchableOpacity
                   key={digit}
-                  style={styles.dtmfKey}
+                  style={[styles.dtmfKey, { width: (layoutWidth - spacing['6'] * 2) / 3 }]}
                   onPress={() => handleDtmf(digit)}
                   activeOpacity={0.7}
                 >
@@ -911,7 +914,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     textAlign: 'center',
     letterSpacing: -0.3,
-    maxWidth: width - spacing['8'] * 2,
+    // maxWidth set inline from the live window width
   },
 
   callerNumber: {
@@ -1064,7 +1067,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   dtmfKey: {
-    width: (width - spacing['6'] * 2) / 3,
+    // width set inline from the live window width (a third of the padded row)
     height: 68,
     alignItems: 'center',
     justifyContent: 'center',

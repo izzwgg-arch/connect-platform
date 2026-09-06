@@ -5,7 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Animated,
-  Dimensions,
+  useWindowDimensions,
   Linking,
   Platform,
   Pressable,
@@ -32,8 +32,8 @@ import { spacing } from '../../theme/spacing';
 import { playDtmfTone } from '../../audio/telephonyAudio';
 import { ensureMicPermissionOrAlert } from '../../sip/permissions';
 import { formatDialDisplay } from './dialDisplay';
-
-const { width, height: screenHeight } = Dimensions.get('window');
+import { usePhoneLayoutWidth } from '../../ui/usePhoneLayoutWidth';
+import { KEYPAD_KEY_GAP, KEYPAD_PAD_H_PADDING, keypadCellWidth, keypadGridWidth } from '../../ui/phoneLayoutWidth';
 
 const KEYS = [
   { digit: '1', sub: '' },
@@ -53,15 +53,20 @@ const KEYS = [
 // Compact layout: tighter gutters so the keypad sits closer to the number
 // display above and the call button below. Key size stays comfortable by
 // clamping to a sensible min/max.
-const PAD_H_PADDING = 14;
-const KEY_GAP = 8;
-const KEY_CELL_WIDTH = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
+// ⛔ The key WIDTH is computed per render from the LIVE window width
+// (usePhoneLayoutWidth), never from a module-scope Dimensions.get(): that
+// constant was baked in at bundle load, which is usually a headless push
+// start with no portrait lock — a phone lying sideways at that instant sized
+// the keys for landscape and pushed the 1/3, 4/6, 7/9 and */# columns off
+// the screen until the process died. Guarded by ui/windowWidth.test.ts.
+const PAD_H_PADDING = KEYPAD_PAD_H_PADDING;
+const KEY_GAP = KEYPAD_KEY_GAP;
 // Key height flexes between these bounds so the live-suggestion area above the
 // keypad always has room for two rows. When even the smallest keypad can't fit
 // two rows, we fall back to showing a single suggestion instead.
 const KEY_MAX = 70;
 const KEY_MIN = 46;
-const SHORT_SCREEN = screenHeight < 740;
+const SHORT_SCREEN_HEIGHT = 740;
 // One suggestion row's footprint (avatar/text height + vertical padding + border).
 const SUGGESTION_ROW_H = 50;
 const SUGGESTION_GAP = 6;
@@ -82,6 +87,7 @@ function DialKey({
   onLongPress,
   disabled,
   size,
+  cellWidth,
   digitFontSize,
 }: {
   digit: string;
@@ -90,6 +96,7 @@ function DialKey({
   onLongPress?: (d: string) => void;
   disabled?: boolean;
   size: number;
+  cellWidth: number;
   digitFontSize: number;
 }) {
   const { colors } = useTheme();
@@ -153,7 +160,7 @@ function DialKey({
         style={[
           styles.key,
           {
-            width: KEY_CELL_WIDTH,
+            width: cellWidth,
             height: size,
             transform: [{ scale: scaleAnim }],
             opacity: opacityAnim,
@@ -294,7 +301,14 @@ export function KeypadTab() {
   const [dndOffConfirmOpen, setDndOffConfirmOpen] = useState(false);
   // Measured height of the whole tab — drives adaptive keypad sizing so the
   // suggestion list always has room for (ideally) two rows.
-  const [tabHeight, setTabHeight] = useState(screenHeight);
+  // Live window size. Height seeds the adaptive keypad until onLayout measures
+  // the real tab; width sizes the keys (see the note above PAD_H_PADDING).
+  const { height: windowHeight } = useWindowDimensions();
+  const layoutWidth = usePhoneLayoutWidth();
+  const keyCellWidth = keypadCellWidth(layoutWidth);
+  const keyGridWidth = keypadGridWidth(layoutWidth);
+  const shortScreen = windowHeight < SHORT_SCREEN_HEIGHT;
+  const [tabHeight, setTabHeight] = useState(windowHeight);
   const prevCallStateRef = useRef(sip.callState);
 
   // Load suggestion sources on focus. Network call is best-effort — failure
@@ -578,8 +592,8 @@ export function KeypadTab() {
       seen.add(key);
     }
 
-    return out.slice(0, SHORT_SCREEN ? 2 : 3);
-  }, [number, contacts, recent, callActive]);
+    return out.slice(0, shortScreen ? 2 : 3);
+  }, [number, contacts, recent, callActive, shortScreen]);
 
   const outboundVisible = (outboundRoutes.length > 0 || sipAccounts.length > 0) && !callActive;
 
@@ -862,7 +876,7 @@ export function KeypadTab() {
 
       {/* ── Keypad Grid ── */}
       <View style={[styles.keypad, { paddingHorizontal: PAD_H_PADDING }]}>
-        <View style={styles.keyGrid}>
+        <View style={[styles.keyGrid, { width: keyGridWidth }]}>
           {KEYS.map(({ digit, sub }) => (
             <DialKey
               key={digit}
@@ -872,6 +886,7 @@ export function KeypadTab() {
               onLongPress={handleLongPress}
               disabled={dialing}
               size={keySize}
+              cellWidth={keyCellWidth}
               digitFontSize={keyFontSize}
             />
           ))}
@@ -888,6 +903,7 @@ export function KeypadTab() {
               style={[
                 styles.deleteBtn,
                 {
+                  right: (keyCellWidth - 52) / 2,
                   borderColor: colors.border,
                   backgroundColor: colors.surfaceElevated,
                 },
@@ -1115,7 +1131,7 @@ const styles = StyleSheet.create({
     // No flex — height determined by content; spacer above handles positioning
   },
   keyGrid: {
-    width: KEY_CELL_WIDTH * 3 + KEY_GAP * 2,
+    // width is set inline per render from the live window (keypadGridWidth)
     alignSelf: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1151,7 +1167,7 @@ const styles = StyleSheet.create({
   },
   deleteBtn: {
     position: 'absolute',
-    right: (KEY_CELL_WIDTH - 52) / 2,
+    // `right` is set inline per render: centred under the right-hand key column
     width: 52,
     height: 52,
     borderRadius: 26,

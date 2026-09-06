@@ -29,7 +29,6 @@ import {
   Pressable,
   Platform,
   Easing,
-  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -37,6 +36,7 @@ import { useCallSessions } from "../../context/CallSessionManager";
 import { showAppAlert } from "../../components/ui/appAlert";
 import type { CallSession } from "../../types/callSession";
 import { TransferModal } from "./TransferModal";
+import { usePhoneLayoutWidth } from "../../ui/usePhoneLayoutWidth";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 // Deliberately muted. The drawer sits on top of the ActiveCallScreen's dark
@@ -352,6 +352,8 @@ function Row({
 // ── Drawer ────────────────────────────────────────────────────────────────────
 
 export function CallsDrawer() {
+  const layoutWidth = usePhoneLayoutWidth();
+  const dropdownWidth = Math.min(layoutWidth - 24, 380);
   const {
     activeCall,
     heldCalls,
@@ -599,6 +601,7 @@ export function CallsDrawer() {
           style={[
             styles.dropdown,
             {
+              width: dropdownWidth,
               opacity: slide,
               transform: [
                 {
@@ -661,8 +664,9 @@ export function CallsDrawer() {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const SCREEN_WIDTH = Dimensions.get("window").width;
-const DROPDOWN_WIDTH = Math.min(SCREEN_WIDTH - 24, 380);
+// Dropdown width is computed inside CallsDrawer from the live window
+// (usePhoneLayoutWidth) — never from a module-scope Dimensions.get(), which
+// is baked in at bundle load. See ui/phoneLayoutWidth.ts.
 
 const styles = StyleSheet.create({
   wrapper: {
@@ -703,7 +707,7 @@ const styles = StyleSheet.create({
 
   dropdown: {
     marginTop: 10,
-    width: DROPDOWN_WIDTH,
+    // width set inline from the live window width
     alignSelf: "center",
   },
   dropdownCard: {

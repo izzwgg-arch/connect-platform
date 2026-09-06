@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Animated,
   BackHandler,
-  Dimensions,
   Easing,
   FlatList,
   Image,
@@ -22,6 +21,7 @@ import {
   View,
 } from 'react-native';
 import { Audio, InterruptionModeAndroid, ResizeMode, Video } from 'expo-av';
+import { usePhoneLayoutWidth } from '../../ui/usePhoneLayoutWidth';
 import { playVoiceNoteSentTone, playVoiceNoteStartTone } from '../../audio/telephonyAudio';
 import {
   GestureHandlerRootView,
@@ -91,7 +91,15 @@ type ChatFilter = 'all' | 'unread' | 'sms' | 'dms';
 type ComposerMode = 'dm' | 'sms' | null;
 type MediaPreview = { type: 'image' | 'video' | 'file' | 'location'; url?: string | null; title: string; subtitle?: string; location?: ChatLocation };
 
-const CHAT_MEDIA_MAX_WIDTH = Math.round(Dimensions.get('window').width * 0.7);
+// Media bubbles take 70% of the LIVE window width (useChatMediaMaxWidth).
+// ⛔ Never a module-scope Dimensions.get(): that is baked in at bundle load,
+// usually a headless push start with no portrait lock, so a phone lying
+// sideways at that instant sized every photo for landscape until the process
+// died. See ui/phoneLayoutWidth.ts.
+const CHAT_MEDIA_WIDTH_FRACTION = 0.7;
+function useChatMediaMaxWidth(): number {
+  return Math.round(usePhoneLayoutWidth() * CHAT_MEDIA_WIDTH_FRACTION);
+}
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
@@ -2419,10 +2427,12 @@ function ImageGrid({
   onLongPress?: () => void;
   onRetry: () => void;
 }) {
+  const mediaW = useChatMediaMaxWidth();
+  const halfW = (mediaW - 4) / 2;
   const shown = attachments.slice(0, 4);
   if (!shown.length) return null;
   return (
-    <View style={[styles.imageGrid, shown.length === 1 ? styles.imageGridSingle : null]}>
+    <View style={[styles.imageGrid, { width: mediaW }]}>
       {shown.map((attachment, index) => {
         const aspect = attachment.width && attachment.height ? Math.max(0.56, Math.min(1.8, attachment.width / attachment.height)) : 4 / 3;
         const isLargeThree = shown.length === 3 && index === 0;
@@ -2435,10 +2445,14 @@ function ImageGrid({
             delayLongPress={280}
             style={[
               styles.imageCell,
-              shown.length === 1 ? { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: aspect } : null,
-              shown.length === 2 ? styles.imageCellHalf : null,
-              shown.length === 3 ? (isLargeThree ? styles.imageCellThreeLarge : styles.imageCellThreeSmall) : null,
-              shown.length >= 4 ? styles.imageCellHalf : null,
+              shown.length === 1 ? { width: mediaW, aspectRatio: aspect } : null,
+              shown.length === 2 ? [styles.imageCellHalf, { width: halfW }] : null,
+              shown.length === 3
+                ? isLargeThree
+                  ? [styles.imageCellThreeLarge, { width: mediaW }]
+                  : [styles.imageCellThreeSmall, { width: halfW }]
+                : null,
+              shown.length >= 4 ? [styles.imageCellHalf, { width: halfW }] : null,
             ]}
           >
             <CachedChatImage attachment={attachment} style={styles.imageBubble} resizeMode="cover" />
@@ -2478,6 +2492,7 @@ function VideoThumb({
   onLongPress?: () => void;
   onRetry: () => void;
 }) {
+  const mediaW = useChatMediaMaxWidth();
   const aspect =
     attachment.width && attachment.height
       ? Math.max(0.56, Math.min(1.8, attachment.width / attachment.height))
@@ -2488,7 +2503,7 @@ function VideoThumb({
       onPress={onOpen}
       onLongPress={onLongPress}
       delayLongPress={280}
-      style={[styles.imageCell, { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: aspect }]}
+      style={[styles.imageCell, { width: mediaW, aspectRatio: aspect }]}
     >
       {attachment.downloadUrl ? (
         <Video
@@ -2565,6 +2580,7 @@ function useResolvedVoiceDuration(attachment: ChatAttachment, stored: number | n
 
 function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: ChatAttachment; mine: boolean; failed: boolean; onRetry: () => void }) {
   const { colors } = useTheme();
+  const mediaW = useChatMediaMaxWidth();
   const player = useContext(VoiceNotePlayerContext);
   const isActive = player?.activeId === attachment.id;
   const playing = Boolean(isActive && player?.playing);
@@ -2588,7 +2604,7 @@ function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: Ch
   }, [attachment.downloadUrl, attachment.id, isActive, player]);
 
   return (
-    <View style={[styles.voiceBubble, { backgroundColor: mine ? colors.primary : colors.surfaceElevated, borderColor: mine ? 'transparent' : colors.borderSubtle }]}>
+    <View style={[styles.voiceBubble, { width: Math.min(mediaW, 260), backgroundColor: mine ? colors.primary : colors.surfaceElevated, borderColor: mine ? 'transparent' : colors.borderSubtle }]}>
       <TouchableOpacity onPress={toggle} style={[styles.voicePlay, { backgroundColor: mine ? 'rgba(255,255,255,0.22)' : colors.primaryMuted }]}>
         <Ionicons name={playing ? 'pause' : 'play'} size={18} color={mine ? '#fff' : colors.primary} />
       </TouchableOpacity>
@@ -3460,12 +3476,12 @@ const styles = StyleSheet.create({
   replyInlineThumbPlay: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center' },
   locationCard: { marginTop: 7, borderRadius: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   locationText: { fontSize: 13, fontWeight: '800' },
-  imageGrid: { marginTop: 0, width: CHAT_MEDIA_MAX_WIDTH, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
-  imageGridSingle: { width: CHAT_MEDIA_MAX_WIDTH },
+  // widths for the media bubbles are set inline from useChatMediaMaxWidth()
+  imageGrid: { marginTop: 0, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
   imageCell: { overflow: 'hidden', borderRadius: 18, backgroundColor: 'rgba(15,23,42,0.18)' },
-  imageCellHalf: { width: (CHAT_MEDIA_MAX_WIDTH - 4) / 2, aspectRatio: 1 },
-  imageCellThreeLarge: { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: 1.9 },
-  imageCellThreeSmall: { width: (CHAT_MEDIA_MAX_WIDTH - 4) / 2, aspectRatio: 1 },
+  imageCellHalf: { aspectRatio: 1 },
+  imageCellThreeLarge: { aspectRatio: 1.9 },
+  imageCellThreeSmall: { aspectRatio: 1 },
   imageBubble: { width: '100%', height: '100%' },
   imageOverflow: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,6,23,0.52)' },
   imageOverflowText: { color: '#fff', fontSize: 24, fontWeight: '900' },
@@ -3473,7 +3489,7 @@ const styles = StyleSheet.create({
   imageStateText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   videoPlayOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   videoPlayButton: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(2,6,23,0.55)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center' },
-  voiceBubble: { marginTop: 7, width: Math.min(CHAT_MEDIA_MAX_WIDTH, 260), borderRadius: 18, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  voiceBubble: { marginTop: 7, borderRadius: 18, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
   voicePlay: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   voiceTrackWrap: { flex: 1, minWidth: 0, gap: 5 },
   voiceTrack: { height: 6, borderRadius: 999, overflow: 'hidden' },

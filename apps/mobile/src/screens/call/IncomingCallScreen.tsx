@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   Animated,
-  Dimensions,
   TouchableOpacity,
   ActivityIndicator,
   Platform,
@@ -36,7 +35,9 @@ import { getQuickReplies, canSmsReply, sendQuickReplySms, DEFAULT_QUICK_REPLIES 
 
 const INVITE_TTL_S = 45; // seconds before invite expires
 
-const { width } = Dimensions.get('window');
+// (A module-scope Dimensions.get('window') read used to sit here, unused. Do
+// not bring it back: it is evaluated at bundle load, usually a headless push
+// start with no portrait lock. See ui/phoneLayoutWidth.ts.)
 
 export function IncomingCallScreen() {
   const { token } = useAuth();
