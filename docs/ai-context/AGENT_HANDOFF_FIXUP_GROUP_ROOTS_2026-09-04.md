@@ -191,6 +191,56 @@ ring push lands, whatever the SIP stack is doing. Portal page + mini dialer: eac
 fleet APK; the portal half reaches the office desktop only after a **full close + reopen**
 (an open window keeps the old bundle).
 
+### F9 — 2026-09-06 (Izzy, same day): "he is having problems with SMS on Windows"
+
+No specifics were given, so the whole SMS surface was measured for this tenant first:
+
+| Checked | Result |
+|---|---|
+| Number | one DID `+18458067040`, VOIPMS, tenant default, shared inbox (no owner) |
+| Traffic, 14 days | inbound 36 / outbound 10 / internal 1; **every outbound `sent`, every inbound `delivered`, 0 delivery errors** |
+| Outbound MMS from Windows | 09-03 + 09-04: `voipms_response ok`, provider ids `10215947`, `10222743` |
+| Carrier poll | 2 transient VoIP.ms 522/525 in 72 h (their Cloudflare), self-healed on the next poll |
+| Windows app | `desktop-0.1.16` since 09-03 18:31Z, on the post-09-03 bundle (CLIENT_TRACE rows 09-04 16:09Z), egress `50.122.143.130`; last request **09-04 19:13 CEST** — nothing since (closed for the weekend). ⛔ A `desktop-0.1.5` shell was still running until 09-03 16:59Z. |
+| Notification fix (08-30) | on this bundle — the bridge polls `/chat/threads` (4,556 hits/3 d) |
+| Photo MMS in | **all mirrored** (10 messages, 21 photos, every one an `image/jpeg` attachment row); downloads 200 |
+| Background 403s | `/api/crm/notifications` + `/api/desk-phones/pending` every 60 s (no permission keys) — noise, not a ban (bans count 401s) |
+
+**The one real defect: voice-message MMS never mirrored and cannot play on Windows.**
+Platform-wide, 14 days: **38 inbound MMS, 36 mirrored — the 2 unmirrored were both Fixup's,
+both `media.amr`** (an iPhone voice memo sent by text; 08-27 22:53Z and 09-04 03:15Z).
+Chain: VoIP.ms serves it `audio/amr` (fetched live from loopcom: 200, 110,726 bytes, real
+AMR-NB) → `writeChatAttachmentFile` refuses `audio/amr` (`mime_not_allowed`) → the mirror
+returns null, and **the reason was swallowed** by the callers' `.catch(() => null)` (the
+only log line was `voipms_inbound_mms_mirror_failed` with no reason) → the api falls back to
+the raw carrier URL (`mmsUrls`) → `MessageBubble.tsx` draws an `<audio>` for `.amr` →
+**Chromium has no AMR decoder**, so the Windows app shows a player that never plays.
+
+**Fix — `a9104862`** (`packages/shared/src/voipMsInboundMms.ts`, shared by the worker poll
+and the api webhook): `isCarrierOnlyAudio()` (AMR / AMR-WB / 3GPP by mime or extension) →
+`transcodeCarrierAudioToM4a()` (ffmpeg, AAC mono 64 kbps 24 kHz, fast-start M4A =
+`audio/mp4`, the voice-note format every client already plays) before the write; every
+failure now logs `voipms_mms_fetch_failed` with a stage and reason. Photos and every other
+media type take the byte-identical path.
+
+**Proof:**
+- 6 tests in `voipMsInboundMms.test.ts` (registered), including a **real ffmpeg AMR-NB →
+  M4A transcode** and the source guard (detect → transcode → write order); shared/worker/api
+  typechecks at baseline (0 / 8 / 81).
+- ✅ **worker DEPLOYED 2026-09-06 16:50Z** (`a9104862`, `restarts=0`, the function grepped in
+  the container) and **the boot backfill mirrored the 09-04 voice memo 44 s later**
+  (`voipms_mms_mirror_backfill … attempted:1, mirrored:1`): attachment row
+  `audio/mp4 media.m4a 584,146 B`, ffprobe on the stored file → **aac, 24000 Hz, mono,
+  69.2 s**. The 08-27 one (outside the 6-day sweep) was back-filled by a one-off
+  `runVoipMsMmsMirrorBackfill({lookbackDays:14})` inside the worker → `audio/mp4 media.m4a
+  381,611 B`. **Both of Fixup's voice messages now play** in every client.
+- api deploy state: §5.
+
+⛔ What this does NOT cover: the customer's exact complaint is still unknown — the data
+shows no failed text in either direction and no other Windows-side defect. If it recurs, ask
+which thread and what time; the desktop trace (`/admin/call-timeline`) records presses only
+while the window is on the current bundle.
+
 ---
 
 ## 3. What was done, in order
@@ -258,3 +308,10 @@ fleet APK; the portal half reaches the office desktop only after a **full close 
   F1 and F8); Fixup's iPhones should install 59.
   ⛔ Android: the mobile half of F8 is NOT on any Android phone — it rides the next fleet APK
   (not built here; publishing an APK is Izzy's call).
+- **F9 (`a9104862`):** ✅ **worker DEPLOYED 2026-09-06 16:50Z** (`deploy-worker.sh` done
+  `a9104862`, 0 restarts, `transcodeCarrierAudioToM4a` grepped in the container) and
+  ✅ **api DEPLOYED and container-verified** (`.build-commit` = `a9104862`, 0 restarts, the
+  function grepped ×3, health 200 on both hostnames). Both through the bundle →
+  `/root/connect-mirror.git` route; origin restored to GitHub afterwards
+  (`/root/mms-deploy.log`). Live proof in §2 F9 (both of Fixup's voice memos mirrored to
+  playable M4A).

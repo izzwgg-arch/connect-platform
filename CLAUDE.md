@@ -84,6 +84,20 @@ right solution."*
   desktop has 0 CLIENT_TRACE rows — never restarted since 09-03). Mobile half = **iOS build
   59** (`855a24c3-f5cd-48dd-bf95-83971b28ce84`) + the next Android fleet APK; portal half =
   portal deploy (state in the handoff §5), and the office must fully close + reopen the app.
+- ⛔⛔ **F9, "SMS problems on Windows" (`a9104862`, worker + api DEPLOYED): texting itself
+  was HEALTHY (14 days: every outbound `sent`, every inbound `delivered`, every photo
+  mirrored) — the ONE defect was voice-message MMS.** An iPhone voice memo sent by text
+  arrives from VoIP.ms as `media.amr`; chat storage refuses `audio/amr`, the mirror failed
+  silently (the callers' `.catch(() => null)` ate the reason), and the desktop drew an
+  `<audio>` over the raw carrier URL, which Chromium cannot decode. Platform-wide the only 2
+  unmirrored inbound media in 14 days were exactly Fixup's two AMRs. Now
+  `packages/shared/src/voipMsInboundMms.ts` transcodes AMR/AMR-WB/3GPP to AAC/M4A
+  (`audio/mp4`) with ffmpeg before writing, and logs `voipms_mms_fetch_failed` with a stage +
+  reason. ✅ Proven live: the new worker's boot backfill mirrored the 09-04 memo 44 s after
+  start (ffprobe: aac 24 kHz mono 69.2 s); the 08-27 one back-filled by a one-off
+  `runVoipMsMmsMirrorBackfill({lookbackDays:14})` in the container. ⛔ **`writeChatAttachmentFile`'s
+  MIME allowlist is the gate — any new carrier format must be transcoded, never allow-listed
+  raw.** The customer's exact complaint is still unknown; if it recurs, get the thread + time.
 - ⛔ **Build trap:** the old EAS clone `/tmp/connect-ios-build` on loopcom is DEAD — every
   fetch, even from a bundle that `git bundle verify` calls okay, dies *"pack has N
   unresolved deltas"*. **Use `/tmp/connect-ios-build2`** (fresh clone of
