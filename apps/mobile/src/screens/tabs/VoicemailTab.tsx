@@ -27,6 +27,7 @@ import type { RouteProp } from '@react-navigation/native';
 import type { TabParamList } from '../../navigation/types';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
+import { useIncomingNotifications } from '../../context/NotificationsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { showAppAlert } from '../../components/ui/appAlert';
 import type { AppColors } from '../../theme/colors';
@@ -209,6 +210,7 @@ export function VoicemailTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
+  const notifications = useIncomingNotifications();
   const { colors, isDark } = useTheme();
   const VM = useMemo(() => makeVmPalette(colors, isDark), [colors, isDark]);
   // Contact-name backfill (Izzy 2026-07-28): saved names replace raw caller ids.
@@ -592,8 +594,16 @@ export function VoicemailTab() {
   // answered/connected and a new outbound call started mid-playback. The
   // callback button (`callBack`) also awaits playback teardown before
   // dialing; this effect is the catch-all for every other path.
+  //
+  // ⛔ `sip.callState` alone is NOT enough (Fixup Group, 2026-09-06: "a
+  // voicemail was playing, a call came in, and it didn't stop"). The ring
+  // screen on this app is PUSH-driven: `incomingInvite` is set the moment the
+  // ring push lands, while `sip.callState` only becomes "ringing" when the
+  // SIP INVITE reaches JsSIP — which can be seconds later, or never (the
+  // stale-registration failure). So the push invite must silence playback too.
   const callIsActive =
-    sip.callState === 'dialing' || sip.callState === 'ringing' || sip.callState === 'connected';
+    sip.callState === 'dialing' || sip.callState === 'ringing' || sip.callState === 'connected' ||
+    notifications.incomingInvite !== null;
   useEffect(() => {
     if (callIsActive && activeIdRef.current) {
       stopPlayback();

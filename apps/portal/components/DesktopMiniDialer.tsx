@@ -39,7 +39,7 @@ import {
 import { useAppContext } from "../hooks/useAppContext";
 import { ConnectSelect } from "./ConnectSelect";
 import { isInsideViewportDropdown } from "./ViewportDropdown";
-import { useSipPhone } from "../hooks/useSipPhone";
+import { useOptionalSipPhone, useSipPhone } from "../hooks/useSipPhone";
 import { trace, shortDeviceId } from "../lib/clientTrace";
 import { MiniDialerReloadBar } from "./DesktopUpdateNotice";
 import { useTelephonySocket } from "../hooks/useTelephonySocket";
@@ -486,6 +486,18 @@ function VoicemailPlayer({ vmId, src, durationSec, onPlay }: { vmId?: string; sr
         setError(true);
       });
   };
+
+  // A phone call must silence a playing voicemail — an incoming RING included
+  // (Fixup Group, 2026-09-06: the voicemail kept playing through the ring).
+  // The `pause` event listener above flips `playing` back to false.
+  const phone = useOptionalSipPhone();
+  const callIsActive =
+    phone?.callState === "ringing" || phone?.callState === "dialing" || phone?.callState === "connected";
+  useEffect(() => {
+    if (callIsActive && audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+    }
+  }, [callIsActive]);
 
   const seek = (value: number) => {
     const audio = audioRef.current;

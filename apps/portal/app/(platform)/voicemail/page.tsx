@@ -27,7 +27,7 @@ import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { ConnectSelect } from "../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
-import { useSipPhone } from "../../../hooks/useSipPhone";
+import { useOptionalSipPhone, useSipPhone } from "../../../hooks/useSipPhone";
 import { apiDelete, apiGet, apiPatch } from "../../../services/apiClient";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { CRMPageHeader, cn, crm } from "../../../components/crm";
@@ -303,6 +303,21 @@ function SmartAudioPlayer({
       audioRef.current.pause();
     }
   }, [activeId, vm.id]);
+
+  // A phone call must silence a playing voicemail — an incoming RING included,
+  // or the voicemail keeps talking over the ringtone and over the answered
+  // call (Fixup Group, 2026-09-06: "a voicemail was playing, a call came in,
+  // and the voicemail didn't stop"). Optional hook: this player also renders
+  // where no SIP provider exists.
+  const phone = useOptionalSipPhone();
+  const callIsActive =
+    phone?.callState === "ringing" || phone?.callState === "dialing" || phone?.callState === "connected";
+  useEffect(() => {
+    if (callIsActive && audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      setPlaying(false);
+    }
+  }, [callIsActive]);
 
   useEffect(() => () => {
     if (audioRef.current) {
