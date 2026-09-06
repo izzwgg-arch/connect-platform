@@ -1,3 +1,76 @@
+## ⛔⛔ AGENT HANDOFF — Fixup Group "to the roots": the iPhones have NEVER connected an inbound call, because a suspended iPhone keeps saying "registered" after the PBX dropped it (2026-09-04 → 09-06, `5dcc38a5`, iOS build 58) — READ FIRST for ANY iPhone "I answered and got voicemail", before adding a "skip when already registered" guard to the ring path, or before calling the 443 route an answer fix
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIXUP_GROUP_ROOTS_2026-09-04.md`**
+(`5dcc38a5` on `feat/ivr-migration-takeover` — apps/mobile only. ✅ **iOS build 58 QUEUED
+on EAS 2026-09-06 14:57Z** (`1ae3d8f9-f406-4a62-aaae-f71a4b839e31`, `ios-prod`,
+`appBuildVersion 58`); submit/attach/publish is Izzy's call and the phones only change when
+the customer installs. ✅ **One production data change:** Fixup Group
+(`cmqr9cs9402qqs013m7p64lpi`) moved to the 443 SIP route (`webrtcRouteViaSbc=true`,
+`sipWsUrl=NULL`, `sipDomain=m.connectcomunications.com`; backup
+`/root/fixup-443-20260904/tenant-before.json`). No api/portal/telephony deploy, no PBX write,
+no migration.) Memory: [[fixup-iphone-stale-registration-never-redialed]].
+Izzy, 2026-09-04: *"find every single issue … every failure, every hiccup they had since the
+system went up … in every failure, I want a solution and proof that the solution is the
+right solution."*
+
+- ⛔⛔ **THE HEADLINE, from `asterisk.cdr` all-time: 92 inbound calls since 06-23 — desk
+  answered 43, an app answered 4 (ALL Android/desktop), and the two iPhones have NEVER
+  connected an inbound call. All 4 iPhone Answer taps failed (08-05, 08-07, 08-24, 09-04).**
+  Today's caller 973-756-5563 rang three times in five minutes and reached nobody.
+- ⛔⛔ **THE ROOT CAUSE IS THE APP TRUSTING ITSELF.** PJSIP qualifies every contact
+  (`qualify_frequency 30`/`qualify_timeout 3`); a SUSPENDED iPhone cannot answer the OPTIONS
+  ping, so its contact is dropped ≤33 s after backgrounding (09-04: backgrounded ~14:10:49Z,
+  contact gone 14:11:22Z). The app never notices — its blackbox reads
+  `registrationState: registered, registrationAgeMs: 156681, wssConnected: true` — and
+  **every ring-time guard skipped on "registered"** (the eager pre-register, jssip's
+  *"Already registered, skipping"*, the iOS `earlyColdAcceptSent` path). The PBX committed
+  `CONTACTS=` desk+desktop+Android, Mode-B waited its 8 s for a fresh contact
+  (`no_fresh_contact`), voicemail at 30 s. **Identical on 08-07 (`registrationAgeMs
+  162675`), and 6 of 15 iOS answer-fail blackboxes PLATFORM-WIDE (B Visible, Loopcom Demo,
+  Fixup) carry it — an iOS app defect, not a Fixup fault.**
+- ✅ **THE FIX (`5dcc38a5`): `decideRingRegister()` in
+  `apps/mobile/src/sip/mobileWakeRegistration.ts`** — iOS + app not active + registration
+  older than **`IOS_PBX_CONTACT_DROP_MS = 30 000` (the qualify period, not a tuned guess)**
+  → the eager pre-register calls `sip.register({ forceRestart: true })`. Foreground, <30 s,
+  "registering" and **Android are byte-identical to before**; jssip's
+  `inInviteAnswerWindow()` still refuses the restart once an INVITE has landed. ⛔ **Never
+  re-add a bare "skip when registered" guard on the ring path** — a source guard
+  (comment-stripped, CRLF-normalised) fails if the eager block decides on `regState` alone.
+  Proven: 17 tests (the decisive cases are the REAL blackbox values), **all 3 source guards
+  fail replayed against HEAD**, mobile `tsc` 0. Log tell: `eager_preregister_stale_ios_force_restart`.
+- ⛔⛔ **THE 443 ROUTE IS NOT THE ANSWER FIX — say so plainly.** Fixup was the last iOS
+  tenant on the direct 8089 route behind a Cologuard filter (register-on-wake p50 15.4 s /
+  p90 57.7 s, the platform's slowest; 18/52 iOS sessions `SIP_REGISTER_FAILED`), so the
+  flip is justified — but **B Visible has been on 443 for weeks and carries 7 iPhone
+  `INVITE_NOT_RECEIVED` failures with the same stale-registered signature.** 443 makes the
+  fresh REGISTER fast enough to land inside the ring; F1's fix is what sends it. ⛔ Every
+  Fixup device must **sign out and back in** or the cached `sipWsUrl` keeps the old route.
+- ⛔ **Two iPhones on ONE login share ONE `CallInvite`** — a DECLINE from either flips the
+  row `DECLINED` and the other's ACCEPT answers `INVITE_ALREADY_HANDLED` (declines seen
+  08-05/08-12/08-24/08-25; no lost call proven from it alone). Per-device invite state
+  needs a migration — NOT built. Signing out one iPhone is still the right mitigation.
+- **The rest of the roots:** the Android is on `1.0.0+20260802-103722` (5 weeks old —
+  install the current APK, nothing pushes it); the desk phone was registered at 32 ms /
+  0 % loss through both of today's 30-s rings nobody picked up (a second desk contact via
+  DigitalOcean `159.89.179.105` vanished 08-31 20:40Z — unexplained, ask them); **29 of 92
+  callers hung up inside IVR-48 without pressing a key** (the menu requires one; a
+  no-key default to 103 is Izzy's call); zero support tickets ever filed; SMS ingest clean
+  and the 08-30 notification/MMS fixes are live on their 0.1.16 desktop.
+- ⛔ **Build trap:** the old EAS clone `/tmp/connect-ios-build` on loopcom is DEAD — every
+  fetch, even from a bundle that `git bundle verify` calls okay, dies *"pack has N
+  unresolved deltas"*. **Use `/tmp/connect-ios-build2`** (fresh clone of
+  `/opt/connectcomms/app` + the bundle + the old clone's `node_modules` moved across —
+  `app.config.ts` needs `expo/config-plugins` resolvable or EAS fails before upload).
+  GitHub 401'd the server's pack fetch again; bundle route as documented.
+- ⏳ **NOT PROVEN: no iPhone has answered a call on build 58.** Acceptance (handoff §4):
+  lock the iPhone > 60 s, call, answer → `eager_preregister_stale_ios_force_restart` in the
+  app log, a fresh `T31_103_1` REGISTER inside the ring, then the PBX dials it or telephony
+  logs a `wake_leg` redirect, and a two-way conversation. Negatives: a FOREGROUND iPhone
+  logs `…skipped_already_registered … appState=active`; desk answers still
+  `answered_during_grace`; no `wake_leg` on ring-group calls. If a fresh REGISTER lands
+  > 8 s after the tap, the next lever is `modeBFreshContactWaitMs` (telephony,
+  0-active-calls deploy) — measure first.
+
 ## ⛔⛔ AGENT HANDOFF — the softphone REPORTS EVERY DEVICE EVENT AND EVERY PRESS now: read `/admin/call-timeline` BEFORE asking for a screen share (2026-09-03, `762d055f`) — READ FIRST for ANY "I can't hear / they can't hear me" ticket, before touching `applySink`/`refreshAudioDevices`/`attachRemoteStream` in `useSipPhone.ts`, before adding a diag fetch to the portal, or before adding a fact the client should record
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SOFTPHONE_CLIENT_TRACE_2026-09-03.md`**
