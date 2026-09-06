@@ -98,6 +98,19 @@ right solution."*
   `runVoipMsMmsMirrorBackfill({lookbackDays:14})` in the container. ⛔ **`writeChatAttachmentFile`'s
   MIME allowlist is the gate — any new carrier format must be transcoded, never allow-listed
   raw.** The customer's exact complaint is still unknown; if it recurs, get the thread + time.
+- ⛔⛔ **F10, "incoming messages take too long" (`fe1813f6`, worker DEPLOYED + measured): the
+  inbound poll cycle took ~3–3.5 MINUTES** — VoIP.ms answers 7–11 s per API call and the
+  cycle made getSMS+getMMS for EACH of 16 numbers (32 calls); the 60 s timer was skipped while
+  a cycle ran, so a text sat unseen up to a whole cycle. Now ONE account-wide getSMS (limit
+  500) + ONE getMMS per cycle, split per DID (`mergeInboundRowsForDid`), FULL page or failed
+  call → the old per-number fetch. **Live: cycles every ~60 s, 8–13 s each (`cycle done …
+  mode=account ms=…`)** — worst-case carrier lag 3.5 min → ~70 s. ⛔ Never re-add a
+  per-number carrier call to that loop. **The instant path is the webhook VoIP.ms is ALREADY
+  firing on every text (109 × 401 in 14 d, account-level callback, no token)** — a secret is
+  stored now and the exact URL sits in `/root/voipms-webhook-url.txt`; pasting it at VoIP.ms
+  is Izzy's. Unproven until the first real text: whether VoIP.ms substitutes the `{…}`
+  placeholders in the POST body (they are literal in the logged query). Both paths dedupe on
+  `voipms:<id>`.
 - ⛔ **Build trap:** the old EAS clone `/tmp/connect-ios-build` on loopcom is DEAD — every
   fetch, even from a bundle that `git bundle verify` calls okay, dies *"pack has N
   unresolved deltas"*. **Use `/tmp/connect-ios-build2`** (fresh clone of

@@ -241,6 +241,56 @@ shows no failed text in either direction and no other Windows-side defect. If it
 which thread and what time; the desktop trace (`/admin/call-timeline`) records presses only
 while the window is on the current bundle.
 
+### F10 — 2026-09-06 (Izzy: "I think their issue is how long incoming messages take to come in")
+
+**How an inbound text reaches Connect:** the worker POLLS VoIP.ms (`voipMsInboundSyncJob`),
+then the Windows app polls Connect (`/chat/threads` every 30 s from the notification bridge,
+every 7 s on an open chat). The webhook VoIP.ms could call on arrival is fail-closed (no secret)
+— see below.
+
+**Measured before the fix (worker log, 2026-09-06):** the poll timer is 60 s, but a cycle
+did `getSMS` + `getMMS` for EACH of the 16 numbers on the account — 32 carrier calls — and
+**VoIP.ms answers 7–11 s per call** (probe from loopcom: `getDIDsInfo` 7.2 s, `getSMS` 7.4 s,
+`getMMS` 10.9 s). So one cycle took **~3–3.5 min** (`cycle done` gaps p50 180 s / p90 230 s)
+and the 60 s timer was skipped while a cycle ran. **A text sat unseen for 0–3.5 min at the
+carrier step alone**, plus up to 30 s of desktop poll. That IS "messages take long to come in".
+(⛔ The per-message lag could not be reconstructed historically: the worker's `docker logs`
+were wiped by today's deploy, and `ConnectChatMessage.createdAt` is the CARRIER time.)
+
+**Fix — `fe1813f6`:** ONE account-wide `getSMS` (limit 500, no `did`) + ONE `getMMS` per
+cycle, split per DID by the same merge the per-number path always used
+(`mergeInboundRowsForDid`, extracted); a failed `getSMS` or a FULL page falls back to the
+exact per-number fetch, so a burst can never be truncated. `getMMS` was already
+account-wide — it was simply being repeated 16×. The cycle line now logs `mode=` and `ms=`.
+
+**Proof:** 4 tests (per-DID split incl. a short-code sender, MMS merge per DID, page size,
+source guard — the guard fails against HEAD); worker `tsc` at its 8-error baseline.
+✅ **worker DEPLOYED 2026-09-06 17:18Z** (`fe1813f6`, 0 restarts) and **measured live**:
+`cycle done … mode=account ms=8426 / 10443 / 12892 / 10247 / 9226`, cycles at
+17:18:58 → 17:20:00 → 17:21:02 → 17:21:59 → 17:22:58 (**every ~60 s, 8–13 s each**), and a
+new message (`fetched 53 → 54`) was picked up on the 17:21 cycle. **Worst-case carrier lag
+3.5 min → ~70 s; typical ~35 s.**
+
+**The instant path — needs Izzy at VoIP.ms:** VoIP.ms is ALREADY calling
+`POST /api/webhooks/voipms/sms` on every inbound text (109 POSTs in 14 days from
+`72.251.239.208`, one per message, to the second — e.g. 09-04 19:19:17 / 19:40:21 / 19:44:57
+CEST match Fixup's 17:19:14Z / 17:40:17Z / 17:44:54Z texts), from an ACCOUNT-LEVEL callback
+(no DID has our URL: 61 DIDs have none, 11 point at the PBX `m.connectcomunications.com/sms/…`
+incl. Fixup's, `sms_sipaccount_enabled=1`). Every one is refused **401** because the URL carries
+no `token` and no secret was stored. ✅ **A secret is now stored** (`GlobalVoipMsConfig.
+webhookSecretEncrypted`, credentials untouched, read back) and the exact URL to paste is in
+**`/root/voipms-webhook-url.txt` on loopcom (600)**:
+`https://app.loopcom.net/api/webhooks/voipms/sms?token=…&from={FROM}&to={TO}&message={MESSAGE}&id={ID}&date={TIMESTAMP}&media={MEDIA}`.
+Paste it as the SMS/MMS URL callback at VoIP.ms (the account-level one that is firing today).
+⛔ **Two things are UNPROVEN until the first real text arrives through it:** whether VoIP.ms
+substitutes the `{…}` placeholders in the POST body (the nginx request line shows them
+LITERAL in the query — the body is not logged; if they arrive literal the handler logs
+`dropped inbound message: unusable sender "{FROM}"` and nothing is lost, the poll still
+ingests it), and the auth (`token` param → `isVoipMsWebhookAuthorized`). Both paths dedupe on
+`voipms:<id>`, so the poll and the webhook can never double-insert.
+⛔ The VoIP.ms wiki is Cloudflare-gated (403 to fetch); the variable names are the ones
+Connect's own admin page has always told the owner to paste.
+
 ---
 
 ## 3. What was done, in order
@@ -315,3 +365,8 @@ while the window is on the current bundle.
   `/root/connect-mirror.git` route; origin restored to GitHub afterwards
   (`/root/mms-deploy.log`). Live proof in §2 F9 (both of Fixup's voice memos mirrored to
   playable M4A).
+- **F10 (`fe1813f6`):** ✅ **worker DEPLOYED 2026-09-06 17:18Z** (`deploy-worker.sh` done
+  `fe1813f6`, 0 restarts, `ACCOUNT_WIDE_SMS_LIMIT` grepped ×4 in the container; mirror route,
+  origin restored — `/root/poll-deploy.log`); live cycle measurements in §2 F10. Webhook secret
+  stored in `GlobalVoipMsConfig` (one column, credentials untouched); the URL for VoIP.ms is
+  `/root/voipms-webhook-url.txt`. ⛔ Nothing at VoIP.ms was changed.
