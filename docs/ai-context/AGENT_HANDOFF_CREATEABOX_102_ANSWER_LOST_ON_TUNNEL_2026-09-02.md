@@ -230,3 +230,61 @@ sizes are unmeasured too. The only thing that settles it is option C in §7.
 
 Pcaps kept for that comparison: `/root/cab102-cap/{inner,outer,outer2,direct443}.pcap`
 on loopcom (read-only captures, ~4 MB total; delete when done).
+
+## 10. Option A APPLIED — 2026-09-06 15:34Z (Izzy's call)
+
+Izzy, 2026-09-06, on reading §7: *"the app doesn't need the tunnel at all since it works
+on 5G — the tunnel is only for the hard phone."* That is the whole cause restated: the
+GL.iNet's split tunnel (`AllowedIPs 209.145.60.79/32`) applies to **every device on the
+office network**, and the app registered directly to that IP (`sipWsUrl
+wss://m.connectcomunications.com:8089/ws`), so on office WiFi it was tunnelled exactly
+like a desk phone. On 5G the router is not in the path.
+
+**Done (one guarded DB write, no deploy, no PBX write):**
+
+| Field | Before | After |
+|---|---|---|
+| `webrtcRouteViaSbc` | `false` | `true` |
+| `sipWsUrl` | `wss://m.connectcomunications.com:8089/ws` | `null` |
+| `sipDomain` | `m.connectcomunications.com` | unchanged |
+
+`updateMany` guarded on all three prior values → `count: 1`, read back. Backup of the
+prior row: `loopcom:/root/cab102-tenant-backup-20260906T153403Z.json`. Reversal is
+those two values back.
+
+**What the app is handed now:** `resolveWebrtcConfig` → explicit `sipWsUrl` (null) →
+`webrtcRouteViaSbc` true → the global `SIP_PUBLIC_WS_URL` = `wss://sip.loopcom.net/sip`
+(read live from `app-api-1`). That is loopcom's hostname, not the PBX IP, so the router's
+tunnel rule cannot match it; nginx `location /sip` on `sip.loopcom.net` proxies to
+`m.connectcomunications.com:8089/ws`. RTP still goes phone ↔ PBX and will ride the tunnel
+on office WiFi like the desk phones' RTP does (small packets — proven fine all day).
+
+**Proof the host works (not inferred):** `/sip` answers `101` on `sip.loopcom.net`,
+`sip.connectcomunications.com` and `app.connectcomunications.com`; loopcom held **7**
+established nginx→PBX:8089 upstream sockets at flip time; and **Hanna (T141)** — same
+`sipWsUrl: null` shape, built after the 08-17 global flip, no tunnel anywhere — has **9
+REGISTERED events this week** through `45.14.194.179`, i.e. through `sip.loopcom.net`.
+Other null-`sipWsUrl` tenants on the route today: Fixup Group, TYH Industries, Loopcom
+Demo 2, YS Plumbing.
+
+**How to tell the tunnel path from the 443 path** (both present `45.14.194.179` to the
+PBX, and both carry a `.invalid` `x-ast-orig-host` for an app client): take the contact's
+PORT from `pjsip show aor T7_102_1` and look for it in
+`ss -tn state established '( dport = :8089 )'` on loopcom. A hit = nginx upstream socket
+= 443 route. No hit = MASQUERADE'd tunnel traffic. At 15:37Z Sender's live contact was
+`45.14.194.179:48492` **Avail 504 ms** and 48492 was NOT an nginx socket → still the
+tunnel, because he has not signed out/in (the app never refreshes a cached `sipWsUrl`).
+His other contact `172.56.161.198:35171` (T-Mobile direct, Unavail) is a stale 5G session.
+
+**NOT PROVEN:** no answered call on the new route yet. Acceptance: Sender signs out and
+back in on office WiFi → his new contact port shows up in the `ss` list → one inbound call
+answered on the app with two-way audio. Negative that matters: the desk phone `T7_102`
+keeps registering through the tunnel (it is not WebRTC; untouched).
+
+**Interim workaround** (no change needed): WiFi off on the phone in the office, stay on
+5G — the four failures were all on office WiFi, both successes off it.
+
+**Deliberately NOT done:** MSS clamp on `wg0` (§7 B) and the GL box MTU (§7 D) — with
+the app off the tunnel there is nothing large left riding it; the capture-backed test
+call (§7 C) is now optional. The 504 ms RTT on the tunnel contact and the 313
+UNREACHABLE/48 h churn are the office uplink's own problem and remain.

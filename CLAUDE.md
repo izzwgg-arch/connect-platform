@@ -457,6 +457,26 @@ Memory: [[createabox-102-answer-lost-on-the-tunnel]].
   on loopcom's `wg0` FORWARD (TCP to the PBX only, 3 peers, desk phones UDP untouched).
   (D) WireGuard MTU 1280 + MSS clamp on the GL box itself. A is cheapest and reversible;
   B/D fix the tunnel only if C proves the hypothesis.
+- ✅✅ **OPTION A APPLIED 2026-09-06 15:34Z ON IZZY'S CALL ("the app doesn't need the tunnel at
+  all, it works on 5G — the tunnel is only for the hard phones"): Create A Box's app SIP is on
+  the 443 route.** Tenant `cmnlgryox001ip9paov24bmr0` `webrtcRouteViaSbc false→true`,
+  `sipWsUrl wss://m.connectcomunications.com:8089/ws→null` (guarded `updateMany`, 1 row,
+  read back), `sipDomain` already the hostname; backup
+  `loopcom:/root/cab102-tenant-backup-20260906T153403Z.json`. No deploy, no PBX write, desk
+  phones untouched. ⛔ **WHY the app was on the tunnel at all:** the GL.iNet's split tunnel
+  routes *anything addressed to the PBX's IP* through WireGuard for EVERY device on the office
+  network, and the app registered directly to that IP — so on office WiFi it was tunnelled
+  like a desk phone; on 5G it never was. With `sipWsUrl` null the app is handed the GLOBAL
+  `wss://sip.loopcom.net/sip` (loopcom's hostname, never the PBX IP), so the router's rule
+  can no longer match it anywhere. ✅ That host is proven by a REAL phone: Hanna (same null
+  `sipWsUrl`, no tunnel) registered 9× through it this week; `/sip` answers 101 on all three
+  SIP hostnames and 7 phones sat on the 443 route at flip time. ⏳ **NOT PROVEN: Sender has
+  not signed out/in yet** — his live contact at 15:37Z was still the tunnel path (PBX port
+  48492 is not one of loopcom's nginx→8089 upstream sockets; that is the tell, since both paths
+  present `45.14.194.179`). Acceptance: after sign-out/in on office WiFi, his `T7_102_1`
+  contact port appears in `ss -tn state established '( dport = :8089 )'` on loopcom, then one
+  answered call with audio. ⛔ Interim workaround if he cannot re-login: WiFi off, stay on 5G.
+  Reversal: restore the two fields from the backup file.
 - ⛔ **Two traps re-earned:** the app's `respondInvite` claim lands 20–25 s after the
   tap on failed calls — that is the app claiming AFTER the answer settles, not network
   lag (the `answer-status` GET at tap time lands instantly); and a failed call's
