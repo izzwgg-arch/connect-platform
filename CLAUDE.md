@@ -1,10 +1,11 @@
 ## ⛔⛔ AGENT HANDOFF — Fixup Group "to the roots": the iPhones have NEVER connected an inbound call, because a suspended iPhone keeps saying "registered" after the PBX dropped it (2026-09-04 → 09-06, `5dcc38a5`, iOS build 58) — READ FIRST for ANY iPhone "I answered and got voicemail", before adding a "skip when already registered" guard to the ring path, or before calling the 443 route an answer fix
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FIXUP_GROUP_ROOTS_2026-09-04.md`**
-(`5dcc38a5` on `feat/ivr-migration-takeover` — apps/mobile only. ✅ **iOS build 58 QUEUED
-on EAS 2026-09-06 14:57Z** (`1ae3d8f9-f406-4a62-aaae-f71a4b839e31`, `ios-prod`,
-`appBuildVersion 58`); submit/attach/publish is Izzy's call and the phones only change when
-the customer installs. ✅ **One production data change:** Fixup Group
+(`5dcc38a5` on `feat/ivr-migration-takeover` — apps/mobile only. ✅ **iOS build 58 is ON
+TESTFLIGHT 2026-09-06**: EAS `1ae3d8f9-f406-4a62-aaae-f71a4b839e31` FINISHED 15:04Z,
+Apple processing VALID 15:08Z, attached to "Loopcom Testers" (204), beta review
+WAITING_FOR_REVIEW — Fixup's login is in that group. The App Store release is Izzy's call and
+the phones only change when the customer installs. ✅ **One production data change:** Fixup Group
 (`cmqr9cs9402qqs013m7p64lpi`) moved to the 443 SIP route (`webrtcRouteViaSbc=true`,
 `sipWsUrl=NULL`, `sipDomain=m.connectcomunications.com`; backup
 `/root/fixup-443-20260904/tenant-before.json`). No api/portal/telephony deploy, no PBX write,

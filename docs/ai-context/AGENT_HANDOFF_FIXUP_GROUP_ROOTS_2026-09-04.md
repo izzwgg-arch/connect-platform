@@ -206,8 +206,13 @@ no-key-pressed default to 103 is one dialplan change).
 
 - 2026-09-06 14:57:36Z — EAS build **58** queued, id
   `1ae3d8f9-f406-4a62-aaae-f71a4b839e31`, profile `ios-prod`, commit `5dcc38a5`,
-  `appBuildVersion 58`. Distribution (submit to TestFlight, attach to "Loopcom Testers"
-  `fe508ee6-4a3f-49dd-bf53-858839fa2f06`, App Store release) is Izzy's call; **the phones
-  only change when the customer installs.**
+  `appBuildVersion 58`; **FINISHED 15:04:27Z** (IPA artifact on EAS).
+- 15:06Z — `eas submit` → App Store Connect (submission
+  `a7fbdc83-353b-4c2d-b9b0-b39d45bb2a18`); **15:08:48Z Apple processing `VALID`**;
+  attached to TestFlight group **"Loopcom Testers"** (`fe508ee6-…`, HTTP 204) and beta
+  review submitted (`WAITING_FOR_REVIEW`, 201) — `/root/.appstoreconnect/asc-release-58.mjs`.
+  `fixupusa1@gmail.com` is already a tester in that group, so both Fixup iPhones get build 58
+  from TestFlight once Apple's beta review passes. The App Store release is Izzy's call;
+  **the phones only change when the customer installs.**
 - Android: the fix is gated `Platform.OS === "ios"`, so no Android build is needed for it;
   Fixup's Android still needs the current fleet APK (F5).
