@@ -163,6 +163,34 @@ invalid"*. A third of all callers never pressed anything. That is their menu des
 fault — but it is where a third of their inbound traffic goes. Izzy's call (a
 no-key-pressed default to 103 is one dialplan change).
 
+### F8 — 2026-09-06 (reported by Izzy the same day): "a voicemail was playing, a call came in, and the voicemail didn't stop"
+
+Three voicemail players exist and **none of them paused on a ring** — read from the code,
+each a component with its own `<audio>`/`Audio.Sound` and no phone awareness:
+
+| Surface | What it keyed on before | Why that missed the ring |
+|---|---|---|
+| Mobile `VoicemailTab` (iPhone/Android) | `sip.callState` ∈ dialing/ringing/connected | `sip.callState` becomes "ringing" only when the **SIP INVITE reaches JsSIP**. The ring screen is **push-driven** (`incomingInvite` in NotificationsContext) and the INVITE arrives seconds later — or **never**, which is exactly F1's failure shape on every Fixup iPhone call. So the voicemail played straight through the CallKit ring. |
+| Portal voicemail page `SmartAudioPlayer` | nothing | never consulted `useSipPhone` at all |
+| Mini dialer `VoicemailPlayer` | nothing | never consulted the phone at all |
+
+Which surface Fixup meant is **not provable from the server**: their desktop window has
+produced **0** `CLIENT_TRACE` rows in 7 days (never restarted since the 09-03 deploy, so
+it records nothing), and the iOS blackbox carries no playback state. All three were fixed.
+
+**Fix — `6a86b621`.** Mobile: `callIsActive` now also includes
+`notifications.incomingInvite !== null` (the push invite), so playback stops the instant the
+ring push lands, whatever the SIP stack is doing. Portal page + mini dialer: each player reads
+`useOptionalSipPhone()` and pauses its `<audio>` on `ringing` / `dialing` / `connected`.
+
+**Proof:** `apps/portal/lib/voicemailPausesOnRing.test.ts` (2 guards, registered) and
+`apps/mobile/src/screens/tabs/voicemailPausesOnRing.test.ts` (1 guard, registered as
+`test:voicemail-ring-stop`) — **all three FAIL replayed against HEAD** (`PORTAL_GUARD_ROOT`
+/ `MOBILE_GUARD_ROOT`); portal `tsc` 0, mobile `tsc` 0. Deploy/build state in §5.
+⛔ The mobile half rides **iOS build 59** (build 58 does not have it) and the next Android
+fleet APK; the portal half reaches the office desktop only after a **full close + reopen**
+(an open window keeps the old bundle).
+
 ---
 
 ## 3. What was done, in order
@@ -214,5 +242,19 @@ no-key-pressed default to 103 is one dialplan change).
   `fixupusa1@gmail.com` is already a tester in that group, so both Fixup iPhones get build 58
   from TestFlight once Apple's beta review passes. The App Store release is Izzy's call;
   **the phones only change when the customer installs.**
-- Android: the fix is gated `Platform.OS === "ios"`, so no Android build is needed for it;
+- Android: the F1 fix is gated `Platform.OS === "ios"`, so no Android build is needed for it;
   Fixup's Android still needs the current fleet APK (F5).
+- **F8 (`6a86b621`):** ✅ **portal DEPLOYED and container-verified 2026-09-06 15:42Z** —
+  `app-portal-1` `.build-commit` = `6a86b621`, 0 restarts, `/voicemail` + `/api/health` 200
+  on both hostnames, and the shipped chunks carry the new pause effect (measured by the
+  `.paused` literal, which survives minification: voicemail page chunk **2 → 3**, mini-dialer
+  chunk `app/desktop/mini-dialer/page-*.js` **0 → 1** — exactly the source deltas).
+  ⛔ Deploy ran through the bundle → `/root/connect-mirror.git` route (GitHub still 401s the
+  server's pack fetch); origin restored to GitHub afterwards (`/root/vm59-deploy.log`).
+  **iOS build 59** (`855a24c3-f5cd-48dd-bf95-83971b28ce84`, commit `6a86b621`) FINISHED
+  15:43Z, submitted to App Store Connect, **Apple processing VALID 15:46:55Z, attached to
+  "Loopcom Testers" (204), beta review WAITING_FOR_REVIEW (201)** —
+  `/root/.appstoreconnect/asc-release-59.mjs`. **Build 59 supersedes 58** (it carries both
+  F1 and F8); Fixup's iPhones should install 59.
+  ⛔ Android: the mobile half of F8 is NOT on any Android phone — it rides the next fleet APK
+  (not built here; publishing an APK is Izzy's call).
