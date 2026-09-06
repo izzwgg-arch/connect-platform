@@ -221,10 +221,22 @@ function voipMsDateFromParam(): string {
   return `${twoDaysAgo.getUTCFullYear()}-${pad(twoDaysAgo.getUTCMonth() + 1)}-${pad(twoDaysAgo.getUTCDate())}`;
 }
 
+/**
+ * Account-wide getSMS page size. VoIP.ms answers ~7–11 s per API call
+ * (measured 2026-09-06: getSMS 7.4 s, getMMS 10.9 s), so the old per-number
+ * loop — getSMS+getMMS for each of 16 numbers — took ~3–3.5 min per cycle
+ * and a text sat unread for up to that long ("incoming messages take too
+ * long", Fixup Group). One account-wide getSMS + one getMMS per cycle costs
+ * ~11 s. If a page comes back FULL the cycle falls back to the per-number
+ * fetch, so a burst can never be silently truncated.
+ */
+export const ACCOUNT_WIDE_SMS_LIMIT = 500;
+
 async function fetchVoipMsMethod(
   creds: VoipMsStoredCreds,
   didE164: string,
   method: "getSMS" | "getMMS",
+  opts?: { accountWide?: boolean },
 ): Promise<Record<string, unknown>[]> {
   const base = creds.apiBaseUrl || DEFAULT_VOIPMS_API;
   const url = new URL(base);
@@ -235,6 +247,10 @@ async function fetchVoipMsMethod(
   if (method === "getMMS") {
     // getMMS uses `from` (VoIP.ms docs); did/limit are not in the published example — filter rows client-side.
     url.searchParams.set("from", dateFrom);
+  } else if (opts?.accountWide) {
+    // No `did`: every DID on the account in one call; rows carry their own `did`.
+    url.searchParams.set("limit", String(ACCOUNT_WIDE_SMS_LIMIT));
+    url.searchParams.set("date_from", dateFrom);
   } else {
     url.searchParams.set("did", digits(didE164));
     url.searchParams.set("limit", "50");
@@ -266,7 +282,43 @@ async function fetchRecentSmsForDid(creds: VoipMsStoredCreds, didE164: string): 
       return [] as Record<string, unknown>[];
     }),
   ]);
+  return mergeInboundRowsForDid(didE164, smsRaw, mmsRaw);
+}
 
+export type AccountWideBatch = {
+  smsRaw: Record<string, unknown>[];
+  mmsRaw: Record<string, unknown>[];
+  /** false when the getSMS page came back full — a burst may be truncated, so callers must fall back to per-DID. */
+  complete: boolean;
+};
+
+/**
+ * ONE getSMS + ONE getMMS for the whole account. Throws when getSMS fails
+ * (the caller then falls back to the per-number path); a failed getMMS only
+ * costs the MMS URLs, exactly as it did per number.
+ */
+async function fetchAccountWideRecent(creds: VoipMsStoredCreds): Promise<AccountWideBatch> {
+  const [smsRaw, mmsRaw] = await Promise.all([
+    fetchVoipMsMethod(creds, "", "getSMS", { accountWide: true }),
+    fetchVoipMsMethod(creds, "", "getMMS").catch((err: any) => {
+      console.warn("[voipms-inbound] account-wide getMMS failed", err?.message || err);
+      return [] as Record<string, unknown>[];
+    }),
+  ]);
+  return { smsRaw, mmsRaw, complete: smsRaw.length < ACCOUNT_WIDE_SMS_LIMIT };
+}
+
+/**
+ * Pick out and merge the rows that belong to ONE of our DIDs. Rows for other
+ * DIDs are dropped by the `did` check here and again by
+ * normalizeInboundRow's `to === tenantDidE164` rule, so the same batch can
+ * be handed to every number in the cycle.
+ */
+export function mergeInboundRowsForDid(
+  didE164: string,
+  smsRaw: Record<string, unknown>[],
+  mmsRaw: Record<string, unknown>[],
+): InboundRow[] {
   const mergeMap = new Map<string, InboundRow>();
 
   function ingest(raw: Record<string, unknown>) {
@@ -714,11 +766,25 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
       console.log("[voipms-inbound] no tenant SMS numbers to poll");
       return;
     }
+    // One account-wide fetch per cycle (see ACCOUNT_WIDE_SMS_LIMIT). A failed
+    // or FULL page falls back to the exact per-number path used before.
+    const cycleStartedAt = Date.now();
+    let batch: AccountWideBatch | null = null;
+    try {
+      const b = await fetchAccountWideRecent(creds);
+      if (b.complete) batch = b;
+      else console.warn(`[voipms-inbound] account-wide getSMS page full (${b.smsRaw.length}) — falling back to per-number fetch`);
+    } catch (err: any) {
+      console.warn("[voipms-inbound] account-wide getSMS failed — falling back to per-number fetch", err?.message || err);
+    }
+    const mode = batch ? "account" : "per_did";
     let totalFetched = 0;
     for (const n of numbers) {
       if (!n.tenantId) continue;
       try {
-        const rows = await fetchRecentSmsForDid(creds, n.phoneE164);
+        const rows = batch
+          ? mergeInboundRowsForDid(n.phoneE164, batch.smsRaw, batch.mmsRaw)
+          : await fetchRecentSmsForDid(creds, n.phoneE164);
         totalFetched += rows.length;
         for (const row of rows) {
           await importInboundMessage({
@@ -739,7 +805,7 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
         console.warn("[voipms-inbound] sync failed", n.phoneE164, err?.message || err);
       }
     }
-    console.log(`[voipms-inbound] cycle done: numbers=${numbers.length} fetched=${totalFetched}`);
+    console.log(`[voipms-inbound] cycle done: numbers=${numbers.length} fetched=${totalFetched} mode=${mode} ms=${Date.now() - cycleStartedAt}`);
   } finally {
     running = false;
   }
