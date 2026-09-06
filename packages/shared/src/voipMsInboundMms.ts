@@ -3,7 +3,15 @@
  * tenant/thread-scoped chat files (same storage as user uploads).
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { maxBytesForThread, writeChatAttachmentFile } from "./chatAttachmentStorage";
+
+const execFileAsync = promisify(execFile);
 
 function pathnameOf(url: string): string {
   try {
@@ -26,6 +34,13 @@ const EXT_MIME: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
+  // Carrier-only audio containers (an iPhone voice memo sent as MMS arrives
+  // from VoIP.ms as `media.amr`). Not playable in any browser and refused by
+  // chat storage — they are transcoded to AAC/M4A before writing, see
+  // isCarrierOnlyAudio() + transcodeCarrierAudioToM4a().
+  ".amr": "audio/amr",
+  ".awb": "audio/amr-wb",
+  ".3ga": "audio/3gpp",
   ".mp4": "video/mp4",
   ".webm": "video/webm",
   ".3gp": "video/mp4",
@@ -103,7 +118,72 @@ export async function downloadVoipMsMmsBuffer(
 }
 
 /**
- * Fetch one VoIP.ms MMS URL and write to chat storage. Returns null on any failure (logged by caller).
+ * Audio a carrier MMS gateway hands us that NO browser can decode and that
+ * chat storage (rightly) refuses: AMR-NB/AMR-WB and the 3GPP audio wrappers.
+ * An iPhone "voice memo" sent by text arrives exactly like this. Before
+ * 2026-09-06 such a message was never mirrored (Fixup Group received two and
+ * the Windows app showed a player that could not play) — the mirror silently
+ * failed on `mime_not_allowed`, and the fallback was the raw VoIP.ms URL fed
+ * to an `<audio>` element that has no AMR decoder.
+ */
+export function isCarrierOnlyAudio(mimeType: string, fileName: string): boolean {
+  const mime = String(mimeType || "").toLowerCase().split(";")[0].trim();
+  if (mime === "audio/amr" || mime === "audio/amr-wb" || mime === "audio/3gpp" || mime === "audio/3gpp2") return true;
+  const lower = String(fileName || "").toLowerCase();
+  return /\.(amr|awb|3ga)$/.test(lower);
+}
+
+/**
+ * ffmpeg arguments after `-i <in>`: audio only, AAC mono, low bitrate (the
+ * source is 8 kHz telephony speech), M4A with the index up front so a
+ * browser can start playing before the whole file lands.
+ */
+export const CARRIER_AUDIO_TRANSCODE_ARGS = [
+  "-vn",
+  "-c:a", "aac",
+  "-b:a", "64k",
+  "-ac", "1",
+  "-ar", "24000",
+  "-movflags", "+faststart",
+];
+
+/**
+ * Transcode carrier-only audio to AAC in an M4A container (`audio/mp4`, which
+ * chat storage accepts and every client already plays — it is the voice-note
+ * format). Returns null on any failure; the reason is logged here because the
+ * callers' `.catch(() => null)` throws it away.
+ */
+export async function transcodeCarrierAudioToM4a(input: Buffer, sourceExt = ".amr"): Promise<Buffer | null> {
+  const id = crypto.randomBytes(6).toString("hex");
+  const inPath = path.join(os.tmpdir(), `cc-mms-in-${id}${sourceExt}`);
+  const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.m4a`);
+  try {
+    await fs.promises.writeFile(inPath, input);
+    await execFileAsync(
+      "ffmpeg",
+      ["-y", "-loglevel", "error", "-i", inPath, ...CARRIER_AUDIO_TRANSCODE_ARGS, outPath],
+      { timeout: 30_000, maxBuffer: 1024 * 1024 },
+    );
+    const out = await fs.promises.readFile(outPath);
+    return out.length > 0 ? out : null;
+  } catch (err: any) {
+    console.warn(
+      JSON.stringify({
+        event: "voipms_mms_transcode_failed",
+        reason: String(err?.message || err).slice(0, 200),
+      }),
+    );
+    return null;
+  } finally {
+    await fs.promises.unlink(inPath).catch(() => undefined);
+    await fs.promises.unlink(outPath).catch(() => undefined);
+  }
+}
+
+/**
+ * Fetch one VoIP.ms MMS URL and write to chat storage. Returns null on any
+ * failure — the REASON is logged here (`voipms_mms_fetch_failed`), because
+ * both callers wrap this in `.catch(() => null)` and used to lose it.
  */
 export async function fetchVoipMsMmsToChatFile(input: {
   tenantId: string;
@@ -113,14 +193,27 @@ export async function fetchVoipMsMmsToChatFile(input: {
   isSmsThread: boolean;
 }): Promise<{ storageKey: string; mimeType: string; sizeBytes: number; fileName: string } | null> {
   const maxBytes = maxBytesForThread(input.isSmsThread);
+  const urlPrefix = String(input.sourceUrl || "").slice(0, 96);
   let buffer: Buffer;
   let contentType: string | null;
   try {
     ({ buffer, contentType } = await downloadVoipMsMmsBuffer(input.sourceUrl, maxBytes));
-  } catch {
+  } catch (err: any) {
+    console.warn(JSON.stringify({ event: "voipms_mms_fetch_failed", stage: "download", reason: String(err?.message || err).slice(0, 120), urlPrefix }));
     return null;
   }
-  const { fileName, mimeType } = inferMmsFileNameAndMime(input.sourceUrl, contentType);
+  let { fileName, mimeType } = inferMmsFileNameAndMime(input.sourceUrl, contentType);
+  if (isCarrierOnlyAudio(mimeType, fileName)) {
+    const ext = (fileName.match(/(\.[a-z0-9]+)$/i)?.[1] || ".amr").toLowerCase();
+    const transcoded = await transcodeCarrierAudioToM4a(buffer, ext);
+    if (!transcoded) {
+      console.warn(JSON.stringify({ event: "voipms_mms_fetch_failed", stage: "transcode", reason: "carrier_audio_transcode_failed", mimeType, urlPrefix }));
+      return null;
+    }
+    buffer = transcoded;
+    mimeType = "audio/mp4";
+    fileName = fileName.replace(/\.[a-z0-9]+$/i, "") + ".m4a";
+  }
   try {
     return await writeChatAttachmentFile({
       tenantKey: input.tenantId,
@@ -130,7 +223,8 @@ export async function fetchVoipMsMmsToChatFile(input: {
       mimeType,
       maxBytes,
     });
-  } catch {
+  } catch (err: any) {
+    console.warn(JSON.stringify({ event: "voipms_mms_fetch_failed", stage: "write", reason: String(err?.message || err).slice(0, 120), mimeType, urlPrefix }));
     return null;
   }
 }
