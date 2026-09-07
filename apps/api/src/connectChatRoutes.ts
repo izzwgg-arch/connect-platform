@@ -51,6 +51,7 @@ import { probeChatMedia } from "./chatMediaProbe";
 import { denoiseVoiceNote, isVoiceNoteUpload, isVoiceNoteFilename } from "./chatVoiceNoteDenoise";
 import { isConnectChatMessageMine } from "./connectChatMessageMine";
 import { isVoipMsWebhookAuthorized } from "./voipMsWebhookAuth";
+import { parseVoipMsWebhookEnvelope } from "./voipMsWebhookPayload";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -1811,7 +1812,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       lastDidsSyncAt: cfg.lastDidsSyncAt?.toISOString() || null,
       webhookUrl,
       webhookUrlNote:
-        "Paste this entire URL into VoIP.ms → DID → SMS/MMS URL callback. Keep the {FROM}, {TO}, … placeholders exactly — VoIP.ms fills them on each inbound message (per VoIP.ms SMS-MMS wiki).",
+        "Set this URL as the DID's `webhook` (setSMS webhook + webhook_enable=1, or the portal's SMS/MMS webhook field) with `&token=<webhook secret>` appended. VoIP.ms POSTs a JSON envelope (data.payload.{from,to,text,id,media}) and leaves the {FROM}/{TO} placeholders literal — the handler reads the envelope (proven 2026-09-07).",
     };
   });
 
@@ -2541,11 +2542,34 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     const payload = mergeVoipMsPayload(req);
-    const rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
-    const rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
-    const message = String(payload.message ?? payload.body ?? payload.msg ?? "");
-    const providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
-    const mmsUrls = extractInboundMmsUrls(payload);
+    // The per-DID `webhook` at VoIP.ms POSTs a JSON envelope and leaves the
+    // query's `{FROM}`/`{TO}` placeholders LITERAL — proven on production
+    // 2026-09-07 (the first tokened hit ingested nothing: literal "{TO}" →
+    // invalid_to). The envelope wins whenever it is present; the flat mapping
+    // below is only the legacy `sms_url_callback` shape. See voipMsWebhookPayload.ts.
+    const envelope = parseVoipMsWebhookEnvelope(payload);
+    if (envelope.kind === "ignored") {
+      req.log.info({ endpoint: "/webhooks/voipms/sms", eventType: envelope.eventType }, "voipms webhook: non-message event ignored");
+      return reply.type("text/plain").send("ok");
+    }
+    let rawFrom: string;
+    let rawTo: string;
+    let message: string;
+    let providerMessageId: string;
+    let mmsUrls: string[];
+    if (envelope.kind === "message") {
+      rawFrom = envelope.message.from;
+      rawTo = envelope.message.to;
+      message = envelope.message.text;
+      providerMessageId = envelope.message.id;
+      mmsUrls = envelope.message.mediaUrls;
+    } else {
+      rawFrom = String(payload.from ?? payload.src ?? payload.callerid ?? "");
+      rawTo = String(payload.to ?? payload.dst ?? payload.did ?? "");
+      message = String(payload.message ?? payload.body ?? payload.msg ?? "");
+      providerMessageId = String(payload.id ?? payload.sms ?? payload.sms_id ?? payload.message_id ?? "").trim();
+      mmsUrls = extractInboundMmsUrls(payload);
+    }
 
     await ingestInboundSmsToChat({
       rawFrom,
