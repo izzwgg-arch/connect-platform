@@ -291,6 +291,87 @@ ingests it), and the auth (`token` param → `isVoipMsWebhookAuthorized`). Both 
 ⛔ The VoIP.ms wiki is Cloudflare-gated (403 to fetch); the variable names are the ones
 Connect's own admin page has always told the owner to paste.
 
+#### F10b — 2026-09-07: the instant path, done through the API (Izzy: "u do it thru the api, make sure you dont mess any incoming call up")
+
+**Corrections to the paragraph above, each proven live:**
+
+1. **It is the per-DID `webhook` field, not an account-level callback.** A read-only
+   `getDIDsInfo` census of all 74 DIDs: **7 carry our URL with `webhook_enabled=1`** — Fixup
+   8458067040, Ribit 3479673004, Displaydex 8452003535, Trust 8452441708, Luxure 8455378318,
+   Relax 8457761765, lanhome/Connect 8455577768 — plus 8452605692 (the retired inii temp,
+   disabled). The older `sms_url_callback` field is a DIFFERENT thing (11 DIDs point it at the
+   PBX's `m.connectcomunications.com/sms/<uuid>`) and was not touched. The 08-07 runbook's
+   "the per-DID webhook fields are a red herring" was about *delivery to Connect* (which rides
+   the poll); the field is very much live as a POST source.
+2. **VoIP.ms POSTs a JSON envelope and leaves the URL placeholders literal.** Captured by
+   texting Connect's own 845-557-7768 from 845-723-1213 (both ours, no customer touched):
+   ```json
+   {"data":{"id":110997718,"payload":{"id":110997718,
+     "to":[{"status":"webhook_delivered","phone_number":"8455577768"}],
+     "from":{"phone_number":"8457231213"},"text":"Connect webhook test 14:20:19",
+     "type":"SMS","media":[],"received_at":"2026-09-07T14:20:46.000000+00:00",
+     "record_type":"message"},"event_type":"message.received","record_type":"event"}}
+   ```
+   MMS is the same with `"type":"MMS","media":[{"url":"https://voip.ms/media/…/media.png"}]`
+   (captured with `sendMMS`). The `id` is the same number `getSMS`/`getMMS` report, so the
+   poll's `voipms:<id>` dedupe matches. ⛔ **The first tokened hit answered 200 and ingested
+   NOTHING** — `mergeVoipMsPayload` put the literal query `{TO}` on top and the ingest logged
+   `invalid_to`. Fixed `f15923a0`: `apps/api/src/voipMsWebhookPayload.ts`
+   (`parseVoipMsWebhookEnvelope`, pure; 7 tests on the two REAL bodies + a wiring guard that
+   reads 0 against HEAD), `handleVoipMsInbound` reads the envelope FIRST, answers 200 without
+   ingesting for any other `event_type`, and keeps the flat `from/to/message` mapping only as
+   the legacy fallback. api DEPLOYED via bundle → mirror → `deploy-direct.sh api` (container
+   `f15923a0`, 0 restarts, parser grepped ×2, health 200 both hostnames; origin restored).
+3. **`setSMS` is a checkbox form: an omitted flag is UNCHECKED.** Rehearsed on 8455577768
+   (Connect's own escalation number, never a customer): `setSMS {did, enable:"1", webhook}`
+   persisted the URL and **flipped `webhook_enabled` 1 → 0**, nothing else moved. The
+   re-arm parameter is **`webhook_enable`** — `webhook_enabled` did nothing;
+   `url_callback_enable`/`url_callback_enabled` were never reached because `webhook_enable`
+   armed it first. **One `setSMS` per DID per minute** (`sms_wait_message`). The VoIP.ms
+   apidocs 403 from both loopcom and this workstation and the Chrome extension did not answer
+   the pairing prompt twice, so the names were established empirically, each with a
+   `getDIDsInfo` read-back.
+4. **The token leaked into the transcript** (a `SmsRoutingLog.payload` column printed the
+   JSON `"token"` key unmasked — my `sed` only masked `token=`). **Rotated** the same hour:
+   new 40-char secret written to `GlobalVoipMsConfig.webhookSecretEncrypted` via
+   `encryptJson`, read back equal, `credentialsEncrypted` byte-identical before/after;
+   `/root/voipms-webhook-url.txt` rewritten as `https://app.loopcom.net/api/webhooks/voipms/sms?token=<secret>`
+   (no placeholders — the envelope carries everything). Old token fingerprint `1983e19c08dd`
+   → new `4b6ed093ac9b`.
+
+**Proof on Connect's own number (deployed code, real carrier, no customer):** `sendSMS`
+at 14:35:27Z → VoIP.ms received it 14:35:46 → nginx `POST /api/webhooks/voipms/sms?token=…
+200` at 16:35:46 CEST → `SmsRoutingLog status=routed from=8457231213 to=8455577768` at
+14:35:46.464Z → `ConnectChatMessage` `voipms:110998324` created 14:35:46.395Z. The next
+poll cycle (`fetched 63 → 64`) found the id present and wrote nothing. **Exactly one message
+row.** The 19 s is the carrier delivering the SMS itself, not us.
+
+**Fixup's DID 8458067040 armed** with `/root/did-arm-webhook.ts` (in the container as a
+one-off, removed after): carries `enable`, `webhook`, `webhook_enable`, `email`,
+`sms_forward`, `url_callback`, `url_callback_retry`, `url_callback_enable`,
+`sipaccount_enable`/`sms_sipaccount_enable`/`sipaccount` when the read shows them on, then a
+full `getDIDsInfo` diff with a bounded 3-attempt repair loop. Result: **`changed: [webhook]`
+only** — `routing account:344022_fixupusa`, `sms_enabled 1`, `webhook_enabled 1`,
+`sms_url_callback_enabled 1`, `sms_sipaccount_enabled 1`, `sms_email_enabled 0`,
+`sms_forward_enabled 0` all identical, `unrepaired: []`. **Calls untouched, read from both
+ends after the write:** PBX `pjsip show registrations` → `344022_fixupusa … Registered
+(exp. 1345s)`, `T31_103` contact `Avail 32.5 ms`; VoIP.ms `getRegistrationStatus` →
+`registered: yes` (New York 1). SMS settings share nothing with trunk registration or DID
+routing, and the diff proves `routing` never moved.
+
+**Backups:** every DID's full pre-write `getDIDsInfo` row in
+`loopcom:/root/voipms-webhook-20260907/dids-before.json` (600). Reversal for Fixup:
+`setSMS {did:8458067040, enable:"1", webhook:<old URL from the backup>, webhook_enable:"1",
+url_callback:<old>, url_callback_enable:"1", sipaccount_enable:"1", email:<old>}`.
+
+⛔ **NOT done, Izzy's call:** the other 5 DIDs pointed at us (Ribit, Displaydex, Trust,
+Luxure 8455378318, Relax) still 401 on every text — same script, one DID per minute.
+⏳ **NOT PROVEN on Fixup's own number** — no customer text has arrived since the arm.
+Acceptance: the next inbound text to 845-806-7040 shows `POST …/sms?token=… 200` in nginx and
+`select "createdAt", status, "rawTo" from "SmsRoutingLog" where "rawTo" like '%8067040'
+order by "createdAt" desc limit 3;` reads `routed` (webhook) with no `routed_poll` twin for
+the same id.
+
 ---
 
 ## 3. What was done, in order
@@ -369,4 +450,12 @@ Connect's own admin page has always told the owner to paste.
   `fe1813f6`, 0 restarts, `ACCOUNT_WIDE_SMS_LIMIT` grepped ×4 in the container; mirror route,
   origin restored — `/root/poll-deploy.log`); live cycle measurements in §2 F10. Webhook secret
   stored in `GlobalVoipMsConfig` (one column, credentials untouched); the URL for VoIP.ms is
-  `/root/voipms-webhook-url.txt`. ⛔ Nothing at VoIP.ms was changed.
+  `/root/voipms-webhook-url.txt`.
+- **F10b (`f15923a0`, 2026-09-07):** ✅ **api DEPLOYED** (bundle → mirror → `deploy-direct.sh
+  api`, container `f15923a0`, 0 restarts, `parseVoipMsWebhookEnvelope` grepped ×2, health 200
+  both hostnames, origin restored — `/root/wh-deploy.log`). ✅ **Two carrier writes at
+  VoIP.ms**: the `webhook` URL (+ `webhook_enable=1`) on Connect's own 8455577768 (rehearsal +
+  proof) and on **Fixup's 8458067040** — getDIDsInfo diff shows ONLY `webhook` changed on
+  each; secret rotated after a transcript leak. Proven end to end on 8455577768 (§2 F10b);
+  ⏳ not yet exercised by a real Fixup text. 5 other pointed DIDs deliberately left as they
+  were.

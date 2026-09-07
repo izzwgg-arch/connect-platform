@@ -105,12 +105,33 @@ right solution."*
   500) + ONE getMMS per cycle, split per DID (`mergeInboundRowsForDid`), FULL page or failed
   call → the old per-number fetch. **Live: cycles every ~60 s, 8–13 s each (`cycle done …
   mode=account ms=…`)** — worst-case carrier lag 3.5 min → ~70 s. ⛔ Never re-add a
-  per-number carrier call to that loop. **The instant path is the webhook VoIP.ms is ALREADY
-  firing on every text (109 × 401 in 14 d, account-level callback, no token)** — a secret is
-  stored now and the exact URL sits in `/root/voipms-webhook-url.txt`; pasting it at VoIP.ms
-  is Izzy's. Unproven until the first real text: whether VoIP.ms substitutes the `{…}`
-  placeholders in the POST body (they are literal in the logged query). Both paths dedupe on
-  `voipms:<id>`.
+  per-number carrier call to that loop. ✅✅ **THE INSTANT PATH IS LIVE FOR FIXUP (2026-09-07,
+  `f15923a0` api DEPLOYED + one carrier write, Izzy: "do it thru the api"): VoIP.ms's per-DID
+  `webhook` field now carries the tokened URL and a real text lands in Connect the SECOND
+  VoIP.ms receives it** — proven on Connect's own 845-557-7768 (webhook `routed` at 14:35:46Z,
+  the poll then found `voipms:110998324` already present, exactly ONE message row). ⛔ **Three
+  facts nobody may re-derive:** (1) the caller is the per-DID **`webhook`** field (7 DIDs point
+  at us: Fixup, Ribit, Displaydex, Trust, Luxure 8455378318, Relax, lanhome), NOT an
+  account-level callback — the §F10 line above saying "account-level" was wrong;
+  (2) **VoIP.ms POSTs a JSON envelope** `data.payload.{from.phone_number, to[].phone_number,
+  text, id, media[].url}` with `event_type: message.received` and leaves the query's `{FROM}`/
+  `{TO}` placeholders LITERAL — the first tokened hit answered 200 and ingested NOTHING
+  (`invalid_to` on the literal `{TO}`); `apps/api/src/voipMsWebhookPayload.ts` reads the
+  envelope first, ignores other events with a 200, keeps the flat mapping as fallback
+  (7 tests on the two REAL captured bodies, wiring guard reads 0 at HEAD); (3) **`setSMS` is a
+  checkbox form — an OMITTED flag reads as UNCHECKED**: `webhook` alone flipped
+  `webhook_enabled` 1→0 on the rehearsal DID; the re-arm parameter is **`webhook_enable`**
+  (`webhook_enabled`/`url_callback_enable*` do nothing), one write per DID per minute
+  (`sms_wait_message`). Fixup's write carried every other field and the getDIDsInfo diff
+  shows ONLY `webhook` changed (routing/SMS/PBX callback/SIP-account/email/forward intact);
+  PBX trunk `344022_fixupusa` Registered and T31_103 `Avail` after. ⛔ The first token printed
+  unmasked in a psql column and was ROTATED (new secret in `GlobalVoipMsConfig`, URL file
+  rewritten as `…/sms?token=<secret>` with no placeholders). ⛔ The other 5 pointed DIDs still
+  401 on every text — arming them is the same script (`did-arm-webhook.ts` in the handoff)
+  and Izzy's call. Backup of every DID's pre-write state:
+  `loopcom:/root/voipms-webhook-20260907/dids-before.json`. ⏳ NOT PROVEN on Fixup's own
+  number yet — acceptance is the next real inbound text: nginx `POST …/sms?token=… 200` +
+  `SmsRoutingLog status=routed rawTo=8458067040`.
 - ⛔ **Build trap:** the old EAS clone `/tmp/connect-ios-build` on loopcom is DEAD — every
   fetch, even from a bundle that `git bundle verify` calls okay, dies *"pack has N
   unresolved deltas"*. **Use `/tmp/connect-ios-build2`** (fresh clone of
