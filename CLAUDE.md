@@ -1,3 +1,40 @@
+## ⛔ AGENT HANDOFF — Trust Bookkeepings got a stock number on its OWN VoIP.ms subaccount, routed to ext 106 (2026-09-07) — READ FIRST before giving an EXISTING tenant a new number, before using a "spare" DID, or before re-posting a tenant's edit form
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_TRUST_FORWARDING_NUMBER_2026-09-07.md`**
+(**No code change, no deploy, no migration.** One VoIP.ms create + one routing write
+under Izzy's explicit instruction; three PBX panel writes through the SAME onboarding
+code the wizard uses, each Apply followed by a doorway re-bake — T2/T35/T105 read
+1/0, 1/0, 2/0 before and after. Backups: PBX `/root/trust97-before-20260907T232445Z/`,
+loopcom `/root/trust97/state.json` (600). Script: loopcom `/root/trust97-build.ts`.)
+Memory: [[stock-number-on-own-subaccount-to-existing-extension]].
+Izzy: *"take a phone number that we have in stock and create a subaccount called Trust
+9/7/2026 and pointed to trust bookkeeping extension 106. We don't need E911 for this."*
+
+- ✅ **LIVE:** (845) 557-7735 → subaccount **`344022_Trust972026`** (id 845044, E911 `0`
+  on purpose) → PBX trunk **182 "Trust 9/7/2026"** in Main (**Registered**, contact Avail
+  27 ms, carrier `registered: yes`) → tenant 18's number list (9 DIDs; Main's
+  `default-trunk` renders `_8455577735`) → inbound route **314** → `Goto(T18_cos-all,106,1)`.
+  Connect's `PbxTenantInboundDid` already synced it onto `cmnlgrykx000fp9pa90gohk96`.
+- ⛔ **A "spare" DID is not clean until the PBX says so.** `listSpareDids()` returned 8;
+  `7244198226` (Matamim's retired temp) still sits in `ombu_tenant_dids` 104 and
+  `8452605692` (inii mini's temp) still has inbound route 239. Check both tables before
+  routing any spare.
+- ⛔ **VoIP.ms usernames are alphanumeric ≤12 chars and descriptions lose their `/`** —
+  "Trust 9/7/2026" became username `Trust972026`, description "Trust 972026". The PBX
+  panel accepted the slash in the trunk and route descriptions.
+- ⛔ **An inbound route alone never receives a call on an existing tenant** — Main's
+  `default-trunk` is rendered from `ombu_tenant_dids`, so the DID must be added to the
+  tenant's number list (`pbxConsoleWrites.saveTenant` with the FULL list) and Apply run
+  in Main. `saveTenant` re-posts the whole tenant form: snapshot `ombu_tenants` +
+  `ombu_tenant_settings` first and diff after — here **byte-identical**.
+- ⛔ `register_flag = no` on trunk 182 matches the other Trust trunks (44, 67); it is not
+  a fault. Billing is **unchanged** — Trust's PBX DIDs bill as `pbx_inbound_did` $0 lines,
+  extensions are a manual 5, E911 is a flat $3.
+- ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
+  Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
+  (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched
+  (the trunk is on no outbound route).
+
 ## ⛔⛔ AGENT HANDOFF — Relax Tires 101 "vibrating, not ringing, no incoming-call screen" (2026-09-07): the ring reaches the phone in 0.5 s; the SCREEN stopped taking over on 08-31, and the handset's full-screen-notification permission is the only thing that launches it — READ FIRST for ANY "the app vibrates but shows no call screen", before blaming push delivery again, and before reading `UI_SHOWN.pushReceivedAt` as a push-receipt time
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_RELAX_TIRES_RING_SCREEN_2026-09-07.md`**
