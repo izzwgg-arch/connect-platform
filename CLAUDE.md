@@ -1,3 +1,33 @@
+## ⛔ AGENT HANDOFF — Store → Orders (Supermarket mode) now has Received date-range, status tabs (+Failed, +Dismissed), Source, server-side search and paging; "only two orders left" was the workspace switcher on All workspaces (2026-09-08) — READ FIRST before touching `GET /supermarket/drafts`, `OrdersDesk.tsx`'s list, or for ANY "the orders disappeared"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-08.md`**
+(commit **`65225b5e`**; mockup approved first at
+https://claude.ai/code/artifact/cf7ce2bb-68b5-46a9-a75d-8a3307db1e68). This is the page Izzy
+meant by *"the orders page … only showing me 24 hours back"* — the Tracking → Orders work in
+the section below was the wrong page (still valid, not the ask).
+
+- ⛔ **"All the orders are gone, only two are left" = header switcher on All workspaces.** No
+  `x-tenant-context` → `resolveEffectiveTenantBillingContext` falls back to the Support user's
+  own tenant (Connect Communications: exactly 2 drafts from 08-26). Gesheft had 932 + 431 rows
+  throughout. Check the switcher before suspecting a deploy or data loss.
+- ⛔ **There was never a 24 h rule** — the list was `take: 100` newest, no date filter, no
+  paging; Gesheft's ~60–120 drafts/day filled it.
+- ✅ **API:** `GET /supermarket/drafts` takes `status, source, from, to, q, page, pageSize`
+  (pure `draftListQuery.ts`, 7 tests green, in the package test glob); response keeps `drafts`
+  and adds `total/page/pageSize`. Search = name (insensitive) / phone digits / POS order #.
+  No migration (indexes existed).
+- ✅ **Portal:** URL-backed filters (`tab, range, from, to, src, q, page, size`); tab strip +
+  Failed to send + Dismissed; filter bar with Received presets + Custom from/to, Source chips,
+  Clear filters; live search; ONE table for all tabs with a real Received date/time, count
+  line, pager, rows-per-page; dark + light (`color-scheme` per theme on the date inputs).
+- ✅ **DEPLOYED + container-verified 2026-09-08:** api `65225b5e` (235 s, blue/green clean;
+  `app-api-1` has `supermarketRoutes.ts:622 parseDraftListQuery`), portal `65225b5e` (29 s; the built
+  chunks + CSS carry `sm-filterbar`), both `/ready` 200. A first portal attempt was cancelled at the
+  BUILD stage (never cut over) when I noticed the entangled auth commit; Izzy then said *"Just deploy the
+  filters as we discussed"* and it was redeployed. ⏳ NOT PROVEN: a logged-in look in light + dark.
+- ⛔ **This deploy was the first to ship another session's `39b9eb4f` "sign-in code v2"**
+  (api + portal together so both halves match). If login misbehaves, look there first.
+
 ## ⛔ AGENT HANDOFF — Sign-in code (2FA by text/email) v2: the PERSON CHOOSES text or email, the code is asked ONCE PER SIGN-IN, the session has NO EXPIRY and only signing out ends it — BUILT + tested, ⛔ NOT DEPLOYED, previewed for Izzy (2026-09-08) — READ FIRST before touching `/auth/login`, `/auth/otp/*`, `issueLoginSession`, the login page, or before re-adding "remember this device" / `expiresIn`
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOGIN_OTP_V2_CHOICE_2026-09-08.md`**.
