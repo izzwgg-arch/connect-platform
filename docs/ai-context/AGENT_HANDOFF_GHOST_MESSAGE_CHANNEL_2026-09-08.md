@@ -77,7 +77,13 @@ before the store keeps `channelIndex`/`channelByUniqueId` free of the pseudo-cha
 
 ## 6. Deploy
 
-Recorded in the CLAUDE.md section for this handoff (queue job id, verification lines).
+Queue job **`939eec1b-a886-4dcf-98ce-c94a2ab52c4b`** (dry-run `dd5c89e7` first; attempt `cd34710d`
+failed on `/opt/connectcomms/ops/run-heavy.sh`'s lock while a direct portal deploy was building —
+the lock is real, not stale; it clears on the wrapper's EXIT trap). Enqueued in a 1-active-call
+window at 21:46 CEST; build 51 s, restart 20 s, health OK. Verified in `app-telephony-1`: both
+markers grep in the running src, boot log shows `pseudo_channel_skipped` for
+`Message/ast_msg_queue`, 0 upserts with `to: h`, 0 error lines, `Message/` channels in the store
+= 0, AMI + ARI connected.
 The deploy itself clears the live ghost: the telephony restart drops every WS client, each
 reconnects and takes a fresh snapshot, and the new code never re-seeds it.
 

@@ -69,7 +69,13 @@ Memory: [[ghost-call-message-pseudo-channel]].
   no shutdown sequence in any of them) — cause unknown, open for Izzy. The deploy queue (pm2
   `connect-deploy-worker`) does NOT survive a reboot** — port 3910 dead, `pm2 ls` empty;
   restored with `pm2 resurrect` from `/root/.pm2/dump.pm2`. Nothing starts pm2 at boot.
-- Deploy state: **see the line appended below once the queue job finishes.**
+- ✅ **DEPLOYED: telephony queue job `939eec1b` (commit `cfc17107`, enqueued at 1 active call,
+  build 51 s, restart 20 s, health OK) — container-verified: both markers in the running src,
+  boot log `pseudo_channel_skipped` for `Message/ast_msg_queue`, 0 ghost upserts, 0 error lines,
+  `Message/` channels in store = 0, AMI+ARI connected.** The restart itself cleared the live
+  ghost from every admin socket (reconnect ⇒ fresh snapshot). First attempt `cd34710d` failed on
+  the host's `run-heavy.sh` lock while a direct portal deploy was building — that lock is real,
+  wait for it. Deploy queue `dd5c89e7` was the dry-run.
 
 ## ⛔ AGENT HANDOFF — A plus center "not all users synced": the 21 extensions ARE in sync and VitalPBX holds NO emails, so there are no users to import (2026-09-08) — READ FIRST before "re-syncing" a tenant's users, or before adding emails on the PBX to make the sync create accounts
 
