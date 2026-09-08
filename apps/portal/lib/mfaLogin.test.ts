@@ -115,10 +115,13 @@ test("⛔ security page: default export only, phrases registered, errors read .b
   assert.match(src, /useUiLanguage\(SECURITY_PHRASES\)/);
   assert.doesNotMatch(code, /\.payload\b/, "ApiError has .body, not .payload (CLAUDE.md)");
   assert.match(src, /e\.body as \{ error\?: string; message\?: string \} \| null/);
-  for (const url of ['"/auth/mfa/status"', '"/auth/mfa/totp/setup"', '"/auth/mfa/totp/verify"', '"/auth/mfa/recovery-codes/regenerate"', '"/auth/mfa/disable"']) {
+  // v3 (2026-09-08): ONE method — a code by text or email — turned on/off HERE and nowhere else.
+  for (const url of ['"/auth/otp/status"', '"/auth/otp/enable"', '"/auth/otp/disable"']) {
     assert.ok(src.includes(url), `${url} must be called from the page`);
   }
-  assert.match(src, /QRCodeSVG value=\{mode\.setup\.otpauthUri\}/);
+  assert.doesNotMatch(src, /\/auth\/mfa\/totp|QRCodeSVG|otpauthUri|recovery code/i, "the authenticator-app enrolment UI is gone");
+  assert.match(src, /apiPost<[^>]*>\("\/auth\/otp\/disable", \{ password \}\)/, "turning off is gated by the password, not a code");
+  assert.doesNotMatch(src, /admin\/tenants|login-otp/, "no tenant switch is reachable from the page");
   assert.match(src, /<Suspense/, "useSearchParams needs a Suspense boundary for the production build");
   // Every literal handed to t() is in the phrase list.
   const phrases = read("../app/(platform)/account/security/phrases.ts");

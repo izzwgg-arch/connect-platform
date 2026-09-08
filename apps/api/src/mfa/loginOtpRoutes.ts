@@ -1,28 +1,31 @@
 /**
- * Routes + runner for the per-tenant sign-in code. Rules and the pure decisions
- * live in ./loginOtp.ts — this file is the thin layer that touches the DB, the
- * SMS sender, the email outbox and Fastify. See loginOtp.ts's header for the
- * whole contract (v2, 2026-09-08: the person chooses text or email; no
- * "remember this device"; no session expiry — sign-out is what ends it).
+ * Routes + runner for the sign-in code (2FA by text or email, per user). Rules
+ * and the pure decisions live in ./loginOtp.ts — this file is the thin layer
+ * that touches the DB, the SMS sender, the email outbox and Fastify. See
+ * loginOtp.ts's header for the whole contract.
  *
- *   POST /auth/otp/send     { preAuthToken, channel }   ← v2: the choice
+ *   PUBLIC (JWT bypass list — a pre-auth token is not a session):
+ *   POST /auth/otp/send     { preAuthToken, channel }   the text-or-email choice
  *   POST /auth/otp/verify   { preAuthToken, code }
  *   POST /auth/otp/resend   { preAuthToken, channel? }
- *   GET  /admin/tenants/:id/login-otp       (SUPER_ADMIN)
- *   PUT  /admin/tenants/:id/login-otp       (SUPER_ADMIN) { required, channel }
  *
- * ⛔ The three /auth/otp/* POSTs must be on the JWT bypass list — a pre-auth
- * token is not a session, so the global hook would 401 them before they ran
- * (the exact trap the `/internal/agent/*` doors fell into twice). A test pins it.
+ *   SIGNED IN (Account → Security):
+ *   GET  /auth/otp/status                       enabled? where would codes go?
+ *   POST /auth/otp/enable   {}                  turn on (adds a factor — no confirmation)
+ *   POST /auth/otp/disable  { password }        turn off — the PASSWORD, not a code
  *
- * ⛔ The code always goes to the REGISTERED phone (User.phone) or email
- * (User.email). The client picks a CHANNEL, never a destination.
+ * ⛔ Only the three PUBLIC routes may be on `jwtPublicRouteBypass.ts`. A test
+ * pins it. ⛔ The code always goes to the REGISTERED phone (User.phone) or
+ * email (User.email). The client picks a CHANNEL, never a destination.
+ * ⛔ v3 removed the per-tenant admin routes (`/admin/tenants/:id/login-otp`).
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import { db } from "@connect/db";
 import { createLoginThrottle, clientIpFromForwardedFor } from "../loginThrottle";
 import { resolveBillingSmsSender, normalizeUsPhone } from "../billing/billingSmsSender";
+import { isMfaRequiredForRole } from "./mfaPolicy";
 import { OTP_PRE_AUTH_PURPOSE, mintPreAuthToken, verifyPreAuthToken } from "./preAuthToken";
 import {
   LOGIN_CODE_EMAIL_TYPE,
@@ -37,7 +40,6 @@ import {
   hashOtpCode,
   maskDestination,
   normalizeOtpChannel,
-  normalizeTenantOtpChannel,
   offerChannels,
   otpEmailHtml,
   otpEmailSubject,
@@ -62,7 +64,6 @@ export type OtpRouteDeps = {
   /** server.ts's `audit()` shape — tenantId is required there. */
   audit: (params: { tenantId: string; action: string; entityType: string; entityId: string; actorUserId?: string; targetUserId?: string | null; metadata?: Record<string, unknown> | null }) => Promise<unknown>;
   issueSession: (userId: string) => Promise<{ token: string; portalPermissionSet?: string[] }>;
-  requireSuperAdmin: (req: any, reply: any) => Promise<any | undefined>;
   log?: { info: (o: any, m: string) => void; warn: (o: any, m: string) => void };
   /** Injected for tests; production uses the real senders. */
   sendSms?: (input: { tenantId: string; to: string; body: string }) => Promise<unknown>;
@@ -205,7 +206,6 @@ async function replaceCodeAndSend(deps: OtpRouteDeps, input: { row: { id: string
 
 export type StartOtpInput = {
   user: OtpUser;
-  tenantChannelSetting: unknown;
   requestedChannel?: unknown;
 };
 
@@ -221,8 +221,7 @@ export type StartOtpInput = {
 export async function startOtpChallenge(deps: OtpRouteDeps, input: StartOtpInput) {
   const now = nowOf(deps);
   const phone = normalizeUsPhone(input.user.phone || "");
-  const setting = normalizeTenantOtpChannel(input.tenantChannelSetting);
-  const offer = offerChannels(setting, phone, input.user.email);
+  const offer = offerChannels(phone, input.user.email);
   const pre = mintPreAuthToken(input.user.id, now, OTP_PRE_AUTH_PURPOSE);
   const base = {
     otpChallengeRequired: true as const,
@@ -246,16 +245,84 @@ export async function startOtpChallenge(deps: OtpRouteDeps, input: StartOtpInput
 
 // ── routes ───────────────────────────────────────────────────────────────────
 
+type OtpUserRow = OtpUser & { role: string; passwordHash: string; loginOtpEnabledAt: Date | null; totpEnabled: boolean };
+
 export async function registerLoginOtpRoutes(app: FastifyInstance, deps: OtpRouteDeps): Promise<void> {
   const sourceIp = (req: any) => clientIpFromForwardedFor(req.headers?.["x-forwarded-for"]);
 
-  const loadOtpUser = async (userId: string): Promise<(OtpUser & { tenantSetting: unknown; tenantRequired: boolean }) | null> => {
-    const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, tenantId: true, email: true, phone: true, tenant: { select: { loginOtpChannel: true, loginOtpRequired: true } } } as any }) as any;
+  const loadOtpUser = async (userId: string): Promise<OtpUserRow | null> => {
+    const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, tenantId: true, email: true, phone: true, role: true, passwordHash: true, loginOtpEnabledAt: true, mfa: { select: { enabledAt: true } } } as any }) as any;
     if (!user) return null;
-    return { id: user.id, tenantId: user.tenantId, email: user.email, phone: user.phone, tenantSetting: user.tenant?.loginOtpChannel, tenantRequired: user.tenant?.loginOtpRequired === true };
+    return { id: user.id, tenantId: user.tenantId, email: user.email, phone: user.phone, role: String(user.role), passwordHash: String(user.passwordHash || ""), loginOtpEnabledAt: user.loginOtpEnabledAt ?? null, totpEnabled: Boolean(user.mfa?.enabledAt) };
   };
 
-  // v2: the person picked text or email. Sends to the REGISTERED destination.
+  const statusOf = (u: OtpUserRow) => {
+    const phone = normalizeUsPhone(u.phone || "");
+    const offer = offerChannels(phone, u.email);
+    const enabled = Boolean(u.loginOtpEnabledAt);
+    const required = isMfaRequiredForRole(u.role);
+    return {
+      enabled,
+      enabledAt: u.loginOtpEnabledAt ? u.loginOtpEnabledAt.toISOString() : null,
+      channels: offer.channels,
+      destinations: offer.destinations,
+      phoneOnFile: !!phone,
+      /** Legacy authenticator app still on for this account (no UI to enrol any more). */
+      totpEnabled: u.totpEnabled,
+      required,
+      enrollmentRequired: required && !enabled && !u.totpEnabled,
+    };
+  };
+
+  // ── Account → Security ─────────────────────────────────────────────────────
+  app.get("/auth/otp/status", async (req: any, reply: any) => {
+    const u = req.user; if (!u?.sub) return reply.status(401).send({ error: "unauthorized" });
+    const user = await loadOtpUser(u.sub);
+    if (!user) return reply.status(401).send({ error: "unauthorized" });
+    return statusOf(user);
+  });
+
+  app.post("/auth/otp/enable", async (req: any, reply: any) => {
+    const u = req.user; if (!u?.sub) return reply.status(401).send({ error: "unauthorized" });
+    const user = await loadOtpUser(u.sub);
+    if (!user) return reply.status(401).send({ error: "unauthorized" });
+    if (!user.loginOtpEnabledAt) {
+      await db.user.update({ where: { id: user.id }, data: { loginOtpEnabledAt: new Date(nowOf(deps)) } as any });
+      void deps.audit({ tenantId: user.tenantId, actorUserId: user.id, targetUserId: user.id, action: "LOGIN_OTP_ENABLED", entityType: "User", entityId: user.id, metadata: { channels: offerChannels(normalizeUsPhone(user.phone || ""), user.email).channels } });
+    }
+    const fresh = await loadOtpUser(user.id);
+    return { ok: true, ...statusOf(fresh ?? user) };
+  });
+
+  // Turning it off asks for the PASSWORD, not a code, so a person who lost
+  // their phone is not locked out of turning it off. Wrong passwords ride the
+  // same throttle as wrong codes: 429 with Retry-After, never 401.
+  app.post("/auth/otp/disable", async (req: any, reply: any) => {
+    const u = req.user; if (!u?.sub) return reply.status(401).send({ error: "unauthorized" });
+    const parsed = z.object({ password: z.string().min(1).max(200) }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_request", message: "Enter your password to turn two-step verification off." });
+    const user = await loadOtpUser(u.sub);
+    if (!user) return reply.status(401).send({ error: "unauthorized" });
+    const now = nowOf(deps);
+    const t = verifyThrottle.evaluate(user.id, sourceIp(req), now);
+    if (t.action !== "allow") {
+      reply.header("Retry-After", String(t.retryAfterSeconds ?? 600));
+      return reply.status(429).send({ error: "RATE_LIMITED" });
+    }
+    if (!user.passwordHash || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
+      verifyThrottle.recordFailure(user.id, sourceIp(req), now);
+      return reply.status(401).send({ error: "invalid_password", message: "That password is not right." });
+    }
+    verifyThrottle.recordSuccess(user.id);
+    if (user.loginOtpEnabledAt) {
+      await db.user.update({ where: { id: user.id }, data: { loginOtpEnabledAt: null } as any });
+      void deps.audit({ tenantId: user.tenantId, actorUserId: user.id, targetUserId: user.id, action: "LOGIN_OTP_DISABLED", entityType: "User", entityId: user.id, metadata: { by: "self", verifiedWith: "password" } });
+    }
+    const fresh = await loadOtpUser(user.id);
+    return { ok: true, ...statusOf(fresh ?? { ...user, loginOtpEnabledAt: null }) };
+  });
+
+  // ── the sign-in steps (PUBLIC: pre-auth token, no session) ─────────────────
   app.post("/auth/otp/send", async (req: any, reply: any) => {
     const parsed = z.object({ preAuthToken: z.string().min(20), channel: z.string().max(10) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.status(400).send({ error: "invalid_request" });
@@ -267,7 +334,7 @@ export async function registerLoginOtpRoutes(app: FastifyInstance, deps: OtpRout
     const user = await loadOtpUser(pre.claims.sub);
     if (!user) return reply.status(401).send({ error: "otp_session_invalid", reason: "user_gone" });
     const phone = normalizeUsPhone(user.phone || "");
-    const offer = offerChannels(normalizeTenantOtpChannel(user.tenantSetting), phone, user.email);
+    const offer = offerChannels(phone, user.email);
     if (!offer.channels.includes(channel)) return reply.status(400).send({ error: "otp_channel_unavailable", channels: offer.channels });
     const result = await issueCode(deps, { user, channel, preAuthJti: pre.claims.jti, action: "LOGIN_OTP_SENT" });
     return { ok: true, channel: result.channel, channels: offer.channels, destinations: offer.destinations, destination: result.destination, sent: result.sent, ...(result.reason ? { reason: result.reason } : {}), expiresInSeconds: LOGIN_OTP_TTL_SECONDS };
@@ -318,8 +385,7 @@ export async function registerLoginOtpRoutes(app: FastifyInstance, deps: OtpRout
     await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(now), status: "ACTIVE" as any } as any }).catch(() => undefined);
 
     void deps.audit({ tenantId: user.tenantId, actorUserId: user.id, action: "LOGIN_OTP_VERIFIED", entityType: "User", entityId: user.id, metadata: { channel: row.channel } });
-    // v2: the session is the ordinary one — it lasts until sign-out, nothing
-    // else. No device token, no expiry.
+    // The session is the ordinary one — it lasts until sign-out, nothing else.
     const session = await deps.issueSession(user.id);
     return { ...session, otpMethod: row.channel };
   });
@@ -339,36 +405,11 @@ export async function registerLoginOtpRoutes(app: FastifyInstance, deps: OtpRout
     const user = await loadOtpUser(pre.claims.sub);
     if (!user) return reply.status(401).send({ error: "otp_session_invalid", reason: "user_gone" });
     const phone = normalizeUsPhone(user.phone || "");
-    const choice = chooseChannels(normalizeTenantOtpChannel(user.tenantSetting), !!phone, parsed.data.channel);
+    const choice = chooseChannels(!!phone, parsed.data.channel);
     const to = registeredDestination(user, choice.preferred);
     const sent = await replaceCodeAndSend(deps, { row, user, channel: choice.preferred, to });
     void deps.audit({ tenantId: user.tenantId, actorUserId: user.id, action: "LOGIN_OTP_RESENT", entityType: "User", entityId: user.id, metadata: { channel: choice.preferred, sent } });
-    const offer = offerChannels(normalizeTenantOtpChannel(user.tenantSetting), phone, user.email);
+    const offer = offerChannels(phone, user.email);
     return { ok: true, channel: choice.preferred, channels: choice.channels, destinations: offer.destinations, destination: maskDestination(choice.preferred, to), sent, expiresInSeconds: LOGIN_OTP_TTL_SECONDS };
-  });
-
-  // ── the per-tenant switch (SUPER_ADMIN) ────────────────────────────────────
-  app.get("/admin/tenants/:id/login-otp", async (req: any, reply: any) => {
-    const admin = await deps.requireSuperAdmin(req, reply); if (!admin) return;
-    const { id } = req.params as { id: string };
-    const t = await (db as any).tenant.findUnique({ where: { id }, select: { id: true, name: true, loginOtpRequired: true, loginOtpChannel: true } });
-    if (!t) return reply.status(404).send({ error: "tenant_not_found" });
-    return { tenantId: t.id, name: t.name, required: !!t.loginOtpRequired, channel: normalizeTenantOtpChannel(t.loginOtpChannel) };
-  });
-
-  app.put("/admin/tenants/:id/login-otp", async (req: any, reply: any) => {
-    const admin = await deps.requireSuperAdmin(req, reply); if (!admin) return;
-    const { id } = req.params as { id: string };
-    const parsed = z.object({ required: z.boolean(), channel: z.preprocess((v) => (typeof v === "string" ? v.trim().toUpperCase() : v), z.enum(["EMAIL", "SMS", "EITHER"])).optional() }).safeParse(req.body ?? {});
-    if (!parsed.success) return reply.status(400).send({ error: "invalid_request", issues: parsed.error.issues });
-    const existing = await (db as any).tenant.findUnique({ where: { id }, select: { id: true } });
-    if (!existing) return reply.status(404).send({ error: "tenant_not_found" });
-    const updated = await (db as any).tenant.update({
-      where: { id },
-      data: { loginOtpRequired: parsed.data.required, ...(parsed.data.channel ? { loginOtpChannel: parsed.data.channel } : {}) },
-      select: { id: true, loginOtpRequired: true, loginOtpChannel: true },
-    });
-    await deps.audit({ tenantId: id, actorUserId: admin.sub, action: "TENANT_LOGIN_OTP_UPDATED", entityType: "Tenant", entityId: id, metadata: { required: updated.loginOtpRequired, channel: updated.loginOtpChannel } });
-    return { tenantId: id, required: !!updated.loginOtpRequired, channel: normalizeTenantOtpChannel(updated.loginOtpChannel) };
   });
 }

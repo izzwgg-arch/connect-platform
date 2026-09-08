@@ -4,6 +4,27 @@ Newest entries first.
 
 ---
 
+## Sign-in code v3 — per user on Account → Security, text/email only (2026-09-08)
+
+Branch `feat/ivr-migration-takeover`. Handoff `AGENT_HANDOFF_LOGIN_OTP_V3_SECURITY_PAGE_2026-09-08.md` §5.
+Same dev-box harness as the v2 entry below, plus `bcryptjs@2` and a mirrored
+`packages/db/prisma/schema.prisma` four levels above `src/mfa` (the new Prisma-column guard reads it).
+
+```bash
+node --import ./ts-hooks.mjs --test src/mfa/loginOtp.test.ts
+node --experimental-test-module-mocks --import ./ts-hooks.mjs --test src/mfa/loginOtpRoutes.test.ts
+node --experimental-test-module-mocks --import ./ts-hooks.mjs --test src/mfa/mfa.test.ts
+node --import file:///…/ts-hooks.mjs --test apps/portal/lib/mfaLogin.test.ts
+node --import file:///…/ts-hooks.mjs --test apps/portal/lib/turnstileWiring.test.ts
+```
+
+**Results:** api rules+guards **19/19**; api routes end-to-end **14/14** (incl. enable/disable
+with real bcrypt, the password throttle, and 404s for the removed admin + trusted-device
+routes); TOTP suite **25/25** (status now also reads `loginOtpEnabledAt`); portal `mfaLogin`
+**12/12**; `turnstileWiring` **13/13**. ⏳ `tsc` not run (unavailable here).
+
+---
+
 ## Sign-in code v2 — text-or-email choice, once per sign-in, no expiry (2026-09-08)
 
 Branch `feat/ivr-migration-takeover`, **NOT deployed** (Izzy: preview first). Handoff

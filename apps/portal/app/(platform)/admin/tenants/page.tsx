@@ -2,14 +2,13 @@
 
 import { useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
-import { apiGet, apiPost, apiPut } from "../../../../services/apiClient";
+import { apiGet, apiPost } from "../../../../services/apiClient";
 import { DataTable } from "../../../../components/DataTable";
 import { EmptyState } from "../../../../components/EmptyState";
 import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
-import { ConnectSelect } from "../../../../components/ConnectSelect";
 
 export default function AdminTenantsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -31,21 +30,6 @@ export default function AdminTenantsPage() {
     }
   };
 
-  // Per-tenant sign-in code (2FA-by-code, 2026-08-19). SUPER_ADMIN only on the api.
-  const setLoginOtp = async (tenantId: string, required: boolean, channel?: string) => {
-    setTogglingId(tenantId);
-    setToggleError(null);
-    try {
-      await apiPut(`/admin/tenants/${tenantId}/login-otp`, { required, ...(channel ? { channel } : {}) });
-      setRefreshKey((k) => k + 1);
-    } catch (e: any) {
-      const detail = e?.body?.message || e?.body?.error || e?.message || "Could not update the setting.";
-      setToggleError(`Sign-in code for this tenant was not changed — ${detail}`);
-    } finally {
-      setTogglingId(null);
-    }
-  };
-
   const rows = tenants.status === "success"
     ? tenants.data.map((tenant, idx) => ({
         id: String(tenant.id || idx),
@@ -53,8 +37,6 @@ export default function AdminTenantsPage() {
         approved: tenant.isApproved === false ? "No" : "Yes",
         createdAt: String(tenant.createdAt || "-"),
         linkedSipEnabled: tenant.linkedSipCallVisibilityEnabled === true,
-        loginOtpRequired: tenant.loginOtpRequired === true,
-        loginOtpChannel: String(tenant.loginOtpChannel || "EITHER"),
       }))
     : [];
 
@@ -85,37 +67,6 @@ export default function AdminTenantsPage() {
                   >
                     {togglingId === r.id ? "Saving…" : r.linkedSipEnabled ? "On" : "Off"}
                   </button>
-                ),
-              },
-              {
-                key: "loginOtp",
-                label: "Sign-in code (2FA)",
-                render: (r) => (
-                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      className={r.loginOtpRequired ? "btn primary" : "btn ghost"}
-                      disabled={togglingId === r.id}
-                      onClick={() => setLoginOtp(r.id, !r.loginOtpRequired)}
-                      title="When ON, everyone in this tenant enters a one-time code after their password, every time they sign in. They choose whether it goes to their registered mobile number or their email. It is asked once per sign-in and the session lasts until they sign out — no expiry. Users who already use an authenticator app are not asked twice. Off by default. ⛔ Phone-app users cannot finish sign-in on the current app until the build with the code step ships."
-                    >
-                      {togglingId === r.id ? "Saving…" : r.loginOtpRequired ? "On" : "Off"}
-                    </button>
-                    {r.loginOtpRequired ? (
-                      <ConnectSelect
-                        size="sm"
-                        value={r.loginOtpChannel}
-                        disabled={togglingId === r.id}
-                        onChange={(v) => setLoginOtp(r.id, true, v)}
-                        ariaLabel="How the code is sent"
-                        options={[
-                          { value: "EITHER", label: "Text or email" },
-                          { value: "SMS", label: "Text only" },
-                          { value: "EMAIL", label: "Email only" },
-                        ]}
-                      />
-                    ) : null}
-                  </span>
                 ),
               },
               { key: "createdAt", label: "Created", render: (r) => r.createdAt }

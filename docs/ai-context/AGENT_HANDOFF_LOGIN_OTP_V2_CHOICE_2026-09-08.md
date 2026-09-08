@@ -1,5 +1,7 @@
 # Sign-in code (2FA by text/email) v2 — the person chooses the channel, once per sign-in, no expiry (2026-09-08)
 
+> ⚠ **Superseded the same evening by v3** (`AGENT_HANDOFF_LOGIN_OTP_V3_SECURITY_PAGE_2026-09-08.md`): the switch is now PER USER on Account → Security (`User.loginOtpEnabledAt`), the per-tenant admin switch and routes are gone, and the Security page offers text/email only. The sign-in flow described here (choose → send → verify) is unchanged.
+
 Branch `feat/ivr-migration-takeover`. **BUILT, tested on the dev box, previewed in the
 in-app browser. ⛔ NOT DEPLOYED — Izzy asked to see it first.** No migration. Supersedes
 the v1 behaviour in `AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §12 (the rules there

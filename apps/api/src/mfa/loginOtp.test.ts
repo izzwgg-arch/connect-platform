@@ -1,9 +1,11 @@
 /**
- * Per-tenant sign-in code (2FA-by-code) + Cloudflare Turnstile — the rules,
- * and the guards that pin them to the login route.
+ * Sign-in code (2FA by text or email, per user) + Cloudflare Turnstile — the
+ * rules, and the guards that pin them to the login route.
  *
- * v2 (2026-09-08): the person chooses text or email; no "remember this
- * device"; no session expiry — signing out is the only thing that ends it.
+ * v3 (2026-09-08): per USER (`User.loginOtpEnabledAt`), turned on on Account →
+ * Security; the person chooses text or email; no "remember this device"; no
+ * session expiry — signing out is the only thing that ends it; no per-tenant
+ * switch.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -22,7 +24,6 @@ import {
   hashOtpCode,
   maskDestination,
   normalizeOtpChannel,
-  normalizeTenantOtpChannel,
   offerChannels,
   otpCodeMatches,
   otpSmsBody,
@@ -37,44 +38,39 @@ const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(
 
 // ─── the gate ─────────────────────────────────────────────────────────────────
 
-test("gate (v2): OFF tenant → nothing; TOTP user → nothing; otherwise a code EVERY sign-in — there is no trusted-device skip any more", () => {
-  assert.deepEqual(decideOtpGate({ tenantOtpRequired: false, userHasTotp: false }), { kind: "none" });
-  assert.deepEqual(decideOtpGate({ tenantOtpRequired: true, userHasTotp: true }), { kind: "none" });
-  assert.deepEqual(decideOtpGate({ tenantOtpRequired: true, userHasTotp: false }), { kind: "challenge" });
-  // A stray v1 field must not resurrect the skip.
-  assert.deepEqual(decideOtpGate({ tenantOtpRequired: true, userHasTotp: false, trustedDevice: { valid: true } } as any), { kind: "challenge" });
+test("gate (v3): per user — OFF → nothing; TOTP user → nothing; ON → a code EVERY sign-in, no trusted-device skip", () => {
+  assert.deepEqual(decideOtpGate({ userOtpEnabled: false, userHasTotp: false }), { kind: "none" });
+  assert.deepEqual(decideOtpGate({ userOtpEnabled: true, userHasTotp: true }), { kind: "none" });
+  assert.deepEqual(decideOtpGate({ userOtpEnabled: true, userHasTotp: false }), { kind: "challenge" });
+  // Stray v1/v2 fields must not resurrect a skip or a tenant switch.
+  assert.deepEqual(decideOtpGate({ userOtpEnabled: true, userHasTotp: false, trustedDevice: { valid: true } } as any), { kind: "challenge" });
+  assert.deepEqual(decideOtpGate({ userOtpEnabled: false, userHasTotp: false, tenantOtpRequired: true } as any), { kind: "none" }, "a tenant flag alone switches nobody on");
 });
 
 // ─── channels ─────────────────────────────────────────────────────────────────
 
-test("channels: tenant setting × phone presence × request; a phoneless user is always emailable", () => {
-  assert.deepEqual(chooseChannels("EITHER", true), { channels: ["SMS", "EMAIL"], preferred: "SMS" });
-  assert.deepEqual(chooseChannels("EITHER", true, "EMAIL"), { channels: ["SMS", "EMAIL"], preferred: "EMAIL" });
-  assert.deepEqual(chooseChannels("EITHER", true, "email"), { channels: ["SMS", "EMAIL"], preferred: "EMAIL" }, "case-insensitive");
-  assert.deepEqual(chooseChannels("EITHER", false), { channels: ["EMAIL"], preferred: "EMAIL" });
-  assert.deepEqual(chooseChannels("SMS", true), { channels: ["SMS"], preferred: "SMS" });
-  assert.deepEqual(chooseChannels("SMS", false), { channels: ["EMAIL"], preferred: "EMAIL" }, "SMS-only tenant, no phone → email rather than lockout");
-  assert.deepEqual(chooseChannels("EMAIL", true), { channels: ["EMAIL"], preferred: "EMAIL" });
-  assert.deepEqual(chooseChannels("EMAIL", true, "SMS"), { channels: ["EMAIL"], preferred: "EMAIL" }, "a request for a channel the tenant disallows is ignored");
-  assert.equal(normalizeTenantOtpChannel("sms"), "SMS");
-  assert.equal(normalizeTenantOtpChannel("junk"), "EITHER");
+test("channels (v3): phone on file → text + email; no phone → email only; a request picks within what is offered", () => {
+  assert.deepEqual(chooseChannels(true), { channels: ["SMS", "EMAIL"], preferred: "SMS" });
+  assert.deepEqual(chooseChannels(true, "EMAIL"), { channels: ["SMS", "EMAIL"], preferred: "EMAIL" });
+  assert.deepEqual(chooseChannels(true, "email"), { channels: ["SMS", "EMAIL"], preferred: "EMAIL" }, "case-insensitive");
+  assert.deepEqual(chooseChannels(false), { channels: ["EMAIL"], preferred: "EMAIL" });
+  assert.deepEqual(chooseChannels(false, "SMS"), { channels: ["EMAIL"], preferred: "EMAIL" }, "no phone → email, whatever was asked");
   assert.equal(normalizeOtpChannel(" email "), "EMAIL");
   assert.equal(normalizeOtpChannel("pigeon"), null);
 });
 
-test("v2 offer: every offered channel comes with its MASKED registered destination — the chooser never sees a raw phone or email", () => {
-  assert.deepEqual(offerChannels("EITHER", "+18455551234", "baila@acme.test"), {
+test("offer: every offered channel comes with its MASKED registered destination — the chooser never sees a raw phone or email", () => {
+  assert.deepEqual(offerChannels("+18455551234", "baila@acme.test"), {
     channels: ["SMS", "EMAIL"],
     destinations: { SMS: "•••-•••-1234", EMAIL: "b••••@acme.test" },
   });
-  assert.deepEqual(offerChannels("EITHER", null, "office@acme.test"), { channels: ["EMAIL"], destinations: { EMAIL: "o•••••@acme.test" } });
-  assert.deepEqual(offerChannels("SMS", "+18455551234", "baila@acme.test"), { channels: ["SMS"], destinations: { SMS: "•••-•••-1234" } });
-  const raw = JSON.stringify(offerChannels("EITHER", "+18455551234", "baila@acme.test"));
+  assert.deepEqual(offerChannels(null, "office@acme.test"), { channels: ["EMAIL"], destinations: { EMAIL: "o•••••@acme.test" } });
+  const raw = JSON.stringify(offerChannels("+18455551234", "baila@acme.test"));
   assert.equal(raw.includes("8455551234"), false);
   assert.equal(raw.includes("baila@"), false);
 });
 
-test("v2 first send: two channels and no request → CHOOSE (send nothing); a named allowed channel or a single channel → send now", () => {
+test("first send: two channels and no request → CHOOSE (send nothing); a named allowed channel or a single channel → send now", () => {
   assert.deepEqual(decideFirstSend(["SMS", "EMAIL"]), { kind: "choose" });
   assert.deepEqual(decideFirstSend(["SMS", "EMAIL"], "EMAIL"), { kind: "send", channel: "EMAIL" });
   assert.deepEqual(decideFirstSend(["SMS", "EMAIL"], "sms"), { kind: "send", channel: "SMS" });
@@ -167,16 +163,13 @@ test("turnstile gate: observe logs, enforce refuses; unavailable is a 503 not a 
 
 // ─── wiring guards (source) ───────────────────────────────────────────────────
 
-test("wiring: /auth/otp/send + /verify + /resend are on the JWT bypass list — and only those three", () => {
+test("wiring: /auth/otp/send + /verify + /resend are on the JWT bypass list — and only those three (status/enable/disable are session-gated)", () => {
   const s = stripComments(src("jwtPublicRouteBypass.ts"));
-  assert.match(s, /"\/auth\/otp\/send"/);
-  assert.match(s, /"\/auth\/otp\/verify"/);
-  assert.match(s, /"\/auth\/otp\/resend"/);
   const otpEntries = (s.match(/"\/auth\/otp\/[a-z-]+"/g) || []);
   assert.deepEqual(otpEntries.sort(), ['"/auth/otp/resend"', '"/auth/otp/send"', '"/auth/otp/verify"'], "nothing else under /auth/otp/ may skip the JWT hook");
 });
 
-test("wiring: login runs Turnstile after the throttle and before any DB read; the OTP gate after the TOTP decision; NO trusted-device read", () => {
+test("wiring (v3): login reads the USER's own switch — no tenant lookup, no trusted device; Turnstile after the throttle and before any DB read; OTP gate after the TOTP decision", () => {
   const s = stripComments(src("server.ts"));
   const start = s.indexOf('app.post("/auth/login"');
   const body = s.slice(start, s.indexOf("async function issueLoginSession(", start));
@@ -188,14 +181,16 @@ test("wiring: login runs Turnstile after the throttle and before any DB read; th
   const sessionAt = body.indexOf("issueLoginSession(user.id)");
   assert.ok(throttleAt > 0 && turnstileAt > throttleAt && lookupAt > turnstileAt, "throttle → turnstile → user lookup");
   assert.ok(totpAt > lookupAt && otpAt > totpAt && sessionAt > otpAt, "TOTP decision → OTP gate → session");
-  assert.match(body, /decideOtpGate\(\{ tenantOtpRequired: true, userHasTotp: false \}\)/);
+  assert.match(body, /decideOtpGate\(\{ userOtpEnabled: Boolean\(\(user as any\)\.loginOtpEnabledAt\), userHasTotp: false \}\)/);
   assert.match(body, /startOtpChallenge\(otpDeps/);
   assert.match(body, /requestedChannel: input\.otpChannel/);
-  assert.doesNotMatch(body, /checkTrustedDevice|trustedDeviceToken/, "v2: no remembered-device skip in the login handler");
-  assert.doesNotMatch(s, /checkTrustedDevice/, "v2: the helper is gone from server.ts entirely");
+  assert.doesNotMatch(body, /loginOtpRequired|loginOtpChannel|tenantChannelSetting/, "v3: the tenant switch is gone from the login handler");
+  assert.doesNotMatch(body, /checkTrustedDevice|trustedDeviceToken/, "no remembered-device skip in the login handler");
+  // The sign-in code satisfies a required role: the grace nudge must not fire for someone who has it on.
+  assert.match(body, /if \(mfaOutcome\.kind !== "challenge" && mfaOutcome\.kind !== "none" && \(user as any\)\.loginOtpEnabledAt\) mfaOutcome = \{ kind: "none" \};/);
 });
 
-test("wiring (v2): every session is signed ONE way — no expiresIn, no per-tenant lookup in issueLoginSession; routes registered", () => {
+test("wiring: every session is signed ONE way — no expiresIn, no per-tenant lookup in issueLoginSession; routes registered", () => {
   const s = stripComments(src("server.ts"));
   const fn = s.slice(s.indexOf("async function issueLoginSession("), s.indexOf("const mfaDeps = buildMfaDeps("));
   assert.doesNotMatch(fn, /expiresIn/, "no expiry on any session (Izzy 2026-09-08: 'there is no expiry')");
@@ -204,6 +199,7 @@ test("wiring (v2): every session is signed ONE way — no expiresIn, no per-tena
   assert.equal((fn.match(/app\.jwt\.sign\(/g) || []).length, 1, "exactly one sign call");
   assert.doesNotMatch(s, /OTP_SESSION_EXPIRES_IN/);
   assert.match(s, /await registerLoginOtpRoutes\(app, otpDeps\);/);
+  assert.doesNotMatch(s, /loginOtpRequired: \(t as any\)\.loginOtpRequired/, "v3: the admin tenant list no longer carries the dead switch");
 });
 
 test("wiring: the login parser accepts turnstileToken + otpChannel, no longer knows trustedDeviceToken, and still refuses a short password", () => {
@@ -213,24 +209,41 @@ test("wiring: the login parser accepts turnstileToken + otpChannel, no longer kn
   assert.match(s, /password: z\.string\(\)\.min\(LOGIN_PASSWORD_MIN_LENGTH\)/);
 });
 
-test("⛔ v2 removed the trusted device from the CODE, not just the UI: nothing in the OTP module reads, mints or honours one", () => {
+test("⛔ v3: no trusted device, no session expiry, no tenant switch anywhere in the OTP module; the admin routes are gone", () => {
   for (const rel of ["mfa/loginOtp.ts", "mfa/loginOtpRoutes.ts"]) {
     const s = stripComments(src(rel));
     assert.doesNotMatch(s, /trustedLoginDevice|TrustedDevice|rememberDevice|trusted-devices/i, `${rel} must not touch remembered devices`);
     assert.doesNotMatch(s, /expiresIn:|OTP_SESSION/, `${rel} must not put an expiry on a session`);
+    assert.doesNotMatch(s, /loginOtpRequired|loginOtpChannel|TenantOtpChannelSetting/, `${rel} must not read the dead tenant switch`);
   }
+  const routes = stripComments(src("mfa/loginOtpRoutes.ts"));
+  const paths = [...routes.matchAll(/app\.(get|post|put|delete)\("([^"]+)"/g)].map((m) => `${m[1].toUpperCase()} ${m[2]}`).sort();
+  assert.deepEqual(paths, ["GET /auth/otp/status", "POST /auth/otp/disable", "POST /auth/otp/enable", "POST /auth/otp/resend", "POST /auth/otp/send", "POST /auth/otp/verify"]);
+  // Turning it off is gated by the PASSWORD (bcrypt), throttled, and the audit names it.
+  const disable = routes.slice(routes.indexOf('app.post("/auth/otp/disable"'), routes.indexOf('app.post("/auth/otp/send"'));
+  assert.match(disable, /bcrypt\.compare\(parsed\.data\.password, user\.passwordHash\)/);
+  assert.match(disable, /verifyThrottle\.evaluate\(/);
+  assert.match(disable, /LOGIN_OTP_DISABLED/);
+  // Turning it on touches nothing but the user's own row.
+  const enable = routes.slice(routes.indexOf('app.post("/auth/otp/enable"'), routes.indexOf('app.post("/auth/otp/disable"'));
+  assert.match(enable, /loginOtpEnabledAt: new Date\(/);
+  assert.doesNotMatch(enable, /tenant\.update|requireSuperAdmin/);
 });
 
 test("⛔ the OTP routes reach accessors that EXIST on the generated Prisma client (the `(db as any)` transposition trap)", async () => {
   const { Prisma } = await import("@prisma/client");
   const s = stripComments(src("mfa/loginOtpRoutes.ts"));
   const accessors = new Set([...s.matchAll(/\(db as any\)\.(\w+)\./g)].map((m) => m[1]));
-  for (const a of ["loginOtpChallenge", "emailJob", "tenant"]) assert.ok(accessors.has(a), `expected the routes to use db.${a}`);
-  assert.equal(accessors.has("trustedLoginDevice"), false, "v2: the routes never read TrustedLoginDevice");
+  for (const a of ["loginOtpChallenge", "emailJob"]) assert.ok(accessors.has(a), `expected the routes to use db.${a}`);
+  assert.equal(accessors.has("trustedLoginDevice"), false, "the routes never read TrustedLoginDevice");
+  assert.equal(accessors.has("tenant"), false, "v3: the routes never touch Tenant");
   for (const a of accessors) {
     const model = a.charAt(0).toUpperCase() + a.slice(1);
     assert.equal((Prisma.ModelName as any)[model], model, `client.${a} must map to a real model — ${model} is missing from the generated client (run prisma generate / check the schema)`);
   }
+  // And the per-user column exists in the schema the client is generated from.
+  const schema = readFileSync(path.join(__dirname, "..", "..", "..", "..", "packages", "db", "prisma", "schema.prisma"), "utf8");
+  assert.match(schema, /\n\s*loginOtpEnabledAt\s+DateTime\?/, "User.loginOtpEnabledAt must exist");
 });
 
 // ─── hardening pass (2026-08-19): the adversarial findings ───────────────────
@@ -250,21 +263,7 @@ test("reuse: a live code is re-bound, not re-sent — so hitting /auth/login or 
   assert.deepEqual(decideChallengeReuse({ ...live, attempts: LOGIN_OTP_MAX_ATTEMPTS - 1 }, now), { reuse: true }, "one try left is still usable");
 });
 
-test("⛔ the login handler FAILS CLOSED when it cannot read the tenant's 2FA setting", () => {
-  const s = stripComments(src("server.ts"));
-  const start = s.indexOf('app.post("/auth/login"');
-  const body = s.slice(start, s.indexOf("async function issueLoginSession(", start));
-  // The lookup that decides whether a second factor is required must not swallow errors.
-  assert.doesNotMatch(
-    body,
-    /loginOtpRequired: true, loginOtpChannel: true \} \}\)\.catch\(/,
-    "a .catch() on this read would issue a session with NO code asked for",
-  );
-  assert.match(body, /login_otp_tenant_lookup_failed/);
-  assert.match(body, /status\(503\)\.send\(\{ error: "service_unavailable"/);
-});
-
-test("v2 send order: the login decides choose-vs-send BEFORE any code exists; issueCode reuses before it creates, creates before it sends", () => {
+test("send order: the login decides choose-vs-send BEFORE any code exists; issueCode reuses before it creates, creates before it sends", () => {
   const s = stripComments(src("mfa/loginOtpRoutes.ts"));
   const start = s.slice(s.indexOf("export async function startOtpChallenge("), s.indexOf("export async function registerLoginOtpRoutes("));
   const decideAt = start.indexOf("decideFirstSend(");

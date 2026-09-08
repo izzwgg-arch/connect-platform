@@ -71,6 +71,8 @@ export type MfaUserRow = {
   email: string;
   role: string;
   status?: string | null;
+  /** Sign-in code (2FA by text/email) turned on by the person — v3 2026-09-08. Counts as a second factor for the role requirement. */
+  loginOtpEnabledAt?: Date | null;
 };
 
 export type MfaRow = {
@@ -360,13 +362,16 @@ export async function getMfaStatus(deps: MfaDeps, user: { id: string; role: stri
   const row = await deps.store.getMfa(user.id);
   const enabled = Boolean(row?.enabledAt);
   const required = isMfaRequiredForRole(user.role);
+  // v3: a person with the sign-in code (text/email) on is not nudged to enrol.
+  const person = await deps.store.getUser(user.id).catch(() => null);
+  const codeEnabled = Boolean(person?.loginOtpEnabledAt);
   return {
     enabled,
     enabledAt: row?.enabledAt ? row.enabledAt.toISOString() : null,
     pendingSetup: Boolean(row && !row.enabledAt),
     recoveryCodesRemaining: row?.enabledAt ? await deps.store.countUnusedRecoveryCodes(row.id) : 0,
     required,
-    enrollmentRequired: required && !enabled,
+    enrollmentRequired: required && !enabled && !codeEnabled,
     methods: enabled ? ["totp", "recovery_code"] : [],
   };
 }

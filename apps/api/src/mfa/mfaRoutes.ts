@@ -63,9 +63,9 @@ export function prismaMfaStore(client: any = db): MfaStore {
     async getUser(userId) {
       const u = await client.user.findUnique({
         where: { id: userId },
-        select: { id: true, tenantId: true, email: true, role: true, status: true },
+        select: { id: true, tenantId: true, email: true, role: true, status: true, loginOtpEnabledAt: true } as any,
       });
-      return u ? ({ id: u.id, tenantId: u.tenantId, email: u.email, role: String(u.role), status: u.status ? String(u.status) : null } as MfaUserRow) : null;
+      return u ? ({ id: u.id, tenantId: u.tenantId, email: u.email, role: String(u.role), status: u.status ? String(u.status) : null, loginOtpEnabledAt: u.loginOtpEnabledAt ?? null } as MfaUserRow) : null;
     },
     async getMfa(userId) {
       const r = await client.userMfa.findUnique({ where: { userId } });

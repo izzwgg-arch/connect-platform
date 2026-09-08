@@ -1,9 +1,10 @@
 /**
- * The per-tenant sign-in code, end to end through the real Fastify routes
- * against a faked database — v2 (2026-09-08): password → CHOOSE text or email
- * → code → session; the code is asked on EVERY sign-in (no remembered device),
- * the session carries no expiry; and every way a code must NOT let someone in
- * (wrong login, replay, attempts, send cap, admin switch).
+ * The sign-in code, end to end through the real Fastify routes against a faked
+ * database — v3 (2026-09-08): PER USER, turned on/off on Account → Security
+ * (enable = one click; disable = the password); at sign-in the person CHOOSES
+ * text or email → code → session; the code is asked on EVERY sign-in, the
+ * session carries no expiry; and every way a code must NOT let someone in
+ * (wrong login, replay, attempts, send cap).
  *
  * Run with: node --experimental-test-module-mocks --import tsx --test
  */
@@ -11,13 +12,15 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
 import jwt from "@fastify/jwt";
+import bcrypt from "bcryptjs";
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-jwt-secret-for-otp-routes-0123456789abcdef";
 delete process.env.LOGIN_THROTTLE_DISABLED;
+delete process.env.MFA_REQUIRED_ROLES;
 
 // ─── fake db ─────────────────────────────────────────────────────────────────
 
-const state: any = { users: [], tenants: [], challenges: [], emails: [], sms: [], audits: [], outbox: [] as string[] };
+const state: any = { users: [], challenges: [], emails: [], sms: [], audits: [], outbox: [] as string[] };
 let seq = 0;
 const nextId = (p: string) => `${p}_${++seq}`;
 const matches = (row: any, where: any): boolean =>
@@ -37,15 +40,12 @@ mock.module("@connect/db", {
         findUnique: async ({ where }: any) => {
           const u = state.users.find((x: any) => x.id === where.id) ?? null;
           if (!u) return null;
-          const t = state.tenants.find((x: any) => x.id === u.tenantId);
-          return { ...u, tenant: t ? { loginOtpChannel: t.loginOtpChannel, loginOtpRequired: t.loginOtpRequired } : null };
+          return { ...u, mfa: u.totpEnabledAt ? { enabledAt: u.totpEnabledAt } : null };
         },
         update: async ({ where, data }: any) => { const u = state.users.find((x: any) => x.id === where.id); Object.assign(u, data); return u; },
       },
-      tenant: {
-        findUnique: async ({ where }: any) => state.tenants.find((x: any) => x.id === where.id) ?? null,
-        update: async ({ where, data }: any) => { const t = state.tenants.find((x: any) => x.id === where.id); Object.assign(t, data); return t; },
-      },
+      // v3: deliberately NO tenant accessor and NO trustedLoginDevice accessor.
+      // If any route still reached for either, the call would throw.
       loginOtpChallenge: {
         create: async ({ data }: any) => { const row = { id: nextId("ch"), createdAt: new Date(), attempts: 0, sendCount: 1, consumedAt: null, ...data }; state.challenges.push(row); return row; },
         update: async ({ where, data }: any) => {
@@ -63,8 +63,6 @@ mock.module("@connect/db", {
           return rows[0] ? { ...rows[0] } : null; // a snapshot, as Prisma returns — never the live row
         },
       },
-      // v2: deliberately NO trustedLoginDevice accessor. If any route still reached
-      // for it, the call would throw and the test would fail — which is the point.
       emailJob: { create: async ({ data }: any) => { state.emails.push(data); state.outbox.push(String(data.textBody)); return { id: nextId("em"), ...data }; } },
     },
   },
@@ -89,17 +87,18 @@ const { mintPreAuthToken } = require("./preAuthToken") as typeof import("./preAu
 
 // ─── harness ─────────────────────────────────────────────────────────────────
 
-const TENANT = { id: "t_acme", name: "Acme", loginOtpRequired: true, loginOtpChannel: "EITHER" };
-const BAILA = { id: "u_baila", tenantId: TENANT.id, email: "baila@acme.test", phone: "8455551234", role: "USER", status: "ACTIVE", lastLoginAt: null as Date | null };
-const NOPHONE = { id: "u_nophone", tenantId: TENANT.id, email: "office@acme.test", phone: null, role: "USER", status: "ACTIVE", lastLoginAt: null as Date | null };
-const IZZY = { id: "u_izzy", tenantId: "t_admin", email: "izzy@admin.test", phone: null, role: "SUPER_ADMIN", status: "ACTIVE", lastLoginAt: null as Date | null };
+const PASSWORD = "correct horse battery";
+const HASH = bcrypt.hashSync(PASSWORD, 4);
+const BAILA = { id: "u_baila", tenantId: "t_acme", email: "baila@acme.test", phone: "8455551234", role: "USER", status: "ACTIVE", passwordHash: HASH, loginOtpEnabledAt: new Date("2026-09-08T10:00:00Z") as Date | null, totpEnabledAt: null as Date | null, lastLoginAt: null as Date | null };
+const NOPHONE = { id: "u_nophone", tenantId: "t_acme", email: "office@acme.test", phone: null, role: "USER", status: "ACTIVE", passwordHash: HASH, loginOtpEnabledAt: new Date("2026-09-08T10:00:00Z") as Date | null, totpEnabledAt: null as Date | null, lastLoginAt: null as Date | null };
+const IZZY = { id: "u_izzy", tenantId: "t_admin", email: "izzy@admin.test", phone: "8457231213", role: "SUPER_ADMIN", status: "ACTIVE", passwordHash: HASH, loginOtpEnabledAt: null as Date | null, totpEnabledAt: null as Date | null, lastLoginAt: null as Date | null };
 
 function reset() {
   state.users = [{ ...BAILA }, { ...NOPHONE }, { ...IZZY }];
-  state.tenants = [{ ...TENANT }, { id: "t_admin", name: "Admin", loginOtpRequired: false, loginOtpChannel: "EITHER" }];
   state.challenges = []; state.emails = []; state.sms = []; state.audits = []; state.outbox = [];
   resetOtpVerifyThrottle();
 }
+const userRow = (id: string) => state.users.find((x: any) => x.id === id);
 
 async function buildApp() {
   const app = Fastify();
@@ -112,15 +111,10 @@ async function buildApp() {
   });
   const deps = {
     audit: async (p: any) => { state.audits.push(p); },
-    // v2: the session is signed exactly like every other session — no expiresIn.
+    // The session is signed exactly like every other session — no expiresIn.
     issueSession: async (userId: string) => {
-      const u = state.users.find((x: any) => x.id === userId);
+      const u = userRow(userId);
       return { token: app.jwt.sign({ sub: u.id, tenantId: u.tenantId, email: u.email, role: u.role }), portalPermissionSet: ["can_view_dashboard"] };
-    },
-    requireSuperAdmin: async (req: any, reply: any) => {
-      try { await req.jwtVerify(); } catch { reply.status(401).send({ error: "unauthorized" }); return null; }
-      if (req.user.role !== "SUPER_ADMIN") { reply.status(403).send({ error: "forbidden" }); return null; }
-      return req.user;
     },
     log: { warn: () => undefined, info: () => undefined },
   };
@@ -128,10 +122,11 @@ async function buildApp() {
   return { app, deps, sessionFor: (u: any) => app.jwt.sign({ sub: u.id, tenantId: u.tenantId, email: u.email, role: u.role }) };
 }
 
-/** What server.ts does after the password matched: gate → challenge (v2: no trusted-device argument exists). */
+/** What server.ts does after the password matched: gate on the USER's own switch → challenge. */
 async function loginAfterPassword(deps: any, user: any, requestedChannel?: string) {
-  const gate = decideOtpGate({ tenantOtpRequired: true, userHasTotp: false });
-  if (gate.kind === "challenge") return { gate, body: await startOtpChallenge(deps, { user, tenantChannelSetting: TENANT.loginOtpChannel, requestedChannel }) };
+  const live = userRow(user.id);
+  const gate = decideOtpGate({ userOtpEnabled: Boolean(live.loginOtpEnabledAt), userHasTotp: Boolean(live.totpEnabledAt) });
+  if (gate.kind === "challenge") return { gate, body: await startOtpChallenge(deps, { user: live, requestedChannel }) };
   return { gate, body: null };
 }
 const send = (app: any, preAuthToken: string, channel: string) => app.inject({ method: "POST", url: "/auth/otp/send", payload: { preAuthToken, channel } });
@@ -141,7 +136,57 @@ const codeFromMessages = () => String(state.outbox[state.outbox.length - 1]).mat
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-test("v2 happy path: the login OFFERS text or email (sends nothing) → the person picks text → code by SMS → verify → session; the code is NOT stored in the clear", async () => {
+test("v3 Security page: status → enable (one click, own row only) → status; nothing else on the platform switches it", async () => {
+  reset();
+  const { app, deps, sessionFor } = await buildApp();
+  const auth = { authorization: `Bearer ${sessionFor(IZZY)}` };
+  const s0 = await app.inject({ method: "GET", url: "/auth/otp/status", headers: auth });
+  assert.equal(s0.statusCode, 200, s0.body);
+  assert.deepEqual(s0.json(), { enabled: false, enabledAt: null, channels: ["SMS", "EMAIL"], destinations: { SMS: "•••-•••-1213", EMAIL: "i•••@admin.test" }, phoneOnFile: true, totpEnabled: false, required: true, enrollmentRequired: true });
+  assert.equal((await app.inject({ method: "GET", url: "/auth/otp/status" })).statusCode, 401, "signed-in only — NOT on the bypass list");
+  assert.equal((await app.inject({ method: "POST", url: "/auth/otp/enable" })).statusCode, 401);
+
+  const on = await app.inject({ method: "POST", url: "/auth/otp/enable", headers: auth, payload: {} });
+  assert.equal(on.statusCode, 200, on.body);
+  assert.equal(on.json().enabled, true);
+  assert.equal(on.json().enrollmentRequired, false, "the sign-in code satisfies the role requirement");
+  assert.ok(userRow(IZZY.id).loginOtpEnabledAt instanceof Date);
+  assert.ok(state.audits.some((a: any) => a.action === "LOGIN_OTP_ENABLED" && a.actorUserId === IZZY.id && a.targetUserId === IZZY.id));
+  const again = await app.inject({ method: "POST", url: "/auth/otp/enable", headers: auth, payload: {} });
+  assert.equal(again.statusCode, 200);
+  assert.equal(state.audits.filter((a: any) => a.action === "LOGIN_OTP_ENABLED").length, 1, "idempotent — a second click audits nothing new");
+  // A tenant-level switch does not exist: the other users' rows are untouched.
+  assert.equal(userRow(BAILA.id).loginOtpEnabledAt?.toISOString(), "2026-09-08T10:00:00.000Z");
+  // And now the login challenges Izzy.
+  const { gate } = await loginAfterPassword(deps, IZZY);
+  assert.equal(gate.kind, "challenge");
+});
+
+test("v3 disable: needs the PASSWORD — wrong one is 401 and counted, five wrong → 429, right one turns it off and the next sign-in is plain", async () => {
+  reset();
+  const { app, deps, sessionFor } = await buildApp();
+  const auth = { authorization: `Bearer ${sessionFor(BAILA)}`, "x-forwarded-for": "203.0.113.20" };
+  assert.equal((await app.inject({ method: "POST", url: "/auth/otp/disable", headers: auth, payload: {} })).statusCode, 400, "no password → 400");
+  const wrong = await app.inject({ method: "POST", url: "/auth/otp/disable", headers: auth, payload: { password: "nope nope nope" } });
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(wrong.json().error, "invalid_password");
+  assert.ok(userRow(BAILA.id).loginOtpEnabledAt, "still on");
+  for (let i = 0; i < 4; i++) await app.inject({ method: "POST", url: "/auth/otp/disable", headers: auth, payload: { password: "nope nope nope" } });
+  const throttled = await app.inject({ method: "POST", url: "/auth/otp/disable", headers: auth, payload: { password: PASSWORD } });
+  assert.equal(throttled.statusCode, 429, "five wrong passwords → even the right one waits");
+  assert.ok(throttled.headers["retry-after"]);
+  assert.ok(userRow(BAILA.id).loginOtpEnabledAt, "still on");
+  resetOtpVerifyThrottle();
+  const off = await app.inject({ method: "POST", url: "/auth/otp/disable", headers: auth, payload: { password: PASSWORD } });
+  assert.equal(off.statusCode, 200, off.body);
+  assert.equal(off.json().enabled, false);
+  assert.equal(userRow(BAILA.id).loginOtpEnabledAt, null);
+  assert.ok(state.audits.some((a: any) => a.action === "LOGIN_OTP_DISABLED" && a.metadata.verifiedWith === "password"));
+  const { gate } = await loginAfterPassword(deps, BAILA);
+  assert.equal(gate.kind, "none", "off → the pre-2FA login");
+});
+
+test("happy path: the login OFFERS text or email (sends nothing) → the person picks text → code by SMS → verify → session; the code is NOT stored in the clear", async () => {
   reset();
   const { app, deps } = await buildApp();
   const { gate, body } = await loginAfterPassword(deps, BAILA);
@@ -162,7 +207,7 @@ test("v2 happy path: the login OFFERS text or email (sends nothing) → the pers
   assert.deepEqual({ ok: s.json().ok, channel: s.json().channel, destination: s.json().destination, sent: s.json().sent }, { ok: true, channel: "SMS", destination: "•••-•••-1234", sent: true });
   assert.equal(state.sms.length, 1);
   assert.equal(state.sms[0].to, "+18455551234", "the REGISTERED phone, not anything the client said");
-  assert.equal(state.sms[0].tenantId, TENANT.id);
+  assert.equal(state.sms[0].tenantId, BAILA.tenantId);
   const code = codeFromMessages();
   const ch = state.challenges[0];
   assert.equal(ch.codeHash, hashOtpCode(code, ch.id));
@@ -174,16 +219,16 @@ test("v2 happy path: the login OFFERS text or email (sends nothing) → the pers
   assert.ok(json.token, "the ordinary login body");
   assert.deepEqual(json.portalPermissionSet, ["can_view_dashboard"]);
   assert.equal(json.otpMethod, "SMS");
-  assert.equal("trustedDeviceToken" in json, false, "v2: no device token, ever");
-  assert.equal(app.jwt.decode(json.token).exp, undefined, "v2: the session has NO expiry — sign-out is what ends it");
+  assert.equal("trustedDeviceToken" in json, false, "no device token, ever");
+  assert.equal(app.jwt.decode(json.token).exp, undefined, "the session has NO expiry — sign-out is what ends it");
   assert.equal(state.challenges[0].consumedAt !== null, true);
-  assert.equal(state.users.find((u: any) => u.id === BAILA.id).lastLoginAt !== null, true);
+  assert.equal(userRow(BAILA.id).lastLoginAt !== null, true);
   assert.ok(state.audits.some((a: any) => a.action === "LOGIN_OTP_CHOICE_OFFERED"));
   assert.ok(state.audits.some((a: any) => a.action === "LOGIN_OTP_SENT" && a.metadata.channel === "SMS"));
   assert.ok(state.audits.some((a: any) => a.action === "LOGIN_OTP_VERIFIED"));
 });
 
-test("v2: picking EMAIL sends to the registered email as LOGIN_CODE on their tenant, never ADMIN_ALERT", async () => {
+test("picking EMAIL sends to the registered email as LOGIN_CODE on their tenant, never ADMIN_ALERT", async () => {
   reset();
   const { app, deps } = await buildApp();
   const { body } = await loginAfterPassword(deps, BAILA);
@@ -194,7 +239,7 @@ test("v2: picking EMAIL sends to the registered email as LOGIN_CODE on their ten
   assert.equal(state.sms.length, 0);
   assert.equal(state.emails.length, 1);
   assert.equal(state.emails[0].type, "LOGIN_CODE");
-  assert.equal(state.emails[0].tenantId, TENANT.id);
+  assert.equal(state.emails[0].tenantId, BAILA.tenantId);
   assert.equal(state.emails[0].toEmail, BAILA.email);
   assert.match(state.emails[0].textBody, /\d{6}/);
   assert.equal(state.emails[0].status, "QUEUED");
@@ -203,13 +248,14 @@ test("v2: picking EMAIL sends to the registered email as LOGIN_CODE on their ten
   assert.equal(ok.json().otpMethod, "EMAIL");
 });
 
-test("one channel possible (no phone on file) → no choice screen: the login emails straight away, as before", async () => {
+test("one channel possible (no phone on file) → no choice screen: the login emails straight away; the Security page says email only", async () => {
   reset();
-  const { app, deps } = await buildApp();
+  const { app, deps, sessionFor } = await buildApp();
+  const st = await app.inject({ method: "GET", url: "/auth/otp/status", headers: { authorization: `Bearer ${sessionFor(NOPHONE)}` } });
+  assert.deepEqual({ channels: st.json().channels, phoneOnFile: st.json().phoneOnFile, destinations: st.json().destinations }, { channels: ["EMAIL"], phoneOnFile: false, destinations: { EMAIL: "o•••••@acme.test" } });
   const { body } = await loginAfterPassword(deps, NOPHONE);
   assert.equal((body as any).channel, "EMAIL");
   assert.deepEqual(body!.channels, ["EMAIL"]);
-  assert.deepEqual(body!.destinations, { EMAIL: "o•••••@acme.test" });
   assert.equal(body!.sent, true);
   assert.equal(state.sms.length, 0);
   assert.equal(state.emails.length, 1);
@@ -249,7 +295,7 @@ test("send refusals: a channel not offered → 400 with the offered list; garbag
   assert.equal(state.emails[state.emails.length - 1].toEmail, BAILA.email);
 });
 
-test("⛔ v2 'once per login, gone at sign-out': after a verified sign-in the NEXT sign-in is challenged again — there is no way to skip the code", async () => {
+test("⛔ 'once per login, gone at sign-out': after a verified sign-in the NEXT sign-in is challenged again — there is no way to skip the code", async () => {
   reset();
   const { app, deps, sessionFor } = await buildApp();
   const first = await loginAfterPassword(deps, BAILA);
@@ -262,9 +308,10 @@ test("⛔ v2 'once per login, gone at sign-out': after a verified sign-in the NE
   assert.equal(second.body!.sent, false);
   assert.equal((second.body as any).reason, "choose_channel");
   assert.equal((routesMod as any).checkTrustedDevice, undefined, "the v1 helper no longer exists");
-  // Unsigned, the JWT hook answers 401 before routing; signed in, the router itself has nothing there.
-  assert.equal((await app.inject({ method: "GET", url: "/auth/otp/trusted-devices", headers: { authorization: `Bearer ${sessionFor(BAILA)}` } })).statusCode, 404, "the v1 trusted-devices routes are gone");
-  assert.equal((await app.inject({ method: "DELETE", url: "/auth/otp/trusted-devices", headers: { authorization: `Bearer ${sessionFor(BAILA)}` } })).statusCode, 404);
+  const signed = { authorization: `Bearer ${sessionFor(BAILA)}` };
+  assert.equal((await app.inject({ method: "GET", url: "/auth/otp/trusted-devices", headers: signed })).statusCode, 404, "the v1 trusted-devices routes are gone");
+  assert.equal((await app.inject({ method: "GET", url: "/admin/tenants/t_acme/login-otp", headers: signed })).statusCode, 404, "the v1/v2 per-tenant admin routes are gone");
+  assert.equal((await app.inject({ method: "PUT", url: "/admin/tenants/t_acme/login-otp", headers: signed, payload: { required: true } })).statusCode, 404);
 });
 
 test("refusals: wrong code counts down, replay is dead, a stranger's pre-auth token cannot spend Baila's code, garbage token → 401", async () => {
@@ -339,25 +386,6 @@ test("resend: a fresh code by the other channel, the old code dies, capped at 3 
   const re3 = await app.inject({ method: "POST", url: "/auth/otp/resend", payload: { preAuthToken: body!.preAuthToken } });
   assert.equal(re3.statusCode, 429, "three sends per login, then start over with the password");
   assert.equal(re3.json().error, "otp_resend_limit");
-});
-
-test("admin switch: SUPER_ADMIN reads/sets per tenant with an audit row; a tenant admin is refused; bad channel 400", async () => {
-  reset();
-  const { app, sessionFor } = await buildApp();
-  const admin = { authorization: `Bearer ${sessionFor(IZZY)}` };
-  const g = await app.inject({ method: "GET", url: `/admin/tenants/${TENANT.id}/login-otp`, headers: admin });
-  assert.equal(g.statusCode, 200);
-  assert.equal(g.json().required, true);
-  const put = await app.inject({ method: "PUT", url: `/admin/tenants/${TENANT.id}/login-otp`, headers: admin, payload: { required: false, channel: "sms" } });
-  assert.equal(put.statusCode, 200, put.body);
-  assert.deepEqual({ required: put.json().required, channel: put.json().channel }, { required: false, channel: "SMS" });
-  assert.equal(state.tenants[0].loginOtpRequired, false);
-  assert.ok(state.audits.some((a: any) => a.action === "TENANT_LOGIN_OTP_UPDATED" && a.tenantId === TENANT.id && a.actorUserId === IZZY.id));
-  const bad = await app.inject({ method: "PUT", url: `/admin/tenants/${TENANT.id}/login-otp`, headers: admin, payload: { required: true, channel: "PIGEON" } });
-  assert.equal(bad.statusCode, 400);
-  const tenantAdmin = { authorization: `Bearer ${sessionFor({ ...BAILA, role: "TENANT_ADMIN" })}` };
-  assert.equal((await app.inject({ method: "PUT", url: `/admin/tenants/${TENANT.id}/login-otp`, headers: tenantAdmin, payload: { required: true } })).statusCode, 403);
-  assert.equal((await app.inject({ method: "GET", url: `/admin/tenants/nope/login-otp`, headers: admin })).statusCode, 404);
 });
 
 test("⛔ signing in again (or double-clicking 'Text me') while a code is still live sends NOTHING and the code already on their phone still works", async () => {

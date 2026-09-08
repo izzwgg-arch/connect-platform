@@ -28,50 +28,41 @@ the section below was the wrong page (still valid, not the ask).
 - ⛔ **This deploy was the first to ship another session's `39b9eb4f` "sign-in code v2"**
   (api + portal together so both halves match). If login misbehaves, look there first.
 
-## ⛔ AGENT HANDOFF — Sign-in code (2FA by text/email) v2: the PERSON CHOOSES text or email, the code is asked ONCE PER SIGN-IN, the session has NO EXPIRY and only signing out ends it — BUILT + tested, ⛔ NOT DEPLOYED, previewed for Izzy (2026-09-08) — READ FIRST before touching `/auth/login`, `/auth/otp/*`, `issueLoginSession`, the login page, or before re-adding "remember this device" / `expiresIn`
+## ⛔ AGENT HANDOFF — Sign-in code (2FA by text/email) v3: PER USER, turned on/off ONLY on Account → Security, text or email ONLY (no authenticator app in the UI), the per-tenant admin switch REMOVED — BUILT, tested, DEPLOYED (2026-09-08) — READ FIRST before touching `/auth/login`, `/auth/otp/*`, the Security page, `User.loginOtpEnabledAt`, or before re-adding a tenant switch / TOTP enrolment / "remember this device" / `expiresIn`
 
-Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOGIN_OTP_V2_CHOICE_2026-09-08.md`**.
-Memory: [[loopcom-2fa-sign-in-code]]. Supersedes the "remember this device" and
-"90-day sessions" parts of the 2026-08-19 section below (its other rules still hold).
-Izzy: *"Make the 2fa give an option between sms and email. It is only required once
-when customer or tenant logs in, and it gets removed everytime customer logs out. There
-is no expiry and only things that remove it is logging out. Send the 2fa code to the
-registered phone number and email of the customer. Don't deploy anything yet show it on
-the preview panel."*
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOGIN_OTP_V3_SECURITY_PAGE_2026-09-08.md`**
+(v2 flow at sign-in unchanged: `…V2_CHOICE…`). Memory: [[loopcom-2fa-sign-in-code]].
+Mockups Izzy approved: https://claude.ai/code/artifact/9b16b8c3-4561-4bf6-b0d8-04d3572f18f7.
+Izzy: *"I want the 2fa only to be accessed here [Account → Security]" … "remove the
+Authenticator app, just stick with Text or email" … "Build it and deploy."*
 
-- ✅ **THE CHOICE:** with the tenant switch on, `POST /auth/login` now sends NOTHING when
-  both channels are possible — it answers `{ otpChallengeRequired, preAuthToken, channels,
-  destinations: { SMS: "•••-•••-1213", EMAIL: "i•••@…" }, sent:false, reason:"choose_channel" }`;
-  the portal shows a "Text me at … / Email me at …" card; **new `POST /auth/otp/send
-  { preAuthToken, channel }`** creates the code and sends it to the REGISTERED phone/email
-  (the client picks a channel, never a destination — extra `to/email` fields are ignored,
-  tested). One channel possible (no phone, or SMS-only/EMAIL-only tenant) → sent straight
-  away as before. `otpChannel` on the login still skips the round trip.
-- ⛔⛔ **"REMEMBER THIS DEVICE" AND THE 90-DAY SESSION ARE GONE FROM THE CODE.**
-  `decideOtpGate({ tenantOtpRequired, userHasTotp })` — two inputs, no trusted-device
-  branch; `checkTrustedDevice`, `mintTrustedDeviceToken`, `GET/DELETE /auth/otp/trusted-devices`,
-  `OTP_SESSION_EXPIRES_IN`, `lib/trustedDevice.ts` no longer exist; `issueLoginSession`
-  has ONE `app.jwt.sign(` with no `expiresIn` (guarded). `TrustedLoginDevice` table stays,
-  inert. Sign-out (`clearAuthSession`) also drops the old `cc-trusted-device` key. **What
-  makes it "once per login" is the session itself lasting until sign-out** — exactly how
-  every non-OTP session already behaves — so a skip-the-code token would add nothing.
-- ✅ **Send rules (`issueCode`):** live code + same channel → re-bind, `already_sent` (a
-  double-click or a re-login costs no text); other channel with sends left → new code,
-  old one dies; cap of 3 hit → `send_limit` and the body says which code still works.
-  Bypass list is **exactly** `/auth/otp/send`, `/verify`, `/resend` (pinned).
-- ✅ **Tests ran on the dev box through the scratch harness** (memory
-  `devbox-verification-harness`; hook must be passed as a `file://` URL): api
-  `mfa/loginOtp.test.ts` **20/20**, `mfa/loginOtpRoutes.test.ts` **13/13** (real Fastify,
-  faked db — incl. "after a verified sign-in the NEXT sign-in is challenged again" and
-  "the session has no `exp`"), portal `lib/mfaLogin.test.ts` **12/12**,
-  `lib/turnstileWiring.test.ts` **13/13**. ⏳ **NOT PROVEN:** `tsc` (cannot run here),
-  a Next render of the real page, a real text/email.
-- ✅ **Preview:** walked through in the in-app Browser pane on 2026-09-08: password → the Text-me / Email-me choice card (both masked destinations) → code entry (a wrong code shows "4 tries left") → signed in (no expiry) → Sign out → the next sign-in asks again; light AND dark render with the portal tokens. The mock is a scratchpad page served with the portal's
-  REAL `globals.css` + wordmark and the exact classes of `app/login/page.tsx`, with an
-  in-page fake api; it is not in the repo.
-- ⛔ **NOT DEPLOYED** by Izzy's instruction. When he approves: api + portal through the
-  deploy queue, no migration, no env; acceptance recipe in the handoff §7. ⛔ The mobile
-  app still has no OTP step — unchanged from v1.
+- ✅ **THE SWITCH IS THE PERSON'S OWN `User.loginOtpEnabledAt`** (migration
+  `20260908200000_user_login_otp_enabled`, NULL for everyone on ship day). Account → Security:
+  the page shows the masked registered mobile + email → **Turn on** (`POST /auth/otp/enable`,
+  one click, own row only, idempotent) → from then on every sign-in asks for a code by text or
+  email (the v2 choice screen). **Turn off** asks for the **password** (`POST /auth/otp/disable
+  { password }`, bcrypt, wrong = 401 + counted on the code throttle → 429), never a code — a
+  lost phone never locks anyone out of turning it off. `GET /auth/otp/status` feeds the page.
+- ⛔⛔ **THERE IS NO TENANT SWITCH AND NO AUTHENTICATOR-APP ENROLMENT ANY MORE.** Admin →
+  Tenants lost the "Sign-in code (2FA)" column and `GET/PUT /admin/tenants/:id/login-otp`
+  are gone (404). `Tenant.loginOtpRequired/loginOtpChannel` stay in the DB **inert** (dropping
+  them would break the OLD api during blue/green) and a guard asserts nothing reads them. The
+  TOTP routes + login branch stay dormant (0 users enrolled); the Security page no longer
+  offers them; a legacy TOTP-on account sees "ask your administrator". Do not resurrect either
+  without Izzy.
+- ✅ **The role requirement is satisfied by the sign-in code:** `/auth/login` turns
+  `enroll_grace`/`enroll_required` into `none` when `user.loginOtpEnabledAt` is set, and
+  `getMfaStatus.enrollmentRequired` is false for them — the dashboard nudge disappears once
+  Izzy turns it on. Login reads the switch off the user row already loaded (no tenant lookup,
+  nothing to fail closed on).
+- ✅ **Tests on the dev-box harness** (memory `devbox-verification-harness`; the harness now
+  also mirrors `packages/db/prisma/schema.prisma` four levels above `src/mfa`): api
+  `mfa/loginOtp.test.ts` **19/19**, `mfa/loginOtpRoutes.test.ts` **14/14** (real Fastify, faked
+  db, real bcrypt), `mfa/mfa.test.ts` **25/25**; portal `lib/mfaLogin.test.ts` **12/12**,
+  `lib/turnstileWiring.test.ts` **13/13**. ⏳ `tsc` cannot run here — the container build is
+  the first typecheck.
+- ⏳ **DEPLOY: in progress — see the line below once the containers are verified.**
+- ⛔ The mobile app still has no code step; the Security page says so before "Turn on".
 
 ## ⛔ AGENT HANDOFF — Tracking → Orders now has a Received date-range filter, store filter and real paging; the "only 24 hours" complaint was the newest-100 row cap, not a time rule (2026-09-08) — READ FIRST before touching `GET /delivery/orders`, `orderService.listOrders/searchOrders`, or the orders page filters
 
@@ -11376,7 +11367,7 @@ permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   unverified; Polly's generative engine already burned us by accepting one and
   discarding it, so compare output bytes before exposing any such control.
 
-## ⛔⛔ AGENT HANDOFF — a tenant can require a SIGN-IN CODE by text/email (2FA per company, "remember this device" 90 days, 90-day sessions), and the login form can carry Cloudflare Turnstile — BUILT and DEPLOYED, every switch OFF (2026-08-19) — ⚠ PARTLY SUPERSEDED 2026-09-08: v2 (top of this file) removed "remember this device" and the 90-day sessions and added the text-or-email choice; the rest of this section still holds — READ FIRST before touching `/auth/login`, before flipping `loginOtpRequired` for a customer, before adding `expiresIn` anywhere, before setting `TURNSTILE_*`, or for "I got a code / I didn't get a code"
+## ⛔⛔ AGENT HANDOFF — a tenant can require a SIGN-IN CODE by text/email (2FA per company, "remember this device" 90 days, 90-day sessions), and the login form can carry Cloudflare Turnstile — BUILT and DEPLOYED, every switch OFF (2026-08-19) — ⚠ SUPERSEDED 2026-09-08 by v2 then v3 (see the v3 section near the top of this file): no "remember this device", no 90-day sessions, the person chooses text or email, and since v3 NO tenant switch — it is per user on Account → Security; the data/hash/throttle rules in this section still hold — READ FIRST before touching `/auth/login`, before flipping `loginOtpRequired` for a customer, before adding `expiresIn` anywhere, before setting `TURNSTILE_*`, or for "I got a code / I didn't get a code"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §12**
 (`fc551996` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and

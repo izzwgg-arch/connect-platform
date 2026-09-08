@@ -1,61 +1,56 @@
 "use client";
 /**
- * Account → Security: two-step verification (MFA) for the signed-in person.
+ * Account → Security: two-step verification for the signed-in person.
+ *
+ * v3 (2026-09-08, Izzy, from the approved mockups): ONE method — a 6-digit
+ * code by text message or email — turned on and off HERE, by the person, and
+ * nowhere else (the per-tenant admin switch is gone). The authenticator-app
+ * enrolment UI is gone; an account that still has it on (none did on ship
+ * day) is told to ask an administrator.
  *
  * Reachable by EVERY signed-in user (no permission key — it is their own
  * account), from the profile menu and from the sign-in redirect that GRACE
- * mode sends required roles through. What it does, in order:
+ * mode sends required roles through. What it does:
  *
- *   off  → "Turn on" → POST /auth/mfa/totp/setup → QR + manual key → the person
- *          types the first code → POST /auth/mfa/totp/verify → recovery codes,
- *          shown ONCE → done.
- *   on   → enabled since / codes left; "New recovery codes" and "Turn off",
- *          each behind a current 6-digit code.
+ *   off → shows where codes WOULD go (masked registered mobile + email) →
+ *         "Turn on two-step verification" → POST /auth/otp/enable → on.
+ *   on  → shows where codes go; "Turn off" asks for the PASSWORD (not a code,
+ *         so a lost phone never locks anyone out of turning it off) →
+ *         POST /auth/otp/disable { password } → off.
  *
  * ⛔ Errors are read from `e.body` — `.payload` has never existed on ApiError
- * (CLAUDE.md). ⛔ Nothing here is logged; the secret and the codes live in
- * component state and are gone on navigation. ⛔ The QR box has a white
- * background on purpose: a scanner needs contrast the dark theme does not give.
+ * (CLAUDE.md). ⛔ The password lives in component state only.
  */
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { QRCodeSVG } from "qrcode.react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 import { ApiError, apiGet, apiPost } from "../../../../services/apiClient";
-import { isSubmittableMfaCode, looksLikeTotpCodeInput, normalizeMfaCodeInput, safeNextPath } from "../../../../lib/mfaLogin";
+import { safeNextPath } from "../../../../lib/mfaLogin";
 // ⛔ A page.tsx may only export its default component (a named export fails the
 // production build — CLAUDE.md), so the phrase list lives in a sibling module.
 import { SECURITY_PHRASES } from "./phrases";
 
-
 type Status = {
   enabled: boolean;
   enabledAt: string | null;
-  pendingSetup: boolean;
-  recoveryCodesRemaining: number;
+  channels: string[];
+  destinations: Record<string, string>;
+  phoneOnFile: boolean;
+  totpEnabled: boolean;
   required: boolean;
   enrollmentRequired: boolean;
 };
 
-type Setup = { secretBase32: string; manualKey: string; otpauthUri: string; account: string };
-
-type Mode =
-  | { kind: "idle" }
-  | { kind: "setup"; setup: Setup }
-  | { kind: "codes"; codes: string[]; heading: "enabled" | "regenerated" }
-  | { kind: "regenerate" }
-  | { kind: "disable" };
+type Mode = { kind: "idle" } | { kind: "disable" };
 
 function errorText(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
     const body = e.body as { error?: string; message?: string } | null;
-    if (e.status === 429) return "Too many wrong codes. Wait a few minutes and try again.";
+    if (e.status === 429) return "Too many tries. Wait a few minutes and try again.";
+    if (body?.error === "invalid_password") return "That password is not right.";
     if (body?.message) return body.message;
-    if (body?.error === "invalid_code") return "That code didn't match. Try the current one.";
-    if (body?.error === "already_enabled") return "Two-step verification is already on.";
-    if (body?.error === "mfa_unavailable") return "The server can't store a two-step secret yet. Tell your administrator.";
   }
   return fallback;
 }
@@ -79,15 +74,14 @@ function AccountSecurityInner() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loadError, setLoadError] = useState("");
   const [mode, setMode] = useState<Mode>({ kind: "idle" });
-  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
-  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const s = await apiGet<Status>("/auth/mfa/status");
+      const s = await apiGet<Status>("/auth/otp/status");
       setStatus(s);
       setLoadError("");
     } catch (e) {
@@ -97,51 +91,14 @@ function AccountSecurityInner() {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function beginSetup() {
+  async function turnOn() {
     setBusy(true); setErr(""); setNotice("");
     try {
-      const setup = await apiPost<Setup>("/auth/mfa/totp/setup", {});
-      setMode({ kind: "setup", setup });
-      setCode("");
+      const s = await apiPost<Status & { ok: boolean }>("/auth/otp/enable", {});
+      setStatus(s);
+      setNotice(t("Two-step verification is on. Each time you sign in we’ll ask for a code by text or email."));
     } catch (e) {
-      setErr(errorText(e, "Couldn't start the setup."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function confirmSetup(event: React.FormEvent) {
-    event.preventDefault();
-    if (mode.kind !== "setup") return;
-    const c = normalizeMfaCodeInput(code);
-    if (!looksLikeTotpCodeInput(c)) { setErr(t("Enter the 6-digit code from your authenticator app.")); return; }
-    setBusy(true); setErr("");
-    try {
-      const res = await apiPost<{ enabled: boolean; recoveryCodes: string[] }>("/auth/mfa/totp/verify", { code: c });
-      setMode({ kind: "codes", codes: res.recoveryCodes, heading: "enabled" });
-      setCode("");
-      setCopied(false);
-      await load();
-    } catch (e) {
-      setErr(errorText(e, "That code didn't match."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitRegenerate(event: React.FormEvent) {
-    event.preventDefault();
-    const c = normalizeMfaCodeInput(code);
-    if (!looksLikeTotpCodeInput(c)) { setErr(t("Enter the 6-digit code from your authenticator app.")); return; }
-    setBusy(true); setErr("");
-    try {
-      const res = await apiPost<{ recoveryCodes: string[] }>("/auth/mfa/recovery-codes/regenerate", { code: c });
-      setMode({ kind: "codes", codes: res.recoveryCodes, heading: "regenerated" });
-      setCode("");
-      setCopied(false);
-      await load();
-    } catch (e) {
-      setErr(errorText(e, "That code didn't match."));
+      setErr(errorText(e, "Couldn't turn two-step verification on. Try again."));
     } finally {
       setBusy(false);
     }
@@ -149,49 +106,39 @@ function AccountSecurityInner() {
 
   async function submitDisable(event: React.FormEvent) {
     event.preventDefault();
-    const c = normalizeMfaCodeInput(code);
-    if (!isSubmittableMfaCode(c)) { setErr(t("Enter the 6-digit code from your authenticator app.")); return; }
+    if (!password) { setErr(t("Enter your password.")); return; }
     setBusy(true); setErr("");
     try {
-      await apiPost("/auth/mfa/disable", { code: c });
+      const s = await apiPost<Status & { ok: boolean }>("/auth/otp/disable", { password });
+      setStatus(s);
       setMode({ kind: "idle" });
-      setCode("");
+      setPassword("");
       setNotice(t("Two-step verification is off. Your password alone signs you in."));
-      await load();
     } catch (e) {
-      setErr(errorText(e, "That code didn't match."));
+      setErr(errorText(e, "Couldn't turn two-step verification off. Try again."));
     } finally {
       setBusy(false);
     }
   }
 
-  async function copyCodes() {
-    if (mode.kind !== "codes") return;
-    try {
-      await navigator.clipboard.writeText(mode.codes.join("\n"));
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  }
-
   function cancel() {
     setMode({ kind: "idle" });
-    setCode("");
+    setPassword("");
     setErr("");
   }
 
-  const showRequiredBanner = Boolean(status && status.enrollmentRequired) || (wantsSetup && !status?.enabled);
+  const on = Boolean(status && (status.enabled || status.totpEnabled));
+  const showRequiredBanner = Boolean(status && status.enrollmentRequired) || (wantsSetup && !on);
 
   return (
     <div className="acs-wrap">
       <SecurityStyles />
       <PageHeader
         title={t("Security")}
-        subtitle={t("Two-step verification protects your account with a code from your phone as well as your password.")}
+        subtitle={t("Two-step verification protects your account with a code as well as your password.")}
       />
 
-      {showRequiredBanner && status && !status.enabled ? (
+      {showRequiredBanner && status && !on ? (
         <div className="acs-banner" role="status">
           <span>{t("Your role requires two-step verification. Set it up now — it takes about a minute.")}</span>
           <Link href={nextPath} className="acs-banner-link">{t("Not now")}</Link>
@@ -208,7 +155,7 @@ function AccountSecurityInner() {
             {status ? (
               status.enabled ? (
                 <div className="muted acs-sub">
-                  {t("Turned on")}{status.enabledAt ? ` ${new Date(status.enabledAt).toLocaleDateString()}` : ""} · {t("Recovery codes left")}: {status.recoveryCodesRemaining}
+                  {t("Turned on")}{status.enabledAt ? ` ${new Date(status.enabledAt).toLocaleDateString()}` : ""} · {t("codes by text message or email")}
                 </div>
               ) : null
             ) : (
@@ -216,101 +163,91 @@ function AccountSecurityInner() {
             )}
           </div>
           {status ? (
-            <span className={`chip ${status.enabled ? "success" : "warning"}`}>{status.enabled ? t("On") : t("Off")}</span>
+            <span className={`chip ${on ? "success" : "warning"}`}>{on ? t("On") : t("Off")}</span>
           ) : null}
         </div>
 
-        {status && !status.enabled && mode.kind === "idle" ? (
-          <div className="acs-actions">
-            <button className="btn" type="button" disabled={busy} onClick={() => void beginSetup()}>
-              {t("Turn on two-step verification")}
-            </button>
-          </div>
-        ) : null}
-
-        {status && status.enabled && mode.kind === "idle" ? (
-          <div className="acs-actions">
-            <button className="btn ghost" type="button" disabled={busy} onClick={() => { setMode({ kind: "regenerate" }); setCode(""); setErr(""); }}>
-              {t("Get new recovery codes")}
-            </button>
-            <button className="btn ghost danger" type="button" disabled={busy} onClick={() => { setMode({ kind: "disable" }); setCode(""); setErr(""); }}>
-              {t("Turn off")}
-            </button>
-          </div>
-        ) : null}
-
-        {mode.kind === "setup" ? (
-          <form className="acs-setup" onSubmit={confirmSetup}>
-            <p className="acs-copy">{t("Scan this code with your authenticator app (Google Authenticator, Microsoft Authenticator, Authy, 1Password…).")}</p>
-            <div className="acs-qr" aria-label="Two-step verification QR code">
-              <QRCodeSVG value={mode.setup.otpauthUri} size={196} level="M" />
-            </div>
-            <p className="acs-copy">{t("Can't scan? Type this key into the app instead:")}</p>
-            <code className="acs-key">{mode.setup.manualKey}</code>
-            <label className="label acs-label" htmlFor="acs-first-code">{t("Then enter the 6-digit code the app shows:")}</label>
-            <input
-              id="acs-first-code"
-              className="input acs-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="123 456"
-              maxLength={7}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              autoFocus
-            />
-            {err ? <div className="acs-error" role="alert">{err}</div> : null}
-            <div className="acs-actions">
-              <button className="btn" type="submit" disabled={busy}>{t("Verify and turn on")}</button>
-              <button className="btn ghost" type="button" disabled={busy} onClick={cancel}>{t("Cancel")}</button>
-            </div>
-          </form>
-        ) : null}
-
-        {mode.kind === "codes" ? (
+        {status && status.totpEnabled && !status.enabled ? (
           <div className="acs-setup">
-            <p className="acs-copy acs-strong">
-              {mode.heading === "enabled" ? t("Two-step verification is on.") : t("New recovery codes")}
-            </p>
-            <p className="acs-copy">
-              {mode.heading === "regenerated" ? `${t("Your old recovery codes no longer work.")} ` : ""}
-              {t("Save these recovery codes somewhere safe. Each one signs you in once if you lose your phone. They will not be shown again.")}
-            </p>
-            <ul className="acs-codes">
-              {mode.codes.map((c) => <li key={c}><code>{c}</code></li>)}
-            </ul>
-            <div className="acs-actions">
-              <button className="btn ghost" type="button" onClick={() => void copyCodes()}>{copied ? t("Copied") : t("Copy codes")}</button>
-              <button className="btn" type="button" onClick={cancel}>{t("I've saved my recovery codes")}</button>
-            </div>
+            <p className="acs-copy">{t("This account uses an authenticator app for two-step verification. To switch to a code by text or email, ask your administrator to reset it.")}</p>
           </div>
         ) : null}
 
-        {mode.kind === "regenerate" || mode.kind === "disable" ? (
-          <form className="acs-setup" onSubmit={mode.kind === "regenerate" ? submitRegenerate : submitDisable}>
+        {status && !status.totpEnabled ? (
+          <div className="acs-setup">
             <p className="acs-copy">
-              {mode.kind === "regenerate"
-                ? t("Enter the current 6-digit code from your authenticator app to continue.")
-                : t("Enter a current code from your authenticator app, or a recovery code, to turn two-step verification off.")}
+              {status.enabled
+                ? t("Where your codes go")
+                : t("Each time you sign in we send a 6-digit code to your registered mobile number or email. You choose which at sign-in.")}
             </p>
-            <input
-              className="input acs-code"
-              inputMode={mode.kind === "regenerate" ? "numeric" : "text"}
-              autoComplete="one-time-code"
-              placeholder={mode.kind === "regenerate" ? "123 456" : "123 456 / ABCDE-FGHJK"}
-              maxLength={12}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              autoFocus
-            />
-            {err ? <div className="acs-error" role="alert">{err}</div> : null}
-            <div className="acs-actions">
-              <button className={`btn ${mode.kind === "disable" ? "danger" : ""}`} type="submit" disabled={busy}>
-                {mode.kind === "disable" ? t("Turn off") : t("Confirm")}
-              </button>
-              <button className="btn ghost" type="button" disabled={busy} onClick={cancel}>{t("Cancel")}</button>
+            <div className="acs-dest">
+              {status.channels.includes("SMS") ? (
+                <div className="acs-dest-row">
+                  <span className="acs-dest-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5" /><path d="M10.5 18.5h3" /></svg>
+                  </span>
+                  <div className="acs-dest-text">
+                    <div className="acs-dest-title">{t("Text message")}</div>
+                    <div className="muted acs-dest-to">{status.destinations.SMS} · {t("your registered mobile number")}</div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="acs-dest-row">
+                <span className="acs-dest-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="m3.5 7 8.5 6 8.5-6" /></svg>
+                </span>
+                <div className="acs-dest-text">
+                  <div className="acs-dest-title">{t("Email")}</div>
+                  <div className="muted acs-dest-to">{status.destinations.EMAIL} · {t("your account email")}</div>
+                </div>
+              </div>
             </div>
-          </form>
+            <p className="muted acs-note">
+              {status.phoneOnFile
+                ? t("To change the mobile number, ask your administrator. The code is asked once each time you sign in and stays until you sign out.")
+                : t("No mobile number on file, so codes go by email. Ask your administrator to add your mobile number to get texts.")}
+            </p>
+            {!status.enabled ? (
+              <p className="muted acs-note">{t("The Loopcom phone app cannot ask for the code yet. If you sign in on the app, wait before turning this on.")}</p>
+            ) : null}
+
+            {!status.enabled && mode.kind === "idle" ? (
+              <div className="acs-actions">
+                <button className="btn primary" type="button" disabled={busy} onClick={() => void turnOn()}>
+                  {t("Turn on two-step verification")}
+                </button>
+              </div>
+            ) : null}
+
+            {status.enabled && mode.kind === "idle" ? (
+              <div className="acs-actions">
+                <button className="btn ghost danger" type="button" disabled={busy} onClick={() => { setMode({ kind: "disable" }); setPassword(""); setErr(""); setNotice(""); }}>
+                  {t("Turn off")}
+                </button>
+              </div>
+            ) : null}
+
+            {mode.kind === "disable" ? (
+              <form className="acs-setup" onSubmit={submitDisable}>
+                <p className="acs-copy">{t("Enter your password to turn two-step verification off. Your password alone will sign you in.")}</p>
+                <label className="label acs-label" htmlFor="acs-password">{t("Password")}</label>
+                <input
+                  id="acs-password"
+                  className="input acs-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoFocus
+                />
+                {err ? <div className="acs-error" role="alert">{err}</div> : null}
+                <div className="acs-actions">
+                  <button className="btn danger" type="submit" disabled={busy}>{t("Turn off")}</button>
+                  <button className="btn ghost" type="button" disabled={busy} onClick={cancel}>{t("Cancel")}</button>
+                </div>
+              </form>
+            ) : null}
+          </div>
         ) : null}
 
         {mode.kind === "idle" && err ? <div className="acs-error" role="alert">{err}</div> : null}
@@ -331,13 +268,17 @@ function SecurityStyles() {
       .acs-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
       .acs-setup{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--border);padding-top:14px}
       .acs-copy{margin:0;font-size:13.5px;line-height:1.5;color:var(--text)}
-      .acs-strong{font-weight:650}
-      .acs-qr{align-self:flex-start;padding:12px;border-radius:12px;background:#fff;box-shadow:0 0 0 1px var(--border)}
-      .acs-key{align-self:flex-start;font-size:15px;letter-spacing:.08em;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text);user-select:all}
+      .acs-note{margin:0;font-size:12.5px;line-height:1.5}
       .acs-label{margin-top:4px}
-      .acs-code{max-width:240px;letter-spacing:.14em;font-variant-numeric:tabular-nums;font-size:16px}
-      .acs-codes{margin:0;padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 18px;list-style:none;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft)}
-      .acs-codes code{font-size:14.5px;letter-spacing:.06em;color:var(--text)}
+      .acs-password{max-width:250px}
+      .acs-dest{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft);overflow:hidden}
+      .acs-dest-row{display:flex;align-items:center;gap:12px;padding:12px 14px}
+      .acs-dest-row + .acs-dest-row{border-top:1px solid var(--border)}
+      .acs-dest-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:30px;height:30px;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+      .acs-dest-icon svg{width:16px;height:16px}
+      .acs-dest-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+      .acs-dest-title{font-size:13.5px;font-weight:600;color:var(--text)}
+      .acs-dest-to{font-size:12.5px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
       .acs-error{border:1px solid color-mix(in srgb,var(--danger) 42%,transparent);background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--text);border-radius:10px;padding:10px 13px;font-size:13.5px;line-height:1.45}
       .acs-notice{border:1px solid color-mix(in srgb,var(--success) 40%,transparent);background:color-mix(in srgb,var(--success) 10%,transparent);color:var(--text);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:12px}
       .acs-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid color-mix(in srgb,var(--warning) 45%,transparent);background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--text);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:12px}
