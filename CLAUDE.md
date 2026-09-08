@@ -40,6 +40,12 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
   whole outbound model is prefix codes (1129/0855/0535/9331/2014/1213/2661, now 1730); a
   14-digit `1730…` dial resolves in NO other tenant. Backup
   `/root/trust1730-before-20260908T121546Z/` on the PBX; recipe in the handoff §4–§6.
+- ⛔ **"THE PREFIX IS NOT WORKING" (2026-09-08 pm) IS THE HANDSET, NOT THE ROUTE** — the desk phone
+  sent `1730` ALONE (and `7190`, `7735`) because the served Yealink config carries
+  `interdigit_long_timer = 3` fleet-wide (36/39 configs): a 3-second pause after the code dials
+  the code. Same phone sent 10 and 14 digits intact when typed continuously. Workaround: dial
+  all 14 digits without pausing / pre-dial then Send; the real fix is a per-device timer
+  override + check-cfg NOTIFY (handoff §8) and is Izzy's call.
 - ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
   Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
   (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched

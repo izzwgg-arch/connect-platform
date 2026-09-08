@@ -152,3 +152,33 @@ all `external_cid NULL`, `dynamic_external_cid no`), so the behaviour is identic
 forced mode until someone sets one. Script: loopcom `/root/trust1730-cidmode.ts`.
 ⛔ `FormOption` in `panelForm.ts` is `{ v, t }`, not `{ value }` — a guard reading `.value`
 sees `undefined` for every option and refuses a perfectly good form (cost one run).
+
+## 8. Round 4 (2026-09-08 afternoon) — "the prefix is not working": the HANDSET sends `1730` on its own after a pause
+
+Read-only investigation, nothing changed. Izzy: *"They're saying the prefix is not working."*
+
+- ⛔ **The route is fine; the digits never arrive.** `asterisk.cdr` for tenant
+  `trust_bookkeepings` shows ext 106's DESK phone (`PJSIP/T18_106`, not the app)
+  dialling **`1730` ALONE** at 13:21:45 and 14:21:31 ET (FAILED, 0 s, `ForkCDR`), and
+  likewise `7190` and `7735` as lone 4-digit fragments. The PBX received a 4-digit
+  call, which matches nothing, so the route never saw a `1730…` string.
+- ⛔ **Not a 4-digit dial-now rule** — the same phone sent `8455577735` intact
+  (10 digits) at 13:22:02, and in Dec 2025 this same endpoint sent 14-digit prefixed
+  dials (`12135622096644`, and `08555622096644` / `20145622096644` / `93315622096644`
+  from T18_101) that WORKED. A blanket 4-digit rule would have cut `8455…` too.
+- ✅ **THE MECHANISM: the served Yealink config sets
+  `account.1.dialplan.digitmap.interdigit_long_timer = 3`** — a 3-second pause while
+  typing sends whatever has been entered. Read the code `1730`, pause to read the
+  number off the paper, and the phone dials `1730`. `7190`/`7735` are the same shape.
+  It is **fleet-wide**: 36 of 39 served Yealink configs carry `= 3` (VitalPBX's Yealink
+  templates); every other digitmap key is blank ("keep what the handset has"); no
+  config on the PBX sets a digitmap string or a dialnow rule.
+- Ext 106's phone: MAC `80:5e:0c:44:5b:30`, provisioning device 50, template 41,
+  model 175, config last rendered 2026-05-08 (`805e0c445b30.cfg`). The T43U on
+  108.86.0.90 that fetched config on 09-07 is ext **104** (`805e0c78fc7c`), not 106.
+  ⛔ Desk phones register with NO user agent recorded in `PbxEndpointRegistrationEvent`.
+- **Zero-risk workaround (no change anywhere):** dial all 14 digits without pausing,
+  or pre-dial on-hook and press Send. **Fix options, both PBX provisioning writes +
+  a `yealink-check-cfg` NOTIFY, Izzy's call:** raise `interdigit_long_timer` (e.g. 8)
+  on that one device (per-device override) or on Trust's four phones (template 41 —
+  check which other tenants share it first), never fleet-wide by reflex.
