@@ -13,8 +13,8 @@ import {
   platformNoreplyEmail,
 } from "./publicOrigins";
 import { turnstileGate } from "./turnstile";
-import { checkTrustedDevice, registerLoginOtpRoutes, startOtpChallenge } from "./mfa/loginOtpRoutes";
-import { OTP_SESSION_EXPIRES_IN, decideOtpGate } from "./mfa/loginOtp";
+import { registerLoginOtpRoutes, startOtpChallenge } from "./mfa/loginOtpRoutes";
+import { decideOtpGate } from "./mfa/loginOtp";
 import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
@@ -6134,7 +6134,10 @@ app.post("/auth/login", async (req, reply) => {
   //   enroll_required→ 403 (only when MFA_ENFORCEMENT=required, which is NOT set)
   // See apps/api/src/mfa/mfaService.ts for the contract and mfaPolicy.ts for
   // why grace is the default and the only mode that has ever been turned on.
-  const mfaOutcome = await decideLoginMfa(mfaDeps, { id: user.id, role: String(user.role) });
+  let mfaOutcome = await decideLoginMfa(mfaDeps, { id: user.id, role: String(user.role) });
+  // v3 (2026-09-08): a person who turned the sign-in code on HAS a second factor —
+  // the required-role nudge (grace) and refusal (hard) do not apply to them.
+  if (mfaOutcome.kind !== "challenge" && mfaOutcome.kind !== "none" && (user as any).loginOtpEnabledAt) mfaOutcome = { kind: "none" };
   if (mfaOutcome.kind === "enroll_required") {
     app.log.warn({ userId: user.id, role: user.role, endpoint: "/auth/login" }, "login_refused_mfa_enrollment_required");
     return reply.status(403).send({
@@ -6156,34 +6159,20 @@ app.post("/auth/login", async (req, reply) => {
       error: "mfa_required",
     };
   }
-  // ── Per-tenant sign-in code (2FA-by-code, 2026-08-19) ────────────────────
-  // Only reached when the TOTP decision above did NOT challenge — i.e. the user
-  // is not TOTP-enrolled (an enrolled user already carries a stronger factor).
-  // OFF for every tenant until an administrator turns it on. Contract and rules
-  // in mfa/loginOtp.ts; a "remembered device" token skips the code for 90 days.
-  // ⛔ FAILS CLOSED. This read decides whether a second factor is required, so a
-  // `.catch(() => null)` here would let a transient database error hand out a
-  // session with NO code asked for — the same fail-open shape as the empty
-  // CDR_INGEST_SECRET and the dead NODE_ENV gates. If we cannot tell, we refuse.
-  let otpTenant: { loginOtpRequired?: boolean; loginOtpChannel?: string } | null;
-  try {
-    otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true, loginOtpChannel: true } });
-  } catch (err) {
-    app.log.error({ err, userId: user.id }, "login_otp_tenant_lookup_failed");
-    return reply.status(503).send({ error: "service_unavailable", message: "We couldn't complete sign-in just now. Please try again in a moment." });
-  }
-  if (otpTenant?.loginOtpRequired) {
-    const trusted = input.trustedDeviceToken ? await checkTrustedDevice(otpDeps, user.id, input.trustedDeviceToken) : null;
-    const otpGate = decideOtpGate({ tenantOtpRequired: true, userHasTotp: false, trustedDevice: trusted });
-    if (otpGate.kind === "challenge") {
-      // lastLoginAt is stamped when the code is verified, not here — a password
-      // alone is not a sign-in for a tenant that asked for a code.
-      return await startOtpChallenge(otpDeps, {
-        user: { id: user.id, tenantId: user.tenantId, email: user.email, phone: (user as any).phone },
-        tenantChannelSetting: otpTenant.loginOtpChannel,
-        requestedChannel: input.otpChannel,
-      });
-    }
+  // ── Sign-in code (2FA by text or email) — per USER, v3 2026-09-08 ──────────
+  // Only reached when the TOTP decision above did NOT challenge (an enrolled
+  // person already carries a second factor). The switch is the person's own
+  // `User.loginOtpEnabledAt`, set on Account → Security and nowhere else; it is
+  // on the row already loaded above, so there is no extra read and nothing to
+  // fail closed on. Contract and rules in mfa/loginOtp.ts.
+  const otpGate = decideOtpGate({ userOtpEnabled: Boolean((user as any).loginOtpEnabledAt), userHasTotp: false });
+  if (otpGate.kind === "challenge") {
+    // lastLoginAt is stamped when the code is verified, not here — a password
+    // alone is not a sign-in for a person who asked for a code.
+    return await startOtpChallenge(otpDeps, {
+      user: { id: user.id, tenantId: user.tenantId, email: user.email, phone: (user as any).phone },
+      requestedChannel: input.otpChannel,
+    });
   }
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
   const session = await issueLoginSession(user.id);
@@ -6211,19 +6200,12 @@ async function issueLoginSession(userId: string): Promise<{ token: string; porta
     .findFirst({ where: { ownerUserId: user.id, status: "ACTIVE" }, orderBy: { createdAt: "asc" }, select: { displayName: true } })
     .catch(() => null);
   const namedUser = { ...(user as any), ownedExtensions: namingExtension ? [namingExtension] : [] };
-  // ⛔ Sessions still never expire platform-wide (CLAUDE.md, token-expiry section:
-  // the mobile app cannot survive a 401 yet). The ONE exception, by Izzy's ask
-  // (2026-08-19): a tenant with the sign-in code switched on gets 90-day
-  // sessions — "they should have to re-login every 90 days if 2FA is enabled".
-  // Opt-in per tenant, off by default, so nobody's phone breaks on ship day.
-  // ⛔ No `.catch()` here either: swallowing a failure would mint a session that
-  // NEVER expires for a tenant that asked for 90-day sign-ins. A throw becomes a
-  // 500 and the person simply signs in again — the honest failure.
-  const otpTenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { loginOtpRequired: true } });
-  const signOpts = otpTenant?.loginOtpRequired ? { expiresIn: OTP_SESSION_EXPIRES_IN } : undefined;
-  const token = signOpts
-    ? app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) }, signOpts)
-    : app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) });
+  // ⛔ Sessions never expire platform-wide (CLAUDE.md, token-expiry section: the
+  // mobile app cannot survive a 401 yet). The 90-day exception for sign-in-code
+  // tenants (2026-08-19) was REMOVED on 2026-09-08 by Izzy's ask — "there is no
+  // expiry; the only thing that removes it is logging out" — so every session is
+  // signed one way again, and the sign-in code is asked once per sign-in.
+  const token = app.jwt.sign({ sub: user.id, tenantId: user.tenantId, email: user.email, role: user.role, name: displayNameForUser(namedUser) });
   const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
     user.role,
     user.id,
@@ -6239,8 +6221,8 @@ async function issueLoginSession(userId: string): Promise<{ token: string; porta
 // below) because `/auth/login` above needs `decideLoginMfa` at request time.
 const mfaDeps = buildMfaDeps({ audit, issueSession: issueLoginSession });
 // The sign-in-code deps live here for the same reason: `/auth/login` above
-// needs `startOtpChallenge` / `checkTrustedDevice` at request time.
-const otpDeps = { audit, issueSession: issueLoginSession, requireSuperAdmin, log: app.log };
+// needs `startOtpChallenge` at request time.
+const otpDeps = { audit, issueSession: issueLoginSession, log: app.log };
 
 app.get("/auth/invite/validate", async (req, reply) => {
   const query = z.object({ token: z.string().min(20) }).parse(req.query || {});
@@ -9306,8 +9288,6 @@ app.get("/admin/tenants", async (req, reply) => {
       perSecondRate: t.perSecondRate,
       firstCampaignRequiresApproval: t.firstCampaignRequiresApproval,
       linkedSipCallVisibilityEnabled: (t as any).linkedSipCallVisibilityEnabled === true,
-      loginOtpRequired: (t as any).loginOtpRequired === true,
-      loginOtpChannel: String((t as any).loginOtpChannel || "EITHER"),
       stats: { users: userCount, campaigns: campaignCount },
     };
   }));

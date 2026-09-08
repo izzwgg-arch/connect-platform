@@ -216,10 +216,10 @@
     - Import never downgrades an existing `CrmContactMeta.stage`. It only upserts a LEAD stage if no CrmContactMeta exists yet.
     - Import uses `source: "IMPORT"` on new `Contact` rows so they can be distinguished from manually-created contacts.
 
-39. **CRM screen pop must never modify telephony behavior.**
-    - `CrmScreenPop` only *reads* from `useTelephony().activeCalls`. It never writes to the WS, does not call any telephony API, and does not affect call routing.
-    - API: `GET /crm/contacts/lookup` returns 403 silently when CRM is disabled — screen pop catches the error and shows nothing.
-    - Deduplication is `seenLinkedIds` ref — never re-pops the same `linkedId` in the same session.
+39. **There is NO CRM screen pop (removed 2026-09-08 at Izzy's request).** The only incoming-call
+    surface a person sees is the ringing softphone itself (floating dialer / Windows mini dialer /
+    phone app). Do not add a second incoming-call pop-up, toast or card in any tenant.
+    - API: `GET /crm/contacts/lookup` still exists (dialer / live workspace) and returns 403 silently when CRM is disabled.
     - Do not add `await` to any CRM lookup inside a telephony event handler.
 
 38. **The CRM CDR hook (`fireCrmCdrHook`) must NEVER block CDR ingest.**

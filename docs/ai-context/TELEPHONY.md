@@ -669,13 +669,13 @@ registration worked May 27. See `WEBRTC_DIAGNOSTICS.md` for full entity IDs and 
       direction, disposition, startedAt, answeredAt, endedAt, durationSec, talkSec,
       rawLegCount, dcontext, isForwarded, fromName).
     - `CallRecord` — legacy table (kept for backward-compat).
-- **CRM screen pop (Phase 2B)**: The portal's `CrmScreenPop` component (mounted in `AppShell`)
-  watches the existing telephony WS via `useTelephony()` (`TelephonyContext.tsx`). On a new
-  `direction === "inbound"` + `state === "ringing"` call, it calls `GET /crm/contacts/lookup?phone=`
-  with `call.from`. If matched, it shows a non-intrusive flyout (bottom-right) with contact
-  name, stage, task count, and "Open Contact" / "Live Workspace" / "Dismiss" actions.
-  Deduplication: `seenLinkedIds` ref prevents repeat lookups for the same call. 403/failure = silent skip.
-  No telephony code touched. No new WS service. Only reads from existing `useTelephony()` state.
+- **CRM screen pop (Phase 2B) — ⛔ REMOVED 2026-09-08 (Izzy: "Just remove those notifications
+  completely … The only incoming call notifications I want to see are the actual incoming calls").**
+  `components/CrmScreenPop.tsx` is deleted and `AppShell` no longer mounts it, for every tenant.
+  The bottom-right "Incoming Call / Unknown caller / Dismiss" card is gone; the ringing softphone
+  (floating dialer, Windows mini dialer, phone app) is the only incoming-call surface. Do not
+  re-add a second incoming-call pop-up. `GET /crm/contacts/lookup` and the WS `crm*` enrichment
+  fields stay (the dialer and live workspace use them). Guard: `apps/portal/lib/noIncomingCallScreenPop.test.ts`.
 
 - **CRM CDR hook (Phase 2A)**: After `ConnectCdr` upsert succeeds in `/internal/cdr-ingest`,
   the handler calls `fireCrmCdrHook(...)` **without await** (fire-and-forget, `.catch(() => {})`).

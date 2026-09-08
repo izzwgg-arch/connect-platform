@@ -180,6 +180,29 @@ pnpm approve-builds && pnpm rebuild better-sqlite3   # Linux: native better-sqli
 bash scripts/ops/start-deploy-queue-pm2.sh
 ```
 
+### Boot persistence (2026-09-08)
+
+PM2 does not come back after a host reboot by itself — on 2026-09-08 the host rebooted and the
+queue was simply gone (port 3910 dead, `pm2 ls` empty) until someone ran `pm2 resurrect`. The fix
+is pm2's own init hook, installed once on the app host as root:
+
+```bash
+pm2 startup systemd -u root --hp /root   # writes + enables /etc/systemd/system/pm2-root.service
+pm2 save                                  # freezes the CURRENT process list into /root/.pm2/dump.pm2
+```
+
+The unit runs `pm2 resurrect` after `network.target`, which restores every process in
+`dump.pm2` with the environment captured at save time (so `DEPLOY_QUEUE_TOKEN` and the
+`DEPLOY_*` overrides ride along — PM2 core never reads dotenv files). Rules:
+
+- **After any change to the pm2 process list (start, delete, env change via
+  `start-deploy-queue-pm2.sh`), run `pm2 save`** — otherwise the next boot restores the old list.
+- Verify: `systemctl is-enabled pm2-root` → `enabled`; after a boot,
+  `systemctl status pm2-root` active and `GET http://127.0.0.1:3910/ops/deploy/status` answers.
+- A stale worker lock from before the reboot is harmless: `status.lock.pidAlive` is checked and
+  the worker reclaims it.
+- Remove with `pm2 unstartup systemd` if the queue ever moves off pm2.
+
 ### Upgrading `connect-deploy-queue` only (e.g. **1.1.2**)
 
 Pin `/opt/connectcomms/app` to the desired git revision (via your normal queue-driven deploy of **`api`** if this change shipped there, or operator policy). Then **`bash scripts/ops/start-deploy-queue-pm2.sh`** rebuilds **`ops/deploy-queue`** and **`pm2 reload`**s **`connect-deploy-worker`**. Verify **`GET http://127.0.0.1:3910/ops/deploy/status`** shows **`version.deployQueuePackage":"1.1.2"`** (and idle **`runningCount`** / **`queuedCount`** before and after). This path does **not** restart **`api`**, **`portal`**, or **`telephony`** containers by itself — only the PM2 queue process.

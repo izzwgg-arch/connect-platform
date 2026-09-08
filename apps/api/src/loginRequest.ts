@@ -48,15 +48,15 @@ export const LOGIN_PASSWORD_MIN_LENGTH = 8;
 const loginRequestSchema = z.object({
   email: z.string().email(),
   password: z.string().min(LOGIN_PASSWORD_MIN_LENGTH),
-  /** "Remember this device" token from a previous sign-in-code verification (per-tenant 2FA). Optional, opaque. */
-  trustedDeviceToken: z.string().max(200).optional(),
   /** Cloudflare Turnstile response from the portal's sign-in form. Optional; the api decides whether it is required. */
   turnstileToken: z.string().max(4096).optional(),
-  /** Which channel the sign-in code should go out on, when the tenant allows a choice. */
+  /** Which channel the sign-in code should go out on (SMS | EMAIL). Optional — without
+   *  it the api offers the choice (v2, 2026-09-08). A "remember this device" token used
+   *  to sit beside it; it is gone, and an old client still sending one is stripped by zod. */
   otpChannel: z.string().max(10).optional(),
 });
 
-export type LoginRequest = { email: string; password: string; trustedDeviceToken?: string; turnstileToken?: string; otpChannel?: string };
+export type LoginRequest = { email: string; password: string; turnstileToken?: string; otpChannel?: string };
 
 export type LoginRequestParse =
   | { ok: true; value: LoginRequest }
@@ -78,7 +78,6 @@ export function parseLoginRequest(body: unknown): LoginRequestParse {
       value: {
         email: result.data.email,
         password: result.data.password,
-        ...(result.data.trustedDeviceToken ? { trustedDeviceToken: result.data.trustedDeviceToken } : {}),
         ...(result.data.turnstileToken ? { turnstileToken: result.data.turnstileToken } : {}),
         ...(result.data.otpChannel ? { otpChannel: result.data.otpChannel } : {}),
       },

@@ -7,7 +7,7 @@ import type { CallStateStore } from "../state/CallStateStore";
 import { isExtensionLegChannel } from "../state/CallStateStore";
 import { AorContactRegistry } from "../state/AorContactRegistry";
 import { resolveWakeDialLeg } from "./wakeDialLeg";
-import { isHelperChannel } from "../normalizers/normalizeCallEvent";
+import { isHelperChannel, isPseudoChannel } from "../normalizers/normalizeCallEvent";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
 import { TenantResolver } from "../state/TenantResolver";
@@ -266,6 +266,14 @@ export class TelephonyService {
         const linkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         const isHelper = isHelperChannel(typed.channel);
         const linkedIdEmpty = !(typed.linkedid ?? "").trim();
+        // A permanent pseudo-channel (Message/ast_msg_queue) carries a linkedid
+        // of its own, so the helper guard below does not catch it — and it never
+        // hangs up, so a call seeded from it is broadcast once per AMI bootstrap
+        // and can never be removed (2026-09-08 "<unknown> → h" ghost).
+        if (isPseudoChannel(typed.channel)) {
+          log.info({ event: typed.event, channel: typed.channel }, "PIPE: pseudo_channel_skipped (never a call)");
+          break;
+        }
         if (linkedIdEmpty && isHelper) {
           log.debug({ channel: typed.channel }, "PIPE: helper_channel_skipped (no linkedid)");
           break;

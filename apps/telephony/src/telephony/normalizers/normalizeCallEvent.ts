@@ -15,6 +15,21 @@ export function isHelperChannel(channel: string): boolean {
   return false;
 }
 
+/**
+ * True for Asterisk's PERMANENT pseudo-channels, which are never a call at all.
+ * `Message/ast_msg_queue` lives for the whole Asterisk process (it is the
+ * out-of-call MESSAGE queue): `core show channels` lists it as "Up" in context
+ * `messages`, exten `h`, with no caller ID and a days-long duration, and it
+ * NEVER emits a Hangup. Seeding it as a call at AMI bootstrap (CoreShowChannel)
+ * put an "<unknown> → h" row on every admin client that only a page refresh
+ * could clear — no remove can ever follow for a channel that never ends
+ * (2026-09-08). Unlike Local/ helpers (which belong to a real call and DO hang
+ * up), these must never create or touch a call.
+ */
+export function isPseudoChannel(channel: string): boolean {
+  return channel.trim().startsWith("Message/");
+}
+
 /** True when the call has only helper channels. Do not show as user-facing. */
 export function isLocalOnlyCall(call: NormalizedCall): boolean {
   return (

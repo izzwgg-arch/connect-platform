@@ -104,9 +104,24 @@
 .sm-root .sm-kpi .sm-d.sm-up { color: var(--success); }
 .sm-root /* toolbar + tabs */
   .sm-toolbar { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; flex-wrap: wrap; }
-.sm-root .sm-tabs { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 2px; }
-.sm-root .sm-tab { font-size: .78rem; font-weight: 600; color: var(--text-dim); border-radius: 7px; padding: .3rem .75rem; }
+.sm-root .sm-tabs { display: inline-flex; gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 2px; }
+/* The tabs are real <button>s and this portal runs Tailwind with preflight off,
+   so the browser's default grey "buttonface" background and system font leak
+   through unless reset here (2026-09-08: the inactive tabs rendered light grey
+   in dark mode). Segmented control: dim text on the track, the active tab is a
+   raised pill — --panel-2 in dark, white on a --panel-2 track in light. */
+.sm-root .sm-tab { appearance: none; -webkit-appearance: none; background: transparent; border: 0; margin: 0;
+    font: inherit; font-size: .78rem; font-weight: 600; line-height: 1.4; color: var(--text-dim);
+    border-radius: 7px; padding: .3rem .75rem; white-space: nowrap; cursor: pointer;
+    transition: background-color .12s, color .12s; }
+.sm-root .sm-tab:hover { color: var(--text); background: var(--sm-row-hover); }
 .sm-root .sm-tab.sm-on { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+.sm-root .sm-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sm-root .sm-tab.sm-on:focus-visible { box-shadow: inset 0 0 0 1px var(--border), 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+:root[data-theme="light"] .sm-root .sm-tabs { background: var(--panel-2); }
+:root[data-theme="light"] .sm-root .sm-tab:hover { background: rgba(15, 23, 42, 0.05); }
+:root[data-theme="light"] .sm-root .sm-tab.sm-on { background: #ffffff; box-shadow: inset 0 0 0 1px var(--border), 0 1px 2px rgba(15, 23, 42, 0.08); }
+:root[data-theme="light"] .sm-root .sm-tab.sm-on:hover { background: #ffffff; }
 .sm-root .sm-filter { font-size: .76rem; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 999px; padding: .22rem .7rem; }
 .sm-root .sm-search { display: flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--border);
     border-radius: 8px; padding: .3rem .7rem; color: var(--text-dim); font-size: .78rem; min-width: 13rem; }
@@ -459,3 +474,50 @@
   font-size: 10.5px; color: var(--text-dim); }
 .sm-root .sm-kbd-legend b { color: var(--text); font-weight: 700; }
 .sm-root .sm-kbd-hint { font-size: 10.5px; color: var(--text-dim); margin-right: auto; }
+
+/* ---------- Orders Desk filters (2026-09-08) ----------
+   Received range + Source chips under the tab strip, a live search box, the
+   count line above the table and the pager below it. Everything themes through
+   the same --panel/--border/--accent vars as the rest of the desk; the two date
+   inputs also follow the theme's color-scheme so the native picker matches. */
+.sm-root .sm-filterbar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: .6rem .9rem; margin-bottom: .8rem; }
+.sm-root .sm-flab-inline { font-size: .64rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); min-width: 3.9rem; }
+.sm-root .sm-chips { display: inline-flex; gap: .375rem; flex-wrap: wrap; }
+.sm-root button.sm-filter { background: transparent; cursor: pointer; font: inherit; font-size: .76rem; line-height: 1.4; }
+.sm-root .sm-filter.sm-on { color: var(--accent); font-weight: 600; border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sm-root .sm-vsep { width: 1px; height: 22px; background: var(--border); margin: 0 .25rem; }
+.sm-root .sm-daterange { display: inline-flex; align-items: center; gap: .5rem; margin-left: .25rem; }
+.sm-root .sm-date { height: 30px; width: 9rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0 .55rem; font: inherit; font-size: .78rem; color: var(--text); color-scheme: dark; }
+:root[data-theme="light"] .sm-root .sm-date { color-scheme: light; }
+.sm-root .sm-date:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.sm-root .sm-btn.sm-btn-sm { padding: .35rem .75rem; font-size: .76rem; }
+.sm-root .sm-btn:disabled { opacity: .5; cursor: not-allowed; }
+.sm-root .sm-rangetext { white-space: nowrap; }
+.sm-root .sm-search-live { cursor: text; }
+.sm-root .sm-search-live input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font: inherit; font-size: .78rem; color: var(--text); }
+.sm-root .sm-search-live input::placeholder { color: var(--text-dim); }
+.sm-root .sm-search-live:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.sm-root .sm-tcount { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .55rem 1rem;
+  border-bottom: 1px solid var(--border); font-size: .78rem; color: var(--text-dim); }
+.sm-root .sm-tcount b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.sm-root .sm-table.sm-loading .sm-trow { opacity: .6; transition: opacity .15s; }
+.sm-root .sm-received b span { color: var(--text-dim); font-weight: 500; }
+.sm-root .sm-flags { display: flex; gap: .375rem; flex-wrap: wrap; }
+.sm-root .sm-pager { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; padding: .6rem 1rem;
+  border-top: 1px solid var(--border); font-size: .78rem; color: var(--text-dim); }
+.sm-root .sm-pages { display: inline-flex; align-items: center; gap: .25rem; }
+.sm-root .sm-pg, .sm-root .sm-pgarrow { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 .45rem;
+  border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text-dim); font: inherit; font-size: .78rem; font-weight: 500; cursor: pointer; }
+.sm-root .sm-pg:hover, .sm-root .sm-pgarrow:hover { background: var(--sm-row-hover); color: var(--text); }
+.sm-root .sm-pg.sm-on { color: var(--accent); font-weight: 700; background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.sm-root .sm-pg.sm-gap { cursor: default; }
+.sm-root .sm-pgarrow { border-color: var(--border); background: var(--panel-2); font-size: 1rem; line-height: 1; }
+.sm-root .sm-pgarrow:disabled { opacity: .4; cursor: not-allowed; }
+.sm-root .sm-rpp { display: inline-flex; align-items: center; gap: .5rem; }
+.sm-root .sm-select { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: .25rem .5rem; font: inherit;
+  font-size: .78rem; font-weight: 600; color: var(--text); color-scheme: dark; }
+:root[data-theme="light"] .sm-root .sm-select { color-scheme: light; }

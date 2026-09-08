@@ -1,3 +1,234 @@
+## ⛔ AGENT HANDOFF — the bottom-right "Incoming Call / Unknown caller / Dismiss" card (CRM screen pop) is REMOVED for every tenant; the ringing softphone is the ONLY incoming-call surface (2026-09-08, `04b23b11`) — READ FIRST before adding any incoming-call pop-up, toast or card to the portal or desktop
+
+(**portal only** — no api, no telephony, no migration, no env, no PBX write. Memory: [[no-second-incoming-call-popup]].)
+Izzy, 2026-09-08, screenshot of the white card on the dark portal: *"Just remove those notifications
+completely. I don't want to see those incoming call notifications in the main tenant or any other
+tenant. The only incoming call notifications I want to see are the actual incoming calls. That's it.
+On the phone you don't need the extra notification."*
+
+- ✅ **GONE: `apps/portal/components/CrmScreenPop.tsx` (deleted) and its `<CrmScreenPop />` mount in
+  `layout/AppShell.tsx`** — that shell wraps every `(platform)` page, so this is every tenant and the
+  Windows app's main window too. It was a second pop for a ring: one 316 px card per ringing inbound
+  external call (83 px looking up / 125 px unknown caller / 277 px matched contact, measured against
+  the shipped CSS), living until *its* call left the live feed, hard-coded white (`var(--surface,#fff)`
+  — `--surface` is defined nowhere) so it glowed in dark mode, and a comment claimed "only keep one
+  pop at a time" while the code stacked them. ⛔ **Do not re-add it, resize it, or replace it with a
+  toast.** Guard: `apps/portal/lib/noIncomingCallScreenPop.test.ts` (3 tests, registered in the
+  package `test` list, green on the dev box via the Node 26 type-strip harness).
+- ⛔ **What the "actual incoming call" surfaces are, all untouched:** the floating dialer's own
+  incoming card (`FloatingDialer.tsx`, 288 × 345 px, only when YOUR extension rings), the Windows
+  mini dialer window (360 × 640 default, user-resized, `showMiniForIncomingCall`), the Android
+  CallStyle heads-up / full-screen ring, the in-call `CallWaitingBanner`. Also untouched:
+  `GET /crm/contacts/lookup` and the WS `crm*` enrichment fields (dialer + live workspace use them),
+  `cdrHook`'s after-the-fact CRM_INBOUND_CALL notification/toast to the contact's owner (60 s poll,
+  not a live ring — the next candidate if Izzy names it).
+- ✅ **Phone: nothing to change.** The Android wake-placeholder "Incoming call — connecting…" heads-up
+  (`postWakePlaceholderNotification`) has **no call site** since 2026-07-07 — only the definition and
+  three `cancelWakePlaceholderNotification` calls remain — so the CallStyle ring is already the only
+  notification a ring produces there.
+- ⛔ **I first built the wrong thing:** a half/quarter resize mock-up plus a "newer call gives the
+  older card 1 s, then it fades" rule (`lib/screenPopStack.ts`, 8 tests). Izzy cut the feature
+  instead; that code was reverted before commit and is NOT in the tree. Do not resurrect it.
+- ✅ **DEPLOYED + container-verified 2026-09-08 ~21:08Z** via `ssh connect … bash scripts/deploy-direct.sh portal --commit 04b23b11` (blue/green, build ~5 min, health /login 293 ms). ⛔ The host checkout finished at **`68e17c90`**, not 04b23b11: deploy-portal.sh re-exec'd after advancing and picked up the branch head, which by then carried another session's commit on top of mine (68e17c90 fix(supermarket): Orders Desk status tabs — themed segmented control, no more grey button face;e0c3594d feat(auth): sign-in code v3 — per user on Account → Security, text or email only; tenant switch and authenticator-app enrolment UI removed). So the portal container = 68e17c90 (mine included). Proof: `docker exec app-portal-1 sh -c 'cd /app/apps/portal/.next && grep -rl crm-pop-slide-in .'` → **empty** (the pre-deploy container matched `static/chunks/app/(platform)/layout-2c7c1cd9….js` and `server/chunks/7380.js`); `curl 127.0.0.1:3000/login` → 200. Nothing else deployed (no api).
+- Docs updated: `TELEPHONY.md` § CRM screen pop (now the removal note), `RULES.md` rule 39 (now "there
+  is NO CRM screen pop"), `CRM.md` match-order note. The Live-workspace copy still says "answer an
+  incoming screen pop" in two subtitles (`LiveCallStatusBanner.tsx`, `LiveWorkspaceSessionRail.tsx`)
+  — wording only, left alone.
+
+## ⛔ AGENT HANDOFF — Store → Orders status tabs (Needs review / Sent / Failed to send / Dismissed / All orders) rendered with the browser's default grey button face in dark mode; fixed in `supermarket.css` as a themed segmented control for dark + light (2026-09-08) — READ FIRST before adding any `<button>` to the Orders Desk or another `.sm-root` page
+
+Izzy's screenshot: the four inactive tabs were light-grey blocks on the dark toolbar. Fix in
+`apps/portal/app/(platform)/orders/supermarket.css` (`.sm-root .sm-tab*` rules); no TSX change.
+Detail appended to **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-08.md` §6**.
+
+- ⛔ **CAUSE: this portal runs Tailwind with `preflight: false`, so a `<button>` keeps the UA
+  defaults (`background: buttonface`, system font, 2px border).** The tab strip has been real
+  `<button>`s since before the filters commit, but `.sm-tab` only set colour/size/padding —
+  never `background`/`border`/`font`. Every OTHER desk button class (`.sm-btn.*`, `button.sm-filter`,
+  `.sm-pg`, `.sm-iconbtn`, `.sm-play`, `.sm-asschip`) sets its own background, which is why only
+  the tabs leaked. **Rule: any new `<button>` under `.sm-root` must reset `appearance/background/
+  border/font` itself — nothing global does it.**
+- ✅ **THE FIX:** `.sm-tab` = `appearance:none; background:transparent; border:0; font:inherit;
+  cursor:pointer` + hover (`--sm-row-hover`) + `:focus-visible` accent ring. Dark: track `--panel`,
+  active pill `--panel-2` with the inset `--border` (as the mockup). Light (`:root[data-theme="light"]`):
+  track `--panel-2` (#f8fafc), active pill **white** with inset border + a 1px shadow, hover
+  `rgba(15,23,42,.05)` — otherwise the light active tab was #f8fafc on white, invisible.
+- ✅ **Verified on the dev box** by rendering the real `supermarket.css` + the portal's theme tokens in a
+  static page in the in-app browser, dark and light (no `tsc`/pnpm here — memory `devbox-toolchain-blocker`).
+- ✅ **DEPLOYED + container-verified 2026-09-08 ~21:30Z:** commit `68e17c90` (CSS + docs), `deploy-direct.sh
+  portal --commit 68e17c90` (dry-run first). `app-portal-1` `.build-commit` = `68e17c90`, the built
+  `.next/static/css/8522e9002ae5ad04.css` carries the new `.sm-root .sm-tab{appearance:none;background:transparent;…}`
+  rule, `/ready` 200, no candidate container left. ⏳ NOT PROVEN: a logged-in look at `/orders` in both themes.
+- ⛔ **Trap seen on the way:** the first run died at `stage=build` with `HEAVY JOB ALREADY RUNNING:
+  deploy-queue:portal:compose-build-portal-candidate` — another session was deploying `04b23b11` (screen-pop
+  removal). `deploy-direct.sh` does NOT lock the `git-sync` stage, only the heavy build: my run had already
+  moved the shared clone's HEAD to `68e17c90` under their in-flight build (their Docker context was already
+  transferred, and their image is stamped `04b23b11`, but their log's final `done` line printed `68e17c90`
+  because it reads the clone HEAD). Poll `ps -eo cmd | grep -E "[d]eploy-(direct|portal|api)"` before deploying.
+
+## ⛔ AGENT HANDOFF — Store → Orders (Supermarket mode) now has Received date-range, status tabs (+Failed, +Dismissed), Source, server-side search and paging; "only two orders left" was the workspace switcher on All workspaces (2026-09-08) — READ FIRST before touching `GET /supermarket/drafts`, `OrdersDesk.tsx`'s list, or for ANY "the orders disappeared"
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-08.md`**
+(commit **`65225b5e`**; mockup approved first at
+https://claude.ai/code/artifact/cf7ce2bb-68b5-46a9-a75d-8a3307db1e68). This is the page Izzy
+meant by *"the orders page … only showing me 24 hours back"* — the Tracking → Orders work in
+the section below was the wrong page (still valid, not the ask).
+
+- ⛔ **"All the orders are gone, only two are left" = header switcher on All workspaces.** No
+  `x-tenant-context` → `resolveEffectiveTenantBillingContext` falls back to the Support user's
+  own tenant (Connect Communications: exactly 2 drafts from 08-26). Gesheft had 932 + 431 rows
+  throughout. Check the switcher before suspecting a deploy or data loss.
+- ⛔ **There was never a 24 h rule** — the list was `take: 100` newest, no date filter, no
+  paging; Gesheft's ~60–120 drafts/day filled it.
+- ✅ **API:** `GET /supermarket/drafts` takes `status, source, from, to, q, page, pageSize`
+  (pure `draftListQuery.ts`, 7 tests green, in the package test glob); response keeps `drafts`
+  and adds `total/page/pageSize`. Search = name (insensitive) / phone digits / POS order #.
+  No migration (indexes existed).
+- ✅ **Portal:** URL-backed filters (`tab, range, from, to, src, q, page, size`); tab strip +
+  Failed to send + Dismissed; filter bar with Received presets + Custom from/to, Source chips,
+  Clear filters; live search; ONE table for all tabs with a real Received date/time, count
+  line, pager, rows-per-page; dark + light (`color-scheme` per theme on the date inputs).
+- ✅ **DEPLOYED + container-verified 2026-09-08:** api `65225b5e` (235 s, blue/green clean;
+  `app-api-1` has `supermarketRoutes.ts:622 parseDraftListQuery`), portal `65225b5e` (29 s; the built
+  chunks + CSS carry `sm-filterbar`), both `/ready` 200. A first portal attempt was cancelled at the
+  BUILD stage (never cut over) when I noticed the entangled auth commit; Izzy then said *"Just deploy the
+  filters as we discussed"* and it was redeployed. ⏳ NOT PROVEN: a logged-in look in light + dark.
+- ⛔ **This deploy was the first to ship another session's `39b9eb4f` "sign-in code v2"**
+  (api + portal together so both halves match). If login misbehaves, look there first.
+
+## ⛔ AGENT HANDOFF — Sign-in code (2FA by text/email) v3: PER USER, turned on/off ONLY on Account → Security, text or email ONLY (no authenticator app in the UI), the per-tenant admin switch REMOVED — BUILT, tested, DEPLOYED (2026-09-08) — READ FIRST before touching `/auth/login`, `/auth/otp/*`, the Security page, `User.loginOtpEnabledAt`, or before re-adding a tenant switch / TOTP enrolment / "remember this device" / `expiresIn`
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOGIN_OTP_V3_SECURITY_PAGE_2026-09-08.md`**
+(v2 flow at sign-in unchanged: `…V2_CHOICE…`). Memory: [[loopcom-2fa-sign-in-code]].
+Mockups Izzy approved: https://claude.ai/code/artifact/9b16b8c3-4561-4bf6-b0d8-04d3572f18f7.
+Izzy: *"I want the 2fa only to be accessed here [Account → Security]" … "remove the
+Authenticator app, just stick with Text or email" … "Build it and deploy."*
+
+- ✅ **THE SWITCH IS THE PERSON'S OWN `User.loginOtpEnabledAt`** (migration
+  `20260908200000_user_login_otp_enabled`, NULL for everyone on ship day). Account → Security:
+  the page shows the masked registered mobile + email → **Turn on** (`POST /auth/otp/enable`,
+  one click, own row only, idempotent) → from then on every sign-in asks for a code by text or
+  email (the v2 choice screen). **Turn off** asks for the **password** (`POST /auth/otp/disable
+  { password }`, bcrypt, wrong = 401 + counted on the code throttle → 429), never a code — a
+  lost phone never locks anyone out of turning it off. `GET /auth/otp/status` feeds the page.
+- ⛔⛔ **THERE IS NO TENANT SWITCH AND NO AUTHENTICATOR-APP ENROLMENT ANY MORE.** Admin →
+  Tenants lost the "Sign-in code (2FA)" column and `GET/PUT /admin/tenants/:id/login-otp`
+  are gone (404). `Tenant.loginOtpRequired/loginOtpChannel` stay in the DB **inert** (dropping
+  them would break the OLD api during blue/green) and a guard asserts nothing reads them. The
+  TOTP routes + login branch stay dormant (0 users enrolled); the Security page no longer
+  offers them; a legacy TOTP-on account sees "ask your administrator". Do not resurrect either
+  without Izzy.
+- ✅ **The role requirement is satisfied by the sign-in code:** `/auth/login` turns
+  `enroll_grace`/`enroll_required` into `none` when `user.loginOtpEnabledAt` is set, and
+  `getMfaStatus.enrollmentRequired` is false for them — the dashboard nudge disappears once
+  Izzy turns it on. Login reads the switch off the user row already loaded (no tenant lookup,
+  nothing to fail closed on).
+- ✅ **Tests on the dev-box harness** (memory `devbox-verification-harness`; the harness now
+  also mirrors `packages/db/prisma/schema.prisma` four levels above `src/mfa`): api
+  `mfa/loginOtp.test.ts` **19/19**, `mfa/loginOtpRoutes.test.ts` **14/14** (real Fastify, faked
+  db, real bcrypt), `mfa/mfa.test.ts` **25/25**; portal `lib/mfaLogin.test.ts` **12/12**,
+  `lib/turnstileWiring.test.ts` **13/13**. ⏳ `tsc` cannot run here — the container build is
+  the first typecheck.
+- ✅ **DEPLOYED + container-verified 2026-09-08 ~21:25Z.** api via `scripts/release/deploy-direct.sh api`
+  (first attempt died on `HEAVY JOB ALREADY RUNNING` — another session's portal build; a
+  20-s poll on `ps aux | grep -c "[r]un-heavy"` + queue `runningCount` then ran it): migration
+  `20260908200000_user_login_otp_enabled` applied (`information_schema.columns` shows
+  `User.loginOtpEnabledAt timestamp`; 0 rows set), blue/green cutover 256/160 ms, health 86 ms,
+  `app-api-1` at `68e17c90` (branch tip, contains `e0c3594d`) with `/auth/otp/status|enable|disable|send`
+  in the running source and an unsigned `GET /auth/otp/status` → 401. Portal: the other
+  session's direct deploy of the same tip (`direct-portal-20260908T211930Z.log`, done 68e17c90)
+  carried it — my own portal job was cancelled as redundant; `app-portal-1` at `68e17c90`,
+  built `account/security/page.js` has "Where your codes go" + the three otp routes, the
+  authenticator copy and the Admin → Tenants "Sign-in code (2FA)" column are gone, the login
+  choice card is present, `/login` 200. ⏳ NOT PROVEN: a real text/email to a human (Izzy's
+  acceptance recipe, handoff §7).
+- ⛔ The mobile app still has no code step; the Security page says so before "Turn on".
+
+## ⛔ AGENT HANDOFF — Tracking → Orders now has a Received date-range filter, store filter and real paging; the "only 24 hours" complaint was the newest-100 row cap, not a time rule (2026-09-08) — READ FIRST before touching `GET /delivery/orders`, `orderService.listOrders/searchOrders`, or the orders page filters
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_ORDERS_DATE_RANGE_PAGING_2026-09-08.md`**
+(commit **`790ecf22`**, 9 files; mockup approved first at
+https://claude.ai/code/artifact/acd624fa-73f1-4e02-b6da-0df7ffcbb2dc).
+Izzy: *"filters to look up orders as far back as it goes … right now it's only showing me
+24 hours back"* → *"go, build it as drawn. Light mode and dark mode."*
+
+- ⛔ **There was never a 24 h rule.** `listOrders()` returned the newest 100 rows (cap 200),
+  no date filter, no paging; a busy day filled the list. Do not hunt for a time constant.
+- ✅ **API:** `GET /delivery/orders` → **`{ items, total, page, pageSize }`** (was a bare
+  array; the portal page was the only consumer). Query `status, storeId, from, to` (ISO
+  instants, inclusive on `createdAt`), `page` (1-based), `pageSize` (default 50, max 200),
+  parsed by pure **`orderQuery.ts`** (7 tests green on the dev box — ⛔ the package `test`
+  glob list omits `src/delivery/*.test.ts`, so nothing there runs under `pnpm test`).
+  New `GET /delivery/stores`. `@@index([tenantId, createdAt])` on `DeliveryOrder` +
+  migration `20260908160000_delivery_order_created_at_index`.
+- ✅ **Portal:** filters live in the URL (`range=today|7d|30d|90d|all|custom`, `from/to`,
+  `status`, `store`, `page`, `size`); presets are the browser's local day boundaries; a
+  Custom From/To pair with Apply; store `ConnectSelect` only when >1 store; new
+  **Received** column; count line + pager + rows-per-page. Light/dark via `crm-*` tokens;
+  the native date picker gets `.tracking-orders-date` (`color-scheme` per theme) because
+  `crm.input` hard-codes `[color-scheme:dark]`.
+- ✅ **DEPLOYED + container-verified 2026-09-08:** api `790ecf22` (blue/green clean, 428 s;
+  `prisma migrate deploy` applied the index — `pg_indexes` on `connectcomms-postgres` lists
+  `DeliveryOrder_tenantId_createdAt_idx`; `app-api-1` has `routes.ts:68 searchOrders(…parseOrdersQuery…)`).
+  Portal deployed at branch head **`cfc17107`** (another session's telephony fix on top of
+  790ecf22 — built into the portal image only; ⛔ the api container is still 790ecf22, that fix
+  is not on the api); `app-portal-1`'s built orders `page.js` carries the new copy. ⏳ **NOT
+  PROVEN: a logged-in look in light + dark** (no MCP tab group in Izzy's Chrome, no portal
+  session in the in-app browser) — first person on the page: click `Custom…` and check the
+  two date fields in both themes.
+- ⛔ The worktree is **CRLF on disk** — exact-anchor patch scripts must normalise line
+  endings (memory `takeover-worktree-crlf-patching`).
+
+## ⛔⛔ AGENT HANDOFF — the "<unknown> → h" Active Call that sits for hours after a reboot is Asterisk's `Message/ast_msg_queue` pseudo-channel, seeded as a call at AMI bootstrap and never removable (2026-09-08) — READ FIRST for ANY "stuck call / Unknown on Active Calls that only a refresh clears", before touching the CoreShowChannel/Newchannel handler, isHelperChannel, or the broadcaster's upsert path
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_GHOST_MESSAGE_CHANNEL_2026-09-08.md`**
+(telephony only, on `feat/ivr-migration-takeover`. Deploy state at the end of this section.)
+Izzy: *"There is a stuck phone call and active calls say unknown for 1 hour and 45 minutes."*
+Memory: [[ghost-call-message-pseudo-channel]].
+
+- ⛔⛔ **THE CAUSE: every AMI bootstrap (`CoreShowChannels` after connect/reconnect) replays
+  Asterisk's permanent `Message/ast_msg_queue` pseudo-channel (Up, context `messages`, exten `h`,
+  CallerID `<unknown>`, 163 h old, linkedid = its own uniqueid). The handler's helper guard only
+  skipped helpers WITHOUT a linkedid, so the store created call `1788305013.58084` (up,
+  `<unknown>` → `h`, tenant null) and the broadcaster pushed `call.upsert` to ADMIN sockets
+  (null tenant ⇒ admins only — why only Izzy saw it).** It fails `hasValidChannel`, so it is in NO
+  snapshot and NO sweep (`getActive`, `reconcileLiveChannels`, the ghost sweep all need a channel
+  ABSENT from ARI — this one is always present), and it never hangs up: one upsert, zero removes.
+  Tell: a fresh load is clean, a tab open across the reboot shows the row with a timer counting
+  from the boot second. Seen at 17:19Z, 17:20Z, 17:33Z — the three bootstraps of tonight's reboots.
+- ✅ **THE FIX: `isPseudoChannel()` (Message/* only) in `normalizeCallEvent.ts`; the
+  Newchannel/CoreShowChannel case `break`s on it before resolving a tenant or touching the store,
+  logging `PIPE: pseudo_channel_skipped (never a call)`.** Local/ helpers are untouched (they
+  belong to a real call and DO hang up). Test `services/pseudoChannelBootstrap.test.ts` (5) —
+  run inside a throwaway container of the prod image: **232/232 across services+state+websocket+routes.**
+- ⛔ **Every `this.calls.delete` path emits `callRemove` — the ghost was never DELETED, it was
+  never ELIGIBLE.** Don't "fix" by broadcasting only `getActive()`: ringing calls are broadcast
+  before they qualify and must stay that way (INSTANT_HANGUP_SYNC 2026-08-31).
+- ⛔ **Reading the store: `curl -H "x-cdr-secret: $CDR_INGEST_SECRET" http://127.0.0.1:3003/telephony/diag`
+  (port is on host loopback; secret via `docker exec app-telephony-1 printenv`). Print the
+  `isActive:false` rows too — the ghost hides there; filtering to active rows cost 20 minutes.**
+- ⛔ **`docker logs app-telephony-1` LIED after the reboots**: the full read stops in the
+  pre-reboot rotated file and `--since 3h` returned only OLD lines. Only `--tail N` or the raw
+  `$(docker inspect --format '{{.LogPath}}' app-telephony-1)` (parse each line's `.log`) show
+  post-boot lines. Same for `app-api-1`.
+- ⛔ **The host hard-rebooted FOUR times (19:16, 19:18, 19:19, 19:32 CEST, `journalctl --list-boots`;
+  no shutdown sequence in any of them) — cause unknown, open for Izzy. The deploy queue (pm2
+  `connect-deploy-worker`) does NOT survive a reboot** — port 3910 dead, `pm2 ls` empty;
+  restored with `pm2 resurrect` from `/root/.pm2/dump.pm2`. ✅ **FIXED 21:58 CEST (Izzy: "fix the
+  deploy queue so it survives a reboot"): `pm2 startup systemd -u root --hp /root` installed and
+  enabled `/etc/systemd/system/pm2-root.service` (`ExecStart=pm2 resurrect`, `After=network.target`,
+  `PM2_HOME=/root/.pm2`), `pm2 save` refreshed the dump (7.9 KB, carries the worker's env incl.
+  `DEPLOY_QUEUE_TOKEN`), trial `systemctl start pm2-root` exited 0 with the worker untouched.
+  ⛔ After ANY change to the pm2 process list run `pm2 save`, or the next boot restores the old
+  list. Docs: `docs/safe-deploy-queue.md` § Boot persistence.**
+- ✅ **DEPLOYED: telephony queue job `939eec1b` (commit `cfc17107`, enqueued at 1 active call,
+  build 51 s, restart 20 s, health OK) — container-verified: both markers in the running src,
+  boot log `pseudo_channel_skipped` for `Message/ast_msg_queue`, 0 ghost upserts, 0 error lines,
+  `Message/` channels in store = 0, AMI+ARI connected.** The restart itself cleared the live
+  ghost from every admin socket (reconnect ⇒ fresh snapshot). First attempt `cd34710d` failed on
+  the host's `run-heavy.sh` lock while a direct portal deploy was building — that lock is real,
+  wait for it. Deploy queue `dd5c89e7` was the dry-run.
+
 ## ⛔ AGENT HANDOFF — A plus center "not all users synced": the 21 extensions ARE in sync and VitalPBX holds NO emails, so there are no users to import (2026-09-08) — READ FIRST before "re-syncing" a tenant's users, or before adding emails on the PBX to make the sync create accounts
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_APLUS_USER_SYNC_2026-09-08.md`**
@@ -11216,7 +11447,7 @@ permission-snapshot change.) Memory: [[voice-changer-is-built-and-gated]],
   unverified; Polly's generative engine already burned us by accepting one and
   discarding it, so compare output bytes before exposing any such control.
 
-## ⛔⛔ AGENT HANDOFF — a tenant can require a SIGN-IN CODE by text/email (2FA per company, "remember this device" 90 days, 90-day sessions), and the login form can carry Cloudflare Turnstile — BUILT and DEPLOYED, every switch OFF (2026-08-19) — READ FIRST before touching `/auth/login`, before flipping `loginOtpRequired` for a customer, before adding `expiresIn` anywhere, before setting `TURNSTILE_*`, or for "I got a code / I didn't get a code"
+## ⛔⛔ AGENT HANDOFF — a tenant can require a SIGN-IN CODE by text/email (2FA per company, "remember this device" 90 days, 90-day sessions), and the login form can carry Cloudflare Turnstile — BUILT and DEPLOYED, every switch OFF (2026-08-19) — ⚠ SUPERSEDED 2026-09-08 by v2 then v3 (see the v3 section near the top of this file): no "remember this device", no 90-day sessions, the person chooses text or email, and since v3 NO tenant switch — it is per user on Account → Security; the data/hash/throttle rules in this section still hold — READ FIRST before touching `/auth/login`, before flipping `loginOtpRequired` for a customer, before adding `expiresIn` anywhere, before setting `TURNSTILE_*`, or for "I got a code / I didn't get a code"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_SECURITY_AUDIT_2026-08-16.md` §12**
 (`fc551996` on `feat/ivr-migration-takeover`. **api + portal DEPLOYED and

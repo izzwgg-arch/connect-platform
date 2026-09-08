@@ -206,8 +206,10 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // path that may be here: setup / verify / disable / status all need a
       // real session. `mfa.test.ts` pins that.
       "/auth/mfa/challenge",
-      // Per-tenant sign-in code (2FA-by-code, 2026-08-19): a pre-auth token is
-      // not a session, so these must run without the JWT hook. ONLY these two.
+      // Per-tenant sign-in code (2FA-by-code, 2026-08-19; v2 2026-09-08 added
+      // /send — the person's text-or-email choice): a pre-auth token is not a
+      // session, so these must run without the JWT hook. ONLY these three.
+      "/auth/otp/send",
       "/auth/otp/verify",
       "/auth/otp/resend",
       "/auth/mobile-qr-exchange",
