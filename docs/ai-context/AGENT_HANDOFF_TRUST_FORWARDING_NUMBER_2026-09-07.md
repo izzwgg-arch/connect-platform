@@ -129,3 +129,26 @@ Communications' own (845) 723-1213 (Connect-mode IVR answers; nobody rings):
   regex, not string equality (cost one failed run).
 - ⏳ The route is on no time group and has no PIN. Nothing was changed on ext 106
   itself; any Trust extension can dial `1730 + number` and present 718-437-1730.
+
+## 7. Round 3 (2026-09-08, same morning) — caller ID is "if not provided" now
+
+Izzy: *"In the outbound route, it should overwrite the caller ID when one is not provided."*
+Route 179 `overwrite_cid` **`yes` → `if_not_provided`** (the mode Trust's default route 51
+already uses): whole-form re-post of the route's own edit form with ONE field changed
+(`loadParsedForm("trunk_group","edit",179)` + `applyOverrides({set:{overwrite_cid}})`),
+read back, one Apply in Main, re-bake (doorways 1/0, 1/0, 2/0). Patterns and the trunk
+list were read back unchanged (4 rows, trunk 72 only). Render is now
+`Set(CALLERID(all)=${IF($["X${CALLERID(num)}X"="XX"]?${OUTBOUND_CID}:${CALLERID(all)})})`.
+
+✅ **Re-proven with one positive originate (08:31 ET)**: `sub-construct-cid` blanked the
+extension's CID (ext 106 has no `external_cid`), the route filled it, and the far end
+logged `__INCOMING_SOURCE=7184371730` again.
+
+⛔ **What "if not provided" means on this PBX**: `sub-construct-cid s-external` blanks
+the CID when the extension's `ombu_extensions.external_cid` is EMPTY and leaves it when
+set — so an extension carrying its own external caller ID will present THAT on a `1730`
+dial, not 718-437-1730. **Today none of Trust's 7 extensions has one** (census 2026-09-08:
+all `external_cid NULL`, `dynamic_external_cid no`), so the behaviour is identical to the
+forced mode until someone sets one. Script: loopcom `/root/trust1730-cidmode.ts`.
+⛔ `FormOption` in `panelForm.ts` is `{ v, t }`, not `{ value }` — a guard reading `.value`
+sees `undefined` for every option and refuses a perfectly good form (cost one run).

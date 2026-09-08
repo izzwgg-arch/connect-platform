@@ -31,7 +31,7 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
   a fault. Billing is **unchanged** — Trust's PBX DIDs bill as `pbx_inbound_did` $0 lines,
   extensions are a manual 5, E911 is a flat $3.
 - ✅✅ **ROUND 2 (2026-09-08): outbound route 179 "Trust 1730" is LIVE AND PROVEN ON THE WIRE** — dial
-  **`1730` + number** from any Trust extension → forced CID **`"Trust Bookkeeping" <7184371730>`** over
+  **`1730` + number** from any Trust extension → CID **`"Trust Bookkeeping" <7184371730>`** (`overwrite_cid if_not_provided` since round 3 the same morning — an extension with its OWN `external_cid` keeps it; none of Trust's 7 has one today) over
   trunk **72 "0001"** (Telocall); second member of **ARS-49** (tenant 18's own "Trust bookkeeping"
   selection — no tenant regen, Main only). Two AMI originates from ext 106 to Izzy's own (845)
   723-1213 proved it: `Outbound Route: Trust 1730` → far end `__INCOMING_SOURCE=7184371730`;
