@@ -75,3 +75,57 @@ call failed to parse and wrote NOTHING — write the file with the editor, then 
   handoff — one PATCH, no carrier write (`sms_enabled` is already `1`).
 - Outbound is deliberately untouched: the new trunk is on no outbound route,
   so calls forwarded out by ext 106 leave on Trust's existing routes and CID.
+
+---
+
+# ROUND 2 — the "1730" outbound route (2026-09-08)
+
+Izzy: *"make an outbound route. Use trunk 1000 or 0001, and make the outbound caller
+ID be 718-437-1730. Make a prefix of 1730. That would be the code to use for that
+outbound route only for Trust bookkeeping."*
+
+## 4. What exists now
+
+| | |
+|---|---|
+| Outbound route | **179 "Trust 1730"** (Main, tenant_id 1): `cid_name "Trust Bookkeeping"`, `cid_number 7184371730`, **`overwrite_cid = yes`** (forced, like every other prefixed Trust route), ONE trunk: **72 = "0001"** (Telocall) |
+| Patterns | the Trust convention (route 44 SpaceArt = prefix `0855`): `845` prepend + prefix `1730` + `nxxxxxx`; prefix `1730` + `nxxnxxxxxx`; `1730` + `1nxxnxxxxxx`; `1730` + `011.` — renders `_1730nxxnxxxxxx` etc., prefix stripped before `Gosub(trk-72,${DNID})` |
+| Where it lives | appended as the **second member of ARS-49 "Trust bookkeeping"** (behind route 51, which carries the un-prefixed default patterns). `T18_ARS-all` includes ARS-49; **tenant 18 is ARS-49's only user** (checked `ombu_tenant_settings outbound_profiles` across all tenants). A `1730…` dial resolves in NO other tenant's `T<n>_ARS-all` (13 tenants checked) |
+| Tenant regen | **none** — the route + ARS edit render in MAIN only (the A Plus doors lesson); one Apply, doorways T2/T35/T105 still 1/0, 1/0, 2/0 |
+| Backup | PBX `/root/trust1730-before-20260908T121546Z/routing-tables.sql` (routes, patterns, members, ars, ars_members, tenant_settings) |
+| Scripts | loopcom `/root/trust1730-build.ts` (build), PBX `/root/trust1730-test.sh` (the AMI test below) |
+
+## 5. ✅ PROVEN WITH TWO REAL CALLS, no customer phone rung (08:19–08:20 ET)
+
+AMI Originate `Local/<num>@T18_cos-all/n`, `CallerID: 106`, to Connect
+Communications' own (845) 723-1213 (Connect-mode IVR answers; nobody rings):
+
+- **Positive** `17308457231213` → `Outbound Route: Trust 1730` → `Overwrite CID
+  (forced)` → `CALLERID(all)="Trust Bookkeeping" <7184371730>` → `Gosub(trk-72,
+  8457231213…)` → `Called PJSIP/8457231213@0001` → far end logged
+  **`__INCOMING_SOURCE=7184371730`** → answered, hung up after the 4 s Wait.
+- **Negative** `8457231213` (plain) → `Outbound Route: Trust Bookkeeping 2` →
+  `CALLERID(all)=Trust Bookkeeping <8452441708>` → trunk 72 → far end
+  `__INCOMING_SOURCE=8452441708`. **Plain dials are byte-for-byte unchanged.**
+- 0 channels left afterwards. ⚠ Those two calls are in Connect Communications'
+  inbound history (from 718-437-1730 and 845-244-1708) and in Trust's outbound
+  history as ext 106 — test artefacts, not customer calls.
+
+## 6. ⛔ Facts and traps
+
+- ⛔ **718-437-1730 is NOT on the VoIP.ms master account (`invalid_did`) and is on no
+  PBX tenant** — Telocall passes it anyway (proven again). Izzy chose it; presenting
+  a number the customer does not own is the caller-ID question the doors handoff
+  records, and it is his call.
+- ⛔ **Trust's whole outbound model is prefix codes**: 1129 Avenue Filing, 0855
+  SpaceArt, 0535 Sterlion, 9331 Rollup, 2014 Koznits, 1213 Smooth, 2661 SGE, and now
+  **1730**. Route 51 (no prefix) is the default. `ombu_ars_members.sort` is 0 on every
+  row — order is insertion order, and here it does not matter: no un-prefixed
+  pattern can match a 14/15-digit `1730…` string.
+- ⛔ The ARS edit is a whole-form re-post (`loadParsedForm(s,"ars","edit",49)` +
+  appended `members[1][…]` rows incl. the `enabled` checkbox as `1`); read back
+  `ombu_ars_members` after. The `astmanager` section header in
+  `manager__50-ombutel-user.conf` carries a trailing comment — match it with a
+  regex, not string equality (cost one failed run).
+- ⏳ The route is on no time group and has no PIN. Nothing was changed on ext 106
+  itself; any Trust extension can dial `1730 + number` and present 718-437-1730.

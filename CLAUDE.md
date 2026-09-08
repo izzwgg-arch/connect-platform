@@ -30,6 +30,16 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
 - ⛔ `register_flag = no` on trunk 182 matches the other Trust trunks (44, 67); it is not
   a fault. Billing is **unchanged** — Trust's PBX DIDs bill as `pbx_inbound_did` $0 lines,
   extensions are a manual 5, E911 is a flat $3.
+- ✅✅ **ROUND 2 (2026-09-08): outbound route 179 "Trust 1730" is LIVE AND PROVEN ON THE WIRE** — dial
+  **`1730` + number** from any Trust extension → forced CID **`"Trust Bookkeeping" <7184371730>`** over
+  trunk **72 "0001"** (Telocall); second member of **ARS-49** (tenant 18's own "Trust bookkeeping"
+  selection — no tenant regen, Main only). Two AMI originates from ext 106 to Izzy's own (845)
+  723-1213 proved it: `Outbound Route: Trust 1730` → far end `__INCOMING_SOURCE=7184371730`;
+  a plain dial still takes "Trust Bookkeeping 2" with 845-244-1708. ⛔ 718-437-1730 is on NO
+  account of ours (VoIP.ms `invalid_did`) — Izzy's chosen CID, Telocall passes it. Trust's
+  whole outbound model is prefix codes (1129/0855/0535/9331/2014/1213/2661, now 1730); a
+  14-digit `1730…` dial resolves in NO other tenant. Backup
+  `/root/trust1730-before-20260908T121546Z/` on the PBX; recipe in the handoff §4–§6.
 - ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
   Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
   (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched
