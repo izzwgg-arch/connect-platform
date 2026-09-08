@@ -921,3 +921,92 @@ through the new candidate pools. Acceptance: on the desk, search "bread"
 first, no organic on top); then re-run the agent on a draft asking for
 eggs — the pick must be the cheapest regular dozen with no "?" caused by
 phantom out-of-stock.
+
+## §16 — the customer MIRROR: the desk suggests accounts as the rep types, pay-IVR entry point wired, both keys proven (2026-09-08, `c7191071`)
+
+Izzy pasted the NEW POS key (raised to `customer:get:all` — the "own" scope the
+whole build waited on) plus the Sola key. Four asks: phone search must SUGGEST,
+the pay IVR must be up, orders must go in. Commit `c7191071` on
+`feat/ivr-migration-takeover`; api + portal DEPLOYED and container-verified at
+`711242f1`, migration `20260908230000_pos_customer_mirror` applied.
+
+### The customer mirror (the "suggestions" ask)
+- ⛔⛔ **THE REGISTER HAS NO CUSTOMER SEARCH.** `/customers/phonenumber/{10}` is
+  an EXACT lookup and `/customers` is a paged list — nothing partial, nothing by
+  name. So the desk boxes took a full 10-digit number and "nothing came up" for
+  anything less. The fix mirrors the list, exactly like the catalog:
+  **`PosCustomer`** + `customerSync.ts` walks `GET /customers` (envelope
+  `{results, hasMore, cursor, total}`, same as products), one-run walks, lastMod
+  high-water, 2.5s pacing, a 429 waits Retry-After, an unparseable page records
+  `customerLastError` and stops. ⛔ **Cards are COUNTED, never copied** — the row
+  carries `cardCount`, the register keeps the card records. Boot kick +
+  interval beside the catalog/draft sweeps, inside `SUPERMARKET_SWEEPS_DISABLED`.
+- **`GET /supermarket/customers/search?q=`** reads the MIRROR (never the register
+  — a per-keystroke register call bills per key). Digits → `phonesText contains`
+  (a starts-with outranks a contains, and the SECOND number on a record is
+  searchable); letters → name/email contains. Empty answer carries
+  `mirror.ready`+count so the box says "still loading from the register" instead
+  of "no such customer" before the first walk finishes.
+- **`CustomerTypeahead.tsx`** replaces the bare `<input>` in ALL THREE
+  "Whose order is this?" boxes (`/orders/new`, `/orders/twin`,
+  `OrdersDesk`'s draft phone box): ↑/↓ rove, Enter picks, Esc closes, mouse
+  works; a pick binds the register account by id (draft PATCH takes
+  `posCustomerId`; lookup route takes `customerId`). ⛔ Both lookup paths fall
+  back to `mirrorCustomerByPhone` when the register misses/is down.
+- ✅ **PROVEN LIVE (read-only, deployed code, real key):** search `845782` →
+  real accounts prefix-ranked; `weinstock` → every Weinstock by name; `281-5596`
+  → the FEURWEKER record whose SECOND phone is 845-281-5596 (the case the
+  register's single-lookup cannot do); lookup `8457823064` → account 3762
+  JACOB WEINSTOCK (returned NOTHING before the all-scope key). Mirror walk
+  finished: **13,829 customers**, `finished:true`, high-water set, 0 error.
+- ⛔ **Live-shape fixes the all-scope key surfaced:** their `address` is an
+  OBJECT (`{addressLine1, city, state, zipCode}`) — `extractPosCustomer` printed
+  `[object Object]` before; their card is `{id, masked:"4xxx…9603", exp:"0228"
+  MMYY, issuer}` — `extractPosCard` now reads those names and formats exp
+  `02/28`. Both pinned by `customerSync.test.ts` on the REAL captured shapes.
+- ⚠️ Some register records carry a name of literal `"?"` (Yiddish/Hebrew names
+  the POS returns un-encoded) — phone search is unaffected (the primary path);
+  cosmetic, their source data.
+
+### Pay-by-phone IVR (the "IVR for payments" ask) — NOW REACHABLE
+- The dialplan `[connect-pay-gesheft]` → `[connect-supermarket-pay]` has been on
+  the PBX since 2026-08-26 but **nothing pointed at it**. Wired an entry point:
+  SQL-inserted the `connect-pay-gesheft` custom-context row on tenant 8, then
+  created (through the panel, the forward-builder code path) a Custom Application
+  **"Pay by phone" on ext 799** → `Goto(T8_custom-contexts,cc-5,1)`, then
+  `applyAndRebake` (tenant 8, doorways re-baked 3/3, 0 lines changed). Backup
+  `pbx:/root/payline-backup-20260908T230604Z/`.
+- ✅ **PROVEN ON THE WIRE:** an AMI originate into `799@T8_app-custom-application`
+  reached `[connect-supermarket-pay]`, which posted to the api door and — with
+  the AstDB `wake_api_secret` — the door answered 200 with the real prompt
+  (`01_welcome & 13_not_recognized`, gather 10 digits). The same call from the
+  PBX to the PUBLIC url is 200; a 403 seen from a workstation is the documented
+  content-filter, not the pay path. 51 prompt wavs are in
+  `/var/lib/asterisk/sounds/connect-pay/en-male`.
+- ⏳ **NOT DONE — Izzy's call:** ext 799 is reachable internally but **no menu
+  key or DID routes a CUSTOMER to it.** Adding an IVR-23 key would need the
+  greeting re-recorded to announce it, or give it a dedicated DID. The pay flow
+  itself is up; the last hop (which key / which number) is a routing decision.
+
+### Orders (the "put orders in" ask)
+- The put-through path is wired + tested (STRESS 25 runs voicemail→draft→approve
+  →register→delivery end to end) and the key AUTHENTICATES against the order
+  endpoints (`getOrderByExternalId` → 500 on a probe id = their documented
+  "reachable, auth passed" signal, same as the catalog Test). **949 NEEDS_REVIEW
+  drafts** are ready, each with items + agent lines.
+- ⏳ **NOT PROVEN: no REAL order has been placed on the live register.** A
+  put-through is `POST /orders` (18 credits) that creates a real order in
+  Gesheft's store queue — a live, customer-visible write. It is the desk's
+  "put through" button on any draft; deliberately not run unattended.
+
+### The Sola gap
+- ⚠️ The Sola row has the secret (`testConnection` → `ok:true`) but **NO public
+  iFields key** (`ifieldsKey:null`). Register cards LIST fine, but the desk's
+  "add a card" iframe cannot render and a save-card can't run until the public
+  iFields key is pasted on the Sola row under Integrations. Charging an existing
+  register card needs a gateway token the register cards don't carry
+  (`chargeable:false`), so today the pay path is the register's own cards via the
+  pay IVR / on-account, not a Connect-side Sola charge.
+
+- ✅ Proven: 162 supermarket api tests + 11 new `customerSync.test.ts` (real
+  shapes, sweep, ranking, wiring guards); portal tsc 0; api tsc 76 = baseline.
