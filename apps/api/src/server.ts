@@ -307,6 +307,7 @@ import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
 import { registerSupermarketRoutes } from "./supermarket/supermarketRoutes";
 import { crmModeEnforcementHook } from "./supermarket/crmMode";
 import { runCatalogSyncSweep, CATALOG_SYNC_BOOT_DELAY_MS, CATALOG_SYNC_DEFAULT_INTERVAL_MS } from "./supermarket/catalogSync";
+import { runCustomerSyncSweep, CUSTOMER_SYNC_BOOT_DELAY_MS, CUSTOMER_SYNC_DEFAULT_INTERVAL_MS } from "./supermarket/customerSync";
 import { runDraftBuilderSweep, DRAFT_BUILDER_BOOT_DELAY_MS, DRAFT_BUILDER_DEFAULT_INTERVAL_MS } from "./supermarket/draftBuilder";
 import { ingestOrderEvent } from "./delivery/orderService";
 import { registerMfaRoutes, buildMfaDeps } from "./mfa/mfaRoutes";
@@ -42473,7 +42474,16 @@ const port = Number(process.env.PORT || 3001);
     setInterval(() => {
       runDraftBuilderSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket draft sweep failed"));
     }, draftMs);
-    app.log.info({ catalogMs, draftMs }, "SUPERMARKET_SWEEPS_ARMED");
+    // the customer mirror (2026-09-08) — the desk's phone/name type-ahead
+    // reads it; boot kick + interval like its siblings
+    const customerMs = Number(process.env.SUPERMARKET_CUSTOMER_SYNC_INTERVAL_MS || CUSTOMER_SYNC_DEFAULT_INTERVAL_MS);
+    setTimeout(() => {
+      runCustomerSyncSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket customer sweep failed"));
+    }, CUSTOMER_SYNC_BOOT_DELAY_MS);
+    setInterval(() => {
+      runCustomerSyncSweep({ db, log: app.log }).catch((err) => app.log.warn({ err: String(err?.message ?? err) }, "supermarket customer sweep failed"));
+    }, customerMs);
+    app.log.info({ catalogMs, draftMs, customerMs }, "SUPERMARKET_SWEEPS_ARMED");
   }
   await registerMfaRoutes(app, { audit, issueSession: issueLoginSession, service: mfaDeps });
   await registerLoginOtpRoutes(app, otpDeps);

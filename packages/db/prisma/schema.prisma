@@ -853,6 +853,7 @@ model Tenant {
   providerCredentials             ProviderCredential[]
   posCatalogItems                 PosCatalogItem[]
   posCatalogSyncState             PosCatalogSyncState?
+  posCustomers                    PosCustomer[]
   supermarketOrderDrafts          SupermarketOrderDraft[]
   supermarketPhraseLessons        SupermarketPhraseLesson[]
   supermarketPhraseDismissals     SupermarketPhraseDismissal[]
@@ -8356,10 +8357,52 @@ model PosCatalogSyncState {
   /// Running credit estimate — the meter their key pays for.
   creditsSpent Int       @default(0)
   itemCount    Int       @default(0)
+  /// Customer mirror (2026-09-08): the register's own customer list, walked
+  /// the same way as the catalog so the desk can suggest accounts as a rep
+  /// types a phone number or a name. Same cursor rules — a walk must finish
+  /// inside one run; lastMod is the only thing persisted.
+  customerLastMod    String?
+  customerCount      Int       @default(0)
+  customerLastSyncAt DateTime?
+  customerLastError  String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// One register customer, mirrored from the POS (GET /customers). The desk's
+/// phone/name type-ahead reads THIS table, never the register: 13.8k rows at
+/// 1 credit per page is a one-time ~140-credit walk, then lastMod keeps it
+/// current for ~1 credit per sweep. ⛔ Cards are COUNTED here, never stored —
+/// the register keeps the card records; we keep only how many exist.
+model PosCustomer {
+  id            String   @id @default(cuid())
+  tenantId      String
+  posCustomerId String
+  firstName     String   @default("")
+  lastName      String   @default("")
+  /// "FIRST LAST" as the desk shows it.
+  name          String   @default("")
+  /// Every phone on the record, 10 digits each, space-joined — a `contains`
+  /// search over this is the type-ahead.
+  phonesText    String   @default("")
+  primaryPhone  String   @default("")
+  email         String   @default("")
+  address       String   @default("")
+  city          String   @default("")
+  route         String   @default("")
+  onAccount     Boolean  @default(false)
+  cardCount     Int      @default(0)
+  posLastMod    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, posCustomerId])
+  @@index([tenantId, name])
+  @@index([tenantId, primaryPhone])
 }
 
 /// A pre-filled order awaiting a rep — built from a Yiddish voicemail, an

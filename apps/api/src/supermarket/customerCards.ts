@@ -65,10 +65,14 @@ const s = (v: unknown) => String(v ?? "").trim();
 /** Defensive extraction of a POS card record — field names unproven live. */
 export function extractPosCard(rec: any): Omit<CardOnFile, "id" | "source" | "chargeable"> & { posCardId: string | null; gatewayToken: string | null } {
   const posCardId = rec?.id != null ? String(rec.id) : rec?.cardId != null ? String(rec.cardId) : null;
-  const masked = s(rec?.maskedNumber ?? rec?.cardNumber ?? rec?.number ?? rec?.mask);
+  // Live shape (proven 2026-09-08 with the all-customer key):
+  // {id, masked:"4xxxxxxxxxxx9603", exp:"0228", name, zipCode, issuer:"Visa"}
+  const masked = s(rec?.masked ?? rec?.maskedNumber ?? rec?.cardNumber ?? rec?.number ?? rec?.mask);
   const last4 = s(rec?.last4 ?? rec?.lastFour) || (masked ? masked.replace(/\D/g, "").slice(-4) : "");
-  const exp = s(rec?.exp ?? rec?.expiration ?? rec?.expiry ?? rec?.expDate);
-  const brand = s(rec?.brand ?? rec?.cardType ?? rec?.type ?? rec?.network);
+  const expRaw = s(rec?.exp ?? rec?.expiration ?? rec?.expiry ?? rec?.expDate);
+  // their "0228" is MMYY — show it as 02/28
+  const exp = /^\d{4}$/.test(expRaw) ? `${expRaw.slice(0, 2)}/${expRaw.slice(2)}` : expRaw;
+  const brand = s(rec?.issuer ?? rec?.brand ?? rec?.cardType ?? rec?.type ?? rec?.network);
   const cardholderName = s(rec?.cardholderName ?? rec?.nameOnCard ?? rec?.name);
   const gatewayToken = s(rec?.xToken ?? rec?.token ?? rec?.gatewayToken) || null;
   return { posCardId, brand, last4, exp, cardholderName, gatewayToken };

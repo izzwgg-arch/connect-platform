@@ -13,11 +13,11 @@
 import "../supermarket.css";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { DraftReview } from "../OrdersDesk";
+import { CustomerTypeahead, type CustomerHit } from "../CustomerTypeahead";
 
 const SM_NEW_ORDER_PHRASES = [
   "New order", "Whose order is this?",
@@ -33,6 +33,7 @@ function NewOrderInner() {
   const params = useSearchParams();
   const router = useRouter();
   const phone = params?.get("phone") ?? "";
+  const pickedId = params?.get("customerId") ?? "";
   const fromCall = params?.get("fromCall") === "1";
   const [draftId, setDraftId] = useState<string | null>(null);
   const [lookupPhone, setLookupPhone] = useState("");
@@ -42,19 +43,24 @@ function NewOrderInner() {
   const startedRef = useRef(false);
 
   const start = useCallback(
-    async (phoneToUse: string) => {
+    async (phoneToUse: string, customerId?: string) => {
       if (startedRef.current) return;
       startedRef.current = true;
       let name = "";
       let posCustomerId: string | null = null;
       let balanceCents: number | null = null;
-      if (phoneToUse) {
+      let phoneForDraft = phoneToUse;
+      if (phoneToUse || customerId) {
         try {
-          const found = await apiGet<any>(`/supermarket/lookup?phone=${encodeURIComponent(phoneToUse)}`);
+          const qs = customerId
+            ? `customerId=${encodeURIComponent(customerId)}${phoneToUse ? `&phone=${encodeURIComponent(phoneToUse)}` : ""}`
+            : `phone=${encodeURIComponent(phoneToUse)}`;
+          const found = await apiGet<any>(`/supermarket/lookup?${qs}`);
           if (found?.found) {
             name = found.name ?? "";
             posCustomerId = found.posCustomerId ?? null;
             balanceCents = typeof found.balanceCents === "number" ? found.balanceCents : null;
+            if (!phoneForDraft && found.phone) phoneForDraft = String(found.phone);
           }
         } catch {
           /* unknown caller — the draft still opens */
@@ -64,7 +70,7 @@ function NewOrderInner() {
       try {
         const res = await apiPost<{ draft: { id: string } }>("/supermarket/drafts", {
           sourceType: "call",
-          customerPhone: phoneToUse,
+          customerPhone: phoneForDraft,
           customerName: name,
         });
         setDraftId(res.draft.id);
@@ -76,9 +82,9 @@ function NewOrderInner() {
   );
 
   useEffect(() => {
-    if (phone) void start(phone);
+    if (phone || pickedId) void start(phone, pickedId || undefined);
     else inputRef.current?.focus();
-  }, [phone, start]);
+  }, [phone, pickedId, start]);
 
   if (draftId) {
     return (
@@ -112,22 +118,24 @@ function NewOrderInner() {
             <div className="sm-card-h">{t("Whose order is this?")}</div>
             <div className="sm-card-b">
               <p className="sm-mut" style={{ marginTop: 0 }}>{t("Ask for the phone number on the account. Just type — no clicking needed.")}</p>
-              <div className="sm-fieldbox" style={{ borderColor: "var(--accent)", boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)" }}>
-                <Search size={13} aria-hidden style={{ color: "var(--text-dim)" }} />
-                <input
-                  ref={inputRef}
-                  value={lookupPhone}
-                  inputMode="numeric"
-                  onChange={(e) => setLookupPhone(e.target.value.replace(/[^\d() +-]/g, ""))}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && lookupPhone.replace(/\D/g, "").length >= 10) {
-                      router.replace(`/orders/new?phone=${encodeURIComponent(lookupPhone.replace(/\D/g, ""))}`);
-                    }
-                  }}
-                  aria-label={t("Whose order is this?")}
-                  style={{ flex: 1, background: "transparent", border: 0, outline: "none", color: "inherit", font: "inherit", fontVariantNumeric: "tabular-nums", fontSize: ".95rem" }}
-                />
-              </div>
+              <CustomerTypeahead
+                value={lookupPhone}
+                onChange={setLookupPhone}
+                inputRef={inputRef}
+                autoFocus
+                placeholder={t("Whose order is this?")}
+                boxStyle={{ borderColor: "var(--accent)", boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)" }}
+                inputStyle={{ fontSize: ".95rem" }}
+                onPick={(hit: CustomerHit) => {
+                  router.replace(
+                    `/orders/new?customerId=${encodeURIComponent(hit.posCustomerId)}${hit.primaryPhone ? `&phone=${encodeURIComponent(hit.primaryPhone)}` : ""}`,
+                  );
+                }}
+                onEnter={(typed) => {
+                  const digits = typed.replace(/\D/g, "");
+                  if (digits.length >= 7) router.replace(`/orders/new?phone=${encodeURIComponent(digits)}`);
+                }}
+              />
               <p className="sm-mut">{t("Matches show as you type — Enter opens the account.")}</p>
               <button type="button" className="sm-btn sm-ghost" style={{ width: "100%", justifyContent: "center" }} onClick={() => void start("")}>
                 {t("No account — start a blank order")}

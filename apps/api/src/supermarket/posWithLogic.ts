@@ -109,12 +109,18 @@ export function extractPosCustomer(body: any): {
   const name =
     [rec.firstName, rec.lastName].filter(Boolean).join(" ") ||
     String(rec.name ?? rec.fullName ?? "");
-  const street = String(rec.address ?? rec.address1 ?? rec.street ?? "");
-  const city = String(rec.city ?? "");
-  const state = String(rec.state ?? "");
-  const zip = String(rec.zip ?? rec.zipCode ?? rec.postalCode ?? "");
+  // ⛔ Their address is an OBJECT ({addressLine1, addressLine2, city, state,
+  // zipCode}) — proven live 2026-09-08 with the all-customer key. A bare
+  // String() of it printed "[object Object]" on every draft.
+  const addr: any = rec.address && typeof rec.address === "object" ? rec.address : null;
+  const street = addr
+    ? [addr.addressLine1, addr.addressLine2].map((v: unknown) => String(v ?? "").trim()).filter(Boolean).join(" ")
+    : String(rec.address ?? rec.address1 ?? rec.street ?? "");
+  const city = String(addr?.city ?? rec.city ?? "");
+  const state = String(addr?.state ?? rec.state ?? "");
+  const zip = String(addr?.zipCode ?? addr?.zip ?? rec.zip ?? rec.zipCode ?? rec.postalCode ?? "");
   const address = [street, [city, state].filter(Boolean).join(" "), zip].filter(Boolean).join(", ");
-  const phone = String(rec.phoneNumber ?? rec.phone ?? rec.phone1 ?? "");
+  const phone = String(rec.phoneNumber ?? rec.phone ?? rec.phone1 ?? (Array.isArray(rec.phones) ? rec.phones[0] : "") ?? "");
   const email = String(rec.email ?? "");
   if (!id && !name) return null;
   let raw: any = null;
@@ -125,6 +131,89 @@ export function extractPosCustomer(body: any): {
     raw = null;
   }
   return { posCustomerId: id != null ? String(id) : null, name: name.slice(0, 120), phone, address: address.slice(0, 300), email: email.slice(0, 200), raw };
+}
+
+/**
+ * One register customer as the mirror stores it (PosCustomer). Read
+ * defensively off the live shape (2026-09-08): {id, firstName, lastName,
+ * phone, phones[], email, address{…}, customerCreditCards[], route,
+ * isOnAccountEligible, lastModified}. ⛔ Cards are COUNTED, never copied.
+ */
+export type MirrorCustomer = {
+  posCustomerId: string;
+  firstName: string;
+  lastName: string;
+  name: string;
+  phones: string[];
+  primaryPhone: string;
+  email: string;
+  address: string;
+  city: string;
+  route: string;
+  onAccount: boolean;
+  cardCount: number;
+  posLastMod: string | null;
+};
+
+export function toMirrorCustomer(rec: any): MirrorCustomer | null {
+  if (!rec || typeof rec !== "object") return null;
+  const id = rec.id ?? rec.customerId ?? rec.customerID ?? null;
+  if (id === null || id === undefined || String(id).trim() === "") return null;
+  const firstName = String(rec.firstName ?? "").trim().slice(0, 80);
+  const lastName = String(rec.lastName ?? "").trim().slice(0, 80);
+  const name = ([firstName, lastName].filter(Boolean).join(" ") || String(rec.name ?? rec.fullName ?? "").trim()).slice(0, 120);
+  const rawPhones: unknown[] = [];
+  if (Array.isArray(rec.phones)) rawPhones.push(...rec.phones);
+  rawPhones.push(rec.phone, rec.phoneNumber, rec.phone1, rec.phone2, rec.mobile, rec.cell);
+  const phones: string[] = [];
+  for (const p of rawPhones) {
+    const ten = posPhoneDigits(String(p ?? ""));
+    if (ten && !phones.includes(ten)) phones.push(ten);
+  }
+  const addr: any = rec.address && typeof rec.address === "object" ? rec.address : null;
+  const street = addr
+    ? [addr.addressLine1, addr.addressLine2].map((v: unknown) => String(v ?? "").trim()).filter(Boolean).join(" ")
+    : String(rec.address ?? "").trim();
+  const city = String(addr?.city ?? rec.city ?? "").trim().slice(0, 80);
+  const cards = Array.isArray(rec.customerCreditCards) ? rec.customerCreditCards.length : Array.isArray(rec.cards) ? rec.cards.length : 0;
+  const lastMod = rec.lastModified ?? rec.lastMod ?? null;
+  return {
+    posCustomerId: String(id).slice(0, 64),
+    firstName,
+    lastName,
+    name,
+    phones,
+    primaryPhone: phones[0] ?? "",
+    email: String(rec.email ?? "").trim().slice(0, 200),
+    address: street.slice(0, 200),
+    city,
+    route: String(rec.route ?? "").trim().slice(0, 40),
+    onAccount: rec.isOnAccountEligible === true,
+    cardCount: Number.isFinite(cards) ? cards : 0,
+    posLastMod: lastMod === null || lastMod === undefined ? null : String(lastMod).slice(0, 64),
+  };
+}
+
+/** Their /customers page: {results, hasMore, cursor, total} — the products envelope. */
+export function parseCustomersPage(body: unknown): { items: MirrorCustomer[]; cursor: string | null } | null {
+  const b: any = body;
+  const list: unknown[] | null = Array.isArray(b)
+    ? b
+    : Array.isArray(b?.results)
+      ? b.results
+      : Array.isArray(b?.customers)
+        ? b.customers
+        : Array.isArray(b?.items)
+          ? b.items
+          : Array.isArray(b?.data)
+            ? b.data
+            : null;
+  if (!list) return null;
+  const items = list.map(toMirrorCustomer).filter((c): c is MirrorCustomer => c !== null);
+  const hasMore = Array.isArray(b) ? false : b?.hasMore;
+  const cursorRaw = Array.isArray(b) || hasMore === false ? null : b?.cursor ?? b?.nextCursor ?? b?.next ?? null;
+  const cursor = typeof cursorRaw === "string" && cursorRaw.length > 0 && cursorRaw.length < 512 ? cursorRaw : null;
+  return { items, cursor };
 }
 
 /** A customer PIN their api accepts: 1–8 chars, no whitespace/control chars. */

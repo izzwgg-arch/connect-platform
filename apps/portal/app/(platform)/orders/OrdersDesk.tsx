@@ -28,6 +28,7 @@ import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient
 import { browserTenantContext, getPortalApiBaseUrl } from "../../../services/apiClient";
 import { readAuthToken } from "../../../services/session";
 import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
+import { CustomerTypeahead, type CustomerHit } from "./CustomerTypeahead";
 
 /** A card on file — the register's stored cards + ones saved here via Sola. */
 type CardOnFile = {
@@ -765,6 +766,7 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     // setPhoneEdit is async, so reading state here would use the old value
     const typed = (override ?? phoneEdit).trim();
     if (!typed || !draft) return;
+    if (typed.replace(/\D/g, "").length < 7) return; // a name being typed, not a number yet
     setPhoneBusy(true);
     try {
       const res = await apiPatch<{ draft: DraftRow }>(`/supermarket/drafts/${encodeURIComponent(draft.id)}`, { customerPhone: typed });
@@ -777,6 +779,22 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
       setPhoneBusy(false);
     }
   }, [phoneEdit, draft]);
+
+  // a suggestion picked from the type-ahead binds THAT register account
+  const pickCustomer = useCallback(async (hit: CustomerHit) => {
+    if (!draft) return;
+    setPhoneBusy(true);
+    try {
+      const res = await apiPatch<{ draft: DraftRow }>(`/supermarket/drafts/${encodeURIComponent(draft.id)}`, { posCustomerId: hit.posCustomerId });
+      setDraft(res.draft);
+      setPhoneEdit(res.draft.customerPhone ?? "");
+      setError(null);
+    } catch (e) {
+      setError(errText(e, "That account could not be attached."));
+    } finally {
+      setPhoneBusy(false);
+    }
+  }, [draft]);
 
   // ── the ONE quick-add box (mockup note 5) ────────────────────────────────
   const [q, setQ] = useState("");
@@ -1303,23 +1321,18 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
           <div className="sm-card-b">
             <div className="sm-acct" style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "stretch" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <div className="sm-fieldbox" style={{ maxWidth: 220, flexWrap: "nowrap" }}>
-                  <input
+                <div style={{ maxWidth: 320, flex: 1, minWidth: 0 }}>
+                  <CustomerTypeahead
                     value={phoneEdit}
+                    onChange={setPhoneEdit}
                     placeholder={t("Customer phone (845…)")}
-                    aria-label={t("Customer phone (845…)")}
-                    onChange={(e) => setPhoneEdit(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void lookupPhone();
-                      }
-                    }}
-                    onBlur={() => {
-                      if (phoneEdit.trim() && phoneEdit.trim() !== (draft.customerPhone ?? "")) void lookupPhone();
-                    }}
                     disabled={phoneBusy || draft.status === "SUBMITTED"}
-                    style={{ flex: 1, minWidth: 0, background: "transparent", border: 0, outline: "none", color: "inherit", font: "inherit", fontWeight: 700 }}
+                    inputStyle={{ fontWeight: 700 }}
+                    onPick={(hit) => void pickCustomer(hit)}
+                    onEnter={(typed) => void lookupPhone(typed)}
+                    onBlurLookup={(typed) => {
+                      if (typed !== (draft.customerPhone ?? "")) void lookupPhone(typed);
+                    }}
                   />
                 </div>
                 {phoneBusy ? <span className="sm-sku">{t("Looking up…")}</span> : draft.posCustomerId ? <b>Acct {draft.posCustomerId}</b> : null}

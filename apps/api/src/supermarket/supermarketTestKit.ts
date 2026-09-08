@@ -303,7 +303,17 @@ export function makeSupermarketDb(): FakeDb {
     },
     posCatalogSyncState: {
       uniques: [["tenantId"]],
-      defaults: () => ({ lastMod: null, cursor: null, lastSyncAt: null, lastError: null, creditsSpent: 0, itemCount: 0 }),
+      defaults: () => ({
+        lastMod: null, cursor: null, lastSyncAt: null, lastError: null, creditsSpent: 0, itemCount: 0,
+        customerLastMod: null, customerCount: 0, customerLastSyncAt: null, customerLastError: null,
+      }),
+    },
+    posCustomer: {
+      uniques: [["tenantId", "posCustomerId"]],
+      defaults: () => ({
+        firstName: "", lastName: "", name: "", phonesText: "", primaryPhone: "", email: "", address: "", city: "",
+        route: "", onAccount: false, cardCount: 0, posLastMod: null,
+      }),
     },
     supermarketOrderDraft: {
       uniques: [["tenantId", "sourceType", "sourceId"], ["posExternalId"]],

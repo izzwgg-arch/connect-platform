@@ -41,6 +41,7 @@ import { catalogCodePrefix, inStockFirst, isKnownOutOfStock, rankCatalogRows, se
 import { normalizePhrase } from "./phraseLessons";
 import { knownCustomerPhones, resolveCustomerPhone } from "./customerPhoneMatch";
 import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
+import { mirrorCustomerById, mirrorCustomerByPhone, searchMirrorCustomers } from "./customerSync";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
 
@@ -124,6 +125,8 @@ const draftPatchSchema = z.object({
   orderMethod: z.enum(["Pickup", "Delivery"]).optional(),
   /** The account IS the phone number (Izzy) — 7 digits get the 845 area code. */
   customerPhone: z.string().max(24).optional(),
+  /** A suggestion the rep picked (2026-09-08): bind THIS register account. */
+  posCustomerId: z.string().min(1).max(64).optional(),
 });
 
 const draftApproveSchema = z.object({
@@ -797,6 +800,33 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     if (parsed.data.comments !== undefined) data.comments = parsed.data.comments;
     if (parsed.data.notes !== undefined) data.notes = parsed.data.notes;
     if (parsed.data.orderMethod !== undefined) data.orderMethod = parsed.data.orderMethod;
+    if (parsed.data.posCustomerId !== undefined && parsed.data.customerPhone === undefined) {
+      // The rep PICKED a suggestion from the mirror: bind that account and
+      // take its primary number as the order's phone. The register is asked
+      // for the full record (address, email) best-effort; the mirror answers
+      // when it cannot.
+      const picked = await mirrorCustomerById(db, tenantOf(req), parsed.data.posCustomerId);
+      if (!picked) return reply.status(404).send({ error: "customer_not_found", message: "That account is not on the register list." });
+      data.posCustomerId = picked.posCustomerId;
+      data.customerName = picked.name;
+      data.customerInfo = picked;
+      if (picked.phone) {
+        data.customerPhone = picked.phone;
+        data.phoneMatch = { phone: picked.phone, confidence: "stated" };
+      }
+      try {
+        const client = await clientFor(db, tenantOf(req));
+        if (client) {
+          const ext = extractPosCustomer(await client.getCustomerById(picked.posCustomerId));
+          if (ext?.posCustomerId === picked.posCustomerId) {
+            if (ext.name) data.customerName = ext.name;
+            data.customerInfo = ext;
+          }
+        }
+      } catch {
+        /* the mirror already answered */
+      }
+    }
     if (parsed.data.customerPhone !== undefined) {
       const phone10 = posPhoneDigits(parsed.data.customerPhone);
       if (!phone10) {
@@ -825,6 +855,21 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         }
       } catch {
         /* best-effort — an unreachable register costs the lookup, never the save */
+      }
+      if (!data.posCustomerId) {
+        // The register said no (or was unreachable): the mirror is the second
+        // opinion — it knows every phone on every record, incl. a second
+        // number the exact-phone endpoint may not index.
+        try {
+          const m = await mirrorCustomerByPhone(db, tenantOf(req), phone10);
+          if (m) {
+            data.posCustomerId = m.posCustomerId;
+            if (m.name) data.customerName = m.name;
+            data.customerInfo = m;
+          }
+        } catch {
+          /* best-effort */
+        }
       }
     }
     const updated = await db.supermarketOrderDraft.update({ where: { id: draft.id }, data });
@@ -1246,26 +1291,78 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     return reply.send({ ok: true, rule: { id: saved.id, text: saved.text, active: saved.active, history: saved.history } });
   });
 
+  /**
+   * Type-ahead for the "Whose order is this?" boxes (Izzy, 2026-09-08:
+   * "when I search a phone number, I get suggestions"). Reads the MIRROR
+   * (PosCustomer) — never the register, which has no search and bills per
+   * call. Digits match any phone on the record; letters match the name.
+   */
+  app.get("/supermarket/customers/search", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    const tenantId = tenantOf(req);
+    const q = String((req.query as any)?.q ?? "").slice(0, 80);
+    const limitRaw = Number((req.query as any)?.limit ?? 8);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.floor(limitRaw))) : 8;
+    let items: Awaited<ReturnType<typeof searchMirrorCustomers>> = [];
+    try {
+      items = await searchMirrorCustomers(db, tenantId, q, limit);
+    } catch (err: any) {
+      app.log.warn({ err: String(err?.message ?? err) }, "supermarket customer search failed");
+    }
+    const state = await db.posCatalogSyncState
+      .findUnique({ where: { tenantId }, select: { customerCount: true, customerLastSyncAt: true, customerLastMod: true } })
+      .catch(() => null);
+    return reply.send({
+      items,
+      // an EMPTY answer must say why — before the first walk finishes there
+      // is nothing to match, and that is not "no such customer"
+      mirror: {
+        customers: Number(state?.customerCount ?? 0),
+        ready: Boolean(state?.customerLastMod),
+        lastSyncAt: state?.customerLastSyncAt ?? null,
+      },
+    });
+  });
+
   /** The screen-pop / order-twin lookup: phone → register account. */
   app.get("/supermarket/lookup", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
     const tenantId = tenantOf(req);
     const phoneRaw = String((req.query as any)?.phone ?? "");
-    const phone10 = posPhoneDigits(phoneRaw);
-    if (!phone10) return reply.send({ found: false });
-    const client = await clientFor(db, tenantId);
-    if (!client) return reply.send({ found: false, noPosKey: true });
+    const pickedId = String((req.query as any)?.customerId ?? "").trim().slice(0, 64);
+    let phone10 = posPhoneDigits(phoneRaw);
     let posCustomerId: string | null = null;
     let name = "";
-    try {
-      const body: any = await client.getCustomerByPhone(phone10);
-      const id = body?.id ?? body?.customerId ?? null;
-      if (id) {
-        posCustomerId = String(id);
-        name = [body?.firstName, body?.lastName].filter(Boolean).join(" ") || String(body?.name ?? "");
+    if (pickedId) {
+      // a suggestion the rep picked — the mirror is authoritative for the id
+      const m = await mirrorCustomerById(db, tenantId, pickedId).catch(() => null);
+      if (m) {
+        posCustomerId = m.posCustomerId;
+        name = m.name;
+        if (!phone10 && m.phone) phone10 = m.phone;
       }
-    } catch {
-      /* not found / unreachable both read as not-found to the pop */
+    }
+    if (!posCustomerId && !phone10) return reply.send({ found: false });
+    const client = await clientFor(db, tenantId);
+    if (!client) return reply.send({ found: false, noPosKey: true });
+    if (!posCustomerId && phone10) {
+      try {
+        const body: any = await client.getCustomerByPhone(phone10);
+        const id = body?.id ?? body?.customerId ?? null;
+        if (id) {
+          posCustomerId = String(id);
+          name = [body?.firstName, body?.lastName].filter(Boolean).join(" ") || String(body?.name ?? "");
+        }
+      } catch {
+        /* not found / unreachable — the mirror answers next */
+      }
+      if (!posCustomerId) {
+        const m = await mirrorCustomerByPhone(db, tenantId, phone10).catch(() => null);
+        if (m) {
+          posCustomerId = m.posCustomerId;
+          name = m.name;
+        }
+      }
     }
     if (!posCustomerId) return reply.send({ found: false });
 
@@ -1293,7 +1390,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     }
 
     const recent = await db.supermarketOrderDraft.findMany({
-      where: { tenantId, status: "SUBMITTED", OR: [{ posCustomerId }, { customerPhone: { contains: phone10.slice(-7) } }] },
+      where: { tenantId, status: "SUBMITTED", OR: [{ posCustomerId }, ...(phone10 ? [{ customerPhone: { contains: phone10.slice(-7) } }] : [])] },
       orderBy: { submittedAt: "desc" },
       take: 3,
       select: { id: true, posOrderId: true, submittedAt: true, items: true },
@@ -1301,6 +1398,7 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     return reply.send({
       found: true,
       posCustomerId,
+      phone: phone10 ?? "",
       name: name.slice(0, 120),
       balanceCents,
       recentOrders: recent.map((r: any) => ({

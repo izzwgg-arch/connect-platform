@@ -9,10 +9,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
 import { useUiLanguage } from "../../../../hooks/useUiLanguage";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { DraftReview } from "../OrdersDesk";
+import { CustomerTypeahead, type CustomerHit } from "../CustomerTypeahead";
 
 const SM_TWIN_PHRASES = [
   "Order", "Whose order is this?",
@@ -34,20 +34,25 @@ export function TwinInner() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const startedRef = useRef(false);
 
-  const open = useCallback(async (phoneToUse: string) => {
+  const open = useCallback(async (phoneToUse: string, customerId?: string) => {
     setBusy(true);
     let name = "";
     let posCustomerId: string | null = null;
     let balanceCents: number | null = null;
     let found = false;
-    if (phoneToUse) {
+    let phoneForDraft = phoneToUse;
+    if (phoneToUse || customerId) {
       try {
-        const res = await apiGet<any>(`/supermarket/lookup?phone=${encodeURIComponent(phoneToUse)}`);
+        const qs = customerId
+          ? `customerId=${encodeURIComponent(customerId)}${phoneToUse ? `&phone=${encodeURIComponent(phoneToUse)}` : ""}`
+          : `phone=${encodeURIComponent(phoneToUse)}`;
+        const res = await apiGet<any>(`/supermarket/lookup?${qs}`);
         if (res?.found) {
           found = true;
           name = res.name ?? "";
           posCustomerId = res.posCustomerId ?? null;
           balanceCents = typeof res.balanceCents === "number" ? res.balanceCents : null;
+          if (!phoneForDraft && res.phone) phoneForDraft = String(res.phone);
         }
       } catch {
         /* treated as unknown */
@@ -65,7 +70,7 @@ export function TwinInner() {
     try {
       const res = await apiPost<{ draft: { id: string } }>("/supermarket/drafts", {
         sourceType: "call",
-        customerPhone: phoneToUse,
+        customerPhone: phoneForDraft,
         customerName: name,
       });
       setDraftId(res.draft.id);
@@ -125,23 +130,22 @@ export function TwinInner() {
       <div className="sm-root sm-app" style={{ padding: ".9rem .8rem" }}>
         <div style={{ fontWeight: 700, fontSize: ".92rem", marginBottom: ".3rem" }}>{t("Whose order is this?")}</div>
         <p className="sm-mut" style={{ marginTop: 0 }}>{t("Ask for the phone number on the account. It's ready to take the digits — no clicking, just type.")}</p>
-        <div className="sm-fieldbox" style={{ borderColor: "var(--accent)", boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)", fontVariantNumeric: "tabular-nums" }}>
-          <Search size={13} aria-hidden style={{ color: "var(--text-dim)" }} />
-          <input
-            ref={inputRef}
-            value={lookupDigits}
-            inputMode="numeric"
-            autoFocus
-            onChange={(e) => setLookupDigits(e.target.value.replace(/[^\d() +-]/g, ""))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && lookupDigits.replace(/\D/g, "").length >= 10) {
-                void open(lookupDigits.replace(/\D/g, ""));
-              }
-            }}
-            aria-label={t("Whose order is this?")}
-            style={{ flex: 1, background: "transparent", border: 0, outline: "none", color: "inherit", font: "inherit", fontSize: ".95rem" }}
-          />
-        </div>
+        <CustomerTypeahead
+          value={lookupDigits}
+          onChange={setLookupDigits}
+          inputRef={inputRef}
+          autoFocus
+          placeholder={t("Whose order is this?")}
+          boxStyle={{ borderColor: "var(--accent)", boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)" }}
+          inputStyle={{ fontSize: ".95rem" }}
+          onPick={(hit: CustomerHit) => {
+            void open(hit.primaryPhone, hit.posCustomerId);
+          }}
+          onEnter={(typed) => {
+            const digits = typed.replace(/\D/g, "");
+            if (digits.length >= 7) void open(digits);
+          }}
+        />
         <button
           type="button"
           className="sm-btn sm-ghost"
