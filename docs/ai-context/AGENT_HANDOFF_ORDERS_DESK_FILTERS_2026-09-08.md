@@ -128,3 +128,11 @@ mode, and light mode."*
   raised pill). No `tsc` on this box; the portal Docker build is the gate.
 - **Rule going forward:** any new `<button>` under `.sm-root` (or any portal page, since
   preflight is off) must reset its own background/border/font. Nothing global does it.
+- **Deployed 2026-09-08** — commit `68e17c90`, `deploy-direct.sh portal --commit 68e17c90`
+  (dry-run first). The first real run failed at `stage=build` with `HEAVY JOB ALREADY RUNNING`
+  because another session's portal deploy of `04b23b11` held the build lock (its git-sync had
+  already moved the clone to `68e17c90`, so that run's log ends with `done 68e17c90` while its
+  image is stamped `04b23b11` — the `done` line reads the clone HEAD, not the image). Re-ran once
+  the queue was clear: `app-portal-1` `.build-commit` = `68e17c90`, built CSS
+  `8522e9002ae5ad04.css` carries the new `.sm-tab` rule, `/ready` 200. ⏳ Not proven: a logged-in
+  look in both themes.

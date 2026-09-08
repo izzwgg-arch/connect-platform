@@ -55,7 +55,16 @@ Detail appended to **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-
   `rgba(15,23,42,.05)` — otherwise the light active tab was #f8fafc on white, invisible.
 - ✅ **Verified on the dev box** by rendering the real `supermarket.css` + the portal's theme tokens in a
   static page in the in-app browser, dark and light (no `tsc`/pnpm here — memory `devbox-toolchain-blocker`).
-- Deploy state: see the line below this section once the portal container is verified.
+- ✅ **DEPLOYED + container-verified 2026-09-08 ~21:30Z:** commit `68e17c90` (CSS + docs), `deploy-direct.sh
+  portal --commit 68e17c90` (dry-run first). `app-portal-1` `.build-commit` = `68e17c90`, the built
+  `.next/static/css/8522e9002ae5ad04.css` carries the new `.sm-root .sm-tab{appearance:none;background:transparent;…}`
+  rule, `/ready` 200, no candidate container left. ⏳ NOT PROVEN: a logged-in look at `/orders` in both themes.
+- ⛔ **Trap seen on the way:** the first run died at `stage=build` with `HEAVY JOB ALREADY RUNNING:
+  deploy-queue:portal:compose-build-portal-candidate` — another session was deploying `04b23b11` (screen-pop
+  removal). `deploy-direct.sh` does NOT lock the `git-sync` stage, only the heavy build: my run had already
+  moved the shared clone's HEAD to `68e17c90` under their in-flight build (their Docker context was already
+  transferred, and their image is stamped `04b23b11`, but their log's final `done` line printed `68e17c90`
+  because it reads the clone HEAD). Poll `ps -eo cmd | grep -E "[d]eploy-(direct|portal|api)"` before deploying.
 
 ## ⛔ AGENT HANDOFF — Store → Orders (Supermarket mode) now has Received date-range, status tabs (+Failed, +Dismissed), Source, server-side search and paging; "only two orders left" was the workspace switcher on All workspaces (2026-09-08) — READ FIRST before touching `GET /supermarket/drafts`, `OrdersDesk.tsx`'s list, or for ANY "the orders disappeared"
 
@@ -120,7 +129,19 @@ Authenticator app, just stick with Text or email" … "Build it and deploy."*
   db, real bcrypt), `mfa/mfa.test.ts` **25/25**; portal `lib/mfaLogin.test.ts` **12/12**,
   `lib/turnstileWiring.test.ts` **13/13**. ⏳ `tsc` cannot run here — the container build is
   the first typecheck.
-- ⏳ **DEPLOY: in progress — see the line below once the containers are verified.**
+- ✅ **DEPLOYED + container-verified 2026-09-08 ~21:25Z.** api via `scripts/release/deploy-direct.sh api`
+  (first attempt died on `HEAVY JOB ALREADY RUNNING` — another session's portal build; a
+  20-s poll on `ps aux | grep -c "[r]un-heavy"` + queue `runningCount` then ran it): migration
+  `20260908200000_user_login_otp_enabled` applied (`information_schema.columns` shows
+  `User.loginOtpEnabledAt timestamp`; 0 rows set), blue/green cutover 256/160 ms, health 86 ms,
+  `app-api-1` at `68e17c90` (branch tip, contains `e0c3594d`) with `/auth/otp/status|enable|disable|send`
+  in the running source and an unsigned `GET /auth/otp/status` → 401. Portal: the other
+  session's direct deploy of the same tip (`direct-portal-20260908T211930Z.log`, done 68e17c90)
+  carried it — my own portal job was cancelled as redundant; `app-portal-1` at `68e17c90`,
+  built `account/security/page.js` has "Where your codes go" + the three otp routes, the
+  authenticator copy and the Admin → Tenants "Sign-in code (2FA)" column are gone, the login
+  choice card is present, `/login` 200. ⏳ NOT PROVEN: a real text/email to a human (Izzy's
+  acceptance recipe, handoff §7).
 - ⛔ The mobile app still has no code step; the Security page says so before "Turn on".
 
 ## ⛔ AGENT HANDOFF — Tracking → Orders now has a Received date-range filter, store filter and real paging; the "only 24 hours" complaint was the newest-100 row cap, not a time rule (2026-09-08) — READ FIRST before touching `GET /delivery/orders`, `orderService.listOrders/searchOrders`, or the orders page filters
