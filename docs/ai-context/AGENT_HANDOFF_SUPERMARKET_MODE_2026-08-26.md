@@ -983,10 +983,20 @@ the pay IVR must be up, orders must go in. Commit `c7191071` on
   PBX to the PUBLIC url is 200; a 403 seen from a workstation is the documented
   content-filter, not the pay path. 51 prompt wavs are in
   `/var/lib/asterisk/sounds/connect-pay/en-male`.
-- ⏳ **NOT DONE — Izzy's call:** ext 799 is reachable internally but **no menu
-  key or DID routes a CUSTOMER to it.** Adding an IVR-23 key would need the
-  greeting re-recorded to announce it, or give it a dedicated DID. The pay flow
-  itself is up; the last hop (which key / which number) is a routing decision.
+- ✅ **PRESS 0 REACHES THE PAY LINE (Izzy: "it's supposed to be zero"):**
+  IVR-23 (main Gesheft menu) option 0 was repointed from the stale "Pasach 2026"
+  announcement to the Pay by phone app (ext 799). Raw-SQL surgical repoint
+  (new `ombu_destinations` category 5/index 24 mirroring option 303's shape) +
+  `ombu_queued_changes (8,31)` + `reload_dialplan=yes`, then `applyAndRebake`
+  (doorways 3/3, 0 lines changed). ✅ PROVEN on the wire: a press-0 call flows
+  `Option 0 → Goto(T8_app-custom-application,799,1) → cc-5 → connect-pay-gesheft
+  → connect-supermarket-pay → api door` and the door answered
+  `{"prompts":["01_welcome","02_pin"],action:"gather"}` — and because the test
+  CID matched a real account it went straight to PIN, confirming the caller-ID
+  lookup against the register too. Backup `pbx:/root/ivr0-pay-backup-*/before.sql`
+  (old option-0 dest = 560 = announcement-35, left as inert clutter).
+  ⛔ The greeting audio does NOT yet announce "press 0 to pay" — re-recording it
+  is Izzy's call; the routing is live.
 
 ### Orders (the "put orders in" ask)
 - The put-through path is wired + tested (STRESS 25 runs voicemail→draft→approve
