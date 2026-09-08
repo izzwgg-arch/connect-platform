@@ -65,8 +65,14 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
   sent `1730` ALONE (and `7190`, `7735`) because the served Yealink config carries
   `interdigit_long_timer = 3` fleet-wide (36/39 configs): a 3-second pause after the code dials
   the code. Same phone sent 10 and 14 digits intact when typed continuously. Workaround: dial
-  all 14 digits without pausing / pre-dial then Send; the real fix is a per-device timer
-  override + check-cfg NOTIFY (handoff §8) and is Izzy's call.
+  all 14 digits without pausing / pre-dial then Send.
+- ✅✅ **FIXED THE SAME HOUR, HOWEVER THE PHONE CHOPS IT (round 5, handoff §9): `1730` dialed ALONE now
+  gets a SECOND DIAL TONE, takes the number, and re-enters the tenant flow as `1730<number>` so
+  route 179 carries it** — `/etc/asterisk/vitalpbx/extensions__97-connect-trust1730.conf`
+  (`[T18_cos-all](+) exten => 1730` → `connect-trust1730-collect`; repo copy in `scripts/pbx/`),
+  `dialplan reload` only, tenant 18 only, doorways untouched. Proven by originate + SendDTMF:
+  `Outbound Route: Trust 1730` → CID 7184371730 → far end `__INCOMING_SOURCE=7184371730`.
+  ⛔ Never put this in `extensions__60_custom.conf` (a parse error there takes the doorway with it).
 - ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
   Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
   (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched

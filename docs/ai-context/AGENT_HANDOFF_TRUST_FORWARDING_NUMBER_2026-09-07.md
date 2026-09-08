@@ -182,3 +182,37 @@ Read-only investigation, nothing changed. Izzy: *"They're saying the prefix is n
   a `yealink-check-cfg` NOTIFY, Izzy's call:** raise `interdigit_long_timer` (e.g. 8)
   on that one device (per-device override) or on Trust's four phones (template 41 —
   check which other tenants share it first), never fleet-wide by reflex.
+
+## 9. Round 5 (2026-09-08 14:09 ET) — the code works however the phone chops it: `1730` alone gets a SECOND DIAL TONE
+
+Izzy: *"I asked you to create the prefix. When I dial that prefix, that's when that outbound
+route should be selected… that prefix is not working."* — a fix, not advice.
+
+**What shipped (PBX dialplan write, tenant 18 only):**
+`/etc/asterisk/vitalpbx/extensions__97-connect-trust1730.conf` (repo copy:
+`scripts/pbx/extensions__97-connect-trust1730.conf`), picked up by
+`extensions.conf`'s `#include vitalpbx/extensions__*.conf`, loaded with `dialplan reload`
+(no Apply, no regen, doorways untouched). It appends ONE exact exten to `[T18_cos-all](+)`:
+`1730` → `Answer()` → `connect-trust1730-collect`: `Playtones(dial)` + `WaitExten(12)`
+(`TIMEOUT(digit)=3`), patterns `_NXXNXXXXXX` / `_1NXXNXXXXXX` / `_NXXXXXX` / `_011.` →
+`Goto(T18_cos-all,1730${EXTEN},1)`. So the bare code re-enters the tenant's own outbound
+flow with the code prepended and **route 179 carries the call exactly as a 14-digit dial
+would** (the route sets `DNID=${EXTEN:4}` itself, so the re-entry strips the prefix).
+An exact exten beats the tenant's `_[-+*#0-9a-zA-Z].` catch-all, and a continuous
+14-digit dial never touches it (re-verified: `17308457231213@T18_ARS-all` → Trust 1730).
+
+✅ **Proven with a real call**: AMI originate `Local/1730@T18_cos-all/n` (CallerID 106)
+with `SendDTMF(wwww8457231213…)` on the originating leg — log: `1730@T18_cos-all` →
+Answer → `WaitExten(12)` → digits received → `8457231213@connect-trust1730-collect` →
+`Goto(T18_cos-all,17308457231213,1)` → `Outbound Route: Trust 1730` → `DNID=8457231213`
+→ `CALLERID(all)=Trust Bookkeeping <7184371730>` → `Called PJSIP/8457231213@0001` →
+answered → far end `__INCOMING_SOURCE=7184371730`. 0 channels left. Script:
+PBX `/root/trust1730-test2.sh`.
+
+⛔ **Facts for the next person:** the handset side (`interdigit_long_timer = 3`, §8) is
+UNCHANGED — the second dial tone makes it irrelevant. A `1730` dial that then goes
+silent for 12 s hangs up (`t`); a non-matching entry plays `invalid`. `TIMEOUT(digit)=3`
+means a 7-digit local number waits 3 s before going out (7-digit could extend to 10);
+10/11-digit numbers go out the instant the last digit lands. Rollback = delete the file
++ `dialplan reload`. ⛔ The doorway file `extensions__60_custom.conf` was deliberately
+NOT touched — a parse error in a separate `97-` file cannot take Connect's menus down.
