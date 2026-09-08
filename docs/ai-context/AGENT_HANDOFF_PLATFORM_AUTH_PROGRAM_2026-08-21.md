@@ -609,3 +609,12 @@ blocked on a real build, not on Meta.
 ⏳ **Still open:** no payment method on the WABAs; loopcom.net is still a parked
 "under construction" page; and the display name `Connect comunications` on the
 second WABA remains likely to be declined once reviews do start.
+
+## 8. UPDATE 2026-09-02 — the Google half is DONE as far as the console allows
+
+The unknown project owner, the scope check, the Testing-vs-Published question and the
+loopcom.net redirect bug (§2) are all resolved. Project `connect-497316`, owners support@ +
+izzy@loopcom.net; `gmail.send` = sensitive, `gmail.readonly`/`drive.readonly` = restricted
+(dropped by Izzy's decision); app published; brand verification submitted. Everything,
+including the per-signed-in-user "Verify branding" trap, is in
+`AGENT_HANDOFF_GOOGLE_OAUTH_VERIFICATION_2026-09-02.md`.
