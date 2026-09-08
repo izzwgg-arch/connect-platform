@@ -96,8 +96,15 @@ reconnects and takes a fresh snapshot, and the new code never re-seeds it.
   bootstrap above, hence three ghost upserts. **Open item for Izzy.**
 - ⛔ **The deploy queue does not survive a reboot.** pm2 `connect-deploy-worker` was not running
   (port 3910 dead, `pm2 ls` empty); `/root/.pm2/dump.pm2` (May 15) still lists it. Restored with
-  `pm2 resurrect` — the saved process list, no rebuild. Nothing installs pm2 at boot (`pm2 startup`
-  was never run / no unit). Worth a systemd unit or `pm2 startup`.
+  `pm2 resurrect` — the saved process list, no rebuild. ✅ **Fixed the same evening on Izzy's
+  instruction:** `pm2 startup systemd -u root --hp /root` installed and enabled
+  `/etc/systemd/system/pm2-root.service` (`ExecStart=/usr/lib/node_modules/pm2/bin/pm2 resurrect`,
+  `After=network.target`, `Environment=PM2_HOME=/root/.pm2`); `pm2 save` refreshed `dump.pm2`
+  (now 2026-09-08, includes the worker's full env); `systemctl start pm2-root` as a trial exited 0
+  and left the running worker alone (same pid, uptime kept). A real reboot was NOT performed —
+  it would take production down — so the first real proof is the next reboot: expect
+  `systemctl status pm2-root` active and `GET :3910/ops/deploy/status` answering within a minute
+  of boot. Rule: after any change to the pm2 process list, `pm2 save`.
 - ⛔ **`docker logs app-telephony-1` is unreliable after those reboots**: the full read stops in
   the pre-reboot rotated file (max-file 5 × 50 MB) and `--since 3h` returned only OLD lines while
   `--tail 3` showed the present. Read the raw json-file

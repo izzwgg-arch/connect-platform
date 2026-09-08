@@ -68,7 +68,13 @@ Memory: [[ghost-call-message-pseudo-channel]].
 - ⛔ **The host hard-rebooted FOUR times (19:16, 19:18, 19:19, 19:32 CEST, `journalctl --list-boots`;
   no shutdown sequence in any of them) — cause unknown, open for Izzy. The deploy queue (pm2
   `connect-deploy-worker`) does NOT survive a reboot** — port 3910 dead, `pm2 ls` empty;
-  restored with `pm2 resurrect` from `/root/.pm2/dump.pm2`. Nothing starts pm2 at boot.
+  restored with `pm2 resurrect` from `/root/.pm2/dump.pm2`. ✅ **FIXED 21:58 CEST (Izzy: "fix the
+  deploy queue so it survives a reboot"): `pm2 startup systemd -u root --hp /root` installed and
+  enabled `/etc/systemd/system/pm2-root.service` (`ExecStart=pm2 resurrect`, `After=network.target`,
+  `PM2_HOME=/root/.pm2`), `pm2 save` refreshed the dump (7.9 KB, carries the worker's env incl.
+  `DEPLOY_QUEUE_TOKEN`), trial `systemctl start pm2-root` exited 0 with the worker untouched.
+  ⛔ After ANY change to the pm2 process list run `pm2 save`, or the next boot restores the old
+  list. Docs: `docs/safe-deploy-queue.md` § Boot persistence.**
 - ✅ **DEPLOYED: telephony queue job `939eec1b` (commit `cfc17107`, enqueued at 1 active call,
   build 51 s, restart 20 s, health OK) — container-verified: both markers in the running src,
   boot log `pseudo_channel_skipped` for `Message/ast_msg_queue`, 0 ghost upserts, 0 error lines,
