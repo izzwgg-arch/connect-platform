@@ -1,9 +1,36 @@
 /**
- * Per-tenant sign-in code — "2FA by code" (2026-08-19, Izzy's ask):
+ * Per-tenant sign-in code — "2FA by code".
  *
- *   "a switch to turn it on and off per tenant. When they log in, they get a text
- *    or email with a code, and they have to hit 'Remember me' to be able to log
- *    in without it. They should have to re-login every 90 days if 2FA is enabled."
+ * v1 (2026-08-19, Izzy): "a switch to turn it on and off per tenant. When they
+ *   log in, they get a text or email with a code, and they have to hit
+ *   'Remember me' to be able to log in without it. They should have to
+ *   re-login every 90 days if 2FA is enabled."
+ * v2 (2026-09-08, Izzy): "Make the 2FA give an option between SMS and email.
+ *   It is only required once when the customer or tenant logs in, and it gets
+ *   removed every time the customer logs out. There is no expiry and the only
+ *   thing that removes it is logging out. Send the 2FA code to the registered
+ *   phone number and email of the customer."
+ *
+ * WHAT v2 CHANGED
+ *   - THE PERSON CHOOSES WHERE THE CODE GOES. When both channels are possible,
+ *     /auth/login sends NOTHING: it answers the challenge with `channels` and
+ *     the masked `destinations` for each (`•••-•••-1213`, `i•••@example.com`),
+ *     `sent: false`, `reason: "choose_channel"`. The portal shows "Text me at …"
+ *     / "Email me at …"; `POST /auth/otp/send { preAuthToken, channel }` creates
+ *     the code and sends it to the REGISTERED phone (User.phone) or email
+ *     (User.email) — never to an address the client supplies. When only ONE
+ *     channel is possible (no phone on file, or the tenant allows one channel)
+ *     the login sends on it straight away, as before: a one-button choice is
+ *     no choice. A client that already knows the answer may pass `otpChannel`
+ *     to /auth/login and skip the extra round trip.
+ *   - "REMEMBER THIS DEVICE" IS GONE. The code is asked exactly once per
+ *     sign-in. The session it mints lives until the person signs out — like
+ *     every other session on the platform, nothing expires on a clock — and
+ *     signing out is the only thing that ends it; the next sign-in asks for a
+ *     code again. No trusted-device token is read, minted or honoured any more.
+ *     `TrustedLoginDevice` rows are inert (the table stays; nothing reads it).
+ *   - THE 90-DAY SESSION FOR OTP TENANTS IS GONE ("there is no expiry").
+ *     `issueLoginSession` signs one way for everyone again.
  *
  * HOW IT FITS THE LOGIN THAT ALREADY EXISTS (server.ts `/auth/login`):
  *   password ok → TOTP MFA decision (mfaService, unchanged) → THIS gate:
@@ -11,48 +38,36 @@
  *   - user is TOTP-enrolled                 → nothing changes (they already have a
  *                                             stronger second factor; the TOTP
  *                                             challenge above already ran)
- *   - a valid remembered-device token came  → sign in; 90-day session
- *   - otherwise                             → send a code, answer
- *     `{ otpChallengeRequired, preAuthToken, expiresInSeconds, channels,
- *        destination, error: "otp_required" }` and NO session token.
- *     `POST /auth/otp/verify { preAuthToken, code, rememberDevice? }` mints the
- *     session (90 days) and, if asked, a remembered-device token (90 days).
+ *   - otherwise                             → the challenge above, and NO session
+ *     token. `POST /auth/otp/verify { preAuthToken, code }` mints the session.
  *
- * ⛔ THE RULES
+ * ⛔ THE RULES (unchanged from v1)
  *  - The code is stored ONLY as a SHA-256 hash and compared in constant time.
  *  - The code is BOUND to the pre-auth token that requested it (`preAuthJti`),
  *    so a code can only be spent by the login attempt that caused it.
  *  - Five wrong guesses spend the challenge; a new sign-in is needed. Every
  *    verify is ALSO throttled per account and per source IP (`loginThrottle.ts`
  *    factory, the same shape as TOTP) — a throttled answer is 429, never 401.
- *  - Re-sends are capped (3 per challenge) and each re-send REPLACES the code.
- *  - The remembered-device token is random, stored ONLY as a SHA-256 hash, bound
- *    to ONE user, expires in 90 days, and is revocable. Presenting it skips the
- *    code — nothing else. It never becomes a session by itself.
+ *  - Sends are capped (3 per challenge) and each send REPLACES the code.
+ *  - One live code per person (`decideChallengeReuse`): a loop on /auth/login or
+ *    /auth/otp/send cannot spend the SMS balance.
  *  - The pre-auth token has its OWN purpose (`otp_challenge`), so a TOTP
  *    pre-auth token cannot be spent here and vice versa.
- *  - Sessions minted under the switch carry `exp` = 90 days. ⛔ Every OTHER
- *    session on the platform still never expires (see CLAUDE.md's token-expiry
- *    section — the mobile app cannot survive a 401 yet). That is why this is
- *    per-tenant opt-in and OFF by default: turning it on for a tenant means
- *    that tenant's PHONE users cannot sign in on the current app (it throws
- *    `otp_required` like it throws `mfa_required`) until the mobile build with
- *    the code step ships. Say so before switching a tenant on.
+ *  - ⛔ The mobile app has no code step. A user on an OTP tenant cannot finish
+ *    sign-in on the current app (it throws `otp_required` like it throws
+ *    `mfa_required`) until the build with the code step ships. Say so before
+ *    switching a tenant on whose people live in the app.
  *  - Nothing here sends by itself: the code goes out through the SAME doors
  *    every other message uses — the platform SMS sender (`billingSmsSender.ts`)
  *    and the `EmailJob` outbox with type `LOGIN_CODE` (⛔ never `ADMIN_ALERT`,
  *    which the send door drops).
  */
-import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 
 export const LOGIN_OTP_CODE_LENGTH = 6;
 export const LOGIN_OTP_TTL_SECONDS = 10 * 60;
 export const LOGIN_OTP_MAX_ATTEMPTS = 5;
 export const LOGIN_OTP_MAX_SENDS = 3;
-export const TRUSTED_DEVICE_TTL_DAYS = 90;
-export const OTP_SESSION_TTL_DAYS = 90;
-/** What `issueLoginSession` passes to jwt.sign for an OTP-tenant session. */
-export const OTP_SESSION_EXPIRES_IN = `${OTP_SESSION_TTL_DAYS}d`;
 /** EmailJob.type for the code email — a customer email, so NEVER "ADMIN_ALERT". */
 export const LOGIN_CODE_EMAIL_TYPE = "LOGIN_CODE";
 
@@ -64,21 +79,28 @@ export function normalizeTenantOtpChannel(raw: unknown): TenantOtpChannelSetting
   return v === "SMS" || v === "EMAIL" ? v : "EITHER";
 }
 
+export function normalizeOtpChannel(raw: unknown): OtpChannel | null {
+  const v = String(raw ?? "").trim().toUpperCase();
+  return v === "SMS" || v === "EMAIL" ? v : null;
+}
+
 // ── the gate ─────────────────────────────────────────────────────────────────
 
 export type OtpGateInput = {
   tenantOtpRequired: boolean;
   /** TOTP-enrolled users already carry a stronger factor; the code is not layered on. */
   userHasTotp: boolean;
-  /** Result of `verifyTrustedDevice`, or null when no token was presented. */
-  trustedDevice: { valid: boolean } | null;
 };
-export type OtpGate = { kind: "none" } | { kind: "trusted" } | { kind: "challenge" };
+export type OtpGate = { kind: "none" } | { kind: "challenge" };
 
+/**
+ * v2: there is no "trusted device" branch any more. Tenant ON and not
+ * TOTP-enrolled = a code, every sign-in. What makes it "once per login" is that
+ * the SESSION lasts until sign-out, not a skip-the-code token.
+ */
 export function decideOtpGate(input: OtpGateInput): OtpGate {
   if (!input.tenantOtpRequired) return { kind: "none" };
   if (input.userHasTotp) return { kind: "none" };
-  if (input.trustedDevice?.valid) return { kind: "trusted" };
   return { kind: "challenge" };
 }
 
@@ -86,17 +108,17 @@ export function decideOtpGate(input: OtpGateInput): OtpGate {
 
 /**
  * ⛔ WHY THIS EXISTS: without it, every POST /auth/login for an OTP tenant
- * minted a fresh code and sent a fresh TEXT. Resends are capped per challenge
+ * minted a fresh code and sent a fresh TEXT. Sends are capped per challenge
  * (`LOGIN_OTP_MAX_SENDS`), but nothing capped creating CHALLENGES — so anyone
  * holding a valid password could spend our SMS balance at the global rate
  * limit (480/min per IP), and an ordinary customer double-clicking Sign in
  * got two texts with two different codes, of which only the newer worked.
  *
- * So a login that finds a LIVE challenge (unconsumed, unexpired, and with
- * tries left) re-binds that challenge to the new login instead of sending
- * anything: the code already on their phone stays the one that works, and
+ * So a send that finds a LIVE challenge (unconsumed, unexpired, and with
+ * tries left) re-binds that challenge to the new login instead of creating
+ * another: the code already on their phone stays the one that works, and
  * only the newest login can spend it. SMS per person is then bounded by the
- * resend cap inside one 10-minute window, not by how often login is called.
+ * send cap inside one 10-minute window, not by how often login is called.
  *
  * ⛔ A challenge that has burned its attempts is NOT reused — that would hand
  * someone a dead code and no way forward until it expired. Burning those five
@@ -127,9 +149,34 @@ export function chooseChannels(setting: TenantOtpChannelSetting, hasPhone: boole
   if ((setting === "SMS" || setting === "EITHER") && hasPhone) channels.push("SMS");
   if (setting === "EMAIL" || setting === "EITHER" || !hasPhone) channels.push("EMAIL");
   if (channels.length === 0) channels.push("EMAIL");
-  const req = String(requested ?? "").trim().toUpperCase();
-  const preferred = (req === "SMS" || req === "EMAIL") && channels.includes(req as OtpChannel) ? (req as OtpChannel) : channels[0];
+  const req = normalizeOtpChannel(requested);
+  const preferred = req && channels.includes(req) ? req : channels[0];
   return { channels, preferred };
+}
+
+/** The masked place each offered channel would deliver to — what the chooser shows. */
+export type ChannelOffer = { channels: OtpChannel[]; destinations: Partial<Record<OtpChannel, string>> };
+
+export function offerChannels(setting: TenantOtpChannelSetting, phone: string | null | undefined, email: string): ChannelOffer {
+  const { channels } = chooseChannels(setting, !!phone);
+  const destinations: Partial<Record<OtpChannel, string>> = {};
+  for (const c of channels) destinations[c] = maskDestination(c, c === "SMS" ? String(phone) : email);
+  return { channels, destinations };
+}
+
+/**
+ * v2: does the login send now, or wait for the person to choose?
+ *   - the client named an allowed channel → send on it (no extra round trip);
+ *   - exactly one channel is possible     → send on it (nothing to choose);
+ *   - otherwise                           → offer the choice, send nothing.
+ */
+export type FirstSend = { kind: "send"; channel: OtpChannel } | { kind: "choose" };
+
+export function decideFirstSend(channels: OtpChannel[], requested?: unknown): FirstSend {
+  const req = normalizeOtpChannel(requested);
+  if (req && channels.includes(req)) return { kind: "send", channel: req };
+  if (channels.length === 1) return { kind: "send", channel: channels[0] };
+  return { kind: "choose" };
 }
 
 // ── code + hashing ───────────────────────────────────────────────────────────
@@ -187,31 +234,6 @@ export function decideOtpVerify(row: ChallengeRow | null, input: { userId: strin
   if (row.attempts >= LOGIN_OTP_MAX_ATTEMPTS) return { ok: false, reason: "too_many_attempts" };
   if (!otpCodeMatches(input.code, row.id, row.codeHash)) return { ok: false, reason: "wrong_code" };
   return { ok: true };
-}
-
-// ── remembered devices ───────────────────────────────────────────────────────
-
-export function mintTrustedDeviceToken(): { token: string; tokenHash: string } {
-  const token = randomBytes(32).toString("base64url");
-  return { token, tokenHash: hashTrustedDeviceToken(token) };
-}
-
-export function hashTrustedDeviceToken(token: string): string {
-  return createHash("sha256").update(String(token ?? "")).digest("hex");
-}
-
-export type TrustedDeviceRow = { userId: string; expiresAt: Date; revokedAt: Date | null };
-
-export function decideTrustedDevice(row: TrustedDeviceRow | null, userId: string, nowMs: number): { valid: boolean; reason?: string } {
-  if (!row) return { valid: false, reason: "unknown" };
-  if (row.userId !== userId) return { valid: false, reason: "wrong_user" };
-  if (row.revokedAt) return { valid: false, reason: "revoked" };
-  if (row.expiresAt.getTime() <= nowMs) return { valid: false, reason: "expired" };
-  return { valid: true };
-}
-
-export function trustedDeviceExpiry(nowMs: number = Date.now()): Date {
-  return new Date(nowMs + TRUSTED_DEVICE_TTL_DAYS * 24 * 60 * 60 * 1000);
 }
 
 // ── message text ─────────────────────────────────────────────────────────────

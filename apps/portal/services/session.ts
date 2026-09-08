@@ -48,6 +48,10 @@ export function clearAuthSession(): void {
     localStorage.removeItem("token");
     localStorage.removeItem("cc-token");
     localStorage.removeItem("authToken");
+    // Sign-in code v2 (2026-09-08): signing out is the ONLY thing that ends a
+    // verified sign-in, so the v1 "remember this device" token must not outlive
+    // it. The api ignores that token now; this just keeps old browsers clean.
+    localStorage.removeItem("cc-trusted-device");
   } catch { /* storage blocked — nothing was stored to clear */ }
 }
 

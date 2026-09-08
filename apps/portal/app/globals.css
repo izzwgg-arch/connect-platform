@@ -37953,19 +37953,53 @@ table tr:hover {
 .lc-login-submit:disabled,
 .lc-login-ghost:disabled { opacity: 0.6; cursor: default; }
 
-/* Sign-in code step (per-tenant 2FA-by-code, 2026-08-19): the "remember this
-   device" row and the Cloudflare Turnstile holder. Same tokens as the rest of
-   the card, so they follow the in-app theme. */
-.lc-login-remember {
+/* Sign-in code step (per-tenant 2FA-by-code, 2026-08-19; v2 2026-09-08): the
+   text-or-email choice and the Cloudflare Turnstile holder. Same tokens as the
+   rest of the card, so they follow the in-app theme. */
+.lc-login-choices { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; }
+.lc-login-choice {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 2px 0 6px;
-  font-size: 14px;
-  color: var(--text-dim);
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  text-align: left;
   cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
 }
-.lc-login-remember input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.lc-login-choice:hover { border-color: var(--accent); }
+.lc-login-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lc-login-choice:disabled { opacity: 0.6; cursor: default; }
+.lc-login-choice-icon {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.lc-login-choice-icon svg { width: 18px; height: 18px; }
+.lc-login-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lc-login-choice-to {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lc-login-turnstile { min-height: 65px; display: flex; justify-content: center; margin: 4px 0; }
 
 .lc-login-submit:focus-visible,

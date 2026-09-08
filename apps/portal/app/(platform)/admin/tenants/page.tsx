@@ -97,7 +97,7 @@ export default function AdminTenantsPage() {
                       className={r.loginOtpRequired ? "btn primary" : "btn ghost"}
                       disabled={togglingId === r.id}
                       onClick={() => setLoginOtp(r.id, !r.loginOtpRequired)}
-                      title="When ON, everyone in this tenant enters a one-time code (text or email) after their password unless they chose to remember their device for 90 days; sessions expire after 90 days. Users who already use an authenticator app are not asked twice. Off by default. ⛔ Phone-app users cannot finish sign-in on the current app until the build with the code step ships."
+                      title="When ON, everyone in this tenant enters a one-time code after their password, every time they sign in. They choose whether it goes to their registered mobile number or their email. It is asked once per sign-in and the session lasts until they sign out — no expiry. Users who already use an authenticator app are not asked twice. Off by default. ⛔ Phone-app users cannot finish sign-in on the current app until the build with the code step ships."
                     >
                       {togglingId === r.id ? "Saving…" : r.loginOtpRequired ? "On" : "Off"}
                     </button>

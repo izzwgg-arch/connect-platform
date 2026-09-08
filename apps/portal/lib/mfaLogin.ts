@@ -13,6 +13,18 @@
  *         ask for a code and POST /auth/mfa/challenge { preAuthToken, code }
  *         which answers the first shape
  *
+ * Per-tenant sign-in code (2FA-by-code; v2 2026-09-08 — the person chooses
+ * text or email, no "remember this device", no expiry: sign-out ends it):
+ *
+ *   200 { otpChallengeRequired: true, preAuthToken, expiresInSeconds, channels,
+ *         destinations, sent: false, reason: "choose_channel", error: "otp_required" }
+ *         → NOT signed in: show the choice, POST /auth/otp/send { preAuthToken,
+ *           channel }, then ask for the code
+ *   200 { …same…, channel, destination, sent: true }          → NOT signed in:
+ *         only one channel was possible, the code is already on its way — ask
+ *         for the code straight away
+ *   then POST /auth/otp/verify { preAuthToken, code } → the first shape
+ *
  * ⛔ The pre-auth token is NOT a session and must never be written to
  * localStorage as one — `writeAuthToken` would then hand it to every poller,
  * each of which gets 401 unauthorized, and the global 401 handler would tear the
@@ -28,23 +40,36 @@ export type LoginApiResponse = {
   expiresInSeconds?: number;
   methods?: string[];
   error?: string;
-  /** Per-tenant sign-in code (2FA-by-code, 2026-08-19). */
+  /** Per-tenant sign-in code (2FA-by-code). */
   otpChallengeRequired?: boolean;
+  /** The channel a code was sent on (absent while the person still has to choose). */
   channel?: string;
   channels?: string[];
+  /** Masked registered destination per offered channel: { SMS: "•••-•••-1213", EMAIL: "i•••@x.com" }. */
+  destinations?: Record<string, string>;
   destination?: string;
   sent?: boolean;
-  /** "already_sent" = a code we sent earlier is still valid; we did NOT send another. */
+  /** "choose_channel" = pick text or email first; "already_sent" = a code we sent earlier is still valid; "send_limit" = no more sends this login. */
   reason?: string;
-  /** Returned by /auth/otp/verify when "remember this device" was ticked. */
-  trustedDeviceToken?: string;
-  trustedDeviceExpiresAt?: string;
+};
+
+export type OtpChallengeState = {
+  preAuthToken: string;
+  expiresInSeconds: number;
+  channels: string[];
+  destinations: Record<string, string>;
+  /** True until a code has gone out (or is known to be on its way). */
+  awaitingChannel: boolean;
+  channel: string;
+  destination: string;
+  sent: boolean;
+  reason?: string;
 };
 
 export type ClassifiedLogin =
-  | { kind: "session"; token: string; portalPermissionSet?: string[]; mfaEnrollmentRequired: boolean; trustedDeviceToken?: string; trustedDeviceExpiresAt?: string }
+  | { kind: "session"; token: string; portalPermissionSet?: string[]; mfaEnrollmentRequired: boolean }
   | { kind: "mfa_challenge"; preAuthToken: string; expiresInSeconds: number; methods: string[] }
-  | { kind: "otp_challenge"; preAuthToken: string; expiresInSeconds: number; channel: string; channels: string[]; destination: string; sent: boolean; reason?: string }
+  | ({ kind: "otp_challenge" } & OtpChallengeState)
   | { kind: "failed"; error: string };
 
 export function classifyLoginResponse(res: LoginApiResponse | null | undefined): ClassifiedLogin {
@@ -55,20 +80,29 @@ export function classifyLoginResponse(res: LoginApiResponse | null | undefined):
       token,
       portalPermissionSet: Array.isArray(res?.portalPermissionSet) ? res!.portalPermissionSet : undefined,
       mfaEnrollmentRequired: res?.mfaEnrollmentRequired === true,
-      ...(res?.trustedDeviceToken ? { trustedDeviceToken: String(res.trustedDeviceToken), trustedDeviceExpiresAt: String(res.trustedDeviceExpiresAt || "") } : {}),
     };
   }
   const preAuth = String(res?.preAuthToken || "");
   if (res?.otpChallengeRequired === true && preAuth) {
+    const channels = Array.isArray(res?.channels) && res!.channels.length ? res!.channels.map(String) : ["EMAIL"];
+    const destinations = sanitizeDestinations(res?.destinations, channels);
+    const reason = res?.reason ? String(res.reason) : undefined;
+    const channel = String(res?.channel || "");
+    // The choice screen is shown when the api explicitly asks for it, or when
+    // no channel has been used yet and more than one is on offer.
+    const awaitingChannel = reason === "choose_channel" || (!channel && channels.length > 1);
+    const effectiveChannel = channel || channels[0];
     return {
       kind: "otp_challenge",
       preAuthToken: preAuth,
       expiresInSeconds: Number.isFinite(res?.expiresInSeconds) ? Number(res!.expiresInSeconds) : 300,
-      channel: String(res?.channel || "EMAIL"),
-      channels: Array.isArray(res?.channels) && res!.channels.length ? res!.channels.map(String) : ["EMAIL"],
-      destination: String(res?.destination || ""),
-      sent: res?.sent !== false,
-      ...(res?.reason ? { reason: String(res.reason) } : {}),
+      channels,
+      destinations,
+      awaitingChannel,
+      channel: effectiveChannel,
+      destination: String(res?.destination || destinations[effectiveChannel] || ""),
+      sent: res?.sent === true,
+      ...(reason ? { reason } : {}),
     };
   }
   if (res?.mfaChallengeRequired === true && preAuth) {
@@ -80,6 +114,28 @@ export function classifyLoginResponse(res: LoginApiResponse | null | undefined):
     };
   }
   return { kind: "failed", error: String(res?.error || "Login failed") };
+}
+
+function sanitizeDestinations(raw: unknown, channels: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const c of channels) {
+      const v = (raw as Record<string, unknown>)[c];
+      if (typeof v === "string" && v) out[c] = v;
+    }
+  }
+  return out;
+}
+
+/** Plain English for the two places a code can go. */
+export function otpChannelLabel(channel: string): string {
+  return channel === "SMS" ? "text message" : "email";
+}
+
+/** What the choice button says: "Text me at •••-•••-1213" / "Email me at i•••@x.com". */
+export function otpChoiceLabel(channel: string, destination: string | undefined): string {
+  const verb = channel === "SMS" ? "Text me" : "Email me";
+  return destination ? `${verb} at ${destination}` : verb;
 }
 
 /** Six digits = an authenticator code; ten letters/digits = a recovery code. */

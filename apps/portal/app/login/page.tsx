@@ -10,7 +10,6 @@ import { applyPortalPermissionsFromLogin } from "../../services/portalPermission
 import { writeAuthToken } from "../../services/session";
 import { clearStaleVisualQaSession } from "../../services/visualQaMode";
 import { isLocalhostDev } from "../../lib/localDev";
-import { readTrustedDeviceToken, writeTrustedDeviceToken } from "../../lib/trustedDevice";
 import { TurnstileWidget, TURNSTILE_SITE_KEY } from "../../components/TurnstileWidget";
 import {
   classifyLoginResponse,
@@ -18,10 +17,12 @@ import {
   looksLikeRecoveryCodeInput,
   mfaChallengeErrorMessage,
   normalizeMfaCodeInput,
+  otpChannelLabel,
   safeNextPath,
   securityPageDestination,
   type ClassifiedLogin,
   type LoginApiResponse,
+  type OtpChallengeState,
 } from "../../lib/mfaLogin";
 import type { Permission } from "../../types/app";
 
@@ -32,9 +33,29 @@ import type { Permission } from "../../types/app";
  * /auth/mfa/challenge → the ordinary session. Accounts without it never see
  * step two: the response is exactly what it was before MFA existed.
  *
+ * Per-tenant sign-in code (2FA-by-code, v2 2026-09-08): password → the api
+ * answers `otpChallengeRequired` → the person picks TEXT or EMAIL (both shown
+ * with the masked registered destination) → POST /auth/otp/send → we ask for
+ * the 6-digit code → POST /auth/otp/verify → the ordinary session. The code is
+ * asked once per sign-in; the session lasts until they sign out. There is no
+ * "remember this device" and nothing expires on a clock.
+ *
  * ⛔ The pre-auth token stays in component state. It is NOT a session and must
  * never go through writeAuthToken — see lib/mfaLogin.ts.
  */
+type OtpStep = OtpChallengeState & { expiresAt: number };
+
+type OtpSendResponse = {
+  ok: boolean;
+  channel: string;
+  channels: string[];
+  destinations?: Record<string, string>;
+  destination: string;
+  sent: boolean;
+  reason?: string;
+  expiresInSeconds: number;
+};
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -47,11 +68,10 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [useRecovery, setUseRecovery] = useState(false);
   const codeRef = useRef<HTMLInputElement | null>(null);
-  // Per-tenant sign-in code (2FA-by-code): a code sent by text/email after the
-  // password, "remember this device" for 90 days. Same pre-auth-token rule as MFA.
-  const [otp, setOtp] = useState<{ preAuthToken: string; expiresAt: number; channel: string; channels: string[]; destination: string; sent: boolean; reason?: string } | null>(null);
+  // Per-tenant sign-in code (2FA-by-code): choose text or email, then the code.
+  // Same pre-auth-token rule as MFA.
+  const [otp, setOtp] = useState<OtpStep | null>(null);
   const [otpCode, setOtpCode] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(true);
   const [otpNotice, setOtpNotice] = useState("");
   const otpRef = useRef<HTMLInputElement | null>(null);
   // Cloudflare Turnstile token (empty when the widget is not configured).
@@ -67,13 +87,10 @@ export default function LoginPage() {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
   useEffect(() => {
-    if (otp) otpRef.current?.focus();
+    if (otp && !otp.awaitingChannel) otpRef.current?.focus();
   }, [otp]);
 
   function completeSignIn(session: Extract<ClassifiedLogin, { kind: "session" }>) {
-    if (session.trustedDeviceToken && session.trustedDeviceExpiresAt) {
-      writeTrustedDeviceToken(session.trustedDeviceToken, session.trustedDeviceExpiresAt);
-    }
     writeAuthToken(session.token);
     applyPortalPermissionsFromLogin(session.portalPermissionSet as Permission[] | undefined);
     if (typeof window !== "undefined") {
@@ -94,15 +111,21 @@ export default function LoginPage() {
     }, 400);
   }
 
+  /** Plain English for a send that did not send — never a bare slug. */
+  function otpSendNotice(step: Pick<OtpChallengeState, "sent" | "reason" | "channel" | "destination">): string {
+    if (step.sent) return "";
+    if (step.reason === "already_sent") return `We already sent a code by ${otpChannelLabel(step.channel)} to ${step.destination}. Enter it below, or choose "Send it again".`;
+    if (step.reason === "send_limit") return `You have asked for a code too many times. The one we sent by ${otpChannelLabel(step.channel)} to ${step.destination} still works — or start over in ten minutes.`;
+    return "We could not send the code. Try again, or use the other method if one is offered.";
+  }
+
   async function loginWithCredentials(loginEmail: string, loginPassword: string) {
     setError("");
     setLoading(true);
     try {
-      const trustedDeviceToken = readTrustedDeviceToken();
       const res = await apiPost<LoginApiResponse>("/auth/login", {
         email: loginEmail,
         password: loginPassword,
-        ...(trustedDeviceToken ? { trustedDeviceToken } : {}),
         ...(turnstileToken ? { turnstileToken } : {}),
       });
       const classified = classifyLoginResponse(res);
@@ -118,26 +141,14 @@ export default function LoginPage() {
         return;
       }
       if (classified.kind === "otp_challenge") {
-        setOtp({
-          preAuthToken: classified.preAuthToken,
-          expiresAt: Date.now() + classified.expiresInSeconds * 1000,
-          channel: classified.channel,
-          channels: classified.channels,
-          destination: classified.destination,
-          sent: classified.sent,
-          reason: classified.reason,
-        });
+        const { kind: _kind, ...state } = classified;
+        setOtp({ ...state, expiresAt: Date.now() + classified.expiresInSeconds * 1000 });
         setOtpCode("");
-        // "already_sent" is not a failure: a code we sent moments ago is still
-        // good, so we deliberately did not send a second one. Saying "we could
-        // not send it" there would send people chasing a problem that is not.
-        setOtpNotice(
-          classified.sent
-            ? ""
-            : classified.reason === "already_sent"
-              ? `We already sent a code to ${classified.destination}. Enter it below, or choose "Send it again".`
-              : "We could not send the code. Try again, or use the other method if one is offered.",
-        );
+        // With a choice to make there is nothing to say yet. When the api sent
+        // straight away (one channel possible) an "already_sent" is not a
+        // failure: a code we sent moments ago is still good, so we deliberately
+        // did not send a second one.
+        setOtpNotice(classified.awaitingChannel ? "" : otpSendNotice(classified));
         return;
       }
       completeSignIn(classified);
@@ -230,6 +241,61 @@ export default function LoginPage() {
     }
   }
 
+  /** The dead-step exits every OTP call shares: the pre-auth token is gone → back to the password. */
+  function otpStepDead() {
+    setOtp(null);
+    setOtpCode("");
+    setOtpNotice("");
+    setError("That sign-in step is no longer valid. Enter your email and password again.");
+  }
+
+  /** v2: the person picked text or email. The api sends to the REGISTERED destination for that channel. */
+  async function sendOtp(channel: string) {
+    if (!otp) return;
+    if (Date.now() > otp.expiresAt) {
+      setOtp(null);
+      setError("That sign-in step timed out. Enter your email and password again.");
+      return;
+    }
+    setError("");
+    setOtpNotice("");
+    setLoading(true);
+    try {
+      const res = await apiPost<OtpSendResponse>("/auth/otp/send", {
+        preAuthToken: otp.preAuthToken,
+        channel,
+      });
+      const next: OtpStep = {
+        ...otp,
+        awaitingChannel: false,
+        channel: res.channel,
+        channels: Array.isArray(res.channels) && res.channels.length ? res.channels : otp.channels,
+        destinations: res.destinations && typeof res.destinations === "object" ? res.destinations : otp.destinations,
+        destination: res.destination,
+        sent: res.sent === true,
+        reason: res.reason,
+      };
+      setOtp(next);
+      setOtpCode("");
+      setOtpNotice(otpSendNotice(next));
+    } catch (e: unknown) {
+      if (e instanceof ApiError) {
+        const body = e.body as { error?: string; channels?: string[] } | null;
+        if (body?.error === "otp_channel_unavailable") {
+          setOtp({ ...otp, channels: Array.isArray(body.channels) && body.channels.length ? body.channels : otp.channels });
+          setError("That way of sending the code is not available for your account. Choose the other one.");
+          return;
+        }
+        if (String(body?.error || "").startsWith("otp_")) { otpStepDead(); return; }
+        setError(String(body?.error || e.message || "Could not send the code. Try again."));
+        return;
+      }
+      setError("Could not send the code. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function submitOtp(event: React.FormEvent) {
     event.preventDefault();
     if (!otp) return;
@@ -249,11 +315,10 @@ export default function LoginPage() {
       const res = await apiPost<LoginApiResponse>("/auth/otp/verify", {
         preAuthToken: otp.preAuthToken,
         code: trimmed,
-        rememberDevice,
       });
       const classified = classifyLoginResponse(res);
       if (classified.kind !== "session") {
-        setError("Sign-in didn\u2019t complete. Try again.");
+        setError("Sign-in didn’t complete. Try again.");
         return;
       }
       completeSignIn(classified);
@@ -266,15 +331,11 @@ export default function LoginPage() {
           setError(left !== null && left > 0 ? `That code is not right. ${left} ${left === 1 ? "try" : "tries"} left.` : "That code is not right.");
           return;
         }
-        if (body?.error === "otp_challenge_dead" || body?.error === "otp_session_invalid") {
-          setOtp(null);
-          setError("That sign-in step is no longer valid. Enter your email and password again.");
-          return;
-        }
-        setError(String(body?.error || e.message || "Sign-in didn\u2019t complete. Try again."));
+        if (body?.error === "otp_challenge_dead" || body?.error === "otp_session_invalid") { otpStepDead(); return; }
+        setError(String(body?.error || e.message || "Sign-in didn’t complete. Try again."));
         return;
       }
-      setError(String((e as Error)?.message || "Sign-in didn\u2019t complete. Try again."));
+      setError(String((e as Error)?.message || "Sign-in didn’t complete. Try again."));
     } finally {
       setLoading(false);
     }
@@ -286,17 +347,26 @@ export default function LoginPage() {
     setOtpNotice("");
     setLoading(true);
     try {
-      const res = await apiPost<{ ok: boolean; channel: string; channels: string[]; destination: string; sent: boolean; expiresInSeconds: number }>("/auth/otp/resend", {
+      const res = await apiPost<OtpSendResponse>("/auth/otp/resend", {
         preAuthToken: otp.preAuthToken,
         ...(channel ? { channel } : {}),
       });
-      setOtp({ ...otp, channel: res.channel, channels: res.channels, destination: res.destination, sent: res.sent, expiresAt: Date.now() + (res.expiresInSeconds || 600) * 1000 });
+      setOtp({
+        ...otp,
+        awaitingChannel: false,
+        channel: res.channel,
+        channels: Array.isArray(res.channels) && res.channels.length ? res.channels : otp.channels,
+        destinations: res.destinations && typeof res.destinations === "object" ? res.destinations : otp.destinations,
+        destination: res.destination,
+        sent: res.sent === true,
+        reason: undefined,
+      });
       setOtpCode("");
-      setOtpNotice(res.sent ? `A new code is on its way to ${res.destination}.` : "We could not send the code. Try the other method, or contact support.");
+      setOtpNotice(res.sent ? `A new code is on its way by ${otpChannelLabel(res.channel)} to ${res.destination}.` : "We could not send the code. Try the other method, or contact support.");
       otpRef.current?.focus();
     } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 429) { setError("You have asked for a new code too many times. Enter your email and password again in a few minutes."); return; }
-      if (e instanceof ApiError && String((e.body as { error?: string } | null)?.error || "").startsWith("otp_")) { setOtp(null); setError("That sign-in step is no longer valid. Enter your email and password again."); return; }
+      if (e instanceof ApiError && String((e.body as { error?: string } | null)?.error || "").startsWith("otp_")) { otpStepDead(); return; }
       setError("Could not send a new code. Try again.");
     } finally {
       setLoading(false);
@@ -326,8 +396,58 @@ export default function LoginPage() {
     await loginWithCredentials(LOCAL_DEV_EMAIL, LOCAL_DEV_PASSWORD);
   }
 
+  // v2: choose where the code goes. Both buttons show the masked REGISTERED
+  // destination — the person picks a channel, never types an address.
+  if (otp && otp.awaitingChannel) {
+    return (
+      <main className="lc-login">
+        <LoginThemeToggle />
+        <div className="lc-login-card">
+          <img className="lc-login-logo" src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} />
+          <p className="lc-login-step" role="status">
+            One more step. Where should we send your 6-digit sign-in code?
+          </p>
+          <div className="lc-login-choices" role="group" aria-label="Where to send the sign-in code">
+            {otp.channels.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className="lc-login-choice"
+                disabled={loading}
+                onClick={() => void sendOtp(c)}
+                aria-label={`${c === "SMS" ? "Text me" : "Email me"} at ${otp.destinations[c] || ""}`.trim()}
+              >
+                <span className="lc-login-choice-icon" aria-hidden="true">
+                  {c === "SMS" ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="6" y="2.5" width="12" height="19" rx="2.5" />
+                      <path d="M10.5 18.5h3" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                      <path d="m3.5 7 8.5 6 8.5-6" />
+                    </svg>
+                  )}
+                </span>
+                <span className="lc-login-choice-text">
+                  <span>{c === "SMS" ? "Text me" : "Email me"}</span>
+                  <span className="lc-login-choice-to">{otp.destinations[c] || (c === "SMS" ? "your registered mobile number" : "your registered email")}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          {error ? <div className="lc-login-error" role="alert">{error}</div> : null}
+          <button className="lc-login-forgot lc-login-linkbtn" type="button" onClick={backToPassword} disabled={loading}>
+            Back to sign in
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (otp) {
-    const via = otp.channel === "SMS" ? "text message" : "email";
+    const via = otpChannelLabel(otp.channel);
     const other = otp.channels.find((c) => c !== otp.channel);
     return (
       <main className="lc-login">
@@ -337,7 +457,7 @@ export default function LoginPage() {
           <p className="lc-login-step" role="status">
             {otp.sent
               ? `We sent a 6-digit code by ${via} to ${otp.destination}. Enter it to finish signing in.`
-              : otp.reason === "already_sent"
+              : otp.reason === "already_sent" || otp.reason === "send_limit"
                 ? `Enter the 6-digit code we sent by ${via} to ${otp.destination}.`
                 : `We could not send your code by ${via}.`}
           </p>
@@ -357,10 +477,6 @@ export default function LoginPage() {
               aria-label="Sign-in code"
             />
           </label>
-          <label className="lc-login-remember">
-            <input type="checkbox" checked={rememberDevice} onChange={(e) => setRememberDevice(e.target.checked)} />
-            <span>Remember this device for 90 days</span>
-          </label>
           {otpNotice ? <div className="lc-login-step" role="status">{otpNotice}</div> : null}
           {error ? <div className="lc-login-error" role="alert">{error}</div> : null}
           <button className="lc-login-submit" type="submit" disabled={loading}>
@@ -371,7 +487,7 @@ export default function LoginPage() {
           </button>
           {other ? (
             <button className="lc-login-ghost" type="button" disabled={loading} onClick={() => void resendOtp(other)}>
-              {other === "SMS" ? "Text me the code instead" : "Email me the code instead"}
+              {other === "SMS" ? `Text me instead${otp.destinations.SMS ? ` (${otp.destinations.SMS})` : ""}` : `Email me instead${otp.destinations.EMAIL ? ` (${otp.destinations.EMAIL})` : ""}`}
             </button>
           ) : null}
           <button className="lc-login-forgot lc-login-linkbtn" type="button" onClick={backToPassword} disabled={loading}>

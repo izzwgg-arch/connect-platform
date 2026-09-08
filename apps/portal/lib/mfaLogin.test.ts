@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   classifyLoginResponse,
@@ -18,6 +18,8 @@ import {
   looksLikeTotpCodeInput,
   mfaChallengeErrorMessage,
   normalizeMfaCodeInput,
+  otpChannelLabel,
+  otpChoiceLabel,
   safeNextPath,
   securityPageDestination,
 } from "./mfaLogin";
@@ -138,43 +140,53 @@ test("⛔ the security page is reachable: profile menu links it, and the dashboa
   assert.match(nudge, /href="\/account\/security\?setup=1"/);
 });
 
-// ─── per-tenant sign-in code + Turnstile (2026-08-19) ────────────────────────
+// ─── per-tenant sign-in code + Turnstile (2026-08-19; v2 2026-09-08) ─────────
 
-test("classifyLoginResponse: the OTP challenge shape has NO token; a token still always wins; trusted-device fields ride the session", () => {
-  const otp = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), expiresInSeconds: 600, channel: "SMS", channels: ["SMS", "EMAIL"], destination: "•••-•••-1234", sent: true, error: "otp_required" });
-  assert.equal(otp.kind, "otp_challenge");
-  if (otp.kind === "otp_challenge") {
-    assert.equal(otp.channel, "SMS");
-    assert.deepEqual(otp.channels, ["SMS", "EMAIL"]);
-    assert.equal(otp.sent, true);
-    assert.equal(otp.expiresInSeconds, 600);
+test("classifyLoginResponse (v2): choose-channel → awaitingChannel with both masked destinations; a one-channel send → straight to the code; a token still always wins; no trusted-device fields exist", () => {
+  const choose = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), expiresInSeconds: 300, channels: ["SMS", "EMAIL"], destinations: { SMS: "•••-•••-1234", EMAIL: "b••••@acme.test" }, sent: false, reason: "choose_channel", error: "otp_required" });
+  assert.equal(choose.kind, "otp_challenge");
+  if (choose.kind === "otp_challenge") {
+    assert.equal(choose.awaitingChannel, true);
+    assert.deepEqual(choose.channels, ["SMS", "EMAIL"]);
+    assert.deepEqual(choose.destinations, { SMS: "•••-•••-1234", EMAIL: "b••••@acme.test" });
+    assert.equal(choose.sent, false);
+    assert.equal(choose.expiresInSeconds, 300);
   }
-  const notSent = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), sent: false });
-  assert.equal(notSent.kind === "otp_challenge" && notSent.sent, false);
+  const sentNow = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), channel: "EMAIL", channels: ["EMAIL"], destinations: { EMAIL: "o•••••@acme.test" }, destination: "o•••••@acme.test", sent: true });
+  assert.equal(sentNow.kind === "otp_challenge" && sentNow.awaitingChannel, false, "one channel, already sent → no choice screen");
+  assert.equal(sentNow.kind === "otp_challenge" && sentNow.channel, "EMAIL");
+  assert.equal(sentNow.kind === "otp_challenge" && sentNow.destination, "o•••••@acme.test");
+  const oldShape = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), channels: ["SMS", "EMAIL"], sent: false });
+  assert.equal(oldShape.kind === "otp_challenge" && oldShape.awaitingChannel, true, "two channels and no channel used yet → choose, even without the reason");
+  const junkDest = classifyLoginResponse({ otpChallengeRequired: true, preAuthToken: "p".repeat(40), channels: ["SMS"], destinations: { SMS: 5, PIGEON: "x" } as any, sent: true, channel: "SMS" });
+  assert.deepEqual(junkDest.kind === "otp_challenge" && junkDest.destinations, {}, "only string destinations for offered channels survive");
   assert.equal(classifyLoginResponse({ otpChallengeRequired: true }).kind, "failed", "no pre-auth token → not a challenge");
   const withToken = classifyLoginResponse({ token: "t", otpChallengeRequired: true, preAuthToken: "p".repeat(40) });
   assert.equal(withToken.kind, "session", "a token always wins");
-  const remembered = classifyLoginResponse({ token: "t", trustedDeviceToken: "d".repeat(48), trustedDeviceExpiresAt: "2026-11-17T00:00:00.000Z" });
-  assert.equal(remembered.kind === "session" && remembered.trustedDeviceToken, "d".repeat(48));
-  const plain = classifyLoginResponse({ token: "t" });
-  assert.equal(plain.kind === "session" && "trustedDeviceToken" in plain, false, "no device token → the field is absent, not empty");
+  const plain = classifyLoginResponse({ token: "t", trustedDeviceToken: "d".repeat(48) } as any);
+  assert.equal(plain.kind === "session" && "trustedDeviceToken" in plain, false, "v2: a v1 device token in the body is dropped on the floor");
+  assert.equal(otpChoiceLabel("SMS", "•••-•••-1234"), "Text me at •••-•••-1234");
+  assert.equal(otpChoiceLabel("EMAIL", undefined), "Email me");
+  assert.equal(otpChannelLabel("SMS"), "text message");
 });
 
-test("⛔ login page: the OTP step posts to /auth/otp/verify with the pre-auth token, remembers only on request, and never stores the pre-auth token", () => {
+test("⛔ login page (v2): choose text or email → /auth/otp/send with the pre-auth token → /auth/otp/verify; no remember-me, no device token, the pre-auth token is never stored", () => {
   const src = read("../app/login/page.tsx");
-  assert.match(src, /apiPost<LoginApiResponse>\("\/auth\/otp\/verify", \{\s*\n\s*preAuthToken: otp\.preAuthToken,\s*\n\s*code: trimmed,\s*\n\s*rememberDevice,/);
+  assert.match(src, /apiPost<OtpSendResponse>\("\/auth\/otp\/send", \{\s*\n\s*preAuthToken: otp\.preAuthToken,\s*\n\s*channel,/);
+  assert.match(src, /apiPost<LoginApiResponse>\("\/auth\/otp\/verify", \{\s*\n\s*preAuthToken: otp\.preAuthToken,\s*\n\s*code: trimmed,\s*\n\s*\}\)/);
   assert.match(src, /apiPost<[^>]*>\("\/auth\/otp\/resend", \{\s*\n\s*preAuthToken: otp\.preAuthToken,/);
   assert.match(src, /classified\.kind === "otp_challenge"/);
-  // The remembered-device token is stored ONLY inside completeSignIn, from a classified session, and sent on the next login.
-  const deviceWrites = src.match(/writeTrustedDeviceToken\(/g) ?? [];
-  assert.equal(deviceWrites.length, 1, "exactly one place stores the device token");
-  assert.match(src, /if \(session\.trustedDeviceToken && session\.trustedDeviceExpiresAt\) \{\s*\n\s*writeTrustedDeviceToken\(session\.trustedDeviceToken, session\.trustedDeviceExpiresAt\);/);
-  assert.match(src, /const trustedDeviceToken = readTrustedDeviceToken\(\);/);
-  assert.match(src, /\.\.\.\(trustedDeviceToken \? \{ trustedDeviceToken \} : \{\}\)/);
-  assert.doesNotMatch(src, /writeTrustedDeviceToken\([^)]*preAuth/i);
-  // "Remember this device" is a real choice on screen, defaulting to on.
-  assert.match(src, /useState\(true\)/);
-  assert.match(src, /Remember this device for 90 days/);
+  assert.match(src, /if \(otp && otp\.awaitingChannel\)/, "the choice screen is its own render branch");
+  assert.match(src, /otp\.channels\.map\(\(c\) =>/, "one button per offered channel");
+  assert.match(src, /otp\.destinations\[c\]/, "each button shows the masked registered destination");
+  assert.match(src, /className="lc-login-choice"/);
+  // v1 leftovers must be gone from the page.
+  assert.doesNotMatch(src, /rememberDevice|trustedDevice|TrustedDevice|Remember this device|90 days/);
+  // The only session write is inside completeSignIn, from a classified session; the pre-auth token never goes near it.
+  const tokenWrites = src.match(/writeAuthToken\(/g) ?? [];
+  assert.equal(tokenWrites.length, 1);
+  assert.match(src, /writeAuthToken\(session\.token\)/);
+  assert.doesNotMatch(src, /writeAuthToken\([^)]*preAuth/i);
   assert.match(src, /autoComplete="one-time-code"/);
   // Turnstile: rendered only when a site key is configured; the token rides the login body; a human_check_ refusal resets the widget.
   assert.match(src, /TURNSTILE_SITE_KEY \? <TurnstileWidget/);
@@ -182,10 +194,14 @@ test("⛔ login page: the OTP step posts to /auth/otp/verify with the pre-auth t
   assert.match(src, /errCode\.startsWith\("human_check_"\)/);
 });
 
-test("⛔ trustedDevice + TurnstileWidget: expiry is honoured locally; the widget renders nothing without a site key and loads only Cloudflare's script", () => {
-  const td = read("./trustedDevice.ts");
-  assert.match(td, /exp <= nowMs/);
-  assert.match(td, /localStorage\.removeItem\(KEY\)/);
+test("⛔ v2 sign-out is the ONLY thing that ends a verified sign-in: clearAuthSession drops the session AND the v1 device token; lib/trustedDevice.ts is gone", () => {
+  const s = read("../services/session.ts");
+  const fn = s.slice(s.indexOf("export function clearAuthSession("), s.indexOf("export function readTenantContext("));
+  assert.match(fn, /localStorage\.removeItem\("cc-trusted-device"\)/);
+  assert.equal(existsSync(join(here, "trustedDevice.ts")), false, "the remember-this-device module was deleted, not left dead");
+});
+
+test("TurnstileWidget: renders nothing without a site key and loads only Cloudflare's script", () => {
   const tw = read("../components/TurnstileWidget.tsx");
   assert.match(tw, /if \(!TURNSTILE_SITE_KEY\) return null;/);
   // The URL moved into lib/turnstileScript.ts so app/login/layout.tsx can
