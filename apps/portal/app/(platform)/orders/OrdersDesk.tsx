@@ -19,7 +19,7 @@
 import "./supermarket.css";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ExternalLink, Loader2, MessageCircle, Mic, Pause, Phone, Play, RefreshCw, Search } from "lucide-react";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
@@ -91,6 +91,14 @@ export const SM_ORDERS_PHRASES = [
   "Click to set the right item — the agent learns it", "Add this instead — a one-off, not taught",
   "Please confirm the phone number.", "Use this number", "Use what they said", "keep",
   "from the number they called from",
+  // Orders Desk filters (2026-09-08)
+  "Failed to send", "Dismissed", "Search name, phone or order #",
+  "Today", "Last 7 days", "Last 30 days", "Last 90 days", "All time", "Custom", "Apply", "to",
+  "From date", "To date", "Source", "All", "Clear filters",
+  "orders match", "order matches", "newest first", "Showing", "of", "No orders",
+  "No orders match these filters. Try a wider range or All time.", "No orders here.",
+  "sent", "failed to send", "dismissed", "card declined", "note",
+  "Previous page", "Next page", "Rows per page",
 ] as string[];
 
 type DraftRow = {
@@ -261,14 +269,6 @@ export function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-function ago(iso: string, t: (s: string) => string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const min = Math.max(0, Math.round(ms / 60000));
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.round(min / 60);
-  return hr === 1 ? "1 hr ago" : `${hr} hr ago`;
-}
-
 function errText(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
     const body: any = e.body;
@@ -282,32 +282,94 @@ function errText(e: unknown, fallback: string): string {
 function OrdersList() {
   const { t } = useUiLanguage(SM_ORDERS_PHRASES);
   const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
   const [summary, setSummary] = useState<{ needsReview: number; submittedToday: number; fromVoicemail: number; fromText: number } | null>(null);
-  const [drafts, setDrafts] = useState<DraftRow[]>([]);
-  const [sent, setSent] = useState<DraftRow[]>([]);
-  const [tab, setTab] = useState<"review" | "sent" | "all">("review");
+  const [rows, setRows] = useState<DraftRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Filters live in the URL (?tab=&range=&from=&to=&src=&q=&page=&size=) so a
+  // lookup survives Back and can be shared. Defaults are omitted from the URL.
+  const tabParam = sp.get("tab");
+  const tab: SmTab = isSmTab(tabParam) ? tabParam : "review";
+  const rangeParam = sp.get("range");
+  const range: SmRange = isSmRange(rangeParam) ? rangeParam : SM_DEFAULT_RANGE;
+  const from = sp.get("from") ?? "";
+  const to = sp.get("to") ?? "";
+  const srcParam = sp.get("src") ?? "";
+  const source: SmSource = SM_SOURCES.some((s) => s.key === srcParam) ? (srcParam as SmSource) : "";
+  const q = sp.get("q") ?? "";
+  const page = Math.max(1, Number.parseInt(sp.get("page") ?? "1", 10) || 1);
+  const sizeParam = Number.parseInt(sp.get("size") ?? "", 10);
+  const pageSize = SM_PAGE_SIZES.includes(sizeParam) ? sizeParam : SM_DEFAULT_PAGE_SIZE;
+
+  const setParams = useCallback(
+    (patch: Record<string, string | null>, opts: { keepPage?: boolean } = {}) => {
+      const next = new URLSearchParams(sp.toString());
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null || v === "") next.delete(k);
+        else next.set(k, v);
+      }
+      if (!opts.keepPage) next.delete("page");
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [sp, router, pathname],
+  );
+
+  // Search box: local draft, debounced into the URL.
+  const [qDraft, setQDraft] = useState(q);
+  useEffect(() => setQDraft(q), [q]);
+  useEffect(() => {
+    if (qDraft === q) return;
+    const h = setTimeout(() => setParams({ q: qDraft.trim() || null }), 350);
+    return () => clearTimeout(h);
+  }, [qDraft, q, setParams]);
+
+  // Custom range draft (committed on Apply).
+  const [draftFrom, setDraftFrom] = useState(from);
+  const [draftTo, setDraftTo] = useState(to);
+  useEffect(() => {
+    setDraftFrom(from);
+    setDraftTo(to);
+  }, [from, to]);
+  const draftValid = Boolean(draftFrom || draftTo) && (!draftFrom || !draftTo || draftFrom <= draftTo);
+  const draftDirty = draftFrom !== from || draftTo !== to;
+  const todayYmd = smYmd(new Date());
+
+  const bounds = useMemo(() => smRangeBounds(range, from, to), [range, from, to]);
+  const rangeText = useMemo(() => smDescribeRange(range, bounds), [range, bounds]);
+  const status = SM_TABS.find((x) => x.key === tab)?.status ?? "";
+
   const load = useCallback(async () => {
     try {
-      const [sum, needs, done] = await Promise.all([
+      const qs = new URLSearchParams();
+      if (status) qs.set("status", status);
+      if (source) qs.set("source", source);
+      if (bounds.from) qs.set("from", bounds.from.toISOString());
+      if (bounds.to) qs.set("to", bounds.to.toISOString());
+      if (q) qs.set("q", q);
+      if (page > 1) qs.set("page", String(page));
+      qs.set("pageSize", String(pageSize));
+      const [sum, list] = await Promise.all([
         apiGet<any>("/supermarket/summary"),
-        apiGet<{ drafts: DraftRow[] }>("/supermarket/drafts?status=NEEDS_REVIEW"),
-        apiGet<{ drafts: DraftRow[] }>("/supermarket/drafts?status=SUBMITTED"),
+        apiGet<{ drafts: DraftRow[]; total?: number }>(`/supermarket/drafts?${qs.toString()}`),
       ]);
       setSummary(sum);
-      setDrafts(needs.drafts ?? []);
-      setSent(done.drafts ?? []);
+      setRows(list.drafts ?? []);
+      setTotal(typeof list.total === "number" ? list.total : (list.drafts ?? []).length);
       setError(null);
     } catch (e) {
       setError(errText(e, "Orders could not be loaded."));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [status, source, bounds, q, page, pageSize]);
 
   useEffect(() => {
+    setLoading(true);
     void load();
     const timer = setInterval(() => void load(), 30_000);
     return () => clearInterval(timer);
@@ -322,7 +384,18 @@ function OrdersList() {
     }
   }, [router]);
 
-  const listShown = tab === "sent" ? sent : tab === "all" ? [...drafts, ...sent] : drafts;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const firstIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastIdx = Math.min(page * pageSize, total);
+  const showing = total === 0 ? t("No orders") : `${t("Showing")} ${firstIdx.toLocaleString()}–${lastIdx.toLocaleString()} ${t("of")} ${total.toLocaleString()}`;
+  const filtersActive = range !== SM_DEFAULT_RANGE || Boolean(source) || Boolean(q) || pageSize !== SM_DEFAULT_PAGE_SIZE || tab !== "review";
+  const srcLabel = (d: DraftRow) => t(d.sourceType === "voicemail" ? "Voicemail" : d.sourceType === "text" ? "Text" : "Call");
+  const emptyText =
+    q || source || range !== "all"
+      ? t("No orders match these filters. Try a wider range or All time.")
+      : tab === "review"
+        ? t("Nothing needs review right now.")
+        : t("No orders here.");
 
   return (
     <div className="sm-content" style={{ minHeight: "auto" }}>
@@ -342,67 +415,255 @@ function OrdersList() {
 
       <div className="sm-toolbar">
         <span className="sm-tabs">
-          <button type="button" className={`sm-tab${tab === "review" ? " sm-on" : ""}`} onClick={() => setTab("review")}>{t("Needs review")}</button>
-          <button type="button" className={`sm-tab${tab === "sent" ? " sm-on" : ""}`} onClick={() => setTab("sent")}>{t("Sent")}</button>
-          <button type="button" className={`sm-tab${tab === "all" ? " sm-on" : ""}`} onClick={() => setTab("all")}>{t("All orders")}</button>
+          {SM_TABS.map((x) => (
+            <button key={x.key} type="button" className={`sm-tab${tab === x.key ? " sm-on" : ""}`} onClick={() => setParams({ tab: x.key === "review" ? null : x.key })}>
+              {t(x.label)}
+            </button>
+          ))}
         </span>
         <span className="sm-spacer" />
+        <label className="sm-search sm-search-live">
+          <Search size={13} aria-hidden />
+          <input
+            type="search"
+            value={qDraft}
+            onChange={(e) => setQDraft(e.target.value)}
+            placeholder={t("Search name, phone or order #")}
+            aria-label={t("Search name, phone or order #")}
+          />
+        </label>
+      </div>
+
+      {/* Filters (2026-09-08): Received range + Source. Status is the tab strip above. */}
+      <div className="sm-filterbar">
+        <span className="sm-flab-inline">{t("Received")}</span>
+        <span className="sm-chips">
+          {SM_RANGES.map((r) => (
+            <button key={r.key} type="button" className={`sm-filter${range === r.key ? " sm-on" : ""}`} onClick={() => setParams({ range: r.key === SM_DEFAULT_RANGE ? null : r.key, from: null, to: null })}>
+              {t(r.label)}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={`sm-filter${range === "custom" ? " sm-on" : ""}`}
+            onClick={() => {
+              if (range === "custom") return;
+              const seedFrom = bounds.from ? smYmd(bounds.from) : "";
+              setDraftFrom(seedFrom);
+              setDraftTo(todayYmd);
+              setParams({ range: "custom", from: seedFrom || null, to: todayYmd });
+            }}
+          >
+            {range === "custom" ? t("Custom") : `${t("Custom")}…`}
+          </button>
+        </span>
+        {range === "custom" ? (
+          <form
+            className="sm-daterange"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!draftValid) return;
+              setParams({ range: "custom", from: draftFrom || null, to: draftTo || null });
+            }}
+          >
+            <input type="date" className="sm-date" aria-label={t("From date")} value={draftFrom} max={draftTo || todayYmd} onChange={(e) => setDraftFrom(e.target.value)} />
+            <span className="sm-cellsub">{t("to")}</span>
+            <input type="date" className="sm-date" aria-label={t("To date")} value={draftTo} min={draftFrom || undefined} max={todayYmd} onChange={(e) => setDraftTo(e.target.value)} />
+            <button type="submit" className="sm-btn sm-primary sm-btn-sm" disabled={!draftValid || !draftDirty}>{t("Apply")}</button>
+          </form>
+        ) : null}
+        <span className="sm-vsep" aria-hidden />
+        <span className="sm-flab-inline">{t("Source")}</span>
+        <span className="sm-chips">
+          {SM_SOURCES.map((s) => (
+            <button key={s.key || "all"} type="button" className={`sm-filter${source === s.key ? " sm-on" : ""}`} onClick={() => setParams({ src: s.key || null })}>
+              {t(s.label)}
+            </button>
+          ))}
+        </span>
+        <span className="sm-spacer" />
+        <span className="sm-cellsub sm-rangetext">{rangeText}</span>
+        {filtersActive ? (
+          <button type="button" className="sm-btn sm-quiet sm-btn-sm" onClick={() => { setQDraft(""); setParams({ tab: null, range: null, from: null, to: null, src: null, q: null, size: null }); }}>
+            {t("Clear filters")}
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="sm-mut" role="alert">{error}</p> : null}
-      {loading ? <p className="sm-mut">{t("Loading…")}</p> : null}
 
-      {tab !== "sent" ? (
-        <div className="sm-table">
-          <div className="sm-thead"><span /><span>{t("Customer")}</span><span>{t("Received")}</span><span>{t("Draft")}</span><span>{t("Flags")}</span><span /></div>
-          {drafts.length === 0 && !loading ? (
-            <div className="sm-trow"><span /><span className="sm-cellsub">{t("Nothing needs review right now.")}</span><span /><span /><span /><span /></div>
-          ) : null}
-          {drafts.map((d) => {
-            const est = (d.items ?? []).reduce((s, i) => s + i.unitPriceCents * i.qty, 0);
-            const wic = /WIC/i.test(d.comments ?? "");
-            return (
-              <div className="sm-trow" key={d.id}>
-                <span className="sm-srcic" aria-hidden>{d.sourceType === "voicemail" ? <Mic size={14} /> : d.sourceType === "text" ? <MessageCircle size={14} /> : <Phone size={14} />}</span>
-                <div className="sm-who"><b>{d.customerName || d.customerPhone || "—"}</b><span>{d.customerPhone}{d.posCustomerId ? ` · acct ${d.posCustomerId}` : ""}</span></div>
-                <span className="sm-cellsub">{t(d.sourceType === "voicemail" ? "Voicemail" : d.sourceType === "text" ? "Text" : "Call")} · {ago(d.createdAt, t)}</span>
-                <span className="sm-cellsub"><span className="sm-amount">{(d.items ?? []).length} {t("items")} · {money(est)}</span> est.</span>
-                <span>
-                  {wic ? <span className="sm-pill sm-wic"><i />WIC</span> : null}{" "}
-                  {(d.notes ?? "").length > 0 ? <span className="sm-pill sm-info"><i />note</span> : null}
-                </span>
-                <Link className="sm-btn sm-primary" href={`/orders?draft=${d.id}`}>{t("Review")}</Link>
-              </div>
-            );
-          })}
+      <div className={`sm-table${loading ? " sm-loading" : ""}`}>
+        <div className="sm-tcount">
+          <span><b>{total.toLocaleString()}</b> {t(total === 1 ? "order matches" : "orders match")} · {t("newest first")}</span>
+          <span>{loading && rows.length === 0 ? t("Loading…") : showing}</span>
         </div>
-      ) : null}
-
-      {tab !== "review" ? (
-        <>
-          <p className="sm-flab" style={{ margin: "1.2rem 0 0.5rem" }}>{t("Sent today — tracked by Loopcom")}</p>
-          <div className="sm-table">
-            {sent.length === 0 && !loading ? (
-              <div className="sm-trow"><span /><span className="sm-cellsub">{t("No orders yet today.")}</span><span /><span /><span /><span /></div>
-            ) : null}
-            {sent.map((d) => {
-              const total = (d.items ?? []).reduce((s, i) => s + i.unitPriceCents * i.qty, 0);
-              return (
-                <div className="sm-trow" key={d.id}>
-                  <span className="sm-srcic sm-done" aria-hidden><Check size={14} /></span>
-                  <div className="sm-who"><b>{d.customerName || d.customerPhone || "—"}</b><span>{d.posOrderId ? `#${d.posOrderId} · ` : ""}{t(d.sourceType === "voicemail" ? "from voicemail" : d.sourceType === "text" ? "from text" : "from a call")}{d.paymentStatus === "CHARGED" ? ` · ${"paid"} ${d.paymentLast4 ? `•••• ${d.paymentLast4}` : ""}` : d.paymentStatus === "DECLINED" ? " · card declined" : ""}</span></div>
-                  <span className="sm-cellsub"><span className="sm-amount">{money(total)}</span></span>
-                  <span><span className="sm-pill sm-info"><i />{d.orderMethod}</span></span>
-                  <span />
-                  <Link className="sm-btn sm-quiet" href={`/orders?draft=${d.id}`}>{t("Open")}</Link>
-                </div>
-              );
-            })}
+        <div className="sm-thead"><span /><span>{t("Customer")}</span><span>{t("Received")}</span><span>{tab === "sent" ? t("Total") : t("Draft")}</span><span>{t("Flags")}</span><span /></div>
+        {rows.length === 0 && !loading ? (
+          <div className="sm-trow"><span /><span className="sm-cellsub">{emptyText}</span><span /><span /><span /><span /></div>
+        ) : null}
+        {rows.map((d) => {
+          const amount = (d.items ?? []).reduce((s, i) => s + i.unitPriceCents * i.qty, 0);
+          const wic = /WIC/i.test(d.comments ?? "");
+          const sent = d.status === "SUBMITTED";
+          const failed = d.status === "SUBMIT_FAILED";
+          const dismissed = d.status === "DISMISSED";
+          const rec = smFmtReceived(d.createdAt);
+          const sentOn = sent && d.submittedAt ? smFmtReceived(d.submittedAt) : null;
+          return (
+            <div className="sm-trow" key={d.id}>
+              <span className={`sm-srcic${sent ? " sm-done" : ""}`} aria-hidden>
+                {sent ? <Check size={14} /> : d.sourceType === "voicemail" ? <Mic size={14} /> : d.sourceType === "text" ? <MessageCircle size={14} /> : <Phone size={14} />}
+              </span>
+              <div className="sm-who">
+                <b>{d.customerName || d.customerPhone || "—"}</b>
+                <span>{sent && d.posOrderId ? `#${d.posOrderId} · ` : ""}{d.customerPhone}{d.posCustomerId ? ` · acct ${d.posCustomerId}` : ""}</span>
+              </div>
+              <div className="sm-who sm-received">
+                <b>{rec.day} <span>· {rec.time}</span></b>
+                <span>{srcLabel(d)}{sentOn ? ` · ${t("sent")} ${sentOn.day}` : ""}</span>
+              </div>
+              <span className="sm-cellsub">
+                <span className="sm-amount">{sent ? money(amount) : `${(d.items ?? []).length} ${t("items")} · ${money(amount)}`}</span>{sent ? "" : " est."}
+              </span>
+              <span className="sm-flags">
+                {sent ? <span className="sm-pill sm-info"><i />{t(d.orderMethod === "Delivery" ? "Delivery" : "Pickup")}</span> : null}
+                {failed ? <span className="sm-pill sm-warn"><i />{t("failed to send")}</span> : null}
+                {dismissed ? <span className="sm-pill sm-move"><i />{t("dismissed")}</span> : null}
+                {d.paymentStatus === "DECLINED" ? <span className="sm-pill sm-warn"><i />{t("card declined")}</span> : null}
+                {wic ? <span className="sm-pill sm-wic"><i />WIC</span> : null}
+                {!sent && (d.notes ?? "").length > 0 ? <span className="sm-pill sm-info"><i />{t("note")}</span> : null}
+              </span>
+              {sent || dismissed ? (
+                <Link className="sm-btn sm-quiet" href={`/orders?draft=${d.id}`}>{t("Open")}</Link>
+              ) : (
+                <Link className="sm-btn sm-primary" href={`/orders?draft=${d.id}`}>{t("Review")}</Link>
+              )}
+            </div>
+          );
+        })}
+        {total > 0 ? (
+          <div className="sm-pager">
+            <span>{showing}</span>
+            <span className="sm-pages">
+              <button type="button" className="sm-pgarrow" aria-label={t("Previous page")} disabled={page <= 1} onClick={() => setParams({ page: page - 1 <= 1 ? null : String(page - 1) }, { keepPage: true })}>‹</button>
+              {smPageNumbers(page, pages).map((n, i) =>
+                n === "…" ? (
+                  <span key={`gap-${i}`} className="sm-pg sm-gap">…</span>
+                ) : (
+                  <button key={n} type="button" className={`sm-pg${n === page ? " sm-on" : ""}`} aria-current={n === page ? "page" : undefined} onClick={() => setParams({ page: n === 1 ? null : String(n) }, { keepPage: true })}>
+                    {n}
+                  </button>
+                ),
+              )}
+              <button type="button" className="sm-pgarrow" aria-label={t("Next page")} disabled={page >= pages} onClick={() => setParams({ page: String(page + 1) }, { keepPage: true })}>›</button>
+            </span>
+            <span className="sm-rpp">
+              {t("Rows per page")}
+              <select className="sm-select" value={String(pageSize)} aria-label={t("Rows per page")} onChange={(e) => setParams({ size: Number(e.target.value) === SM_DEFAULT_PAGE_SIZE ? null : e.target.value })}>
+                {SM_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </span>
           </div>
-        </>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
+}
+
+// ── Orders Desk filter helpers (2026-09-08) ─────────────────────────────────
+
+type SmTab = "review" | "sent" | "failed" | "dismissed" | "all";
+const SM_TABS: { key: SmTab; label: string; status: string }[] = [
+  { key: "review", label: "Needs review", status: "NEEDS_REVIEW" },
+  { key: "sent", label: "Sent", status: "SUBMITTED" },
+  { key: "failed", label: "Failed to send", status: "SUBMIT_FAILED" },
+  { key: "dismissed", label: "Dismissed", status: "DISMISSED" },
+  { key: "all", label: "All orders", status: "" },
+];
+function isSmTab(v: string | null): v is SmTab {
+  return SM_TABS.some((x) => x.key === v);
+}
+
+type SmRange = "today" | "7d" | "30d" | "90d" | "all" | "custom";
+const SM_RANGES: { key: SmRange; label: string; daysBack: number | null }[] = [
+  { key: "today", label: "Today", daysBack: 0 },
+  { key: "7d", label: "Last 7 days", daysBack: 6 },
+  { key: "30d", label: "Last 30 days", daysBack: 29 },
+  { key: "90d", label: "Last 90 days", daysBack: 89 },
+  { key: "all", label: "All time", daysBack: null },
+];
+const SM_DEFAULT_RANGE: SmRange = "30d";
+function isSmRange(v: string | null): v is SmRange {
+  return v === "custom" || SM_RANGES.some((r) => r.key === v);
+}
+
+type SmSource = "" | "call" | "voicemail" | "text";
+const SM_SOURCES: { key: SmSource; label: string }[] = [
+  { key: "", label: "All" },
+  { key: "call", label: "Call" },
+  { key: "voicemail", label: "Voicemail" },
+  { key: "text", label: "Text" },
+];
+
+const SM_PAGE_SIZES = [25, 50, 100, 200];
+const SM_DEFAULT_PAGE_SIZE = 50;
+
+function smYmd(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function smParseYmd(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+/** Local-day boundaries → instants the API compares createdAt against. */
+function smRangeBounds(range: SmRange, from: string, to: string, now = new Date()): { from?: Date; to?: Date } {
+  if (range === "all") return {};
+  if (range === "custom") {
+    const f = from ? smParseYmd(from) : null;
+    const tt = to ? smParseYmd(to) : null;
+    const out: { from?: Date; to?: Date } = {};
+    if (f) { f.setHours(0, 0, 0, 0); out.from = f; }
+    if (tt) { tt.setHours(23, 59, 59, 999); out.to = tt; }
+    return out;
+  }
+  const back = SM_RANGES.find((r) => r.key === range)?.daysBack ?? 29;
+  const f = new Date(now);
+  f.setHours(0, 0, 0, 0);
+  f.setDate(f.getDate() - back);
+  return { from: f };
+}
+function smFmtDay(d: Date, withYear: boolean): string {
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(withYear ? { year: "numeric" } : {}) });
+}
+function smDescribeRange(range: SmRange, b: { from?: Date; to?: Date }, now = new Date()): string {
+  if (range === "all") return "All time";
+  const to = b.to ?? now;
+  if (!b.from) return `Up to ${smFmtDay(to, true)}`;
+  const sameYear = b.from.getFullYear() === to.getFullYear();
+  const sameMonth = sameYear && b.from.getMonth() === to.getMonth();
+  if (sameMonth && b.from.getDate() === to.getDate()) return smFmtDay(b.from, true);
+  if (sameMonth) return `${b.from.getDate()} – ${smFmtDay(to, true)}`;
+  return `${smFmtDay(b.from, !sameYear)} – ${smFmtDay(to, true)}`;
+}
+function smFmtReceived(iso: string, now = new Date()): { day: string; time: string } {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { day: "—", time: "" };
+  return {
+    day: d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) }),
+    time: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+  };
+}
+function smPageNumbers(page: number, pages: number): (number | "…")[] {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const out: (number | "…")[] = [1];
+  if (page > 3) out.push("…");
+  for (let i = Math.max(2, page - 1); i <= Math.min(pages - 1, page + 1); i++) out.push(i);
+  if (page < pages - 2) out.push("…");
+  out.push(pages);
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

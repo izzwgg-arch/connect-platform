@@ -30,6 +30,7 @@ import {
   storeIntegrationKey,
 } from "./integrationCredentials";
 import { clearCrmModeCache, requireSupermarketMode, CRM_MODES } from "./crmMode";
+import { parseDraftListQuery, draftSearchWhere } from "./draftListQuery";
 import { approveAndSubmitDraft, sanitizeDraftItems } from "./orderSubmit";
 import { runPayIvrStep } from "./payIvrRuntime";
 import { payIvrDialplanView } from "./payIvrDialplan";
@@ -611,18 +612,26 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     return reply.send({ needsReview, submittedToday, fromVoicemail, fromText });
   });
 
+  // Orders Desk list (2026-09-08): filtered + paged. Query: status, source
+  // (call|voicemail|text), from/to (ISO instants on createdAt), q (name / phone
+  // digits / POS order #), page, pageSize (≤200). Response keeps the `drafts`
+  // key and adds total/page/pageSize. Parsing lives in draftListQuery.ts (tested).
   app.get("/supermarket/drafts", async (req: any, reply: any) => {
     if (!(await requireSupermarketMode(db, req, reply))) return;
     const tenantId = tenantOf(req);
-    const status = String((req.query as any)?.status ?? "").trim();
+    const lq = parseDraftListQuery(req.query as any);
     const where: any = { tenantId };
-    if (status && ["NEEDS_REVIEW", "APPROVED", "SUBMITTED", "SUBMIT_FAILED", "DISMISSED", "SUBMITTING"].includes(status)) {
-      where.status = status;
-    }
-    const drafts = await db.supermarketOrderDraft.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: 100,
+    if (lq.status) where.status = lq.status;
+    if (lq.sourceType) where.sourceType = lq.sourceType;
+    if (lq.from || lq.to) where.createdAt = { ...(lq.from ? { gte: lq.from } : {}), ...(lq.to ? { lte: lq.to } : {}) };
+    const search = draftSearchWhere(lq.q);
+    if (search) where.OR = search.OR;
+    const [drafts, total] = await Promise.all([
+      db.supermarketOrderDraft.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (lq.page - 1) * lq.pageSize,
+        take: lq.pageSize,
       select: {
         id: true,
         sourceType: true,
@@ -642,8 +651,10 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
         createdAt: true,
         submittedAt: true,
       },
-    });
-    return reply.send({ drafts });
+      }),
+      db.supermarketOrderDraft.count({ where }),
+    ]);
+    return reply.send({ drafts, total, page: lq.page, pageSize: lq.pageSize });
   });
 
   app.get("/supermarket/drafts/:id", async (req: any, reply: any) => {
