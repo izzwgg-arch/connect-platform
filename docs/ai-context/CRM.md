@@ -9,7 +9,7 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - **Per-user fields:** telephony enriches each WebSocket client separately; users without CRM access or campaign assignment do not receive `crmContactId` / name / profile URL.
 - **Match order:** exact normalized phone → other `ContactPhone` rows on the contact → safe last-10 suffix (NANP only).
 - **Portal:** optional WS fields on `LiveCall` — `crmContactName` overrides PBX `fromName` in Connect UI only (PBX caller ID unchanged). Floating dialer quick action: **Open CRM Profile** when `crmContactId` + `crmProfileUrl` present on inbound calls.
-- **Do not** rely on client-only `GET /crm/contacts/lookup` for live call identity when WS enrichment is enabled (`CrmScreenPop` prefers WS fields).
+- **Do not** rely on client-only `GET /crm/contacts/lookup` for live call identity when WS enrichment is enabled (prefer the WS fields; the old `CrmScreenPop` card was removed 2026-09-08).
 
 ## Lead timezone (city/state → stored timezone)
 
