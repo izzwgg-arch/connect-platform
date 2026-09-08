@@ -7219,6 +7219,8 @@ model DeliveryOrder {
   @@unique([tenantId, sourceId])
   @@index([tenantId, status])
   @@index([tenantId, storeId])
+  /// Orders page date-range filter + newest-first paging (2026-09-08).
+  @@index([tenantId, createdAt])
 }
 
 /// A package/tote within an order.

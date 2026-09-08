@@ -52,6 +52,12 @@ export interface DeliveryOrderRow {
   priority?: string; notifyConsent?: boolean;
   driverId?: string | null; driverName?: string | null; runId?: string | null;
 }
+export interface DeliveryOrdersPage {
+  items: DeliveryOrderRow[]; total: number; page: number; pageSize: number;
+}
+export interface DeliveryStoreRow {
+  id: string; name: string; externalRef: string; active: boolean; timezone?: string | null;
+}
 export interface DriverRow {
   id: string; userId: string; name: string; status: string; active: boolean;
   activeRunId?: string | null; stores: { storeId: string }[]; storeCount: number;
@@ -85,13 +91,19 @@ export interface ExceptionRow {
 
 export const deliveryApi = {
   dashboard: (storeId?: string) => req<DashboardResponse>("GET", `/delivery/dashboard${storeId ? `?storeId=${encodeURIComponent(storeId)}` : ""}`),
-  orders: (params: { status?: string; storeId?: string } = {}) => {
+  /** Paged + date-filterable (2026-09-08). from/to are ISO instants; page is 1-based. */
+  orders: (params: { status?: string; storeId?: string; from?: string; to?: string; page?: number; pageSize?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.status) q.set("status", params.status);
     if (params.storeId) q.set("storeId", params.storeId);
+    if (params.from) q.set("from", params.from);
+    if (params.to) q.set("to", params.to);
+    if (params.page && params.page > 1) q.set("page", String(params.page));
+    if (params.pageSize) q.set("pageSize", String(params.pageSize));
     const qs = q.toString();
-    return req<DeliveryOrderRow[]>("GET", `/delivery/orders${qs ? `?${qs}` : ""}`);
+    return req<DeliveryOrdersPage>("GET", `/delivery/orders${qs ? `?${qs}` : ""}`);
   },
+  stores: () => req<DeliveryStoreRow[]>("GET", "/delivery/stores"),
   order: (id: string) => req<any>("GET", `/delivery/orders/${id}`),
   transition: (id: string, to: string, reason?: string) =>
     req<any>("POST", `/delivery/orders/${id}/transition`, { to, reason }),

@@ -7,7 +7,8 @@ import { z } from "zod";
 import { requireDeliveryDispatch, requireDriver, verifyOrderSourceSecret } from "./guard";
 import { getDeliverySettings } from "./settingsService";
 import { MockOrderSourceAdapter } from "./orderSourceAdapter";
-import { ingestOrderEvent, listOrders, getOrder, transitionOrder, reassignOrder, addOrderNote } from "./orderService";
+import { ingestOrderEvent, searchOrders, listStores, getOrder, transitionOrder, reassignOrder, addOrderNote } from "./orderService";
+import { parseOrdersQuery } from "./orderQuery";
 import { scanLabel } from "./scanService";
 import { createRun, addStop, startRun, listRunsForDriver, listRuns, listUnassignedOrders, getRun, reorderRunStops } from "./runService";
 import { optimizeRun, stopNavUrl } from "./routeService";
@@ -51,16 +52,20 @@ export async function registerDeliveryRoutes(app: any): Promise<void> {
     return reply.send(await getDeliverySettings(user.tenantId));
   });
 
+  // Stores for the orders-page store filter (2026-09-08).
+  app.get("/delivery/stores", async (req: any, reply: any) => {
+    const user = await requireDeliveryDispatch(req, reply);
+    if (!user) return;
+    return reply.send(await listStores(user.tenantId));
+  });
+
+  // Paged + date-filterable (2026-09-08). Response: { items, total, page, pageSize }.
+  // Query: status, storeId, from, to (ISO instants), page (1-based), pageSize (≤200).
+  // The portal orders page is the only consumer; it was updated in the same commit.
   app.get("/delivery/orders", async (req: any, reply: any) => {
     const user = await requireDeliveryDispatch(req, reply);
     if (!user) return;
-    const q = req.query ?? {};
-    return reply.send(
-      await listOrders(user.tenantId, {
-        status: typeof q.status === "string" ? q.status : undefined,
-        storeId: typeof q.storeId === "string" ? q.storeId : undefined,
-      }),
-    );
+    return reply.send(await searchOrders(user.tenantId, parseOrdersQuery(req.query)));
   });
 
   app.get("/delivery/orders/:id", async (req: any, reply: any) => {

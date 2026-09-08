@@ -269,31 +269,99 @@ export async function driverNameMap(tenantId: string, driverIds: (string | null 
   return new Map(profiles.map((p) => [p.id, nameByUser.get(p.userId) ?? p.id.slice(0, 8)]));
 }
 
-export async function listOrders(tenantId: string, opts: { status?: string; storeId?: string; take?: number } = {}) {
-  const rows = await db.deliveryOrder.findMany({
-    where: {
-      tenantId,
-      ...(opts.status && isValidStatus(opts.status) ? { status: opts.status } : {}),
-      ...(opts.storeId ? { storeId: opts.storeId } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: Math.min(opts.take ?? 100, 200),
-    select: {
-      id: true, sourceId: true, status: true, storeId: true, addrLine1: true, addrUnit: true,
-      customerName: true, createdAt: true, priority: true, messagingConsent: true,
-      assignment: { select: { driverId: true } },
-      runStop: { select: { runId: true } },
-    },
-  });
-  const names = await driverNameMap(tenantId, rows.map((r) => r.assignment?.driverId));
-  return rows.map((o) => ({
+export interface OrdersFilter {
+  status?: string;
+  storeId?: string;
+  /** Inclusive createdAt bounds (instants). See orderQuery.ts for how the route parses them. */
+  from?: Date;
+  to?: Date;
+}
+
+function ordersWhere(tenantId: string, opts: OrdersFilter) {
+  const createdAt =
+    opts.from || opts.to
+      ? { ...(opts.from ? { gte: opts.from } : {}), ...(opts.to ? { lte: opts.to } : {}) }
+      : undefined;
+  return {
+    tenantId,
+    ...(opts.status && isValidStatus(opts.status) ? { status: opts.status } : {}),
+    ...(opts.storeId ? { storeId: opts.storeId } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
+}
+
+const ORDER_LIST_SELECT = {
+  id: true, sourceId: true, status: true, storeId: true, addrLine1: true, addrUnit: true,
+  customerName: true, createdAt: true, priority: true, messagingConsent: true,
+  assignment: { select: { driverId: true } },
+  runStop: { select: { runId: true } },
+} as const;
+
+type OrderListRow = {
+  id: string; sourceId: string; status: string; storeId: string; addrLine1: string; addrUnit: string | null;
+  customerName: string | null; createdAt: Date; priority: string; messagingConsent: boolean;
+  assignment: { driverId: string | null } | null;
+  runStop: { runId: string } | null;
+};
+
+function mapOrderListRow(o: OrderListRow, names: Map<string, string>) {
+  return {
     id: o.id, sourceId: o.sourceId, status: o.status, storeId: o.storeId,
     addrLine1: o.addrLine1, addrUnit: o.addrUnit, customerName: o.customerName, createdAt: o.createdAt,
     priority: o.priority, notifyConsent: o.messagingConsent,
     driverId: o.assignment?.driverId ?? null,
     driverName: o.assignment?.driverId ? names.get(o.assignment.driverId) ?? null : null,
     runId: o.runStop?.runId ?? null,
-  }));
+  };
+}
+
+/** Newest-first, unpaged (capped) list. Kept for callers that want "the latest N". */
+export async function listOrders(tenantId: string, opts: OrdersFilter & { take?: number } = {}) {
+  const rows = await db.deliveryOrder.findMany({
+    where: ordersWhere(tenantId, opts),
+    orderBy: { createdAt: "desc" },
+    take: Math.min(opts.take ?? 100, 200),
+    select: ORDER_LIST_SELECT,
+  });
+  const names = await driverNameMap(tenantId, rows.map((r) => r.assignment?.driverId));
+  return rows.map((o) => mapOrderListRow(o as OrderListRow, names));
+}
+
+/**
+ * Paged, date-filterable search behind GET /delivery/orders (2026-09-08).
+ * Returns the page plus the total that matches the whole filter, so the portal
+ * can page through every order the tenant has ever received — the old list
+ * silently stopped at the newest 100, which on a busy day was about one day.
+ */
+export async function searchOrders(
+  tenantId: string,
+  opts: OrdersFilter & { page?: number; pageSize?: number } = {},
+) {
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
+  const page = Math.max(opts.page ?? 1, 1);
+  const where = ordersWhere(tenantId, opts);
+  const [rows, total] = await Promise.all([
+    db.deliveryOrder.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: ORDER_LIST_SELECT,
+    }),
+    db.deliveryOrder.count({ where }),
+  ]);
+  const names = await driverNameMap(tenantId, rows.map((r) => r.assignment?.driverId));
+  return { items: rows.map((o) => mapOrderListRow(o as OrderListRow, names)), total, page, pageSize };
+}
+
+/** Tenant's delivery stores, for the orders-page store filter. */
+export async function listStores(tenantId: string) {
+  const rows = await db.deliveryStore.findMany({
+    where: { tenantId },
+    orderBy: [{ active: "desc" }, { name: "asc" }],
+    select: { id: true, name: true, externalRef: true, active: true, timezone: true },
+  });
+  return rows;
 }
 
 export async function getOrder(tenantId: string, orderId: string) {
