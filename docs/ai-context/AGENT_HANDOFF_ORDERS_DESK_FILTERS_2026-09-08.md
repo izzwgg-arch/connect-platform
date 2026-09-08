@@ -101,3 +101,30 @@ range) was approved: *"Go, build it as drawn and deploy."* Commit **`65225b5e`**
   and failed before writing — anchors must be copied from the file, never typed from memory.
 - The `total` counts the whole filter server-side; the tiles still count NEEDS_REVIEW / today
   independently of the filters (by design — they are the "right now" numbers).
+
+## 6. Follow-up (2026-09-08, evening) — the status tabs showed the browser's grey button face
+
+Izzy's screenshot after the deploy: *Sent / Failed to send / Dismissed / All orders* sat as
+light-grey blocks on the dark toolbar. *"Fix this to stay consistent with Connect theme, dark
+mode, and light mode."*
+
+- **Cause.** `apps/portal/tailwind.config` has `preflight: false`, so a `<button>` keeps the UA
+  stylesheet (`background-color: buttonface`, system font, 2px outset border). The tab strip
+  has been `<button>`s since the desk was first ported; `.sm-root .sm-tab` only set colour,
+  size, weight, radius and padding, so the grey face showed through on every inactive tab
+  (the active one was covered by `.sm-on`'s `--panel-2`). The chips already had
+  `button.sm-filter { background: transparent; font: inherit }`, the pager buttons and
+  `.sm-btn` variants set their own backgrounds — only the tabs were missing the reset.
+- **Fix** (CSS only, `supermarket.css` "toolbar + tabs" block): `.sm-tab` resets
+  `appearance`, `background`, `border`, `margin`, `font` and gets `cursor: pointer`,
+  `white-space: nowrap`, a hover state on `--sm-row-hover` and an accent `:focus-visible`
+  ring (the active tab keeps its inset border under the ring). `.sm-tabs` gains `gap: 2px`.
+  Light theme: the track becomes `--panel-2` and the active pill is white with the inset
+  border plus `0 1px 2px rgba(15,23,42,.08)`; hover is `rgba(15,23,42,.05)`. Without that,
+  the light active tab (`#f8fafc` on a `#ffffff` track) was invisible.
+- **Verified** by rendering the real stylesheet plus the portal's `:root` / `[data-theme="light"]`
+  tokens into a static page served on localhost and screenshotting it in the in-app browser in
+  both themes (dark: dim tabs on the panel track, lighter active pill; light: grey track, white
+  raised pill). No `tsc` on this box; the portal Docker build is the gate.
+- **Rule going forward:** any new `<button>` under `.sm-root` (or any portal page, since
+  preflight is off) must reset its own background/border/font. Nothing global does it.

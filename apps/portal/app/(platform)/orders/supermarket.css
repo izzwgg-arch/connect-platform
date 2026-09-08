@@ -104,9 +104,24 @@
 .sm-root .sm-kpi .sm-d.sm-up { color: var(--success); }
 .sm-root /* toolbar + tabs */
   .sm-toolbar { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; flex-wrap: wrap; }
-.sm-root .sm-tabs { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 2px; }
-.sm-root .sm-tab { font-size: .78rem; font-weight: 600; color: var(--text-dim); border-radius: 7px; padding: .3rem .75rem; }
+.sm-root .sm-tabs { display: inline-flex; gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 2px; }
+/* The tabs are real <button>s and this portal runs Tailwind with preflight off,
+   so the browser's default grey "buttonface" background and system font leak
+   through unless reset here (2026-09-08: the inactive tabs rendered light grey
+   in dark mode). Segmented control: dim text on the track, the active tab is a
+   raised pill — --panel-2 in dark, white on a --panel-2 track in light. */
+.sm-root .sm-tab { appearance: none; -webkit-appearance: none; background: transparent; border: 0; margin: 0;
+    font: inherit; font-size: .78rem; font-weight: 600; line-height: 1.4; color: var(--text-dim);
+    border-radius: 7px; padding: .3rem .75rem; white-space: nowrap; cursor: pointer;
+    transition: background-color .12s, color .12s; }
+.sm-root .sm-tab:hover { color: var(--text); background: var(--sm-row-hover); }
 .sm-root .sm-tab.sm-on { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+.sm-root .sm-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sm-root .sm-tab.sm-on:focus-visible { box-shadow: inset 0 0 0 1px var(--border), 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+:root[data-theme="light"] .sm-root .sm-tabs { background: var(--panel-2); }
+:root[data-theme="light"] .sm-root .sm-tab:hover { background: rgba(15, 23, 42, 0.05); }
+:root[data-theme="light"] .sm-root .sm-tab.sm-on { background: #ffffff; box-shadow: inset 0 0 0 1px var(--border), 0 1px 2px rgba(15, 23, 42, 0.08); }
+:root[data-theme="light"] .sm-root .sm-tab.sm-on:hover { background: #ffffff; }
 .sm-root .sm-filter { font-size: .76rem; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 999px; padding: .22rem .7rem; }
 .sm-root .sm-search { display: flex; align-items: center; gap: .4rem; background: var(--panel); border: 1px solid var(--border);
     border-radius: 8px; padding: .3rem .7rem; color: var(--text-dim); font-size: .78rem; min-width: 13rem; }

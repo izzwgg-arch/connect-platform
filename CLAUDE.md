@@ -1,3 +1,25 @@
+## ⛔ AGENT HANDOFF — Store → Orders status tabs (Needs review / Sent / Failed to send / Dismissed / All orders) rendered with the browser's default grey button face in dark mode; fixed in `supermarket.css` as a themed segmented control for dark + light (2026-09-08) — READ FIRST before adding any `<button>` to the Orders Desk or another `.sm-root` page
+
+Izzy's screenshot: the four inactive tabs were light-grey blocks on the dark toolbar. Fix in
+`apps/portal/app/(platform)/orders/supermarket.css` (`.sm-root .sm-tab*` rules); no TSX change.
+Detail appended to **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-08.md` §6**.
+
+- ⛔ **CAUSE: this portal runs Tailwind with `preflight: false`, so a `<button>` keeps the UA
+  defaults (`background: buttonface`, system font, 2px border).** The tab strip has been real
+  `<button>`s since before the filters commit, but `.sm-tab` only set colour/size/padding —
+  never `background`/`border`/`font`. Every OTHER desk button class (`.sm-btn.*`, `button.sm-filter`,
+  `.sm-pg`, `.sm-iconbtn`, `.sm-play`, `.sm-asschip`) sets its own background, which is why only
+  the tabs leaked. **Rule: any new `<button>` under `.sm-root` must reset `appearance/background/
+  border/font` itself — nothing global does it.**
+- ✅ **THE FIX:** `.sm-tab` = `appearance:none; background:transparent; border:0; font:inherit;
+  cursor:pointer` + hover (`--sm-row-hover`) + `:focus-visible` accent ring. Dark: track `--panel`,
+  active pill `--panel-2` with the inset `--border` (as the mockup). Light (`:root[data-theme="light"]`):
+  track `--panel-2` (#f8fafc), active pill **white** with inset border + a 1px shadow, hover
+  `rgba(15,23,42,.05)` — otherwise the light active tab was #f8fafc on white, invisible.
+- ✅ **Verified on the dev box** by rendering the real `supermarket.css` + the portal's theme tokens in a
+  static page in the in-app browser, dark and light (no `tsc`/pnpm here — memory `devbox-toolchain-blocker`).
+- Deploy state: see the line below this section once the portal container is verified.
+
 ## ⛔ AGENT HANDOFF — Store → Orders (Supermarket mode) now has Received date-range, status tabs (+Failed, +Dismissed), Source, server-side search and paging; "only two orders left" was the workspace switcher on All workspaces (2026-09-08) — READ FIRST before touching `GET /supermarket/drafts`, `OrdersDesk.tsx`'s list, or for ANY "the orders disappeared"
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_ORDERS_DESK_FILTERS_2026-09-08.md`**
