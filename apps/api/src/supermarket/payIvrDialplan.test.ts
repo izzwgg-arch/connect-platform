@@ -58,3 +58,30 @@ test("a trailing slash on the directory never doubles up", () => {
   const v = payIvrDialplanView({ prompts: ["x"], gather: null, transfer: false, done: false }, "/sounds/pay///");
   assert.equal(v.playback, "/sounds/pay/x");
 });
+
+// ── The dialplan file itself: the header trap (2026-09-08) ────────────────
+// Asterisk's CURLOPT(httpheader) ADDS a header on the channel every time it is
+// set ("Multiple calls add multiple headers"). With the two Set()s inside the
+// step loop, the second request of every call carried the secret twice, the
+// api read "S, S", answered 403, and the caller was handed to a person the
+// moment their first Read() timed out. A unit test of the api cannot see this
+// — the defect is in the PBX file — so this reads the shipped dialplan.
+test("⛔ the pay dialplan sets its HTTP headers exactly once per channel, before the step loop, never in h", () => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  const conf = fs
+    .readFileSync(path.join(__dirname, "..", "..", "..", "..", "scripts", "pbx", "supermarket", "connect-supermarket-pay.conf"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const lines = conf.split("\n").filter((l) => !l.trim().startsWith(";"));
+  const headerLines = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("Set(CURLOPT(httpheader)"));
+  assert.equal(headerLines.length, 2, `expected exactly two header Set() lines, found ${headerLines.length}`);
+  const stepIdx = lines.findIndex((l) => l.includes("n(step)"));
+  const hIdx = lines.findIndex((l) => l.startsWith("exten => h,"));
+  assert.ok(stepIdx > 0 && hIdx > stepIdx, "dialplan shape changed — re-check this guard");
+  for (const [, i] of headerLines) {
+    assert.ok(i < stepIdx, "a header Set() sits inside the step loop — it will stack on the channel and 403 the second step");
+    assert.ok(i < hIdx, "a header Set() sits in the h extension — it stacks on the channel");
+  }
+  const secretLine = headerLines.find(([l]) => l.includes("x-cdr-secret"));
+  assert.ok(secretLine, "the shared-secret header is not set at all");
+});

@@ -1020,3 +1020,80 @@ the pay IVR must be up, orders must go in. Commit `c7191071` on
 
 - ✅ Proven: 162 supermarket api tests + 11 new `customerSync.test.ts` (real
   shapes, sweep, ranking, wiring guards); portal tsc 0; api tsc 76 = baseline.
+
+### §16b — the pay line was WRONG VOICE + 403 at step two; both fixed on the PBX (2026-09-08 evening)
+
+Izzy called the line the same evening (press 0 on the main menu) and reported
+(1) not Stephen's voice, (2) "we do not recognize the number you're calling
+from" and then the main menu. Read-only diagnosis first, then two scoped PBX
+writes under the standing pay-line mandate, everything backed up.
+
+**The 403 — `CURLOPT(httpheader)` accumulates per channel.** Asterisk 20.18's
+own `core show function CURLOPT`: *"httpheader — Add HTTP header. Multiple
+calls add multiple headers."* The dialplan set `Content-Type` and
+`x-cdr-secret` inside the `(step)` loop and again in `h`. Loop pass 1 sent them
+once (200); pass 2 sent each twice; Node joins duplicate headers as `"S, S"`,
+`internalSecret`'s hash comparison fails, the door answers
+`{"error":"forbidden"}` (21 bytes), `PAY_ACTION` decodes empty → `bail` →
+`Goto(T8_app-time-condition,TC-4,1)` (Phone Orders time condition → IVR-22
+"Orders" in hours / announcement-10 after). That is the "main menu" he landed on.
+- nginx `pay-ivr/step`: every pay call since install shows `200` then `403 21`
+  (09-08 01:13:54/01:14:09, 01:50:48/01:51:02, 02:14:10/02:14:25,
+  02:14:41/02:14:52 CEST) — the 08-26 and 09-08 "proven" runs only examined the
+  first POST.
+- Reproduced with no call: `curl 127.0.0.1:3001/internal/supermarket/pay-ivr/step`
+  with the secret header once → 200; the same header twice → 403.
+  ⛔ From loopcom's PUBLIC ip the same POST is nginx's `/api/internal/` deny
+  (403 HTML) — probe the api port directly.
+- Fix (`scripts/pbx/supermarket/connect-supermarket-pay.conf`): both `Set()`s
+  moved to run ONCE right after `PAY_LOOPS=0`, removed from the loop and from
+  `h` (the channel datastore still carries them in `h`). Applied to
+  `/etc/asterisk/extensions__60_custom.conf` by replacing the
+  `[connect-supermarket-pay]` context body (the live block was diffed
+  IDENTICAL to the repo copy first), written with `cat tmp > file` (inode +
+  ACLs kept), backup `extensions__60_custom.conf.bak.payheaders.20260909T003957Z`,
+  `dialplan reload`, then `dialplan show s@connect-supermarket-pay` read back:
+  headers at priorities 10/11, `[step]` at 12, `h` carries 0 header lines.
+- Guard: `payIvrDialplan.test.ts` — "sets its HTTP headers exactly once per
+  channel, before the step loop, never in h" reads the conf (CRLF-normalised,
+  comments stripped): 7/7 green; replayed against HEAD's conf the count is 4,
+  all inside the loop → red.
+
+**The voice.** `/var/lib/asterisk/sounds/connect-pay/en-male` (51 files, mtime
+2026-08-26 11:45 -0400) matched NO stash on loopcom by md5, and by duration it
+was a different, shorter script: `01_welcome` 1.76 s vs Stephen-neural 2.29 s
+/ Stephen-generative 2.56 s / Kristen 2.65 s; `13_not_recognized` **2.28 s** vs
+neural **9.12 s** — so the installed prompt 13 could not have carried the
+"enter the phone number on your account" offer Izzy specced. The 08-26
+dialplan commit (`2f5075f7`) says only "51 male prompts at 8 kHz mono are in
+place"; its source is unrecorded. Installed now, both 8 kHz/16-bit/mono:
+- `en-male` ← `loopcom:/root/stephen-neural/*.wav` (52 files, the set Izzy chose
+  on 08-25 — Stephen NEURAL + the IPA "Gesheft"); PBX md5 of `01_welcome` =
+  `59f4404877ec91127c9aa3eef67d6577` = the stash. Old set preserved at
+  `pbx:/root/payline-prompts-backup-20260909T003957Z/en-male` (51 files).
+- `en-female` ← the Kristen assembly the 08-25 handoff describes
+  (`/root/gesheft-pay-ivr` v1 → `…-kristen-v2` 05/13/19/20 → `kristen-numbers`
+  → `kristen-extra` 21/22), 52 files. NOT referenced by anything yet: the prompt
+  dir is the single `SUPERMARKET_PAY_PROMPT_DIR` (default `en-male`); per-line
+  voice choice is a build, not a copy.
+- Staging copies for both sets: `pbx:/root/payline-voices-20260909T003957Z/`.
+
+**Proof on the wire (after both writes):** `channel originate
+Local/799@T8_app-custom-application/n application Wait 42` (no CID → unknown
+caller; rings nobody). Call `C-0000ed3f`: step 1 → 200 `01_welcome +
+13_not_recognized` (played 20:44:52 → 20:44:54 → the 9-second neural 13), Read
+timed out, step 2 → **200** `19_lookup_not_found + 13_not_recognized`, hangup
+→ **200** `done:true`. nginx: `200 301`, `200 319`, `200 103` — the first pay
+call in the log with no 403.
+
+**What Izzy actually hit, decoded from his own calls:** 19:50:46 he pressed 0
+from the Gesheft DID (`Local/IVR-23@T8_app-ivr`), caller-ID matched a register
+account, step 1 answered `01_welcome + 02_pin` — the PIN gather — and the
+hangup POST 403'd (harmless, session left open). 20:14:08 and 20:14:40 he called
+from **845-557-7768** (Connect's admin number, not a Gesheft account): "not
+recognized" was correct; the 10-s Read expired, step 2 403'd, bail → TC-4.
+
+⏳ NOT PROVEN: no human has keyed a number/PIN/amount on the fixed line; the
+main greeting still does not announce 0; the female voice is on disk and
+unselectable. Open from §16: iFields key for Sola saves; no real order placed.
+
