@@ -28,6 +28,7 @@ import {
   queueInvoicePaymentDayResendOnce,
 } from "../../api/src/billing/billingEmailLifecycle";
 import { runManualInvoiceAutomationCore } from "./manualInvoiceAutomation";
+import { raiseAutopayBlockAlarm } from "./autopayBlockAlarm";
 import { sweepMissingReceiptEmails } from "../../api/src/billing/receiptReconciliation";
 import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
@@ -3519,7 +3520,7 @@ let _billingAutomationRunning = false;
  */
 async function checkActiveSolaScheduleBlock(
   tenantId: string,
-): Promise<{ linkId: string; solaScheduleId: string } | null> {
+): Promise<{ linkId: string; solaScheduleId: string; companyName: string | null } | null> {
   const block = await (db as any).billingSolaExternalScheduleLink.findFirst({
     where: {
       tenantId,
@@ -3527,10 +3528,10 @@ async function checkActiveSolaScheduleBlock(
       isActive: true,
       NOT: { cutoverStatus: "CUTOVER_COMPLETE" },
     },
-    select: { id: true, solaScheduleId: true },
+    select: { id: true, solaScheduleId: true, companyName: true },
   });
   if (!block) return null;
-  return { linkId: block.id, solaScheduleId: block.solaScheduleId };
+  return { linkId: block.id, solaScheduleId: block.solaScheduleId, companyName: block.companyName ?? null };
 }
 
 /**
@@ -3669,6 +3670,33 @@ async function runAutopayReminderPhase(
 
   const activeSolaBlock = await checkActiveSolaScheduleBlock(setting.tenantId);
   if (activeSolaBlock) {
+    // 2026-09-09: this used to skip SILENTLY — no event, no alarm — so a tenant
+    // blocked by a mis-mapped Sola link (Secro, two cycles running) simply never
+    // got an invoice. Log it AND text the owner (de-duped per tenant+link/24h).
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId: setting.tenantId,
+        runId,
+        type: "billing.autopay_reminder_skipped_active_sola_schedule",
+        message: `Autopay T-3 — invoice NOT created: tenant has an active Sola recurring schedule not yet cut over (link ${activeSolaBlock.linkId}).`,
+        metadata: {
+          solaScheduleLinkId: activeSolaBlock.linkId,
+          solaScheduleId: activeSolaBlock.solaScheduleId,
+          solaCompanyName: activeSolaBlock.companyName,
+          reason: "active_sola_schedule_not_cutover",
+          paymentDate: schedule.paymentDate,
+        },
+      },
+    }).catch(() => null);
+    await raiseAutopayBlockAlarm(db, {
+      tenantId: setting.tenantId,
+      tenantName: String(setting.tenant?.name ?? setting.tenantId),
+      phase: "reminder",
+      linkId: activeSolaBlock.linkId,
+      solaScheduleId: activeSolaBlock.solaScheduleId,
+      linkCompanyName: activeSolaBlock.companyName,
+      paymentDate: schedule.paymentDate,
+    }, { log: console as any });
     results.push({ tenantId: setting.tenantId, phase: "reminder", skipped: "active_sola_schedule" });
     return;
   }
@@ -3930,10 +3958,22 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               metadata: {
                 solaScheduleLinkId: activeSolaBlock.linkId,
                 solaScheduleId: activeSolaBlock.solaScheduleId,
+                solaCompanyName: activeSolaBlock.companyName,
                 reason: "active_sola_schedule_not_cutover",
               },
             },
           }).catch(() => null);
+          // 2026-09-09: the hourly event above is read by nobody — a blocked
+          // payment date must reach a person (de-duped per tenant+link/24h).
+          await raiseAutopayBlockAlarm(db, {
+            tenantId: setting.tenantId,
+            tenantName: String(setting.tenant?.name ?? setting.tenantId),
+            phase: "charge",
+            linkId: activeSolaBlock.linkId,
+            solaScheduleId: activeSolaBlock.solaScheduleId,
+            linkCompanyName: activeSolaBlock.companyName,
+            paymentDate: schedule.paymentDate,
+          }, { log: console as any });
           results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "active_sola_schedule" });
           continue;
         }
