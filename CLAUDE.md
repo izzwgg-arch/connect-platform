@@ -485,6 +485,14 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
   845-244-1708 CID, and nobody said a word.** Codes moved into `prefix` via the real PATCH; verified
   `26618457231213` / `12138457231213`. ⛔ `OutboundRoute.callerIdNumber` is informational — a code typed there is
   a dialer entry that silently does nothing; audit other tenants for the same shape. ⏳ She must fully reopen the app.
+- ✅ **RING GROUP 808 "Satmer 58" IS LIVE AND (845) 557-7735 RINGS IT (round 7, 2026-09-09, handoff §11):**
+  member ext 106 only, prefix `Satmer 58` → her phone shows `Satmer 58:<caller>`, no answer → her own voicemail;
+  route 314 `Goto(T18_ext-ringgroups,808,1)`, doorways unchanged. Built via the real `POST /voice/teams` +
+  the helper's `/route-set-destination-v2` + a panel Apply in tenant 18's context. ⛔⛔ **I DID THOSE IN THE
+  WRONG ORDER AND THREE REAL CALLS (845-323-7184, 10:32–10:33 ET) HEARD "no route exists":** the helper
+  runs in `legacy_no_api_key` mode on this box — its "regen" is a `dialplan reload` only — so it baked the
+  route at ring group 808 BEFORE 808 was rendered. **A route target that was just created needs the tenant
+  Apply FIRST, then the route move; read `apply.mode` and `dialplan show <target>` before trusting a bake.**
 - ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
   Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
   (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched

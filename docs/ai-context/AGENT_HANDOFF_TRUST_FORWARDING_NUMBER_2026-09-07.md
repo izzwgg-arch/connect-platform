@@ -272,3 +272,55 @@ Leasing" maps to the PBX route "trust smooth" (Smooth Leasing) — kept as Izzy'
 An already-open desktop app re-reads `/me/outbound-routes` only at init/sign-in — she
 needs to fully close and reopen the app (or reload) to see "Satmar 58" in the route
 dropdown. Acceptance: pick Satmar 58, dial any number → the far end sees 718-437-1730.
+
+## 11. Round 7 (2026-09-09 10:32 ET) — ring group "Satmer 58" on 808, the number points at it, and a TWO-MINUTE DEAD WINDOW I caused
+
+Izzy: *"create a ring group, call it also Satmer 58, add that also into the prefix. Add 106 only to
+that ring group and point the number to the ring group. This way, when somebody calls, it will
+show the prefix."* (His spelling — "Satmer" — used verbatim on the PBX; the Connect dialer route is
+still spelled "Satmar 58" from round 6; either is a one-field rename.)
+
+**LIVE, proven from the rendered dialplan + `dialplan show`:** ring group **808 "Satmer 58"**
+(`ombu_ring_groups.ring_group_id 124`, tenant 18), strategy ringall, member **ext 106 only**,
+prefix **`Satmer 58`** → `Set(CALLERID(name)=Satmer 58:${CALLERID(name)})` →
+`Dial(Local/106@T18_ring-group-dial/n,30,…)` → no answer → `Goto(sub-extensions-vm,VM-106,1)`
+(her own voicemail, same as before). Inbound route 314 for **(845) 557-7735** now reads
+`Goto(T18_ext-ringgroups,808,1)` (was `T18_cos-all,106,1`); its destination row moved
+1042 → **1047** (own row, module ring_group). Doorways T2/T35/T105 = 1/0, 1/0, 2/0 before AND
+after; `ombu_queued_changes` for tenant 18 empty afterwards. Backup on the PBX:
+`/root/trust-satmer58-before-20260909T143210Z/` (route 314 + tenant-18 ring groups + dest 1042
+SQL + the pre-change `extensions__50-18-dialplan.conf`); the helper's own bake backup is
+`/var/lib/connect-pbx-helper/backups/extensions__50-18-dialplan.conf.20260909T143224Z.bak`.
+
+**How (the real code paths, no hand SQL on the PBX except the pending-change stamp):**
+1. `POST /voice/teams` (SUPER_ADMIN token in `app-api-1`) `{kind:"ring_group", name, prefix,
+   strategy:"ringall", members:["106"], lastDestination:{kind:"voicemail",target:"106"}}` →
+   `createRingGroup` panel replay → 808, **not applied** (by design: "goes live at the next apply").
+2. Helper **`/route-set-destination-v2`** `{did, tenantId:"18", targetType:"ring_group",
+   targetId:124}` → guarded `UPDATE ombu_inbound_routes`, new destination row, **bake of the
+   route Goto**, `dialplan reload`.
+3. ⛔ **Panel Apply in TENANT 18's context** (`PanelSession.setTenant("fb6a694802f40408")` +
+   `applyChanges`) — 2.8 s — then the doorway re-bake (3 tenants, 0 lines changed).
+
+⛔⛔ **THE DEAD WINDOW, AND THE ORDER THAT CAUSED IT.** Step 2's helper answered
+`apply.mode: "legacy_no_api_key"` — i.e. the helper has NO VitalPBX REST app-key on this box, so
+its "per-tenant regen" was **only a `dialplan reload`**, and a ring group created seconds earlier
+through the panel was NOT rendered. The route bake then pointed the live number at
+`T18_ext-ringgroups,808`, **which did not exist** → `sent to invalid extension` → `invalid-dest`
+→ *"I'm sorry, no route exists to that destination"* → hangup. **Measured cost: three real calls
+from 845-323-7184 at 10:32:34, 10:32:54 and 10:33:24 ET** (the same caller had rung the number
+unanswered at 10:30:55, and ext 106 dialed them back through code 1730 at 10:34:11 — Trust was
+evidently testing the new line at that moment). The gap closed at ~10:34:2x when step 3 ran.
+⛔ **The rule: when the TARGET of a route change was JUST created, Apply in the tenant's context
+FIRST, and only then move the route.** And read the helper's `apply.mode` — `legacy_no_api_key`
+means "nothing regenerated", and a bake that points at an unrendered target is dead air, with a
+polite prompt instead of silence. ⛔ `dialplan show <ext>@T<t>_ext-ringgroups` before AND after is
+the check; a `changed:1` bake result proves the Goto moved, not that its target exists.
+⛔ The `ombu_settings` row for a tenant's reload flag is `T18_reload_dialplan` (module 108) —
+the panel's own ring-group save had already set it `yes`; my `INSERT … ON DUPLICATE KEY` attempt
+failed on the NOT NULL `module_id` and was unnecessary. The two `ombu_queued_changes` rows
+(18,20) + (18,29) I inserted were consumed by the Apply.
+
+⏳ **NOT PROVEN by a human: nobody has watched "Satmer 58:" on Miss Spilman's phone.** It is proven
+as the rendered `CALLERID(name)` line, never as a screen. Acceptance = one call to (845) 557-7735
+and her display reading `Satmer 58:<caller>`; no-answer must land in her voicemail as before.
