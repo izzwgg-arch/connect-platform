@@ -216,3 +216,48 @@ means a 7-digit local number waits 3 s before going out (7-digit could extend to
 10/11-digit numbers go out the instant the last digit lands. Rollback = delete the file
 + `dialplan reload`. ⛔ The doorway file `extensions__60_custom.conf` was deliberately
 NOT touched — a parse error in a separate `97-` file cannot take Connect's menus down.
+
+## 10. Round 6 (2026-09-09) — the code is in the Connect dialer for ext 106 as "Satmar 58"
+
+Izzy: *"Also add the prefix to their dialer for extension 106"* — named **"Satmer 58"** in the
+previous (dictated) message; recorded here as **Satmar 58** (rename = one field on
+Admin → Users → Miss Spilman → outbound route prefixes).
+
+**What the dialer feature is (so nobody re-derives it):** Connect keeps its OWN
+`OutboundRoute` table per tenant (`name`, `prefix`, informational `callerIdName`/`Number`)
+and a `UserOutboundRoutePermission` row per person. The mini/floating dialer's route
+dropdown shows ONLY routes the signed-in user holds a permission row for
+(`GET /me/outbound-routes`); dialing with one selected goes through
+`POST /me/outbound-routes/resolve-dial`, which PREPENDS the prefix and hands
+`1730<number>` to the PBX — where outbound route 179 matches it exactly as a hand-dialed
+14-digit call would. **There is no PBX write in this half.** `callerIdNumber` on the
+Connect row is never read on the dial path.
+
+**Done, through the real admin routes** (90-s self-signed SUPER_ADMIN token inside
+`app-api-1` against `127.0.0.1:3001`; script in the session scratchpad
+`trust-dialer-build.js`):
+- `POST /outbound-routes` → Trust tenant `cmnlgrykx000fp9pa90gohk96`, name **Satmar 58**,
+  prefix **1730**, callerIdName "Trust Bookkeeping", callerIdNumber 7184371730 → row
+  **`cmtu6uedk6gplnn14hsxvosm7`** (audit `OUTBOUND_ROUTE_CREATED`).
+- `PUT /admin/users/cmnmjhiy8002bp96hkzsnlvde/outbound-routes` (cspilman@ = owner of
+  ext 106). ⛔ That PUT **REPLACES** the whole set, so the body carried her three existing
+  routes (Avenue Filing · 1129 stays her default) plus the new one. Held after:
+  Avenue Filing (default), Rose Leasing, **Satmar 58**, SGE — 3 → 4, nothing else moved.
+- ✅ Verified AS HER (60-s USER token, read-only + resolve, no call placed):
+  `GET /me/outbound-routes` → `["Avenue Filing","Rose Leasing","Satmar 58","SGE"]`;
+  `resolve-dial 845-723-1213` → `finalNumber 17308457231213` (route 179's
+  `_1730nxxnxxxxxx`); `7231213` → `17307231213` (the `845`-prepend 7-digit pattern);
+  `911` → `911`, `prefixApplied:false` (the emergency bypass holds).
+
+⛔ **Found in passing, NOT changed (Izzy's call): Trust's other two dialer routes prepend
+NOTHING.** "SGE" and "Rose Leasing" (created 2026-05-04) have `prefix` EMPTY and the
+dial code sitting in `callerIdNumber` (`2661` / `1213`) — the wrong field, and the
+dialer never reads it. So picking either in the dialer sends the plain number → route 51
+"Trust Bookkeeping 2" with the 845-244-1708 CID, not SGE's/Smooth's. Fix = move each code
+into `prefix` (`PATCH /outbound-routes/:id`), 30 seconds, but it changes what two
+customers' dials present, so it waits for his word. Avenue Filing (1129) is correct.
+
+⏳ **NOT PROVEN: Miss Spilman has not opened the dialer since** (last login 2026-07-31).
+An already-open desktop app re-reads `/me/outbound-routes` only at init/sign-in — she
+needs to fully close and reopen the app (or reload) to see "Satmar 58" in the route
+dropdown. Acceptance: pick Satmar 58, dial any number → the far end sees 718-437-1730.

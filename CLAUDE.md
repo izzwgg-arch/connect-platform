@@ -365,6 +365,14 @@ Izzy: *"take a phone number that we have in stock and create a subaccount called
   `dialplan reload` only, tenant 18 only, doorways untouched. Proven by originate + SendDTMF:
   `Outbound Route: Trust 1730` → CID 7184371730 → far end `__INCOMING_SOURCE=7184371730`.
   ⛔ Never put this in `extensions__60_custom.conf` (a parse error there takes the doorway with it).
+- ✅ **THE CODE IS IN HER CONNECT DIALER TOO (round 6, 2026-09-09, handoff §10): "Satmar 58" · 1730** —
+  a Connect `OutboundRoute` row (`cmtu6uedk6gplnn14hsxvosm7`, Trust tenant) assigned to ext 106's user
+  cspilman@ beside her three existing ones; the dialer dropdown lists it and `resolve-dial` prepends
+  1730, so a dialer call rides PBX route 179 exactly like a hand-dialed one (verified as her: 845-723-1213
+  → `17308457231213`, 911 untouched). No PBX write in this half. ⛔ The user-assignment PUT REPLACES the
+  whole set — always carry the existing routes. ⛔ Found, NOT fixed: Trust's "SGE" and "Rose Leasing"
+  dialer routes have an EMPTY prefix with the code (2661/1213) sitting in `callerIdNumber`, which the dial
+  path never reads — picking them prepends nothing. Izzy's call. ⏳ She must fully reopen the app to see it.
 - ⏳ **NOT PROVEN: nobody has called (845) 557-7735** — ringing ext 106 rings Miss
   Spilman's real desk, so the one test call is Izzy's. ⏳ Texting is NOT wired
   (`TenantSmsNumber` unassigned, by omission — he did not ask); outbound untouched
