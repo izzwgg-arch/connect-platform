@@ -542,26 +542,48 @@ if (flag("--extended")) {
   await test("CN1", "cancellation", async () => {
     const f = path.join(WS, "cancel-proof.txt"); rmrf(f);
     const s0 = await statsNow();
-    const p = ask("Use PowerShell to wait 90 seconds and then create cancel-proof.txt in the coworker test workspace containing 'should not exist'. Do it in one script.", { timeoutMs: 300_000 });
-    // Wait until the LONG PowerShell call is really in flight — the model may run a
-    // short setup script first, so require the same call to still be running after
-    // ~10 s (a quick call would have finished) before cancelling it.
+    // A long, OBSERVABLE job: write a progress file every 2 s for ~4 minutes, then
+    // (only at the very end) the forbidden file. This gives a wide window to inject
+    // the cancel and clear evidence (progress stops; cancel-proof never appears).
+    const progress = path.join(WS, "cancel-progress.txt"); rmrf(progress);
+    const p = ask("Use PowerShell to do this in ONE script in the coworker test workspace: loop 120 times, and on each iteration append the current time to cancel-progress.txt and then Start-Sleep 2; only AFTER the whole loop finishes, create cancel-proof.txt containing 'should not exist'.", { timeoutMs: 300_000 });
+    // Inject the cancel as soon as the PowerShell call is in flight (status polls
+    // can be slow on a loaded box, so break on the first sight of it, not a high runningMs).
+    // ⛔ Cancel ONLY once the AGENT'S status shows the PowerShell call in flight —
+    // proven in isolation that this is the reliable signal (the progress file can
+    // appear a beat before the agent registers the dispatch, and cancelling then
+    // finds nothing). Give it ~2 s of runtime so it is unmistakably the loop.
     let inflightSeen = false; const t0 = Date.now();
-    while (Date.now() - t0 < 90_000) {
+    while (Date.now() - t0 < 180_000) {
       const st = await agent("coworker/status", null, "GET");
       const ps = (st.json?.inflight ?? []).find((c) => c.name === "computer_powershell");
-      if (ps && ps.runningMs > 9000) { inflightSeen = true; break; }
-      await new Promise((r) => setTimeout(r, 1500));
+      if (ps && ps.runningMs > 1500) { inflightSeen = true; break; }
+      await new Promise((r) => setTimeout(r, 800));
     }
     const psBefore = ps("@(Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-100) }).Count");
-    const cancel = await agent("coworker/cancel", { taskId: null });
+    await new Promise((r) => setTimeout(r, 1000));
+    const progressAtCancel = exists(progress) ? fs.statSync(progress).size : 0;
+    const stAtCancel = await agent("coworker/status", null, "GET");
+    log(`CN1 status at cancel: ${JSON.stringify(stAtCancel.json?.inflight ?? [])} activeTasks=${JSON.stringify(stAtCancel.json?.activeTasks ?? [])}`);
+    // ⛔ The cancel MUST go on its OWN connection — Node's fetch pool queues it
+    // behind the still-open 4-minute chat request otherwise, so it would not reach
+    // the agent until the turn ends (proven: a 4-minute round trip). curl opens a
+    // fresh connection, exactly like a real second client (the bubble's Cancel button).
+    let cancel;
+    try {
+      const out = execFileSync("curl", ["-s", "--max-time", "30", "-X", "POST", "-H", "Content-Type: application/json", "-H", `Authorization: Bearer ${TOKEN}`, "-d", '{"taskId":null}', `${PORTAL}/agent-api/coworker/cancel`], { encoding: "utf8" });
+      cancel = { json: JSON.parse(out), status: 200 };
+    } catch (e) { cancel = { json: { error: String(e?.message ?? e) }, status: 0 }; }
+    log(`CN1 cancel response (own connection): ${JSON.stringify(cancel.json)}`);
     const r = await p;
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 8000));
+    const progressAfter = exists(progress) ? fs.statSync(progress).size : 0;
     const psAfter = ps("@(Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-160) }).Count");
-    await new Promise((r) => setTimeout(r, 95_000)); // long enough for the 90 s script to have finished had it survived
     const s1 = await statsNow();
-    const ok = inflightSeen && cancel.json?.cancelled >= 1 && !exists(f) && /cancel|stopp|abort|did not|didn't|not complete|interrupt|halted/i.test(r.reply) && !/created cancel-proof\.txt|has been created/i.test(r.reply);
-    record("CN1", "cancellation", "Start a 90 s PowerShell job, POST /agent-api/coworker/cancel once the call is in flight.", "call cancelled at the agent, PowerShell tree killed (no file even 95 s later), reply admits the stop", `inflightSeen=${inflightSeen} cancelled=${cancel.json?.cancelled} flagged=${cancel.json?.flagged} file=${exists(f)} recentPs before=${psBefore} after=${psAfter} agentCancelled=${s1.cancelled - s0.cancelled}; ${r.reply.slice(0, 160)}`, "agent status/cancel routes + fs (after the script's own deadline) + Get-Process + stats", ok ? "PASS" : "FAIL");
+    // The loop was killed: cancel-proof never appears AND the progress file stopped growing.
+    const stopped = progressAfter === progressAtCancel;
+    const ok = inflightSeen && cancel.json?.cancelled >= 1 && !exists(f) && stopped && /cancel|stopp|abort|did not|didn't|not complete|interrupt|halted/i.test(r.reply) && !/created cancel-proof\.txt|has been created/i.test(r.reply);
+    record("CN1", "cancellation", "Start a ~4-minute PowerShell loop, POST /agent-api/coworker/cancel while it runs.", "agent cancels the in-flight call, the PowerShell tree is killed (progress file stops growing, cancel-proof never appears), reply admits the stop", `inflightSeen=${inflightSeen} cancelled=${cancel.json?.cancelled} flagged=${cancel.json?.flagged} proofFile=${exists(f)} progressStopped=${stopped} (${progressAtCancel}→${progressAfter}B) recentPs before=${psBefore} after=${psAfter} agentCancelled=${s1.cancelled - s0.cancelled}; ${r.reply.slice(0, 160)}`, "agent status/cancel routes + fs (proof absent + progress frozen) + Get-Process + stats", ok ? "PASS" : "FAIL");
   });
 
   if (!flag("--skip-browser")) {

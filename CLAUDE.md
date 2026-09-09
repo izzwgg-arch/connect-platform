@@ -119,6 +119,11 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. 
   false, bad state → 400, no JWT → 403); desktop 73/73. ⛔ The agent container must be rebuilt for this
   (see the deploy bullet); an old desktop against the new agent simply never posts progress (old behaviour), a new
   desktop against an old agent logs `link: progress … → 404` and the prompt still shows.
+- ✅ **DEPLOYED + container-verified 2026-09-09 19:10Z (by session connect2-ef, folded into its rc.10 run):** `app-agent-1`
+  started 19:09:48Z from an image built 19:09:34Z at `bab5323d`; the container runs the TS source and
+  `/app/apps/agent/src/coworker/desktopLink.ts` inside it carries `APPROVAL_WAIT_MS` + `extend()`; through nginx
+  `POST /agent-api/coworker/progress` → 403 without a token while an unknown route → 404 (the route is live);
+  0 restarts. The installed rc.10 asar carries the desktop half. Its packaged acceptance suite then read 58/58.
 - `hands.ts` header comment lied ("the link runs only … the Coworker is enabled (the bubble setting …)") —
   the link runs whenever the app is signed in, bubble or not. Comment fixed; behaviour unchanged.
 - ✅ **Proven:** desktop typecheck 0; `src/coworkerWidget/*.test.ts` + `src/coworker/*.test.ts` **72/72**
