@@ -1,6 +1,6 @@
-## Voicemail email transcript toggle renamed "Voicemail transcription" (portal-only, 2026-09-09)
+## Voicemail email transcript toggle renamed "Include transcription in email" (portal-only, 2026-09-09)
 
-(Ezra, 2026-09-09: *"call it voicemail transcription on and off."*) `apps/portal/components/ProfileMenu.tsx` ~L458: the third voicemail toggle in the profile panel is now labelled **Voicemail transcription** with a state-aware detail line (On / Off). Same server field `Extension.vmEmailIncludeTranscript`, same API, no desktop change (the Windows app loads this portal page). Portal deploy: see the bullet below.
+(Ezra, 2026-09-09: *"call it voicemail transcription on and off"* then *"Include Transcription and Email, because nobody's going to know what that is"*) `apps/portal/components/ProfileMenu.tsx` ~L458: the third voicemail toggle in the profile panel is now labelled **Include transcription in email** / "Add the written text to the voicemail email" (was "Include the typed-out message"; an interim "Voicemail transcription" `28a22fdd` was never deployed). Same server field `Extension.vmEmailIncludeTranscript`, same API, no desktop change (the Windows app loads this portal page). Portal deploy: see the bullet below.
 
 ## ⛔ AGENT HANDOFF — the Coworker BUBBLE's chat popover no longer CLOSES ITSELF when the hands ask for approval or open a folder; the approval prompt lands BESIDE the chat (on its monitor), focus comes back to the chat afterwards, and the bubble's badge is finally driven (amber = working, red = finished while hidden) (2026-09-09) — READ FIRST before touching the chat window's `blur` handler, `askApproval`'s placement, `setWidgetBadge`, or for "the Coworker chat disappeared while it was working"
 
