@@ -23,7 +23,10 @@ import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { buildSelfServiceTools } from "./tools/selfServiceTools";
 import { buildPortStatusTools } from "./tools/portStatusTools";
-import { buildCoworkerTaskTools } from "./tools/coworkerTaskTools";
+import { buildCoworkerTaskTools, COWORKER_CHAT_PATH } from "./tools/coworkerTaskTools";
+import { DesktopLink } from "./coworker/desktopLink";
+import { buildDesktopTools, coworkerHandsPrompt, COWORKER_NOT_CONNECTED_PROMPT, COWORKER_MAX_TOOL_ITERATIONS } from "./coworker/desktopTools";
+import { registerCoworkerLinkRoutes } from "./coworker/routes";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
 import { buildWorkbenchTools } from "./tools/workbenchTools";
@@ -103,6 +106,7 @@ async function main() {
 
   let engine: ConversationEngine | null = null;
   let actionService: ActionService | null = null;
+  let desktopLink: DesktopLink | null = null;
   if (prisma) {
     // Action + approval lifecycle. PBX backend runs the Scoped Executor.
     // liveWrites is FALSE unless the operator explicitly enables it AND the
@@ -302,7 +306,31 @@ async function main() {
     const knowledgeProvider = ({ tenantId, audience }: { tenantId: string; audience: "customer" | "internal" }) =>
       loadStandingKnowledgeBlock({ prisma, tenantId, audience });
 
-    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools, knowledgeProvider);
+    // ── The Coworker's hands (2026-09-09) ──
+    // The person's Loopcom Windows app links to this service (apps/agent/src/
+    // coworker) and announces the tools it can run; each turn from that app
+    // gets those tools, and every call is executed AND policy-checked on the
+    // desktop. In memory: a restart drops nothing usable (see desktopLink.ts).
+    desktopLink = new DesktopLink();
+    setInterval(() => { try { desktopLink!.sweep(); } catch { /* housekeeping */ } }, 60_000).unref();
+    const dynamicTools = async (ctx: { tenantId: string; clientUserId: string | null; viewingPath?: string; desktopApp?: boolean }, conversationId: string) => {
+      const inBubble = typeof ctx.viewingPath === "string" && ctx.viewingPath.startsWith(COWORKER_CHAT_PATH);
+      const empty = { tools: [], prompt: inBubble ? COWORKER_NOT_CONNECTED_PROMPT : null };
+      if (!ctx.clientUserId || !(ctx.desktopApp || inBubble)) return empty;
+      const identity = { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId };
+      const manifest = desktopLink!.manifest(identity);
+      if (!manifest || manifest.tools.length === 0) return empty;
+      const taskId = `${conversationId}:${Date.now().toString(36)}`;
+      return {
+        tools: buildDesktopTools(desktopLink!, identity, manifest, taskId, conversationId),
+        prompt: coworkerHandsPrompt(manifest),
+        maxIterations: COWORKER_MAX_TOOL_ITERATIONS,
+        taskId,
+        onDone: () => desktopLink!.endTask(identity, taskId),
+        cancel: () => desktopLink!.cancel(identity, null),
+      };
+    };
+    engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools, knowledgeProvider, dynamicTools);
 
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
     // (once) so common replies are instant. Runs in the background — never
@@ -367,6 +395,9 @@ async function main() {
     const { EscalationService } = await import("./escalation/escalations");
     const escalations = new EscalationService(prisma, router, chatTools, audit);
     registerChatRoutes(app, engine, uploadStore, prisma, escalations);
+    // The Windows app's link: hello / long-poll / result / cancel / status,
+    // identity from the same portal JWT the chat uses.
+    if (desktopLink) registerCoworkerLinkRoutes(app, desktopLink, audit);
     registerDiagRoutes(app, diagEngine);
     registerActionRoutes(app, actionService);
     registerAdminRoutes(app, prisma);

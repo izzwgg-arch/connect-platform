@@ -5,7 +5,18 @@
  * token. The portal's useSipPhone treats "coworker-chat" as a proxy window for that
  * reason — a chat popover must never register a second phone.
  */
-export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat";
+export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat" | "coworker-approval" | "coworker-connections";
+
+/** One MCP server the person configured in Coworker Settings & Connections. */
+export type CoworkerMcpServerSetting = {
+  id: string;
+  name: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+};
 
 export type DesktopSettings = {
   alwaysOnTop: boolean;
@@ -34,7 +45,16 @@ export type DesktopSettings = {
    * SAFE (absent) = a file move asks first; TRUSTED = it runs. Reads are always
    * allowed under both; the never-allowed rows are not a profile at all.
    */
-  coworkerPermissions?: "SAFE" | "TRUSTED";
+  coworkerPermissions?: "SAFE" | "TRUSTED" | "AUTONOMOUS";
+  /**
+   * The Coworker's hands (2026-09-09). MCP servers the person added in Coworker
+   * Settings & Connections; the workspace folder the file tools resolve relative
+   * paths against (default %USERPROFILE%\LoopcomCoworkerAcceptance); extra
+   * folders the file tools may reach beyond the user profile + workspace.
+   */
+  coworkerMcpServers?: CoworkerMcpServerSetting[];
+  coworkerWorkspace?: string;
+  coworkerExtraRoots?: string[];
   /**
    * Remote support: whether this installation will answer a request to share
    * its screen. ⛔⛔ OFF BY DEFAULT, AND THAT IS THE WHOLE FLEET-SAFETY STORY.

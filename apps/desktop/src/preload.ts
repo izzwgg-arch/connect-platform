@@ -283,3 +283,29 @@ const coworkerWidgetApi = {
 };
 
 contextBridge.exposeInMainWorld("coworkerWidget", coworkerWidgetApi);
+
+// ── The Coworker's hands (2026-09-09) ─────────────────────────────────
+// ⛔ Two more bridges, both for LOCAL pages packaged with the app.
+// `coworkerApproval` (assets/coworkerApproval.html): read the ONE request this
+// window was opened for, answer allow/deny for that call id — no data in, no
+// capability out. `coworkerAdmin` (assets/coworkerConnections.html): the
+// settings & connections page: profile, MCP servers, link status, history.
+// The hosted portal also gets `coworkerAdmin` read-only status so the chat can
+// show "hands connected"; the mutating verbs are re-checked in main by window
+// kind (a hosted page may not add an MCP server or change the profile).
+const coworkerApprovalApi = {
+  get: () => ipcRenderer.invoke("coworker-approval:get"),
+  answer: (payload: { callId: string; approved: boolean }) => ipcRenderer.send("coworker-approval:answer", payload),
+};
+contextBridge.exposeInMainWorld("coworkerApproval", coworkerApprovalApi);
+
+const coworkerAdminApi = {
+  getState: () => ipcRenderer.invoke("coworker-admin:state"),
+  setProfile: (profile: string) => ipcRenderer.invoke("coworker-admin:set-profile", profile),
+  mcp: (action: string, id: string, config?: unknown) => ipcRenderer.invoke("coworker-admin:mcp", { action, id, config }),
+  relink: () => ipcRenderer.invoke("coworker-admin:relink"),
+  cancel: () => ipcRenderer.invoke("coworker-admin:cancel"),
+  openPath: (p: string, how: "open" | "folder") => ipcRenderer.invoke("coworker-admin:open-path", { path: p, how }),
+  openConnections: () => ipcRenderer.invoke("coworker-admin:open-connections"),
+};
+contextBridge.exposeInMainWorld("coworkerAdmin", coworkerAdminApi);
