@@ -39048,8 +39048,8 @@ table tr:hover {
 :root[data-theme="light"] .rd-root, :root[data-theme="light"] .rd-modal { --rd-ink-success: #15803d; --rd-ink-warning: #b45309; --rd-ink-danger: #b91c1c; }
 .rd-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none; }
 .rd-btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-.rd-btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.rd-btn--primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
+.rd-btn--primary { background: var(--accent); border-color: var(--accent); color: #04121d; font-weight: 700; } /* blue fill + dark bold text, same as .mtg-primary (Meetings → Start meeting); Izzy 2026-09-09 */
+.rd-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }
 .rd-btn--danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .rd-btn--ghost { background: transparent; }
 .rd-btn--sm { padding: 5px 10px; font-size: 12px; border-radius: 7px; }
