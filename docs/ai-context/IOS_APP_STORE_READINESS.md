@@ -245,3 +245,42 @@ Blue 2B refinement with light/dark variants) — nothing to change in the listin
   distribution consequence only.
 - The **org migration** (Loopcom LLC) rides in parallel; seller name flips
   after it completes. Review proceeds under Israel Weinstock.
+
+## ⛔ 2026-09-09 — STILL WAITING FOR REVIEW AFTER 10.5 DAYS; MIGRATION GO-AHEAD WAS SENT (WITH A BODY) AND APPLE HAS BEEN SILENT SINCE 2026-09-02
+
+Read live 2026-09-09 (ASC API from loopcom + Izzy's own signed-in Chrome, profile
+"jacob" / Gmail account #5 = iw5626644@gmail.com). **Read-only — nothing sent,
+nothing changed.**
+
+- **Review:** version 1.0 / build 57 is `WAITING_FOR_REVIEW`; review submission
+  `f395cee7-6db2-4abf-9aa6-26aa43d8125c` submitted 2026-08-30T03:12Z, its one item
+  `READY_FOR_REVIEW`. ASC → App Review (Resolution Center) lists that ONE
+  submission and **no message from Apple**. No rejection, never entered
+  `IN_REVIEW`. Apple's own submission email: "up to 48 hours". 0 customer
+  reviews / 0 ratings — the app is not live, so **the "one star" Izzy saw is the
+  yellow status badge beside "1.0 Waiting for Review" in the ASC sidebar, not a
+  rating.**
+- **Migration case 20000151453845:** the replacement go-ahead **WAS sent, with a
+  body, 2026-09-02 12:50 PM** ("Apologies - my previous reply went out blank…
+  Yes, please start the migration now. Please migrate my individual membership
+  (team PR63R6J84J) to the organization…"). ⛔ It shows as a SEPARATE
+  conversation in Gmail (the Apple thread still lists only Natalie/blank/Natalie),
+  which is why it reads as unsent from the inbox view — check `in:sent`.
+  **Apple has not replied since** (7 days). `developer.apple.com/account` →
+  Membership details still reads **Enrolled as: Individual**, renewal
+  2027-04-14, no card on file (banner). Builds 58/59 uploaded + processed VALID
+  on 09-06, so Certificates & Profiles was NOT dark — the migration has not
+  started on Apple's side.
+- **Both Apple-side queues are stalled together** (review untouched since 08-30,
+  migration case unanswered since 09-02). Whether one holds the other is Apple's
+  to say; nothing on our side is pending.
+- **Next (both are sends, need Izzy's word):** (1) reply on case 20000151453845
+  asking for the migration status and whether it is holding App Review;
+  (2) ASC → Contact Us → App Review → ask for a status on the 08-30 submission
+  (10+ days, no contact). ⛔ Do NOT remove the version from review to resubmit
+  build 59 — that puts it at the back of the queue with no explanation gained.
+- Chrome note: only one Chrome profile has its Claude extension connected at a
+  time; the Apple session lives in profile **"jacob"** (`Profile 2`, avatar
+  "J"), the default extension connection is profile "Iz". Izzy must click the
+  extension icon in the jacob window to connect it (`list_connected_browsers`
+  then shows it as a second browser; pick it via `select_browser`).

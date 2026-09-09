@@ -50,6 +50,7 @@ calling from,' and it took me to the main menu."*
   845-244-9666, press 0, hear STEPHEN, key a real account's 10 digits + PIN, hear the
   balance.
 
+- ✅ **2026-09-09 "it asked me for a PIN" — both calls decoded, nothing broken (handoff §16c).** Izzy's cell 562-209-6644 IS on Gesheft's register (`PosCustomer 1001021 IZZY WEIN`), so the line recognised him and skipped the lookup correctly; 845-782-3064 = `3762 JACOB WEINSTOCK`. Both asked a PIN because **`SupermarketPhonePin` has 0 rows — the agreed rule is PIN-ONCE enrollment** (the register demands `X-Customer-Pin` on every balance/charge and its customer record carries no PIN), and nobody has ever keyed one. Both calls hung up at the prompt. Never asking even once needs Gesheft/POS with Logic — the open 08-25 ask.
 ## ⛔ AGENT HANDOFF — the bottom-right "Incoming Call / Unknown caller / Dismiss" card (CRM screen pop) is REMOVED for every tenant; the ringing softphone is the ONLY incoming-call surface (2026-09-08, `04b23b11`) — READ FIRST before adding any incoming-call pop-up, toast or card to the portal or desktop
 
 (**portal only** — no api, no telephony, no migration, no env, no PBX write. Memory: [[no-second-incoming-call-popup]].)
@@ -3260,6 +3261,19 @@ times."* Memory: [[signalwire-inbound-rang-nobody-tenant-race]].
   the VoIP.ms path and was never affected.**
 
 ## ⛔⛔ AGENT HANDOFF — the iPhone App Store submission: 4 of 5 blockers CLOSED, only SCREENSHOTS and two web-UI checks remain (2026-08-27) — READ FIRST before any App Store work, before "fixing" the reviewer demo account, before trusting a 200 from the ASC API, or before believing App Privacy can be checked by a script
+
+- ⛔⛔ **2026-09-09 STATUS: STILL `WAITING_FOR_REVIEW` AFTER 10.5 DAYS, AND APPLE HAS BEEN SILENT ON
+  THE MIGRATION CASE SINCE 09-02.** Read live from the ASC API + Izzy's signed-in Chrome: submission
+  `f395cee7…` (08-30 03:12Z) never entered review, Resolution Center holds ZERO messages, 0 ratings
+  (**the "one star" is the yellow status badge beside "1.0 Waiting for Review", not a rating**).
+  ⛔ **Correction to the 09-02 bullet below: the replacement go-ahead reply WAS sent, with a body,
+  09-02 12:50 PM** — it sits as its own conversation in `in:sent`, not in the Apple thread, which is
+  why it looked unsent. Membership still reads **Individual**; builds 58/59 processed on 09-06, so the
+  migration has not started. Nothing is pending on our side; both queues are Apple's. Next = two
+  SENDS needing Izzy's word: reply on case 20000151453845 asking status, and ASC Contact Us → App
+  Review status request. ⛔ Do NOT pull the version to resubmit build 59. Full detail: readiness doc
+  §2026-09-09. Chrome trap: the Apple session is in profile **"jacob"** — its extension must be
+  connected by hand and picked with `select_browser`.
 
 Full state: **`docs/ai-context/IOS_APP_STORE_READINESS.md`**
 (**Listing metadata WRITTEN through the App Store Connect API and read back — no
