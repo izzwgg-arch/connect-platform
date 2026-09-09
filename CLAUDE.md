@@ -1,3 +1,28 @@
+## ⛔⛔ AGENT HANDOFF — the Loopcom Coworker HAS REAL HANDS: the desktop links to the agent, the model calls `computer_*`/`mcp_*` tools that RUN on the person's Windows PC, and every call is judged + approved LOCALLY (2026-09-09, `bab5323d`) — READ FIRST before touching `apps/agent/src/coworker/`, `apps/desktop/src/coworker/`, the engine's `DynamicToolsProvider`, or before adding any computer capability
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. This replaces the card-era three-task
+`coworker_task` as the way the Coworker acts on a computer (that tool stays, but is not offered while the hands are on).
+
+- **Shape:** the Windows app (`hands.ts`) links to the agent over `/agent-api/coworker/*` (hello / long-poll `next` /
+  `result` / `progress` / `cancel`, keyed by the verified `tenantId:userId`) and announces a manifest of 31 built-in
+  tools + any connected MCP tools. `ConversationEngine` takes a per-turn `DynamicToolsProvider` that offers them as
+  `computer_*` / `mcp_*` when the chat comes from the app (branded UA) or the bubble, and awaits each call's result
+  INSIDE the turn (up to 10 min; an approval extends it). Every call is decided on the desktop by a COPY of the shared
+  policy core (`apps/desktop/src/coworker/policyCore.ts`, drift-guarded), shown as an approval window when the verdict
+  is `ask`, executed in `runtime/` (fs fence, PowerShell denylist, Windows CIM, hidden own-partition browser, xlsx,
+  diagnostics, MCP host), and journaled.
+- ⛔ **THE DESKTOP DECIDES, NEVER THE SERVER.** Every message from the wire is untrusted input. A compromised agent
+  can only ASK; the NEVER_AUTO floor, the hard prohibitions and the shell denylist are not settings. A "No"/denied/
+  cancelled is final for that call — the prompt forbids routing around it.
+- ⛔ **Keep `policyCore.ts` identical to `packages/shared/src/coworker/*`** (the test reads the shared files); tool
+  names must match `^[a-z][a-z0-9_]{0,63}$`; never let the poll loop spin or leave a timer armed.
+- **Deploy state:** agent `app-agent-1` at `bab5323d` (`/agent-api/coworker/*`, `proxy_read_timeout 900s`); portal
+  `48511a49` (permissions view: SAFE/TRUSTED/AUTONOMOUS + Settings & Connections); desktop `0.1.17-rc.10` installed on
+  the dev box (built from a clean export — see the rc.10 section below), feed still 0.1.16. Proven end to end on this
+  machine (`Loopcom-Coworker-Proof-2026-09-09T1751`): the agent runs an ordinary "Create a folder on my Desktop…" and
+  the folder appears; base acceptance 45/45 dev + 44/45 packaged; browser/download/xlsx/PowerShell/diagnostics/MCP,
+  injection defense, secret redaction, both providers, cancel, loop protection all PASS.
+
 ## ⛔ AGENT HANDOFF — McNamara Lion is the FIRST existing tenant with the overdue-account cutoff switched ON; its September invoice is already FAILED, so a countdown starts at the next sweep (2026-09-09) — READ FIRST before touching McNamara Lion's billing, before switching the cutoff on for ANY tenant whose PBX tenant has no `emergency-calls` context, or for "McNamara's phones stopped dialing out"
 
 (**PRODUCTION DATA ONLY — one `PUT` through the sanctioned route, no code, no deploy, no migration, no PBX write, no money moved, no email sent by hand.** Izzy, 2026-09-09: *"turn on the auto disconnect for non-payment or interrupt service for the McNamara line only."* Memory: [[mcnamara-lion-service-interruption-is-on]]; the feature itself is the 2026-08-17/18 section further down.)
