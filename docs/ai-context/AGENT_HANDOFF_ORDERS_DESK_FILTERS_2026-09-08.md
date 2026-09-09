@@ -102,6 +102,51 @@ range) was approved: *"Go, build it as drawn and deploy."* Commit **`65225b5e`**
 - The `total` counts the whole filter server-side; the tiles still count NEEDS_REVIEW / today
   independently of the filters (by design — they are the "right now" numbers).
 
+## 6. Follow-up the same evening — "Kishef 101 can't get the item dropdown; give ext 101 all Store permissions"
+
+Izzy: *"I have tried from inside Kishef 101 to handle the orders. … when I try to put in an
+item, the dropdown can't pop up. I should be able to do everything within the store section
+(all permissions) in the shift extension 101 user."* → *"gesheft"*. **"Kishef" = Gesheft**
+(his spelling); Gesheft extension 101 is **"Phone Orders"**, owner user
+`yisraelweinstock@gmail.com` (`cmnmjhr3500anp96hc00p068a`, role USER) — the same account the
+office desktop shells run (`AGENT_HANDOFF_GESHEFT_101_WINDOWS_ANSWER_2026-08-24.md`).
+
+- **Why the dropdown never appears for that account:** the quick-add suggestions are an inline
+  list fed by `GET /supermarket/catalog/search`; every `/supermarket/*` call is prefix-gated on
+  `can_view_supermarket_orders` (`server.ts` PORTAL_API_PERMISSION_RULES). Phone Orders had
+  role USER and **no custom role**, and the three supermarket keys are in neither default
+  bucket, so the API answered **403** and the portal swallows the error (`catch → setHits([])`).
+  No 403 on catalog/search showed in the last hours because that account never got that far —
+  its `/orders` list polls were the 403s.
+- **What was granted (prod DB write, 2026-09-08 ~23:30, no API token available):**
+  `CustomRole` **`cmttct4x33omgg0fah09mdt3t` "Store — all access"** in Gesheft, assigned via
+  `UserCustomRole cmttct4x87zgr05q7uumjltww` to `cmnmjhr3500anp96hc00p068a`. Permissions:
+  `can_view_section_store, can_view_store_orders, can_view_store_deliveries,
+  can_view_store_drivers, can_view_store_specials, can_view_store_teach,
+  can_view_supermarket_orders, can_manage_supermarket_orders, can_manage_supermarket_specials,
+  can_manage_tracking_drivers` **PLUS the whole END_USER bucket** (the platform snapshot's 56
+  keys ∪ the code defaults' 49) — 73 keys total.
+- ⛔⛔ **A custom role is AUTHORITATIVE** (`computeAuthoritativePortalPermissions`,
+  `crm/portalCrmPermissions.ts`): once a non-super-admin holds any custom role, their effective
+  set is EXACTLY the role's keys — the bucket grants nothing extra. The first insert here
+  carried only the 10 Store keys, which for a few minutes stripped Phone Orders of every
+  end-user permission (overview, voicemail, chat, softphone…). Fixed within minutes by the
+  UPDATE above. **Never create a "store only" role for a working user — list the base keys too.**
+- Permission cache TTL is 15 s (`permissionCache.ts`); a DB write needs no restart. The
+  desktop shells hold long-lived JWTs (`lastLoginAt` 09-03), which is fine — permissions are
+  resolved per request from the DB, not from the token.
+- **Deliveries page caveat:** `/orders/deliveries` calls `/delivery/map` + `/delivery/runs`,
+  which need `DeliveryTenantSettings.enabled` (Gesheft has **no row** → `delivery_not_enabled`)
+  and a `DeliveryUserAccess` role — a separate feature switch, not a permission key. The page
+  degrades to empty (`.catch(() => [])`). Not touched.
+- ⛔ **The 403 polls seen during this work were NOT Phone Orders.** nginx: IP 50.48.58.53,
+  `Loopcom/0.1.17-rc.9` desktop, referer `/orders`, every 30 s — that desktop is signed in as
+  **`izzwgg@gmail.com` (tenant Landau Home, ext 101 "Home", crmMode `classic`)**, whose "EZra"
+  custom role has the Store view keys, so the nav shows Store → Orders but
+  `requireSupermarketMode` refuses a classic tenant. Working Gesheft orders needs the Gesheft
+  account (Phone Orders) or Support with the workspace switcher on Gesheft.
+- ⏳ NOT PROVEN: a Store → Orders session as Phone Orders after the grant (no client here).
+
 ## 6. Follow-up (2026-09-08, evening) — the status tabs showed the browser's grey button face
 
 Izzy's screenshot after the deploy: *Sent / Failed to send / Dismissed / All orders* sat as
