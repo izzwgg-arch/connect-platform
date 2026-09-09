@@ -1,3 +1,34 @@
+## ⛔ AGENT HANDOFF — Meta business verification was REJECTED: the LLC was 5 days old when it was submitted, the address said "suit c", and the contact email is unconfirmed (2026-09-09) — READ FIRST before resubmitting Meta verification, before typing an address into any Meta form, or for "the WhatsApp numbers are still Pending"
+
+Full detail: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUTH_PROGRAM_2026-08-21.md` §9**
+(**Read-only in Izzy's Chrome — no Meta setting changed, nothing uploaded, NOTHING
+SUBMITTED.** Memory: [[whatsapp-numbers-pending-business-verification]].)
+
+- ⛔ **Meta's screen says only "Couldn't be verified — your submission has been rejected.
+  You can upload new documents or submit your original ones for another review."** No
+  field-level reason exists anywhere reachable (Security Center, Business info, WhatsApp
+  activity log, the FB notification tray were all read). The reason lives in the rejection
+  EMAIL, sent to the portfolio contact **izzy@loopcom.net — which the portfolio flags as
+  UNCONFIRMED** ("Follow the link in the email sent to izzy@loopcom.net"). Confirm it first.
+- ⛔⛔ **THE FILING DATE IS THE HEADLINE: NY DOS says LOOPCOM LLC (DOS ID 8001109) was
+  filed 2026-08-20; verification was submitted 2026-08-25.** Meta's record lookup cannot
+  find a 5-day-old LLC, so it verifies by DOCUMENTS or rejects — and nothing records that
+  any document was uploaded. Resubmit WITH the DOS filing receipt + the IRS CP 575.
+- ⛔ **The submitted address was `33 Route 17M` / `suit c`; the state record is `33 NY
+  17M` / `SUITE C`** — read straight out of the wizard's pre-filled draft. Meta matches
+  documents to the address character for character. Fix line 2 to `SUITE C` in BOTH the
+  submission and Business info → Business details. Business type = **Private Company**.
+- ✅ Ruled out by measurement: loopcom.net (HTTPS, all 26 links 200, schema.org already
+  carries the legal name + Suite C address). ⚠️ PhysicalAddress.com notarisation mails
+  (Aug 23–26) mean a virtual mailbox exists somewhere — never put that address into Meta.
+- ⏳ **Security Center now reads "Started on Sep 09 — Pending submission — Continue"** — a
+  DRAFT from walking the wizard, stopped at "Help us confirm it's you" (a personal identity
+  step, deliberately left to Izzy). Both WhatsApp numbers still Pending; Tech Provider
+  access verification has a **11/8/2026** deadline and cannot start until BV passes.
+- ⛔ Chrome traps: two profiles have the extension (Default "Iz" holds Meta; "jacob" has no
+  FB login), `switch_browser`'s prompt never rendered, `screenshot` errors on this build —
+  read dialogs via `read_page`/JS; the wizard's LAST of two `Next` buttons is the live one.
+
 ## ⛔⛔ AGENT HANDOFF — the Loopcom Coworker HAS REAL HANDS: the desktop links to the agent, the model calls `computer_*`/`mcp_*` tools that RUN on the person's Windows PC, and every call is judged + approved LOCALLY (2026-09-09, `bab5323d`) — READ FIRST before touching `apps/agent/src/coworker/`, `apps/desktop/src/coworker/`, the engine's `DynamicToolsProvider`, or before adding any computer capability
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. This replaces the card-era three-task

@@ -618,3 +618,118 @@ izzy@loopcom.net; `gmail.send` = sensitive, `gmail.readonly`/`drive.readonly` = 
 (dropped by Izzy's decision); app published; brand verification submitted. Everything,
 including the per-signed-in-user "Verify branding" trap, is in
 `AGENT_HANDOFF_GOOGLE_OAUTH_VERIFICATION_2026-09-02.md`.
+
+## 9. UPDATE 2026-09-09 — the Meta business verification was REJECTED; why, and what to resubmit
+
+**Read-only in Izzy's real Chrome (Default "Iz" profile). No Meta setting changed, no
+document uploaded, NOTHING SUBMITTED.** Izzy: *"Facebook business verification got
+declined. Let's figure out why and figure out our next step."*
+
+### 9a. What Meta shows, verbatim
+
+Security Center → Business Verification → *Verification for Loopcom LLC*:
+> **Couldn't be verified** — "Your submission has been rejected. You can upload new
+> documents or submit your original ones for another review."
+
+⛔ **Meta prints NO field-level reason anywhere reachable:** not in Security Center,
+not in Business info ("Unverified"), not in the WhatsApp Manager activity log (still
+only the Aug 16 `Name verification requested` rows), not in the personal Facebook
+notification tray (20 items, none about verification), and the Business Support Home
+page dies on Meta's own "Redirect Confirmation" interstitial. Meta's help article
+`facebook.com/business/help/2342133782492969` lists exactly four rejection classes:
+false/misleading info · not authorised to represent the business · circumventing review ·
+**website fails to load / not HTTPS / has a link that errors**.
+
+⛔ The rejection email goes to the portfolio's contact email — **`izzy@loopcom.net`,
+which the portfolio itself flags as UNCONFIRMED** ("Follow the link in the email sent to
+izzy@loopcom.net to confirm your email address"). Nobody has read that mailbox for this;
+the connected Gmail is `support@connectcomunications.com`, which never received it.
+
+### 9b. What the submission actually contained — read out of the wizard's saved draft
+
+Re-opening *Start verification* pre-fills the previous answers. Read with page JS:
+
+| Field | Submitted to Meta | NY Department of State record (DOS ID **8001109**, read live via the Public Inquiry API) |
+|---|---|---|
+| Business name | `Loopcom LLC` | `LOOPCOM LLC` ✅ |
+| Street | `33 Route 17M` | `33 NY 17M` |
+| Line 2 | **`suit c`** | `SUITE C` |
+| City / State / ZIP | Harriman / New York / 10926 | HARRIMAN / NY / 10926 ✅ |
+| Phone | 8457231213 | (not on file) |
+| Website | https://loopcom.net/ | — |
+| Business type | (unknown what was picked) | DOMESTIC LIMITED LIABILITY COMPANY → wizard option **"Private Company"** |
+| EIN | entered by Izzy (optional field) | — |
+
+⛔⛔ **THE LLC WAS FILED ON 2026-08-20 AND VERIFICATION WAS SUBMITTED ON 2026-08-25.**
+`dateOfInitialDosFiling: 2026-08-20`, statement status CURRENT, Active. Five days is far
+too young for Meta's third-party record match (the same window in which D&B only issued
+the D-U-N-S on 08-28). **A business Meta cannot find in official records MUST verify by
+documents; a documents-less submission of an unfindable business is rejected.** Whether
+any document was uploaded on 08-25 is not recorded anywhere — the 08-25 note says only
+that the wizard "may" ask for documents.
+
+⛔ **Second, independent defect: the address does not match the document character for
+character.** `suit c` (typo, lower case) vs `SUITE C`, and `33 Route 17M` vs `33 NY 17M`.
+Meta's own rule: documents must "validate the legal name of your business and your
+business's official mailing address". The state record has **no location address at
+all** (only the service-of-process address), so the SOP address IS the address to match.
+
+✅ **Ruled out, measured:** loopcom.net loads over HTTPS, every one of its 26 internal
+links answers 200 (crawled 2026-09-09), and its schema.org block already says
+`legalName: Loopcom LLC`, `33 NY-17M, Suite C, Harriman NY 10926`, `+18457231213`. The
+"website" rejection class does not apply. The two WhatsApp numbers are still `Pending`,
+WhatsApp Manager still says "Business verification: In progress" (its cache lags the
+Security Center), and there is still no payment method on either WABA.
+
+⚠️ **PhysicalAddress.com (a mail-receiving-agent service) sent Izzy notarisation requests
+on Aug 23/24/26** — i.e. a virtual mailbox was set up somewhere in that window. 33 Route
+17M is a real leased medical/office building (LoopNet), so the state record is NOT a
+virtual-office address. Meta declines virtual/PO-box addresses; if the PhysicalAddress.com
+address was ever typed into Meta, that would be a third cause. It was not in the draft.
+
+### 9c. The resubmission — all of it Izzy's, none of it code
+
+1. **Confirm the contact email first** — Business info → Profile contact info →
+   *Resend email* → click the link in izzy@loopcom.net. Read the rejection email that
+   is already sitting in that mailbox; it names the failed field.
+2. **Fix the address to match the state record exactly:** street `33 NY 17M`, line 2
+   `SUITE C` (⛔ not "suit c", not "Ste C"), Harriman, NY, 10926. Do the same in
+   Business info → Business details, so the portfolio and the submission agree.
+3. **Business type = Private Company** (the LLC option). Not Corporation — that option
+   is described as "publicly listed" and Meta then looks for public filings.
+4. **Upload documents; do not rely on the record lookup.** Meta's accepted list
+   (`facebook.com/business/help/159334372093366`): Articles/Certificate of
+   Incorporation (for an LLC: the NY DOS filing receipt / Articles of Organization,
+   dated 2026-08-20), Business Registration, **government-issued tax document (the IRS
+   EIN letter CP 575 — not a self-filed return)**, business bank statement, or a utility
+   bill (address/phone only, must carry the legal name). The DOS filing receipt + the CP
+   575 cover name AND address AND tax ID. Redact anything Meta does not need.
+5. **Wait at least 24 h after the rejection before resubmitting** (same-day resubmits
+   are auto-flagged in every practitioner write-up) — it has been longer than that.
+6. **Confirm your connection** will send a code to 845-723-1213 — that is Connect's own
+   SMS number; short-code texts have landed in Connect's inbox since the 08-16 fix (the
+   Play Console code arrived that way on 08-29), so read it from the admin SMS inbox.
+7. The wizard's last step is **"Help us confirm it's you"** — a personal identity check.
+   ⛔ The agent stopped there deliberately; that step is a person's to do.
+
+⏳ **State left behind:** Security Center now reads *"Started on Sep 09, 2026 — Pending
+submission — Continue"* — a DRAFT created by walking the wizard, NOT a submission. The
+rejected submission is unchanged. Izzy can press *Continue* and finish it, or *Start
+verification* again from scratch.
+
+⏳ **Also seen, not acted on:** *Access verification* (Tech Provider) reads "Not
+verified … must be completed by **11/8/2026** to avoid restrictions to 1 app" — it cannot
+start until business verification passes. The `Connect comunications` WABA display name
+is still the misspelled one the 08-24 note expects Meta to decline.
+
+⛔ **Tooling traps this session:** two Chrome profiles carry the Claude extension
+(Default "Iz" = the Meta session; Profile 2 "jacob" = no Facebook login) and the
+`switch_browser` prompt never rendered — `select_browser` on whichever deviceId
+`list_connected_browsers` reports is the reliable route; `computer.screenshot` fails on
+this extension build (`clip.scale` deserialise error), so read dialogs with
+`read_page`/`find` or page JS; the wizard renders TWO `Next` buttons per step and only the
+LAST one advances; `get_page_text` on WhatsApp Manager returns only an `<article>`
+header — use `read_page`. The NY DOS record is readable without a browser session:
+`POST https://apps.dos.ny.gov/PublicInquiryWeb/api/PublicInquiry/GetEntityRecordByID`
+with `{SearchID:"8001109",EntityName:"LOOPCOM LLC",AssumedNameFlag:"false"}` from a tab
+on `apps.dos.ny.gov`.
