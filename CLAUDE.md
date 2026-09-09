@@ -22,7 +22,13 @@ black on white? Make it Blue and black like the other main buttons"* and sent th
 - Verified in his own Chrome (Support login, `app.loopcom.net/remote-desktop`, `data-theme` toggled
   by script): the injected `rd-btn rd-btn--primary rd-btn--block` rendered identical to the Start
   meeting screenshot. ⏳ Deploy status: see the bullet appended below once the portal is out.
-- Deploy status is in the commit/deploy bullets below this line once done.
+- ✅ **DEPLOYED + container-verified 2026-09-09:** commit `c54ae95f`, `ssh connect … bash scripts/deploy-direct.sh
+  portal --commit c54ae95f` (dry-run first, no other deploy running; blue/green, nginx back on 3000).
+  `app-portal-1` `/app/.build-commit` = `c54ae95f`, `curl 127.0.0.1:3000/login` → 200 in 15 ms; the built
+  CSS (`static/css/465dd88a….css`, `dd47d032….css`) contains `color:#04121d;font-weight:700` and the route
+  chunk `static/chunks/app/(platform)/remote-desktop/page-082ddeca….js` contains
+  `rd-btn rd-btn--primary rd-btn--block`. The interim neutral look (`635da8ff`) was live for ~1 h only.
+  ⏳ NOT PROVEN: Izzy's own eyes on the deployed page.
 
 ## ⛔ AGENT HANDOFF — the dev box (VMI3409497) runs desktop `0.1.17-rc.9` now, REBUILT HERE from a clean export of HEAD and installed with `/S`; the fleet feed is UNTOUCHED at 0.1.16 (2026-09-09) — READ FIRST before "the latest desktop build", before building the desktop app on this machine, or before believing `apps/desktop/release/` exists
 
