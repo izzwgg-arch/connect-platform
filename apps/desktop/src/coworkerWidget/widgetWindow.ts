@@ -56,6 +56,14 @@ export type WidgetDeps = {
    * nothing.
    */
   attachDiag?: (win: BW, tag: string) => void;
+  /**
+   * The Coworker's hands are mid-flight: an approval prompt is up, or a tool
+   * call is running. While this returns true the chat panel does NOT hide on
+   * blur — the approval window taking focus, or a tool opening Explorer, must
+   * not make the conversation vanish under the person (2026-09-09: in SAFE mode
+   * the very first write asked for approval and the chat closed itself).
+   */
+  holdChatOpen?: () => boolean;
 };
 
 /**
@@ -252,6 +260,32 @@ function chatIsShowing(): boolean {
   return Boolean(chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible());
 }
 
+/** Never throws: a focus rule must not be able to break the popover. */
+function holdChatOpen(): boolean {
+  try { return deps?.holdChatOpen?.() === true; } catch { return false; }
+}
+
+/** Where the chat panel is right now (screen coordinates), or null when it is not showing. */
+export function chatPanelBounds(): Rect | null {
+  try {
+    if (!chatIsShowing()) return null;
+    const b = chatWindow!.getBounds();
+    return { x: b.x, y: b.y, width: b.width, height: b.height };
+  } catch { return null; }
+}
+
+export function isChatPanelVisible(): boolean {
+  return chatIsShowing();
+}
+
+/**
+ * After an approval prompt closes (answered, cancelled, timed out), give the
+ * chat its focus back — only if it is still showing. Never re-shows a hidden one.
+ */
+export function restoreChatPanel(): void {
+  try { if (chatIsShowing()) chatWindow!.focus(); } catch (err) { deps?.log(`chat restore failed: ${String(err)}`); }
+}
+
 /** Bubble click: open the chat, or close it if it is the thing that was open. */
 function toggleChatPanel(): void {
   const d = deps;
@@ -291,6 +325,7 @@ function openChatPanel(): void {
       placeChatBesideBubble(chatWindow);
       chatWindow.show();
       chatWindow.focus();
+      setWidgetBadge("none"); // the person is looking: nothing is unread any more
       // Logged too: the first live run showed one "opened" and three "closed"
       // lines because re-shows were silent, which read like the toggle was broken.
       d.log("chat panel shown again");
@@ -333,6 +368,7 @@ function openChatPanel(): void {
       if (!chatWindow || chatWindow.isDestroyed()) return;
       chatWindow.show();
       chatWindow.focus();
+      setWidgetBadge("none");
     });
 
     // Any link the assistant tries to open in a new window goes to the OS browser,
@@ -343,12 +379,14 @@ function openChatPanel(): void {
     });
 
     // Close on blur so it behaves like a popover, not a second app window. ⛔ but
-    // NOT while devtools is open (that would make debugging impossible).
+    // NOT while devtools is open (that would make debugging impossible), and ⛔
+    // NOT while the hands are busy: the approval prompt taking focus, or a tool
+    // opening a folder, is not the person walking away from the conversation.
     chatWindow.on("blur", () => {
-      if (chatWindow && !chatWindow.isDestroyed() && !chatWindow.webContents.isDevToolsOpened()) {
-        chatHiddenByBlurAt = Date.now();
-        chatWindow.hide();
-      }
+      if (!chatWindow || chatWindow.isDestroyed() || chatWindow.webContents.isDevToolsOpened()) return;
+      if (holdChatOpen()) { d.log("chat kept open on blur (hands busy)"); return; }
+      chatHiddenByBlurAt = Date.now();
+      chatWindow.hide();
     });
     chatWindow.on("closed", () => { chatWindow = null; });
     d.log("chat panel opened");

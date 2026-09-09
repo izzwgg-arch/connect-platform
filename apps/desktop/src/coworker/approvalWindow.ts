@@ -17,6 +17,7 @@
 import type { BrowserWindow as BW, IpcMain, Screen } from "electron";
 import fs from "node:fs";
 import type { ApprovalRequest } from "./runtime";
+import type { Point, Rect } from "../coworkerWidget/widgetGeometry";
 
 export type ApprovalDeps = {
   BrowserWindow: typeof BW;
@@ -26,7 +27,40 @@ export type ApprovalDeps = {
   preloadPath: string;
   log: (line: string) => void;
   attachDiag?: (win: BW, tag: string) => void;
+  /** The chat panel's bounds while it is showing — the prompt lands beside it, on ITS display. */
+  anchor?: () => Rect | null;
+  /** Fired after every answer, close, cancel or timeout — main hands the chat its focus back. */
+  onSettled?: (r: { callId: string; approved: boolean; how: string }) => void;
 };
+
+export const APPROVAL_WIDTH = 460;
+export const APPROVAL_HEIGHT = 360;
+const APPROVAL_GAP = 12;
+
+/**
+ * Where the approval prompt goes. ⛔ Pure, tested.
+ *
+ * Beside the chat panel when it is showing: to its LEFT (the bubble's home is the
+ * bottom-right corner, so the room is on the left), bottom-aligned with it; to the
+ * right when the left has no room; over its centre when neither side has room.
+ * Always fully inside the work area. With no chat panel showing: the bottom-right
+ * corner of the work area, 24px in. Before this the prompt always went to the
+ * primary display's corner — ON TOP of the chat it was asking about, and on the
+ * wrong monitor when the bubble lived on a second screen.
+ */
+export function approvalPositionFor(anchor: Rect | null, workArea: Rect, size: { width: number; height: number } = { width: APPROVAL_WIDTH, height: APPROVAL_HEIGHT }): Point {
+  const clamp = (p: Point): Point => ({
+    x: Math.round(Math.min(Math.max(p.x, workArea.x), Math.max(workArea.x, workArea.x + workArea.width - size.width))),
+    y: Math.round(Math.min(Math.max(p.y, workArea.y), Math.max(workArea.y, workArea.y + workArea.height - size.height))),
+  });
+  if (!anchor) return clamp({ x: workArea.x + workArea.width - size.width - 24, y: workArea.y + workArea.height - size.height - 24 });
+  const y = anchor.y + anchor.height - size.height;
+  const left = anchor.x - size.width - APPROVAL_GAP;
+  if (left >= workArea.x) return clamp({ x: left, y });
+  const right = anchor.x + anchor.width + APPROVAL_GAP;
+  if (right + size.width <= workArea.x + workArea.width) return clamp({ x: right, y });
+  return clamp({ x: anchor.x + (anchor.width - size.width) / 2, y: anchor.y + (anchor.height - size.height) / 2 });
+}
 
 type Pending = { req: ApprovalRequest; resolve: (r: { approved: boolean; how: string }) => void; win: BW };
 
@@ -59,6 +93,7 @@ function settle(callId: string, r: { approved: boolean; how: string }) {
   deps?.log(`approval: ${p.req.tool} → ${r.how}`);
   try { if (!p.win.isDestroyed()) p.win.destroy(); } catch { /* gone */ }
   p.resolve(r);
+  try { deps?.onSettled?.({ callId, ...r }); } catch { /* the chat's focus is a courtesy, never a failure */ }
 }
 
 /** Show the prompt; resolves with the person's answer, or denied when the window is closed / the task is cancelled. */
@@ -69,10 +104,14 @@ export function askApproval(req: ApprovalRequest, signal: AbortSignal): Promise<
     try {
       const html = d.assetPath("coworkerApproval.html");
       if (!fs.existsSync(html)) { d.log("approval: asset missing"); resolve({ approved: false, how: "no_ui" }); return; }
-      const wa = d.screen.getPrimaryDisplay().workArea;
-      const width = 460; const height = 360;
+      // Beside the chat panel, on the display the chat is on; the corner otherwise.
+      const anchor = (() => { try { return d.anchor?.() ?? null; } catch { return null; } })();
+      const display = anchor ? d.screen.getDisplayMatching(anchor) : d.screen.getPrimaryDisplay();
+      const wa = display.workArea;
+      const at = approvalPositionFor(anchor, { x: wa.x, y: wa.y, width: wa.width, height: wa.height });
+      const width = APPROVAL_WIDTH; const height = APPROVAL_HEIGHT;
       const win = new d.BrowserWindow({
-        width, height, x: Math.round(wa.x + wa.width - width - 24), y: Math.round(wa.y + wa.height - height - 24),
+        width, height, x: at.x, y: at.y,
         frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: false, alwaysOnTop: true,
         title: "Loopcom Coworker — approval", backgroundColor: "#0f1a2c", show: false,
         webPreferences: { preload: d.preloadPath, contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: ["--connect-window-kind=coworker-approval"] },
@@ -84,7 +123,7 @@ export function askApproval(req: ApprovalRequest, signal: AbortSignal): Promise<
       signal.addEventListener("abort", () => settle(req.callId, { approved: false, how: "cancelled" }), { once: true });
       win.loadFile(html);
       win.once("ready-to-show", () => { try { win.show(); win.focus(); } catch { /* ignore */ } });
-      d.log(`approval: shown for ${req.tool} (${req.callId.slice(0, 8)})`);
+      d.log(`approval: shown for ${req.tool} (${req.callId.slice(0, 8)}) at ${at.x},${at.y}${anchor ? " beside the chat" : ""}`);
     } catch (err) {
       d.log(`approval: failed to show ${String(err)}`);
       resolve({ approved: false, how: "no_ui" });

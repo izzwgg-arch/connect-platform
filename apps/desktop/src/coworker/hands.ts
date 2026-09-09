@@ -4,16 +4,18 @@
  * `startCoworkerHands()`. Everything here is wrapped: a fault in the hands must
  * never reach the phone.
  *
- * ⛔ The link runs only while the app is signed in (the token comes from the
- * main window's localStorage) and the Coworker is enabled (the bubble setting or
- * the hands setting — the bubble is how people find it). The hands do not exist
- * for a signed-out app, and they stop the moment the app quits (goodbye).
+ * ⛔ The link runs whenever the app is signed in (the token comes from the main
+ * window's localStorage). It does NOT depend on the bubble setting: the bubble is
+ * only how people find the chat, and the same agent reaches the hands from any
+ * window of the app. The hands do not exist for a signed-out app, and they stop
+ * the moment the app quits (goodbye).
  */
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import type { App, BrowserWindow as BW, IpcMain, Screen, Session, Shell } from "electron";
 import type { DesktopSettings, CoworkerMcpServerSetting } from "../types";
+import type { Rect } from "../coworkerWidget/widgetGeometry";
 import { CoworkerRuntime } from "./runtime";
 import { CoworkerBrowser } from "./runtime/browser";
 import { McpManager, parseServerConfig } from "./runtime/mcp";
@@ -43,6 +45,12 @@ export type HandsDeps = {
   log: (line: string) => void;
   attachDiag?: (win: BW, tag: string) => void;
   rebuildTray: () => void;
+  /** The chat panel's bounds while it is showing — the approval prompt lands beside it. */
+  chatAnchor?: () => Rect | null;
+  /** After an approval prompt closes, however it closed — main hands the chat its focus back. */
+  onApprovalSettled?: () => void;
+  /** The number of tool calls in flight changed — main drives the bubble's badge. */
+  onActivity?: (active: number) => void;
 };
 
 export type Hands = {
@@ -53,6 +61,8 @@ export type Hands = {
   stop: () => Promise<void>;
   openConnections: () => void;
   status: () => Record<string, unknown>;
+  /** An approval prompt is up or a call is running — the chat popover must not hide on blur. */
+  busy: () => boolean;
 };
 
 export const DEFAULT_WORKSPACE_NAME = "LoopcomCoworkerAcceptance";
@@ -89,7 +99,11 @@ export function startCoworkerHands(d: HandsDeps): Hands {
   let link: DesktopLinkClient | null = null;
   const mcp = new McpManager((l) => log(l), () => { try { link?.announce(); } catch { /* not started */ } });
 
-  const approvalDeps: ApprovalDeps = { BrowserWindow: d.BrowserWindow, ipcMain: d.ipcMain, screen: d.screen, assetPath: d.assetPath, preloadPath: d.preloadPath, log: (l) => log(l), attachDiag: d.attachDiag };
+  const approvalDeps: ApprovalDeps = {
+    BrowserWindow: d.BrowserWindow, ipcMain: d.ipcMain, screen: d.screen, assetPath: d.assetPath, preloadPath: d.preloadPath, log: (l) => log(l), attachDiag: d.attachDiag,
+    anchor: d.chatAnchor,
+    onSettled: () => { try { d.onApprovalSettled?.(); } catch { /* courtesy */ } },
+  };
   registerApprovalIpc(approvalDeps);
 
   const permissions = () => normalizePermissions({ profile: d.getSettings().coworkerPermissions ?? "SAFE", overrides: {} });
@@ -107,6 +121,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     showInFolder: (p) => d.shell.showItemInFolder(p),
     diagnostics: { portalUrl: d.portalUrl, appVersion: d.app.getVersion(), logFile: d.logFile, phoneState: d.phoneState, linkState: () => (link ? link.status() : { state: "off" }) as unknown as Record<string, unknown> },
     log: (l) => log(`runtime: ${l}`),
+    onActivity: d.onActivity,
   });
 
   const manifest = () => {
@@ -217,5 +232,6 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     stop: async () => { try { runtime.cancel(null); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
     openConnections: () => { openConnectionsWindow(approvalDeps); },
     status: () => ({ link: link!.status(), profile: permissions().profile, mcp: mcp.status().map((m) => ({ id: m.id, state: m.state, tools: m.tools.length })), active: runtime.activeCalls() }),
+    busy: () => runtime.activeCalls().length > 0 || pendingApprovals().length > 0,
   };
 }

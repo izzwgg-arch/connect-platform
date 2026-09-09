@@ -10,7 +10,7 @@ import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { registerCoworkerHands } from "./coworker/mainWiring";
 import { startCoworkerHands, type Hands } from "./coworker/hands";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
-import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
+import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc, chatPanelBounds, isChatPanelVisible, restoreChatPanel, setWidgetBadge } from "./coworkerWidget/widgetWindow";
 import { readShellLogTail } from "./shellLog";
 import { release as osRelease } from "node:os";
 import {
@@ -570,7 +570,30 @@ function widgetDeps() {
     // Without this the bubble's renderer is a black box in the log — the dead first
     // build produced ZERO coworker lines because nothing captured its console.
     attachDiag: (win: BrowserWindow, tag: string) => attachConsoleCapture(win, tag),
+    // The chat popover stays put while the hands are asking or working (2026-09-09).
+    holdChatOpen: () => { try { return hands?.busy() === true; } catch { return false; } },
   };
+}
+
+/**
+ * The bubble's badge, driven by the hands (2026-09-09): amber "working" while a
+ * tool call runs; when the calls stop and the chat is HIDDEN, red "unread" so the
+ * person knows something landed; cleared when the chat is opened (widgetWindow).
+ * The quiet gap between two calls of one turn is debounced so the dot does not
+ * flip red/amber every couple of seconds. ⛔ Wrapped: decorative, never fatal.
+ */
+let coworkerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+function coworkerActivity(active: number): void {
+  try {
+    if (coworkerIdleTimer) { clearTimeout(coworkerIdleTimer); coworkerIdleTimer = null; }
+    if (active > 0) { setWidgetBadge("working"); return; }
+    coworkerIdleTimer = setTimeout(() => {
+      coworkerIdleTimer = null;
+      try { setWidgetBadge(isChatPanelVisible() ? "none" : "unread"); } catch { /* decorative */ }
+    }, 1500);
+  } catch (err) {
+    diag("coworker-widget", `badge failed: ${String(err)}`);
+  }
 }
 
 /** One-line tray status for the hands' link: "connected" / "not signed in" / "off". */
@@ -604,6 +627,9 @@ function startHands(): void {
       log: (line) => diag("coworker", line),
       attachDiag: (win, tag) => attachConsoleCapture(win, tag),
       rebuildTray: () => rebuildTray(),
+      chatAnchor: () => chatPanelBounds(),
+      onApprovalSettled: () => restoreChatPanel(),
+      onActivity: (active) => coworkerActivity(active),
     });
     diag("coworker", "hands started");
     rebuildTray();

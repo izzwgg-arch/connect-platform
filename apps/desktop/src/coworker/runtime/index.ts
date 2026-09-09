@@ -57,6 +57,8 @@ export type RuntimeDeps = {
   showInFolder: (p: string) => void;
   diagnostics: { portalUrl: string; appVersion: string; logFile: string; phoneState: () => Record<string, unknown> | null; linkState: () => Record<string, unknown> };
   log: (line: string) => void;
+  /** The number of calls in flight changed (0 = idle). Drives the bubble's badge; never awaited. */
+  onActivity?: (active: number) => void;
   now?: () => number;
 };
 
@@ -88,6 +90,8 @@ export class CoworkerRuntime {
 
   activeCalls() { return [...this.active.values()].map((a) => ({ taskId: a.taskId, name: a.name, runningMs: this.now() - a.startedAt })); }
 
+  private activity() { try { this.deps.onActivity?.(this.active.size); } catch { /* a badge must never break a call */ } }
+
   /** Cancel every call of a task (null = all). Aborts approvals, kills shell children, closes the browser. */
   cancel(taskId: string | null): number {
     let n = 0;
@@ -98,6 +102,7 @@ export class CoworkerRuntime {
       this.active.delete(id); n++;
     }
     if (!taskId || n) this.deps.browser.cancel();
+    this.activity();
     this.deps.log(`cancel task=${taskId ?? "all"} aborted=${n}`);
     return n;
   }
@@ -107,8 +112,10 @@ export class CoworkerRuntime {
     const abort = new AbortController();
     const rec = { taskId: call.taskId, name: call.name, abort, children: new Set<ChildProcess>(), startedAt };
     this.active.set(call.id, rec);
+    this.activity();
     const finish = async (ok: boolean, content: unknown, verdict: string, outcome: "done" | "denied" | "failed" | "cancelled" | "timeout", summary?: string) => {
       this.active.delete(call.id);
+      this.activity();
       const durationMs = this.now() - startedAt;
       await this.deps.journal.append({ ts: new Date().toISOString(), kind: "call", taskId: call.taskId, callId: call.id, tool: call.name, verdict, outcome, summary: summary ?? summarize(content), args: call.args, durationMs });
       this.deps.log(`call ${call.id.slice(0, 8)} ${call.name} → ${outcome} (${verdict}) ${durationMs}ms`);

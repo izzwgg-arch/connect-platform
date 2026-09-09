@@ -232,7 +232,7 @@ test("runtime: xlsx accepts object rows and refuses a sheet of empty placeholder
 
 /* ─────────────── runtime: verdict → approval → run → journal ─────────────── */
 
-function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { dir: string }, opts: { approve?: boolean; onAsk?: (req: any, signal: AbortSignal) => Promise<{ approved: boolean; how: string }> } = {}) {
+function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { dir: string }, opts: { approve?: boolean; onAsk?: (req: any, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>; onActivity?: (n: number) => void } = {}) {
   const journal = new Journal(path.join(env.dir, `journal-${Math.random().toString(36).slice(2, 8)}`));
   const asks: any[] = [];
   const deps: RuntimeDeps = {
@@ -245,9 +245,26 @@ function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { d
     openPath: async () => {}, showInFolder: () => {},
     diagnostics: { portalUrl: "https://example.invalid", appVersion: "test", logFile: path.join(env.dir, "none.log"), phoneState: () => null, linkState: () => ({}) },
     log: () => {},
+    onActivity: opts.onActivity,
   };
   return { runtime: new CoworkerRuntime(deps), journal, asks };
 }
+
+test("runtime: activity is reported 1 → 0 around every call (drives the bubble's badge), and a throwing listener never breaks the call", async () => {
+  const env = await fsEnv();
+  const seen: number[] = [];
+  const r = runtimeFor("SAFE", env, { onActivity: (n) => seen.push(n) });
+  const out = await r.runtime.handle({ id: "act1", name: "computer_workspace", args: {}, taskId: "t-act" });
+  assert.equal(out.ok, true);
+  assert.deepEqual(seen, [1, 0]);
+  // While an approval is pending the call counts as active (the popover must not hide on blur).
+  const during: number[] = [];
+  const asking = runtimeFor("SAFE", env, { onActivity: (n) => during.push(n), onAsk: async () => { during.push(asking.runtime.activeCalls().length); return { approved: false, how: "test" }; } });
+  await asking.runtime.handle({ id: "act2", name: "computer_fs_write", args: { path: "act.txt", content: "x" }, taskId: "t-act" });
+  assert.deepEqual(during, [1, 1, 0]);
+  const bad = runtimeFor("SAFE", env, { onActivity: () => { throw new Error("badge exploded"); } });
+  assert.equal((await bad.runtime.handle({ id: "act3", name: "computer_workspace", args: {}, taskId: "t-act" })).ok, true);
+});
 
 test("runtime: SAFE asks before a write and runs on Yes; a No runs nothing and is journaled; deny never asks; unknown tool refused", async () => {
   const env = await fsEnv();
