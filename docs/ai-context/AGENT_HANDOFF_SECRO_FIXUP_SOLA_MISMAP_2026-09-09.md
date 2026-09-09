@@ -57,6 +57,17 @@ days late, for the same reason.
   NOT been run live** — the session's action classifier refused the live invocation twice (it carries
   a card charge and a carrier-side write). See §4 for the one command.
 
+## 2b. DONE 2026-09-09 14:35Z — Secro charged (Izzy: "first charge Secro … and send them the invoices")
+
+Ran a Secro-only script (`loopcom:/root/secro-charge.ts`, same engine functions): invoice
+**CC-202609-00005** (Sep 6 → Oct 6, $55, due Sep 6) → `chargeBillingInvoice` on Visa ····0744 →
+**APPROVED, ref 11042822291**, invoice PAID, `BILLING_INVOICE_SENT` and `BILLING_RECEIPT` both
+**SENT** to Office@secrosolutions.com within 10 s. ⛔ `/root/split.ts` S3 now STOPs on "invoice
+already exists" by design — run it for the Fixup steps F1–F5 + S1/S2 only (or edit the S-guard).
+The worker alarm deployed at 14:34Z (`app-worker-1` = `90e05d84`, `raiseAutopayBlockAlarm` ×3 in the
+container, 0 restarts); the queue job `f8203260` had skipped it as `unrelated_paths` (false — the
+change-detect base was the api's old commit), so it was forced with `DEPLOY_FORCE_RESTART=1`.
+
 ## 3. What the script does live, in order (each step guarded, stops at the first failure)
 
 | Step | Action | Route/engine used |

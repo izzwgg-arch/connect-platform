@@ -80,11 +80,20 @@ through Sola … make sure it matches the same card when you move over."*
   next 10-09** — Fixup Group paid this cycle through Sola. Fixup's existing Connect settings
   (day 9, $30 ext + $10 texting + $3 E911 + $2 regulatory) **already total exactly $45 — no price
   change**.
-- ✅ **STAGED (§3/§4 of the handoff), one script, guarded, re-runnable:** move ····6300 to Fixup
+- ✅✅ **SECRO IS CHARGED (2026-09-09 14:35Z, Izzy: "first charge Secro"):** invoice
+  **CC-202609-00005**, Sep 6→Oct 6, $55, due Sep 6, Visa ····0744 **APPROVED** (ref 11042822291),
+  PAID, `BILLING_INVOICE_SENT` + `BILLING_RECEIPT` both **SENT** to Office@secrosolutions.com.
+  ⛔ **The mis-mapped link is STILL on Secro** — the October cycle (T-3 = Oct 3) will block again
+  until the Fixup split below runs.
+- ✅ **Worker alarm DEPLOYED + container-verified 14:34Z** (`app-worker-1` at branch tip `90e05d84`
+  ⊇ `5dd55bf2`, `raiseAutopayBlockAlarm` ×3 in the running src, 0 restarts, 0 error lines).
+  ⛔ The deploy queue skipped it as `unrelated_paths` — a false skip (`apps/worker/src/main.ts`
+  changed); ran `DEPLOY_FORCE_RESTART=1 bash scripts/deploy-worker.sh` detached with a log.
+- ⏳ **STAGED, NOT RUN — the Fixup half (§3/§4 of the handoff), one script, guarded, re-runnable:** move ····6300 to Fixup
   Group + default → re-map the link to Fixup → `takeOverBillingFromSola` (disables the Sola
   schedule, Connect autopay from **Oct 9**) → Fixup invoice Sep 9→Oct 9 $45 + external payment
   "paid via Sola" → Secro block cleared → deactivate Fleetease's ····1032 on Secro → Secro invoice
-  Sep 6→Oct 6 $55, due Sep 6 → **charge Secro's ····0744**. ⏳ **Nothing of this has happened yet.**
+  (the Secro half is DONE above; the script's Secro steps now refuse on the existing September invoice — run only the Fixup steps).
 - ✅ **THE ALARM (`5dd55bf2`, `apps/worker/src/autopayBlockAlarm.ts`): an active-Sola block in
   EITHER phase now raises an AgentEscalation (texts Izzy), de-duped per tenant+link per 24 h, and
   the reminder skip logs `billing.autopay_reminder_skipped_active_sola_schedule`.** ⛔ Never
