@@ -180,52 +180,69 @@ export function CoworkerTaskCard({ task, onDone, onDismissed, sayInChat }: {
   );
 }
 
-/** The Permissions view: Safe (asks before any change) vs Trusted (moves without asking). */
+type CoworkerProfile = "SAFE" | "TRUSTED" | "AUTONOMOUS";
+
+/**
+ * The Permissions view: Safe / Trusted / Autonomous — the three profiles the
+ * desktop's policy core (apps/desktop/src/coworker/policyCore.ts) judges every
+ * tool call against since the hands arrived (2026-09-09). The table mirrors the
+ * profile baselines; the "Never" rows are the NEVER_AUTO floor + hard
+ * prohibitions, which no profile can switch on. "Settings & Connections" opens
+ * the app's local window (MCP servers, link status, task history).
+ */
 export function CoworkerPermissionsView({ onBack }: { onBack: () => void }) {
-  const [profile, setProfile] = useState<"SAFE" | "TRUSTED">("SAFE");
+  const [profile, setProfile] = useState<CoworkerProfile>("SAFE");
   const [saving, setSaving] = useState(false);
-  const desk = () => (typeof window === "undefined" ? null : (window as unknown as { connectDesktop?: { window?: { getSettings?: () => Promise<{ coworkerPermissions?: "SAFE" | "TRUSTED" }>; updateSettings?: (p: { coworkerPermissions: "SAFE" | "TRUSTED" }) => Promise<unknown> } } }).connectDesktop?.window ?? null);
+  const desk = () => (typeof window === "undefined" ? null : (window as unknown as { connectDesktop?: { window?: { getSettings?: () => Promise<{ coworkerPermissions?: CoworkerProfile }>; updateSettings?: (p: { coworkerPermissions: CoworkerProfile }) => Promise<unknown> } } }).connectDesktop?.window ?? null);
+  const admin = () => (typeof window === "undefined" ? null : (window as unknown as { coworkerAdmin?: { openConnections?: () => Promise<unknown> } }).coworkerAdmin ?? null);
   useEffect(() => {
-    desk()?.getSettings?.().then((s) => setProfile(s?.coworkerPermissions === "TRUSTED" ? "TRUSTED" : "SAFE")).catch(() => {});
+    desk()?.getSettings?.().then((s) => setProfile(s?.coworkerPermissions === "TRUSTED" ? "TRUSTED" : s?.coworkerPermissions === "AUTONOMOUS" ? "AUTONOMOUS" : "SAFE")).catch(() => {});
   }, []);
-  const choose = async (p: "SAFE" | "TRUSTED") => {
+  const choose = async (p: CoworkerProfile) => {
     setSaving(true);
     setProfile(p);
     try { await desk()?.updateSettings?.({ coworkerPermissions: p }); } catch { /* stays as shown; the desktop re-reads at run time */ } finally { setSaving(false); }
   };
-  const rows: { thing: string; safe: string; trusted: string; never: boolean }[] = [
-    { thing: "Read a folder (count files, sizes)", safe: "Allowed", trusted: "Allowed", never: false },
-    { thing: "Read Windows version, uptime, memory", safe: "Allowed", trusted: "Allowed", never: false },
-    { thing: "Move loose files into subfolders (never deletes)", safe: "Asks first", trusted: "Allowed", never: false },
-    { thing: "Delete anything", safe: "Never", trusted: "Never", never: true },
-    { thing: "Run a program or a command", safe: "Never", trusted: "Never", never: true },
-    { thing: "Send a file anywhere", safe: "Never", trusted: "Never", never: true },
-    { thing: "Touch a folder outside Downloads, Desktop, Documents", safe: "Never", trusted: "Never", never: true },
-    { thing: "Read a password, a card, a key", safe: "Never", trusted: "Never", never: true },
+  const rows: { thing: string; safe: string; trusted: string; auto: string; never: boolean }[] = [
+    { thing: "Read files and folders, Windows info, run diagnostics", safe: "Allowed", trusted: "Allowed", auto: "Allowed", never: false },
+    { thing: "Create, write, move, copy files (your folders + the workspace)", safe: "Asks", trusted: "Allowed", auto: "Allowed", never: false },
+    { thing: "Delete a file or folder", safe: "Asks", trusted: "Asks", auto: "Asks", never: false },
+    { thing: "Run a PowerShell script", safe: "Asks", trusted: "Asks", auto: "Allowed", never: false },
+    { thing: "Use the Coworker's own background browser, download files", safe: "Asks", trusted: "Allowed", auto: "Allowed", never: false },
+    { thing: "Submit a web form", safe: "Asks", trusted: "Asks", auto: "Asks", never: false },
+    { thing: "Call a connected MCP server's tools", safe: "Asks", trusted: "Allowed", auto: "Allowed", never: false },
+    { thing: "Change security, services, network settings; install software; open remote access; touch Windows folders", safe: "Never", trusted: "Never", auto: "Never", never: true },
+    { thing: "Move your mouse or type into your programs", safe: "Never", trusted: "Never", auto: "Never", never: true },
+  ];
+  const profiles: { id: CoworkerProfile; label: string; blurb: string }[] = [
+    { id: "SAFE", label: "Safe", blurb: "Reads freely. Asks before it writes, runs anything or opens a browser." },
+    { id: "TRUSTED", label: "Trusted", blurb: "Writes in your folders, browses and downloads without asking. Still asks before PowerShell, deleting or submitting forms." },
+    { id: "AUTONOMOUS", label: "Autonomous", blurb: "Also runs PowerShell without asking. Never: security, services, network, installs; deleting still asks." },
   ];
   return (
     <div className="fa-cw-perms">
       <div className="fa-cw-top"><span className="fa-cw-ico"><ShieldCheck size={14} /></span><b>What the Coworker may do on this computer</b></div>
       <div className="fa-cw-profiles">
-        <label className={profile === "SAFE" ? "on" : ""}>
-          <input type="radio" name="cw-profile" checked={profile === "SAFE"} onChange={() => choose("SAFE")} disabled={saving} />
-          <b>Safe</b><small>Reads freely. Asks before it moves anything.</small>
-        </label>
-        <label className={profile === "TRUSTED" ? "on" : ""}>
-          <input type="radio" name="cw-profile" checked={profile === "TRUSTED"} onChange={() => choose("TRUSTED")} disabled={saving} />
-          <b>Trusted</b><small>Moves files in your own folders without asking. Still never deletes.</small>
-        </label>
+        {profiles.map((p) => (
+          <label key={p.id} className={profile === p.id ? "on" : ""}>
+            <input type="radio" name="cw-profile" checked={profile === p.id} onChange={() => choose(p.id)} disabled={saving} />
+            <b>{p.label}</b><small>{p.blurb}</small>
+          </label>
+        ))}
       </div>
       <table className="fa-cw-table">
-        <thead><tr><th>Action</th><th>Safe</th><th>Trusted</th></tr></thead>
+        <thead><tr><th>Action</th><th>Safe</th><th>Trusted</th><th>Autonomous</th></tr></thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.thing} className={r.never ? "fa-cw-never" : ""}><td>{r.thing}</td><td>{r.safe}</td><td>{r.trusted}</td></tr>
+            <tr key={r.thing} className={r.never ? "fa-cw-never" : ""}><td>{r.thing}</td><td>{r.safe}</td><td>{r.trusted}</td><td>{r.auto}</td></tr>
           ))}
         </tbody>
       </table>
-      <p className="fa-cw-note">The "Never" rows are not settings — no profile, no chat message and no update can switch them on. Everything else runs only while this window is open, on this computer, and is written to your task history.</p>
-      <div className="fa-cw-actions"><button className="fa-cw-btn" onClick={onBack}>Back to chat</button></div>
+      <p className="fa-cw-note">The "Never" rows are not settings — no profile, no chat message and no server can switch them on. During a phone call nothing that could touch audio, network or system settings runs. Every action is written to the task history on this computer.</p>
+      <div className="fa-cw-actions">
+        {admin()?.openConnections && <button className="fa-cw-btn" onClick={() => { void admin()?.openConnections?.(); }}>Settings &amp; Connections (MCP)</button>}
+        <button className="fa-cw-btn" onClick={onBack}>Back to chat</button>
+      </div>
     </div>
   );
 }
