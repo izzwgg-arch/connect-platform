@@ -125,6 +125,23 @@ test("cancel fails the in-flight calls of that task, refuses new ones for it, an
   assert.equal(((await b).content as { error: string }).error, "task_cancelled");
 });
 
+test("a cancel that lands while the model is planning (no call in flight) still stops the task", async () => {
+  const link = new DesktopLink();
+  link.hello(me, manifest());
+  link.beginTask(me, "planning");
+  const r = link.cancel(me, null);
+  assert.equal(r.cancelled, 0);
+  assert.ok(r.flagged >= 1);
+  assert.equal(link.isCancelled(me, "planning"), true);
+  const refused = await link.dispatch(me, { name: "computer_fs_write", args: {}, taskId: "planning" });
+  assert.equal((refused.content as { error: string }).error, "task_cancelled");
+  assert.deepEqual((link.status(me) as { activeTasks?: string[] }).activeTasks, ["planning"]);
+  link.endTask(me, "planning");
+  assert.deepEqual((link.status(me) as { activeTasks?: string[] }).activeTasks, []);
+  const again = await link.dispatch(me, { name: "computer_fs_write", args: {}, taskId: "planning" });
+  assert.notEqual((again.content as { error?: string }).error, "task_cancelled", "a finished task's flag is forgotten");
+});
+
 test("an oversized result is cut to the ceiling, not handed to the model whole", async () => {
   const link = new DesktopLink();
   link.hello(me, manifest());

@@ -321,6 +321,8 @@ async function main() {
       const manifest = desktopLink!.manifest(identity);
       if (!manifest || manifest.tools.length === 0) return empty;
       const taskId = `${conversationId}:${Date.now().toString(36)}`;
+      // Registered now, before the first tool call, so a cancel during planning stops the job.
+      desktopLink!.beginTask(identity, taskId);
       return {
         tools: buildDesktopTools(desktopLink!, identity, manifest, taskId, conversationId),
         prompt: coworkerHandsPrompt(manifest),

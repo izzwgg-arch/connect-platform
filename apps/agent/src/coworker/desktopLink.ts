@@ -88,6 +88,8 @@ type Session = {
   waiters: Waiter[];
   inflight: Map<string, Inflight>;
   cancelledTasks: Set<string>;
+  /** Turns currently running with the hands (registered by the engine's provider). */
+  activeTasks: Set<string>;
   /** Tool calls ever dispatched to this desktop, for /status and the harness. */
   stats: { dispatched: number; completed: number; failed: number; timedOut: number; cancelled: number };
 };
@@ -191,7 +193,7 @@ export class DesktopLink {
     }
     this.sessions.set(key, {
       key, identity, manifest, connectedAt: t, lastSeen: t,
-      queue: [], waiters: [], inflight: new Map(), cancelledTasks: new Set(),
+      queue: [], waiters: [], inflight: new Map(), cancelledTasks: new Set(), activeTasks: new Set(),
       stats: { dispatched: 0, completed: 0, failed: 0, timedOut: 0, cancelled: 0 },
     });
     return { key, replaced: false };
@@ -310,9 +312,9 @@ export class DesktopLink {
    * back to the model at once, further dispatches for it are refused, and the
    * desktop is told so it can stop subprocesses and the browser.
    */
-  cancel(identity: LinkIdentity, taskId: string | null): { cancelled: number } {
+  cancel(identity: LinkIdentity, taskId: string | null): { cancelled: number; flagged: number } {
     const s = this.session(identity);
-    if (!s) return { cancelled: 0 };
+    if (!s) return { cancelled: 0, flagged: 0 };
     let n = 0;
     for (const [id, f] of s.inflight) {
       if (taskId && f.taskId !== taskId) continue;
@@ -322,19 +324,33 @@ export class DesktopLink {
       n++;
       f.resolve({ ok: false, content: { error: "task_cancelled", message: "The person cancelled this task. Stop and report what was and was not done." } });
     }
+    // ⛔ Flag ACTIVE tasks too, not only the ones with a call in flight: a cancel
+    // that lands while the model is between tool calls (planning, or waiting on
+    // the provider) must still refuse the next dispatch, or the job carries on.
     if (taskId) s.cancelledTasks.add(taskId);
-    else for (const f of s.inflight.values()) s.cancelledTasks.add(f.taskId);
+    else { for (const f of s.inflight.values()) s.cancelledTasks.add(f.taskId); for (const t of s.activeTasks) s.cancelledTasks.add(t); }
     this.deliver(s, { kind: "cancel", taskId, issuedAt: new Date(this.now()).toISOString() });
-    return { cancelled: n };
+    return { cancelled: n, flagged: s.cancelledTasks.size };
   }
 
   isCancelled(identity: LinkIdentity, taskId: string): boolean {
     return !!this.session(identity)?.cancelledTasks.has(taskId);
   }
 
-  /** The task finished (any outcome): its cancel flag no longer needs remembering. */
+  /**
+   * A turn with the hands began. ⛔ Registered BEFORE the first tool call so a
+   * cancel that lands while the model is still planning (no call in flight yet)
+   * still stops the job: every later dispatch for the task is refused.
+   */
+  beginTask(identity: LinkIdentity, taskId: string): void {
+    this.session(identity)?.activeTasks.add(taskId);
+  }
+
+  /** The task finished (any outcome): its flags no longer need remembering. */
   endTask(identity: LinkIdentity, taskId: string): void {
-    this.session(identity)?.cancelledTasks.delete(taskId);
+    const s = this.session(identity);
+    s?.cancelledTasks.delete(taskId);
+    s?.activeTasks.delete(taskId);
   }
 
   status(identity: LinkIdentity) {
@@ -350,6 +366,7 @@ export class DesktopLink {
       mcpServers: s.manifest.mcpServers ?? [],
       lastSeenMsAgo: this.now() - s.lastSeen,
       inflight: [...s.inflight.values()].map((f) => ({ name: f.name, taskId: f.taskId, runningMs: this.now() - f.startedAt })),
+      activeTasks: [...s.activeTasks],
       queued: s.queue.length,
       stats: { ...s.stats },
     };

@@ -18,6 +18,8 @@ public class W {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint f);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 "@
@@ -49,9 +51,17 @@ while ((Get-Date) -lt $deadline -and $n -lt $MaxAnswers) {
     $n++
     $shot = Join-Path $OutDir ("approval-{0:D2}-{1}.png" -f $n, (Get-Date -Format "HHmmss"))
     try { Shot $h $shot } catch { "shot failed: $_" | Out-File -Append (Join-Path $OutDir "approval-watcher.log") }
-    [void][W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 300
-    [System.Windows.Forms.SendKeys]::SendWait($Answer)
-    "$(Get-Date -Format o) approval window found → sent $Answer → $shot" | Out-File -Append (Join-Path $OutDir "approval-watcher.log")
+    # ⛔ Post the key straight to the prompt's own window (Chromium's input HWND), so
+    # no focus is stolen from whoever else is using this desktop and the keystroke
+    # can never land in another program. SetForegroundWindow + SendKeys from a
+    # background process is refused by Windows' foreground lock and leaks keys.
+    $vk = if ($Answer -eq "{ESC}") { 0x1B } else { 0x0D }
+    $target = [W]::FindWindowEx($h, [IntPtr]::Zero, "Chrome_RenderWidgetHostHWND", $null)
+    if ($target -eq [IntPtr]::Zero) { $target = $h }
+    [void][W]::PostMessage($target, 0x0100, [IntPtr]$vk, [IntPtr]0x00000001)   # WM_KEYDOWN
+    Start-Sleep -Milliseconds 60
+    [void][W]::PostMessage($target, 0x0101, [IntPtr]$vk, [IntPtr]0xC0000001)   # WM_KEYUP
+    "$(Get-Date -Format o) approval window found → posted $Answer (vk $vk) to $target → $shot" | Out-File -Append (Join-Path $OutDir "approval-watcher.log")
     Start-Sleep -Seconds 2
   }
   Start-Sleep -Milliseconds 700
