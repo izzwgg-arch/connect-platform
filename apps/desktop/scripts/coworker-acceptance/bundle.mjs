@@ -15,8 +15,7 @@ if (!OUT || !fs.existsSync(OUT)) { console.error("usage: node bundle.mjs <proof-
 /** Sub-run directories, in the order they were produced (later wins). */
 const RUNS = [
   { dir: ".", suite: "dev" }, { dir: "rerun-dev", suite: "dev" }, { dir: "rerun-dev2", suite: "dev" }, { dir: "extended-dev", suite: "dev" }, { dir: "extended-dev2", suite: "dev" }, { dir: "rerun-dev3", suite: "dev" },
-  { dir: "packaged", suite: "packaged" }, { dir: "extended-packaged", suite: "packaged" },
-  { dir: "rerun-packaged", suite: "packaged" }, { dir: "rerun-packaged2", suite: "packaged" }, { dir: "extended-packaged2", suite: "packaged" },
+  { dir: "packaged", suite: "packaged" }, { dir: "extended-packaged", suite: "packaged" }, { dir: "rerun-packaged", suite: "packaged" }, { dir: "rerun-cn1", suite: "packaged" }, { dir: "rerun-cn1b", suite: "packaged" }, { dir: "rerun-cn1c", suite: "packaged" }, { dir: "rerun-cn1d", suite: "packaged" },
 ];
 const byId = { dev: new Map(), packaged: new Map() };
 const transcripts = [];
