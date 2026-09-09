@@ -249,13 +249,24 @@ Connect row is never read on the dial path.
   `_1730nxxnxxxxxx`); `7231213` → `17307231213` (the `845`-prepend 7-digit pattern);
   `911` → `911`, `prefixApplied:false` (the emergency bypass holds).
 
-⛔ **Found in passing, NOT changed (Izzy's call): Trust's other two dialer routes prepend
-NOTHING.** "SGE" and "Rose Leasing" (created 2026-05-04) have `prefix` EMPTY and the
-dial code sitting in `callerIdNumber` (`2661` / `1213`) — the wrong field, and the
-dialer never reads it. So picking either in the dialer sends the plain number → route 51
-"Trust Bookkeeping 2" with the 845-244-1708 CID, not SGE's/Smooth's. Fix = move each code
-into `prefix` (`PATCH /outbound-routes/:id`), 30 seconds, but it changes what two
-customers' dials present, so it waits for his word. Avenue Filing (1129) is correct.
+✅ **FIXED THE SAME HOUR (Izzy: "if it didn't work, they would have told me, but make sure
+they do work"): Trust's other two dialer routes had been prepending NOTHING since May.**
+"SGE" and "Rose Leasing" (created 2026-05-04) had `prefix` EMPTY with the dial code sitting in
+`callerIdNumber` (`2661` / `1213`) — a field the dial path never reads. **They would NOT have
+told him, and they had not:** the audit trail holds **8 `OUTBOUND_ROUTE_DIAL_RESOLVED` rows
+through those two entries (Jul 20 → Aug 3, Mrs Pollak ext 107 and Miss Spilman ext 106), every
+one `prefixApplied:false`** — the plain number went out on route 51 "Trust Bookkeeping 2" with
+the 845-244-1708 caller ID instead of SGE's / Smooth's. Nobody noticed because the call still
+connected. PBX side checked first (read-only `dialplan show` in `T18_ARS-all`):
+`_2661nxxnxxxxxx` → "Trust Sge", `_1213nxxnxxxxxx` → "trust smooth" — so the codes are right,
+only the Connect field was wrong. Fixed via the real `PATCH /outbound-routes/:id` (guarded on
+name + tenant + the code being in `callerIdNumber`): SGE → `prefix 2661`, Rose Leasing →
+`prefix 1213`, `callerIdNumber` cleared so the misreading cannot recur. Verified as Miss
+Spilman: `resolve-dial 845-723-1213` → `26618457231213` / `12138457231213`, `prefixApplied:true`.
+⛔ **The rule: `OutboundRoute.callerIdNumber` is informational only — a code typed there is a
+dialer entry that silently does nothing.** Check every tenant's rows for an empty `prefix` with
+digits in `callerIdNumber` before trusting a dialer route. ⚠️ Naming: the Connect row "Rose
+Leasing" maps to the PBX route "trust smooth" (Smooth Leasing) — kept as Izzy's May naming.
 
 ⏳ **NOT PROVEN: Miss Spilman has not opened the dialer since** (last login 2026-07-31).
 An already-open desktop app re-reads `/me/outbound-routes` only at init/sign-in — she
