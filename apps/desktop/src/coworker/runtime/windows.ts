@@ -41,7 +41,8 @@ $cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPerce
     cpuCount: os.cpus().length,
     uptimeSeconds: Math.round(uptimeSec),
     uptimeHuman: humanDuration(uptimeSec),
-    memory: { totalBytes: os.totalmem(), freeBytes: os.freemem(), usedBytes: os.totalmem() - os.freemem(), usedPercent: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100) },
+    memory: { totalBytes: os.totalmem(), freeBytes: os.freemem(), usedBytes: os.totalmem() - os.freemem(), usedPercent: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100), totalHuman: humanBytes(os.totalmem()), usedHuman: humanBytes(os.totalmem() - os.freemem()), freeHuman: humanBytes(os.freemem()) },
+    note: "Human sizes are 1024-based, the way Windows Task Manager and Explorer show them (24.0 GB here = 25.8 GB decimal). Quote the *Human fields for the person.",
   };
   if (!parsed) return { ...base, windows: null, disks: [], note: `PowerShell detail unavailable: ${run.stderr.slice(0, 200) || "no output"}` };
   return {

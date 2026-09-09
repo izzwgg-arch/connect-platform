@@ -99,6 +99,10 @@ function sheetXml(rows: Cell[][]): string {
       const ref = `${colName(c)}${r + 1}`;
       if (typeof v === "number" && Number.isFinite(v)) cells.push(`<c r="${ref}"><v>${v}</v></c>`);
       else if (typeof v === "boolean") cells.push(`<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`);
+      // A string starting with "=" is a formula (=SUM(D2:D4)); Excel computes it on open.
+      else if (typeof v === "string" && v.startsWith("=") && v.length > 1) cells.push(`<c r="${ref}"><f>${esc(v.slice(1))}</f></c>`);
+      // A numeric-looking string ("1250.50", "$1,250.50") becomes a number so sums work.
+      else if (typeof v === "string" && /^\s*[$€£]?-?[\d,]+(\.\d+)?\s*$/.test(v) && Number.isFinite(Number(v.replace(/[$€£,\s]/g, "")))) cells.push(`<c r="${ref}"><v>${Number(v.replace(/[$€£,\s]/g, ""))}</v></c>`);
       else cells.push(`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`);
     });
     body.push(`<row r="${r + 1}">${cells.join("")}</row>`);

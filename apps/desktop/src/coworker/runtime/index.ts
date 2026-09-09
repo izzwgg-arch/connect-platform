@@ -210,12 +210,31 @@ export class CoworkerRuntime {
         const r = await resolveUserPath(args.path, env);
         if (!r.ok) return wrap(r);
         if (!/\.xlsx$/i.test(r.abs)) return wrap({ ok: false, error: "bad_extension", message: "The path must end in .xlsx." });
-        const sheets = Array.isArray(args.sheets) ? (args.sheets as Sheet[]).filter((s) => s && Array.isArray(s.rows)).map((s) => ({ name: String(s.name ?? "Sheet"), rows: s.rows.slice(0, 50_000).map((row) => (Array.isArray(row) ? row.slice(0, 500) : [])) })) : [];
+        // Rows may arrive as arrays or as objects ({vendor, amount}) — objects are
+        // laid out in header order when the first row is a header, else by key order.
+        const sheets = Array.isArray(args.sheets) ? (args.sheets as Sheet[]).filter((s) => s && Array.isArray(s.rows)).map((s) => {
+          const header = Array.isArray(s.rows[0]) ? (s.rows[0] as unknown[]).map((h) => String(h ?? "")) : null;
+          const rows = s.rows.slice(0, 50_000).map((row) => {
+            if (Array.isArray(row)) return row.slice(0, 500);
+            if (row && typeof row === "object") {
+              const o = row as Record<string, unknown>;
+              if (header && header.some((h) => h in o)) return header.map((h) => o[h] as never);
+              return Object.values(o).slice(0, 500) as never[];
+            }
+            return [];
+          });
+          return { name: String(s.name ?? "Sheet"), rows };
+        }) : [];
         if (!sheets.length) return wrap({ ok: false, error: "no_sheets", message: "sheets must contain at least one sheet with rows." });
+        const emptyRows = sheets.reduce((n, s) => n + s.rows.filter((row) => !row.some((v) => v !== null && v !== undefined && v !== "")).length, 0);
+        const dataRows = sheets.reduce((n, s) => n + s.rows.length, 0);
+        if (dataRows > 0 && emptyRows >= Math.max(2, dataRows / 2)) {
+          return wrap({ ok: false, error: "rows_mostly_empty", emptyRows, totalRows: dataRows, message: `${emptyRows} of ${dataRows} rows are empty. Put the real values in the rows (read the source files first) — a spreadsheet of placeholders is not what the person asked for.` });
+        }
         await require("node:fs").promises.mkdir(path.dirname(r.abs), { recursive: true });
         const bytes = await writeXlsxFile(r.abs, sheets);
         const back = await readXlsxFile(r.abs, 5).catch(() => null);
-        return wrap({ ok: true, path: r.abs, bytes, sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })), verifiedReadback: !!back && back.sheets.length === sheets.length });
+        return wrap({ ok: true, path: r.abs, bytes, sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })), emptyRows, verifiedReadback: !!back && back.sheets.length === sheets.length, note: "Verify with computer_xlsx_read if the contents matter." });
       }
       case "computer_xlsx_read": {
         const r = await resolveUserPath(args.path, env, { mustExist: true });

@@ -80,7 +80,7 @@ async function closeConversation() {
   } catch { /* best effort */ }
 }
 
-function ps(script) { return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 60_000 }).trim(); }
+function ps(script) { try { return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 60_000 }).trim(); } catch (e) { log(`ps failed: ${String(e?.message ?? e).slice(0, 200)}`); return String(e?.stdout ?? "").trim(); } }
 const exists = (p) => fs.existsSync(p);
 const readText = (p) => fs.readFileSync(p, "utf8");
 const rmrf = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch {} };
@@ -248,8 +248,10 @@ await test("W2", "Windows info (memory)", async () => {
   const total = Number(ps("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory")) / 1024 ** 3;
   const freeNow = Number(ps("(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory")) * 1024 / 1024 ** 3;
   const nums = (r.reply.replace(/,/g, "").match(/\d+(?:\.\d+)?/g) || []).map(Number);
-  const ok = nums.some((n) => Math.abs(n - total) < 0.6) && nums.some((n) => Math.abs(n - (total - freeNow)) < 1.5 || Math.abs(n - freeNow) < 1.5 || (n >= 1 && n <= 100));
-  record("W2", "Windows info", "Tell me current memory usage.", `total ≈ ${total.toFixed(1)} GB, used ≈ ${(total - freeNow).toFixed(1)} GB`, r.reply.slice(0, 200), "Win32_OperatingSystem/ComputerSystem (±1.5 GB)", ok ? "PASS" : "FAIL");
+  // Windows shows GiB as "GB"; a model may report decimal GB from the byte count. Both are the same fact.
+  const totalDec = total * 1.073741824;
+  const ok = nums.some((n) => Math.abs(n - total) < 0.6 || Math.abs(n - totalDec) < 0.6) && nums.some((n) => Math.abs(n - (total - freeNow)) < 1.5 || Math.abs(n - (total - freeNow) * 1.073741824) < 1.5 || Math.abs(n - freeNow) < 1.5 || Math.abs(n - freeNow * 1.073741824) < 1.5 || (n >= 1 && n <= 100));
+  record("W2", "Windows info", "Tell me current memory usage.", `total ≈ ${total.toFixed(1)} GiB (${totalDec.toFixed(2)} GB decimal), used ≈ ${(total - freeNow).toFixed(1)} GiB`, r.reply.slice(0, 200), "Win32_OperatingSystem/ComputerSystem (±1.5 GB, either unit)", ok ? "PASS" : "FAIL");
 });
 await test("W3", "Windows info (processes)", async () => {
   const top = ps("Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 -ExpandProperty ProcessName").split(/\r?\n/).filter(Boolean);
@@ -267,10 +269,13 @@ await test("W4", "Windows info (version + uptime)", async () => {
   record("W4", "Windows info", "Tell me my Windows version and uptime.", `build ${build}, uptime ≈ ${upH} h`, r.reply.slice(0, 200), "Win32_OperatingSystem BuildNumber + LastBootUpTime", ok && upOk ? "PASS" : "FAIL");
 });
 await test("W5", "Windows info (Loopcom process)", async () => {
-  const pids = ps("Get-Process -Name Loopcom -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id").split(/\r?\n/).filter(Boolean);
-  const r = await ask("Check whether the Loopcom process is running on this computer and report its PID.");
+  // The packaged app is Loopcom.exe; the from-source dev run is electron.exe.
+  const procName = SUITE === "packaged" ? "Loopcom" : "electron";
+  const pids = ps(`@(Get-Process -Name ${procName} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id) -join "\`n"`).split(/\r?\n/).filter(Boolean);
+  const prompt = SUITE === "packaged" ? "Check whether the Loopcom process is running on this computer and report its PID." : "Check whether the Loopcom desktop app process is running on this computer (in this development run it was started from source, so it runs as electron.exe) and report its PID.";
+  const r = await ask(prompt);
   const ok = pids.length > 0 && pids.some((p) => r.reply.includes(p));
-  record("W5", "Windows info", "Check whether the Loopcom process is running and report its PID.", `running, one of PIDs ${pids.join("/")}`, r.reply.slice(0, 200), "Get-Process -Name Loopcom", ok ? "PASS" : "FAIL");
+  record("W5", "Windows info", prompt, `running, one of PIDs ${pids.join("/")}`, r.reply.slice(0, 200), `Get-Process -Name ${procName}`, ok ? "PASS" : "FAIL");
 });
 await test("W6", "Windows info (inspect a temporary process)", async () => {
   const marker = `LoopcomAcceptanceSleeper${Date.now().toString(36)}`;

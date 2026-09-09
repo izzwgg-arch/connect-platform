@@ -109,7 +109,7 @@ export const TOOL_CATALOG: readonly CatalogTool[] = [
   /* ── spreadsheets ── */
   {
     name: "computer_xlsx_write",
-    description: "Create a real Excel workbook (.xlsx) from rows. Each sheet is a name plus a 2-D array of cell values (strings or numbers; first row is usually the header). Use this when the person asks for a spreadsheet or Excel file; use computer_fs_write with CSV text when they ask for a CSV.",
+    description: "Create a real Excel workbook (.xlsx) from rows. Each sheet is a name plus a 2-D array of cell values (strings or numbers; first row is usually the header; a string starting with '=' is a formula, e.g. '=SUM(D2:D4)'). Put the REAL values in the rows — read the source files first and fill every data row; a sheet of empty placeholder rows is refused. Use this when the person asks for a spreadsheet or Excel file; use computer_fs_write with CSV text when they ask for a CSV.",
     parameters: { type: "object", properties: { path: str("Destination .xlsx path. " + PATH_NOTE), sheets: { type: "array", description: "One or more sheets.", items: { type: "object", properties: { name: { type: "string" }, rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "null"] } } } }, required: ["name", "rows"] } } }, required: ["path", "sheets"], additionalProperties: false },
     spec: spec("computer_xlsx_write", "FILESYSTEM", "LOW", ["files.read", "files.write"], { timeoutMs: 60_000 }),
   },

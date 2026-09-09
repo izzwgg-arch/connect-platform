@@ -210,6 +210,24 @@ test("xlsx: writer → reader round trip, columns, numbers and strings", () => {
   assert.deepEqual(back.sheets[0].rows, [["vendor", "amount"], ["Vendor A", 120.5], ["Vendor <B>", 99]]);
   assert.equal(colName(27), "AB");
   assert.equal(colIndex("AB1"), 27);
+  // Formulas and numeric-looking strings (the O4 lesson: "=SUM(D2:D4)" and "1250.50" must be live cells).
+  const f = buildXlsx([{ name: "S", rows: [["amount"], ["1250.50"], ["$980.00"], ["=SUM(A2:A3)"]] }]);
+  const xml = require("./runtime/xlsx").readZip(f).get("xl/worksheets/sheet1.xml").toString("utf8");
+  assert.match(xml, /<c r="A2"><v>1250.5<\/v><\/c>/);
+  assert.match(xml, /<c r="A3"><v>980<\/v><\/c>/);
+  assert.match(xml, /<c r="A4"><f>SUM\(A2:A3\)<\/f><\/c>/);
+});
+
+test("runtime: xlsx accepts object rows and refuses a sheet of empty placeholders", async () => {
+  const env = await fsEnv();
+  const r = runtimeFor("AUTONOMOUS", env);
+  const empty = await r.runtime.handle({ id: "x1", name: "computer_xlsx_write", args: { path: "empty.xlsx", sheets: [{ name: "S", rows: [["a", "b"], [null, null], [null, null], ["", ""]] }] }, taskId: "t" });
+  assert.equal((empty.content as any).error, "rows_mostly_empty");
+  assert.ok(!existsSync(path.join(env.workspace, "empty.xlsx")));
+  const objs = await r.runtime.handle({ id: "x2", name: "computer_xlsx_write", args: { path: "objs.xlsx", sheets: [{ name: "S", rows: [["vendor", "amount"], { vendor: "A", amount: 1 }, { vendor: "B", amount: 2 }] }] }, taskId: "t" });
+  assert.equal(objs.ok, true, JSON.stringify(objs.content));
+  const back = parseXlsx(readFileSync(path.join(env.workspace, "objs.xlsx")));
+  assert.deepEqual(back.sheets[0].rows, [["vendor", "amount"], ["A", 1], ["B", 2]]);
 });
 
 /* ─────────────── runtime: verdict → approval → run → journal ─────────────── */
