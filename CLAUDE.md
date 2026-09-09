@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ## ⛔ AGENT HANDOFF — McNamara Lion is the FIRST existing tenant with the overdue-account cutoff switched ON; its September invoice is already FAILED, so a countdown starts at the next sweep (2026-09-09) — READ FIRST before touching McNamara Lion's billing, before switching the cutoff on for ANY tenant whose PBX tenant has no `emergency-calls` context, or for "McNamara's phones stopped dialing out"
 
 (**PRODUCTION DATA ONLY — one `PUT` through the sanctioned route, no code, no deploy, no migration, no PBX write, no money moved, no email sent by hand.** Izzy, 2026-09-09: *"turn on the auto disconnect for non-payment or interrupt service for the McNamara line only."* Memory: [[mcnamara-lion-service-interruption-is-on]]; the feature itself is the 2026-08-17/18 section further down.)
@@ -9,7 +8,6 @@
 - ⛔ **Inbound keeps ringing during a cutoff.** Their number +3477730349 is `DidRouteMapping.routingMode = pbx` — not on the Connect doorway — so the `Busy(10)` half of the feature cannot reach them; the runner will log `no Connect-mode number — inbound callers will NOT hear busy`.
 - ⏳ **NOT PROVEN: no sweep has run with this switch on.** The api's retained docker logs (≈8 h) no longer hold the 09-08 boot line, so "armed" is proven by env (`SERVICE_INTERRUPTION_CUTOVER_AT` in the container) + the route's own `armed:true` + `startServiceInterruptionSweep` in the running `server.ts`, not by a logged sweep. Acceptance: after ~23:15Z 09-09, `GET …/service-interruption` reads `countdownStartedAt: 2026-09-06T04:15:23.784Z, invoiceId` set; `select ... from "BillingEventLog" where "tenantId"='cmnlgrym4000rp9pa1sge6cpu'` shows the countdown/reminder rows; and `docker logs app-api-1 --tail 5000 | grep -a SERVICE_INTERRUPTION` shows `sweep complete {considered:2 …}` with no `tenant failed` line. Reversal: the same PUT with `{enabled:false}`; after a cutoff, `POST …/restore`.
 
-=======
 ## ⛔ AGENT HANDOFF — the portal INSTALL link (`/desktop/Connect-Setup-latest.exe`) now serves desktop `0.1.17-rc.10`; the auto-update feed `latest.yml` is STILL 0.1.16 (2026-09-09) — READ FIRST before "which build does Install download", before touching `/opt/connectcomms/desktop/`, or before flipping the feed
 
 (Ezra, 2026-09-09: *"Publish to install page."* No code change, no deploy. The "install page" is the workspace nav item `workspace.install` in `apps/portal/navigation/navConfig.ts` (and the two Remote Desktop "Download" buttons), all `href="/desktop/Connect-Setup-latest.exe"`, served by nginx from `/opt/connectcomms/desktop/` (`sites-enabled/connectcomms` ~L204, `cache-control: no-cache`).)
@@ -167,7 +165,6 @@ Izzy's workstation already had rc.9 from `7f73086a`. Memory: [[loopcom-desktop-b
   `apps/desktop`** — they belong to the other session. Publishing rc.9 to the fleet remains
   Izzy's call (it carries remote-desktop, coworker-hands and elevated-support work).
 
->>>>>>> origin/feat/ivr-migration-takeover
 ## ⛔ AGENT HANDOFF — Relax Tires pays on the 26th now; moving a billing day LATER needs the OPEN invoice re-dated or the customer is charged on the OLD day anyway (2026-09-09) — READ FIRST before changing ANY tenant's `billingDayOfMonth` when an OPEN invoice already exists
 
 (**PRODUCTION DATA ONLY — no code, no deploy, no migration, no PBX write, no money
