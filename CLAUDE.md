@@ -93,6 +93,14 @@ the section below was the wrong page (still valid, not the ask).
   chunks + CSS carry `sm-filterbar`), both `/ready` 200. A first portal attempt was cancelled at the
   BUILD stage (never cut over) when I noticed the entangled auth commit; Izzy then said *"Just deploy the
   filters as we discussed"* and it was redeployed. ⏳ NOT PROVEN: a logged-in look in light + dark.
+- ✅ **Same evening — "Kishef 101" = Gesheft ext 101 = user "Phone Orders" (`yisraelweinstock@gmail.com`,
+  `cmnmjhr3500anp96hc00p068a`, role USER, no custom role → every `/supermarket/*` call 403 → the quick-add
+  dropdown never fills).** Granted CustomRole **`cmttct4x33omgg0fah09mdt3t` "Store — all access"** (73 keys:
+  all 10 Store keys + the whole END_USER bucket) by DB write (handoff §6). ⛔⛔ **A custom role is
+  AUTHORITATIVE** — the user's effective set becomes exactly the role's keys, so a "store-only" role strips
+  overview/voicemail/chat; always include the base keys. ⛔ The 403 polls on `/orders` seen meanwhile were
+  Izzy's OWN desktop (`Loopcom/0.1.17-rc.9`, tenant Landau Home, `classic` mode) — a classic tenant can
+  never use Store pages; work Gesheft orders as Phone Orders or as Support with the workspace on Gesheft.
 - ⛔ **This deploy was the first to ship another session's `39b9eb4f` "sign-in code v2"**
   (api + portal together so both halves match). If login misbehaves, look there first.
 
