@@ -1097,3 +1097,27 @@ recognized" was correct; the 10-s Read expired, step 2 403'd, bail → TC-4.
 main greeting still does not announce 0; the female voice is on disk and
 unselectable. Open from §16: iFields key for Sola saves; no real order placed.
 
+### §16c — 2026-09-09: "it asked me for a PIN" — both calls decoded; the PIN-once rule is working as designed, nobody has enrolled yet
+
+Izzy, 2026-09-09: *"I called from a number that's not in the system … it's asking me
+to enter a PIN"* and *"I just called with a number that is in the system … it also asked
+me for a PIN. If the number is in the system, then it shouldn't ask."*
+
+- **Call 1, 06:32:30Z, from +1 562-209-6644 (his cell):** `SupermarketPayCall` row
+  `callerIdMatched: true, posCustomerId: 1001021`. That number IS on Gesheft's register —
+  `PosCustomer 1001021 "IZZY WEIN", phonesText 5622096644` (mirror of all 13,829 records).
+  So the line recognised him and correctly skipped the "which account?" lookup. It was
+  never an unknown number.
+- **Call 2, 12:28:32Z, from +1 845-782-3064:** matched `3762 JACOB WEINSTOCK`, same shape.
+- **Both asked for a PIN because `SupermarketPhonePin` holds 0 rows.** The rule agreed
+  2026-08-25 (POS handoff §10, "PIN FLOW RULE") is: caller-ID match = no PIN — delivered
+  as ONE-TIME ENROLLMENT, because the register demands `X-Customer-Pin` on every balance
+  read and charge and the customer record carries no PIN field. The FIRST call from an
+  account's own number keys the PIN once; it is stored encrypted bound to (account, number)
+  and supplied silently on every later matching-CID call. Nobody has ever keyed one, so
+  every call so far has been "the first call". Both of today's calls hung up at the PIN
+  prompt (~12 s in) — step 2 in nginx is the hangup POST (`200 103`), not a second gather.
+- ⛔ The only way to never ask even once is on Gesheft's side: POS with Logic making PIN
+  enforcement configurable, or handing us the PIN — the open ask-Gesheft item from 08-25.
+- ⏳ Acceptance unchanged: key the PIN once from a recognised number, hang up, call again —
+  the second call must go straight to `22_main_menu` (1 balance / 2 payment).
