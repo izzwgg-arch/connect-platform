@@ -9,6 +9,7 @@
  *   POST /agent/coworker/hello    { manifest }             → { ok, pollWaitMs }
  *   GET  /agent/coworker/next?wait=25                      → 200 { message } | 204
  *   POST /agent/coworker/result   { callId, ok, content }  → { ok, accepted }
+ *   POST /agent/coworker/progress { callId, state }        → { ok, extended }   (state = awaiting_approval: the person is deciding)
  *   POST /agent/coworker/cancel   { taskId? }              → { ok, cancelled }
  *   POST /agent/coworker/goodbye                           → { ok }
  *   GET  /agent/coworker/status                            → the link's view of this person's desktop
@@ -20,7 +21,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { resolveIdentity } from "../conversation/routes";
 import type { AuditLog } from "../audit/audit";
-import { DesktopLink, MAX_POLL_WAIT_MS, parseManifest, type LinkIdentity } from "./desktopLink";
+import { DesktopLink, MAX_POLL_WAIT_MS, APPROVAL_WAIT_MS, parseManifest, type LinkIdentity } from "./desktopLink";
 
 function who(req: FastifyRequest): LinkIdentity | null {
   const id = resolveIdentity(req);
@@ -65,6 +66,17 @@ export function registerCoworkerLinkRoutes(app: FastifyInstance, link: DesktopLi
       payload: { userId: id.clientUserId, callId: body.data.callId, tool: body.data.name ?? null, ok: body.data.ok, durationMs: body.data.durationMs ?? null },
     });
     return { ok: true, accepted };
+  });
+
+  // The desktop put an approval prompt on the person's screen for this call: give
+  // the call the prompt's lifetime on top of its tool timeout (see DesktopLink.extend).
+  app.post("/agent/coworker/progress", async (req, reply) => {
+    const id = who(req);
+    if (!id) return reply.code(403).send({ error: "forbidden" });
+    const body = z.object({ callId: z.string().min(1).max(80), state: z.enum(["awaiting_approval"]) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    const extended = link.extend(id, body.data.callId, APPROVAL_WAIT_MS);
+    return { ok: true, extended };
   });
 
   app.post("/agent/coworker/cancel", async (req, reply) => {

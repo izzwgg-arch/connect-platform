@@ -232,7 +232,7 @@ test("runtime: xlsx accepts object rows and refuses a sheet of empty placeholder
 
 /* ─────────────── runtime: verdict → approval → run → journal ─────────────── */
 
-function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { dir: string }, opts: { approve?: boolean; onAsk?: (req: any, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>; onActivity?: (n: number) => void } = {}) {
+function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { dir: string }, opts: { approve?: boolean; onAsk?: (req: any, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>; onActivity?: (n: number) => void; onAwaitingApproval?: (c: { id: string; taskId: string; tool: string }) => void } = {}) {
   const journal = new Journal(path.join(env.dir, `journal-${Math.random().toString(36).slice(2, 8)}`));
   const asks: any[] = [];
   const deps: RuntimeDeps = {
@@ -246,9 +246,25 @@ function runtimeFor(profile: "SAFE" | "TRUSTED" | "AUTONOMOUS", env: FsEnv & { d
     diagnostics: { portalUrl: "https://example.invalid", appVersion: "test", logFile: path.join(env.dir, "none.log"), phoneState: () => null, linkState: () => ({}) },
     log: () => {},
     onActivity: opts.onActivity,
+    onAwaitingApproval: opts.onAwaitingApproval,
   };
   return { runtime: new CoworkerRuntime(deps), journal, asks };
 }
+
+test("runtime: before an approval prompt is shown the link is told (so the agent waits for the person); an allowed call never says so; hands wires it to /progress", async () => {
+  const env = await fsEnv();
+  const waits: string[] = [];
+  const r = runtimeFor("SAFE", env, { approve: false, onAwaitingApproval: (c) => waits.push(`${c.id}:${c.tool}`) });
+  await r.runtime.handle({ id: "w1", name: "computer_fs_write", args: { path: "wait.txt", content: "x" }, taskId: "t-w" });
+  await r.runtime.handle({ id: "w2", name: "computer_fs_stat", args: { path: "wait.txt" }, taskId: "t-w" });
+  assert.deepEqual(waits, ["w1:computer_fs_write"]);
+  const hands = readFileSync(path.join(__dirname, "hands.ts"), "utf8");
+  assert.match(hands, /onAwaitingApproval: \(c\) => \{ try \{ link\?\.progress\(c\.id, "awaiting_approval"\)/);
+  const link = readFileSync(path.join(__dirname, "link.ts"), "utf8");
+  assert.match(link, /\/agent-api\/coworker\/progress/);
+  const agentRoutes = readFileSync(path.join(__dirname, "..", "..", "..", "agent", "src", "coworker", "routes.ts"), "utf8");
+  assert.match(agentRoutes, /"\/agent\/coworker\/progress"/, "the desktop posts to a route the agent actually serves");
+});
 
 test("runtime: activity is reported 1 → 0 around every call (drives the bubble's badge), and a throwing listener never breaks the call", async () => {
   const env = await fsEnv();

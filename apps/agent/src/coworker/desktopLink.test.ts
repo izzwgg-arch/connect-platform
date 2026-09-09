@@ -102,6 +102,29 @@ test("timeout, disconnect and not-connected are RESULTS the model can read, neve
   assert.equal(link.manifest(me), null);
 });
 
+test("extend: an approval prompt pushes the deadline out, so the model is not told 'timeout' while the person is still deciding", async () => {
+  const link = new DesktopLink();
+  link.hello(me, manifest());
+  const p = link.dispatch(me, { name: "computer_fs_delete", args: {}, taskId: "t", timeoutMs: 1000 });
+  const msg = (await link.next(me, 0)) as { kind: string; id: string } | null;
+  assert.ok(msg && msg.kind === "call");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(link.extend(me, msg!.id, 1500), true);
+  await new Promise((r) => setTimeout(r, 1000)); // past the ORIGINAL 1 s deadline
+  assert.equal((link.status(me) as { inflight?: unknown[] }).inflight?.length, 1, "still waiting on the person, not timed out");
+  assert.equal(link.result(me, msg!.id, { ok: false, content: { denied: true } }), true, "the answer is accepted, not 'late'");
+  assert.equal(((await p).content as { denied: boolean }).denied, true);
+  assert.equal(link.extend(me, "no-such-call", 1000), false);
+  // An extended call that is never answered still expires — by the extension, never forever.
+  const p2 = link.dispatch(me, { name: "computer_fs_delete", args: {}, taskId: "t", timeoutMs: 1000 });
+  const m2 = await link.next(me, 0);
+  assert.equal(link.extend(me, (m2 as { id: string }).id, 1000), true);
+  await new Promise((r) => setTimeout(r, 2300));
+  const expired = await p2;
+  assert.equal((expired.content as { error: string }).error, "desktop_timeout");
+  assert.match((expired.content as { message: string }).message, /within 2 seconds/, "the message counts the extension");
+});
+
 test("cancel fails the in-flight calls of that task, refuses new ones for it, and tells the desktop", async () => {
   const link = new DesktopLink();
   link.hello(me, manifest());
@@ -217,6 +240,18 @@ test("routes: identity from the JWT only; hello → next → result round trip; 
     const res = await app.inject({ method: "POST", url: "/agent/coworker/result", headers: H, payload: { callId: msg.id, ok: true, content: { workspace: "C:\\x" }, name: msg.name } });
     assert.equal(res.json().accepted, true);
     assert.deepEqual((await pending).content, { workspace: "C:\\x" });
+
+    // progress: the desktop says the person is deciding → the deadline moves out.
+    const pending2 = link.dispatch(me, { name: "computer_fs_delete", args: {}, taskId: "t2", timeoutMs: 1000 });
+    const msg2 = (await app.inject({ method: "GET", url: "/agent/coworker/next?wait=1", headers: H })).json().message;
+    const prog = await app.inject({ method: "POST", url: "/agent/coworker/progress", headers: H, payload: { callId: msg2.id, state: "awaiting_approval" } });
+    assert.equal(prog.statusCode, 200);
+    assert.equal(prog.json().extended, true);
+    assert.equal((await app.inject({ method: "POST", url: "/agent/coworker/progress", headers: H, payload: { callId: "unknown", state: "awaiting_approval" } })).json().extended, false);
+    assert.equal((await app.inject({ method: "POST", url: "/agent/coworker/progress", headers: H, payload: { callId: msg2.id, state: "dancing" } })).statusCode, 400);
+    assert.equal((await app.inject({ method: "POST", url: "/agent/coworker/progress", payload: { callId: msg2.id, state: "awaiting_approval" } })).statusCode, 403);
+    await app.inject({ method: "POST", url: "/agent/coworker/result", headers: H, payload: { callId: msg2.id, ok: false, content: { denied: true } } });
+    assert.equal((await pending2).ok, false);
 
     const status = await app.inject({ method: "GET", url: "/agent/coworker/status", headers: H });
     assert.equal(status.json().connected, true);

@@ -76,7 +76,7 @@ export type DesktopCallResult = { ok: boolean; content: unknown; durationMs?: nu
 export type LinkIdentity = { tenantId: string; clientUserId: string };
 
 type Waiter = { resolve: (m: DesktopMessage | null) => void; timer: ReturnType<typeof setTimeout> };
-type Inflight = { resolve: (r: DesktopCallResult) => void; timer: ReturnType<typeof setTimeout>; taskId: string; name: string; startedAt: number };
+type Inflight = { resolve: (r: DesktopCallResult) => void; timer: ReturnType<typeof setTimeout>; taskId: string; name: string; startedAt: number; deadlineMs: number };
 
 type Session = {
   key: string;
@@ -98,6 +98,12 @@ type Session = {
 export const DESKTOP_PRESENCE_MS = 90_000;
 /** Longest a single tool call may wait for the desktop, whatever it declares. */
 export const MAX_CALL_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * How much longer a call may wait once the desktop says an approval prompt is on
+ * the screen: the prompt's own lifetime (5 min on the desktop) plus slack. Human
+ * time is not tool time — see extend().
+ */
+export const APPROVAL_WAIT_MS = 5 * 60 * 1000 + 30_000;
 export const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 /** Longest one long-poll is held open (nginx read timeout is 120 s; stay well under). */
 export const MAX_POLL_WAIT_MS = 25_000;
@@ -279,18 +285,45 @@ export class DesktopLink {
     const startedAt = this.now();
     s.stats.dispatched++;
     return new Promise<DesktopCallResult>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!s.inflight.has(id)) return;
-        s.inflight.delete(id);
-        s.stats.timedOut++;
-        resolve({ ok: false, content: { error: "desktop_timeout", message: `The computer did not finish "${call.name}" within ${Math.round(timeoutMs / 1000)} seconds.` }, durationMs: this.now() - startedAt });
-      }, timeoutMs);
-      s.inflight.set(id, { resolve, timer, taskId: call.taskId, name: call.name, startedAt });
+      const timer = setTimeout(() => this.expire(s, id), timeoutMs);
+      s.inflight.set(id, { resolve, timer, taskId: call.taskId, name: call.name, startedAt, deadlineMs: timeoutMs });
       this.deliver(s, {
         kind: "call", id, name: call.name, args: call.args, taskId: call.taskId,
         conversationId: call.conversationId, issuedAt: new Date(startedAt).toISOString(), timeoutMs,
       });
     });
+  }
+
+  /** The deadline passed: the model gets a timeout RESULT (never a rejection). */
+  private expire(s: Session, id: string): void {
+    const f = s.inflight.get(id);
+    if (!f) return;
+    s.inflight.delete(id);
+    s.stats.timedOut++;
+    f.resolve({ ok: false, content: { error: "desktop_timeout", message: `The computer did not finish "${f.name}" within ${Math.round(f.deadlineMs / 1000)} seconds.` }, durationMs: this.now() - f.startedAt });
+  }
+
+  /**
+   * The desktop is waiting on the PERSON for this call — an approval prompt is on
+   * their screen. Human time is not tool time: push the deadline out by the
+   * prompt's lifetime, so the model is not handed "desktop_timeout" — and does
+   * not ask AGAIN, raising a second prompt — while the first prompt still stands.
+   * (2026-09-09: a delete asked; the person took 64 s; the tool's 60 s timeout
+   * fired; the model retried; two prompts stood and the first answer "arrived
+   * late".) Unknown or already-settled ids → false. Bounded: one extension is at
+   * most APPROVAL_WAIT_MS, and an unanswered prompt still expires.
+   */
+  extend(identity: LinkIdentity, callId: string, extraMs: number): boolean {
+    const s = this.session(identity);
+    if (!s) return false;
+    s.lastSeen = this.now();
+    const f = s.inflight.get(callId);
+    if (!f) return false;
+    const ms = Math.min(Math.max(1000, extraMs), APPROVAL_WAIT_MS);
+    clearTimeout(f.timer);
+    f.deadlineMs += ms;
+    f.timer = setTimeout(() => this.expire(s, callId), ms);
+    return true;
   }
 
   /** The desktop reports what happened. Unknown/expired ids are ignored (false). */

@@ -68,6 +68,23 @@ export class DesktopLinkClient {
   /** Re-announce the manifest now (MCP server connected, profile changed). */
   announce(): void { this.lastHelloAt = 0; }
 
+  /**
+   * Tell the agent this call is waiting on the PERSON (an approval prompt is up)
+   * so it pushes the call's deadline out. Fire-and-forget: the prompt shows
+   * either way; without this the agent's tool timeout (10-60 s for file tools)
+   * fires while the person is still reading, the model is told "timeout" and asks
+   * again, and a SECOND prompt appears (2026-09-09).
+   */
+  progress(callId: string, state: "awaiting_approval"): void {
+    if (!this.token) return;
+    void this.call("POST", "/agent-api/coworker/progress", { callId, state }, 10_000)
+      .then((r) => {
+        if (r.status !== 200) this.deps.log(`link: progress ${state} for ${callId.slice(0, 8)} → ${r.status}`);
+        else if (!r.json?.extended) this.deps.log(`link: progress for ${callId.slice(0, 8)} not extended (the agent no longer waits on it)`);
+      })
+      .catch((e: any) => this.deps.log(`link: progress post failed ${String(e?.message ?? e).slice(0, 100)}`));
+  }
+
   private async call(method: string, path: string, body: unknown, timeoutMs: number): Promise<{ status: number; json: any }> {
     const f = this.deps.fetchImpl ?? fetch;
     const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), timeoutMs);

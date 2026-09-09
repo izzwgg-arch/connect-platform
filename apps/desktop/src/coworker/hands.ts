@@ -122,6 +122,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     diagnostics: { portalUrl: d.portalUrl, appVersion: d.app.getVersion(), logFile: d.logFile, phoneState: d.phoneState, linkState: () => (link ? link.status() : { state: "off" }) as unknown as Record<string, unknown> },
     log: (l) => log(`runtime: ${l}`),
     onActivity: d.onActivity,
+    onAwaitingApproval: (c) => { try { link?.progress(c.id, "awaiting_approval"); } catch { /* not started yet */ } },
   });
 
   const manifest = () => {

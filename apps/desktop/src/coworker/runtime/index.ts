@@ -59,6 +59,8 @@ export type RuntimeDeps = {
   log: (line: string) => void;
   /** The number of calls in flight changed (0 = idle). Drives the bubble's badge; never awaited. */
   onActivity?: (active: number) => void;
+  /** An approval prompt is about to be shown for this call — the link tells the agent to wait for the person. */
+  onAwaitingApproval?: (call: { id: string; taskId: string; tool: string }) => void;
   now?: () => number;
 };
 
@@ -136,6 +138,7 @@ export class CoworkerRuntime {
       if (decision.verdict === "ask") {
         await this.deps.journal.append({ ts: new Date().toISOString(), kind: "call", taskId: call.taskId, callId: call.id, tool: call.name, verdict: decision.code, outcome: "asked", args, summary: decision.message });
         const req = this.approvalText(call, catalog ?? null, mcp?.tool.name ?? null, args, decision);
+        try { this.deps.onAwaitingApproval?.({ id: call.id, taskId: call.taskId, tool: call.name }); } catch { /* the agent's deadline is a courtesy; the prompt shows regardless */ }
         let approvalTimer: ReturnType<typeof setTimeout> | null = null;
         const answer = await Promise.race([
           this.deps.askApproval(req, abort.signal),
