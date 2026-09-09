@@ -1,6 +1,6 @@
 ## Voicemail email transcript toggle renamed "Include transcription in email" (portal-only, 2026-09-09)
 
-(Ezra, 2026-09-09: *"call it voicemail transcription on and off"* then *"Include Transcription and Email, because nobody's going to know what that is"*) `apps/portal/components/ProfileMenu.tsx` ~L458: the third voicemail toggle in the profile panel is now labelled **Include transcription in email** / "Add the written text to the voicemail email" (was "Include the typed-out message"; an interim "Voicemail transcription" `28a22fdd` was never deployed). Same server field `Extension.vmEmailIncludeTranscript`, same API, no desktop change (the Windows app loads this portal page). Portal deploy: see the bullet below.
+(Ezra, 2026-09-09: *"call it voicemail transcription on and off"* then *"Include Transcription and Email, because nobody's going to know what that is"*) `apps/portal/components/ProfileMenu.tsx` ~L458: the third voicemail toggle in the profile panel is now labelled **Include transcription in email** / "Add the written text to the voicemail email" (was "Include the typed-out message"; an interim "Voicemail transcription" `28a22fdd` was never deployed). Same server field `Extension.vmEmailIncludeTranscript`, same API, no desktop change (the Windows app loads this portal page). Portal deploy: ✅ DEPLOYED + container-verified 2026-09-09 18:29Z, commit `665d1cb9` via `ssh connect "cd /opt/connectcomms/app && bash scripts/deploy-direct.sh portal --commit 665d1cb9"` (dry-run first, queue idle, blue/green, nginx back on 3000). `app-portal-1` `/app/.build-commit` = `665d1cb9`; the built chunk `static/chunks/app/(platform)/layout-c4070a34â¦.js` contains "Include transcription in email"; `curl 127.0.0.1:3000/login` → 200 in 15 ms. Deploy log `/root/deploy-portal-665d1cb9.log`. ⏳ NOT PROVEN: Izzy’s own eyes on the deployed profile panel.
 
 ## ⛔ AGENT HANDOFF — the Coworker BUBBLE's chat popover no longer CLOSES ITSELF when the hands ask for approval or open a folder; the approval prompt lands BESIDE the chat (on its monitor), focus comes back to the chat afterwards, and the bubble's badge is finally driven (amber = working, red = finished while hidden) (2026-09-09) — READ FIRST before touching the chat window's `blur` handler, `askApproval`'s placement, `setWidgetBadge`, or for "the Coworker chat disappeared while it was working"
 
@@ -32,6 +32,18 @@
   flip red/amber between them. "Unread" means "the hands finished something while you were not looking";
   the assistant's text reply itself is not signalled (that would need the portal page to call the bridge —
   a portal change, not done).
+- ⛔⛔ **SECOND DEFECT, found from Ezra’s screenshot the same hour (“Why does it always pop up?”): the AGENT gave up on a call
+  after the tool’s own timeout (60 s for a delete, 10–30 s for other file tools) while the person was still reading
+  the approval prompt.** The model was told `desktop_timeout`, asked again, a SECOND prompt appeared (journal
+  18:18:52 `asked`, 18:19:57 `asked` again, same task), and the first answer “arrived late (not accepted)”. For a
+  SAFE customer that is a new prompt every 10–60 s until they answer inside the window. Fix: the desktop now POSTs
+  `/agent-api/coworker/progress {callId, state:"awaiting_approval"}` right before it shows the prompt
+  (`RuntimeDeps.onAwaitingApproval` → `DesktopLinkClient.progress()`), and the agent’s `DesktopLink.extend()` pushes
+  that call’s deadline out by `APPROVAL_WAIT_MS` (5 min + 30 s, the prompt’s own lifetime) — once, bounded, and an
+  unanswered prompt still expires. Agent tests 12/12 (extend + the `/progress` route: 200/extended, unknown id →
+  false, bad state → 400, no JWT → 403); desktop 73/73. ⛔ The agent container must be rebuilt for this
+  (see the deploy bullet); an old desktop against the new agent simply never posts progress (old behaviour), a new
+  desktop against an old agent logs `link: progress … → 404` and the prompt still shows.
 - `hands.ts` header comment lied ("the link runs only … the Coworker is enabled (the bubble setting …)") —
   the link runs whenever the app is signed in, bubble or not. Comment fixed; behaviour unchanged.
 - ✅ **Proven:** desktop typecheck 0; `src/coworkerWidget/*.test.ts` + `src/coworker/*.test.ts` **72/72**
