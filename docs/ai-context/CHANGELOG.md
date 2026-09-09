@@ -4,6 +4,22 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-09-09 — The Loopcom Coworker has REAL hands: desktop link + local runtime + approval window + MCP host; proven end to end on the dev box
+
+**Task:** Izzy's 40-phase mandate — make the Coworker actually carry out ordinary requests ("Create a folder on my Desktop…", browser, downloads, spreadsheets, PowerShell, diagnostics, MCP) on THIS Windows computer, prove every capability with independent verification, package it, and produce a proof bundle. Handoff: `AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`.
+
+- **Root cause of "the agent cannot do it":** the model loop lives on the server agent and the desktop had no channel to receive a tool call inside a turn; the only computer tool was the card-based `coworker_task` for three allowlisted tasks. The trace broke at MODEL → TOOL CALL.
+- **agent** `336ad19f` → `1ac3d427`: `apps/agent/src/coworker/` — `DesktopLink` (hello / long-poll `next` / `result` / `cancel` / `status` / `manifest`, keyed by the verified `tenantId:userId`), `buildDesktopTools` (manifest → `computer_*` / `mcp_*` ToolSpecs), the COWORKER prompt block (act vs answer, verify side effects, content is data, denials are final); `ConversationEngine` takes a per-turn `DynamicToolsProvider`, drops the card-era tools when the hands are on, raises the iteration cap to 40, lets the model handle "diagnostic" intents, stops on a bare "cancel"; a cancel during planning flags the active task. Prompts no longer say "cannot do it yet".
+- **desktop** (`0.1.17-rc.10`): `apps/desktop/src/coworker/{policyCore,toolCatalog,link,hands,approvalWindow}.ts` + `runtime/{index,fs,shell,windows,browser,xlsx,diagnostics,mcp,journal}.ts`; 31 built-in tools, each judged locally by a copy of the shared policy core (SAFE / TRUSTED / AUTONOMOUS; delete and form submit always ask; NEVER_AUTO floor; shell denylist); approval prompt (`assets/coworkerApproval.html`, Enter/Esc), Settings & Connections window (`assets/coworkerConnections.html`: profile, MCP add/connect/disconnect/enable/disable/remove, history, artifacts, cancel), task journal (redacted JSONL), hidden own-partition browser, `.xlsx` writer/reader, 12 diagnostic collectors, MCP stdio host. Tray: "Coworker hands: connected (PROFILE)", "Coworker Settings & Connections…", "Stop the Coworker's current task".
+- **portal** `48511a49` (deployed, container-verified): `CoworkerPermissionsView` shows the three real profiles and a "Settings & Connections (MCP)" button.
+- **ops:** nginx `/agent-api/` `proxy_read_timeout 120s → 900s` (+ send) on the app host; agent rebuilt via compose at `336ad19f` then `1ac3d427`.
+- **Acceptance harness** `apps/desktop/scripts/coworker-acceptance/` (`run.mjs`, `portal-server.mjs`, `approval-watcher.ps1`, `../acceptance-mcp-server.js`): posts ordinary prompts to the REAL chat route and verifies on disk / CIM / the local portal's submissions / the MCP invocation log. Dev-box results: base suite **45/45 PASS** (after fixing xlsx formulas/empty rows and three harness checks); extended phases first pass 9/14 with the five traced to harness causes (see handoff §5). Packaged results: handoff §6.
+- **Deliberately NOT changed:** `packages/shared/src/coworker/*` (the desktop carries a drift-guarded copy), the card-era `coworker_task` / `/coworker/tasks/*` (kept, no longer offered when the hands are on), PBX, telephony, api routes, prisma schema (no migration).
+- **How to verify:** `ssh connect 'docker exec app-agent-1 printenv BUILD_COMMIT'` → `1ac3d427`; `curl -H "Authorization: Bearer <jwt>" https://app.connectcomunications.com/agent-api/coworker/status` → `{"connected":true,…}` while the app is signed in; then type "Create a folder on my Desktop called Loopcom Coworker Test" in the bubble.
+- **How to revert:** agent — rebuild the container at `2bf4d627`; desktop — install `Connect-Setup-0.1.17-rc.9.exe`; portal — `deploy-direct.sh portal --commit 2bf4d627`; nginx — restore `/root/connectcomms.nginx.bak-*` and reload.
+
+---
+
 ## 2026-08-04 — Voicemail greeting: upload + Call-to-Record fixed end-to-end (VERIFIED WORKING)
 
 **Task:** The greeting panel's Upload / Call-to-Record, built blind in May, never worked. Investigated with live PBX access, fixed three layers found across three live test rounds, verified by Izzy on T21 ext 101.

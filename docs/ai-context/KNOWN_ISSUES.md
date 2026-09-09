@@ -10,6 +10,16 @@ When you find a new fragile area, add it here.
 
 ---
 
+## AI Coworker (the hands, 2026-09-09)
+
+- **Open — the model sometimes reports sizes in decimal GB while Windows shows GiB.** The tools return bytes plus 1024-based `*Human` fields with a note; a reply of "25.8 GB total" for a 24.0 GB machine is the same fact. Not a defect of the hands; the acceptance checks accept either unit.
+- **Open — `computer_xlsx_write` refuses a sheet whose rows are mostly empty** (`rows_mostly_empty`) since `0b6b44b6`, after gpt-5 once wrote a template workbook with placeholder rows and "=SUM" as text. The model is told to read the sources first; formulas are now real cells. If a legitimate mostly-empty sheet is ever needed, pass the rows explicitly filled.
+- **Open — cancel from the chat is a typed "cancel"/"stop" or the tray/Connections "Stop"; the bubble chat has no Cancel button yet.** `POST /agent-api/coworker/cancel` stops in-flight calls, kills PowerShell trees, closes the browser, and flags the active task so the model's next call is refused.
+- **Open — approval prompts and any other operator on the same desktop:** the prompt is a focused always-on-top window answered by keyboard or click; during the 2026-09-09 acceptance run another session on the dev box clicked Allow on a delete prompt meant for the denial test. The harness's watcher now posts keys to the prompt's own HWND instead of stealing focus.
+- **By design — no active-desktop control and no isolated desktop.** The hands never move the mouse or type into the person's programs (the browser is a hidden own-partition BrowserWindow driven by DOM script). Phases 22/23 of the mandate are NOT IMPLEMENTED, on purpose; `desktop.active` stays a NEVER_AUTO domain.
+- **Not implemented — QuickBooks.** No Intuit integration exists on the platform; a QuickBooks MCP server can be added in Coworker Settings & Connections once someone holds Intuit app credentials and a sandbox company. BLOCKED: authorization required.
+- **Harness note — the dev-box `apps/agent` test run reports `Cannot find module 'zod'` for several files.** That is the scratch toolchain (workspace packages are junctions without their own `node_modules`), not the code; those suites are green in the agent's Docker build.
+
 ## Billing
 
 - **Fixed 2026-05-12 — tenant billing 403 with valid portal access.** `registerBillingRoutes` used a **too-narrow** JWT role list (`ADMIN`, `BILLING`, `SUPER_ADMIN` only) for tenant paths while the portal granted billing via permissions. **`TENANT_ADMIN`** / **`BILLING_ADMIN`** received **403** on `/billing/settings`, `/billing/platform/invoices`, etc. Fix: shared allowlist in `apps/api/src/billing/billingAuth.ts` aligned with `canManageBilling()` in `server.ts`.

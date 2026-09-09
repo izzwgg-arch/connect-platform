@@ -4,6 +4,41 @@ Newest entries first.
 
 ---
 
+## The Coworker's hands — unit suites + the end-to-end acceptance harness (2026-09-09)
+
+Branch `feat/ivr-migration-takeover`, commits `336ad19f` → `1ac3d427`. Handoff `AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`.
+Toolchain on the dev box: scratch `npm install` junctioned into `apps/desktop/node_modules` (electron 41.5.0,
+typescript 6.0.3, tsx) and `apps/agent/node_modules` (typescript 5.9.2, fastify, zod, prisma client generated);
+the pnpm store here is unreadable (`devbox-toolchain-blocker`).
+
+```bash
+# desktop
+node_modules/.bin/tsc -p tsconfig.json --noEmit                      # 0 errors
+node --import tsx --test --test-timeout=90000 src/*.test.ts src/phoneSetup/*.test.ts src/coworkerWidget/*.test.ts src/coworker/*.test.ts src/remoteSupport/*.test.ts src/remoteDesktop/*.test.ts
+#   250/250 (235 before + 15 in src/coworker/coworkerHands.test.ts; +2 xlsx tests later = 252)
+# agent
+node_modules/.bin/tsc -p tsconfig.json --noEmit                      # 0 errors in apps/agent/src (11 pre-existing in packages/*)
+node --experimental-test-module-mocks --import tsx --test src/coworker/desktopLink.test.ts src/conversation/coworkerAwareness.test.ts src/conversation/staffPrompt.test.ts src/conversation/engineTools.test.ts src/tools/coworkerTaskTools.test.ts
+#   desktopLink 11/11, coworkerAwareness 6/6, staffPrompt, engineTools, coworkerTaskTools all green
+# full agent suite: 419 ok; the ✖ files (escalationGate, escalations, standingKnowledge, smsEmail*, permissionGrant)
+#   are "Cannot find module 'zod'" through the workspace junctions of this harness + two pre-existing assertions
+#   (everett 'yi' vs 'he', permissionGrant) — not touched by this work.
+# packaged build
+node_modules/.bin/tsc -p tsconfig.json && node_modules/.bin/electron-builder --win && node --import tsx scripts/verify-built-icon.ts
+#   release/Connect-Setup-0.1.17-rc.10.exe, verify:icon OK
+# acceptance (the real agent, the real app, this machine)
+node apps/desktop/scripts/coworker-acceptance/run.mjs --suite dev --out %USERPROFILE%\Loopcom-Coworker-Proof-2026-09-09T1751
+#   base: 41 PASS / 4 FAIL first run → O4 (xlsx template rows: fixed in code), W2 + B (GiB vs decimal GB: check fixed),
+#   W5 (dev build is electron.exe: check fixed) → reruns 4/4 PASS ⇒ 45/45
+node run.mjs --suite dev --extended --only BG1,CC1,CN1,FR1,FR2,LP1,PM2,PM3,SL1,PF1,PV1,PV2,FR3 --out …/extended-dev
+#   9 PASS / 5 FAIL first run: BG1 (foreground changes were another operator's, now attributed), CC1 (regex),
+#   CN1 (the harness's own Get-Process CommandLine query took ~100 s so the cancel came late — now waits for the
+#   in-flight call), PM2 (Esc via SendKeys never reached the prompt; watcher now posts to the HWND), PV1 (the Claude
+#   turn ran the pipeline and wrote the file; the check wanted the provider NAME in it). Reruns: handoff §5/§6.
+```
+
+---
+
 ## Sign-in code v3 — per user on Account → Security, text/email only (2026-09-08)
 
 Branch `feat/ivr-migration-takeover`. Handoff `AGENT_HANDOFF_LOGIN_OTP_V3_SECURITY_PAGE_2026-09-08.md` §5.

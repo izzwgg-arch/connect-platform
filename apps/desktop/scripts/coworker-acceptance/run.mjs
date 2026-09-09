@@ -543,10 +543,16 @@ if (flag("--extended")) {
     const f = path.join(WS, "cancel-proof.txt"); rmrf(f);
     const s0 = await statsNow();
     const p = ask("Use PowerShell to wait 90 seconds and then create cancel-proof.txt in the coworker test workspace containing 'should not exist'. Do it in one script.", { timeoutMs: 300_000 });
-    // Wait until the PowerShell call is really in flight on the desktop (the model plans first), then cancel.
+    // Wait until the LONG PowerShell call is really in flight — the model may run a
+    // short setup script first, so require the same call to still be running after
+    // ~10 s (a quick call would have finished) before cancelling it.
     let inflightSeen = false; const t0 = Date.now();
-    while (Date.now() - t0 < 90_000) { const st = await agent("coworker/status", null, "GET"); if ((st.json?.inflight ?? []).some((c) => c.name === "computer_powershell")) { inflightSeen = true; break; } await new Promise((r) => setTimeout(r, 1000)); }
-    await new Promise((r) => setTimeout(r, 4000));
+    while (Date.now() - t0 < 90_000) {
+      const st = await agent("coworker/status", null, "GET");
+      const ps = (st.json?.inflight ?? []).find((c) => c.name === "computer_powershell");
+      if (ps && ps.runningMs > 9000) { inflightSeen = true; break; }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
     const psBefore = ps("@(Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-100) }).Count");
     const cancel = await agent("coworker/cancel", { taskId: null });
     const r = await p;

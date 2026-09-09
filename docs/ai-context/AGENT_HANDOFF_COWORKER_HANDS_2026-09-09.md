@@ -136,6 +136,14 @@ _(filled in — see §10)_
 
 ## 8. Traps hit while building
 
+- ⛔⛔ **THE FIRST rc.10 INSTALLER WAS DEAD ON ARRIVAL.** `electron-builder --win` run from `apps/desktop` with the
+  JUNCTIONED scratch `node_modules` packed `electron-updater` without its own dependencies; the installed app's main
+  process threw `Cannot find module 'builder-util-runtime'` on load, leaving three processes, no window and no log
+  line. Found by running `resources/app.asar` under the dev electron. Fix: build from a clean export directory
+  (`scratchpad/desktop-build` = dist/ assets/ scripts/ package.json electron-builder.yml + `npm install --omit=dev`,
+  then `electron-builder --win -c.electronVersion=41.5.0`), and smoke-test the asar under the dev electron BEFORE
+  installing. The good installer's sha256 starts `808509ad2233e5f7`; asar 3,727,354 bytes (the dead one: 2,252,029).
+
 - `taskkill` is not on the git-bash PATH here (`Stop-Process -Name Loopcom` from PowerShell instead); the installed
   app holds the single-instance lock so a dev `electron .` silently exits until it is stopped.
 - Electron's `node_modules/electron/path.txt` must have NO trailing newline or `electron .` fails with ENOENT on
