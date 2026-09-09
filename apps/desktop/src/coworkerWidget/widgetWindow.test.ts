@@ -77,6 +77,28 @@ test("clicking the bubble while the chat is open closes it instead of bouncing i
   assert.ok(BLUR_CLICK_GRACE_MS >= 200 && BLUR_CLICK_GRACE_MS <= 1000);
 });
 
+// ── 1b. the hands and the popover (2026-09-09) ───────────────────────
+
+test("the chat does NOT hide on blur while an approval prompt or a tool call is in flight", () => {
+  const blur = window_.slice(window_.indexOf('chatWindow.on("blur"'), window_.indexOf('chatWindow.on("closed"'));
+  assert.match(blur, /holdChatOpen\(\)/, "the approval window taking focus must not close the conversation under the person");
+  assert.match(blur, /chatWindow\.hide\(\)/, "…but an ordinary blur still hides it (it is a popover)");
+  assert.match(main, /holdChatOpen: \(\) =>/);
+  assert.match(main, /hands\?\.busy\(\)/);
+});
+
+test("the approval prompt lands beside the chat, hands focus back afterwards, and the badge follows the hands", () => {
+  assert.match(main, /chatAnchor: \(\) => chatPanelBounds\(\)/);
+  assert.match(main, /onApprovalSettled: \(\) => restoreChatPanel\(\)/);
+  assert.match(main, /onActivity: \(active\) => coworkerActivity\(active\)/);
+  assert.match(main, /setWidgetBadge\("working"\)/);
+  assert.match(main, /isChatPanelVisible\(\) \? "none" : "unread"/, "a finished task with the chat hidden is unread; with it showing there is nothing to flag");
+  const open = window_.slice(window_.indexOf("function openChatPanel"), window_.indexOf("function chatAnchor"));
+  assert.equal((open.match(/setWidgetBadge\("none"\)/g) ?? []).length, 2, "opening the chat (first time and re-show) clears the dot");
+  const restore = window_.slice(window_.indexOf("export function restoreChatPanel"), window_.indexOf("function toggleChatPanel"));
+  assert.ok(!/\.show\(\)/.test(restore), "restore only re-focuses a chat that is showing; it never re-shows a hidden one");
+});
+
 // ── 2. it opens the customer assistant, not the owner console ────────
 
 test("the chat opens /desktop/coworker — never the /assistant owner console", () => {

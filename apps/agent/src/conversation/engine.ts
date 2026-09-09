@@ -16,6 +16,7 @@ import type { AuditLog } from "../audit/audit";
 import { killSwitchEngaged } from "../config";
 import { isMemoryAdd, renderLessonsBlock, type TrainerLessonService } from "../training/lessons";
 import { isPlatformStaff } from "../authRoles";
+import type { Intent } from "../triage/intent";
 
 export const AUTO_CLOSE_HOURS = 12;
 
@@ -66,18 +67,15 @@ EVERYTHING ELSE (other changes, diagnostics): you cannot do it yet — warmly sa
 been passed to the human team, and summarize it clearly.
 THE LOOPCOM COWORKER: the Windows app has a round Loopcom bubble that floats on the screen (Tray icon →
 "Show Coworker Bubble"; drag it anywhere; one click opens this same chat). It exists and you should say
-so when asked. The Coworker can do a SHORT LIST of things on the person's own computer, and ONLY when they
-are talking to you through that bubble: count what is in their Downloads, Desktop or Documents folder;
-organize one of those folders by moving loose files into subfolders by type (moves only — it never
-deletes); and read the Windows version, uptime and memory. To do one, call the coworker_task tool — it
-puts an approval card on their screen (what / where / why / can it be undone) and NOTHING runs until they
-press the button on that card. So after calling it say the request is on their screen, never that it is
-done; use my_computer_tasks before answering "did it finish?". If the tool refuses because they are not in
-the bubble, tell them to open it (Tray icon → "Show Coworker Bubble") and ask again there. Anything else on
-their computer — other folders, deleting, running programs, changing settings — the Coworker cannot do
-yet: say so plainly, do NOT hand them scripts or commands unless they ask, and pass the exact request to
-the Connect team so it is on record. Never claim a task on their computer was done, started or scheduled
-unless my_computer_tasks says so.
+so when asked. When the person's Loopcom Windows app is connected to this chat, you have HANDS on their
+computer: tools named computer_* (files and folders, PowerShell, Windows information, the Coworker's own
+background browser, downloads, diagnostics) and mcp_* (their connected MCP servers) appear in your tool
+list, and a COWORKER block in your instructions says so. Then an action request is carried out with those
+tools and reported from their results — never answered with instructions for the person to do it
+themselves. When those tools are NOT in your list, the app is not connected: say the Coworker's hands are
+not connected right now, suggest making sure the Loopcom app is running and signed in with the bubble on,
+and do NOT hand them scripts or commands unless they ask. Never claim a task on their computer was done
+unless a tool result shows it.
 Never invent capabilities, never promise timelines, never discuss other tenants or internal systems.`;
 
 /**
@@ -132,7 +130,7 @@ WHAT YOU CANNOT DO, and why it is not a restriction on THEM:
 - Some commands need their say-so. If a command comes back refused as "ask first", tell them plainly what you wanted to run and why, and ask. You cannot approve it on your own behalf — that is the point of the rule, not an obstacle to work around.
 - If a command comes back refused as "never", do not look for another way around it. Say which rule stopped you; if the rule looks wrong, say that too — an over-broad rule is worth reporting.
 
-THE LOOPCOM COWORKER: the Windows app's floating Loopcom bubble opens this same chat (Tray → "Show Coworker Bubble"). It is real and you should say so. Behind it: the policy core, the diagnostic engine, and the FIRST hands — three allowlisted tasks on the owner's own computer (folder_summary / organize_folder on Downloads, Desktop or Documents; system_snapshot), proposed with the coworker_task tool ONLY from inside the bubble window, shown as a what/where/why/undo approval card, run by the desktop app after the press, recorded as an AgentAction you can read with my_computer_tasks. organize_folder moves files into subfolders by type and never deletes. Nothing else on the computer is possible yet — no other folders, no delete, no programs, no settings; say that as the current fact. After calling coworker_task say the card is on screen, never that the task is done.
+THE LOOPCOM COWORKER: the Windows app's floating Loopcom bubble opens this same chat (Tray → "Show Coworker Bubble"). It is real and you should say so. When the owner's Loopcom Windows app is connected to this chat, you have HANDS on that computer: computer_* tools (files, PowerShell, Windows info, the Coworker's own background browser, downloads, diagnostics) and mcp_* tools (connected MCP servers) are in your tool list and a COWORKER block describes them. ⛔ The "cannot edit, write or delete files" rule above is about the SERVER and the codebase; on the owner's own computer, through those tools, you create, write, move, copy, run and download as asked — do the work and report the results. When the computer_* tools are absent, the app is not connected: say so instead of describing how they could do it by hand.
 
 HOW TO ANSWER: plain English, no jargon, get to the point. Short paragraphs. Show the command you ran or the file you read when it carries the argument. If something is broken, say what is broken, what you checked, and what you would do — in that order.`;
 
@@ -210,6 +208,13 @@ export interface ChatContext {
    *  cannot see the screen, and should say so if asked about specifics. */
   viewingPage?: string;
   viewingPath?: string;
+  /**
+   * True when the request came from the Loopcom Windows app (its branded
+   * User-Agent), whichever window. With a desktop linked for this person, the
+   * computer_* tools are offered for chats from that app — the bubble AND the
+   * main window's corner assistant — but never for a browser tab elsewhere.
+   */
+  desktopApp?: boolean;
 }
 
 /** Finished chat-widget upload, resolved tenant-scoped by the route layer. */
@@ -269,6 +274,29 @@ export type ContextProvider = (ctx: ChatContext) => Promise<{ ok: true; block: s
  */
 export type KnowledgeProvider = (input: { tenantId: string; audience: "customer" | "internal" }) => Promise<string | null>;
 
+/**
+ * The Coworker's hands for ONE turn (apps/agent/src/coworker). Resolved per
+ * message because the tool list is whatever the person's Windows app announced
+ * when it connected — built-in hands plus MCP tools — and it changes as servers
+ * connect. `tools` empty ⇒ no desktop is linked for this chat; `prompt` then
+ * carries the "not connected" wording when they are in the bubble.
+ *   taskId    groups every tool call of this turn, so a cancel stops this job only.
+ *   onDone    lets the provider forget the task's cancel flag once the turn ends.
+ */
+export interface DynamicToolSet {
+  tools: ToolSpec[];
+  prompt: string | null;
+  maxIterations?: number;
+  taskId?: string;
+  onDone?: () => void;
+  /** "cancel"/"stop" typed by the person: stop the running job for this chat. */
+  cancel?: () => { cancelled: number };
+}
+export type DynamicToolsProvider = (ctx: ChatContext, conversationId: string) => Promise<DynamicToolSet>;
+
+/** "cancel", "stop", "stop it", "cancel the task." — a bare instruction, nothing else in the message. */
+export const CANCEL_RE = /^\s*(?:please\s+)?(?:cancel|stop|abort)(?:\s+(?:it|that|this|the task|the job|everything|now))?\s*[.!]*\s*$/i;
+
 export class ConversationEngine {
   constructor(
     private store: ConversationStore,
@@ -291,6 +319,12 @@ export class ConversationEngine {
      * and last, like `tools`: absent means exactly the previous behaviour.
      */
     private knowledge: KnowledgeProvider | null = null,
+    /**
+     * The Coworker's hands (desktop tools + MCP) for the person's linked Windows
+     * app. Optional and last, like the others: absent means exactly the previous
+     * behaviour — no computer tools are ever offered.
+     */
+    private dynamicTools: DynamicToolsProvider | null = null,
   ) {}
 
   /**
@@ -548,15 +582,48 @@ export class ConversationEngine {
       }
     }
 
+    // ── THE COWORKER'S HANDS ── Resolved now, before triage, because two things
+    // below depend on whether a desktop is linked: a bare "cancel"/"stop" must
+    // stop the running job instead of being chatted about, and the phone-line
+    // diagnostic triage must not swallow "my browser test is broken" when the
+    // person is working a computer task. Failure-safe: no provider, or a
+    // provider that throws, means exactly the old behaviour.
+    let dyn: DynamicToolSet | null = null;
+    if (this.dynamicTools) {
+      try {
+        dyn = await this.dynamicTools(ctx, conv.id);
+      } catch (err) {
+        dyn = null;
+        await this.audit.record({ actor: "system", event: "chat.coworker_tools_unavailable", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err).slice(0, 200) } });
+      }
+    }
+    const handsOn = !!dyn && dyn.tools.length > 0;
+    if (dyn?.cancel && CANCEL_RE.test(bridging ? englishText : text)) {
+      const r = dyn.cancel();
+      const english = r.cancelled > 0
+        ? "Stopped. I cancelled what was running on your computer; anything already done stays as it is."
+        : "Nothing was running on your computer, so there was nothing to stop.";
+      await this.audit.record({ actor: ctx.role, event: "chat.coworker_cancel", tenantId: ctx.tenantId, conversationId: conv.id, payload: { cancelled: r.cancelled } });
+      if (bridging) return this.finishBridged(conv, ctx, english, "coworker-cancel", bridgeDegraded);
+      await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: english, model: "coworker-cancel" });
+      return { conversationId: conv.id, reply: english, language, model: "coworker-cancel", degraded: false };
+    }
+
     // Triage: if the message is an actionable intent (diagnostic or a catalog
     // action) and a triage orchestrator is wired, handle it deterministically
     // (policy-gated, approval-gated) before falling back to conversational LLM.
     // Intent detection runs on the ENGLISH text when bridging (numbers/keywords
     // parse more reliably), and the English reply is translated back via YL.
+    // ⛔ With the hands on, a "diagnostic" intent (the phone-complaint keyword
+    // list: "not working", "broken", "dead"…) is left to the model, which holds
+    // BOTH the phone-line read tools and the computer tools and can tell "my
+    // phone is dead" from "the test server is dead". Catalog actions (DND, hold
+    // music, routing) still go through triage exactly as before.
     if (this.triage) {
       try {
         const { detectIntent } = await import("../triage/intent");
-        const intent = detectIntent(bridging ? englishText : text);
+        const detected = detectIntent(bridging ? englishText : text);
+        const intent: Intent = handsOn && detected.kind === "diagnostic" ? { kind: "chat", raw: bridging ? englishText : text } : detected;
         // Chat-kind intents also go through triage: a bare reply like "Main"
         // may be the answer to triage's own pending clarifying question
         // (resume path). Triage returns handled:false for genuine small talk.
@@ -633,9 +700,9 @@ export class ConversationEngine {
     // window can and cannot do, instead of describing a page.
     const inCoworker = typeof ctx.viewingPath === "string" && ctx.viewingPath.startsWith(COWORKER_CHAT_PATH);
     const viewingBlock = inCoworker
-      ? isPlatformStaff(ctx.platformRole)
-        ? `They are talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. From here you may propose one of the allowlisted computer tasks with coworker_task (folder summary / organize a folder / system snapshot, on Downloads, Desktop or Documents); it appears as an approval card beside this chat and runs only after they press it. Anything beyond that list is not built yet — say so as the current fact and do not offer scripts unless asked.`
-        : `The customer is talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the Connect app. From here you may propose one of the Coworker's allowlisted computer tasks with coworker_task (count or organize their Downloads, Desktop or Documents folder; read the Windows version/uptime/memory); it appears as an approval card beside this chat and runs only after THEY press it — say it is on their screen, never that it is done. Anything else on their computer (other folders, deleting, programs, settings) the Coworker cannot do yet: say so plainly, do not offer scripts or commands unless they ask, and pass the exact request to the Connect team so it is on record.`
+      ? handsOn
+        ? `${isPlatformStaff(ctx.platformRole) ? "They are" : "The customer is"} talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. Their Loopcom app is CONNECTED and the computer_* tools below run on that computer: when they ask for something to be done there, do it and report the results.`
+        : `${isPlatformStaff(ctx.platformRole) ? "They are" : "The customer is"} talking to you through the Loopcom Coworker — the floating Loopcom bubble on their own Windows computer — not a page of the portal. Their Loopcom app is NOT connected to this chat right now, so nothing can run on the computer this turn: if they ask for something there, say the Coworker's hands are not connected yet, suggest making sure the Loopcom app is running and signed in with the bubble on, and ask them to try again in a moment. Do not offer scripts or manual steps unless they ask.`
       : ctx.viewingPage
       ? isPlatformStaff(ctx.platformRole)
         ? `They have the "${String(ctx.viewingPage).slice(0, 80)}" page open${ctx.viewingPath ? ` (${String(ctx.viewingPath).slice(0, 200)})` : ""}. You cannot see their screen — but you can open that page yourself with the browse tool and read what it returns, so do that rather than saying you cannot see it.`
@@ -654,6 +721,10 @@ export class ConversationEngine {
       // corrections and must be able to override a document.
       ...(knowledgeBlock ? [{ role: "system" as const, content: knowledgeBlock }] : []),
       ...(viewingBlock ? [{ role: "system" as const, content: viewingBlock }] : []),
+      // The Coworker block sits AFTER the page context and BEFORE the lessons:
+      // it describes the hands that are on the table this turn, and a trainer's
+      // correction must still be able to override how they are used.
+      ...(dyn?.prompt ? [{ role: "system" as const, content: dyn.prompt }] : []),
       ...(lessonsBlock ? [{ role: "system" as const, content: lessonsBlock }] : []),
       ...history.slice(-HISTORY_WINDOW).map((m) => ({
         role: (m.role === "assistant" ? "assistant" : "user") as "assistant" | "user",
@@ -695,15 +766,29 @@ export class ConversationEngine {
         // context — chat text claiming another tenant changes nothing, because
         // no tool schema accepts a tenant and the registry strips any the model
         // invents. Without tools this is byte-for-byte the previous behaviour.
-        const res = this.tools?.length
-          ? await this.llm.completeWithTools(
-              "support_chat",
-              msgs,
-              this.tools,
-              { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role, ctx.platformRole), clientUserId: ctx.clientUserId, viewingPath: ctx.viewingPath, conversationId: conv.id },
-              { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id },
-            )
-          : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });
+        // With the hands on, the desktop's tools join the platform's, and the
+        // two proposal-era tools (coworker_task / my_computer_tasks) step aside
+        // so the model is not offered a card-based way to do what it can now do.
+        const turnTools: ToolSpec[] = handsOn
+          ? [...(this.tools ?? []).filter((t) => t.name !== "coworker_task" && t.name !== "my_computer_tasks"), ...dyn!.tools]
+          : (this.tools ?? []);
+        let res;
+        try {
+          res = turnTools.length
+            ? await this.llm.completeWithTools(
+                "support_chat",
+                msgs,
+                turnTools,
+                { tenantId: ctx.tenantId, role: this.toolRoleFor(ctx.role, ctx.platformRole), clientUserId: ctx.clientUserId, viewingPath: ctx.viewingPath, conversationId: conv.id },
+                { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id, ...(handsOn && dyn!.maxIterations ? { maxIterations: dyn!.maxIterations } : {}) },
+              )
+            : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });
+        } finally {
+          try { dyn?.onDone?.(); } catch { /* bookkeeping only */ }
+        }
+        if (handsOn) {
+          await this.audit.record({ actor: "agent", event: "chat.coworker_turn", tenantId: ctx.tenantId, conversationId: conv.id, payload: { taskId: dyn!.taskId ?? null, toolCalls: (res as { toolCalls?: number }).toolCalls ?? 0, hitIterationCap: (res as { hitIterationCap?: boolean }).hitIterationCap ?? false, desktopTools: dyn!.tools.length } });
+        }
         const model = `${res.provider}:${res.model}`;
         // An empty reply is NOT a normal outcome — on thinking-by-default models
         // it means the token budget was spent reasoning. Both branches below fall

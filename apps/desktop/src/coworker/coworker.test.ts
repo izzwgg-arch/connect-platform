@@ -197,7 +197,8 @@ test("the run channel re-decides at run time: a write during a call comes back '
 test("main.ts registers the hands with the call state and the stored profile; preload exposes decideTask + runTask on the same two channels", () => {
   const main = read(path.resolve(__dirname, "../main.ts"));
   assert.ok(/registerCoworkerHands\(\{/.test(main), "main.ts does not register the coworker hands");
-  assert.ok(/getProfile:\s*\(\)\s*=>\s*settings\.coworkerPermissions/.test(main), "profile must come from DesktopSettings.coworkerPermissions");
+  // 2026-09-09: AUTONOMOUS (the hands' third profile) maps to TRUSTED for these card-era tasks.
+  assert.ok(/getProfile:\s*\(\)\s*=>\s*\(?settings\.coworkerPermissions/.test(main), "profile must come from DesktopSettings.coworkerPermissions");
   assert.ok(/isCallActive:\s*\(\)\s*=>\s*isPhoneOnCall\(\)/.test(main), "call protection must read the live phone state");
   const preload = read(path.resolve(__dirname, "../preload.ts"));
   assert.ok(preload.includes(`ipcRenderer.invoke("${COWORKER_DECIDE_CHANNEL}"`), "preload decideTask channel");

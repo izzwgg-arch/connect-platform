@@ -455,7 +455,7 @@ export function ProfileMenu() {
           <ControlToggle label="Theme" detail={theme === "dark" ? "Dark mode" : "Light mode"} checked={theme === "dark"} onChange={(next) => setTheme(next ? "dark" : "light")} />
           <ControlToggle label="SMS to Email" detail="Send my texts to my inbox" checked={smsToEmail} disabled={smsToEmailSaving} onChange={updateSmsToEmail} />
           <ControlToggle label="Email my voicemails" detail="Send each new voicemail to my email" checked={vmEmail} disabled={vmEmailSaving} onChange={updateVmEmail} />
-          <ControlToggle label="Include the typed-out message" detail="Add the written text to the email" checked={vmEmailTranscript} disabled={vmEmailSaving || !vmEmail} onChange={updateVmEmailTranscript} />
+          <ControlToggle label="Include transcription in email" detail="Add the written text to the voicemail email" checked={vmEmailTranscript} disabled={vmEmailSaving || !vmEmail} onChange={updateVmEmailTranscript} />
         </section>
 
         <section className="ecp-section" aria-label="Voicemail greeting">

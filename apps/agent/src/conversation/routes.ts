@@ -95,8 +95,15 @@ export function registerChatRoutes(
         if (u?.uiLanguage === "yi") preferredLanguage = "yi";
       } catch { /* fall back to detection */ }
     }
+    // The Loopcom Windows app brands its User-Agent ("Loopcom/<version>", see
+    // apps/desktop/src/userAgent.ts). That is what lets the engine offer the
+    // computer_* tools from the app's own windows and never from a browser tab.
+    // ⛔ Data, not authority: the flag only widens the tool OFFER; the desktop
+    // link itself is keyed by the verified identity and the desktop re-checks
+    // every call locally, so a forged header gains nothing without a linked app.
+    const desktopApp = /\bLoopcom\/\d/.test(String(req.headers["user-agent"] ?? ""));
     const result = await engine.handleMessage(
-      { ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path },
+      { ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path, desktopApp },
       body.data.text,
       attachments,
     );

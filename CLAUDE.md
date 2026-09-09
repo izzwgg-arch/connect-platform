@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## ⛔ AGENT HANDOFF — McNamara Lion is the FIRST existing tenant with the overdue-account cutoff switched ON; its September invoice is already FAILED, so a countdown starts at the next sweep (2026-09-09) — READ FIRST before touching McNamara Lion's billing, before switching the cutoff on for ANY tenant whose PBX tenant has no `emergency-calls` context, or for "McNamara's phones stopped dialing out"
 
 (**PRODUCTION DATA ONLY — one `PUT` through the sanctioned route, no code, no deploy, no migration, no PBX write, no money moved, no email sent by hand.** Izzy, 2026-09-09: *"turn on the auto disconnect for non-payment or interrupt service for the McNamara line only."* Memory: [[mcnamara-lion-service-interruption-is-on]]; the feature itself is the 2026-08-17/18 section further down.)
@@ -8,6 +9,165 @@
 - ⛔ **Inbound keeps ringing during a cutoff.** Their number +3477730349 is `DidRouteMapping.routingMode = pbx` — not on the Connect doorway — so the `Busy(10)` half of the feature cannot reach them; the runner will log `no Connect-mode number — inbound callers will NOT hear busy`.
 - ⏳ **NOT PROVEN: no sweep has run with this switch on.** The api's retained docker logs (≈8 h) no longer hold the 09-08 boot line, so "armed" is proven by env (`SERVICE_INTERRUPTION_CUTOVER_AT` in the container) + the route's own `armed:true` + `startServiceInterruptionSweep` in the running `server.ts`, not by a logged sweep. Acceptance: after ~23:15Z 09-09, `GET …/service-interruption` reads `countdownStartedAt: 2026-09-06T04:15:23.784Z, invoiceId` set; `select ... from "BillingEventLog" where "tenantId"='cmnlgrym4000rp9pa1sge6cpu'` shows the countdown/reminder rows; and `docker logs app-api-1 --tail 5000 | grep -a SERVICE_INTERRUPTION` shows `sweep complete {considered:2 …}` with no `tenant failed` line. Reversal: the same PUT with `{enabled:false}`; after a cutoff, `POST …/restore`.
 
+=======
+## ⛔ AGENT HANDOFF — the portal INSTALL link (`/desktop/Connect-Setup-latest.exe`) now serves desktop `0.1.17-rc.10`; the auto-update feed `latest.yml` is STILL 0.1.16 (2026-09-09) — READ FIRST before "which build does Install download", before touching `/opt/connectcomms/desktop/`, or before flipping the feed
+
+(Ezra, 2026-09-09: *"Publish to install page."* No code change, no deploy. The "install page" is the workspace nav item `workspace.install` in `apps/portal/navigation/navConfig.ts` (and the two Remote Desktop "Download" buttons), all `href="/desktop/Connect-Setup-latest.exe"`, served by nginx from `/opt/connectcomms/desktop/` (`sites-enabled/connectcomms` ~L204, `cache-control: no-cache`).)
+
+- ✅ **PUBLISHED:** `Connect-Setup-0.1.17-rc.10.exe` (100,502,069 bytes, sha256 `f7a60e421d852f218fdbeaa7770905d1345bfc77abc9575c70f3e9777a0e7c50`) + `.blockmap` copied into `/opt/connectcomms/desktop/`, and `Connect-Setup-latest.exe` replaced atomically (tmp + `mv`) with that same file. Verified: `curl` of `https://app.connectcomunications.com/desktop/Connect-Setup-latest.exe` returns 200, that length, and that sha256; `app.loopcom.net` too. Before this, `Connect-Setup-latest.exe` was a byte copy of `0.1.16` (sha `3b7af6ace82662b7…`), so reverting is `cp -p Connect-Setup-0.1.16.exe Connect-Setup-latest.exe`.
+- ✅ **The source artifact** is the evening rebuild from the clean `git archive HEAD` (HEAD `665d1cb9`) export — the one installed and running on the dev box, asar deps verified (see the rc.10 handoff below). ⛔ NOT the 14:35 in-place build in `apps/desktop/release/` (100,458,656 bytes), which crashes on launch.
+- ⛔ **FEED NOT FLIPPED, on purpose.** `latest.yml` still reads `0.1.16` (`Connect-Setup-0.1.16.exe`), so nobody auto-updates. rc.10 carries the unpublished coworker-hands / remote-desktop / elevated-support work, and flipping the feed is fleet-wide — Ezra's call. When he says so: `cp latest-0.1.17-rc.10.yml latest.yml` in the same directory (already staged there, sha512 of the exe inside). An rc install on top of the 0.1.16 feed is stable ("downgrade is disallowed").
+- ⏳ NOT PROVEN: a real click on Install from a signed-in portal and a fresh install on a machine other than the dev box.
+
+## Voicemail email transcript toggle renamed "Include transcription in email" (portal-only, 2026-09-09)
+
+(Ezra, 2026-09-09: *"call it voicemail transcription on and off"* then *"Include Transcription and Email, because nobody's going to know what that is"*) `apps/portal/components/ProfileMenu.tsx` ~L458: the third voicemail toggle in the profile panel is now labelled **Include transcription in email** / "Add the written text to the voicemail email" (was "Include the typed-out message"; an interim "Voicemail transcription" `28a22fdd` was never deployed). Same server field `Extension.vmEmailIncludeTranscript`, same API, no desktop change (the Windows app loads this portal page). Portal deploy: ✅ DEPLOYED + container-verified 2026-09-09 18:29Z, commit `665d1cb9` via `ssh connect "cd /opt/connectcomms/app && bash scripts/deploy-direct.sh portal --commit 665d1cb9"` (dry-run first, queue idle, blue/green, nginx back on 3000). `app-portal-1` `/app/.build-commit` = `665d1cb9`; the built chunk `static/chunks/app/(platform)/layout-c4070a34â¦.js` contains "Include transcription in email"; `curl 127.0.0.1:3000/login` → 200 in 15 ms. Deploy log `/root/deploy-portal-665d1cb9.log`. ⏳ NOT PROVEN: Izzy’s own eyes on the deployed profile panel.
+
+## ⛔ AGENT HANDOFF — the Coworker BUBBLE's chat popover no longer CLOSES ITSELF when the hands ask for approval or open a folder; the approval prompt lands BESIDE the chat (on its monitor), focus comes back to the chat afterwards, and the bubble's badge is finally driven (amber = working, red = finished while hidden) (2026-09-09) — READ FIRST before touching the chat window's `blur` handler, `askApproval`'s placement, `setWidgetBadge`, or for "the Coworker chat disappeared while it was working"
+
+(Ezra, 2026-09-09: *"Check co worker bubble, look for things to fix."* Desktop-only change, no API/agent/portal deploy.
+**Commit:** see `git log -1 -- apps/desktop/src/coworkerWidget/widgetWindow.ts`. Read with the section below
+(the hands, `336ad19f`) and `docs/ai-context/AGENT_HANDOFF_COWORKER_BUBBLE_DEAD_2026-09-02.md` §2a/§6.)
+
+- ⛔⛔ **THE DEFECT: the chat popover hides on `blur` (it is a popover by design, §2a of the 09-02 handoff), and
+  the approval window is `alwaysOnTop` + `focus()` — so in SAFE mode (the customer default) the FIRST write the
+  hands attempt raised the approval prompt, the chat lost focus and HID, and the person answered a question
+  about a conversation they could no longer see.** The same happened whenever a tool took focus
+  (`computer_open_path` opening Explorer). It was invisible on this box because Ezra's profile is AUTONOMOUS
+  (nothing asks) and the acceptance harness never opens the popover.
+  Fix in `widgetWindow.ts`: `WidgetDeps.holdChatOpen` (main: `hands?.busy()` = an approval pending OR a
+  runtime call in flight) — while true the `blur` handler logs `chat kept open on blur (hands busy)` and
+  does nothing. Ordinary blur still hides; a bubble click while it shows still closes it (`chatIsShowing()`
+  branch of `toggleChatPanel`).
+- ⛔ **The approval window went to the PRIMARY display's bottom-right corner — on top of the chat it was asking
+  about (the bubble's home is that corner) and on the wrong screen when the bubble lived on a second monitor.**
+  `approvalWindow.ts` now takes `anchor()` (main → `chatPanelBounds()`) and places the prompt with the pure,
+  tested `approvalPositionFor()`: LEFT of the chat, bottom-aligned, 12px gap; right when no room; centred
+  over it when neither; clamped to the work area of `screen.getDisplayMatching(chat)`. No chat showing →
+  the old corner. `onSettled` → main `restoreChatPanel()` re-focuses the chat if it is still showing (never
+  re-shows a hidden one). Log line: `approval: shown for <tool> (<id>) at x,y beside the chat`.
+- ✅ **The badge is wired now (§6 "wired to nothing" is closed):** `RuntimeDeps.onActivity(n)` fires on every
+  call start/finish/cancel → `hands` → main `coworkerActivity()`: `n>0` → `working` (amber pulse); `n→0`
+  debounced 1.5 s → `unread` (red) if the chat is hidden, else `none`; opening the chat (first show and
+  re-show) clears it. ⛔ The debounce is deliberate — one turn is a chain of 2-second calls and the dot would
+  flip red/amber between them. "Unread" means "the hands finished something while you were not looking";
+  the assistant's text reply itself is not signalled (that would need the portal page to call the bridge —
+  a portal change, not done).
+- ⛔⛔ **SECOND DEFECT, found from Ezra’s screenshot the same hour (“Why does it always pop up?”): the AGENT gave up on a call
+  after the tool’s own timeout (60 s for a delete, 10–30 s for other file tools) while the person was still reading
+  the approval prompt.** The model was told `desktop_timeout`, asked again, a SECOND prompt appeared (journal
+  18:18:52 `asked`, 18:19:57 `asked` again, same task), and the first answer “arrived late (not accepted)”. For a
+  SAFE customer that is a new prompt every 10–60 s until they answer inside the window. Fix: the desktop now POSTs
+  `/agent-api/coworker/progress {callId, state:"awaiting_approval"}` right before it shows the prompt
+  (`RuntimeDeps.onAwaitingApproval` → `DesktopLinkClient.progress()`), and the agent’s `DesktopLink.extend()` pushes
+  that call’s deadline out by `APPROVAL_WAIT_MS` (5 min + 30 s, the prompt’s own lifetime) — once, bounded, and an
+  unanswered prompt still expires. Agent tests 12/12 (extend + the `/progress` route: 200/extended, unknown id →
+  false, bad state → 400, no JWT → 403); desktop 73/73. ⛔ The agent container must be rebuilt for this
+  (see the deploy bullet); an old desktop against the new agent simply never posts progress (old behaviour), a new
+  desktop against an old agent logs `link: progress … → 404` and the prompt still shows.
+- `hands.ts` header comment lied ("the link runs only … the Coworker is enabled (the bubble setting …)") —
+  the link runs whenever the app is signed in, bubble or not. Comment fixed; behaviour unchanged.
+- ✅ **Proven:** desktop typecheck 0; `src/coworkerWidget/*.test.ts` + `src/coworker/*.test.ts` **72/72**
+  (new: `approvalWindow.test.ts` 6 placement cases; `coworkerHands.test.ts` "activity 1 → 0 around every
+  call, 1 while the approval is pending, a throwing listener never breaks the call"; two source guards in
+  `widgetWindow.test.ts` for the hold-on-blur wiring and the badge wiring). ⏳ **NOT PROVEN on a screen:**
+  needs a SAFE-profile turn through the popover — the prompt must appear LEFT of the chat, the chat must stay
+  visible, Enter must return focus to the chat, and with the chat hidden the dot must go amber then red.
+  ⛔ Do NOT run that on this box while another session's dev `electron .` and acceptance harness are up
+  (they were, 2026-09-09 17:46Z→): the dev app holds the single-instance lock and the harness's results
+  would be confused by a second driver. It rides the next desktop build (rc.10 is the other session's).
+- ⛔ Traps this session hit: the takeover tree is MIXED — `widgetWindow.ts`, `main.ts`, `CLAUDE.md` are CRLF,
+  `hands.ts`/`approvalWindow.ts`/`runtime/index.ts` LF; git-bash `grep $'\r'` LIES (text mode) — check from
+  node. Exact-anchor patch scripts must normalise (memory `takeover-worktree-crlf-patching`). A bash heredoc
+  carrying a JS file with backticks fails to parse in this harness — write scripts with the Write tool.
+
+## ⛔ AGENT HANDOFF — Remote Desktop `rd-btn--primary` is now BLUE FILL + DARK BOLD TEXT (the Meetings "Start meeting" look), not white-on-blue and not the neutral grey (2026-09-09) — READ FIRST before restyling any button on `/remote-desktop`, the connect modal, `this-computer` or `session/[id]`
+
+(**Two commits the same afternoon. No API change, portal-only deploys.** Izzy, 2026-09-09, with a
+screenshot of the "Connect to someone else's computer" card: *"match the color of the button to
+the other buttons"* → I made it the neutral `rd-btn` (`635da8ff`). He came back: *"Why is it
+black on white? Make it Blue and black like the other main buttons"* and sent the Meetings
+**+ Start meeting** button (`.mtg-primary`: `--accent` fill, `#04121d` text, 700 weight).)
+
+- **Final state:** `.rd-btn--primary` in `apps/portal/app/globals.css` (~L39051) = `background:
+  var(--accent); border-color: var(--accent); color: #04121d; font-weight: 700`, hover =
+  `filter: brightness(1.08)`. It used to be `color: #fff` with an `--accent-2` hover. The
+  Connect-by-ID button in `apps/portal/app/(platform)/remote-desktop/page.tsx` has
+  `rd-btn rd-btn--primary rd-btn--block` again.
+- ⛔ Because the change is on the modifier, EVERY `rd-btn--primary` got the new look: per-machine
+  **Connect** in the machine cards, **Continue** in the connect modal, the primaries on
+  `this-computer` and `session/[id]`. That is intended — Izzy's ask was "like the other main
+  buttons", i.e. the portal's blue+dark-text primary. Do not put white text back on it.
+- The portal has no global `.btn.primary` rule; the shared `.btn` is dark-navy in dark mode and
+  `--accent` fill + white text in light (`:root[data-theme="light"] .btn:not(.ghost):not(.danger)`).
+  The Meetings `.mtg-primary` is the reference Izzy pointed at; `.rd-btn--primary` now mirrors it
+  in both themes (same rule, `--accent` is #22a8ff dark / #3b82f6 light).
+- Verified in his own Chrome (Support login, `app.loopcom.net/remote-desktop`, `data-theme` toggled
+  by script): the injected `rd-btn rd-btn--primary rd-btn--block` rendered identical to the Start
+  meeting screenshot. ⏳ Deploy status: see the bullet appended below once the portal is out.
+- ✅ **DEPLOYED + container-verified 2026-09-09:** commit `c54ae95f`, `ssh connect … bash scripts/deploy-direct.sh
+  portal --commit c54ae95f` (dry-run first, no other deploy running; blue/green, nginx back on 3000).
+  `app-portal-1` `/app/.build-commit` = `c54ae95f`, `curl 127.0.0.1:3000/login` → 200 in 15 ms; the built
+  CSS (`static/css/465dd88a….css`, `dd47d032….css`) contains `color:#04121d;font-weight:700` and the route
+  chunk `static/chunks/app/(platform)/remote-desktop/page-082ddeca….js` contains
+  `rd-btn rd-btn--primary rd-btn--block`. The interim neutral look (`635da8ff`) was live for ~1 h only.
+  ⏳ NOT PROVEN: Izzy's own eyes on the deployed page.
+
+## ⛔ AGENT HANDOFF — the dev box runs desktop `0.1.17-rc.10` REBUILT from a clean export; the 14:24 in-place rc.10 crashed on launch with `Cannot find module builder-util-runtime` (2026-09-09) — READ FIRST before building the desktop app IN the worktree
+
+(**No code change, no deploy, no feed change.** Ezra, 2026-09-09: *"What is causing this error?"* then *"rebuild rc.10 the rc.9 way and reinstall it"*. Memory: [[loopcom-desktop-built-and-installed-on-devbox]].)
+
+- ⛔⛔ **NEVER run `electron-builder` inside `apps/desktop` of this worktree while `node_modules` is a junction to a scratchpad.** electron-builder 26 asks `npm list --json` for the prod tree; against the junction (no `package-lock.json` in the app dir, package resolved as a `file:` link) npm reports electron-updater's children as *missing*, so the asar shipped `node_modules/electron-updater` ALONE — none of builder-util-runtime, fs-extra, js-yaml, lazy-val, lodash.escaperegexp, lodash.isequal, semver, tiny-typed-emitter. Proven: the installed asar of the 14:24 build listed exactly one module; `dist/updater.js` requires builder-util-runtime first, hence the dialog.
+- ✅ **Why the export recipe (rc.9 section below) works:** in the export layout `npm list` returns nothing, electron-builder logs `searching for node modules pm=traversal` and walks `node_modules` for real. That fallback is the whole mechanism — it is not that npm "works" there.
+- ✅ **Rebuilt 2026-09-09 evening** from `git archive HEAD` (HEAD `665d1cb9`; the other session's UNCOMMITTED `src/coworker/{hands,link,runtime/index}.ts` edits are NOT in it), `npm ci` from the rc.9 lockfile (electron-updater **6.8.9**, not the 6.3.9 the worktree junction carries), `New-Item -ItemType Junction` from PowerShell (cmd `mklink` quoting fails from bash), tsc, `electron-builder --win`, `verify-built-icon` OK. Asar verified BEFORE install: 16 modules, every electron-updater dependency present. Installed with `/S` (first silent run exited 2 while uninstalling the old copy; second run exited 0), registry `DisplayVersion 0.1.17-rc.10`, app launched, no error dialog. Artifact: this session's scratchpad `desktop-build/src-root/apps/desktop/release/Connect-Setup-0.1.17-rc.10.exe` (100,502,069 bytes) — NOT the one in `apps/desktop/release/` here, which is the broken 14:24 build.
+- ⛔ **Verification that must precede every install from now on:** read the asar header (`resources/app.asar`, JSON header after the 16-byte pickle) and confirm `node_modules` contains every key of electron-updater's `dependencies`. Cheaper than a launch.
+
+## ⛔ AGENT HANDOFF — the dev box (VMI3409497) runs desktop `0.1.17-rc.9` now, REBUILT HERE from a clean export of HEAD and installed with `/S`; the fleet feed is UNTOUCHED at 0.1.16 (2026-09-09) — READ FIRST before "the latest desktop build", before building the desktop app on this machine, or before believing `apps/desktop/release/` exists
+
+(**No code change, no deploy, no feed change.** Izzy, 2026-09-09: *"install the latest loopcom
+windows app with the assistant that can run tasks on my computer. Install it on this computer
+only, so update it."* — "this computer" = the dev box, which was on 0.1.16 (the fleet version);
+Izzy's workstation already had rc.9 from `7f73086a`. Memory: [[loopcom-desktop-built-and-installed-on-devbox]].)
+
+- ✅ **INSTALLED AND RUNNING: `Loopcom 0.1.17-rc.9`** (registry `DisplayVersion 0.1.17-rc.9`, exe
+  `FileVersion 0.1.17-rc.9` / `Loopcom LLC`, log banner `=== log start v0.1.17-rc.9 ===`, 6
+  processes). The updater checked the feed and wrote *"Update for version 0.1.17-rc.9 is not
+  available (latest version: 0.1.16, downgrade is disallowed)"* — an rc install on top of the fleet
+  feed is stable; it will not be pulled back to 0.1.16. `/S` exit 0 closed the running 0.1.16 app;
+  relaunched by `Start-Process` on `%LOCALAPPDATA%\Programs\@connectdesktop\Loopcom.exe`.
+- ✅ **THE ARTIFACT:** `apps/desktop/release/Connect-Setup-0.1.17-rc.9.exe` (100,414,720 bytes,
+  sha256 `a664c20bbc0c04a609b0a9a52a292eb9116e5fe062d418c23483708f06097d7a`) + `.blockmap` +
+  `latest.yml` (reads rc.9 — ⛔ NOT uploaded; `app.connectcomunications.com/desktop/latest.yml`
+  still reads 0.1.16). `verify-built-icon` OK — 7 RT_ICON, the Loopcom icon and nothing else.
+  Same desktop source as the workstation's rc.9: `git log 7f73086a..HEAD -- apps/desktop` is empty.
+- ⛔⛔ **BUILT FROM `git archive HEAD`, NOT FROM THE WORKING TREE.** Another session was writing
+  UNTRACKED `apps/desktop/src/coworker/{policyCore,toolCatalog}.ts` + `runtime/*` (a bigger
+  Coworker runtime: browser/shell/windows/xlsx/mcp) and had symlinked `apps/desktop/node_modules`
+  to ITS scratchpad. `tsconfig` includes `src/**/*.ts`, so an in-place build would have shipped that
+  half-written work. Recipe that works on this box (no pnpm, no root `node_modules`):
+  `git archive HEAD apps/desktop tsconfig.base.json packages/shared/src/coworker | tar -x -C <scratch>`;
+  `npm install electron@41.5.0 electron-updater@6.8.9 electron-builder@26.8.1 typescript@6.0.3
+  @types/node@25.6.0` (the lockfile's exact versions) in the scratch; `mklink /J node_modules`
+  into the export; `tsc -p tsconfig.json`; `electron-builder --win` (downloads electron + nsis
+  itself; `CSC_IDENTITY_AUTO_DISCOVERY=false`).
+- ⛔ **winCodeSign still needs the pre-extract** (no `SeCreateSymbolicLink`, no Developer Mode):
+  `curl -L` the `winCodeSign-2.6.0.7z` release asset into
+  `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\` and `7za x` it into `winCodeSign-2.6.0`
+  (exit 2 on the two `.dylib` symlinks is fine; `rcedit-x64.exe` must exist). Done; the cache now
+  persists on this box.
+- ⛔ **`node scripts/verify-built-icon.ts` FAILS on Node 26** (`__dirname is not defined in ES
+  module scope` — type-stripping loads it as ESM). Without tsx, compile it:
+  `tsc --ignoreConfig scripts/verify-built-icon.ts --module commonjs --target es2022
+  --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node
+  --outDir scripts` then `node scripts/verify-built-icon.js`.
+- ⏳ **NOT PROVEN: the Coworker hands on THIS machine** — nobody has opened the bubble here and
+  approved a `folder_summary` / `organize_folder` / `system_snapshot` card (acceptance in the
+  2026-09-02 "HAS HANDS" section). Not done on purpose: an `organize_folder` moves Izzy's files.
+- ⛔ **Do not "clean up" the untracked coworker files or the `node_modules` symlink in
+  `apps/desktop`** — they belong to the other session. Publishing rc.9 to the fleet remains
+  Izzy's call (it carries remote-desktop, coworker-hands and elevated-support work).
+
+>>>>>>> origin/feat/ivr-migration-takeover
 ## ⛔ AGENT HANDOFF — Relax Tires pays on the 26th now; moving a billing day LATER needs the OPEN invoice re-dated or the customer is charged on the OLD day anyway (2026-09-09) — READ FIRST before changing ANY tenant's `billingDayOfMonth` when an OPEN invoice already exists
 
 (**PRODUCTION DATA ONLY — no code, no deploy, no migration, no PBX write, no money

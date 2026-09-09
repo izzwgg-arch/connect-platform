@@ -8,8 +8,9 @@ import { brandedUserAgent } from "./userAgent";
 import { initAutoUpdater, checkForUpdatesInteractive, getUpdateState, onUpdateStateChange, installDownloadedUpdate } from "./updater";
 import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { registerCoworkerHands } from "./coworker/mainWiring";
+import { startCoworkerHands, type Hands } from "./coworker/hands";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
-import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc } from "./coworkerWidget/widgetWindow";
+import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc, chatPanelBounds, isChatPanelVisible, restoreChatPanel, setWidgetBadge } from "./coworkerWidget/widgetWindow";
 import { readShellLogTail } from "./shellLog";
 import { release as osRelease } from "node:os";
 import {
@@ -81,6 +82,9 @@ let miniWindow: BrowserWindow | null = null;
 let phoneEngineWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+// The Coworker's hands (2026-09-09): the link to the agent + the local runtime.
+// Started after the main window exists (the session token is read from it).
+let hands: Hands | null = null;
 let settings: DesktopSettings = DEFAULT_SETTINGS;
 let latestPhoneStateEnvelope: PhoneEngineEnvelope | null = null;
 // When the last phone-state envelope arrived (main-process clock). A frozen renderer
@@ -481,6 +485,15 @@ function rebuildTray(): void {
       label: settings.coworkerWidgetEnabled ? "Hide Coworker Bubble" : "Show Coworker Bubble",
       click: () => toggleCoworkerWidget(),
     },
+    // The hands: status line (read-only), the settings & connections window,
+    // and an emergency stop for whatever the Coworker is doing right now.
+    ...(hands
+      ? [
+          { label: `Coworker hands: ${coworkerHandsLabel()}`, enabled: false },
+          { label: "Coworker Settings & Connections…", click: () => { try { hands?.openConnections(); } catch (err) { diag("coworker", `open connections failed: ${String(err)}`); } } },
+          { label: "Stop the Coworker's current task", click: () => { try { hands?.runtime.cancel(null); } catch (err) { diag("coworker", `cancel failed: ${String(err)}`); } } },
+        ]
+      : []),
     { type: "separator" },
     // Remote Desktop (2026-09-02). The switch needs a username and password
     // first, so "Allow" opens the setup page rather than flipping blindly;
@@ -557,7 +570,72 @@ function widgetDeps() {
     // Without this the bubble's renderer is a black box in the log — the dead first
     // build produced ZERO coworker lines because nothing captured its console.
     attachDiag: (win: BrowserWindow, tag: string) => attachConsoleCapture(win, tag),
+    // The chat popover stays put while the hands are asking or working (2026-09-09).
+    holdChatOpen: () => { try { return hands?.busy() === true; } catch { return false; } },
   };
+}
+
+/**
+ * The bubble's badge, driven by the hands (2026-09-09): amber "working" while a
+ * tool call runs; when the calls stop and the chat is HIDDEN, red "unread" so the
+ * person knows something landed; cleared when the chat is opened (widgetWindow).
+ * The quiet gap between two calls of one turn is debounced so the dot does not
+ * flip red/amber every couple of seconds. ⛔ Wrapped: decorative, never fatal.
+ */
+let coworkerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+function coworkerActivity(active: number): void {
+  try {
+    if (coworkerIdleTimer) { clearTimeout(coworkerIdleTimer); coworkerIdleTimer = null; }
+    if (active > 0) { setWidgetBadge("working"); return; }
+    coworkerIdleTimer = setTimeout(() => {
+      coworkerIdleTimer = null;
+      try { setWidgetBadge(isChatPanelVisible() ? "none" : "unread"); } catch { /* decorative */ }
+    }, 1500);
+  } catch (err) {
+    diag("coworker-widget", `badge failed: ${String(err)}`);
+  }
+}
+
+/** One-line tray status for the hands' link: "connected" / "not signed in" / "off". */
+function coworkerHandsLabel(): string {
+  try {
+    const s = hands?.link.status();
+    if (!s) return "off";
+    if (s.state === "connected") return `connected (${hands?.status().profile ?? "SAFE"})`;
+    if (s.state === "no_token") return "waiting for sign-in";
+    if (s.state === "error") return `reconnecting (${s.lastError ?? "error"})`;
+    return s.state;
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Start the hands once the main window exists. ⛔ Wrapped: a fault here never reaches the phone. */
+function startHands(): void {
+  if (hands) return;
+  try {
+    hands = startCoworkerHands({
+      app, BrowserWindow, ipcMain, screen, session, shell,
+      portalUrl, preloadPath, assetPath,
+      getSettings: () => settings,
+      writeSettings: (next) => writeSettings(next),
+      isCallActive: () => isPhoneOnCall(),
+      phoneState: () => (latestPhoneStateEnvelope?.payload && typeof latestPhoneStateEnvelope.payload === "object" ? (latestPhoneStateEnvelope.payload as Record<string, unknown>) : null),
+      fullWindow: () => (fullWindow && !fullWindow.isDestroyed() ? fullWindow : null),
+      userAgent: app.userAgentFallback,
+      logFile: path.join(logDir(), "connect.log"),
+      log: (line) => diag("coworker", line),
+      attachDiag: (win, tag) => attachConsoleCapture(win, tag),
+      rebuildTray: () => rebuildTray(),
+      chatAnchor: () => chatPanelBounds(),
+      onApprovalSettled: () => restoreChatPanel(),
+      onActivity: (active) => coworkerActivity(active),
+    });
+    diag("coworker", "hands started");
+    rebuildTray();
+  } catch (err) {
+    diag("coworker", `hands failed to start: ${String(err)}`);
+  }
 }
 
 function toggleCoworkerWidget(): void {
@@ -770,7 +848,8 @@ function registerIpc(): void {
   // a live call always turns a file move into an ask. Nothing here takes a path.
   registerCoworkerHands({
     ipcMain,
-    getProfile: () => settings.coworkerPermissions,
+    // The card-era hands know SAFE/TRUSTED only; AUTONOMOUS is at least TRUSTED for them.
+    getProfile: () => (settings.coworkerPermissions === "AUTONOMOUS" ? "TRUSTED" : settings.coworkerPermissions),
     isCallActive: () => isPhoneOnCall(),
     log: (line) => diag("coworker", line),
   });
@@ -1064,6 +1143,9 @@ if (!gotSingleInstanceLock) {
   // phone-engine window (removing the second phone / double-ring).
   createFullWindow(!shouldStartHidden());
   if (settings.openMiniOnStartup) createMiniWindow(true);
+  // The Coworker's hands link to the agent as soon as the main window can hand
+  // over the session token (the link waits for sign-in on its own).
+  startHands();
   // Restore the floating Coworker bubble if the user had it on. ⛔ Wrapped: the
   // bubble must never be able to stop the app from starting.
   try {
@@ -1107,4 +1189,7 @@ app.on("before-quit", () => {
   // that can move their mouse and that nothing is watching.
   try { stopRemoteSupport(); } catch { /* quitting anyway */ }
   try { stopRemoteDesktop(); } catch { /* quitting anyway */ }
+  // The hands: kill shell children and MCP servers, close the browser, tell the
+  // agent goodbye (best effort, bounded — quitting must not hang on the network).
+  try { void hands?.stop(); } catch { /* quitting anyway */ }
 });

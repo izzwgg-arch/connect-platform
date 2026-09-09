@@ -1,0 +1,201 @@
+<!doctype html>
+<!--
+  Coworker — Settings & Connections (local page, packaged with the app).
+  Permission profile, the link to the agent, MCP servers (add / connect /
+  disconnect / reconnect / enable / disable / remove), recent task history and
+  artifacts. Talks to the main process only through window.coworkerAdmin.
+  No Node, no network: contextIsolation on, sandbox on, CSP below.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;" />
+    <title>Loopcom Coworker — Settings & Connections</title>
+    <style>
+      :root { color-scheme: dark; --bg:#0f1a2c; --panel:#16233a; --panel2:#0f1a2c; --border:#23344f; --text:#e6edf7; --dim:#8b9ab2; --accent:#22a8ff; --ok:#34c27b; --danger:#f06060; --warn:#f0b655; }
+      html, body { margin:0; background:var(--bg); color:var(--text); font: 13px/1.5 "Segoe UI", system-ui, sans-serif; }
+      .wrap { padding: 18px 22px 30px; max-width: 1000px; }
+      h1 { font-size:18px; margin:0 0 4px; } h1 small { color:var(--dim); font-weight:400; font-size:12px; margin-left:8px; }
+      h2 { font-size:14px; margin:22px 0 8px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); }
+      .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+      .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+      .grow { flex:1; min-width:0; }
+      .dim { color:var(--dim); } .ok { color:var(--ok); } .bad { color:var(--danger); } .warn { color:var(--warn); }
+      .pill { font-size:10px; letter-spacing:.04em; text-transform:uppercase; padding:2px 7px; border-radius:999px; border:1px solid var(--border); color:var(--dim); }
+      .pill.connected { color:var(--ok); border-color:var(--ok); } .pill.error, .pill.dead { color:var(--danger); border-color:var(--danger); } .pill.starting { color:var(--warn); border-color:var(--warn); }
+      button { border:1px solid var(--border); background:var(--panel2); color:var(--text); border-radius:8px; padding:6px 10px; font:inherit; font-size:12px; cursor:pointer; }
+      button.primary { background:var(--accent); color:#04121d; border-color:transparent; font-weight:600; }
+      button.danger { color:var(--danger); }
+      button:disabled { opacity:.5; cursor:default; }
+      input, select { background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font:inherit; font-size:12px; }
+      label.opt { display:grid; grid-template-columns:18px 1fr; column-gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:10px; cursor:pointer; }
+      label.opt.on { border-color:var(--accent); }
+      label.opt small { color:var(--dim); display:block; }
+      table { width:100%; border-collapse:collapse; font-size:12px; } th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--border); vertical-align:top; } th { color:var(--dim); font-weight:500; }
+      .never td { color:var(--dim); }
+      .tools { font-size:11px; color:var(--dim); margin-top:4px; word-break:break-word; }
+      .err { color:var(--danger); font-size:12px; }
+      .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size:11px; }
+      .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Loopcom Coworker <small>settings, permissions, connections and history — this computer only</small></h1>
+
+      <h2>Link to the assistant</h2>
+      <div class="card" id="link">…</div>
+
+      <h2>What the Coworker may do on this computer</h2>
+      <div class="card">
+        <div class="grid2" id="profiles"></div>
+        <table style="margin-top:10px">
+          <thead><tr><th>Action</th><th>Safe</th><th>Trusted</th><th>Autonomous</th></tr></thead>
+          <tbody>
+            <tr><td>Read files and folders, Windows info, diagnostics</td><td>Allowed</td><td>Allowed</td><td>Allowed</td></tr>
+            <tr><td>Create, write, move, copy files (your folders + workspace)</td><td>Asks</td><td>Allowed</td><td>Allowed</td></tr>
+            <tr><td>Delete a file or folder</td><td>Asks</td><td>Asks</td><td>Asks</td></tr>
+            <tr><td>Run a PowerShell script</td><td>Asks</td><td>Asks</td><td>Allowed</td></tr>
+            <tr><td>Use the Coworker's own background browser, download files</td><td>Asks</td><td>Allowed</td><td>Allowed</td></tr>
+            <tr><td>Submit a web form</td><td>Asks</td><td>Asks</td><td>Asks</td></tr>
+            <tr><td>Call a connected MCP server's tools</td><td>Asks</td><td>Allowed</td><td>Allowed</td></tr>
+            <tr class="never"><td>Change security, services, network settings; install software; open remote access; touch Windows system folders</td><td>Never</td><td>Never</td><td>Never</td></tr>
+            <tr class="never"><td>Move your mouse or type into your programs</td><td>Never</td><td>Never</td><td>Never</td></tr>
+          </tbody>
+        </table>
+        <p class="dim" style="margin:8px 0 0">The "Never" rows are not settings — no profile, no chat message and no server can switch them on. During a phone call, nothing that could touch audio, network or system settings runs.</p>
+      </div>
+
+      <h2>MCP connections</h2>
+      <div id="servers"></div>
+      <div class="card">
+        <div class="row">
+          <input id="srvId" class="grow" placeholder="id (letters, digits, - _ )" maxlength="64" />
+          <input id="srvName" class="grow" placeholder="Display name" maxlength="80" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input id="srvCommand" class="grow" placeholder="Command or path to a .js server (e.g. C:\...\server.js, or npx)" maxlength="1000" />
+          <input id="srvArgs" class="grow" placeholder="Arguments, space separated (quotes allowed)" maxlength="2000" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="add">Add and connect</button>
+          <span class="err" id="addErr"></span>
+        </div>
+      </div>
+
+      <h2>Recent activity on this computer</h2>
+      <div class="card" id="history">…</div>
+      <h2>Artifacts</h2>
+      <div class="card" id="artifacts">…</div>
+    </div>
+    <script>
+      (function () {
+        var api = window.coworkerAdmin;
+        if (!api) { document.body.innerHTML = '<p class="err" style="padding:20px">Bridge missing — this page only works inside the Loopcom app.</p>'; return; }
+        var $ = function (id) { return document.getElementById(id); };
+        function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+        function fmtAgo(iso) { if (!iso) return "never"; var s = Math.round((Date.now() - new Date(iso).getTime()) / 1000); if (s < 60) return s + "s ago"; if (s < 3600) return Math.round(s / 60) + "m ago"; return Math.round(s / 3600) + "h ago"; }
+        function splitArgs(s) { var out = [], m, re = /"([^"]*)"|'([^']*)'|(\S+)/g; while ((m = re.exec(s))) out.push(m[1] != null ? m[1] : m[2] != null ? m[2] : m[3]); return out; }
+
+        function renderLink(st) {
+          var box = $("link"); box.innerHTML = "";
+          var row = el("div", "row");
+          var pill = el("span", "pill " + (st.link.state === "connected" ? "connected" : st.link.state === "error" ? "error" : "starting"), st.link.state.replace("_", " "));
+          row.appendChild(pill);
+          row.appendChild(el("span", "grow", (st.link.state === "connected" ? "Linked to the assistant as the signed-in user · " : st.link.state === "no_token" ? "Not signed in — the hands do not exist until the Loopcom app is signed in · " : (st.link.lastError ? "Last problem: " + st.link.lastError + " · " : "")) + "last poll " + fmtAgo(st.link.lastPollAt) + " · calls handled " + st.link.calls));
+          var b = el("button", null, "Reconnect now"); b.onclick = function () { api.relink().then(refresh); };
+          row.appendChild(b);
+          var c = el("button", "danger", "Cancel running task"); c.onclick = function () { api.cancel().then(refresh); };
+          row.appendChild(c);
+          box.appendChild(row);
+          box.appendChild(el("p", "dim mono", "workspace " + st.workspace + " · app " + st.appVersion + " · tools announced " + st.tools + (st.activeCalls.length ? " · running: " + st.activeCalls.map(function (a) { return a.name; }).join(", ") : "") + (st.pendingApprovals.length ? " · waiting for your answer: " + st.pendingApprovals.map(function (a) { return a.tool; }).join(", ") : "")));
+        }
+        function renderProfiles(st) {
+          var box = $("profiles"); box.innerHTML = "";
+          [["SAFE", "Safe", "Reads freely. Asks before it writes, runs anything or opens a browser."], ["TRUSTED", "Trusted", "Writes in your folders, browses and downloads without asking. Still asks before PowerShell, deleting or submitting forms."], ["AUTONOMOUS", "Autonomous", "Also runs PowerShell without asking. Never: security, services, network, installs, deletes without asking."]].forEach(function (p) {
+            var lab = el("label", "opt" + (st.profile === p[0] ? " on" : ""));
+            var r = el("input"); r.type = "radio"; r.name = "profile"; r.checked = st.profile === p[0];
+            r.onchange = function () { api.setProfile(p[0]).then(refresh); };
+            var d = el("div"); d.appendChild(el("b", null, p[1])); d.appendChild(el("small", null, p[2]));
+            lab.appendChild(r); lab.appendChild(d); box.appendChild(lab);
+          });
+        }
+        function renderServers(st) {
+          var box = $("servers"); box.innerHTML = "";
+          if (!st.mcp.length) box.appendChild(el("div", "card dim", "No MCP servers configured. Add one below — for example the Loopcom acceptance test server, or any MCP server that speaks stdio."));
+          st.mcp.forEach(function (s) {
+            var card = el("div", "card");
+            var row = el("div", "row");
+            row.appendChild(el("span", "pill " + s.state, s.state));
+            var nm = el("b", null, s.name + " "); nm.appendChild(el("span", "dim mono", "(" + s.id + ")")); row.appendChild(nm);
+            row.appendChild(el("span", "grow dim mono", s.command + (s.args && s.args.length ? " " + s.args.join(" ") : "")));
+            function btn(label, fn, cls) { var b = el("button", cls || null, label); b.onclick = function () { b.disabled = true; fn().then(refresh, refresh); }; return b; }
+            if (s.enabled) {
+              if (s.state === "connected") row.appendChild(btn("Disconnect", function () { return api.mcp("disconnect", s.id); }));
+              else row.appendChild(btn("Connect", function () { return api.mcp("connect", s.id); }, "primary"));
+              row.appendChild(btn("Reconnect", function () { return api.mcp("reconnect", s.id); }));
+              row.appendChild(btn("Disable", function () { return api.mcp("disable", s.id); }));
+            } else {
+              row.appendChild(btn("Enable", function () { return api.mcp("enable", s.id); }, "primary"));
+            }
+            row.appendChild(btn("Remove", function () { return api.mcp("remove", s.id); }, "danger"));
+            card.appendChild(row);
+            if (s.error) card.appendChild(el("div", "err", friendlyError(s.error)));
+            if (s.serverInfo && s.serverInfo.name) card.appendChild(el("div", "dim", "Server: " + s.serverInfo.name + " " + (s.serverInfo.version || "") + (s.pid ? " · pid " + s.pid : "") + " · calls " + s.calls));
+            card.appendChild(el("div", "tools", s.tools.length ? "Tools (" + s.tools.length + "): " + s.tools.map(function (t) { return t.name; }).join(", ") : (s.state === "connected" ? "This server exposes no tools." : "")));
+            box.appendChild(card);
+          });
+        }
+        function friendlyError(e) {
+          if (/ENOENT|could not start/i.test(e)) return "The command could not be started — check the path or program name. (" + e + ")";
+          if (/timed out/i.test(e)) return "The server did not answer in time. It may be stuck or not speaking MCP over stdio. (" + e + ")";
+          if (/exited/i.test(e)) return "The server process stopped. (" + e + ")";
+          if (/handshake|initialize|JSON|parse/i.test(e)) return "The server answered in a way Loopcom could not read (malformed response). (" + e + ")";
+          return e;
+        }
+        function renderHistory(st) {
+          var box = $("history"); box.innerHTML = "";
+          if (!st.history.calls.length) { box.appendChild(el("span", "dim", "Nothing yet.")); }
+          else {
+            var t = el("table"); var tb = el("tbody");
+            var hd = el("tr"); ["When", "Tool", "Outcome", "Detail"].forEach(function (h) { hd.appendChild(el("th", null, h)); }); t.appendChild(hd);
+            st.history.calls.slice(0, 40).forEach(function (c) {
+              var tr = el("tr");
+              tr.appendChild(el("td", "dim", new Date(c.ts).toLocaleTimeString()));
+              tr.appendChild(el("td", "mono", c.tool || c.kind));
+              tr.appendChild(el("td", c.outcome === "done" || c.outcome === "approved" ? "ok" : c.outcome === "denied" || c.outcome === "failed" ? "bad" : "dim", c.outcome || ""));
+              tr.appendChild(el("td", "dim", (c.summary || "") + (c.durationMs ? " · " + c.durationMs + " ms" : "")));
+              tb.appendChild(tr);
+            });
+            t.appendChild(tb); box.appendChild(t);
+          }
+          var ab = $("artifacts"); ab.innerHTML = "";
+          if (!st.history.artifacts.length) ab.appendChild(el("span", "dim", "No artifacts registered yet."));
+          st.history.artifacts.forEach(function (a) {
+            if (!a.artifact) return;
+            var row = el("div", "row");
+            row.appendChild(el("b", null, a.artifact.label));
+            row.appendChild(el("span", "grow dim mono", a.artifact.path));
+            var o = el("button", null, "Open"); o.onclick = function () { api.openPath(a.artifact.path, "open"); };
+            var f = el("button", null, "Show in folder"); f.onclick = function () { api.openPath(a.artifact.path, "folder"); };
+            row.appendChild(o); row.appendChild(f); ab.appendChild(row);
+          });
+        }
+        function refresh() {
+          return api.getState().then(function (st) { renderLink(st); renderProfiles(st); renderServers(st); renderHistory(st); }).catch(function (e) { $("link").textContent = "Could not read the Coworker state: " + e; });
+        }
+        $("add").onclick = function () {
+          $("addErr").textContent = "";
+          var cfg = { id: $("srvId").value.trim(), name: $("srvName").value.trim(), command: $("srvCommand").value.trim(), args: splitArgs($("srvArgs").value), enabled: true };
+          api.mcp("add", cfg.id, cfg).then(function (r) {
+            if (r && r.error) { $("addErr").textContent = r.message || r.error; return; }
+            $("srvId").value = ""; $("srvName").value = ""; $("srvCommand").value = ""; $("srvArgs").value = "";
+            refresh();
+          }).catch(function (e) { $("addErr").textContent = String(e); });
+        };
+        refresh();
+        setInterval(refresh, 4000);
+      })();
+    </script>
+  </body>
+</html>

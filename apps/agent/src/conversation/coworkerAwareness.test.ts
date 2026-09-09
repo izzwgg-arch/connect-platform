@@ -1,13 +1,16 @@
 /**
  * The assistant knows where it is when it is inside the Coworker bubble, and both
- * prompts know the Coworker exists and what it cannot do yet.
+ * prompts know the Coworker exists and — since 2026-09-09 — that it has HANDS when
+ * the person's Loopcom Windows app is linked (apps/agent/src/coworker).
  *
  * 2026-09-02, the first live question through the bubble: "Can you organize files
  * on my computer?" — answered as if no such feature existed. The engine saw only
  * "the Desktop page" (the bubble's window loads /desktop/coworker), and neither
- * prompt mentioned the Coworker at all. These read the engine SOURCE because a
- * prompt sentence and a viewing-block branch are properties no unit test of a
- * helper can see.
+ * prompt mentioned the Coworker at all. 2026-09-09: the prompts still said the
+ * Coworker "cannot do it yet" while the computer_* tools were on the table — a
+ * capability the prompt denies is not a capability. These read the engine SOURCE
+ * because a prompt sentence and a viewing-block branch are properties no unit test
+ * of a helper can see.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -30,14 +33,16 @@ test("the coworker chat path matches what the desktop app loads", () => {
   assert.match(desktop, /export const CHAT_ROUTE = "\/desktop\/coworker"/);
 });
 
-test("the viewing block knows the bubble, for customers AND for staff", () => {
+test("the viewing block knows the bubble, and tells the truth for BOTH link states", () => {
   const view = stripComments(code.slice(code.indexOf("const inCoworker ="), code.indexOf("const staffMode =")));
   assert.match(view, /ctx\.viewingPath\.startsWith\(COWORKER_CHAT_PATH\)/);
   assert.match(view, /talking to you through the Loopcom Coworker/);
-  assert.match(view, /propose one of the Coworker's allowlisted computer tasks with coworker_task/, "the customer branch must name the tool");
-  assert.match(view, /runs only after THEY press it/, "the customer branch must say nothing runs without the press");
-  assert.match(view, /Anything beyond that list is not built yet/, "the staff branch must state the build fact");
-  assert.match(view, /pass the exact request to the Connect team/, "a customer's computer task must be recorded");
+  assert.match(view, /\? handsOn\s*\?/, "the bubble branch forks on whether the desktop is linked");
+  assert.match(view, /Their Loopcom app is CONNECTED and the computer_\* tools below run on that computer/, "linked: act");
+  assert.match(view, /Their Loopcom app is NOT connected to this chat right now/, "not linked: say so");
+  assert.match(view, /Do not offer scripts or manual steps unless they ask/);
+  assert.doesNotMatch(view, /coworker_task/, "the card-era tool is no longer what the bubble offers");
+  assert.doesNotMatch(view, /not built yet|cannot do yet/, "no branch may deny a capability the tools provide");
   assert.ok(!/They have the "\$\{String\(ctx\.viewingPage\)[^`]*Loopcom Coworker/.test(view), "the page wording must not leak into the coworker branch");
 });
 
@@ -46,22 +51,26 @@ test("the coworker branch is checked BEFORE the page branch, so the bubble is ne
   assert.ok(view.indexOf("inCoworker") < view.indexOf("ctx.viewingPage\n") || view.indexOf("inCoworker") < view.indexOf(": ctx.viewingPage"), "page branch runs first");
 });
 
-test("the customer prompt says the Coworker exists and what it cannot do yet", () => {
+test("the customer prompt says the Coworker exists, has hands when linked, and acts instead of instructing", () => {
   const p = promptBody("SYSTEM_PROMPT");
   assert.match(p, /THE LOOPCOM COWORKER/);
   assert.match(p, /Show Coworker Bubble/);
-  assert.match(p, /call the coworker_task tool/);
-  assert.match(p, /NOTHING runs until they\npress the button on that card/);
-  assert.match(p, /Never claim a task on their computer was done, started or scheduled\nunless my_computer_tasks says so/);
-  assert.match(p, /pass the exact request to\s+the Connect team/);
+  assert.match(p, /you have HANDS on their\ncomputer: tools named computer_\*/);
+  assert.match(p, /never answered with instructions for the person to do it\nthemselves/);
+  assert.match(p, /the app is not connected: say the Coworker's hands are\nnot connected right now/);
+  assert.match(p, /Never claim a task on their computer was done\nunless a tool result shows it/);
+  assert.doesNotMatch(p, /coworker_task|my_computer_tasks/, "the card-era tools are not what the prompt teaches any more");
+  assert.doesNotMatch(p, /cannot do\s+yet/);
 });
 
-test("the staff prompt says the Coworker exists and states the build fact without the customer refusals", () => {
+test("the staff prompt says the Coworker has hands and that the server-side 'cannot write files' rule is about the SERVER", () => {
   const p = promptBody("STAFF_SYSTEM_PROMPT");
   assert.match(p, /THE LOOPCOM COWORKER/);
-  assert.match(p, /the FIRST hands — three allowlisted tasks/);
-  assert.match(p, /never that the task is done/);
+  assert.match(p, /you have HANDS on that computer: computer_\* tools/);
+  assert.match(p, /is about the SERVER and the codebase; on the owner's own computer/);
+  assert.match(p, /do the work and report the results/);
   assert.ok(!p.toLowerCase().includes("you cannot do it yet"), "the staff prompt must not regrow the customer refusal");
+  assert.doesNotMatch(p, /Nothing else on the computer is possible yet/);
 });
 
 test("a request the prompt routes to the team is phrased so the escalation detector catches it", () => {
