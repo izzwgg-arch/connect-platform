@@ -1,3 +1,21 @@
+## ⛔ AGENT HANDOFF — Remote Desktop home: the "Connect by ID" button is a NEUTRAL `rd-btn` now, not the sky-blue `rd-btn--primary` (2026-09-09) — READ FIRST before restyling any button on `/remote-desktop`
+
+(**One className, no CSS change, portal-only deploy.** Izzy, 2026-09-09, with a screenshot of
+the "Connect to another computer" card: *"match the color of the button to the other buttons"*.)
+
+- The full-width **Connect** button under Connect ID / Password in
+  `apps/portal/app/(platform)/remote-desktop/page.tsx` was `rd-btn rd-btn--primary rd-btn--block`
+  (`--accent` #22a8ff fill). Every other button in that column — **Copy**, **Create a password for
+  them**, **Download the installer**, **Share this computer**, **Remove** — is the neutral `rd-btn`
+  (`--panel-2` fill, `--border` edge). Dropped `rd-btn--primary` so it matches them.
+- ⛔ Left alone on purpose: the per-machine **Connect** in each machine card's footer, the
+  **Continue** in the connect modal, and the primaries on `this-computer` and `session/[id]`
+  are still `rd-btn--primary`. Izzy asked for the one button in the screenshot; restyle the
+  others only if he says so.
+- `.rd-btn*` rules live in `apps/portal/app/globals.css` ~L39049 (`rd-btn`, `--primary`,
+  `--danger`, `--ghost`, `--sm`, `--block`). Nothing there changed.
+- Deploy status is in the commit/deploy bullets below this line once done.
+
 ## ⛔ AGENT HANDOFF — the dev box (VMI3409497) runs desktop `0.1.17-rc.9` now, REBUILT HERE from a clean export of HEAD and installed with `/S`; the fleet feed is UNTOUCHED at 0.1.16 (2026-09-09) — READ FIRST before "the latest desktop build", before building the desktop app on this machine, or before believing `apps/desktop/release/` exists
 
 (**No code change, no deploy, no feed change.** Izzy, 2026-09-09: *"install the latest loopcom

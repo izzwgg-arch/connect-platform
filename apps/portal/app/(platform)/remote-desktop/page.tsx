@@ -296,7 +296,7 @@ function RemoteDesktopHome() {
                   <span>Play their sound here and use my microphone there<small>Turn off for silent viewing.</small></span>
                 </label>
                 {idError && <p className="rd-error">{idError}</p>}
-                <button type="button" className="rd-btn rd-btn--primary rd-btn--block" disabled={idBusy} onClick={() => void submitById()}>{idBusy ? "Connecting…" : "Connect"}</button>
+                <button type="button" className="rd-btn rd-btn--block" disabled={idBusy} onClick={() => void submitById()}>{idBusy ? "Connecting…" : "Connect"}</button>
               </>
             )}
           </div>
