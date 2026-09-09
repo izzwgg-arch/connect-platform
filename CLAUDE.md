@@ -14,7 +14,12 @@ the "Connect to another computer" card: *"match the color of the button to the o
   others only if he says so.
 - `.rd-btn*` rules live in `apps/portal/app/globals.css` ~L39049 (`rd-btn`, `--primary`,
   `--danger`, `--ghost`, `--sm`, `--block`). Nothing there changed.
-- Deploy status is in the commit/deploy bullets below this line once done.
+- ✅ **DEPLOYED + container-verified 2026-09-09:** commit `635da8ff`, `ssh connect … bash scripts/deploy-direct.sh
+  portal --commit 635da8ff` (dry-run first, no other deploy running; blue/green, nginx back on 3000).
+  `app-portal-1` `/app/.build-commit` = `635da8ff`, `curl 127.0.0.1:3000/login` → 200 in 29 ms; the built
+  route chunk `static/chunks/app/(platform)/remote-desktop/page-*.js` no longer contains
+  `rd-btn rd-btn--primary rd-btn--block` and does contain `rd-btn rd-btn--block`. ⏳ NOT PROVEN: a
+  logged-in look at `/remote-desktop` in light + dark.
 
 ## ⛔ AGENT HANDOFF — the dev box (VMI3409497) runs desktop `0.1.17-rc.9` now, REBUILT HERE from a clean export of HEAD and installed with `/S`; the fleet feed is UNTOUCHED at 0.1.16 (2026-09-09) — READ FIRST before "the latest desktop build", before building the desktop app on this machine, or before believing `apps/desktop/release/` exists
 
