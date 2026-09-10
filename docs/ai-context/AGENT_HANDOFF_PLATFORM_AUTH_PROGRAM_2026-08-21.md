@@ -733,3 +733,62 @@ header — use `read_page`. The NY DOS record is readable without a browser sess
 `POST https://apps.dos.ny.gov/PublicInquiryWeb/api/PublicInquiry/GetEntityRecordByID`
 with `{SearchID:"8001109",EntityName:"LOOPCOM LLC",AssumedNameFlag:"false"}` from a tab
 on `apps.dos.ny.gov`.
+
+## 10. UPDATE 2026-09-10 — RESUBMITTED with documents; status "In review"
+
+Izzy: *"I confirmed the email from Facebook. What's next?"* → *"do it."* Driven in his
+real Chrome (the profile logged into Facebook as him — the only one connected that
+morning; `switch_browser` again never rendered a prompt, `select_browser` on the sole
+deviceId worked). Three Meta writes, all his instruction: the email confirmation link,
+the Business-details address, and the verification draft. He typed the EIN and uploaded
+the documents himself and pressed submit.
+
+### 10a. There was NO rejection email — the "read the email for the reason" plan was dead
+
+izzy@loopcom.net (Gmail account index `/u/4/` in that Chrome — `?authuser=` resolves it)
+holds, from Meta, only: *Verify your business email* (Aug 25, a code), *Confirm your
+business email* (Aug 16 and Sep 9, the confirmation link). `in:anywhere` incl. Spam:
+nothing else. **Meta does not email a field-level rejection reason.** The two known
+defects in §9b stand as the whole explanation.
+
+### 10b. "I confirmed it yesterday" — and Meta still read UNCONFIRMED
+
+Business info → Profile contact info still showed *"Confirm email address — Follow the
+link…"* on a fresh load a day after he clicked. The link
+(`business.facebook.com/verify/email/checkpoint/?token=…`) only counts when the browser is
+logged into the Facebook account that owns the portfolio; opened from this profile it
+landed on the People page and the box flipped to a plain `izzy@loopcom.net`. ⛔ Rule:
+**a Meta email-confirmation link is bound to the SESSION, not the mailbox** — judge it by
+the Business info page afterwards, never by "I clicked it".
+
+### 10c. Address fixed in BOTH places
+
+- Business info → Business details: `33 NY 17M` / `SUITE C` / Harriman / New York / 10926
+  (was `33 Route 17M`, line 2 empty). Saved and read back off the page.
+- The wizard draft ("Started on Sep 09 — Continue"): country US → **Private Company** →
+  name `Loopcom LLC`, alt name `Loopcom` (new) → street `33 NY 17M`, line 2 `SUITE C` (was
+  `suit c`). ⛔ The street field is an autocomplete search box; it offered
+  *"33 State Route 17M, Harriman, New York, 10926-3244"* — deliberately NOT picked, the
+  typed value stays so it matches the DOS record character for character. Escape does not
+  close that list; it is harmless.
+- ⛔ The EIN field was left to Izzy — the agent does not type government-issued IDs into
+  forms, and said so three times (explicit permission does not change it). He typed it.
+
+### 10d. "We couldn't find your business" is EXPECTED, not a failure
+
+After the details step the wizard reads *"We couldn't find your business. Upload
+documents and confirm your connection to Loopcom LLC"* with Email (recommended) / Phone
+call / SMS / WhatsApp / Domain verification. Meta's record lookup runs against
+third-party registries; a 3-week-old LLC (filed 08-20, D-U-N-S 08-28) is not in them yet.
+That screen IS the documents route from §9c step 4. Advised: Email → izzy@loopcom.net,
+documents = NY DOS filing receipt + IRS CP 575; skip Domain verification (loopcom.net is
+not verified under Brand safety → Domains in this portfolio).
+
+### 10e. Result
+
+Security Center → *Verification for Loopcom LLC*: **"Thank you for submitting your
+information. It should take about 2 business days… — In review"** (read 2026-09-10
+~07:00 ET). ⏳ NOT PROVEN: the outcome. Acceptance = "Verified" in Business info, then both
+WhatsApp numbers moving off Pending (1–2 days after), then Tech Provider access
+verification can start (deadline 11/8/2026). If it is rejected again, the next lever is
+the documents themselves (which ones he uploaded is not recorded here — ask him).

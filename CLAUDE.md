@@ -8,11 +8,25 @@
 - ✅ **Plan v3 built and staged:** `docs/regulatory/LoopCom_Robocall_Mitigation_Plan.{html,pdf}` = v2 text verbatim + Filer ID 839208 in the header table + a one-line revision footer (headless-Chrome render, PyMuPDF-verified, 3 pages). Uploaded through **Revise** on the live RMD record as `LoopCom_Robocall_Mitigation_Plan_v3_2026-09-10.pdf` — the single-attachment upload REPLACES the old PDF in place (no delete step). Every copied field verified intact: `no_stir_shaken=true`, exemption text present, confidential=false. ✅ **SUBMITTED by Izzy 2026-09-10** — "My Filings" lists `LoopCom_Robocall_Mitigation_Plan_v3_2026-09-10.pdf`; the RMD record is current. Nothing else is owed to the FCC for the Filer ID.
 - ⛔ RMD sign-in = Okta + **Okta Verify push to Izzy's phone**; the "page has timed out" screen means sign in at `fcc-ext.okta.com` first, then reopen `/rmd`. ⛔ `javascript_tool` results containing sys_id-shaped hex are BLOCKED by the redactor — return labels only, replace `_` in names.
 
-## ⛔ AGENT HANDOFF — Meta business verification was REJECTED: the LLC was 5 days old when it was submitted, the address said "suit c", and the contact email is unconfirmed (2026-09-09) — READ FIRST before resubmitting Meta verification, before typing an address into any Meta form, or for "the WhatsApp numbers are still Pending"
+## ⛔ AGENT HANDOFF — Meta business verification: REJECTED 09-09 (5-day-old LLC, "suit c", unconfirmed email) → RESUBMITTED WITH DOCUMENTS 2026-09-10, now "In review" — READ FIRST before touching Meta verification, before typing an address into any Meta form, or for "the WhatsApp numbers are still Pending"
 
-Full detail: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUTH_PROGRAM_2026-08-21.md` §9**
+Full detail: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUTH_PROGRAM_2026-08-21.md` §9 + §10**
 (**Read-only in Izzy's Chrome — no Meta setting changed, nothing uploaded, NOTHING
 SUBMITTED.** Memory: [[whatsapp-numbers-pending-business-verification]].)
+
+- ✅✅ **RESUBMITTED 2026-09-10 (handoff §10) — Security Center reads "In review… about 2 business days."**
+  Done in Izzy's Chrome on his "do it": the Sep 9 confirmation link opened from the LOGGED-IN Facebook
+  session (his own click a day earlier never registered — ⛔ that link is bound to the SESSION, not the
+  mailbox; judge it by the Business info page, never by "I clicked it"); Business details AND the wizard
+  draft both fixed to `33 NY 17M` / `SUITE C`; type Private Company; alt name `Loopcom`. ⛔ **No rejection
+  email ever existed** in izzy@loopcom.net (Spam included) — Meta sends no field-level reason; the two
+  §9b defects are the whole explanation. ⛔ **"We couldn't find your business" on the connection step is
+  EXPECTED for a 3-week-old LLC** (third-party registries lag) — it is the documents route, not a
+  failure; Email method + DOS filing receipt + CP 575. ⛔ The EIN and the documents were Izzy's own
+  keystrokes (the agent does not type government IDs, permission or not). ⛔ The street box is an
+  autocomplete; its "33 State Route 17M" suggestion was deliberately NOT picked. ⏳ NOT PROVEN: the
+  outcome — acceptance is "Verified" on Business info, then the two WhatsApp numbers leaving Pending,
+  then Tech Provider access verification (deadline 11/8/2026). Everything below is the 09-09 history.
 
 - ⛔ **Meta's screen says only "Couldn't be verified — your submission has been rejected.
   You can upload new documents or submit your original ones for another review."** No
