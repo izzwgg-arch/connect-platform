@@ -165,3 +165,178 @@ Desktop: resident multi-interface join; port-in-use vs cannot-listen; permission
 
 ## 13. MD to update at the end
 CLAUDE.md (new ⛔ section + correct the "§20/§21" bullets), `AGENT_HANDOFF_DESK_PHONE_SETUP_WIZARD_2026-08-21.md` (new §), memory: `yealink-pnp-hands-a-reset-phone-its-folder.md` (power-cycle is the mechanism; no hour halt), new `grandstream-adapter-captured-off-real-devices.md`, new `app-asks-windows-for-firewall-permission.md`.
+
+---
+
+## 14. DONE 2026-09-10 — the vendor catalogue and an adapter for every one of the 427 models
+
+Commits `830101a8` + `a98a70f1` on `feat/ivr-migration-takeover`, pushed.
+**Shared package only — nothing is wired into the wizard, the desktop app or the server yet, and
+nothing is deployed.** Proof page for Izzy:
+<https://claude.ai/code/artifact/c233fc3a-fa7e-469b-a879-5304a2bda80f>
+
+Izzy's scope, final and verbatim: *"it doesn't matter. It's for the future as well. Every single
+phone should be able to be provisioned automatically through the automatic wizard, so every single
+phone needs to have an adapter, and the template should be connected to it. all 427 should have"* —
+plus *"I want you to come back with proof to me that every single one has an adapter."*
+
+### 14a. What shipped
+
+Two layers, deliberately separated, because they answer different questions and one of them must
+never be edited by hand.
+
+- **`packages/shared/src/deskPhoneSetup/vendorCatalog.generated.ts`** — the PBX's own truth.
+  20 brands, **427 models** with their `provisioning.phone_models.id`, **1,143 OUI prefixes**, the
+  `provisioning_path` key each brand's template writes, and **per model** two independent facts:
+  `hasBaseTemplate` and `templateWritesProvisioningPath`.
+- **`scripts/deskPhoneSetup/gen-vendor-catalog.py`** + `data/` — the generator and the three
+  read-only dumps it reads. Re-run it and the catalogue regenerates byte-identically; it asserts
+  its own invariants and **refuses to write** if the PBX's data has moved (see 14c).
+- **`packages/shared/src/deskPhoneSetup/vendorAdapters.ts`** — the hand-written half. Per brand:
+  the OEM where the box lies about who built it, the mechanisms **in the order the driver should
+  try them**, the PnP profile, default credentials, the literal HTTP paths that reboot / re-read /
+  set the URL, DHCP options, config filenames, a **confidence**, and a **gaps** list in plain words.
+- **`packages/shared/src/deskPhoneSetup/vendorCoverage.test.ts`** — 17 checks, registered in
+  `packages/shared/package.json`. Shared suite 597/597, typecheck 0.
+
+### 14b. THE RULE the adapter file exists to protect
+
+`confidence` is `proven | documented | inferred | unknown`, and **`proven` means somebody watched
+it work on a real handset on this platform**. Today that is **Yealink alone**. The test pins the
+proven set to exactly `["yealink"]`, forbids a `proven` HTTP endpoint sitting on an unproven brand,
+and fails any unproven adapter that lists no gaps. **A label cannot be upgraded without changing
+that test in the same commit as the evidence.**
+
+⛔ And none of it changes the older rule: a phone is Ready because **Asterisk says it registered**,
+never because an adapter step returned success.
+
+### 14c. ⛔ Four gaps the reconciliation found — named in code, not averaged away
+
+Reconciling `provisioning.phone_models` against `base_templates/` **in both directions** is what
+surfaced these. The generator hard-codes the known set and **throws if it changes**, so the gap can
+never widen silently.
+
+1. **`Gigaset P820 IP PRO` (id 407) has a catalogue row and NO template on disk.** Its neighbours
+   p810 / p810b / p825 / p850w all have one. So it is **426 of 427 renderable, not 427**. Fixing it
+   is one folder on the PBX and is Izzy's call.
+2. **`base_templates/atcom/a20/` matches no catalogue row** (99 KB, dated 2024). Unreachable from
+   the database side — nothing can ever be pointed at it. The DB has a20lte/a20w/a20wac but no
+   plain a20.
+3. **`0c383e` is registered to BOTH Fanvil and Attimo.** That is the strongest evidence we have
+   that Attimo is a Fanvil rebrand, and it means a MAC can never name which. `vendorsForMac`
+   returns **both**; `vendorForMac` returns **null** rather than choosing.
+4. **Two manufacturer OUI blocks are missing from `provisioning.brand_macs`:** Flyingvoice's own
+   `789912` (registered 2024 — the table only holds `0021f2`, the Easy3Call ODM block on older
+   stock) and Snom's second block `1c7126`. **Current-production stock of either brand is not
+   recognised by MAC at all.** Two rows, no code.
+
+### 14d. The numbers, and what each one means
+
+| | |
+|---|---|
+| Models in the catalogue | **427** across 20 brands |
+| Models with an adapter | **427** — checked by walking the catalogue |
+| Models the PBX can render | **426** (gap 1 above) |
+| Templates that also write the URL back | **359** — the other 67 are pointed once and remember it |
+| Models drivable from the office LAN | **396** |
+| Models whose brand answers the boot-time multicast | **369** |
+| Proven on a real handset | **82** (Yealink) |
+| Documented by the manufacturer | **333** across 14 brands |
+| Inferred from the template dialect | **10** (Attimo 4, ClearlyIP 3, LVSwitches 3) |
+| Nothing published | **2** (Nurivoice 1, Hanyang Digitech 1) |
+
+⛔ **"Template does not write the URL" is NOT "cannot be provisioned"** — they are separate stored
+fields for a reason. All 17 Aastra-Mitel models are in that group, which is exactly why that
+brand's `templateProvisioningKey` is `null`. Also in it: the 23 older Polycom SoundPoint/Edge
+models, the 7 Dinstar DAG gateways, 6 Gigaset DECT bases, 13 Sangoma A/D/P, 1 Snom DECT base.
+
+⛔ **31 models across four brands (Alcatel-Lucent 15, Dinstar 14, Nurivoice 1, Hanyang 1) have no
+mechanism a computer on the LAN can drive at all.** `hasLocallyDrivableMechanism()` is what the
+wizard must consult **before it shows a progress bar** — the alternative is pretending to work on
+a phone we cannot touch. The test pins that list.
+
+### 14e. What the research established (five agents)
+
+The single most useful finding: **one PnP responder covers most of the fleet.** Yealink, Snom,
+VTech ET6xx, Fanvil, Htek, Sangoma S-series, Atcom, Flyingvoice, Gigaset and (inferred) Attimo all
+send a SIP `SUBSCRIBE` for `Event: ua-profile` to **224.0.1.75:5060** at boot and obey a `NOTIFY`
+carrying `Content-Type: application/url` with the URL as the body — 369 of the 427 models.
+
+⛔ **The `Event` header cannot identify the model.** Snom and VTech both send `vendor="OEM"
+model="OEM"`; Fanvil sends `vendor="Fanvil" model="VOIP PHONE"`; Atcom sends `vendor="ATCOM"
+model="ATCOM"`. **Recognise the brand by OUI, not by the SUBSCRIBE.**
+
+Per-brand facts worth not re-deriving:
+
+- **Htek is the OEM behind the Sangoma S-series** (its MACs are Hanlong's `001fc1`) and behind
+  ClearlyIP (identical `P237` template key). Action URI `GET /Phone_ActionURL&key=Reboot|AutoP`,
+  admin/admin.
+- **Sangoma is two unrelated platforms in one brand.** S-series = Htek. A/D/P-series = Sangoma's
+  own (Digium heritage): **mDNS `_digiumproxy._udp`**, SIP NOTIFY `check-sync`, `<mac>.cfg`,
+  password **789** not admin — and ⛔ **its web UI locks once provisioned; only a factory reset
+  gets it back.**
+- **Gigaset reads DHCP option 114, not 66.** A network configured for every other brand will not
+  reach it. No HTTP API at all.
+- **Atcom's action URI is NOT a cold-start lever** — it is gated by the phone's own caller
+  allow-list, and the first request from an unlisted address makes the **handset** ask a person to
+  allow remote control. PnP is the only cold path. There is no `AutoP` key; REBOOT is the only one.
+- **Flyingvoice is a hybrid**: Yealink's exact filename scheme (`<mac>.boot`, `y000000000000.cfg`,
+  with a published fetch order) with Fanvil's action-URI path (`/cgi-bin/ConfigManApp.com?key=AutoP`
+  — and `AutoP` there needs **no reboot**). Also honours SIP NOTIFY `check-sync;reboot=true`.
+- **Fanvil has no documented HTTP call that SETS the URL** — only reboot / re-read. The URL must
+  arrive by PnP or DHCP.
+- **Grandstream randomises the admin password on a sticker** on everything built since 2017, so its
+  HTTP paths need the customer to read it off the phone. Sources disagree on port (5060 vs 5080)
+  and content type (`application/url` vs `application/x-gs-ucm-url`) — **the listener must accept
+  both rather than pick one.**
+- **Polycom UCS 5.9.7 and later force the `456` password to change at first login**, so a phone
+  that has ever been switched on may refuse the factory credentials.
+- **Cisco MPP usually ships with web administration disabled**; the SPA generation's
+  `GET /admin/resync?<url>` both points and fetches in one request.
+- **Attimo is almost certainly a Fanvil rebrand** — a Brazilian operator that brands hardware
+  rather than building it; its PBX template writes Fanvil's own `Flash Server IP` key, and the PBX
+  gives it Fanvil's OUI.
+
+⛔ **Cross-check that validated everything:** the PBX's own `brand_macs` table agrees with the
+manufacturers' IEEE registrations on every block the research checked — `808287` Atcom, `001fc1`
+Htek, `0c383e` Fanvil, `005058` Sangoma, `000413` Snom, `7c2f80` Gigaset, `0021f2` Flyingvoice's
+ODM block. Two independent sources, same answer.
+
+### 14f. Traps paid for while building this
+
+- ⛔ **`provisioning.brand_macs` mixes formats.** Most rows are bare 6-hex; the rows added later
+  carry colons (`EC:74:D7`); two ClearlyIP rows are IEEE **MA-M/MA-S** assignments **7 and 9 hex
+  digits long**. Normalise to lowercase hex with no separators and match by **prefix**, or 10 rows
+  are silently dropped and two brands stop being recognised.
+- ⛔ **Bash heredocs here turn an escaped newline inside a Python string into a REAL newline**,
+  which produced an unterminated string literal and a half-patched generator that ran clean and
+  wrote nothing new. Write any file containing escapes with the editor, never a heredoc. It bit
+  again writing this very section, on the content's own quoting.
+- ⛔ **A generator that "succeeds" is not a generator that wrote what you asked.** The first patched
+  version printed its success line while three of its writer edits had silently failed to apply —
+  caught only by grepping the OUTPUT for the new field.
+- ⛔ The template scan must count **models**, not template directories: `base_templates` also holds
+  the `atcom/a20` orphan, which writes `provisioning_path` and belongs to no catalogue row. That
+  one row is the difference between 360 and 359.
+- ⛔ `git commit -F - -- <paths>` commits **only** the paths in the pathspec. Two modified files
+  were left behind by the first commit and needed a second one — check `git status` after.
+- ⛔ The in-app Browser pane cannot render a `file://` page and cannot sign in to claude.ai. It is
+  also the documented Claude-Desktop crasher — use `mcp__claude-in-chrome__*`. I reached for the
+  pane first here; the rule is at the top of CLAUDE.md and I should not have.
+
+### 14g. NOT DONE — what still stands between this and Izzy's actual ask
+
+The catalogue and the adapters exist and are proven as data. **Nothing consumes them yet.**
+
+1. The `VendorAdapter` interface is not wired into `apps/desktop/src/phoneSetup/` — `yealink.ts` is
+   still the only executor, and the desktop cannot import the monorepo, so it needs a
+   drift-guarded copy the way `coworker/policyCore.ts` does.
+2. `pnpResident.ts` still joins the multicast group on the **OS default interface only** and still
+   assumes Yealink's port and content type. Multi-NIC and Grandstream tolerance are Phase C/E.
+3. `vendorSupportsLocalActions()` in `deviceKinds.ts` still returns true **only for Yealink**, so
+   every other brand still stalls in "Preparing" — the original defect Izzy reported.
+4. The server ladder still halts to Support after about an hour on `provisioningHandoffFailed`, and
+   has no per-vendor decision table.
+5. Nothing writes a `provisioning.devices` row per model yet (`save_phone` exists; the wizard does
+   not call it), and the no-MAC common files (Polycom `000000000000.cfg`) do not exist per tenant.
+6. Phases A and B of this plan — the log wiring and the in-app firewall prompt — are untouched.
