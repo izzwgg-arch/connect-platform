@@ -1,13 +1,13 @@
 # LoopCom, LLC — Robocall Mitigation Plan
 
-**DRAFT for Izzy's review — not yet filed.** To be submitted with LoopCom's Robocall
-Mitigation Database (RMD) registration once the USAC 499 Filer ID is issued.
+**Filed with the FCC Robocall Mitigation Database 2026-08-23 (v2). Revised 2026-09-10 (v3)
+to add the FCC Form 499 Filer ID 839208; no other change.** Rendered PDF: `LoopCom_Robocall_Mitigation_Plan.pdf`.
 
 | | |
 |---|---|
 | Company | LoopCom, LLC (d/b/a Loopcom) |
 | FCC Registration Number (FRN) | 0038803722 |
-| FCC Form 499 Filer ID | *(pending — USAC registration in review)* |
+| FCC Form 499 Filer ID | 839208 |
 | Business address | 33 NY-17M, Suite C, Harriman, NY 10926 |
 | Robocall mitigation contact | Israel Weinstock, CEO — izzy@loopcom.net — (562) 209-6644 |
 | Provider type | Interconnected VoIP provider (voice service provider; no facilities-based PSTN interconnection of its own) |
@@ -109,4 +109,4 @@ in this plan as its network and the governing rules evolve.
 ---
 *Prepared 2026-08-20. Review before filing: (a) confirm the description of
 upstream carrier signing is current; (b) confirm the contact phone/email;
-(c) insert the 499 Filer ID when issued.*
+(c) 499 Filer ID 839208 inserted 2026-09-10.*

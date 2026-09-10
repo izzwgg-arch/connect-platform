@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LoopCom, LLC — Robocall Mitigation Plan</title>
+<style>
+  @page { size: Letter; margin: 0.8in 0.85in; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.42; color: #111; }
+  h1 { font-size: 17pt; margin: 0 0 12pt 0; border-bottom: 2px solid #1f3a5f; padding-bottom: 6pt; color: #1f3a5f; }
+  h2 { font-size: 12.5pt; margin: 16pt 0 6pt 0; color: #1f3a5f; }
+  table.meta { border-collapse: collapse; width: 100%; margin: 0 0 8pt 0; font-size: 10.5pt; }
+  table.meta td { border: 1px solid #bfc7d1; padding: 4pt 7pt; vertical-align: top; }
+  table.meta td.k { width: 30%; font-weight: bold; background: #eef2f7; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  p { margin: 0 0 7pt 0; }
+  ul { margin: 0 0 7pt 0; padding-left: 18pt; }
+  li { margin: 0 0 4pt 0; }
+  .foot { margin-top: 14pt; font-size: 9.5pt; color: #444; border-top: 1px solid #bfc7d1; padding-top: 6pt; }
+</style>
+</head>
+<body>
+
+<h1>LoopCom, LLC — Robocall Mitigation Plan</h1>
+
+<table class="meta">
+  <tr><td class="k">Company</td><td>LoopCom, LLC (d/b/a Loopcom)</td></tr>
+  <tr><td class="k">FCC Registration Number (FRN)</td><td>0038803722</td></tr>
+  <tr><td class="k">FCC Form 499 Filer ID</td><td>839208</td></tr>
+  <tr><td class="k">Business address</td><td>33 NY-17M, Suite C, Harriman, NY 10926</td></tr>
+  <tr><td class="k">Robocall mitigation contact</td><td>Israel Weinstock, CEO — izzy@loopcom.net — (562) 209-6644</td></tr>
+  <tr><td class="k">Provider type</td><td>Interconnected VoIP provider (voice service provider; no facilities-based PSTN interconnection of its own)</td></tr>
+</table>
+
+<h2>1. Who we are and how calls reach the phone network</h2>
+<p>LoopCom provides business phone service (interconnected VoIP) to small and mid-size businesses in the United States. Customers place and receive calls through LoopCom's hosted platform; calls reach the public switched telephone network exclusively through LoopCom's underlying wholesale carriers. LoopCom does not sell wholesale termination, does not serve other carriers or call centers as traffic aggregators, and does not offer high-volume outbound dialing, autodialing, or telemarketing campaign services.</p>
+
+<h2>2. STIR/SHAKEN status</h2>
+<p><strong>LoopCom certifies no STIR/SHAKEN implementation of its own and is performing robocall mitigation, as described in this plan.</strong></p>
+<p>LoopCom does not hold an Operating Company Number or a Service Provider Code (SPC) token, and therefore does not itself apply STIR/SHAKEN authentication to calls. LoopCom does not originate traffic directly onto the PSTN. All outbound calls are handed to underlying wholesale carriers, which apply STIR/SHAKEN attestation to the calls they originate on LoopCom's behalf.</p>
+<p>Accordingly, LoopCom's obligation and commitment is robocall mitigation: to ensure that the traffic it hands to its upstream carriers is lawful, attributable to a known and identified customer, and carries only caller ID that the customer is entitled to use. The practices below implement that commitment.</p>
+
+<h2>3. Know-your-customer (KYC) controls</h2>
+<ul>
+  <li>Every customer is an identified business that completes a sign-up including legal/business name, contact identity, service address, and payment by verifiable means (payment card). Service is provisioned only after payment.</li>
+  <li>Each line/extension is associated with a named user within the customer's organization, and each customer's E911 service address is validated and registered with the carrier at provisioning time.</li>
+  <li>LoopCom does not accept anonymous sign-ups and does not provision service to customers whose identity cannot be established.</li>
+</ul>
+
+<h2>4. Caller ID controls</h2>
+<ul>
+  <li>Outbound caller ID is configured exclusively by LoopCom personnel when a customer's service is provisioned. Customers have no ability — self-service or otherwise — to set, change, or override the caller ID their calls present. There is no customer-facing setting for caller ID anywhere on the platform.</li>
+  <li>Every number a customer presents was either purchased for them through LoopCom's underlying carriers, or ported into LoopCom through a number port in which the customer supplied documentary proof of ownership (such as a carrier bill in the customer's name) before the number was provisioned.</li>
+  <li>Unlawful caller ID spoofing by a customer is therefore not merely prohibited by policy — it is not possible on the platform, because the customer never controls the caller ID field.</li>
+</ul>
+
+<h2>5. Traffic monitoring and abuse prevention</h2>
+<ul>
+  <li>LoopCom requires 10DLC registration for outbound text messaging: customers sending application-to-person text traffic must be registered under a 10DLC brand and campaign before that traffic is permitted.</li>
+  <li>Outbound messaging is subject to per-customer daily caps and a campaign approval process; anomalous volume requires manual review.</li>
+  <li>Platform monitoring watches for toll-fraud patterns and anomalous calling behavior (including automated monitoring with alerts to management), and every administrative and provisioning action is recorded in audit logs.</li>
+  <li>LoopCom's platform can suspend an individual customer's outbound service promptly without affecting other customers, and this capability is used when abuse is identified.</li>
+  <li>LoopCom's customer base is small businesses using ordinary business calling; the platform is not marketed to, or suitable for, mass outbound calling operations.</li>
+</ul>
+
+<h2>6. Cooperation with traceback and enforcement</h2>
+<ul>
+  <li>LoopCom will respond to traceback requests from the Industry Traceback Group, the FCC, or law enforcement within 24 hours of receipt, using the contact listed above.</li>
+  <li>Because every call is attributable to an identified, paying business customer, LoopCom can identify the source of any call it carried.</li>
+</ul>
+
+<h2>7. Enforcement against violators</h2>
+<ul>
+  <li>Customers agree not to use the service for unlawful calling, including illegal robocalls and unlawful spoofing.</li>
+  <li>On discovery of illegal robocalling or spoofing, LoopCom will suspend the offending customer's outbound service immediately, investigate, and terminate service where the violation is confirmed. LoopCom will not knowingly serve any customer engaged in illegal calling campaigns.</li>
+</ul>
+
+<h2>8. Commitment</h2>
+<p>LoopCom certifies that it is committed to preventing the origination of illegal robocall traffic on its network, will cooperate fully with the FCC and traceback efforts, and will maintain and update the practices described in this plan as its network and the governing rules evolve.</p>
+
+<p class="foot">Prepared August 23, 2026. Revised September 10, 2026 to add the FCC Form 499 Filer ID (839208); no other change.</p>
+
+</body>
+</html>
