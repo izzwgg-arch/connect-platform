@@ -135,10 +135,19 @@ missing: stop reloading, wait ten minutes, load the page ONCE.**
 | Publishing status | ✅ **In production** |
 | izzy@loopcom.net project Owner | ✅ (IAM list shows both owners) |
 | Both domains verified in Search Console by an Owner | ✅ |
-| **Brand verification submitted** | ⏳ see the status line at the end of this file |
-| **Data-access (gmail.send) verification submitted** | ⏳ blocked until branding is verified AND published (Verification Center → "Prepare for verification" → Confirm) |
+| **Brand verification** | ✅ **PASSED — Verification Center reads "Your branding has been verified and is being shown to users" (read live 2026-09-10)** |
+| **Data-access (gmail.send) verification submitted** | ⏳ **NOT SUBMITTED (2026-09-10)** — Data access status: "not verified". The 924-char justification is SAVED; the **YouTube demo-video link is EMPTY** and is the only missing input. Then Verification Center → "Prepare for verification" → Confirm. |
 | Code still requesting `gmail.readonly` / `drive.readonly` | ⛔ open, §6 |
 | Sign in with Google (login) | ❌ not built — a separate portal/api feature; the OAuth app is now ready for it (non-sensitive scopes need no review) |
+
+## 5b. Status re-read live 2026-09-10 (Izzy: "I want to have it in production, not the test version")
+
+- **Audience → Publishing status: IN PRODUCTION** (User type External, "5 users / 100 user cap"). It is NOT the test version.
+  ⛔ What reads like "the test version" is Google's **"unverified app" interstitial**, which the Audience page itself explains: *"If your users are seeing the 'unverified app' screen, it is because your OAuth request includes additional scopes that haven't been approved."* `gmail.send` is declared but **unapproved**, and the code still adds the undeclared `gmail.readonly` / `drive.readonly` (§6).
+- **Branding: verified and shown to users.** The 09-02 submission passed; the "Publish branding" 7-day window is no longer a concern — the status line says it is being shown.
+- **Data Access:** non-sensitive openid/email/profile; sensitive `gmail.send` with the justification saved (Save button disabled = nothing unsaved); restricted: none declared. **Demo video: none.** Google requires a YouTube video showing the consent screen (the unverified screen "is expected and must be shown in the video") and the scope in use, for every OAuth client on the project (there is one, `connect production`).
+- **Path to a clean consent screen, in order:** (1) api change so the auth URL sends ONLY the declared scopes (§6 — drop `gmail.readonly`, keep Drive off the Gmail-connect flow / move to `drive.file`), deploy; (2) record a ~1-minute screen video: app.loopcom.net → CRM email → Connect Gmail → consent screen → send an email from the CRM; upload UNLISTED to YouTube (the Play Store video channel works); (3) paste the link on Data Access, Save; (4) Verification Center → Prepare for verification → Confirm. Google's sensitive-scope review is typically days to a couple of weeks; the "unverified app" screen disappears for `gmail.send` when it is approved.
+- ⛔ The Verification Center / Audience / Data Access pages all rendered fine signed in as `support@` this time (authuser=1) — the per-user trap in §4 applies to the **Verify branding** button, which is no longer needed.
 
 ## 6. What the code must do next (not done — needs a real api change + deploy)
 
