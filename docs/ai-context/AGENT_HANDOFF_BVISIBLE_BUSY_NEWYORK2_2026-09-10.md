@@ -136,3 +136,75 @@ carrier refuses a call before it reaches us, both CDRs are silent and the 30-min
 guardrail can miss it. **The Asterisk log's registration warnings are the
 witness** — and grepping *all* trunks for `No response received` immediately
 separates "this customer is broken" from "this POP is broken".
+
+---
+
+# RESOLVED — everything is off New York 2 (2026-09-10, later the same day)
+
+⛔ **§7 above is now HISTORY.** The carrier half was completed and the whole
+platform was moved off the failing POP, on Izzy's instruction
+(*"Get them all back up and running right now"*).
+
+## What actually fixed B Visible
+
+**It needed BOTH halves, and the DID POP was the binding one.** Moving the trunk
+to newyork1 at 19:23 UTC did **not** restore service — inbound stayed dead. Only
+when the **DID's own POP** moved to New York 1 (~19:38) did calls resume:
+**first inbound call in 88 minutes at 19:40:21 UTC, answered, 123 seconds.**
+
+⛔ **So `setDIDPOP` is the lever for this failure, not the trunk registration.**
+The number is anchored at a POP independently of where the account registers;
+if that POP is refusing, inbound dies no matter how healthy the trunk is.
+
+## The platform-wide move
+
+**Phase 1 — 9 DIDs** moved to POP 35 via `setDIDPOP {did, pop}`. Verified: every
+`routing`, `failover_*`, `sms_enabled`, `e911` and `dialtime` byte-identical
+afterwards — **the method touches only the POP**. Rollback: all 9 were pop 82.
+
+| Customer | Number | Subaccount |
+|---|---|---|
+| B Visible | 866-579-7575 (toll-free) | brightview |
+| Gesheft | 845-305-0021 | relax2 |
+| Displaydex | 845-364-7474 | eli |
+| Trust Bookkeepings | 845-288-2287 | trimprotrust |
+| Smooth Leasing | 845-252-1213 | Smooth2 |
+| ADDB Builders | 845-243-3057 | Vaddb |
+| Secro Selutions | 845-637-2329 | giti |
+| (no tenant row) | 323-616-0463 | lemmecheck |
+| (no tenant row) | 845-288-2286 | Trusttrimpro |
+
+**Phase 2 — 11 trunks** moved newyork2 → newyork1 in `ombu_trunk_parameters`
+(51 rows) **and** `pjsip__50-1-trunks.conf` (50 refs), inode-preserving, then
+`module reload res_pjsip.so`. Backups `/root/ny2-trunk-move-20260910T204025Z/`.
+
+**Final state: 0 DIDs on pop 82, 0 trunks on newyork2, 0 DB rows, 0 conf refs.
+70 DIDs now on New York 1. 66 registrations — the same count as before.**
+
+## ⛔ Two traps this second pass earned
+
+1. **A guard caught a real inconsistency: `Newyork2.voip.ms` with a CAPITAL N.**
+   Trunk 61 (Relax Tires) carried it in `outgoing_match` while its config and
+   live registration were already newyork1 — so a case-sensitive
+   `REPLACE`/`grep` missed it and reported "0 left" while one row remained.
+   **A regen would have pushed Relax Tires back onto the dead POP.** Always
+   match this hostname case-insensitively.
+2. **The api container was recreated mid-run by another session's deploy**,
+   killing the first attempt and taking the `docker cp`'d script and its backup
+   file with it. ⛔ **Check afterwards whether a partial write landed** — here
+   nothing had moved, but it could have been 4 of 9. Run carrier batches
+   detached with the log written to the HOST (`> /root/x.log`), never relying
+   on the exec's stdout.
+
+## ⛔ Still on other POPs — NOT touched
+
+**newyork3 (pop 83) carries 3 numbers and had 2 registration failures today**
+(`trustSGE`, `solidefyc`, at 14:49–14:52, same incident window as newyork2).
+Nobody asked for those to move and they are working; flagged, not actioned.
+
+⚠️ Unrelated and pre-existing: the **Telocall** trunk `0001` registration is
+still `Rejected` (`us-east.telocall.com:700` — the documented port typo, should
+be 7000). Calls flow both ways via IP auth. Not caused by this work.
+
+⚠️ **Smooth Leasing's 845-252-1213 has taken ZERO inbound calls in 7 days.**
+That line appears dead and nobody has noticed. Separate from today's outage.
