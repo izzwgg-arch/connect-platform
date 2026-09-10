@@ -93,14 +93,30 @@ pour them into SignalWire"* → *"Build it. Commit, push, deploy it."*
   ⛔ There is also **no LOA generator for a port-OUT** — `onboarding/portQueue.ts` makes
   one from an `OnboardingSubmission`, and an existing customer's number has none, so
   filing today means assembling the pack by hand.
-- ⚠️ **Noticed in passing, NOT mine, filed as a task chip:**
-  `agentEscalationDispatch.ts:138` does `(done ? log?.info : log?.warn)?.(…)` — a
-  detached pino method, so `this` is lost and it throws
-  `TypeError: Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')`.
-  The outer catch then logs **"agent escalation dispatch failed"**, which is the logger's
-  crash rather than a real failure, and because the throw is inside the per-row loop it
-  may abort the rest of the batch. **Escalations are how the platform texts Izzy when
-  something breaks.** From commit `242d1a40`; seen live on production 2026-09-10.
+- ✅ **FIXED 2026-09-10 — the escalation dispatcher was being crashed BY ITS OWN LOGGING.**
+  `agentEscalationDispatch.ts:138` did `(done ? log?.info : log?.warn)?.(…)`. That reads
+  the method off pino and calls it **detached**, so `this` is lost and pino throws
+  `TypeError: Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')`
+  from inside the log call. The throw is in the **per-row loop**, so the call site's
+  `.catch` logged **"agent escalation dispatch failed"** — the logger's own crash wearing
+  delivery's name — and the rest of the batch never went out. **Escalations are how the
+  platform texts Izzy when something breaks.** Now `if (done) log?.info?.(…)` /
+  `else log?.warn?.(…)`, which keeps the binding. From commit `242d1a40`; seen live on
+  production 2026-09-10.
+  ⛔ **Never write `(cond ? log.info : log.warn)(…)`, `const l = log.info`, or pass a pino
+  method as a callback** — a pino method only works called ON its logger.
+  **Proven, not assumed:** reproduced against the real installed pino **9.14.0** (old shape
+  throws that exact TypeError, fixed shape logs fine), and a 5-row loop demo goes from
+  **1 of 5 rows dispatched to 5 of 5**. Typecheck is differential (before vs after produce
+  an identical error set). ⛔ The api test suite was **NOT** run — this worktree has no
+  `node_modules` and nothing imports this file under test.
+  **The repo-wide sweep found NO other instance.** apps/, packages/, scripts/, services/,
+  worker/ were scanned for every detaching shape — ternary, assigned to a variable,
+  destructured off the logger, passed as a callback — and the scanner was **self-tested
+  against the original line first**, so "clean" means checked, not merely quiet.
+  ⏳ **SOURCE ONLY — NOT DEPLOYED.** After deploying api, verify with
+  `docker logs app-api-1 | grep pino.msgPrefix` staying at **0** while an escalation
+  dispatches, and `"agent escalation dispatched"` appearing for each row.
 
 ## ⛔⛔ AGENT HANDOFF — the wizard can SAY WHAT IT DID and sweeps EVERY network now, the finish screen stopped lying, and Izzy's flow is MOCKED UP AWAITING APPROVAL (2026-09-10 evening) — READ FIRST before touching `apps/desktop/src/phoneSetup/`, before flipping `vendorSupportsLocalActions` for any brand, or for "the wizard is stuck on Preparing"
 

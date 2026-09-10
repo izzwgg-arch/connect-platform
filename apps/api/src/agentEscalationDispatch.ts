@@ -135,10 +135,23 @@ export async function dispatchAgentEscalationsBatch(log?: { info: (o: any, m: st
           lastError: errors.length ? errors.join(" | ").slice(0, 900) : null,
         },
       });
-      (done ? log?.info : log?.warn)?.(
-        { escalationId: row.id, tenantName: row.tenantName, userName: row.userName, smsSent: !!smsSentAt, emailQueued: !!emailQueuedAt, errors },
-        done ? "agent escalation dispatched" : "agent escalation dispatch incomplete",
-      );
+      // ⛔ Call the method ON the logger. `(done ? log.info : log.warn)(…)` reads
+      // the method off pino and calls it detached: `this` is lost, and pino throws
+      // `Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')`
+      // from inside the log call. That throw escapes this loop — the batch's
+      // remaining escalations never dispatch, and the call site's .catch reports
+      // it as "agent escalation dispatch failed", blaming delivery for a logging
+      // bug. (Live on 2026-09-10; introduced 242d1a40.)
+      const outcome = {
+        escalationId: row.id,
+        tenantName: row.tenantName,
+        userName: row.userName,
+        smsSent: !!smsSentAt,
+        emailQueued: !!emailQueuedAt,
+        errors,
+      };
+      if (done) log?.info?.(outcome, "agent escalation dispatched");
+      else log?.warn?.(outcome, "agent escalation dispatch incomplete");
     }
   } finally {
     running = false;
