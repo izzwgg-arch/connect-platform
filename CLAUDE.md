@@ -71,6 +71,18 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. 
   cancelled is final for that call — the prompt forbids routing around it.
 - ⛔ **Keep `policyCore.ts` identical to `packages/shared/src/coworker/*`** (the test reads the shared files); tool
   names must match `^[a-z][a-z0-9_]{0,63}$`; never let the poll loop spin or leave a timer armed.
+- ⛔⛔ **"I asked the Coworker to use the browser and it said it can't" (Izzy, 2026-09-10 15:08 ET) = HIS WORKSTATION
+  STILL RUNS rc.9, WHICH HAS NO HANDS.** Read-only diagnosis, nothing changed. The turn came from IP 50.48.58.53 with UA
+  `Loopcom/0.1.17-rc.9` on the Landau Home login (izzwgg@gmail.com); the reply was "I don't have web-browsing from this
+  chat". rc.9 was built from `7f73086a` (09-03): its `apps/desktop/src/coworker/` holds only the card-era
+  `executor/tasks/mainWiring` — no `link.ts`, no `hands.ts`, no `computer_browser_*`. It never POSTs
+  `/agent-api/coworker/hello` (**0 ever from his IP**; the only linked box today is Ezra's dev box on rc.10), so
+  `dynamicTools` returns `empty` and the model has no browser tool. ⛔ The auto-update feed (`latest.yml`) still reads
+  0.1.16, so rc.9 will NEVER self-update to rc.10 — he must download the portal Install link
+  (`/desktop/Connect-Setup-latest.exe`, currently rc.10, 100,502,069 bytes) and run it, then sign in with the bubble on
+  and wait for the tray to read `Coworker hands: connected`. **Triage recipe for any "the Coworker can't do X on my
+  computer":** grep nginx for that person's IP on `agent-api/coworker/hello` — zero hits means the app is pre-rc.10 or
+  not linked, and no server change can help.
 - **Deploy state:** agent `app-agent-1` at `bab5323d` (`/agent-api/coworker/*`, `proxy_read_timeout 900s`); portal
   `48511a49` (permissions view: SAFE/TRUSTED/AUTONOMOUS + Settings & Connections); desktop `0.1.17-rc.10` installed on
   the dev box (built from a clean export — see the rc.10 section below), feed still 0.1.16. Proven end to end on this
