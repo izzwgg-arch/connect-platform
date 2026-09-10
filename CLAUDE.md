@@ -77,10 +77,11 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. 
   chat". rc.9 was built from `7f73086a` (09-03): its `apps/desktop/src/coworker/` holds only the card-era
   `executor/tasks/mainWiring` — no `link.ts`, no `hands.ts`, no `computer_browser_*`. It never POSTs
   `/agent-api/coworker/hello` (**0 ever from his IP**; the only linked box today is Ezra's dev box on rc.10), so
-  `dynamicTools` returns `empty` and the model has no browser tool. ⛔ The auto-update feed (`latest.yml`) still reads
-  0.1.16, so rc.9 will NEVER self-update to rc.10 — he must download the portal Install link
-  (`/desktop/Connect-Setup-latest.exe`, currently rc.10, 100,502,069 bytes) and run it, then sign in with the bubble on
-  and wait for the tray to read `Coworker hands: connected`. **Triage recipe for any "the Coworker can't do X on my
+  `dynamicTools` returns `empty` and the model has no browser tool. ✅ **The feed was FLIPPED to rc.10 at 11:25Z the same
+  day on his word** (see the Install-link section below), so his rc.9 updates itself on its next check (at app start,
+  then every 3 h; it downloads in the background and offers "Restart now"); installing by hand from the portal Install
+  link (`/desktop/Connect-Setup-latest.exe`, rc.10) is the faster route. Then sign in with the bubble on and wait for
+  the tray to read `Coworker hands: connected`. **Triage recipe for any "the Coworker can't do X on my
   computer":** grep nginx for that person's IP on `agent-api/coworker/hello` — zero hits means the app is pre-rc.10 or
   not linked, and no server change can help.
 - **Deploy state:** agent `app-agent-1` at `bab5323d` (`/agent-api/coworker/*`, `proxy_read_timeout 900s`); portal
@@ -106,7 +107,7 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`**. 
 
 - ✅ **PUBLISHED:** `Connect-Setup-0.1.17-rc.10.exe` (100,502,069 bytes, sha256 `f7a60e421d852f218fdbeaa7770905d1345bfc77abc9575c70f3e9777a0e7c50`) + `.blockmap` copied into `/opt/connectcomms/desktop/`, and `Connect-Setup-latest.exe` replaced atomically (tmp + `mv`) with that same file. Verified: `curl` of `https://app.connectcomunications.com/desktop/Connect-Setup-latest.exe` returns 200, that length, and that sha256; `app.loopcom.net` too. Before this, `Connect-Setup-latest.exe` was a byte copy of `0.1.16` (sha `3b7af6ace82662b7…`), so reverting is `cp -p Connect-Setup-0.1.16.exe Connect-Setup-latest.exe`.
 - ✅ **The source artifact** is the evening rebuild from the clean `git archive HEAD` (HEAD `665d1cb9`) export — the one installed and running on the dev box, asar deps verified (see the rc.10 handoff below). ⛔ NOT the 14:35 in-place build in `apps/desktop/release/` (100,458,656 bytes), which crashes on launch.
-- ⛔ **FEED NOT FLIPPED, on purpose.** `latest.yml` still reads `0.1.16` (`Connect-Setup-0.1.16.exe`), so nobody auto-updates. rc.10 carries the unpublished coworker-hands / remote-desktop / elevated-support work, and flipping the feed is fleet-wide — Ezra's call. When he says so: `cp latest-0.1.17-rc.10.yml latest.yml` in the same directory (already staged there, sha512 of the exe inside). An rc install on top of the 0.1.16 feed is stable ("downgrade is disallowed").
+- ✅✅ **FEED FLIPPED TO rc.10 — 2026-09-10 11:25Z, on Izzy's instruction ("Flip the feed to rc.10 so it auto-updates").** `latest.yml` in `/opt/connectcomms/desktop/` is now the staged `latest-0.1.17-rc.10.yml` (sha512 `9AlXvz50…` and size 100,502,069 verified against the exe BEFORE the swap; tmp + `mv`); backup of the 0.1.16 feed at `/root/latest.yml.bak-0.1.16-20260910T112502Z`. Verified served on BOTH hostnames: `latest.yml` reads `0.1.17-rc.10`, the exe answers 200 / 100,502,069 and the `.blockmap` 200 / 105,396. **Every installed Loopcom app ≥0.1.4 now auto-updates to rc.10 on its next check** (`updater.ts`: at app start, then every 3 h; `autoDownload` + `autoInstallOnAppQuit`, with a "Restart now" prompt on download) — electron-updater's generic provider on channel `latest` with no `allowPrerelease`/`allowDowngrade` override compares by semver, so 0.1.16 → rc.10 and rc.9 → rc.10 both qualify (an rc.9 on the old feed had logged "downgrade is disallowed", the same compare). That is the fleet-wide ship of the coworker-hands / remote-desktop / elevated-support work. Rollback: `cp -p /root/latest.yml.bak-0.1.16-20260910T112502Z latest.yml` — ⛔ it stops FURTHER updates only; a machine already on rc.10 stays there. ⏳ NOT PROVEN: no fleet machine has been seen updating yet — the tell is a `/desktop/Connect-Setup-0.1.17-rc.10.exe` or `.blockmap` GET in nginx from a customer IP, then that IP's chat UA reading `Loopcom/0.1.17-rc.10`.
 - ⏳ NOT PROVEN: a real click on Install from a signed-in portal and a fresh install on a machine other than the dev box.
 
 ## Voicemail email transcript toggle renamed "Include transcription in email" (portal-only, 2026-09-09)
