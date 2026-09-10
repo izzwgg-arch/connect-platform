@@ -340,3 +340,98 @@ The catalogue and the adapters exist and are proven as data. **Nothing consumes 
 5. Nothing writes a `provisioning.devices` row per model yet (`save_phone` exists; the wizard does
    not call it), and the no-MAC common files (Polycom `000000000000.cfg`) do not exist per tenant.
 6. Phases A and B of this plan — the log wiring and the in-app firewall prompt — are untouched.
+
+---
+
+## 15. IN PROGRESS 2026-09-10 evening — Izzy's flow, Phase A and the honest finish
+
+Commits `731e04c0` + `3e21ceec` on `feat/ivr-migration-takeover`, pushed.
+**Desktop + portal source only. NOTHING IS DEPLOYED and no desktop build exists**,
+so Izzy's stuck Yealink is unchanged on his screen.
+
+Izzy's scope this session, verbatim intent: *"Do you know the model of the phone?"*
+with a **manufacturer dropdown from our database** feeding the search; discovery that
+covers **PoE switches, Wi-Fi extenders, anywhere a phone can be**; select → assign to
+an extension → Next; **"Preparing means all phones are factory reset"**; prompt for
+any Windows/network permission; *"rock hard, solid in any situation… sustainable for
+long-term high usage in the years to come."*
+
+⛔⛔ **THE CONSENT MODEL IS THE TICK, AND HE CORRECTED ME ON IT.** I flagged
+"Preparing = factory reset all phones" as dangerous. His answer: the tick on the
+found screen IS the permission — *"as long as the customer unchecks that box, that
+phone does not get factory reset. Only the checkboxes of the phones the customer
+checks to be connected to Loopcom get factory reset."* So there is **no separate
+approval card**; the found screen says plainly that ticking wipes the phone, and
+`resetAuth` collapses into the selection. Build it that way.
+
+### 15a. Mockup awaiting approval
+<https://claude.ai/code/artifact/f5047981-e442-482a-9cdd-315670161f73> — seven screens
+at the wizard's real 760px width in the app's own `dps-*` tokens, light and dark.
+⛔ Four decisions are his and are NOT assumed (listed in §15e).
+
+### 15b. Shipped: the subsystem can say what it did (`731e04c0`)
+⛔⛔ **IT WAS SILENT FOR ITS WHOLE LIFE.** `main.ts:844` called
+`registerPhoneSetup({ ipcMain, safeStorage })` with no `log`, so
+`createPnpResident({ log: deps.log })` got `undefined` and `connect.log` held **zero**
+phoneSetup lines, ever. That is why the stuck run needed a production DB read to
+diagnose. Now: main.ts passes `diag("phoneSetup", …)`, mainWiring threads it to BOTH
+the resident and the capability, and the capability logs from **ONE wrapper around
+the dispatcher** (`run` → `runInner`) rather than at its twenty return paths — a new
+op, or a new refusal on an old one, cannot be silent.
+⛔ `describeRequest` reduces a provisioning URL to its **HOST**: the path carries the
+16-hex tenant folder hash, which is the credential a phone uses to fetch its own SIP
+password, and a log file is something a customer opens and pastes into a ticket.
+
+### 15c. Shipped: it sweeps every network (`731e04c0`)
+⛔⛔ **`scanLan` TOOK `subnets[0]` AND WROTE A NOTE ABOUT ITS OWN BUG** — *"This
+computer is on N networks; only X was scanned."* A PC with a cable and Wi-Fi, or one
+behind an extender handing out a second range, missed the other network in silence.
+Now `localScannableNetworks()` returns all of them with adapter names, `scanLan`
+sweeps every one **smallest first**, merges by MAC, under a **3,000-address budget
+across all networks combined**, and a network too big to fit is **NAMED** in the note.
+⛔ `subnet` keeps its old meaning (the first swept) because the portal stores it on the
+run; the new `subnets: ScannedNetwork[]` is the whole truth for the screen.
+⛔ **Virtual adapters are filtered by NAME as well as range** — Hyper-V, WSL and Docker
+all sit in 172.16–172.31, which IS RFC1918, so the private-address test admitted them.
+✅ **Measured on Izzy's real machine:** Tailscale, the Hyper-V switch and loopback are
+correctly dropped, leaving one Wi-Fi **192.168.4.0/22** (1,022 addresses) — which spans
+.4.0–.7.255 and therefore already covered **all four** of his phones.
+⛔⛔ **SO MULTI-NETWORK IS NOT WHAT BROKE HIS YEALINK.** Say so plainly; it matters for
+other offices, not for that run.
+
+### 15d. Shipped: the finish screen stops lying (`3e21ceec`)
+His screen showed a **green tick** above **"0 of your 1 phones are ready"** with
+*"Your office is working."* beneath it. `summarizeRun` was honest (ready 0,
+needsAttention 1) — the JSX drew the tick **unconditionally** and branched its sentence
+on `needsAttention` alone, so "nothing connected" and "one of six still to do"
+rendered identically. Three outcomes, three marks now; the word "working" is printed
+only when at least one phone is.
+
+### 15e. ⛔ STILL BLOCKING — four of these are Izzy's, and two of them gate real work
+1. **Approve the mockup**, or say what to change. The manufacturer dropdown, the
+   whole-network search screen and the tick-wording all wait on it.
+2. **May the agent sign in to the GXP2170 (192.168.6.171) and HT812 (192.168.4.22)
+   with default credentials to capture the real config API?** Phase E cannot be built
+   from guesswork — a wrong P-code configures nothing, silently.
+3. **Do the two middle screens come out?** He said "click Next and it searches", which
+   skips today's `connection` (cable/Wi-Fi) and `network` (explainer) steps. Neither
+   changes what is scanned. Drawn as removed in the mockup.
+4. **All four devices are assigned to ext 101 "Home"** — intended?
+
+### 15f. ⛔ NOT DONE — and the honest reason for each
+- **`vendorSupportsLocalActions` is still Yealink-only, DELIBERATELY.** Flipping it for
+  Grandstream today would be **worse than the stall**: `capability.ts` imports only
+  `yealink.ts`, so the driver would point Yealink-shaped HTTP at a Grandstream. The
+  adapter must exist first (needs decision 2).
+- **The Yealink is still halted.** The `provisioningHandoffFailed` override still
+  converts `set_provisioning` into a halt-to-Support after the bounded restarts.
+  ⛔ Removing that override alone is NOT the fix — it exists because every further
+  `set_provisioning` restarts somebody's phone again. The plan's §5 shape (stop
+  counting restarts, enter a WAITING state the standing resident finishes) needs the
+  server AND driver changed together.
+- **Grandstreams still stall in "Preparing"** — no terminal decision exists for a
+  vendor with a PBX template and no local adapter (plan §7).
+- **The permission prompt (plan §3) is untouched.**
+- **Nothing is deployed and no desktop build exists.** The portal fix reaches nobody
+  until a portal deploy; the desktop fixes need a clean-export build (rc.11) installed
+  on his PC, and publishing auto-updates the fleet — his call, every time.
