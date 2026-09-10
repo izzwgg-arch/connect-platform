@@ -99,6 +99,21 @@ export type CapabilityDeps = {
   sipProbe?: (ip: string) => Promise<SipProbeResult>;
   /** The standing PnP responder, injectable for tests. */
   pnpResident?: PnpResident;
+  /**
+   * Where to say what an operation did. Optional so every existing caller and test
+   * is unchanged; when absent nothing is written.
+   *
+   * ⛔⛔ THIS SUBSYSTEM WAS SILENT FOR ITS WHOLE LIFE. `main.ts` never passed a log
+   * down, so `connect.log` held ZERO phoneSetup lines and the only way to find out
+   * why a customer's phone had stalled was to read the production database. That is
+   * what made the 2026-09-10 Landau Home run take a DB read to diagnose.
+   *
+   * ⛔ NEVER log packet contents, a credential, or the provisioning URL — its path
+   * carries the tenant's folder hash, which is the one secret in this whole flow.
+   * `describeRequest` below is the only thing that reads a request for logging and
+   * it emits the op, a private IP, a MAC and a URL's HOST at most.
+   */
+  log?: (line: string) => void;
 };
 
 /** How long `set_provisioning` waits for the phone to ask before answering the wizard. */
@@ -117,12 +132,87 @@ const MIN_MS_BETWEEN_SCANS = 15_000;
 
 type Gate = { lastActionAt: Map<string, number>; actionTimes: number[]; lastScanAt: number };
 
+/**
+ * What an operation was aimed at, in one line, safe to write to a log file.
+ *
+ * ⛔ The URL is reduced to its HOST. `set_provisioning` carries
+ * `https://<host>/phoneprov/<16 hex>/` and that folder hash is the credential a
+ * phone uses to download its own SIP password — it must never reach a log file a
+ * customer can open, mail us, or paste into a ticket.
+ */
+export function describeRequest(req: OperationRequest): string {
+  const bits: string[] = [];
+  const ip = (req as any).ip;
+  if (typeof ip === "string" && ip) bits.push(`ip=${ip}`);
+  const mac = (req as any).mac;
+  if (typeof mac === "string" && mac) bits.push(`mac=${mac.replace(/[^0-9a-fA-F]/g, "").toLowerCase()}`);
+  const url = (req as any).url;
+  if (typeof url === "string" && url) {
+    let host = "unreadable";
+    try { host = new URL(url).host; } catch { /* keep the placeholder */ }
+    bits.push(`urlHost=${host}`);
+  }
+  const macs = (req as any).macs;
+  if (Array.isArray(macs)) bits.push(`macs=${macs.length}`);
+  const subnet = (req as any).subnet;
+  if (typeof subnet === "string" && subnet) bits.push(`subnet=${subnet}`);
+  return bits.join(" ");
+}
+
+/** The outcome, in one word plus the reason when there is one. Never the payload. */
+export function describeResult(res: OperationResult): string {
+  if (!res.ok) return `refused:${res.refused}`;
+  switch (res.op) {
+    case "discover":
+      return `ok hosts=${res.scan.hosts.length} outcome=${res.scan.outcome} subnet=${res.scan.subnet ?? "none"}`;
+    case "fingerprint":
+      return `ok vendor=${res.fingerprint.vendor ?? "unknown"} model=${res.fingerprint.model ?? "unknown"}`;
+    case "test_credentials":
+      return `ok accepted=${res.accepted}${res.reason ? ` reason=${res.reason}` : ""}`;
+    case "set_provisioning":
+      return `ok listening=${res.listening} rebooted=${res.rebooted}`
+        + `${res.rebootRefused ? ` rebootRefused=${res.rebootRefused}` : ""}`
+        + ` delivered=${res.delivered} acknowledged=${res.acknowledged}`;
+    case "arm_pnp":
+      return `ok listening=${res.listening} macs=${res.macs} deliveries=${res.deliveries}`;
+    default:
+      return "ok";
+  }
+}
+
 export function createPhoneCapability(deps: CapabilityDeps) {
-  const resident: PnpResident = deps.pnpResident ?? createPnpResident();
+  const resident: PnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const now = deps.now ?? (() => Date.now());
   const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0 };
+  const log = deps.log ?? (() => {});
 
+  /**
+   * ⛔ ONE log site wrapping the whole dispatcher, deliberately — not a line at each
+   * of the twenty-odd `return`s inside it. A new operation, or a new refusal added
+   * to an existing one, is logged automatically; there is no path out of `runInner`
+   * that can be silent. A logger that throws must never break a phone setup, so the
+   * whole thing is inside try/catch.
+   */
   async function run(req: OperationRequest): Promise<OperationResult> {
+    const op = (req as any)?.op ?? "none";
+    const started = now();
+    let res: OperationResult;
+    try {
+      res = await runInner(req);
+    } catch (err) {
+      // The dispatcher is not supposed to throw. If it ever does, say so rather than
+      // letting an empty log imply the operation was never attempted.
+      try { log(`${op} threw after ${now() - started}ms: ${err instanceof Error ? err.name : "error"}`); } catch { /* never */ }
+      throw err;
+    }
+    try {
+      const where = describeRequest(req);
+      log(`${op}${where ? " " + where : ""} -> ${describeResult(res)} (${now() - started}ms)`);
+    } catch { /* logging must never change an outcome */ }
+    return res;
+  }
+
+  async function runInner(req: OperationRequest): Promise<OperationResult> {
     // ⛔ The operation name is checked against the list before anything else looks
     // at the request. An unknown op is refused without its arguments being read.
     if (!req || !(PHONE_OPERATIONS as readonly string[]).includes((req as any).op)) {

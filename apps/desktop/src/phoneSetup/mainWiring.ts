@@ -73,6 +73,7 @@ export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void; d
     http: deps.http ?? nodeHttp,
     resolveCredential: async (ref) => get(ref),
     pnpResident,
+    log: deps.log,
   });
 
   deps.ipcMain.handle(PHONE_SETUP_CHANNEL, async (_e: unknown, req: OperationRequest): Promise<OperationResult> => {

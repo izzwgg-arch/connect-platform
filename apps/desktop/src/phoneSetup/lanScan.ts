@@ -23,11 +23,17 @@
  * serves a config from weeks ago. This module produces the other half of that
  * comparison: what the phones on the network actually are.
  *
- * ⛔ IT ONLY EVER SEES ONE SUBNET — the one the Windows machine is sitting on.
- * An office with several networks needs the app running on each, or the results
- * are quietly partial. The scan reports the subnet it looked at for exactly
- * this reason: a short list must be readable as "here is where I looked",
- * never as "this office has three phones".
+ * ⛔⛔ IT SWEEPS EVERY LOCAL NETWORK, NOT THE FIRST ONE (changed 2026-09-10).
+ * It used to take `subnets[0]` and then write a NOTE saying the rest had been
+ * ignored — so a computer with a cable AND Wi-Fi, or one behind a mesh extender
+ * handing out its own range, swept one and silently missed the other. That is the
+ * "the phones are definitely on this network and it cannot find them" report.
+ * `subnets` on the result names every network actually swept.
+ *
+ * ⛔ It still only sees networks THIS COMPUTER IS ON. A phone on a separate VLAN
+ * with no route from here cannot be reached by any software on this machine — that
+ * is a fact about the network, and the wizard says so on the phone's own row rather
+ * than showing a progress bar that can never move.
  *
  * ⛔ SCANNING IS AN EXPLICIT ACTION. Nothing here runs on a timer. A support
  * tool that inventories a customer's network in the background is a different
@@ -52,13 +58,53 @@ export type DiscoveredHost = {
   fingerprint?: DeviceFingerprint | null;
 };
 
+/** One network that was actually swept, for the screen and the log. */
+export type ScannedNetwork = {
+  cidr: string;
+  iface: string;
+  addresses: number;
+  hostsSeen: number;
+};
+
 export type ScanResult = {
+  /**
+   * The FIRST network swept.
+   *
+   * ⛔ Kept as a single string on purpose: the portal stores this on the run and
+   * the API has always been handed one. `subnets` below is the whole truth; this
+   * stays for every existing caller.
+   */
   subnet: string | null;
+  /** Every network swept, in the order they were swept. */
+  subnets: ScannedNetwork[];
   hostsSeen: number;
   hosts: DiscoveredHost[];
   outcome: "ok" | "partial" | "failed";
   note?: string;
 };
+
+export type ScanOptions = {
+  /** Sweep exactly this one network instead of everything reachable. */
+  subnet?: string;
+  /** Injectable for tests — the real list comes from the operating system. */
+  networks?: ScannableNetwork[];
+  /** Total addresses across ALL networks. Injectable so a test need not sweep 3,000. */
+  maxAddresses?: number;
+  log?: (line: string) => void;
+  /**
+   * The per-network sweep. Injectable ONLY so the multi-network loop can be tested
+   * without touching a real network — production always uses the real one.
+   */
+  sweep?: typeof sweepSubnet;
+};
+
+/**
+ * ⛔ The ceiling is across every network combined. Two /22s and a /24 is 2,298
+ * probes — fine. Five /22s is not, and the customer is watching a spinner. When
+ * the budget runs out the networks that did not fit are NAMED, never dropped in
+ * silence, so "we did not look there" is something the screen can say.
+ */
+const MAX_TOTAL_ADDRESSES = 3_000;
 
 /**
  * The web ports a desk phone answers on. Hitting one both proves something is
@@ -107,11 +153,50 @@ const SCANNABLE_MASKS: Record<string, number> = {
   "255.255.252.0": 22,
 };
 
-export function localScannableSubnets(
+/**
+ * Adapters that are not a network a phone can be on.
+ *
+ * ⛔⛔ NAME MATCHING IS REQUIRED, NOT BELT-AND-BRACES. Hyper-V, WSL and Docker
+ * Desktop all hand themselves addresses in 172.16–172.31, which IS RFC1918, so
+ * `isPrivateIpv4` admits them and they look exactly like a real office network.
+ * On this very workstation that is four extra "networks" — sweeping them is a
+ * thousand wasted probes each and, worse, it is where the multicast group gets
+ * joined if the wrong one sorts first.
+ *
+ * ⛔ Tailscale is in the list for clarity only: it uses 100.64/10 (carrier NAT),
+ * which `isPrivateIpv4` already refuses. Leave it in — the day someone puts
+ * Tailscale on a 10.x range, the name is what saves us.
+ */
+const VIRTUAL_ADAPTER_RE =
+  /(vethernet|virtualbox|vmware|hyper-?v|wsl|docker|tailscale|zerotier|npcap|loopback|bluetooth|vpn|wireguard|tap-|tun-)/i;
+
+export type ScannableNetwork = {
+  /** The network in CIDR form, e.g. "192.168.4.0/22". */
+  cidr: string;
+  /** The adapter it was found on, as Windows names it. For the log and the screen. */
+  iface: string;
+  /** This computer's own address on that network. */
+  localAddress: string;
+  /** How many addresses a sweep of it would probe. */
+  size: number;
+};
+
+/**
+ * Every local IPv4 network worth sweeping — ALL of them, not the first.
+ *
+ * ⛔⛔ THE OLD SHAPE RETURNED A LIST AND THE SCANNER USED `subnets[0]`, then wrote
+ * a NOTE saying the others had been ignored. A computer with a cable and Wi-Fi, or
+ * one on a mesh extender that hands out its own range, swept one network and
+ * silently missed the other — which is exactly "the phones are definitely here and
+ * it cannot find them".
+ */
+export function localScannableNetworks(
   interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
-): string[] {
-  const out: string[] = [];
-  for (const addrs of Object.values(interfaces)) {
+): ScannableNetwork[] {
+  const out: ScannableNetwork[] = [];
+  const seen = new Set<string>();
+  for (const [iface, addrs] of Object.entries(interfaces)) {
+    if (VIRTUAL_ADAPTER_RE.test(iface)) continue;
     for (const addr of addrs || []) {
       if (addr.family !== "IPv4" || addr.internal) continue;
       const prefix = SCANNABLE_MASKS[addr.netmask ?? ""];
@@ -120,10 +205,22 @@ export function localScannableSubnets(
       const base = networkBase(addr.address, prefix);
       if (base === null) continue;
       const cidr = `${base}/${prefix}`;
-      if (!out.includes(cidr)) out.push(cidr);
+      if (seen.has(cidr)) continue;
+      seen.add(cidr);
+      out.push({ cidr, iface, localAddress: addr.address, size: 2 ** (32 - prefix) - 2 });
     }
   }
+  // Smallest first: a /24 finishes in seconds, so the common case shows results
+  // fast, and a big /22 never delays a small network that had the phones on it.
+  out.sort((a, b) => a.size - b.size);
   return out;
+}
+
+/** The CIDRs alone. Kept because callers and tests have always spoken in strings. */
+export function localScannableSubnets(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+): string[] {
+  return localScannableNetworks(interfaces).map((n) => n.cidr);
 }
 
 /** The network address of `ip` under a /22–/24 prefix, dotted, or null. */
@@ -317,13 +414,20 @@ function pingOnce(ip: string): Promise<void> {
  * so reading it cold returns the router and little else. The sweep is what
  * makes the table complete.
  */
-export async function scanLan(options: { subnet?: string } = {}): Promise<ScanResult> {
-  const subnets = localScannableSubnets();
-  const subnet = options.subnet || subnets[0] || null;
+export async function scanLan(options: ScanOptions = {}): Promise<ScanResult> {
+  const networks = options.networks ?? localScannableNetworks();
+  const log = options.log ?? (() => {});
 
-  if (!subnet) {
+  // An explicit subnet (the wizard's "search this one") still wins outright.
+  const chosen: ScannableNetwork[] = options.subnet
+    ? [networks.find((n) => n.cidr === options.subnet)
+        ?? { cidr: options.subnet, iface: "requested", localAddress: "", size: 0 }]
+    : networks;
+
+  if (chosen.length === 0) {
     return {
       subnet: null,
+      subnets: [],
       hostsSeen: 0,
       hosts: [],
       outcome: "failed",
@@ -332,11 +436,72 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
     };
   }
 
-  const addresses = hostsInSubnet(subnet);
-  if (addresses.length === 0) {
-    return { subnet, hostsSeen: 0, hosts: [], outcome: "failed", note: "That network address could not be read." };
+  // ⛔ A budget across ALL networks, not per network. Three /22s is 3,066 probes
+  // and a customer watching a spinner; the cap keeps the worst case bounded while
+  // the smallest-first order means the networks most likely to hold the phones are
+  // the ones that always get swept.
+  const scanned: ScannedNetwork[] = [];
+  const skipped: ScannableNetwork[] = [];
+  let budget = options.maxAddresses ?? MAX_TOTAL_ADDRESSES;
+
+  const all = new Map<string, DiscoveredHost & { respondedOnHttp: boolean; respondedOnSip: boolean; fingerprint: DeviceFingerprint | null }>();
+  let anyTableRead = false;
+
+  for (const net of chosen) {
+    const addresses = hostsInSubnet(net.cidr);
+    if (addresses.length === 0) {
+      log(`scan: ${net.cidr} (${net.iface}) unreadable — skipped`);
+      continue;
+    }
+    if (addresses.length > budget) {
+      skipped.push(net);
+      log(`scan: ${net.cidr} (${net.iface}) skipped — ${addresses.length} addresses, ${budget} left in budget`);
+      continue;
+    }
+    budget -= addresses.length;
+
+    const one = await (options.sweep ?? sweepSubnet)(net.cidr, addresses);
+    anyTableRead = anyTableRead || one.tableRead;
+    for (const h of one.hosts) if (!all.has(h.mac)) all.set(h.mac, h);
+    scanned.push({ cidr: net.cidr, iface: net.iface, addresses: addresses.length, hostsSeen: one.hosts.length });
+    log(`scan: ${net.cidr} (${net.iface}) ${addresses.length} addresses -> ${one.hosts.length} devices`);
   }
 
+  if (scanned.length === 0) {
+    return {
+      subnet: chosen[0]?.cidr ?? null, subnets: [], hostsSeen: 0, hosts: [],
+      outcome: "failed", note: "That network address could not be read.",
+    };
+  }
+
+  const hosts = [...all.values()];
+  if (!anyTableRead && hosts.length === 0) {
+    return {
+      subnet: scanned[0].cidr, subnets: scanned, hostsSeen: 0, hosts: [],
+      outcome: "failed",
+      note: "Windows would not report the network address table, so no phones could be identified.",
+    };
+  }
+
+  return {
+    // ⛔ `subnet` stays the FIRST network scanned, unchanged in meaning, because the
+    // portal stores it on the run and the API has always been handed a string.
+    subnet: scanned[0].cidr,
+    subnets: scanned,
+    hostsSeen: hosts.length,
+    hosts,
+    outcome: skipped.length > 0 ? "partial" : "ok",
+    note: skipped.length > 0
+      ? `${skipped.length === 1 ? "One network was" : `${skipped.length} networks were`} too large to sweep this time: ${skipped.map((s) => s.cidr).join(", ")}.`
+      : undefined,
+  };
+}
+
+/** One network, swept the way a single network has always been swept. */
+async function sweepSubnet(
+  subnet: string,
+  addresses: string[],
+): Promise<{ hosts: (DiscoveredHost & { respondedOnHttp: boolean; respondedOnSip: boolean; fingerprint: DeviceFingerprint | null })[]; tableRead: boolean }> {
   const responsive = new Set<string>();
   const sipResponsive = new Map<string, DeviceFingerprint | null>();
 
@@ -418,16 +583,6 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
     }
   }
 
-  if (table.size === 0 && sipResponsive.size === 0) {
-    return {
-      subnet,
-      hostsSeen: responsive.size,
-      hosts: [],
-      outcome: "failed",
-      note: "Windows would not report the network address table, so no phones could be identified.",
-    };
-  }
-
   // ⛔ A range test, not a string prefix: a /22 spans four third-octets, and the
   // old startsWith could only ever express a /24.
   const present = [...table.values()].filter((h) => ipInSubnet(h.ip, subnet));
@@ -438,13 +593,7 @@ export async function scanLan(options: { subnet?: string } = {}): Promise<ScanRe
     fingerprint: sipResponsive.get(h.ip) ?? null,
   }));
 
-  return {
-    subnet,
-    hostsSeen: hosts.length,
-    hosts,
-    outcome: "ok",
-    note: subnets.length > 1
-      ? `This computer is on ${subnets.length} networks; only ${subnet} was scanned.`
-      : undefined,
-  };
+  // `tableRead` separates "Windows would not answer" from "nothing is there" —
+  // the caller needs that difference to write an honest message.
+  return { hosts, tableRead: table.size > 0 || sipResponsive.size > 0 };
 }

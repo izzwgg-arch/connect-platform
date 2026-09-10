@@ -152,7 +152,7 @@ function cap(over: Partial<Parameters<typeof createPhoneCapability>[0]> = {}) {
     api: createPhoneCapability({
       http: async () => res({ status: 200, headers: { Server: "Yealink SIP-T54W 96.86.0.15" } }),
       resolveCredential: async () => CREDS,
-      scan: async () => ({ subnet: "192.168.1.0/24", hostsSeen: 2, hosts: [], outcome: "ok" as const }),
+      scan: async () => ({ subnet: "192.168.1.0/24", subnets: [{ cidr: "192.168.1.0/24", iface: "Ethernet", addresses: 254, hostsSeen: 2 }], hostsSeen: 2, hosts: [], outcome: "ok" as const }),
       now: () => t,
       ...over,
     }),
@@ -367,8 +367,15 @@ test("an adapter error never leaks a URL or a header back to the web page", asyn
 // passes straight through a missing call site.
 test("the shipped app actually registers the capability", () => {
   const main = readFileSync(join(__dirname, "..", "main.ts"), "utf8");
-  assert.match(main, /registerPhoneSetup\(\{\s*ipcMain,\s*safeStorage\s*\}\)/,
-    "a capability nothing calls is how the scanner sat unshipped for a week");
+  // ⛔ Matches the CALL and its two required deps, not the exact argument list.
+  // The literal `({ ipcMain, safeStorage })` form was pinned here until 2026-09-10,
+  // when `log` was added — the guard failed on a change that strictly improved the
+  // thing it guards. A guard should assert the intent (the capability IS wired,
+  // with a credential store) and leave room for the call to grow.
+  const call = /registerPhoneSetup\(\s*\{([\s\S]*?)\}\s*\)/.exec(main);
+  assert.ok(call, "a capability nothing calls is how the scanner sat unshipped for a week");
+  assert.match(call[1], /\bipcMain\b/, "it needs the IPC channel or the page cannot reach it");
+  assert.match(call[1], /\bsafeStorage\b/, "it needs the credential store");
   assert.match(main, /from "\.\/phoneSetup\/mainWiring"/);
   assert.match(main, /\bsafeStorage\b.*from "electron"/,
     "without safeStorage the password sits in memory in the clear");

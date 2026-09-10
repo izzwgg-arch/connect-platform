@@ -841,7 +841,15 @@ function registerIpc(): void {
   // loads the hosted portal, so anything it can express is something a compromised
   // server could express too. Credentials live behind a reference in the OS keystore
   // and never cross this boundary.
-  registerPhoneSetup({ ipcMain, safeStorage });
+  // ⛔⛔ `log` IS NOT OPTIONAL IN PRACTICE — omitting it made this whole subsystem
+  // silent for its entire life. `connect.log` held ZERO phoneSetup lines, so when a
+  // customer's phone stalled the only way to learn why was to read the production
+  // database. `phoneSetupLogWiring.test.ts` reads this file and fails if it goes.
+  registerPhoneSetup({
+    ipcMain,
+    safeStorage,
+    log: (line) => diag("phoneSetup", line),
+  });
 
   // The Coworker's hands. ⛔ Two channels, one allowlist (src/coworker/tasks.ts),
   // re-validated here on arrival; the profile comes from the tray-side settings and
