@@ -435,3 +435,178 @@ only when at least one phone is.
 - **Nothing is deployed and no desktop build exists.** The portal fix reaches nobody
   until a portal deploy; the desktop fixes need a clean-export build (rc.11) installed
   on his PC, and publishing auto-updates the fleet — his call, every time.
+
+---
+
+## 16. DONE 2026-09-10 — the Grandstream capture, taken from the device AND from our own PBX
+
+Phase E said *"a wrong P-code configures nothing, silently"* and demanded the codes be
+proven. They now are — twice over, from two independent sources that agree.
+
+### 16a. Where the codes came from (so nobody guesses one again)
+
+⛔⛔ **`GET /cgi-bin/metaconfig_get` on a Grandstream answers UNAUTHENTICATED with the
+handset's own alias→P-code map.** On Izzy's GXP2170 (192.168.6.171) that is **2,632
+entries** — the authoritative dictionary, straight off the device, no login, no password,
+no sticker. This is the mechanism to use for ANY Grandstream model, present or future.
+Anything else is guessing.
+
+⛔ **`GET /cgi-bin/api.values.get?request=phone_model` is also unauthenticated** and
+returns `GXP2170`. A credential-free fingerprint — which matters precisely because
+Grandstream randomises the admin password onto a sticker nobody has read yet.
+⚠️ It echoes back ANY key you ask for with an empty value, so only a NON-EMPTY answer
+means anything; `token`, `login_token` and friends all come back `""`.
+
+The provisioning codes, read off the device with their real validation rules:
+
+| P-code | Alias | Rules / default |
+|---|---|---|
+| **P237** | `provisioning.config.serverPath` | `min:0\|max:512`, default `fm.grandstream.com/gs` |
+| **P212** | `provisioning.config.protocol` | `required\|include:"TFTP","HTTP","HTTPS","FTP","FTPS"` |
+| P234 / P235 | config file prefix / postfix | `min:0\|max:512`, default `""` |
+| P192 | `provisioning.firmware.serverPath` | |
+| P194 | `provisioning.auto.mode` | `"No","YesUpgradeMin","YesUpgradeHourOfDay","YesUpgradeDayOfWeek"` |
+| P1360 / P1361 | config username / password | |
+| P22421 | `provision.config.forceReboot` | `integer\|between:0,1` |
+| P145 | `provisioning.override.dhcp.allowCommonOptions` | `"Yes","No"`, default Yes |
+| P8337 | `provisioning.override.dhcp.allowCustomOption` | `"None","Option150","Option160"` |
+| P240 | `authenticateFile` · P1359 `filePassword` · P8467 `processAll.enable` | |
+
+### 16b. ⛔⛔ TWO FACTS THAT WOULD EACH HAVE SILENTLY BROKEN A HAND-BUILT ADAPTER
+
+**1. P237 IS NOT A URL.** Our own PBX renders it as
+`209.145.60.79/phoneprov/<tenant-hash>` — **no scheme, no trailing slash** — and puts the
+transport in **P212 as a separate value**. A Yealink-shaped `https://…/` written into P237
+configures nothing. The two vendors are completely different in shape and the Yealink
+adapter is not a model for this one.
+
+**2. The two surfaces DISAGREE about P212's type.** The **config file** takes an
+**integer** (`<P212>2</P212>`, and the template's own comment says 0 TFTP, 1 HTTP,
+2 HTTPS, 3 FTP, 4 FTPS) while the phone's **metaconfig** declares the **strings**
+`"TFTP"…"FTPS"`. A value correct for one surface is silently wrong on the other.
+
+### 16c. ✅ The PBX ALREADY generates the file — Izzy's HT flow needs no new machinery
+
+Izzy, 2026-09-10: *"the HT Grandstream, all HTs, usually are not done via URL. It's done
+via an actual config file. Upload the file inside the UI, and it provisions."* and *"once
+the MAC address is added to the PBX, the PBX generates a config file. We can test it there
+and see what the PBX generates."*
+
+Read-only on the live PBX, and it is all already there:
+
+- Templates ship for **60 Grandstream models including `gxp2170` AND `ht812`**
+  (`/var/lib/vitalpbx/provisioning/base_templates/grandstream/<model>/template.cfg`).
+- Both are **Grandstream XML** (`<gs_provision><config>…`), rendered through a Blade-style
+  template — NOT the flat `P237=value` format.
+- **Seven Grandstream devices are already provisioned on this PBX**: 2× GXP2170, 2× HT801,
+  2× HT802, **1× HT812**. So the file Izzy describes has been generated for real.
+- ⛔ **The filename is `cfg<MAC>.xml`**, not Yealink's `<mac>.cfg`.
+- The rendered HT812 file carries exactly:
+  `<P212>2</P212>`, `<P237>209.145.60.79/phoneprov/f3df739ac62197cd</P237>`,
+  `<P192>209.145.60.79/firmwares/HT812</P192>`, `<P234></P234>`, `<P235></P235>`,
+  `<P145>1</P145>`, `<P8337>0</P8337>`, `<P8467>0</P8467>`, `<P240>0</P240>`.
+- ✅✅ **PROVEN SERVED:** `https://209.145.60.79/phoneprov/f3df739ac62197cd/cfgc074ade57937.xml`
+  answers **200 with 118,646 bytes — byte-identical to the file on disk.**
+
+**So the whole HT mechanism is: MAC → PBX renders `cfg<MAC>.xml` → the file carries the SIP
+account AND points P237/P212 back at the same folder → upload it once in the device UI →
+it provisions and STAYS provisioned.** Nothing new has to be built to make that work; what
+is missing is only the wizard step that fetches the file and tells the person to upload it.
+
+### 16d. What is still NOT proven
+
+- ⛔ **The WRITE has never been exercised.** `POST /cgi-bin/dologin` was reached on the real
+  GXP2170 but not passed — it needs the sticker password, which nobody has read. So
+  `api.values.post` stays **documented, not proven**; the P-codes it would carry ARE proven.
+  ⚠️ Do not brute-force it: Grandstream locks out on repeated failures.
+- ⛔ **The HT812 was NOT touched**, per Izzy's explicit instruction ("you could log into the
+  GXP2170, but not the HT812"). Everything above about HTs came from the PBX, not the device.
+- The adapter's `confidence` stays `documented`. It becomes `proven` when somebody watches a
+  Grandstream take its config on this platform — not before.
+
+### 16e. Recorded in code
+
+`packages/shared/src/deskPhoneSetup/vendorAdapters.ts` — the Grandstream entry now carries
+both traps in its `notes`, the proven filename order in `configFilenames`, the unexercised
+write in `gaps`, and `metaconfig_get` as the way to re-derive any code. Shared typecheck 0,
+`vendorCoverage.test.ts` 17/17.
+
+---
+
+## 17. DONE 2026-09-10 — Izzy's mockup exception (the photos) and the make dropdown
+
+Izzy, 2026-09-10: *"The mockup is approved with one exception: the photos of the phone
+are supposed to be next to the phone. Once the phones are identified, it should be a
+photo there."* and, from the build request, *"there should be a dropdown first with all
+manufacturers from our database."*
+
+### 17a. ⛔⛔ The photo was never missing — the FALLBACK was lying
+
+`PhonePhoto` has rendered the PBX's product image on all four screens since 2026-08-25.
+What went wrong is what happens when there ISN'T one, and it is not a rare case:
+
+**94 of the PBX's 427 models ship no product image (22%), measured on the live PBX.** Not
+a random 94 — **every Grandstream HT and every Dinstar DAG**, i.e. the whole ATA family,
+plus all 39 newer Polycom and 33 Flying Voice models. And **5 of the 7 Grandstream devices
+provisioned on this platform today are HTs**, so for Grandstream a missing photo is the
+COMMON case. Izzy's own two devices split exactly this way: the GXP2170 has a picture,
+the **HT812 does not and never will**.
+
+The old fallback drew ONE telephone glyph for all of them — pointing a customer at a phone
+that is not on their shelf. `KindGlyph` now draws what the thing actually IS: a flat box
+with sockets for an ATA, a cradle with an aerial for a cordless base, a cone with sound
+arcs for a ceiling speaker, a wall panel with a call button for a door intercom, and — for
+something we could not identify — **a plain box, because drawing a telephone would be a
+claim**. The words already worked this way (`describe()` → `describeKind`); the picture
+now agrees with them.
+
+⛔ Verified against real models: `HT812`/`HT801` → `ata` → "Small box your regular phones
+plug into"; `GXP2170` → `desk_phone`; `i64` → `doorbell`.
+
+### 17b. The make dropdown — and the one way it must never be used
+
+`BRAND_OPTIONS` is built from **VENDOR_CATALOG**, never typed into the component: a make
+we have no template for must not be offered (they would pick it, we would find nothing,
+and the wizard would look broken), and a make the PBX gains later has to appear without
+anybody editing the file. It is a `ConnectSelect` (the portal's only dropdown), searchable,
+with **"I am not sure — look for all of them" always present and last**.
+
+⛔⛔ **THE MAKE ORDERS THE FOUND LIST AND NEVER FILTERS IT** (`makeHint.ts`). Reading the
+wrong name off a sticker is an ordinary mistake — labels are small and offices have mixed
+estates. If we filtered, that mistake would show an EMPTY found screen while their phone
+sat right there in the scan results, and the only conclusion available to them is that the
+wizard does not work. This is exercised, not grepped: `orderPhonesByMake` is driven with a
+make that matches nothing and asserted to return all four phones.
+
+### 17c. ⏳ The gap that is left, stated rather than guessed at
+
+**76 of 427 models have no photo AND no kind**, so they get the plain box and the words
+"Phone equipment". Overwhelmingly Polycom VVX/CCX/IP/E/B (39) and Flying Voice P-series
+(33). `deviceKindFor` was written for the brands the wizard had met, and **300 of 427
+models resolve to `unknown`** — 70%.
+
+⛔ **Deliberately NOT fixed by pattern-guessing.** A wrong kind tells a customer the wrong
+thing about hardware in front of them, which is worse than an unspecific one; `unknown`
+→ plain box is honest. The one family added here is **`DAG\d` → ata**, because "Dinstar
+Analog Gateway" is the product line's own name and all seven of them also lack a photo
+(83 → 76). Closing the rest properly means sourcing a kind per brand — its own pass.
+
+### 17d. Proven as
+
+Portal typecheck **0**; portal suite **583 tests, 579 pass, 4 fail — the exact documented
+baseline**, none in a file this touched (`campaignsIndexLayout`, `coworkerHands`,
+`nativeSelectSweep` catching another session's `OrdersDesk.tsx`, `webrtcSdpDiagnostics`).
+Shared **597/597**, shared typecheck 0. New `wizardMakeAndPhotos.test.ts` (registered)
+**17/17**, and ⛔ **all 6 of its source guards FAIL replayed against HEAD** — including one
+that had to be tightened because it passed at HEAD by slicing on a `KindGlyph` that did
+not exist there, i.e. it was decoration until the replay caught it.
+
+⛔ One existing guard was relaxed rather than worked around: `deskPhoneWizard.test.ts`
+pinned `(step === "found" ? phones : chosen).map` byte-for-byte. Its stated intent —
+"match, ready, live and done are about the CHOSEN phones only" — is untouched by an
+ordering, so it now accepts either spelling AND gained a new assertion that the found
+branch must never become a `.filter`.
+
+⏳ **NOT PROVEN: nobody has opened the wizard in a browser since this.** It is proven as
+typecheck, tests and measurements against the live PBX — never as a person looking at the
+screen. Nothing is deployed.

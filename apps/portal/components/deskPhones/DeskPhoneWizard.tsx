@@ -19,7 +19,16 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { classifyDiscoveredHosts, shouldFingerprint, deviceKindFor, describeKind } from "@connect/shared";
+import {
+  classifyDiscoveredHosts,
+  shouldFingerprint,
+  deviceKindFor,
+  describeKind,
+  VENDOR_CATALOG,
+  VENDOR_SLUGS,
+  type DeviceKind,
+} from "@connect/shared";
+import { MAKE_UNSURE, orderPhonesByMake, toldUsPhrase } from "./makeHint";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
@@ -64,6 +73,27 @@ function desktop(): any | null {
   return (window as any).connectDesktop ?? null;
 }
 
+/**
+ * The makes we can actually set up, read from the PBX's own catalogue.
+ *
+ * ⛔ Built from VENDOR_CATALOG rather than written out here, for two reasons that both
+ * reach a customer: a make we have no template for must never be offered (they would
+ * pick it, we would find nothing, and the wizard would look broken), and a make the PBX
+ * gains later has to appear on this screen without anybody remembering to edit it. The
+ * catalogue is regenerated from the PBX — see vendorCatalog.generated.ts.
+ *
+ * ⛔ "I am not sure" is deliberately LAST and always present. Someone who cannot find
+ * their make on a 20-item list must have a way forward that is not guessing; picking it
+ * simply searches for everything, which is what the "No" tile does anyway.
+ */
+const BRAND_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Choose the make…" },
+  ...VENDOR_SLUGS
+    .map((slug) => ({ value: slug, label: VENDOR_CATALOG[slug].displayName }))
+    .sort((a, b) => a.label.localeCompare(b.label)),
+  { value: MAKE_UNSURE, label: "I am not sure — look for all of them" },
+];
+
 /** ⛔ The photo comes from the PBX's own product images, filed under the model name.
  * ⛔⛔ The token rides the QUERY STRING because an <img> sends no Authorization
  * header — without it every photo request was refused and the pictures never
@@ -78,12 +108,25 @@ function photoFor(model: string | null): string | null {
   return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
-/** The handset photo with an HONEST fallback: a model the PBX has no picture
- * for (Fanvil i-series, for one) gets the glyph, never a broken-image icon. */
+/**
+ * The product photo, with a fallback that is HONEST ABOUT THE KIND OF THING.
+ *
+ * ⛔⛔ 94 of the PBX's 427 models ship no picture at all (measured 2026-09-10) — and it
+ * is not a random 94: EVERY Grandstream HT and EVERY Dinstar DAG is missing, i.e. the
+ * whole ATA family, plus all 39 newer Polycom and 33 Flying Voice models. Five of the
+ * seven Grandstream devices actually provisioned on this platform today are HTs. So a
+ * missing photo is the NORMAL case for a box, not an edge case, and no amount of waiting
+ * for VitalPBX will fix it.
+ *
+ * ⛔ Which is why the fallback is drawn PER KIND rather than as one desk-phone glyph:
+ * showing a picture of a telephone for an HT812 sends the customer looking for a phone
+ * that does not exist on their shelf. The words already worked this way (`describe()`
+ * routes through `describeKind`); the picture now agrees with them.
+ */
 function PhonePhoto({ model, alt }: { model: string | null; alt?: string }) {
   const [failed, setFailed] = useState(false);
   const src = photoFor(model);
-  if (!src || failed) return <PhoneGlyph />;
+  if (!src || failed) return <KindGlyph kind={deviceKindFor(model)} />;
   return <img src={src} alt={alt ?? ""} onError={() => setFailed(true)} />;
 }
 
@@ -117,6 +160,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [knowsPhone, setKnowsPhone] = useState<"yes" | "no" | null>(null);
+  const [phoneBrand, setPhoneBrand] = useState("");
   const [phoneNameHint, setPhoneNameHint] = useState("");
   const [connection, setConnection] = useState<"cable" | "wifi" | "unsure" | null>(null);
   const [othersCount, setOthersCount] = useState(0);
@@ -350,6 +394,12 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     (p: CustomerPhone) => picks[p.id] ?? (p.connectedNow !== true),
     [picks],
   );
+  /** What the person told us on the make/model step, as one phrase to echo back. */
+  const toldUs = useMemo(() => toldUsPhrase(phoneBrand, phoneNameHint), [phoneBrand, phoneNameHint]);
+
+  /** The found list with the chosen make first. ⛔ Orders, never filters — see makeHint.ts. */
+  const orderedPhones = useMemo(() => orderPhonesByMake(phones, phoneBrand), [phones, phoneBrand]);
+
   /** The phones going into the setup — every later screen is about these only. */
   const chosen = useMemo(() => phones.filter(isPicked), [phones, isPicked]);
   const leftAlone = phones.length - chosen.length;
@@ -433,14 +483,31 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   <span>There is usually a brand name printed under the screen, like Yealink, Polycom or Grandstream.</span>
                 </button>
                 {knowsPhone === "yes" && (
-                  <input
-                    className="dps-input"
-                    style={{ gridColumn: "1 / -1" }}
-                    placeholder="What does it say? e.g. Yealink T54W"
-                    value={phoneNameHint}
-                    onChange={(e) => setPhoneNameHint(e.target.value)}
-                    aria-label="The name printed on your phone"
-                  />
+                  <div className="dps-brandpick" style={{ gridColumn: "1 / -1" }}>
+                    {/* ⛔ The makes come from the PBX's OWN catalogue (VENDOR_CATALOG, 20 brands),
+                        never a list typed here — a make we cannot provision must not be offered,
+                        and a make the PBX adds later must appear without anyone editing this file. */}
+                    <label className="dps-flabel" htmlFor="dps-brand">Who makes it?</label>
+                    <ConnectSelect
+                      id="dps-brand"
+                      value={phoneBrand}
+                      onChange={setPhoneBrand}
+                      ariaLabel="The make of your phone"
+                      searchable
+                      options={BRAND_OPTIONS}
+                    />
+                    <label className="dps-flabel" htmlFor="dps-model" style={{ marginTop: 10 }}>
+                      And the model, if you can see one <span className="dps-opt">(optional)</span>
+                    </label>
+                    <input
+                      id="dps-model"
+                      className="dps-input"
+                      placeholder="e.g. T54W"
+                      value={phoneNameHint}
+                      onChange={(e) => setPhoneNameHint(e.target.value)}
+                      aria-label="The model printed on your phone"
+                    />
+                  </div>
                 )}
                 <button className={`dps-tile${knowsPhone === "no" ? " dps-sel" : ""}`} onClick={() => setKnowsPhone("no")}>
                   <b>No &mdash; I have no idea</b>
@@ -592,9 +659,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   &mdash; computers, printers and the like. We left those alone.
                 </p>
               )}
-              {step === "found" && phoneNameHint.trim() && phones.length > 0 && (
+              {step === "found" && toldUs && phones.length > 0 && (
                 <p className="dps-hint" style={{ marginTop: 6 }}>
-                  You told us &ldquo;{phoneNameHint.trim()}&rdquo; &mdash; check the pictures below match what is on your desk.
+                  You told us &ldquo;{toldUs}&rdquo; &mdash; check the pictures below match what is on your desk.
                 </p>
               )}
               {subnet && (
@@ -604,7 +671,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               )}
               {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
               <div className="dps-plist">
-                {(step === "found" ? phones : chosen).map((p) => (
+                {(step === "found" ? orderedPhones : chosen).map((p) => (
                   /* ⛔ On the found screen the whole row is one big tick target, the
                      same shape as the clearing screen — a person picks phones here. */
                   <RowShell key={p.id} pick={step === "found"} picked={isPicked(p)}
@@ -977,6 +1044,88 @@ function PhoneGlyph() {
       <rect x="4" y="2" width="16" height="20" rx="2.5" />
       <rect x="7.5" y="5" width="9" height="4.5" rx="1" />
       <circle cx="9" cy="14" r="1" /><circle cx="12" cy="14" r="1" /><circle cx="15" cy="14" r="1" />
+    </svg>
+  );
+}
+
+/**
+ * What this thing LOOKS like, for the 94 catalogue models the PBX has no photo of.
+ *
+ * ⛔ Each drawing has to be recognisable at 28px against the object on the customer's
+ * desk or wall — so they are silhouettes with one distinguishing feature each (the ATA
+ * its row of sockets, the base its aerial, the speaker its sound arcs, the intercom its
+ * call button), not detailed illustrations that turn to mush at this size.
+ *
+ * ⛔ `unknown` deliberately gets a PLAIN BOX rather than the phone. We do not know what
+ * it is; drawing a telephone would be a claim, and the row's own words already say
+ * "we could not tell what this is".
+ */
+function KindGlyph({ kind }: { kind: DeviceKind }) {
+  // aria-hidden is written out on EVERY drawing below rather than carried in here, because
+  // the wizard's accessibility guard reads the literal opening-tag text — a spread would
+  // hide the attribute from it, and a guard that cannot see what it checks is not a guard.
+  // (⛔ And this comment deliberately does not spell that tag out: the guard scans the raw
+  // file, so prose quoting the tag is itself picked up as an unlabelled drawing.)
+  const shell = {
+    width: 28, height: 28, viewBox: "0 0 24 24", fill: "none",
+    stroke: "currentColor", strokeWidth: 1.8,
+    style: { color: "var(--dps-accent)" },
+  };
+
+  if (kind === "desk_phone") return <PhoneGlyph />;
+
+  if (kind === "ata") {
+    // A small flat box with phone sockets along the front — what an HT actually is.
+    return (
+      <svg {...shell} aria-hidden="true">
+        <rect x="2.5" y="7" width="19" height="10" rx="2" />
+        <rect x="5" y="13.5" width="3" height="2.2" rx="0.5" />
+        <rect x="9.5" y="13.5" width="3" height="2.2" rx="0.5" />
+        <rect x="14" y="13.5" width="3" height="2.2" rx="0.5" />
+        <circle cx="19" cy="10" r="0.9" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+
+  if (kind === "cordless_base") {
+    // A cradle with a handset sitting in it, and the aerial that gives it away.
+    return (
+      <svg {...shell} aria-hidden="true">
+        <path d="M4 20 h16 a1.5 1.5 0 0 0 1.5-1.5 v-2 h-19 v2 A1.5 1.5 0 0 0 4 20 Z" />
+        <rect x="8" y="6" width="8" height="10.5" rx="2" />
+        <path d="M18.5 9.5 V4" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (kind === "pager") {
+    // A ceiling speaker: the cone, and sound coming out of it.
+    return (
+      <svg {...shell} aria-hidden="true">
+        <circle cx="9" cy="12" r="6.5" />
+        <circle cx="9" cy="12" r="2.2" />
+        <path d="M17 8.5 a5 5 0 0 1 0 7" strokeLinecap="round" />
+        <path d="M20 6 a9 9 0 0 1 0 12" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (kind === "doorbell") {
+    // A narrow panel on a wall: grille at the top, the button you press below it.
+    return (
+      <svg {...shell} aria-hidden="true">
+        <rect x="6.5" y="2.5" width="11" height="19" rx="2.5" />
+        <path d="M9.5 7 h5 M9.5 9.5 h5" strokeLinecap="round" />
+        <circle cx="12" cy="16" r="2.2" />
+      </svg>
+    );
+  }
+
+  // unknown — a plain box. We do not know, so we do not draw a claim.
+  return (
+    <svg {...shell} aria-hidden="true">
+      <rect x="3.5" y="6" width="17" height="12" rx="2.5" />
+      <circle cx="7.5" cy="15" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   );
 }

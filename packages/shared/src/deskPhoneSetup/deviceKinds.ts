@@ -33,6 +33,11 @@ const KIND_PATTERNS: Array<{ kind: DeviceKind; re: RegExp }> = [
   { kind: "doorbell", re: /^I\d{1,2}[A-Z]{0,2}$/i },         // Fanvil i-series intercoms (i16V, i31S, i62…)
   { kind: "pager", re: /^PA\d/i },                           // Fanvil PA2/PA3 paging gateway
   { kind: "ata", re: /^HT\d{3}/i },                          // Grandstream HT801/802/812/814…
+  // ⛔ Dinstar's whole DAG line is "Dinstar Analog Gateway" — every DAG model in the
+  // catalogue is a multi-port FXS box, so this is a fact about the product line rather
+  // than a guess from the model number. It matters because ALL SEVEN of them also ship
+  // without a product photo, so the kind is the only thing the customer gets to see.
+  { kind: "ata", re: /^DAG\d/i },                            // Dinstar DAG1000-xS, DAG2500, DAG3000
   { kind: "cordless_base", re: /^W\d{2}B/i },                // Yealink W60B/W70B/W80B/W90B bases
   // Panasonic SIP families (separators already stripped: "KX-TGP500" -> "KXTGP500").
   // ⛔ TGP550 before the TGP catch-all: the 550 is a corded desk set, the

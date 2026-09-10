@@ -285,7 +285,18 @@ test("the found screen lets the person pick which phones to set up, and every la
   // Match, ready, live and done are about the CHOSEN phones only.
   assert.match(exec, /const chosen = useMemo\(\(\) => phones\.filter\(isPicked\)/);
   assert.match(exec, /const assigned = useMemo\(\(\) => chosen\.filter/);
-  assert.match(exec, /\(step === "found" \? phones : chosen\)\.map/);
+  // ⛔ Pinned as the INTENT, not as one literal expression. This asserted
+  // `(step === "found" ? phones : chosen)` byte-for-byte until 2026-09-10, when the found
+  // list gained an ORDERING by the make the person picked (`orderedPhones`, makeHint.ts).
+  // That is the same SET of phones in a different order, so the property this test exists
+  // to protect — found shows everything, every later screen shows only the chosen — was
+  // never in danger; only the spelling changed. What must stay true is that the found
+  // branch is not `chosen` and the other branch is.
+  assert.match(exec, /\(step === "found" \? (phones|orderedPhones) : chosen\)\.map/);
+  // ⛔ And the found branch must never become a FILTER — hiding a phone because it does not
+  // match the make somebody typed is how a found screen goes empty while the scan actually
+  // found their phone. `orderPhonesByMake` is exercised for this in wizardMakeAndPhotos.test.ts.
+  assert.doesNotMatch(exec, /step === "found" \? phones\.filter/);
   assert.doesNotMatch(exec, /\{phones\.map\(\(p\) => \(\s*<div key=\{p\.id\} className="dps-prow">/,
     "the live progress list must show the chosen phones, not every phone found");
   assert.doesNotMatch(exec, /\{phones\.map\(\(p\) => \(\s*<div key=\{p\.id\} className="dps-st">/,

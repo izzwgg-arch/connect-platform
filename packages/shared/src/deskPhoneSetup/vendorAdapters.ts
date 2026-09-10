@@ -506,21 +506,37 @@ export const VENDOR_ADAPTERS: Record<VendorSlug, VendorAdapter> = {
       path: "/cgi-bin/api.values.post",
       auth: "session",
       confidence: "documented",
-      source: "Grandstream HTTP API — body `sid=<session>&P237=<url>&P212=<protocol>`",
+      source:
+        "Grandstream HTTP API — body `sid=<session>&P237=<path>&P212=<protocol>`. The two P-codes " +
+        "are PROVEN: read off a real GXP2170 (`/cgi-bin/metaconfig_get`) and seen rendered by our " +
+        "own PBX. The POST itself is still unexercised — see gaps.",
     },
     dhcpOptions: [66, 43, 160],
-    configFilenames: ["cfg<MAC>", "cfg<MAC>.xml", "cfg<model>.xml", "cfg.xml"],
+    // PROVEN: our PBX renders `cfg<MAC>.xml`, and that exact name serves 200 over HTTPS.
+    configFilenames: ["cfg<MAC>.xml", "cfg<MAC>", "cfg<model>.xml", "cfg.xml"],
     confidence: "documented",
     gaps: [
       "Every unit built since 2017 ships with a RANDOM admin password printed on a sticker, so the " +
         "HTTP paths need the customer to read it off the phone — which is exactly the moment the " +
         "wizard has to ask, rather than guess.",
+      "The WRITE has never been exercised: `dologin` was reached on a real GXP2170 but not passed " +
+        "(no sticker password to hand), so `api.values.post` remains documented, not proven. The " +
+        "P-codes it would carry ARE proven.",
       "Door stations (GDS) use a completely different login and config surface.",
     ],
     notes:
       "Log in first at `POST /cgi-bin/dologin` to get a session id; every other call carries it. " +
-      "P212 selects the transport (0 TFTP, 1 HTTP, 2 HTTPS) and must be set alongside P237 or the " +
-      "phone keeps its old protocol.",
+      "⛔⛔ P237 IS NOT A URL. Our PBX renders it as `209.145.60.79/phoneprov/<tenant-hash>` — no " +
+      "scheme, no trailing slash — and puts the transport in P212 as a SEPARATE integer. Writing a " +
+      "Yealink-shaped `https://…/` into P237 configures nothing. ⛔ And the two surfaces disagree " +
+      "about P212's type: the CONFIG FILE takes an integer (0 TFTP, 1 HTTP, 2 HTTPS, 3 FTP, 4 " +
+      "FTPS) while the phone's own metaconfig declares the STRINGS \"TFTP\"…\"FTPS\", so a value " +
+      "correct for one surface is silently wrong on the other. " +
+      "⛔ Never guess a P-code: `GET /cgi-bin/metaconfig_get` answers UNAUTHENTICATED with the " +
+      "handset's own alias→P-code map (2,632 entries on a GXP2170), which is where every code " +
+      "above was read from. `GET /cgi-bin/api.values.get?request=phone_model` is also " +
+      "unauthenticated and returns the model — a credential-free fingerprint, useful precisely " +
+      "because the admin password is on a sticker nobody has yet read.",
   },
 
   polycom: {
