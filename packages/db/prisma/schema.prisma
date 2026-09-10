@@ -2941,6 +2941,52 @@ model PbxTenantInboundDid {
   @@index([pbxInstanceId, active])
 }
 
+/// One row per number being moved from VoIP.ms to SignalWire.
+///
+/// ⛔ `did` is the BARE 10 DIGITS, matching `PbxTenantInboundDid.e164` (which
+/// stores `8453050012`, not `+18453050012`). `TenantSmsNumber.phoneE164` and
+/// SignalWire both use the `+1…` form — `carrierMigrationE164()` is the one
+/// place that converts, so the two shapes can never drift.
+///
+/// ⛔ The lane columns are SEPARATE on purpose: a number's calls can be on
+/// SignalWire while its texting is still on VoIP.ms and its outbound is still
+/// on VoIP.ms. Collapsing them into one "migrated" flag is exactly the mistake
+/// that drops a customer's texting.
+model CarrierMigration {
+  id                 String    @id @default(cuid())
+  /// Bare 10 digits.
+  did                String    @unique
+  connectTenantId    String?
+  /// Snapshot so the board still reads correctly if a tenant is renamed.
+  tenantNameSnapshot String?
+  /// not_started | ready | filed | landing | live | done | held
+  status             String    @default("not_started")
+  holdReason         String?
+  /// Which carrier each lane is on today: voipms | signalwire.
+  voiceCarrier       String    @default("voipms")
+  smsCarrier         String    @default("voipms")
+  /// SignalWire's own port order reference, typed in by whoever filed it.
+  portReference      String?
+  /// The carrier-confirmed date the number is due to move.
+  focDate            DateTime?
+  filedAt            DateTime?
+  filedByUserId      String?
+  /// Stamped by the arrival watcher the first time the number is seen on the
+  /// SignalWire account, and when its handlers were pointed at us.
+  landedAt           DateTime?
+  pointedAt          DateTime?
+  swNumberId         String?
+  smsFlippedAt       DateTime?
+  lastCheckedAt      DateTime?
+  lastError          String?
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([status])
+  @@index([connectTenantId])
+}
+
 model PbxWebhookRegistration {
   id            String      @id @default(cuid())
   pbxInstanceId String      @unique

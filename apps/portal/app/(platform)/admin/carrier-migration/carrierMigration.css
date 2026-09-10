@@ -1,0 +1,190 @@
+/*
+ * Admin → Carrier migration.
+ *
+ * Scoped under .cm-root so nothing leaks into the rest of the console. Colours
+ * come from the app's own tokens (--panel / --border / --accent …) so the page
+ * follows the in-app light/dark toggle, never the operating system's.
+ *
+ * ⛔ INK vs FILL: --success / --warning / --danger are DISPLAY colours. As TEXT
+ * on the light panel they fail contrast (measured 2.15–3.76:1), so text uses
+ * the --cm-ink-* tokens below and fills keep the display colour. Same rule the
+ * queue wallboard learned the hard way.
+ */
+
+.cm-root {
+  --cm-ink-ok: var(--success);
+  --cm-ink-warn: var(--warning);
+  --cm-ink-crit: var(--danger);
+  --cm-ink-accent: var(--accent);
+  --cm-old: var(--warning);
+  --cm-new: var(--accent);
+  --cm-old-fill: color-mix(in srgb, var(--warning) 16%, transparent);
+  --cm-new-fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  --cm-ok-fill: color-mix(in srgb, var(--success) 16%, transparent);
+  --cm-crit-fill: color-mix(in srgb, var(--danger) 16%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+:root[data-theme="light"] .cm-root {
+  --cm-ink-ok: #0f7a4a;
+  --cm-ink-warn: #b45309;
+  --cm-ink-crit: #b3261e;
+  --cm-ink-accent: #1d4ed8;
+  --cm-old: #b45309;
+  --cm-new: #1d4ed8;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+.cm-head { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.cm-head h1 { margin: 0 0 3px; font-size: 22px; font-weight: 650; letter-spacing: -0.012em; }
+.cm-head .cm-sub { font-size: 13px; color: var(--text-dim); }
+.cm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.cm-btn {
+  border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 650;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  cursor: pointer; white-space: nowrap; font-family: inherit;
+}
+.cm-btn:hover:not(:disabled) { border-color: var(--accent); }
+.cm-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cm-btn--primary { background: var(--accent); border-color: var(--accent); color: #04121d; font-weight: 700; }
+.cm-btn--ghost { background: transparent; }
+.cm-btn--sm { padding: 5px 10px; font-size: 11.5px; }
+.cm-btn--danger { color: var(--cm-ink-crit); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+
+/* ── Gates ────────────────────────────────────────────────────────────────── */
+.cm-gates { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 12px; }
+.cm-gate {
+  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--gc);
+  border-radius: 10px; padding: 13px 15px;
+}
+.cm-gate--ok { --gc: var(--success); }
+.cm-gate--pending { --gc: var(--warning); }
+.cm-gate--blocked { --gc: var(--danger); }
+.cm-gate h2 { margin: 0; font-size: 12.5px; font-weight: 660; }
+.cm-gate .cm-gate-status {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  margin: 5px 0 6px; color: var(--gc);
+}
+.cm-gate--ok .cm-gate-status { color: var(--cm-ink-ok); }
+.cm-gate--pending .cm-gate-status { color: var(--cm-ink-warn); }
+.cm-gate--blocked .cm-gate-status { color: var(--cm-ink-crit); }
+.cm-gate p { margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Summary strip ────────────────────────────────────────────────────────── */
+.cm-strip { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.cm-strip-top { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; justify-content: space-between; margin-bottom: 11px; }
+.cm-strip-count { font-size: 15px; font-weight: 650; }
+.cm-strip-count b { font-variant-numeric: tabular-nums; }
+.cm-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-dim); }
+.cm-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.cm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.cm-bar { height: 9px; border-radius: 999px; overflow: hidden; display: flex; background: var(--panel-2); }
+.cm-bar i { display: block; height: 100%; }
+
+/* ── Board ────────────────────────────────────────────────────────────────── */
+.cm-tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.cm-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 760px; }
+.cm-table th {
+  text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim); padding: 10px 14px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.cm-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.cm-table tr:last-child td { border-bottom: 0; }
+.cm-grp td {
+  background: var(--panel-2); font-weight: 660; font-size: 12px; padding-top: 8px; padding-bottom: 8px;
+}
+.cm-grp-name { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cm-grp-count { color: var(--text-dim); font-weight: 500; font-size: 11.5px; }
+.cm-grp-out { float: right; font-size: 11px; font-weight: 650; }
+.cm-grp-out--ok { color: var(--cm-ink-ok); }
+.cm-grp-out--pending { color: var(--text-dim); }
+.cm-grp-out--blocked { color: var(--cm-ink-warn); }
+
+.cm-num {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  background: none; border: 0; padding: 0; color: var(--text); font-size: 12.5px; cursor: pointer; font-weight: 600;
+}
+.cm-num:hover { color: var(--accent); text-decoration: underline; }
+.cm-num:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.cm-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2.5px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 640; white-space: nowrap; border: 1px solid transparent;
+}
+.cm-chip--old { background: var(--cm-old-fill); color: var(--cm-old); }
+.cm-chip--new { background: var(--cm-new-fill); color: var(--cm-new); }
+.cm-chip--ok { background: var(--cm-ok-fill); color: var(--cm-ink-ok); }
+.cm-chip--crit { background: var(--cm-crit-fill); color: var(--cm-ink-crit); }
+.cm-chip--none { color: var(--text-dim); border-color: var(--border); }
+
+.cm-stage { font-size: 11.5px; color: var(--text-dim); }
+.cm-stage b { color: var(--text); font-weight: 620; }
+.cm-stage--blocked b { color: var(--cm-ink-warn); }
+.cm-stage--live b { color: var(--cm-ink-ok); }
+
+/* ── Detail drawer ────────────────────────────────────────────────────────── */
+.cm-drawer-back {
+  position: fixed; inset: 0; background: rgba(4, 10, 18, 0.55); z-index: 60;
+  border: 0; padding: 0; cursor: pointer;
+}
+.cm-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw);
+  background: var(--panel); border-left: 1px solid var(--border); z-index: 61;
+  display: flex; flex-direction: column; min-height: 0;
+  box-shadow: -18px 0 44px -30px rgba(0, 0, 0, 0.7);
+}
+.cm-drawer-head {
+  padding: 16px 20px; border-bottom: 1px solid var(--border); flex: none;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.cm-drawer-head h2 {
+  margin: 0 0 2px; font-size: 19px; font-weight: 660;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.cm-drawer-head .cm-sub { font-size: 12.5px; color: var(--text-dim); }
+.cm-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 26px; display: flex; flex-direction: column; gap: 16px; }
+.cm-x { background: none; border: 0; color: var(--text-dim); font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.cm-x:hover { color: var(--text); }
+.cm-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cm-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 15px; }
+.cm-card h3 { margin: 0 0 3px; font-size: 13px; font-weight: 650; }
+.cm-card .cm-csub { font-size: 11.5px; color: var(--text-dim); margin-bottom: 11px; }
+
+.cm-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; font-size: 12px; margin: 0; }
+.cm-kv dt { color: var(--text-dim); white-space: nowrap; }
+.cm-kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.cm-blockers { margin: 0; padding-left: 18px; font-size: 12px; color: var(--cm-ink-warn); }
+.cm-blockers li { margin-bottom: 4px; }
+.cm-blockers li:last-child { margin-bottom: 0; }
+
+.cm-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 11px; }
+.cm-field label { font-size: 11.5px; font-weight: 620; color: var(--text-dim); }
+.cm-field input, .cm-field textarea {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; color: var(--text); font: inherit; font-size: 12.5px; width: 100%;
+}
+.cm-field input:focus-visible, .cm-field textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+
+.cm-msg { border-radius: 8px; padding: 9px 12px; font-size: 12px; line-height: 1.5; }
+.cm-msg--ok { background: var(--cm-ok-fill); color: var(--cm-ink-ok); }
+.cm-msg--err { background: var(--cm-crit-fill); color: var(--cm-ink-crit); }
+.cm-msg--warn { background: var(--cm-old-fill); color: var(--cm-ink-warn); }
+
+.cm-protected { border-left: 3px solid var(--danger); padding-left: 11px; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Events ───────────────────────────────────────────────────────────────── */
+.cm-events { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.8; color: var(--text-dim); }
+.cm-events div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-events b { color: var(--text); font-weight: 600; }
+.cm-events .cm-ev-t { color: var(--cm-ink-accent); }
+
+.cm-empty { padding: 34px 20px; text-align: center; color: var(--text-dim); font-size: 13px; }
+.cm-note { font-size: 12px; color: var(--text-dim); line-height: 1.55; }
+.cm-note strong { color: var(--text); font-weight: 620; }

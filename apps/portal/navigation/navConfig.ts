@@ -7,6 +7,7 @@ import {
 import {
   Activity,
   AlertTriangle,
+  ArrowLeftRight,
   AudioLines,
   Bot,
   BarChart3,
@@ -257,6 +258,7 @@ export const navItems: NavItem[] = [
   { id: "admin.ai_trainer", href: "/ai-trainer", label: "AI Trainer", icon: "TR", lucide: GraduationCap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_ai_trainer" },
   { id: "admin.elevenlabs", href: "/elevenlabs", label: "ElevenLabs", icon: "EL", lucide: Mic2, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_elevenlabs" },
   { id: "admin.polly", href: "/polly", label: "Amazon Polly", icon: "PY", lucide: AudioLines, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_polly" },
+  { id: "admin.carrier_migration", href: "/admin/carrier-migration", label: "Carrier Migration", icon: "CM", lucide: ArrowLeftRight, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_carrier_migration" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
 
@@ -322,6 +324,7 @@ export const OWNER_ONLY_LIFTABLE_NAV_ITEMS: readonly string[] = [];
 export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "pbx.ivr_migration",
   "apps.signalwire",
+  "admin.carrier_migration",
   "admin.pbx_console",
   "admin.integrations",
   "admin.voice_agent",
@@ -368,6 +371,9 @@ export function isNavItemVisibleForUser(
   if (item.id === "pbx.ivr_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // Carrier migration decides when a paying customer's number changes carrier,
+  // and a port is not reversible in minutes. Owner only, always.
+  if (item.id === "admin.carrier_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.pbx_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.integrations" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.voice_agent" && backendJwtRole !== "SUPER_ADMIN") return false;

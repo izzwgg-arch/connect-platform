@@ -381,6 +381,15 @@ import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
+import {
+  inboundSmsWebhookUrl as signalWireInboundSmsWebhookUrl,
+  resolvePublicApiBase as resolveSignalWirePublicApiBase,
+} from "./signalwire/signalWireRoutes";
+import { resolveSignalWireCredentials } from "./signalwire/signalWireCredentials";
+import { listNumbers as swListNumbers, updateNumberHandlers as swUpdateNumberHandlers } from "./signalwire/signalWireClient";
+import { resolvePbxSipEndpointId } from "./onboarding/signalWireProvisioning";
+import { registerCarrierMigrationRoutes } from "./carrierMigration/routes";
+import { startCarrierMigrationWatch } from "./carrierMigration/arrivalWatcher";
 import { registerMeetingRoutes } from "./meetings/meetingRoutes";
 import { registerLoopcomDirectRoutes } from "./loopcomDirect/directRoutes";
 import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
@@ -2993,6 +3002,10 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // PBX Console (2026-08-19) — platform-owner only; every handler also calls requireOwner.
   { prefix: "/admin/pbx-console", permission: "can_manage_global_settings" },
   { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
+  // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
+  // the prefix is not silently outside the global gate (the /admin/wake-health
+  // class, where a missing rule meant no permission check ran at all).
+  { prefix: "/admin/carrier-migration", permission: "can_manage_global_settings" },
   // Voice agent (conversational order-taking IVR) admin (2026-08-26) —
   // SUPER_ADMIN only; every handler ALSO calls requireSuperAdmin. Rule exists
   // so the route is inside the global gate (the /admin/wake-health class).
@@ -24116,6 +24129,31 @@ registerSignalWireRoutes({
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),
 });
+
+// ── Carrier migration (2026-09-10) ─────────────────────────────────────────
+// Moving all 52 live numbers off VoIP.ms and onto SignalWire, a few at a time.
+// Incoming calls move by themselves (Main's default-trunk routes on the
+// dialled number and both carriers converge there); the ONLY gap is between a
+// number landing on the SignalWire account and its handlers being pointed at
+// our trunk, which is what the arrival watcher closes. Texting and outbound
+// calls are separate, gated switches — see carrierMigration/board.ts.
+// SUPER_ADMIN only; the watcher fails closed and touches only numbers a person
+// has filed.
+const carrierMigrationWatchDeps = {
+  resolveCredentials: () => resolveSignalWireCredentials(db),
+  listNumbers: (creds: any) => swListNumbers(creds),
+  updateNumberHandlers: (creds: any, id: string, patch: any) => swUpdateNumberHandlers(creds, id, patch),
+  resolvePbxSipEndpointId: (creds: any, d: any, owned?: any) => resolvePbxSipEndpointId(creds, d, owned),
+  inboundSmsWebhookUrl: () => signalWireInboundSmsWebhookUrl(resolveSignalWirePublicApiBase()),
+  log: app.log,
+};
+registerCarrierMigrationRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+  watch: carrierMigrationWatchDeps,
+});
+startCarrierMigrationWatch({ ...carrierMigrationWatchDeps, db });
 
 // ── PBX Console (2026-08-19) ────────────────────────────────────────────────
 // Replaces the VitalPBX panel for tenants / extensions / phone provisioning /

@@ -158,6 +158,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.ai_trainer", section: "admin", label: "AI Trainer", href: "/ai-trainer", permission: "can_view_admin_ai_trainer" },
   { id: "admin.elevenlabs", section: "admin", label: "ElevenLabs", href: "/elevenlabs", permission: "can_view_admin_elevenlabs" },
   { id: "admin.polly", section: "admin", label: "Amazon Polly", href: "/polly", permission: "can_view_admin_polly" },
+  { id: "admin.carrier_migration", section: "admin", label: "Carrier Migration", href: "/admin/carrier-migration", permission: "can_view_admin_carrier_migration" },
   // Platform-internal screens (every one SUPER_ADMIN-forced in navConfig and
   // requireSuperAdmin/can_manage_global_settings at the api). Own keys so the
   // rows on both permission editors stop moving together; none is in any
