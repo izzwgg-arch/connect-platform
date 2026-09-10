@@ -25,3 +25,21 @@
 # Regenerated from Linux PBX dumps and diffed against fresh ones — keep LF so a
 # re-dump compares byte-for-byte.
 /scripts/deskPhoneSetup/** text eol=lf
+
+# CLAUDE.md contains a NUL byte (a `\0` written through a shell heredoc in 2026-08),
+# so git's binary auto-detection exempts it from core.autocrlf conversion and it
+# stores whatever line endings the last tool happened to write. That made it flip
+# CRLF (d39cad7f..38c618b1) -> LF (69ae1b37) on a FORTY-LINE content change, rendering
+# as 20,618 insertions / 20,577 deletions.
+#
+# ⛔ That is a safety problem, not a tidiness one: this repo's rule is to read the
+# staged diff before every commit, because it is the only thing that catches another
+# session's in-flight CLAUDE.md work being swept in — and a whole-file line-ending
+# diff cannot be read. It would keep flip-flopping every time a different tool wrote
+# the file.
+#
+# An explicit `text` overrides the binary auto-detection, so git now normalises to LF
+# in the blob whatever is on disk and the churn stops. The blob is ALREADY LF as of
+# 69ae1b37, so this costs zero churn to add. It also makes the NUL repair (see the
+# CLAUDE.md section about itself) a content-only change whenever somebody does it.
+/CLAUDE.md text eol=lf
