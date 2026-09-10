@@ -875,24 +875,40 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
 
         {step === "done" && summary && (
           <>
+            {/* ⛔⛔ THE MARK REFLECTS THE OUTCOME. This screen used to draw a green
+                tick UNCONDITIONALLY and say "Your office is working" whenever
+                anything needed attention — so a run where NOTHING registered showed
+                a customer a tick above "0 of your 1 phones are ready". Izzy hit
+                exactly that on 2026-09-10. Three outcomes, three marks, and the
+                word "working" is only ever used when at least one phone really is. */}
             <div className="dps-wz-body" style={{ textAlign: "center", paddingTop: 34 }}>
               <div
                 className="dps-found"
                 style={{
                   width: 62, height: 62, borderRadius: "50%", display: "grid", placeItems: "center",
-                  margin: "0 auto 18px", background: "color-mix(in srgb, var(--success, #34c27b) 17%, transparent)",
+                  margin: "0 auto 18px",
+                  background: summary.ready === 0
+                    ? "color-mix(in srgb, var(--warning, #f0b655) 17%, transparent)"
+                    : "color-mix(in srgb, var(--success, #34c27b) 17%, transparent)",
                 }}
               >
                 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
-                     strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--dps-ok)" }} aria-hidden="true">
-                  <path d="M4.5 12.5l5 5 10-11" />
+                     strokeLinecap="round" strokeLinejoin="round"
+                     style={{ color: summary.ready === 0 ? "var(--dps-warn)" : "var(--dps-ok)" }} aria-hidden="true">
+                  {summary.ready === 0
+                    ? <><path d="M12 8v5" /><path d="M12 16.5v.01" /><circle cx="12" cy="12" r="9" /></>
+                    : <path d="M4.5 12.5l5 5 10-11" />}
                 </svg>
               </div>
               <h3 style={{ fontSize: 26 }}>{summary.headline}</h3>
               <p className="dps-sub" style={{ margin: "9px auto 0" }}>
                 {summary.needsAttention === 0
                   ? "Try picking one up — you should hear a dial tone."
-                  : "Your office is working. The rest can wait until you have a minute."}
+                  : summary.ready === 0
+                    // Nothing registered. Saying the office is working would be false,
+                    // and it is the sentence a customer quotes back when they ring up.
+                    ? "None of them are connected yet. Loopcom Support can finish this with you."
+                    : "The ones that are ready are working now. The rest can wait until you have a minute."}
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(158px,1fr))", gap: 8, marginTop: 22, textAlign: "left" }}>
                 {chosen.map((p) => (
