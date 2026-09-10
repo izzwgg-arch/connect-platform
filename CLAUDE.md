@@ -150,6 +150,47 @@ to me that every single one has an adapter."*
   `provisioning.devices` row per model (`save_phone` exists; the wizard does not call it) and
   the no-MAC common files (Polycom `000000000000.cfg`) do not exist per tenant; (6) Phases A
   and B of the plan — the log wiring and the in-app firewall prompt — are untouched.
+- ✅✅ **GRANDSTREAM IS CAPTURED, FROM THE DEVICE AND FROM OUR OWN PBX (2026-09-10,
+  `38c618b1`, plan §16) — nothing here is inferred.** ⛔⛔ **`GET /cgi-bin/metaconfig_get`
+  answers UNAUTHENTICATED with the handset's own alias→P-code map** — 2,632 entries on
+  Izzy's GXP2170 — so **never guess a Grandstream P-code again**; `api.values.get?request=
+  phone_model` is also unauthenticated and returns the model, a credential-free fingerprint
+  (useful because the admin password is on a sticker nobody has read). ⛔⛔ **P237 IS NOT A
+  URL**: our PBX renders it `209.145.60.79/phoneprov/<tenant-hash>` — **no scheme, no
+  trailing slash** — with the transport in **P212 separately**, so a Yealink-shaped
+  `https://…/` configures NOTHING. ⛔ And the two surfaces disagree on P212's type — the
+  config FILE takes an integer (`<P212>2</P212>`), the metaconfig declares the STRINGS
+  `"TFTP"…"FTPS"`. ✅ **Izzy's HT flow needs no new machinery**: the PBX already ships
+  templates for **60 Grandstream models incl. gxp2170 AND ht812**, already renders
+  **`cfg<MAC>.xml`** (NOT Yealink's `<mac>.cfg`) for the **7 Grandstream devices live on
+  this platform** (2× GXP2170, 2× HT801, 2× HT802, 1× HT812), and that file **serves 200 /
+  118,646 bytes over HTTPS, byte-identical to disk** — it carries the SIP account AND points
+  P237/P212 back at the same folder, so uploading it once provisions and STAYS provisioned.
+  What is missing is only the wizard step that fetches it and hands it over. ⏳ **The WRITE
+  is still unexercised** (`dologin` needs the sticker password) so the adapter stays
+  `documented`; ⛔ **the HT812 was NOT touched**, per Izzy — every HT fact above came from
+  the PBX. ⚠️ Do not brute-force `dologin`; Grandstream locks out.
+- ✅ **THE WIZARD'S PICTURE TELLS THE TRUTH NOW (`38c618b1`, plan §17).** Izzy's mockup
+  exception ("the photos are supposed to be next to the phone") was **not a missing photo** —
+  `PhonePhoto` has rendered them since 2026-08-25. ⛔⛔ **94 of the 427 models ship NO product
+  image (22%), and not a random 94: EVERY Grandstream HT and EVERY Dinstar DAG — the whole
+  ATA family — plus 39 newer Polycom and 33 Flying Voice.** 5 of the 7 live Grandstream
+  devices are HTs, so for that brand a missing photo is the COMMON case, and Izzy's own two
+  devices split exactly this way (GXP2170 has one, **HT812 does not and never will**). The
+  old fallback drew ONE telephone glyph for all of them — pointing a customer at a phone that
+  is not on their shelf. `KindGlyph` now draws what the thing IS (ATA box / cordless cradle /
+  ceiling speaker / door panel), and **a plain box for `unknown`, because drawing a telephone
+  would be a claim**. ⛔ **76 models still have neither photo nor kind** (mostly Polycom
+  VVX/CCX/IP and Flying Voice) and **300 of 427 resolve to `unknown`** — left honestly
+  unknown rather than pattern-guessed, because a WRONG kind is worse than an unspecific one;
+  only `DAG\d → ata` was added (the product line is literally "Dinstar Analog Gateway").
+- ✅ **The make dropdown is live and reads the catalogue**, never a typed list (a make we
+  cannot provision must not be offered; a make the PBX gains later must appear by itself).
+  ⛔⛔ **IT ORDERS THE FOUND LIST AND NEVER FILTERS IT** (`apps/portal/components/deskPhones/
+  makeHint.ts`) — misreading a sticker is ordinary, and filtering would show an EMPTY found
+  screen while the scan HAD found their phone, whose only reading is "the wizard is broken".
+  Exercised, not grepped. ⏳ **NOT PROVEN: nobody has opened the wizard in a browser and
+  nothing is deployed.**
 
 ## ⛔ AGENT HANDOFF — the 100-person MEETINGS load test ran for an hour with US ends (2026-09-10): LiveKit relayed CLEANLY, the 10–22 % loss was the LOAD GENERATORS starving, Izzy's office line caps at ~45–48 sessions, and screen share was NEVER exercised — READ FIRST before quoting ANY meeting capacity number, before running `lk load-test` from a workstation or from the SFU host, or before touching `toggleShare` in `MeetingRoom.tsx`
 
