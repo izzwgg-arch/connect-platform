@@ -165,18 +165,32 @@ pour them into SignalWire"* → *"Build it. Commit, push, deploy it."*
   production 2026-09-10.
   ⛔ **Never write `(cond ? log.info : log.warn)(…)`, `const l = log.info`, or pass a pino
   method as a callback** — a pino method only works called ON its logger.
-  **Proven, not assumed:** reproduced against the real installed pino **9.14.0** (old shape
-  throws that exact TypeError, fixed shape logs fine), and a 5-row loop demo goes from
-  **1 of 5 rows dispatched to 5 of 5**. Typecheck is differential (before vs after produce
+  **Proven, not assumed — INSIDE THE RUNNING PRODUCTION CONTAINER.** `app-api-1` runs
+  **pino 10.3.1** (the workstation has 9.14.0 — check, do not assume); on 10.3.1 the old
+  shape throws that exact TypeError and the fixed shape logs fine. A 5-row loop demo goes
+  from **1 of 5 rows dispatched to 5 of 5**. Typecheck is differential (before vs after produce
   an identical error set). ⛔ The api test suite was **NOT** run — this worktree has no
   `node_modules` and nothing imports this file under test.
   **The repo-wide sweep found NO other instance.** apps/, packages/, scripts/, services/,
   worker/ were scanned for every detaching shape — ternary, assigned to a variable,
   destructured off the logger, passed as a callback — and the scanner was **self-tested
   against the original line first**, so "clean" means checked, not merely quiet.
-  ⏳ **SOURCE ONLY — NOT DEPLOYED.** After deploying api, verify with
-  `docker logs app-api-1 | grep pino.msgPrefix` staying at **0** while an escalation
-  dispatches, and `"agent escalation dispatched"` appearing for each row.
+  ✅ **DEPLOYED + CONTAINER-VERIFIED 2026-09-10** (api at `5f9d9642`, blue/green, health
+  check passed). In `app-api-1`: the fixed lines are present, the old shape is gone from
+  `/app/apps/api/src`, and `pino.msgPrefix` + `"agent escalation dispatch failed"` are both
+  at **0**. Before the deploy the same container showed **3 `pino.msgPrefix` crashes and
+  exactly 3 "dispatch failed" lines — 1:1**, which is the proof the "failures" were the
+  logger, not delivery.
+  ⏳ **NOT YET seen on a REAL escalation**, because the queue is empty — the last 6 rows are
+  all `SENT` with `attempts=1`. ⛔ **Nothing was ever lost to this bug**: the row's DB
+  update runs BEFORE the log line, so each escalation had already delivered (SMS + email)
+  and been recorded when the logger crashed. The real damage was a **false alarm** — the
+  one channel that reports trouble crying "dispatch failed" — plus a latent risk that only
+  bites under load: escalations arrived one at a time today, so the abandoned remainder of
+  each batch was empty. Had 2+ ever queued together (an incident storm, exactly when it
+  matters), rows 2..5 would have been pushed to later 30 s sweeps, burning `attempts`.
+  To prove the success path end to end, a synthetic row must be inserted — ⛔ that TEXTS
+  IZZY on both phones and emails the alert inbox, so ask first.
 
 ## ⛔⛔ AGENT HANDOFF — the wizard can SAY WHAT IT DID and sweeps EVERY network now, the finish screen stopped lying, and Izzy's flow is MOCKED UP AWAITING APPROVAL (2026-09-10 evening) — READ FIRST before touching `apps/desktop/src/phoneSetup/`, before flipping `vendorSupportsLocalActions` for any brand, or for "the wizard is stuck on Preparing"
 
