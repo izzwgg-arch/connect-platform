@@ -512,11 +512,11 @@ function EmailStatusRow({
         <div className="mt-2 flex items-center gap-2">
           <ShieldCheck className={cn("h-4 w-4", replyTrackingActive ? "text-crm-success" : "text-crm-warning")} />
           <p className="text-sm font-semibold text-crm-text">
-            {loading ? "Checking..." : replyTrackingActive ? "Active" : connected ? "Disabled" : "Unavailable"}
+            {loading ? "Checking..." : replyTrackingActive ? "Active" : "Not available"}
           </p>
         </div>
         <p className="mt-1 text-xs text-crm-muted">
-          {replyTrackingActive ? "Metadata sync enabled" : "Enable in settings to track replies"}
+          {replyTrackingActive ? "Metadata sync enabled" : "Not offered on Loopcom — replies arrive in your mailbox as usual"}
         </p>
       </div>
 
@@ -648,7 +648,10 @@ export default function CrmEmailLandingPage() {
       const res = await apiPost<{ url: string }>("/crm/email/oauth/start", {
         scope: "USER",
         bodyCacheMode: "METADATA_ONLY",
-        enableReplyTracking: true,
+        // Reply tracking is no longer offered (2026-09-10): it needed a Google-
+        // RESTRICTED scope that was dropped from the app. The api ignores this
+        // flag either way; sending false keeps the consent screen honest.
+        enableReplyTracking: false,
       });
       if (res?.url) window.location.href = res.url;
     } finally {

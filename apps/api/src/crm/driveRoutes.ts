@@ -106,6 +106,11 @@ async function findDriveConnection(tenantId: string): Promise<DriveConnectionRow
 
 // ── Route registrar ───────────────────────────────────────────────────────────
 
+/** Off since 2026-09-10 — see the note on POST /crm/drive/oauth/start. */
+export const DRIVE_IMPORT_AVAILABLE = false;
+export const DRIVE_IMPORT_UNAVAILABLE_MESSAGE =
+  "Google Drive import is not available on Loopcom right now. Documents can still be attached to a lead by uploading them.";
+
 export async function registerCrmDriveRoutes(app: FastifyInstance) {
   const cryptoReady = hasCredentialsMasterKey();
   if (!cryptoReady) {
@@ -151,6 +156,8 @@ export async function registerCrmDriveRoutes(app: FastifyInstance) {
     const gmailConnection = connections.length > 0 ? connections[0] : null;
 
     return {
+      driveImportAvailable: DRIVE_IMPORT_AVAILABLE,
+      driveImportUnavailableMessage: DRIVE_IMPORT_AVAILABLE ? null : DRIVE_IMPORT_UNAVAILABLE_MESSAGE,
       gmailConnected: gmailConnection !== null,
       gmailEmail: gmailConnection?.emailAddress ?? null,
       driveConnected: driveConnection != null,
@@ -177,6 +184,16 @@ export async function registerCrmDriveRoutes(app: FastifyInstance) {
   app.post("/crm/drive/oauth/start", async (req, reply) => {
     const user = await requireAuth(req, reply);
     if (!user) return;
+    // ⛔ Google Drive import is OFF (2026-09-10). It needs `drive.readonly`, which
+    // Google classes as RESTRICTED (an annual paid CASA assessment); Izzy chose to
+    // drop it on 2026-09-02 and the app's Data Access declaration no longer lists
+    // it. Refused BEFORE any env or crypto check so the answer is the same on every
+    // box. Measured before switching it off: 0 connections ever held the scope.
+    // The way back is `drive.file` + a Google Picker flow (per-file consent, not
+    // restricted) — a portal build, not a toggle. Never re-add drive.readonly here.
+    if (!DRIVE_IMPORT_AVAILABLE) {
+      return reply.status(409).send({ error: "drive_import_unavailable", message: DRIVE_IMPORT_UNAVAILABLE_MESSAGE });
+    }
     if (!cryptoReady) return reply.status(503).send({ error: "crypto_not_configured" });
 
     let clientId: string;

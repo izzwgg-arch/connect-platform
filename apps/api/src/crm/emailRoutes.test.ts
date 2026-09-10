@@ -93,17 +93,17 @@ test("replyTrackingStatus: healthy when tracking on and scope present", () => {
   );
 });
 
-test("replyTrackingStatus: no_scope when scope not granted regardless of flag", () => {
+test("replyTrackingStatus: unavailable when scope not granted regardless of flag", () => {
   assert.equal(
     replyTrackingStatus({ replyTrackingEnabled: false, scopes: ["https://www.googleapis.com/auth/gmail.send"] }),
-    "no_scope",
+    "unavailable",
   );
 });
 
-test("replyTrackingStatus: no_scope when flag is true but scope missing (token drift)", () => {
+test("replyTrackingStatus: unavailable when flag is true but scope missing (token drift)", () => {
   assert.equal(
     replyTrackingStatus({ replyTrackingEnabled: true, scopes: [] }),
-    "no_scope",
+    "unavailable",
   );
 });
 
@@ -117,7 +117,7 @@ test("replyTrackingStatus: disabled when scope present but tracking off (backfil
 test("replyTrackingStatus: no_scope on empty scopes with tracking off", () => {
   assert.equal(
     replyTrackingStatus({ replyTrackingEnabled: false, scopes: [] }),
-    "no_scope",
+    "unavailable",
   );
 });
 

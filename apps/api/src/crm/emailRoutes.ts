@@ -425,7 +425,17 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
     const body = (req.body as any) || {};
     const bodyCacheMode = String(body?.bodyCacheMode || "METADATA_ONLY");
-    const enableReplyTracking = Boolean(body?.enableReplyTracking);
+    // ⛔ Reply tracking is NOT offered any more (2026-09-10). It needed
+    // `gmail.readonly`, which Google classes as RESTRICTED (an annual paid CASA
+    // security assessment); Izzy chose to drop it on 2026-09-02. The Data Access
+    // declaration on the Google Auth Platform lists sign-in + gmail.send ONLY,
+    // and the consent screen must ask for exactly that list — an undeclared
+    // restricted scope shows every customer the "unverified app" interstitial
+    // and would fail the gmail.send review. The body flag is read and ignored so
+    // an older portal bundle cannot reintroduce it. Connections that were granted
+    // the scope before this date keep working until the person reconnects.
+    void body?.enableReplyTracking;
+    const enableReplyTracking = false;
 
     // scope = USER (default) or TENANT (admins only). label/isDefaultForTenant apply to TENANT.
     const scopeChoice: "USER" | "TENANT" = body?.scope === "TENANT" ? "TENANT" : "USER";
@@ -456,7 +466,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       "profile",
       "https://www.googleapis.com/auth/gmail.send",
     ];
-    if (enableReplyTracking) scopesArr.push("https://www.googleapis.com/auth/gmail.readonly");
+    // ⛔ Never push gmail.readonly (or any other restricted scope) here — see the note above.
     const scope = scopesArr.join(" ");
 
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");

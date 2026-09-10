@@ -20,6 +20,9 @@ import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type DriveStatus = {
+  /** false since 2026-09-10 — the api refuses the connect; the message says why. */
+  driveImportAvailable?: boolean;
+  driveImportUnavailableMessage?: string | null;
   gmailConnected: boolean;
   gmailEmail: string | null;
   driveConnected: boolean;
@@ -326,7 +329,12 @@ export default function CrmDrivePage() {
                     connected={status.driveConnected}
                     label={status.driveConnected ? "Connected" : "Not connected"}
                   />
-                  {!status.driveConnected && (
+                  {!status.driveConnected && status.driveImportAvailable === false && (
+                    <span className="text-xs text-crm-muted" role="note">
+                      {status.driveImportUnavailableMessage || "Google Drive import is not available on Loopcom right now."}
+                    </span>
+                  )}
+                  {!status.driveConnected && status.driveImportAvailable !== false && (
                     <button
                       className={crm.btnPrimary}
                       onClick={handleConnectDrive}

@@ -668,7 +668,12 @@ test("⛔ server.ts wiring: login decides via decideLoginMfa AFTER the password 
   // ⛔ THE "NORMAL LOGIN IS UNCHANGED" PROOF: the no-MFA body is `issueLoginSession`'s
   // `{ token, portalPermissionSet? }` and NOTHING else — the only extra key is the
   // grace flag, and it is conditional on the required-role outcome.
-  assert.match(login, /const session = await issueLoginSession\(user\.id\);\s*\n\s*return \{\s*\n\s*\.\.\.session,\s*\n\s*\.\.\.\(mfaOutcome\.kind === "enroll_grace" \? \{ mfaEnrollmentRequired: true \} : \{\}\),\s*\n\s*\};/);
+  // Since 2026-09-10 that body is built inside `completeLoginAfterPrimaryFactor` (shared
+  // with Sign in with Google) and handed back as `{ status: 200, outcome: "session", body }`
+  // — the BODY is byte-identical to what /auth/login always returned, and the password
+  // door hands every credential-passed login to that ONE function.
+  assert.match(login, /const session = await issueLoginSession\(user\.id\);\s*\n\s*return \{\s*\n\s*status: 200,\s*\n\s*outcome: "session",\s*\n\s*body: \{\s*\n\s*\.\.\.session,\s*\n\s*\.\.\.\(mfaOutcome\.kind === "enroll_grace" \? \{ mfaEnrollmentRequired: true \} : \{\}\),\s*\n\s*\},\s*\n\s*\};/);
+  assert.match(login, /await completeLoginAfterPrimaryFactor\(user, \{ otpChannel: input\.otpChannel, via: "password" \}\)/);
   const issueBody = server.slice(server.indexOf("async function issueLoginSession("), server.indexOf("const mfaDeps = buildMfaDeps("));
   assert.match(issueBody, /return \{\s*\n\s*token,\s*\n\s*\.\.\.\(portalPermissionSet \? \{ portalPermissionSet \} : \{\}\),\s*\n\s*\};/, "the session body is exactly { token, portalPermissionSet? } — what /auth/login returned before MFA");
   // issueLoginSession still fetches the naming extension (userDisplayName.callsites guard depends on it).

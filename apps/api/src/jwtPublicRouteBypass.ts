@@ -200,6 +200,14 @@ export function shouldSkipJwtVerification(path: string): boolean {
       "/api/ready",
       "/auth/signup",
       "/auth/login",
+      // Sign in with Google (2026-09-10). start = the browser is sent to Google
+      // with no session yet; callback = Google redirects the browser back with
+      // code+state (verified in-handler by an HMAC-signed state); complete = the
+      // portal trades a 60-second one-shot handoff for the ordinary login body.
+      // All three carry no Bearer token by construction. googleLoginRoutes.ts.
+      "/auth/google/start",
+      "/auth/google/callback",
+      "/auth/google/complete",
       // MFA second step (2026-08-18). Carries a 5-minute PRE-AUTH token — not a
       // session — and verifies it in-handler with a key derived from JWT_SECRET,
       // so the JWT hook could never accept it anyway. ⛔ The ONLY /auth/mfa/*
@@ -234,6 +242,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // throttles itself, so no signature is required for safety.
       "/webhooks/signalwire/registry",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
+    || path.endsWith("/auth/google/start") || path.endsWith("/auth/google/callback") || path.endsWith("/auth/google/complete")
     || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
     || path.endsWith("/webhooks/signalwire/registry")
     || path === "/metrics"

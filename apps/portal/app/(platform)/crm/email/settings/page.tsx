@@ -70,26 +70,29 @@ function isValidEmailAddress(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-/** Returns "healthy" | "no_scope" | "disabled" | "off" mirroring the API helper. */
-function replyTrackingState(s: Sender): "healthy" | "no_scope" | "disabled" | "off" {
+/** Mirrors the API helper (crmEmailHelpers.replyTrackingStatus). "unavailable" = the
+ *  gmail.readonly scope was never granted — and since 2026-09-10 it never will be: reply
+ *  tracking is not offered any more (Google classes that scope as RESTRICTED). It is a
+ *  statement, not a reconnect prompt. */
+function replyTrackingState(s: Sender): "healthy" | "unavailable" | "disabled" | "off" {
   if (!isConnected(s)) return "off";
   const scope = hasReadonlyScope(s.scopes);
   if (s.replyTrackingEnabled && scope) return "healthy";
-  if (!scope) return "no_scope";
+  if (!scope) return "unavailable";
   return "disabled";
 }
 
-function ReplyTrackingStatePill({ state }: { state: "healthy" | "no_scope" | "disabled" | "off" }) {
+function ReplyTrackingStatePill({ state }: { state: "healthy" | "unavailable" | "disabled" | "off" }) {
   if (state === "healthy")
     return (
       <span className={cn(crm.chip, "text-[10px] border-crm-success/35 bg-crm-success/10 text-crm-success")}>
         <ShieldCheck className="h-3 w-3" /> Reply tracking active
       </span>
     );
-  if (state === "no_scope")
+  if (state === "unavailable")
     return (
-      <span className={cn(crm.chip, "text-[10px] border-crm-danger/35 bg-crm-danger/10 text-crm-danger")}>
-        <AlertCircle className="h-3 w-3" /> Reconnect required
+      <span className={cn(crm.chip, "text-[10px] text-crm-muted")} title="Reply tracking is not offered on Loopcom. Replies still arrive in your mailbox.">
+        Reply tracking not available
       </span>
     );
   if (state === "disabled")
@@ -203,8 +206,11 @@ export default function CrmEmailSettingsPage() {
         label: label ?? undefined,
         isDefaultForTenant: isDefaultForTenant ?? undefined,
         bodyCacheMode: "METADATA_ONLY",
-        enableReplyTracking: Boolean(enableReplyTracking),
+        // Reply tracking is no longer offered (2026-09-10) — the api ignores the
+        // flag; the parameter stays so existing callers compile. Never send true.
+        enableReplyTracking: false,
       });
+      void enableReplyTracking;
       if (res?.url) window.location.href = res.url;
     } catch (e: any) {
       setError(e?.message || "Failed to start OAuth");
@@ -674,18 +680,6 @@ function SenderRow({
                 Test
               </button>
             )}
-            {sender.canManage && connected && rtState === "no_scope" && (
-              <button
-                type="button"
-                className={cn(crm.btnGhost, "text-xs border-crm-danger/35 text-crm-danger")}
-                onClick={() => onEnableReplyTracking(sender)}
-                disabled={busy}
-                title="gmail.readonly scope not granted — reconnect to add reply tracking"
-              >
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="h-3.5 w-3.5" />}
-                Reconnect for reply tracking
-              </button>
-            )}
             {sender.canManage && connected && rtState === "disabled" && (
               <button
                 type="button"
@@ -725,14 +719,6 @@ function SenderRow({
               <div>
                 <strong>Reconnect required.</strong> Google rejected this mailbox token, so CRM sends from this sender will fail until it is reconnected.
                 {sender.lastError ? <span className="mt-1 block text-crm-danger/90">Last error: {sender.lastError}</span> : null}
-              </div>
-            </div>
-          )}
-          {rtState === "no_scope" && (
-            <div className="mb-2.5 flex items-start gap-2 rounded-crm border border-crm-danger/35 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <div>
-                <strong>Reconnect required.</strong> The <code>gmail.readonly</code> permission was not granted when this account was connected. Reply sync is disabled. Click <strong>Reconnect for reply tracking</strong> above to grant the scope.
               </div>
             </div>
           )}

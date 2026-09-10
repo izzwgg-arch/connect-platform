@@ -179,6 +179,37 @@ export function securityPageDestination(next: string | null | undefined): string
   return `/account/security?setup=1&next=${encodeURIComponent(dest)}`;
 }
 
+/**
+ * Sign in with Google (2026-09-10). The api sends the browser back to /login
+ * with EITHER `g=<one-shot handoff>` (trade it for the login body over POST
+ * /auth/google/complete) OR `google_error=<slug>`. The slugs are a closed list
+ * (apps/api/src/googleLogin.ts GOOGLE_LOGIN_ERRORS); every one gets a sentence
+ * here so a customer never reads a slug. The only rule the wording has to carry:
+ * a Google address that is not on Loopcom is NOT invited to sign up — the
+ * administrator adds their email to an extension, then Google sign-in works.
+ */
+export const GOOGLE_LOGIN_START_PATH = "/auth/google/start";
+export function googleLoginErrorMessage(code: string | null | undefined): string {
+  switch (String(code ?? "").trim()) {
+    case "not_registered":
+      return "That Google account isn't set up on Loopcom yet. Ask your administrator to add your email address to your extension, then try again.";
+    case "disabled":
+      return "This account has been disabled. Contact your administrator.";
+    case "cancelled":
+      return "Google sign-in was cancelled. Enter your email and password, or choose Sign in with Google again.";
+    case "expired":
+      return "That Google sign-in took too long. Please choose Sign in with Google again.";
+    case "email_unverified":
+      return "Google hasn't verified that email address, so it can't be used to sign in. Enter your email and password instead.";
+    case "not_configured":
+      return "Google sign-in isn't available right now. Enter your email and password instead.";
+    case "":
+      return "";
+    default:
+      return "Google sign-in didn't complete. Enter your email and password, or try Google again.";
+  }
+}
+
 /** Only ever navigate to a same-origin path — a `next` param is attacker-writable. */
 export function safeNextPath(next: string | null | undefined, fallback = "/dashboard"): string {
   if (!next) return fallback;

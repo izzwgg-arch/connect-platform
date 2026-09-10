@@ -49,17 +49,22 @@ export function hasReadonlyScope(scopes: string[]): boolean {
 
 /**
  * Derives the reply-tracking state for a CRM email connection.
- * - "healthy"   : tracking enabled and gmail.readonly scope granted
- * - "no_scope"  : gmail.readonly not in scopes — user must reconnect
- * - "disabled"  : scope present but replyTrackingEnabled=false (backfill edge-case)
- * - "off"       : not configured (no scope, tracking flag is irrelevant)
+ * - "healthy"     : tracking enabled and gmail.readonly scope granted (a grant
+ *                   from before 2026-09-10 — the connect flow no longer asks for it)
+ * - "unavailable" : gmail.readonly not granted. ⛔ NOT "reconnect to enable":
+ *                   reply tracking is no longer offered (the scope is RESTRICTED at
+ *                   Google and was dropped from the app on 2026-09-02), so a
+ *                   reconnect can never obtain it. Screens must say so, not nag.
+ * - "disabled"    : scope present but replyTrackingEnabled=false (backfill edge-case)
+ * - "off"         : not configured (no scope, tracking flag is irrelevant)
  */
+export type ReplyTrackingState = "healthy" | "unavailable" | "disabled" | "off";
 export function replyTrackingStatus(
   c: { replyTrackingEnabled: boolean; scopes: string[] },
-): "healthy" | "no_scope" | "disabled" | "off" {
+): ReplyTrackingState {
   const scope = hasReadonlyScope(c.scopes);
   if (c.replyTrackingEnabled && scope) return "healthy";
-  if (!scope) return "no_scope";
+  if (!scope) return "unavailable";
   // scope present but tracking disabled — should be resolved by backfill migration
   return "disabled";
 }

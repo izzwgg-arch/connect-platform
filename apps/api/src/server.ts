@@ -11,10 +11,12 @@ import {
   canonicalPortalOrigin,
   platformBillingFromEmail,
   platformNoreplyEmail,
+  portalOriginForRequest,
 } from "./publicOrigins";
 import { turnstileGate } from "./turnstile";
 import { registerLoginOtpRoutes, startOtpChallenge } from "./mfa/loginOtpRoutes";
 import { decideOtpGate } from "./mfa/loginOtp";
+import { registerGoogleLoginRoutes, googleClientFromEnv } from "./googleLoginRoutes";
 import fastifyMultipart from "@fastify/multipart";
 import bcrypt from "bcryptjs";
 import net from "net";
@@ -6106,22 +6108,52 @@ app.post("/auth/login", async (req, reply) => {
     loginFailuresTotal.labels("bad_password").inc();
     return reply.status(401).send({ error: "invalid_credentials" });
   }
-  // ⛔ ONLY AFTER the password matched. This check used to sit BEFORE bcrypt,
-  // so `{"email": x, "password": "anything"}` answered 403 for a disabled
-  // account and 401 for everything else — a free oracle that confirmed which
-  // addresses exist (audit finding J). Someone who typed the RIGHT password for
-  // a disabled account has proven it is theirs and may be told plainly; anyone
-  // else gets the same 401 as a wrong password.
-  if ((user as any).status === "DISABLED") {
-    loginFailuresTotal.labels("account_disabled").inc();
-    return reply.status(403).send({ error: "account_disabled", message: "This account has been disabled. Contact your administrator." });
-  }
+  // Everything after the password lives in ONE function shared with Sign in
+  // with Google (2026-09-10): the DISABLED check, the TOTP decision, the
+  // sign-in-code gate and the session. `/auth/google/complete` calls the same
+  // function, so the two doors can never drift and a person who turned the
+  // sign-in code on is asked for it whichever way they came in.
+  const done = await completeLoginAfterPrimaryFactor(user, { otpChannel: input.otpChannel, via: "password" });
+  if (done.outcome === "disabled") return reply.status(done.status).send(done.body);
   // A person who eventually remembers their own password walks away with a clean
   // slate — the failures that got them here must not linger and lock them out later.
   recordLoginSuccess(emailKey);
   loginSuccessTotal.inc();
+  return reply.status(done.status).send(done.body);
+});
+
+/**
+ * The post-credential half of a sign-in — everything that happens once WHO is
+ * at the keyboard has been established, by a password (`/auth/login`) or by
+ * Google (`/auth/google/complete`, googleLoginRoutes.ts). Returns what the
+ * route should answer; it never touches `reply` itself so both callers stay
+ * byte-identical in what they send.
+ *
+ *   disabled              → 403 account_disabled (told plainly: the credential
+ *                           already proved the account is theirs — audit finding J)
+ *   mfa_enroll_required   → 403 (only when MFA_ENFORCEMENT=required, which is NOT set)
+ *   mfa_challenge         → 200, NO session: `{ mfaChallengeRequired, preAuthToken, … }`
+ *   otp_challenge         → 200, NO session: the sign-in-code choice/send body
+ *   session               → 200 `{ token, portalPermissionSet?, mfaEnrollmentRequired? }`
+ *
+ * ⛔ Nothing before this point is shared on purpose: the throttle, Turnstile and
+ * the password compare are the PASSWORD door's own; Google's door has Google.
+ */
+async function completeLoginAfterPrimaryFactor(
+  user: any,
+  input: { otpChannel?: string; via: "password" | "google" },
+): Promise<{ status: number; body: Record<string, unknown>; outcome: "disabled" | "mfa_enroll_required" | "mfa_challenge" | "otp_challenge" | "session" }> {
+  // ⛔ ONLY AFTER the credential matched. This check used to sit BEFORE bcrypt,
+  // so `{"email": x, "password": "anything"}` answered 403 for a disabled
+  // account and 401 for everything else — a free oracle that confirmed which
+  // addresses exist (audit finding J). Someone who proved the account is theirs
+  // may be told plainly; anyone else gets the same 401 as a wrong password.
+  if ((user as any).status === "DISABLED") {
+    loginFailuresTotal.labels("account_disabled").inc();
+    return { status: 403, outcome: "disabled", body: { error: "account_disabled", message: "This account has been disabled. Contact your administrator." } };
+  }
   // ── MFA (Phase 11, 2026-08-18) ────────────────────────────────────────────
-  // Decided ONLY after the password matched, so a wrong password answers the
+  // Decided ONLY after the credential matched, so a wrong password answers the
   // identical 401 whether or not the account has MFA — the login response never
   // leaks enrolment. Three outcomes; two of them leave the response byte-for-
   // byte what it always was:
@@ -6139,24 +6171,32 @@ app.post("/auth/login", async (req, reply) => {
   // the required-role nudge (grace) and refusal (hard) do not apply to them.
   if (mfaOutcome.kind !== "challenge" && mfaOutcome.kind !== "none" && (user as any).loginOtpEnabledAt) mfaOutcome = { kind: "none" };
   if (mfaOutcome.kind === "enroll_required") {
-    app.log.warn({ userId: user.id, role: user.role, endpoint: "/auth/login" }, "login_refused_mfa_enrollment_required");
-    return reply.status(403).send({
-      error: "mfa_enrollment_required",
-      message: "Your role requires two-step verification, and this account hasn't set it up yet. Ask a platform administrator to reset your access.",
-    });
+    app.log.warn({ userId: user.id, role: user.role, endpoint: input.via === "google" ? "/auth/google/complete" : "/auth/login" }, "login_refused_mfa_enrollment_required");
+    return {
+      status: 403,
+      outcome: "mfa_enroll_required",
+      body: {
+        error: "mfa_enrollment_required",
+        message: "Your role requires two-step verification, and this account hasn't set it up yet. Ask a platform administrator to reset your access.",
+      },
+    };
   }
   if (mfaOutcome.kind === "challenge") {
-    // lastLoginAt is stamped when the challenge completes, not here — a password
-    // alone is not a sign-in for an MFA account.
+    // lastLoginAt is stamped when the challenge completes, not here — a
+    // credential alone is not a sign-in for an MFA account.
     return {
-      mfaChallengeRequired: true,
-      preAuthToken: mfaOutcome.preAuthToken,
-      expiresInSeconds: mfaOutcome.expiresInSeconds,
-      methods: mfaOutcome.methods,
-      // For clients written before MFA existed (the mobile app throws
-      // `json.error || "LOGIN_FAILED"` when there is no token): a readable slug
-      // instead of a generic failure. Not an error for a client that knows MFA.
-      error: "mfa_required",
+      status: 200,
+      outcome: "mfa_challenge",
+      body: {
+        mfaChallengeRequired: true,
+        preAuthToken: mfaOutcome.preAuthToken,
+        expiresInSeconds: mfaOutcome.expiresInSeconds,
+        methods: mfaOutcome.methods,
+        // For clients written before MFA existed (the mobile app throws
+        // `json.error || "LOGIN_FAILED"` when there is no token): a readable slug
+        // instead of a generic failure. Not an error for a client that knows MFA.
+        error: "mfa_required",
+      },
     };
   }
   // ── Sign-in code (2FA by text or email) — per USER, v3 2026-09-08 ──────────
@@ -6167,20 +6207,27 @@ app.post("/auth/login", async (req, reply) => {
   // fail closed on. Contract and rules in mfa/loginOtp.ts.
   const otpGate = decideOtpGate({ userOtpEnabled: Boolean((user as any).loginOtpEnabledAt), userHasTotp: false });
   if (otpGate.kind === "challenge") {
-    // lastLoginAt is stamped when the code is verified, not here — a password
-    // alone is not a sign-in for a person who asked for a code.
-    return await startOtpChallenge(otpDeps, {
+    // lastLoginAt is stamped when the code is verified, not here — a
+    // credential alone is not a sign-in for a person who asked for a code.
+    const body = await startOtpChallenge(otpDeps, {
       user: { id: user.id, tenantId: user.tenantId, email: user.email, phone: (user as any).phone },
       requestedChannel: input.otpChannel,
     });
+    return { status: 200, outcome: "otp_challenge", body: body as Record<string, unknown> };
   }
+  // INVITED → ACTIVE here is what lets a person whose email was just added to an
+  // extension sign in with Google without ever creating a password (2026-09-10).
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), status: "ACTIVE" as any } as any }).catch(() => undefined);
   const session = await issueLoginSession(user.id);
   return {
-    ...session,
-    ...(mfaOutcome.kind === "enroll_grace" ? { mfaEnrollmentRequired: true } : {}),
+    status: 200,
+    outcome: "session",
+    body: {
+      ...session,
+      ...(mfaOutcome.kind === "enroll_grace" ? { mfaEnrollmentRequired: true } : {}),
+    },
   };
-});
+}
 
 /**
  * The ONE place the session claim shape and the login response body live.
@@ -42467,6 +42514,18 @@ const port = Number(process.env.PORT || 3001);
   }
   await registerMfaRoutes(app, { audit, issueSession: issueLoginSession, service: mfaDeps });
   await registerLoginOtpRoutes(app, otpDeps);
+  // Sign in with Google (2026-09-10): identity from Google, the account from the
+  // User table (never created here), the session from the SAME post-credential
+  // chain a password uses — completeLoginAfterPrimaryFactor, defined beside
+  // /auth/login. Routes + rules: googleLoginRoutes.ts / googleLogin.ts.
+  await registerGoogleLoginRoutes(app, {
+    db: db as any,
+    log: app.log,
+    audit,
+    completeLogin: completeLoginAfterPrimaryFactor,
+    portalOriginForRequest,
+    googleClient: googleClientFromEnv,
+  });
   await registerOnboardingPublicRoutes(app);
   await registerOnboardingProvisioningRoutes(app);
   warnIfOnboardingStorageEphemeral(app.log);

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { LoginThemeToggle } from "../../components/LoginThemeToggle";
-import { ApiError, apiPost } from "../../services/apiClient";
+import { ApiError, apiPost, getPortalApiBaseUrl } from "../../services/apiClient";
 import { applyPortalPermissionsFromLogin } from "../../services/portalPermissionHydration";
 import { writeAuthToken } from "../../services/session";
 import { clearStaleVisualQaSession } from "../../services/visualQaMode";
@@ -23,6 +23,8 @@ import {
   type ClassifiedLogin,
   type LoginApiResponse,
   type OtpChallengeState,
+  GOOGLE_LOGIN_START_PATH,
+  googleLoginErrorMessage,
 } from "../../lib/mfaLogin";
 import type { Permission } from "../../types/app";
 
@@ -83,6 +85,29 @@ export default function LoginPage() {
     if (isLocalhostDev()) setShowLocalDevSignIn(true);
   }, []);
 
+  // Sign in with Google (2026-09-10): the api's callback lands here with either a
+  // one-shot handoff (`g`) or a reason (`google_error`). Both are taken off the
+  // URL immediately — a handoff in the address bar is a replayable secret, and a
+  // stale error must not reappear on the next visit — and the handoff is traded
+  // for the ORDINARY login body, so the 2FA screens below apply unchanged.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const handoff = params.get("g");
+    const googleError = params.get("google_error");
+    if (!handoff && !googleError) return;
+    params.delete("g");
+    params.delete("google_error");
+    const clean = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+    window.history.replaceState(window.history.state, "", clean);
+    if (googleError) {
+      setError(googleLoginErrorMessage(googleError));
+      return;
+    }
+    void loginWithGoogleHandoff(String(handoff));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
@@ -111,6 +136,69 @@ export default function LoginPage() {
     }, 400);
   }
 
+  /**
+   * ONE reader for every door's login body (password, Google): a challenge
+   * becomes its screen, a session signs the person in. The two doors answer
+   * the identical shape (the api shares the post-credential chain), so this is
+   * the only place the portal decides what a login body means.
+   */
+  function applyLoginResponse(res: LoginApiResponse) {
+    const classified = classifyLoginResponse(res);
+    if (classified.kind === "failed") {
+      setError(classified.error);
+      setTurnstileReset((k) => k + 1);
+      return;
+    }
+    if (classified.kind === "mfa_challenge") {
+      setChallenge({ preAuthToken: classified.preAuthToken, expiresAt: Date.now() + classified.expiresInSeconds * 1000 });
+      setCode("");
+      setUseRecovery(false);
+      return;
+    }
+    if (classified.kind === "otp_challenge") {
+      const { kind: _kind, ...state } = classified;
+      setOtp({ ...state, expiresAt: Date.now() + classified.expiresInSeconds * 1000 });
+      setOtpCode("");
+      // With a choice to make there is nothing to say yet. When the api sent
+      // straight away (one channel possible) an "already_sent" is not a
+      // failure: a code we sent moments ago is still good, so we deliberately
+      // did not send a second one.
+      setOtpNotice(classified.awaitingChannel ? "" : otpSendNotice(classified));
+      return;
+    }
+    completeSignIn(classified);
+  }
+
+  /** Where the Google button sends the browser: the api's start route, carrying where they were going. */
+  function googleStartHref(): string {
+    const next = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("next") : null;
+    const landing = safeNextPath(next);
+    return `${getPortalApiBaseUrl()}${GOOGLE_LOGIN_START_PATH}?next=${encodeURIComponent(landing)}`;
+  }
+
+  /** Trade the one-shot handoff from the Google callback for the login body. */
+  async function loginWithGoogleHandoff(handoff: string) {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await apiPost<LoginApiResponse>("/auth/google/complete", { code: handoff });
+      applyLoginResponse(res);
+    } catch (e: unknown) {
+      if (e instanceof ApiError) {
+        const body = e.body as { error?: string; message?: string } | null;
+        if (e.status === 403 && body?.error === "account_disabled") {
+          setError(googleLoginErrorMessage("disabled"));
+          return;
+        }
+        setError(String(body?.message || googleLoginErrorMessage("expired")));
+        return;
+      }
+      setError(googleLoginErrorMessage("google_failed"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   /** Plain English for a send that did not send — never a bare slug. */
   function otpSendNotice(step: Pick<OtpChallengeState, "sent" | "reason" | "channel" | "destination">): string {
     if (step.sent) return "";
@@ -128,30 +216,7 @@ export default function LoginPage() {
         password: loginPassword,
         ...(turnstileToken ? { turnstileToken } : {}),
       });
-      const classified = classifyLoginResponse(res);
-      if (classified.kind === "failed") {
-        setError(classified.error);
-        setTurnstileReset((k) => k + 1);
-        return;
-      }
-      if (classified.kind === "mfa_challenge") {
-        setChallenge({ preAuthToken: classified.preAuthToken, expiresAt: Date.now() + classified.expiresInSeconds * 1000 });
-        setCode("");
-        setUseRecovery(false);
-        return;
-      }
-      if (classified.kind === "otp_challenge") {
-        const { kind: _kind, ...state } = classified;
-        setOtp({ ...state, expiresAt: Date.now() + classified.expiresInSeconds * 1000 });
-        setOtpCode("");
-        // With a choice to make there is nothing to say yet. When the api sent
-        // straight away (one channel possible) an "already_sent" is not a
-        // failure: a code we sent moments ago is still good, so we deliberately
-        // did not send a second one.
-        setOtpNotice(classified.awaitingChannel ? "" : otpSendNotice(classified));
-        return;
-      }
-      completeSignIn(classified);
+      applyLoginResponse(res);
     } catch (e: unknown) {
       if (e instanceof ApiError) {
         if (e.status === 401) {
@@ -593,6 +658,25 @@ export default function LoginPage() {
         <button className="lc-login-submit" type="submit" disabled={loading}>
           {loading ? "Signing in..." : "Sign in"}
         </button>
+        <div className="lc-login-or" aria-hidden="true"><span>or</span></div>
+        {/* Sign in with Google (2026-09-10): a plain link to the api's start route —
+            a top-level navigation, no Google script on the page, no CSP change.
+            Only an address that is ALREADY a Loopcom login can get in this way;
+            there is no sign-up behind it. */}
+        <a
+          className="lc-login-google"
+          href={googleStartHref()}
+          aria-disabled={loading ? "true" : undefined}
+          onClick={(e) => { if (loading) e.preventDefault(); }}
+        >
+          <svg className="lc-login-google-mark" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+          </svg>
+          <span>Sign in with Google</span>
+        </a>
         {showLocalDevSignIn ? (
           <button
             className="lc-login-ghost"
