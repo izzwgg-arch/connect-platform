@@ -21,3 +21,7 @@
 # being gitignored wholesale.
 /docs/pbx/*.sh text eol=lf
 /docs/pbx/*.conf text eol=lf
+
+# Regenerated from Linux PBX dumps and diffed against fresh ones — keep LF so a
+# re-dump compares byte-for-byte.
+/scripts/deskPhoneSetup/** text eol=lf

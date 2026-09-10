@@ -1,0 +1,489 @@
+=== per brand: the provisioning_path key line(s), unique; brands with NONE listed at the end ===
+--- alcatel-lucent (15 of 15 models reference it)
+<FlashServerIP>{{ $settings['provisioning_path'] ?? null }}</FlashServerIP>
+<setting id="DeviceProvisionServerUrl" value="{{ $settings['provisioning_path'] ?? null }}" override="true" />
+<setting id="LocalEnetcfgDmUrl" value="{{ $settings['provisioning_path'] ?? null }}" override="true"/>
+--- atcom (24 of 24 models reference it)
+auto_provision.server.url = {{ $settings['provisioning_path'] ?? null }}
+--- attimo (4 of 4 models reference it)
+Flash Server IP :{{ $settings['provisioning_path'] ?? null }}
+--- cisco (10 of 10 models reference it)
+<Profile_Rule ua="na">[--uid {{ $connectionSettings['auth_user'] ?? null }} --pwd {{ $connectionSettings['auth_password'] ?? null }}]{{ $settings['provisioning_path'] ?? null }}/SEP$MAU.cnf.xml</Profile_Rule>
+--- clearlyip (3 of 3 models reference it)
+<P237 para="FirmwareUpGrade_ConfigServerPath">{{ $settings['provisioning_path'] ?? null }}</P237>
+--- dinstar (7 of 14 models reference it)
+Config.Autoprovision.GENERAL.Url = {{ $settings['provisioning_path'] ?? null }}
+--- fanvil (32 of 35 models reference it)
+ap.FlashServerIP = {{ $settings['provisioning_path'] ?? null }}
+Download Server IP :{{ $settings['provisioning_path'] ?? null }}
+Flash Server IP :{{ $settings['provisioning_path'] ?? null }}
+--- flying voice (0 of 40 models reference it)
+auto_provision.server.url={{ $settings['provisioning_path'] ?? null }}
+--- gigaset (0 of 13 models reference it)
+<param name="Provisioning.global.ProvisioningServer" value="{{ $settings['provisioning_path'] ?? null }}"/>
+<setting_server perm="">{{ $settings['provisioning_path'] ?? null }}</setting_server>
+--- grandstream (62 of 62 models reference it)
+<item name="provisioning.config.serverPath">{{ $settings['provisioning_path'] ?? null }}</item>
+<item name="provisioning.server_path">{{ $settings['provisioning_path'] ?? null }}</item>
+<P237>{{ $settings['provisioning_path'] ?? null }}</P237>
+--- hanyang digitech (0 of 1 models reference it)
+pvserverip={{ $settings['provisioning_path'] ?? null }}
+--- htek (11 of 11 models reference it)
+<P237 para="FirmwareUpGrade_ConfigServerPath">{{ $settings['provisioning_path'] ?? null }}</P237>
+--- lvswitches (3 of 3 models reference it)
+auto_provision.server_url = {{ $settings['provisioning_path'] ?? null }}
+--- nurivoice (1 of 1 models reference it)
+pvserverip={{ $settings['provisioning_path'] ?? null }}
+--- polycom (16 of 39 models reference it)
+ device.prov.serverName="{{ $settings['provisioning_path'] ?? null }}"
+--- sangoma (4 of 17 models reference it)
+<P237 para="FirmwareUpGrade.ConfigServerPath">{{ $settings['provisioning_path'] ?? null }}</P237>
+<setting id="config_server_url" value="http://{{ $connectionSettings['auth_user'].':'.$connectionSettings['auth_password'].'@'. $settings['provisioning_path'] }}" />
+--- snom (19 of 20 models reference it)
+<setting_server>{{ $settings['provisioning_path'] ?? null }}</setting_server>
+<setting_server perm="RW">{{ $settings['provisioning_path'] ?? null }}</setting_server>
+--- vtech (16 of 16 models reference it)
+provisioning.server_address = {{ $settings['provisioning_path'] ?? null }}
+provisioning_settings.cfg.URL="{{ $settings['provisioning_path'] ?? null }}"
+--- yealink (80 of 82 models reference it)
+auto_provision.server.url = {{ $settings['provisioning_path'] ?? null }}
+static.auto_provision.server.url = {{ $settings['provisioning_path'] ?? null }}
+BRANDS WITH NO provisioning_path IN ANY TEMPLATE: aastra-mitel
+
+=== generated filename per brand (colon-stripped MAC) ===
+Grandstream -> cfg<mac>.xml 
+Polycom -> <mac>.cfg <mac>-phone.cfg 
+Yealink -> <mac>.boot <mac>.cfg 
+Yealink -> <mac>.boot <mac>.cfg <mac>.cfg.bak-claude-udp 
+
+=== settings.provisioning_path + connection_settings columns ===
+id sip_port pjsip_port description sip_domain sip_proxy sip_proxy_port sip_transport http_port https_port tenant_id shared 
+id auth_user auth_password tenant 
+=== BRAND,MODEL dump (427 rows) ===
+Aastra-Mitel,6730i,203
+Aastra-Mitel,6731i,202
+Aastra-Mitel,6735i,201
+Aastra-Mitel,6737i,200
+Aastra-Mitel,6739i,199
+Aastra-Mitel,6753i,198
+Aastra-Mitel,6755i,197
+Aastra-Mitel,6757i,196
+Aastra-Mitel,6757i-CT,195
+Aastra-Mitel,6863i,207
+Aastra-Mitel,6865i,206
+Aastra-Mitel,6867i,205
+Aastra-Mitel,6869i,204
+Aastra-Mitel,9112i,211
+Aastra-Mitel,9133i,210
+Aastra-Mitel,9143i,209
+Aastra-Mitel,9480i,208
+Alcatel-Lucent,8008-CE,6
+Alcatel-Lucent,8008G-CE,7
+Alcatel-Lucent,8018-CE,8
+Alcatel-Lucent,8058s-CE,9
+Alcatel-Lucent,8068s-CE,10
+Alcatel-Lucent,8078s-CE,11
+Alcatel-Lucent,H2,4
+Alcatel-Lucent,H2P,5
+Alcatel-Lucent,H3G,214
+Alcatel-Lucent,H3P,213
+Alcatel-Lucent,H6,215
+Alcatel-Lucent,M3,3
+Alcatel-Lucent,M5,2
+Alcatel-Lucent,M7,1
+Alcatel-Lucent,M8,257
+Atcom,A10,12
+Atcom,A10W,13
+Atcom,A11,14
+Atcom,A16,15
+Atcom,A20LTE,17
+Atcom,A20W,18
+Atcom,A20WAC,19
+Atcom,A21,20
+Atcom,A26,21
+Atcom,A41,22
+Atcom,A41W,23
+Atcom,A48,24
+Atcom,A48LTE,25
+Atcom,A48W,26
+Atcom,A48WAC,27
+Atcom,A68,28
+Atcom,A68LTE,29
+Atcom,A68W,30
+Atcom,A68WAC,31
+Atcom,D20,32
+Atcom,D21,33
+Atcom,D32,34
+Atcom,D33,35
+Attimo,A-A03,383
+Attimo,A-A04,384
+Attimo,A-G01,381
+Attimo,A-G02,382
+Cisco,CP-7811,223
+Cisco,CP-7821,224
+Cisco,CP-7841,225
+Cisco,CP-7861,226
+Cisco,CP-8811,236
+Cisco,CP-8841,237
+Cisco,CP-8845,238
+Cisco,CP-8851,239
+Cisco,CP-8861,240
+Cisco,CP-8865,241
+ClearlyIP,CIP230,36
+ClearlyIP,CIP250,37
+ClearlyIP,CIP270,38
+Dinstar,C60L&C60LP,217
+Dinstar,C60S&C60SP,216
+Dinstar,C61S&C61SP,218
+Dinstar,C62G&C62GP,219
+Dinstar,C63G&C63GP,220
+Dinstar,C64G&C64GP,221
+Dinstar,C66G&C66GP,222
+Dinstar,DAG1000-16S,260
+Dinstar,DAG1000-24S,261
+Dinstar,DAG1000-32S,262
+Dinstar,DAG1000-4S,258
+Dinstar,DAG1000-8S,259
+Dinstar,DAG2500,263
+Dinstar,DAG3000,264
+Fanvil,H2S,40
+Fanvil,H3,41
+Fanvil,H5,42
+Fanvil,V61W,397
+Fanvil,V62,342
+Fanvil,V62 Pro,399
+Fanvil,V62W,398
+Fanvil,V63,341
+Fanvil,V64,340
+Fanvil,V65,339
+Fanvil,V66,394
+Fanvil,V66 Pro,395
+Fanvil,V67,338
+Fanvil,W610D,402
+Fanvil,W610W,396
+Fanvil,W710D,403
+Fanvil,X1SG,39
+Fanvil,X1SP,246
+Fanvil,X210,55
+Fanvil,X210i,56
+Fanvil,X2C,43
+Fanvil,X2P,44
+Fanvil,X303,390
+Fanvil,X303-2 Wire,400
+Fanvil,X3S,45
+Fanvil,X3U,46
+Fanvil,X4,47
+Fanvil,X4U,48
+Fanvil,X5S,49
+Fanvil,X5U,50
+Fanvil,X6,51
+Fanvil,X6U,52
+Fanvil,X7,53
+Fanvil,X7A,391
+Fanvil,X7C,54
+Flying Voice,FIP10,57
+Flying Voice,FIP11C,58
+Flying Voice,FIP12WP,59
+Flying Voice,FIP13G,60
+Flying Voice,FIP14G,61
+Flying Voice,FIP15G,62
+Flying Voice,FIP15GPLUS,265
+Flying Voice,FIP16,63
+Flying Voice,FIP16PLUS,266
+Flying Voice,P10,267
+Flying Voice,P10G,269
+Flying Voice,P10LTE,271
+Flying Voice,P10P,268
+Flying Voice,P10W,270
+Flying Voice,P11,272
+Flying Voice,P11G,274
+Flying Voice,P11LTE,276
+Flying Voice,P11P,273
+Flying Voice,P11W,275
+Flying Voice,P20,282
+Flying Voice,P20G,285
+Flying Voice,P20P,283
+Flying Voice,P20W,284
+Flying Voice,P21,286
+Flying Voice,P21P,287
+Flying Voice,P21W,288
+Flying Voice,P22G,278
+Flying Voice,P22P,277
+Flying Voice,P23G,289
+Flying Voice,P23GW,290
+Flying Voice,P24GW,291
+Flying Voice,P33,279
+Flying Voice,P33G,281
+Flying Voice,P33P,280
+Flying Voice,P510,297
+Flying Voice,P53,292
+Flying Voice,P54,293
+Flying Voice,P55,294
+Flying Voice,P57,295
+Flying Voice,P58,296
+Gigaset,N210 IP PRO,411
+Gigaset,N530 IP PRO,412
+Gigaset,N610 IP PRO,413
+Gigaset,N670 IP PRO,414
+Gigaset,N770 IP PRO,415
+Gigaset,N870 IP PRO,416
+Gigaset,N870E IP PRO,417
+Gigaset,P710 IP PRO,404
+Gigaset,P810 IP PRO,405
+Gigaset,P810B IP PRO,406
+Gigaset,P820 IP PRO,407
+Gigaset,P825 IP PRO,408
+Gigaset,P850W IP PRO,409
+Gigaset,P855BW IP PRO,410
+Grandstream,DP750,366
+Grandstream,DP752,367
+Grandstream,DP755,368
+Grandstream,GHP610,347
+Grandstream,GHP610W,348
+Grandstream,GHP611,349
+Grandstream,GHP611W,350
+Grandstream,GHP620,343
+Grandstream,GHP620W,344
+Grandstream,GHP621,345
+Grandstream,GHP621W,346
+Grandstream,GRP2601,242
+Grandstream,GRP2602,243
+Grandstream,GRP2603,244
+Grandstream,GRP2604,245
+Grandstream,GRP2612,76
+Grandstream,GRP2612P,77
+Grandstream,GRP2612W,78
+Grandstream,GRP2613,75
+Grandstream,GRP2614,74
+Grandstream,GRP2615,73
+Grandstream,GRP2616,72
+Grandstream,GRP2624,247
+Grandstream,GRP2634,248
+Grandstream,GRP2636,352
+Grandstream,GRP2650,351
+Grandstream,GRP2670,249
+Grandstream,GXP1610,84
+Grandstream,GXP1615,83
+Grandstream,GXP1620,82
+Grandstream,GXP1625,81
+Grandstream,GXP1628,80
+Grandstream,GXP1630,79
+Grandstream,GXP1760W,71
+Grandstream,GXP1780,69
+Grandstream,GXP1782,70
+Grandstream,GXP2000,335
+Grandstream,GXP2010,336
+Grandstream,GXP2020,337
+Grandstream,GXP2130,68
+Grandstream,GXP2135,67
+Grandstream,GXP2140,66
+Grandstream,GXP2160,65
+Grandstream,GXP2170,64
+Grandstream,GXV3350,187
+Grandstream,GXV3370,186
+Grandstream,GXV3380,185
+Grandstream,GXV3450,353
+Grandstream,GXV3470,354
+Grandstream,GXV3480,355
+Grandstream,HT801,305
+Grandstream,HT802,304
+Grandstream,HT812,303
+Grandstream,HT813,302
+Grandstream,HT814,301
+Grandstream,HT818,300
+Grandstream,WP810,385
+Grandstream,WP816,386
+Grandstream,WP820,212
+Grandstream,WP822,387
+Grandstream,WP825,388
+Grandstream,WP826,389
+Hanyang Digitech,P1100,299
+Htek,UC902,85
+Htek,UC902S,86
+Htek,UC912,87
+Htek,UC921,88
+Htek,UC921E,89
+Htek,UC921G,90
+Htek,UC923,91
+Htek,UC924,92
+Htek,UC924E,93
+Htek,UC926,94
+Htek,UC926E,95
+LVSwitches,T780,192
+LVSwitches,T790,193
+LVSwitches,T800,194
+Nurivoice,IP460S,298
+Polycom,B10,356
+Polycom,B20,357
+Polycom,B30,358
+Polycom,CCX400,250
+Polycom,CCX500,251
+Polycom,CCX600,252
+Polycom,CCX700,253
+Polycom,E100,326
+Polycom,E220,327
+Polycom,E300,328
+Polycom,E320,329
+Polycom,E350,330
+Polycom,E400,331
+Polycom,E450,332
+Polycom,E500,333
+Polycom,E550,334
+Polycom,IP321,323
+Polycom,IP331,324
+Polycom,IP335,325
+Polycom,IP430,322
+Polycom,IP450,321
+Polycom,IP500,319
+Polycom,IP501,320
+Polycom,IP550,318
+Polycom,IP560,317
+Polycom,IP650,316
+Polycom,IP670,315
+Polycom,VVX101,107
+Polycom,VVX150,106
+Polycom,VVX201,105
+Polycom,VVX250,104
+Polycom,VVX301,102
+Polycom,VVX311,103
+Polycom,VVX350,101
+Polycom,VVX401,99
+Polycom,VVX411,100
+Polycom,VVX450,98
+Polycom,VVX501,97
+Polycom,VVX601,96
+Sangoma,A20,16
+Sangoma,A22,359
+Sangoma,A25,360
+Sangoma,A30,361
+Sangoma,D60,369
+Sangoma,D62,370
+Sangoma,D65,371
+Sangoma,D80,372
+Sangoma,P310,306
+Sangoma,P315,307
+Sangoma,P320,308
+Sangoma,P325,309
+Sangoma,P330,310
+Sangoma,P370,311
+Sangoma,S300,312
+Sangoma,S500,313
+Sangoma,S700,314
+Snom,D120,123
+Snom,D305,122
+Snom,D315,121
+Snom,D335,120
+Snom,D345,119
+Snom,D375,118
+Snom,D385,117
+Snom,D710,116
+Snom,D712,115
+Snom,D715,114
+Snom,D717,113
+Snom,D725,112
+Snom,D735,111
+Snom,D745,110
+Snom,D765,109
+Snom,D785,108
+Snom,M10-KLE,125
+Snom,M100-KLE,373
+Snom,M10R-KLE,126
+Snom,M18-KLE,124
+Vtech,CTM-S2312,135
+Vtech,CTM-S2315,140
+Vtech,CTM-S2411,136
+Vtech,CTM-S2415,141
+Vtech,CTM-S241P,138
+Vtech,CTM-S2421,137
+Vtech,CTM-S2425,142
+Vtech,CTM-S242P,139
+Vtech,LS-S3410,127
+Vtech,LS-S3420,128
+Vtech,S2100,129
+Vtech,S2100-L,130
+Vtech,S2210-L,131
+Vtech,S2211-L,132
+Vtech,S2220-L,133
+Vtech,S2221-L,134
+Yealink,AX83H,393
+Yealink,AX86R,401
+Yealink,CP860,191
+Yealink,CP920,190
+Yealink,CP925,235
+Yealink,CP930W,189
+Yealink,CP935,256
+Yealink,CP960,188
+Yealink,CP965,234
+Yealink,T19P,165
+Yealink,T19PE2,164
+Yealink,T20P,166
+Yealink,T21P,167
+Yealink,T21PE2,163
+Yealink,T22P,168
+Yealink,T23G,161
+Yealink,T23P,162
+Yealink,T26P,169
+Yealink,T27G,160
+Yealink,T27P,170
+Yealink,T28P,171
+Yealink,T29G,159
+Yealink,T30,255
+Yealink,T31G,228
+Yealink,T31W,362
+Yealink,T32G,172
+Yealink,T33G,173
+Yealink,T34W,363
+Yealink,T38G,174
+Yealink,T40G,151
+Yealink,T40P,152
+Yealink,T41P,150
+Yealink,T41S,149
+Yealink,T42G,148
+Yealink,T42S,147
+Yealink,T43U,175
+Yealink,T44U,365
+Yealink,T44W,364
+Yealink,T46G,146
+Yealink,T46S,145
+Yealink,T46U,176
+Yealink,T48G,144
+Yealink,T48S,143
+Yealink,T48U,227
+Yealink,T49G,177
+Yealink,T52S,178
+Yealink,T53,153
+Yealink,T53W,154
+Yealink,T54S,179
+Yealink,T54W,155
+Yealink,T56A,180
+Yealink,T57W,156
+Yealink,T58A,157
+Yealink,T58V,181
+Yealink,T58W,254
+Yealink,T73U,427
+Yealink,T73W,426
+Yealink,T74U,425
+Yealink,T74W,424
+Yealink,T77U,423
+Yealink,T85W,422
+Yealink,T87W,421
+Yealink,T88V Pro,420
+Yealink,T88W,418
+Yealink,T88W Pro,419
+Yealink,VP530,182
+Yealink,VP59,158
+Yealink,W52P,183
+Yealink,W53P,233
+Yealink,W56P,184
+Yealink,W57R,374
+Yealink,W59R,375
+Yealink,W60P,232
+Yealink,W70B,392
+Yealink,W71P,376
+Yealink,W73P,231
+Yealink,W74P,377
+Yealink,W76P,230
+Yealink,W77P,378
+Yealink,W78H,380
+Yealink,W78P,379
+Yealink,W79P,229

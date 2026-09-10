@@ -1,0 +1,427 @@
+aastra-mitel|6730i|0|2091
+aastra-mitel|6731i|0|2091
+aastra-mitel|6735i|0|2091
+aastra-mitel|6737i|0|2091
+aastra-mitel|6739i|0|2091
+aastra-mitel|6753i|0|2091
+aastra-mitel|6755i|0|2091
+aastra-mitel|6757i|0|2091
+aastra-mitel|6757i-ct|0|2091
+aastra-mitel|6863i|0|2091
+aastra-mitel|6865i|0|2091
+aastra-mitel|6867i|0|2091
+aastra-mitel|6869i|0|2091
+aastra-mitel|9112i|0|2091
+aastra-mitel|9133i|0|2091
+aastra-mitel|9143i|0|2091
+aastra-mitel|9480i|0|2091
+alcatel-lucent|8008-ce|1|13678
+alcatel-lucent|8008g-ce|1|13680
+alcatel-lucent|8018-ce|1|13683
+alcatel-lucent|8058s-ce|1|13683
+alcatel-lucent|8068s-ce|1|13666
+alcatel-lucent|8078s-ce|1|13634
+alcatel-lucent|h2|1|42887
+alcatel-lucent|h2p|1|42888
+alcatel-lucent|h3g|1|25463
+alcatel-lucent|h3p|1|25463
+alcatel-lucent|h6|1|25462
+alcatel-lucent|m3|1|25462
+alcatel-lucent|m5|1|25463
+alcatel-lucent|m7|1|25464
+alcatel-lucent|m8|1|42450
+atcom|a10|1|74395
+atcom|a10w|1|74395
+atcom|a11|1|74395
+atcom|a16|1|74395
+atcom|a20|1|99472
+atcom|a20lte|1|99472
+atcom|a20w|1|99471
+atcom|a20wac|1|99472
+atcom|a21|1|99472
+atcom|a26|1|99472
+atcom|a41|1|116190
+atcom|a41w|1|116190
+atcom|a48|1|116190
+atcom|a48lte|1|318798
+atcom|a48w|1|318798
+atcom|a48wac|1|318794
+atcom|a68|1|318786
+atcom|a68lte|1|318792
+atcom|a68w|1|318798
+atcom|a68wac|1|318796
+atcom|d20|1|99472
+atcom|d21|1|99472
+atcom|d32|1|99472
+atcom|d33|1|99472
+attimo|a-a03|1|36406
+attimo|a-a04|1|37623
+attimo|a-g01|1|33695
+attimo|a-g02|1|48100
+cisco|cp-7811|1|47424
+cisco|cp-7821|1|47424
+cisco|cp-7841|1|47424
+cisco|cp-7861|1|47424
+cisco|cp-8811|1|47424
+cisco|cp-8841|1|47424
+cisco|cp-8845|1|47424
+cisco|cp-8851|1|47424
+cisco|cp-8861|1|47424
+cisco|cp-8865|1|47424
+clearlyip|cip230|1|69582
+clearlyip|cip250|1|130499
+clearlyip|cip270|1|195717
+dinstar|c60l&c60lp|1|72684
+dinstar|c60s&c60sp|1|72684
+dinstar|c61s&c61sp|1|72684
+dinstar|c62g&c62gp|1|72684
+dinstar|c63g&c63gp|1|80056
+dinstar|c64g&c64gp|1|87427
+dinstar|c66g&c66gp|1|102161
+dinstar|dag1000-16s|0|188206
+dinstar|dag1000-24s|0|188206
+dinstar|dag1000-32s|0|188206
+dinstar|dag1000-4s|0|188217
+dinstar|dag1000-8s|0|188206
+dinstar|dag2500|0|188206
+dinstar|dag3000|0|188206
+fanvil|h2s|1|24863
+fanvil|h3|1|25179
+fanvil|h5|1|25175
+fanvil|v61w|1|57765
+fanvil|v62|1|117803
+fanvil|v62 pro|1|58443
+fanvil|v62w|1|60121
+fanvil|v63|1|117819
+fanvil|v64|1|38823
+fanvil|v65|1|117395
+fanvil|v66|1|54912
+fanvil|v66 pro|1|54936
+fanvil|v67|1|117819
+fanvil|w610d|1|21476
+fanvil|w610w|1|44740
+fanvil|w710d|1|81016
+fanvil|x1sg|1|33283
+fanvil|x1sp|1|33479
+fanvil|x210|1|117322
+fanvil|x210i|1|117940
+fanvil|x2c|1|25107
+fanvil|x2p|1|25103
+fanvil|x303|1|47094
+fanvil|x303-2 wire|1|52113
+fanvil|x3s|1|32146
+fanvil|x3u|1|51338
+fanvil|x4|1|33740
+fanvil|x4u|1|79591
+fanvil|x5s|1|98166
+fanvil|x5u|1|98019
+fanvil|x6|1|117703
+fanvil|x6u|1|118030
+fanvil|x7|1|117817
+fanvil|x7a|1|34207
+fanvil|x7c|1|116990
+flying voice|fip10|1|19348
+flying voice|fip11c|1|24884
+flying voice|fip12wp|1|19348
+flying voice|fip13g|1|30437
+flying voice|fip14g|1|52650
+flying voice|fip15g|1|63805
+flying voice|fip15gplus|1|22000
+flying voice|fip16|1|18951
+flying voice|fip16plus|1|20821
+flying voice|p10|1|20821
+flying voice|p10g|1|20821
+flying voice|p10lte|1|20821
+flying voice|p10p|1|20821
+flying voice|p10w|1|20821
+flying voice|p11|1|20821
+flying voice|p11g|1|20821
+flying voice|p11lte|1|20821
+flying voice|p11p|1|20821
+flying voice|p11w|1|20821
+flying voice|p20|1|22000
+flying voice|p20g|1|22000
+flying voice|p20p|1|22000
+flying voice|p20w|1|22000
+flying voice|p21|1|22000
+flying voice|p21p|1|22000
+flying voice|p21w|1|22000
+flying voice|p22g|1|20821
+flying voice|p22p|1|20821
+flying voice|p23g|1|22000
+flying voice|p23gw|1|22000
+flying voice|p24gw|1|22000
+flying voice|p33|1|20821
+flying voice|p33g|1|20821
+flying voice|p33p|1|20821
+flying voice|p510|1|22000
+flying voice|p53|1|22006
+flying voice|p54|1|22000
+flying voice|p55|1|22000
+flying voice|p57|1|22000
+flying voice|p58|1|22000
+gigaset|n210 ip pro|0|3151
+gigaset|n530 ip pro|1|5178
+gigaset|n610 ip pro|0|3151
+gigaset|n670 ip pro|0|3151
+gigaset|n770 ip pro|0|3151
+gigaset|n870e ip pro|0|3151
+gigaset|n870 ip pro|0|3151
+gigaset|p710 ip pro|1|14522
+gigaset|p810b ip pro|1|14523
+gigaset|p810 ip pro|1|14522
+gigaset|p825 ip pro|1|14522
+gigaset|p850w ip pro|1|14523
+gigaset|p855bw ip pro|1|14524
+grandstream|dp750|1|120826
+grandstream|dp752|1|120826
+grandstream|dp755|1|165390
+grandstream|ghp610|1|91703
+grandstream|ghp610w|1|91703
+grandstream|ghp611|1|91703
+grandstream|ghp611w|1|91703
+grandstream|ghp620|1|91703
+grandstream|ghp620w|1|91703
+grandstream|ghp621|1|91703
+grandstream|ghp621w|1|91703
+grandstream|grp2601|1|115074
+grandstream|grp2602|1|126134
+grandstream|grp2603|1|132383
+grandstream|grp2604|1|143986
+grandstream|grp2612|1|180411
+grandstream|grp2612p|1|180411
+grandstream|grp2612w|1|180411
+grandstream|grp2613|1|224957
+grandstream|grp2614|1|285634
+grandstream|grp2615|1|408221
+grandstream|grp2616|1|359359
+grandstream|grp2624|1|397046
+grandstream|grp2634|1|380397
+grandstream|grp2636|1|486734
+grandstream|grp2650|1|529897
+grandstream|grp2670|1|441613
+grandstream|gxp1610|1|93768
+grandstream|gxp1615|1|93768
+grandstream|gxp1620|1|121387
+grandstream|gxp1625|1|148731
+grandstream|gxp1628|1|129182
+grandstream|gxp1630|1|156478
+grandstream|gxp1760w|1|166133
+grandstream|gxp1780|1|201549
+grandstream|gxp1782|1|201539
+grandstream|gxp2000|1|80477
+grandstream|gxp2010|1|81961
+grandstream|gxp2020|1|81187
+grandstream|gxp2130|1|189680
+grandstream|gxp2135|1|232662
+grandstream|gxp2140|1|403646
+grandstream|gxp2160|1|304586
+grandstream|gxp2170|1|500099
+grandstream|gxv3350|1|88697
+grandstream|gxv3370|1|82145
+grandstream|gxv3380|1|87848
+grandstream|gxv3450|1|89952
+grandstream|gxv3470|1|89952
+grandstream|gxv3480|1|89952
+grandstream|ht801|1|104467
+grandstream|ht802|1|104782
+grandstream|ht812|1|115022
+grandstream|ht813|1|80375
+grandstream|ht814|1|115103
+grandstream|ht818|1|117627
+grandstream|wp810|1|155649
+grandstream|wp816|1|155639
+grandstream|wp820|1|155649
+grandstream|wp822|1|155649
+grandstream|wp825|1|155649
+grandstream|wp826|1|155649
+hanyang digitech|p1100|1|1597
+htek|uc902|1|189650
+htek|uc902s|1|189698
+htek|uc912|1|191722
+htek|uc921|1|191722
+htek|uc921e|1|191722
+htek|uc921g|1|191778
+htek|uc923|1|194291
+htek|uc924|1|196749
+htek|uc924e|1|196749
+htek|uc926|1|199223
+htek|uc926e|1|199224
+lvswitches|t780|1|20440
+lvswitches|t790|1|22678
+lvswitches|t800|1|27154
+nurivoice|ip460s|1|1195
+polycom|b10|0|634
+polycom|b20|0|634
+polycom|b30|0|634
+polycom|ccx400|1|8140
+polycom|ccx500|1|8140
+polycom|ccx600|1|8140
+polycom|ccx700|1|8140
+polycom|e100|0|3500
+polycom|e220|0|3500
+polycom|e300|0|3500
+polycom|e320|0|3500
+polycom|e350|0|3500
+polycom|e400|0|3500
+polycom|e450|0|3500
+polycom|e500|0|3500
+polycom|e550|0|3500
+polycom|ip321|0|2600
+polycom|ip331|0|2600
+polycom|ip335|0|2600
+polycom|ip430|0|2600
+polycom|ip450|0|2801
+polycom|ip500|0|2600
+polycom|ip501|0|2600
+polycom|ip550|0|2796
+polycom|ip560|0|2796
+polycom|ip650|0|2796
+polycom|ip670|0|2802
+polycom|vvx101|1|8140
+polycom|vvx150|1|8140
+polycom|vvx201|1|8140
+polycom|vvx250|1|8140
+polycom|vvx301|1|8140
+polycom|vvx311|1|8140
+polycom|vvx350|1|8140
+polycom|vvx401|1|8140
+polycom|vvx411|1|8140
+polycom|vvx450|1|8140
+polycom|vvx501|1|8140
+polycom|vvx601|1|8238
+sangoma|a20|0|17168
+sangoma|a22|0|17168
+sangoma|a25|0|17168
+sangoma|a30|0|21221
+sangoma|d60|0|23855
+sangoma|d62|0|23855
+sangoma|d65|0|23855
+sangoma|d80|0|23715
+sangoma|p310|0|19654
+sangoma|p315|0|19654
+sangoma|p320|1|19729
+sangoma|p325|0|19654
+sangoma|p330|0|19654
+sangoma|p370|0|19654
+sangoma|s300|1|117739
+sangoma|s500|1|132386
+sangoma|s700|1|147681
+snom|d120|1|200405
+snom|d305|1|200405
+snom|d315|1|200405
+snom|d335|1|200405
+snom|d345|1|200405
+snom|d375|1|200405
+snom|d385|1|200405
+snom|d710|1|200405
+snom|d712|1|200405
+snom|d715|1|200405
+snom|d717|1|200405
+snom|d725|1|200405
+snom|d735|1|200405
+snom|d745|1|200405
+snom|d765|1|200405
+snom|d785|1|200405
+snom|m100-kle|0|1519
+snom|m10-kle|1|50039
+snom|m10r-kle|1|50039
+snom|m18-kle|1|50039
+vtech|ctm-s2312|1|13592
+vtech|ctm-s2315|1|13592
+vtech|ctm-s2411|1|13592
+vtech|ctm-s2415|1|13592
+vtech|ctm-s241p|1|13592
+vtech|ctm-s2421|1|13592
+vtech|ctm-s2425|1|13592
+vtech|ctm-s242p|1|13592
+vtech|ls-s3410|1|10086
+vtech|ls-s3420|1|10113
+vtech|s2100|1|13592
+vtech|s2100-l|1|13592
+vtech|s2210-l|1|13592
+vtech|s2211-l|1|13592
+vtech|s2220-l|1|13592
+vtech|s2221-l|1|13592
+yealink|ax83h|1|33201
+yealink|ax86r|1|89926
+yealink|cp860|1|98530
+yealink|cp920|1|98530
+yealink|cp925|1|98462
+yealink|cp930w|1|98530
+yealink|cp935|1|98462
+yealink|cp960|1|98530
+yealink|cp965|1|98479
+yealink|t19p|1|62362
+yealink|t19pe2|1|98448
+yealink|t20p|1|62362
+yealink|t21p|1|96005
+yealink|t21pe2|1|98975
+yealink|t22p|1|62357
+yealink|t23g|1|98975
+yealink|t23p|1|98975
+yealink|t26p|1|63513
+yealink|t27g|1|98975
+yealink|t27p|1|98975
+yealink|t28p|1|62785
+yealink|t29g|1|99548
+yealink|t30|1|98591
+yealink|t31g|1|63316
+yealink|t31w|1|105197
+yealink|t32g|1|63367
+yealink|t33g|1|98916
+yealink|t34w|1|105197
+yealink|t38g|1|70394
+yealink|t40g|1|98975
+yealink|t40p|1|98975
+yealink|t41p|1|98992
+yealink|t41s|1|98992
+yealink|t42g|1|98975
+yealink|t42s|1|98974
+yealink|t43u|1|99548
+yealink|t44u|1|105753
+yealink|t44w|1|105753
+yealink|t46g|1|98991
+yealink|t46s|1|98992
+yealink|t46u|1|99548
+yealink|t48g|1|99548
+yealink|t48s|1|98992
+yealink|t48u|1|99497
+yealink|t49g|1|93503
+yealink|t52s|1|98991
+yealink|t53|1|99530
+yealink|t53w|1|99564
+yealink|t54s|1|98992
+yealink|t54w|1|99548
+yealink|t56a|1|95714
+yealink|t57w|1|99548
+yealink|t58a|1|99548
+yealink|t58v|1|95259
+yealink|t58w|1|129397
+yealink|t73u|1|99548
+yealink|t73w|1|99548
+yealink|t74u|1|99548
+yealink|t74w|1|99548
+yealink|t77u|1|99548
+yealink|t85w|1|98975
+yealink|t87w|1|98975
+yealink|t88v pro|1|99548
+yealink|t88w|1|99548
+yealink|t88w pro|1|99548
+yealink|vp530|1|68503
+yealink|vp59|1|99538
+yealink|w52p|1|33261
+yealink|w53p|1|33211
+yealink|w56p|1|33211
+yealink|w57r|1|33201
+yealink|w59r|1|33201
+yealink|w60p|1|33211
+yealink|w70b|1|33201
+yealink|w71p|1|33201
+yealink|w73p|1|33211
+yealink|w74p|1|33201
+yealink|w76p|1|33211
+yealink|w77p|1|33201
+yealink|w78h|1|33201
+yealink|w78p|1|33201
+yealink|w79p|1|33211
