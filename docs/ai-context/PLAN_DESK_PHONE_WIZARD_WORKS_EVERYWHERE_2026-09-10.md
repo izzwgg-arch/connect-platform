@@ -610,3 +610,210 @@ branch must never become a `.filter`.
 ⏳ **NOT PROVEN: nobody has opened the wizard in a browser since this.** It is proven as
 typecheck, tests and measurements against the live PBX — never as a person looking at the
 screen. Nothing is deployed.
+
+## 18. DONE 2026-09-11 — the wizard stopped being a Yealink wizard (`dac3aab2`)
+
+Izzy: *"Keep going. We need to get this up and running end to end. Every single phone
+should be able to be connected through the wizard, all 427. I'm going to run a live test
+again on my network."*
+
+**api + portal DEPLOYED and container-verified; the desktop half is committed and rides
+the next installer.** No migration, no PBX write, no env change, no tenant row touched.
+
+### 18a. The finding: it was FOUR gates, not a missing adapter
+
+§14 built an adapter for all 427 models and recorded that **nothing consumed them yet**.
+The obvious next step looked like "write a Grandstream executor". It was not. A census of
+the catalogue — measured, not assumed — says:
+
+- **369 of the 427 models are on brands that send a PnP `SUBSCRIBE`, and every one of them
+  sends the IDENTICAL shape**: `Event: ua-profile` to `224.0.1.75`, port **5060**, body
+  `application/url`. Ten brands. There is nothing per-vendor to get right.
+- **396 of 427 are drivable from the LAN by SOME mechanism.**
+- **31 across four brands publish none at all** (Alcatel-Lucent 15, Dinstar 14, Nurivoice
+  1, Hanyang 1). ⛔ Dinstar has **no OUI rows in the catalogue at all**, so a Dinstar box
+  cannot even be named by hardware address.
+
+So the wire protocol already covered most of the fleet. What stopped it was four gates
+shaped around one vendor, each of which had to be opened separately.
+
+### 18b. Gate 1 — one gate answered two different questions
+
+`vendorSupportsLocalActions` returned true for **Yealink alone**, and
+`setupDriver.ts` used that one boolean to refuse **everything** for every other brand —
+including `set_provisioning`, whose entire local half is *opening a socket and waiting*.
+
+⛔ **Its own rationale was about Action URI**, i.e. about **speaking** to a phone. It was
+then used to decide **listening**, which is a different question with a different answer.
+That conflation is the whole defect, and it is why a Grandstream sat on "Preparing".
+
+Split, in `vendorAdapters.ts`, beside the data that answers them:
+
+- **`vendorSupportsHttpActions`** — may this machine send an HTTP request *at* the phone?
+  Backed by `VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR`, today `["yealink"]`. ⛔ An
+  **unidentified** device answers **false**: talking to a device we cannot name is a guess,
+  and pointing Yealink shapes at a Grandstream configures nothing while looking like it
+  worked.
+- **`vendorSupportsPnpHandoff`** — may this machine *answer* the phone? ⛔ An unidentified
+  device answers **true** — it fails **toward listening**. Arming the responder for one
+  costs a hardware address on a listener that answers nothing else; a device that is not a
+  PnP phone simply never asks. **A locked phone from a previous provider reports no vendor
+  at all, and that is precisely the phone this wizard exists for.**
+- **`vendorCanBeDrivenLocally`** — the OR of the two, and only ever used to choose between
+  a progress bar and an honest hand-off. `deviceKinds.ts`'s `vendorSupportsLocalActions`
+  now delegates to it and its comment says it is a SUMMARY, not a policy.
+
+In the driver: `rediscover` moved **above** the gate and is ungated (it is a network sweep,
+not a request at a phone); the three HTTP ops stall when `!canHttp`; `set_provisioning`
+stalls only when `!canPnp`; and the restart is `canHttp && attempts < 2`, so a brand whose
+HTTP shapes we do not hold gets the listener armed and the person asked to power-cycle —
+which is the documented mechanism for a factory-reset phone anyway.
+
+### 18c. Gate 2 — the hardware-address list was 12 prefixes for 4 makers
+
+`deviceIdentity.ts`'s `VENDOR_PREFIXES` knew yealink, grandstream, fanvil and panasonic.
+The PBX's own `brand_macs` table holds **1,143 prefixes across 20 brands**. So a Polycom, a
+Snom, an Htek, an Atcom, a Sangoma came back `unknown` — and `discoveryFilter.looksLikePhone`
+then filed a real desk phone under **"other devices we left alone"**, so it never reached
+the found screen and nothing downstream ever got the chance to set it up.
+
+`guessVendorFromMac` reads `vendorsForMac` (the catalogue) first; `VENDOR_PREFIXES` is now
+a **three-entry supplement** for what the PBX table is missing — Flyingvoice's own `789912`
+and Snom's second block `1c7126`, both recorded in §14e as absent, plus **panasonic**,
+which the PBX has no brand row for at all (detection and provisionability are different
+questions). `discoveryFilter` gained `macIsPhoneMaker`, checked **before** the fingerprint
+guess in both `looksLikePhone` and `shouldFingerprint`.
+
+⛔ **`vendorSlugFor`'s prefix-match floor is 4, not 5.** A floor of 5 silently excluded
+`snom` and `htek` — two four-character slugs — so those brands resolved to nothing while
+every longer name worked. Found by driving the real function, not by reading it.
+
+⛔ **The one prefix two makers share is left unnamed, deliberately.** `0c383e` is claimed
+by **Fanvil AND Attimo** and it is the only one of the 1,142 distinct prefixes claimed
+twice — which also means **Fanvil's only OUI is the shared one**, so no Fanvil can ever be
+named by address. That is the price of not guessing, and it costs nothing mechanical: both
+brands have the identical PnP shape, so every gate answers the same either way, and
+`looksLikePhone` still returns **true** — an ambiguity between two phone makers is still,
+unambiguously, a phone. This follows the catalogue's own recorded contract (`vendorForMac`
+returns null rather than choosing).
+
+### 18d. Gate 3 — the wizard told customers something untrue
+
+`MAX_PROVISIONING_WAIT_MS` was one hour. After it, the driver sent
+`provisioningHandoffFailed: true` and the customer read *"We could not point this phone at
+Loopcom from your computer — Loopcom Support can finish this one."*
+
+⛔⛔ **That was false, and §20 of the setup handoff says why in its own words: the desktop
+responder is STANDING. It stays armed after the wizard window closes, hourly, for the
+tenant's whole phone list.** So the phone is provisioned the moment somebody power-cycles
+it — tonight, tomorrow morning, whenever. Telling a customer we had given up, while the
+machine was still listening and would still finish the job, is the single most misleading
+thing this wizard has ever said.
+
+The clock is **deleted**. The only give-up left is **`MAX_CANNOT_LISTEN_ATTEMPTS = 3`**
+consecutive `cannot_listen` refusals — the one case where waiting is genuinely pointless,
+because the socket cannot be opened at all so no request can ever arrive. ⛔ Counted
+**consecutively** and reset by any success: a single refusal can be the port momentarily
+held by something else, and giving up on one bad reading would be as wrong as the clock
+was. ⛔ A refusal still never spends a restart attempt, and once we have given up no
+further op is sent at all.
+
+### 18e. Gate 4 — a brand nothing can drive had no terminal state
+
+For the 31 models with no LAN mechanism the ladder kept naming `set_provisioning`, the
+driver could not perform it, and the run never finished: a progress bar for something that
+was never going to happen. `deskPhoneRoutes.ts` gained a Phase-F block in the **same
+route-level shape as `handConfiguredVendor`** (Panasonic, §22 of the setup handoff), so the
+pure ladder and its 12.6M-decision invariant suite stay untouched:
+
+- **not registered** → `halt` to support with *"This phone has to be pointed at Loopcom by
+  hand — its maker gives us no way to do it from your computer."* No reset is spent, no
+  folder URL is leaked.
+- **registered** → `do_nothing`, and the green-light condition widened to
+  `(provisioningIsOurs || handConfiguredVendor || !drivableLocally)` — demanding that a
+  phone we can never re-point also be pointing at our folder would leave a working phone
+  amber for ever.
+
+### 18f. The responder itself (desktop — committed, NOT yet in an installer)
+
+- **Two ports.** `PNP_PRIMARY_PORT` 5060 and `PNP_SECONDARY_PORT` 5080. Every brand in the
+  catalogue documents 5060; **Grandstream's own sources contradict each other** about which
+  its phones use, and a phone asking on a port nobody holds is silent failure. ⛔ The
+  primary decides whether we are listening; the secondary failing to bind is logged and
+  otherwise ignored.
+- **Every network, not the OS default.** `localMulticastInterfaces()` joins the group on
+  every real private non-loopback IPv4 address. A PC with a cable and Wi-Fi, or an office
+  where the phones sit behind an extender, was previously a coin toss — and the failure is
+  silent, because the socket is open and the phone just asks into a void. ⛔ Deliberately
+  **more permissive than the scanner**: joining a group on a virtual adapter costs nothing,
+  while skipping a real NIC because its name carries "VPN" costs the whole feature. A
+  fallback `addMembership(group)` runs if no interface accepted.
+- **The reply names the port the phone reached us on**, not a constant.
+- **The body type is the phone's own `Accept`.** ⛔⛔ That value arrives from a device on
+  the customer's network and is written straight into a SIP header, so it is an injection
+  surface in the most literal sense: a CR or LF in it would end our header and let the
+  phone dictate the rest of the message. `usableContentType` accepts only a plain
+  `type/subtype` of RFC 7230 token characters, bounded, and anything else falls back to
+  `application/url` — refused, never sanitised. Re-validated **inside** `buildPnpNotify`
+  as well as at the parser, because that is the function that writes the header and it
+  must not depend on a caller having been careful.
+
+### 18g. Found in passing — a guard that guarded nothing
+
+`deskPhoneWizard.test.ts`'s "no protocol jargon in customer copy" check read
+`/\x08(HTTP|SIP|DHCP|...)\x08/i` — **two literal BACKSPACE bytes** where `\b` word
+boundaries were meant. A bash heredoc turned each `\b` into the control character it
+names. A backspace never appears in customer copy, so **that guard has matched nothing
+since the day it was written.** Repaired at the byte level and re-proven: the fixed form
+catches `"...over HTTP, try again"`, `"Checking the provisioning folder"` and
+`"DHCP option 66"`, passes honest copy, and the broken form matches none of them. The
+wizard's copy turned out to be clean — the cost was the guard, not the product.
+
+⛔ This is the documented heredoc trap, now four sightings deep in this repo. **Write any
+file containing escapes with the editor.**
+
+### 18h. Proof
+
+| suite | result |
+|---|---|
+| `packages/shared` | **597 / 597** |
+| `apps/desktop` | **285 / 285** |
+| `apps/api` desk-phones | **101 / 101** |
+| `apps/portal` full | **581 / 585** — the 4 documented pre-existing, none in a touched file |
+
+Typechecks: shared **0**, desktop **0**, portal **0**, api **84 = the exact baseline** with
+**none in any edited file**.
+
+⛔ **Every new test was replayed against HEAD by swapping the eight changed source files
+back** (backed up first, restored byte-identically after — verified with `cmp`):
+
+| | fails at HEAD |
+|---|---|
+| shared invariants | **2 of 2** rewritten tests |
+| desktop pnp + resident | **4** (the Accept echo, three two-port/interface tests) |
+| portal driver + wizard | **3** (Grandstream listened for, the hour, the give-up threshold) |
+| api routes | **5** (catalogue naming ×2, the shared block, both Phase-F tests) |
+
+⛔ **Named honestly: the tests that PASS at HEAD are regression guards, not bug-proofs** —
+the hostile-`Accept` test (HEAD hard-coded the literal, so nothing could be injected), the
+`cannot_listen` recovery test (HEAD never set the flag at all), and the api's Grandstream
+ladder test (the api never had the Yealink gate — that gate was in the driver). They are
+kept because they pin the new contract; they are not counted as evidence of the fix.
+
+### 18i. NOT PROVEN
+
+⛔ **No phone of any brand has been set up through this.** It is proven as tests, as
+typechecks, and as code verified inside the running containers — never as a handset that
+registered. **Izzy's rig is the acceptance test**: Yealink 192.168.6.170, Grandstream
+GXP2170 .171, Grandstream .172, Grandstream HT812 192.168.4.22, all four on ext 101
+"Home" (Landau Home, PBX T21).
+
+⛔ **The desktop half — two ports, multi-interface join, the Accept echo — is committed and
+is on NO machine.** It rides the next installer, which is Izzy's call to build and publish
+(publishing auto-updates the whole fleet). Until then his office runs rc.10's responder:
+one socket, 5060, one interface. **The portal and api halves do NOT wait for it** — the
+gates, the naming and the honest states are live now.
+
+⏳ **Deliberately not built:** the Grandstream HTTP write path (`api.values.post` needs the
+sticker admin password, so Grandstream rides the PnP power-cycle path instead and its
+adapter stays `documented`), and Phase B's in-app Windows firewall prompt.
