@@ -12,6 +12,9 @@ export * from "./deviceIdentity";
 export * from "./escalation";
 export * from "./discoveryFilter";
 export * from "./deviceKinds";
+export * from "./provisioningRecord";
+export * from "./retry";
+export * from "./resetSafety";
 
 /**
  * The PBX's own provisioning catalogue (generated) and the per-brand adapters built on it.

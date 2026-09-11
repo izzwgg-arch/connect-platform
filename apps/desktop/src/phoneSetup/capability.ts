@@ -21,6 +21,7 @@ import {
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
 } from "./yealink";
 import { normalizeMac } from "./pnp";
+import { decideLocalFactoryReset } from "./resetSafetyCore";
 import { createPnpResident, PNP_RESIDENT_MAX_MACS, type PnpResident } from "./pnpResident";
 
 /** Every operation that exists. Adding one is a deliberate act with its own test. */
@@ -39,6 +40,20 @@ export const PHONE_OPERATIONS = [
   // no wizard. `disarm_pnp` is sign-out. Both take the same fenced URL and nothing else.
   "arm_pnp",
   "disarm_pnp",
+  /**
+   * 2026-09-11, on Izzy's mandate: *"the Loopcom app should be able to run a factory
+   * reset or a reboot from the network… completely hands-off after the system finds
+   * the phones."*
+   *
+   * ⛔⛔ IT IS THE MOST DESTRUCTIVE THING IN THE PRODUCT AND IT IS FENCED FOUR WAYS,
+   * all of them here on the customer's own machine: the address must be private; an
+   * `authorizationId` from the server's approval record must be present; the SHAPE of
+   * the device (read from what the phone said about itself, never from a caller field)
+   * must be one where a reset is recoverable — `resetSafetyCore.ts`; and the same
+   * phone is never reset twice in one session. The server's own `decideReset` is the
+   * durable record on top of all four.
+   */
+  "factory_reset",
 ] as const;
 
 export type PhoneOperation = (typeof PHONE_OPERATIONS)[number];
@@ -51,6 +66,21 @@ export type OperationRequest =
   | { op: "trigger_autop"; ip: string; credentialRef?: string | null }
   | { op: "arm_pnp"; url: string; macs: string[] }
   | { op: "disarm_pnp" }
+  | {
+      op: "factory_reset";
+      ip: string;
+      /**
+       * What the PHONE said it is. ⛔ The fence is computed from this, so it must be
+       * the fingerprint's own model string — never a label the wizard chose, and never
+       * a value a caller may set freely to get a different verdict.
+       */
+      model: string | null;
+      /** How the phone said it is attached. `unknown` is the ordinary answer. */
+      link?: "wired" | "wireless" | "unknown";
+      /** The id of the server's approval record. A reset with no approval is refused. */
+      authorizationId: string;
+      credentialRef?: string | null;
+    }
   | {
       op: "set_provisioning"; ip: string; mac: string; url: string; credentialRef?: string | null;
       /** Restart the phone so it asks (PnP fires once per boot). Default true. */
@@ -77,6 +107,13 @@ export type OperationResult =
     }
   | { ok: true; op: "arm_pnp"; listening: boolean; macs: number; deliveries: number }
   | { ok: true; op: "disarm_pnp" }
+  /**
+   * ⛔ `sent` is deliberately the only thing reported. A phone that has been told to
+   * wipe itself stops answering because it is doing what it was told, so there is no
+   * honest "confirmed" to give — the proof is the phone coming back and asking for its
+   * folder, which the resident listener records separately.
+   */
+  | { ok: true; op: "factory_reset"; sent: true }
   | { ok: false; refused: string };
 
 /**
@@ -130,7 +167,18 @@ const MAX_ACTIONS_PER_MINUTE = 30;
 /** A scan sweeps 254 addresses; there is no reason to do it more than this. */
 const MIN_MS_BETWEEN_SCANS = 15_000;
 
-type Gate = { lastActionAt: Map<string, number>; actionTimes: number[]; lastScanAt: number };
+type Gate = {
+  lastActionAt: Map<string, number>;
+  actionTimes: number[];
+  lastScanAt: number;
+  /**
+   * ⛔⛔ EVERY PHONE THIS PROCESS HAS ALREADY TOLD TO WIPE ITSELF. The server holds the
+   * durable record (`decideReset` caps a run at one), and this is the local belt: a
+   * head that has lost its place — a retried request, a stuck driver, a compromised
+   * account — cannot turn one wipe into two on the machine that would actually send it.
+   */
+  resetsSent: Set<string>;
+};
 
 /**
  * What an operation was aimed at, in one line, safe to write to a log file.
@@ -156,6 +204,13 @@ export function describeRequest(req: OperationRequest): string {
   if (Array.isArray(macs)) bits.push(`macs=${macs.length}`);
   const subnet = (req as any).subnet;
   if (typeof subnet === "string" && subnet) bits.push(`subnet=${subnet}`);
+  // ⛔ A wipe has to be traceable to the approval a person gave. The id is a record
+  // reference, not a secret, and it is the one thing that ties this machine's action
+  // back to the server's audit row — so it goes in the line, always.
+  const auth = (req as any).authorizationId;
+  if (typeof auth === "string" && auth) bits.push(`auth=${auth}`);
+  const link = (req as any).link;
+  if (typeof link === "string" && link) bits.push(`link=${link}`);
   return bits.join(" ");
 }
 
@@ -175,6 +230,8 @@ export function describeResult(res: OperationResult): string {
         + ` delivered=${res.delivered} acknowledged=${res.acknowledged}`;
     case "arm_pnp":
       return `ok listening=${res.listening} macs=${res.macs} deliveries=${res.deliveries}`;
+    case "factory_reset":
+      return "ok reset sent";
     default:
       return "ok";
   }
@@ -183,7 +240,7 @@ export function describeResult(res: OperationResult): string {
 export function createPhoneCapability(deps: CapabilityDeps) {
   const resident: PnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const now = deps.now ?? (() => Date.now());
-  const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0 };
+  const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0, resetsSent: new Set() };
   const log = deps.log ?? (() => {});
 
   /**
@@ -256,7 +313,7 @@ export function createPhoneCapability(deps: CapabilityDeps) {
     // ⛔ Reads are cheap and safe; only things that CHANGE a phone are spaced out.
     // set_provisioning only changes the phone when it is asked to restart it; a
     // listen-and-check call is a read and rides the wizard's 4-second tick.
-    const mutating = req.op === "reboot" || req.op === "trigger_autop"
+    const mutating = req.op === "reboot" || req.op === "trigger_autop" || req.op === "factory_reset"
       || (req.op === "set_provisioning" && (req as any).reboot !== false);
     if (mutating && t - last < MIN_MS_BETWEEN_ACTIONS_PER_PHONE) {
       return { ok: false, refused: "too_soon_for_this_phone" };
@@ -274,7 +331,15 @@ export function createPhoneCapability(deps: CapabilityDeps) {
     }
 
     gate.actionTimes.push(t);
-    if (mutating) gate.lastActionAt.set(ip, t);
+    // ⛔⛔ A REFUSED RESET MUST NOT SPEND THE PER-PHONE SPACING BUDGET. The other
+    // mutating ops send the moment they are dispatched, so stamping here is honest for
+    // them. `factory_reset` is refused by its own fence in most real cases and reaches
+    // the phone in none of them — and the very next thing the ladder does after a
+    // refusal is the non-destructive PnP hand-off, on the SAME phone. Stamping a
+    // request that touched nothing would make the safe fallback wait five seconds for
+    // a wipe that never happened. It stamps itself, in the handler, just before it
+    // actually sends. (Found by the Wi-Fi fence test, not by reading this.)
+    if (mutating && req.op !== "factory_reset") gate.lastActionAt.set(ip, t);
 
     switch (req.op) {
       case "fingerprint": {
@@ -314,6 +379,38 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         const r = await sendAction(deps.http, ip, action, creds);
         if (!r.ok) return { ok: false, refused: r.reason };
         return { ok: true, op: req.op };
+      }
+      case "factory_reset": {
+        // ⛔⛔ THE FOUR CHECKS, IN THIS ORDER, AND THE ORDER IS THE POLICY.
+        //
+        // 1) An approval must exist. The server's record is what makes this a decision
+        //    somebody made rather than a default the driver fell into; without an id
+        //    there is nothing to audit the wipe against, so there is no wipe.
+        const authorizationId = String((req as any).authorizationId ?? "").trim();
+        if (!authorizationId) return { ok: false, refused: "reset_not_authorized" };
+
+        // 2) Never twice. A retried request, a stuck driver or a compromised head
+        //    cannot turn one wipe into two on the machine that sends it.
+        if (gate.resetsSent.has(ip)) return { ok: false, refused: "already_reset_this_session" };
+
+        // 3) The shape of the actual device, from what the PHONE said. This is the
+        //    check a compromised server cannot talk its way past — see
+        //    resetSafetyCore.ts for why each refusal is unrecoverable.
+        const verdict = decideLocalFactoryReset((req as any).model, ((req as any).link ?? "unknown"));
+        if (!verdict.allowed) return { ok: false, refused: `reset_unsafe:${verdict.reason}` };
+
+        // 4) Only now does anything leave this machine. ⛔ Never retried, by anything,
+        //    ever: a wipe that "timed out" was very likely received, because the phone
+        //    stops answering precisely because it is doing what it was told.
+        gate.lastActionAt.set(ip, t);
+        const r = await sendAction(deps.http, ip, "reset", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+        // ⛔ The phone is recorded as reset whether or not the reply arrived. A wipe
+        // that "timed out" was very likely received — the phone stops answering
+        // BECAUSE it is doing what it was told — so treating a timeout as "did not
+        // happen" is how one wipe becomes two.
+        gate.resetsSent.add(ip);
+        if (!r.ok) return { ok: false, refused: r.reason };
+        return { ok: true, op: "factory_reset", sent: true };
       }
       case "set_provisioning": {
         // ⛔⛔ THE URL FENCE, before a socket exists. Only a Loopcom PBX folder.
@@ -355,13 +452,35 @@ export function createPhoneCapability(deps: CapabilityDeps) {
 }
 
 /**
- * ⛔⛔ FACTORY RESET IS NOT IN THIS FILE, AND THAT IS THE DESIGN.
+ * ⛔⛔ FACTORY RESET IS HERE NOW, AND EVERY REASON IT WAS NOT STILL APPLIES.
  *
- * The reset a phone actually needs goes over SIP, from the PBX, to a handset that is
- * registered to us — no office access and no password. The local path only exists
- * for a phone that has never spoken to us, and wiring it here would mean the most
- * destructive operation in the product sat behind the same door as "what model is
- * this". It gets its own door, its own authorization record and its own audit row on
- * the server before anything local is asked to do anything.
+ * It used to be absent on purpose, and this constant used to read `true` with a note
+ * saying so: the reset a phone actually needs goes over SIP from the PBX, needs no
+ * office access and no password, and wiring the local path would put the most
+ * destructive operation in the product behind the same door as "what model is this".
+ *
+ * That reasoning was never wrong — it was incomplete. It only covers a phone that has
+ * ALREADY registered to us. The phone this wizard exists for is the one still holding
+ * another provider's settings, which has never spoken to our PBX and therefore cannot
+ * be reached over SIP at all. Izzy, 2026-09-11: *"even if the phone is stuck in
+ * somebody's DHCP, the system should find every single possible way to factory reset
+ * the phone and be able to switch it to us."*
+ *
+ * ⛔ So the PREFERENCE is unchanged and is enforced on the server: the ladder still
+ * sends `reset_over_sip` whenever the phone is registered to us, and only reaches
+ * `reset_over_lan` when it is not. What changed is that the last rung now exists.
+ *
+ * ⛔⛔ AND IT IS NOT BEHIND THE SAME DOOR AS THE READS. It needs an `authorizationId`
+ * no other operation takes, it is refused outright on the three device shapes where a
+ * wipe cannot be undone, it is refused a second time for the same phone in one
+ * session, and it is the only operation whose fence reads what the DEVICE said rather
+ * than what the caller asked for.
  */
-export const RESET_IS_NOT_A_LOCAL_CAPABILITY = true;
+export const RESET_IS_NOT_A_LOCAL_CAPABILITY = false;
+
+/**
+ * ⛔ Kept as a constant so the refusal names are greppable and a test can pin them.
+ * A refused reset is reported as `reset_unsafe:<reason>`, and every one of these is a
+ * device where the wipe is NOT recoverable — see resetSafetyCore.ts.
+ */
+export const RESET_REFUSAL_PREFIX = "reset_unsafe:" as const;

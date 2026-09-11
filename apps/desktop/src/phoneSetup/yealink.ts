@@ -60,6 +60,18 @@ export const YEALINK_DEFAULT_CREDENTIALS: YealinkCredentials = { username: "admi
 const ACTION_KEYS = {
   reboot: "Reboot",
   autop: "AutoP",
+  /**
+   * ⛔⛔ FACTORY RESET. Yealink's Action URI list carries `Reset` alongside `Reboot`
+   * and `AutoP`, on the same `servlet?key=` surface and the same authentication — so
+   * this adds no new mechanism, only the most destructive value on an existing one.
+   *
+   * ⛔ A phone whose firmware does not carry this key answers 404/500 and
+   * `sendAction` reports `refused` with the status. That failure direction is the
+   * safe one: nothing was wiped, and the ladder falls through to the non-destructive
+   * PnP hand-off. NEVER "fix" an unexpected status here by trying another URL shape —
+   * guessing at a reset endpoint is the one guess that cannot be taken back.
+   */
+  reset: "Reset",
 } as const;
 
 export type YealinkAction = keyof typeof ACTION_KEYS;

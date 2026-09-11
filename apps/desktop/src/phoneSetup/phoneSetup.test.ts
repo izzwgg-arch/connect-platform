@@ -148,13 +148,19 @@ test("a locked phone reports locked rather than a generic failure", async () => 
 
 function cap(over: Partial<Parameters<typeof createPhoneCapability>[0]> = {}) {
   let t = 1_000_000;
+  // ⛔ Every request that would leave the machine is recorded, whatever transport the
+  // test supplies. For a destructive operation "it was refused" is only half the
+  // claim — the half that matters is that NOTHING reached the phone.
+  const seen: Array<{ url: string; method: string }> = [];
+  const inner = over.http ?? (async () => res({ status: 200, headers: { Server: "Yealink SIP-T54W 96.86.0.15" } }));
   return {
+    seen,
     api: createPhoneCapability({
-      http: async () => res({ status: 200, headers: { Server: "Yealink SIP-T54W 96.86.0.15" } }),
       resolveCredential: async () => CREDS,
       scan: async () => ({ subnet: "192.168.1.0/24", subnets: [{ cidr: "192.168.1.0/24", iface: "Ethernet", addresses: 254, hostsSeen: 2 }], hostsSeen: 2, hosts: [], outcome: "ok" as const }),
       now: () => t,
       ...over,
+      http: async (req) => { seen.push({ url: req.url, method: req.method }); return inner(req); },
     }),
     advance: (ms: number) => { t += ms; },
   };
@@ -162,20 +168,105 @@ function cap(over: Partial<Parameters<typeof createPhoneCapability>[0]> = {}) {
 
 test("an operation that is not on the list is refused without reading its arguments", async () => {
   const { api } = cap();
-  assert.deepEqual(await api.run({ op: "factory_reset", ip: "192.168.1.41" } as any), { ok: false, refused: "unknown_operation" });
+  assert.deepEqual(await api.run({ op: "reset", ip: "192.168.1.41" } as any), { ok: false, refused: "unknown_operation" });
   assert.deepEqual(await api.run({ op: "run_command", cmd: "whoami" } as any), { ok: false, refused: "unknown_operation" });
   assert.deepEqual(await api.run(null as any), { ok: false, refused: "unknown_operation" });
 });
 
-test("factory reset is deliberately not a local capability", () => {
-  assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes("factory_reset"));
-  assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes("reset"));
+/**
+ * ⛔⛔ THIS TEST USED TO ASSERT `factory_reset` WAS ABSENT. It is present from
+ * 2026-09-11 on Izzy's mandate, and absence has been replaced by something stronger:
+ * the four things that must be true before a wipe can leave this machine. Deleting
+ * any one of them is what this now catches. Do NOT relax it back to a membership check.
+ */
+test("a factory reset cannot leave this machine without an approval on it", async () => {
+  const { api, seen } = cap();
+  const out = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "" } as any);
+  assert.deepEqual(out, { ok: false, refused: "reset_not_authorized" });
+  assert.equal(seen.length, 0, "nothing may reach the phone without an approval");
+});
+
+test("a factory reset is refused on the three shapes where a wipe cannot be undone", async () => {
+  // ⛔ Analog adapter, cordless base, door station — see resetSafetyCore.ts for why
+  // each one is unrecoverable. The verdict is computed from the MODEL THE PHONE GAVE,
+  // so a caller cannot ask its way past it.
+  for (const [model, reason] of [
+    ["HT812", "ata_analog_lines"],
+    ["W60B", "cordless_unpairs_handsets"],
+    ["GDS3710", "door_or_paging"],
+  ] as const) {
+    const { api, seen } = cap();
+    const out = await api.run({ op: "factory_reset", ip: "192.168.1.41", model, authorizationId: "auth-1" } as any);
+    assert.deepEqual(out, { ok: false, refused: `reset_unsafe:${reason}` }, model);
+    assert.equal(seen.length, 0, `${model}: nothing may reach the phone`);
+  }
+});
+
+test("a factory reset is refused on a phone that might be on Wi-Fi", async () => {
+  // ⛔ Izzy's own T53W. The W is Yealink's Wi-Fi variant; wiping it on Wi-Fi erases the
+  // network name and password and nothing can ever reach the phone again.
+  const { api, seen } = cap();
+  const out = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T53W", authorizationId: "auth-1" } as any);
+  assert.deepEqual(out, { ok: false, refused: "reset_unsafe:wireless_capable_unconfirmed" });
+  assert.equal(seen.length, 0);
+
+  // Told plainly that it is on a cable, the same phone may be cleared.
+  const ok = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T53W", link: "wired", authorizationId: "auth-1" } as any);
+  assert.deepEqual(ok, { ok: true, op: "factory_reset", sent: true });
+});
+
+test("a wired desk phone IS cleared, and never twice", async () => {
+  const { api, seen, advance } = cap();
+  const first = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
+  assert.deepEqual(first, { ok: true, op: "factory_reset", sent: true });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0].url, /key=Reset$/, "the documented Action URI value, and only that");
+
+  // ⛔ The local belt. A retried request, a stuck driver or a compromised head cannot
+  // turn one wipe into two on the machine that would actually send it.
+  advance(120_000);
+  const again = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
+  assert.deepEqual(again, { ok: false, refused: "already_reset_this_session" });
+  assert.equal(seen.length, 1, "the second request must never have left the machine");
+});
+
+test("a wipe that timed out still counts as sent", async () => {
+  // ⛔⛔ THE DIRECTION THAT MATTERS. A phone told to wipe itself stops answering
+  // BECAUSE it is doing what it was told, so a timeout is the EXPECTED reply. Treating
+  // it as "did not happen" and letting the next attempt through is how one wipe
+  // becomes two on a customer's handset.
+  const { api, advance } = cap({ http: async () => { throw new Error("timeout"); } });
+  const first = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
+  assert.deepEqual(first, { ok: false, refused: "unreachable" });
+
+  advance(120_000);
+  const again = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
+  assert.deepEqual(again, { ok: false, refused: "already_reset_this_session" });
+});
+
+test("a refused reset does not delay the safe fallback on the same phone", async () => {
+  // ⛔ The ladder's very next move after a refused wipe is the non-destructive PnP
+  // hand-off, on the SAME phone. A refusal that touched nothing must not make it wait.
+  const { api } = cap();
+  const refused = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "HT812", authorizationId: "auth-1" } as any);
+  assert.equal(refused.ok, false);
+  const next = await api.run({ op: "reboot", ip: "192.168.1.41" } as any);
+  assert.deepEqual(next, { ok: true, op: "reboot" });
+});
+
+test("a factory reset is fenced to the office network like everything else", async () => {
+  const { api, seen } = cap();
+  for (const ip of ["8.8.8.8", "169.254.1.1", "010.0.0.1", "not-an-ip"]) {
+    const out = await api.run({ op: "factory_reset", ip, model: "T46G", authorizationId: "auth-1" } as any);
+    assert.deepEqual(out, { ok: false, refused: "not_a_private_address" }, ip);
+  }
+  assert.equal(seen.length, 0);
 });
 
 test("there is no way to express an arbitrary request", () => {
   // the shape of the allowlist IS the security property
   assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["arm_pnp", "disarm_pnp", "discover", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
+    ["arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
 });
 
 test("a public address is refused even when the server asked for it", async () => {

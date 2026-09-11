@@ -120,8 +120,12 @@ test("ADVERSARIAL: no payload shape can make the capability throw", async () => 
 test("ADVERSARIAL: an operation name outside the list is refused before its arguments are read", async () => {
   const { api, seen } = cap();
   for (const op of [
-    "factory_reset", "reset", "run_command", "exec", "fetch", "setConfig",
+    "reset", "run_command", "exec", "fetch", "setConfig",
     "arbitraryHttp", "DISCOVER", "Discover", " discover", "discover ", "discover;reboot",
+    // ⛔ Near-misses of the real reset op. `factory_reset` itself is on the list from
+    // 2026-09-11 and is fenced in `phoneSetup.test.ts`; anything that merely LOOKS like
+    // it must still be refused before its arguments are read.
+    "FACTORY_RESET", "factory_reset ", " factory_reset", "factory_reset;reboot",
   ]) {
     const out = await api.run({ op, ip: "192.168.1.41" } as any);
     assert.deepEqual(out, { ok: false, refused: "unknown_operation" }, op);
@@ -129,10 +133,14 @@ test("ADVERSARIAL: an operation name outside the list is refused before its argu
   assert.equal(seen.length, 0, "not one request should have left the machine");
 });
 
-test("ADVERSARIAL: the allowlist is exactly eight operations and reset is not one", () => {
-  assert.equal(PHONE_OPERATIONS.length, 8);
-  for (const forbidden of ["factory_reset", "reset", "run_command", "http", "request"]) {
-    assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes(forbidden));
+test("ADVERSARIAL: the allowlist is exactly nine operations and none of them is a request-sender", () => {
+  // ⛔ It was eight until 2026-09-11, when `factory_reset` was added on Izzy's mandate.
+  // The number is pinned so adding a tenth is a deliberate act with its own test, and
+  // the forbidden list is what actually matters: no verb here takes a URL, a command
+  // or a request body from the caller.
+  assert.equal(PHONE_OPERATIONS.length, 9);
+  for (const forbidden of ["reset", "run_command", "http", "request", "exec", "eval"]) {
+    assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes(forbidden), forbidden);
   }
 });
 

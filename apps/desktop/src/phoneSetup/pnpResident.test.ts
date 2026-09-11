@@ -219,9 +219,12 @@ function cap(opts: { http?: (req: HttpRequest) => Promise<HttpResponse>; failBin
   return { api, seen, resident, sockets };
 }
 
-test("the allowlist has eight operations: the six plus arm_pnp and disarm_pnp", () => {
+test("the allowlist has nine operations: the six, arm_pnp/disarm_pnp, and factory_reset", () => {
+  // ⛔ `factory_reset` joined on 2026-09-11 (Izzy's mandate). Its four fences live in
+  // capability.ts and are pinned by phoneSetup.test.ts; this list is here so a TENTH
+  // operation can never appear without somebody changing a test on purpose.
   assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["arm_pnp", "disarm_pnp", "discover", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
+    ["arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
 });
 
 test("arm_pnp arms the resident for the customer's folder and phones; the fence applies; the list is capped", async () => {
