@@ -817,3 +817,223 @@ gates, the naming and the honest states are live now.
 ⏳ **Deliberately not built:** the Grandstream HTTP write path (`api.values.post` needs the
 sticker admin password, so Grandstream rides the PnP power-cycle path instead and its
 adapter stays `documented`), and Phase B's in-app Windows firewall prompt.
+
+## 19. 2026-09-11 — Izzy's hands-off mandate, and what his own rig proves
+
+⛔⛔ **NOTHING IN THIS SECTION IS BUILT.** It is the decision record plus verified
+ground truth for the work that follows. No code changed, nothing was deployed, and
+**no PBX row was written** — every PBX fact below is a read-only `SELECT` or an
+`asterisk -rx "... show ..."`, re-run and re-verified on **2026-09-11**.
+
+⛔ **It is also a recovery.** The session that took these decisions ran out of
+context, was compacted, and then could not answer at all ("Prompt is too long").
+Its last instruction was *"update MD file."* — the write never landed. Everything
+here would otherwise have been lost, which is exactly the failure this file exists
+to prevent.
+
+### 19a. What Izzy asked for, in his own words
+
+Ordered as he said them, because the later ones overrule the earlier ones.
+
+1. *"Check my desktop. Three phones say 'not connected,' but they are and have an
+   IP address and are on the same network as Grandstream. It is on a PoE switch, so
+   the system needs to be able to recognize that there is a PoE switch and what kind
+   of PoE switch. same with the Wi-Fi extender."*
+2. *"but again, this whole thing should be automated. The customer should be sitting
+   there, and the system should do everything, which means the Loopcom app should be
+   able to run a factory reset or a reboot from the network. This should be able to
+   work completely hands-off after the system finds the phones"*
+3. *"also, I restarted that Yealink phone and it didn't connect."*
+4. *"not just over lan, even if the desk phone works with Wi-Fi as well"*
+5. *"and you don't need to design a new wizard. You can use the existing one. It
+   should just function the way I wanted it to function."*
+6. *"with the exception that if a user selects that he does know the model of the
+   phone, then they should get a dropdown with manufacturers. They can select the
+   manufacturer from the database that we have all the templates in, and then the
+   second dropdown will be the model and the depiction for where to find the brand
+   and models on the back of the phone."*
+7. *"once the customer hits Set Up the Phone, the first thing the wizard is supposed
+   to be doing is taking both phones and preparing them (meaning factory resetting
+   them, all of them). First thing you have to do. Once it comes back online, the
+   wizard should take them, upload the provisioning profile, and then restart.
+   That's it."*
+8. *"before the customer says to connect the phones to our system, even if the phone
+   is stuck in somebody's DHCP, the system should find every single possible way to
+   factory reset the phone and be able to switch it to us."*
+
+### 19b. ⛔⛔ The reset-first decision — HE WAS TOLD THE COST AND REAFFIRMED IT
+
+Item 7 was pushed back on once, in writing, before being accepted. **The pushback
+is recorded here so nobody re-litigates it and nobody claims he was not warned.**
+
+What he was told:
+
+- **The desktop app cannot factory-reset a phone today, by deliberate design.**
+  `factory_reset` is refused as an unknown operation, and **two tests exist whose
+  only job is to assert it is never added to the capability list.** Someone decided
+  a program running on a customer's PC must not be able to wipe their hardware.
+  Reset-first is therefore **reopening that decision**, not tuning a parameter.
+- **The server already has reset and puts it LAST on purpose.** Redirecting a phone
+  without a reset is rung 3; reset over the network is rung 6 and reset via the PBX
+  is rung 7, both behind an approval gate.
+- ⛔ **The dependency runs backwards.** To reset a phone over the network you must
+  already be able to log into it, which needs its admin password. A phone that came
+  from another provider usually no longer has the factory password. And if you *can*
+  log in, you do not need the reset — you set the provisioning address and reboot,
+  which is faster and safer. **Reset is the tool you can only use on the phones that
+  do not need it.**
+- ⛔⛔ **One case is fatal to his own Wi-Fi requirement (item 4): a factory reset
+  erases network settings.** A Wi-Fi phone forgets the SSID and passphrase and never
+  comes back — nothing on the network can reach it again. Someone must walk over and
+  type the Wi-Fi password into the handset. **Reset-first would take a working
+  wireless phone and make it permanently unreachable.**
+- ⛔ Resetting an HT ATA erases the analog line configuration (our own rule in code
+  already forbids it), and resetting a DECT base can unpair the handsets.
+
+**He reaffirmed anyway (item 8). That is the decision.** The shape agreed as the way
+to honour it without the three fatal cases:
+
+1. **Prepare** — get the phone into a state where it will accept us. For most phones
+   that is logging in and setting the address; for a phone that lets nobody in, that
+   is forcing it to boot. **Reset is one way to prepare, used when it is the only
+   way, and never on an ATA or a wireless phone.**
+2. **Provision** — hand it the profile.
+3. **Restart** — it comes up on our system.
+
+⛔ That is his sequence. The only difference from item 7 is that *prepare* picks the
+lightest thing that works instead of always reaching for the heaviest.
+
+### 19c. ⛔⛔ The rig, verified live 2026-09-11 — three of his four phones carry another customer's identity
+
+Read from `provisioning.devices` joined to `phone_models`, read-only:
+
+| Phone | MAC | PBX tenant | recorded as |
+|---|---|---|---|
+| Grandstream HT812 | `C0:74:AD:E5:79:37` | **2 — `a_plus_center`** | "Home" |
+| Grandstream GXP2170 | `c0:74:ad:8c:65:4e` | **7 — `create_a_box`** | "106" |
+| Grandstream GXP2170 | `c0:74:ad:8c:60:5f` | **7 — `create_a_box`** | "102" |
+| Grandstream HT801 | `EC:74:D7:20:1F:EA` | **21 — `test`** (Landau Home) | "101" ✅ correct |
+| Yealink | `80:5e:c0:b3:b2:d0` | **none — no row anywhere** | — |
+
+⛔ **Nothing has leaked.** The names on Izzy's screen come from his own assignment in
+the wizard, not from those records. But three of the four still carry another
+customer's identity on the PBX, **and that must be cleaned up before his rig can
+provision cleanly** — the provisioning file a phone downloads is keyed on its MAC,
+and today two of his phones would be handed Create A Box's.
+
+⛔ **CORRECTION to the 2026-09-10 note: the HT801's MAC is `EC:74:D7:20:1F:EA`, not
+`EC:74:07:…`.** The earlier reading came off a zoomed screenshot and misread `D7` as
+`07`. `EC:74:D7` is a real Grandstream OUI; `EC:74:07` is not. The earlier
+*conclusion* (HT801 correctly on Landau Home) was right — only the digits were wrong.
+**Take a MAC from the database, never from a screenshot.**
+
+### 19d. ⛔⛔ Why the restarted Yealink still did not connect — the chicken and egg
+
+`80:5e:c0:b3:b2:d0` has **no provisioning record on the PBX at all, on any tenant**
+(re-verified — a loose `LIKE '%b2d0%'` over `provisioning.devices` returns nothing).
+
+The PnP resident answers **only MACs already recorded for the tenant**. So when Izzy
+power-cycled the phone it almost certainly *did* announce itself, and **we
+deliberately said nothing back.** The listener only answers phones that are already
+set up, and setting the phone up is the entire job. On top of that, the wizard had
+already halted that phone to Support, so the run was not arming the resident either.
+
+⛔ **This is the single most useful fact on the rig.** It means the every-brand
+responder shipped in §18 cannot finish a *new* phone — only re-point one the PBX
+already knows. Closing it is Phase D's real content.
+
+### 19e. Live registration state — the pill is telling the truth
+
+```
+T21_101    (desk phones)  Unavailable   0 of inf contacts     <- no desk phone, ever
+T21_101_1  (softphone)    Not in use    2 contacts, both Avail, from 50.48.58.53
+```
+
+⛔ **All four rig phones point at extension 101.** That is ONE endpoint, so it can
+only give ONE answer. **The moment any one of them registers, all four rows turn
+green, including the three that did not.** That is the next complaint, and it is
+worth fixing before it arrives.
+
+### 19f. Four screen defects found, all real, none fixed
+
+- **The pill lies by omission.** "Not connected" reads exactly one thing: is this
+  extension registered to the phone system (`defaultIsRegistered`,
+  `apps/api/src/deskPhoneSetup/deskPhoneRoutes.ts:140`). It is factually correct and
+  it answers a question the customer is not asking — **on a row our own LAN scan
+  pulled off the network by MAC seconds earlier.** The row contradicts itself, and
+  the IP is deliberately hidden as a technical field. Proposed: *"Not on your phone
+  system yet"*, and show the IP.
+- **The done screen congratulates you for a failure.** `DeskPhoneWizard.tsx:882`
+  draws a green success circle **unconditionally**; the subtitle branches only on
+  `needsAttention === 0` so everything else falls through to *"Your office is
+  working."*; and `summarizeRun` (`states.ts:209`) carries the comment *"Count the
+  wins first. Never '1 failed'."* — right at 7 of 8, wrong at 0 of 1, where it
+  prints a zero under a tick.
+- **The screen never says what to do.** The phone already has a plain-English note
+  in the database and the done screen does not show it — and that note's advice
+  ("Loopcom Support can finish this one") is itself wrong: the real next step is to
+  power-cycle the phone with the wizard open.
+- ⛔ **"Yes, I can see a name on it" goes nowhere.** The free-text box is sent to the
+  server by nothing. It produces exactly one sentence on the results screen telling
+  you what you typed. Izzy's two dropdowns (item 6) turn that dead end into a real
+  fact the server can act on — **and the database behind them already exists**: the
+  20 brands and 427 models of §14.
+
+### 19g. PoE switch and Wi-Fi extender — why this is bigger than a label
+
+Today `discoveryFilter.ts` admits a device as a phone only on evidence and **counts
+everything else for the honesty line, throwing the MAC and IP away** — which is what
+produces *"We also saw 88 other devices on your network."* Nothing anywhere in the
+codebase models a switch, an extender, or LLDP.
+
+- **The switch is the missing power-cycle.** A reset Yealink only announces itself
+  when it boots — that is the mechanism, not a workaround. Today a human must walk
+  over and unplug it. If the wizard knows the PoE switch it can cycle that port
+  itself and finish the phone hands-off, which is item 2 verbatim.
+- **The extender is why a phone can be online and silent.** Discovery rides
+  multicast; plenty of extenders do not forward it or bridge into a separate
+  broadcast domain. **Izzy's HT812 sits on 192.168.4.22 while his PC is on
+  192.168.6.x, so that boundary is already in play on his own rig.**
+
+⛔ Two honest limits to state before building: an **unmanaged** PoE switch has no
+control plane, so nothing can cycle it and the wizard must say so rather than
+pretend; and cycling a port drops everything on it, so it needs the same approval
+card a factory reset gets.
+
+⏳ **Blocked on Izzy: what is the switch and what is the extender — brand, model, and
+does the switch have a web page.** No vendor codes will be guessed; the real device
+has to be probed, exactly as Grandstream was in §16.
+
+### 19h. ⛔ What was lost, and how to get it back
+
+Two research workflows were launched and stopped before they finished.
+
+| run | agents | survived |
+|---|---|---|
+| `hands-off-desk-phone-setup` `wf_8d556a05-621` | 10 | **4 of 10** |
+| `hands-off-wifi-desk-phones` `wf_06999905-7bf` | 6 | **0 of 6** |
+
+⛔ **The four that survived are all stage 1 — our OWN ground truth**, not the
+cross-vendor sweep: what the PBX side can drive (SIP NOTIFY surface), a precise map
+of the setup ladder, what the desktop app can drive today, and the catalogue's
+provenance. **The six stage-2 agents — the actual "every possible way to reset or
+reboot a phone across all 20 brands, and what a PoE switch can be driven to do" —
+returned nothing. That question is still unanswered.**
+
+⛔ **Both runs are resumable and completed calls return cached:**
+`Workflow({scriptPath, resumeFromRunId})`. Journals and per-agent transcripts are at
+`~/.claude/projects/C--dev-projects-Connect-2/3d1b922b-e815-40b2-8c0a-4471c2b4a6bb/subagents/workflows/<runId>/`.
+⛔ **Read `journal.jsonl` before re-running** — it records each agent's actual return
+value, so you can see what is cached rather than assuming.
+
+### 19i. NOT DONE — the state at the end of 2026-09-11 morning
+
+Everything in §19 is a decision or a measurement. **No line of code was written for
+any of it.** The build order that follows from it:
+
+1. Clean the three cross-tenant provisioning rows off Izzy's rig (PBX write — needs
+   his mandate) and decide whether all four phones really share ext 101.
+2. Re-run the stage-2 research (the cross-vendor reset/reboot sweep + the wireless
+   case), because "every possible way" cannot be built from memory.
+3. Then Phase D with his reset-first shape, Phase E, and the screen work — the
+   screens **mockup-first**, by his own standing rule.
