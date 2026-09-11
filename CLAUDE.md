@@ -1,3 +1,32 @@
+## ⛔⛔⛔ THE GATE — READ THE MD FILES BEFORE YOU START, UPDATE THEM BEFORE YOU FINISH. THIS IS THE FIRST THING IN THIS FILE BECAUSE IT IS THE BIGGEST GATE THERE IS.
+
+Izzy, 2026-09-11, verbatim: *"Never, ever, ever, ever start a task without reading the MD
+files. Never, ever finish a task without updating the MD files. Ever. It's the biggest
+gate out there."*
+
+⛔ **BEFORE the first tool call of any task** — read this file AND the matching
+`docs/ai-context/AGENT_HANDOFF_*.md` for the area you are about to touch. The handoff for
+that exact area almost certainly exists and almost certainly records the trap you are
+about to walk into. ⛔⛔ **Reading CLAUDE.md's summary bullets is NOT reading the MD
+files** — the summary tells you a feature exists; the handoff tells you how it fails.
+
+⛔ **BEFORE reporting done** — update `CLAUDE.md`, the matching handoff, `TESTS_RUN.md` if
+you ran tests, and memory + `MEMORY.md`; then commit → push → deploy and tell Izzy which
+files you touched. Full procedure: **THE TWO RULES THAT WRAP EVERY TASK**, below.
+
+⛔⛔ **WHAT SKIPPING IT COSTS — 2026-09-11, a worked example on a LIVE customer line.**
+Asked to make 845-723-1213 ring T101 ext 101, an agent worked off CLAUDE.md's summary plus
+live PBX reads and skipped `AGENT_HANDOFF_IVR_RUNTIME_2026-08-06.md`. It hand-edited the
+tenant inbound route. §1.5 of that handoff says in its own words: *"our bake IS the
+routing, so any regen by anything reverts a live number. Detection + auto re-bake is the
+only defense."* The drift reconciler reverted the edit **three separate times**, each
+within minutes — proven by the inode changing (15731645 → 15730853), i.e. the file was
+REPLACED, not edited. The same handoff plus one AstDB read would also have shown that the
+number's menu has **no working keys at all**, so every option that depended on reaching a
+human through it was dead before the first edit. Three failed attempts, a live customer's
+main number re-pointed and reverted repeatedly, and Izzy had to give the instruction
+twice. ⛔ **Ten minutes of reading would have cost nothing and saved all of it.**
+
 ## ⛔⛔ AGENT HANDOFF — Izzy's HANDS-OFF mandate: factory-reset FIRST (he was told the cost and reaffirmed it), Wi-Fi phones too, and THREE OF HIS FOUR RIG PHONES CARRY ANOTHER CUSTOMER'S IDENTITY ON THE PBX (2026-09-11) — READ FIRST before touching the desk-phone wizard again, before proposing a reset order, before answering "why didn't the Yealink connect", or before trusting a MAC read off a screenshot
 
 Full record: **`docs/ai-context/PLAN_DESK_PHONE_WIZARD_WORKS_EVERYWHERE_2026-09-10.md` §19**
