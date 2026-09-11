@@ -4,6 +4,69 @@ Newest entries first.
 
 ---
 
+## Desk-phone wizard — every brand, not just Yealink (2026-09-11)
+
+Branch `feat/ivr-migration-takeover`, commit `dac3aab2`. Plan doc
+`PLAN_DESK_PHONE_WIZARD_WORKS_EVERYWHERE_2026-09-10.md` §18.
+
+```bash
+# shared
+cd packages/shared && npx tsc --noEmit                               # 0 errors
+npm test                                                             # 597 / 597
+
+# desktop
+cd apps/desktop && npx tsc --noEmit                                  # 0 errors
+npm test                                                             # 285 / 285
+
+# portal
+cd apps/portal && npx tsc --noEmit                                   # 0 errors
+npm test                                                             # 585 tests, 581 pass, 4 fail
+#   all four pre-existing and none in a touched file:
+#   campaignsIndexLayout, coworkerHands, webrtcSdpDiagnostics, and
+#   nativeSelectSweep catching another session's OrdersDesk.tsx:563
+
+# api  (⛔ needs --experimental-test-module-mocks or every mock.module file dies)
+cd apps/api && npx tsc --noEmit | grep -c "error TS"                 # 84 = the exact baseline
+npx tsc --noEmit | grep "error TS" | grep -E "deskPhoneSetup|vendorAdapters|deviceKinds|deviceIdentity|discoveryFilter"
+#   -> empty: none in any edited file
+node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"
+#                                                                    # 101 / 101
+```
+
+**Replay against HEAD.** The eight changed SOURCE files were copied to the scratchpad,
+`git checkout HEAD --`'d, the suites re-run, then restored and `cmp`-verified byte-identical.
+The new tests fail there:
+
+| suite | fails at HEAD |
+|---|---|
+| shared invariants | **2 of 2** rewritten tests |
+| desktop `pnp` + `pnpResident` | **4** — the Accept echo, and three two-port / interface tests |
+| portal driver + wizard | **3** — a Grandstream is listened for, the hour is gone, the give-up threshold |
+| api routes | **5** — catalogue naming ×2, the shared OUI block, both Phase-F tests |
+
+⛔ **Named rather than counted: the new tests that PASS at HEAD are regression guards, not
+bug-proofs.** The hostile-`Accept` test (HEAD hard-coded the literal, so nothing could be
+injected), the `cannot_listen` recovery test (HEAD never set the flag at all), and the api's
+Grandstream-ladder test (the api never had the Yealink gate — that gate was in the driver).
+
+⛔ **One repair found by a control-character scan, not by a test:**
+`apps/portal/lib/deskPhoneWizard.test.ts`'s jargon guard read
+`/<BS>(HTTP|SIP|DHCP|…)<BS>/i` with two literal BACKSPACE bytes where `\b` word boundaries
+were meant, so it had matched nothing since the day it was written. Proven both ways
+afterwards — the fixed regex catches "over HTTP", "provisioning folder" and "DHCP option 66"
+and passes honest copy; the broken one matches none of them.
+
+```bash
+# the scan worth repeating on any file written through a shell
+python -c "import io,sys; d=io.open(sys.argv[1],'rb').read().replace(b'\r\n',b'\n'); \
+print(len([b for b in d if b<9 or (10<b<32) or b==127]))" <file>
+```
+
+⏳ **NOT PROVEN: no phone of any brand has been set up through this.** Every number above is
+a suite or a typecheck; the acceptance test is Izzy's own rig.
+
+---
+
 ## The Coworker's hands — unit suites + the end-to-end acceptance harness (2026-09-09)
 
 Branch `feat/ivr-migration-takeover`, commits `336ad19f` → `1ac3d427`. Handoff `AGENT_HANDOFF_COWORKER_HANDS_2026-09-09.md`.
