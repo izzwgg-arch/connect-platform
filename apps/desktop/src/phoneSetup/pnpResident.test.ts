@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createPnpResident, PNP_RESIDENT_MAX_MACS } from "./pnpResident";
 import { PNP_MULTICAST_GROUP, type PnpSocket } from "./pnp";
+import { PNP_PRIMARY_PORT, PNP_SECONDARY_PORT } from "./pnpResident";
 import { createPhoneCapability, PHONE_OPERATIONS } from "./capability";
 import { sendAction, testCredentials, type HttpRequest, type HttpResponse } from "./yealink";
 
@@ -40,12 +41,16 @@ function subscribeFrom(ip: string, mac: string, callId = "abc123@" + ip): string
 class FakeSocket extends EventEmitter implements PnpSocket {
   sent: Array<{ text: string; port: number; address: string }> = [];
   joined: string[] = [];
+  /** Which interface addresses the join was asked for, in order. */
+  joinedOn: Array<string | undefined> = [];
+  /** Which port this socket bound to — the resident opens one per listening port. */
+  boundPort: number | null = null;
   bound = false; closed = false; failBind = false;
-  bind(_port: number, _address: string, cb: () => void) {
+  bind(port: number, _address: string, cb: () => void) {
     if (this.failBind) { setImmediate(() => this.emit("error", new Error("EADDRINUSE"))); return; }
-    this.bound = true; setImmediate(cb);
+    this.bound = true; this.boundPort = port; setImmediate(cb);
   }
-  addMembership(group: string) { this.joined.push(group); }
+  addMembership(group: string, iface?: string) { this.joined.push(group); this.joinedOn.push(iface); }
   send(msg: Buffer, port: number, address: string, cb?: (err: Error | null) => void) {
     this.sent.push({ text: msg.toString("utf8"), port, address });
     if (cb) setImmediate(() => cb(null));
@@ -73,8 +78,14 @@ function make(opts: { failBind?: boolean; now?: () => number } = {}) {
 test("armed for a folder and a list, the resident answers a listed phone whenever it boots", async () => {
   const { resident, sockets } = make();
   assert.equal(await resident.arm({ url: URL_OK, macs: [MAC, MAC2] }), true);
-  assert.equal(sockets.length, 1);
+  // ⛔ TWO sockets now, and the count is not the point — the ports are. 5060 is what
+  // every brand in the catalogue documents; 5080 is held as well because
+  // Grandstream's own sources contradict each other about which of the two its
+  // phones multicast to, and a phone asking on a port nobody holds is silent
+  // failure. The primary is opened first, so sockets[0] is always udp/5060.
+  assert.deepEqual(sockets.map((x) => x.boundPort), [PNP_PRIMARY_PORT, PNP_SECONDARY_PORT]);
   assert.deepEqual(sockets[0].joined, [PNP_MULTICAST_GROUP]);
+  assert.deepEqual(sockets[0].joinedOn, ["192.168.0.10"], "joined on the interface it was given");
   sockets[0].deliver(subscribeFrom(PHONE_IP, MAC), PHONE_IP);
   await tick();
   assert.equal(sockets[0].sent.length, 2, "200 OK then NOTIFY");
@@ -148,8 +159,9 @@ test("re-arming the SAME folder keeps the socket and the log; a DIFFERENT folder
   await resident.arm({ url: URL_OK, macs: [MAC] });
   sockets[0].deliver(subscribeFrom(PHONE_IP, MAC), PHONE_IP);
   await tick();
+  const openedBefore = sockets.length;
   assert.equal(await resident.arm({ url: URL_OK, macs: [MAC2] }), true);
-  assert.equal(sockets.length, 1, "same folder: no new socket");
+  assert.equal(sockets.length, openedBefore, "same folder: no new socket opened");
   assert.equal(resident.status().macs, 2);
   assert.equal(resident.status().deliveries.length, 1);
   assert.equal(await resident.arm({ url: URL_OTHER, macs: [MAC2] }), true);
@@ -216,7 +228,7 @@ test("arm_pnp arms the resident for the customer's folder and phones; the fence 
   const { api, resident, sockets } = cap();
   const out = await api.run({ op: "arm_pnp", url: URL_OK, macs: [MAC, MAC2, "junk"] });
   assert.deepEqual(out, { ok: true, op: "arm_pnp", listening: true, macs: 2, deliveries: 0 });
-  assert.equal(sockets.length, 1);
+  assert.deepEqual(sockets.map((x) => x.boundPort), [PNP_PRIMARY_PORT, PNP_SECONDARY_PORT]);
   assert.deepEqual(await api.run({ op: "arm_pnp", url: "https://evil.example/phoneprov/f3df739ac62197cd/", macs: [MAC] }), { ok: false, refused: "not_a_loopcom_provisioning_url" });
   assert.deepEqual(await api.run({ op: "arm_pnp", url: URL_OK, macs: new Array(PNP_RESIDENT_MAX_MACS + 1).fill(MAC) }), { ok: false, refused: "too_many_hardware_addresses" });
   assert.equal(resident.status().url, URL_OK);
@@ -232,7 +244,12 @@ test("set_provisioning arms the resident for the phone FIRST, then asks it to re
   const { api, seen, sockets } = cap();
   const p = api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK, waitMs: 400 });
   await tick();
-  assert.equal(sockets.length, 1, "the listener is up before the restart is sent");
+  // ⛔ THE PROPERTY IS THE ORDER, not the number of sockets. PnP fires once per
+  // boot, so a responder that starts after the restart misses a fast phone. What
+  // must be true here is that the listening socket EXISTS and is bound before the
+  // reboot request goes out — which is what the two lines below say together.
+  assert.ok(sockets.length >= 1 && sockets[0].bound, "the listener is up before the restart is sent");
+  assert.equal(sockets[0].boundPort, PNP_PRIMARY_PORT);
   assert.match(seen[0].url, /^http:\/\/192\.168\.0\.121\/servlet\?key=Reboot$/);
   const decoded = Buffer.from(seen[0].headers.Authorization.slice(6), "base64").toString("utf8");
   assert.equal(decoded, "admin:admin", "a reset phone is on the documented default");

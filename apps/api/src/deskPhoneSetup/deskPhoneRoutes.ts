@@ -20,7 +20,8 @@ import { userHasActionPermission } from "../permissionGates";
 import {
   buildButtonLayout, serializeButtonLayout, customerStateFor, decideReset, formatMac,
   guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
-  summarizeRun, vendorSupportsPbxProvisioning, type PhoneCondition, type PhoneState,
+  summarizeRun, vendorCanBeDrivenLocally, vendorSupportsPbxProvisioning,
+  type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
@@ -720,10 +721,19 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // every further "set_provisioning" would restart somebody's phone again. The
     // ladder itself stays pure; this is the one caller-observed fact it acts on.
     if (decision.action === "set_provisioning" && observed.data.provisioningHandoffFailed) {
+      // ⛔⛔ THIS FLAG CHANGED MEANING ON 2026-09-11 AND THE WORDING HAD TO FOLLOW.
+      // It used to be set by a CLOCK — an hour after the office machine first asked
+      // — and the sentence below said we had given up. That was false: the desktop
+      // responder is STANDING, so a phone power-cycled the next morning is still
+      // provisioned. The driver now raises this ONLY when the machine could not open
+      // its listening socket at all, which is the one case where waiting really is
+      // pointless, so the message says that and names the thing a person can fix.
       decision = {
         action: "halt", rung: -1, halted: true, handOff: "support",
-        reason: "office machine could not hand the phone its provisioning folder over PnP (bounded restarts, then listen-only)",
-        customerMessage: "We could not point this phone at Loopcom from your computer. Loopcom Support can finish this one with you.",
+        reason: "the office machine could not open the PnP listening socket (repeated cannot_listen)",
+        customerMessage:
+          "This computer could not listen for the phone on your network. If Windows asked whether to " +
+          "allow Loopcom, choose Allow and run setup again — or Loopcom Support can finish this one with you.",
       };
     }
     // ⛔⛔ A vendor with NO brand in the PBX's provisioning catalog (Panasonic —
@@ -756,6 +766,35 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         };
       }
     }
+    // ⛔⛔ A BRAND NO COMPUTER ON THE LAN CAN DRIVE MUST REACH A FINISHED STATE.
+    // Four brands in the PBX catalogue — Alcatel-Lucent, Dinstar, Nurivoice and
+    // Hanyang Digitech, 31 models between them — publish no mechanism a machine on
+    // the same network can use: no PnP multicast, no HTTP action, no mDNS. Before
+    // this, the ladder would keep naming `set_provisioning`, the driver could not
+    // perform it, and the phone sat on "Preparing" for ever — the run never
+    // finished and the customer was watching a progress bar for something that was
+    // never going to happen. Same route-level shape as the hand-configured branch
+    // above, so the pure ladder and its exhaustive invariant suite stay untouched.
+    const drivableLocally = vendorCanBeDrivenLocally(phone.vendor);
+    if (!handConfiguredVendor && !drivableLocally) {
+      if (registeredToUs) {
+        // ⛔ Registration is the whole test for a phone we cannot re-point. Chasing
+        // provisioning on it would leave a working phone amber for ever.
+        decision = {
+          action: "do_nothing", rung: 0, halted: false,
+          reason: "registered; nothing on the LAN can drive this brand and registration is the whole test",
+        };
+      } else if (decision.action !== "do_nothing" && decision.action !== "halt") {
+        decision = {
+          action: "halt", rung: -1, halted: true, handOff: "support",
+          reason: `no LAN-drivable mechanism exists for vendor "${sanitizeDeviceText(phone.vendor, 40)}" — no PnP, no HTTP action, no mDNS`,
+          customerMessage:
+            "This phone has to be pointed at Loopcom by hand — its maker gives us no way to do it " +
+            "from your computer. Loopcom Support will do it with you; the rest of your phones keep going.",
+        };
+      }
+    }
+
     // The folder a reset phone needs, resolved only when the instruction is to
     // point the phone at us. Null means "no URL known" — the driver waits.
     let provisioningUrl: string | null = null;
@@ -817,11 +856,13 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           haltedReason: decision.handOff || "support",
         },
       });
-    } else if (decision.action === "do_nothing" && registeredToUs && (provisioningIsOurs || handConfiguredVendor)) {
+    } else if (decision.action === "do_nothing" && registeredToUs && (provisioningIsOurs || handConfiguredVendor || !drivableLocally)) {
       // ⛔ `handConfiguredVendor` joins `provisioningIsOurs` here on purpose: a
       // Panasonic can never point at our provisioning, so registration alone is
       // the green light for it — demanding both would leave a working phone
-      // amber forever.
+      // amber forever. ⛔ `!drivableLocally` joins them for the same reason: an
+      // Alcatel or a Dinstar was pointed at us by a person, so there is nothing
+      // left for us to verify beyond the PBX saying it is registered.
       await db.deskPhoneSetupPhone.update({
         where: { id: phone.id },
         data: { state: "REGISTERED", registeredAt: phone.registeredAt ?? new Date(), customerNote: null },

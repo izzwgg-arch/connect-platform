@@ -36,12 +36,27 @@
 import { createSocket as nodeCreateSocket } from "node:dgram";
 import { isLoopcomProvisioningUrl } from "./yealink";
 import {
-  buildPnpNotify, buildPnpOk, isNotifyAck, normalizeMac, notifyTarget, parsePnpSubscribe,
-  pickLocalAddressFor, PNP_MULTICAST_GROUP, PNP_PORT, type LocalEndpoint, type PnpSocket,
+  buildPnpNotify, buildPnpOk, isNotifyAck, localMulticastInterfaces, normalizeMac, notifyTarget,
+  parsePnpSubscribe, pickLocalAddressFor, PNP_MULTICAST_GROUP, PNP_PORT,
+  type LocalEndpoint, type PnpSocket,
 } from "./pnp";
 
 /** The most hardware addresses one arm() may carry — a tenant, not a directory. */
 export const PNP_RESIDENT_MAX_MACS = 512;
+
+/**
+ * The ports we listen on.
+ *
+ * ⛔ 5060 is the port every brand in the PBX catalogue documents, and it is the one
+ * that must bind for the responder to be useful. 5080 is here because Grandstream's
+ * own sources disagree with each other about which of the two its phones multicast
+ * to, and a second socket is a great deal cheaper than a customer whose phone asks
+ * on a port nobody is holding. Its failure to bind is logged and otherwise ignored —
+ * never let the bonus port decide whether we are listening.
+ */
+export const PNP_PRIMARY_PORT = PNP_PORT;
+export const PNP_SECONDARY_PORT = 5080;
+export const PNP_LISTEN_PORTS = [PNP_PRIMARY_PORT, PNP_SECONDARY_PORT] as const;
 
 export type PnpDelivery = {
   mac: string;
@@ -104,7 +119,7 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
 
   let url: string | null = null;
   const macs = new Set<string>();
-  let socket: PnpSocket | null = null;
+  let sockets: PnpSocket[] = [];
   let listening = false;
   let problem: PnpResidentStatus["problem"] = null;
   const answeredCallIds = new Map<string, { mac: string; agent: string | null; at: number }>();
@@ -121,27 +136,36 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
   };
 
   const closeSocket = () => {
-    if (socket) { try { socket.close(); } catch { /* already closed */ } }
-    socket = null;
+    for (const s of sockets) { try { s.close(); } catch { /* already closed */ } }
+    sockets = [];
     listening = false;
   };
 
-  const openSocket = (): Promise<boolean> => new Promise<boolean>((resolve) => {
+  /**
+   * Open ONE socket on one port and wire it up.
+   *
+   * ⛔ Resolves `true` only when the bind completed. The caller decides what a
+   * failure means: on the primary port it means we are not listening, on the
+   * secondary it means nothing at all.
+   */
+  const openOne = (port: number): Promise<boolean> => new Promise<boolean>((resolve) => {
     let s: PnpSocket;
     try { s = (opts.createSocket ?? defaultCreateSocket)(); }
-    catch { problem = "cannot_listen"; resolve(false); return; }
-    socket = s;
+    catch { resolve(false); return; }
     let bound = false;
+    const drop = () => {
+      sockets = sockets.filter((x) => x !== s);
+      try { s.close(); } catch { /* already closed */ }
+    };
     s.on("error", () => {
-      // Before the bind completed: cannot listen. After: the socket died — the
-      // next arm() (the hourly refresh) opens a fresh one.
-      problem = "cannot_listen";
-      if (socket === s) closeSocket();
+      // Before the bind completed: this port is unusable. After: this socket died —
+      // the next arm() (the hourly refresh) opens a fresh one.
+      drop();
       if (!bound) resolve(false);
-      log("pnp resident: socket error; not listening");
+      else log(`pnp resident: socket on udp/${port} errored; dropped`);
     });
     s.on("message", (msg, rinfo) => {
-      if (socket !== s || !url) return;
+      if (!sockets.includes(s) || !url) return;
       const text = msg.toString("utf8");
       // An ack for a NOTIFY we sent: mark the delivery acknowledged.
       for (const [callId, a] of answeredCallIds) {
@@ -155,10 +179,13 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
       if (!sub) return;
       // ⛔ Armed list only, by hardware address only. No address-based matching
       // in a standing listener — see the header.
-      if (!sub.mac || !macs.has(sub.mac)) return;
+      if (!sub.mac) { log("pnp resident: heard a request that named no hardware address; ignored"); return; }
+      if (!macs.has(sub.mac)) { log(`pnp resident: heard ${sub.mac}, not on the armed list; ignored`); return; }
       if (answeredCallIds.has(sub.callId)) return; // once per boot
       const local = opts.localAddress === undefined ? pickLocalAddressFor(rinfo.address) : opts.localAddress;
-      const localEp: LocalEndpoint = { ip: local ?? "0.0.0.0", port: PNP_PORT };
+      // ⛔ The reply names the port the phone actually reached us on, not a constant:
+      // a phone that asked on 5080 must be told where to answer.
+      const localEp: LocalEndpoint = { ip: local ?? "0.0.0.0", port };
       const tag = token();
       let ok: string, notify: string;
       try {
@@ -175,7 +202,7 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
         s.send(Buffer.from(ok, "utf8"), rinfo.port, rinfo.address);
         s.send(Buffer.from(notify, "utf8"), rinfo.port, rinfo.address, (err) => {
           if (err) { log(`pnp resident: notify to ${sub.mac} failed to send`); return; }
-          log(`pnp resident: told ${sub.mac} at ${rinfo.address} its folder`);
+          log(`pnp resident: told ${sub.mac} at ${rinfo.address} its folder (udp/${port}, ${sub.accept ?? "default"} body)`);
           settle({ mac: sub.mac!, ip: rinfo.address, url: url!, at, acknowledged: false, agent: sub.userAgent });
         });
       } catch {
@@ -183,25 +210,54 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
       }
     });
     try {
-      s.bind(PNP_PORT, "0.0.0.0", () => {
+      s.bind(port, "0.0.0.0", () => {
         bound = true;
-        // ⛔ A failed multicast join is not fatal — see pnp.ts. Join on the
-        // interface that faces the phones when one is known; the OS default otherwise.
-        const first = macs.size ? null : null;
-        void first;
-        const iface = opts.localAddress === undefined ? undefined : (opts.localAddress ?? undefined);
-        try { s.addMembership(PNP_MULTICAST_GROUP, iface); } catch { /* listen anyway */ }
-        listening = true;
-        problem = null;
-        log("pnp resident: listening on udp/5060");
+        sockets.push(s);
+        // ⛔⛔ JOIN ON EVERY NETWORK THIS MACHINE IS ON, not just the OS default.
+        // A failed join is not fatal — some interfaces refuse it while still
+        // delivering the group's traffic, and some firmware sends a unicast
+        // SUBSCRIBE as well — so we try them all and listen regardless.
+        const ifaces = opts.localAddress === undefined
+          ? localMulticastInterfaces()
+          : (opts.localAddress ? [opts.localAddress] : []);
+        const joined: string[] = [];
+        for (const addr of ifaces) {
+          try { s.addMembership(PNP_MULTICAST_GROUP, addr); joined.push(addr); } catch { /* try the next */ }
+        }
+        if (!joined.length) {
+          // No interface accepted a join (or there were none to try). Ask for the
+          // group on whatever the OS picks rather than giving up on multicast.
+          try { s.addMembership(PNP_MULTICAST_GROUP); joined.push("os-default"); } catch { /* listen anyway */ }
+        }
+        log(`pnp resident: listening on udp/${port}; joined ${joined.length ? joined.join(", ") : "no interface"}`);
         resolve(true);
       });
     } catch {
-      problem = "cannot_listen";
-      closeSocket();
+      drop();
       resolve(false);
     }
   });
+
+  /**
+   * Open the listening sockets.
+   *
+   * ⛔ The PRIMARY port decides whether we are listening. The secondary is a bonus
+   * for one brand whose documentation contradicts itself, and a machine where
+   * something else already holds 5080 is not a machine that cannot set up phones.
+   */
+  const openSocket = async (): Promise<boolean> => {
+    const primary = await openOne(PNP_PRIMARY_PORT);
+    if (!primary) {
+      problem = "cannot_listen";
+      closeSocket();
+      return false;
+    }
+    const secondary = await openOne(PNP_SECONDARY_PORT);
+    if (!secondary) log(`pnp resident: udp/${PNP_SECONDARY_PORT} unavailable; primary port is enough`);
+    listening = true;
+    problem = null;
+    return true;
+  };
 
   return {
     async arm({ url: nextUrl, macs: nextMacs }) {
@@ -218,7 +274,7 @@ export function createPnpResident(opts: PnpResidentOptions = {}): PnpResident {
         url = nextUrl;
       }
       for (const m of normalized) macs.add(m);
-      if (socket && listening) return true;
+      if (sockets.length && listening) return true;
       closeSocket();
       return openSocket();
     },

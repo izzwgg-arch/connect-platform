@@ -18,6 +18,8 @@
  * nothing is "unknown", and unknown is shown honestly, never guessed into a kind.
  */
 
+import { vendorCanBeDrivenLocally } from "./vendorAdapters";
+
 export type DeviceKind =
   | "desk_phone"
   | "ata"            // analog adapter: regular phones/fax plug into it
@@ -82,17 +84,26 @@ export function kindSupportsButtons(kind: DeviceKind): boolean {
 }
 
 /**
- * May the office machine drive this device with the local adapter?
+ * May the office machine drive this device with a local adapter, by ANY mechanism?
  *
- * ⛔ The adapter speaks Yealink's documented mechanisms (Action URI, the
- * check-sync NOTIFY family). Sending those at a Grandstream or a Fanvil is not
- * "worth a try" — it is an unauthenticated request pattern another vendor's device
- * may log, refuse or mishandle. Until an adapter for that vendor is captured off a
- * real device, the honest move is to configure it SERVER-side (the provisioning
- * template) and say so, never to poke it.
+ * ⛔⛔ THIS IS NOW A SUMMARY, NOT A POLICY, AND THE SPLIT BEHIND IT MATTERS.
+ * Until 2026-09-11 this function was `vendor === "yealink"` and it was the ONLY
+ * gate in the driver, so it answered two very different questions at once:
+ * "may we ANSWER this phone when it asks us for its settings?" and "may we SEND
+ * an HTTP request AT it?". The first is plain RFC 6080 SIP that ten brands and
+ * 369 of the PBX's 427 models speak identically; the second is vendor-specific
+ * and is Yealink's alone until another brand's executor ships. Conflating them
+ * left every non-Yealink phone spinning on "Preparing" forever.
+ *
+ * The two real questions live beside the adapter data that answers them:
+ * `vendorSupportsPnpHandoff` (passive, safe, true even for an unidentified
+ * device) and `vendorSupportsHttpActions` (intrusive, positive identification
+ * required). ⛔ Call THOSE per action. This one only says whether anything at
+ * all can be attempted, which is what decides between a progress bar and an
+ * honest "somebody has to do this by hand".
  */
 export function vendorSupportsLocalActions(vendor: string | null | undefined): boolean {
-  return String(vendor ?? "").trim().toLowerCase() === "yealink";
+  return vendorCanBeDrivenLocally(vendor);
 }
 
 /**

@@ -37,6 +37,32 @@ export const PNP_DEFAULT_WAIT_MS = 90_000;
 export const PNP_MAX_WAIT_MS = 150_000;
 /** How long to wait for the phone's 200 OK to our NOTIFY before calling it done. */
 export const PNP_ACK_WAIT_MS = 3_000;
+/** What almost every brand asks for, and what we answer when a phone names nothing. */
+export const PNP_DEFAULT_CONTENT_TYPE = "application/url";
+
+/**
+ * A media type is only usable if it is a plain `type/subtype` of RFC 7230 token
+ * characters.
+ *
+ * ⛔⛔ THIS VALUE ARRIVES FROM THE PHONE AND IS WRITTEN STRAIGHT INTO A HEADER, so
+ * it is an injection surface in the most literal sense: a CR or LF in it would end
+ * the header and let a device dictate the rest of our message. Bounded, character
+ * classed, and anything that is not exactly a token pair is refused in favour of the
+ * default — never sanitised into something "close enough".
+ */
+const MEDIA_TYPE_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}\/[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+export function usableContentType(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  // An Accept header may list several; take the first we can safely echo.
+  for (const part of String(raw).split(",")) {
+    const candidate = part.split(";")[0].trim();
+    if (!candidate || candidate.length > 129) continue;
+    if (candidate === "*/*") return null;
+    if (MEDIA_TYPE_RE.test(candidate)) return candidate;
+  }
+  return null;
+}
 
 export type PnpSubscribe = {
   requestUri: string;
@@ -50,6 +76,16 @@ export type PnpSubscribe = {
   event: string;
   /** Normalised 12-hex hardware address, when the phone put one in the request. */
   mac: string | null;
+  /**
+   * The body type the phone asked for, when it named one it will actually take.
+   *
+   * ⛔ Brands disagree: most want `application/url`, and Grandstream documentation
+   * also describes `application/x-gs-ucm-url`. Rather than pick a side per vendor —
+   * which is a guess made against somebody's hardware — we answer with what the
+   * phone itself asked for, and fall back to the near-universal default when it
+   * asked for nothing usable.
+   */
+  accept: string | null;
 };
 
 const COMPACT_HEADERS: Record<string, string> = {
@@ -93,6 +129,7 @@ export function parsePnpSubscribe(text: string): PnpSubscribe | null {
   return {
     requestUri: m[1], vias: headers.via, from, to, callId, cseq,
     contact: one("contact"), userAgent: one("user-agent"), event, mac,
+    accept: usableContentType(one("accept")),
   };
 }
 
@@ -127,6 +164,10 @@ export function buildPnpNotify(
 ): string {
   if (!isLoopcomProvisioningUrl(url)) throw new Error("refused: not a Loopcom provisioning folder");
   if (!/^[0-9A-Za-z]+$/.test(branchSeed) || !/^[0-9A-Za-z]+$/.test(tag)) throw new Error("refused: bad token");
+  // ⛔ Re-validated here even though the parser already checked it: this is the
+  // function that writes the header, and it must not depend on a caller having been
+  // careful. Same belt-and-braces as the URL fence two lines above.
+  const contentType = usableContentType(sub.accept) ?? PNP_DEFAULT_CONTENT_TYPE;
   const body = url;
   return [
     `NOTIFY ${target} SIP/2.0`,
@@ -139,7 +180,7 @@ export function buildPnpNotify(
     `Contact: <sip:pnp@${local.ip}:${local.port}>`,
     "Event: ua-profile;effective-by=0",
     "Subscription-State: terminated;reason=timeout",
-    "Content-Type: application/url",
+    `Content-Type: ${contentType}`,
     `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
     "",
     body,
@@ -189,6 +230,38 @@ export function pickLocalAddressFor(
     }
   }
   return firstPrivate;
+}
+
+/**
+ * Every address on this machine that a phone could plausibly multicast to us on.
+ *
+ * ⛔⛔ THE RESIDENT USED TO JOIN THE GROUP ON ONE INTERFACE — the OS default — and
+ * on a machine with more than one network that is a coin toss. A PC with a cable
+ * and Wi-Fi, or an office where the phones sit behind an extender handing out a
+ * second range, would simply never hear the SUBSCRIBE, and the failure is silent:
+ * the socket is open, nothing is wrong, the phone just asks into a void.
+ *
+ * ⛔ DELIBERATELY MORE PERMISSIVE THAN THE SCANNER. `localScannableNetworks` skips
+ * virtual adapters by NAME (Hyper-V, WSL, Docker, Tailscale) because sweeping them
+ * wastes a 3,000-address budget on nothing. Joining a multicast group on one costs
+ * nothing at all, while skipping the wrong adapter costs the whole feature — and a
+ * real office NIC can carry "VPN" in its name. So membership asks only the question
+ * that matters: is this a real, private, non-loopback IPv4 address?
+ */
+export function localMulticastInterfaces(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(interfaces)) {
+    for (const entry of list ?? []) {
+      if (entry.family !== "IPv4" && (entry.family as unknown) !== 4) continue;
+      if (entry.internal) continue;
+      const addr = canonicalPrivateIpv4(entry.address);
+      if (!addr || out.includes(addr)) continue;
+      out.push(addr);
+    }
+  }
+  return out;
 }
 
 export type PnpOutcome =

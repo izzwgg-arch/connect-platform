@@ -964,3 +964,137 @@ export function hasLocallyDrivableMechanism(slug: VendorSlug): boolean {
     (m) => m === "pnp_multicast" || m === "http_action_uri" || m === "http_settings_write" || m === "sip_notify_check_sync" || m === "mdns",
   );
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * The capability gates the wizard actually asks.
+ *
+ * ⛔⛔ THERE ARE TWO QUESTIONS HERE AND CONFLATING THEM COST 314 MODELS.
+ *
+ * Until 2026-09-11 one gate answered both, and it was `vendor === "yealink"`. Its
+ * own reasoning was about the INTRUSIVE half — "the adapter speaks Yealink's Action
+ * URI and check-sync; sending those at a Grandstream is not worth a try" — and that
+ * reasoning is correct. But it was also gating the PASSIVE half, and the passive
+ * half is not Yealink's at all:
+ *
+ *   • ANSWERING a phone's own PnP request is plain RFC 6080 SIP. The phone
+ *     multicasts `SUBSCRIBE … Event: ua-profile` at boot and believes whoever
+ *     answers. `pnp.ts` parses and builds that exchange with nothing vendor-specific
+ *     in it, and TEN brands covering 369 of the PBX's 427 models send exactly that
+ *     shape — every one of them port 5060, body `application/url` (measured across
+ *     the catalogue, not assumed).
+ *   • SENDING an HTTP request at a phone is the opposite: a vendor-specific,
+ *     unauthenticated request pattern another maker's device may log or mishandle.
+ *
+ * So: we may LISTEN for anybody, and we may only SPEAK to a brand whose endpoints
+ * we hold. Splitting the gate is what lets a Grandstream, a Polycom or a Snom be
+ * finished by the same power-cycle that already finishes a Yealink.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Free-text vendor name → catalogue slug, or null when we do not recognise it.
+ *
+ * Vendor strings reach us from three places and none of them agree: a phone's web
+ * banner ("Yealink SIP-T46G"), a SIP `User-Agent` ("Grandstream GXP2170"), and our
+ * own OUI lookup (already a slug). So: strip to alphanumerics, try the slug, try a
+ * short alias table of the names manufacturers actually print, then allow a longer
+ * banner to carry a slug as its PREFIX ("grandstreamnetworks" → grandstream).
+ *
+ * ⛔ A prefix match must be unique. Two slugs matching means we do not know, and
+ * "we do not know" has to stay available as an answer — the gates below are safe
+ * for an unknown brand precisely because they fail toward listening, never toward
+ * poking an unidentified device.
+ */
+const VENDOR_ALIASES: Record<string, VendorSlug> = {
+  poly: "polycom",
+  polycominc: "polycom",
+  plantronics: "polycom",
+  aastra: "mitel",
+  aastramitel: "mitel",
+  alcatellucent: "alcatel",
+  alcatellucententerprise: "alcatel",
+  flyingvoicetechnology: "flyingvoice",
+  gigasetcommunications: "gigaset",
+  ciscosystems: "cisco",
+  clearlyipinc: "clearlyip",
+};
+
+export function vendorSlugFor(vendor: string | null | undefined): VendorSlug | null {
+  const key = String(vendor ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!key) return null;
+  const slugs = Object.keys(VENDOR_ADAPTERS) as VendorSlug[];
+  if ((slugs as string[]).includes(key)) return key as VendorSlug;
+  const alias = VENDOR_ALIASES[key];
+  if (alias) return alias;
+  // A banner that CONTAINS a slug as its opening ("snomtechnologyag" -> snom). Unique
+  // or nothing. ⛔ The floor is 4, not 5: the two shortest slugs are "snom" and
+  // "htek" and a floor of 5 silently excluded both — Snom alone is 20 models, and
+  // "snom technology AG" is exactly how that vendor's own banner reads.
+  const hits = slugs.filter((s) => s.length >= 4 && key.startsWith(s));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * Is this hardware address in ANY phone maker's block the PBX knows?
+ *
+ * ⛔ This is the admission question, and it is deliberately not "which brand". The
+ * one ambiguous prefix in the table (`0c383e`, claimed by both Fanvil and Attimo —
+ * which is itself the evidence Attimo is a Fanvil rebrand) is still, unambiguously,
+ * a phone. Refusing to show a device because we cannot choose between two phone
+ * makers would be the worst possible reading of an ambiguity.
+ */
+export function macIsPhoneMaker(mac: string): boolean {
+  return vendorsForMac(mac).length > 0;
+}
+
+/**
+ * May the office machine arm its standing PnP responder for this brand?
+ *
+ * ⛔⛔ TRUE FOR AN UNIDENTIFIED DEVICE, ON PURPOSE, AND THIS IS SAFE BY
+ * CONSTRUCTION. Arming costs one hardware address on a listener that answers
+ * nothing else: if the device is not a PnP phone it simply never asks and nothing
+ * whatsoever happens to it. If it IS a PnP phone whose web page refused to identify
+ * it — which is exactly what a locked phone from another provider looks like — it
+ * gets connected. Failing toward listening cannot damage a device; failing away
+ * from it is how the wizard abandoned the phones it exists for.
+ */
+export function vendorSupportsPnpHandoff(vendor: string | null | undefined): boolean {
+  const slug = vendorSlugFor(vendor);
+  if (!slug) return true;
+  return VENDOR_ADAPTERS[slug].pnp.supported;
+}
+
+/**
+ * May the office machine send an HTTP request AT a phone of this brand?
+ *
+ * ⛔ Requires a POSITIVE identification of a brand whose endpoints are recorded in
+ * this file. An unknown brand answers FALSE — the opposite of the gate above, and
+ * for the opposite reason: listening at an unidentified device is free, talking to
+ * one is a guess made against somebody's hardware.
+ *
+ * ⛔ Today the desktop's executor (`apps/desktop/src/phoneSetup/yealink.ts`) only
+ * implements Yealink's request shapes, so this is Yealink alone regardless of what
+ * the catalogue records for other brands. It is written as a lookup rather than a
+ * literal so that shipping a second brand's executor is a one-line change HERE,
+ * beside the endpoints it would use — and so the reason is written down.
+ */
+const VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR: ReadonlySet<VendorSlug> = new Set<VendorSlug>(["yealink"]);
+
+export function vendorSupportsHttpActions(vendor: string | null | undefined): boolean {
+  const slug = vendorSlugFor(vendor);
+  if (!slug) return false;
+  if (!VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR.has(slug)) return false;
+  const a = VENDOR_ADAPTERS[slug];
+  return Boolean(a.reboot || a.reprovision || a.setProvisioningUrl);
+}
+
+/**
+ * Can this machine attempt ANYTHING for this brand, by any mechanism?
+ *
+ * ⛔ This is the question the wizard must answer before it shows a progress bar.
+ * False means a person has to act, and the honest screen says so rather than
+ * spinning — four brands (Alcatel-Lucent, Dinstar, Nurivoice, Hanyang Digitech,
+ * 31 models between them) have no mechanism a computer on the LAN can drive at all.
+ */
+export function vendorCanBeDrivenLocally(vendor: string | null | undefined): boolean {
+  return vendorSupportsPnpHandoff(vendor) || vendorSupportsHttpActions(vendor);
+}

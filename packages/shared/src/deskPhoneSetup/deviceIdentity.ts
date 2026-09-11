@@ -37,6 +37,9 @@ export function formatMac(mac: string): string {
   return (n.match(/.{2}/g) ?? []).join(":").toUpperCase();
 }
 
+import { vendorsForMac } from "./vendorAdapters";
+import type { VendorSlug } from "./vendorCatalog.generated";
+
 /**
  * Phone-maker hardware prefixes, from the IEEE OUI registry.
  *
@@ -55,28 +58,63 @@ export function formatMac(mac: string): string {
  * provisionability are separate questions; `vendorSupportsPbxProvisioning` in
  * deviceKinds.ts answers the second one.
  */
-const VENDOR_PREFIXES: Array<{ vendor: "yealink" | "grandstream" | "fanvil" | "panasonic"; prefixes: string[] }> = [
-  { vendor: "yealink", prefixes: ["805e0c", "805ec0", "001565", "249ad8", "805e18"] },
-  // IEEE registrations for Grandstream Networks.
-  { vendor: "grandstream", prefixes: ["000b82", "c074ad"] },
-  // IEEE registration for Fanvil Technology.
-  { vendor: "fanvil", prefixes: ["0c383e"] },
-  // IEEE registrations for Panasonic Communications Co., Ltd. — the blocks their
-  // KX-series SIP terminals ship on (0080f0 is the classic KX phone prefix).
+const VENDOR_PREFIXES: Array<{ vendor: SupplementaryVendor; prefixes: string[] }> = [
+  // ⛔⛔ Panasonic is NOT in the PBX's catalogue and never will be — its brand does
+  // not exist in provisioning.brands. It is here so a found KX-TGP/UT/HDV is SHOWN
+  // honestly rather than being invisible; `vendorSupportsPbxProvisioning` is what
+  // then refuses to promise we can configure one.
   { vendor: "panasonic", prefixes: ["0080f0", "080023"] },
+  // ⛔ Two blocks the PBX's own `provisioning.brand_macs` table is MISSING, recorded
+  // against the manufacturers' IEEE registrations (CLAUDE.md, desk-phone §14e).
+  // Without them, CURRENT-PRODUCTION stock of either brand is not recognised by MAC
+  // at all: the PBX table holds only Flying Voice's older Easy3Call ODM block
+  // (0021f2) and one of Snom's two blocks. The catalogue is generated and must not
+  // be hand-edited, so the supplement lives here.
+  { vendor: "flyingvoice", prefixes: ["789912"] },
+  { vendor: "snom", prefixes: ["1c7126"] },
 ];
 
+/**
+ * Brands recognised by hardware address but NOT resolvable from the generated
+ * catalogue — either because the PBX has no such brand (Panasonic) or because its
+ * OUI table is missing a block the manufacturer really uses.
+ */
+type SupplementaryVendor = VendorSlug | "panasonic";
+
 export type VendorGuess = {
-  vendor: "yealink" | "grandstream" | "fanvil" | "panasonic" | "unknown";
+  vendor: VendorSlug | "panasonic" | "unknown";
   confidence: "prefix" | "none";
 };
 
+/**
+ * Which maker built the device with this hardware address?
+ *
+ * ⛔⛔ THE CATALOGUE IS THE AUTHORITY, AND UNTIL 2026-09-11 THIS FUNCTION IGNORED
+ * IT. It carried twelve hand-written prefixes for four makers while
+ * `provisioning.brand_macs` on the live PBX holds 1,143 prefixes across 20 brands.
+ * A Snom, a Polycom, an Htek or a Sangoma on a customer's network therefore came
+ * back "unknown" — which made `looksLikePhone` file it under "other devices we left
+ * alone", so the wizard never showed it and never had a chance to set it up.
+ *
+ * Order is deliberate: the generated catalogue first (it is regenerated from the
+ * PBX and is the thing that can grow), then the small hand-kept supplement above
+ * for what the catalogue structurally cannot cover.
+ *
+ * ⛔ An AMBIGUOUS address resolves to "unknown" rather than picking a side — the
+ * table is not a partition (`0c383e` is claimed by both Fanvil and Attimo). Callers
+ * deciding whether to SHOW the device must ask `macIsPhoneMaker`, which answers the
+ * admission question honestly; only a caller that needs one brand name uses this.
+ */
 export function guessVendorFromMac(mac: string): VendorGuess {
   const n = normalizeMac(mac);
   if (!n) return { vendor: "unknown", confidence: "none" };
-  for (const { vendor, prefixes } of VENDOR_PREFIXES) {
-    for (const p of prefixes) {
-      if (n.startsWith(p)) return { vendor, confidence: "prefix" };
+  const fromCatalog = vendorsForMac(n);
+  if (fromCatalog.length === 1) return { vendor: fromCatalog[0], confidence: "prefix" };
+  if (fromCatalog.length === 0) {
+    for (const { vendor, prefixes } of VENDOR_PREFIXES) {
+      for (const p of prefixes) {
+        if (n.startsWith(p)) return { vendor, confidence: "prefix" };
+      }
     }
   }
   return { vendor: "unknown", confidence: "none" };

@@ -45,7 +45,7 @@ test("no status code, protocol name or provisioning jargon is on any customer st
   const NL = String.fromCharCode(10);
   const literal = new RegExp("\"([^\"\\"+NL+"]{12,160})\"", "g");
   const strings = [...executable.matchAll(literal)].map((m) => m[1]);
-  const banned = /(HTTP|SIP|DHCP|Option\s*66|RPS|TFTP|MAC address|IP address|provisioning|subnet)/i;
+  const banned = /\b(HTTP|SIP|DHCP|Option\s*66|RPS|TFTP|MAC address|IP address|provisioning|subnet)\b/i;
   const leaks = strings.filter((s) => banned.test(s) && !s.startsWith("/") && !s.includes("desk-phones"));
   assert.deepEqual(leaks, [], "customer-facing copy must not contain jargon");
 });
@@ -326,5 +326,14 @@ test("the office computer keeps a STANDING provisioning listener armed — deskt
   const PROVIDERS = read("app", "providers.tsx");
   assert.match(PROVIDERS, /<PnpResidentHost \/>/, "mounted globally, like the setup-request card");
   const DRIVER = read("components", "deskPhones", "setupDriver.ts");
-  assert.match(DRIVER, /MAX_PROVISIONING_WAIT_MS = 60 \* 60_000/, "the wizard waits an hour for a person, not five minutes");
+  // ⛔⛔ THE HOUR IS GONE, AND ITS ABSENCE IS THE THING TO GUARD. The wizard used to
+  // wait an hour and then tell the customer we had given up — while the desktop
+  // responder was STILL LISTENING and would still finish the phone the moment it was
+  // power-cycled. There is no clock on the hand-off any more; the only give-up left
+  // is a machine that cannot open the socket at all, which is the one case where
+  // waiting really is pointless.
+  assert.doesNotMatch(DRIVER, /MAX_PROVISIONING_WAIT_MS/, "no clock may decide that a listening machine has failed");
+  assert.match(DRIVER, /MAX_CANNOT_LISTEN_ATTEMPTS = 3/, "the only give-up is repeated cannot_listen");
+  assert.match(stripComments(DRIVER), /const reboot = canHttp &&/, "a restart is only ever sent at a brand whose HTTP shapes we hold");
+  assert.match(stripComments(DRIVER), /if \(!canPnp\)/, "a brand we cannot even listen for is left to the server to finish honestly");
 });

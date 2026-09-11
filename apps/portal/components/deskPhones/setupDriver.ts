@@ -18,7 +18,7 @@
  * feed the gentle branches.
  */
 
-import { vendorSupportsLocalActions } from "@connect/shared";
+import { vendorSupportsHttpActions, vendorSupportsPnpHandoff } from "@connect/shared";
 
 export type DriverApi = {
   get: <T>(path: string) => Promise<T>;
@@ -75,9 +75,14 @@ type PhoneMemo = {
   stalledCount: number;
   /** PnP hand-offs attempted for this phone (only the first two may restart it). */
   provisioningAttempts: number;
-  /** When this phone was first asked to take its folder — the give-up clock. */
+  /** When this phone was first asked to take its folder, for the "waiting since" line. */
   provisioningFirstAskedAt: number | null;
-  /** We gave up handing this phone its folder; the server ends its setup kindly. */
+  /** Consecutive refusals where this machine could not open the listening socket. */
+  cannotListenCount: number;
+  /**
+   * This machine genuinely cannot hand the phone its folder, so the server ends the
+   * setup kindly. ⛔ Set ONLY by repeated `cannot_listen` — never by elapsed time.
+   */
   provisioningHandoffFailed: boolean;
 };
 
@@ -92,16 +97,28 @@ const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
 const MAX_CONSECUTIVE_STALLS = 3;
 
 /**
- * ⛔ The desktop's STANDING listener does the waiting now (it stays armed after
- * this window closes), so what the driver bounds is (1) how often it asks the phone
- * to RESTART — twice, ever, from here — and (2) how long this WIZARD keeps a phone
- * on its live list before telling the server to halt it kindly: an hour from the
- * first ask. The first live run (2026-09-02) showed a reset phone refusing the
- * restart outright, so the hand-off rests on somebody plugging the phone in; that
- * can take a while, and it costs nothing to wait.
+ * ⛔⛔ THERE IS NO LONGER A CLOCK ON THE HAND-OFF, AND REMOVING IT WAS THE POINT.
+ *
+ * Until 2026-09-11 the driver gave up an hour after first asking, and the server
+ * turned that into "We could not point this phone at Loopcom from your computer —
+ * Support can finish this one." That sentence was FALSE by the time it shipped: the
+ * desktop responder is STANDING (it stays armed after this window closes, wizard or
+ * no wizard), so a phone power-cycled at any point — this afternoon, or tomorrow
+ * morning — is provisioned the moment it asks. Telling a customer we had given up,
+ * while the machine on their desk was still listening and would still finish the
+ * job, was the most misleading thing this wizard said. It is what put the Landau
+ * Home Yealink into "Needs attention" on 2026-09-10 while nothing was wrong.
+ *
+ * So the only genuine give-up left is the one that is TRUE: this computer cannot
+ * listen at all, so nothing will ever arrive however long we wait. Everything else
+ * stays in "waiting for you to unplug it", which is what is actually happening.
+ *
+ * What the driver still bounds is how often it asks a phone to RESTART — twice,
+ * ever, from here — because a restart is something we do TO somebody's phone.
  */
-export const MAX_PROVISIONING_WAIT_MS = 60 * 60_000;
 export const PROVISIONING_REBOOT_ATTEMPTS = 2;
+/** Consecutive `cannot_listen` refusals before we admit this machine cannot do it. */
+export const MAX_CANNOT_LISTEN_ATTEMPTS = 3;
 
 export const HINT_HANDED_OFF =
   "Told this phone where Loopcom is. It is fetching its settings and will restart on its own.";
@@ -131,7 +148,8 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         defaultCredentialsTried: false, locked: false, haveCustomerCredentials: false,
         credentialRef: null, passwordUnavailable: false, resetDeclined: false,
         stalledOn: null, stalledCount: 0,
-        provisioningAttempts: 0, provisioningFirstAskedAt: null, provisioningHandoffFailed: false,
+        provisioningAttempts: 0, provisioningFirstAskedAt: null,
+        cannotListenCount: 0, provisioningHandoffFailed: false,
       };
       memos.set(id, m);
     }
@@ -217,13 +235,44 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
       }
 
       // ── things this machine can do ─────────────────────────────────────────
-      if (!bridge || !phone.ip) { markStall(m, action); continue; }
-      // ⛔ The local adapter speaks Yealink's documented mechanisms. Sending those
-      // at a Grandstream HT or a Fanvil speaker is not "worth a try" — another
-      // vendor's device gets configured SERVER-side, and locally we wait.
-      if (!vendorSupportsLocalActions(phone.vendor)) { markStall(m, action); continue; }
+      if (!bridge) { markStall(m, action); continue; }
+
+      // ⛔ A rediscover is a sweep of the NETWORK, not a request aimed at this
+      // phone. It needs no vendor permission and no address — and gating it behind
+      // both (as the single old gate did) meant a phone that came back on a new
+      // address after a restart was never looked for again unless it was a Yealink.
+      if (action === "rediscover") {
+        const scan = await bridge.run({ op: "discover" }).catch(() => null);
+        if (scan?.ok) {
+          const hosts = (scan.scan?.hosts ?? []).map((h: any) => ({ mac: h.mac, ip: h.ip }));
+          // The server re-matches by hardware id, so a phone that came back on a new
+          // address is found again without anyone tracking addresses.
+          await api.post(`/desk-phones/runs/${runId}/discovered`, {
+            subnet: scan.scan?.subnet ?? undefined, phones: hosts,
+          }).catch(() => null);
+          performed.push({ phoneId: phone.id, action });
+          clearStall(m);
+        } else markStall(m, action);
+        continue;
+      }
+
+      if (!phone.ip) { markStall(m, action); continue; }
+
+      // ⛔⛔ THE GATE IS PER ACTION, NOT PER PHONE, AND THAT IS THE WHOLE FIX.
+      // Until 2026-09-11 one check — `vendor === "yealink"` — stood in front of
+      // everything, so a Grandstream, a Polycom or a Snom was refused even the
+      // passive step and sat on "Preparing" until somebody gave up. Two questions:
+      //   • may we ANSWER this phone when it asks us for its settings? Plain RFC
+      //     6080 SIP; ten brands and 369 of the PBX's 427 models send exactly that
+      //     shape, and an unidentified device is included because listening at one
+      //     costs nothing and it may be precisely the phone this wizard is for.
+      //   • may we SEND an HTTP request AT it? Vendor-specific, and Yealink's alone
+      //     until another brand's executor ships.
+      const canPnp = vendorSupportsPnpHandoff(phone.vendor);
+      const canHttp = vendorSupportsHttpActions(phone.vendor);
 
       if (action === "try_default_credentials") {
+        if (!canHttp) { markStall(m, action); continue; }
         const r = await bridge.run({ op: "test_credentials", ip: phone.ip, useDefault: true }).catch(() => null);
         m.defaultCredentialsTried = true;
         // ⛔ accepted=false with reason "locked" is a WRONG password; anything else
@@ -234,6 +283,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         continue;
       }
       if (action === "trigger_autop" || action === "check_sync") {
+        if (!canHttp) { markStall(m, action); continue; }
         // check_sync's real form is a PBX-side NOTIFY; from the office machine the
         // equivalent nudge is an autop fetch, which is the same "re-read your
         // settings now" said locally.
@@ -254,8 +304,16 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         // ⛔ Once we have given up, we have given up — the server ends the phone's
         // setup on the next advance, and no further restart is ever sent.
         if (m.provisioningHandoffFailed) { markStall(m, action); continue; }
+        // ⛔ A brand with no PnP and no HTTP cannot be pointed from this machine at
+        // all. We do not poke it and we do not spin: the server gives it a terminal
+        // "somebody has to do this by hand" state on its next advance.
+        if (!canPnp) { markStall(m, action); continue; }
         if (m.provisioningFirstAskedAt === null) m.provisioningFirstAskedAt = now();
-        const reboot = m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
+        // ⛔ The RESTART is the vendor-specific half. For a brand whose HTTP shapes
+        // we do not hold we arm the listener and ask the person to power-cycle —
+        // which is the documented mechanism for a factory-reset phone anyway, since
+        // one on defaults asks at the handset before obeying a remote restart.
+        const reboot = canHttp && m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
         const r = await bridge.run({
           op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
@@ -267,9 +325,19 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
           hints[phone.id] = r?.refused === "unknown_operation" ? HINT_APP_TOO_OLD
             : r?.refused === "cannot_listen" ? HINT_CANNOT_LISTEN
             : HINT_REFUSED;
+          // ⛔ The ONE true give-up: the socket could not be opened, so no amount of
+          // waiting or power-cycling will ever produce a request for us to answer.
+          // Counted CONSECUTIVELY — a single refusal can be the port momentarily
+          // held by something else, and giving up on the first would be as wrong as
+          // the clock was.
+          if (r?.refused === "cannot_listen") {
+            m.cannotListenCount += 1;
+            if (m.cannotListenCount >= MAX_CANNOT_LISTEN_ATTEMPTS) m.provisioningHandoffFailed = true;
+          } else m.cannotListenCount = 0;
           markStall(m, action);
           continue;
         }
+        m.cannotListenCount = 0;
         // The op ran (listened, maybe restarted the phone): that is an attempt.
         m.provisioningAttempts += 1;
         if (r.delivered) {
@@ -283,26 +351,12 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
           clearStall(m);
           continue;
         }
+        // ⛔ NO CLOCK HERE. The listener is armed and stays armed; the honest line
+        // is what the person has to do, for as long as it takes them to do it.
         hints[phone.id] = r.rebooted ? HINT_RESTARTING : HINT_POWER_CYCLE;
-        if (now() - m.provisioningFirstAskedAt >= MAX_PROVISIONING_WAIT_MS) m.provisioningHandoffFailed = true;
         markStall(m, action);
         continue;
       }
-      if (action === "rediscover") {
-        const scan = await bridge.run({ op: "discover" }).catch(() => null);
-        if (scan?.ok) {
-          const hosts = (scan.scan?.hosts ?? []).map((h: any) => ({ mac: h.mac, ip: h.ip }));
-          // The server re-matches by hardware id, so a phone that came back on a new
-          // address is found again without anyone tracking addresses.
-          await api.post(`/desk-phones/runs/${runId}/discovered`, {
-            subnet: scan.scan?.subnet ?? undefined, phones: hosts,
-          }).catch(() => null);
-          performed.push({ phoneId: phone.id, action });
-          clearStall(m);
-        } else markStall(m, action);
-        continue;
-      }
-
       // Everything else — reset_over_sip, generate_template,
       // verify_registration, do_nothing, halt — is the server's or the PBX's to do,
       // or is a wait. The next tick looks again.

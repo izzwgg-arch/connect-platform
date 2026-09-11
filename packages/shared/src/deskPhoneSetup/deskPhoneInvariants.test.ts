@@ -679,13 +679,47 @@ test("KINDS: the Grandstream HT house rule is on the kind, always", () => {
   }
 });
 
-test("KINDS: only Yealink may be driven locally; every kind may be CLEARED", () => {
+test("KINDS: listening is allowed for anybody, SPEAKING only for a brand we hold; every kind may be CLEARED", () => {
   const { vendorSupportsLocalActions } = require("./deviceKinds");
-  assert.equal(vendorSupportsLocalActions("yealink"), true);
-  assert.equal(vendorSupportsLocalActions("Yealink"), true);
-  for (const v of ["grandstream", "fanvil", "panasonic", "unknown", "", null, undefined]) {
-    assert.equal(vendorSupportsLocalActions(v as any), false, `${v} allowed local actions`);
+  const { vendorSupportsPnpHandoff, vendorSupportsHttpActions } = require("./vendorAdapters");
+
+  // ⛔⛔ THIS TEST USED TO ASSERT "only Yealink may be driven locally", AND THAT
+  // POLICY WAS THE BUG. One gate answered two different questions, so a Grandstream,
+  // a Polycom or a Snom — 314 models between them — was refused even the PASSIVE
+  // step and sat on "Preparing" until somebody gave up. The two questions:
+  //
+  //   SPEAKING to a phone (an HTTP request aimed AT it) is vendor-specific and stays
+  //   Yealink's alone until another brand's executor ships.
+  for (const v of ["yealink", "Yealink"]) assert.equal(vendorSupportsHttpActions(v), true, v);
+  for (const v of ["grandstream", "fanvil", "polycom", "snom", "panasonic", "unknown", "", null, undefined]) {
+    assert.equal(vendorSupportsHttpActions(v as any), false, `${v} was allowed to be poked over HTTP`);
   }
+  //   LISTENING for a phone that asks US is plain RFC 6080 SIP. Ten brands covering
+  //   369 of the PBX's 427 models send exactly that shape.
+  for (const v of ["yealink", "grandstream", "fanvil", "polycom", "snom", "htek", "atcom", "gigaset"]) {
+    assert.equal(vendorSupportsPnpHandoff(v), true, `${v} should be answerable`);
+  }
+  // ⛔ AND AN UNIDENTIFIED DEVICE IS ANSWERABLE, ON PURPOSE. Arming the responder for
+  // one costs a hardware address on a listener that answers nothing else: a device
+  // that is not a PnP phone simply never asks. A locked phone from a previous
+  // provider — which is precisely what this wizard is for — reports no vendor at all,
+  // and refusing to listen for it is how the wizard abandoned its own reason to exist.
+  for (const v of ["unknown", "", null, undefined]) {
+    assert.equal(vendorSupportsPnpHandoff(v as any), true, `${v} should still be listened for`);
+  }
+  // ⛔ The four brands that publish NO mechanism a machine on the LAN can drive stay
+  // false on every gate — they are what the honest "somebody has to do this by hand"
+  // state exists for, and softening this would put them back on a spinner.
+  for (const v of ["alcatel", "dinstar", "nurivoice", "hanyang"]) {
+    assert.equal(vendorSupportsPnpHandoff(v), false, `${v} has no PnP`);
+    assert.equal(vendorSupportsHttpActions(v), false, `${v} has no HTTP`);
+    assert.equal(vendorSupportsLocalActions(v), false, `${v} must not show a progress bar`);
+  }
+  // The summary gate is the OR of the two, and is only used to choose between a
+  // progress bar and an honest hand-off.
+  assert.equal(vendorSupportsLocalActions("yealink"), true);
+  assert.equal(vendorSupportsLocalActions("grandstream"), true);
+  assert.equal(vendorSupportsLocalActions("panasonic"), true, "recognised, listened for; provisioning is refused elsewhere");
   // ⛔ Clearing is decided by the RECORD, never the kind — an HT box and a doorbell
   // go through the identical authorisation, once-only and attempt-cap gates. This
   // pins that no kind-based carve-out sneaks into decideReset's inputs: the record
@@ -694,13 +728,41 @@ test("KINDS: only Yealink may be driven locally; every kind may be CLEARED", () 
   assert.equal(decideReset(rec).allowed, true);
 });
 
-test("KINDS: phone-maker hardware blocks are recognised for all three vendors", () => {
+test("KINDS: hardware blocks come from the PBX catalogue, not a hand-written shortlist", () => {
   assert.equal(guessVendorFromMac("80:5e:0c:00:00:01").vendor, "yealink");
   assert.equal(guessVendorFromMac("00:0b:82:11:22:33").vendor, "grandstream");
   assert.equal(guessVendorFromMac("c0:74:ad:11:22:33").vendor, "grandstream");
-  assert.equal(guessVendorFromMac("0c:38:3e:11:22:33").vendor, "fanvil");
   assert.equal(guessVendorFromMac("a4:5d:36:11:22:33").vendor, "unknown");
+
+  // ⛔⛔ THE SHORTLIST WAS TWELVE PREFIXES FOR FOUR MAKERS while the PBX's own
+  // brand_macs table holds 1,143 across 20 brands. Every brand below therefore came
+  // back "unknown", which made looksLikePhone file a real desk phone under "other
+  // devices we left alone" — so it never reached the found screen and nothing
+  // downstream ever got the chance to set it up.
+  assert.equal(guessVendorFromMac("00:04:f2:11:22:33").vendor, "polycom");
+  assert.equal(guessVendorFromMac("00:04:13:11:22:33").vendor, "snom");
+  assert.equal(guessVendorFromMac("00:1f:c1:11:22:33").vendor, "htek");
+  assert.equal(guessVendorFromMac("80:82:87:11:22:33").vendor, "atcom");
+  assert.equal(guessVendorFromMac("00:50:58:11:22:33").vendor, "sangoma");
+
+  // ⛔ Two blocks the PBX table is MISSING, carried as a hand-kept supplement: without
+  // them, current-production stock of either brand is unrecognisable by address.
+  assert.equal(guessVendorFromMac("78:99:12:11:22:33").vendor, "flyingvoice");
+  assert.equal(guessVendorFromMac("1c:71:26:11:22:33").vendor, "snom");
+  // Panasonic is recognised although the PBX has no such brand — detection and
+  // provisionability are different questions.
+  assert.equal(guessVendorFromMac("00:80:f0:11:22:33").vendor, "panasonic");
+
+  // ⛔⛔ THE ONE AMBIGUOUS BLOCK. `0c383e` is claimed by BOTH Fanvil and its Attimo
+  // rebrand, so naming one maker would be a coin toss and this refuses to. What must
+  // NOT happen is the device disappearing over it: an ambiguity between two phone
+  // makers is still, unambiguously, a phone.
+  assert.equal(guessVendorFromMac("0c:38:3e:11:22:33").vendor, "unknown", "refuses to pick a side");
+  assert.equal(looksLikePhone({ mac: "0c:38:3e:11:22:33", ip: "192.168.1.31" }), true, "and is still shown");
+
   // so an HT box on a customer's shelf is shown, not filtered out as "other device"
   assert.equal(looksLikePhone({ mac: "00:0b:82:11:22:33", ip: "192.168.1.30" }), true);
-  assert.equal(looksLikePhone({ mac: "0c:38:3e:11:22:33", ip: "192.168.1.31" }), true);
+  for (const mac of ["00:04:f2:11:22:33", "00:04:13:11:22:33", "00:1f:c1:11:22:33", "00:50:58:11:22:33"]) {
+    assert.equal(looksLikePhone({ mac, ip: "192.168.1.32" }), true, `${mac} must reach the found screen`);
+  }
 });

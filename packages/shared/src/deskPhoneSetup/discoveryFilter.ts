@@ -17,6 +17,7 @@
  */
 
 import { guessVendorFromMac, normalizeMac } from "./deviceIdentity";
+import { macIsPhoneMaker, vendorSlugFor } from "./vendorAdapters";
 
 export type ScannedHost = {
   mac: string;
@@ -52,28 +53,46 @@ export function shouldFingerprint(host: { mac: string; respondedOnHttp?: boolean
   // what lets an unknown-OUI SIP box be identified instead of filed under
   // "other devices" forever (2026-08-25).
   if (host.respondedOnSip) return true;
-  return guessVendorFromMac(host.mac).vendor !== "unknown";
+  return macIsPhoneMaker(host.mac) || guessVendorFromMac(host.mac).vendor !== "unknown";
 }
 
-/** The makers whose devices belong in the list. ⛔ Widened 2026-08-22: any VoIP
- * device — Grandstream HT boxes and door systems, Fanvil speakers and intercoms —
- * not only Yealink desk phones. Widened 2026-09-03 with Panasonic (KX-TGP/UT/HDV
- * SIP families): a found Panasonic is SHOWN honestly even though the PBX cannot
- * generate settings for it — invisible was the worse failure. */
-const PHONE_MAKERS = new Set(["yealink", "grandstream", "fanvil", "panasonic"]);
+/**
+ * Is the maker this device reported one we recognise as a phone maker at all?
+ *
+ * ⛔⛔ THIS WAS A FOUR-NAME SET AND THAT IS WHY ONLY YEALINKS EVER GOT SET UP.
+ * `new Set(["yealink","grandstream","fanvil","panasonic"])` decided what counted as
+ * a phone, while the PBX's own catalogue knows 20 brands across 427 models. A Snom,
+ * a Polycom, an Htek, a Sangoma, an Atcom, a Gigaset or a VTech handset sitting on a
+ * customer's desk was therefore counted as "another device, which we left alone" —
+ * it never reached the found screen, so nothing downstream ever had the chance to
+ * connect it. Now the catalogue answers, plus Panasonic, which is recognised on
+ * purpose without being provisionable.
+ */
+function isKnownPhoneMakerName(vendor: string | null | undefined): boolean {
+  const v = String(vendor ?? "").toLowerCase().trim();
+  if (!v || v === "unknown") return false;
+  if (v === "panasonic") return true;
+  return vendorSlugFor(v) !== null;
+}
 
 /** Is there evidence this specific device is VoIP equipment we should show? */
 export function looksLikePhone(host: ScannedHost): boolean {
   if (!normalizeMac(host.mac)) return false;
   const fp = host.fingerprint;
   if (fp) {
-    if (PHONE_MAKERS.has(String(fp.vendor ?? "").toLowerCase())) return true;
+    if (isKnownPhoneMakerName(fp.vendor)) return true;
     // A model was actually read off the device — that is the device speaking.
     if (fp.model && fp.confidence && fp.confidence !== "none") return true;
   }
   // The hardware address is in a known phone-maker block. Strong enough to show the
   // device even when its web interface refused to identify itself (a locked phone
   // does exactly that).
+  // ⛔ `macIsPhoneMaker`, not `guessVendorFromMac(...) !== "unknown"`: the OUI table
+  // is not a partition, and the one address block two phone makers both claim
+  // (`0c383e` — Fanvil and its Attimo rebrand) is still unambiguously A PHONE.
+  // Refusing to show it because we cannot choose between two phone makers would be
+  // the worst possible reading of that ambiguity.
+  if (macIsPhoneMaker(host.mac)) return true;
   if (guessVendorFromMac(host.mac).vendor !== "unknown") return true;
   return false;
 }

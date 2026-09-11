@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSetupDriver, MAX_PROVISIONING_WAIT_MS } from "./setupDriver";
+import { createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
 
@@ -243,6 +243,38 @@ test("a non-Yealink device is never poked with Yealink mechanisms", async () => 
   assert.deepEqual(out.performed.map((p) => p.phoneId), ["yl"]);
 });
 
+test("...but a non-Yealink phone IS listened for — that is the whole difference", async () => {
+  // ⛔⛔ THE DEFECT THIS PINS, AND IT IS THE ONE IZZY REPORTED: one gate answered
+  // two different questions, so every brand except Yealink was refused even the
+  // PASSIVE step and sat on "Preparing" until somebody gave up.
+  //
+  //   SPEAKING to a phone — an HTTP request aimed AT it — is vendor-specific, and
+  //   pointing Yealink shapes at a Grandstream configures nothing while looking
+  //   like it worked. That stays Yealink's alone (the test above).
+  //
+  //   LISTENING for a phone that asks US is plain RFC 6080 SIP, and it is the SAME
+  //   request on every brand that sends it: ten of them, covering 369 of the PBX's
+  //   427 models. There is nothing vendor-specific to get wrong, and a factory-reset
+  //   phone multicasts it once per boot whatever badge is on the front.
+  const api = fakeApi(
+    [phone("gs", { vendor: "grandstream", mac: "000b82aabbcc" })],
+    { gs: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" } },
+  );
+  const bridge = fakeBridge();
+  bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, listening: true, rebooted: false, delivered: false }; };
+  const d = createSetupDriver("r1", api, bridge);
+  const out = await d.tick();
+
+  assert.equal(bridge.ops.length, 1, "the responder is armed for it");
+  assert.equal(bridge.ops[0].op, "set_provisioning");
+  // ⛔ And armed WITHOUT a restart: we hold no Grandstream HTTP shapes, so the
+  // person is asked to power-cycle instead — which is the documented mechanism for
+  // a factory-reset phone anyway, since one on defaults asks at the handset before
+  // obeying a remote restart.
+  assert.equal(bridge.ops[0].reboot, false, "no restart is sent at a brand whose HTTP shapes we do not hold");
+  assert.match(out.hints.gs, /Plug this phone in/);
+});
+
 test("a phone the person left unticked on the found screen is never advanced, even though it is assigned", async () => {
   // 2026-09-02: Izzy's nine-phone office, ONE factory-reset phone to set up. The
   // other eight carry an extension from the PBX records and used to be driven too.
@@ -291,7 +323,7 @@ test("set_provisioning: without a URL from the server nothing is attempted", asy
   assert.equal(bridge.ops.length, 0);
 });
 
-test("set_provisioning: two restarts from here, then listen-and-check with a plug-it-in ask, and an hour later the server is told to stop", async () => {
+test("set_provisioning: two restarts from here, then listen-and-check FOREVER — a listening machine never gives up", async () => {
   const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
     p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
   });
@@ -300,20 +332,47 @@ test("set_provisioning: two restarts from here, then listen-and-check with a plu
   let t = 1_000_000;
   const d = createSetupDriver("r1", api, bridge, () => t);
   const hints: string[] = [];
-  // ticks every 4 s, as the wizard does — an hour is 900 of them
-  const ticksPerHour = Math.ceil(MAX_PROVISIONING_WAIT_MS / 4000);
-  for (let i = 0; i < ticksPerHour + 2; i += 1) { hints.push((await d.tick()).hints.p1); t += 4000; }
+  // Four hours of the wizard's 4-second tick. The OLD driver gave up after one.
+  for (let i = 0; i < 3_600; i += 1) { hints.push((await d.tick()).hints.p1); t += 4000; }
   assert.deepEqual(bridge.ops.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-and-check");
   assert.ok(bridge.ops.slice(2).every((o) => o.reboot === false), "no third restart, ever");
   assert.match(hints[0], /restarting/);
   assert.match(hints[2], /Plug this phone in/);
   assert.match(hints[2], /keeps listening/);
   assert.match(hints[2], /Windows asks/);
+
+  // ⛔⛔ THE POINT OF THIS TEST NOW: the server is NEVER told to give up while this
+  // machine is listening. It used to be told after an hour, and the customer was
+  // shown "We could not point this phone at Loopcom from your computer — Support can
+  // finish this one." That was FALSE: the desktop responder is STANDING, so the
+  // phone is provisioned the moment somebody power-cycles it, tonight or tomorrow.
+  // Saying we had given up, while the machine was still listening and would still
+  // finish the job, is the single most misleading thing this wizard ever said.
   const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
-  assert.equal(advances[advances.length - 1].body.provisioningHandoffFailed, true, "after an hour the server is told to halt kindly");
-  assert.equal(advances[10].body.provisioningHandoffFailed, false, "not early");
-  const firstFailed = advances.findIndex((c) => c.body.provisioningHandoffFailed === true);
-  assert.ok(firstFailed * 4000 >= MAX_PROVISIONING_WAIT_MS, "the give-up waits the full hour");
+  assert.ok(advances.length > 3_000, "sanity: the ticks really ran");
+  assert.ok(
+    advances.every((c) => c.body.provisioningHandoffFailed === false),
+    "a listening machine must never tell the server to halt the phone, however long it waits",
+  );
+});
+
+test("set_provisioning: a cannot_listen that RECOVERS resets the count — one bad reading is not a verdict", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
+    p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
+  });
+  const bridge = fakeBridge();
+  let n = 0;
+  (bridge as any).run = async (req: any) => {
+    bridge.ops.push(req);
+    n += 1;
+    // refuse, refuse, then the port frees up and stays free
+    if (n <= 2) return { ok: false, refused: "cannot_listen" };
+    return { ok: true, op: req.op, listening: true, rebooted: false, delivered: false, acknowledged: false, deliveredAt: null };
+  };
+  const d = createSetupDriver("r1", api, bridge);
+  for (let i = 0; i < 10; i += 1) await d.tick();
+  const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
+  assert.ok(advances.every((c) => c.body.provisioningHandoffFailed === false), "a recovered machine is never reported as having given up");
 });
 
 test("set_provisioning: a machine that cannot listen says so in plain words, and never reboots the phone", async () => {
@@ -344,14 +403,37 @@ test("set_provisioning: an OLD desktop app (unknown_operation) is told to update
   assert.ok(bridge.ops.every((o) => o.reboot === true), "the restart budget is untouched while nothing has run");
 });
 
-test("set_provisioning: cannot_listen does not spend an attempt either, and the hint names Windows", async () => {
+test("set_provisioning: cannot_listen never spends a RESTART, and the give-up needs three in a row", async () => {
   const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], {
     p1: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" },
   });
   const bridge = fakeBridge();
   (bridge as any).run = async (req: any) => { bridge.ops.push(req); return { ok: false, refused: "cannot_listen" }; };
   const d = createSetupDriver("r1", api, bridge);
-  for (let i = 0; i < 7; i += 1) await d.tick();
+  const hints: string[] = [];
+  for (let i = 0; i < 7; i += 1) hints.push((await d.tick()).hints.p1 ?? "");
+
+  // ⛔ A REFUSAL IS NOT AN ATTEMPT. Nothing listened and nothing restarted, so the
+  // restart budget must be exactly where it started — otherwise a machine that never
+  // managed to try once would burn through its two restarts on error messages.
+  assert.ok(bridge.ops.every((o) => o.reboot === true), "the restart budget is untouched while nothing has run");
+  // ⛔ And once we HAVE given up, the phone is left alone entirely: no further op is
+  // sent, so a wedged port cannot become a machine poking a handset every four seconds.
+  assert.equal(bridge.ops.length, MAX_CANNOT_LISTEN_ATTEMPTS, "we stop asking the moment we admit we cannot listen");
+
+  // The person is told what to do on EVERY tick they might be looking at, not only
+  // the first — a hint that names Windows once and then goes quiet is a dead end.
+  for (const h of hints.slice(0, MAX_CANNOT_LISTEN_ATTEMPTS)) assert.match(h, /Windows/);
+
+  // ⛔⛔ THIS IS THE ONE PLACE THE SERVER IS EVER TOLD TO STOP, and the threshold is
+  // the whole point of the assertion. The wizard used to say it had given up after an
+  // hour of a perfectly healthy machine listening — a statement to a customer that was
+  // simply untrue. It may only say that when nothing will EVER arrive, i.e. when the
+  // socket itself cannot be opened; and not on the first reading, because a port can be
+  // momentarily held by something else.
   const advances = api.calls.filter((c) => c.path.endsWith("/advance"));
-  assert.ok(advances.every((c) => c.body.provisioningHandoffFailed === false));
+  for (let i = 0; i < MAX_CANNOT_LISTEN_ATTEMPTS - 1; i += 1) {
+    assert.equal(advances[i].body.provisioningHandoffFailed, false, `told the server to stop on refusal ${i + 1}`);
+  }
+  assert.equal(advances[advances.length - 1].body.provisioningHandoffFailed, true, "three in a row is a real verdict");
 });

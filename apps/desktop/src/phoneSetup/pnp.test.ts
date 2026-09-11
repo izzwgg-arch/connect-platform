@@ -100,6 +100,52 @@ test("the NOTIFY carries exactly the folder URL as application/url", () => {
   assert.match(head, /\r\nCall-ID: abc123@192\.168\.0\.121\r\n/);
 });
 
+test("the body type is the one the PHONE asked for, so no brand needs guessing", () => {
+  // ⛔ Brands disagree about this header and the disagreement is documented rather
+  // than resolved: most want `application/url`, and Grandstream's own material also
+  // describes an `x-gs-ucm-url` form. Picking per vendor would be a guess made
+  // against somebody's hardware, and a wrong guess is a phone that downloads
+  // nothing. The phone states what it will take; we answer with that.
+  const withAccept = (v: string) =>
+    parsePnpSubscribe(subscribeFrom(PHONE_IP, MAC).replace("Accept: application/url", `Accept: ${v}`))!;
+  const notifyFor = (v: string) =>
+    buildPnpNotify(withAccept(v), URL_OK, { ip: "192.168.0.50", port: PNP_PORT }, "t", "s", `sip:${PHONE_IP}:5060`);
+
+  assert.match(notifyFor("application/x-gs-ucm-url"), /\r\nContent-Type: application\/x-gs-ucm-url\r\n/);
+  // A list: the first type we can safely echo wins, parameters dropped.
+  assert.match(notifyFor("application/x-gs-ucm-url;q=1, application/url"), /\r\nContent-Type: application\/x-gs-ucm-url\r\n/);
+  // "anything" is not an answer — fall back to what almost every brand wants.
+  assert.match(notifyFor("*/*"), /\r\nContent-Type: application\/url\r\n/);
+});
+
+test("⛔ a hostile Accept can never write a header — this value comes FROM the device", () => {
+  // ⛔⛔ THIS IS AN INJECTION SURFACE IN THE MOST LITERAL SENSE. The value arrives
+  // from a device on the customer's network and is written straight into a SIP
+  // header, so a CR or an LF in it would end our header and let the phone dictate
+  // the rest of the message. Refused outright in favour of the default — never
+  // trimmed, stripped or otherwise massaged into something "close enough".
+  const hostile = [
+    "application/url\r\nX-Injected: yes",
+    "application/url\nSubscription-State: active",
+    "application/url; boundary=\r\n\r\nEVIL",
+    "not a media type",
+    "application/",
+    "/url",
+    "a".repeat(400) + "/b",
+    "",
+    "   ",
+  ];
+  for (const v of hostile) {
+    const sub = parsePnpSubscribe(subscribeFrom(PHONE_IP, MAC).replace("Accept: application/url", `Accept: ${v}`))!;
+    const n = buildPnpNotify(sub, URL_OK, { ip: "192.168.0.50", port: PNP_PORT }, "t", "s", `sip:${PHONE_IP}:5060`);
+    const [head] = n.split("\r\n\r\n");
+    assert.match(head, /\r\nContent-Type: application\/url\r\n/, `fell back for ${JSON.stringify(v)}`);
+    assert.doesNotMatch(head, /X-Injected|EVIL|Subscription-State: active/, `leaked through ${JSON.stringify(v)}`);
+    // Exactly one Content-Type, and the head is still a well-formed header block.
+    assert.equal(head.split("\r\n").filter((l) => /^Content-Type:/i.test(l)).length, 1);
+  }
+});
+
 test("the 200 OK echoes the phone's dialog and adds our To tag", () => {
   const sub = parsePnpSubscribe(subscribeFrom(PHONE_IP, MAC))!;
   const ok = buildPnpOk(sub, { ip: "192.168.0.50", port: PNP_PORT }, "ourtag");

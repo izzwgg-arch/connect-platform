@@ -509,13 +509,38 @@ test("a locked phone is still identified by its hardware address block", async (
   const runId = await startRun(app);
   // No fingerprint vendor at all, and an explicit "unknown" — both must fall
   // back to the OUI. A vendor the device itself admitted is never overridden.
+  //
+  // ⛔ The blocks below are drawn from the PBX's OWN brand_macs table (1,143 of
+  // them across 20 brands). This used to be answered from a hand-written list of
+  // twelve prefixes covering four makers, so a Snom, a Polycom, an Htek or a
+  // Sangoma came back unnamed and the found screen showed a real desk phone with
+  // no maker at all.
   const out = await discover(app, runId, [
-    { mac: "0C:38:3E:11:22:33" },
+    { mac: "00:04:13:11:22:33" },
     { mac: "80:5E:C0:AA:BB:CC", vendor: "unknown" },
     { mac: "C0:74:AD:00:11:22", vendor: "grandstream" },
   ]);
   const vendors = out.phones.map((p: any) => p.vendor);
-  assert.deepEqual(vendors, ["fanvil", "yealink", "grandstream"]);
+  assert.deepEqual(vendors, ["snom", "yealink", "grandstream"]);
+});
+
+test("the ONE hardware block two makers share is left unnamed — and the phone is still taken", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  // ⛔⛔ `0c383e` is registered to BOTH Fanvil and Attimo, and it is the only
+  // prefix in the whole 1,142-prefix table that is claimed twice. A hardware
+  // address therefore CANNOT say which of the two this is, so we do not say —
+  // printing a maker we cannot support is worse than printing none, and the
+  // customer has the real name on the sticker in front of them.
+  //
+  // ⛔ WHAT MUST NOT HAPPEN is the device vanishing over it. An ambiguity between
+  // two phone makers is still, unambiguously, a phone: the row is stored, it
+  // reaches the found screen, and every later gate treats it as an unidentified
+  // device — which fails TOWARD listening for it, so it can still be set up.
+  const out = await discover(app, runId, [{ mac: "0C:38:3E:11:22:33" }]);
+  assert.equal(out.phones.length, 1, "the device is kept");
+  assert.equal(out.phones[0].vendor, null, "and deliberately not given a maker");
 });
 
 test("the customer view shows the formatted hardware address", async () => {
@@ -597,13 +622,16 @@ test("a rescan that resubmits only part of the list still fills vendors on the o
   const app = await makeApp(CUSTOMER, { provisionedPhones: async () => [] });
   const runId = await startRun(app);
   // First pass finds two devices, before any vendor knowledge existed server-side.
-  await discover(app, runId, [{ mac: "0C:38:3E:77:C5:36" }, { mac: "0C:38:3E:77:C5:43" }]);
+  // ⛔ Deliberately an UNAMBIGUOUS block: this test is about the BACKFILL, and the
+  // one prefix two makers share is correctly left unnamed, which would make the
+  // backfill unobservable here and quietly turn this into a test of nothing.
+  await discover(app, runId, [{ mac: "00:04:F2:77:C5:36" }, { mac: "00:04:F2:77:C5:43" }]);
   state.phones.forEach((r: any) => { r.vendor = null; }); // the pre-fix stored state
   // ⛔ ARP is ephemeral: the rescan sees only ONE of them. The other row's
   // hardware address has not changed — it must be named anyway (on the first
   // live run 4 of 6 rows kept vendor null exactly this way).
-  const out = await discover(app, runId, [{ mac: "0C:38:3E:77:C5:36" }]);
-  assert.deepEqual(out.phones.map((p: any) => p.vendor), ["fanvil", "fanvil"]);
+  const out = await discover(app, runId, [{ mac: "00:04:F2:77:C5:36" }]);
+  assert.deepEqual(out.phones.map((p: any) => p.vendor), ["polycom", "polycom"]);
 });
 
 test("the screen tells the live truth about a factory-reset phone, records notwithstanding", async () => {
@@ -877,4 +905,76 @@ test("a Panasonic OUI fills the vendor server-side when the scan could not say",
   const runId = await startRun(app);
   const out = await discover(app, runId, [{ mac: "00:80:F0:AA:BB:CC", ip: "192.168.1.60" }]);
   assert.equal(out.phones[0].vendor, "panasonic", "the hardware block names the maker even when the device is silent");
+});
+
+/* ── every brand the catalogue knows, not just Yealink (2026-09-11) ───────── */
+
+async function assignedPhone(app: any, runId: string, device: any) {
+  await discover(app, runId, [device]);
+  const phone = state.phones[0];
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  return phone;
+}
+
+const advanceOnce = async (app: any, runId: string, phoneId: string) => body(await app.inject({
+  method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: { reachableOnLan: true },
+}));
+
+test("a Grandstream gets the ordinary ladder — the wizard is not a Yealink wizard", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async () => "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/",
+  });
+  const runId = await startRun(app);
+  // ⛔⛔ THE DEFECT THIS PINS: one gate answered two different questions. "May the
+  // office machine SPEAK to this phone over HTTP?" is vendor-specific and is
+  // Yealink's alone until another executor ships. "May we LISTEN for this phone?"
+  // is plain RFC 6080 SIP that ten brands — 369 of the PBX's 427 models — send in
+  // one identical shape. Conflating them refused Grandstream, Polycom, Snom and
+  // the rest even the passive step, so they sat on "Preparing" until somebody gave
+  // up. The instruction below is what the phone needs; the DRIVER decides that a
+  // restart is not sendable at this brand and asks the person to power-cycle.
+  const phone = await assignedPhone(app, runId, { mac: "00:0B:82:AA:BB:CC", ip: "192.168.1.70" });
+  assert.equal(phone.vendor, "grandstream");
+  const adv = await advanceOnce(app, runId, phone.id);
+  assert.equal(adv.action, "set_provisioning");
+  assert.equal(adv.halted, false);
+  assert.ok(adv.provisioningUrl, "and it is handed the folder to point the phone at");
+  assert.notEqual(phone.state, "NEEDS_ATTENTION");
+});
+
+test("a brand nothing on the LAN can drive reaches a FINISHED state, not a spinner", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    provisioningUrlFor: async () => "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/",
+  });
+  const runId = await startRun(app);
+  // ⛔ Alcatel-Lucent, Dinstar, Nurivoice and Hanyang — 31 models between them —
+  // publish no mechanism a machine on the same network can use: no PnP multicast,
+  // no HTTP action, no mDNS. The ladder would keep naming set_provisioning, the
+  // driver could not perform it, and the customer watched a progress bar for
+  // something that was never going to happen. Saying so is the honest answer.
+  const phone = await assignedPhone(app, runId, { mac: "AA:00:11:22:33:44", ip: "192.168.1.71", vendor: "alcatel" });
+  const adv = await advanceOnce(app, runId, phone.id);
+  assert.equal(adv.action, "halt");
+  assert.equal(adv.handOff, "support");
+  assert.match(adv.customerMessage, /by hand/i);
+  assert.match(adv.customerMessage, /rest of your phones keep going/i);
+  assert.equal(phone.state, "NEEDS_ATTENTION");
+  assert.equal(phone.resetCount, 0, "a phone we cannot re-point must never be wiped");
+  assert.ok(!("provisioningUrl" in adv), "no folder URL for a phone that can never be told about it");
+});
+
+test("...and if that same phone IS registered, it is simply Ready", async () => {
+  reset(); registered = new Set(["101"]);
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  // ⛔ Registration is the whole test for a phone we can never re-point. Demanding
+  // that it also be pointing at OUR folder would leave a working phone amber for
+  // ever — the same reasoning as the hand-configured branch above.
+  const phone = await assignedPhone(app, runId, { mac: "AA:00:11:22:33:44", ip: "192.168.1.71", vendor: "alcatel" });
+  const adv = await advanceOnce(app, runId, phone.id);
+  assert.equal(adv.action, "do_nothing");
+  assert.equal(adv.halted, false);
+  assert.equal(phone.state, "REGISTERED");
 });
