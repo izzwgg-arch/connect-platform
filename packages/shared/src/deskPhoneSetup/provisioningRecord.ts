@@ -90,7 +90,51 @@ export type RecordTarget = {
    * account list so the row keeps the shape the panel renders. Defaults to one.
    */
   lineKeys?: number;
+  /**
+   * Every `provisioning.templates` row the PBX has, as the console reads them.
+   *
+   * ⛔⛔ A DEVICE ROW WITH NO SETTINGS PROFILE RENDERS A CONFIG THE HANDSET CANNOT
+   * USE, and it fails SILENTLY — `save_phone` accepts a null `template_id`, the
+   * INSERT lands, the generator runs, and the phone fetches a file with nothing in
+   * it. All 55 devices that exist on this PBX today carry a non-null `template_id`,
+   * so a null one is a shape nothing here has ever produced and nothing has ever
+   * been proven against. Deciding the profile is therefore part of deciding the row,
+   * not a detail the caller fills in afterwards.
+   */
+  templates: PbxTemplate[];
 };
+
+/** A `provisioning.templates` row, reduced to the three columns that decide anything. */
+export type PbxTemplate = {
+  id: number;
+  /** `provisioning.templates.model_id`. A profile only fits the model it was made for. */
+  modelId: number;
+  /** The PBX tenant NUMBER that owns it, or null for a profile every tenant may use. */
+  tenant: number | null;
+  /** VitalPBX's own "this one is shared" flag. */
+  shared: boolean;
+};
+
+/**
+ * Which settings profile this handset should use.
+ *
+ * ⛔ ORDER IS THE POLICY. The customer's OWN profile for this model wins, because it
+ * carries whatever they have already had set up — timezone, keys, the lot. A shared
+ * profile is the fallback. Nothing else is ever substituted: a profile built for a
+ * DIFFERENT model writes settings this handset does not have, which is worse than no
+ * profile at all because it looks like it worked.
+ */
+export function chooseTemplate(
+  pbxModelId: number,
+  pbxTenantNumber: number,
+  templates: PbxTemplate[],
+): number | null {
+  const forModel = (templates ?? []).filter((t) => t && Number(t.modelId) === pbxModelId);
+  const own = forModel.find((t) => Number(t.tenant) === pbxTenantNumber);
+  if (own) return own.id;
+  const shared = forModel.find((t) => t.shared || t.tenant == null);
+  return shared ? shared.id : null;
+}
 
 export type RecordRefusal =
   | "bad_mac"
@@ -134,6 +178,18 @@ export type RecordPlan =
       rehomedFromTenant: number | null;
       /** True when the row was ours already but pointed at the wrong or a dead device. */
       rebound: boolean;
+      /**
+       * The settings profile to write, or null when the phone system has none that
+       * fits this model.
+       *
+       * ⛔⛔ NULL IS NOT "leave it blank and carry on" — it is a hole the CALLER has
+       * to close, by creating a profile for this model before writing the row. The
+       * plan says so rather than deciding it, because creating one is a write to the
+       * phone system and this module writes nothing.
+       */
+      templateId: number | null;
+      /** True exactly when `templateId` is null. Named so a caller cannot miss it. */
+      needsTemplate: boolean;
       explain: string;
     };
 
@@ -258,6 +314,16 @@ export function planProvisioningRecord(
   const description = String(target.extNumber).trim();
   const accounts = accountsFor(target.deskDeviceId, target.lineKeys);
 
+  // ⛔ Decided ONCE, here, so every write branch below carries the same answer. An
+  // existing row's own profile is kept when it already fits the model we are writing
+  // — a customer's profile holds their own settings and re-picking would discard them.
+  const keepExisting =
+    existing && existing.templateId != null && existing.modelId === resolved.pbxModelId
+      ? existing.templateId
+      : null;
+  const templateId = keepExisting ?? chooseTemplate(resolved.pbxModelId, target.pbxTenantNumber, target.templates ?? []);
+  const templateFields = { templateId, needsTemplate: templateId == null };
+
   // 4 — no row anywhere. The Yealink case: write one.
   if (!existing) {
     return {
@@ -270,6 +336,7 @@ export function planProvisioningRecord(
       accounts,
       rehomedFromTenant: null,
       rebound: false,
+      ...templateFields,
       explain: `no provisioning record existed for ${mac}; creating one for ${resolved.canonical} on extension ${description}`,
     };
   }
@@ -315,6 +382,7 @@ export function planProvisioningRecord(
       accounts,
       rehomedFromTenant: existing.pbxTenantNumber,
       rebound: true,
+      ...templateFields,
       explain:
         `${mac} was recorded under PBX tenant ${existing.pbxTenantNumber} and was found on this customer's own network; ` +
         `moving it to tenant ${target.pbxTenantNumber} extension ${description}`,
@@ -333,6 +401,7 @@ export function planProvisioningRecord(
     accounts,
     rehomedFromTenant: null,
     rebound: true,
+    ...templateFields,
     explain: bindingIsDead
       ? `${mac} was bound to device ${primary}, which no longer exists; rebinding to extension ${description}`
       : wrongModel

@@ -21,9 +21,13 @@ import {
   buildButtonLayout, serializeButtonLayout, customerStateFor, decideReset, formatMac,
   guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
   summarizeRun, vendorCanBeDrivenLocally, vendorSupportsPbxProvisioning,
+  pnpArmList, planPhoneRetry, retryClears, retryableCount, inheritedResetCount,
   type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
+import { ensureProvisioningRecord, type RecordOutcome, type RecordQuery } from "./provisioningRecordWriter";
+import { resolvePbxRouteHelperConfig } from "@connect/integrations";
+import { consoleSavePhone } from "../pbxInboundRouteHelperClient";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
@@ -59,6 +63,27 @@ export type DeskPhoneDeps = {
    * driver waits, never a wrong URL.
    */
   provisioningUrlFor?: (tenantId: string) => Promise<string | null>;
+  /**
+   * Make the PBX hold the `provisioning.devices` row this phone needs, at the moment
+   * the person says whose phone it is.
+   *
+   * ⛔⛔ THIS IS WHAT BREAKS THE CHICKEN AND EGG. The standing PnP responder answers a
+   * phone only when its hardware address is already recorded, so without this the
+   * wizard could RE-POINT a phone the PBX knew and could never FINISH a new one —
+   * which is why Izzy's factory-reset Yealink multicast its SUBSCRIBE exactly as
+   * designed and was met with silence.
+   *
+   * ⛔ Best-effort, always. Assigning a phone is a thing a PERSON did; it must not
+   * fail because the phone system is unreachable. Every failure comes back as a
+   * reason written onto the row, so the screen says what is missing.
+   */
+  ensureRecord?: (args: {
+    tenantId: string;
+    mac: string;
+    vendor: string | null;
+    model: string | null;
+    extNumber: string;
+  }) => Promise<RecordOutcome>;
 };
 
 /**
@@ -166,6 +191,66 @@ async function defaultProvisionedPhones(tenantId: string): Promise<PbxProvisione
 }
 
 /**
+ * Write (or adopt) the `provisioning.devices` row for one phone.
+ *
+ * ⛔ The DECISION is pure and lives in `@connect/shared`; this resolves the two things
+ * that cannot be pure — a read-only connection to the PBX and the helper that runs
+ * `save_phone` — and hands them to `ensureProvisioningRecord`.
+ *
+ * ⛔⛔ THE HELPER CONFIG IS RESOLVED FROM THE PBX INSTANCE, NOT FROM A DEFAULT. A
+ * `save_phone` aimed at the wrong PBX writes a customer's handset into somebody else's
+ * phone system, and the MAC uniqueness rule then makes it unfixable from the wizard.
+ */
+async function defaultEnsureRecord(args: {
+  tenantId: string;
+  mac: string;
+  vendor: string | null;
+  model: string | null;
+  extNumber: string;
+}): Promise<RecordOutcome> {
+  const link = await db.tenantPbxLink.findUnique({ where: { tenantId: args.tenantId } });
+  if (!link?.pbxInstanceId) return { kind: "unavailable", detail: "this account is not linked to a phone system" };
+  // ⛔ resolvePbxTenantNumber, never Number(pbxTenantCode) — the code is "T2".
+  const pbxTenantNumber = resolvePbxTenantNumber(link as any);
+  if (!pbxTenantNumber) return { kind: "unavailable", detail: "no PBX tenant number on the link" };
+  const instance = await db.pbxInstance.findUnique({ where: { id: link.pbxInstanceId } });
+  const cfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
+  if (!cfg) return { kind: "unavailable", detail: "the phone system helper is not configured" };
+
+  // ⛔ ONE connection for the whole read, closed in a finally. Leaking a MySQL
+  // connection per assignment is how a helper wedged at 1024 file descriptors before.
+  let conn: any = null;
+  return ensureProvisioningRecord(
+    {
+      query: async (): Promise<RecordQuery | null> => {
+        const connected = await connectOmbutelMysql((instance as any)?.ombuMysqlUrlEncrypted);
+        if (!connected.ok) return null;
+        conn = connected.conn;
+        return async (sql: string, params: any[] = []) => {
+          const [rows] = (await conn.query(sql, params)) as any;
+          return (rows ?? []) as any[];
+        };
+      },
+      savePhone: (a) => consoleSavePhone(cfg, a as any),
+      auditRehome: async (info) => {
+        await db.auditLog.create({
+          data: {
+            tenantId: args.tenantId,
+            action: "DESK_PHONE_RECORD_REHOMED",
+            entityType: "desk_phone",
+            entityId: info.mac,
+            metadata: info as any,
+          },
+        });
+      },
+    },
+    { pbxTenantNumber, mac: args.mac, vendor: args.vendor, model: args.model, extNumber: args.extNumber },
+  ).finally(() => {
+    try { conn?.end?.(); } catch { /* already gone */ }
+  });
+}
+
+/**
  * ⛔⛔ ONE PLACE DECIDES WHETHER A PERSON MAY DO THIS, AND IT IS NOT THE ROUTE
  * BODY. Two keys, deliberately separate: running the wizard reads a network and
  * points phones at us; authorising a reset ERASES a customer's device.
@@ -247,6 +332,26 @@ async function withConnectedNow(
 }
 
 /** What the customer's screen gets. ⛔ Nothing technical crosses this boundary. */
+/**
+ * What the wizard is told about the record write, in customer-safe terms.
+ *
+ * ⛔ NEVER the technical `explain`, the PBX tenant number or the model id. A customer
+ * screen must not learn that their handset was recorded under another company — that is
+ * an audit fact for us, and it is already written to the audit log.
+ */
+function recordView(outcome: RecordOutcome | null) {
+  if (!outcome) return null;
+  switch (outcome.kind) {
+    case "written": return { state: "ready" as const, message: null };
+    case "adopted": return { state: "ready" as const, message: null };
+    case "refused": return { state: "needs_us" as const, message: outcome.customerMessage };
+    // ⛔ An unreachable phone system is NOT presented as the customer's problem, and
+    // NOT as a failure of the thing they just did. The assignment landed; only the
+    // record is pending, and the wizard retries it on its own.
+    case "unavailable": return { state: "pending" as const, message: null };
+  }
+}
+
 function customerPhoneView(row: any) {
   return {
     id: row.id,
@@ -525,14 +630,160 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     });
     if (!ext) return reply.status(404).send({ error: "extension_not_found" });
 
-    const updated = await db.deskPhoneSetupPhone.update({
+    let updated = await db.deskPhoneSetupPhone.update({
       where: { id: phone.id },
       data: {
         extensionId: ext.id, extNumber: ext.extNumber, displayName: ext.displayName,
         state: "ASSIGNED",
       },
     });
-    return reply.send({ ok: true, phone: customerPhoneView(updated) });
+
+    /**
+     * ⛔⛔ THE MOMENT THE RECORD BECOMES WRITEABLE, AND THE REASON IT IS HERE.
+     * Every input exists for the first time right now: the hardware address (our own
+     * scan), the model (the phone's banner or the person's dropdown pick) and the
+     * extension they just chose. Before this, the PnP responder only ever answered
+     * phones the PBX already knew — so a brand-new phone asked and was met with
+     * silence, which is exactly what happened to Izzy's Yealink.
+     *
+     * ⛔ Wrapped, and it can only ever ADD a note. The person has already made their
+     * choice; a phone system that is slow, unreachable or missing a settings profile
+     * must not lose it. `skippedAt` is honoured too — a phone somebody deliberately
+     * unticked is not written to the PBX at all.
+     */
+    let record: RecordOutcome | null = null;
+    if (!updated.skippedAt && ext.extNumber) {
+      try {
+        record = await (deps.ensureRecord ?? defaultEnsureRecord)({
+          tenantId: user.tenantId,
+          mac: phone.macAddress,
+          vendor: phone.vendor ?? null,
+          model: phone.model ?? null,
+          extNumber: String(ext.extNumber),
+        });
+      } catch (e: any) {
+        record = { kind: "unavailable", detail: e?.message || String(e) };
+      }
+      try {
+        if (record.kind === "refused") {
+          updated = await db.deskPhoneSetupPhone.update({
+            where: { id: phone.id },
+            data: { customerNote: record.customerMessage, technicalNote: record.explain },
+          });
+        } else if (record.kind === "written" || record.kind === "adopted") {
+          // ⛔ The note is CLEARED on success. A stale sentence left on a row that has
+          // since been fixed is exactly what made Izzy's second run read identically
+          // to his first.
+          updated = await db.deskPhoneSetupPhone.update({
+            where: { id: phone.id },
+            data: { customerNote: null, technicalNote: record.explain },
+          });
+        }
+        if (record.kind === "written" && record.rehomedFromTenant != null) {
+          await deps.audit({
+            tenantId: user.tenantId,
+            action: "DESK_PHONE_RECORD_REHOMED",
+            entityType: "desk_phone_setup_phone",
+            entityId: phone.id,
+            actorUserId: user.sub,
+            metadata: { mac: phone.macAddress, fromTenant: record.rehomedFromTenant, extNumber: ext.extNumber },
+          });
+        }
+      } catch { /* the note is a nicety; the assignment is the thing */ }
+    }
+
+    return reply.send({ ok: true, phone: customerPhoneView(updated), record: recordView(record) });
+  });
+
+  /* ── try this one again ────────────────────────────────────────────────── */
+
+  /**
+   * NOTHING MAY BE PERMANENTLY STUCK.
+   *
+   * ⛔⛔ THE DEFECT THIS CLOSES, measured on Izzy's own run 2026-09-11. His Yealink sat
+   * in `NEEDS_ATTENTION`; that state has an EMPTY transition list and `isTerminal()`
+   * returns true for it, so there was no way out — not by re-running the wizard, not by
+   * re-scanning, not by anything a customer could do. Worse, the halt had been written
+   * BEFORE the fix that deleted the hour-long give-up, so deleting that clock could do
+   * nothing for a phone already halted. He pressed the button again, the same stale
+   * sentence came back, and the run reported zero attempts.
+   *
+   * ⛔ THIS IS NOT A LADDER TRANSITION, deliberately. `TRANSITIONS` says what the wizard
+   * will do ON ITS OWN, and a terminal state genuinely is terminal there — the ladder
+   * must never quietly restart a phone it gave up on, because that is a reboot loop on
+   * somebody's desk. A retry is a PERSON saying "go again": its own route, its own
+   * audit, its own rules.
+   *
+   * ⛔⛔ AND IT NEVER FORGIVES A RESET. `resetCount` and `resetRequestedAt` are the
+   * record of hardware we have actually wiped; they are absent from what this writes.
+   * Losing our place must never turn into wiping somebody's phone a second time.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/retry", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    const plan = planPhoneRetry({
+      state: phone.state as PhoneState,
+      resetCount: phone.resetCount,
+      attempts: phone.attempts,
+      hasExtension: Boolean(phone.extensionId && phone.extNumber),
+    });
+    if (!plan.allowed) {
+      // ⛔ 409, not 400: the request was perfectly well formed and the phone is simply
+      // in a state where a retry would do harm. A 400 reads like the app is broken.
+      return reply.status(409).send({ error: plan.reason, message: plan.customerMessage });
+    }
+
+    const updated = await db.deskPhoneSetupPhone.update({
+      where: { id: phone.id },
+      data: retryClears(plan),
+    });
+
+    /**
+     * ⛔ A retry re-attempts the RECORD too, and that matters more than the state
+     * change. Most halts are a phone the PBX has no row for; sending it round the
+     * ladder again with the same missing record produces the same halt. Best-effort
+     * as everywhere else — a phone system that cannot be reached still leaves the
+     * phone un-stuck and moving.
+     */
+    let record: RecordOutcome | null = null;
+    if (!updated.skippedAt && updated.extNumber) {
+      try {
+        record = await (deps.ensureRecord ?? defaultEnsureRecord)({
+          tenantId: user.tenantId,
+          mac: phone.macAddress,
+          vendor: phone.vendor ?? null,
+          model: phone.model ?? null,
+          extNumber: String(updated.extNumber),
+        });
+        if (record.kind === "refused") {
+          await db.deskPhoneSetupPhone.update({
+            where: { id: phone.id },
+            data: { customerNote: record.customerMessage, technicalNote: record.explain },
+          });
+        }
+      } catch { /* the retry itself already landed */ }
+    }
+
+    await deps.audit({
+      tenantId: user.tenantId,
+      action: "DESK_PHONE_RETRY",
+      entityType: "desk_phone_setup_phone",
+      entityId: phone.id,
+      actorUserId: user.sub,
+      // ⛔ The reset count is recorded on every retry, so the audit trail shows plainly
+      // that a retry did not clear it.
+      metadata: { from: phone.state, to: plan.nextState, resetCount: phone.resetCount, explain: plan.explain },
+    });
+
+    const after = await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } });
+    return reply.send({ ok: true, phone: customerPhoneView(after ?? updated), record: recordView(record) });
   });
 
   /* ── which phones to set up at all ─────────────────────────────────────── */
@@ -942,9 +1193,38 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     try { url = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(user.tenantId); } catch { url = null; }
     let phones: PbxProvisionedPhone[] = [];
     try { phones = await (deps.provisionedPhones ?? defaultProvisionedPhones)(user.tenantId); } catch { phones = []; }
-    const macs = Array.from(new Set(
-      phones.map((ph) => String(ph.mac ?? "").toLowerCase()).filter((m) => /^[0-9a-f]{12}$/.test(m)),
-    ));
+
+    /**
+     * ⛔⛔ THE PHONES IN A LIVE RUN ARE ARMED TOO, AND THIS IS HALF THE FIX.
+     * The PBX list is what the phone system already knows — which is precisely the set
+     * that does NOT include a phone somebody is setting up right now. Arming from that
+     * alone is what left a factory-reset Yealink asking into silence.
+     *
+     * ⛔ Only phones that are IN the setup and assigned: a phone the person unticked is
+     * never answered (we would be pointing a handset they deliberately left alone at
+     * us), and one with nobody assigned has nothing to be pointed at yet. `pnpArmList`
+     * is the one place that rule lives.
+     */
+    let runMacs: string[] = [];
+    try {
+      const active = await db.deskPhoneSetupRun.findFirst({
+        where: { tenantId: user.tenantId, status: "running" },
+        orderBy: { startedAt: "desc" },
+        select: { id: true },
+      });
+      if (active) {
+        const rows = await db.deskPhoneSetupPhone.findMany({
+          where: { runId: active.id, tenantId: user.tenantId },
+          select: { macAddress: true, skippedAt: true, extNumber: true },
+        });
+        runMacs = pnpArmList(rows);
+      }
+    } catch { runMacs = []; }
+
+    const macs = Array.from(new Set([
+      ...phones.map((ph) => String(ph.mac ?? "").toLowerCase()).filter((m) => /^[0-9a-f]{12}$/.test(m)),
+      ...runMacs,
+    ]));
     return reply.send({ ok: true, url, macs });
   });
 

@@ -19,12 +19,39 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { planProvisioningRecord, pnpArmList, type PbxPhoneRecord, type RecordTarget } from "./provisioningRecord";
+import {
+  planProvisioningRecord,
+  pnpArmList,
+  chooseTemplate,
+  type PbxPhoneRecord,
+  type PbxTemplate,
+  type RecordTarget,
+} from "./provisioningRecord";
 
 const LANDAU = 21;
 const DESK = 130;
 const SOFTPHONE = 191;
 const LIVE = [DESK, SOFTPHONE];
+
+/** Model ids as `provisioning.phone_models` really numbers them. */
+const M_T53W = 154;
+const M_GXP2170 = 64;
+const M_HT812 = 303;
+const M_HT801 = 305;
+
+/**
+ * Settings profiles, in the shape the console reads them. ⛔ The ids match the
+ * `template_id` on the real device rows used as fixtures below — 24 on the HT801, 16
+ * and 15 on the GXP2170s, 1 on the HT812 — so "keep the profile this row already has"
+ * is tested against the values the PBX actually holds.
+ */
+const TEMPLATES: PbxTemplate[] = [
+  { id: 24, modelId: M_HT801, tenant: LANDAU, shared: false },
+  { id: 1, modelId: M_HT812, tenant: 2, shared: false },
+  { id: 16, modelId: M_GXP2170, tenant: 7, shared: false },
+  { id: 15, modelId: M_GXP2170, tenant: LANDAU, shared: false },
+  { id: 90, modelId: M_T53W, tenant: null, shared: true },
+];
 
 function target(over: Partial<RecordTarget> = {}): RecordTarget {
   return {
@@ -35,6 +62,7 @@ function target(over: Partial<RecordTarget> = {}): RecordTarget {
     extNumber: "101",
     deskDeviceId: DESK,
     liveDeviceIds: LIVE,
+    templates: TEMPLATES,
     ...over,
   };
 }
@@ -206,6 +234,76 @@ test("an unreadable hardware address is refused first of all", () => {
     assert.equal(plan.kind, "refuse", `${bad} must refuse`);
     if (plan.kind === "refuse") assert.equal(plan.reason, "bad_mac", `${bad}`);
   }
+});
+
+/* ── the settings profile ────────────────────────────────────────────────── */
+
+test("a new row gets a settings profile, or the config it renders is unusable", () => {
+  // ⛔⛔ save_phone ACCEPTS a null template_id: the INSERT lands, the generator runs,
+  // and the phone fetches a file with nothing in it — no error anywhere. All 55
+  // devices on this PBX carry one, so a null is a shape nothing has ever been proven
+  // against. Deciding it is part of deciding the row.
+  const plan = planProvisioningRecord(target(), null);
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  assert.equal(plan.templateId, 90, "the shared T53W profile");
+  assert.equal(plan.needsTemplate, false);
+});
+
+test("a model with no profile anywhere says so instead of writing a blank one", () => {
+  const plan = planProvisioningRecord(target({ templates: [] }), null);
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  assert.equal(plan.templateId, null);
+  // ⛔ Named so a caller cannot skim past it. The hole is the caller's to close.
+  assert.equal(plan.needsTemplate, true);
+});
+
+test("the customer's OWN profile beats a shared one", () => {
+  // Their own carries whatever they already had set up; re-picking discards it.
+  assert.equal(chooseTemplate(M_GXP2170, LANDAU, TEMPLATES), 15);
+  assert.equal(chooseTemplate(M_GXP2170, 7, TEMPLATES), 16);
+  assert.equal(chooseTemplate(M_T53W, LANDAU, TEMPLATES), 90, "nobody owns one, so the shared one");
+});
+
+test("a profile built for a DIFFERENT model is never substituted", () => {
+  // ⛔ It would write settings this handset does not have — worse than none, because
+  // it looks like it worked.
+  assert.equal(chooseTemplate(M_HT801, 7, TEMPLATES), null, "no HT801 profile for tenant 7 and none shared");
+  assert.equal(chooseTemplate(999999, LANDAU, TEMPLATES), null);
+  assert.equal(chooseTemplate(M_T53W, LANDAU, []), null);
+});
+
+test("re-homing a phone keeps the profile its row already had", () => {
+  // ⛔ The GXP2170 moving off create_a_box keeps template 16 — the model has not
+  // changed, so re-picking would throw away settings somebody configured.
+  const existing: PbxPhoneRecord = {
+    phoneId: 24, mac: "c074ad8c654e", pbxTenantNumber: 7, modelId: M_GXP2170,
+    templateId: 16, boundDeviceIds: [29],
+  };
+  const plan = planProvisioningRecord(
+    target({ mac: "c0:74:ad:8c:65:4e", vendor: "grandstream", model: "GXP2170" }),
+    existing,
+  );
+  assert.equal(plan.kind, "write");
+  if (plan.kind === "write") assert.equal(plan.templateId, 16);
+});
+
+test("correcting a wrong model also corrects the profile", () => {
+  // ⛔ The row said HT812 and the phone is a GXP2170. Keeping the HT812 profile would
+  // render an analog adapter's settings onto a desk phone.
+  const existing: PbxPhoneRecord = {
+    phoneId: 23, mac: "c074ad8c605f", pbxTenantNumber: LANDAU, modelId: M_HT812,
+    templateId: 1, boundDeviceIds: [DESK],
+  };
+  const plan = planProvisioningRecord(
+    target({ mac: "c0:74:ad:8c:60:5f", vendor: "grandstream", model: "GXP2170" }),
+    existing,
+  );
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  assert.equal(plan.pbxModelId, M_GXP2170);
+  assert.equal(plan.templateId, 15, "Landau's own GXP2170 profile, not the HT812 one");
 });
 
 /* ── arming the listener ─────────────────────────────────────────────────── */
