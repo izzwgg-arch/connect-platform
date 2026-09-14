@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-14 · Deploy 403 cause proven: queued-log 404 polling triggered office autoban; unblocked; API/portal fix locally validated → `2026-09-14-deploy-log-autoban.md`
+- 2026-09-14 · Deploy 403 prevention deployed/verified: queued-log waiting responses, bounded polling, live 200s and no renewed ban → `2026-09-14-deploy-log-autoban.md`
 
 - 2026-09-14 · Profile menu deployment proven; office autoban explained/recovered; live DND test awaits extension → `2026-09-14-profile-menu-design.md`
 

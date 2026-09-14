@@ -14,3 +14,5 @@ DND follow-up: source-confirmed visibility requires an ACTIVE extension owned by
 Interactive proposal separates Quick settings and Voicemail, clarifies browser versus extension call controls, uses explicit Light/Dark choices, nests transcription under voicemail email, explains greeting prerequisites, and reduces footer prominence. Exact label “Include transcription in email” is retained.
 
 Chrome checks passed for theme switching, tabs, email/transcription dependency, close/reopen and Escape focus return. Light quick settings inspected at 390px; dark voicemail inspected at 320px without horizontal overflow. Production implementation and save/error handling remain unimplemented. Full record: `docs/ai-context/AGENT_HANDOFF_PROFILE_MENU_DESIGN_2026-09-14.md`.
+
+**Live visual acceptance (2026-09-14):** profile menu inspected in both light and dark mode in Chrome; Support correctly displays No extension assigned and unavailable DND with an explanation. Original light theme restored. No real DND/call mutation; incoming-call acceptance still awaits a chosen test extension.
