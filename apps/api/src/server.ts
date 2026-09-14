@@ -361,6 +361,7 @@ import {
   readActiveGreetingSha,
   resetGreetingWithBusyMirror,
 } from "./voicemailGreetingMirror";
+import { registerActAsFilerRoutes } from "./support/actAsFilerRoutes";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
@@ -42698,6 +42699,29 @@ const port = Number(process.env.PORT || 3001);
   registerSupportMessageRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
   // Live visibility into the automatic support agent — the watcher pushes here.
   registerAgentRunRoutes(app, { db, requireSuper: (req, reply) => requireSuperAdmin(req, reply), log: app.log });
+  // The support agent acts AS THE PERSON WHO FILED THE TICKET: replayed through
+  // these same routes with a 2-minute token for that user, so their custom role
+  // decides and their tenant bounds it. Writes stay off until the owner is
+  // texted what is being done (SUPPORT_AGENT_WRITES_ENABLED).
+  registerActAsFilerRoutes(app, {
+    db,
+    requireSuper: (req, reply) => requireSuperAdmin(req, reply),
+    signFilerToken: (claims) => app.jwt.sign(claims, { expiresIn: "2m" }),
+    inject: async ({ method, url, token, body }) => {
+      const res = await app.inject({
+        method: method as any,
+        url,
+        headers: { authorization: `Bearer ${token}` },
+        ...(body === undefined ? {} : { payload: body as any }),
+      });
+      let parsed: unknown = null;
+      try { parsed = res.json(); } catch { parsed = { raw: String(res.body).slice(0, 2000) }; }
+      return { statusCode: res.statusCode, body: parsed };
+    },
+    audit,
+    writesEnabled: () => process.env.SUPPORT_AGENT_WRITES_ENABLED === "1",
+    log: app.log,
+  });
   registerSupportConsoleRoutes({
     app,
     db,
