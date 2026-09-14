@@ -1128,6 +1128,23 @@ A Box 106 / A plus center 108 then lose that device. Nothing was changed on the 
   The negative that matters most: the `.172` GXP2170 must come back **refused**.
 - ⛔ **The picker and sticker screens were built without a mockup**, against Izzy's standing
   mockup-first rule. Stated plainly; show him the screens before calling them final.
+- ⛔⛔ **CHECKED 2026-09-14 (later session): an rc.12 installer would NOT turn reset on.
+  Nothing calls `factory_reset`.** The portal driver has no branch for `reset_over_lan` — it
+  falls into "everything else is the server's or the PBX's to do" and waits
+  (`setupDriver.ts:360`, unchanged since `dac3aab2`). And `reset_over_sip` has **no executor
+  anywhere** (0 hits for a PBX reset NOTIFY in api/telephony/worker). ⛔⛔ **Worse, the server
+  SPENDS the reset before anybody sends it:** `advance` claims it atomically —
+  `RESET_REQUESTED`, `resetCount + 1` (`deskPhoneRoutes.ts:1237`) — and a reset is never
+  forgiven, so a phone reaching rung 6/7 loses its one reset without being touched.
+  Production read the same hour: **0 runs with a reset approval, 0 phones with
+  `resetCount > 0`** — nobody has hit it. **Order to close it:** (1) wire the driver to run
+  `factory_reset` for `reset_over_lan` (model from the phone's own fingerprint, the run's
+  approval id, link) and stop the server spending the reset until the desktop reports
+  `sent`; build the PBX reset NOTIFY or take `reset_over_sip` off the ladder; (2) deploy
+  api + portal; (3) only then build rc.12 from a clean export and install it.
+  The installed app on Izzy's PC is **rc.11** (exe `FileVersion 0.1.17-rc.11`, log banner
+  rc.11 at 2026-09-14 03:44Z) — ⛔ the uninstall registry still reads `0.99.0`, which is stale.
+  Everything else in §20 (writer, retry, identify, pickers) is api + portal and needs no build.
 - ⏳ Desktop `factory_reset` needs an installer (rc.12); PoE switch + Wi-Fi extender still
   blocked on the brand/model from Izzy; §19f's screen defects (the unconditional green tick,
   the subtitle failure branch, the per-phone note never shown, the IP hidden on the row)
