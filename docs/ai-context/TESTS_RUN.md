@@ -4,6 +4,22 @@ Newest entries first.
 
 ---
 
+## Voicemail greeting also plays on busy — ticket 3GTH9M (2026-09-14, `5b499073`)
+
+- api `node --experimental-test-module-mocks --import tsx --test src/voicemailGreetingMirror.test.ts src/vmRecordCallJobs.test.ts
+  src/vmRecordCallHelpers.test.ts` → **60/60 pass** (9 new: create busy when absent, replace a previous copy, NEVER
+  overwrite a distinct busy greeting, call-to-record reads bytes from the PBX, helper failure reported not thrown, reset
+  removes busy only when it is a copy, non-unavailable reset untouched + still throws, source guard).
+- Source guard replayed against pre-fix HEAD `server.ts`/`vmRecordCallJobs.ts` → **FAILS** ("upload must mirror to busy.wav"), as it should.
+- api `tsc --noEmit`: 84 errors, **none in `voicemailGreetingMirror.ts` or `vmRecordCallJobs.ts`**; the `server.ts` ones are
+  far from the edited lines (Timeout/apnsVoipPush types). HEAD's count was not re-run.
+- ✅ Deployed: api queue job `4c42b792` → container `7d12c14f` (contains `5b499073`), 0 restarts, healthy, 200 on both hostnames.
+- ✅ Backfill dry-run then apply (Trust 101/105/107 → `created`); PBX read-back: busy.wav sha256 == unavail.wav for all
+  three, owner asterisk, 8 kHz mono PCM; 106's own busy.wav unchanged.
+- ⛔ Not proven: no real busy/declined call to ext 101 has played the recording yet.
+
+---
+
 ## Desk-phone per-brand mechanisms + Grandstream through GDMS in the real wizard (2026-09-14, round 3, `7e54716a`)
 
 - shared `npm test` (full script, new `deviceMechanisms.test.ts` registered) → **707/707 pass**; `tsc --noEmit` 0 errors.
