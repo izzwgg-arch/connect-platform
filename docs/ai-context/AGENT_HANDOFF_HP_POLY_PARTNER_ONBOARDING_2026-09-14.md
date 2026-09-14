@@ -47,4 +47,9 @@ The browser was not signed in to HP, the HP Partner Portal or Poly Lens.
 - **Poly Lens login** (lens.poly.com): opened. Izzy signs in, via Google for izzy@loopcom.net or another method.
 - **ScanSource Specialty prospect form** (scansource.my.site.com/prospectscreening/s/): filled in except "Do you have an immediate opportunity?" (required) and "How did you hear". Company, name, email, phone 845-723-1213, US, email contact, resell=Yes, UC, Cisco=No, supplier "HP | Poly", federal=No, and the comments were entered. NOT submitted.
 
+## Continuation attempt (2026-09-14, later still)
+- Browser "googole" (Izzy picked it in the extension). partner.hp.com → Log In → HP account sign-in page: NOT signed in.
+- izzy@loopcom.net typed into the sign-in email box. Stopped there: the next step is a password or an emailed sign-in code, and the agent does not authenticate for Izzy. Whether the HP account from the earlier pre-filled sign-up was ever created is unknown.
+- Once Izzy is signed in, the agent can fill the Partner Portal "Register a New Company" form (Loopcom LLC, 33 NY 17M Suite C, Harriman NY 10926, Reseller, officer Israel Weinstock, izzy@loopcom.net, 845-723-1213). Submit and the HP Partner Agreement stay Izzy's clicks.
+
 ## Status: nothing applied. Next steps are Izzy's (see the final report in chat).
