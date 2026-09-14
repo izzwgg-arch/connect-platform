@@ -27,5 +27,10 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   `/prepare` (GDMS claim → reset; later a GDMS restart, ≤2, 3 min apart; one cloud ask per 30 s). Serial screen;
   one read-only maker-cloud lookup for unnamed phones. Other brands unchanged. Why: Izzy's 20:13Z run — a ticked
   GXP2170 was told "reset over LAN", skipped it, and waited for a power-cycle while GDMS sat unused. Handoff §10b.
-- ⏳ **NOT PROVEN:** no GDMS credential saved yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
+- ⛔⛔ **Round 4 (`c7f5459c`, desktop rc.15): GRANDSTREAM RESETS OVER THE LAN WITH THE PASSWORD, no serial.**
+  New `apps/desktop/src/phoneSetup/grandstream.ts` (session `dologin` → `api-sys_operation REBOOT|RESET`);
+  `deviceMechanismsFor` prefers `lan_http` reset over the serial-based GDMS reset. Settings stay on PnP (no
+  Grandstream HTTP config write, no P237 trap). Handoff §10c. ⏳ The authenticated write is UNPROVEN on a real
+  handset — Izzy types the phone password into the wizard once; a wrong shape fails safe to the PnP power-cycle.
+- ⏳ **NOT PROVEN:** GDMS credential IS saved (round 2 Verify passed), but no real reset yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.

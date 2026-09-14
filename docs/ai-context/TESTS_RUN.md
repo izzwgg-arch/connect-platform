@@ -24,6 +24,24 @@ Chrome visual/interaction checks passed: light/dark, Quick settings/Voicemail ta
 
 ---
 
+## Desk-phone Grandstream LAN reset with the password, no serial (2026-09-14, round 4, `c7f5459c`)
+
+- shared `npm test` → **708/708 pass**; tsc 0. Changed expectations: `deviceMechanisms` now LAN-first (a
+  Grandstream with GDMS connected still resets over the LAN); `deviceIdentification` capabilities gain the local
+  Grandstream reset; the `deskPhoneInvariants` "only Yealink over HTTP" invariant is now Yealink+Grandstream.
+- desktop `node --import tsx --test src/phoneSetup/*.test.ts` → **164/164 pass** incl. new
+  `grandstreamAdapter.test.ts` (12: login body not URL, private-address fence, sid/cookie parse, RESET/REBOOT
+  ordering, 401→locked with no operation sent, session-less 200→locked, no-password→nothing sent,
+  unreachable≠sent, credential test). desktop tsc 0.
+- api deviceCloudRoutes **33/33** (Grandstream ticked → `reset_over_lan` with no `via`; the old "via vendor_cloud"
+  expectations flipped to LAN). portal setupDriver **44/44** (Grandstream cleared over the LAN with the password;
+  a brand with no executor still takes the hand-off; the cloud-reset path tests moved to a Poly fixture).
+- First run caught 3 shared + 7 portal expectation failures — all were tests encoding the old "only Yealink
+  resets over HTTP" fact; updated, not the code.
+- ⛔ Not proven by any of this: a real GXP2170 logged into and reset over the LAN. Izzy's live run is the proof.
+
+---
+
 ## Desk-phone per-brand mechanisms + Grandstream through GDMS in the real wizard (2026-09-14, round 3, `7e54716a`)
 
 - shared `npm test` (full script, new `deviceMechanisms.test.ts` registered) → **707/707 pass**; `tsc --noEmit` 0 errors.

@@ -294,6 +294,48 @@ for the GXP2170's serial (on its sticker) and CLAIM it into Loopcom's GDMS — a
 the GDMS device-record field names; whether a GDMS factory reset keeps the device in the account and
 back online to GDMS; whether the reset GXP asks over PnP on its boot. Reset takes .171 off Create A Box 106.
 
+## 10c. Round 4 (`c7f5459c`) — reset a Grandstream over the LAN with the password, no serial
+
+**Why.** GDMS reset needs the device ADDED to the account first, which needs the serial number, and
+an existing customer's phone won't give its serial over the network (proven 2026-09-14 by reading
+Izzy's GXP2170 at .171 unauthenticated: `phone_model`, MAC and vendor answer; `serial_number`/`sn`/`P89`
+all come back empty; the sticker is the only source). Izzy: an existing customer "will have to go to the
+physical phone … there is no way to get the serial number." So the LAN reset — type the admin password
+once into the wizard's existing password box — now PREFERS over the serial-based cloud reset.
+
+**The build:**
+- **`apps/desktop/src/phoneSetup/grandstream.ts`** (NEW): session executor. `POST /cgi-bin/dologin`
+  (`username=admin&password=…` in the body, never the URL) → `{sid, cookie}`; `POST /cgi-bin/api-sys_operation`
+  `request=REBOOT|RESET&sid=…`. Address-fenced (`canonicalPrivateIpv4`), HTTP→HTTPS scheme fallback, never
+  retried, **no default password** (Grandstream's is random per unit). ⛔ SETTINGS ARE NOT WRITTEN HERE —
+  a reset Grandstream asks over SIP PnP, which the resident already answers, so there is no HTTP config
+  write and the P237/P212 trap ([[grandstream-p237-is-not-a-url]]) is not touched.
+- **`capability.ts`**: `reboot` / `factory_reset` / `set_provisioning` restart / `test_credentials` branch on
+  `vendor`. Grandstream has no autop and no default-password probe (returns "no_default", so the ladder goes
+  straight to the password step rather than spending a login toward the phone's lockout).
+- **shared**: `VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR` and new `VENDORS_WITH_A_LOCAL_RESET_EXECUTOR` /
+  `vendorSupportsLocalReset` both include grandstream; **`deviceMechanismsFor` prefers `lan_http` reset over
+  `vendor_cloud` whenever a local reset executor exists** (password beats serial); `capabilitiesFor` grants
+  the local Grandstream reset (`canFactoryReset` paths gain `local_http`).
+- **driver**: passes `vendor` to the desktop for the brand-specific calls. A Grandstream now takes the
+  `reset_over_lan` local path (login → RESET), not the GDMS path. GDMS reset/restart stay wired for a future
+  brand-in-account case; GDMS lookup still runs read-only for model discovery.
+- **desktop `0.1.17-rc.15`** (needs install — the desktop is what talks to the phone). No portal/api desktop
+  dependency beyond this.
+
+**Tests:** shared 708/708 (deviceMechanisms flipped to LAN-first; deviceIdentification capabilities; the
+invariant "only Yealink over HTTP" updated to Yealink+Grandstream); api deviceCloudRoutes 33/33 (Grandstream
+ticked → `reset_over_lan`, no `via`); portal setupDriver 44/44 (a Grandstream is cleared over the LAN with the
+password; brands with no executor still take the hand-off); desktop 164/164 incl. new `grandstreamAdapter.test.ts`
+12/12; every tsc 0.
+
+**⏳ UNPROVEN on a real handset — Izzy's live run is the proof.** The `dologin`/`api-sys_operation` request
+shapes are documented (Grandstream HTTP API) and cross-checked against the captured GXP2170 reads, but the
+authenticated write has NEVER succeeded on a real Grandstream (no sticker/known password was ever passed).
+A wrong shape fails SAFE: the reset is refused and the phone falls back to the PnP power-cycle. Izzy types the
+phone's admin password into the wizard when asked; it stays in the desktop vault and never reaches the server.
+⛔ Grandstream locks out on repeated bad passwords — the design sends ≤1 password attempt (no default guess).
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
