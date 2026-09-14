@@ -1193,7 +1193,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
       throw err;
     }
     const fromEmail = provider.fromEmail || platformBillingFromEmail();
-    const fromName = provider.fromName || "Connect Communications";
+    const fromName = provider.fromName || "Loopcom";
     // One list, two sources. Typed explicitly because `.catch(() => [])` alone
     // infers never[] and then nothing else can join it.
     const pdfAttachments: Array<{ filename: string; content: Buffer; contentType: string }> =
@@ -1260,7 +1260,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
   }
 
   const fromEmail = provider.fromEmail || platformNoreplyEmail();
-  const fromName = provider.fromName || "Connect Communications";
+  const fromName = provider.fromName || "Loopcom";
 
   const transporter = nodemailer.createTransport({
     host: smtpHost,
