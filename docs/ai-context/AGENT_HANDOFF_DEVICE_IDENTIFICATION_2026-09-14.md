@@ -226,7 +226,15 @@ settings step).
   hostnames; shipped chunks carry "Grandstream device cloud (GDMS)" (2), the `gdms-credentials`
   calls (1) and "Or type or scan what the label says" (2). ⏳ Nobody has opened either screen in a
   browser yet; an open tab / desktop window keeps the old bundle until reloaded.
-- **No GDMS credential is stored (AgentSecret has no gdms row, no GDMS_* env) and no live GDMS call has ever been made** — so the live-safe
+- ✅ **LIVE GDMS HANDSHAKE PROVEN 2026-09-14 20:07Z.** Izzy saved the account on the card himself
+  (20:05, region us, API ID …5002; agent never saw a value). Verify → HTTP 200 in 1.4 s,
+  `GDMS_CREDENTIALS_VERIFIED {organizations: 1}`. Look up `C0:74:AD:8C:60:5F` → HTTP 200 in 1.3 s,
+  `GDMS_DEVICE_LOOKUP {found: false}` — and that is TRUE: the GDMS UC dashboard shows **Total
+  Devices 0** (the GXP2170 was used for account verification, never added as a device). So token,
+  signature and the list call are right; the device-record field names are still unproven until
+  a device exists in GDMS. ⛔ Adding it (claim) is a write — only on Izzy's word.
+  (`.env.gdms` at the repo root is unused — the card save is the live source.)
+- (history) **No GDMS credential was stored and no live GDMS call had been made before 20:05Z** — so the live-safe
   validation the prompt asks for (read-only lookup against the real account) has not run. Enable:
   confirm `CREDENTIALS_MASTER_KEY` is set in `app-api-1` (else the save answers 503), save the API ID
   + secret + the GDMS login on **Admin → Integrations → Grandstream device cloud** (⛔ never through
