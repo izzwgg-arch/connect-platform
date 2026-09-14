@@ -328,3 +328,119 @@ test("arming is normalised so the desktop never has to care how a MAC was writte
   const armed = pnpArmList([{ macAddress: "C0-74-AD-8C-65-4E", skippedAt: null, extNumber: "106" }]);
   assert.deepEqual(armed, ["c074ad8c654e"]);
 });
+
+/* ── moving a record off another customer ────────────────────────────────── */
+
+import {
+  contactAddresses,
+  decideRehome,
+  REHOME_LIVE_WINDOW_MS,
+  type RehomeRegistration,
+} from "./provisioningRecord";
+
+/**
+ * ⛔ REAL contact strings, read off the live PBX 2026-09-14. Izzy's GXP2170 at
+ * 192.168.6.171 is registered AS Create A Box ext 106 from his own public address;
+ * Create A Box's real ext 102 is their office phone, arriving through their tunnel.
+ */
+const RIG_PUBLIC = "50.48.58.53";
+const NOW = new Date("2026-09-14T05:00:00Z");
+const T7_106_THIS_RIG: RehomeRegistration = {
+  endpoint: "T7_106", status: "REGISTERED", lastRegisteredAt: "2026-09-14T04:34:19Z",
+  contactUri: "sip:T7_106@50.48.58.53:36493;x-ast-orig-host=192.168.6.171:5060",
+};
+const T7_102_THEIR_OFFICE: RehomeRegistration = {
+  endpoint: "T7_102", status: "REGISTERED", lastRegisteredAt: "2026-09-14T04:35:43Z",
+  contactUri: "sip:T7_102@45.14.194.179:5060;x-ast-orig-host=192.168.8.160:5060",
+};
+
+test("contact addresses are read the way Asterisk writes them", () => {
+  assert.deepEqual(contactAddresses(T7_106_THIS_RIG.contactUri), { publicHost: "50.48.58.53", lanHost: "192.168.6.171" });
+  assert.deepEqual(contactAddresses("sip:T21_101_1@[2001:db8::1]:5060"), { publicHost: "2001:db8::1", lanHost: null });
+  assert.deepEqual(contactAddresses(null), { publicHost: null, lanHost: null });
+});
+
+test("a record bound to no extension that still exists may be moved", () => {
+  const d = decideRehome({ boundEndpoints: [], registrations: null, discoveredIp: null, requesterIp: null, now: NOW });
+  assert.equal(d.allow, true);
+});
+
+test("a record nothing has used inside the window is stale and may be moved", () => {
+  const d = decideRehome({ boundEndpoints: ["T7_106"], registrations: [], discoveredIp: null, requesterIp: null, now: NOW });
+  assert.equal(d.allow, true, d.why);
+});
+
+test("unreadable registration state refuses — never move what cannot be proven stale", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"], registrations: null, discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, false);
+});
+
+test("another company's extension in use by a DIFFERENT device is never taken", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_102"], registrations: [T7_102_THEIR_OFFICE],
+    discoveredIp: "192.168.6.172", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, false);
+  assert.match(d.why, /T7_102/);
+});
+
+test("the only live registration being THIS handset on THIS network lets it move", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"], registrations: [T7_106_THIS_RIG],
+    discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, true, d.why);
+});
+
+test("the same LAN address claimed from a different network is refused — that is a forger", () => {
+  // ⛔ LAN addresses repeat in every office on earth; only the pair proves presence.
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"], registrations: [T7_106_THIS_RIG],
+    discoveredIp: "192.168.6.171", requesterIp: "203.0.113.9", now: NOW,
+  });
+  assert.equal(d.allow, false);
+});
+
+test("an unknown customer address can never prove presence", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"], registrations: [T7_106_THIS_RIG],
+    discoveredIp: "192.168.6.171", requesterIp: null, now: NOW,
+  });
+  assert.equal(d.allow, false);
+});
+
+test("one live registration by this phone and one by another device still refuses", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106", "T7_102"], registrations: [T7_106_THIS_RIG, T7_102_THEIR_OFFICE],
+    discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, false);
+});
+
+test("a registration without the NAT marker cannot be proven to be this phone", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"],
+    registrations: [{ ...T7_106_THIS_RIG, contactUri: "sip:T7_106@50.48.58.53:36493" }],
+    discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, false);
+});
+
+test("a registration older than the window stops counting; one inside it still counts", () => {
+  const day = 86_400_000;
+  const old = { ...T7_102_THEIR_OFFICE, status: "UNREGISTERED", lastRegisteredAt: new Date(NOW.getTime() - REHOME_LIVE_WINDOW_MS - day) };
+  const recent = { ...T7_102_THEIR_OFFICE, status: "UNREGISTERED", lastRegisteredAt: new Date(NOW.getTime() - 3 * day) };
+  const base = { boundEndpoints: ["T7_102"], discoveredIp: "192.168.6.172", requesterIp: RIG_PUBLIC, now: NOW };
+  assert.equal(decideRehome({ ...base, registrations: [old] }).allow, true);
+  assert.equal(decideRehome({ ...base, registrations: [recent] }).allow, false);
+});
+
+test("a registration on an endpoint the record is NOT bound to is ignored", () => {
+  const d = decideRehome({
+    boundEndpoints: ["T7_106"], registrations: [T7_102_THEIR_OFFICE],
+    discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
+  });
+  assert.equal(d.allow, true, d.why);
+});

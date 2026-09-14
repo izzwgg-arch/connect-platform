@@ -22,6 +22,8 @@ function fakePbx(opts: {
   accounts?: Row[];
   templates?: Row[];
   ombuDevices?: Row[];
+  /** Rows for the bound-device lookup a move performs: `{ device_id, user, tenant_id }`. */
+  boundDevices?: Row[];
   failOn?: RegExp;
 } = {}): { query: RecordQuery; seen: string[] } {
   const seen: string[] = [];
@@ -31,13 +33,18 @@ function fakePbx(opts: {
     { id: 90, model_id: 154, tenant: null, shared: "yes" },
     { id: 24, model_id: 305, tenant: LANDAU, shared: "no" },
   ];
+  // ⛔⛔ `ombu_devices.user` IS THE BARE EXTENSION — `101`, `101_1` — NEVER `T21_101`.
+  // Census of the live PBX 2026-09-14: 158 pjsip devices, 0 with a T-prefix. The first
+  // version of this fixture invented the prefixed shape, the writer was built to match
+  // the fixture, and every real write would have refused "no desk device".
   const ombuDevices = opts.ombuDevices ?? [
-    { device_id: DESK, user: `T${LANDAU}_101` },
-    { device_id: SOFTPHONE, user: `T${LANDAU}_101_1` },
+    { device_id: DESK, user: "101" },
+    { device_id: SOFTPHONE, user: "101_1" },
   ];
   const query: RecordQuery = async (sql, params = []) => {
     seen.push(sql);
     if (opts.failOn && opts.failOn.test(sql)) throw new Error("pbx read failed");
+    if (/device_id IN \(/.test(sql)) return opts.boundDevices ?? [];
     if (/provisioning\.devices/.test(sql)) {
       const mac = String(params[0] ?? "");
       return devices.filter((d) => String(d.mac).toLowerCase().replace(/[:-]/g, "") === mac);
@@ -62,6 +69,8 @@ function writer(over: Partial<Parameters<typeof ensureProvisioningRecord>[0]> = 
       query: async () => pbx.query,
       savePhone: async (a: any) => { saved.push(a); return { phoneId: a.phoneId ?? 999 }; },
       auditRehome: async (i: any) => { rehomes.push(i); },
+      // Nothing registered anywhere unless a test says otherwise.
+      registrations: async () => [],
       ...over,
     } as Parameters<typeof ensureProvisioningRecord>[0],
   };
@@ -219,9 +228,9 @@ test("'shared' is read as VitalPBX writes it — the string 'yes'", async () => 
 test("the desk endpoint is matched exactly, so the softphone can never win", async () => {
   const pbx = fakePbx({
     ombuDevices: [
-      { device_id: SOFTPHONE, user: `T${LANDAU}_101_1` },
-      { device_id: DESK, user: `T${LANDAU}_101` },
-      { device_id: 500, user: `T${LANDAU}_1010` },
+      { device_id: SOFTPHONE, user: "101_1" },
+      { device_id: DESK, user: "101" },
+      { device_id: 500, user: "1010" },
     ],
   });
   const ctx = await readRecordContext(pbx.query, { pbxTenantNumber: LANDAU, mac: "80:5e:c0:b3:b2:d0", extNumber: "101" });
@@ -244,4 +253,95 @@ test("line keys are read in order, because the first one is the primary line", a
   const ctx = await readRecordContext(pbx.query, { pbxTenantNumber: LANDAU, mac: "EC:74:D7:20:1F:EA", extNumber: "101" });
   assert.deepEqual(ctx.existing!.boundDeviceIds, [DESK, null]);
   assert.ok(pbx.seen.some((s) => /provisioning\.accounts[\s\S]*ORDER BY id/.test(s)), "accounts must be read in order");
+});
+
+/* ── moving a record off another customer (2026-09-14) ───────────────────── */
+
+const RIG_PUBLIC = "50.48.58.53";
+/** Izzy's GXP2170: provisioning.devices id 24 on tenant 7, bound to ombu device 29 (`106`). */
+const GXP_106 = {
+  pbxTenantNumber: LANDAU, mac: "c0:74:ad:8c:65:4e", vendor: "grandstream", model: "GXP2170", extNumber: "101",
+  discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC,
+};
+function heldByCreateABox() {
+  return fakePbx({
+    devices: [{ id: 24, mac: "c0:74:ad:8c:65:4e", tenant: 7, model_id: 64, template_id: 16 }],
+    accounts: [{ device_id: 24, phone_device_id: 29 }],
+    templates: [{ id: 16, model_id: 64, tenant: 7, shared: "no" }],
+    boundDevices: [{ device_id: 29, user: "106", tenant_id: 7 }],
+  });
+}
+const reg = (contactUri: string) => ({ endpoint: "T7_106", status: "REGISTERED", lastRegisteredAt: new Date(), contactUri });
+
+test("another company's extension in use by a DIFFERENT device refuses the move and writes nothing", async () => {
+  const asked: string[][] = [];
+  const w = writer({
+    registrations: async (eps: string[]) => {
+      asked.push(eps);
+      return [reg("sip:T7_106@45.14.194.179:5060;x-ast-orig-host=192.168.8.160:5060")];
+    },
+  }, heldByCreateABox());
+  const out = await ensureProvisioningRecord(w.deps, GXP_106);
+  assert.equal(out.kind, "refused");
+  if (out.kind !== "refused") return;
+  assert.equal(out.reason, "held_by_another_account");
+  assert.deepEqual(asked, [["T7_106"]], "the bare `106` must be composed into the endpoint the PBX actually names");
+  assert.equal(w.saved.length, 0);
+  assert.equal(w.rehomes.length, 0, "nothing moved, so nothing may be recorded as moved");
+  assert.ok(!/tenant|T\d+_|another company|create a box/i.test(out.customerMessage), out.customerMessage);
+});
+
+test("the only live registration being THIS handset on THIS network lets the move happen", async () => {
+  const w = writer({
+    registrations: async () => [reg("sip:T7_106@50.48.58.53:36493;x-ast-orig-host=192.168.6.171:5060")],
+  }, heldByCreateABox());
+  const out = await ensureProvisioningRecord(w.deps, GXP_106);
+  assert.equal(out.kind, "written");
+  assert.equal(w.rehomes.length, 1);
+  assert.equal(w.saved[0].phoneId, 24, "UPDATE the row — a MAC may exist exactly once");
+});
+
+test("the same claim from another network is refused — a LAN address alone proves nothing", async () => {
+  const w = writer({
+    registrations: async () => [reg("sip:T7_106@50.48.58.53:36493;x-ast-orig-host=192.168.6.171:5060")],
+  }, heldByCreateABox());
+  const out = await ensureProvisioningRecord(w.deps, { ...GXP_106, requesterIp: "203.0.113.9" });
+  // ⛔ The REASON is asserted, not just "refused": replayed against the previous writer,
+  // a bare kind check passed for the wrong reason ("no desk device").
+  assert.equal(out.kind === "refused" && out.reason, "held_by_another_account");
+  assert.equal(w.saved.length, 0);
+});
+
+test("registration state that cannot be read refuses the move", async () => {
+  const w = writer({ registrations: async () => { throw new Error("db down"); } }, heldByCreateABox());
+  const out = await ensureProvisioningRecord(w.deps, GXP_106);
+  assert.equal(out.kind === "refused" && out.reason, "held_by_another_account");
+  assert.equal(w.saved.length, 0);
+});
+
+test("no registration source at all refuses the move — never allowed on missing evidence", async () => {
+  const w = writer({ registrations: undefined }, heldByCreateABox());
+  const out = await ensureProvisioningRecord(w.deps, GXP_106);
+  assert.equal(out.kind === "refused" && out.reason, "held_by_another_account");
+  assert.equal(w.saved.length, 0);
+});
+
+test("a bound-device read that fails leaves everything untouched", async () => {
+  const pbx = fakePbx({
+    devices: [{ id: 24, mac: "c0:74:ad:8c:65:4e", tenant: 7, model_id: 64, template_id: 16 }],
+    accounts: [{ device_id: 24, phone_device_id: 29 }],
+    templates: [{ id: 16, model_id: 64, tenant: 7, shared: "no" }],
+    failOn: /device_id IN \(/,
+  });
+  const w = writer({}, pbx);
+  const out = await ensureProvisioningRecord(w.deps, GXP_106);
+  assert.equal(out.kind, "unavailable");
+  assert.equal(w.saved.length, 0);
+});
+
+test("a phone that is not being moved never asks about registrations", async () => {
+  let asked = 0;
+  const w = writer({ registrations: async () => { asked += 1; return []; } });
+  await ensureProvisioningRecord(w.deps, YEALINK);
+  assert.equal(asked, 0, "only a MOVE needs proof of presence");
 });

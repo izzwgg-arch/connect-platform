@@ -23,11 +23,13 @@
 // moduleResolution that cannot resolve that subpath — it works in the portal only, and
 // using it here is a build error that reads like a missing export.
 import {
+  decideRehome,
   normalizeMac,
   planProvisioningRecord,
   type PbxPhoneRecord,
   type PbxTemplate,
   type RecordPlan,
+  type RehomeRegistration,
 } from "@connect/shared";
 
 /** The narrowest thing a query source has to be, so tests need no database. */
@@ -114,11 +116,16 @@ export async function readRecordContext(
       [args.pbxTenantNumber],
     );
     liveDeviceIds = (rows ?? []).map((r: any) => Number(r.device_id)).filter((n) => Number.isFinite(n) && n > 0);
-    // ⛔⛔ THE DESK ENDPOINT IS `T<n>_<ext>` AND THE SOFTPHONE IS `T<n>_<ext>_1`.
+    // ⛔⛔ `ombu_devices.user` IS THE BARE EXTENSION: the desk device is `101` and the
+    // softphone is `101_1`. The PBX composes the endpoint name `T<n>_101` itself; the
+    // column never carries the prefix (live census 2026-09-14: 158 pjsip devices, 0
+    // prefixed). This line first matched `T21_101`, copied from an invented test
+    // fixture, and would have refused EVERY real write as "no desk device".
     // Matching loosely would bind the handset to the softphone's credentials, so the
-    // desk phone and the app would fight over one registration. Exact string, always.
-    const want = `T${args.pbxTenantNumber}_${String(args.extNumber).trim()}`;
-    const desk = (rows ?? []).find((r: any) => String(r.user ?? "") === want);
+    // desk phone and the app would fight over one registration. Exact string, always —
+    // the tenant is already fixed by the join above.
+    const want = String(args.extNumber).trim();
+    const desk = (rows ?? []).find((r: any) => String(r.user ?? "").trim() === want);
     deskDeviceId = desk ? Number(desk.device_id) : null;
   } catch {
     deskDeviceId = null;
@@ -153,6 +160,12 @@ export type RecordWriterDeps = {
    * previous tenant is written down. Three of the four phones on Izzy's own desk hit it.
    */
   auditRehome?: (info: { mac: string; fromTenant: number; toTenant: number; extNumber: string }) => Promise<void> | void;
+  /**
+   * The api's live registration mirror for these endpoints (`T<n>_<ext>`). Consulted
+   * only when a write would MOVE a record off another account. ⛔ Absent or throwing
+   * means the move is REFUSED — a move is never allowed on missing evidence.
+   */
+  registrations?: (endpoints: string[]) => Promise<RehomeRegistration[]>;
   log?: (line: string) => void;
 };
 
@@ -172,6 +185,10 @@ export async function ensureProvisioningRecord(
     model: string | null;
     extNumber: string;
     lineKeys?: number;
+    /** Where our own scan saw the handset on the customer's LAN. */
+    discoveredIp?: string | null;
+    /** The public address the customer's own computer reached us from. */
+    requesterIp?: string | null;
   },
 ): Promise<RecordOutcome> {
   const log = deps.log ?? (() => {});
@@ -232,6 +249,66 @@ export async function ensureProvisioningRecord(
         "Loopcom needs to add a settings profile for this model of phone before it can be set up. " +
         "We can see it on your network and we will finish it for you.",
     };
+  }
+
+  // ⛔⛔ MOVING A RECORD OFF ANOTHER CUSTOMER NEEDS PROOF IT IS STALE (2026-09-14).
+  // "This phone is on my network" is reported by the customer's OWN computer and the
+  // server cannot verify it, so without this any customer with the desk-phone permission
+  // could name another company's working handset and silently re-point it. The rule
+  // lives in `decideRehome`: moved only when nothing live uses the other extension, or
+  // when the only live registration there IS this handset on this network. Anything
+  // unreadable refuses — a stale row left for Support costs a phone call; a live phone
+  // taken costs another customer their line.
+  if (plan.rehomedFromTenant != null) {
+    const bound = (ctx.existing?.boundDeviceIds ?? []).filter(
+      (d): d is number => typeof d === "number" && d > 0,
+    );
+    let boundEndpoints: string[] = [];
+    if (bound.length) {
+      try {
+        const rows = await query(
+          `SELECT od.device_id AS device_id, od.user AS user, e.tenant_id AS tenant_id
+             FROM ombutel.ombu_devices od
+             JOIN ombutel.ombu_extensions e ON e.extension_id = od.extension_id
+            WHERE od.device_id IN (${bound.map(() => "?").join(", ")})`,
+          bound,
+        );
+        // ⛔ `user` is the bare extension (`106`); the PBX names the endpoint `T7_106`.
+        boundEndpoints = (rows ?? [])
+          .map((r: any) => `T${Number(r.tenant_id)}_${String(r.user ?? "").trim()}`)
+          .filter((ep: string) => /^T\d+_\S+$/.test(ep));
+      } catch (e: any) {
+        return { kind: "unavailable", detail: `could not read the other account's extension: ${e?.message || String(e)}` };
+      }
+    }
+    let registrations: RehomeRegistration[] | null = null;
+    if (boundEndpoints.length && deps.registrations) {
+      try {
+        registrations = await deps.registrations(boundEndpoints);
+      } catch {
+        registrations = null;
+      }
+    }
+    const decision = decideRehome({
+      boundEndpoints,
+      registrations,
+      discoveredIp: args.discoveredIp ?? null,
+      requesterIp: args.requesterIp ?? null,
+      now: new Date(),
+    });
+    if (!decision.allow) {
+      log(`record move refused: held by tenant ${plan.rehomedFromTenant} — ${decision.why}`);
+      return {
+        kind: "refused",
+        reason: "held_by_another_account",
+        explain: `${plan.mac} is recorded under PBX tenant ${plan.rehomedFromTenant} and was NOT moved: ${decision.why}`,
+        // ⛔ Never tells the customer another company holds this phone — that is an
+        // audit fact for us, not something their screen should learn.
+        customerMessage:
+          "Loopcom Support needs to finish setting up this phone for you. Your other phones keep going.",
+      };
+    }
+    log(`record move allowed: ${decision.why}`);
   }
 
   // ⛔ AUDIT BEFORE THE WRITE. If the save lands and the audit then fails, the record

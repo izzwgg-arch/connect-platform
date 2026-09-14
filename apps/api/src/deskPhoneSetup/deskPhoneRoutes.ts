@@ -30,9 +30,20 @@ import { ensureProvisioningRecord, type RecordOutcome, type RecordQuery } from "
 import { resolvePbxRouteHelperConfig } from "@connect/integrations";
 import { consoleSavePhone } from "../pbxInboundRouteHelperClient";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
+import { clientIpFromForwardedFor } from "../loginThrottle";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
+
+/**
+ * The public address the customer's own computer reached us from: the LAST
+ * X-Forwarded-For entry, because earlier entries are whatever the client sent.
+ * null when unknown — which the record-move rule treats as unprovable, never as a match.
+ */
+const requesterIpOf = (req: any): string | null => {
+  const ip = clientIpFromForwardedFor(req?.headers?.["x-forwarded-for"]);
+  return ip && ip !== "unknown" ? ip : null;
+};
 
 export type DeskPhoneDeps = {
   audit: (p: {
@@ -84,6 +95,10 @@ export type DeskPhoneDeps = {
     vendor: string | null;
     model: string | null;
     extNumber: string;
+    /** Where our own scan saw the handset on the customer's LAN. */
+    discoveredIp?: string | null;
+    /** The public address the customer's computer reached us from (last XFF entry). */
+    requesterIp?: string | null;
   }) => Promise<RecordOutcome>;
 };
 
@@ -208,6 +223,8 @@ async function defaultEnsureRecord(args: {
   vendor: string | null;
   model: string | null;
   extNumber: string;
+  discoveredIp?: string | null;
+  requesterIp?: string | null;
 }): Promise<RecordOutcome> {
   const link = await db.tenantPbxLink.findUnique({ where: { tenantId: args.tenantId } });
   if (!link?.pbxInstanceId) return { kind: "unavailable", detail: "this account is not linked to a phone system" };
@@ -244,8 +261,20 @@ async function defaultEnsureRecord(args: {
           },
         });
       },
+      // ⛔ The live registration mirror, consulted ONLY when a write would move a record
+      // off another account: it is the evidence that the other extension is not in use.
+      registrations: async (endpoints) => {
+        const rows = await db.pbxEndpointRegistration.findMany({
+          where: { endpoint: { in: endpoints } },
+          select: { endpoint: true, status: true, lastRegisteredAt: true, contactUri: true },
+        });
+        return rows as any;
+      },
     },
-    { pbxTenantNumber, mac: args.mac, vendor: args.vendor, model: args.model, extNumber: args.extNumber },
+    {
+      pbxTenantNumber, mac: args.mac, vendor: args.vendor, model: args.model, extNumber: args.extNumber,
+      discoveredIp: args.discoveredIp ?? null, requesterIp: args.requesterIp ?? null,
+    },
   ).finally(() => {
     try { conn?.end?.(); } catch { /* already gone */ }
   });
@@ -661,6 +690,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           vendor: phone.vendor ?? null,
           model: phone.model ?? null,
           extNumber: String(ext.extNumber),
+          discoveredIp: phone.ipAddress ?? null,
+          requesterIp: requesterIpOf(req),
         });
       } catch (e: any) {
         record = { kind: "unavailable", detail: e?.message || String(e) };
@@ -760,6 +791,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           vendor: picked.vendor,
           model: picked.model,
           extNumber: String(updated.extNumber),
+          discoveredIp: phone.ipAddress ?? null,
+          requesterIp: requesterIpOf(req),
         });
         if (record.kind === "refused") {
           updated = await db.deskPhoneSetupPhone.update({
@@ -884,6 +917,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           vendor: phone.vendor ?? null,
           model: phone.model ?? null,
           extNumber: String(updated.extNumber),
+          discoveredIp: phone.ipAddress ?? null,
+          requesterIp: requesterIpOf(req),
         });
         if (record.kind === "refused") {
           await db.deskPhoneSetupPhone.update({

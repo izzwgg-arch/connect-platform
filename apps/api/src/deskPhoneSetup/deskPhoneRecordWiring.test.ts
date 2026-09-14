@@ -153,6 +153,9 @@ test("assigning a phone writes its record — the chicken and egg", async () => 
   assert.equal(calls.length, 1, "the record must be written the moment the person chooses");
   assert.deepEqual(calls[0], {
     tenantId: "t_abc", mac: "805ec0b3b2d0", vendor: "yealink", model: "T53W", extNumber: "101",
+    // ⛔ Where our scan saw it, and — with no forwarded header — an unknown customer
+    // address, which the move rule can never read as proof of presence.
+    discoveredIp: "192.168.6.170", requesterIp: null,
   });
   assert.equal(phone.state, "ASSIGNED");
 });
@@ -565,4 +568,48 @@ test("a PBX that cannot be read still arms the run's own phones", async () => {
   await assignedPhone(app, runId, YEALINK);
   const cfg = body(await app.inject({ method: "GET", url: "/desk-phones/pnp-config" }));
   assert.deepEqual(cfg.macs, ["805ec0b3b2d0"]);
+});
+
+/* ── proof of presence for a record move (2026-09-14) ─────────────────────── */
+
+test("the writer is told where our scan saw the phone and where the customer's computer is", async () => {
+  reset();
+  const calls: any[] = [];
+  const app = await makeApp(CUSTOMER, {
+    ensureRecord: async (a: any) => {
+      calls.push(a);
+      return { kind: "written", phoneId: 1, rehomedFromTenant: null, rebound: false, explain: "" };
+    },
+  });
+  const runId = await startRun(app);
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/discovered`,
+    payload: { subnet: "192.168.6.0/22", phones: [YEALINK] },
+  });
+  const phone = state.phones[state.phones.length - 1];
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`,
+    payload: { extensionId: "e1" },
+    headers: { "x-forwarded-for": "6.6.6.6, 50.48.58.53" },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].discoveredIp, "192.168.6.170");
+  // ⛔ The LAST entry: nginx appends the real peer, earlier entries are whatever the client typed.
+  assert.equal(calls[0].requesterIp, "50.48.58.53");
+});
+
+test("every route that writes a record passes proof of presence, not just assign", () => {
+  // ⛔ Reads the SOURCE: a route that forgot these would still write, and the move rule
+  // would silently refuse every legitimate move from that route — or, worse, a future
+  // default that treated "absent" as a match would accept every forged one.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = String(fs.readFileSync(path.join(__dirname, "deskPhoneRoutes.ts"), "utf8")).replace(/\r\n/g, "\n");
+  const sites = src.split("(deps.ensureRecord ?? defaultEnsureRecord)(").slice(1);
+  assert.equal(sites.length, 3, "assign, identify and retry");
+  for (const s of sites) {
+    const call = s.slice(0, s.indexOf("});"));
+    assert.match(call, /discoveredIp: phone\.ipAddress \?\? null/);
+    assert.match(call, /requesterIp: requesterIpOf\(req\)/);
+  }
 });

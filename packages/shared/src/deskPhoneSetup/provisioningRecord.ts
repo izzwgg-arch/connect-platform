@@ -437,3 +437,114 @@ export function pnpArmList(
   }
   return out;
 }
+
+/* ── moving a record off another customer ─────────────────────────────────── */
+
+/** How recently a registration still counts as somebody USING that extension. */
+export const REHOME_LIVE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** One row of the api's live registration mirror, reduced to what decides a move. */
+export type RehomeRegistration = {
+  /** `T<tenant>_<ext>` as the PBX names the endpoint. */
+  endpoint: string;
+  status: string | null;
+  lastRegisteredAt: Date | string | null;
+  /** e.g. `sip:T7_106@50.48.58.53:36493;x-ast-orig-host=192.168.6.171:5060`. */
+  contactUri: string | null;
+};
+
+export type RehomeEvidence = {
+  /** The endpoints the OTHER account's record is bound to that still exist. */
+  boundEndpoints: string[];
+  /** null = the registration state could not be read. */
+  registrations: RehomeRegistration[] | null;
+  /** Where our own scan saw this handset on the customer's LAN. */
+  discoveredIp: string | null;
+  /** The public address the customer's own computer reached us from. */
+  requesterIp: string | null;
+  now: Date;
+  windowMs?: number;
+};
+
+export type RehomeDecision = { allow: boolean; why: string };
+
+const cleanHost = (h: string | null | undefined): string | null => {
+  const v = String(h ?? "").trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return v || null;
+};
+
+/**
+ * The two addresses Asterisk records for a registered contact: the public one the
+ * REGISTER arrived from, and the phone's own LAN address, which `rewrite_contact`
+ * preserves as `x-ast-orig-host`.
+ */
+export function contactAddresses(contactUri: string | null | undefined): {
+  publicHost: string | null;
+  lanHost: string | null;
+} {
+  const uri = String(contactUri ?? "");
+  const pub = /@(\[[^\]]+\]|[^:;>\s]+)/.exec(uri);
+  const lan = /x-ast-orig-host=(\[[^\]]+\]|[^:;>\s]+)/i.exec(uri);
+  return { publicHost: cleanHost(pub?.[1]), lanHost: cleanHost(lan?.[1]) };
+}
+
+/**
+ * May a phone's record be taken off the account it is recorded under?
+ *
+ * ⛔⛔ THE HOLE THIS CLOSES, found 2026-09-14 before the record writer ever shipped.
+ * "This phone is on my network" is reported by the customer's OWN computer and the
+ * server cannot verify it. Moving a record on that word alone would let any customer
+ * with the desk-phone permission name another company's working handset and silently
+ * re-point it — the victim's desk phone would fetch the claimant's settings at its next
+ * boot and stop ringing for its owner.
+ *
+ * ⛔ So a move is allowed only when it is PROVABLY stale:
+ *   - the other record is bound to no extension that still exists, or
+ *   - nothing has registered on its extension inside the window, or
+ *   - the ONLY live registration there is this very handset: its LAN address matches
+ *     our scan AND its public address matches the customer's own computer. A forger
+ *     would have to be sitting inside that office to satisfy both.
+ * Everything else — including anything we could not read — refuses. A stale row left
+ * for Support costs a phone call; a live phone taken costs another customer their line.
+ *
+ * Measured on Izzy's rig the same day, which is why the third branch exists: his
+ * GXP2170 at 192.168.6.171 is live as Create A Box ext 106 from his own public address,
+ * while Create A Box's REAL ext 102 is their office phone behind their tunnel.
+ */
+export function decideRehome(e: RehomeEvidence): RehomeDecision {
+  const bound = [...new Set((e.boundEndpoints ?? []).map((s) => String(s).trim()).filter(Boolean))];
+  if (!bound.length) {
+    return { allow: true, why: "the other account's record is bound to no extension that still exists" };
+  }
+  if (!e.registrations) {
+    return { allow: false, why: "the registration state of the other account's extension could not be read" };
+  }
+  const windowMs = e.windowMs ?? REHOME_LIVE_WINDOW_MS;
+  const nowMs = e.now.getTime();
+  const live = e.registrations.filter((r) => {
+    if (!r || !bound.includes(String(r.endpoint))) return false;
+    if (String(r.status ?? "").toUpperCase() === "REGISTERED") return true;
+    const t = r.lastRegisteredAt == null ? NaN : new Date(r.lastRegisteredAt).getTime();
+    return Number.isFinite(t) && nowMs - t <= windowMs;
+  });
+  if (!live.length) {
+    return {
+      allow: true,
+      why: `nothing has registered on ${bound.join(", ")} in the last ${Math.round(windowMs / 86_400_000)} days`,
+    };
+  }
+  const discovered = cleanHost(e.discoveredIp);
+  const requester = cleanHost(e.requesterIp);
+  const strangers = live.filter((r) => {
+    const { publicHost, lanHost } = contactAddresses(r.contactUri);
+    return !(discovered && requester && lanHost === discovered && publicHost === requester);
+  });
+  if (!strangers.length) {
+    return {
+      allow: true,
+      why: `the only live registration on ${live.map((r) => r.endpoint).join(", ")} is this handset (${discovered}) on this customer's own network (${requester})`,
+    };
+  }
+  const s = strangers[0];
+  return { allow: false, why: `${s.endpoint} is in use by another device (${s.contactUri ?? "no contact address"})` };
+}
