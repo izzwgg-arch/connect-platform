@@ -1,5 +1,9 @@
 ## ⛔⛔⛔ THE GATE — READ THE MD FILES BEFORE YOU START, UPDATE THEM BEFORE YOU FINISH. THIS IS THE FIRST THING IN THIS FILE BECAUSE IT IS THE BIGGEST GATE THERE IS.
 
+**Core project rule reaffirmed by Izzy, 2026-09-14:** Read `CLAUDE.md` freshly at the start of every user task, before doing the work. After finishing the work, update `CLAUDE.md` before the final response. Every task, every time, including small tasks, repository refreshes, and documentation-only work. A prior read or remembered summary is not a substitute. Reading these instructions is the necessary first action. This rule is also recorded at the top of `AGENTS.md` and in the persistent project memory `MEMORY.md`.
+
+**2026-09-14 rule-persistence task:** Added the explicit every-task rule to `AGENTS.md` and `MEMORY.md`, and reaffirmed it here. Documentation-only change; no runtime tests or deployment required. Existing unrelated local changes preserved.
+
 Izzy, 2026-09-11, verbatim: *"Never, ever, ever, ever start a task without reading the MD
 files. Never, ever finish a task without updating the MD files. Ever. It's the biggest
 gate out there."*
@@ -26,6 +30,54 @@ number's menu has **no working keys at all**, so every option that depended on r
 human through it was dead before the first edit. Three failed attempts, a live customer's
 main number re-pointed and reverted repeatedly, and Izzy had to give the instruction
 twice. ⛔ **Ten minutes of reading would have cost nothing and saved all of it.**
+
+## ⛔⛔ AGENT HANDOFF — ZERO-TOUCH YEALINK (RPS) PROVISIONING is built into the existing Desk Phone Wizard and deployed INERT; no Yealink credentials, no RPS call, no handset proof (2026-09-14) — READ FIRST before touching `apps/api/src/deskPhoneSetup/managedPhone*.ts` / `yealinkRps.ts` / `yealinkConfig.ts`, `/phone-provisioning/*`, `ManagedDeskPhone`, or before enabling Yealink RPS
+
+Full developer doc: **`docs/ai-context/AGENT_HANDOFF_YEALINK_MANAGED_PROVISIONING_2026-09-14.md`**
+(architecture, APIs, env vars, enable-LIVE steps, troubleshooting, limits). Memory:
+[[yealink-managed-provisioning-built-inert]]. DEPLOY STATE: see the last bullet.
+
+- **Shape:** a "Prepare a Yealink for delivery / manage phones" mode INSIDE the existing
+  wizard (`ManagedPhonePanel`) → `/desk-phones/managed*` → `ManagedPhoneService`
+  (manufacturer-agnostic, `DeskPhoneProvider`; `YealinkProvider` today) → persisted
+  `ManagedDeskPhone` (fleet-unique MAC, per-device AES-GCM secrets) → Yealink JSON RPS v1
+  (`YealinkRpsClient`, signature per the official doc) or `DisabledRps` → the phone fetches
+  `/api/phone-provisioning/<mac>/<mac>.cfg` with per-device HTTP Basic → registers the DESK
+  endpoint `T<n>_<ext>` using credentials READ from `ombu_devices` (bare `101`, never `_1`).
+  The office-scan/PnP/reset ladder is untouched.
+- ⛔ **Inert switches:** `MANAGED_PHONE_PROVISIONING_ENABLED=1` (master; unset → capabilities
+  `enabled:false`, handset route 404, management 503). RPS is live only when
+  `YEALINK_RPS_ENABLED=1` AND base URL (`https://*.yealink.com/`), access key id, secret and
+  server id are all set; otherwise devices record `rpsState: pending_credentials` — never a
+  claimed success. `YEALINK_RPS_MODE=test|mock` THROWS at runtime; the simulator
+  (`yealinkRpsSimulator.ts`) is test-only and a guard fails if runtime imports it.
+- ⛔ **Four statuses, never collapsed:** RPS assignment ≠ phone contacted (`lastSeenAt`) ≠
+  this config version delivered (`servedVersion == configVersion`, recorded in `onResponse`,
+  never at generation) ≠ `online` (fresh REGISTERED after delivery, same tenant/extension/desk
+  endpoint, AND the phone's MAC in the SIP UA/contact). ⛔ Yealink's stock SIP User-Agent has
+  no MAC, so real phones normally stop at `endpoint_registered_device_unverified`. Replacement
+  keeps the old phone until proven; with no MAC evidence it finishes ONLY via
+  `attestedWorking: true` (admin confirmed a call; audited) AND a post-delivery registration.
+- ⛔ **Security:** tenant from the token only (a body `tenantId` is a 400); foreign ids 404;
+  cross-tenant MAC (Loopcom row or PBX `provisioning.devices` row) = `device_ownership_conflict`;
+  same-MAC concurrent claims serialize on a Postgres advisory lock; RPS vendor bodies/fetch
+  errors never propagate or log; JWT bypass is an anchored handset-filename regex only;
+  handset IP = LAST `X-Forwarded-For` (`handsetSourceIp`), never `req.ip`.
+- ⛔ **FKs to Tenant and Extension are CASCADE** — the first draft used Restrict, which would
+  have blocked the removed-tenant erase (the ConnectChatThread class). Proven on real Postgres.
+- ✅ **Proven:** api `src/deskPhoneSetup/*.test.ts` 181 pass + 1 skipped; the real-PostgreSQL
+  test passes against a local 127.0.0.1:55439 DB (convergent claims, unique MAC, audit-FK
+  rollback, tenant cascade); migration drift = fresh DB (pre-change baseline dump + migration)
+  vs schema → `prisma migrate diff` **empty**; portal `managedPhoneStatus.test.ts` 3/3
+  (registered); typechecks api 84 = baseline, portal 0. PBX transports read (read-only):
+  UDP/TCP 5060, TLS 5061.
+- ⏳ **NOT PROVEN:** any live Yealink RPS call (no credentials; whether the 2019 JSON v1 API is
+  entitled for a 2026 account is unconfirmed), any handset check-in, any real registration via
+  this path. Limits imposed by Yealink: RPS redirects only at factory boot; reboot / factory
+  reset / firmware need YMCS (not integrated — capabilities report false). Enable steps: §7 of
+  the handoff; test on a designated test Yealink on Loopcom Demo only.
+- ⛔ `.managed-phone-test-pg/` (a running local Postgres data dir) and `.managed-phone-baseline.*`
+  are untracked scratch in the repo root — never commit them.
 
 ## ⛔⛔ AGENT HANDOFF — the desk-phone RECORD WRITER exists now, and two defects that would have broken it on day one were caught BEFORE it shipped (2026-09-14) — READ FIRST before touching `provisioningRecordWriter.ts`, before letting ANY route write another tenant's PBX data, before writing a PBX test fixture, or before assigning one of Izzy's rig phones in the wizard
 

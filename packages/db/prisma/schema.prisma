@@ -1009,6 +1009,7 @@ model Tenant {
   lanDiscoveredPhones             LanDiscoveredPhone[]
   deskPhoneSetupRuns              DeskPhoneSetupRun[]
   deskPhoneSetupPhones            DeskPhoneSetupPhone[]
+  managedDeskPhones               ManagedDeskPhone[]
   voicemailEmailRecipients        VoicemailEmailRecipient[]
   videoMeetings                   VideoMeeting[]
   /// Loopcom Direct — the per-company off switch. See LoopcomDirectIdentity:
@@ -2848,6 +2849,7 @@ model WebrtcPlatformOutageDismissal {
 
 model Extension {
   id                       String                   @id @default(cuid())
+  managedDeskPhones        ManagedDeskPhone[]
   tenantId                 String
   extNumber                String
   displayName              String
@@ -8179,6 +8181,47 @@ model LoopcomDirectBlock {
 // phone coming back on a different address. Losing our place must never turn
 // into wiping somebody's phone a second time.
 // ---------------------------------------------------------------------------
+
+/// Persistent inventory; setup phone rows remain per-run and are not migrated/deleted.
+model ManagedDeskPhone {
+  id String @id @default(cuid())
+  macAddress String @unique
+  tenantId String
+  extensionId String
+  manufacturer String
+  model String
+  nickname String?
+  displayName String?
+  serialNumber String?
+  endpoint String
+  configVersion Int @default(1)
+  options Json @default("{}")
+  /// AES-GCM envelope; unique provisioning + administrator passwords. Never SIP credentials.
+  secretsEncrypted String
+  rpsState String @default("pending_credentials")
+  rpsDeviceId String?
+  rpsServerId String?
+  lastError String?
+  lastSeenAt DateTime?
+  lastProvisionedAt DateTime?
+  servedVersion Int?
+  sourceIp String?
+  userAgent String?
+  firmware String?
+  retiredAt DateTime?
+  /// The predecessor remains active until device-specific registration is verified.
+  replacesId String? @unique
+  createdBy String
+  updatedBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// ⛔ Cascade, never Restrict: a Restrict FK here blocks the removed-tenant erase
+  /// (pbxOrphanTenantSweep) exactly like the old ConnectChatThread one did. The
+  /// AuditLog trail is the durable record of what the phone was.
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  @@index([tenantId, retiredAt])
+}
 
 model DeskPhoneSetupRun {
   id       String @id @default(cuid())

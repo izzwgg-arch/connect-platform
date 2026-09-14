@@ -306,6 +306,8 @@ import { registerCoworkerTaskRoutes } from "./coworkerTaskRoutes";
 import { registerRemoteDesktopRoutes } from "./remoteDesktopRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
+import { registerManagedPhoneRoutes } from "./deskPhoneSetup/managedPhoneRoutes";
+import { registerManagedPhoneMetrics } from "./deskPhoneSetup/managedPhoneMetrics";
 import { registerSupermarketRoutes } from "./supermarket/supermarketRoutes";
 import { crmModeEnforcementHook } from "./supermarket/crmMode";
 import { runCatalogSyncSweep, CATALOG_SYNC_BOOT_DELAY_MS, CATALOG_SYNC_DEFAULT_INTERVAL_MS } from "./supermarket/catalogSync";
@@ -5440,6 +5442,7 @@ function androidApkPublicUrl(): string {
 
 // ── Prometheus metrics ────────────────────────────────────────────────────────
 const apiRegistry = new Registry();
+registerManagedPhoneMetrics(apiRegistry);
 apiRegistry.setDefaultLabels({ service: "api" });
 collectDefaultMetrics({ register: apiRegistry });
 
@@ -42469,6 +42472,7 @@ const port = Number(process.env.PORT || 3001);
   // ⛔ Desk phone setup. The office machine discovers and performs; every decision
   // -- may this phone be touched, may it be wiped, what is the customer told -- is
   // made here, where the customer, the permissions and the audit trail live.
+  await registerManagedPhoneRoutes(app);
   await registerDeskPhoneSetupRoutes(app, {
     audit,
     ourProvisioningHosts: () => [

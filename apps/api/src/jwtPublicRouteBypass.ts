@@ -6,6 +6,9 @@
  */
 export function shouldSkipJwtVerification(path: string): boolean {
   const pathWithoutApiPrefix = path.startsWith("/api/") ? path.slice(4) : path;
+  // Handsets authenticate with per-device HTTP Basic in the handler. Anchored
+  // filename grammar; no management API is included in this exception.
+  if (/^\/phone-provisioning\/[0-9a-f]{12}\/(?:[0-9a-f]{12}\.(?:cfg|boot)|y[0-9]{12}\.(?:cfg|boot))$/i.test(pathWithoutApiPrefix)) return true;
   // Reverse proxies often mount the API under a prefix (e.g. /api/...); req.url keeps that prefix.
   // ⛔ `/admin/dev/generate-observe-token` was on this list until 2026-08-18.
   // Being here is what made it run ANONYMOUSLY, and nginx proxies `/api/` with

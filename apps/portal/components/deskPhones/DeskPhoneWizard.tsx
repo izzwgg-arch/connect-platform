@@ -29,6 +29,7 @@ import {
 } from "@connect/shared";
 import { orderPhonesByMake, toldUsPhrase } from "./makeHint";
 import { IdentityPicker, StickerDrawing } from "./PhoneIdentity";
+import { ManagedPhonePanel } from "./ManagedPhonePanel";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
@@ -134,6 +135,15 @@ function describe(model: string | null): string {
 export const LIVE_NO_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000;
 
 export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
+  const [managedMode, setManagedMode] = useState(false);
+  const [managedModels, setManagedModels] = useState<{ model: string }[]>([]);
+  useEffect(() => {
+    let active = true;
+    apiGet<{ enabled: boolean; models: { model: string }[] }>("/desk-phones/managed/capabilities")
+      .then(result => { if (active && result.enabled) setManagedModels(result.models); })
+      .catch(() => { /* Existing office setup remains available. */ });
+    return () => { active = false; };
+  }, []);
   const [step, setStep] = useState<Step>("welcome");
   const [runId, setRunId] = useState<string | null>(null);
   const [phones, setPhones] = useState<CustomerPhone[]>([]);
@@ -536,10 +546,12 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        {step === "welcome" && (
+        {managedMode && <ManagedPhonePanel models={managedModels} onBack={() => setManagedMode(false)} />}
+        {step === "welcome" && !managedMode && (
           <>
             <div className="dps-wz-body">
               <h3>Let&rsquo;s set up your desk phones</h3>
+              {managedModels.length > 0 && <button className="dps-btn" onClick={() => setManagedMode(true)}>Prepare a Yealink for delivery / manage phones</button>}
               <p className="dps-sub">
                 Loopcom will look for the desk phones in your office and connect them to your account.
                 It usually takes about five minutes, and we will tell you before anything on a phone changes.
