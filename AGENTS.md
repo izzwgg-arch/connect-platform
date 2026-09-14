@@ -1,3 +1,11 @@
+# Core project rule — every task, every time
+
+Owner instruction reaffirmed 2026-09-14. Applies to every agent working on Loopcom / Connect.
+
+1. Read the repository's `CLAUDE.md` at the start of **every user task**, before investigation, commands, or edits. Reading the instructions themselves is the necessary first action. Prior reads, summaries, and memory do not replace a fresh read.
+2. After completing the work, update the docs **before the final response**, recording the outcome, verification, and anything still unresolved. This applies even to small tasks, repository refreshes, and documentation-only tasks. ⛔ Since 2026-09-14 `CLAUDE.md` holds ONLY standing rules + a one-line-per-area HANDOFF INDEX: write the details to that area's file in `docs/ai-context/claude-md-sections/` (and its full `AGENT_HANDOFF_*.md`), then add/refresh its single index line in `CLAUDE.md`. Never paste a handoff section into `CLAUDE.md` — it is loaded into every session and must stay under 80 KB.
+3. Keep this rule in persistent project memory (`MEMORY.md`). Do not wait for the user to remind you. Name the updated documentation in the final response.
+
 # Cursor Agent Deployment Rules
 
 > Read this file **before every deploy-related action**. It applies to all Cursor
