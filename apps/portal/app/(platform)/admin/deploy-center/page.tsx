@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { useDeployPolling } from "../../../../hooks/useDeployPolling";
+import { deployPollFailure, type DeployPollResult } from "../../../../lib/deployPolling";
 import { apiGet, apiPost, ApiError } from "../../../../services/apiClient";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,7 +48,7 @@ type QueueStatus = {
 
 type JobsResponse = { jobs: JobRow[] };
 type JobResponse = { job: JobRow; logTail?: string | null };
-type LogResponse = { id: string; lines: number; text: string };
+type LogResponse = { id: string; lines: number; text: string; pending?: boolean; available?: boolean };
 type EnqueueResponse = { job: JobRow };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -671,47 +673,57 @@ function JobRow({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function LogDrawer({
-  job, onClose,
+  job, onClose, statusStale,
 }: {
   job: JobRow | null;
   onClose: () => void;
+  statusStale: boolean;
 }) {
   const [logText, setLogText] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [lines, setLines] = useState(200);
   const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const isRunning = job?.status === "running" || job?.status === "queued";
-
-  const fetchLog = useCallback(async (silent = false) => {
-    if (!job) return;
-    if (!silent) setLogLoading(true);
-    setLogError(null);
-    try {
-      const resp = await apiGet<LogResponse>(`/admin/deploy/jobs/${job.id}/log?lines=${lines}`);
-      setLogText(resp.text);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : String(e);
-      if (msg.includes("log_not_available")) {
-        setLogText("Log not yet available. Job may still be initialising.");
-      } else {
-        setLogError(msg);
-      }
-    } finally {
-      setLogLoading(false);
-    }
-  }, [job, lines]);
+  const [logRetry, setLogRetry] = useState(0);
+  const jobId = job?.id;
+  const jobStatus = job?.status;
+  const requestKey = `${jobId}:${jobStatus}:${lines}:${logRetry}`;
+  const latestRequestKey = useRef(requestKey);
+  latestRequestKey.current = requestKey;
+  const isRunning = jobStatus === "running";
 
   useEffect(() => {
-    if (!job) return;
-    void fetchLog();
-    if (isRunning) {
-      timerRef.current = setInterval(() => { void fetchLog(true); }, 3000);
+    setLogText(null);
+    setLogError(null);
+    setLogLoading(false);
+  }, [jobId, lines]);
+
+  const fetchLog = useCallback(async (): Promise<DeployPollResult> => {
+    if (!jobId) return "stop";
+    if (jobStatus === "queued") {
+      setLogText("Waiting in the queue. The log will appear when this deployment starts.");
+      setLogError(null);
+      return "stop";
     }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [job, fetchLog, isRunning]);
+    setLogLoading(true);
+    try {
+      const resp = await apiGet<LogResponse>(`/admin/deploy/jobs/${jobId}/log?lines=${lines}`);
+      if (latestRequestKey.current !== requestKey) return "stop";
+      setLogText(resp.text);
+      setLogError(null);
+      if (jobStatus !== "running") return "stop";
+      return resp.pending ? "retry" : "ok";
+    } catch (e) {
+      if (latestRequestKey.current !== requestKey) return "stop";
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setLogError(`Updates unavailable. Any displayed log is from the last successful check. ${msg}`);
+      return deployPollFailure(e);
+    } finally {
+      if (latestRequestKey.current === requestKey) setLogLoading(false);
+    }
+  }, [jobId, jobStatus, lines, requestKey]);
+
+  useDeployPolling(fetchLog, requestKey, !!jobId);
 
   async function copyLog() {
     if (!logText) return;
@@ -752,9 +764,10 @@ function LogDrawer({
               {job.id.slice(0, 12)}… · branch: {job.branch}
               {job.dryRun && <span style={{ color: C.info, marginLeft: 8 }}>dry run</span>}
             </div>
+            {statusStale && <div role="alert" style={{ color: C.crit, marginTop: 8 }}>Job updates unavailable. This status may be outdated.</div>}
             {isRunning && (
               <div style={{ fontSize: 11, color: C.warn, marginTop: 4 }}>
-                ⚡ Auto-refreshing every 3 seconds…
+                {logError ? "Log updates unavailable" : "Updates every 10 seconds while this tab is visible"}
               </div>
             )}
           </div>
@@ -799,8 +812,8 @@ function LogDrawer({
             </div>
           )}
           {logError && (
-            <div style={{ padding: 20, color: C.crit, fontSize: 12 }}>
-              Failed to load log: {logError}
+            <div role="alert" style={{ padding: 20, color: C.crit, fontSize: 12 }}>
+              {logError}
             </div>
           )}
           {logText != null && (
@@ -824,7 +837,7 @@ function LogDrawer({
             Duration: {fmtDuration(job.duration)}
             {job.skipReason && <> · Skip: <span style={{ color: C.purple }}>{job.skipReason}</span></>}
           </div>
-          <Btn variant="ghost" small onClick={() => void fetchLog()}>↻ Reload</Btn>
+          <Btn variant="ghost" small disabled={logLoading || jobStatus === "queued"} onClick={() => setLogRetry((n) => n + 1)}>↻ Reload</Btn>
         </div>
       </div>
     </>
@@ -848,47 +861,44 @@ export default function DeployCenterPage() {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [logJob, setLogJob] = useState<JobRow | null>(null);
 
-  const statusTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const jobsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+  const [pollRetry, setPollRetry] = useState(0);
 
-  const fetchStatus = useCallback(async (silent = false) => {
+  const fetchStatus = useCallback(async (silent = false): Promise<DeployPollResult> => {
     if (!silent) setLoadingStatus(true);
     else setRefreshing(true);
-    setStatusError(null);
     try {
       const r = await apiGet<QueueStatus>("/admin/deploy/status");
       setStatus(r);
+      setStatusError(null);
       setLastUpdated(new Date().toLocaleTimeString());
+      return "ok";
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
-      setStatusError(msg);
+      setStatusError(`Updates unavailable; displayed status may be outdated. ${msg}`);
+      return deployPollFailure(e);
     } finally {
       setLoadingStatus(false);
       setRefreshing(false);
     }
   }, []);
 
-  const fetchJobs = useCallback(async () => {
+  const fetchJobs = useCallback(async (): Promise<DeployPollResult> => {
     try {
       const r = await apiGet<JobsResponse>("/admin/deploy/jobs?limit=50");
       setJobs(r.jobs);
-    } catch {
-      /* silently skip job refresh errors */
+      setJobsError(null);
+      return "ok";
+    } catch (e) {
+      setJobsError("Job updates unavailable. The listed states are from the last successful check.");
+      return deployPollFailure(e);
     }
   }, []);
 
-  useEffect(() => {
-    void fetchStatus();
-    void fetchJobs();
-
-    statusTimerRef.current = setInterval(() => { void fetchStatus(true); }, 5000);
-    jobsTimerRef.current = setInterval(() => { void fetchJobs(); }, 5000);
-
-    return () => {
-      if (statusTimerRef.current) clearInterval(statusTimerRef.current);
-      if (jobsTimerRef.current) clearInterval(jobsTimerRef.current);
-    };
-  }, [fetchStatus, fetchJobs]);
+  useDeployPolling(async () => {
+    const results = await Promise.all([fetchStatus(true), fetchJobs()]);
+    return results.includes("stop") ? "stop" : results.includes("retry") ? "retry" : "ok";
+  }, String(pollRetry));
 
   function handleEnqueued(job: JobRow) {
     setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
@@ -951,7 +961,7 @@ export default function DeployCenterPage() {
           loading={loadingStatus}
           refreshing={refreshing}
           lastUpdated={lastUpdated}
-          onRefresh={() => { void fetchStatus(); void fetchJobs(); }}
+          onRefresh={() => setPollRetry((n) => n + 1)}
         />
 
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20, maxWidth: 1400, margin: "0 auto" }}>
@@ -962,7 +972,7 @@ export default function DeployCenterPage() {
               <div style={{ fontSize: 12, color: C.text, marginBottom: 8 }}>
                 {statusError || "Could not connect to http://127.0.0.1:3910. Check that connect-deploy-worker is running (pm2 status)."}
               </div>
-              <Btn onClick={() => { void fetchStatus(); }} variant="secondary" small>Retry</Btn>
+              <Btn onClick={() => setPollRetry((n) => n + 1)} variant="secondary" small>Retry</Btn>
             </div>
           )}
 
@@ -1021,6 +1031,8 @@ export default function DeployCenterPage() {
             </div>
           </div>
 
+          {jobsError && <div role="alert" style={{ color: C.crit, padding: 12 }}>{jobsError}</div>}
+
           {/* Row 2: Jobs table */}
           <JobsTable
             jobs={jobs}
@@ -1032,7 +1044,7 @@ export default function DeployCenterPage() {
           {/* Footer */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.border}`, marginTop: 4, flexWrap: "wrap", gap: 10 }}>
             <div style={{ fontSize: 11, color: C.textDim }}>
-              Deploy Center · Polling every 5s · Token never leaves server · All actions audited ·{" "}
+              Deploy Center · Updates every 10s while visible · Token never leaves server · All actions audited ·{" "}
               <a href="/admin/ops-center" style={{ color: C.blue, textDecoration: "none" }}>Ops Center →</a>
             </div>
             <div style={{ fontSize: 11, color: C.textDim }}>
@@ -1042,7 +1054,7 @@ export default function DeployCenterPage() {
         </div>
 
         {/* Log drawer */}
-        <LogDrawer job={logJob} onClose={() => setLogJob(null)} />
+        <LogDrawer job={logJob ? jobs.find((item) => item.id === logJob.id) ?? logJob : null} statusStale={!!jobsError} onClose={() => setLogJob(null)} />
       </div>
     </PermissionGate>
   );

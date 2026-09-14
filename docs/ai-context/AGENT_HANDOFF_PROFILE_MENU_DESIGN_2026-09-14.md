@@ -1,5 +1,8 @@
 # Profile menu mockup — 2026-09-14
 
+**2026-09-14 follow-up:** server logs now prove this deployment succeeded at 22:33 UTC; the office IP had been automatically banned at 22:29 by 74 expected queued-log 404s. A later running portal `12d2c318` contains the implementation and its compiled marker was verified. Owner-approved unblock restored HTTP access. Permanent prevention is tracked in `AGENT_HANDOFF_DEPLOY_LOG_AUTOBAN_2026-09-14.md`; live DND call acceptance remains pending.
+
+
 ## Release verification blocked — 2026-09-14 18:42 Eastern
 
 Implementation commit `8b866ed68ab73ac8aa5d67a88dde60ca65257836` is pushed. The second portal job `10fee31a-fd98-45b7-9071-0e856e6bb7e5` started at 18:28:39 after API job `928e0b0c-219...` completed. It passed git sync/change detection and entered the production Docker/Next build with the expected build marker. Last observed status was RUNNING / build; log ended at `Creating an optimized production build ...`. No final `[deploy-portal] done` line, running-container verification, or fresh production menu verification was obtained.

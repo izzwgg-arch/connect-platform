@@ -240,3 +240,7 @@ Pin `/opt/connectcomms/app` to the desired git revision (via your normal queue-d
 - Rollback in per-service scripts is best-effort (rebuild previous git state).
 - Windows dev hosts may skip running the queue locally if `better-sqlite3` is not built.
 - A successful dry-run only proves checkout safety at that moment. Operators must still run the real deploy through the queue and verify the final `done <sha>` log line / container contents for production-impact changes.
+
+## Browser monitoring safety
+
+The public SUPER_ADMIN `/admin/deploy/jobs/:id/log` route returns HTTP 200 with `pending: true, available: false` for a real queued job without a log. Unknown IDs still return 404. Never poll absent queued logs as errors: nginx counts repeated public 404s and can ban the operator’s whole office. Deploy Center waits for running status, polls sequentially every 10 seconds only while visible, backs off temporary failures, stops denied/missing requests, and labels stale data. Internal queue file-path restrictions are unchanged. Regression suite: `node --import tsx --test apps/api/src/deployLogRoutes.test.ts apps/portal/lib/deployPolling.test.ts`.

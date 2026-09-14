@@ -1,5 +1,8 @@
 # Profile menu design review — 2026-09-14
 
+**2026-09-14 follow-up:** server logs now prove this deployment succeeded at 22:33 UTC; the office IP had been automatically banned at 22:29 by 74 expected queued-log 404s. A later running portal `12d2c318` contains the implementation and its compiled marker was verified. Owner-approved unblock restored HTTP access. Permanent prevention is tracked in `AGENT_HANDOFF_DEPLOY_LOG_AUTOBAN_2026-09-14.md`; live DND call acceptance remains pending.
+
+
 **Current result (18:42 Eastern):** implemented and pushed as `8b866ed6`; deployment UNVERIFIED. Portal job `10fee31a-fd98-45b7-9071-0e856e6bb7e5` was last seen building. Fresh dashboard/Deploy Center and public login/ready requests now return nginx 403 from this connection on both hostnames; canonical Linux SSH is unavailable. Inspect the existing job after access is restored, do not enqueue a duplicate. Live DND call acceptance still awaits an owner-selected extension. See full handoff for evidence and resume steps.
 
 **Implementation now authorized and complete locally; rollout pending.** Two-tab profile menu matches mockup in both themes. DND is always visible, uses the real extension-wide endpoint, requires confirmed read-back and exposes unknown/loading/unavailable states with GET-only retry. No PBX configuration changes. Portal typecheck and 6 focused + 6 safeguard tests pass; actual-component Chrome fixtures cover requests, failures, retry, voicemail dependency, keyboard and responsive layout. Live DND call test awaits an owner-selected extension. Historical mockup-only notes below are superseded by this authorization. Full handoff records implementation and verification limits.

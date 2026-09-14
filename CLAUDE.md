@@ -395,7 +395,9 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-14 · Profile menu implemented/pushed; rollout unverified after HTTP 403; live DND test awaits extension → `2026-09-14-profile-menu-design.md`
+- 2026-09-14 · Deploy 403 cause proven: queued-log 404 polling triggered office autoban; unblocked; API/portal fix locally validated → `2026-09-14-deploy-log-autoban.md`
+
+- 2026-09-14 · Profile menu deployment proven; office autoban explained/recovered; live DND test awaits extension → `2026-09-14-profile-menu-design.md`
 
 - 2026-09-14 · Outgoing email sender name "Connect" → "Loopcom" (live DB `EmailProviderConfig.fromName` + api fallback `770de892`) → `2026-09-14-email-sender-name-loopcom.md`
 

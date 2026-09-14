@@ -2,6 +2,11 @@
 
 Newest entries first.
 
+## Deploy Center autoban regression (2026-09-14)
+
+15 focused route/polling tests pass, including 74 queued-log reads with zero public 404s and all six deploy services; PBX safeguards 6/6 pass. Portal typecheck passes; API tsc has 84 existing diagnostics, none in the new route/registration. Actual-component Chrome fixture verifies queued zero-read, running log, stale error warnings, manual recovery and terminal single read. Live nginx ban/74-path aggregation proved cause; owner-approved one-IP unblock restored both login hosts and API health to 200. API/portal fix release pending; see AGENT_HANDOFF_DEPLOY_LOG_AUTOBAN_2026-09-14.md.
+
+
 ## Support agent hands — watcher hookup (2026-09-14, `84a5fc16`)
 
 - watcher `node --test stress.test.mjs hands.test.mjs` → **66/66 pass** (19 new in `hands.test.mjs`: per-company cap

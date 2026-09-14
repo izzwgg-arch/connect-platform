@@ -1,3 +1,4 @@
+import { registerDeployLogRoutes } from "./deployLogRoutes.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import formbody from "@fastify/formbody";
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
@@ -42305,17 +42306,7 @@ app.get("/admin/deploy/jobs/:id", async (req, reply) => {
   return reply.status(r.status).send(r.data);
 });
 
-// GET /admin/deploy/jobs/:id/log?lines=…
-app.get("/admin/deploy/jobs/:id/log", async (req, reply) => {
-  const admin = await requireSuperAdmin(req, reply);
-  if (!admin) return;
-  const { id } = req.params as { id: string };
-  if (!/^[0-9a-f-]{36}$/.test(id)) return reply.status(400).send({ error: "invalid_job_id" });
-  const qs = req.query as Record<string, string>;
-  const lines = Math.min(2000, Math.max(1, Number(qs.lines) || 200));
-  const r = await dqFetch(`/ops/deploy/jobs/${encodeURIComponent(id)}/log?lines=${lines}`);
-  return reply.status(r.status).send(r.data);
-});
+registerDeployLogRoutes(app, { requireSuperAdmin, dqFetch });
 
 // POST /admin/deploy/enqueue
 app.post("/admin/deploy/enqueue", async (req, reply) => {
