@@ -28,7 +28,7 @@ import {
   type DeviceKind,
 } from "@connect/shared";
 import { orderPhonesByMake, toldUsPhrase } from "./makeHint";
-import { IdentityPicker, StickerDrawing } from "./PhoneIdentity";
+import { IdentityPicker, SerialStickerDrawing, StickerDrawing } from "./PhoneIdentity";
 import { ManagedPhonePanel } from "./ManagedPhonePanel";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
@@ -1186,8 +1186,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 </p>
                 <div className="dps-ask" style={{ marginTop: 18 }}>
                   <b>Where is it?</b>
-                  <p>Turn the phone over. The label has the model, the MAC address and a line starting
-                  with S/N &mdash; that last one is the serial number.</p>
+                  <p>Turn the phone over. The white label has the model, the MAC address and a line
+                  starting with <b>S/N</b> &mdash; that last one is the serial number. There is a
+                  barcode beside it, so a barcode scanner works instead of typing.</p>
+                  {/* ⛔ The drawing is the half people actually need: almost nobody knows where a
+                      serial number lives, and almost everybody can read a label once told to turn
+                      the phone over. Same reasoning as the make/model step's sticker drawing. */}
+                  <SerialStickerDrawing />
                   <div className="dps-ask-row">
                     <input
                       id={`dps-serial-${n.phoneId}`}
