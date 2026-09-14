@@ -670,8 +670,19 @@ test("cloud reset: the maker needs the serial — the person is asked, the maker
   assert.equal(first.hints.p1, HINT_NEEDS_SERIAL);
 
   clock += 4_000;
-  await d.tick();
+  const paced = await d.tick();
   assert.equal(prepares(api).length, 1, `asked again inside ${CLOUD_ASK_INTERVAL_MS} ms`);
+  // ⛔⛔ THE REGRESSION IZZY HIT: the ask is paced, the QUESTION is not. A need raised only on the
+  // asking tick vanished from the screen on every tick in between — "the field to put it in keeps
+  // disappearing every few seconds" — taking whatever was half-typed with it.
+  assert.deepEqual(paced.needs.map((n) => n.kind), ["serial"], "the serial question survives a paced tick");
+  assert.equal(paced.hints.p1, HINT_NEEDS_SERIAL);
+  for (let i = 0; i < 5; i += 1) {
+    clock += 4_000;
+    const still = await d.tick();
+    assert.deepEqual(still.needs.map((n) => n.kind), ["serial"], `tick ${i} dropped the serial question`);
+  }
+  assert.equal(prepares(api).length, 1, "and none of those ticks re-asked the maker");
 
   d.serialProvided("p1");
   const resumed = await d.tick();

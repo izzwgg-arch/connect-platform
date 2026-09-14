@@ -96,6 +96,17 @@ type PhoneMemo = {
   resetRefusedLocally: boolean;
   /** When this machine last asked the server to run a maker-cloud step, to pace GDMS calls. */
   cloudAskedAt: number | null;
+  /**
+   * ⛔⛔ THIS PHONE IS STILL WAITING FOR ITS SERIAL NUMBER, AND THAT OUTLIVES THE ASK.
+   * The wizard rebuilds its "needs a person" list from EVERY tick, but the maker's cloud is only
+   * asked once per `CLOUD_ASK_INTERVAL_MS` — so a need raised only on the asking tick vanished from
+   * the screen on the ~7 ticks in between, taking the input the person was typing into with it
+   * (Izzy, 2026-09-14: "the field to put it in keeps disappearing every few seconds"). The fact is
+   * remembered here and re-stated every tick until it is answered.
+   */
+  awaitingSerial: boolean;
+  /** What the maker said it needs, kept so the re-stated need reads the same every tick. */
+  serialMessage: string | null;
   /** Restarts the maker's cloud accepted for this phone (bounded like every restart). */
   cloudRestarts: number;
   cloudRestartAt: number | null;
@@ -247,6 +258,7 @@ export function createSetupDriver(
         cannotListenCount: 0, provisioningHandoffFailed: false,
         resetRefusedLocally: false,
         cloudAskedAt: null, cloudRestarts: 0, cloudRestartAt: null, cloudUnavailable: false,
+        awaitingSerial: false, serialMessage: null,
         lastHint: null,
       };
       memos.set(id, m);
@@ -286,6 +298,8 @@ export function createSetupDriver(
   /** The serial number was saved for this phone: ask the maker's cloud again on the next tick. */
   function serialProvided(phoneId: string) {
     const m = memo(phoneId);
+    m.awaitingSerial = false;
+    m.serialMessage = null;
     m.cloudAskedAt = null;
     m.stalledOn = null;
     m.stalledCount = 0;
@@ -297,6 +311,8 @@ export function createSetupDriver(
    */
   function serialUnavailable(phoneId: string) {
     const m = memo(phoneId);
+    m.awaitingSerial = false;
+    m.serialMessage = null;
     m.cloudUnavailable = true;
     m.stalledOn = null;
     m.stalledCount = 0;
@@ -329,16 +345,15 @@ export function createSetupDriver(
     }
     const manual = res.plan?.manualAction;
     if (manual?.code === "serial_required") {
-      needs.push({
-        kind: "serial",
-        phoneId: phone.id,
-        label: phone.displayName || phone.extNumber || "this phone",
-        message: String(manual.message || "The phone maker needs this phone’s serial number."),
-      });
-      hints[phone.id] = HINT_NEEDS_SERIAL;
+      // ⛔ REMEMBERED, not pushed here. The caller re-states this on every tick; raising it only on
+      // the asking tick made the input vanish between paced asks.
+      m.awaitingSerial = true;
+      m.serialMessage = String(manual.message || "The phone maker needs this phone’s serial number.");
       markStall(m, `cloud_${purpose}`);
       return;
     }
+    // Any other answer means the maker is no longer waiting on a serial for this phone.
+    m.awaitingSerial = false;
     const step = purpose === "reset" ? "factory_reset" : "reboot";
     const done = (res.ran ?? []).find((r: any) => r?.step === step);
     if (done?.ok) {
@@ -489,6 +504,17 @@ export function createSetupDriver(
             }
           }
           await askMakerCloud(phone, m, "reset", needs, hints, performed);
+          // ⛔ Re-stated EVERY tick while it is outstanding — the ask itself is paced, the question
+          // to the person is not. Without this the serial field unmounts under whoever is typing.
+          if (m.awaitingSerial) {
+            needs.push({
+              kind: "serial",
+              phoneId: phone.id,
+              label: phone.displayName || phone.extNumber || "this phone",
+              message: m.serialMessage ?? "The phone maker needs this phone’s serial number.",
+            });
+            hints[phone.id] = HINT_NEEDS_SERIAL;
+          }
           continue;
         }
         const authorizationId = typeof decision.resetAuthorizationId === "string" ? decision.resetAuthorizationId : "";
