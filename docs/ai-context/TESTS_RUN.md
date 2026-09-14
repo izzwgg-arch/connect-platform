@@ -4,6 +4,24 @@ Newest entries first.
 
 ---
 
+## Desk-phone per-brand mechanisms + Grandstream through GDMS in the real wizard (2026-09-14, round 3, `7e54716a`)
+
+- shared `npm test` (full script, new `deviceMechanisms.test.ts` registered) → **707/707 pass**; `tsc --noEmit` 0 errors.
+  `deviceMechanisms.test.ts` 8/8 incl. the SWEEP over every catalogue brand × 9 cloud shapes.
+- api `node --experimental-test-module-mocks --import tsx --test`: deviceCloudRoutes **33/33** (5 new: Grandstream +
+  GDMS → `reset_over_lan via vendor_cloud` + folder; no cloud → answered as before; Yealink never `via`; spent reset →
+  `set_provisioning via vendor_cloud`; unticked → nothing), deskPhoneRoutes 56, deskPhoneStress 38, deskPhoneChaos 6,
+  deskPhoneRecordWiring 28, deskPhoneRouteOrder 8, deviceProviders 33, provisioningRecordWriter 21,
+  managedPhoneIntegration 12, yealinkRps 12 — **0 fail**. api tsc: no errors in `deskPhoneSetup`.
+- portal `node --import tsx --test`: setupDriver **43/43** (8 new maker-cloud tests: listen-first, never a local wipe,
+  cannot-listen blocks the clear, serial asked + paced + resumed, "can't find it" falls back, permanent vs retryable
+  refusal, restarts bounded at 2 and spaced 3 min, already-delivered phone not restarted, unnamed brand path unchanged);
+  other registered desk-phone files 46/46; portal tsc 0.
+- First run of the new driver tests: 1 failure was the TEST (an observation travels on the NEXT advance) — fixed in the test.
+- ⛔ Not proven by any of this: a real GXP2170 added to GDMS, reset and restarted through GDMS, then provisioned by PnP.
+
+---
+
 ## Desk-phone Prepare Device goes reset-first + GDMS card (2026-09-14, round 2, `acb994a3`)
 
 - shared `node --import tsx --test src/deskPhoneSetup/deviceIdentification.test.ts` → **33/33 pass**

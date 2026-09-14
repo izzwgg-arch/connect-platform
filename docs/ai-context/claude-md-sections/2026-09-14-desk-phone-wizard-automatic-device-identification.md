@@ -21,5 +21,11 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
 - ✅ **DEPLOYED + container-verified 2026-09-14:** api 19:13Z and portal 19:22Z, both `acb994a3`, 0 restarts;
   migration `20260914190000` applied (six columns present). ✅ Desktop `0.1.17-rc.14` built from a clean export of
   `f8e11424` and INSTALLED on Izzy's PC — ⛔ NOT published (feed stays rc.10).
+- ⛔⛔ **Round 3 (`7e54716a`, DEPLOYED api+portal 2026-09-14 ~21:00Z): PER-BRAND MECHANISMS.** Shared
+  `deviceMechanismsFor(vendor, readiness)` is the ONE answer for how a brand is cleared / restarted / given
+  settings. `/advance` adds `via:"vendor_cloud"` from it; the driver listens first, then runs the step through
+  `/prepare` (GDMS claim → reset; later a GDMS restart, ≤2, 3 min apart; one cloud ask per 30 s). Serial screen;
+  one read-only maker-cloud lookup for unnamed phones. Other brands unchanged. Why: Izzy's 20:13Z run — a ticked
+  GXP2170 was told "reset over LAN", skipped it, and waited for a power-cycle while GDMS sat unused. Handoff §10b.
 - ⏳ **NOT PROVEN:** no GDMS credential saved yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.

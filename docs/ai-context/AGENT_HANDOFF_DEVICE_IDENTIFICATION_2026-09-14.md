@@ -245,6 +245,55 @@ settings step).
 - Yealink RPS still has no credentials (tickets pending); Fanvil and Poly have no API access at all.
 - The new card line and label box have not been seen in a browser.
 
+## 10b. Round 3 (`7e54716a`) — why ticking a GXP2170 did nothing, and the per-brand fix
+
+**Diagnosed live 2026-09-14 20:13Z (Landau Home run `cmu0wf85m05u3s9135s7lmzaw`).** Izzy ticked
+the GXP2170 at .171; the ladder said `reset_over_lan` (proven by replaying `nextEscalation`), the
+driver's `!canHttp` gate skipped the reset for a Grandstream and fell to `set_provisioning`, which
+for a brand with no HTTP executor only ARMS the PnP listener and shows "unplug it and plug it
+back in". Nobody power-cycled it: 13 advances every 4 s, no reset, no write, cancelled 20:14.
+**Nothing in the wizard called the GDMS routes** (`/prepare`, `/claim`, `/vendor-lookup` had no
+caller). The second GXP (.172, `c074ad8c605f`) never answered the 20:12 scan (its only evidence is
+`existing_inventory`) and is registered nowhere — powered off or on another address.
+⛔ The .171 GXP is still REGISTERED as **Create A Box T7_106** (contact on Izzy's LAN); its PBX
+record was rehomed to Landau Home ext 101 at 20:13 (`decideRehome` allowed it on the same-LAN proof).
+
+**The fix:**
+- **`packages/shared/src/deskPhoneSetup/deviceMechanisms.ts` — `deviceMechanismsFor(vendor, readiness)`**,
+  ONE answer per brand: reset `vendor_cloud | lan_http | not_available`, restart
+  `vendor_cloud | lan_http | power_cycle | not_available`, settings `pnp | lan_http | hand_configured |
+  not_available`. Built only from shipped executors, the PnP catalogue and a cloud's readiness here
+  (configured, not redirect-only, action implemented, same brand). Never clears/restarts a phone
+  nothing can then configure. Panasonic = hand_configured, never cleared. SWEEP test over every
+  catalogue brand × every cloud shape; without a cloud it equals the old gates exactly.
+- **`/advance`** (deskPhoneRoutes): the pure ladder is untouched; the route adds `via: "vendor_cloud"`
+  (+ the tenant folder URL) when `decision.action` is `reset_over_lan`/`set_provisioning` and the
+  brand's mechanism is the cloud. Registry hoisted to the top of `registerDeskPhoneSetupRoutes`
+  (shared with the cloud routes); readiness cached 30 s; a readiness failure = no cloud.
+- **Driver** (`setupDriver.ts`): `via vendor_cloud` → arm the PnP listener FIRST (refused listener =
+  no clear), then `POST /prepare` (claim → factory reset, spent atomically server-side, so no
+  `/reset-sent`); later `set_provisioning via vendor_cloud` → listen, then a GDMS restart through
+  `/prepare`, at most `PROVISIONING_REBOOT_ATTEMPTS` (2), `CLOUD_RESTART_WAIT_MS` (3 min) apart. One
+  cloud ask per phone per `CLOUD_ASK_INTERVAL_MS` (30 s). `serial_required` → NeedsPerson `serial`.
+  A non-retryable refusal, a conflict/unknown model, or "I can't find it" sets `cloudUnavailable`
+  and the phone takes the exact pre-cloud path. The office machine never wipes or restarts a cloud brand.
+- **Wizard**: "needs its serial number" screen (posts `S/N: <typed>` through the existing
+  `/scan-label`, which refuses another phone's label); one read-only `/vendor-lookup` per found phone
+  whose maker is known but model is not.
+- **No desktop change**: `set_provisioning {reboot:false}` already exists in rc.14.
+
+**✅ DEPLOYED + container-verified 2026-09-14:** api 20:55Z and portal ~21:01Z, both `7e54716a`
+(waited for Izzy's own Deploy Center portal job `f2460c4f` to finish — the queue refused while it ran;
+no break-glass). api: 0 restarts, `/health` 200, `deviceMechanismsFor` in the running source.
+portal: 0 restarts, 0 error lines, `/settings/desk-phones` 200 on both hostnames, the shipped chunks
+carry "needs its serial number" and "phone maker’s cloud to clear". Shipped alongside (other
+sessions, already pushed): `f2460c4f` dashboard polish, `770de892` email sender name.
+
+**⏳ NOT PROVEN (needs Izzy + a real phone):** GDMS holds 0 devices, so the first real run will ask
+for the GXP2170's serial (on its sticker) and CLAIM it into Loopcom's GDMS — a write. Unverified:
+the GDMS device-record field names; whether a GDMS factory reset keeps the device in the account and
+back online to GDMS; whether the reset GXP asks over PnP on its boot. Reset takes .171 off Create A Box 106.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
