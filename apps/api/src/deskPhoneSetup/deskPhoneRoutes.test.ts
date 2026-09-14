@@ -126,6 +126,23 @@ async function discover(app: any, runId: string, phones: any[]) {
   return body(r);
 }
 
+/**
+ * Decide the reset, report it sent, then let the phone come back from its reboot
+ * (the wait window has passed) still carrying the given provisioning address.
+ */
+async function resetAndReboot(app: any, runId: string, phoneId: string, cameBackWith: string) {
+  const d = body(await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {} }));
+  assert.equal(d.action, "reset_over_lan");
+  const s = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: d.resetAuthorizationId },
+  });
+  assert.equal(body(s).counted, true);
+  const row = state.phones.find((p: any) => p.id === phoneId);
+  row.resetRequestedAt = new Date(Date.now() - 10 * 60_000);
+  row.provisioningUrl = cameBackWith;
+}
+
 /* ── permission ──────────────────────────────────────────────────────────── */
 
 test("somebody without the key cannot start a run", async () => {
@@ -256,13 +273,115 @@ test("an approved reset is issued once and then refused", async () => {
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
   }));
   assert.equal(first.action, "reset_over_lan");
+  assert.ok(String(first.resetAuthorizationId).startsWith(`${runId}.`), "the instruction carries this run's approval id");
+  // ⛔ DECIDING a reset spends nothing — nothing has left the office machine yet
+  assert.equal(state.phones[0].resetCount, 0, "a reset is counted when it is SENT, never when it is decided");
+
+  const sent = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: first.resetAuthorizationId },
+  });
+  assert.equal(sent.statusCode, 200);
+  assert.equal(body(sent).counted, true);
   assert.equal(state.phones[0].resetCount, 1);
+  assert.equal(state.phones[0].state, "WAITING_FOR_REBOOT");
+  assert.equal(state.phones[0].provisioningUrl, null, "the old provider's address does not survive a wipe");
+
+  const again = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: first.resetAuthorizationId },
+  }));
+  assert.equal(again.counted, false);
+  assert.equal(again.alreadyCounted, true);
 
   const second = body(await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
   }));
-  assert.equal(second.action, "halt");
+  assert.notEqual(second.action, "reset_over_lan");
   assert.equal(state.phones[0].resetCount, 1, "losing our place must never wipe a phone twice");
+
+  // and once it has moved on, a stray late report cannot re-arm anything
+  state.phones[0].state = "REDISCOVERED";
+  const late = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: first.resetAuthorizationId },
+  });
+  assert.equal(late.statusCode, 409);
+  assert.equal(body(late).error, "reset_not_allowed");
+  assert.equal(state.phones[0].resetCount, 1);
+  assert.equal(state.audits.filter((a: any) => a.action === "DESK_PHONE_RESET_REQUESTED").length, 1);
+});
+
+test("approving phone A does not approve phone B", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [
+    { mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" },
+    { mac: "80:5E:0C:BD:13:5B", provisioningUrl: "https://prov.oldprovider.net/x" },
+  ]);
+  const [a, b] = state.phones;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [a.id] } });
+
+  const forB = body(await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${b.id}/advance`, payload: {} }));
+  assert.equal(forB.action, "request_reset_authorization", "an approval names phones, not a whole run");
+
+  const authId = `${runId}.${new Date(state.runs[0].resetAuthorizedAt).getTime()}`;
+  const sentB = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${b.id}/reset-sent`, payload: { authorizationId: authId },
+  });
+  assert.equal(sentB.statusCode, 409);
+  assert.equal(state.phones[1].resetCount, 0);
+
+  // approving B later keeps A approved
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [b.id] } });
+  assert.deepEqual(JSON.parse(state.runs[0].resetAuthorizedPhoneIds).sort(), [a.id, b.id].sort());
+});
+
+test("a reset report carrying another run's approval id is refused", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: "run_someone_else.12345" },
+  });
+  assert.equal(r.statusCode, 409);
+  assert.equal(body(r).error, "authorization_mismatch");
+  assert.equal(state.phones[0].resetCount, 0);
+});
+
+test("another customer cannot report a reset on this run", async () => {
+  reset();
+  const mine = await makeApp(CUSTOMER);
+  const runId = await startRun(mine);
+  await discover(mine, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await mine.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+  const theirs = await makeApp(OTHER);
+  const r = await theirs.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: `${runId}.1` },
+  });
+  assert.equal(r.statusCode, 404);
+  assert.equal(state.phones[0].resetCount, 0);
+});
+
+test("a reset the office machine refused on its own fence becomes the non-destructive hand-off", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
+  const phoneId = state.phones[0].id;
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
+  const out = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: { resetRefusedLocally: true },
+  }));
+  assert.equal(out.action, "set_provisioning");
+  assert.equal(state.phones[0].resetCount, 0, "a refused wipe spends nothing");
 });
 
 test("an approval covers exactly the phones the person was shown", async () => {
@@ -340,7 +459,7 @@ test("a manufacturer redirect halts and hands off, rather than retrying", async 
   await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
   const phoneId = state.phones[0].id;
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
-  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {} });
+  await resetAndReboot(app, runId, phoneId, "https://prov.oldprovider.net/x");
 
   const out = body(await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {},
@@ -357,7 +476,7 @@ test("a router still advertising the old provider is a different answer", async 
   await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", provisioningUrl: "https://prov.oldprovider.net/x" }]);
   const phoneId = state.phones[0].id;
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [phoneId] } });
-  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`, payload: {} });
+  await resetAndReboot(app, runId, phoneId, "https://prov.oldprovider.net/x");
 
   const out = body(await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phoneId}/advance`,

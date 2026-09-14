@@ -186,7 +186,7 @@ function checkInvariants(seed: number, step: number) {
 
 const OPS = [
   "start", "discover", "rediscover", "assign", "unassign", "authorize",
-  "advance", "advance", "advance", "read", "readDiag", "buttons",
+  "advance", "advance", "advance", "resetSent", "resetSent", "read", "readDiag", "buttons",
   "pbxUp", "pbxDown", "revokeReset", "grantReset", "reopen", "crossTenant",
 ] as const;
 
@@ -266,6 +266,22 @@ async function chaosRun(seed: number, steps: number) {
           if (out?.phone?.status) {
             assert.ok(CUSTOMER_WORDS.has(out.phone.status), `bad status ${out.phone.status} [seed=${seed} step=${step}]`);
           }
+          break;
+        }
+        case "resetSent": {
+          // the office machine reporting a wipe — sometimes for a phone never approved,
+          // sometimes with a stale or foreign approval id, sometimes repeated
+          if (!runId || !state.phones.length) break;
+          const p: any = pick(r, state.phones);
+          const run = state.runs.find((x: any) => x.id === runId);
+          const authId = pick(r, [
+            run?.resetAuthorizedAt ? `${runId}.${new Date(run.resetAuthorizedAt).getTime()}` : `${runId}.0`,
+            `${runId}.0`, "run_other.1", "",
+          ]);
+          const res: any = await a.inject({
+            method: "POST", url: `/desk-phones/runs/${runId}/phones/${p.id}/reset-sent`, payload: { authorizationId: authId },
+          });
+          assert.ok(res.statusCode < 500, `reset-sent answered ${res.statusCode} [seed=${seed} step=${step}]`);
           break;
         }
         case "read":
@@ -381,9 +397,12 @@ test("CHAOS: concurrent everything on one phone still resets it at most once", a
     });
     const p = state.phones[0];
     await a.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [p.id] } });
+    const authId = `${runId}.${new Date(state.runs[0].resetAuthorizedAt).getTime()}`;
     await Promise.all([
       ...Array.from({ length: 15 }, () =>
         a.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${p.id}/advance`, payload: {} })),
+      ...Array.from({ length: 15 }, () =>
+        a.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${p.id}/reset-sent`, payload: { authorizationId: authId } })),
       ...Array.from({ length: 5 }, () =>
         a.inject({ method: "POST", url: `/desk-phones/runs/${runId}/authorize-reset`, payload: { phoneIds: [p.id] } })),
       ...Array.from({ length: 5 }, () =>

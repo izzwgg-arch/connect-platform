@@ -171,6 +171,23 @@ async function authorize(a: any, id: string, phoneIds: string[]) {
   return await a.inject({ method: "POST", url: `/desk-phones/runs/${id}/authorize-reset`, payload: { phoneIds } });
 }
 
+/** Decide the reset, then report it sent — the only way a reset is ever counted. */
+async function resetSent(a: any, id: string, phoneId: string) {
+  const d = await advance(a, id, phoneId);
+  assert.equal(d.action, "reset_over_lan");
+  const r = B(await a.inject({
+    method: "POST", url: `/desk-phones/runs/${id}/phones/${phoneId}/reset-sent`,
+    payload: { authorizationId: d.resetAuthorizationId },
+  }));
+  assert.equal(r.counted, true);
+}
+/** The reboot window has passed and the phone is back, carrying this address. */
+function cameBackFromReboot(phoneId: string, url: string) {
+  const row = state.phones.find((x: any) => x.id === phoneId);
+  row.resetRequestedAt = new Date(Date.now() - 10 * 60_000);
+  row.provisioningUrl = url;
+}
+
 /* ═══ 1. the phones themselves ═══════════════════════════════════════════════ */
 
 test("STRESS: a clean factory phone, pointed nowhere, is simply redirected", async () => {
@@ -252,7 +269,7 @@ test("STRESS: a phone that changes address after a reset is followed, not re-res
   await found(a, id, [{ mac: mac(8), ip: "192.168.1.41", provisioningUrl: "https://prov.old.net/x" }]);
   const p = state.phones[0];
   await authorize(a, id, [p.id]);
-  assert.equal((await advance(a, id, p.id)).action, "reset_over_lan");
+  await resetSent(a, id, p.id);
 
   // it comes back somewhere else entirely
   await found(a, id, [{ mac: mac(8).toLowerCase().replace(/:/g, "-"), ip: "192.168.1.87" }]);
@@ -266,7 +283,7 @@ test("STRESS: losing our place mid-reset cannot wipe a phone twice", async () =>
   await found(a, id, [{ mac: mac(9), provisioningUrl: "https://prov.old.net/x" }]);
   const p = state.phones[0];
   await authorize(a, id, [p.id]);
-  await advance(a, id, p.id);
+  await resetSent(a, id, p.id);
 
   // the app closes, Windows restarts, a brand-new Fastify comes up — the record is
   // the memory, and it survives all of it
@@ -276,13 +293,27 @@ test("STRESS: losing our place mid-reset cannot wipe a phone twice", async () =>
   assert.equal(state.phones[0].resetCount, 1);
 });
 
-test("STRESS: twenty concurrent advance calls on one phone still reset it once", async () => {
+test("STRESS: twenty concurrent advance calls on one phone spend NO reset", async () => {
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(10), provisioningUrl: "https://prov.old.net/x" }]);
   const p = state.phones[0];
   await authorize(a, id, [p.id]);
   await Promise.all(Array.from({ length: 20 }, () => advance(a, id, p.id)));
+  assert.equal(state.phones[0].resetCount, 0, "deciding is free; only a sent wipe is counted");
+});
+
+test("STRESS: twenty concurrent reset reports on one phone count it once", async () => {
+  reset(); const a = await app(); const id = await run(a);
+  await found(a, id, [{ mac: mac(18), provisioningUrl: "https://prov.old.net/x" }]);
+  const p = state.phones[0];
+  await authorize(a, id, [p.id]);
+  const d = await advance(a, id, p.id);
+  assert.equal(d.action, "reset_over_lan");
+  await Promise.all(Array.from({ length: 20 }, () => a.inject({
+    method: "POST", url: `/desk-phones/runs/${id}/phones/${p.id}/reset-sent`, payload: { authorizationId: d.resetAuthorizationId },
+  })));
   assert.equal(state.phones[0].resetCount, 1, "a race must not become twenty wipes");
+  assert.equal(state.audits.filter((x: any) => x.action === "DESK_PHONE_RESET_REQUESTED").length, 1);
 });
 
 /* ═══ 4. the two unfixable problems ═════════════════════════════════════════ */
@@ -292,7 +323,8 @@ test("STRESS: a manufacturer redirect stops after two attempts and never loops",
   await found(a, id, [{ mac: mac(11), provisioningUrl: "https://prov.old.net/x" }]);
   const p = state.phones[0];
   await authorize(a, id, [p.id]);
-  await advance(a, id, p.id);
+  await resetSent(a, id, p.id);
+  cameBackFromReboot(p.id, "https://prov.old.net/x");
   for (let i = 0; i < 8; i += 1) await advance(a, id, p.id);
   assert.equal(state.phones[0].resetCount, 1, "resetting all day never produces a different answer");
   assert.equal(state.phones[0].state, "NEEDS_ATTENTION");
@@ -304,7 +336,8 @@ test("STRESS: a router handing back the old provider is a different message enti
   await found(a, id, [{ mac: mac(12), provisioningUrl: "https://prov.old.net/x" }]);
   const p = state.phones[0];
   await authorize(a, id, [p.id]);
-  await advance(a, id, p.id);
+  await resetSent(a, id, p.id);
+  cameBackFromReboot(p.id, "https://prov.old.net/x");
   const out = await advance(a, id, p.id, { networkSuppliesOldProvisioning: true });
   assert.equal(out.handOff, "customer_network");
   assert.match(out.customerMessage, /will not change your router/i);

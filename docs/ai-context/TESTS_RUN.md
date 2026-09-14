@@ -4,6 +4,29 @@ Newest entries first.
 
 ---
 
+## Desk-phone reset wired + counted only when sent (2026-09-14, later)
+
+Branch `feat/ivr-migration-takeover`. Plan doc §20f. ⛔ Every reset proof below uses a FAKE
+bridge / fake db — no phone on any network was reset, rebooted or sent anything (Izzy:
+"don't factory reset any of the phones on my network. I have to do it.").
+
+```bash
+# api  (⛔ needs --experimental-test-module-mocks)
+cd apps/api && npx tsc --noEmit | grep -c "error TS"                 # 84 = the exact baseline, 0 in deskPhoneSetup
+node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"
+#                                                                    # 156 / 156
+# replayed against HEAD's deskPhoneRoutes.ts (backed up, restored, cmp-identical):
+#   12 of the reset tests FAIL there (incl. the route-order source guard
+#   "deciding a reset never spends it"). Regression guards that pass at HEAD by design:
+#   "twenty concurrent reset reports count it once" (route absent -> nothing counted),
+#   "another customer cannot report a reset" (404 either way).
+
+# portal
+cd apps/portal && node --import tsx --test components/deskPhones/setupDriver.test.ts   # 31 / 31
+```
+
+---
+
 ## Desk-phone record writer, make/model pickers, and the record-move rule (2026-09-14)
 
 Branch `feat/ivr-migration-takeover`, commits `257b0b07` (pickers + identify route) and

@@ -1145,8 +1145,64 @@ A Box 106 / A plus center 108 then lose that device. Nothing was changed on the 
   The installed app on Izzy's PC is **rc.11** (exe `FileVersion 0.1.17-rc.11`, log banner
   rc.11 at 2026-09-14 03:44Z) — ⛔ the uninstall registry still reads `0.99.0`, which is stale.
   Everything else in §20 (writer, retry, identify, pickers) is api + portal and needs no build.
+- ✅ **SUPERSEDED by §20f below** — the driver is wired and the server no longer spends a reset early.
 - ⏳ Desktop `factory_reset` needs an installer (rc.12); PoE switch + Wi-Fi extender still
   blocked on the brand/model from Izzy; §19f's screen defects (the unconditional green tick,
   the subtitle failure branch, the per-phone note never shown, the IP hidden on the row)
   are not fixed; `retryableCount` / `inheritedResetCount` are not wired to a screen; the
   stage-2 cross-vendor reset research (§19h) was not re-run.
+
+### 20f. 2026-09-14 (later) — reset wired end to end; counted only when the office machine sends it
+
+Izzy: "Keep going until it's ready, proven, and ready to use on every single phone possible" —
+and, mid-task: "don't factory reset any of the phones on my network. I have to do it."
+⛔ **Nothing in this section touched a phone. Every reset proof is a fake bridge / fake db.**
+
+**Server (`apps/api/src/deskPhoneSetup/deskPhoneRoutes.ts`):**
+- `advance` DECIDES only. It runs `decideReset` against the stored row and returns
+  `resetAuthorizationId = <runId>.<resetAuthorizedAt ms>`; it no longer writes
+  `RESET_REQUESTED` / `resetCount + 1`.
+- New `POST /desk-phones/runs/:id/phones/:phoneId/reset-sent {authorizationId}` —
+  ownRun → run still running → setup permission → body → phone scoped by id/run/tenant →
+  id must start with `<runId>.` (else 409 `authorization_mismatch`) → already
+  `WAITING_FOR_REBOOT` with resetCount > 0 answers `alreadyCounted` → skipped or not allowed
+  answers 409 `reset_not_allowed` → atomic `updateMany` guarded on resetCount + state →
+  `WAITING_FOR_REBOOT`, `resetCount + 1`, `resetRequestedAt`, `attempts + 1`,
+  **`provisioningUrl: null`** (a wiped phone no longer holds the old provider's address;
+  keeping it would read as "went straight back to the old provider" seconds later) → ONE
+  `DESK_PHONE_RESET_REQUESTED` audit, `reportedBy: "office_machine"`.
+- Approval is per phone: `resetApprovalFor(run, phoneId)` returns the approval time only if
+  `resetAuthorizedPhoneIds` names that phone. `authorize-reset` UNIONS new ids into the list.
+- `advance` body gained `resetRefusedLocally`: a `reset_over_lan` decision becomes
+  `set_provisioning` (rung 3, non-destructive).
+- `awaitingReboot` is bounded: `RESET_REBOOT_WAIT_MS = 120_000` after `resetRequestedAt`.
+
+**Driver (`apps/portal/components/deskPhones/setupDriver.ts`):** `reset_over_lan` branch —
+no approval id → stall; non-HTTP brand → `resetRefusedLocally` + "we did not clear this
+phone"; else `fingerprint` (model from what the phone says NOW) → `factory_reset`.
+`classifyResetAnswer`: `ok && sent` or `already_reset_this_session` or any other post-fence
+failure (timeout, unreachable, HTTP) = **sent** (reported, retried 3×); `unknown_operation`,
+`not_a_private_address`, `reset_unsafe:*` = **refused** (never reported, next advance carries
+`resetRefusedLocally`); `reset_not_authorized`, `too_soon_for_this_phone`, a thrown bridge =
+**wait**. Response shapes checked against `apps/desktop/src/phoneSetup/capability.ts`
+(`{ok:true, op:"factory_reset", sent:true}` and the refusal strings) — they match.
+
+**Still not built:** `reset_over_sip` (rung 7, chosen when the phone is registered to us) has
+no executor; the driver stalls on it (3-stall cap) and now spends nothing. The Wi-Fi cable
+question (`resetSafety.ask`) still has no screen, so a Wi-Fi-capable model with link
+"unknown" is refused by the desktop fence and takes the hand-off.
+
+**Proven:** api desk-phone suites **156/156** (new: sent-not-decided, per-phone approval,
+foreign approval id, cross-tenant 404, local refusal → hand-off, 20 concurrent reports → 1
+reset + 1 audit, chaos `resetSent` op with random/foreign/stale ids, route-order source
+guard). **12 fail replayed against HEAD's route file.** Portal driver **31/31** (fingerprint
+then factory_reset args, reported on sent/timeout/already-reset, not on fence refusal or
+unknown_operation, no op without an approval id, non-Yealink skipped, bridge throw waits,
+lost report retried without a second wipe, classifier table). api typecheck 84 = baseline.
+
+**Order from here:** deploy api + portal (both halves ship together — an old portal never
+calls `reset-sent`, but it also never runs `factory_reset`, so nothing is lost either way);
+build rc.12 from a clean export (asar dependency check + icon verify) and install on Izzy's
+PC; ⛔ do NOT publish the feed without his word. ⏳ **Acceptance is Izzy's, on his own rig**:
+tick a wired Yealink on the clearing screen, approve, and watch it wipe once, come back, and
+register. The negative that matters: a Wi-Fi phone or an HT box must NOT wipe.

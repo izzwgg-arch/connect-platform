@@ -82,15 +82,21 @@ reset/reboot over the network, then the dropdowns, then the switch and extender.
   the rig: assign the Yealink `80:5e:c0:b3:b2:d0` to ext 101 → a `provisioning.devices`
   row appears bound to device **130** → power-cycle → `T21_101` registers. The negative
   that matters most: the `.172` GXP2170 must come back **refused**.
-- ⛔⛔ **"RESET OVER THE NETWORK" IS NOT WIRED, AND AN rc.12 INSTALLER WOULD NOT FIX THAT
-  (checked 2026-09-14, plan §20e).** The desktop has a `factory_reset` op, but **the portal
-  driver never calls it** — `reset_over_lan` falls into the "wait" branch
-  (`setupDriver.ts:360`) — and **`reset_over_sip` has no executor anywhere**. ⛔⛔ **Worse:
-  `advance` SPENDS the phone's one reset (`RESET_REQUESTED`, `resetCount + 1`,
-  `deskPhoneRoutes.ts:1237`) before anything is sent**, so a phone reaching that rung loses
-  its reset untouched. Production: 0 reset approvals, 0 phones with `resetCount > 0` — not
-  hit yet. **Wire the driver + make the server spend the reset only on a reported `sent`,
-  deploy, THEN build rc.12.** Izzy's PC runs rc.11 (the uninstall registry's `0.99.0` is stale).
+- ✅⛔⛔ **RESET OVER THE NETWORK IS WIRED NOW, AND A RESET IS COUNTED ONLY WHEN IT IS SENT
+  (plan §20f, 2026-09-14 later).** Before: the portal driver never called `factory_reset`
+  and `advance` SPENT the phone's one reset the moment it decided one (a phone lost its
+  reset untouched). Now the driver runs `fingerprint` → `factory_reset {ip, model,
+  link:"unknown", authorizationId}` for `reset_over_lan`, and the reset is counted by the
+  new **`POST …/phones/:phoneId/reset-sent`** (atomic claim, one audit row, clears the old
+  provisioning URL). `advance` only decides and returns `resetAuthorizationId`
+  (`<runId>.<approvedAtMs>`). ⛔ **Never move the counter back into `advance`** — a source
+  guard fails. ⛔ Approval is **per phone** (`resetApprovalFor`); re-authorising unions the
+  list. ⛔ A desktop fence refusal is never reported — the next advance carries
+  `resetRefusedLocally` and becomes the non-destructive `set_provisioning`; a timeout after
+  the fence IS counted (a wiping phone stops answering). Reboot wait bounded at 120 s.
+  ⛔ `reset_over_sip` (rung 7, registered phones) still has **no executor** — the driver
+  stalls on it and spends nothing. ⛔ **Proven with fakes only — Izzy does every reset on
+  his network himself.** Deploy state + rc.12 in §20f. Izzy's PC runs rc.11.
 - ⛔ **The picker + sticker screens were built WITHOUT a mockup**, against Izzy's standing
   mockup-first rule — show him before calling them final. ⏳ Still open: PoE switch /
   Wi-Fi extender (needs brand + model from Izzy), §19f's screen defects (unconditional

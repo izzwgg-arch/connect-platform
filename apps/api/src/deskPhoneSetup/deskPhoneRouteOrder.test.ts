@@ -114,6 +114,21 @@ test("no run-scoped route looks a run up by id without the caller's tenant", () 
   }
 });
 
+test("deciding a reset never spends it — only the reset-sent report counts one", () => {
+  const adv = RUN_SCOPED.find((x) => x.route.endsWith("/advance"));
+  const sent = RUN_SCOPED.find((x) => x.route.endsWith("/reset-sent"));
+  assert.ok(adv, "the advance route disappeared");
+  assert.ok(sent, "the reset-sent route disappeared — nothing would ever count a reset");
+  assert.ok(!/resetCount:\s*phone\.resetCount\s*\+\s*1/.test(adv!.body),
+    "advance increments resetCount again — a reset would be spent before anything left the office machine");
+  assert.ok(!/DESK_PHONE_RESET_REQUESTED/.test(adv!.body), "advance audits a reset it has not sent");
+  assert.ok(/resetCount:\s*phone\.resetCount\s*\+\s*1/.test(sent!.body), "reset-sent no longer counts the reset");
+  assert.ok(/updateMany\(\{\s*where:\s*\{\s*id: phone\.id,\s*resetCount: phone\.resetCount/.test(sent!.body),
+    "reset-sent's claim is no longer atomic on the counter it read");
+  assert.ok(sent!.body.indexOf("resetApprovalFor(") > sent!.body.indexOf("ownRun(req, reply)"),
+    "reset-sent must check the approval names THIS phone, after ownership");
+});
+
 test("the helper that checked a permission before ownership is gone and stays gone", () => {
   assert.ok(!/async function mayAuthorizeReset\b/.test(code),
     "mayAuthorizeReset() is back — it resolves the caller and checks the reset permission in one step, which forces 403 ahead of 404");

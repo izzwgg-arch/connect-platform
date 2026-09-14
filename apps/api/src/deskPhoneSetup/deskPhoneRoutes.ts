@@ -451,6 +451,39 @@ const discoveredBody = z.object({
   })).max(500),
 });
 
+/**
+ * The phone ids a run's reset approval actually named.
+ *
+ * ⛔⛔ AN APPROVAL COVERS THE PHONES THE PERSON TICKED, AND NOTHING ELSE. Until
+ * 2026-09-14 the ladder read only `run.resetAuthorizedAt`, so approving phone A made a
+ * reset "authorised" for every other phone in the same run — including one the person
+ * never saw on the clearing screen. Unreadable stored text reads as "nobody approved".
+ */
+export function approvedResetPhoneIds(run: { resetAuthorizedPhoneIds?: string | null }): string[] {
+  try {
+    const parsed = JSON.parse(run.resetAuthorizedPhoneIds || "[]");
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The approval time as the ladder must see it for THIS phone: null unless it was named. */
+export function resetApprovalFor(
+  run: { resetAuthorizedAt?: Date | null; resetAuthorizedPhoneIds?: string | null },
+  phoneId: string,
+): string | null {
+  if (!run.resetAuthorizedAt) return null;
+  return approvedResetPhoneIds(run).includes(phoneId) ? run.resetAuthorizedAt.toISOString() : null;
+}
+
+/**
+ * How long a phone we have just told to wipe itself is treated as "restarting".
+ * After that the ladder looks at it afresh: the standing PnP listener has been armed for
+ * it the whole time, so a phone that came back quickly has already been answered.
+ */
+export const RESET_REBOOT_WAIT_MS = 120_000;
+
 export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: DeskPhoneDeps) {
   /* ── starting ──────────────────────────────────────────────────────────── */
 
@@ -1028,12 +1061,16 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       return reply.status(400).send({ error: "phone_list_mismatch" });
     }
 
+    // ⛔ A second approval ADDS to the first. Replacing the list would silently take
+    // the approval away from a phone the person already said yes to, and the wizard
+    // would ask them about it again.
+    const approvedIds = [...new Set([...approvedResetPhoneIds(run), ...phones.map((p: any) => String(p.id))])];
     await db.deskPhoneSetupRun.update({
       where: { id: run.id },
       data: {
         resetAuthorizedAt: new Date(),
         resetAuthorizedByUserId: user.sub,
-        resetAuthorizedPhoneIds: JSON.stringify(phones.map((p: any) => p.id)),
+        resetAuthorizedPhoneIds: JSON.stringify(approvedIds),
       },
     });
     for (const p of phones) {
@@ -1070,6 +1107,11 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       // The office machine tried to hand this phone its folder over PnP and gave
       // up (bounded restarts, then listen-only). Can only make LESS happen.
       provisioningHandoffFailed: z.boolean().optional(),
+      // The office machine refused to wipe this phone on its own fence (an analog
+      // adapter, a cordless base, a phone that may be on Wi-Fi, an unknown model, an
+      // app too old to have the step). Can only make LESS happen: the phone gets the
+      // non-destructive hand-off instead.
+      resetRefusedLocally: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!observed.success) return reply.status(400).send({ error: "invalid_request" });
 
@@ -1114,18 +1156,30 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       firmwareTooOld: false,
       provisioningRevertedAfterReset: phone.resetCount > 0 && !provisioningIsOurs && !!phone.provisioningUrl,
       networkSuppliesOldProvisioning: observed.data.networkSuppliesOldProvisioning ?? false,
-      awaitingReboot: observed.data.awaitingReboot ?? phone.state === "WAITING_FOR_REBOOT",
+      awaitingReboot: observed.data.awaitingReboot ?? (
+        phone.state === "WAITING_FOR_REBOOT"
+        && (!phone.resetRequestedAt || Date.now() - new Date(phone.resetRequestedAt).getTime() < RESET_REBOOT_WAIT_MS)
+      ),
       onACall: observed.data.onACall ?? false,
       passwordUnavailable: observed.data.passwordUnavailable ?? false,
       resetDeclined: observed.data.resetDeclined ?? false,
     };
 
+    const resetApprovedAt = resetApprovalFor(run, phone.id);
     let decision = nextEscalation(condition, {
       state: phone.state as PhoneState,
       resetCount: phone.resetCount,
-      resetAuthorizedAt: run.resetAuthorizedAt ? run.resetAuthorizedAt.toISOString() : null,
+      resetAuthorizedAt: resetApprovedAt,
       attempts: phone.attempts,
     });
+    // ⛔ The office machine's own fence said no (or it cannot do the step at all). The
+    // phone still gets set up — through the hand-off, which erases nothing.
+    if (decision.action === "reset_over_lan" && observed.data.resetRefusedLocally) {
+      decision = {
+        action: "set_provisioning", rung: 3,
+        reason: "the office machine refused the reset on its own safety fence; hand the phone its folder instead",
+      };
+    }
     // ⛔ A hand-off the office machine has given up on is ended here, not retried:
     // every further "set_provisioning" would restart somebody's phone again. The
     // ladder itself stays pure; this is the one caller-observed fact it acts on.
@@ -1215,10 +1269,20 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // ⛔ A reset instruction is issued only if the stored record still allows it.
     // The ladder already checked; this checks again against the row, because the row
     // is the thing that survives a crash.
+    //
+    // ⛔⛔ AND IT IS NO LONGER SPENT HERE (2026-09-14). This branch used to claim the
+    // reset — RESET_REQUESTED, resetCount + 1 — the moment it DECIDED one was due. But
+    // nothing had wiped anything yet: the wizard's driver had no branch for this
+    // instruction and `reset_over_sip` has no executor at all, so a phone reaching this
+    // rung lost its one reset (a reset is never given back) without being touched. The
+    // reset is now counted by POST …/reset-sent, which the office machine calls only
+    // after its own fence let the wipe leave the machine. The single-send guarantee
+    // moves with it: the atomic claim lives there now.
+    let resetAuthorizationId: string | null = null;
     if (decision.action === "reset_over_lan" || decision.action === "reset_over_sip") {
       const verdict = decideReset({
         state: phone.state as PhoneState, resetCount: phone.resetCount,
-        resetAuthorizedAt: run.resetAuthorizedAt ? run.resetAuthorizedAt.toISOString() : null,
+        resetAuthorizedAt: resetApprovedAt,
         attempts: phone.attempts,
       });
       if (!verdict.allowed) {
@@ -1228,33 +1292,9 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
           phone: customerPhoneView(phone),
         });
       }
-      // ⛔⛔ THE CLAIM IS ATOMIC, AND THAT IS NOT OPTIONAL. `decideReset` is correct,
-      // but two advance calls landing at once would both read resetCount=0, both pass
-      // the check, and both issue a wipe — a check-then-act race on the one operation
-      // that must never happen twice. The updateMany is guarded on the resetCount and
-      // state we just read, so exactly one concurrent caller flips the row and the
-      // rest see count=0. Same pattern as every other single-use claim in this repo.
-      const claim = await db.deskPhoneSetupPhone.updateMany({
-        where: { id: phone.id, resetCount: phone.resetCount, state: phone.state },
-        data: {
-          state: "RESET_REQUESTED", resetCount: phone.resetCount + 1,
-          resetRequestedAt: new Date(), attempts: phone.attempts + 1,
-        },
-      });
-      if (!claim || claim.count !== 1) {
-        // ⛔ Somebody else advanced this phone between our read and our write. We do
-        // NOT issue a second reset; we report the phone's current state instead.
-        const now = await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } });
-        return reply.send({
-          ok: true, action: "do_nothing", rung: 0, halted: false, handOff: null,
-          customerMessage: null, phone: customerPhoneView(now ?? phone),
-        });
-      }
-      await deps.audit({
-        tenantId: user.tenantId, action: "DESK_PHONE_RESET_REQUESTED",
-        entityType: "DeskPhoneSetupPhone", entityId: phone.id, actorUserId: user.sub,
-        metadata: { mac: phone.macAddress, via: decision.action },
-      });
+      // Ties the wipe the office machine is about to send to THIS run's approval. The
+      // desktop refuses a reset without one; the server checks it names this run.
+      if (run.resetAuthorizedAt) resetAuthorizationId = `${run.id}.${new Date(run.resetAuthorizedAt).getTime()}`;
     } else if (decision.halted) {
       await db.deskPhoneSetupPhone.update({
         where: { id: phone.id },
@@ -1287,8 +1327,81 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       handOff: decision.handOff ?? null,
       customerMessage: decision.customerMessage ?? null,
       ...(decision.action === "set_provisioning" ? { provisioningUrl } : {}),
+      ...(decision.action === "reset_over_lan" ? { resetAuthorizationId } : {}),
       phone: customerPhoneView(fresh),
     });
+  });
+
+  /* ── the office machine says the wipe left it ──────────────────────────── */
+
+  /**
+   * ⛔⛔ THIS IS WHERE A RESET IS COUNTED, AND ONLY HERE.
+   *
+   * The office machine calls it once its own fence let a factory reset leave the
+   * machine — or when the request may have reached the phone (a wipe that "timed out"
+   * was very likely received, because the phone stops answering BECAUSE it is doing
+   * what it was told). A reset it refused on its own fence is never reported, so it is
+   * never counted.
+   *
+   * ⛔ The claim is atomic on the counter and state just read: twenty reports landing at
+   * once produce one reset and one audit row. The approval must still name this phone.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/reset-sent", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (run.status !== "running") return reply.status(404).send({ error: "not_found" });
+    if (!(await allowedToSetUp(user, reply))) return;
+    const body = z.object({ authorizationId: z.string().trim().min(1).max(160) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    // ⛔ The approval id must belong to THIS run. It is not a secret, it is a binding:
+    // a report carrying another run's id is not a report about this run's approval.
+    if (!body.data.authorizationId.startsWith(`${run.id}.`)) {
+      return reply.status(409).send({ error: "authorization_mismatch" });
+    }
+
+    // Already counted (a retried report, or the other of two racing ones): say so.
+    if (phone.state === "WAITING_FOR_REBOOT" && phone.resetCount > 0) {
+      return reply.send({ ok: true, counted: false, alreadyCounted: true, phone: customerPhoneView(phone) });
+    }
+
+    const verdict = phone.skippedAt
+      ? { allowed: false as const, reason: "not_selected", explain: "This phone was left out of the setup." }
+      : decideReset({
+        state: phone.state as PhoneState, resetCount: phone.resetCount,
+        resetAuthorizedAt: resetApprovalFor(run, phone.id),
+        attempts: phone.attempts,
+      });
+    if (!verdict.allowed) {
+      return reply.status(409).send({ error: "reset_not_allowed", reason: verdict.reason });
+    }
+
+    const claim = await db.deskPhoneSetupPhone.updateMany({
+      where: { id: phone.id, resetCount: phone.resetCount, state: phone.state },
+      data: {
+        state: "WAITING_FOR_REBOOT", resetCount: phone.resetCount + 1,
+        resetRequestedAt: new Date(), attempts: phone.attempts + 1,
+        // ⛔ The address the phone had is the old provider's, and a wiped phone no
+        // longer has it. Keeping it would make the very next look read "it went straight
+        // back to the old provider" and hand the phone to Support seconds after its reset.
+        provisioningUrl: null,
+      },
+    });
+    const fresh = await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } });
+    if (!claim || claim.count !== 1) {
+      return reply.send({ ok: true, counted: false, alreadyCounted: true, phone: customerPhoneView(fresh ?? phone) });
+    }
+    await deps.audit({
+      tenantId: user.tenantId, action: "DESK_PHONE_RESET_REQUESTED",
+      entityType: "DeskPhoneSetupPhone", entityId: phone.id, actorUserId: user.sub,
+      metadata: { mac: phone.macAddress, via: "reset_over_lan", reportedBy: "office_machine" },
+    });
+    return reply.send({ ok: true, counted: true, phone: customerPhoneView(fresh ?? phone) });
   });
 
   /* ── progress ──────────────────────────────────────────────────────────── */

@@ -84,6 +84,12 @@ type PhoneMemo = {
    * setup kindly. ⛔ Set ONLY by repeated `cannot_listen` — never by elapsed time.
    */
   provisioningHandoffFailed: boolean;
+  /**
+   * This machine would not wipe the phone (its own fence: an adapter, a cordless base,
+   * a phone that may be on Wi-Fi, an unknown model — or an app too old for the step).
+   * Travels on every advance so the server hands the phone its folder instead.
+   */
+  resetRefusedLocally: boolean;
 };
 
 const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
@@ -137,6 +143,34 @@ export const HINT_APP_TOO_OLD =
   "This computer's Loopcom app is older than this step. Update Loopcom on this computer, then come back here — the setup continues by itself.";
 export const HINT_REFUSED =
   "This computer could not hand the phone its settings just now. We will try again shortly.";
+export const HINT_RESET_SENT =
+  "This phone is clearing its old settings and restarting. We are listening for it to come back.";
+export const HINT_RESET_SKIPPED =
+  "We did not clear this phone — it is safer to hand it its new settings without erasing it.";
+
+/**
+ * What a factory-reset request's answer means for the count.
+ *
+ *   • `sent`    — the wipe left this machine, or may have reached the phone. Counted.
+ *   • `refused` — this machine's own fence stopped it before anything was sent. Never
+ *                 counted; the phone gets the non-destructive hand-off instead.
+ *   • `wait`    — nothing was sent and asking again later is right.
+ *
+ * ⛔⛔ THE ASYMMETRY IS THE POLICY. A refusal the desktop names as a fence is known to
+ * have sent nothing. Anything else after the fence — a timeout, an unreachable phone, an
+ * HTTP error — may have reached the handset, and a phone told to wipe itself stops
+ * answering precisely BECAUSE it is doing it. Counting those is how one wipe never
+ * becomes two. `already_reset_this_session` means an earlier request DID leave.
+ */
+export function classifyResetAnswer(r: any): "sent" | "refused" | "wait" {
+  if (!r) return "wait"; // the call never reached the app, so nothing left it
+  if (r.ok === true) return r.sent === true ? "sent" : "wait";
+  const why = String(r.refused ?? "");
+  if (why === "already_reset_this_session") return "sent";
+  if (why === "reset_not_authorized" || why === "too_soon_for_this_phone") return "wait";
+  if (why === "unknown_operation" || why === "not_a_private_address" || why.startsWith("reset_unsafe:")) return "refused";
+  return "sent";
+}
 
 export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge, now: () => number = () => Date.now()) {
   const memos = new Map<string, PhoneMemo>();
@@ -150,6 +184,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         stalledOn: null, stalledCount: 0,
         provisioningAttempts: 0, provisioningFirstAskedAt: null,
         cannotListenCount: 0, provisioningHandoffFailed: false,
+        resetRefusedLocally: false,
       };
       memos.set(id, m);
     }
@@ -210,6 +245,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         passwordUnavailable: m.passwordUnavailable,
         resetDeclined: m.resetDeclined,
         provisioningHandoffFailed: m.provisioningHandoffFailed,
+        resetRefusedLocally: m.resetRefusedLocally,
         reachableOnLan: Boolean(phone.ip),
       }).catch(() => null);
       if (!decision?.ok) continue;
@@ -270,6 +306,53 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
       //     until another brand's executor ships.
       const canPnp = vendorSupportsPnpHandoff(phone.vendor);
       const canHttp = vendorSupportsHttpActions(phone.vendor);
+
+      if (action === "reset_over_lan") {
+        // ⛔ Only ever reached after a person ticked this phone on the clearing screen
+        // and the server confirmed the approval names it.
+        const authorizationId = typeof decision.resetAuthorizationId === "string" ? decision.resetAuthorizationId : "";
+        if (!authorizationId) { markStall(m, action); continue; }
+        // ⛔ Only a brand we hold the documented reset shape for is ever asked. Every
+        // other phone takes the hand-off, which needs no reset at all.
+        if (!canHttp) {
+          m.resetRefusedLocally = true;
+          hints[phone.id] = HINT_RESET_SKIPPED;
+          clearStall(m);
+          continue;
+        }
+        // ⛔ The model the fence judges is what the PHONE says right now — never the
+        // stored label, which a person may have picked from a list.
+        const fp = await bridge.run({
+          op: "fingerprint", ip: phone.ip,
+          ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+        }).catch(() => null);
+        const model = fp?.ok && typeof fp.fingerprint?.model === "string" && fp.fingerprint.model
+          ? fp.fingerprint.model : null;
+        const r = await bridge.run({
+          op: "factory_reset", ip: phone.ip, model, link: "unknown", authorizationId,
+          ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+        }).catch(() => null);
+        const outcome = classifyResetAnswer(r);
+        if (outcome === "refused") {
+          m.resetRefusedLocally = true;
+          hints[phone.id] = r?.refused === "unknown_operation" ? HINT_APP_TOO_OLD : HINT_RESET_SKIPPED;
+          clearStall(m);
+          continue;
+        }
+        if (outcome === "wait") { markStall(m, action); continue; }
+        // Counted on the server. Retried a little: if every report is lost, the next
+        // tick's advance asks again, this machine answers already_reset_this_session,
+        // and the report goes out then — never a second wipe.
+        for (let i = 0; i < 3; i += 1) {
+          const ack = await api.post<any>(`/desk-phones/runs/${runId}/phones/${phone.id}/reset-sent`, { authorizationId })
+            .catch(() => null);
+          if (ack?.ok) break;
+        }
+        performed.push({ phoneId: phone.id, action });
+        hints[phone.id] = HINT_RESET_SENT;
+        clearStall(m);
+        continue;
+      }
 
       if (action === "try_default_credentials") {
         if (!canHttp) { markStall(m, action); continue; }
@@ -357,7 +440,8 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         markStall(m, action);
         continue;
       }
-      // Everything else — reset_over_sip, generate_template,
+      // Everything else — reset_over_sip (no executor exists, and the ladder cannot
+      // reach it: a phone registered to us returns at rung 0 or 5 first), generate_template,
       // verify_registration, do_nothing, halt — is the server's or the PBX's to do,
       // or is a wait. The next tick looks again.
       markStall(m, action);

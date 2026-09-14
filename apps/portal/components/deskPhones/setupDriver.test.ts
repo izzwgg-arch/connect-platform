@@ -8,7 +8,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS } from "./setupDriver";
+import {
+  createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS, classifyResetAnswer,
+  HINT_RESET_SENT, HINT_RESET_SKIPPED, HINT_APP_TOO_OLD,
+} from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
 
@@ -436,4 +439,125 @@ test("set_provisioning: cannot_listen never spends a RESTART, and the give-up ne
     assert.equal(advances[i].body.provisioningHandoffFailed, false, `told the server to stop on refusal ${i + 1}`);
   }
   assert.equal(advances[advances.length - 1].body.provisioningHandoffFailed, true, "three in a row is a real verdict");
+});
+
+/* ── reset_over_lan: the one destructive step, proven with a fake bridge only ── */
+
+const RESET_DECISION = { action: "reset_over_lan", resetAuthorizationId: "run_1.1789000000000" };
+
+function resetBridge(answer: (req: any) => any, model = "T54W") {
+  const ops: any[] = [];
+  return {
+    ops,
+    run: async (req: any) => {
+      ops.push(req);
+      if (req.op === "fingerprint") return { ok: true, fingerprint: { vendor: "yealink", model, firmware: "96.86.0.1", confidence: "high" } };
+      return answer(req);
+    },
+  };
+}
+const resetReports = (api: any) => api.calls.filter((c: any) => c.path.endsWith("/reset-sent"));
+
+test("reset_over_lan: reads the model off the phone, then asks for the wipe with this run's approval", async () => {
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  const bridge = resetBridge(() => ({ ok: true, op: "factory_reset", sent: true }));
+  const out = await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(bridge.ops[0].op, "fingerprint", "the fence judges what the phone says, so ask it first");
+  assert.deepEqual(bridge.ops[1], {
+    op: "factory_reset", ip: "192.168.1.20", model: "T54W", link: "unknown", authorizationId: RESET_DECISION.resetAuthorizationId,
+  });
+  const reports = resetReports(api);
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0].body, { authorizationId: RESET_DECISION.resetAuthorizationId });
+  assert.equal(out.hints.p1, HINT_RESET_SENT);
+});
+
+test("reset_over_lan: no approval id on the instruction means nothing is asked of the phone", async () => {
+  const api = fakeApi([phone("p1")], { p1: { action: "reset_over_lan" } });
+  const bridge = resetBridge(() => ({ ok: true, sent: true }));
+  await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(bridge.ops.length, 0);
+  assert.equal(resetReports(api).length, 0);
+});
+
+test("reset_over_lan: a brand we hold no reset shape for is never wiped, and the server hears so", async () => {
+  const api = fakeApi([phone("p1", { vendor: "grandstream" })], { p1: RESET_DECISION });
+  const bridge = resetBridge(() => ({ ok: true, sent: true }));
+  const d = createSetupDriver("r1", api, bridge);
+  const out = await d.tick();
+  assert.equal(bridge.ops.length, 0, "no fingerprint, no wipe");
+  assert.equal(out.hints.p1, HINT_RESET_SKIPPED);
+  await d.tick();
+  const adv = api.calls.filter((c: any) => c.path.endsWith("/advance")).at(-1)!;
+  assert.equal(adv.body.resetRefusedLocally, true);
+  assert.equal(resetReports(api).length, 0);
+});
+
+test("reset_over_lan: the desktop fence refusing is never reported as a reset", async () => {
+  for (const refused of ["reset_unsafe:ata", "reset_unsafe:wireless_link", "not_a_private_address"]) {
+    const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+    const bridge = resetBridge(() => ({ ok: false, refused }));
+    const d = createSetupDriver("r1", api, bridge);
+    const out = await d.tick();
+    assert.equal(resetReports(api).length, 0, `${refused} was counted as a wipe`);
+    assert.equal(out.hints.p1, HINT_RESET_SKIPPED);
+    await d.tick();
+    assert.equal(api.calls.filter((c: any) => c.path.endsWith("/advance")).at(-1)!.body.resetRefusedLocally, true);
+  }
+});
+
+test("reset_over_lan: an app too old for the step says update, and spends nothing", async () => {
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  const out = await createSetupDriver("r1", api, resetBridge(() => ({ ok: false, refused: "unknown_operation" }))).tick();
+  assert.equal(out.hints.p1, HINT_APP_TOO_OLD);
+  assert.equal(resetReports(api).length, 0);
+});
+
+test("reset_over_lan: an answer that may have reached the phone IS counted (one wipe never becomes two)", async () => {
+  for (const answer of [{ ok: false, refused: "timeout" }, { ok: false, refused: "unreachable" }, { ok: false, refused: "already_reset_this_session" }]) {
+    const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+    await createSetupDriver("r1", api, resetBridge(() => answer)).tick();
+    assert.equal(resetReports(api).length, 1, `${answer.refused} was not reported`);
+  }
+});
+
+test("reset_over_lan: nothing left the machine (not authorised, too soon, bridge threw) — no report", async () => {
+  for (const run of [
+    async () => ({ ok: false, refused: "reset_not_authorized" }),
+    async () => ({ ok: false, refused: "too_soon_for_this_phone" }),
+    async () => { throw new Error("bridge gone"); },
+  ]) {
+    const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+    const ops: any[] = [];
+    const bridge = { ops, run: async (req: any) => { ops.push(req); return req.op === "fingerprint" ? { ok: false } : run(); } };
+    await createSetupDriver("r1", api, bridge).tick();
+    assert.equal(resetReports(api).length, 0);
+  }
+});
+
+test("reset_over_lan: a lost report is retried, never re-wiped", async () => {
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  let failures = 2;
+  const post = api.post;
+  (api as any).post = async (path: string, body?: unknown) => {
+    if (path.endsWith("/reset-sent") && failures > 0) { failures -= 1; api.calls.push({ method: "POST", path, body }); throw new Error("net"); }
+    return post(path, body);
+  };
+  const bridge = resetBridge(() => ({ ok: true, sent: true }));
+  await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(bridge.ops.filter((o: any) => o.op === "factory_reset").length, 1);
+  assert.equal(resetReports(api).length, 3);
+});
+
+test("classifyResetAnswer: the counting policy, exhaustively", () => {
+  assert.equal(classifyResetAnswer(null), "wait");
+  assert.equal(classifyResetAnswer({ ok: true, sent: true }), "sent");
+  assert.equal(classifyResetAnswer({ ok: true, sent: false }), "wait");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "reset_unsafe:unknown_model" }), "refused");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "unknown_operation" }), "refused");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "not_a_private_address" }), "refused");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "reset_not_authorized" }), "wait");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "too_soon_for_this_phone" }), "wait");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "already_reset_this_session" }), "sent");
+  assert.equal(classifyResetAnswer({ ok: false, refused: "http_500" }), "sent");
 });
