@@ -12,6 +12,8 @@ import {
   createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS, classifyResetAnswer,
   HINT_RESET_SENT, HINT_RESET_SKIPPED, HINT_APP_TOO_OLD,
   HINT_CLEARING, HINT_CONNECTED,
+  HINT_RESTARTING, HINT_NEEDS_SERIAL, HINT_CANNOT_LISTEN,
+  CLOUD_ASK_INTERVAL_MS, CLOUD_RESTART_WAIT_MS, PROVISIONING_REBOOT_ATTEMPTS,
 } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
@@ -608,4 +610,146 @@ test("classifyResetAnswer: the counting policy, exhaustively", () => {
   assert.equal(classifyResetAnswer({ ok: false, refused: "too_soon_for_this_phone" }), "wait");
   assert.equal(classifyResetAnswer({ ok: false, refused: "already_reset_this_session" }), "sent");
   assert.equal(classifyResetAnswer({ ok: false, refused: "http_500" }), "sent");
+});
+
+/* ── the maker's cloud: the server names the mechanism, this machine listens and asks ── */
+
+const FOLDER = "https://m.connectcomunications.com/phoneprov/0123456789abcdef/";
+const gsPhone = (over: any = {}) => phone("p1", { vendor: "grandstream", model: "GXP2170", mac: "c074ad8c605f", ...over });
+
+/** An api whose /prepare answers come from a queue, so each tick's cloud outcome is scripted. */
+function cloudApi(phones: any[], decision: any, prepareReplies: any[]) {
+  const api = fakeApi(phones, { p1: decision });
+  const post = api.post;
+  (api as any).post = async (path: string, body?: any) => {
+    if (path.endsWith("/prepare")) {
+      api.calls.push({ method: "POST", path, body });
+      const next = prepareReplies.length > 1 ? prepareReplies.shift() : prepareReplies[0];
+      if (next instanceof Error) throw next;
+      return next;
+    }
+    return post(path, body);
+  };
+  return api;
+}
+const prepares = (api: any) => api.calls.filter((c: any) => c.path.endsWith("/prepare"));
+
+test("cloud reset: LISTEN first, then the server runs the clear; nothing is wiped from this machine", async () => {
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" },
+    [{ ok: true, plan: { manualAction: null }, ran: [{ step: "claim", ok: true }, { step: "factory_reset", ok: true }] }]);
+  const bridge = fakeBridge();
+  const out = await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(bridge.ops[0].op, "set_provisioning", "the listener is armed before the maker is asked");
+  assert.equal(bridge.ops[0].reboot, false);
+  assert.equal(bridge.ops[0].url, FOLDER);
+  assert.ok(!bridge.ops.some((o: any) => o.op === "factory_reset"), "the office machine never wipes a cloud brand");
+  assert.equal(prepares(api).length, 1);
+  assert.equal(resetReports(api).length, 0, "the server counted the cloud reset itself");
+  assert.equal(out.hints.p1, HINT_RESET_SENT);
+  assert.ok(out.performed.some((p) => p.action === "reset_via_cloud"));
+});
+
+test("cloud reset: nothing is cleared while this machine cannot listen", async () => {
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER }, [{ ok: true, ran: [] }]);
+  const bridge = { ops: [] as any[], run: async (req: any) => { bridge.ops.push(req); return { ok: false, refused: "cannot_listen" }; } };
+  const out = await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(prepares(api).length, 0);
+  assert.equal(out.hints.p1, HINT_CANNOT_LISTEN);
+});
+
+test("cloud reset: the maker needs the serial — the person is asked, the maker is not hammered, and the answer resumes it", async () => {
+  let clock = 1_000_000;
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER }, [
+    { ok: true, plan: { manualAction: { code: "serial_required", message: "Scan the label." } }, ran: [] },
+    { ok: true, plan: { manualAction: null }, ran: [{ step: "factory_reset", ok: true }] },
+  ]);
+  const d = createSetupDriver("r1", api, fakeBridge(), () => clock);
+  const first = await d.tick();
+  assert.deepEqual(first.needs.map((n) => n.kind), ["serial"]);
+  assert.equal(first.hints.p1, HINT_NEEDS_SERIAL);
+
+  clock += 4_000;
+  await d.tick();
+  assert.equal(prepares(api).length, 1, `asked again inside ${CLOUD_ASK_INTERVAL_MS} ms`);
+
+  d.serialProvided("p1");
+  const resumed = await d.tick();
+  assert.equal(prepares(api).length, 2, "a saved serial is tried on the very next tick");
+  assert.equal(resumed.hints.p1, HINT_RESET_SENT);
+});
+
+test("cloud reset: 'I can't find it' ends the cloud for that phone, which continues the way it did before", async () => {
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" },
+    [{ ok: true, plan: { manualAction: { code: "serial_required", message: "Scan the label." } }, ran: [] }]);
+  const bridge = fakeBridge();
+  const d = createSetupDriver("r1", api, bridge);
+  await d.tick();
+  d.serialUnavailable("p1");
+  const next = await d.tick();
+  assert.equal(prepares(api).length, 1);
+  assert.equal(next.hints.p1, HINT_RESET_SKIPPED);
+  // The observation travels on the NEXT advance, which is what turns the server to the hand-off.
+  await d.tick();
+  const adv = api.calls.filter((c: any) => c.path.endsWith("/advance")).at(-1)!;
+  assert.equal(adv.body.resetRefusedLocally, true, "the server hands the phone its folder instead");
+  assert.equal(prepares(api).length, 1);
+});
+
+test("cloud reset: a refusal that will not change ends the cloud; a retryable one is asked again later", async () => {
+  let clock = 5_000_000;
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" }, [
+    { ok: true, plan: { manualAction: null }, ran: [{ step: "factory_reset", ok: false, retryable: true, message: "Busy, try again." }] },
+    { ok: true, plan: { manualAction: null }, ran: [{ step: "factory_reset", ok: false, retryable: false, message: "Not allowed." }] },
+  ]);
+  const d = createSetupDriver("r1", api, fakeBridge(), () => clock);
+  const busy = await d.tick();
+  assert.equal(busy.hints.p1, "Busy, try again.");
+  clock += CLOUD_ASK_INTERVAL_MS;
+  const refused = await d.tick();
+  assert.equal(refused.hints.p1, "Not allowed.");
+  clock += CLOUD_ASK_INTERVAL_MS;
+  const after = await d.tick();
+  assert.equal(prepares(api).length, 2, "a permanent refusal is not asked again");
+  assert.equal(after.hints.p1, HINT_RESET_SKIPPED);
+});
+
+test("cloud restart: listening first, the maker restarts the phone at most twice, spaced out, never every tick", async () => {
+  let clock = 9_000_000;
+  const api = cloudApi([gsPhone({ resetCount: 1 })], { action: "set_provisioning", via: "vendor_cloud", provisioningUrl: FOLDER },
+    [{ ok: true, plan: { manualAction: null }, ran: [{ step: "reboot", ok: true }] }]);
+  const bridge = fakeBridge();
+  const d = createSetupDriver("r1", api, bridge, () => clock);
+
+  const first = await d.tick();
+  assert.equal(bridge.ops[0].op, "set_provisioning");
+  assert.equal(bridge.ops[0].reboot, false, "the office machine never restarts a cloud brand itself");
+  assert.equal(prepares(api).length, 1);
+  assert.equal(first.hints.p1, HINT_RESTARTING);
+
+  for (let i = 0; i < 10; i += 1) { clock += 4_000; await d.tick(); }
+  assert.equal(prepares(api).length, 1, "a restart that is under way is waited for");
+
+  clock += CLOUD_RESTART_WAIT_MS;
+  await d.tick();
+  assert.equal(prepares(api).length, 2);
+
+  for (let i = 0; i < 5; i += 1) { clock += CLOUD_RESTART_WAIT_MS; await d.tick(); }
+  assert.equal(prepares(api).length, PROVISIONING_REBOOT_ATTEMPTS, "restarts are bounded like every restart");
+});
+
+test("cloud restart: a phone that already asked and got its folder is not restarted", async () => {
+  const api = cloudApi([gsPhone({ resetCount: 1 })], { action: "set_provisioning", via: "vendor_cloud", provisioningUrl: FOLDER },
+    [{ ok: true, ran: [{ step: "reboot", ok: true }] }]);
+  const bridge = { ops: [] as any[], run: async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, delivered: true }; } };
+  await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(prepares(api).length, 0);
+});
+
+test("a brand the server did NOT name a cloud for takes exactly the path it took before", async () => {
+  const api = cloudApi([gsPhone()], { action: "reset_over_lan", resetAuthorizationId: "run_1.1" }, [{ ok: true, ran: [] }]);
+  const bridge = fakeBridge();
+  const out = await createSetupDriver("r1", api, bridge).tick();
+  assert.equal(prepares(api).length, 0);
+  assert.equal(bridge.ops.length, 0);
+  assert.equal(out.hints.p1, HINT_RESET_SKIPPED);
 });

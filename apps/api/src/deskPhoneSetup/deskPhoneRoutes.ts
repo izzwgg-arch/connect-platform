@@ -24,7 +24,8 @@ import {
   pnpArmList, planPhoneRetry, retryClears, retryableCount, inheritedResetCount,
   identifyPhone,
   describeDeviceType, describeProvisioningStatus, identifyDevice, provisioningStatusFor,
-  type DeviceType, type PhoneCondition, type PhoneState,
+  deviceMechanismsFor, manufacturerFromText,
+  type DeviceType, type PhoneCondition, type PhoneState, type ProviderReadiness,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 import { ensureProvisioningRecord, type RecordOutcome, type RecordQuery } from "./provisioningRecordWriter";
@@ -570,6 +571,21 @@ export function resetApprovalFor(
 export const RESET_REBOOT_WAIT_MS = 120_000;
 
 export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: DeskPhoneDeps) {
+  // The makers' device clouds, one registry for the whole wizard (the ladder asks it which
+  // mechanism clears and restarts a brand; the cloud routes perform the steps).
+  const registry = deps.deviceProviders ?? createDeviceProviderRegistry({ db, request: deps.gdmsRequest });
+  // ⛔ Readiness is asked on every advance of a phone whose maker has a cloud provider, and the
+  // wizard advances every four seconds. Held briefly; a failure reads as "no cloud", which only
+  // ever makes LESS happen (the phone takes the path it took before the cloud existed).
+  let readinessCache: { at: number; list: ProviderReadiness[] } | null = null;
+  const cloudReadiness = async (): Promise<ProviderReadiness[]> => {
+    if (readinessCache && Date.now() - readinessCache.at < 30_000) return readinessCache.list;
+    let list: ProviderReadiness[] = [];
+    try { list = await registry.allReadiness(); } catch { list = []; }
+    readinessCache = { at: Date.now(), list };
+    return list;
+  };
+
   /* ── starting ──────────────────────────────────────────────────────────── */
 
   app.post("/desk-phones/runs", async (req: any, reply: any) => {
@@ -1413,10 +1429,26 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       }
     }
 
+    // ⛔⛔ WHICH MECHANISM DOES THE STEP — decided HERE, per brand, never by the office machine.
+    // The ladder says WHAT (clear it, hand it its settings); `deviceMechanismsFor` says HOW for
+    // this brand. A brand whose maker cloud is connected and can clear/restart it (a Grandstream
+    // with GDMS) is told `via: "vendor_cloud"`: the office machine listens, and the step itself
+    // runs through `/prepare`. Every other brand is answered exactly as before this existed.
+    let via: "vendor_cloud" | null = null;
+    if (
+      (decision.action === "reset_over_lan" || decision.action === "set_provisioning")
+      && registry.providerFor(manufacturerFromText(phone.vendor))
+    ) {
+      const mechanisms = deviceMechanismsFor(phone.vendor, await cloudReadiness());
+      if (decision.action === "reset_over_lan" && mechanisms.reset === "vendor_cloud") via = "vendor_cloud";
+      if (decision.action === "set_provisioning" && mechanisms.restart === "vendor_cloud") via = "vendor_cloud";
+    }
+
     // The folder a reset phone needs, resolved only when the instruction is to
-    // point the phone at us. Null means "no URL known" — the driver waits.
+    // point the phone at us — or to clear it through the maker's cloud, so the office
+    // machine is listening before the wipe. Null means "no URL known" — the driver waits.
     let provisioningUrl: string | null = null;
-    if (decision.action === "set_provisioning") {
+    if (decision.action === "set_provisioning" || via === "vendor_cloud") {
       try { provisioningUrl = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(user.tenantId); }
       catch { provisioningUrl = null; }
     }
@@ -1481,7 +1513,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       halted: Boolean(decision.halted),
       handOff: decision.handOff ?? null,
       customerMessage: decision.customerMessage ?? null,
-      ...(decision.action === "set_provisioning" ? { provisioningUrl } : {}),
+      ...(decision.action === "set_provisioning" || via === "vendor_cloud" ? { provisioningUrl } : {}),
+      ...(via ? { via } : {}),
       ...(decision.action === "reset_over_lan" ? { resetAuthorizationId } : {}),
       phone: customerPhoneView(fresh),
     });
@@ -1936,7 +1969,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     resetApprovalFor,
     isOurProvisioningUrl: (url) => classifyOurs(url, deps.ourProvisioningHosts()),
     isRegistered: deps.isRegistered ?? defaultIsRegistered,
-    registry: deps.deviceProviders ?? createDeviceProviderRegistry({ db, request: deps.gdmsRequest }),
+    registry,
     withMacLock: deps.withMacLock ?? defaultWithMacLock,
   });
 }

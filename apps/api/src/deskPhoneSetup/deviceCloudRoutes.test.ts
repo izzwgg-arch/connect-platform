@@ -96,6 +96,7 @@ const OTHER = { sub: "u_9", tenantId: "t_other", email: "someone@other.example",
 const STAFF = { sub: "u_s", tenantId: "t_loopcom", email: "izzy@loopcom.net", role: "SUPER_ADMIN" };
 
 const MAC = "C0:74:AD:8C:60:5F";
+const FOLDER = "https://m.connectcomunications.com/phoneprov/0123456789abcdef/";
 const MAC12 = "c074ad8c605f";
 const SN = "20EZ115N308C605F";
 
@@ -144,6 +145,7 @@ async function makeApp(user: any, opts: { registry?: any } = {}) {
     deviceProviders: opts.registry ?? registry(),
     withMacLock: sharedLock,
     gdmsRequest: sim.fetch,
+    provisioningUrlFor: async () => FOLDER,
   });
   return app;
 }
@@ -568,6 +570,72 @@ test("an unticked device still locked to another provider waits for the tick, an
   assert.deepEqual(out.ran, []);
   assert.equal(sim.addCalls, 0);
   assert.equal(sim.tasks.length, 0);
+});
+
+/* ── the wizard's ladder names the mechanism per brand ───────────────────── */
+
+async function tickedAssigned(app: any, phone: Record<string, unknown> = {}) {
+  const ctx = await runWithPhone(app, phone);
+  ctx.row.extNumber = "101"; ctx.row.extensionId = "e1";
+  await tick(app, ctx.runId, [ctx.row.id]);
+  return ctx;
+}
+const advance = async (app: any, base: string) =>
+  body(await app.inject({ method: "POST", url: `${base}/advance`, payload: { reachableOnLan: true } }));
+
+test("a ticked Grandstream with GDMS connected is told to clear THROUGH the maker's cloud, with the folder to listen for", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base } = await tickedAssigned(app);
+  const out = await advance(app, base);
+  assert.equal(out.action, "reset_over_lan", JSON.stringify(out));
+  assert.equal(out.via, "vendor_cloud");
+  assert.equal(out.provisioningUrl, FOLDER, "the office machine listens before the wipe");
+  assert.equal(sim.tasks.length, 0, "deciding sends nothing to the maker");
+});
+
+test("the same Grandstream without a connected cloud is answered exactly as before", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { registry: registry({ unconfigured: true }) });
+  const { base } = await tickedAssigned(app);
+  const out = await advance(app, base);
+  assert.equal(out.action, "reset_over_lan");
+  assert.equal(out.via, undefined);
+  assert.equal(out.provisioningUrl, undefined);
+});
+
+test("a Yealink is never sent to a maker cloud, whatever cloud is connected", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base } = await tickedAssigned(app, { mac: "80:5E:C0:B3:B2:D0", vendor: "Yealink", model: "T42S" });
+  const out = await advance(app, base);
+  assert.equal(out.action, "reset_over_lan");
+  assert.equal(out.via, undefined);
+});
+
+test("once its reset is spent, a Grandstream is handed its folder and restarted through the maker's cloud", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await tickedAssigned(app);
+  row.resetCount = 1;
+  const out = await advance(app, base);
+  assert.equal(out.action, "set_provisioning", JSON.stringify(out));
+  assert.equal(out.via, "vendor_cloud");
+  assert.equal(out.provisioningUrl, FOLDER);
+});
+
+test("an unticked Grandstream is never given a mechanism at all", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row, runId } = await tickedAssigned(app);
+  await tick(app, runId, []);
+  const out = await advance(app, base);
+  assert.equal(out.action, "do_nothing");
+  assert.equal(out.skipped, true);
+  assert.equal(out.via, undefined);
+  assert.equal(row.resetCount, 0);
 });
 
 /* ── factory reset through the maker's cloud ─────────────────────────────── */

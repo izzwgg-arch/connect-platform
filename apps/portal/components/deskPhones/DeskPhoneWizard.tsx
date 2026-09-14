@@ -173,6 +173,10 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   /** Per-phone, plain-English: what this computer is doing for that phone right now. */
   const [hints, setHints] = useState<Record<string, string>>({});
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  /** Per-phone serial number being typed for the maker's cloud. */
+  const [serialDrafts, setSerialDrafts] = useState<Record<string, string>>({});
+  /** Phones already asked about in their maker's cloud this session (asked once each). */
+  const cloudLookedUpRef = useRef<Set<string>>(new Set());
   /** Per-phone make/model the person is picking, before they save it. */
   const [identifyDraft, setIdentifyDraft] = useState<Record<string, { make: string; model: string }>>({});
   const [identifyError, setIdentifyError] = useState<Record<string, string>>({});
@@ -207,6 +211,28 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     setSubnet(out.run.subnet);
     return out;
   }, []);
+
+  /*
+    ⛔ A phone we know the MAKER of but not the MODEL is asked about in that maker's cloud, once,
+    as soon as the list shows it (Izzy, 2026-09-14: the second GXP "didn't try to look up the other
+    MAC addresses to find out what model phones they are"). Read-only at the maker; the server
+    answers "not connected" honestly for a maker with no cloud, and a phone that is not in the
+    cloud account stays unnamed — the label box below is still there for it.
+  */
+  useEffect(() => {
+    if (!runId || (step !== "found" && step !== "match")) return;
+    const unnamed = phones.filter((p) => !p.model && /grandstream|yealink|fanvil|poly/i.test(p.vendor ?? "") && !cloudLookedUpRef.current.has(p.id));
+    if (!unnamed.length) return;
+    for (const p of unnamed) cloudLookedUpRef.current.add(p.id);
+    void (async () => {
+      let learned = false;
+      for (const p of unnamed) {
+        const r = await apiPost<any>(`/desk-phones/runs/${runId}/phones/${p.id}/vendor-lookup`, {}).catch(() => null);
+        if (r?.ok && r.phone?.model) learned = true;
+      }
+      if (learned) await loadRun(runId).catch(() => null);
+    })();
+  }, [runId, step, phones, loadRun]);
 
   const start = useCallback(async () => {
     setBusy(true); setError(null);
@@ -494,6 +520,33 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const declineAllResets = useCallback((allIds: string[]) => {
     driverRef.current?.declineReset(allIds);
     setNeeds((n) => n.filter((x) => x.kind !== "reset_authorization"));
+  }, []);
+
+  /**
+   * The serial number off the phone's label, for the maker's cloud. ⛔ Sent through the same
+   * label route the found screen uses, so the server refuses a label from a different phone and
+   * stores only what the label really says.
+   */
+  const supplySerial = useCallback(async (phoneId: string, label: string) => {
+    if (!runId) return;
+    const typed = (serialDrafts[phoneId] ?? "").trim();
+    if (!typed) return;
+    const text = /\b(S\/?N|SN|SERIAL)\b/i.test(typed) ? typed : `S/N: ${typed}`;
+    try {
+      await apiPost(`/desk-phones/runs/${runId}/phones/${phoneId}/scan-label`, { text: text.slice(0, 600) });
+      driverRef.current?.serialProvided(phoneId);
+      setSerialDrafts((d) => { const { [phoneId]: _gone, ...rest } = d; return rest; });
+      setNeeds((n) => n.filter((x) => !(x.kind === "serial" && x.phoneId === phoneId)));
+      setError(null);
+    } catch (err: any) {
+      setError(err?.body?.message || `The serial number for ${label} could not be read. Check it against the label and try again.`);
+    }
+  }, [runId, serialDrafts]);
+
+  /** "I don't have it" — the phone continues without the maker's cloud. Never a wall. */
+  const noSerial = useCallback((phoneId: string) => {
+    driverRef.current?.serialUnavailable(phoneId);
+    setNeeds((n) => n.filter((x) => !(x.kind === "serial" && x.phoneId === phoneId)));
   }, []);
 
   /** "I don't know the password" — a complete answer, never a wall. */
@@ -1114,6 +1167,46 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               <div className="dps-wz-foot">
                 <button className="dps-btn dps-btn-g dps-btn-big" onClick={() => dontKnowPassword(n.phoneId)}>
                   I don&rsquo;t know it — Loopcom can sort this one out
+                </button>
+                <span className="dps-sp" />
+              </div>
+            </>
+          );
+        })()}
+
+        {step === "live" && !needs.some((n) => n.kind === "reset_authorization" || n.kind === "password") && needs.some((n) => n.kind === "serial") && (() => {
+          const n: any = needs.find((x) => x.kind === "serial");
+          return (
+            <>
+              <div className="dps-wz-body">
+                <h3>{n.label} needs its serial number</h3>
+                <p className="dps-sub">
+                  To clear this phone and connect it, its maker needs the <b>serial number</b> printed on the
+                  label underneath it. Type it in, or point a barcode scanner at the label.
+                </p>
+                <div className="dps-ask" style={{ marginTop: 18 }}>
+                  <b>Where is it?</b>
+                  <p>Turn the phone over. The label has the model, the MAC address and a line starting
+                  with S/N &mdash; that last one is the serial number.</p>
+                  <div className="dps-ask-row">
+                    <input
+                      id={`dps-serial-${n.phoneId}`}
+                      className="dps-input"
+                      maxLength={60}
+                      placeholder="Serial number from the label"
+                      value={serialDrafts[n.phoneId] ?? ""}
+                      onChange={(e) => { const v = e.target.value; setSerialDrafts((d) => ({ ...d, [n.phoneId]: v })); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") void supplySerial(n.phoneId, n.label); }}
+                      aria-label={`Serial number for ${n.label}`}
+                    />
+                    <button className="dps-btn dps-btn-p" onClick={() => void supplySerial(n.phoneId, n.label)}>Use it</button>
+                  </div>
+                </div>
+                {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
+              </div>
+              <div className="dps-wz-foot">
+                <button className="dps-btn dps-btn-g dps-btn-big" onClick={() => noSerial(n.phoneId)}>
+                  I can&rsquo;t find it &mdash; continue without it
                 </button>
                 <span className="dps-sp" />
               </div>

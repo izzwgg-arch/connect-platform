@@ -17,6 +17,7 @@ export * from "./retry";
 export * from "./resetSafety";
 export * from "./modelPicker";
 export * from "./deviceIdentification";
+export * from "./deviceMechanisms";
 
 /**
  * The PBX's own provisioning catalogue (generated) and the per-brand adapters built on it.

@@ -50,7 +50,9 @@ export type DiagnosticPhone = {
 /** What the wizard must put in front of a person before anything continues. */
 export type NeedsPerson =
   | { kind: "reset_authorization"; phoneIds: string[]; message: string }
-  | { kind: "password"; phoneId: string; label: string; message: string };
+  | { kind: "password"; phoneId: string; label: string; message: string }
+  /** The maker's cloud will only take this phone with the serial number off its label. */
+  | { kind: "serial"; phoneId: string; label: string; message: string };
 
 export type TickResult = {
   finished: boolean;
@@ -92,6 +94,16 @@ type PhoneMemo = {
    * Travels on every advance so the server hands the phone its folder instead.
    */
   resetRefusedLocally: boolean;
+  /** When this machine last asked the server to run a maker-cloud step, to pace GDMS calls. */
+  cloudAskedAt: number | null;
+  /** Restarts the maker's cloud accepted for this phone (bounded like every restart). */
+  cloudRestarts: number;
+  cloudRestartAt: number | null;
+  /**
+   * The maker's cloud cannot do this phone (no serial, another account holds it, a refusal
+   * that will not change). The phone continues exactly as it would without a cloud.
+   */
+  cloudUnavailable: boolean;
   /**
    * The last thing we told the person about this phone. ⛔ Kept so a WAIT never blanks the
    * row: most ticks perform nothing (the phone is restarting, or registering), and a row
@@ -133,6 +145,13 @@ const MAX_CONSECUTIVE_STALLS = 3;
 export const PROVISIONING_REBOOT_ATTEMPTS = 2;
 /** Consecutive `cannot_listen` refusals before we admit this machine cannot do it. */
 export const MAX_CANNOT_LISTEN_ATTEMPTS = 3;
+/**
+ * ⛔ The maker's cloud is asked at most this often per phone. Every ask is a round trip to the
+ * maker (a lookup at least), and the wizard ticks every four seconds.
+ */
+export const CLOUD_ASK_INTERVAL_MS = 30_000;
+/** A restart the maker's cloud accepted is given this long to bring the phone back before another. */
+export const CLOUD_RESTART_WAIT_MS = 180_000;
 
 export const HINT_HANDED_OFF =
   "Told this phone where Loopcom is. It is fetching its settings and will restart on its own.";
@@ -157,6 +176,9 @@ export const HINT_RESET_SKIPPED =
   "Loopcom can't clear this make of phone from your computer yet, so we are sending it its settings without clearing it.";
 export const HINT_LOCKED =
   "This phone has a password on it, so it can't be cleared yet. We need that password once.";
+export const HINT_CLOUD_CLEARING = "Asking the phone maker’s cloud to clear this phone…";
+export const HINT_CLOUD_RESTART = "Asking the phone maker’s cloud to restart this phone so it picks up its settings…";
+export const HINT_NEEDS_SERIAL = "Waiting for this phone’s serial number.";
 
 /*
   ⛔⛔ EVERY STEP IS SAID BEFORE IT IS DONE (Izzy, 2026-09-14: "everything the wizard is doing,
@@ -220,6 +242,7 @@ export function createSetupDriver(
         provisioningAttempts: 0, provisioningFirstAskedAt: null,
         cannotListenCount: 0, provisioningHandoffFailed: false,
         resetRefusedLocally: false,
+        cloudAskedAt: null, cloudRestarts: 0, cloudRestartAt: null, cloudUnavailable: false,
         lastHint: null,
       };
       memos.set(id, m);
@@ -254,6 +277,89 @@ export function createSetupDriver(
     m.passwordUnavailable = true;
     m.stalledOn = null;
     m.stalledCount = 0;
+  }
+
+  /** The serial number was saved for this phone: ask the maker's cloud again on the next tick. */
+  function serialProvided(phoneId: string) {
+    const m = memo(phoneId);
+    m.cloudAskedAt = null;
+    m.stalledOn = null;
+    m.stalledCount = 0;
+  }
+
+  /**
+   * The person does not have the serial number. ⛔ A complete answer: the maker's cloud is
+   * not asked again for this phone, and it continues the way it would without a cloud.
+   */
+  function serialUnavailable(phoneId: string) {
+    const m = memo(phoneId);
+    m.cloudUnavailable = true;
+    m.stalledOn = null;
+    m.stalledCount = 0;
+  }
+
+  /**
+   * Ask the server to run this phone's maker-cloud step (register, then clear — or restart).
+   *
+   * ⛔ The server decides and performs it through `/prepare`, which spends the one reset
+   * atomically before the maker is called; this machine only asks, paces the asking, and puts
+   * what came back in front of the person. It never retries a step the server reports sent.
+   */
+  async function askMakerCloud(
+    phone: DiagnosticPhone, m: PhoneMemo, purpose: "reset" | "restart",
+    needs: NeedsPerson[], hints: Record<string, string>, performed: Array<{ phoneId: string; action: string }>,
+  ): Promise<void> {
+    const t = now();
+    if (m.cloudAskedAt !== null && t - m.cloudAskedAt < CLOUD_ASK_INTERVAL_MS) {
+      markStall(m, `cloud_${purpose}`);
+      return;
+    }
+    m.cloudAskedAt = t;
+    say(phone.id, purpose === "reset" ? HINT_CLOUD_CLEARING : HINT_CLOUD_RESTART);
+    const res = await api.post<any>(`/desk-phones/runs/${runId}/phones/${phone.id}/prepare`, {})
+      .catch((err: any) => err?.body ?? null);
+    if (!res || res.ok !== true) {
+      if (res?.message) hints[phone.id] = String(res.message);
+      markStall(m, `cloud_${purpose}`);
+      return;
+    }
+    const manual = res.plan?.manualAction;
+    if (manual?.code === "serial_required") {
+      needs.push({
+        kind: "serial",
+        phoneId: phone.id,
+        label: phone.displayName || phone.extNumber || "this phone",
+        message: String(manual.message || "The phone maker needs this phone’s serial number."),
+      });
+      hints[phone.id] = HINT_NEEDS_SERIAL;
+      markStall(m, `cloud_${purpose}`);
+      return;
+    }
+    const step = purpose === "reset" ? "factory_reset" : "reboot";
+    const done = (res.ran ?? []).find((r: any) => r?.step === step);
+    if (done?.ok) {
+      if (purpose === "restart") { m.cloudRestarts += 1; m.cloudRestartAt = t; }
+      performed.push({ phoneId: phone.id, action: purpose === "reset" ? "reset_via_cloud" : "restart_via_cloud" });
+      hints[phone.id] = purpose === "reset" ? HINT_RESET_SENT : HINT_RESTARTING;
+      clearStall(m);
+      return;
+    }
+    const failed = (res.ran ?? []).find((r: any) => r && r.ok === false);
+    if (failed) {
+      if (failed.message) hints[phone.id] = String(failed.message);
+      // ⛔ Only a refusal that will not change ends the cloud for this phone. A retryable one
+      // (the maker busy, a timeout) is asked again after the pacing interval.
+      if (!failed.retryable) m.cloudUnavailable = true;
+      markStall(m, `cloud_${purpose}`);
+      return;
+    }
+    if (manual) {
+      // Another account holds it, the model is unknown, nothing can clear it: said plainly, and
+      // the phone continues the way it would without a cloud.
+      hints[phone.id] = String(manual.message || "");
+      if (manual.code !== "reset_authorization_required") m.cloudUnavailable = true;
+    }
+    markStall(m, `cloud_${purpose}`);
   }
 
   /** The person left this device unticked on the clearing screen. A deliberate no. */
@@ -355,6 +461,28 @@ export function createSetupDriver(
       if (action === "reset_over_lan") {
         // ⛔ Only ever reached after a person ticked this phone on the clearing screen
         // and the server confirmed the approval names it.
+        // ⛔⛔ THE SERVER NAMED THE MECHANISM. A brand whose maker cloud can clear it (a
+        // Grandstream with GDMS connected) is cleared THROUGH that cloud — the office machine
+        // never sends it a wipe. Listen first, so the phone's own start-up request after the
+        // wipe is answered, then ask the server to run the cloud step.
+        if (decision.via === "vendor_cloud" && !m.cloudUnavailable) {
+          const url = typeof decision.provisioningUrl === "string" ? decision.provisioningUrl : null;
+          if (url && phone.mac && canPnp) {
+            const armed = await bridge.run({ op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot: false })
+              .catch(() => null);
+            if (!armed?.ok) {
+              // ⛔ Nothing is cleared while this machine cannot listen: a wiped phone would ask
+              // into silence. An old app or a blocked port is said plainly; the next tick retries.
+              hints[phone.id] = armed?.refused === "unknown_operation" ? HINT_APP_TOO_OLD
+                : armed?.refused === "cannot_listen" ? HINT_CANNOT_LISTEN
+                  : HINT_REFUSED;
+              markStall(m, action);
+              continue;
+            }
+          }
+          await askMakerCloud(phone, m, "reset", needs, hints, performed);
+          continue;
+        }
         const authorizationId = typeof decision.resetAuthorizationId === "string" ? decision.resetAuthorizationId : "";
         if (!authorizationId) { markStall(m, action); continue; }
         // ⛔ Only a brand we hold the documented reset shape for is ever asked. Every
@@ -456,7 +584,10 @@ export function createSetupDriver(
         // we do not hold we arm the listener and ask the person to power-cycle —
         // which is the documented mechanism for a factory-reset phone anyway, since
         // one on defaults asks at the handset before obeying a remote restart.
-        const reboot = canHttp && m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
+        // ⛔ When the server says the maker's cloud restarts this brand, the office machine only
+        // LISTENS; the restart is asked of the cloud below, after the listener is armed.
+        const viaCloud = decision.via === "vendor_cloud" && !m.cloudUnavailable;
+        const reboot = !viaCloud && canHttp && m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
         say(phone.id, HINT_SENDING);
         const r = await bridge.run({
           op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
@@ -494,6 +625,16 @@ export function createSetupDriver(
           hints[phone.id] = HINT_HANDED_OFF;
           clearStall(m);
           continue;
+        }
+        // ⛔ Listening now: have the maker's cloud restart the phone so it asks. Twice at most,
+        // and never again while an accepted restart still has time to bring the phone back.
+        if (viaCloud) {
+          const due = m.cloudRestartAt === null || now() - m.cloudRestartAt >= CLOUD_RESTART_WAIT_MS;
+          if (m.cloudRestarts < PROVISIONING_REBOOT_ATTEMPTS && due) {
+            await askMakerCloud(phone, m, "restart", needs, hints, performed);
+            continue;
+          }
+          if (!due) { hints[phone.id] = HINT_RESTARTING; markStall(m, action); continue; }
         }
         // ⛔ NO CLOCK HERE. The listener is armed and stays armed; the honest line
         // is what the person has to do, for as long as it takes them to do it.
@@ -553,5 +694,5 @@ export function createSetupDriver(
     return all.length > 0 && all.every((m) => m.stalledCount >= MAX_CONSECUTIVE_STALLS);
   }
 
-  return { tick, credentialStored, passwordUnknown, declineReset, everythingStalled };
+  return { tick, credentialStored, passwordUnknown, declineReset, serialProvided, serialUnavailable, everythingStalled };
 }
