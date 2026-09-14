@@ -13,6 +13,15 @@ Izzy, 2026-09-14: *"solidified concrete 101. Add him to test flight and send the
 | Builds attached | 59, 58, 56: all VALID, not expired |
 | Scripts (loopcom) | `/root/.appstoreconnect/asc-add-sstern.mjs`, `asc-invite-sstern.mjs` (sed copies of the Hanna scripts) |
 
+## Ext 102 added too (Izzy: "do one for extension 102 as well")
+
+| | |
+|---|---|
+| Extension | 102 "Office" `cmnmd7mzo000xp9b04tcydksa` → owner user `cmnmjhhic001bp96he9te7e08` (also owns ext 103 "Toby Horowitz") |
+| User | **office@solidifyconcrete.com**, USER, INVITED, never logged in. It is also the tenant's billing email |
+| TestFlight | POST `/v1/betaTesters` **201**, state **INVITED**. **No first or last name** ("Office" isn't a person, and names can't be edited later) |
+| Scripts | `/root/.appstoreconnect/asc-add-scoffice.mjs`, `asc-invite-scoffice.mjs` |
+
 ## "Send the email", and why nothing else was sent
 
 - The TestFlight invite email is sent **by Apple** when a tester is added to the external group. There is no separate send. The INVITED state (unlike Hanna's NOT_INVITED lag) confirms Apple sent it.
