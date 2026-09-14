@@ -56,4 +56,7 @@ The browser was not signed in to HP, the HP Partner Portal or Poly Lens.
   - HP account sign-up (partner.hp.com → Become an HP Partner → region North America → Create HP account): Israel / Weinstock / izzy@loopcom.net, marketing box unticked. Password + Create are Izzy's.
   - ScanSource prospect form: every field filled (NY, UC, Cisco No, supplier "HP | Poly", resell Yes, federal No, heard via Website, full comments) EXCEPT "Do you have an immediate opportunity?" (Izzy's answer). NOT submitted.
 
+- ✅ izzy@loopcom.net ALREADY HAS an HP account (sign-up answered "Already have an HP account? Sign in").
+- ⛔ **Signing in via partner.hp.com → Log In does NOT start the application** — it bounces a company with no partner agreement back to the portal front page. Per the NA guide (pp. 5–10): partner.hp.com → Become an HP Partner → region North America → **Create HP account** → **Sign in** (top right) → sign in → HP redirects into the registration ("apply as a new company" / Continue). Email typed there; Izzy enters the password.
+
 ## Status: nothing applied. Next steps are Izzy's (see the final report in chat).
