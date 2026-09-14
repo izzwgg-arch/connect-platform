@@ -4,6 +4,46 @@ Newest entries first.
 
 ---
 
+## Desk-phone record writer, make/model pickers, and the record-move rule (2026-09-14)
+
+Branch `feat/ivr-migration-takeover`, commits `257b0b07` (pickers + identify route) and
+`b9956746` (the bare device-name fix + the move rule). Plan doc
+`PLAN_DESK_PHONE_WIZARD_WORKS_EVERYWHERE_2026-09-10.md` §20.
+
+```bash
+# shared
+cd packages/shared && npx tsc --noEmit                               # 0 errors
+npm test                                                             # 672 / 672
+
+# api  (⛔ needs --experimental-test-module-mocks)
+cd apps/api && npx tsc --noEmit | grep -c "error TS"                 # 84 = the exact baseline
+npx tsc --noEmit | grep "error TS" | grep -E "deskPhoneSetup|provisioningRecord|loginThrottle"
+#   -> empty
+node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"
+#                                                                    # 150 / 150
+
+# portal (only 257b0b07 touched it)
+cd apps/portal && npx tsc --noEmit                                   # 0 errors
+npx tsx --test components/deskPhones/wizardIdentifyPhone.test.ts \
+  components/deskPhones/wizardMakeAndPhotos.test.ts lib/deskPhoneWizard.test.ts
+#                                                                    # 56 / 56
+```
+
+**Replay against HEAD** (source file backed up to the scratchpad, `git show HEAD:<file> >`
+swapped in, suite re-run, restored, sha256 compared identical):
+
+| suite | against | fails there |
+|---|---|---|
+| `provisioningRecordWriter.test.ts` (21) | the committed writer | **16** |
+| `deskPhoneRecordWiring.test.ts` (28) | the committed routes | **3** |
+
+⛔ Ten of the sixteen writer failures are the fixture correction: the old fixture used
+`T21_101` for `ombu_devices.user`, the live PBX uses `101`. ⛔ Three "move refused" tests
+first PASSED at HEAD for the wrong reason (HEAD refused with `no_desk_device`); they now
+assert the reason `held_by_another_account` and fail there.
+
+---
+
 ## Desk-phone wizard — every brand, not just Yealink (2026-09-11)
 
 Branch `feat/ivr-migration-takeover`, commit `dac3aab2`. Plan doc

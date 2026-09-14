@@ -1037,3 +1037,99 @@ any of it.** The build order that follows from it:
    case), because "every possible way" cannot be built from memory.
 3. Then Phase D with his reset-first shape, Phase E, and the screen work — the
    screens **mockup-first**, by his own standing rule.
+
+## 20. 2026-09-14 — the record writer, un-sticking, the make/model pickers, and two defects caught before any of it shipped
+
+Commits on `feat/ivr-migration-takeover`: `02bf88c4` (pure rules), `961324ac` (routes),
+`257b0b07` (pickers), `b9956746` (fixes). Izzy's governing instruction for this run:
+*"do not stop until everything … in this desktop deskphone setup is done, production-ready,
+ready to start using it for a customer."* His build order: *"the record writer first
+(that's the wall), then un-sticking phones, then reset/reboot over the network, then the
+dropdowns, then the switch and extender."* Deploy state is in CLAUDE.md's top section.
+
+### 20a. What exists now
+
+- **The wall (§19d) is down in code.** `planProvisioningRecord` (shared, pure) decides the
+  `provisioning.devices` row a discovered + assigned phone needs (insert / move / rebind /
+  adopt); `provisioningRecordWriter.ts` reads the PBX read-only and calls the proven
+  `save_phone`. It runs when a person assigns a phone, on retry, and on identify. A phone
+  with no settings profile is **refused**, never written as a row that renders nothing.
+- **Nothing is permanently stuck.** `POST …/phones/:phoneId/retry` un-sticks
+  `NEEDS_ATTENTION` (a person saying "go again", its own audit `DESK_PHONE_RETRY`) and
+  **never forgives a reset** — `resetCount`/`resetRequestedAt` are untouched.
+- **The listener is armed for the phones being set up**, not only for phones the PBX
+  already knew: `pnp-config` unions the PBX's MACs with `pnpArmList(run phones)`.
+- **Make + model dropdowns.** `modelPicker.ts` (shared) feeds both dropdowns from the
+  generated catalogue; `identifyPhone` stores the model as the catalogue spells it, lets
+  the model decide the make, and refuses a disagreeing make. `findCatalogModel` now strips
+  a leading `SIP-` or brand word after an exact match fails, so a label read as
+  "Yealink SIP-T53W" resolves (swept across every brand to prove it never changes WHICH
+  phone a string names). `POST …/phones/:phoneId/identify` stores it, re-attempts the
+  record, and releases a stuck phone only when the record landed. `PhoneIdentity.tsx`
+  draws the two ConnectSelects plus a drawing of where the label sits under the phone, on
+  the "do you know what kind of phone" step and on each unnamed phone's row at the match step.
+- **Reset over the network** (`02bf88c4`): `resetSafety.ts` refuses a reset on a Wi-Fi
+  phone, an analog adapter or a cordless base (the three unrecoverable cases in §19b) and
+  the desktop `factory_reset` op is fenced four ways. ⛔ **That half is desktop code and is
+  on NO machine until an installer ships it.**
+
+### 20b. ⛔⛔ Defect 1 — the writer could never write
+
+`ombu_devices.user` is the **bare extension**: the desk device is `101`, the softphone
+`101_1`. The PBX composes the endpoint name `T21_101` itself. Live census 2026-09-14:
+**158 pjsip devices, 0 with a `T` prefix.** The writer searched for `T21_101`, copied from a
+test fixture that invented the prefixed shape — so **every real write would have refused
+"no desk device"**, while every test passed. Fixed to an exact match on the bare value (the
+tenant is already fixed by the join) and the fixtures now carry the real shape.
+⛔ **The general lesson, again: a fixture invented to match the code proves nothing. Read
+one real row before writing the fixture.**
+
+### 20c. ⛔⛔ Defect 2 — any customer could take another company's phone
+
+The move branch (a record under another PBX tenant) justified itself with *"the row came
+from our own scan of their LAN."* **It did not — `/discovered` is posted by the customer's
+own computer and the server cannot verify it.** Anyone holding `can_setup_desk_phones`
+could post another company's MAC, assign it, and silently re-point that company's working
+handset (it fetches the claimant's settings at its next boot and stops ringing for its owner).
+
+**`decideRehome` (shared, pure) now allows a move only when it is provably stale:**
+1. the other record is bound to no extension that still exists; or
+2. nothing has registered on that extension for **14 days** (`REHOME_LIVE_WINDOW_MS`); or
+3. the **only** live registration there is this very handset — its `x-ast-orig-host` LAN
+   address equals our scan's address **and** its public address equals the customer's own
+   computer (the **last** `X-Forwarded-For` entry, `clientIpFromForwardedFor`).
+
+Anything unreadable refuses (`held_by_another_account`). The customer reads "Loopcom Support
+needs to finish setting up this phone" — **never** that another company holds it. Evidence
+comes from `PbxEndpointRegistration` (the live mirror). A move that is allowed is still
+audited `DESK_PHONE_RECORD_REHOMED` with the previous tenant, before the write.
+
+### 20d. ⛔⛔ What the live PBX showed on Izzy's rig while this was being built
+
+| rig device | recorded as | live registration | the rule says |
+|---|---|---|---|
+| GXP2170 `c0:74:ad:8c:65:4e` @ 192.168.6.171 | Create A Box (T7) ext **106** | **T7_106 REGISTERED from 50.48.58.53, orig-host 192.168.6.171** — this phone | move allowed |
+| HT812 `C0:74:AD:E5:79:37` @ 192.168.4.22 | A plus center (T2) ext **108** "Home" | **T2_108 REGISTERED from 50.48.58.53, orig-host 192.168.4.22** — this phone | move allowed |
+| GXP2170 `c0:74:ad:8c:60:5f` @ .172 | Create A Box ext **102** | T7_102 REGISTERED from **45.14.194.179 (their tunnel), orig-host 192.168.8.160** — Create A Box's real office phone | **refused → Support** |
+| HT801 `EC:74:D7:20:1F:EA` | Landau Home (T21) 101, bound to dead device 149 | — | rebind (own tenant) |
+| Yealink `80:5e:c0:b3:b2:d0` | no row anywhere | T21_101 unregistered since 2026-06-28 | insert |
+
+⛔ **So §19c's "nothing has leaked" is only half true: two of Izzy's rig devices are live
+right now AS other customers' extensions** — his GXP2170 answers Create A Box ext 106 and
+his HT812 answers A plus center ext 108. That may be deliberate (108 is named "Home"); it
+needs his word. ⛔ **Assigning those two in the wizard WILL move their records**, and Create
+A Box 106 / A plus center 108 then lose that device. Nothing was changed on the PBX.
+
+### 20e. NOT PROVEN / NOT DONE
+
+- ⏳ **No record has been written on production by the writer.** Acceptance on the rig:
+  assign the Yealink to ext 101 → a `provisioning.devices` row appears for
+  `805ec0b3b2d0` bound to device **130** → power-cycle → `T21_101` registers.
+  The negative that matters most: the `.172` GXP2170 must come back **refused**.
+- ⛔ **The picker and sticker screens were built without a mockup**, against Izzy's standing
+  mockup-first rule. Stated plainly; show him the screens before calling them final.
+- ⏳ Desktop `factory_reset` needs an installer (rc.12); PoE switch + Wi-Fi extender still
+  blocked on the brand/model from Izzy; §19f's screen defects (the unconditional green tick,
+  the subtitle failure branch, the per-phone note never shown, the IP hidden on the row)
+  are not fixed; `retryableCount` / `inheritedResetCount` are not wired to a screen; the
+  stage-2 cross-vendor reset research (§19h) was not re-run.

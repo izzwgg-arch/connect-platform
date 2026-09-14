@@ -27,6 +27,67 @@ human through it was dead before the first edit. Three failed attempts, a live c
 main number re-pointed and reverted repeatedly, and Izzy had to give the instruction
 twice. ⛔ **Ten minutes of reading would have cost nothing and saved all of it.**
 
+## ⛔⛔ AGENT HANDOFF — the desk-phone RECORD WRITER exists now, and two defects that would have broken it on day one were caught BEFORE it shipped (2026-09-14) — READ FIRST before touching `provisioningRecordWriter.ts`, before letting ANY route write another tenant's PBX data, before writing a PBX test fixture, or before assigning one of Izzy's rig phones in the wizard
+
+Full record: **`docs/ai-context/PLAN_DESK_PHONE_WIZARD_WORKS_EVERYWHERE_2026-09-10.md` §20**
+(`02bf88c4` rules → `961324ac` routes → `257b0b07` make/model pickers → `b9956746` fixes,
+on `feat/ivr-migration-takeover`. ✅ **api + portal DEPLOYED and container-verified at
+`b9956746` (2026-09-14)** — both `.build-commit` = `b9956746`, 0 restarts, 0 error-level
+lines; `held_by_another_account` / `decideRehome` / `requesterIpOf` / the `/identify` route
+grepped inside `app-api-1`; `dps-idrow` + `/identify` in the shipped portal chunks; health
+and `/settings/desk-phones` 200 on both hostnames. No migration, no PBX write, no env change.
+⛔ An open desktop window or tab keeps the OLD bundle until fully reopened.
+The desktop `factory_reset` half is on NO machine until an installer ships.)
+Memory: [[desk-phone-record-move-needs-proof-of-presence]].
+Izzy: *"the record writer first (that's the wall), then un-sticking phones, then
+reset/reboot over the network, then the dropdowns, then the switch and extender."*
+
+- ✅ **The §19 wall is down in code.** Assigning a phone (assign / retry / identify) now
+  writes its `provisioning.devices` row through the proven `save_phone`, so the PnP
+  resident can finally answer a phone the PBX never knew. `planProvisioningRecord`
+  (shared, pure) decides insert / move / rebind / adopt; a phone with no settings profile
+  is **refused**, never written as a row that renders nothing. `POST …/retry` un-sticks
+  `NEEDS_ATTENTION` and **never forgives a reset**. Make + model are two ConnectSelects fed
+  from the generated catalogue, with a drawing of where the label sits.
+- ⛔⛔ **DEFECT 1: `ombu_devices.user` IS THE BARE EXTENSION (`101`, `101_1`), NEVER
+  `T21_101`.** The PBX composes the endpoint name itself; live census **158 pjsip devices,
+  0 prefixed**. The writer matched `T21_101` — copied from a test fixture that invented the
+  prefixed shape — so **every real write would have refused "no desk device" while every
+  test passed.** ⛔ **Read one real row before writing a PBX fixture.**
+- ⛔⛔ **DEFECT 2: THE "MOVE" BRANCH LET ANY CUSTOMER TAKE ANOTHER COMPANY'S PHONE.** It
+  re-pointed a record held by another PBX tenant on the strength of *"our scan found it on
+  their LAN"* — but `/discovered` is posted by the customer's own computer and **proves
+  nothing**. `decideRehome` (shared, pure) now allows a move ONLY when the other record is
+  bound to no living extension, OR nothing registered there in **14 days**, OR the only
+  live registration is **this handset** (`x-ast-orig-host` == our scan IP **and** contact
+  public IP == the requester's **last** `X-Forwarded-For` entry). Unreadable evidence
+  refuses `held_by_another_account`; the customer reads "Loopcom Support needs to finish
+  setting up this phone" and is **never** told another company holds it.
+  ⛔ **A cross-tenant write gated on client-supplied data is a hijack path — any future
+  one needs server-side evidence (`PbxEndpointRegistration`), never a client report.**
+- ⛔⛔ **§19 BELOW IS WRONG IN TWO PLACES — read these corrections over it.** "NOTHING IS
+  BUILT" is superseded by this section; and **"nothing has leaked" is only half true:
+  two of Izzy's rig devices are LIVE right now as other customers' extensions** — his
+  GXP2170 `.171` answers **Create A Box ext 106** and his HT812 `192.168.4.22` answers
+  **A plus center ext 108 "Home"**, both registered from 50.48.58.53. ⛔ **Assigning those
+  two in the wizard WILL move their records** (the rule allows it — it is his handset on
+  his network), and 106 / 108 lose that device. The `.172` GXP2170 is refused: T7_102 is
+  Create A Box's real office phone via their tunnel. Whether 106/108 are deliberate is
+  **Izzy's call; nothing was changed on the PBX.**
+- ✅ **Proven:** shared **672/672**, api desk-phone **150/150**, portal wizard **56/56**;
+  typechecks shared/portal 0, api **84 = the exact baseline**. **Replayed against HEAD:
+  16 of 21 writer tests and 3 of 28 wiring tests fail there** (three "move refused" tests
+  first passed at HEAD for the wrong reason and were tightened to assert the reason).
+- ⏳ **NOT PROVEN: no record has been written on production by the writer.** Acceptance on
+  the rig: assign the Yealink `80:5e:c0:b3:b2:d0` to ext 101 → a `provisioning.devices`
+  row appears bound to device **130** → power-cycle → `T21_101` registers. The negative
+  that matters most: the `.172` GXP2170 must come back **refused**.
+- ⛔ **The picker + sticker screens were built WITHOUT a mockup**, against Izzy's standing
+  mockup-first rule — show him before calling them final. ⏳ Still open: PoE switch /
+  Wi-Fi extender (needs brand + model from Izzy), §19f's screen defects (unconditional
+  green tick, subtitle failure branch, per-phone note, IP hidden), `retryableCount` /
+  `inheritedResetCount` unwired, stage-2 reset research not re-run.
+
 ## ⛔⛔ AGENT HANDOFF — Izzy's HANDS-OFF mandate: factory-reset FIRST (he was told the cost and reaffirmed it), Wi-Fi phones too, and THREE OF HIS FOUR RIG PHONES CARRY ANOTHER CUSTOMER'S IDENTITY ON THE PBX (2026-09-11) — READ FIRST before touching the desk-phone wizard again, before proposing a reset order, before answering "why didn't the Yealink connect", or before trusting a MAC read off a screenshot
 
 Full record: **`docs/ai-context/PLAN_DESK_PHONE_WIZARD_WORKS_EVERYWHERE_2026-09-10.md` §19**
@@ -66,7 +127,9 @@ otherwise be gone. This is the failure the two standing rules exist to prevent.
   ("Home"); **GXP2170 `c0:74:ad:8c:65:4e` → tenant 7 `create_a_box`** ("106");
   **GXP2170 `c0:74:ad:8c:60:5f` → tenant 7 `create_a_box`** ("102"); **HT801
   `EC:74:D7:20:1F:EA` → tenant 21 `test` (Landau Home), "101" — correct.**
-  ⛔ **Nothing has leaked** — the names on his screen come from his own assignment in the
+  ⛔⛔ **CORRECTED 2026-09-14: "nothing has leaked" was only half true — his GXP2170 `.171`
+  is LIVE as Create A Box ext 106 and his HT812 as A plus center ext 108 (see the top
+  section).** (Original wording:) ⛔ **Nothing has leaked** — the names on his screen come from his own assignment in the
   wizard, not from those rows — but a phone's provisioning file is keyed on its MAC, so
   today two of his phones would be handed **Create A Box's** config. Cleaning the three
   rows is a **PBX write and needs his mandate.**
@@ -129,7 +192,9 @@ otherwise be gone. This is the failure the two standing rules exist to prevent.
   is unanswered.** ⛔ Both runs are resumable (`Workflow({scriptPath, resumeFromRunId})`,
   completed calls return cached); **read `journal.jsonl` first** — it records each
   agent's real return value, so you can see what is genuinely cached.
-- ⏳ **NOTHING IN THIS SECTION IS BUILT.** Order that follows from it: (1) clean the
+- ⛔ **SUPERSEDED 2026-09-14 — the record writer, un-sticking, reset-over-the-network
+  and the make/model pickers ARE built now; see the section at the top of this file.**
+  (Original line, kept as history:) ⏳ **NOTHING IN THIS SECTION IS BUILT.** Order that follows from it: (1) clean the
   three cross-tenant provisioning rows and settle whether all four phones really share
   ext 101; (2) re-run the stage-2 research, because "every possible way" cannot be built
   from memory; (3) then Phase D in his reset-first shape, Phase E, and the screens.
