@@ -1224,3 +1224,47 @@ register. The negative that matters: a Wi-Fi phone or an HT box must NOT wipe.
   and armed with 2 MACs.
 - ⏳ **NOT PROVEN: no reset has been sent to a real phone** — that is Izzy's step on his own
   rig (above). ⛔ An already-open portal tab keeps the old driver until reloaded.
+
+### 20g. 2026-09-14 — "I ran one setup and nothing happened": a stuck phone, and "done" means registered
+
+**Found live, read-only** (DB + nginx + desktop log): Izzy's run `cmtvj71qu0ap9o213v8y8t1dj`
+(⛔ the wizard REOPENS a running run — this one dated 2026-09-10) went start → scan
+(93 hosts) → pick 1 of 4 at 05:38:42Z → **nothing else**. The one phone ticked, the Yealink
+`805ec0b3b2d0` @ .170 ext 101, was already **NEEDS_ATTENTION** from 09-10 (the old
+"could not point this phone at Loopcom" hand-off) with **model blank**. The driver skips
+terminal phones and **no screen called the retry route**, so no assign/advance/reset ever
+left the machine. ⛔ The `/desk-phones/pending` + `pnp-config` 403s in nginx that minute came
+from six OTHER customers' IPs — unrelated.
+
+**Built (`350d25ab`, portal only):**
+- Ticking a phone that `needsAttention` calls `POST …/phones/:id/retry` inside
+  `commitSelection` (409 refusals left alone; a spent reset is never given back), then
+  reloads the run.
+- A ticked phone with no model blocks the match screen's Continue ("Tell us what the phone
+  above is first") — without a model no settings file renders.
+- Izzy, mid-task: *"everything the wizard is doing, the user should be able to see live as
+  it's doing it … the confirmation screen should never come up unless the phone is up and
+  registered, ready to make calls."* → `createSetupDriver(…, onProgress)` announces each step
+  BEFORE it runs (`HINT_CLEARING` before fingerprint/factory_reset, `HINT_SENDING`,
+  `HINT_CHECKING`, `HINT_FINDING`, waiting-for-approval/password/registration); a waiting phone
+  keeps its last message (`PhoneMemo.lastHint`); REGISTERED reads `HINT_CONNECTED`; hints
+  MERGE into the screen state. The **done screen opens only when
+  `summary.ready === summary.total`**; a stuck phone stays on the live screen with its note
+  and a **Try again** button.
+
+**Checked read-only on the PBX so the next run can finish:** no `provisioning.devices` row for
+this MAC; desk device 130 (`101`) on tenant 21; T53W = model 154, base template on disk;
+tenant 21 has no own T53W profile, so `chooseTemplate` takes the first SHARED one — id 6
+"t53w" (⛔ the writer reads `shared` 'yes'/'no' correctly, so A Plus Center's private
+"T53w apc" id 5 is never picked).
+
+**Proven:** portal driver + wizard suites green; the full portal suite shows only the known
+pre-existing failures (campaigns, checkOfferCompatibility, nativeSelectSweep, coworkerHands);
+**all 4 new wizard guards fail replayed against HEAD** via `PORTAL_GUARD_ROOT`; portal tsc 0.
+**Deploy:** ✅ portal DEPLOYED and container-verified 2026-09-14 05:53Z — `app-portal-1`
+`.build-commit` = `350d25ab`, 0 restarts, "ready to make calls" and `/retry` both in the
+shipped `settings/desk-phones/page-5b11493d….js`, `/settings/desk-phones` 200 on both
+hostnames (256 s deploy). No api/desktop change needed — rc.12 already carries every op.
+⏳ **Acceptance (Izzy):** reopen the wizard → tick the Yealink → it un-sticks and asks for
+the model → pick Yealink T53W → Continue → watch each step named live → the finished screen
+appears only after it registers.

@@ -101,6 +101,15 @@ reset/reboot over the network, then the dropdowns, then the switch and extender.
   INSTALLED on Izzy's PC — asar sha256-identical to a clean export of `0f500b11`, updater deps
   complete, icon OK, 0 error lines. NOT published (feed unchanged).** ⏳ No reset has reached a
   real phone yet — that is Izzy's test on his rig. Detail in §20f.
+- ⛔⛔ **"I RAN ONE SETUP AND NOTHING HAPPENED" (2026-09-14, plan §20g, `350d25ab`):** the only
+  phone he ticked was already NEEDS_ATTENTION from 09-10 with no model, the driver skips
+  finished phones, and **no screen ever called retry** — so nothing left the machine. Now:
+  ticking a stuck phone retries it; a model-less phone blocks Continue until named; **every
+  step is announced BEFORE it runs** (`onProgress`, sticky last message per phone); and
+  ⛔ **the finished screen opens ONLY when every chosen phone is REGISTERED** (Izzy: "never
+  come up unless the phone is up and registered, ready to make calls") — a stuck phone stays
+  on the live screen with its reason and **Try again**. ⛔ Never go back to `if (out.finished)`
+  alone — `finished` includes phones needing attention. Deploy state in §20g.
 - ⛔ **The picker + sticker screens were built WITHOUT a mockup**, against Izzy's standing
   mockup-first rule — show him before calling them final. ⏳ Still open: PoE switch /
   Wi-Fi extender (needs brand + model from Izzy), §19f's screen defects (unconditional
