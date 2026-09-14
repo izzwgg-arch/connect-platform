@@ -1,10 +1,11 @@
 # Desk Phone Wizard — automatic device identification + maker-cloud providers (2026-09-14)
 
-**Status: BUILT, TESTED, COMMITTED. NOT DEPLOYED. Migration NOT applied. No GDMS credential
-stored. No live call to any maker cloud has been made. No phone was touched.**
+**Status (round 2, `acb994a3`): RESET-FIRST now governs Prepare Device too (Izzy: "reset every
+time you connect the phone"). GDMS card on Admin → Integrations. Deploy state: see §10. No GDMS
+credential stored by an agent (Izzy enters it). No phone was touched by an agent.**
 
 Branch `feat/ivr-migration-takeover`. This upgrades the EXISTING Desk Phone Wizard — no second
-wizard, no demo screen, the reset ladder and the setup driver are untouched.
+wizard, no demo screen; the ladder and the setup driver are untouched.
 
 The rule the whole design serves (Izzy's prompt): the wizard asks **"what device did we
 discover?"**, never **"what brand did the customer pick?"**. Maker differences live in provider
@@ -51,9 +52,14 @@ office machine (desktop app)                      api                           
   nothing is claimed that the maker's API does not provide.
 - **`planDevicePreparation`**: registered to us → online; ownership validated first; another
   tenant / another maker account → **conflict**; unknown model → manual; claim (serial required →
-  manual if absent); reprovision; **factory reset only when the device is locked to another
-  provider AND the cloud cannot re-point it AND a reset is possible AND the person authorised it**;
-  assign SIP; verify registration.
+  manual if absent); no settings profile → manual BEFORE any reset (never wipe a phone we cannot
+  configure, e.g. Panasonic); **then RESET FIRST (round 2): every ticked phone not yet reset in
+  this setup (`resetAlreadyDone` = `resetCount > 0`) gets `factory_reset` before reprovision /
+  reboot / assign SIP** — unticked → `reset_authorization_required` and nothing at all happens
+  (not even the claim); no network reset → `reset_needs_hands_on`, except when a claim is planned
+  (the maker can reset only a device it holds: claim, then the plan is decided again);
+  reprovision; reboot; assign SIP; verify registration. `lockedByOtherProvider` only changes the
+  wording now.
 - `parseDeviceLabel(text)` reads MAC / serial / model / maker off a typed or scanned label.
 - `provisioningStatusFor` + `describeProvisioningStatus`: Discovered, Identified, Claiming,
   Managed, Preparing, Provisioning, Rebooting, Waiting for device, Registering, Online, Failed,
@@ -121,9 +127,15 @@ provider that throws reads as not connected).
 | `POST …/vendor-lookup` | own run; audited |
 | `POST …/claim` `{serialNumber?}` | own run; advisory MAC lock; ownership checks; audited (serial tail only) |
 | `POST …/scan-label` `{text}` | own run; refuses a label for a different MAC; audited without the serial |
-| `POST …/prepare` `{dryRun?}` | own **running** run + can set up; factory reset additionally needs the reset permission |
+| `POST …/prepare` `{dryRun?}` | own **running** run + can set up; the reset needs the TICK (`/selection`), exactly as the ladder — the separate reset-permission 403 was removed in round 2; the reset is the last step sent in a request, the rest go in `leftForOthers` and run on the next prepare |
 | `GET/POST /admin/desk-phones/gdms-credentials` | SUPER_ADMIN; never echoes a value |
 | `POST /admin/desk-phones/gdms-credentials/verify` | SUPER_ADMIN; refuses a simulated mode |
+| `POST /admin/desk-phones/gdms-credentials/lookup` `{mac}` | SUPER_ADMIN; read-only `findDevice`; returns model/online/firmware/serial tail; audited `GDMS_DEVICE_LOOKUP(_FAILED)` |
+
+**Screen (round 2):** Admin → Integrations (`/admin/integrations`, owner-only) has a
+"Grandstream device cloud (GDMS)" card above the company picker — region, API ID, Secret Key,
+username, password, Save / Verify / Clear, and "Look up" by MAC. `GdmsCredentialsCard.tsx`.
+⛔ There is no "Admin → GDMS" page; round 1's report named one by mistake.
 
 The route-order guard now reads BOTH route files (ownership → permission → body).
 
@@ -135,8 +147,8 @@ The route-order guard now reads BOTH route files (ownership → permission → b
   `device_ownership_conflict`, never re-registered. A maker refusal is flagged
   `possibleOwnershipConflict` and never marked managed. Two tenants claiming the same device at
   once → exactly one wins (Postgres advisory lock `desk-phone-claim:<mac>`).
-- **Factory reset** (never automatic): planned only as in §2; then `allowedToReset` + the
-  per-phone approval + `decideReset`; the one reset is **spent atomically on `resetCount` BEFORE
+- **Factory reset** (reset-first, round 2): planned as in §2; the tick is the approval, and
+  `decideReset` re-checks it; the one reset is **spent atomically on `resetCount` BEFORE
   the maker is asked** (three racing prepares → one wipe), kept when the task was accepted or may
   have landed, **given back only on a definite refusal**; needs an assigned extension first.
 - **Success is never an API call**: an accepted reboot is not "online" — only registration is.
@@ -186,23 +198,42 @@ read-back, other-account refusal, reboot/reset task gating, readiness matrix for
 Yealink RPS live fake, prepare step ordering / refusal / stop-on-failure, credentials validation and
 no-leak, identity-store sanitising, tenant isolation (404), concurrent cross-tenant claims,
 stale/fresh claim locks, label for a different device, dry-run writes nothing, reset authorisation /
-single spend / racing prepares / refusal gives the reset back / no permission → 403, staff-only
-credential screens.
+single spend / racing prepares / refusal gives the reset back / unticked → 409, staff-only
+credential screens, read-only lookup never adds or tasks. Round 2 adds: reset-first ordering,
+second prepare restarts without a second reset, unticked phone untouched, SWEEP over
+`resetAlreadyDone` (reset only ticked + not yet reset + profile exists + before every
+settings step).
 
 ## 10. NOT PROVEN — and what enabling needs
 
-- **Nothing is deployed.** api + portal deploy (the api deploy applies the migration); desktop needs
-  an installer build + install/publish (Izzy's call).
-- **No GDMS credential is stored and no live GDMS call has ever been made** — so the live-safe
+- ✅ **api DEPLOYED + container-verified 2026-09-14 19:13Z at `acb994a3`** (deploy-direct, blue/green):
+  `app-api-1` `.build-commit` = `acb994a32b1a…`, 0 restarts, `/health` 200; the container runs from
+  source and carries the lookup route + `resetAlreadyDone`; migration
+  `20260914190000_desk_phone_identification` finished 19:08:35Z and all six columns exist on
+  `DeskPhoneSetupPhone`. Level-50 log lines after the deploy were only the standing TURN-probe /
+  relay-usage monitors (unrelated). `CREDENTIALS_MASTER_KEY` is set, so a GDMS save will not 503.
+  ⛔ First attempt failed harmlessly at git-sync on a mistyped sha (`acb994a3d`) — nothing changed.
+- ✅ **Desktop `0.1.17-rc.14` built from a clean `git archive f8e11424` export and INSTALLED on Izzy's
+  PC (`/S`, exit 0).** tsc 0; desktop phoneSetup 152/152; `Connect-Setup-0.1.17-rc.14.exe`
+  100,525,567 bytes, sha256 `5a652daf…fe13`; verify-built-icon OK. Asar checked before install
+  (`aaf9b3b6…d9f4`): version rc.14, all 8 electron-updater deps packed, Grandstream `phone_model`
+  read + Poly families in `dist/phoneSetup/yealink.js`. Installed asar identical, registry rc.14,
+  relaunched (the silent install closes the app and does NOT reopen it), log banner rc.14, 0 error
+  lines, updater refuses the rc.10 feed as a downgrade, PnP on udp/5060+5080, `arm_pnp macs=2 ok`.
+  ⛔ **NOT published — the fleet feed stays at rc.10.**
+- ✅ **portal DEPLOYED + container-verified 2026-09-14 19:22Z at `acb994a3`**: `app-portal-1`
+  `.build-commit` = `acb994a32b1a…`, 0 restarts, 0 error lines; `/admin/integrations` 200 on both
+  hostnames; shipped chunks carry "Grandstream device cloud (GDMS)" (2), the `gdms-credentials`
+  calls (1) and "Or type or scan what the label says" (2). ⏳ Nobody has opened either screen in a
+  browser yet; an open tab / desktop window keeps the old bundle until reloaded.
+- **No GDMS credential is stored (AgentSecret has no gdms row, no GDMS_* env) and no live GDMS call has ever been made** — so the live-safe
   validation the prompt asks for (read-only lookup against the real account) has not run. Enable:
   confirm `CREDENTIALS_MASTER_KEY` is set in `app-api-1` (else the save answers 503), save the API ID
-  + secret + the GDMS login from **Admin → GDMS** (⛔ never through chat), press **Verify**, then run
-  **vendor-lookup** on Izzy's test GXP2170 (`C0:74:AD:8C:60:5F`, S/N on its sticker). ⛔ Claim, reboot
-  and reset only on a designated test device, by Izzy.
-- **Conflict with Izzy's standing rule, flagged not resolved:** the prompt says never auto-reset;
-  Izzy's 2026-09-14 rule says reset every ticked phone first. The existing wizard ladder (reset-first)
-  is **unchanged**; the new `/prepare` follows the prompt's capability-driven rule. Which one governs
-  the wizard's main path is Izzy's decision.
+  + secret + the GDMS login on **Admin → Integrations → Grandstream device cloud** (⛔ never through
+  chat), press **Verify**, then **Look up** Izzy's test GXP2170 (`C0:74:AD:8C:60:5F`). ⛔ Claim,
+  reboot and reset only on a designated test device, by Izzy.
+- **RESOLVED (round 2):** Izzy chose reset-first for everything ("reset every time you connect the
+  phone"). `/prepare` now matches the ladder: tick = consent, reset first, once per setup.
 - Yealink RPS still has no credentials (tickets pending); Fanvil and Poly have no API access at all.
 - The new card line and label box have not been seen in a browser.
 

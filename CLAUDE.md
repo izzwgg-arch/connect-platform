@@ -397,7 +397,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 Every file below is in `docs/ai-context/claude-md-sections/` (title starts with its date). Open it, then the full `AGENT_HANDOFF_*.md` it names. One line per area — never expand here.
 
-- Desk Phone Wizard automatic device identification + maker-cloud providers (GDMS/RPS): BUILT, NOT deployed → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
+- 2026-09-14 · Desk Phone Wizard device identification + maker clouds; RESET-FIRST governs Prepare Device; GDMS card on Admin → Integrations; api+portal DEPLOYED `acb994a3`, desktop rc.14 installed (unpublished) → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
 - Fanvil partner / FDPS / FDMS onboarding STARTED, nothing submitted → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
 - Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome → `2026-09-14-grandstream-business-onboarding-itsp-reseller-gd.md`

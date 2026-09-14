@@ -4,6 +4,24 @@ Newest entries first.
 
 ---
 
+## Desk-phone Prepare Device goes reset-first + GDMS card (2026-09-14, round 2, `acb994a3`)
+
+- shared `node --import tsx --test src/deskPhoneSetup/deviceIdentification.test.ts` → **33/33 pass**
+  (reset-first ordering, no second reset, Yealink tick-only, hands-on, SWEEP over `resetAlreadyDone` > 2000 combos).
+- api `node --experimental-test-module-mocks --import tsx --test` on every `src/deskPhoneSetup/*.test.ts`:
+  deviceCloudRoutes **28/28** (incl. first run caught the claim-before-reset gap: 2 failed, fixed),
+  deviceProviders 33, deskPhoneRoutes 56, deskPhoneStress 38, deskPhoneRecordWiring 28, deskPhoneRouteOrder 8,
+  provisioningRecordWriter 21, managedPhoneIntegration 12, yealinkRps 12, deskPhoneChaos 6 — **0 fail**
+  (managedPhonePostgres 0 run: needs the local test Postgres).
+- `tsc --noEmit`: shared 0 errors; portal 0 errors; api errors only in pre-existing unrelated files
+  (webrtc outage/incident, billing preview tests, delivery audit, hostMetrics) — none in deskPhoneSetup.
+- desktop (clean export `f8e11424`): tsc 0; `node --import tsx --test src/phoneSetup/*.test.ts` → **152/152 pass**.
+- Post-deploy container checks: api + portal `.build-commit` = `acb994a3`, 0 restarts, migration columns present,
+  shipped portal chunks carry the GDMS card + label box, `/admin/integrations` 200 on both hostnames.
+- ⛔ Not proven by any of this: a real GDMS account, a real phone reset through /prepare, the card in a browser.
+
+---
+
 ## Desk-phone automatic device identification + maker-cloud providers (2026-09-14, latest)
 
 ```bash
@@ -1380,3 +1398,8 @@ with 0 rows; 845 answers `success` with 5000 rows in the same minute.
 - api `src/deskPhoneSetup/*.test.ts` (--experimental-test-module-mocks): 157/157
 - portal `components/deskPhones/*.test.ts`: 73/73
 - typecheck: shared 0, desktop 0 (own TypeScript), portal 0, api 84 = baseline, none in edited files
+
+## 2026-09-14 — Dashboard design concept
+
+Manual Chrome verification: standalone visualization rendered, layout inspected, Overview/By direction toggle showed the observed Gesheft totals and restored correctly. No automated suite or production deployment; responsive viewport and host design controls not tested. See AGENT_HANDOFF_DASHBOARD_DESIGN_CONCEPT_2026-09-14.md.
+
