@@ -2,6 +2,10 @@
 
 Newest entries first.
 
+## Profile menu mockup (2026-09-14)
+
+Chrome visual/interaction checks passed: light/dark, Quick settings/Voicemail tabs, email-dependent transcription, close/reopen, Escape focus return. Light quick settings at 390px and dark voicemail at 320px fit without horizontal overflow. Local preview only; no production settings or runtime code changed. Full-page screenshot timed out once; normal captures succeeded. Assigned-extension Tweak option not exercised. See `AGENT_HANDOFF_PROFILE_MENU_DESIGN_2026-09-14.md`.
+
 ---
 
 ## Voicemail greeting also plays on busy — ticket 3GTH9M (2026-09-14, `5b499073`)

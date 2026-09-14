@@ -10,6 +10,8 @@ Every time Izzy gives an agent a task:
 
 The agent entry point `AGENTS.md` and `CLAUDE.md` both carry this rule so future sessions can recover it from disk.
 
+Profile menu review (2026-09-14): mockup only, not implementation approval. Preserve browser mute versus extension DND scope and the exact label “Include transcription in email.” Explain unassigned-extension greeting controls and avoid treating default Available presence as proven call readiness. See profile-menu design handoff.
+
 Browser navigation (2026-09-14): opened and verified the Loopcom dashboard in real Chrome; keep requested tabs open with `markDeliverable()`. Record: `docs/ai-context/AGENT_HANDOFF_BROWSER_NAVIGATION_2026-09-14.md`.
 
 Dashboard concept (2026-09-14): owner supplied an active Gesheft dashboard for the 2027 mockup. Use observed totals; do not infer callback status or answer rate from missed/canceled counts. Concept and verification: `docs/ai-context/AGENT_HANDOFF_DASHBOARD_DESIGN_CONCEPT_2026-09-14.md`.
