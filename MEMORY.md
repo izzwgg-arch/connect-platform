@@ -44,3 +44,5 @@ Dashboard voicemail review (2026-09-14): unread pseudo-element is an extra in-fl
 Dashboard voicemail fix (2026-09-14): replace in-flow unread pseudo-element with an avatar dot; keep three grid children. Actual-component fixture checks passed read/unread, missing/long names, both themes and mobile. Distinct loading/empty/unavailable states and navigation icon. Rollout pending; full dashboard handoff tracks deployment.
 
 Dashboard voicemail fix DEPLOYED 7d12c14f (2026-09-14): production build and blue/green/container commit checks passed; live empty card verified light/dark, original light restored. Populated rows verified via actual-component fixtures in both themes/mobile; no live rows in current account. Full dashboard handoff contains job evidence.
+
+Profile menu release (2026-09-14 18:42 Eastern): runtime `8b866ed6` pushed; job `10fee31a-fd98-45b7-9071-0e856e6bb7e5` last seen building before both hostnames returned nginx 403 from this connection. Deployment and live DND acceptance remain unverified. Restore authorized access and inspect that job before any new enqueue. Canonical Linux SSH unavailable; no bypass or PBX changes.

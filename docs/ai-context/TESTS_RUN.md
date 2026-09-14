@@ -2,6 +2,15 @@
 
 Newest entries first.
 
+## Profile menu release verification blocked (2026-09-14 18:42 Eastern)
+
+- Runtime `8b866ed6` pushed to the feature branch and `codex/profile-menu`. Local portal typecheck, 6 DND/dropdown tests, 6 PBX safeguard tests, and actual-component browser fixture checks passed (details below and profile-menu handoff).
+- Production dry run `4f104c91-3517-4f4f-af0f-ebd388177b68` passed. First real job `1ee9806f-db7f-43d3-b469-5c33df86004a` stopped before build on the separate heavy-job lock.
+- Bounded retry `10fee31a-fd98-45b7-9071-0e856e6bb7e5` started 18:28:39, reached Next production compilation with expected SHA, and was last seen RUNNING/build. Final build/rollout checks were not obtained.
+- Around 18:41 fresh Chrome dashboard and Deploy Center returned nginx 403. Independent network-enabled workstation GETs: Loopcom login 403, ready 403, legacy-host login 403. Initial sandbox socket denial was not an HTTP result. No cause/global-outage inference.
+- No live DND mutation or incoming-call acceptance test; awaits owner-selected company/extension. No fresh deployed light/dark verification or manual container grep. Do not report these as passed.
+
+
 ## Support agent hands — phase 1 act-as-filer + phase 2 owner notices STOP/GO (2026-09-14, `d1f2aa46` `cc8211c1` `31dc0e05`)
 
 - api `node --experimental-test-module-mocks --import tsx --test src/support/supportAgentNotice.test.ts

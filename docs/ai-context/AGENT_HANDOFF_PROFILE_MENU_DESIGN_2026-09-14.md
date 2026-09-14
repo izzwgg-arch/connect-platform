@@ -1,5 +1,21 @@
 # Profile menu mockup — 2026-09-14
 
+## Release verification blocked — 2026-09-14 18:42 Eastern
+
+Implementation commit `8b866ed68ab73ac8aa5d67a88dde60ca65257836` is pushed. The second portal job `10fee31a-fd98-45b7-9071-0e856e6bb7e5` started at 18:28:39 after API job `928e0b0c-219...` completed. It passed git sync/change detection and entered the production Docker/Next build with the expected build marker. Last observed status was RUNNING / build; log ended at `Creating an optimized production build ...`. No final `[deploy-portal] done` line, running-container verification, or fresh production menu verification was obtained.
+
+At approximately 18:41 a fresh Chrome reload of both `/admin/deploy-center` and `/dashboard` returned nginx `403 Forbidden`. Independent workstation HTTP checks also returned 403 for `https://app.loopcom.net/login`, `/ready`, and `https://app.connectcomunications.com/login`. This establishes denial from this connection, not a global outage or its cause. The first workstation checks were socket-blocked by the local sandbox; approved network-enabled checks returned the actual HTTP 403. No server infrastructure was changed and no access restriction was bypassed. Canonical Linux SSH is unavailable in this session, so the active build/final result cannot currently be inspected further. Do not enqueue a duplicate or claim deployment succeeded.
+
+Resume by restoring authorized access, inspecting the existing job and final log for SHA `8b866ed68ab73ac8aa5d67a88dde60ca65257836`, verifying the running-container marker/code via the canonical method, then checking the live menu in light/dark. A live extension-wide DND call acceptance test still needs the owner-selected company/extension; the viewed Support account has none. No live DND, greeting, or PBX configuration changes were made by this task. Local fixture server stopped and scratch fixture sources removed.
+
+## Release checkpoint — 2026-09-14
+
+Runtime commit `8b866ed68ab73ac8aa5d67a88dde60ca65257836` was pushed to `origin/feat/ivr-migration-takeover` and pinned release branch `origin/codex/profile-menu`. Deploy Center fallback used because the canonical Linux SSH tool is unavailable in this session.
+
+- Dry run `4f104c91-3517-4f4f-af0f-ebd388177b68` passed at 18:13 Eastern: correct target, no overlap with nine dirty server paths, blue/green enabled.
+- First real attempt `1ee9806f-db7f-43d3-b469-5c33df86004a` stopped before build/rollout at 18:16 with `HEAVY JOB ALREADY RUNNING: deploy-queue:portal:compose-build-portal`. No lock bypass, service restart, or infrastructure edit was attempted. Server Health showed all services healthy. Queue idle does not establish that the separate heavy-build lock is free.
+- After inspection and waiting, one bounded retry was queued at 18:24, job prefix `10fee31a-fd9`, behind an active API build. Final result still pending at this checkpoint.
+- Fresh production dashboard at 18:22 still showed the old menu. Browser fixture server was stopped and its temporary source/bundle directory removed after verification.
 ## Implementation authorized — 2026-09-14
 
 Izzy: “Fix it, add it in, and do the profile menu. As it is in the mockups.” Follow-up requires actual extension-wide DND, not a cosmetic toggle. This supersedes the historical mockup-only scope below. Portal implementation completed; deployment pending at this checkpoint.
