@@ -2,6 +2,13 @@
 
 Newest entries first.
 
+## Profile menu implementation + extension-wide DND (2026-09-14)
+
+- Portal TypeScript `--noEmit --incremental false`: PASS.
+- `profileDnd.test.ts` + `dropdownOutsideClose.test.ts`: 6/6 PASS (registered as `test:profile-menu`).
+- API `pbxMutationSafeguard.test.ts`: 6/6 PASS; no live PBX access.
+- Chrome actual-component fixtures: confirmed DND On/Off POST, save/reopen, unconfirmed/failed write, unknown read, GET-only retry, SMS error/revert, voicemail dependency, keyboard close/tabs, both themes, 390px and 320px layout. PASS. No real phone call or live DND toggle performed; awaiting owner-selected extension.
+
 ## Profile menu mockup (2026-09-14)
 
 Chrome visual/interaction checks passed: light/dark, Quick settings/Voicemail tabs, email-dependent transcription, close/reopen, Escape focus return. Light quick settings at 390px and dark voicemail at 320px fit without horizontal overflow. Local preview only; no production settings or runtime code changed. Full-page screenshot timed out once; normal captures succeeded. Assigned-extension Tweak option not exercised. See `AGENT_HANDOFF_PROFILE_MENU_DESIGN_2026-09-14.md`.
@@ -21,6 +28,24 @@ Chrome visual/interaction checks passed: light/dark, Quick settings/Voicemail ta
 - ✅ Backfill dry-run then apply (Trust 101/105/107 → `created`); PBX read-back: busy.wav sha256 == unavail.wav for all
   three, owner asterisk, 8 kHz mono PCM; 106's own busy.wav unchanged.
 - ⛔ Not proven: no real busy/declined call to ext 101 has played the recording yet.
+
+---
+
+## Desk-phone Grandstream REAL login protocol (token + hashed password) (2026-09-14, round 5, rc.16)
+
+- ⛔ Round 4's login shape was WRONG in production: Izzy's correct password was refused 4× in 40s
+  (`factory_reset … -> refused:locked`, desktop log 21:57Z). Root cause found by reading the phone's own GWT
+  bundle: the login is two steps and the password is hashed, and every CGI path needs a `Referer`.
+- desktop `node --import tsx --test src/phoneSetup/*.test.ts` → **167/167 pass** (was 164; the Grandstream adapter
+  suite was rewritten for the two-step protocol: username-hash-only token request, Referer on all three requests,
+  `hex(sha256(password+token))` with a test asserting the PLAIN password never appears in url/body/headers,
+  access→dologin→RESET ordering, 403-on-token → locked with nothing further sent, unreadable token → `refused`
+  not `locked`, no-password → nothing sent). desktop tsc 0.
+- portal setupDriver **44/44** after teaching `classifyResetAnswer` that `too_many_login_attempts` sent nothing.
+- Live, read-only, no password sent by an agent: `POST /cgi-bin/access` with `access=hex(sha256("admin"))` +
+  `Referer` → **200 `{"response":"success","body":"<token>"}`**; the same POST without `Referer` → **403**.
+- Server state after the failed run: every phone row `resetCount 0, attempts 0` — nothing wiped, nothing spent.
+- ⛔ Not proven: the `dologin` half (needs Izzy's password) and therefore a real reset.
 
 ---
 

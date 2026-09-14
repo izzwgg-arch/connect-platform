@@ -1,23 +1,43 @@
 /**
- * The Grandstream adapter — login, then reset/restart over the session API, driven through a
- * fake transport so every ordering and every refusal is proven without a phone on a desk.
+ * The Grandstream adapter — the TWO-STEP login the phone's own web application performs, driven
+ * through a fake transport so every ordering and refusal is proven without a phone on a desk.
+ *
+ * ⛔ The shapes here were read off Izzy's real GXP2170's GWT bundle on 2026-09-14 (`LDb()` builds
+ * `access=hex(sha256(username))`; `ODb()` builds `password=hex(sha256(password + token))` via
+ * `Oxb = sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(...))`), and the token handshake was
+ * confirmed live against the handset. rc.15 sent a PLAIN password with no token and no Referer,
+ * which is why a correct password was refused four times.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
+  buildGrandstreamAccessRequest,
   buildGrandstreamLoginRequest,
   buildGrandstreamOperationRequest,
+  grandstreamHash,
   parseGrandstreamLogin,
+  parseGrandstreamToken,
   sendGrandstreamOperation,
   testGrandstreamCredentials,
 } from "./grandstream";
 import type { HttpRequest, HttpResponse } from "./yealink";
 
-const OK_LOGIN: HttpResponse = {
+const CREDS = { username: "admin", password: "1234" };
+const TOKEN = "5wbGZpVbSi1dKTJVaXPvM8U09AaHtQN";
+const SID = "SID9000";
+
+const ACCESS_OK: HttpResponse = {
+  status: 200,
+  headers: { "content-type": "application/json;charset=UTF-8" },
+  body: JSON.stringify({ response: "success", body: TOKEN }),
+};
+const LOGIN_OK: HttpResponse = {
   status: 200,
   headers: { "set-cookie": "session_id=abc123; path=/; HttpOnly" },
-  body: JSON.stringify({ response: "success", body: { sid: "SID9000" } }),
+  body: JSON.stringify({ response: "success", body: { sid: SID } }),
 };
+const OP_OK: HttpResponse = { status: 200, headers: {}, body: JSON.stringify({ response: "success" }) };
 
 /** A transport that records every request and answers from a scripted queue. */
 function fakeHttp(answers: Array<HttpResponse | Error>) {
@@ -31,91 +51,114 @@ function fakeHttp(answers: Array<HttpResponse | Error>) {
   return { http, sent };
 }
 
-test("the login request carries the password in the BODY, never the URL", () => {
-  const req = buildGrandstreamLoginRequest("192.168.1.50", "s3cr3t&pw");
-  assert.equal(req.url, "http://192.168.1.50/cgi-bin/dologin");
+test("the hash is the phone's own: hex(sha256(value))", () => {
+  assert.equal(grandstreamHash("admin"), createHash("sha256").update("admin").digest("hex"));
+  assert.equal(grandstreamHash("admin"), "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918");
+});
+
+test("step 1 asks for a token with only a HASH OF THE USERNAME — no password anywhere", () => {
+  const req = buildGrandstreamAccessRequest("192.168.1.50", "admin");
+  assert.equal(req.url, "http://192.168.1.50/cgi-bin/access");
   assert.equal(req.method, "POST");
-  assert.match(req.body ?? "", /password=s3cr3t%26pw/);
-  assert.doesNotMatch(req.url, /s3cr3t/);
+  assert.equal(req.body, `access=${grandstreamHash("admin")}`);
+  assert.doesNotMatch(req.body ?? "", /1234/);
 });
 
-test("the login request refuses a non-private address before any socket", () => {
-  assert.throws(() => buildGrandstreamLoginRequest("8.8.8.8", "x"), /private office address/);
+test("⛔ every CGI request carries the Referer the phone demands (without it: 403 Forbidden)", () => {
+  const access = buildGrandstreamAccessRequest("192.168.1.50", "admin");
+  const login = buildGrandstreamLoginRequest("192.168.1.50", CREDS, TOKEN);
+  const op = buildGrandstreamOperationRequest("192.168.1.50", { sid: SID, cookie: "" }, "reset");
+  for (const req of [access, login, op]) {
+    assert.equal(req.headers.Referer, "http://192.168.1.50/", req.url);
+    assert.equal(req.headers["Content-Type"], "application/x-www-form-urlencoded");
+  }
 });
 
-test("a session is read only from a non-empty sid; the cookie rides with it", () => {
-  const s = parseGrandstreamLogin(OK_LOGIN);
-  assert.equal(s?.sid, "SID9000");
-  assert.equal(s?.cookie, "session_id=abc123");
+test("the token is the body STRING of a successful access response", () => {
+  assert.equal(parseGrandstreamToken(ACCESS_OK), TOKEN);
+  assert.equal(parseGrandstreamToken({ status: 200, headers: {}, body: JSON.stringify({ response: "error" }) }), null);
+  assert.equal(parseGrandstreamToken({ status: 403, headers: {}, body: "" }), null);
+  assert.equal(parseGrandstreamToken(null), null);
 });
 
-test("an empty sid, a non-200 or junk is NOT a session", () => {
+test("⛔ step 2 sends hex(sha256(password + token)) — the PLAIN password never reaches the wire", () => {
+  const req = buildGrandstreamLoginRequest("192.168.1.50", CREDS, TOKEN);
+  assert.equal(req.url, "http://192.168.1.50/cgi-bin/dologin");
+  assert.equal(req.body, `username=admin&password=${grandstreamHash("1234" + TOKEN)}`);
+  const everything = `${req.url} ${req.body} ${JSON.stringify(req.headers)}`;
+  assert.doesNotMatch(everything, /1234(?![0-9a-f])/, "the plain password appeared in the request");
+});
+
+test("the requests refuse a non-private address before any socket", () => {
+  assert.throws(() => buildGrandstreamAccessRequest("8.8.8.8", "admin"), /private office address/);
+  assert.throws(() => buildGrandstreamLoginRequest("8.8.8.8", CREDS, TOKEN), /private office address/);
+  assert.throws(() => buildGrandstreamOperationRequest("8.8.8.8", { sid: SID, cookie: "" }, "reset"), /private office address/);
+});
+
+test("a session is read only from a non-empty sid", () => {
+  assert.equal(parseGrandstreamLogin(LOGIN_OK)?.sid, SID);
+  assert.equal(parseGrandstreamLogin(LOGIN_OK)?.cookie, "session_id=abc123");
   assert.equal(parseGrandstreamLogin({ status: 200, headers: {}, body: JSON.stringify({ body: { sid: "" } }) }), null);
   assert.equal(parseGrandstreamLogin({ status: 401, headers: {}, body: "" }), null);
-  assert.equal(parseGrandstreamLogin({ status: 200, headers: {}, body: "not json" }), null);
-  assert.equal(parseGrandstreamLogin(null), null);
 });
 
-test("the operation request carries request + sid in the body and the session cookie", () => {
-  const req = buildGrandstreamOperationRequest("192.168.1.50", { sid: "SID9000", cookie: "session_id=abc123" }, "reset");
-  assert.equal(req.url, "http://192.168.1.50/cgi-bin/api-sys_operation");
-  assert.equal(req.headers.Cookie, "session_id=abc123");
-  assert.match(req.body ?? "", /request=RESET&sid=SID9000/);
-});
-
-test("reset: logs in, then sends RESET, and reports ok", async () => {
-  const okOp: HttpResponse = { status: 200, headers: {}, body: JSON.stringify({ response: "success" }) };
-  const { http, sent } = fakeHttp([OK_LOGIN, okOp]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", { username: "admin", password: "1234" });
+test("reset: access → dologin → RESET, in that order, and the session rides along", async () => {
+  const { http, sent } = fakeHttp([ACCESS_OK, LOGIN_OK, OP_OK]);
+  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", CREDS);
   assert.deepEqual(r, { ok: true });
-  assert.equal(sent.length, 2);
-  assert.match(sent[0].url, /dologin/);
-  assert.match(sent[1].url, /api-sys_operation/);
-  assert.match(sent[1].body ?? "", /request=RESET/);
+  assert.equal(sent.length, 3);
+  assert.match(sent[0].url, /cgi-bin\/access$/);
+  assert.match(sent[1].url, /cgi-bin\/dologin$/);
+  assert.match(sent[2].url, /cgi-bin\/api-sys_operation$/);
+  assert.match(sent[1].body ?? "", new RegExp(grandstreamHash("1234" + TOKEN)));
+  assert.equal(sent[2].body, `request=RESET&sid=${SID}`);
+  assert.equal(sent[2].headers.Cookie, "session_id=abc123");
 });
 
-test("reboot: logs in, then sends REBOOT", async () => {
-  const { http, sent } = fakeHttp([OK_LOGIN, { status: 200, headers: {}, body: "{}" }]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reboot", { username: "admin", password: "1234" });
-  assert.equal(r.ok, true);
-  assert.match(sent[1].body ?? "", /request=REBOOT/);
+test("reboot sends REBOOT on the same three-step path", async () => {
+  const { http, sent } = fakeHttp([ACCESS_OK, LOGIN_OK, OP_OK]);
+  assert.equal((await sendGrandstreamOperation(http, "192.168.1.50", "reboot", CREDS)).ok, true);
+  assert.equal(sent[2].body, `request=REBOOT&sid=${SID}`);
 });
 
-test("a 401 on the login is 'locked' and NO operation is attempted", async () => {
-  const { http, sent } = fakeHttp([{ status: 401, headers: {}, body: "" }]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", { username: "admin", password: "wrong" });
-  assert.deepEqual(r, { ok: false, reason: "locked", status: 401 });
-  assert.equal(sent.length, 1, "a refused login never sends the reset");
-});
-
-test("a 200 login with no sid is a refused password, not a broken phone — and sends nothing", async () => {
-  const { http, sent } = fakeHttp([{ status: 200, headers: {}, body: JSON.stringify({ response: "error" }) }]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", { username: "admin", password: "wrong" });
-  assert.equal(r.ok, false);
-  assert.equal((r as any).reason, "locked");
+test("a 403 on the token step is 'locked' and NOTHING further is sent", async () => {
+  const { http, sent } = fakeHttp([{ status: 403, headers: {}, body: "Forbidden" }]);
+  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", CREDS);
+  assert.deepEqual(r, { ok: false, reason: "locked", status: 403 });
   assert.equal(sent.length, 1);
 });
 
-test("no password means nothing is sent — a Grandstream is never reset unauthenticated", async () => {
-  const { http, sent } = fakeHttp([OK_LOGIN]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", null);
-  assert.deepEqual(r, { ok: false, reason: "locked" });
+test("⛔ a token we cannot read is 'refused', NEVER 'locked' — it is not a wrong password", async () => {
+  const { http, sent } = fakeHttp([{ status: 200, headers: {}, body: "something we have never seen" }]);
+  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", CREDS);
+  assert.equal(r.ok, false);
+  assert.equal((r as any).reason, "refused");
+  assert.equal(sent.length, 1, "no login is attempted, so nothing counts toward the phone's lockout");
+});
+
+test("a refused password (session-less login) is 'locked', and the operation is never sent", async () => {
+  const { http, sent } = fakeHttp([ACCESS_OK, { status: 200, headers: {}, body: JSON.stringify({ response: "error" }) }]);
+  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", CREDS);
+  assert.equal((r as any).reason, "locked");
+  assert.equal(sent.length, 2);
+});
+
+test("no password means nothing is sent at all", async () => {
+  const { http, sent } = fakeHttp([ACCESS_OK]);
+  assert.deepEqual(await sendGrandstreamOperation(http, "192.168.1.50", "reset", null), { ok: false, reason: "locked" });
   assert.equal(sent.length, 0);
 });
 
-test("an unreachable phone (connection refused on both schemes) is 'unreachable', never 'sent'", async () => {
+test("an unreachable phone is 'unreachable', never 'sent'", async () => {
   const refused = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
   const { http } = fakeHttp([refused]);
-  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", { username: "admin", password: "1234" });
-  assert.equal(r.ok, false);
+  const r = await sendGrandstreamOperation(http, "192.168.1.50", "reset", CREDS);
   assert.equal((r as any).reason, "unreachable");
 });
 
-test("testGrandstreamCredentials: a session means accepted; a 401 means locked", async () => {
-  const good = fakeHttp([OK_LOGIN]);
-  assert.deepEqual(await testGrandstreamCredentials(good.http, "192.168.1.50", { username: "admin", password: "1234" }), { ok: true });
-  const bad = fakeHttp([{ status: 401, headers: {}, body: "" }]);
-  const r = await testGrandstreamCredentials(bad.http, "192.168.1.50", { username: "admin", password: "x" });
-  assert.equal(r.ok, false);
-  assert.equal((r as any).reason, "locked");
+test("testGrandstreamCredentials: a session means accepted; a refusal means locked", async () => {
+  const good = fakeHttp([ACCESS_OK, LOGIN_OK]);
+  assert.deepEqual(await testGrandstreamCredentials(good.http, "192.168.1.50", CREDS), { ok: true });
+  const bad = fakeHttp([ACCESS_OK, { status: 401, headers: {}, body: "" }]);
+  assert.equal((await testGrandstreamCredentials(bad.http, "192.168.1.50", CREDS) as any).reason, "locked");
 });

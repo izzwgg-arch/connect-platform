@@ -218,6 +218,10 @@ export function classifyResetAnswer(r: any): "sent" | "refused" | "wait" | "lock
   if (why === "locked") return "locked";
   if (why === "already_reset_this_session") return "sent";
   if (why === "reset_not_authorized" || why === "too_soon_for_this_phone") return "wait";
+  // ⛔⛔ `too_many_login_attempts` SENDS NOTHING — the office machine stopped before the phone was
+  // touched, because it had already refused this password (Grandstream locks a phone out on repeated
+  // bad logins). Falling through to the default below would record a wipe that never happened.
+  if (why === "too_many_login_attempts") return "refused";
   if (why === "unknown_operation" || why === "not_a_private_address" || why.startsWith("reset_unsafe:")) return "refused";
   return "sent";
 }

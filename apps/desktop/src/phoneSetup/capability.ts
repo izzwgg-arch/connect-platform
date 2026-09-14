@@ -183,7 +183,18 @@ type Gate = {
    * account — cannot turn one wipe into two on the machine that would actually send it.
    */
   resetsSent: Set<string>;
+  /**
+   * ⛔⛔ FAILED LOGINS PER PHONE. Grandstream locks a phone's web interface out after repeated bad
+   * passwords, and on 2026-09-14 a wrong-SHAPED login (rc.15 sent the password plain, with no token)
+   * was retried four times in forty seconds against Izzy's GXP2170 — each one looking to the phone
+   * like a wrong password. The head must not be able to spend a customer's phone into a lockout, so
+   * the count is kept HERE, on the machine that sends them.
+   */
+  loginFailures: Map<string, number>;
 };
+
+/** How many refused logins one phone gets in a session before this machine stops trying. */
+export const MAX_LOGIN_FAILURES_PER_PHONE = 3;
 
 /**
  * What an operation was aimed at, in one line, safe to write to a log file.
@@ -250,8 +261,19 @@ function isGrandstream(vendor: unknown): boolean {
 export function createPhoneCapability(deps: CapabilityDeps) {
   const resident: PnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const now = deps.now ?? (() => Date.now());
-  const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0, resetsSent: new Set() };
+  const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0, resetsSent: new Set(), loginFailures: new Map() };
   const log = deps.log ?? (() => {});
+
+  /** Has this phone already refused us too many times to keep trying? */
+  const loginBlocked = (ip: string) => (gate.loginFailures.get(ip) ?? 0) >= MAX_LOGIN_FAILURES_PER_PHONE;
+  /**
+   * ⛔ Only a REFUSED PASSWORD counts. An unreachable phone or a login shape we could not read sent
+   * nothing the phone would hold against us, so neither may spend the customer's lockout budget.
+   */
+  const noteLogin = (ip: string, outcome: { ok: boolean; reason?: string }) => {
+    if (outcome.ok) { gate.loginFailures.delete(ip); return; }
+    if (outcome.reason === "locked") gate.loginFailures.set(ip, (gate.loginFailures.get(ip) ?? 0) + 1);
+  };
 
   /**
    * ⛔ ONE log site wrapping the whole dispatcher, deliberately — not a line at each
@@ -399,7 +421,9 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         // success. It answers "not the default", which sends the wizard straight to the password step.
         if (isGrandstream(req.vendor)) {
           if (req.useDefault) return { ok: true, op: "test_credentials", accepted: false, reason: "no_default" };
+          if (loginBlocked(ip)) return { ok: true, op: "test_credentials", accepted: false, reason: "too_many_login_attempts" };
           const g = await testGrandstreamCredentials(deps.http, ip, creds);
+          noteLogin(ip, g);
           return { ok: true, op: "test_credentials", accepted: g.ok, reason: g.ok ? undefined : g.reason };
         }
         const r = await testCredentials(deps.http, ip, creds);
@@ -411,7 +435,9 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         // so an autop for a Grandstream is refused and the ladder relies on the restart + PnP instead.
         if (isGrandstream(req.vendor)) {
           if (req.op === "trigger_autop") return { ok: false, refused: "unknown_operation" };
+          if (loginBlocked(ip)) return { ok: false, refused: "too_many_login_attempts" };
           const g = await sendGrandstreamOperation(deps.http, ip, "reboot", creds);
+          noteLogin(ip, g);
           if (!g.ok) return { ok: false, refused: g.reason };
           return { ok: true, op: "reboot" };
         }
@@ -442,12 +468,19 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         // 4) Only now does anything leave this machine. ⛔ Never retried, by anything,
         //    ever: a wipe that "timed out" was very likely received, because the phone
         //    stops answering precisely because it is doing what it was told.
+        // ⛔ A phone that has already refused us its password is not asked again: nothing would be
+        // wiped and every attempt walks it toward its own lockout. Checked BEFORE the stamp below,
+        // so a refusal that sends nothing does not spend the per-phone spacing budget either.
+        if (isGrandstream((req as any).vendor) && loginBlocked(ip)) {
+          return { ok: false, refused: "too_many_login_attempts" };
+        }
         gate.lastActionAt.set(ip, t);
         // ⛔ Grandstream is session-based and has NO documented default — it is reset only with the
         // password the customer typed, never a fallback guess. Yealink keeps its documented default.
         const r = isGrandstream((req as any).vendor)
           ? await sendGrandstreamOperation(deps.http, ip, "reset", creds)
           : await sendAction(deps.http, ip, "reset", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+        if (isGrandstream((req as any).vendor)) noteLogin(ip, r);
         // ⛔⛔ A 401/403 is the phone REFUSING our password: nothing was wiped. Until
         // 2026-09-14 this still recorded a reset, so a locked phone lost its one reset
         // untouched and the password step that could unlock it never ran.
@@ -479,10 +512,15 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         if ((req as any).reboot !== false) {
           // A reset phone is on the documented default; a phone the customer gave us
           // a password for uses that. Either way the restart is the same one verb.
-          // ⛔ Grandstream restarts through its session API with the customer's password (no default).
-          const r = isGrandstream((req as any).vendor)
-            ? await sendGrandstreamOperation(deps.http, ip, "reboot", creds)
+          // ⛔ Grandstream restarts through its session API with the customer's password (no default),
+          // and stops asking once the phone has refused that password too many times.
+          const gs = isGrandstream((req as any).vendor);
+          const r = gs
+            ? (loginBlocked(ip)
+              ? { ok: false as const, reason: "too_many_login_attempts" as any }
+              : await sendGrandstreamOperation(deps.http, ip, "reboot", creds))
             : await sendAction(deps.http, ip, "reboot", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+          if (gs) noteLogin(ip, r);
           rebooted = r.ok;
           if (!r.ok) rebootRefused = r.reason;
         }

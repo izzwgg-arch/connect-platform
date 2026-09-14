@@ -331,12 +331,40 @@ ticked → `reset_over_lan`, no `via`); portal setupDriver 44/44 (a Grandstream 
 password; brands with no executor still take the hand-off); desktop 164/164 incl. new `grandstreamAdapter.test.ts`
 12/12; every tsc 0.
 
-**⏳ UNPROVEN on a real handset — Izzy's live run is the proof.** The `dologin`/`api-sys_operation` request
-shapes are documented (Grandstream HTTP API) and cross-checked against the captured GXP2170 reads, but the
-authenticated write has NEVER succeeded on a real Grandstream (no sticker/known password was ever passed).
-A wrong shape fails SAFE: the reset is refused and the phone falls back to the PnP power-cycle. Izzy types the
-phone's admin password into the wizard when asked; it stays in the desktop vault and never reaches the server.
-⛔ Grandstream locks out on repeated bad passwords — the design sends ≤1 password attempt (no default guess).
+**❌ rc.15's LOGIN SHAPE WAS WRONG — corrected in round 5 below. The "documented" forum/API shape
+(plain `password=` to `dologin`) is NOT what a GXP2170 on 1.0.11.x accepts.** Izzy ran it 21:57Z with the
+CORRECT password and the phone refused four times (`factory_reset … -> refused:locked` ×4 in 40s). This is the
+exact failure [[adapter-proven-means-a-real-handset]] exists to catch: a shape read from documentation and
+community scripts, shipped without a real handset ever accepting it.
+
+## 10d. Round 5 (`rc.16`) — the REAL Grandstream login, read off the phone's own web app
+
+**How it was found (all read-only, no password sent by an agent).** The phone's web UI is a GWT app that also
+loads `sjcl.js`. Fetching `/webapp/webapp.nocache.js` → permutation `21412022F087F210A8C0F7CFF55D7906.cache.js`
+and reading its decompiled source gives the login verbatim:
+- `LDb()` → `POST /cgi-bin/access` body `access=<hex(sha256(username))>` → `{"response":"success","body":"<token>"}`
+- `ODb()` → `POST /cgi-bin/dologin` body `username=<plain>&password=<Oxb(password + token)>`
+- `Oxb(a) = sjcl.codec.hex.fromBits(sjcl.hash.sha256.hash(a))` — i.e. **hex(sha256(password + token))**
+- then `POST /cgi-bin/api-sys_operation` body `request=REBOOT|RESET&sid=<sid>`
+
+**⛔⛔ AND EVERY ONE OF THOSE CGI PATHS NEEDS A `Referer` HEADER.** Proven live on the handset: the identical
+`POST /cgi-bin/access` answered **403 Forbidden** bare and **200 with a token** once `Referer: http://<ip>/`
+(+ `Content-Type: application/x-www-form-urlencoded`) was added. rc.15 sent none of this.
+
+**Fixed in `grandstream.ts`:** two-step login with the token handshake, `hex(sha256(password+token))` (the plain
+password never reaches the wire, pinned by a test), `Referer` on every request, private-IP fence unchanged, and
+"a token we cannot read" reports `refused` — NEVER `locked` — so an unreadable shape can never be mistaken for a
+wrong password. **`capability.ts` gained `MAX_LOGIN_FAILURES_PER_PHONE = 3`**: a phone that has refused us three
+times is not asked again this session, because Grandstream locks a phone's web UI out on repeated bad logins and
+rc.15 spent four attempts in forty seconds. `classifyResetAnswer` maps that refusal to "nothing was sent", so it
+can never be recorded as a wipe.
+
+**Server state after the failed run: CLEAN.** Every phone row reads `resetCount 0, attempts 0, state IDENTIFIED` —
+nothing was wiped, and the one reset per setup is still unspent.
+
+**⏳ STILL UNPROVEN:** no Grandstream has yet been logged into or reset by this code. The handshake half IS proven
+live (the token came back 200); the `dologin` half needs Izzy's password, which only he types. Failure stays safe:
+a refused login falls back to the PnP power-cycle.
 
 ## 11. Traps hit
 
