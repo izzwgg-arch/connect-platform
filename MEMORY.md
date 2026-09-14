@@ -12,6 +12,8 @@ The agent entry point `AGENTS.md` and `CLAUDE.md` both carry this rule so future
 
 Profile menu review (2026-09-14): mockup only, not implementation approval. Preserve browser mute versus extension DND scope and the exact label “Include transcription in email.” Explain unassigned-extension greeting controls and avoid treating default Available presence as proven call readiness. See profile-menu design handoff.
 
+DND visibility (2026-09-14): ProfileMenu hides it unless the own-extension GET returns supported:true. This requires an ACTIVE owned extension, linked PBX/helper, and successful read; temporary read/request failure hides it too, discarding the reason. Unknown is not Off. Admin access to a company does not assign an extension. Source diagnosis recorded in the profile-menu handoff; no live DND changes.
+
 Browser navigation (2026-09-14): opened and verified the Loopcom dashboard in real Chrome; keep requested tabs open with `markDeliverable()`. Record: `docs/ai-context/AGENT_HANDOFF_BROWSER_NAVIGATION_2026-09-14.md`.
 
 Dashboard concept (2026-09-14): owner supplied an active Gesheft dashboard for the 2027 mockup. Use observed totals; do not infer callback status or answer rate from missed/canceled counts. Concept and verification: `docs/ai-context/AGENT_HANDOFF_DASHBOARD_DESIGN_CONCEPT_2026-09-14.md`.

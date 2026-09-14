@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-14 · Profile menu MOCKUP ONLY: grouped settings, explicit theme, extension-state explanation; Chrome/mobile checked → `2026-09-14-profile-menu-design.md`
+- 2026-09-14 · Profile menu MOCKUP + DND visibility traced: owned extension/PBX/read gates; errors silently hide it; no runtime changes → `2026-09-14-profile-menu-design.md`
 
 - 2026-09-14 · Outgoing email sender name "Connect" → "Loopcom" (live DB `EmailProviderConfig.fromName` + api fallback `770de892`) → `2026-09-14-email-sender-name-loopcom.md`
 

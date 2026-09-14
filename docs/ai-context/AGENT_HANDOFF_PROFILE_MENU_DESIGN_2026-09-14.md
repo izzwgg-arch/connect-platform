@@ -34,3 +34,22 @@ Contained interactive fragment with opaque light/dark surfaces. Initial state re
 - Assigned-extension host Tweak example is implemented but was not exercised in the standalone renderer. No production save, actual call, upload, or backend test was performed or claimed.
 
 Outcome: reviewable mockup, not an approved or deployed menu replacement. Original live dashboard retained; live preferences unchanged.
+
+## Follow-up: why some users see DND (2026-09-14)
+
+Izzy liked the mockup and requested investigation of inconsistent Do Not Disturb visibility. This follow-up is source diagnosis, not authorization to change live DND or PBX configuration.
+
+The exact gate is `extDndSupported` in `apps/portal/components/ProfileMenu.tsx:437`. On every menu open, GET `/voice/extensions/me/dnd` sets it from `supported`; any rejected request sets it false. The frontend discards the API's `reason` and silently removes the control.
+
+`apps/api/src/server.ts:20101` resolves the target and `:20119` reads the state. Requirements:
+
+1. An ACTIVE extension in the caller's current tenant with `ownerUserId === user.sub` (`resolveVoicemailGreetingExtension`, around line 19941). An administrator seeing a company's extensions is not itself an assignment. A displayed/JWT extension value is not this database ownership check. If multiple active extensions belong to the user, the oldest-created one is selected.
+2. A LINKED tenant PBX record with both instance and PBX tenant IDs.
+3. Configured route helper for that PBX instance.
+4. Successful live `getPbxDiversion(... feature: "DND")` read. The helper calls `/get-diversion`, not a new integration.
+
+Unsupported reasons are `no_extension`, `no_tenant`, `tenant_not_linked`, `route_helper_not_configured`, and `read_failed`. In practice the resolver returns null for no tenant before the later `no_tenant` check, so that case normally surfaces as `no_extension`. Authentication, permission, network, or other request failures also hide the control through the frontend catch. It starts hidden while loading. Ordinary USER and EXTENSION_USER roles pass the broad `canViewCustomers` gate; this is not specifically an administrator-only feature or a custom-role DND toggle.
+
+This explains both stable account differences and temporary disappearance: a read outage is represented as unsupported, then removed without explanation. It does not mean DND is off. No affected-user roster or fresh live API response was collected, so do not attribute every reported user's absence to one specific cause. The previously observed Support account had no extension shown, consistent with the first gate.
+
+Design recommendation: keep a stable DND row under Calls, distinct from browser mute. Show Loading, On/Off only after a confirmed read, No extension assigned when appropriate, and Temporarily unavailable with Retry on read failure. Never render unknown as Off. The existing mockup already includes DND in the assigned-extension example; it still hides that row in the default unassigned state, so the stable disabled/error state refinement is a recommendation, not yet drawn or implemented. No tests were run for this read-only source trace; no runtime or PBX changes and no deployment.
