@@ -59,4 +59,7 @@ The browser was not signed in to HP, the HP Partner Portal or Poly Lens.
 - ✅ izzy@loopcom.net ALREADY HAS an HP account (sign-up answered "Already have an HP account? Sign in").
 - ⛔ **Signing in via partner.hp.com → Log In does NOT start the application** — it bounces a company with no partner agreement back to the portal front page. Per the NA guide (pp. 5–10): partner.hp.com → Become an HP Partner → region North America → **Create HP account** → **Sign in** (top right) → sign in → HP redirects into the registration ("apply as a new company" / Continue). Email typed there; Izzy enters the password.
 
+- ⛔ With izzy@loopcom.net the sign-in LOOPED: every successful sign-in (via Log In AND via Become a Partner → Create HP account → Sign in) returned to partner.hp.com/login, never the registration or Izzy's earlier draft. A support email to hp.amspartnersupport@hp.com was DRAFTED in Gmail (not sent).
+- Izzy's call: start over with **billing@loopcom.net**. HP sign-up form filled (Israel / Weinstock / billing@loopcom.net, marketing unticked, no "already have an account" warning, so the address is new to HP). Password + Create + email code are Izzy's.
+
 ## Status: nothing applied. Next steps are Izzy's (see the final report in chat).
