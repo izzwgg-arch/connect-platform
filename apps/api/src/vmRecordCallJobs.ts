@@ -21,6 +21,7 @@ import {
   type VmRecordClientState,
   type VmRecordErrorCode,
 } from "./vmRecordCallHelpers";
+import { mirrorUnavailableGreetingToBusy, pbxGreetingMirrorDeps } from "./voicemailGreetingMirror";
 
 type VmRecordWakeMeta = {
   devicesNotified: number;
@@ -627,6 +628,16 @@ export async function runVmRecordCallJob(deps: VmRecordCallDeps, jobId: string):
         afterUpdatedAt: after?.updatedAt ? String(after.updatedAt) : null,
       });
       if (changed && after?.active) {
+        // The dialplan records to a tmp file and mv's it into place on "press 1",
+        // so a changed file here is the finished recording — safe to copy to busy.wav.
+        if (job.greetingType === "unavailable") {
+          const mirror = await mirrorUnavailableGreetingToBusy(pbxGreetingMirrorDeps, helperCfg, {
+            tenantId: job.pbxTenantId,
+            extension: job.extNumber,
+            previousUnavailableSha: job.beforeSha,
+          });
+          deps.log.info({ jobId, extNumber: job.extNumber, pbxTenantId: job.pbxTenantId, ...mirror }, "vm-record-call: busy mirror");
+        }
         job.state = "saved";
         job.verification = {
           saved: true,

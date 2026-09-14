@@ -355,6 +355,12 @@ import {
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
 } from "./pbxInboundRouteHelperClient";
+import {
+  mirrorUnavailableGreetingToBusy,
+  pbxGreetingMirrorDeps,
+  readActiveGreetingSha,
+  resetGreetingWithBusyMirror,
+} from "./voicemailGreetingMirror";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
@@ -20349,6 +20355,11 @@ async function handleVoicemailGreetingUpload(req: any, reply: any) {
   const convertedStorageKey = extensionGreetingStorageKey(extension.tenantId, extension.id, `${greetingPbxBaseName(greetingType)}.wav`);
   const originalStorageKey = extensionGreetingStorageKey(extension.tenantId, extension.id, `original${originalExt}`);
 
+  // Read BEFORE publishing: the busy mirror may only replace a busy.wav that is a copy of this.
+  const previousUnavailableSha = greetingType === "unavailable"
+    ? await readActiveGreetingSha(pbxGreetingMirrorDeps, helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType })
+    : null;
+
   let publish = null as Awaited<ReturnType<typeof uploadPbxVoicemailGreeting>> | null;
   try {
     publish = await uploadPbxVoicemailGreeting(helperCfg, {
@@ -20365,6 +20376,16 @@ async function handleVoicemailGreetingUpload(req: any, reply: any) {
       message: String(err?.message || "PBX helper could not install the greeting."),
       detail: err?.payload || null,
     });
+  }
+
+  if (greetingType === "unavailable") {
+    const mirror = await mirrorUnavailableGreetingToBusy(pbxGreetingMirrorDeps, helperCfg, {
+      tenantId: pbxTenantId,
+      extension: extension.extNumber,
+      previousUnavailableSha,
+      bytes: converted,
+    });
+    app.log.info({ extension: extension.extNumber, pbxTenantId, ...mirror }, "voicemail-greeting: busy mirror");
   }
 
   const metadata: ExtensionGreetingMetadata = {
@@ -20414,7 +20435,8 @@ app.delete("/voice/extensions/me/voicemail-greeting", async (req, reply) => {
   const helperCfg = pbxHelperForExtension(extension);
   const pbxTenantId = pbxTenantIdForExtension(extension);
   if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
-  await resetPbxVoicemailGreeting(helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  const busyMirror = await resetGreetingWithBusyMirror(pbxGreetingMirrorDeps, helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  app.log.info({ extension: extension.extNumber, pbxTenantId, greetingType, ...busyMirror }, "voicemail-greeting: reset");
   await fsp.rm(extensionGreetingDir(extension.tenantId, extension.id), { recursive: true, force: true });
   await audit({
     tenantId: extension.tenantId,
@@ -20441,7 +20463,8 @@ app.post("/voicemail/greeting/reset", async (req, reply) => {
   const pbxTenantId = pbxTenantIdForExtension(extension);
   if (!helperCfg || !pbxTenantId) return reply.code(503).send({ error: "pbx_helper_not_configured" });
   const greetingType = normalizeGreetingType(input.greetingType);
-  await resetPbxVoicemailGreeting(helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  const busyMirror = await resetGreetingWithBusyMirror(pbxGreetingMirrorDeps, helperCfg, { tenantId: pbxTenantId, extension: extension.extNumber, greetingType });
+  app.log.info({ extension: extension.extNumber, pbxTenantId, greetingType, ...busyMirror }, "voicemail-greeting: reset");
   await fsp.rm(extensionGreetingDir(extension.tenantId, extension.id), { recursive: true, force: true });
   await audit({ tenantId: extension.tenantId, actorUserId: user.sub, action: "VOICEMAIL_GREETING_RESET", entityType: "Extension", entityId: extension.id });
   return reply.send({ ok: true, ...formatExtensionControlPanel(extension, null).greeting });
