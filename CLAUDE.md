@@ -96,7 +96,11 @@ reset/reboot over the network, then the dropdowns, then the switch and extender.
   the fence IS counted (a wiping phone stops answering). Reboot wait bounded at 120 s.
   ⛔ `reset_over_sip` (rung 7, registered phones) still has **no executor** — the driver
   stalls on it and spends nothing. ⛔ **Proven with fakes only — Izzy does every reset on
-  his network himself.** Deploy state + rc.12 in §20f. Izzy's PC runs rc.11.
+  his network himself.** ✅ **SHIPPED 2026-09-14 05:35Z: api `4e9f5c33`, portal `0f500b11`
+  (container-verified, `reset-sent` in the shipped desk-phones chunk), and desktop rc.12
+  INSTALLED on Izzy's PC — asar sha256-identical to a clean export of `0f500b11`, updater deps
+  complete, icon OK, 0 error lines. NOT published (feed unchanged).** ⏳ No reset has reached a
+  real phone yet — that is Izzy's test on his rig. Detail in §20f.
 - ⛔ **The picker + sticker screens were built WITHOUT a mockup**, against Izzy's standing
   mockup-first rule — show him before calling them final. ⏳ Still open: PoE switch /
   Wi-Fi extender (needs brand + model from Izzy), §19f's screen defects (unconditional

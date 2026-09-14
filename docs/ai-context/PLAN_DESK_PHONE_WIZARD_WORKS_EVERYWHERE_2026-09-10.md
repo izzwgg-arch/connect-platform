@@ -1206,3 +1206,21 @@ build rc.12 from a clean export (asar dependency check + icon verify) and instal
 PC; ⛔ do NOT publish the feed without his word. ⏳ **Acceptance is Izzy's, on his own rig**:
 tick a wired Yealink on the clearing screen, approve, and watch it wipe once, come back, and
 register. The negative that matters: a Wi-Fi phone or an HT box must NOT wipe.
+
+**✅ SHIPPED 2026-09-14 05:35Z (continuation session):**
+- **api** `app-api-1` = `4e9f5c33` (reset-sent route grepped ×2 in the container, 0 restarts).
+- **portal** `app-portal-1` = `0f500b11` — `reset-sent` present in the shipped
+  `settings/desk-phones/page-417f388e….js`, 0 restarts, `/settings/desk-phones` 200.
+  ⛔ Until this deploy the portal sat on `b9956746`, i.e. the api could count a reset but the
+  wizard never sent one.
+- **desktop rc.12 INSTALLED on Izzy's workstation**, NOT published (feed unchanged).
+  `Connect-Setup-0.1.17-rc.12.exe`, 100,522,180 bytes, sha256 `FCF60438…87D54B7`, built from a
+  clean export in session `af7d2c87`'s scratchpad. Verified before install: exported source ==
+  `0f500b11` on all 113 desktop/shared files (CRLF-normalised — a raw `cmp` flags ~30 files and
+  is only line endings); asar carries all 16 modules incl. every electron-updater dependency;
+  `factory_reset` ×29 in the asar; `verify-built-icon` OK. Installed `/S` at 0 PBX calls,
+  exit 0, registry `0.1.17-rc.12`, installed asar sha256-identical to the build, 7 processes,
+  banner `=== log start v0.1.17-rc.12 ===`, 0 error lines, PnP resident listening on 5060+5080
+  and armed with 2 MACs.
+- ⏳ **NOT PROVEN: no reset has been sent to a real phone** — that is Izzy's step on his own
+  rig (above). ⛔ An already-open portal tab keeps the old driver until reloaded.
