@@ -30,3 +30,5 @@ Owner instruction: evaluate light and dark dashboards as separate designs; do no
 
 
 Both-theme dashboard implementation authorized 2026-09-14, including commit/push/deploy. Preserve light blue/purple/teal and dark blue/green/violet KPI palettes. API date bounds are exclusive-end and use PBX timezone; missed means incoming unanswered, canceled includes busy across directions. See dashboard handoff for implementation and final deployment status.
+
+Dashboard polish is deployed as f2460c4f (2026-09-14), both themes verified live. Earlier mockup/review "no fixes applied" notes are historical and superseded. Canonical SSH tool absent: Deploy Center fallback completed blue/green and container commit-marker check; fresh browser confirmed deployed behavior. Full release evidence and limits are in the dashboard handoff.
