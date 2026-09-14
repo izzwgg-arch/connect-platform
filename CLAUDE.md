@@ -31,6 +31,17 @@ human through it was dead before the first edit. Three failed attempts, a live c
 main number re-pointed and reverted repeatedly, and Izzy had to give the instruction
 twice. ⛔ **Ten minutes of reading would have cost nothing and saved all of it.**
 
+## ⛔ AGENT HANDOFF — Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome (2026-09-14) — READ FIRST before re-submitting any Grandstream partner form or promising GDMS API access
+
+(**Business/browser work only — no code, no PBX, no deploy.** Memory: [[grandstream-partner-onboarding-state]].)
+
+- ✅ **SUBMITTED:** grandstream.com/service-providers "Are you a Service Provider? Partner with us" (HubSpot) as Israel Weinstock / izzy@loopcom.net / Loopcom LLC / Harriman NY — message covers ITSP + reseller + GDMS/API + distributor + ERP/channel. Confirmation: "a member of our team will contact you within a few business days". No reference number is issued. ⛔ Do not resubmit — this doubles as the sales contact.
+- ⏳ **FILLED, NOT SUBMITTED (blocked on a visible reCAPTCHA v2 the agent may not solve):** PartnerConnect ITSP registration `helpdesk.grandstream.com/itsps/register` (platform Open Source/Asterisk; products IP Phones + ATAs; distributor blank). Izzy ticks "I'm not a robot" → Register.
+- ⏳ **FILLED, NOT SUBMITTED (captcha + Terms):** Reseller registration `helpdesk.grandstream.com/resellers/register`. Its "Terms and Conditions" = the ResellerConnect agreement (Oct 2017): no minimum purchase, no exclusivity, no fees; MAP policy on advertised prices; sell only in your region without written approval; **Amazon/eBay need written approval (MFN only, no FBA)**; distributor purchase prices confidential; ⛔ **program is for resellers buying from a Grandstream distributor — never-sold applicants must first be referred to a distributor by Grandstream.** Left unticked pending Izzy's approval.
+- ⛔ **"Authorized online reseller" is not a separate form** — it is written approval on top of ResellerConnect (contact reseller@grandstream.com).
+- ⛔ **GDMS account NOT created** — signup (account.gdms.cloud/signup) needs a password + Grandstream Device Verification (a real device MAC + sticker password) + email code; the agent must not create accounts or type passwords. API Developer + Channel Management/ERP association both depend on it; ERP association is a Grandstream support request after an order via a distributor.
+- Distributor candidates seen (not applied): Target Distributing, NTS Direct, Telephony Depot, VoIP Supply. Grandstream's route is referral via sales.
+
 ## ⛔⛔ AGENT HANDOFF — ZERO-TOUCH YEALINK (RPS) PROVISIONING is built into the existing Desk Phone Wizard and deployed INERT; no Yealink credentials, no RPS call, no handset proof (2026-09-14) — READ FIRST before touching `apps/api/src/deskPhoneSetup/managedPhone*.ts` / `yealinkRps.ts` / `yealinkConfig.ts`, `/phone-provisioning/*`, `ManagedDeskPhone`, or before enabling Yealink RPS
 
 Full developer doc: **`docs/ai-context/AGENT_HANDOFF_YEALINK_MANAGED_PROVISIONING_2026-09-14.md`**
