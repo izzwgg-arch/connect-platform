@@ -688,10 +688,11 @@ test("KINDS: listening is allowed for anybody, SPEAKING only for a brand we hold
   // a Polycom or a Snom — 314 models between them — was refused even the PASSIVE
   // step and sat on "Preparing" until somebody gave up. The two questions:
   //
-  //   SPEAKING to a phone (an HTTP request aimed AT it) is vendor-specific and stays
-  //   Yealink's alone until another brand's executor ships.
-  for (const v of ["yealink", "Yealink"]) assert.equal(vendorSupportsHttpActions(v), true, v);
-  for (const v of ["grandstream", "fanvil", "polycom", "snom", "panasonic", "unknown", "", null, undefined]) {
+  //   SPEAKING to a phone (an HTTP request aimed AT it) is vendor-specific and exists for the
+  //   brands with a shipped executor: Yealink (Action URI) and Grandstream (session API). A
+  //   third brand joins only when its executor ships.
+  for (const v of ["yealink", "Yealink", "grandstream", "Grandstream"]) assert.equal(vendorSupportsHttpActions(v), true, v);
+  for (const v of ["fanvil", "polycom", "snom", "panasonic", "unknown", "", null, undefined]) {
     assert.equal(vendorSupportsHttpActions(v as any), false, `${v} was allowed to be poked over HTTP`);
   }
   //   LISTENING for a phone that asks US is plain RFC 6080 SIP. Ten brands covering

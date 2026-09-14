@@ -583,29 +583,27 @@ async function tickedAssigned(app: any, phone: Record<string, unknown> = {}) {
 const advance = async (app: any, base: string) =>
   body(await app.inject({ method: "POST", url: `${base}/advance`, payload: { reachableOnLan: true } }));
 
-test("a ticked Grandstream with GDMS connected is told to clear THROUGH the maker's cloud, with the folder to listen for", async () => {
+test("a ticked Grandstream is cleared over the LAN with the password — NOT through the serial-based cloud, even when GDMS is connected", async () => {
   reset();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
   const app = await makeApp(CUSTOMER);
   const { base } = await tickedAssigned(app);
   const out = await advance(app, base);
   assert.equal(out.action, "reset_over_lan", JSON.stringify(out));
-  assert.equal(out.via, "vendor_cloud");
-  assert.equal(out.provisioningUrl, FOLDER, "the office machine listens before the wipe");
-  assert.equal(sim.tasks.length, 0, "deciding sends nothing to the maker");
+  assert.equal(out.via, undefined, "the LAN reset needs no maker cloud and no serial");
+  assert.equal(sim.tasks.length, 0, "nothing is sent to GDMS");
 });
 
-test("the same Grandstream without a connected cloud is answered exactly as before", async () => {
+test("the same Grandstream without a connected cloud is cleared over the LAN too", async () => {
   reset();
   const app = await makeApp(CUSTOMER, { registry: registry({ unconfigured: true }) });
   const { base } = await tickedAssigned(app);
   const out = await advance(app, base);
   assert.equal(out.action, "reset_over_lan");
   assert.equal(out.via, undefined);
-  assert.equal(out.provisioningUrl, undefined);
 });
 
-test("a Yealink is never sent to a maker cloud, whatever cloud is connected", async () => {
+test("a Yealink is cleared over the LAN and never sent to a maker cloud", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
   const { base } = await tickedAssigned(app, { mac: "80:5E:C0:B3:B2:D0", vendor: "Yealink", model: "T42S" });
@@ -614,7 +612,7 @@ test("a Yealink is never sent to a maker cloud, whatever cloud is connected", as
   assert.equal(out.via, undefined);
 });
 
-test("once its reset is spent, a Grandstream is handed its folder and restarted through the maker's cloud", async () => {
+test("once its reset is spent, a Grandstream is handed its folder and restarted over the LAN", async () => {
   reset();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
   const app = await makeApp(CUSTOMER);
@@ -622,7 +620,7 @@ test("once its reset is spent, a Grandstream is handed its folder and restarted 
   row.resetCount = 1;
   const out = await advance(app, base);
   assert.equal(out.action, "set_provisioning", JSON.stringify(out));
-  assert.equal(out.via, "vendor_cloud");
+  assert.equal(out.via, undefined);
   assert.equal(out.provisioningUrl, FOLDER);
 });
 

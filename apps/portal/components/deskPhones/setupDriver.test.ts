@@ -76,7 +76,7 @@ test("try_default_credentials runs the ONE documented attempt and records what i
   const bridge = fakeBridge();
   const d = createSetupDriver("r1", api, bridge);
   await d.tick();
-  assert.deepEqual(bridge.ops[0], { op: "test_credentials", ip: "192.168.1.20", useDefault: true });
+  assert.deepEqual(bridge.ops[0], { op: "test_credentials", ip: "192.168.1.20", useDefault: true, vendor: "yealink" });
   // the next tick's advance must carry the observation
   await d.tick();
   const second = api.calls.filter((c) => c.path.includes("/advance")).at(-1)!;
@@ -234,13 +234,12 @@ test("an unticked device is recorded as declined and the flag travels on every a
   assert.equal(p2Last.body.resetDeclined, true, "the unticked device was not declined");
 });
 
-test("a non-Yealink device is never poked with Yealink mechanisms", async () => {
-  // ⛔ Izzy widened the scope to any VoIP device. The local adapter speaks Yealink;
-  // an HT box or a Fanvil speaker gets configured server-side and locally we WAIT —
-  // sending another vendor's device our Action URIs is not "worth a try".
+test("a brand with no HTTP executor is never poked with another vendor's mechanisms", async () => {
+  // ⛔ The local adapters speak Yealink and Grandstream; a Poly or a Fanvil gets configured
+  // server-side and locally we WAIT — sending another vendor's requests is not "worth a try".
   const api = fakeApi(
-    [phone("ht", { vendor: "grandstream", model: "HT802" }), phone("yl", { vendor: "yealink" })],
-    { ht: { action: "trigger_autop" }, yl: { action: "trigger_autop" } },
+    [phone("poly", { vendor: "polycom", model: "VVX411" }), phone("yl", { vendor: "yealink" })],
+    { poly: { action: "trigger_autop" }, yl: { action: "trigger_autop" } },
   );
   const bridge = fakeBridge();
   const d = createSetupDriver("r1", api, bridge);
@@ -263,8 +262,8 @@ test("...but a non-Yealink phone IS listened for — that is the whole differenc
   //   427 models. There is nothing vendor-specific to get wrong, and a factory-reset
   //   phone multicasts it once per boot whatever badge is on the front.
   const api = fakeApi(
-    [phone("gs", { vendor: "grandstream", mac: "000b82aabbcc" })],
-    { gs: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" } },
+    [phone("poly", { vendor: "polycom", model: "VVX411", mac: "0004f2aabbcc" })],
+    { poly: { action: "set_provisioning", provisioningUrl: "https://m.connectcomunications.com/phoneprov/f3df739ac62197cd/" } },
   );
   const bridge = fakeBridge();
   bridge.run = async (req: any) => { bridge.ops.push(req); return { ok: true, op: req.op, listening: true, rebooted: false, delivered: false }; };
@@ -273,12 +272,11 @@ test("...but a non-Yealink phone IS listened for — that is the whole differenc
 
   assert.equal(bridge.ops.length, 1, "the responder is armed for it");
   assert.equal(bridge.ops[0].op, "set_provisioning");
-  // ⛔ And armed WITHOUT a restart: we hold no Grandstream HTTP shapes, so the
-  // person is asked to power-cycle instead — which is the documented mechanism for
-  // a factory-reset phone anyway, since one on defaults asks at the handset before
-  // obeying a remote restart.
+  // ⛔ And armed WITHOUT a restart: we hold no Poly HTTP shapes, so the person is asked to
+  // power-cycle instead — the documented mechanism for a factory-reset phone anyway, since one
+  // on defaults asks at the handset before obeying a remote restart.
   assert.equal(bridge.ops[0].reboot, false, "no restart is sent at a brand whose HTTP shapes we do not hold");
-  assert.match(out.hints.gs, /Plug this phone in/);
+  assert.match(out.hints.poly, /Plug this phone in/);
 });
 
 test("a phone the person left unticked on the found screen is never advanced, even though it is assigned", async () => {
@@ -467,7 +465,7 @@ test("reset_over_lan: reads the model off the phone, then asks for the wipe with
   const out = await createSetupDriver("r1", api, bridge).tick();
   assert.equal(bridge.ops[0].op, "fingerprint", "the fence judges what the phone says, so ask it first");
   assert.deepEqual(bridge.ops[1], {
-    op: "factory_reset", ip: "192.168.1.20", model: "T54W", link: "unknown", authorizationId: RESET_DECISION.resetAuthorizationId,
+    op: "factory_reset", ip: "192.168.1.20", model: "T54W", link: "unknown", authorizationId: RESET_DECISION.resetAuthorizationId, vendor: "yealink",
   });
   const reports = resetReports(api);
   assert.equal(reports.length, 1);
@@ -484,7 +482,7 @@ test("reset_over_lan: no approval id on the instruction means nothing is asked o
 });
 
 test("reset_over_lan: a brand we hold no reset shape for is never wiped, and the server hears so", async () => {
-  const api = fakeApi([phone("p1", { vendor: "grandstream" })], { p1: RESET_DECISION });
+  const api = fakeApi([phone("p1", { vendor: "polycom", model: "VVX411" })], { p1: RESET_DECISION });
   const bridge = resetBridge(() => ({ ok: true, sent: true }));
   const d = createSetupDriver("r1", api, bridge);
   const out = await d.tick();
@@ -616,6 +614,9 @@ test("classifyResetAnswer: the counting policy, exhaustively", () => {
 
 const FOLDER = "https://m.connectcomunications.com/phoneprov/0123456789abcdef/";
 const gsPhone = (over: any = {}) => phone("p1", { vendor: "grandstream", model: "GXP2170", mac: "c074ad8c605f", ...over });
+// A brand the server may route to a maker cloud but which this machine holds NO local reset for,
+// so when the cloud is unavailable the fallback is the non-destructive hand-off, not a LAN reset.
+const cloudOnlyPhone = (over: any = {}) => phone("p1", { vendor: "polycom", model: "VVX411", mac: "0004f2aabbcc", ...over });
 
 /** An api whose /prepare answers come from a queue, so each tick's cloud outcome is scripted. */
 function cloudApi(phones: any[], decision: any, prepareReplies: any[]) {
@@ -679,7 +680,7 @@ test("cloud reset: the maker needs the serial — the person is asked, the maker
 });
 
 test("cloud reset: 'I can't find it' ends the cloud for that phone, which continues the way it did before", async () => {
-  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" },
+  const api = cloudApi([cloudOnlyPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" },
     [{ ok: true, plan: { manualAction: { code: "serial_required", message: "Scan the label." } }, ran: [] }]);
   const bridge = fakeBridge();
   const d = createSetupDriver("r1", api, bridge);
@@ -697,7 +698,7 @@ test("cloud reset: 'I can't find it' ends the cloud for that phone, which contin
 
 test("cloud reset: a refusal that will not change ends the cloud; a retryable one is asked again later", async () => {
   let clock = 5_000_000;
-  const api = cloudApi([gsPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" }, [
+  const api = cloudApi([cloudOnlyPhone()], { action: "reset_over_lan", via: "vendor_cloud", provisioningUrl: FOLDER, resetAuthorizationId: "run_1.1" }, [
     { ok: true, plan: { manualAction: null }, ran: [{ step: "factory_reset", ok: false, retryable: true, message: "Busy, try again." }] },
     { ok: true, plan: { manualAction: null }, ran: [{ step: "factory_reset", ok: false, retryable: false, message: "Not allowed." }] },
   ]);
@@ -745,11 +746,25 @@ test("cloud restart: a phone that already asked and got its folder is not restar
   assert.equal(prepares(api).length, 0);
 });
 
-test("a brand the server did NOT name a cloud for takes exactly the path it took before", async () => {
-  const api = cloudApi([gsPhone()], { action: "reset_over_lan", resetAuthorizationId: "run_1.1" }, [{ ok: true, ran: [] }]);
+test("a brand with no LAN executor and no cloud is not wiped from this machine — it takes the hand-off", async () => {
+  // Polycom has neither a shipped HTTP executor nor (here) a maker cloud, so a LAN reset cannot
+  // be sent: the phone is handed its settings instead. (Grandstream and Yealink DO reset over LAN.)
+  const poly = phone("p1", { vendor: "polycom", model: "VVX411", mac: "0004f2aabbcc" });
+  const api = cloudApi([poly], { action: "reset_over_lan", resetAuthorizationId: "run_1.1" }, [{ ok: true, ran: [] }]);
   const bridge = fakeBridge();
   const out = await createSetupDriver("r1", api, bridge).tick();
   assert.equal(prepares(api).length, 0);
   assert.equal(bridge.ops.length, 0);
   assert.equal(out.hints.p1, HINT_RESET_SKIPPED);
+});
+
+test("a Grandstream with no cloud is cleared over the LAN with the customer's password (login → RESET)", async () => {
+  const api = fakeApi([gsPhone()], { p1: { action: "reset_over_lan", resetAuthorizationId: "run_1.1" } });
+  const bridge = { ops: [] as any[], run: async (req: any) => { bridge.ops.push(req); return req.op === "factory_reset" ? { ok: true, op: "factory_reset", sent: true } : { ok: true, op: req.op, fingerprint: { model: "GXP2170" } }; } };
+  const out = await createSetupDriver("r1", api, bridge).tick();
+  const wipe = bridge.ops.find((o: any) => o.op === "factory_reset");
+  assert.ok(wipe, JSON.stringify(bridge.ops));
+  assert.equal(wipe.vendor, "grandstream", "the desktop is told the brand so it uses the Grandstream reset");
+  assert.equal(resetReports(api).length, 1);
+  assert.equal(out.hints.p1, HINT_RESET_SENT);
 });

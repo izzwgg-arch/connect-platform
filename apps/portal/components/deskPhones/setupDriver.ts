@@ -505,7 +505,7 @@ export function createSetupDriver(
         const model = (fp?.ok && typeof fp.fingerprint?.model === "string" && fp.fingerprint.model
           ? fp.fingerprint.model : null) || phone.model || null;
         const r = await bridge.run({
-          op: "factory_reset", ip: phone.ip, model, link: "unknown", authorizationId,
+          op: "factory_reset", ip: phone.ip, model, link: "unknown", authorizationId, vendor: phone.vendor,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
         const outcome = classifyResetAnswer(r);
@@ -543,7 +543,7 @@ export function createSetupDriver(
       if (action === "try_default_credentials") {
         if (!canHttp) { markStall(m, action); continue; }
         say(phone.id, HINT_CHECKING);
-        const r = await bridge.run({ op: "test_credentials", ip: phone.ip, useDefault: true }).catch(() => null);
+        const r = await bridge.run({ op: "test_credentials", ip: phone.ip, useDefault: true, vendor: phone.vendor }).catch(() => null);
         m.defaultCredentialsTried = true;
         // ⛔ accepted=false with reason "locked" is a WRONG password; anything else
         // (unreachable, refused) is not knowledge about the lock and must not set it.
@@ -559,7 +559,7 @@ export function createSetupDriver(
         // settings now" said locally.
         say(phone.id, HINT_SENDING);
         const r = await bridge.run({
-          op: "trigger_autop", ip: phone.ip,
+          op: "trigger_autop", ip: phone.ip, vendor: phone.vendor,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
         if (r?.ok) { performed.push({ phoneId: phone.id, action }); clearStall(m); }
@@ -590,7 +590,7 @@ export function createSetupDriver(
         const reboot = !viaCloud && canHttp && m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
         say(phone.id, HINT_SENDING);
         const r = await bridge.run({
-          op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
+          op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot, vendor: phone.vendor,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
         if (!r?.ok) {

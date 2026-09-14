@@ -22,7 +22,7 @@
 import type { CloudAction, ProviderReadiness, SupportedManufacturer } from "./deviceIdentification";
 import { vendorSupportsPbxProvisioning } from "./deviceKinds";
 import type { VendorSlug } from "./vendorCatalog.generated";
-import { vendorSlugFor, vendorSupportsHttpActions, vendorSupportsPnpHandoff } from "./vendorAdapters";
+import { vendorSlugFor, vendorSupportsHttpActions, vendorSupportsLocalReset, vendorSupportsPnpHandoff } from "./vendorAdapters";
 
 /** How a ticked phone is factory reset before it gets its settings (reset-first). */
 export type ResetMechanism =
@@ -89,12 +89,18 @@ export function deviceMechanismsFor(
     : null;
   const cloudDoes = (a: CloudAction) => Boolean(cloud && settings !== "not_available" && cloud.supportedActions.includes(a));
 
-  // ⛔ The only office-network wipe executor is Yealink's. Nothing else is claimed.
-  const reset: ResetMechanism = cloudDoes("factory_reset") ? "vendor_cloud"
-    : http && brand === "yealink" ? "lan_http"
+  // ⛔⛔ THE OFFICE-NETWORK RESET WINS OVER THE MAKER CLOUD. Both clear the phone, but the LAN
+  // reset needs only the admin password the customer types once, while the cloud reset needs the
+  // device added to the maker's account first — which needs the serial number nobody can read off
+  // the network (Izzy, 2026-09-14: an existing customer "will have to go to the physical phone …
+  // there is no way to get the serial number"). So when a brand has a LAN reset executor we use it;
+  // the maker cloud is the fallback for a brand that has none. Both are gated on a settings profile
+  // existing, so a phone we cannot configure is never wiped.
+  const reset: ResetMechanism = vendorSupportsLocalReset(vendor) && settings !== "not_available" ? "lan_http"
+    : cloudDoes("factory_reset") ? "vendor_cloud"
       : "not_available";
-  const restart: RestartMechanism = cloudDoes("reboot") ? "vendor_cloud"
-    : http ? "lan_http"
+  const restart: RestartMechanism = http ? "lan_http"
+    : cloudDoes("reboot") ? "vendor_cloud"
       : pnp ? "power_cycle"
         : "not_available";
 

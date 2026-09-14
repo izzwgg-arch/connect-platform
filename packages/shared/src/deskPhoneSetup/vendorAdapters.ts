@@ -1120,13 +1120,13 @@ export function vendorSupportsPnpHandoff(vendor: string | null | undefined): boo
  * for the opposite reason: listening at an unidentified device is free, talking to
  * one is a guess made against somebody's hardware.
  *
- * ⛔ Today the desktop's executor (`apps/desktop/src/phoneSetup/yealink.ts`) only
- * implements Yealink's request shapes, so this is Yealink alone regardless of what
- * the catalogue records for other brands. It is written as a lookup rather than a
- * literal so that shipping a second brand's executor is a one-line change HERE,
- * beside the endpoints it would use — and so the reason is written down.
+ * ⛔ The desktop's executors implement each brand's own request shapes:
+ * `apps/desktop/src/phoneSetup/yealink.ts` (Action URI) and
+ * `apps/desktop/src/phoneSetup/grandstream.ts` (session `dologin` → `api-sys_operation`).
+ * A brand is listed here ONLY when its executor exists, so this set and the desktop code
+ * ship together; a third brand is a one-line change HERE beside the endpoints it would use.
  */
-const VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR: ReadonlySet<VendorSlug> = new Set<VendorSlug>(["yealink"]);
+const VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR: ReadonlySet<VendorSlug> = new Set<VendorSlug>(["yealink", "grandstream"]);
 
 export function vendorSupportsHttpActions(vendor: string | null | undefined): boolean {
   const slug = vendorSlugFor(vendor);
@@ -1134,6 +1134,22 @@ export function vendorSupportsHttpActions(vendor: string | null | undefined): bo
   if (!VENDORS_WITH_A_SHIPPED_HTTP_EXECUTOR.has(slug)) return false;
   const a = VENDOR_ADAPTERS[slug];
   return Boolean(a.reboot || a.reprovision || a.setProvisioningUrl);
+}
+
+/**
+ * May the office machine FACTORY RESET a phone of this brand over the LAN, with the customer's
+ * password? ⛔ A separate, narrower set than the HTTP gate above: a brand can have a restart
+ * executor without a reset one. The reset is the irreversible verb, so it is listed by name.
+ *   • Yealink    — Action URI `key=Reset`.
+ *   • Grandstream — session `dologin` → `api-sys_operation request=RESET` (needs the password;
+ *                   no serial and no maker cloud — this is what lets an EXISTING customer phone
+ *                   be cleared without anyone reading the sticker).
+ */
+const VENDORS_WITH_A_LOCAL_RESET_EXECUTOR: ReadonlySet<VendorSlug> = new Set<VendorSlug>(["yealink", "grandstream"]);
+
+export function vendorSupportsLocalReset(vendor: string | null | undefined): boolean {
+  const slug = vendorSlugFor(vendor);
+  return slug ? VENDORS_WITH_A_LOCAL_RESET_EXECUTOR.has(slug) : false;
 }
 
 /**

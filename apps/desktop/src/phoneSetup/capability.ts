@@ -20,6 +20,7 @@ import {
   buildGrandstreamModelRequest, buildStatusRequest, fingerprintFromGrandstreamValues, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, requestWithSchemeFallback, sendAction, testCredentials,
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
 } from "./yealink";
+import { sendGrandstreamOperation, testGrandstreamCredentials } from "./grandstream";
 import { normalizeMac } from "./pnp";
 import { decideLocalFactoryReset } from "./resetSafetyCore";
 import { createPnpResident, PNP_RESIDENT_MAX_MACS, type PnpResident } from "./pnpResident";
@@ -61,9 +62,9 @@ export type PhoneOperation = (typeof PHONE_OPERATIONS)[number];
 export type OperationRequest =
   | { op: "discover"; subnet?: string }
   | { op: "fingerprint"; ip: string; credentialRef?: string | null }
-  | { op: "test_credentials"; ip: string; credentialRef?: string | null; useDefault?: boolean }
-  | { op: "reboot"; ip: string; credentialRef?: string | null }
-  | { op: "trigger_autop"; ip: string; credentialRef?: string | null }
+  | { op: "test_credentials"; ip: string; credentialRef?: string | null; useDefault?: boolean; vendor?: string | null }
+  | { op: "reboot"; ip: string; credentialRef?: string | null; vendor?: string | null }
+  | { op: "trigger_autop"; ip: string; credentialRef?: string | null; vendor?: string | null }
   | { op: "arm_pnp"; url: string; macs: string[] }
   | { op: "disarm_pnp" }
   | {
@@ -80,12 +81,16 @@ export type OperationRequest =
       /** The id of the server's approval record. A reset with no approval is refused. */
       authorizationId: string;
       credentialRef?: string | null;
+      /** Which brand's reset surface to use. Yealink Action URI by default; Grandstream is session-based. */
+      vendor?: string | null;
     }
   | {
       op: "set_provisioning"; ip: string; mac: string; url: string; credentialRef?: string | null;
       /** Restart the phone so it asks (PnP fires once per boot). Default true. */
       reboot?: boolean;
       waitMs?: number;
+      /** Which brand's restart surface to use for the restart half. */
+      vendor?: string | null;
     };
 
 export type OperationResult =
@@ -237,6 +242,11 @@ export function describeResult(res: OperationResult): string {
   }
 }
 
+/** Which brand's HTTP surface an operation targets. Only Yealink and Grandstream have executors. */
+function isGrandstream(vendor: unknown): boolean {
+  return String(vendor ?? "").trim().toLowerCase() === "grandstream";
+}
+
 export function createPhoneCapability(deps: CapabilityDeps) {
   const resident: PnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const now = deps.now ?? (() => Date.now());
@@ -383,11 +393,28 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         return { ok: false, refused: "unreachable" };
       }
       case "test_credentials": {
+        // ⛔ Grandstream publishes no documented default password (every unit since 2017 has a
+        // random one on its sticker), so the "try the default" probe sends NOTHING for it —
+        // guessing would spend a login attempt toward the phone's own lockout for no chance of
+        // success. It answers "not the default", which sends the wizard straight to the password step.
+        if (isGrandstream(req.vendor)) {
+          if (req.useDefault) return { ok: true, op: "test_credentials", accepted: false, reason: "no_default" };
+          const g = await testGrandstreamCredentials(deps.http, ip, creds);
+          return { ok: true, op: "test_credentials", accepted: g.ok, reason: g.ok ? undefined : g.reason };
+        }
         const r = await testCredentials(deps.http, ip, creds);
         return { ok: true, op: "test_credentials", accepted: r.ok, reason: r.ok ? undefined : r.reason };
       }
       case "reboot":
       case "trigger_autop": {
+        // ⛔ Grandstream restarts through its session API; it has no HTTP "fetch now" (autop) verb,
+        // so an autop for a Grandstream is refused and the ladder relies on the restart + PnP instead.
+        if (isGrandstream(req.vendor)) {
+          if (req.op === "trigger_autop") return { ok: false, refused: "unknown_operation" };
+          const g = await sendGrandstreamOperation(deps.http, ip, "reboot", creds);
+          if (!g.ok) return { ok: false, refused: g.reason };
+          return { ok: true, op: "reboot" };
+        }
         const action = req.op === "reboot" ? "reboot" : "autop";
         const r = await sendAction(deps.http, ip, action, creds);
         if (!r.ok) return { ok: false, refused: r.reason };
@@ -416,7 +443,11 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         //    ever: a wipe that "timed out" was very likely received, because the phone
         //    stops answering precisely because it is doing what it was told.
         gate.lastActionAt.set(ip, t);
-        const r = await sendAction(deps.http, ip, "reset", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+        // ⛔ Grandstream is session-based and has NO documented default — it is reset only with the
+        // password the customer typed, never a fallback guess. Yealink keeps its documented default.
+        const r = isGrandstream((req as any).vendor)
+          ? await sendGrandstreamOperation(deps.http, ip, "reset", creds)
+          : await sendAction(deps.http, ip, "reset", creds ?? YEALINK_DEFAULT_CREDENTIALS);
         // ⛔⛔ A 401/403 is the phone REFUSING our password: nothing was wiped. Until
         // 2026-09-14 this still recorded a reset, so a locked phone lost its one reset
         // untouched and the password step that could unlock it never ran.
@@ -448,7 +479,10 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         if ((req as any).reboot !== false) {
           // A reset phone is on the documented default; a phone the customer gave us
           // a password for uses that. Either way the restart is the same one verb.
-          const r = await sendAction(deps.http, ip, "reboot", creds ?? YEALINK_DEFAULT_CREDENTIALS);
+          // ⛔ Grandstream restarts through its session API with the customer's password (no default).
+          const r = isGrandstream((req as any).vendor)
+            ? await sendGrandstreamOperation(deps.http, ip, "reboot", creds)
+            : await sendAction(deps.http, ip, "reboot", creds ?? YEALINK_DEFAULT_CREDENTIALS);
           rebooted = r.ok;
           if (!r.ok) rebootRefused = r.reason;
         }

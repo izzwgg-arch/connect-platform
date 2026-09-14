@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { deviceMechanismsFor } from "./deviceMechanisms";
 import type { ProviderReadiness } from "./deviceIdentification";
-import { vendorSupportsHttpActions, vendorSupportsPnpHandoff, VENDOR_ADAPTERS } from "./vendorAdapters";
+import { vendorSupportsHttpActions, vendorSupportsLocalReset, vendorSupportsPnpHandoff, VENDOR_ADAPTERS } from "./vendorAdapters";
 import type { VendorSlug } from "./vendorCatalog.generated";
 
 const gdms = (over: Partial<ProviderReadiness> = {}): ProviderReadiness => ({
@@ -20,29 +20,32 @@ const rps: ProviderReadiness = {
   claimRequiresSerial: false, redirectOnly: true, note: "",
 };
 
-test("a Grandstream with the maker cloud connected is cleared and restarted THROUGH the cloud", () => {
+test("a Grandstream is cleared over the LAN with the password, NOT the serial-based cloud — even when GDMS is connected", () => {
+  // ⛔ The whole point: the LAN reset (type the password once) beats the cloud reset (read the
+  // sticker serial to add the device first), so an existing customer phone never needs a sticker.
   const m = deviceMechanismsFor("Grandstream", [gdms(), rps]);
   assert.equal(m.brand, "grandstream");
-  assert.equal(m.reset, "vendor_cloud");
-  assert.equal(m.restart, "vendor_cloud");
+  assert.equal(m.reset, "lan_http");
+  assert.equal(m.restart, "lan_http");
   assert.equal(m.settings, "pnp");
-  assert.equal(m.cloudPlatform, "gdms");
-  assert.equal(m.cloudClaimNeedsSerial, true);
+  assert.equal(m.cloudPlatform, null);
+  assert.equal(m.cloudClaimNeedsSerial, false);
 });
 
-test("the same Grandstream without the cloud is honest: no remote clear, a power-cycle restart", () => {
+test("a Grandstream with no cloud at all is still cleared and restarted over the LAN", () => {
   for (const readiness of [[], [gdms({ cloudConfigured: false })], [gdms({ supportedActions: ["lookup"] })]]) {
     const m = deviceMechanismsFor("grandstream", readiness);
-    assert.equal(m.reset, "not_available", JSON.stringify(readiness));
-    assert.equal(m.restart, "power_cycle");
+    assert.equal(m.reset, "lan_http", JSON.stringify(readiness));
+    assert.equal(m.restart, "lan_http");
     assert.equal(m.cloudPlatform, null);
   }
 });
 
-test("a cloud that can restart but not clear restarts through the cloud and clears nothing", () => {
-  const m = deviceMechanismsFor("grandstream", [gdms({ supportedActions: ["lookup", "claim", "reboot"] })]);
-  assert.equal(m.reset, "not_available");
-  assert.equal(m.restart, "vendor_cloud");
+test("a brand with NO local executor but a cloud that can restart uses the cloud for restart", () => {
+  const fanvilCloud = { ...gdms(), manufacturer: "fanvil" as const, platform: "fanvil_fdps" as const, supportedActions: ["lookup", "reboot"] as any };
+  const m = deviceMechanismsFor("fanvil", [fanvilCloud]);
+  assert.notEqual(m.restart, "lan_http", "Fanvil has no LAN executor");
+  if (m.restart === "vendor_cloud") assert.equal(m.cloudPlatform, "fanvil_fdps");
 });
 
 test("a Yealink is cleared and restarted from the office machine; a redirect-only cloud changes nothing", () => {
@@ -91,8 +94,8 @@ test("SWEEP: every catalogue brand, with every cloud shape, keeps the safety rul
       const m = deviceMechanismsFor(brand, readiness);
       checked++;
       assert.equal(m.brand, brand);
-      // ⛔ An office-network wipe exists for Yealink alone.
-      if (m.reset === "lan_http") assert.equal(brand, "yealink");
+      // ⛔ An office-network wipe exists only for a brand with a shipped local reset executor.
+      if (m.reset === "lan_http") assert.equal(vendorSupportsLocalReset(brand), true, `${brand} reset lan_http`);
       // ⛔ A cloud step only with a configured, managing cloud for THIS brand that implements it.
       for (const [step, action] of [["reset", "factory_reset"], ["restart", "reboot"]] as const) {
         if (m[step] !== "vendor_cloud") continue;

@@ -25,7 +25,7 @@
 import { normalizeMac, formatMac } from "./deviceIdentity";
 import { deviceKindFor, type DeviceKind, vendorSupportsPbxProvisioning } from "./deviceKinds";
 import {
-  findCatalogModel, vendorsForMac, vendorSlugFor, vendorSupportsHttpActions, vendorSupportsPnpHandoff,
+  findCatalogModel, vendorsForMac, vendorSlugFor, vendorSupportsHttpActions, vendorSupportsLocalReset, vendorSupportsPnpHandoff,
 } from "./vendorAdapters";
 import type { PhoneState } from "./states";
 
@@ -397,10 +397,12 @@ export function capabilitiesFor(input: {
   if (cloudDoes("reboot")) add("canReboot", "vendor_cloud");
   if (localHttp) add("canReboot", "local_http");
 
-  // ⛔ The only local wipe executor is Yealink's Action URI; nothing else is claimed.
-  const canFactoryReset = cloudDoes("factory_reset") || (localHttp && input.manufacturer === "yealink");
+  // ⛔ A local wipe exists for the brands with a shipped reset executor (Yealink Action URI,
+  // Grandstream session API). `vendorSupportsLocalReset` is the one place that list lives.
+  const localReset = identified && vendorSupportsLocalReset(vendorText);
+  const canFactoryReset = cloudDoes("factory_reset") || localReset;
   if (cloudDoes("factory_reset")) add("canFactoryReset", "vendor_cloud");
-  if (localHttp && input.manufacturer === "yealink") add("canFactoryReset", "local_http");
+  if (localReset) add("canFactoryReset", "local_http");
 
   const canReprovision = cloudDoes("reprovision") || localHttp || localPnp;
   if (cloudDoes("reprovision")) add("canReprovision", "vendor_cloud");

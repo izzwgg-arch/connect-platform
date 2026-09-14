@@ -248,7 +248,8 @@ test("cloud capabilities are true only when the provider is configured and holds
   assert.equal(caps.canCloudManage, true);
   assert.equal(caps.canReboot, true);
   assert.equal(caps.canFactoryReset, true);
-  assert.deepEqual(caps.paths.canFactoryReset, ["vendor_cloud"]);
+  // Both paths: the maker cloud AND the local Grandstream reset executor (login → RESET).
+  assert.deepEqual(caps.paths.canFactoryReset, ["vendor_cloud", "local_http"]);
   assert.equal(caps.requiresSerialToClaim, true);
   assert.equal(caps.supportsZeroTouch, true);
   assert.equal(caps.canAssignSip, true, "GXP2170 has a PBX settings profile");
@@ -256,12 +257,18 @@ test("cloud capabilities are true only when the provider is configured and holds
   assert.equal(caps.canUpdateFirmware, false);
 });
 
-test("an unconfigured provider grants nothing and says why", () => {
+test("an unconfigured CLOUD grants no cloud powers, but the local Grandstream executor still can", () => {
   const caps = capabilitiesFor({ manufacturer: "grandstream", model: "GXP2170", deviceType: "desk_phone", readiness: gdmsNotConfigured, cloud: managed });
+  // The maker cloud is off, so nothing cloud-shaped is granted…
   assert.equal(caps.canClaim, false);
   assert.equal(caps.canCloudManage, false);
-  assert.equal(caps.canReboot, false);
-  assert.equal(caps.canFactoryReset, false);
+  assert.ok(!caps.paths.canReboot?.includes("vendor_cloud"));
+  assert.ok(!caps.paths.canFactoryReset?.includes("vendor_cloud"));
+  // …but restart and reset still work over the LAN with the customer's password.
+  assert.equal(caps.canReboot, true);
+  assert.deepEqual(caps.paths.canReboot, ["local_http"]);
+  assert.equal(caps.canFactoryReset, true);
+  assert.deepEqual(caps.paths.canFactoryReset, ["local_http"]);
   assert.ok(caps.notes.includes(gdmsNotConfigured.note));
 });
 
@@ -443,11 +450,22 @@ test("a Yealink is reset only once it is ticked, locked or not", () => {
 });
 
 test("a phone nothing can reset over the network is handed to a person to reset once", () => {
-  const id = identifyDevice({ mac: GRANDSTREAM_MAC, evidence: [{ source: "sip_user_agent", model: "GXP2170" }] });
+  // ⛔ Poly has a settings profile (PnP) but no shipped reset executor and no maker cloud here,
+  // so it is the brand that genuinely cannot be cleared from the network. (Grandstream and Yealink
+  // both CAN now, over the LAN with the password.)
+  const id = identifyDevice({ mac: POLY_MAC, evidence: [{ source: "sip_user_agent", model: "VVX411", manufacturer: "Polycom" }] });
   const plan = planDevicePreparation({
     identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: false, resetAuthorized: true, resetAlreadyDone: false,
   });
   assert.equal(plan.manualAction?.code, "reset_needs_hands_on");
+});
+
+test("a Grandstream is now reset over the LAN once ticked, no serial and no maker cloud needed", () => {
+  const id = identifyDevice({ mac: GRANDSTREAM_MAC, evidence: [{ source: "sip_user_agent", model: "GXP2170" }] });
+  const plan = planDevicePreparation({
+    identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: false, resetAuthorized: true, resetAlreadyDone: false,
+  });
+  assert.ok(plan.steps.some((s) => s.step === "factory_reset" && s.via === "local_http"), JSON.stringify(plan));
 });
 
 test("SWEEP: a factory reset is planned only for a ticked, unregistered phone we may touch, never twice, never before a settings profile exists", () => {
