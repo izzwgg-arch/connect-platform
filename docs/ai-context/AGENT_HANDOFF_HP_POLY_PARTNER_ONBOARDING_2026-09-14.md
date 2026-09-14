@@ -42,4 +42,9 @@ The browser was not signed in to HP, the HP Partner Portal or Poly Lens.
 - **888VoIP** — VoIP value-added distributor with staging/provisioning (site 403s WebFetch; not verified in browser).
 - ⏳ Not yet asked: MAC/serial feeds, Poly ZT claiming on our behalf, drop ship, API/EDI.
 
+## Pages opened and pre-filled for Izzy (2026-09-14, later)
+- **HP account sign-up** (via partner.hp.com → Apply): Israel / Weinstock / izzy@loopcom.net filled, marketing box unticked. The password and "Create" are left for Izzy.
+- **Poly Lens login** (lens.poly.com): opened. Izzy signs in, via Google for izzy@loopcom.net or another method.
+- **ScanSource Specialty prospect form** (scansource.my.site.com/prospectscreening/s/): filled in except "Do you have an immediate opportunity?" (required) and "How did you hear". Company, name, email, phone 845-723-1213, US, email contact, resell=Yes, UC, Cisco=No, supplier "HP | Poly", federal=No, and the comments were entered. NOT submitted.
+
 ## Status: nothing applied. Next steps are Izzy's (see the final report in chat).
