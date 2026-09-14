@@ -29,14 +29,22 @@ const matches = (row: any, where: any): boolean =>
     return row[k] === v;
   });
 
+/**
+ * ⛔⛔ EVERY READ RETURNS A COPY, BECAUSE PRISMA DOES. A fake that hands back the live
+ * stored row makes a handler's earlier snapshot change under it — so a route that
+ * correctly records "what this replaced" reads the NEW value and looks broken, and,
+ * far worse, a route that wrongly re-read a mutated object would look correct. Copying
+ * is what makes this harness able to tell those two apart.
+ */
 function table(bucket: string, defaults: () => any) {
+  const copy = (r: any) => (r ? { ...r } : r);
   return {
-    findFirst: async ({ where }: any = {}) => state[bucket].find((r: any) => matches(r, where)) ?? null,
-    findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)),
-    create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return row; },
+    findFirst: async ({ where }: any = {}) => copy(state[bucket].find((r: any) => matches(r, where))) ?? null,
+    findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)).map(copy),
+    create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return copy(row); },
     update: async ({ where, data }: any) => {
       const row = state[bucket].find((r: any) => r.id === where.id);
-      Object.assign(row, data); return row;
+      Object.assign(row, data); return copy(row);
     },
     updateMany: async ({ where, data }: any = {}) => {
       const rows = state[bucket].filter((r: any) => matches(r, where));
@@ -224,6 +232,180 @@ test("a successful write CLEARS a stale note", async () => {
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" },
   });
   assert.equal(phone.customerNote, null, "a sentence left over from a fixed problem is what made the second run read like the first");
+});
+
+/* ── what IS this phone ──────────────────────────────────────────────────── */
+
+const wrote = () => ({ kind: "written" as const, phoneId: 1, rehomedFromTenant: null, rebound: false, explain: "created" });
+
+test("telling us the model is what makes an unnamed phone finishable", async () => {
+  reset();
+  const calls: any[] = [];
+  const app = await makeApp(CUSTOMER, { ensureRecord: async (a: any) => { calls.push(a); return wrote(); } });
+  const runId = await startRun(app);
+  // A phone whose banner we could not read: no model at all.
+  const phone = await assignedPhone(app, runId, { mac: "80:5E:C0:11:22:33", ip: "192.168.6.180" });
+  calls.length = 0;
+
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { make: "yealink", model: "SIP-T53W" },
+  });
+  assert.equal(r.statusCode, 200);
+  // ⛔ Stored as the CATALOGUE spells it, not as it was typed — two phones of one kind
+  // must never be recorded as two different things.
+  assert.equal(phone.model, "T53W");
+  assert.equal(phone.vendor, "yealink");
+  assert.equal(calls.length, 1, "naming it is what unblocks it, so the record is re-attempted");
+  assert.equal(calls[0].model, "T53W");
+});
+
+test("the model names the make by itself", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, { mac: "C0:74:AD:00:11:22", ip: "192.168.6.181" });
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "GXP2170" },
+  });
+  assert.equal(r.statusCode, 200);
+  assert.equal(phone.vendor, "grandstream");
+});
+
+test("a model the phone system does not hold is refused and the row is UNTOUCHED", async () => {
+  reset();
+  const calls: any[] = [];
+  const app = await makeApp(CUSTOMER, { ensureRecord: async (a: any) => { calls.push(a); return wrote(); } });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, YEALINK);
+  calls.length = 0;
+
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { make: "yealink", model: "T99999X" },
+  });
+  assert.equal(r.statusCode, 400);
+  // ⛔ A plain sentence, never a bare slug: somebody is trying to HELP us here, and a
+  // code on screen reads as a refusal of them rather than of what they picked.
+  assert.ok(body(r).message.length > 10);
+  assert.equal(phone.model, "T53W", "a refused pick must not overwrite what we had");
+  assert.equal(calls.length, 0, "and must not touch the phone system");
+});
+
+test("a make that disagrees with the model is refused, never silently re-homed", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, YEALINK);
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { make: "grandstream", model: "T53W" },
+  });
+  assert.equal(r.statusCode, 400);
+  assert.equal(body(r).error, "make_disagrees");
+  assert.equal(phone.vendor, "yealink");
+});
+
+test("naming a STUCK phone lets it go round again — that is the point of asking", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, { mac: "80:5E:C0:44:55:66", ip: "192.168.6.182" });
+  Object.assign(phone, {
+    state: "NEEDS_ATTENTION", haltedReason: "support", attempts: 3,
+    customerNote: "Loopcom Support can finish this one with you.",
+  });
+
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T53W" },
+  });
+  assert.equal(phone.state, "ASSIGNED");
+  assert.equal(phone.attempts, 0);
+  assert.equal(phone.customerNote, null);
+});
+
+test("a phone whose record STILL will not write is left stuck, not looped", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, {
+    ensureRecord: async () => ({
+      kind: "refused", reason: "no_settings_profile",
+      explain: "no template", customerMessage: "Loopcom needs to add a settings profile.",
+    }),
+  });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, { mac: "80:5E:C0:77:88:99", ip: "192.168.6.183" });
+  Object.assign(phone, { state: "NEEDS_ATTENTION", haltedReason: "support", attempts: 3 });
+
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T53W" },
+  });
+  // ⛔ Releasing it here would walk the ladder straight back to the same halt — a reboot
+  // loop on somebody's desk. The model IS recorded; only the release is withheld.
+  assert.equal(phone.state, "NEEDS_ATTENTION");
+  assert.equal(phone.model, "T53W");
+  assert.match(phone.customerNote, /settings profile/);
+});
+
+test("naming a phone NEVER forgives a reset", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, { mac: "80:5E:C0:AA:BB:CC", ip: "192.168.6.184" });
+  const when = new Date("2026-09-10T12:00:00Z");
+  Object.assign(phone, { state: "FAILED", resetCount: 1, resetRequestedAt: when });
+
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T53W" },
+  });
+  assert.equal(phone.resetCount, 1, "the record of a wipe survives every path, not just retry");
+  assert.equal(phone.resetRequestedAt, when);
+});
+
+test("what the answer REPLACED is written down, so a mis-pick is findable", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, YEALINK);
+  await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T46G" },
+  });
+  const row = state.audits.find((a: any) => a.action === "DESK_PHONE_IDENTIFIED");
+  assert.ok(row);
+  assert.equal(row.metadata.wasModel, "T53W");
+  assert.equal(row.metadata.model, "T46G");
+  assert.ok(row.metadata.pbxModelId > 0);
+});
+
+test("another customer cannot name a phone in this run", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, YEALINK);
+  const other = await makeApp(OTHER);
+  const r = await other.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T46G" },
+  });
+  assert.equal(r.statusCode, 404);
+  assert.equal(phone.model, "T53W");
+});
+
+test("somebody without the permission cannot name a phone", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
+  const runId = await startRun(app);
+  const phone = await assignedPhone(app, runId, YEALINK);
+  allowSetup = false;
+  const r = await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
+    payload: { model: "T46G" },
+  });
+  assert.equal(r.statusCode, 403);
 });
 
 /* ── un-sticking ─────────────────────────────────────────────────────────── */

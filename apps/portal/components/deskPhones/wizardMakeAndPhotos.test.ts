@@ -114,11 +114,16 @@ test("a slug that is not a real brand is dropped, never shown raw", () => {
 // ── the dropdown is the catalogue, not a list somebody typed ───────────────────
 
 test("the makes come from the PBX catalogue, so a new brand appears by itself", () => {
-  const src = executable(readSource("DeskPhoneWizard.tsx"));
-  assert.match(src, /VENDOR_SLUGS[\s\S]{0,200}VENDOR_CATALOG\[slug\]\.displayName/,
-    "the option list must be built from the catalogue");
+  // ⛔ The list MOVED on 2026-09-11, it did not go away: both pickers now live in
+  // PhoneIdentity.tsx and read the catalogue through `makeOptions` / `modelOptionsFor`.
+  // The property this test protects — read from the phone system, never typed here —
+  // is unchanged, so the assertion follows it rather than being deleted with the old file.
+  const src = executable(readSource("PhoneIdentity.tsx"));
+  assert.match(src, /makeOptions\(\)/, "the makes must be built from the catalogue");
+  assert.match(src, /modelOptionsFor\(make\)/, "and so must the models");
   // A hand-typed list is the failure: it goes stale and can offer a make we cannot set up.
   assert.doesNotMatch(src, /label:\s*"Yealink"/, "no brand name may be typed into this file");
+  assert.doesNotMatch(executable(readSource("DeskPhoneWizard.tsx")), /label:\s*"Yealink"/);
 });
 
 test("every brand the PBX can provision is offered", () => {
@@ -131,14 +136,16 @@ test("every brand the PBX can provision is offered", () => {
 });
 
 test("it is a ConnectSelect, never a native dropdown", () => {
-  const src = executable(readSource("DeskPhoneWizard.tsx"));
-  assert.match(src, /<ConnectSelect[\s\S]{0,400}options=\{BRAND_OPTIONS\}/);
-  assert.doesNotMatch(src, /<select[\s>]/, "the portal has one dropdown and this is not it");
+  const picker = executable(readSource("PhoneIdentity.tsx"));
+  assert.match(picker, /<ConnectSelect[\s\S]{0,600}options=\{makes\}/);
+  assert.match(picker, /<ConnectSelect[\s\S]{0,600}options=\{models\}/);
+  assert.doesNotMatch(picker, /<select[\s>]/, "the portal has one dropdown and this is not it");
+  assert.doesNotMatch(executable(readSource("DeskPhoneWizard.tsx")), /<select[\s>]/);
 });
 
 test("someone who cannot find their make still has a way forward", () => {
-  const src = executable(readSource("DeskPhoneWizard.tsx"));
-  assert.match(src, /MAKE_UNSURE, label:/, "the 'not sure' option must always be offered");
+  const src = executable(readSource("PhoneIdentity.tsx"));
+  assert.match(src, /PICKER_UNSURE, label:/, "the 'not sure' option must always be offered");
 });
 
 // ── the picture agrees with the words ──────────────────────────────────────────

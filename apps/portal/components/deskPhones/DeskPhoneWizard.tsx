@@ -24,11 +24,11 @@ import {
   shouldFingerprint,
   deviceKindFor,
   describeKind,
-  VENDOR_CATALOG,
-  VENDOR_SLUGS,
+  needsIdentifying,
   type DeviceKind,
 } from "@connect/shared";
-import { MAKE_UNSURE, orderPhonesByMake, toldUsPhrase } from "./makeHint";
+import { orderPhonesByMake, toldUsPhrase } from "./makeHint";
+import { IdentityPicker, StickerDrawing } from "./PhoneIdentity";
 import { apiGet, apiPost } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
@@ -73,26 +73,6 @@ function desktop(): any | null {
   return (window as any).connectDesktop ?? null;
 }
 
-/**
- * The makes we can actually set up, read from the PBX's own catalogue.
- *
- * ⛔ Built from VENDOR_CATALOG rather than written out here, for two reasons that both
- * reach a customer: a make we have no template for must never be offered (they would
- * pick it, we would find nothing, and the wizard would look broken), and a make the PBX
- * gains later has to appear on this screen without anybody remembering to edit it. The
- * catalogue is regenerated from the PBX — see vendorCatalog.generated.ts.
- *
- * ⛔ "I am not sure" is deliberately LAST and always present. Someone who cannot find
- * their make on a 20-item list must have a way forward that is not guessing; picking it
- * simply searches for everything, which is what the "No" tile does anyway.
- */
-const BRAND_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "Choose the make…" },
-  ...VENDOR_SLUGS
-    .map((slug) => ({ value: slug, label: VENDOR_CATALOG[slug].displayName }))
-    .sort((a, b) => a.label.localeCompare(b.label)),
-  { value: MAKE_UNSURE, label: "I am not sure — look for all of them" },
-];
 
 /** ⛔ The photo comes from the PBX's own product images, filed under the model name.
  * ⛔⛔ The token rides the QUERY STRING because an <img> sends no Authorization
@@ -172,6 +152,11 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   /** Per-phone, plain-English: what this computer is doing for that phone right now. */
   const [hints, setHints] = useState<Record<string, string>>({});
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  /** Per-phone make/model the person is picking, before they save it. */
+  const [identifyDraft, setIdentifyDraft] = useState<Record<string, { make: string; model: string }>>({});
+  const [identifyError, setIdentifyError] = useState<Record<string, string>>({});
+  const [identifyBusy, setIdentifyBusy] = useState<Record<string, boolean>>({});
+
   /** Which devices are ticked on the clearing screen. ⛔ The person picks; default all. */
   const [clearTicks, setClearTicks] = useState<Record<string, boolean>>({});
   /**
@@ -291,6 +276,36 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       setStep("welcome");
     }
   }, [runId]);
+
+  /**
+   * WHAT THIS PHONE IS, when we could not read it ourselves.
+   *
+   * ⛔⛔ THIS IS THE ONE CONTROL THAT ANSWERS `model_unknown`. Until it existed the
+   * wizard printed "Tell us the make and model on the back of this phone" at somebody and
+   * gave them nowhere to say it — so a phone our fingerprint could not read could never
+   * be finished, however many times they pressed anything.
+   *
+   * ⛔ The refusal is shown ON THAT PHONE'S ROW, not as the page-wide error: with several
+   * phones on screen, a message at the top does not say which one it is about.
+   */
+  const identify = useCallback(async (phoneId: string, make: string, model: string) => {
+    if (!runId || !model) return;
+    setIdentifyBusy((b) => ({ ...b, [phoneId]: true }));
+    setIdentifyError((e) => ({ ...e, [phoneId]: "" }));
+    try {
+      await apiPost(`/desk-phones/runs/${runId}/phones/${phoneId}/identify`, { make: make || null, model });
+      setIdentifyDraft((d) => { const next = { ...d }; delete next[phoneId]; return next; });
+      await loadRun(runId);
+    } catch (err: any) {
+      // ⛔ `.body`, never `.payload` — ApiError exposes the server's JSON as `body`, and
+      // the field that carries the plain sentence is `message`. Reading `.payload` is the
+      // documented way this codebase turns a full explanation into a bare slug on screen.
+      const said = err?.body?.message;
+      setIdentifyError((e) => ({ ...e, [phoneId]: said || "That could not be saved. Try again." }));
+    } finally {
+      setIdentifyBusy((b) => ({ ...b, [phoneId]: false }));
+    }
+  }, [runId, loadRun]);
 
   const assign = useCallback(async (phoneId: string, extensionId: string | null) => {
     if (!runId) return;
@@ -484,29 +499,28 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 </button>
                 {knowsPhone === "yes" && (
                   <div className="dps-brandpick" style={{ gridColumn: "1 / -1" }}>
-                    {/* ⛔ The makes come from the PBX's OWN catalogue (VENDOR_CATALOG, 20 brands),
-                        never a list typed here — a make we cannot provision must not be offered,
-                        and a make the PBX adds later must appear without anyone editing this file. */}
-                    <label className="dps-flabel" htmlFor="dps-brand">Who makes it?</label>
-                    <ConnectSelect
-                      id="dps-brand"
-                      value={phoneBrand}
-                      onChange={setPhoneBrand}
-                      ariaLabel="The make of your phone"
-                      searchable
-                      options={BRAND_OPTIONS}
+                    {/* ⛔⛔ BOTH LISTS COME FROM THE PBX'S OWN CATALOGUE (20 brands, 427
+                        models), never a list typed here — a make or model we cannot
+                        provision must not be offered, and one the PBX gains later must
+                        appear without anyone editing this file.
+                        ⛔ The model used to be a free-text box. What a person types is not
+                        what the phone system calls it ("SIP-T54W" against a catalogue that
+                        holds "T54W"), so a typed answer mostly resolved to nothing and the
+                        phone stayed unnameable — which is the whole thing this step is for. */}
+                    <IdentityPicker
+                      idPrefix="dps-known"
+                      make={phoneBrand}
+                      model={phoneNameHint}
+                      onMake={setPhoneBrand}
+                      onModel={setPhoneNameHint}
                     />
-                    <label className="dps-flabel" htmlFor="dps-model" style={{ marginTop: 10 }}>
-                      And the model, if you can see one <span className="dps-opt">(optional)</span>
-                    </label>
-                    <input
-                      id="dps-model"
-                      className="dps-input"
-                      placeholder="e.g. T54W"
-                      value={phoneNameHint}
-                      onChange={(e) => setPhoneNameHint(e.target.value)}
-                      aria-label="The model printed on your phone"
-                    />
+                    <div className="dps-sticker">
+                      <StickerDrawing />
+                      <p className="dps-hint" style={{ marginTop: 4 }}>
+                        Both are printed on a white label on the <b>underside</b> of the phone. Turn one
+                        over &mdash; you do not need to unplug anything.
+                      </p>
+                    </div>
                   </div>
                 )}
                 <button className={`dps-tile${knowsPhone === "no" ? " dps-sel" : ""}`} onClick={() => setKnowsPhone("no")}>
@@ -672,9 +686,10 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
               <div className="dps-plist">
                 {(step === "found" ? orderedPhones : chosen).map((p) => (
-                  /* ⛔ On the found screen the whole row is one big tick target, the
-                     same shape as the clearing screen — a person picks phones here. */
-                  <RowShell key={p.id} pick={step === "found"} picked={isPicked(p)}
+                  <div key={p.id}>
+                  {/* ⛔ On the found screen the whole row is one big tick target, the
+                     same shape as the clearing screen — a person picks phones here. */}
+                  <RowShell pick={step === "found"} picked={isPicked(p)}
                     onPick={(v) => setPicks((t) => ({ ...t, [p.id]: v }))}
                     label={`Set up ${p.displayName || p.model || "this phone"}`}>
                     <div className="dps-pimg">
@@ -713,6 +728,44 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                       </span>
                     )}
                   </RowShell>
+                  {/*
+                    ⛔⛔ THE PHONE WE COULD NOT NAME ASKS, RIGHT ON ITS OWN ROW.
+                    Without a model the phone system has no catalogue row for it, so no
+                    settings file is ever rendered and a factory-reset handset asks into
+                    silence — which is exactly what happened to Izzy's Yealink. The person
+                    holding it can read the label in five seconds; nothing else can.
+                    ⛔ Only when we genuinely do not know: a phone that told us its own
+                    model is never asked, because being asked to confirm something the
+                    system plainly already knows reads as the wizard not paying attention.
+                  */}
+                  {step === "match" && needsIdentifying(p) && (
+                    <div className="dps-idrow">
+                      <p className="dps-hint" style={{ margin: "0 0 8px" }}>
+                        We could not tell what this one is. Turn it over and read the label underneath.
+                      </p>
+                      <IdentityPicker
+                        idPrefix={`dps-id-${p.id}`}
+                        size="sm"
+                        disabled={!!identifyBusy[p.id]}
+                        make={identifyDraft[p.id]?.make ?? ""}
+                        model={identifyDraft[p.id]?.model ?? ""}
+                        error={identifyError[p.id] || null}
+                        onMake={(v) => setIdentifyDraft((d) => ({ ...d, [p.id]: { make: v, model: d[p.id]?.model ?? "" } }))}
+                        onModel={(v) => setIdentifyDraft((d) => ({ ...d, [p.id]: { make: d[p.id]?.make ?? "", model: v } }))}
+                      />
+                      <div className="dps-idfoot">
+                        <StickerDrawing />
+                        <button
+                          className="dps-btn dps-btn-p"
+                          disabled={!identifyDraft[p.id]?.model || !!identifyBusy[p.id]}
+                          onClick={() => identify(p.id, identifyDraft[p.id]?.make ?? "", identifyDraft[p.id]?.model ?? "")}
+                        >
+                          {identifyBusy[p.id] ? "Saving…" : "That’s the one"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  </div>
                 ))}
                 {knownElsewhere.length > 0 && (
                   <div className="dps-known">

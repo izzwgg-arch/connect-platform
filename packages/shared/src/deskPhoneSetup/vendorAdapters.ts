@@ -931,20 +931,69 @@ export function vendorForMac(mac: string): VendorSlug | null {
 }
 
 /**
+ * Words a model string may OPEN with that are not part of the model's name: the maker's
+ * own name, and the family word Yealink prints on every handset.
+ *
+ * ⛔⛔ THIS IS WHY IT IS SAFE, AND IT WAS MEASURED RATHER THAN ASSUMED (2026-09-11):
+ * across all 427 catalogue models, NOT ONE key begins with any of these tokens, and NOT
+ * ONE normalised key is shared by two brands. So stripping a leading token can never eat
+ * part of a real model name and can never make a string mean two different phones.
+ * ⛔ Re-run that check if the catalogue is regenerated — `vendorCoverage.test.ts` does.
+ */
+const MODEL_LEADING_NOISE: readonly string[] = [
+  "SIP",
+  ...Object.keys(VENDOR_CATALOG).map((s) => s.toUpperCase()),
+  ...Object.values(VENDOR_CATALOG).map((b) => b.displayName.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()),
+];
+
+/**
  * The catalogue row for a model string as a phone reports it, matched on the normalised key.
  *
  * Discovered model strings arrive with spaces, hyphens and case the catalogue does not use
  * ("SIP-T46G", "sip t46g"), so both sides are stripped to alphanumerics before comparing.
+ *
+ * ⛔⛔ AND A LEADING MAKER OR FAMILY WORD IS STRIPPED TOO, which this function's comment
+ * claimed for months while the code did not do it — `"SIP-T46G"` normalises to `SIPT46G`
+ * and the catalogue holds `T46G`, so it matched NOTHING. That string is exactly what is
+ * printed on the label on the back of a Yealink and exactly what its own web banner
+ * reports, so every one of the PBX's 82 Yealink models was unfindable by the spelling a
+ * person reads off the handset. It reached `planProvisioningRecord` as
+ * `model_not_in_catalogue`, i.e. "Loopcom cannot set this model up automatically yet"
+ * about the single most common desk phone on this platform.
+ *
+ * ⛔ The EXACT match is tried first and is untouched, so every string that resolves today
+ * resolves to the same row. Only strings that resolved to nothing can change.
  */
 export function findCatalogModel(
   modelText: string,
 ): { slug: VendorSlug; model: (typeof VENDOR_CATALOG)[VendorSlug]["models"][number] } | null {
   const key = modelText.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
   if (!key) return null;
-  for (const slug of Object.keys(VENDOR_CATALOG) as VendorSlug[]) {
-    for (const model of VENDOR_CATALOG[slug].models) {
-      if (model.key === key) return { slug, model };
+
+  const exact = (k: string) => {
+    for (const slug of Object.keys(VENDOR_CATALOG) as VendorSlug[]) {
+      for (const model of VENDOR_CATALOG[slug].models) {
+        if (model.key === k) return { slug, model };
+      }
     }
+    return null;
+  };
+
+  const direct = exact(key);
+  if (direct) return direct;
+
+  // Peel leading noise words one at a time — "YEALINKSIPT46G" needs two — longest first
+  // so "ALCATELLUCENT" is never mistaken for "ALCATEL" plus a model beginning "LUCENT".
+  // ⛔ Bounded by the number of tokens, and it stops the moment nothing is left.
+  let rest = key;
+  for (let i = 0; i < MODEL_LEADING_NOISE.length; i++) {
+    const hit = [...MODEL_LEADING_NOISE]
+      .sort((a, b) => b.length - a.length)
+      .find((n) => rest.startsWith(n) && rest.length > n.length);
+    if (!hit) break;
+    rest = rest.slice(hit.length);
+    const found = exact(rest);
+    if (found) return found;
   }
   return null;
 }

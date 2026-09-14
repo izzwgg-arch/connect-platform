@@ -201,6 +201,34 @@
 }
 .dps-opt { font-weight: 500; color: var(--dps-dim); }
 
+/* The two pickers: "who makes it?" and "which one is it?". A stacked label/field pair
+   rather than a row, because they are one question asked in two parts and a person
+   reads them top to bottom. */
+.dps-idpick { display: block; }
+.dps-idpick .cs-wrap { width: 100%; min-width: 0; }
+
+/* The drawing of the label on the underside, beside the pickers on the knowPhone step.
+   ⛔ Boxed and dimmed so it reads as a hint rather than another control — it is
+   there to answer "where do I even look", not to be clicked. */
+.dps-sticker {
+  margin-top: 14px; padding: 10px 12px 4px;
+  border: 1px dashed var(--dps-border); border-radius: 11px; background: var(--dps-panel-2);
+}
+
+/* The same question asked about ONE phone, tucked under that phone's own row.
+   ⛔ It hangs off the row rather than floating at the top of the list: with several
+   phones on screen, a question at the top does not say which one it is about. */
+.dps-idrow {
+  margin: -4px 0 10px; padding: 12px 14px 10px;
+  border: 1px solid var(--dps-border); border-top: 0;
+  border-radius: 0 0 12px 12px; background: var(--dps-panel-2);
+}
+.dps-idfoot {
+  display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+}
+.dps-idfoot svg { flex: 1 1 220px; min-width: 0; max-width: 300px; }
+.dps-idfoot .dps-btn { flex: 0 0 auto; margin-left: auto; }
+
 /* The clearing screen's per-device rows. A row is one big click target.
    The found screen reuses the same shape for "which phones do you want set up". */
 .dps-clear-row { cursor: pointer; }

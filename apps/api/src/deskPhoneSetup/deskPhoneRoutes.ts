@@ -22,6 +22,7 @@ import {
   guessVendorFromMac, isTerminal, nextEscalation, normalizeMac, sanitizeDeviceText,
   summarizeRun, vendorCanBeDrivenLocally, vendorSupportsPbxProvisioning,
   pnpArmList, planPhoneRetry, retryClears, retryableCount, inheritedResetCount,
+  identifyPhone,
   type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
@@ -691,6 +692,128 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         }
       } catch { /* the note is a nicety; the assignment is the thing */ }
     }
+
+    return reply.send({ ok: true, phone: customerPhoneView(updated), record: recordView(record) });
+  });
+
+  /* ── what IS this phone ────────────────────────────────────────────────── */
+
+  /**
+   * THE PERSON TELLS US WHAT THE PHONE IS, OFF THE LABEL ON THE BACK.
+   *
+   * ⛔⛔ THIS IS THE SENTENCE `planProvisioningRecord` HAS BEEN SAYING SINCE IT SHIPPED:
+   * "Tell us the make and model on the back of this phone and we can set it up." There
+   * was no way to tell us. A phone whose model our fingerprint could not read had no
+   * catalogue row, so no `provisioning.devices` write, so no PnP answer, so a handset
+   * asking into silence — permanently, with the wizard printing an instruction nobody
+   * could follow.
+   *
+   * ⛔ A PERSON'S ANSWER BEATS THE FINGERPRINT, because they are holding the thing and
+   * reading the label, and our fingerprint is a guess at a banner. What it replaced is
+   * written to the audit, so a mis-pick is traceable rather than silent.
+   *
+   * ⛔ AND IT IS STORED AS THE CATALOGUE SPELLS IT, never as it arrived — `identifyPhone`
+   * refuses anything the phone system does not hold rather than letting a guess through.
+   * A wrong model renders a settings file the handset silently ignores, which on a desk
+   * looks exactly like a dead phone.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/identify", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    const body = z.object({
+      /** Optional: the model names the make by itself, so this only ever cross-checks. */
+      make: z.string().trim().max(64).nullable().optional(),
+      model: z.string().trim().min(1).max(64),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    const picked = identifyPhone({ make: body.data.make ?? null, model: body.data.model });
+    if (!picked.ok) {
+      // ⛔ 400 with the plain-English reason, never a bare code: this route exists
+      // because somebody is trying to help us, and a slug on screen reads as a refusal
+      // of them rather than of what they picked.
+      return reply.status(400).send({ error: picked.reason, message: picked.message });
+    }
+
+    let updated = await db.deskPhoneSetupPhone.update({
+      where: { id: phone.id },
+      data: { vendor: picked.vendor, model: picked.model },
+    });
+
+    /**
+     * ⛔⛔ NAMING THE PHONE IS WHAT UNBLOCKS IT, so the record is re-attempted here — a
+     * route that only stored the answer would leave the person having done exactly what
+     * was asked and watched nothing happen.
+     */
+    let record: RecordOutcome | null = null;
+    if (!updated.skippedAt && updated.extNumber) {
+      try {
+        record = await (deps.ensureRecord ?? defaultEnsureRecord)({
+          tenantId: user.tenantId,
+          mac: phone.macAddress,
+          vendor: picked.vendor,
+          model: picked.model,
+          extNumber: String(updated.extNumber),
+        });
+        if (record.kind === "refused") {
+          updated = await db.deskPhoneSetupPhone.update({
+            where: { id: phone.id },
+            data: { customerNote: record.customerMessage, technicalNote: record.explain },
+          });
+        } else if (record.kind === "written" || record.kind === "adopted") {
+          updated = await db.deskPhoneSetupPhone.update({
+            where: { id: phone.id },
+            data: { customerNote: null, technicalNote: record.explain },
+          });
+          /**
+           * ⛔⛔ AND ONLY THEN IS A STUCK PHONE LET GO ROUND AGAIN — through the SAME
+           * rules a person pressing "try again" gets, so this path can no more forgive
+           * a reset than that one can. ⛔ Gated on the record having actually landed: a
+           * phone released while its record is still refused walks the ladder straight
+           * back to the same halt, which is a reboot loop on somebody's desk and is
+           * precisely what `TRANSITIONS` refuses to do on its own.
+           */
+          if (isTerminal(updated.state as PhoneState) && updated.state !== "REGISTERED") {
+            const plan = planPhoneRetry({
+              state: updated.state as PhoneState,
+              resetCount: updated.resetCount,
+              attempts: updated.attempts,
+              hasExtension: Boolean(updated.extensionId && updated.extNumber),
+            });
+            if (plan.allowed) {
+              updated = await db.deskPhoneSetupPhone.update({
+                where: { id: phone.id },
+                data: retryClears(plan),
+              });
+            }
+          }
+        }
+      } catch (e: any) {
+        record = { kind: "unavailable", detail: e?.message || String(e) };
+      }
+    }
+
+    await deps.audit({
+      tenantId: user.tenantId,
+      action: "DESK_PHONE_IDENTIFIED",
+      entityType: "desk_phone_setup_phone",
+      entityId: phone.id,
+      actorUserId: user.sub,
+      // ⛔ What it REPLACED is the useful half — a mis-pick that overwrote a correct
+      // fingerprint is only findable if the old answer was written down.
+      metadata: {
+        mac: phone.macAddress,
+        wasVendor: phone.vendor ?? null, wasModel: phone.model ?? null,
+        vendor: picked.vendor, model: picked.model, pbxModelId: picked.pbxModelId,
+        setupSupported: picked.setupSupported, drivableLocally: picked.drivableLocally,
+      },
+    });
 
     return reply.send({ ok: true, phone: customerPhoneView(updated), record: recordView(record) });
   });

@@ -273,7 +273,12 @@ test("the found screen lets the person pick which phones to set up, and every la
   // provision all at once."
   const exec = stripComments(WIZARD);
   // Every found row is one big tick target.
-  assert.match(exec, /<RowShell key=\{p\.id\} pick=\{step === "found"\}/);
+  // ⛔ Pinned as the INTENT, not the exact attribute order. The `key` moved onto a
+  // wrapping <div> on 2026-09-11 when a phone we could not name gained a "tell us what
+  // this is" block beneath its row; what this line protects is that the ROW is the tick
+  // target, which is unchanged.
+  assert.match(exec, /<RowShell pick=\{step === "found"\}/);
+  assert.match(exec, /\.map\(\(p\) => \(\s*<div key=\{p\.id\}>/, "every mapped row still carries a key");
   assert.match(exec, /type="checkbox" className="dps-check" checked=\{picked\}/);
   // The default: not connected = ticked, already connected = left alone.
   assert.match(exec, /picks\[p\.id\] \?\? \(p\.connectedNow !== true\)/);

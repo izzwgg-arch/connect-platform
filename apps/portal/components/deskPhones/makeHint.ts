@@ -14,10 +14,17 @@
  * and "the list never gets shorter" is exactly the kind of claim that deserves to be
  * exercised rather than grepped.
  */
-import { VENDOR_CATALOG, type VendorSlug } from "@connect/shared";
+import { VENDOR_CATALOG, PICKER_UNSURE, type VendorSlug } from "@connect/shared";
 
-/** The sentinel the make dropdown uses for "I am not sure". Not a brand slug. */
-export const MAKE_UNSURE = "unsure";
+/**
+ * The sentinel the make dropdown uses for "I am not sure". Not a brand slug.
+ *
+ * ⛔ ALIASED to the shared one rather than spelled out again. Two constants holding
+ * the same string is a value waiting to drift, and if these two ever disagreed the
+ * ordering here would treat "I am not sure" as a brand name and put every phone that
+ * is NOT a phone at the top of the list.
+ */
+export const MAKE_UNSURE = PICKER_UNSURE;
 
 /** Only the fields the ordering actually reads, so a caller can pass its own row type. */
 type HasVendor = { vendor?: string | null };
