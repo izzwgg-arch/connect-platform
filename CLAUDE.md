@@ -397,7 +397,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-14 · Outgoing email sender name "Connect" → "Loopcom" (live DB `EmailProviderConfig.fromName` + api fallback `770de892`) → `2026-09-14-email-sender-name-loopcom.md`
 
-- 2026-09-14 · Dashboard polish DEPLOYED f2460c4f; voicemail layout fix verified locally, rollout pending → `2026-09-14-dashboard-design-concept.md`
+- 2026-09-14 · Dashboard + voicemail layout DEPLOYED 7d12c14f; both themes and mobile fixtures verified → `2026-09-14-dashboard-design-concept.md`
 
 - 2026-09-14 · Browser navigation: Loopcom dashboard opened and verified in Chrome → `2026-09-14-browser-navigation.md`
 

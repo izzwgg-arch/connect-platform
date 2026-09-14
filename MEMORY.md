@@ -36,3 +36,5 @@ Dashboard polish is deployed as f2460c4f (2026-09-14), both themes verified live
 Dashboard voicemail review (2026-09-14): unread pseudo-element is an extra in-flow grid item shared with message previews; read/unread alignment differs in both themes. Source diagnosis, not populated live verification; current account empty. Preserve newest-first API order and existing palettes. Full dashboard handoff records review; no fix deployed.
 
 Dashboard voicemail fix (2026-09-14): replace in-flow unread pseudo-element with an avatar dot; keep three grid children. Actual-component fixture checks passed read/unread, missing/long names, both themes and mobile. Distinct loading/empty/unavailable states and navigation icon. Rollout pending; full dashboard handoff tracks deployment.
+
+Dashboard voicemail fix DEPLOYED 7d12c14f (2026-09-14): production build and blue/green/container commit checks passed; live empty card verified light/dark, original light restored. Populated rows verified via actual-component fixtures in both themes/mobile; no live rows in current account. Full dashboard handoff contains job evidence.
