@@ -112,7 +112,12 @@ reset/reboot over the network, then the dropdowns, then the switch and extender.
   "lightest step first, reset last" — that was never his rule.** ⛔ Honest limits: a phone
   locked by another provider needs its password or one hands-on reset; `reset_over_sip` has
   no executor; only Yealink has a network reset. Also: the live screen has **Cancel setup** +
-  a 10-minute no-progress timeout. ⏳ Proven with fakes; Izzy tests resets himself.
+  a 10-minute no-progress timeout. ✅ **SHIPPED 2026-09-14 ~06:55Z: api + portal `882c9bee`
+  (container-verified), desktop rc.13 built from a clean export of `b1d2a554` and INSTALLED on
+  Izzy's PC** (installed asar sha256-identical to the checked build, all updater deps packed,
+  0 error lines, PnP resident listening). ⛔ NOT published — feed stays rc.10. ⏳ No reset has
+  reached a real phone; the Yealink `.170` sits at `resetCount 0`, so Izzy's next run resets it
+  first. Detail in §20h.
 - ⛔⛔ **"I RAN ONE SETUP AND NOTHING HAPPENED" (2026-09-14, plan §20g, `350d25ab`):** the only
   phone he ticked was already NEEDS_ATTENTION from 09-10 with no model, the driver skips
   finished phones, and **no screen ever called retry** — so nothing left the machine. Now:

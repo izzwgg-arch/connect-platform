@@ -1328,3 +1328,25 @@ is unproven.
 **Proven:** shared desk-phone 183/183, desktop phoneSetup 143/143, api desk-phone 157/157,
 portal desk-phone 103/103; typechecks shared 0, desktop 0, portal 0, api 84 = baseline with
 none in an edited file. ⛔ Proven with fakes only — Izzy does every reset on his own rig.
+
+**Shipped (2026-09-14 ~06:55Z):**
+- **api + portal at `882c9bee`, container-verified.** `app-api-1` carries `resetApprovedByTick`;
+  the portal went live 06:50:58Z with `Cancel setup` + `office-stop` in the shipped
+  `settings/desk-phones` chunk; 0 restarts, 0 error lines in 5 min, `/settings/desk-phones`
+  200 on both hostnames.
+- **Desktop `0.1.17-rc.13` built from a clean `git archive b1d2a554` export** (manual
+  node_modules traversal), `Connect-Setup-0.1.17-rc.13.exe` 100,522,112 bytes, sha256
+  `b10238c1…93884`; `verify-built-icon` OK. Asar checked BEFORE install: all 8
+  electron-updater deps packed, version rc.13, `factory_reset` ×7 + the `locked` refusal in
+  `dist/phoneSetup/capability.js`. **INSTALLED on Izzy's PC** (`/S`, exit 0): installed
+  `app.asar` sha256 `fd9e264d…c479` = the verified build, registry `0.1.17-rc.13`, 7
+  processes, log banner rc.13, **0 error lines**, updater loads (refuses the rc.10 feed as a
+  downgrade), PnP resident listening on udp/5060 + 5080, `arm_pnp macs=2 ok`.
+  ⛔ **NOT published — the fleet feed stays at rc.10.**
+- **Rig state before the test (read-only):** Yealink `805ec0b3b2d0` @192.168.6.170 T42S →
+  ext 101, state ASSIGNED, `resetCount 0` (the next run resets it first); the two
+  Grandstreams unticked. `T21_101` has never registered.
+
+⏳ **NOT PROVEN — Izzy's acceptance on his rig:** reopen the wizard, tick the Yealink → it
+factory-resets FIRST (if refused "locked": give the admin password or hold OK ~10 s on the
+handset) → profile → restart → the finished screen appears only once `T21_101` is REGISTERED.
