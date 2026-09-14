@@ -2,6 +2,24 @@
 
 Newest entries first.
 
+## Support agent hands — watcher hookup (2026-09-14, `84a5fc16`)
+
+- watcher `node --test stress.test.mjs hands.test.mjs` → **66/66 pass** (19 new in `hands.test.mjs`: per-company cap
+  boundary 9/10, other company unaffected, platform lane never counted, name fallback + unknown company never capped,
+  skips/yesterday not counted, claim records the company; the three hands in ALLOWED_TOOLS and argv; guardrails still
+  state no commit/push/deploy, no PBX write, no customer message, Bash read-only, and now state the fixing rules; 30-min
+  default; the client posts only to /act, /owner-notice, GET /owner-notices with the token; a hostile reference stays
+  under the escalation path; the api's 409 reaches the agent; server.mjs registers the tools; watch.mjs has no POST).
+  `node --check` on server/loopcom/watch/triage ✅.
+- api `src/support/verifiedChange.test.ts src/support/customerUpdate.test.ts src/support/supportAgentNotice.test.ts
+  src/support/actAsFilerRoutes.test.ts src/support/agentRunRoutes.test.ts src/support/supportMessages.test.ts
+  src/support/verdictFollowUp.test.ts src/support/supportLoopGuardrail.test.ts src/agentFixByText.test.ts` →
+  **186/186 pass**. api tsc 84 = baseline. Control-byte scan of all 8 touched files: 0.
+- Guards against HEAD by symbol count: `act_as_filer` (watch.mjs, server.mjs), `tenantKeyOf`, `verifiedChangeOnTicket` → 0 in HEAD.
+- Deployed: api job `488b8c20` → container 84a5fc16, healthy, 0 restarts. Watcher restarted (pid 9484, new startup line).
+- ⛔ Not proven: no ticket has run with the new tools (and the office IP was nginx-banned at the time — handoff §8);
+  writes still OFF.
+
 ## Profile menu release verification blocked (2026-09-14 18:42 Eastern)
 
 - Runtime `8b866ed6` pushed to the feature branch and `codex/profile-menu`. Local portal typecheck, 6 DND/dropdown tests, 6 PBX safeguard tests, and actual-component browser fixture checks passed (details below and profile-menu handoff).
