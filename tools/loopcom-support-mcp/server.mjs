@@ -7,11 +7,14 @@
  * the database can work the ticket directly. Rationale and the whole design
  * argument: docs/ai-context/PLAN_SUPPORT_TICKET_AGENT_2026-08-27.md.
  *
- * ⛔⛔ READ-ONLY, ON PURPOSE. Izzy's design (round 3) is that the OpenAI agent
- * inside LoopCom keeps the customer relationship and does all the talking, and
- * Claude does the technical work. There is deliberately NO tool here that
- * messages a customer, changes a tenant, or approves anything. Adding one is a
- * separate decision made on purpose — not a convenience.
+ * ⛔⛔ WHAT MAY CHANGE, AND ONLY THIS WAY (2026-09-14, Izzy: the agent may fix
+ * everything the ticket's filer is allowed to do, no tenant leakage).
+ * `act_as_filer` is the ONE tool that changes a customer's account, and it can
+ * only ask the api to replay a request as that person — their custom role and
+ * their company bound it, and the api refuses every write until the owner has
+ * been texted (`post_owner_notice`) and after he replies STOP. There is still NO
+ * tool that messages a customer or approves anything; the customer-facing
+ * voice stays OpenAI's.
  *
  * ⛔ It adds NO gate of its own. Every call rides the existing
  * /admin/support/* routes, which are SUPER_ADMIN-gated and audited server-side.
@@ -24,6 +27,7 @@ import { z } from "zod";
 import {
   readConfig, configurationProblem, listTickets, getTicket,
   getCustomer, getConversation, resolveReference, getCallDiagnostics,
+  actAsFiler, postOwnerNotice, getOwnerNotices,
 } from "./loopcom.mjs";
 import { formatTicket, formatCustomer, formatConversation, formatCallDiagnostics, isCustomerReport, when } from "./format.mjs";
 
@@ -154,6 +158,65 @@ server.registerTool(
     inputSchema: { q: z.string().min(3).max(120).describe("Login email or diag session id.") },
   },
   handler(async ({ q }) => formatCallDiagnostics(await getCallDiagnostics(cfg, q), q))
+);
+
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+server.registerTool(
+  "act_as_filer",
+  {
+    title: "Run one Connect api request AS the person who filed the ticket",
+    description:
+      "The ONLY way to change anything for a customer. LoopCom replays ONE api request (a Connect api path such as " +
+      "/voice/extensions/me/control-panel or /voicemail/greeting/upload) as the ticket's filer, through Connect's own " +
+      "permission checks, inside their company — their custom role decides what is allowed, and a refusal is final. " +
+      "Platform paths (/admin, /internal, /auth, /ops, /agent, /support, /onboarding) are always refused. " +
+      "⛔ A write (POST/PUT/PATCH/DELETE) is refused until post_owner_notice has texted the owner, and for good once he " +
+      "replies STOP. A GET needs no notice — use it to read their settings and to VERIFY a fix. " +
+      "Returns the api's status code and response body.",
+    inputSchema: {
+      reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M."),
+      method: z.enum(METHODS),
+      path: z.string().min(1).max(2000).describe("Connect api path, starting with '/'."),
+      body: z.any().optional().describe("JSON body for a write."),
+    },
+  },
+  handler(async ({ reference, method, path, body }) => {
+    const res = await actAsFiler(cfg, reference, { method, path, body });
+    return JSON.stringify(res, null, 2).slice(0, 60_000);
+  })
+);
+
+server.registerTool(
+  "post_owner_notice",
+  {
+    title: "Text the owner what is about to change",
+    description:
+      "Call BEFORE the first change on a ticket. scope 'tenant' = a change confined to this customer's company: the owner " +
+      "is texted the summary and the work may proceed unless he replies STOP. scope 'system' = a change that would affect " +
+      "every customer (code, a deploy, shared PBX configuration): the owner is asked and NOTHING may happen until he " +
+      "replies GO — in this run, post it and report; do not attempt the change. The summary is texted verbatim: one plain " +
+      "sentence saying exactly what will change, no internal jargon. Fails if the owner could not be reached, or if he " +
+      "already said STOP on this ticket.",
+    inputSchema: {
+      reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M."),
+      scope: z.enum(["tenant", "system"]),
+      summary: z.string().min(10).max(400).describe("One plain sentence: what will change."),
+    },
+  },
+  handler(async ({ reference, scope, summary }) => JSON.stringify(await postOwnerNotice(cfg, reference, { scope, summary }), null, 2))
+);
+
+server.registerTool(
+  "get_owner_notices",
+  {
+    title: "Has the owner said STOP (or GO) on this ticket?",
+    description:
+      "The owner notices on a ticket and `mayChange`. ⛔ Check it before EACH change after the first: mayChange false " +
+      "with blockedBecause 'stopped_by_owner' means the owner replied STOP — stop at once and report that you were stopped.",
+    inputSchema: { reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M.") },
+  },
+  handler(async ({ reference }) => JSON.stringify(await getOwnerNotices(cfg, reference), null, 2))
 );
 
 const transport = new StdioServerTransport();

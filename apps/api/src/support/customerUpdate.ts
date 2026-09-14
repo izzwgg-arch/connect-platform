@@ -144,6 +144,31 @@ export async function recordAgentReport(
 }
 
 /**
+ * Did the support agent really change something on this ticket?
+ *
+ * ⛔ Answered from OUR audit trail — a successful (2xx) write the act-as-filer
+ * route replayed as the customer — never from the report's wording. The gate
+ * refuses a message claiming a fix unless this is true, so a model cannot talk
+ * its way into "we fixed it". Any failure to read reads as "no change".
+ */
+export async function verifiedChangeOnTicket(db: any, escalationId: string | null | undefined): Promise<boolean> {
+  if (!escalationId) return false;
+  try {
+    const rows = await db.auditLog.findMany({
+      where: { entityType: "AgentEscalation", entityId: escalationId, action: "SUPPORT_AGENT_ACT_WRITE" },
+      select: { metadata: true },
+      take: 50,
+    });
+    return rows.some((r: any) => {
+      const status = Number(r?.metadata?.statusCode);
+      return status >= 200 && status < 300;
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Step 2 — OpenAI rewrites it, then the gate decides.
  *
  * ⛔ FAILS CLOSED IN EVERY DIRECTION. No key, a model error, an empty answer, or
@@ -173,6 +198,8 @@ export async function rewriteAndGate(
   const apiKey = await resolveOpenAiKey(db);
   if (!apiKey) return hold("No OpenAI key is configured, so the customer message could not be written.");
 
+  const changeWasMade = await verifiedChangeOnTicket(db, row.escalationId);
+
   let text = "";
   try {
     const call = deps.callModel ?? defaultCallModel;
@@ -181,6 +208,9 @@ export async function rewriteAndGate(
       user: [
         `The customer's company: ${tenantName}`,
         `They reported: ${row.ticketRef}`,
+        changeWasMade
+          ? "Our own records confirm a change WAS made on this customer's account for this ticket."
+          : "Our own records show NO change was made on this customer's account for this ticket.",
         "",
         "Internal engineering report (NOT for the customer — rewrite it, never quote it):",
         row.technicalReport.slice(0, 12000),
@@ -195,7 +225,7 @@ export async function rewriteAndGate(
   if (!text.trim()) return hold("The rewrite came back empty.");
 
   const allTenantNames = await liveTenantNames(db);
-  const verdict = reviewCustomerMessage({ text, tenantName, allTenantNames });
+  const verdict = reviewCustomerMessage({ text, tenantName, allTenantNames, changeWasMade });
   if (!verdict.ok) return hold(describeIssues(verdict.issues), verdict.issues);
 
   await db.supportUpdate.update({

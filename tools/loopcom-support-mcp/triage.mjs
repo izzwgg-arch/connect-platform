@@ -81,7 +81,14 @@ export function classifyTicket(ticket) {
 }
 
 export const DEFAULTS = Object.freeze({
-  customerCap: 10,
+  /**
+   * Lane backstop for customer tickets across ALL companies. Raised from 10 on
+   * 2026-09-14 when the per-company cap below became the real limit — it now only
+   * stops a runaway flood.
+   */
+  customerCap: 50,
+  /** Izzy, 2026-09-14: "10 per day … per tenant". Customer lane only. */
+  tenantCap: 10,
   platformCap: 3,
   platformEnabled: true,
   /** A run that has not settled in this long is presumed dead and requeued once. */
@@ -109,6 +116,31 @@ export function startedToday(state, day, lane) {
       c.status !== "skipped_needs_person" &&
       String(c.at ?? "").slice(0, 10) === day &&
       (lane ? c.lane === lane : true),
+  ).length;
+}
+
+/**
+ * Which company a ticket belongs to, for the per-company cap. tenantId when the
+ * list carries it, the company name otherwise; null when neither is known —
+ * an unknown company is never capped (failure direction: work the ticket).
+ */
+export function tenantKeyOf(ticket) {
+  const id = String(ticket?.tenantId ?? "").trim();
+  if (id) return "id:" + id;
+  const name = norm(ticket?.tenantName);
+  return name ? "name:" + name : null;
+}
+
+/** Customer runs STARTED today for one company. Same status rules as startedToday. */
+export function startedTodayForTenant(state, day, key) {
+  if (!key) return 0;
+  return Object.values(state?.claimed ?? {}).filter(
+    (c) =>
+      c && c.status !== "skipped_pre_existing" && c.status !== "skipped_lane_off" &&
+      c.status !== "skipped_needs_person" &&
+      String(c.at ?? "").slice(0, 10) === day &&
+      c.lane === "customer" &&
+      c.tenant === key,
   ).length;
 }
 
@@ -173,6 +205,14 @@ export function decideTicket({ ticket, state, now, cfg = {}, watchingSince }) {
   const cap = lane === "platform" ? c.platformCap : c.customerCap;
   if (startedToday(state, day, lane) >= cap) {
     return { action: "defer_cap", lane, why: `${lane} cap ${cap}/day reached` };
+  }
+  // ⛔ Per company, customer lane only: one busy company cannot use up the day
+  // for everyone else, and each company gets its own 10.
+  if (lane === "customer") {
+    const key = tenantKeyOf(ticket);
+    if (key && startedTodayForTenant(state, day, key) >= c.tenantCap) {
+      return { action: "defer_cap", lane, why: `company cap ${c.tenantCap}/day reached for ${ticket.tenantName ?? key}` };
+    }
   }
 
   return { action: "work", lane, why };

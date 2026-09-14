@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Read LoopCom support escalations from a Claude Code session (read-only).",
+  "description": "LoopCom support escalations in a Claude Code session: read tickets, act as the ticket's filer through the api, text the owner first.",
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check loopcom.mjs",
     "smoke": "node smoke.mjs",
-    "test": "node --test stress.test.mjs",
+    "test": "node --test stress.test.mjs hands.test.mjs",
     "status": "node status.mjs",
     "watch": "node watch.mjs"
   },

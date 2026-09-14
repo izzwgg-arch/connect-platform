@@ -1,13 +1,18 @@
 /**
  * The LoopCom side of the support-ticket MCP server.
  *
- * ⛔ ONE WRITE, AND IT CANNOT REACH A CUSTOMER (v2, 2026-08-31).
- * Everything here reads, except `postAgentReport`, which hands the finished
- * investigation back to LoopCom. That is not a message to a customer: the api
- * gives it to OpenAI to rewrite in plain English and then runs a safety gate
- * that decides whether a person may see it. Claude never writes the words a
- * customer reads, and this client cannot make one appear — it has no route to
- * the customer at all.
+ * ⛔ THE WRITES, AND WHAT BOUNDS EACH ONE (v3, 2026-09-14).
+ *   - `postAgentReport` hands the finished investigation back; the api rewrites
+ *     it through OpenAI and a safety gate decides whether a person may see it.
+ *   - `actAsFiler` runs ONE api request as the person who filed the ticket
+ *     (POST /admin/support/escalations/:ref/act). The api signs it as that
+ *     person and replays it through its own permission checks inside their
+ *     company, so their custom role decides — Izzy, 2026-09-14: the agent may
+ *     fix whatever the filer is allowed to do, with no tenant leakage.
+ *   - `postOwnerNotice` texts the owner what is about to change; the api refuses
+ *     every write without one, and after he replies STOP.
+ * Claude still never writes the words a customer reads, and this client still
+ * has no route to the customer at all.
  *
  * Izzy's design is that the OpenAI agent inside LoopCom keeps the customer
  * relationship and does all the talking; Claude does the technical work.
@@ -121,6 +126,52 @@ export async function resolveReference(cfg, refOrId) {
   const hit = rows.find((r) => String(r.reference || "").toUpperCase() === needle.toUpperCase());
   if (!hit) throw new Error(`No open ticket with reference ${needle} in the last 50. Use list_support_tickets to see what is there.`);
   return hit.id;
+}
+
+/** A JSON write to an /admin/support route. Throws LoopcomError with the api's own refusal text. */
+async function send(cfg, method, path, body, { timeoutMs = 60_000 } = {}) {
+  const url = `${cfg.base}${path}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { authorization: `Bearer ${cfg.token}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body ?? {}),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    let parsed;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+    if (!res.ok) throw new LoopcomError(res.status, parsed, path);
+    return parsed;
+  } catch (err) {
+    if (err instanceof LoopcomError) throw err;
+    if (err?.name === "AbortError") throw new Error(`LoopCom did not answer within ${Math.round(timeoutMs / 1000)}s on ${path}.`);
+    throw new Error(`Could not reach LoopCom at ${cfg.base} — ${String(err?.message || err)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Run ONE api request as the person who filed the ticket.
+ * ⛔ Every gate lives in the api (actAsFilerRoutes.ts): their role, their
+ * company, blocked platform paths, the owner notice, STOP, the per-tenant cap.
+ * This client adds none and must not — a second opinion is how gates drift.
+ */
+export async function actAsFiler(cfg, reference, { method, path, body }) {
+  return send(cfg, "POST", `/admin/support/escalations/${encodeURIComponent(reference)}/act`, { method, path, body });
+}
+
+/** Text the owner what is about to change (scope "tenant") or ask before a system-wide change ("system"). */
+export async function postOwnerNotice(cfg, reference, { scope, summary }) {
+  return send(cfg, "POST", `/admin/support/escalations/${encodeURIComponent(reference)}/owner-notice`, { scope, summary });
+}
+
+/** The notices on a ticket and whether a change may be made right now (false after STOP). */
+export async function getOwnerNotices(cfg, reference) {
+  return call(cfg, `/admin/support/escalations/${encodeURIComponent(reference)}/owner-notices`);
 }
 
 /**
