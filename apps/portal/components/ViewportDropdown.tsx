@@ -18,6 +18,8 @@ type ViewportDropdownProps = {
   width?: number;
   sideOffset?: number;
   collisionPadding?: number;
+  /** Re-clamp menus whose tabs or asynchronous content change their height. */
+  observeContent?: boolean;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -51,6 +53,7 @@ export function ViewportDropdown({
   width = 260,
   sideOffset = 8,
   collisionPadding = 16,
+  observeContent = false,
 }: ViewportDropdownProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -89,13 +92,16 @@ export function ViewportDropdown({
     const frame = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    const observer = observeContent ? new ResizeObserver(updatePosition) : null;
+    if (panelRef.current) observer?.observe(panelRef.current);
 
     return () => {
       window.cancelAnimationFrame(frame);
+      observer?.disconnect();
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [collisionPadding, mounted, open, sideOffset, triggerRef, width]);
+  }, [collisionPadding, mounted, open, sideOffset, triggerRef, width, observeContent]);
 
   useEffect(() => {
     if (!open) return;

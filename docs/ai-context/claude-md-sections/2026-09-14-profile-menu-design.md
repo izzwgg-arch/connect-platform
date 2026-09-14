@@ -1,5 +1,7 @@
 # Profile menu design review — 2026-09-14
 
+**Implementation now authorized and complete locally; rollout pending.** Two-tab profile menu matches mockup in both themes. DND is always visible, uses the real extension-wide endpoint, requires confirmed read-back and exposes unknown/loading/unavailable states with GET-only retry. No PBX configuration changes. Portal typecheck and 6 focused + 6 safeguard tests pass; actual-component Chrome fixtures cover requests, failures, retry, voicemail dependency, keyboard and responsive layout. Live DND call test awaits an owner-selected extension. Historical mockup-only notes below are superseded by this authorization. Full handoff records implementation and verification limits.
+
 Mockup only; no runtime settings or portal source changed. Preserve Loopcom's current visual character. The live Support / Solidify Concrete menu has an unassigned extension, a green Available label, six equally prominent control tiles, unexplained disabled greeting actions, and an oversized sign-out area.
 
 DND follow-up: source-confirmed visibility requires an ACTIVE extension owned by the signed-in user, LINKED tenant PBX, configured helper, and successful live status read. Loading, unsupported configuration, and request/read failures all hide the row; frontend drops the reason. Ordinary users can pass the role gate. Recommend a stable row with a reason/loading/retry state; unknown must never mean Off. No per-user live audit, runtime changes, or DND writes performed.

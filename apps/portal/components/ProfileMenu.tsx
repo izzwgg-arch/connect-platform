@@ -1,6 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from "react";
+import { ChevronDown, ChevronRight, LogOut, Moon, Phone, ShieldCheck, Sun, Upload, Voicemail, X } from "lucide-react";
+import { useProfileDnd } from "./useProfileDnd";
+import { dndUnavailableMessage } from "./profileDnd";
+import "./profile-menu.css";
 import { useRouter } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { getWebRingerEnabled, setWebRingerEnabled } from "../hooks/telephonyAudioPreferences";
@@ -106,14 +110,12 @@ function vmRecordStateLabel(state: string): string {
 export function ProfileMenu() {
   const [open, setOpen] = useState(false);
   const [dnd, setDnd] = useState(false);
-  // Real phone-system DND for this user's own extension, read from and written
-  // to the SAME proven M11 helper path the assistant uses. Never seeded from
-  // the old localStorage mute — that flag meant "this tab", and promoting it
-  // would silently start blocking real calls for anyone who had ever set it.
-  const [extDnd, setExtDnd] = useState(false);
-  const [extDndSupported, setExtDndSupported] = useState(false);
-  const [extDndSaving, setExtDndSaving] = useState(false);
-  const [extDndError, setExtDndError] = useState<string | null>(null);
+  const [section, setSection] = useState<"quick" | "voicemail">("quick");
+  const [panelStatus, setPanelStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [panelRetry, setPanelRetry] = useState(0);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const menuId = useId();
+  const closeRef = useRef<HTMLButtonElement | null>(null);
   const [ringerOn, setRingerOn] = useState(true);
   const [smsToEmail, setSmsToEmail] = useState(false);
   const [smsToEmailSaving, setSmsToEmailSaving] = useState(false);
@@ -131,16 +133,14 @@ export function ProfileMenu() {
   const router = useRouter();
   const { user, tenant, theme, setTheme, setUserAvatarUrl } = useAppContext();
   const sipPhone = useSipPhone();
-  const closeMenu = useCallback(() => setOpen(false), []);
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
   const displayName = getPreferredUserDisplayName(user);
-  const extensionNumber = panelData?.extension?.number || user.extension || "Not assigned";
-  // Presence now follows the REAL extension DND read back from the phone
-  // system. It must never follow the browser mute: that flag means "this tab",
-  // and showing "Do Not Disturb" for it told people their extension was
-  // silenced when it was still ringing everywhere else.
-  // (panelData.presence is still a hardcoded "AVAILABLE" server-side, so it
-  // only ever contributes the default here.)
-  const presence = extDndSupported && extDnd ? "DND" : panelData?.presence || user.presence || "AVAILABLE";
+  const phoneDnd = useProfileDnd(open, `${user.id}:${tenant.id}`);
+  const extensionNumber = panelData?.extension?.number;
+  const canEditGreeting = panelStatus === "ready" && Boolean(panelData?.extension) && !uploading && !recordingCall;
   const greeting = panelData?.greeting ?? DEFAULT_GREETING;
   const previewUrl = useMemo(() => withBrowserToken(greeting.previewUrl), [greeting.previewUrl]);
 
@@ -154,28 +154,23 @@ export function ProfileMenu() {
   useEffect(() => {
     if (!open) return;
     let active = true;
+    setPanelStatus("loading");
+    setPanelData(null);
+    setPreferenceError(null);
     apiGet<ControlPanelResponse>("/voice/extensions/me/control-panel")
       .then((data) => {
-        if (active) setPanelData(data);
+        if (active) { setPanelData(data); setPanelStatus("ready"); }
       })
       .catch(() => {
-        if (active) setPanelData({ extension: null, presence: "OFFLINE", greeting: DEFAULT_GREETING });
+        if (active) { setPanelData(null); setPanelStatus("error"); }
       });
-    apiGet<{ supported?: boolean; dnd?: boolean }>("/voice/extensions/me/dnd")
-      .then((d) => {
-        if (!active) return;
-        setExtDndSupported(Boolean(d?.supported));
-        setExtDnd(Boolean(d?.dnd));
-        setExtDndError(null);
-      })
-      .catch(() => {
-        // Hide the control rather than show a confident "off" — reporting DND
-        // as off when we could not read it is how calls get silently blocked.
-        if (active) setExtDndSupported(false);
-      });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
+  }, [open, user.id, tenant.id, panelRetry]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => closeRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [open]);
 
   useEffect(() => {
@@ -200,27 +195,6 @@ export function ProfileMenu() {
     if (typeof window !== "undefined") localStorage.setItem("cc-extension-dnd", next ? "1" : "0");
   }
 
-  // Real extension DND. Optimistic, but corrected from the server's read-back —
-  // the control must never claim a state the phone system did not confirm.
-  async function updateExtDnd(next: boolean) {
-    const previous = extDnd;
-    setExtDnd(next);
-    setExtDndSaving(true);
-    setExtDndError(null);
-    try {
-      const r = await apiPost<{ dnd?: boolean; confirmed?: boolean }>("/voice/extensions/me/dnd", { dnd: next });
-      setExtDnd(Boolean(r?.dnd));
-      if (r && r.confirmed === false) {
-        setExtDndError("Saved, but we couldn't read it back — check your phone before relying on it.");
-      }
-    } catch (e: any) {
-      setExtDnd(previous);
-      setExtDndError(e?.body?.message || e?.message || "Couldn't reach the phone system.");
-    } finally {
-      setExtDndSaving(false);
-    }
-  }
-
   function updateRinger(next: boolean) {
     setRingerOn(next);
     setWebRingerEnabled(next);
@@ -230,10 +204,12 @@ export function ProfileMenu() {
     const previous = smsToEmail;
     setSmsToEmail(next); // optimistic
     setSmsToEmailSaving(true);
+    setPreferenceError(null);
     try {
       await apiPut("/voice/extensions/me/sms-to-email", { enabled: next });
     } catch {
       setSmsToEmail(previous); // revert on failure
+      setPreferenceError("Couldn’t save text-message emails. Please try again.");
     } finally {
       setSmsToEmailSaving(false);
     }
@@ -243,10 +219,12 @@ export function ProfileMenu() {
     const previous = vmEmail;
     setVmEmail(next); // optimistic
     setVmEmailSaving(true);
+    setPreferenceError(null);
     try {
       await apiPut("/voice/extensions/me/voicemail-email", { enabled: next });
     } catch {
       setVmEmail(previous); // revert on failure
+      setPreferenceError("Couldn’t save voicemail emails. Please try again.");
     } finally {
       setVmEmailSaving(false);
     }
@@ -256,10 +234,12 @@ export function ProfileMenu() {
     const previous = vmEmailTranscript;
     setVmEmailTranscript(next); // optimistic
     setVmEmailSaving(true);
+    setPreferenceError(null);
     try {
       await apiPut("/voice/extensions/me/voicemail-email", { includeTranscript: next });
     } catch {
       setVmEmailTranscript(previous); // revert on failure
+      setPreferenceError("Couldn’t save the transcription preference. Please try again.");
     } finally {
       setVmEmailSaving(false);
     }
@@ -271,7 +251,7 @@ export function ProfileMenu() {
   }
 
   async function uploadGreeting(file: File | null | undefined) {
-    if (!file) return;
+    if (!file || !canEditGreeting) return;
     const ext = file.name.split(".").pop()?.toLowerCase();
     if (ext !== "wav" && ext !== "mp3") {
       setUploadMessage("Use a WAV or MP3 file.");
@@ -286,6 +266,7 @@ export function ProfileMenu() {
     try {
       const nextGreeting = await apiUploadVoicemailGreeting(file);
       setPanelData((current) => ({
+        ...current,
         extension: current?.extension ?? null,
         presence: current?.presence ?? "AVAILABLE",
         greeting: {
@@ -310,11 +291,13 @@ export function ProfileMenu() {
   }
 
   async function resetGreeting() {
+    if (!canEditGreeting || greeting.status !== "custom") return;
     setUploading(true);
     setUploadMessage("Resetting greeting...");
     try {
       const nextGreeting = await apiDelete<GreetingState & { ok: boolean }>("/voice/extensions/me/voicemail-greeting");
       setPanelData((current) => ({
+        ...current,
         extension: current?.extension ?? null,
         presence: current?.presence ?? "AVAILABLE",
         greeting: {
@@ -337,6 +320,7 @@ export function ProfileMenu() {
   }
 
   async function callToRecordGreeting() {
+    if (!canEditGreeting) return;
     setRecordingCall(true);
     setVmRecordJob(null);
     setUploadMessage("Starting Call to Record…");
@@ -389,119 +373,84 @@ export function ProfileMenu() {
   const showVmRecordDebug =
     typeof window !== "undefined" && window.localStorage?.getItem("ecpVmDebug") === "1";
 
+  function selectSection(next: "quick" | "voicemail", focus = false) {
+    setSection(next);
+    if (focus) document.getElementById(`${menuId}-${next}-tab`)?.focus();
+  }
+
   return (
     <div className="menu-wrap">
-      <button ref={triggerRef} className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)} title={displayName}>
+      <button ref={triggerRef} type="button" className="icon-btn profile-trigger" onClick={() => setOpen((v) => !v)}
+        title={displayName} aria-label={`Personal settings for ${displayName}`} aria-expanded={open} aria-controls={menuId}>
         <UserAvatarUpload name={displayName} avatarUrl={user.avatarUrl} size={28} className="profile-trigger-avatar" />
-        <span className="profile-trigger-name">{displayName}</span>
+        <span className="profile-trigger-name">{displayName}</span><ChevronDown size={14} aria-hidden />
       </button>
-      <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closeMenu} width={390} className="extension-control-panel">
-        <section className="ecp-header" aria-label="Extension control panel header">
-          <UserAvatarUpload
-            name={displayName}
-            avatarUrl={user.avatarUrl}
-            size={52}
-            editable
-            onUploaded={setUserAvatarUrl}
-            className="ecp-avatar"
-          />
-          <div className="ecp-identity">
-            <div className="ecp-name">{displayName}</div>
-            <div className="ecp-tenant">{tenant.name}</div>
-            <div className="ecp-extension-row">
-              <strong>Ext {extensionNumber}</strong>
-              <span className={`ecp-status ${statusTone(presence)}`}>
-                <span aria-hidden />
-                {statusLabel(presence)}
-              </span>
+      <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closeMenu} width={430} observeContent className="extension-control-panel profile-menu">
+        <div id={menuId} aria-label="Personal settings" role="region">
+          <header className="pm-header">
+            <UserAvatarUpload name={displayName} avatarUrl={user.avatarUrl} size={48} editable onUploaded={setUserAvatarUrl} className="pm-avatar" />
+            <div className="pm-identity">
+              <div className="pm-name">{displayName}</div>
+              <div className="pm-muted">{tenant.name}</div>
+              <div className="pm-extension">{panelStatus === "loading" ? "Loading extension…" : panelStatus === "error" ? "Extension unavailable" : extensionNumber ? `Extension ${extensionNumber}` : "No extension assigned"}</div>
             </div>
+            <button ref={closeRef} type="button" className="pm-close" aria-label="Close personal settings" onClick={closeMenu}><X size={17} aria-hidden /></button>
+          </header>
+          <div className="pm-tabs" role="tablist" aria-label="Personal settings sections">
+            {(["quick", "voicemail"] as const).map((tab) => (
+              <button type="button" key={tab} id={`${menuId}-${tab}-tab`} role="tab" aria-selected={section === tab}
+                aria-controls={`${menuId}-${tab}`} tabIndex={section === tab ? 0 : -1}
+                onClick={() => selectSection(tab)} onKeyDown={(event) => {
+                  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                    event.preventDefault();
+                    selectSection(event.key === "Home" ? "quick" : event.key === "End" ? "voicemail" : tab === "quick" ? "voicemail" : "quick", true);
+                  }
+                }}>{tab === "quick" ? "Quick settings" : "Voicemail"}</button>
+            ))}
           </div>
-        </section>
-
-        <section className="ecp-section" aria-label="Quick controls">
-          <div className="ecp-section-title">Quick Controls</div>
-          {/* ⛔ This is NOT the phone system's Do Not Disturb. It is a browser-only
-              mute: it lives in localStorage, it is never sent anywhere, and it does
-              not stop your desk phone or mobile from ringing. Real extension DND is
-              written to the PBX by the assistant, and the two have never been
-              connected — which is exactly why a trainer saw the assistant say "DND
-              is off" while this switch stayed lit, and the reverse the next day.
-              Calling both of them "DND" is what made that unexplainable, so this one
-              says what it actually does. Wiring this control to real extension DND
-              is a deliberate product decision, not a rename — it would start
-              blocking real calls from a browser switch. */}
-          {/* The REAL one: this writes your extension's DND on the phone system,
-              through the same M11 helper path the assistant uses. Shown only
-              when the tenant is actually linked to a PBX — a toggle that cannot
-              reach the phone system is worse than no toggle. */}
-          {extDndSupported ? (
-            <>
-              <ControlToggle
-                label="Do Not Disturb"
-                detail={extDnd ? "Your extension is not accepting calls" : "Stop calls to your extension, everywhere"}
-                checked={extDnd}
-                disabled={extDndSaving}
-                onChange={updateExtDnd}
-              />
-              {extDndError ? (
-                <div className="ecp-inline-error" role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "2px 0 6px" }}>
-                  {extDndError}
+          {panelStatus === "error" ? <div className="pm-notice" role="alert">Couldn’t load your account preferences. <button type="button" className="pm-link" onClick={() => setPanelRetry((n) => n + 1)}>Retry</button></div> : null}
+          <div className="pm-content" id={`${menuId}-quick`} role="tabpanel" aria-labelledby={`${menuId}-quick-tab`} hidden={section !== "quick"}>
+            <section className="pm-section" aria-labelledby={`${menuId}-calls`}>
+              <h3 id={`${menuId}-calls`}>Calls</h3>
+              {phoneDnd.state.status === "ready" ? (
+                <ControlToggle label="Do Not Disturb" detail={phoneDnd.state.enabled ? "On · Your extension is not accepting calls." : "Off · Stop calls to your extension on every device."}
+                  checked={phoneDnd.state.enabled} onChange={phoneDnd.change} />
+              ) : (
+                <div className="pm-setting-row" aria-live="polite" aria-busy={phoneDnd.state.status === "loading" || phoneDnd.state.status === "saving"}>
+                  <div><strong>Do Not Disturb</strong><small>{phoneDnd.state.status === "loading" ? "Checking your phone-system status…" : phoneDnd.state.status === "saving" ? "Updating your extension on every device…" : dndUnavailableMessage(phoneDnd.state.reason)}</small></div>
+                  <span className="pm-state">{phoneDnd.state.status === "loading" ? "Checking…" : phoneDnd.state.status === "saving" ? "Saving…" : "Unavailable"}</span>
                 </div>
-              ) : null}
-            </>
-          ) : null}
-          <ControlToggle label="Mute this browser" detail="Stops calls ringing HERE only — not your phone system DND" checked={dnd} onChange={updateDnd} />
-          <ControlToggle label="Ringer" detail="WebRTC incoming ring" checked={ringerOn} onChange={updateRinger} />
-          <ControlToggle label="Theme" detail={theme === "dark" ? "Dark mode" : "Light mode"} checked={theme === "dark"} onChange={(next) => setTheme(next ? "dark" : "light")} />
-          <ControlToggle label="SMS to Email" detail="Send my texts to my inbox" checked={smsToEmail} disabled={smsToEmailSaving} onChange={updateSmsToEmail} />
-          <ControlToggle label="Email my voicemails" detail="Send each new voicemail to my email" checked={vmEmail} disabled={vmEmailSaving} onChange={updateVmEmail} />
-          <ControlToggle label="Include transcription in email" detail="Add the written text to the voicemail email" checked={vmEmailTranscript} disabled={vmEmailSaving || !vmEmail} onChange={updateVmEmailTranscript} />
-        </section>
-
-        <section className="ecp-section" aria-label="Voicemail greeting">
-          <div className="ecp-section-head">
-            <div>
-              <div className="ecp-section-title">Voicemail Greeting</div>
-              <div className="ecp-muted">{greeting.status === "custom" ? "Custom greeting active" : "Using default greeting"}</div>
-            </div>
-            <span className={`ecp-pill ${greeting.status === "custom" ? "success" : ""}`}>{greeting.status}</span>
+              )}
+              {phoneDnd.error ? <div className="pm-error" role="alert">{phoneDnd.error}</div> : null}
+              {phoneDnd.state.status === "unavailable" ? <button type="button" className="pm-link" onClick={() => void phoneDnd.refresh()}>Check status again</button> : null}
+              <ControlToggle label="Mute this browser" detail="Other devices keep ringing." checked={dnd} onChange={updateDnd} />
+              <ControlToggle label="Incoming call sound" detail="Play a ringtone in this browser." checked={ringerOn} onChange={updateRinger} />
+            </section>
+            <section className="pm-section"><h3>Appearance</h3><div className="pm-appearance"><strong>Theme</strong><div className="pm-theme" role="group" aria-label="Theme">
+              <button type="button" aria-pressed={theme === "light"} onClick={() => setTheme("light")}><Sun size={15} aria-hidden />Light</button>
+              <button type="button" aria-pressed={theme === "dark"} onClick={() => setTheme("dark")}><Moon size={15} aria-hidden />Dark</button>
+            </div></div></section>
+            <section className="pm-section"><h3>Messages</h3><ControlToggle label="Email my text messages" detail="Send a copy to my account email." checked={smsToEmail} disabled={smsToEmailSaving || panelStatus !== "ready"} onChange={updateSmsToEmail} /></section>
           </div>
-
-          {greeting.status === "custom" && previewUrl ? (
-            <div className="ecp-player">
-              <audio controls preload="none" src={previewUrl} />
-              <span>{greeting.durationSec ? `${greeting.durationSec}s` : "Duration pending"}</span>
-            </div>
-          ) : null}
-
-          <div
-            className={`ecp-dropzone ${dragActive ? "active" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragActive(true);
-            }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragActive(false);
-              void uploadGreeting(event.dataTransfer.files?.[0]);
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              hidden
-              onChange={(event) => void uploadGreeting(event.target.files?.[0])}
-            />
-            <button className="ecp-upload-btn" type="button" disabled={uploading || !panelData?.extension} onClick={() => fileInputRef.current?.click()}>
-              {greeting.status === "custom" ? "Replace Greeting" : "Upload Greeting"}
-            </button>
-            <span>WAV or MP3, up to 8 MB</span>
-          </div>
-
-          {uploading ? <div className="ecp-progress"><span /></div> : null}
-          {uploadMessage ? <div className="ecp-muted">{uploadMessage}</div> : null}
+          <div className="pm-content" id={`${menuId}-voicemail`} role="tabpanel" aria-labelledby={`${menuId}-voicemail-tab`} hidden={section !== "voicemail"}>
+            <section className="pm-section"><h3>Email delivery</h3>
+              <ControlToggle label="Email my voicemails" detail="Send new voicemails to my account email." checked={vmEmail} disabled={vmEmailSaving || !panelData?.extension || panelStatus !== "ready"} onChange={updateVmEmail} />
+              <div className="pm-dependent"><ControlToggle label="Include transcription in email" detail={vmEmail ? "Add the written text to the voicemail email." : "Turn on voicemail emails to include transcription."} checked={vmEmailTranscript} disabled={vmEmailSaving || !vmEmail || !panelData?.extension || panelStatus !== "ready"} onChange={updateVmEmailTranscript} /></div>
+            </section>
+            <section className="pm-section" aria-label="Voicemail greeting"><h3>Greeting</h3>
+              <div className="pm-greeting-head"><span className="pm-greeting-icon"><Voicemail size={19} aria-hidden /></span><div><strong>{panelStatus === "loading" ? "Loading greeting…" : !panelData?.extension ? "Greeting unavailable" : greeting.status === "custom" ? "Custom greeting" : "Default greeting"}</strong><small>{panelData?.extension ? (greeting.originalFilename || "Upload an audio file or record by phone.") : "No extension is linked to this account."}</small></div></div>
+              {panelStatus === "ready" && !panelData?.extension ? <div className="pm-notice">Ask your administrator to assign an extension to manage voicemail delivery and your greeting.</div> : null}
+              {greeting.status === "custom" && previewUrl ? <div className="ecp-player"><audio controls preload="none" src={previewUrl} aria-label="Voicemail greeting" /><span>{greeting.durationSec ? `${greeting.durationSec}s` : "Duration pending"}</span></div> : null}
+              <div className={`pm-greeting-upload ${dragActive ? "active" : ""}`} onDragOver={(event) => { event.preventDefault(); if (canEditGreeting) setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); if (canEditGreeting) void uploadGreeting(event.dataTransfer.files?.[0]); }}>
+                <input ref={fileInputRef} type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" hidden onChange={(event) => void uploadGreeting(event.target.files?.[0])} />
+                <div className="pm-actions">
+                  <button className="pm-action pm-primary" type="button" disabled={!canEditGreeting} onClick={() => fileInputRef.current?.click()}><Upload size={15} aria-hidden />{greeting.status === "custom" ? "Replace audio" : "Upload audio"}</button>
+                  <button className="pm-action" type="button" disabled={!canEditGreeting} onClick={() => void callToRecordGreeting()}><Phone size={15} aria-hidden />{recordingCall ? "Calling…" : "Call to record"}</button>
+                  {greeting.status === "custom" ? <button className="pm-action" type="button" disabled={!canEditGreeting} onClick={() => void resetGreeting()}>Reset to default</button> : null}
+                </div><p className="pm-hint">WAV or MP3 · Up to 8 MB</p>
+              </div>
+              {uploading ? <div className="ecp-progress"><span /></div> : null}
+              {uploadMessage ? <div className="pm-muted" role="status">{uploadMessage}</div> : null}
           {vmRecordJob && showVmRecordDebug ? (
             <div className="ecp-muted" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 6 }}>
               <div>
@@ -578,63 +527,24 @@ export function ProfileMenu() {
               ) : null}
             </div>
           ) : null}
-          {greeting.publishDetail ? <div className="ecp-warning">{greeting.publishDetail}</div> : null}
-          <div className="ecp-actions-row">
-            <button className="ecp-secondary-btn" type="button" disabled={!previewUrl} onClick={() => previewUrl && window.open(previewUrl, "_blank", "noopener,noreferrer")}>Play</button>
-            <button className="ecp-secondary-btn danger-soft" type="button" disabled={uploading || greeting.status !== "custom"} onClick={() => void resetGreeting()}>Reset to Default</button>
-            <button className="ecp-secondary-btn" type="button" disabled={uploading || recordingCall || !panelData?.extension} onClick={() => void callToRecordGreeting()}>
-              {recordingCall ? "Calling..." : "Call to Record"}
-            </button>
+              {greeting.publishDetail ? <div className="ecp-warning">{greeting.publishDetail}</div> : null}
+            </section>
           </div>
-        </section>
-
-        {/* Account security (two-step verification). Every signed-in person can
-            reach it — it is their own account, no permission key. */}
-        <section className="ecp-logout" style={{ background: "transparent", paddingBottom: 0 }}>
-          <button
-            className="ecp-secondary-btn"
-            type="button"
-            style={{ width: "100%" }}
-            onClick={() => { closeMenu(); router.push("/account/security"); }}
-          >
-            Security &amp; two-step verification
-          </button>
-        </section>
-        <section className="ecp-logout">
-          <button className="ecp-logout-btn" onClick={logout}>Logout</button>
-        </section>
+          {preferenceError ? <div className="pm-error pm-save-error" role="alert">{preferenceError}</div> : null}
+          <footer className="pm-footer">
+            <button type="button" onClick={() => { closeMenu(); router.push("/account/security"); }}><ShieldCheck size={17} aria-hidden /><span>Security &amp; two-step verification</span><ChevronRight size={16} aria-hidden /></button>
+            <button type="button" onClick={logout}><LogOut size={17} aria-hidden /><span>Sign out</span></button>
+          </footer>
+        </div>
       </ViewportDropdown>
     </div>
   );
 }
 
 function ControlToggle({ label, detail, checked, onChange, disabled }: { label: string; detail: string; checked: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
-  return (
-    <button className="ecp-toggle-row" type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}>
-      <span>
-        <strong>{label}</strong>
-        <small>{detail}</small>
-      </span>
-      <span className={`ecp-switch ${checked ? "on" : ""}`} aria-hidden><span /></span>
-    </button>
-  );
-}
-
-function statusTone(status: string): string {
-  const normalized = status.toLowerCase();
-  if (normalized.includes("available")) return "available";
-  if (normalized.includes("ring")) return "ringing";
-  if (normalized.includes("dnd") || normalized.includes("offline")) return "danger";
-  return "busy";
-}
-
-function statusLabel(status: string): string {
-  const normalized = status.toLowerCase();
-  if (normalized.includes("dnd")) return "Do Not Disturb";
-  if (normalized.includes("ring")) return "Ringing";
-  if (normalized.includes("on_call")) return "On Call";
-  if (normalized.includes("offline")) return "Offline";
-  return "Available";
+  return <button className="pm-setting-row pm-toggle" type="button" role="switch" aria-label={label} aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}>
+    <span><strong>{label}</strong><small>{detail}</small></span><span className={`pm-switch ${checked ? "on" : ""}`} aria-hidden><span /></span>
+  </button>;
 }
 
 function withBrowserToken(url: string | null): string | null {
