@@ -315,6 +315,18 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     } catch { setError("That could not be saved. Try again."); }
   }, [runId, loadRun]);
 
+  /** "Try again" on a stuck phone's live row. The server never gives back a reset already spent. */
+  const retryPhone = useCallback(async (phoneId: string) => {
+    if (!runId) return;
+    setError(null);
+    try {
+      await apiPost(`/desk-phones/runs/${runId}/phones/${phoneId}/retry`, {});
+      await loadRun(runId);
+    } catch (err: any) {
+      setError(err?.body?.message || "That phone could not be tried again just now.");
+    }
+  }, [runId, loadRun]);
+
   /**
    * ⛔⛔ THE LIVE STEP DRIVES, IT DOES NOT MERELY WATCH. Each tick asks the server
    * what each phone needs, performs the instructions this machine can perform
@@ -327,7 +339,12 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     if (!runId) return;
     setStep("live");
     const bridge = desktop()?.phoneSetup ?? null;
-    driverRef.current = createSetupDriver(runId, { get: apiGet, post: apiPost }, bridge);
+    // ⛔ onProgress paints a row the moment a step STARTS — a factory reset is seconds of
+    // silence, and a row that only changes afterwards shows nothing while it matters most.
+    driverRef.current = createSetupDriver(
+      runId, { get: apiGet, post: apiPost }, bridge, undefined,
+      (phoneId, text) => setHints((h) => ({ ...h, [phoneId]: text })),
+    );
     const tickNow = async () => {
       // ⛔ Re-entry guard: a slow tick (each phone can cost a 4-second probe) must
       // not overlap the next interval firing, or two ticks advance the same phone.
@@ -338,8 +355,14 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setPhones(out.phones);
         setSummary(out.summary);
         setNeeds(out.needs);
-        setHints(out.hints ?? {});
-        if (out.finished) {
+        setHints((h) => ({ ...h, ...(out.hints ?? {}) }));
+        /*
+          ⛔⛔ THE FINISHED SCREEN MEANS EVERY PHONE CAN MAKE CALLS (Izzy, 2026-09-14: "the
+          confirmation screen should never come up unless the phone is up and registered,
+          ready to make calls"). A run that stopped with a phone needing attention stays on
+          this screen, which names what is wrong and offers "Try again" on that row.
+        */
+        if (out.finished && out.summary && out.summary.total > 0 && out.summary.ready === out.summary.total) {
           if (pollRef.current) clearInterval(pollRef.current);
           setStep("done");
         }
@@ -434,11 +457,33 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         phoneIds: chosen.map((p) => p.id),
       });
       setPhones(out.phones);
+      /*
+        ⛔⛔ TICKING A STUCK PHONE MEANS "TRY THIS ONE AGAIN". Found live 2026-09-14: Izzy
+        ticked his Yealink, which was NEEDS_ATTENTION from an attempt four days earlier; the
+        driver skips finished phones, so nothing at all happened and nothing said why. The
+        server's retry un-sticks it and re-attempts the phone's record; it refuses (409) a
+        phone a retry would harm and never gives back a reset already spent — so a refusal
+        here is left alone and the phone simply stays as it is.
+      */
+      const stuck = out.phones.filter((p) => chosen.some((c) => c.id === p.id) && p.needsAttention);
+      if (stuck.length > 0) {
+        for (const p of stuck) {
+          await apiPost(`/desk-phones/runs/${runId}/phones/${p.id}/retry`, {}).catch(() => null);
+        }
+        await loadRun(runId);
+      }
       setStep("match");
     } catch {
       setError("Your choice could not be saved. Try again.");
     } finally { setBusy(false); }
-  }, [runId, chosen]);
+  }, [runId, chosen, loadRun]);
+
+  /**
+   * ⛔ A ticked phone we could not name blocks the match screen. Without a model the phone
+   * system renders no settings file for it, so sending it on would only reach "needs
+   * attention" again — the exact dead end this screen exists to stop.
+   */
+  const unnamed = useMemo(() => chosen.filter((p) => needsIdentifying(p)), [chosen]);
 
   return (
     <div className="dps-root">
@@ -810,12 +855,16 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
               <button className="dps-btn dps-btn-g" onClick={step === "found" ? search : () => setStep("found")}>
                 {step === "found" ? "Search again" : "Back"}
               </button>
-              <span className="dps-hint">Nothing changes yet.</span>
+              <span className="dps-hint">
+                {step === "match" && unnamed.length > 0
+                  ? "Tell us what the phone above is first — read the label underneath it."
+                  : "Nothing changes yet."}
+              </span>
               <span className="dps-sp" />
               <button
                 className="dps-btn dps-btn-p"
                 onClick={() => (step === "found" ? void commitSelection() : setStep("ready"))}
-                disabled={busy || (step === "found" ? chosen.length === 0 : phones.length === 0)}
+                disabled={busy || (step === "found" ? chosen.length === 0 : phones.length === 0 || unnamed.length > 0)}
               >{step === "found"
                 ? (busy ? "Saving…" : chosen.length === 1 ? "Set up this phone" : `Set up these ${chosen.length} phones`)
                 : "Continue"}</button>
@@ -977,6 +1026,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                     {!p.note && hints[p.id] && <span className="dps-hintline">{hints[p.id]}</span>}
                     {p.mac && <span className="dps-mac">{p.mac}</span>}
                   </div>
+                  {p.needsAttention && (
+                    <button className="dps-btn dps-btn-g" onClick={() => void retryPhone(p.id)}>Try again</button>
+                  )}
                   <span className={`dps-pill ${p.status === "Ready" ? "dps-pill-ok" : p.needsAttention ? "dps-pill-hm" : "dps-pill-br"}`}>
                     {p.status !== "Ready" && !p.needsAttention && <span className="dps-spin" style={{ marginRight: 5 }} />}
                     {p.status}

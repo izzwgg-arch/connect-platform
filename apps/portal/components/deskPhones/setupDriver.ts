@@ -90,6 +90,12 @@ type PhoneMemo = {
    * Travels on every advance so the server hands the phone its folder instead.
    */
   resetRefusedLocally: boolean;
+  /**
+   * The last thing we told the person about this phone. ⛔ Kept so a WAIT never blanks the
+   * row: most ticks perform nothing (the phone is restarting, or registering), and a row
+   * that goes empty while work is genuinely under way reads as the wizard having stopped.
+   */
+  lastHint: string | null;
 };
 
 const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
@@ -148,6 +154,21 @@ export const HINT_RESET_SENT =
 export const HINT_RESET_SKIPPED =
   "We did not clear this phone — it is safer to hand it its new settings without erasing it.";
 
+/*
+  ⛔⛔ EVERY STEP IS SAID BEFORE IT IS DONE (Izzy, 2026-09-14: "everything the wizard is doing,
+  the user should be able to see live as it's doing it"). A factory reset takes seconds of
+  silence on the wire; a row that only changes AFTER the step finished shows nothing while it
+  matters most. These are pushed through `onProgress` the moment a step starts.
+*/
+export const HINT_CHECKING = "Checking this phone…";
+export const HINT_CLEARING = "Clearing this phone’s old settings…";
+export const HINT_SENDING = "Sending this phone its Loopcom settings…";
+export const HINT_FINDING = "Looking for this phone on your network…";
+export const HINT_WAITING_APPROVAL = "Waiting for you to approve clearing this phone.";
+export const HINT_WAITING_PASSWORD = "Waiting for this phone’s password.";
+export const HINT_WAITING_REGISTER = "Settings are on the phone. Waiting for it to connect to Loopcom…";
+export const HINT_CONNECTED = "Connected — ready to make calls.";
+
 /**
  * What a factory-reset request's answer means for the count.
  *
@@ -172,7 +193,14 @@ export function classifyResetAnswer(r: any): "sent" | "refused" | "wait" {
   return "sent";
 }
 
-export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverBridge, now: () => number = () => Date.now()) {
+export function createSetupDriver(
+  runId: string,
+  api: DriverApi,
+  bridge: DriverBridge,
+  now: () => number = () => Date.now(),
+  /** Called the moment a step STARTS, so the screen shows it while it is happening. */
+  onProgress?: (phoneId: string, text: string) => void,
+) {
   const memos = new Map<string, PhoneMemo>();
 
   const memo = (id: string): PhoneMemo => {
@@ -185,10 +213,17 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         provisioningAttempts: 0, provisioningFirstAskedAt: null,
         cannotListenCount: 0, provisioningHandoffFailed: false,
         resetRefusedLocally: false,
+        lastHint: null,
       };
       memos.set(id, m);
     }
     return m;
+  };
+
+  /** Tell the person, now, what is happening to this phone. A listener that throws never stops setup. */
+  const say = (phoneId: string, text: string) => {
+    memo(phoneId).lastHint = text;
+    try { onProgress?.(phoneId, text); } catch { /* the screen is not the setup */ }
   };
 
   /** The wizard calls this when a person typed a phone's password into the app. */
@@ -254,6 +289,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
 
       // ── things a person has to do ──────────────────────────────────────────
       if (action === "request_reset_authorization") {
+        say(phone.id, HINT_WAITING_APPROVAL);
         resetWanted.push({
           id: phone.id,
           message: decision.customerMessage || "This phone still holds settings from your previous phone system.",
@@ -261,6 +297,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         continue;
       }
       if (action === "ask_for_password") {
+        say(phone.id, HINT_WAITING_PASSWORD);
         needs.push({
           kind: "password",
           phoneId: phone.id,
@@ -278,6 +315,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
       // both (as the single old gate did) meant a phone that came back on a new
       // address after a restart was never looked for again unless it was a Yealink.
       if (action === "rediscover") {
+        say(phone.id, HINT_FINDING);
         const scan = await bridge.run({ op: "discover" }).catch(() => null);
         if (scan?.ok) {
           const hosts = (scan.scan?.hosts ?? []).map((h: any) => ({ mac: h.mac, ip: h.ip }));
@@ -322,6 +360,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         }
         // ⛔ The model the fence judges is what the PHONE says right now — never the
         // stored label, which a person may have picked from a list.
+        say(phone.id, HINT_CLEARING);
         const fp = await bridge.run({
           op: "fingerprint", ip: phone.ip,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
@@ -356,6 +395,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
 
       if (action === "try_default_credentials") {
         if (!canHttp) { markStall(m, action); continue; }
+        say(phone.id, HINT_CHECKING);
         const r = await bridge.run({ op: "test_credentials", ip: phone.ip, useDefault: true }).catch(() => null);
         m.defaultCredentialsTried = true;
         // ⛔ accepted=false with reason "locked" is a WRONG password; anything else
@@ -370,6 +410,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         // check_sync's real form is a PBX-side NOTIFY; from the office machine the
         // equivalent nudge is an autop fetch, which is the same "re-read your
         // settings now" said locally.
+        say(phone.id, HINT_SENDING);
         const r = await bridge.run({
           op: "trigger_autop", ip: phone.ip,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
@@ -397,6 +438,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         // which is the documented mechanism for a factory-reset phone anyway, since
         // one on defaults asks at the handset before obeying a remote restart.
         const reboot = canHttp && m.provisioningAttempts < PROVISIONING_REBOOT_ATTEMPTS;
+        say(phone.id, HINT_SENDING);
         const r = await bridge.run({
           op: "set_provisioning", ip: phone.ip, mac: phone.mac, url, reboot,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
@@ -440,6 +482,7 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
         markStall(m, action);
         continue;
       }
+      if (action === "verify_registration") say(phone.id, HINT_WAITING_REGISTER);
       // Everything else — reset_over_sip (no executor exists, and the ladder cannot
       // reach it: a phone registered to us returns at rung 0 or 5 first), generate_template,
       // verify_registration, do_nothing, halt — is the server's or the PBX's to do,
@@ -459,6 +502,16 @@ export function createSetupDriver(runId: string, api: DriverApi, bridge: DriverB
     }
 
     const fresh = await api.get<{ phones: any[]; summary: any }>(`/desk-phones/runs/${runId}`);
+
+    // What each phone's row says after this tick. A step's outcome wins; a phone that only
+    // waited keeps the last thing it was told; a registered phone says it can make calls.
+    for (const [id, text] of Object.entries(hints)) say(id, text);
+    for (const p of (fresh.phones ?? []) as any[]) {
+      if (p.state === "REGISTERED") { hints[p.id] = HINT_CONNECTED; continue; }
+      const last = memos.get(p.id)?.lastHint;
+      if (!hints[p.id] && last && !TERMINAL.has(p.state)) hints[p.id] = last;
+    }
+
     return {
       finished: Boolean(fresh.summary?.finished),
       summary: fresh.summary,

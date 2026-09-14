@@ -112,6 +112,37 @@ test("a model we cannot set up is OFFERED and says so, never hidden", () => {
   assert.match(picker(), /o\.setupSupported \? o\.label :/);
 });
 
+/* ── a stuck phone, and the finished screen (found live 2026-09-14) ─────────── */
+
+test("ticking a stuck phone tries it again — the driver skips finished phones, so nothing else would", () => {
+  const src = wizard();
+  const fn = src.slice(src.indexOf("const commitSelection = useCallback"));
+  const body = fn.slice(0, fn.indexOf("}, [runId, chosen, loadRun]);"));
+  assert.match(body, /needsAttention/, "Izzy ticked a NEEDS_ATTENTION Yealink and nothing happened");
+  assert.match(body, /phones\/\$\{p\.id\}\/retry/);
+  assert.match(body, /loadRun\(runId\)/, "the match screen must show the un-stuck phone");
+});
+
+test("a ticked phone we could not name blocks Continue on the match screen", () => {
+  const src = wizard();
+  assert.match(src, /chosen\.filter\(\(p\) => needsIdentifying\(p\)\)/);
+  assert.match(src, /unnamed\.length > 0\)/, "a model-less phone sent on only reaches needs-attention again");
+});
+
+test("the finished screen appears only when EVERY phone is registered", () => {
+  const src = wizard();
+  assert.match(src, /out\.summary\.ready === out\.summary\.total/);
+  assert.doesNotMatch(src, /if \(out\.finished\) \{/, "finished alone includes phones that need attention");
+});
+
+test("every step is shown as it starts, and a stuck row offers Try again", () => {
+  const src = wizard();
+  assert.match(src, /createSetupDriver\([\s\S]{0,160}\(phoneId, text\) => setHints/);
+  assert.match(src, /p\.needsAttention && \([\s\S]{0,120}retryPhone\(p\.id\)/);
+  const fn = src.slice(src.indexOf("const retryPhone = useCallback"));
+  assert.match(fn.slice(0, 500), /err\?\.body\?\.message/);
+});
+
 test("nothing about a phone system leaks into what the person reads", () => {
   const src = picker();
   for (const jargon of ["pbxModelId", "provisioning.devices", "catalogue row", "VendorSlug"]) {

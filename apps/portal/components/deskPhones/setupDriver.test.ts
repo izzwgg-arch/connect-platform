@@ -11,6 +11,7 @@ import { join } from "node:path";
 import {
   createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS, classifyResetAnswer,
   HINT_RESET_SENT, HINT_RESET_SKIPPED, HINT_APP_TOO_OLD,
+  HINT_CLEARING, HINT_CONNECTED,
 } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
@@ -547,6 +548,53 @@ test("reset_over_lan: a lost report is retried, never re-wiped", async () => {
   await createSetupDriver("r1", api, bridge).tick();
   assert.equal(bridge.ops.filter((o: any) => o.op === "factory_reset").length, 1);
   assert.equal(resetReports(api).length, 3);
+});
+
+/* ── what the person sees, live ──────────────────────────────────────────── */
+
+test("the wipe is announced BEFORE it is asked of the phone, not after", async () => {
+  const log: string[] = [];
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      log.push(`op:${req.op}`);
+      if (req.op === "fingerprint") return { ok: true, fingerprint: { vendor: "yealink", model: "T54W" } };
+      return { ok: true, op: req.op, sent: true };
+    },
+  };
+  const d = createSetupDriver("r1", api, bridge as any, undefined, (id, text) => log.push(`say:${id}:${text}`));
+  await d.tick();
+  const said = log.indexOf(`say:p1:${HINT_CLEARING}`);
+  const wiped = log.indexOf("op:factory_reset");
+  assert.ok(said >= 0, "the clearing step was never shown");
+  assert.ok(said < wiped, "the row must say it is clearing while the wipe is under way");
+});
+
+test("a tick that only waits keeps the last thing the row said — it never goes blank", async () => {
+  const decisions: Record<string, any> = { p1: RESET_DECISION };
+  const api = fakeApi([phone("p1")], decisions);
+  const bridge = resetBridge(() => ({ ok: true, op: "factory_reset", sent: true }));
+  const d = createSetupDriver("r1", api, bridge);
+  const first = await d.tick();
+  assert.equal(first.hints.p1, HINT_RESET_SENT);
+  decisions.p1 = { action: "do_nothing" }; // the phone is restarting; nothing to perform
+  const second = await d.tick();
+  assert.equal(second.hints.p1, HINT_RESET_SENT, "a waiting phone read as the wizard having stopped");
+});
+
+test("a registered phone says it can make calls", async () => {
+  const api = fakeApi([phone("p1", { state: "REGISTERED", status: "Ready" })], {});
+  const out = await createSetupDriver("r1", api, fakeBridge()).tick();
+  assert.equal(out.hints.p1, HINT_CONNECTED);
+});
+
+test("a progress listener that throws never stops the setup", async () => {
+  const api = fakeApi([phone("p1")], { p1: { action: "try_default_credentials" } });
+  const bridge = fakeBridge();
+  const d = createSetupDriver("r1", api, bridge, undefined, () => { throw new Error("screen gone"); });
+  await d.tick();
+  assert.equal(bridge.ops[0].op, "test_credentials");
 });
 
 test("classifyResetAnswer: the counting policy, exhaustively", () => {

@@ -310,7 +310,9 @@ test("the found screen lets the person pick which phones to set up, and every la
 
 test("the live screen shows what this computer is doing for each phone (the power-cycle ask lives there)", () => {
   const exec = stripComments(WIZARD);
-  assert.match(exec, /setHints\(out\.hints \?\? \{\}\)/);
+  // ⛔ MERGED, not replaced (2026-09-14): a step announced the moment it starts must not be
+  // wiped by the end of the same tick.
+  assert.match(exec, /setHints\(\(h\) => \(\{ \.\.\.h, \.\.\.\(out\.hints \?\? \{\}\) \}\)\)/);
   assert.match(exec, /hints\[p\.id\] && <span className="dps-hintline">/);
   const DRIVER = read("components", "deskPhones", "setupDriver.ts");
   assert.match(DRIVER, /op: "set_provisioning"/);
