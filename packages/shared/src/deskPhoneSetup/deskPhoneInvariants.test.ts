@@ -34,13 +34,13 @@ import { classifyDiscoveredHosts, looksLikePhone, shouldFingerprint } from "./di
 
 const CONDITION_KEYS = [
   "registeredToUs", "provisioningIsOurs", "reachableOnLan", "locked",
-  "defaultCredentialsTried", "haveCustomerCredentials", "oldSettingsInWay",
+  "defaultCredentialsTried", "haveCustomerCredentials",
   "modelProfileMissing", "firmwareTooOld", "provisioningRevertedAfterReset",
   "networkSuppliesOldProvisioning", "awaitingReboot", "onACall",
   "passwordUnavailable", "resetDeclined",
 ] as const;
 
-/** All 2^15 = 32,768 of them. */
+/** All 2^14 = 16,384 of them. (`oldSettingsInWay` left 2026-09-14: reset first needs no trigger.) */
 function allConditions(): PhoneCondition[] {
   const out: PhoneCondition[] = [];
   const n = CONDITION_KEYS.length;
@@ -89,7 +89,7 @@ test("EXHAUSTIVE: a reset is NEVER chosen when the stored record forbids it", ()
       );
     }
   }
-  assert.ok(checked > 12_000_000, `expected the whole space, walked ${checked}`);
+  assert.ok(checked >= CONDITIONS.length * RECORDS.length && checked > 6_000_000, `expected the whole space, walked ${checked}`);
   assert.ok(resets > 0, "if nothing ever resets, this test proves nothing");
 });
 

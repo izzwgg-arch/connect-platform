@@ -102,3 +102,21 @@ test("an all-good run reads as done, not as a count", () => {
   assert.equal(s.needsAttention, 0);
   assert.equal(s.headline, "Your phones are ready");
 });
+
+test("the live screen can be cancelled, and stops by itself when nothing moves (2026-09-14)", () => {
+  // Izzy: the screen sat spinning "Preparing" from an old session with no way out.
+  const src = executableLines(readSource("DeskPhoneWizard.tsx"));
+  assert.match(src, /Cancel setup/);
+  assert.match(src, /\/office-stop/);
+  assert.match(src, /LIVE_NO_PROGRESS_TIMEOUT_MS/);
+  assert.match(src, /clearInterval/);
+});
+
+test("a phone that refuses our password is never reported as reset (2026-09-14)", () => {
+  const src = executableLines(readSource("setupDriver.ts"));
+  const start = src.indexOf("m.locked = true");
+  assert.ok(start > 0, "the locked branch exists");
+  const branch = src.slice(start, src.indexOf("continue;", start));
+  assert.match(branch, /HINT_LOCKED/);
+  assert.ok(!/reset-sent/.test(branch), "a locked phone was wiped by nothing, so nothing may count it");
+});

@@ -841,6 +841,34 @@ test("the pick REPLACES the previous pick, so a change of mind lands cleanly", a
   assert.equal(b.skippedAt, null, "re-ticking a phone brings it back");
 });
 
+test("ticking a phone IS the reset approval — the ticked phone is cleared first, the unticked one never", async () => {
+  // ⛔⛔ Izzy, 2026-09-14: "Once it's on, factory reset it, send the profile, and then the
+  // wizard should restart that phone." No second question: the tick is the consent.
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const runId = await startRun(app);
+  await discover(app, runId, [{ mac: "80:5E:0C:BD:13:5A", ip: "192.168.1.41" }, { mac: "80:5E:0C:BD:13:5B", ip: "192.168.1.42" }]);
+  const [ticked, unticked] = state.phones;
+  await assignTo(app, runId, ticked.id, "e1");
+  await assignTo(app, runId, unticked.id, "e2");
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds: [ticked.id] } });
+  const run = state.runs.find((r: any) => r.id === runId);
+  assert.ok(run.resetAuthorizedAt, "the tick recorded the approval");
+  assert.deepEqual(JSON.parse(run.resetAuthorizedPhoneIds), [String(ticked.id)], "for the ticked phone only");
+
+  const adv = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${ticked.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  assert.equal(adv.action, "reset_over_lan", "reset first, with no second question");
+  assert.ok(adv.resetAuthorizationId);
+
+  const other = body(await app.inject({
+    method: "POST", url: `/desk-phones/runs/${runId}/phones/${unticked.id}/advance`, payload: { reachableOnLan: true },
+  }));
+  assert.ok(!["reset_over_lan", "reset_over_sip"].includes(other.action), "an unticked phone is never cleared");
+  assert.equal(unticked.resetCount ?? 0, 0);
+});
+
 test("a pick naming a phone that is not in this run is refused, and another customer sees 404", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
@@ -871,7 +899,9 @@ test("advance answers set_provisioning WITH the tenant's folder URL, and a faile
   await discover(app, runId, [{ mac: "80:5E:0C:4D:79:6D", ip: "192.168.0.121", vendor: "yealink", model: "T53W" }]);
   const phone = state.phones[0];
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
-  // Izzy's reset T53W: reachable, unlocked, not registered, no folder yet.
+  // Izzy's reset T53W: already cleared this setup (reset first), reachable, unlocked,
+  // not registered, no folder yet.
+  phone.resetCount = 1;
   const adv = body(await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
   }));
@@ -895,7 +925,7 @@ test("advance answers set_provisioning WITH the tenant's folder URL, and a faile
   assert.equal(halt.handOff, "support");
   assert.match(halt.customerMessage, /Loopcom Support/);
   assert.equal(phone.state, "NEEDS_ATTENTION");
-  assert.equal(phone.resetCount, 0);
+  assert.equal(phone.resetCount, 1, "and never a second reset");
 });
 
 test("a folder resolver that throws or knows nothing leaves the instruction without a URL", async () => {
@@ -905,6 +935,7 @@ test("a folder resolver that throws or knows nothing leaves the instruction with
   await discover(app, runId, [{ mac: "80:5E:0C:4D:79:6D", ip: "192.168.0.121" }]);
   const phone = state.phones[0];
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  phone.resetCount = 1; // already cleared this setup
   const adv = body(await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true } }));
   assert.equal(adv.action, "set_provisioning");
   assert.equal(adv.provisioningUrl, null);
@@ -1011,6 +1042,7 @@ test("the Panasonic gate fires only on a POSITIVE identification — an unknown 
   await discover(app, runId, [{ mac: "AA:BB:CC:00:11:22", ip: "192.168.1.61" }]);
   const phone = state.phones[0];
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/assign`, payload: { extensionId: "e1" } });
+  phone.resetCount = 1; // already cleared this setup (reset first)
   const adv = body(await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/advance`, payload: { reachableOnLan: true },
   }));
@@ -1055,6 +1087,7 @@ test("a Grandstream gets the ordinary ladder — the wizard is not a Yealink wiz
   // restart is not sendable at this brand and asks the person to power-cycle.
   const phone = await assignedPhone(app, runId, { mac: "00:0B:82:AA:BB:CC", ip: "192.168.1.70" });
   assert.equal(phone.vendor, "grandstream");
+  phone.resetCount = 1; // already cleared this setup (reset first)
   const adv = await advanceOnce(app, runId, phone.id);
   assert.equal(adv.action, "set_provisioning");
   assert.equal(adv.halted, false);

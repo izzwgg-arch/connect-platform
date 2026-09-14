@@ -352,20 +352,21 @@ test("a phone whose record STILL will not write is left stuck, not looped", asyn
   assert.match(phone.customerNote, /settings profile/);
 });
 
-test("naming a phone NEVER forgives a reset", async () => {
+test("naming a halted phone starts a fresh go, so it is reset first again", async () => {
+  // ⛔ Changed 2026-09-14 by Izzy's rule (factory reset first, always): releasing a halted
+  // phone after it is named rides the same retry clears, and a new go resets first.
   reset();
   const app = await makeApp(CUSTOMER, { ensureRecord: async () => wrote() });
   const runId = await startRun(app);
   const phone = await assignedPhone(app, runId, { mac: "80:5E:C0:AA:BB:CC", ip: "192.168.6.184" });
-  const when = new Date("2026-09-10T12:00:00Z");
-  Object.assign(phone, { state: "FAILED", resetCount: 1, resetRequestedAt: when });
+  Object.assign(phone, { state: "FAILED", resetCount: 1, resetRequestedAt: new Date("2026-09-10T12:00:00Z") });
 
   await app.inject({
     method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/identify`,
     payload: { model: "T53W" },
   });
-  assert.equal(phone.resetCount, 1, "the record of a wipe survives every path, not just retry");
-  assert.equal(phone.resetRequestedAt, when);
+  assert.equal(phone.resetCount, 0);
+  assert.equal(phone.resetRequestedAt, null);
 });
 
 test("what the answer REPLACED is written down, so a mis-pick is findable", async () => {
@@ -452,19 +453,18 @@ test("a retry re-attempts the RECORD, because that is usually why it halted", as
   assert.equal(calls.length, 1, "sending it round the ladder with the same missing record gives the same halt");
 });
 
-test("a retry NEVER forgives a reset", async () => {
+test("a retry is a fresh go: the phone is reset first again, and the audit keeps what was cleared", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
   const runId = await startRun(app);
   const phone = await assignedPhone(app, runId, YEALINK);
-  const when = new Date("2026-09-10T12:00:00Z");
-  Object.assign(phone, { state: "FAILED", resetCount: 1, resetRequestedAt: when });
+  Object.assign(phone, { state: "FAILED", resetCount: 1, resetRequestedAt: new Date("2026-09-10T12:00:00Z") });
 
   await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/phones/${phone.id}/retry`, payload: {} });
-  assert.equal(phone.resetCount, 1, "the record of a wipe survives everything");
-  assert.equal(phone.resetRequestedAt, when);
+  assert.equal(phone.resetCount, 0, "reset first on the new go (Izzy, 2026-09-14)");
+  assert.equal(phone.resetRequestedAt, null);
   const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_RETRY");
-  assert.equal(audit.metadata.resetCount, 1, "and the audit says so plainly");
+  assert.equal(audit.metadata.resetCount, 1, "the audit records the count that was cleared");
 });
 
 test("a WORKING phone refuses a retry — it would restart somebody mid-call", async () => {

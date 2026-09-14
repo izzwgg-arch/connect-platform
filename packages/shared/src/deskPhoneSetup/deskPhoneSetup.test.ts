@@ -374,7 +374,7 @@ test("the record versus the desk splits cleanly into three buckets", () => {
 
 const cond = (over: Partial<PhoneCondition> = {}): PhoneCondition => ({
   registeredToUs: false, provisioningIsOurs: false, reachableOnLan: true, locked: false,
-  defaultCredentialsTried: false, haveCustomerCredentials: false, oldSettingsInWay: false,
+  defaultCredentialsTried: false, haveCustomerCredentials: false,
   modelProfileMissing: false, firmwareTooOld: false, provisioningRevertedAfterReset: false,
   networkSuppliesOldProvisioning: false, awaitingReboot: false, onACall: false,
   passwordUnavailable: false, resetDeclined: false, ...over,
@@ -387,46 +387,62 @@ test("a phone that already works is never touched", () => {
 });
 
 test("a phone with somebody on a call is never restarted", () => {
-  const e = nextEscalation(cond({ onACall: true, oldSettingsInWay: true, registeredToUs: true }), rec({ resetAuthorizedAt: "x" }));
+  const e = nextEscalation(cond({ onACall: true, registeredToUs: true }), rec({ resetAuthorizedAt: "x" }));
   assert.equal(e.action, "do_nothing");
   assert.ok(!/reset/.test(e.action));
 });
 
-test("registered but stale gets the cheapest possible fix", () => {
-  const e = nextEscalation(cond({ registeredToUs: true, provisioningIsOurs: false }), rec());
-  assert.equal(e.action, "check_sync", "no restart, no office access, nobody notices");
+// ⛔⛔ FACTORY RESET FIRST (Izzy, 2026-09-11, restated 2026-09-14). Every test below this
+// line asserts that order. An earlier version asserted "the cheapest fix first, a wipe
+// last" — that was never his rule, and these tests exist so it cannot come back quietly.
+
+test("nothing is sent to a phone until this setup has cleared it", () => {
+  const before = nextEscalation(cond({ reachableOnLan: true }), rec({ resetAuthorizedAt: "x" }));
+  assert.equal(before.action, "reset_over_lan", "the reset comes first");
+  const after = nextEscalation(cond({ reachableOnLan: true }), rec({ resetAuthorizedAt: "x", resetCount: 1 }));
+  assert.equal(after.action, "set_provisioning", "then its settings");
 });
 
-test("a reset needs a person, and asks rather than doing", () => {
-  const e = nextEscalation(cond({ oldSettingsInWay: true }), rec());
-  assert.equal(e.action, "request_reset_authorization");
-  // the customer is told WHY, in their words, before being asked to approve anything
-  assert.ok(e.customerMessage, "asking for approval without saying why is not consent");
-  assert.match(e.customerMessage!, /previous phone system/i);
+test("a registered-but-stale phone is reset first, and re-read only once cleared", () => {
+  const stale = cond({ registeredToUs: true, provisioningIsOurs: false, reachableOnLan: false });
+  assert.equal(nextEscalation(stale, rec({ resetAuthorizedAt: "x" })).action, "reset_over_sip");
+  assert.equal(nextEscalation(stale, rec({ resetAuthorizedAt: "x", resetCount: 1 })).action, "check_sync");
 });
 
-test("an approved reset prefers the PBX over the office network", () => {
+test("reset first beats re-reading settings, even on a registered phone the office can reach", () => {
   const e = nextEscalation(
-    cond({ oldSettingsInWay: true, registeredToUs: true, provisioningIsOurs: false, reachableOnLan: true }),
-    rec({ resetAuthorizedAt: "2026-08-21T10:05:00Z" }),
-  );
-  // ⛔ check_sync is cheaper, so a registered phone is redirected before it is wiped
-  assert.equal(e.action, "check_sync");
-});
-
-test("an approved reset on a phone that never reached us goes over the office network", () => {
-  const e = nextEscalation(
-    cond({ oldSettingsInWay: true, registeredToUs: false, reachableOnLan: true, locked: false }),
+    cond({ registeredToUs: true, provisioningIsOurs: false, reachableOnLan: true }),
     rec({ resetAuthorizedAt: "2026-08-21T10:05:00Z" }),
   );
   assert.equal(e.action, "reset_over_lan");
 });
 
-test("the default password is tried once and then a person is asked", () => {
-  const first = nextEscalation(cond({ locked: true }), rec());
+test("a phone with no approval on file is asked, never wiped by default", () => {
+  // Normally unreachable — ticking the phone records the approval — but a phone that
+  // somehow has none must be ASKED, not cleared.
+  const e = nextEscalation(cond(), rec());
+  assert.equal(e.action, "request_reset_authorization");
+  assert.ok(e.customerMessage, "asking for approval without saying why is not consent");
+  assert.match(e.customerMessage!, /clear every phone/i);
+});
+
+test("an approved reset on a phone that never reached us goes over the office network", () => {
+  const e = nextEscalation(
+    cond({ registeredToUs: false, reachableOnLan: true, locked: false }),
+    rec({ resetAuthorizedAt: "2026-08-21T10:05:00Z" }),
+  );
+  assert.equal(e.action, "reset_over_lan");
+});
+
+test("a locked phone gets the password steps first, because its lock is what blocks the reset", () => {
+  const approved = rec({ resetAuthorizedAt: "x" });
+  const first = nextEscalation(cond({ locked: true }), approved);
   assert.equal(first.action, "try_default_credentials");
-  const second = nextEscalation(cond({ locked: true, defaultCredentialsTried: true }), rec());
+  const second = nextEscalation(cond({ locked: true, defaultCredentialsTried: true }), approved);
   assert.equal(second.action, "ask_for_password", "never a second guess");
+  // with the password in hand, the reset goes out
+  const unlocked = nextEscalation(cond({ locked: true, haveCustomerCredentials: true }), approved);
+  assert.equal(unlocked.action, "reset_over_lan");
 });
 
 test("a manufacturer redirect and a router override are told apart", () => {
@@ -451,13 +467,13 @@ test("neither stopping condition is ever retried", () => {
 });
 
 test("the attempt cap stops the ladder before it touches the phone again", () => {
-  const e = nextEscalation(cond({ oldSettingsInWay: true }), rec({ attempts: 2, resetAuthorizedAt: "x" }));
+  const e = nextEscalation(cond(), rec({ attempts: 2, resetAuthorizedAt: "x" }));
   assert.equal(e.action, "halt");
   assert.equal(e.halted, true);
 });
 
 test("an unknown model has its settings written before the phone is touched", () => {
-  const e = nextEscalation(cond({ modelProfileMissing: true, oldSettingsInWay: true }), rec());
+  const e = nextEscalation(cond({ modelProfileMissing: true }), rec({ resetAuthorizedAt: "x" }));
   assert.equal(e.action, "generate_template");
 });
 
@@ -468,7 +484,7 @@ test("firmware is never flashed automatically", () => {
 });
 
 test("a restarting phone is followed, not re-reset", () => {
-  const e = nextEscalation(cond({ awaitingReboot: true, oldSettingsInWay: true }), rec({ resetAuthorizedAt: "x" }));
+  const e = nextEscalation(cond({ awaitingReboot: true }), rec({ resetAuthorizedAt: "x" }));
   assert.equal(e.action, "rediscover");
 });
 
@@ -477,7 +493,7 @@ test("every branch returns an action from the closed list", () => {
   const cases: PhoneCondition[] = [
     cond(), cond({ registeredToUs: true, provisioningIsOurs: true }), cond({ onACall: true }),
     cond({ locked: true }), cond({ locked: true, defaultCredentialsTried: true }),
-    cond({ oldSettingsInWay: true }), cond({ modelProfileMissing: true }), cond({ firmwareTooOld: true }),
+    cond({ resetDeclined: true }), cond({ modelProfileMissing: true }), cond({ firmwareTooOld: true }),
     cond({ awaitingReboot: true }), cond({ provisioningRevertedAfterReset: true }),
     cond({ provisioningIsOurs: true, reachableOnLan: false }), cond({ reachableOnLan: false }),
   ];

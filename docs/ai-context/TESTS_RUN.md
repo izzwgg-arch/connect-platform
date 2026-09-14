@@ -1353,3 +1353,10 @@ with 0 rows; 845 answers `success` with 5000 rows in the same minute.
 - No sign-up has been submitted, so the required-details refusal has never been
   shown to a person.
 - No duplicate-named tenant has been created since the deploy.
+
+## 2026-09-14 — desk phones: factory reset first (plan §20h)
+- shared `src/deskPhoneSetup/*.test.ts` (node --import tsx --test): 183/183
+- desktop `src/phoneSetup/*.test.ts`: 143/143
+- api `src/deskPhoneSetup/*.test.ts` (--experimental-test-module-mocks): 157/157
+- portal `components/deskPhones/*.test.ts`: 73/73
+- typecheck: shared 0, desktop 0 (own TypeScript), portal 0, api 84 = baseline, none in edited files

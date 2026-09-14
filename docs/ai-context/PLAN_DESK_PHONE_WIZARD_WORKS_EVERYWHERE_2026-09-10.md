@@ -1283,3 +1283,48 @@ cannot be restarted remotely by design — it needs a power-cycle (PnP then answ
 approved factory reset. ⚠️ An orphan `59943f7a1616b24e/805ec0b3b2d0.cfg` dated
 2026-08-05 12:41:20 (the Create A Box BLF-fix minute) also exists with no device row —
 if the handset's stored URL points at that folder it would pull the wrong company's file.
+**Watch ended 06:26Z:** 64 polls, zero config fetches, zero PBX contacts — the phone never
+took its settings.
+
+### 20h. 2026-09-14 — FACTORY RESET FIRST, in all four layers; Cancel + timeout on the live screen
+
+Izzy, angrily and verbatim: *"The system should always factory reset first. Always, always,
+always. The first thing that happens before connecting any phone to my system is a factory
+reset. Once it's on, factory reset it, send the profile, and then the wizard should restart
+that phone so it kicks in."* ⛔ The earlier "lightest step first, reset last" shape was never
+his rule. Do not re-argue it.
+
+**Built:**
+- **shared `escalation.ts`:** after the stop conditions (call, cap, reboot wait, redirect,
+  missing profile, old firmware) a phone with `resetCount === 0` is reset FIRST —
+  `reset_over_lan` when reachable and unlocked (or we hold its password), `reset_over_sip`
+  when registered to us. Declined → halt. No approval on file → ask. Locked → the password
+  steps, which are how reset-first reaches a locked phone. Only a cleared phone gets
+  `check_sync` / `set_provisioning` / `trigger_autop`. `oldSettingsInWay` is gone.
+- **Ticking IS the approval:** `POST …/selection` writes `resetAuthorizedAt` +
+  `resetAuthorizedPhoneIds` = exactly the ticked phones (audit `resetApprovedByTick`).
+- **A retry (and naming a halted phone) is a fresh go → reset first again:** `retryClears`
+  sets `resetCount: 0, resetRequestedAt: null`. Within one go the ladder still resets at most
+  once.
+- **Reset fence:** shared `decideFactoryReset` + desktop `decideLocalFactoryReset` refuse ONLY
+  `model_unknown`. The adapter / cordless / door / Wi-Fi refusals are removed from both copies
+  (drift test updated).
+- **Desktop `factory_reset`:** a 401/403 answers `refused: "locked"` and is NOT recorded as
+  sent — a locked phone keeps its reset.
+- **Portal driver:** `locked` → marks the phone locked, clears a refused customer password
+  or spends the default attempt, shows `HINT_LOCKED`, never calls `reset-sent`; the model
+  falls back to the row's own model when the fingerprint has none.
+- **Wizard live screen:** "Cancel setup" (stops the loop, POSTs `office-stop`, closes) and a
+  10-minute no-progress timeout (`LIVE_NO_PROGRESS_TIMEOUT_MS`) with "Keep trying".
+
+**Honest limits, stated to Izzy:** a phone locked by another provider cannot be reset over the
+network without its password (the phone's own lock) — it needs the password or one hands-on
+reset (hold OK ~10 s). `reset_over_sip` still has NO executor (the api has no path to send a
+command to the PBX), so a registered-but-unreachable phone stalls there. Only Yealink has a
+network reset executor; other brands' resets are refused locally and fall back to the PnP
+hand-off. Whether a factory-default Yealink pops an "allow remote control" prompt for the reset
+is unproven.
+
+**Proven:** shared desk-phone 183/183, desktop phoneSetup 143/143, api desk-phone 157/157,
+portal desk-phone 103/103; typechecks shared 0, desktop 0, portal 0, api 84 = baseline with
+none in an edited file. ⛔ Proven with fakes only — Izzy does every reset on his own rig.

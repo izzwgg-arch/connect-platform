@@ -37,6 +37,8 @@ export type DiagnosticPhone = {
   mac?: string | null;
   ip: string | null;
   vendor: string | null;
+  /** The make/model the person picked, when the phone itself will not say. */
+  model?: string | null;
   extNumber: string | null;
   displayName: string | null;
   attempts: number;
@@ -152,7 +154,9 @@ export const HINT_REFUSED =
 export const HINT_RESET_SENT =
   "This phone is clearing its old settings and restarting. We are listening for it to come back.";
 export const HINT_RESET_SKIPPED =
-  "We did not clear this phone — it is safer to hand it its new settings without erasing it.";
+  "Loopcom can't clear this make of phone from your computer yet, so we are sending it its settings without clearing it.";
+export const HINT_LOCKED =
+  "This phone has a password on it, so it can't be cleared yet. We need that password once.";
 
 /*
   ⛔⛔ EVERY STEP IS SAID BEFORE IT IS DONE (Izzy, 2026-09-14: "everything the wizard is doing,
@@ -183,10 +187,13 @@ export const HINT_CONNECTED = "Connected — ready to make calls.";
  * answering precisely BECAUSE it is doing it. Counting those is how one wipe never
  * becomes two. `already_reset_this_session` means an earlier request DID leave.
  */
-export function classifyResetAnswer(r: any): "sent" | "refused" | "wait" {
+export function classifyResetAnswer(r: any): "sent" | "refused" | "wait" | "locked" {
   if (!r) return "wait"; // the call never reached the app, so nothing left it
   if (r.ok === true) return r.sent === true ? "sent" : "wait";
   const why = String(r.refused ?? "");
+  // ⛔⛔ The phone refused our password: nothing was wiped. Never counted (2026-09-14) —
+  // it sends the phone to the password step, which is what unlocks the reset.
+  if (why === "locked") return "locked";
   if (why === "already_reset_this_session") return "sent";
   if (why === "reset_not_authorized" || why === "too_soon_for_this_phone") return "wait";
   if (why === "unknown_operation" || why === "not_a_private_address" || why.startsWith("reset_unsafe:")) return "refused";
@@ -358,20 +365,32 @@ export function createSetupDriver(
           clearStall(m);
           continue;
         }
-        // ⛔ The model the fence judges is what the PHONE says right now — never the
-        // stored label, which a person may have picked from a list.
+        // The model is what the PHONE says right now, and — when a locked web page says
+        // nothing — the make and model the person picked. ⛔ Without that fallback a locked
+        // phone reported no model, the fence refused "model_unknown", and reset-first was
+        // silently skipped on exactly the phones that need it (Izzy's Yealink, 2026-09-14).
         say(phone.id, HINT_CLEARING);
         const fp = await bridge.run({
           op: "fingerprint", ip: phone.ip,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
-        const model = fp?.ok && typeof fp.fingerprint?.model === "string" && fp.fingerprint.model
-          ? fp.fingerprint.model : null;
+        const model = (fp?.ok && typeof fp.fingerprint?.model === "string" && fp.fingerprint.model
+          ? fp.fingerprint.model : null) || phone.model || null;
         const r = await bridge.run({
           op: "factory_reset", ip: phone.ip, model, link: "unknown", authorizationId,
           ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
         }).catch(() => null);
         const outcome = classifyResetAnswer(r);
+        if (outcome === "locked") {
+          // The phone has a password. A stored customer password that was refused is wrong,
+          // so forget it; otherwise the default was the password just refused.
+          m.locked = true;
+          if (m.credentialRef) { m.credentialRef = null; m.haveCustomerCredentials = false; }
+          else m.defaultCredentialsTried = true;
+          hints[phone.id] = HINT_LOCKED;
+          clearStall(m);
+          continue;
+        }
         if (outcome === "refused") {
           m.resetRefusedLocally = true;
           hints[phone.id] = r?.refused === "unknown_operation" ? HINT_APP_TOO_OLD : HINT_RESET_SKIPPED;

@@ -968,8 +968,8 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       entityType: "desk_phone_setup_phone",
       entityId: phone.id,
       actorUserId: user.sub,
-      // ⛔ The reset count is recorded on every retry, so the audit trail shows plainly
-      // that a retry did not clear it.
+      // The reset count BEFORE the retry is recorded: a retry is a fresh go and gets a
+      // fresh reset-first (2026-09-14), so the audit keeps what was cleared before.
       metadata: { from: phone.state, to: plan.nextState, resetCount: phone.resetCount, explain: plan.explain },
     });
 
@@ -1023,10 +1023,22 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         data: { skippedAt: now },
       });
     }
+    // ⛔⛔ TICKING A PHONE IS THE CONSENT TO FACTORY RESET IT (Izzy, 2026-09-14: "The
+    // first thing that happens before connecting any phone to my system is a factory
+    // reset"). The pick is recorded as the run's reset approval and covers EXACTLY the
+    // ticked phones — it replaces the list, so an unticked phone is never covered.
+    await db.deskPhoneSetupRun.update({
+      where: { id: run.id },
+      data: {
+        resetAuthorizedAt: chosen.length ? now : null,
+        resetAuthorizedByUserId: chosen.length ? user.sub : null,
+        resetAuthorizedPhoneIds: JSON.stringify(chosen.map((id: any) => String(id))),
+      },
+    });
     await deps.audit({
       tenantId: user.tenantId, action: "DESK_PHONE_SELECTION_SET",
       entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub,
-      metadata: { selected: chosen.length, skipped: skipped.length },
+      metadata: { selected: chosen.length, skipped: skipped.length, resetApprovedByTick: chosen.length },
     });
 
     const phones = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id }, orderBy: { createdAt: "asc" } });
@@ -1149,9 +1161,6 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       locked: observed.data.locked ?? false,
       defaultCredentialsTried: observed.data.defaultCredentialsTried ?? false,
       haveCustomerCredentials: observed.data.haveCustomerCredentials ?? false,
-      // ⛔ Derived from stored facts, not asserted by the caller: an office machine
-      // must not be able to declare that a phone needs wiping.
-      oldSettingsInWay: !provisioningIsOurs && !!phone.provisioningUrl && !registeredToUs,
       modelProfileMissing: false,
       firmwareTooOld: false,
       provisioningRevertedAfterReset: phone.resetCount > 0 && !provisioningIsOurs && !!phone.provisioningUrl,

@@ -59,46 +59,31 @@ test("the Wi-Fi-capable patterns are identical on both sides", () => {
   assert.deepEqual(local, shared);
 });
 
-test("every refusal reason exists on both sides", () => {
+test("both copies refuse only a device nobody can name (reset first, 2026-09-14)", () => {
+  // ⛔ Izzy's rule: every ticked device is factory reset first. The adapter / cordless /
+  // door / Wi-Fi refusals are gone from BOTH copies; neither may bring one back alone.
   const shared = read("resetSafety.ts");
-  for (const reason of [
-    "ata_analog_lines",
-    "cordless_unpairs_handsets",
-    "door_or_paging",
-    "wireless_forgets_network",
-    "wireless_capable_unconfirmed",
-    "model_unknown",
-  ]) {
-    assert.ok(shared.includes(`"${reason}"`), `shared is missing ${reason}`);
-  }
-});
-
-test("the checks run in the same order on both sides", () => {
-  // ⛔ Shape refusals BEFORE link refusals. An analog adapter on a cable is still an
-  // analog adapter, so if a copy checked the link first it would clear one.
-  const shared = read("resetSafety.ts");
-  const order = ["ata_analog_lines", "cordless_unpairs_handsets", "door_or_paging", "wireless_forgets_network", "wireless_capable_unconfirmed", "model_unknown"];
-  const sharedPositions = order.map((r) => shared.lastIndexOf(`"${r}"`));
-  for (let i = 1; i < sharedPositions.length; i += 1) {
-    assert.ok(sharedPositions[i] > sharedPositions[i - 1], `shared: ${order[i]} must be decided after ${order[i - 1]}`);
-  }
   const local = fs.readFileSync(path.join(__dirname, "resetSafetyCore.ts"), "utf8").replace(/\r\n/g, "\n");
-  const localPositions = order.map((r) => local.lastIndexOf(`"${r}"`));
-  for (let i = 1; i < localPositions.length; i += 1) {
-    assert.ok(localPositions[i] > localPositions[i - 1], `local: ${order[i]} must be decided after ${order[i - 1]}`);
+  const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  for (const gone of ["ata_analog_lines", "cordless_unpairs_handsets", "door_or_paging", "wireless_forgets_network", "wireless_capable_unconfirmed"]) {
+    assert.ok(!code(shared).includes(`reason: "${gone}"`), `shared still refuses ${gone}`);
+    assert.ok(!code(local).includes(`reason: "${gone}"`), `local still refuses ${gone}`);
   }
+  assert.ok(code(shared).includes(`"model_unknown"`));
+  assert.ok(code(local).includes(`"model_unknown"`));
 });
 
 test("both copies answer the same way for the devices on Izzy's desk", () => {
   // The behavioural half. The text comparisons above catch a pattern going missing;
   // this catches the two implementations reaching different verdicts anyway.
   const cases: Array<[string, "wired" | "wireless" | "unknown", boolean]> = [
-    ["T53W", "unknown", false],
+    ["T53W", "unknown", true],
     ["T53W", "wired", true],
-    ["T53W", "wireless", false],
+    ["T53W", "wireless", true],
+    ["T42S", "unknown", true],
     ["GXP2170", "unknown", true],
-    ["HT812", "wired", false],
-    ["HT801", "unknown", false],
+    ["HT812", "wired", true],
+    ["HT801", "unknown", true],
     ["T46G", "unknown", true],
     ["", "wired", false],
   ];

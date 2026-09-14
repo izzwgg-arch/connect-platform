@@ -190,14 +190,19 @@ function cameBackFromReboot(phoneId: string, url: string) {
 
 /* ═══ 1. the phones themselves ═══════════════════════════════════════════════ */
 
-test("STRESS: a clean factory phone, pointed nowhere, is simply redirected", async () => {
+test("STRESS: every phone is factory reset first, THEN handed its settings", async () => {
+  // ⛔⛔ Izzy's rule (2026-09-11, restated 2026-09-14): reset first, always — even a
+  // phone that looks clean. This test used to assert the opposite.
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(1), model: "T54W", firmware: "96.86.0.15" }]);
   const p = state.phones[0];
   await a.inject({ method: "POST", url: `/desk-phones/runs/${id}/phones/${p.id}/assign`, payload: { extensionId: "e0" } });
+  await authorize(a, id, [p.id]);
+  await resetSent(a, id, p.id);
+  cameBackFromReboot(p.id, null as any);
   const out = await advance(a, id, p.id);
-  assert.equal(out.action, "set_provisioning", "a clean phone needs no wipe and no password");
-  assert.equal(state.phones[0].resetCount, 0);
+  assert.equal(out.action, "set_provisioning", "cleared, so now its settings");
+  assert.equal(state.phones[0].resetCount, 1);
 });
 
 test("STRESS: a phone already on Loopcom and registered is left completely alone", async () => {
@@ -220,20 +225,26 @@ test("STRESS: a phone on another provider is never wiped without a person saying
   assert.equal(state.phones[0].resetCount, 0);
 });
 
-test("STRESS: a stale Loopcom address gets the cheapest fix there is", async () => {
+test("STRESS: a registered phone on an old address is reset first, then told to re-read", async () => {
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(4), model: "T54W", provisioningUrl: "https://prov.oldprovider.net/x" }]);
   const p = state.phones[0];
   await a.inject({ method: "POST", url: `/desk-phones/runs/${id}/phones/${p.id}/assign`, payload: { extensionId: "e0" } });
   registered.add("101");
+  await authorize(a, id, [p.id]);
+  await resetSent(a, id, p.id);
+  // A cleared phone forgets its old address. (Coming back STILL pointed at the old
+  // provider is the manufacturer-redirect halt, tested separately.)
+  cameBackFromReboot(p.id, null as any);
   const out = await advance(a, id, p.id);
-  assert.equal(out.action, "check_sync", "registered to us: no restart, no office access, nobody notices");
+  assert.equal(out.action, "check_sync", "cleared and registered: ask it to re-read");
 });
 
 test("STRESS: a phone that is simply off is refused honestly, not retried forever", async () => {
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(5) }]);
   const p = state.phones[0];
+  await authorize(a, id, [p.id]);
   const out = await advance(a, id, p.id, { reachableOnLan: false });
   assert.equal(out.halted, true);
   assert.match(out.customerMessage, /switched on/i);
@@ -245,6 +256,9 @@ test("STRESS: a locked phone gets one documented default attempt and then asks a
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(6), model: "T29G" }]);
   const p = state.phones[0];
+  // ⛔ Reset first can't reach a locked phone without its password — so the password
+  // steps are how reset-first gets there.
+  await authorize(a, id, [p.id]);
   assert.equal((await advance(a, id, p.id, { locked: true })).action, "try_default_credentials");
   const second = await advance(a, id, p.id, { locked: true, defaultCredentialsTried: true });
   assert.equal(second.action, "ask_for_password", "never a second guess");
@@ -255,6 +269,7 @@ test("STRESS: a wrong password never becomes a third, fourth or hundredth guess"
   reset(); const a = await app(); const id = await run(a);
   await found(a, id, [{ mac: mac(7) }]);
   const p = state.phones[0];
+  await authorize(a, id, [p.id]);
   const actions = new Set<string>();
   for (let i = 0; i < 10; i += 1) {
     actions.add((await advance(a, id, p.id, { locked: true, defaultCredentialsTried: true })).action);

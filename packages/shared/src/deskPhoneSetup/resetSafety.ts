@@ -108,67 +108,11 @@ export function modelCanUseWifi(model: string | null | undefined): boolean {
 export function decideFactoryReset(s: ResetSubject): ResetSafety {
   const kind: DeviceKind = deviceKindFor(s.model);
 
-  if (kind === "ata") {
-    return {
-      allowed: false,
-      reason: "ata_analog_lines",
-      explain: "clearing an analog adapter erases the settings its plugged-in phones need",
-      customerMessage:
-        "We will not clear this box — the ordinary phones and fax plugged into it would stop " +
-        "working until somebody set them up again. We will point it at Loopcom without clearing it.",
-    };
-  }
-
-  if (kind === "cordless_base") {
-    return {
-      allowed: false,
-      reason: "cordless_unpairs_handsets",
-      explain: "clearing a cordless base unpairs every handset from it",
-      customerMessage:
-        "We will not clear this base station — every cordless handset would have to be paired to " +
-        "it again by hand. We will point it at Loopcom without clearing it.",
-    };
-  }
-
-  if (kind === "doorbell" || kind === "pager") {
-    return {
-      allowed: false,
-      reason: "door_or_paging",
-      explain: "clearing a door or paging device erases its door/relay/zone setup",
-      customerMessage:
-        "We will not clear this one — it would forget how your door release or speakers are set " +
-        "up. We will point it at Loopcom without clearing it.",
-    };
-  }
-
-  if (s.link === "wireless") {
-    return {
-      allowed: false,
-      reason: "wireless_forgets_network",
-      explain: "this phone is on Wi-Fi; a reset erases the network name and password",
-      customerMessage:
-        "This phone is on Wi-Fi. Clearing it would make it forget your Wi-Fi name and password, " +
-        "and nothing could reach it afterwards. Plug it in with a network cable and we will " +
-        "finish it, or Loopcom Support can do this one with you.",
-    };
-  }
-
-  // ⛔ A model with no wireless at all and no reported link is a wired phone. This is
-  // the majority, and it is what keeps the whole thing hands-off.
-  if (s.link === "unknown" && modelCanUseWifi(s.model)) {
-    return {
-      allowed: false,
-      reason: "wireless_capable_unconfirmed",
-      explain: "model can join Wi-Fi and did not say which; one question settles it",
-      customerMessage:
-        "One quick question before we clear this phone — we do not want it to forget your Wi-Fi.",
-      ask: {
-        question: "Is this phone plugged into your network with a cable?",
-        ifYes: "reset_allowed",
-        ifNo: "reset_refused",
-      },
-    };
-  }
+  // ⛔⛔ 2026-09-14: Izzy's rule is factory reset FIRST for every ticked device — desk
+  // phones, analog adapters, cordless bases, door/paging devices and Wi-Fi phones alike.
+  // The adapter / cordless / door / Wi-Fi refusals that stood here are removed on his
+  // explicit instruction (he was told the costs on 2026-09-11 and reaffirmed). The only
+  // refusal left is a device nobody can name, because a reset request needs a known shape.
 
   if (!String(s.model ?? "").trim()) {
     return {

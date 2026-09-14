@@ -11,7 +11,13 @@
  * nothing else. There is no "send this request to this device" action, because that
  * one action would be the whole vulnerability.
  *
- * ⛔ Least destructive first, always. A wipe is rung six, never rung one.
+ * ⛔⛔ FACTORY RESET FIRST, ALWAYS. Izzy's hard rule (2026-09-11, restated 2026-09-14):
+ * "The first thing that happens before connecting any phone to my system is a factory
+ * reset. Once it's on, factory reset it, send the profile, and then the wizard should
+ * restart that phone so it kicks in." Every ticked phone not already working on Loopcom is
+ * cleared once per setup BEFORE any settings are sent. Ticking the phone is the consent.
+ * ⛔ An earlier version of this file said "least destructive first, a wipe is rung six" —
+ * that was never his rule and must not come back.
  */
 
 import { decideReset, type PhoneRecord } from "./states";
@@ -48,8 +54,6 @@ export type PhoneCondition = {
   defaultCredentialsTried: boolean;
   /** The customer has given us a password for this phone. */
   haveCustomerCredentials: boolean;
-  /** Settings from the old system that cannot be safely overwritten in place. */
-  oldSettingsInWay: boolean;
   /** We have no settings profile for this model yet. */
   modelProfileMissing: boolean;
   /** Firmware too old to support what we need. */
@@ -179,14 +183,10 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
     };
   }
 
-  // 5 — registered to us but pointed somewhere stale: the cheapest fix there is.
-  // Sent from the PBX. No restart, no office access, nobody notices.
-  if (c.registeredToUs && !c.provisioningIsOurs) {
-    return { action: "check_sync", rung: 2, reason: "registered to us; ask it to re-read its settings" };
-  }
-
-  // 6 — old settings in the way. Reset, but only ever with a person's approval.
-  if (c.oldSettingsInWay) {
+  // 5 — ⛔⛔ FACTORY RESET FIRST. Nothing is sent to a phone that has not been cleared in
+  // this setup. `resetCount` is the stored record of a reset the office machine actually
+  // sent, so a phone that came back from its reset moves on to its settings below.
+  if (rec.resetCount === 0) {
     // ⛔ A deliberate "no" ends the conversation about this phone. Asking again is
     // how a wizard turns a choice into a wall.
     if (c.resetDeclined) {
@@ -204,11 +204,13 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
     const verdict = decideReset(rec);
     if (!verdict.allowed) {
       if (verdict.reason === "not_authorized") {
+        // Normally unreachable: ticking the phone records the approval. Kept so a phone
+        // that somehow has no approval on file is ASKED, never wiped by default.
         return {
           action: "request_reset_authorization",
-          rung: 6,
-          reason: "reset needed and nobody has approved it",
-          customerMessage: "This phone still holds settings from your previous phone system.",
+          rung: 1,
+          reason: "reset first, and no approval is on file for this phone",
+          customerMessage: "We clear every phone before connecting it to Loopcom.",
         };
       }
       return {
@@ -220,18 +222,24 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
         customerMessage: verdict.explain,
       };
     }
-    // ⛔ Prefer the PBX. A phone that has ever registered to us can be reset over SIP
-    // with no password and no office access at all.
-    if (c.registeredToUs) {
-      return { action: "reset_over_sip", rung: 7, reason: "approved reset, sent from the PBX" };
-    }
     if (c.reachableOnLan && (!c.locked || c.haveCustomerCredentials)) {
-      return { action: "reset_over_lan", rung: 6, reason: "approved reset, sent over the office network" };
+      return { action: "reset_over_lan", rung: 1, reason: "reset first, sent over the office network" };
     }
-    // Approved but we cannot deliver it. Fall through to the credential rungs.
+    // A phone registered to us can be reset from the PBX with no password.
+    if (c.registeredToUs) {
+      return { action: "reset_over_sip", rung: 1, reason: "reset first, sent from the PBX" };
+    }
+    // Locked (the password rungs below unlock the reset) or unreachable (halted below).
+  }
+
+  // 6 — cleared, registered to us but pointed somewhere stale: ask it to re-read.
+  if (c.registeredToUs && !c.provisioningIsOurs) {
+    return { action: "check_sync", rung: 2, reason: "registered to us; ask it to re-read its settings" };
   }
 
   // 7 — locked. One documented default attempt, then a person. Never a third guess.
+  // ⛔ A locked phone cannot be reset over the network without its password — that is the
+  // phone's own lock, not ours — so this is how reset-first reaches a locked phone.
   if (c.reachableOnLan && c.locked && !c.haveCustomerCredentials) {
     if (!c.defaultCredentialsTried) {
       return { action: "try_default_credentials", rung: 4, reason: "one documented default attempt" };
@@ -247,8 +255,9 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
         handOff: "support",
         reason: "locked, and the customer does not have the password",
         customerMessage:
-          "No problem — plenty of people never got that password. Loopcom Support will sort this " +
-          "phone out for you. The rest of your phones keep going.",
+          "No problem — without that password this phone has to be reset by hand once: hold its OK " +
+          "button for about 10 seconds until it asks to reset, confirm, then press Try again. " +
+          "The rest of your phones keep going.",
       };
     }
     return {
@@ -261,7 +270,7 @@ export function nextEscalation(c: PhoneCondition, rec: PhoneRecord): Escalation 
 
   // 8 — reachable, unlocked, wrong provisioning: just point it at us.
   if (c.reachableOnLan && !c.provisioningIsOurs) {
-    return { action: "set_provisioning", rung: 3, reason: "reachable and unlocked; redirect without a reset" };
+    return { action: "set_provisioning", rung: 3, reason: "cleared and reachable; hand it its settings" };
   }
 
   // 9 — pointed at us but not registered yet: make it fetch, then wait for Asterisk.

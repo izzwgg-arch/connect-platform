@@ -101,6 +101,18 @@ reset/reboot over the network, then the dropdowns, then the switch and extender.
   INSTALLED on Izzy's PC — asar sha256-identical to a clean export of `0f500b11`, updater deps
   complete, icon OK, 0 error lines. NOT published (feed unchanged).** ⏳ No reset has reached a
   real phone yet — that is Izzy's test on his rig. Detail in §20f.
+- ⛔⛔ **FACTORY RESET FIRST, ALWAYS — BUILT IN ALL FOUR LAYERS (plan §20h, 2026-09-14).**
+  Izzy: *"The first thing that happens before connecting any phone to my system is a factory
+  reset. Once it's on, factory reset it, send the profile, and then the wizard should restart
+  that phone."* The ladder resets every ticked phone with `resetCount === 0` BEFORE any
+  settings; **ticking the phone IS the approval** (`/selection` writes `resetAuthorizedAt` +
+  the ticked ids); a retry is a fresh go and resets again; the reset fence refuses only a
+  model nobody can name (adapter/cordless/door/Wi-Fi refusals removed from BOTH copies); a
+  401/403 on the reset is `refused: "locked"` and is never counted. ⛔ **Never bring back
+  "lightest step first, reset last" — that was never his rule.** ⛔ Honest limits: a phone
+  locked by another provider needs its password or one hands-on reset; `reset_over_sip` has
+  no executor; only Yealink has a network reset. Also: the live screen has **Cancel setup** +
+  a 10-minute no-progress timeout. ⏳ Proven with fakes; Izzy tests resets himself.
 - ⛔⛔ **"I RAN ONE SETUP AND NOTHING HAPPENED" (2026-09-14, plan §20g, `350d25ab`):** the only
   phone he ticked was already NEEDS_ATTENTION from 09-10 with no model, the driver skips
   finished phones, and **no screen ever called retry** — so nothing left the machine. Now:

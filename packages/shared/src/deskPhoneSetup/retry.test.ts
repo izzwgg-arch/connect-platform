@@ -60,10 +60,10 @@ test("EVERY state except REGISTERED can be retried, terminal or not", () => {
   }
 });
 
-test("a retry NEVER forgives a reset", () => {
-  // ⛔ The one rule that cannot bend. `resetCount` is the record of hardware we have
-  // actually wiped, so it is absent from what a retry clears — a second wipe is not
-  // recoverable and "we lost our place" must never become "we wiped it again".
+test("a retry is a fresh go, so the phone is factory reset first again", () => {
+  // ⛔⛔ CHANGED 2026-09-14 by Izzy's rule: factory reset first, always. A person pressing
+  // "try again" starts the sequence from step 1, so the reset count is cleared. Within
+  // one go the ladder still resets at most once, so nothing loops on its own.
   const plan = planPhoneRetry({
     state: "FAILED",
     resetCount: 1,
@@ -73,11 +73,12 @@ test("a retry NEVER forgives a reset", () => {
   assert.equal(plan.allowed, true);
   if (!plan.allowed) return;
   const clears = retryClears(plan);
-  assert.ok(!("resetCount" in clears), "resetCount must not be written by a retry");
-  assert.ok(!("resetAuthorizedAt" in clears), "authorisation is a person's decision, not a retry's");
+  assert.equal(clears.resetCount, 0, "the new go resets first");
+  assert.equal(clears.resetRequestedAt, null);
+  assert.ok(!("resetAuthorizedAt" in clears), "approval stays a person's decision, not a retry's");
   assert.ok(!("macAddress" in clears));
   assert.ok(!("extensionId" in clears));
-  assert.match(plan.explain, /reset history kept at 1/);
+  assert.match(plan.explain, /reset again first/);
 });
 
 test("a retry clears the stale sentence the customer keeps re-reading", () => {

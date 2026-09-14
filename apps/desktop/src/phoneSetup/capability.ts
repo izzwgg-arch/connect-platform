@@ -404,7 +404,11 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         //    stops answering precisely because it is doing what it was told.
         gate.lastActionAt.set(ip, t);
         const r = await sendAction(deps.http, ip, "reset", creds ?? YEALINK_DEFAULT_CREDENTIALS);
-        // ⛔ The phone is recorded as reset whether or not the reply arrived. A wipe
+        // ⛔⛔ A 401/403 is the phone REFUSING our password: nothing was wiped. Until
+        // 2026-09-14 this still recorded a reset, so a locked phone lost its one reset
+        // untouched and the password step that could unlock it never ran.
+        if (!r.ok && r.reason === "locked") return { ok: false, refused: "locked" };
+        // ⛔ Otherwise the phone is recorded as reset whether or not the reply arrived. A wipe
         // that "timed out" was very likely received — the phone stops answering
         // BECAUSE it is doing what it was told — so treating a timeout as "did not
         // happen" is how one wipe becomes two.

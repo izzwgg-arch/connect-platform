@@ -91,13 +91,10 @@ export type LocalResetVerdict = { allowed: true } | { allowed: false; reason: Re
  * refusals come first because an analog adapter on a cable is still an analog adapter —
  * being wired makes the NETWORK loss recoverable and does nothing for the lines.
  */
-export function decideLocalFactoryReset(model: string | null | undefined, link: LinkType): LocalResetVerdict {
-  const kind = deviceKindFor(model);
-  if (kind === "ata") return { allowed: false, reason: "ata_analog_lines" };
-  if (kind === "cordless_base") return { allowed: false, reason: "cordless_unpairs_handsets" };
-  if (kind === "doorbell" || kind === "pager") return { allowed: false, reason: "door_or_paging" };
-  if (link === "wireless") return { allowed: false, reason: "wireless_forgets_network" };
-  if (link === "unknown" && modelCanUseWifi(model)) return { allowed: false, reason: "wireless_capable_unconfirmed" };
+export function decideLocalFactoryReset(model: string | null | undefined, _link: LinkType): LocalResetVerdict {
+  // ⛔⛔ 2026-09-14: factory reset FIRST for every ticked device (Izzy's rule). The adapter,
+  // cordless, door/paging and Wi-Fi refusals were removed on his instruction, in step with
+  // the shared copy. Only a device nobody can name is refused.
   if (!String(model ?? "").trim()) return { allowed: false, reason: "model_unknown" };
   return { allowed: true };
 }

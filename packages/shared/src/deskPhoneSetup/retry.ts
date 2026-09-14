@@ -17,17 +17,17 @@
  * which is a different kind of event, so it gets its own function, its own audit and
  * its own rules.
  *
- * ⛔⛔ AND THE ONE THING A RETRY MUST NEVER DO IS FORGIVE A RESET. `resetCount` is
- * the record of how many times we have actually wiped a customer's hardware. It
- * survives a retry, it survives a new run, and it survives the app being closed —
- * losing our place must never turn into wiping somebody's phone a second time.
+ * ⛔⛔ CHANGED 2026-09-14: A RETRY IS A FRESH GO, SO IT GETS A FRESH RESET. Izzy's rule
+ * is factory reset first, always; a person pressing "try again" starts the sequence
+ * again from step 1. Within one go the ladder still resets at most once
+ * (`MAX_RESETS_PER_RUN`), so nothing can loop on its own — only a person can ask again.
  */
 
 import { type PhoneState, isTerminal } from "./states";
 
 export type RetryRecord = {
   state: PhoneState;
-  /** How many times this handset has actually been wiped. NEVER cleared by a retry. */
+  /** How many times this handset has been wiped in the current go. A retry starts a new go (reset first). */
   resetCount: number;
   attempts: number;
   /** Whether somebody has chosen who this phone belongs to. */
@@ -75,7 +75,7 @@ export function planPhoneRetry(rec: RetryRecord): RetryPlan {
     nextState,
     resetAttempts: true,
     explain: isTerminal(rec.state)
-      ? `person asked to try ${rec.state} phone again; returning to ${nextState}, reset history kept at ${rec.resetCount}`
+      ? `person asked to try ${rec.state} phone again; returning to ${nextState}, it will be reset again first (was ${rec.resetCount})`
       : `person asked to try a phone that was mid-flight in ${rec.state}; returning to ${nextState}`,
   };
 }
@@ -83,14 +83,18 @@ export function planPhoneRetry(rec: RetryRecord): RetryPlan {
 /**
  * What a retry clears and what it keeps.
  *
- * ⛔ Kept on purpose: `resetCount`, `resetRequestedAt`, `registeredAt`, the MAC, the
- * assignment. Cleared on purpose: the notes and the halt reason, because leaving the
+ * ⛔ Kept on purpose: the reset APPROVAL, `registeredAt`, the MAC, the assignment.
+ * Cleared on purpose: `resetCount` + `resetRequestedAt` (a new go resets first, Izzy
+ * 2026-09-14), the notes and the halt reason, because leaving the
  * old sentence on screen after a retry is exactly what made Izzy's second run look
  * identical to his first.
  */
 export type RetryClears = {
   state: PhoneState;
   attempts: number;
+  /** Reset first on the new go (2026-09-14). */
+  resetCount: 0;
+  resetRequestedAt: null;
   customerNote: null;
   technicalNote: null;
   haltedReason: null;
@@ -100,6 +104,8 @@ export function retryClears(plan: Extract<RetryPlan, { allowed: true }>): RetryC
   return {
     state: plan.nextState,
     attempts: 0,
+    resetCount: 0,
+    resetRequestedAt: null,
     customerNote: null,
     technicalNote: null,
     haltedReason: null,

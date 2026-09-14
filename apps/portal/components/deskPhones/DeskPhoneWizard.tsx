@@ -130,6 +130,9 @@ function describe(model: string | null): string {
   return describeKind(kind);
 }
 
+/** How long the live screen waits with no phone moving before it stops and says so. */
+export const LIVE_NO_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000;
+
 export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>("welcome");
   const [runId, setRunId] = useState<string | null>(null);
@@ -335,9 +338,30 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
    * approving a wipe, and typing a password. Found on the 2026-08-22 review pass:
    * before this, nothing called advance and setup could never finish.
    */
+  /**
+   * ⛔ Izzy, 2026-09-14: "the thing is still spinning … saying Preparing. There's no cancel
+   * button, and there should be a timeout." The live screen stops driving once no phone has
+   * moved for this long, says so plainly, and offers Keep trying or Cancel setup — never an
+   * endless spinner. (The standing PnP listener on this computer is unaffected.)
+   */
+  const [timedOut, setTimedOut] = useState(false);
+  const progressRef = useRef<{ sig: string; at: number }>({ sig: "", at: 0 });
+
+  const cancelSetup = useCallback(async () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
+    driverRef.current = null;
+    // Ends the run on the server, so reopening the wizard starts a clean setup.
+    if (runId) await apiPost(`/desk-phones/runs/${runId}/office-stop`, {}).catch(() => null);
+    onClose();
+  }, [runId, onClose]);
+
   const beginSetup = useCallback(async () => {
     if (!runId) return;
     setStep("live");
+    setTimedOut(false);
+    progressRef.current = { sig: "", at: Date.now() };
+    if (pollRef.current) clearInterval(pollRef.current);
     const bridge = desktop()?.phoneSetup ?? null;
     // ⛔ onProgress paints a row the moment a step STARTS — a factory reset is seconds of
     // silence, and a row that only changes afterwards shows nothing while it matters most.
@@ -356,6 +380,17 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         setSummary(out.summary);
         setNeeds(out.needs);
         setHints((h) => ({ ...h, ...(out.hints ?? {}) }));
+        // Progress = any phone's status or note changing. Nothing moving for the whole
+        // window stops the loop instead of spinning forever.
+        const sig = JSON.stringify((out.phones ?? []).map((p: any) => [p.id, p.status, p.note ?? null]));
+        const nowMs = Date.now();
+        if (sig !== progressRef.current.sig) progressRef.current = { sig, at: nowMs };
+        else if (nowMs - progressRef.current.at > LIVE_NO_PROGRESS_TIMEOUT_MS) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setTimedOut(true);
+          return;
+        }
         /*
           ⛔⛔ THE FINISHED SCREEN MEANS EVERY PHONE CAN MAKE CALLS (Izzy, 2026-09-14: "the
           confirmation screen should never come up unless the phone is up and registered,
@@ -682,8 +717,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 <>
                   <h3>{phones.length === 1 ? "We found 1 desk phone" : `We found ${phones.length} desk phones`}</h3>
                   <p className="dps-sub">
-                    Tick the phones you want set up. Phones that are already connected are left
-                    exactly as they are unless you tick them.
+                    Tick the phones you want set up. Every phone you tick is factory reset first,
+                    then given its Loopcom settings and restarted. Phones you do not tick are left
+                    exactly as they are.
                   </p>
                   {phones.length > 0 && (
                     <div className="dps-picks">
@@ -1002,6 +1038,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
         })()}
 
         {step === "live" && !needs.length && (
+          <>
           <div className="dps-wz-body">
             <div style={{ display: "flex", alignItems: "baseline", gap: 11, marginBottom: 11 }}>
               <div style={{ font: "700 22px/1 Inter, sans-serif", letterSpacing: "-0.025em" }}>
@@ -1036,13 +1073,26 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 </div>
               ))}
             </div>
-            <p className="dps-hint" style={{ marginTop: 14 }}>
-              {/* ⛔ Honest: the office machine is doing the work, so the window has to
-                  stay open. Saying "you can close this" here would quietly stop the
-                  setup the moment somebody believed it. */}
-              Keep this window open while we work &mdash; you can carry on using your computer.
-            </p>
+            {timedOut ? (
+              <p className="dps-hint" style={{ marginTop: 14, color: "var(--dps-warn)" }}>
+                We stopped waiting &mdash; nothing changed for 10 minutes. Check the phone is plugged in and
+                switched on, then press Keep trying, or cancel this setup.
+              </p>
+            ) : (
+              <p className="dps-hint" style={{ marginTop: 14 }}>
+                {/* ⛔ Honest: the office machine is doing the work, so the window has to
+                    stay open. Saying "you can close this" here would quietly stop the
+                    setup the moment somebody believed it. */}
+                Keep this window open while we work &mdash; you can carry on using your computer.
+              </p>
+            )}
           </div>
+          <div className="dps-wz-foot">
+            <button className="dps-btn dps-btn-g" onClick={() => void cancelSetup()}>Cancel setup</button>
+            <span className="dps-sp" />
+            {timedOut && <button className="dps-btn dps-btn-p" onClick={() => void beginSetup()}>Keep trying</button>}
+          </div>
+          </>
         )}
 
         {step === "done" && summary && (
