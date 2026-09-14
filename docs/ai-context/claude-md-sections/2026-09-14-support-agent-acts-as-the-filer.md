@@ -18,9 +18,16 @@ customer's PC through the Coworker in the Loopcom app with the user's approval p
   returned); the act route refuses every write without a delivered live notice and after any STOP; STOP/GO ride the
   one existing FIX reply sweep (owner numbers only, atomic, negated go refused, STOP works after expiry). New table
   `SupportAgentNotice` (migration `20260914230000`).
-- ⏳ **NOT BUILT:** phase 3 system lane (own worktree, tests, GO → push/deploy, verify, rollback), phase 4 customer
-  conversation, phase 5 Coworker bridge (needs a desktop build for a forced-approval flag), watcher MCP tools + per-tenant
-  cap + guardrail rewrite + read-only SSH keys. Nothing has been sent through `/act` by the watcher.
+- ✅ **Watcher hooked up (`84a5fc16`, api deployed, watcher restarted — handoff §7):** MCP tools `act_as_filer` /
+  `post_owner_notice` / `get_owner_notices`; guardrails now allow fixing within the filer's permissions (no commit/push/
+  deploy, no direct PBX write, no customer messages still stated); 10 per company per day (backstop 50); 30-min runs;
+  the customer may be told "fixed" only when the audit trail shows a 2xx act write. ⛔ Restart = `Stop-Process` the node
+  pid (the scheduled-task Stop/Start did NOT replace it). ⛔ **Writes still OFF** — `SUPPORT_AGENT_WRITES_ENABLED` must be
+  set by Izzy (AGENTS.md rule 10) or flipped in code.
+- ⏳ **NOT BUILT:** phase 3 system lane, phase 4 customer conversation, phase 5 Coworker bridge (desktop build), read-only
+  SSH keys (a PBX write). No ticket has run with the new tools yet.
+- ⛔ **Incident 22:29Z:** Izzy's office IP `50.48.58.53` auto-banned by nginx (req/min>600 + 404>60/5m) by an open Deploy
+  Center tab polling a 404 deploy-job log; expires 23:29Z; close the tab first. Handoff §8.
 - ⛔ **3GTH9M WAS worked automatically** (claimed 20:33Z, report 20:45Z, widget update delivered 20:46Z, unread) — the
   ticket MCP tool's "NOBODY HAS INVESTIGATED THIS YET" ignores agent runs and misled the second session; and nothing
   alerts Izzy when a report says a code fix is needed. Both ⏳ unfixed.

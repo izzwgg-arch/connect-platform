@@ -47,7 +47,7 @@ enforced by the API, never by the agent's judgement:
 | 3 | System-wide lane: own worktree, tests, push+deploy only after GO, verify, rollback | not built |
 | 4 | Customer conversation (SupportMessage/SMS, resume session on reply, "fixed" only with proof) | not built |
 | 5 | Coworker bridge: `computer_powershell` on the filer's linked desktop, forced approval | not built |
-| — | Watcher: MCP tools for act/owner-notice, per-tenant cap, guardrails rewrite, read-only SSH keys | not built |
+| — | Watcher: MCP tools act_as_filer / post_owner_notice / get_owner_notices, fixing guardrails, 10/company cap, 30-min runs, api `changeWasMade` from the audit trail | ✅ `84a5fc16` DEPLOYED + watcher restarted — see §7. ⛔ writes still OFF (`SUPPORT_AGENT_WRITES_ENABLED` unset). Read-only SSH keys NOT done (PBX write — Izzy's call) |
 
 ### Phase 1 — `POST /admin/support/escalations/:reference/act` { method, path, body? }
 
@@ -158,3 +158,50 @@ browser. Enforced in code:
   → "All migrations have been successfully applied"; container `.build-commit` **12d2c318** (a later
   commit that contains `31dc0e05` and `cc8211c1`), restarts 0, healthy; `registerSupportAgentNoticeRoutes` and the
   `checkOwnerNoticeGate` wiring present in the container; `SupportAgentNotice` table exists, 0 rows.
+- api `84a5fc16` (watcher hookup's api half — `verifiedChangeOnTicket`): ✅ job `488b8c20`, container
+  `.build-commit` 84a5fc16, restarts 0, healthy, symbol present in the container.
+
+## 7. The watcher hookup (`84a5fc16`, 2026-09-14)
+
+- **MCP tools** (`tools/loopcom-support-mcp/server.mjs` + `loopcom.mjs`): `act_as_filer {reference, method, path,
+  body}` → `POST …/act`; `post_owner_notice {reference, scope, summary}`; `get_owner_notices {reference}`. All three in
+  `ALLOWED_TOOLS` (under `-p` an unlisted tool is DENIED). The client adds no gate; a 4xx comes back as an error
+  carrying the api's reason (e.g. `409 stopped_by_owner`).
+- **Guardrails** (`watch.mjs` GUARDRAILS): "Investigate and REPORT. Do not fix anything." is gone. The agent may fix
+  what the filer may do, ONLY via act_as_filer, after a tenant owner notice, checking get_owner_notices before each
+  further change, posting a system notice and reporting (not attempting) anything beyond one company, and verifying
+  before calling it fixed; the report must list each write and its status. ⛔ Kept verbatim because
+  `stress.test.mjs` E pins them AND the api cannot enforce them: "Do NOT commit, push, or deploy", "never write to the
+  PBX", "Never message, email or text a customer", Bash read-only.
+- **Caps** (`triage.mjs`): `tenantCap: 10` per company per UTC day, customer lane only, keyed `tenantKeyOf` (tenantId,
+  company-name fallback, unknown company never capped); claims now store `tenant`; lane backstop `customerCap` 10 → 50.
+  Env: `WATCH_TENANT_CAP`. Run timeout 20 → 30 min.
+- **api** `customerUpdate.ts`: `verifiedChangeOnTicket(db, escalationId)` = any `SUPPORT_AGENT_ACT_WRITE` audit row on
+  the ticket with `metadata.statusCode` 2xx (audit `sanitizeEventPayload` keeps `statusCode`). Passed to
+  `reviewCustomerMessage` as `changeWasMade`, and the rewrite model is told what our records show. Fails closed.
+  ⛔ `REWRITE_SYSTEM_PROMPT` deliberately untouched — `customerUpdate.test.ts` pins "INVESTIGATION, not a repair" and
+  "NEVER say we fixed it"; the prompt already allows the claim when the input says a change was made.
+- ⛔ **`stress.test.mjs` is BINARY to git since `7f73086a`** — it holds literal NUL and RLO bytes as hostile-input
+  fixtures. It was left untouched; new watcher tests live in `hands.test.mjs` (package.json test script runs both).
+- ⛔⛔ **RESTARTING THE WATCHER: `Stop-ScheduledTask` + `Start-ScheduledTask` did NOT replace the node process** (task
+  read Running, Start was a no-op; the old `node watch.mjs` from 2026-09-11 kept running the OLD code). What worked:
+  confirm the heartbeat is not `working`, `Stop-Process` the `node … watch.mjs` pid — `run-watcher.cmd` relaunched it
+  within seconds — then read `logs/watcher.log` for the new startup line ("customers 10/day per company (backstop 50)
+  … timeout 30m"). New pid 9484 started 22:44:35Z.
+- ⏳ **To make it live:** `SUPPORT_AGENT_WRITES_ENABLED=1` must reach the api. ⛔ AGENTS.md rule 10 forbids agents
+  editing `/opt/connectcomms/env/` — so Izzy sets it, or a code change flips the default. Until then every act_as_filer
+  write answers `writes_disabled` and the agent reports instead.
+- ⏳ Not proven: no ticket has run with the new tools; no owner notice texted; no real STOP/GO.
+
+## 8. Incident found during the watcher restart: Izzy's office IP auto-banned by nginx (2026-09-14 22:29:11Z)
+
+- `50.48.58.53` (Izzy's office) in `/etc/nginx/connectcomms/denylist.json`: reason **"req/min>600, 404>60/5m"**,
+  req5m 670, s404 74, expires **23:29:11Z** (60-min TTL). Every request 403s on both hostnames — portal, desktop app,
+  Coworker link, and the watcher (poll_failed from 22:37Z).
+- **Cause: an open Deploy Center tab** (`app.loopcom.net/admin/deploy-center`) polling
+  `/api/admin/deploy/jobs/10fee31a-fd98-45b7-9071-0e856e6bb7e5/log?lines=200` (portal job, branch
+  `codex/profile-menu`): 96 × 404 with no backoff, and still polling (245 × 403) after the ban. NOT the session's curl
+  probes — 4 × 401 on api paths, which `monitor.sh` deliberately does not count.
+- Unblock (a person's job — rule 10): close that tab first or it re-bans; then wait for expiry or run
+  `/opt/connectcomms/scripts/unblock_ip.sh 50.48.58.53` once the 5-minute window is clean. Trust's office
+  `66.250.99.208` was unaffected (200s). Follow-up task filed: make Deploy Center stop polling a 404 job log.
