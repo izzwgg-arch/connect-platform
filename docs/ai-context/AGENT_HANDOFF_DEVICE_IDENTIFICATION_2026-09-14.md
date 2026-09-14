@@ -366,6 +366,30 @@ nothing was wiped, and the one reset per setup is still unspent.
 live (the token came back 200); the `dologin` half needs Izzy's password, which only he types. Failure stays safe:
 a refused login falls back to the PnP power-cycle.
 
+## 10e. Round 6 — no password? then ask for the SERIAL (the second door), and rc.16 is installed
+
+**Izzy, 2026-09-14: "If the user doesn't have the password, it should ask for the serial number."**
+Before this, "I don't know it" ended the phone at the ladder's hands-on halt, even though a second key
+existed. The two keys to a Grandstream are the **admin password** (office-network reset) and the
+**serial number** (add it to GDMS, then reset through the cloud). Now the wizard offers both, in that order.
+
+- **shared** `DeviceMechanisms` gains **`resetFallback: "vendor_cloud" | "none"`** — the second door, set only
+  when this deployment's cloud really implements a wipe for that brand and it is not already the primary.
+  Sweep-tested: the fallback is never the same door as the primary and never claimed without a real cloud wipe.
+- **`/advance`** takes a new observed flag `makerCloudUnavailable` and, when `passwordUnavailable` is true, the
+  brand has a `resetFallback`, the one reset is unspent, the phone is ticked and not already registered,
+  converts the halt into `reset_over_lan` + `via: "vendor_cloud"` — which runs `/prepare`, comes back
+  `serial_required`, and shows the serial screen built in round 3.
+- **driver** reports `makerCloudUnavailable` (set by "I can't find it" or a refusal that will not change), so when
+  BOTH doors are shut the ladder's honest hands-on halt stands instead of asking for the serial again.
+- ⛔ With no cloud configured there is no false promise: no password still ends at hands-on (tested).
+
+**Desktop `0.1.17-rc.16` BUILT from a clean export of `3aec620e` and INSTALLED on Izzy's PC.** exe
+100,532,785 bytes sha256 `3BBDBAB9…6C70`; installed asar `D1913541…E81D` byte-identical to the build; registry
+rc.16; log banner rc.16 with 0 errors; PnP armed; 167/167 desktop tests; tsc 0. The shipped
+`dist/phoneSetup/grandstream.js` carries `cgi-bin/access` ×3, `Referer` ×5, `sha256` ×6, and `capability.js`
+carries the login cap. ⛔ NOT published — the feed still reads rc.10 (the updater refused it as a downgrade).
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

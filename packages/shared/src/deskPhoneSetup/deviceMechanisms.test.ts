@@ -28,8 +28,11 @@ test("a Grandstream is cleared over the LAN with the password, NOT the serial-ba
   assert.equal(m.reset, "lan_http");
   assert.equal(m.restart, "lan_http");
   assert.equal(m.settings, "pnp");
-  assert.equal(m.cloudPlatform, null);
-  assert.equal(m.cloudClaimNeedsSerial, false);
+  // ⛔ The cloud is still NAMED — not as the way this phone is cleared, but as the second door for
+  // a customer who does not have the password. `reset` above is what actually happens by default.
+  assert.equal(m.resetFallback, "vendor_cloud");
+  assert.equal(m.cloudPlatform, "gdms");
+  assert.equal(m.cloudClaimNeedsSerial, true);
 });
 
 test("a Grandstream with no cloud at all is still cleared and restarted over the LAN", () => {
@@ -39,6 +42,20 @@ test("a Grandstream with no cloud at all is still cleared and restarted over the
     assert.equal(m.restart, "lan_http");
     assert.equal(m.cloudPlatform, null);
   }
+});
+
+test("⛔ the SECOND door: a Grandstream whose password we lack can still be cleared through the cloud", () => {
+  // The LAN reset is the primary (password); the cloud is the fallback (serial off the label).
+  const withCloud = deviceMechanismsFor("grandstream", [gdms()]);
+  assert.equal(withCloud.reset, "lan_http");
+  assert.equal(withCloud.resetFallback, "vendor_cloud");
+  assert.equal(withCloud.cloudClaimNeedsSerial, true, "the fallback is what needs the serial");
+
+  // No cloud connected: there is no second door, and we must not pretend there is.
+  assert.equal(deviceMechanismsFor("grandstream", []).resetFallback, "none");
+  assert.equal(deviceMechanismsFor("grandstream", [gdms({ supportedActions: ["lookup", "reboot"] })]).resetFallback, "none");
+  // Yealink has no maker cloud here at all.
+  assert.equal(deviceMechanismsFor("yealink", [gdms(), rps]).resetFallback, "none");
 });
 
 test("a brand with NO local executor but a cloud that can restart uses the cloud for restart", () => {
@@ -107,6 +124,13 @@ test("SWEEP: every catalogue brand, with every cloud shape, keeps the safety rul
       }
       // ⛔ Never clear or restart a phone that nothing can then hand its settings.
       if (m.reset !== "not_available" || m.restart === "vendor_cloud") assert.notEqual(m.settings, "not_available");
+      // ⛔ The fallback is never the same door as the primary, and only exists with a real cloud wipe.
+      if (m.resetFallback === "vendor_cloud") {
+        assert.notEqual(m.reset, "vendor_cloud", `${brand} offers the cloud twice`);
+        const r = readiness.find((x) => x.cloudConfigured && !x.redirectOnly && x.supportedActions.includes("factory_reset"));
+        assert.ok(r, `${brand} claims a cloud fallback without a cloud that can wipe`);
+        assert.equal(r.manufacturer === "poly" ? "polycom" : r.manufacturer, brand);
+      }
       // Without any cloud, the answer is exactly the office machine's existing gates.
       if (readiness.length === 0) {
         if (m.settings !== "hand_configured") {

@@ -50,6 +50,16 @@ export type DeviceMechanisms = {
   /** The catalogue brand, or null when the text named no brand we know. */
   brand: VendorSlug | null;
   reset: ResetMechanism;
+  /**
+   * The SECOND door when the first one cannot be opened.
+   *
+   * ⛔⛔ The LAN reset needs the phone's admin password and the cloud reset needs its serial number.
+   * A customer who does not have the password is not out of options — the maker's cloud can still
+   * clear the phone once it is added there, which needs the serial off its label (Izzy, 2026-09-14:
+   * "if the user doesn't have the password, it should ask for the serial number"). `vendor_cloud`
+   * here means exactly that fallback exists for this brand in this deployment.
+   */
+  resetFallback: "vendor_cloud" | "none";
   restart: RestartMechanism;
   settings: SettingsMechanism;
   /** Which maker cloud does the cloud steps, when any does. */
@@ -73,8 +83,8 @@ export function deviceMechanismsFor(
   // cleared — a wipe erases the only configuration it can ever have.
   if (!vendorSupportsPbxProvisioning(vendor)) {
     return {
-      brand, reset: "not_available", restart: "not_available", settings: "hand_configured",
-      cloudPlatform: null, cloudClaimNeedsSerial: false,
+      brand, reset: "not_available", resetFallback: "none", restart: "not_available",
+      settings: "hand_configured", cloudPlatform: null, cloudClaimNeedsSerial: false,
     };
   }
 
@@ -104,10 +114,16 @@ export function deviceMechanismsFor(
       : pnp ? "power_cycle"
         : "not_available";
 
-  const usesCloud = reset === "vendor_cloud" || restart === "vendor_cloud";
+  // The maker's cloud as the SECOND door: only when it is not already the first one, and only when
+  // this deployment's cloud really implements a wipe for this brand.
+  const resetFallback: DeviceMechanisms["resetFallback"] =
+    reset !== "vendor_cloud" && cloudDoes("factory_reset") ? "vendor_cloud" : "none";
+
+  const usesCloud = reset === "vendor_cloud" || restart === "vendor_cloud" || resetFallback === "vendor_cloud";
   return {
     brand,
     reset,
+    resetFallback,
     restart,
     settings,
     cloudPlatform: usesCloud && cloud ? cloud.platform : null,

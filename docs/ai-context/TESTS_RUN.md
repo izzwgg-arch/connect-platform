@@ -2,6 +2,27 @@
 
 Newest entries first.
 
+## Support agent hands — phase 1 act-as-filer + phase 2 owner notices STOP/GO (2026-09-14, `d1f2aa46` `cc8211c1` `31dc0e05`)
+
+- api `node --experimental-test-module-mocks --import tsx --test src/support/supportAgentNotice.test.ts
+  src/support/actAsFilerRoutes.test.ts src/support/agentRunRoutes.test.ts src/support/supportMessages.test.ts
+  src/support/customerUpdate.test.ts src/agentFixByText.test.ts` → **150/150 pass** (phase 1 alone: 116/116).
+  New: path check (every blocked prefix incl. /api + case, URLs, traversal, encoded traversal, backslash, token= /
+  tenantContext=), SUPER_ADMIN-only, token claims from the DB row, tenant mismatch / platform filer / alarm / stale /
+  inactive refused, writes off without the env switch, per-tenant cap by distinct tickets, write refused without a
+  live owner notice or after STOP; notice parser (word+code, negated go refused, FIX not a notice), gate (no notice,
+  undelivered SMS, expired, system waits for GO), replies (STOP halts every later write, one reply acts once,
+  stranger ignored, GO on tenant = not needed, GO after expiry refused, STOP after expiry works, code only stored
+  hashed and never returned by the route, no new notice after STOP, alarm cannot get a tenant notice).
+- Source guards replayed against HEAD by counting the asserted symbols in `git show HEAD:<file>`: every one **0** in HEAD,
+  present in the worktree. (A scratchpad-copy replay died on `Cannot find module 'fastify'` — that proved nothing.)
+- `prisma validate` ✅; api `tsc --noEmit` 84 errors = baseline, none in touched files; `packages/shared` tsc 0.
+- New files scanned for stray control bytes: 0 each (after the `d1f2aa46` binary-file mistake, fixed in `cc8211c1`).
+- Live: `/api/admin/support/escalations/3GTH9M/act` → **401** without a token on both hostnames; health 200 on both.
+- ⛔ Not proven: no request has gone through `/act` from the watcher, no owner notice has been texted, no real STOP/GO
+  processed; `SUPPORT_AGENT_WRITES_ENABLED` unset. Phase-2 deploy: first attempt `33fb81a7` stopped before migrate
+  (another session's portal heavy job) — changed nothing; retry result is in the handoff §6.
+
 ## Profile menu implementation + extension-wide DND (2026-09-14)
 
 - Portal TypeScript `--noEmit --incremental false`: PASS.
@@ -28,6 +49,21 @@ Chrome visual/interaction checks passed: light/dark, Quick settings/Voicemail ta
 - ✅ Backfill dry-run then apply (Trust 101/105/107 → `created`); PBX read-back: busy.wav sha256 == unavail.wav for all
   three, owner asterisk, 8 kHz mono PCM; 106's own busy.wav unchanged.
 - ⛔ Not proven: no real busy/declined call to ext 101 has played the recording yet.
+
+---
+
+## Desk-phone: no password → ask for the SERIAL (second door) (2026-09-14, round 6)
+
+- shared desk-phone suite **158/158**, tsc 0. New: `resetFallback` on `DeviceMechanisms` (Grandstream+GDMS →
+  `vendor_cloud`; no cloud or a cloud that cannot wipe → `none`; Yealink → `none`), plus a sweep invariant that the
+  fallback is never the same door as the primary and never claimed without a real cloud wipe for that brand.
+- api desk-phone routes **92/92**. New: `passwordUnavailable` + a cloud that can wipe → `reset_over_lan` with
+  `via: vendor_cloud` + the folder (so the wizard asks for the serial); `passwordUnavailable` +
+  `makerCloudUnavailable` → halted, hands-on message (both doors shut); no cloud configured → halted, no false promise.
+- portal driver **44/44**, tsc 0 (the advance body now carries `makerCloudUnavailable`).
+- desktop rc.16: **167/167**, tsc 0, built from a clean export of `3aec620e` and installed; shipped asar verified to
+  contain `cgi-bin/access`, `Referer`, `sha256` and the login cap.
+- ⛔ Not proven: a real Grandstream login/reset. That needs Izzy's password on the handset.
 
 ---
 

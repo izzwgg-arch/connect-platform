@@ -398,6 +398,10 @@ export function createSetupDriver(
         resetDeclined: m.resetDeclined,
         provisioningHandoffFailed: m.provisioningHandoffFailed,
         resetRefusedLocally: m.resetRefusedLocally,
+        // ⛔ The maker's cloud is spent for this phone (no serial, or a refusal that will not
+        // change). Travels so the server knows the SECOND door is shut too and can end the phone
+        // honestly at "reset it by hand" instead of offering the serial again.
+        makerCloudUnavailable: m.cloudUnavailable,
         reachableOnLan: Boolean(phone.ip),
       }).catch(() => null);
       if (!decision?.ok) continue;

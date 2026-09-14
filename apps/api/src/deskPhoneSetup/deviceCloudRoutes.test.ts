@@ -624,6 +624,50 @@ test("once its reset is spent, a Grandstream is handed its folder and restarted 
   assert.equal(out.provisioningUrl, FOLDER);
 });
 
+test("⛔ no password: the phone is NOT abandoned — the maker's cloud route is offered so the wizard can ask for the serial", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base } = await tickedAssigned(app);
+  const out = body(await app.inject({
+    method: "POST", url: `${base}/advance`,
+    payload: { reachableOnLan: true, locked: true, defaultCredentialsTried: true, passwordUnavailable: true },
+  }));
+  assert.equal(out.action, "reset_over_lan", JSON.stringify(out));
+  assert.equal(out.via, "vendor_cloud", "the second door: clear it through the maker's cloud");
+  assert.equal(out.provisioningUrl, FOLDER, "the office machine listens before the wipe");
+  assert.equal(out.halted, false);
+});
+
+test("⛔ no password AND no serial: both doors shut, so the phone ends honestly at hands-on", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base } = await tickedAssigned(app);
+  const out = body(await app.inject({
+    method: "POST", url: `${base}/advance`,
+    payload: {
+      reachableOnLan: true, locked: true, defaultCredentialsTried: true,
+      passwordUnavailable: true, makerCloudUnavailable: true,
+    },
+  }));
+  assert.equal(out.via, undefined, "no second door is offered once the serial is refused too");
+  assert.equal(out.halted, true);
+  assert.match(String(out.customerMessage), /by hand|Support/i);
+});
+
+test("with a cloud that cannot wipe, no password still ends at hands-on (no false promise)", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER, { registry: registry({ unconfigured: true }) });
+  const { base } = await tickedAssigned(app);
+  const out = body(await app.inject({
+    method: "POST", url: `${base}/advance`,
+    payload: { reachableOnLan: true, locked: true, defaultCredentialsTried: true, passwordUnavailable: true },
+  }));
+  assert.equal(out.via, undefined);
+  assert.equal(out.halted, true);
+});
+
 test("an unticked Grandstream is never given a mechanism at all", async () => {
   reset();
   const app = await makeApp(CUSTOMER);

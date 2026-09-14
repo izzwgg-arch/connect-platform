@@ -1286,6 +1286,12 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       // app too old to have the step). Can only make LESS happen: the phone gets the
       // non-destructive hand-off instead.
       resetRefusedLocally: z.boolean().optional(),
+      /**
+       * The maker's cloud is spent for this phone: the person has no serial number for it, or the
+       * cloud refused in a way that will not change. ⛔ Can only make LESS happen — it closes the
+       * SECOND door, so the phone ends at the honest hands-on halt instead of being asked again.
+       */
+      makerCloudUnavailable: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!observed.success) return reply.status(400).send({ error: "invalid_request" });
 
@@ -1435,13 +1441,34 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // with GDMS) is told `via: "vendor_cloud"`: the office machine listens, and the step itself
     // runs through `/prepare`. Every other brand is answered exactly as before this existed.
     let via: "vendor_cloud" | null = null;
-    if (
-      (decision.action === "reset_over_lan" || decision.action === "set_provisioning")
-      && registry.providerFor(manufacturerFromText(phone.vendor))
-    ) {
+    if (registry.providerFor(manufacturerFromText(phone.vendor))) {
       const mechanisms = deviceMechanismsFor(phone.vendor, await cloudReadiness());
       if (decision.action === "reset_over_lan" && mechanisms.reset === "vendor_cloud") via = "vendor_cloud";
       if (decision.action === "set_provisioning" && mechanisms.restart === "vendor_cloud") via = "vendor_cloud";
+
+      // ⛔⛔ THE PASSWORD IS NOT THE ONLY KEY TO A PHONE (Izzy, 2026-09-14: "if the user doesn't
+      // have the password, it should ask for the serial number"). The office-network reset needs the
+      // admin password; the maker's cloud needs the device added there, which needs the serial off
+      // its label. So a person who does not have the password is NOT finished — the ladder's
+      // "reset it by hand" halt becomes the cloud route, and the wizard asks for the serial.
+      // ⛔ Only while the one reset is still unspent, the phone is ticked, it is not already working,
+      // and the person has not already told us the serial is unavailable too.
+      if (
+        !via
+        && mechanisms.resetFallback === "vendor_cloud"
+        && observed.data.passwordUnavailable === true
+        && observed.data.makerCloudUnavailable !== true
+        && Number(phone.resetCount ?? 0) === 0
+        && resetApprovedAt
+        && !registeredToUs
+      ) {
+        decision = {
+          action: "reset_over_lan",
+          rung: 1,
+          reason: "no password for the office-network reset; the maker's cloud can clear it once the serial is given",
+        };
+        via = "vendor_cloud";
+      }
     }
 
     // The folder a reset phone needs, resolved only when the instruction is to
