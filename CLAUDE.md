@@ -91,6 +91,19 @@ Full developer doc: **`docs/ai-context/AGENT_HANDOFF_YEALINK_MANAGED_PROVISIONIN
   the handoff; test on a designated test Yealink on Loopcom Demo only.
 - ⛔ `.managed-phone-test-pg/` (a running local Postgres data dir) and `.managed-phone-baseline.*`
   are untracked scratch in the repo root — never commit them.
+- ✅ **DEPLOY STATE (2026-09-14): api DEPLOYED and container-verified at `0f17fe1a`** — migration
+  `20260914150000_managed_desk_phones` applied 15:17Z (table present, **0 rows**), `verify: container
+  commit 0f17fe1a1893 matches target`, 0 restarts, 0 error-level lines; on BOTH hostnames health 200,
+  `/api/phone-provisioning/<mac>/<mac>.cfg` → **404** (inert, handler-owned), `/api/desk-phones/managed/*`
+  → 401 without a token; neither `MANAGED_PHONE_PROVISIONING_ENABLED` nor `YEALINK_RPS_ENABLED` is set.
+  ⛔ **The FIRST deploy attempt failed `failed to bind host port 127.0.0.1:3004: address already in use`
+  (candidate never started) — a transient port clash, not the code; production stayed on `882c9bee`
+  and a plain retry succeeded.** An in-image `node -e require(...)` probe hit
+  `Cannot find module '@connect/shared/webrtcIncidentAlerts'` — an artifact of bypassing tsconfig
+  `paths`, not a boot defect (prod already loads that file). ✅ **Portal DEPLOYED** (container
+  `.build-commit` `93b81e81` ⊇ `0f17fe1a`); "Prepare a Yealink for delivery" is in the shipped
+  `settings/desk-phones` page chunk — hidden in the UI because capabilities answers `enabled:false`.
+  ⏳ Nobody has opened the managed mode in a browser (it cannot show until enabled).
 
 ## ⛔⛔ AGENT HANDOFF — the desk-phone RECORD WRITER exists now, and two defects that would have broken it on day one were caught BEFORE it shipped (2026-09-14) — READ FIRST before touching `provisioningRecordWriter.ts`, before letting ANY route write another tenant's PBX data, before writing a PBX test fixture, or before assigning one of Izzy's rig phones in the wizard
 
