@@ -320,8 +320,10 @@ once into the wizard's existing password box — now PREFERS over the serial-bas
 - **driver**: passes `vendor` to the desktop for the brand-specific calls. A Grandstream now takes the
   `reset_over_lan` local path (login → RESET), not the GDMS path. GDMS reset/restart stay wired for a future
   brand-in-account case; GDMS lookup still runs read-only for model discovery.
-- **desktop `0.1.17-rc.15`** (needs install — the desktop is what talks to the phone). No portal/api desktop
-  dependency beyond this.
+- **desktop `0.1.17-rc.15`** — BUILT from a clean export of `c7f5459c` and INSTALLED on Izzy's PC 2026-09-14
+  (exe 100,530,512 bytes sha256 `bb669f64…`; asar `91fc4013…` identical build vs installed; registry rc.15;
+  log banner rc.15, 0 errors, PnP armed; `grandstream.js` carries `dologin`+`api-sys_operation`, `capability.js`
+  carries `isGrandstream`). ⛔ NOT published — the fleet feed stays rc.10 (the updater refused it as a downgrade).
 
 **Tests:** shared 708/708 (deviceMechanisms flipped to LAN-first; deviceIdentification capabilities; the
 invariant "only Yealink over HTTP" updated to Yealink+Grandstream); api deviceCloudRoutes 33/33 (Grandstream
