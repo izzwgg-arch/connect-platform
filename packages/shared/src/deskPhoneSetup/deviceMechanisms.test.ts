@@ -20,17 +20,14 @@ const rps: ProviderReadiness = {
   claimRequiresSerial: false, redirectOnly: true, note: "",
 };
 
-test("a Grandstream is cleared over the LAN with the password, NOT the serial-based cloud — even when GDMS is connected", () => {
-  // ⛔ The whole point: the LAN reset (type the password once) beats the cloud reset (read the
-  // sticker serial to add the device first), so an existing customer phone never needs a sticker.
+test("a Grandstream is cleared through the maker's cloud from its SERIAL — the password route is only the fallback", () => {
+  // ⛔ The whole point: the cloud route asks for the serial ONCE, on the extension screen. The LAN
+  // route needs the phone's admin password, which the wizard must never demand mid-setup.
   const m = deviceMechanismsFor("Grandstream", [gdms(), rps]);
   assert.equal(m.brand, "grandstream");
-  assert.equal(m.reset, "lan_http");
-  assert.equal(m.restart, "lan_http");
+  assert.equal(m.reset, "vendor_cloud");
+  assert.equal(m.resetFallback, "lan_http", "the password route survives as the second door");
   assert.equal(m.settings, "pnp");
-  // ⛔ The cloud is still NAMED — not as the way this phone is cleared, but as the second door for
-  // a customer who does not have the password. `reset` above is what actually happens by default.
-  assert.equal(m.resetFallback, "vendor_cloud");
   assert.equal(m.cloudPlatform, "gdms");
   assert.equal(m.cloudClaimNeedsSerial, true);
 });
@@ -44,17 +41,21 @@ test("a Grandstream with no cloud at all is still cleared and restarted over the
   }
 });
 
-test("⛔ the SECOND door: a Grandstream whose password we lack can still be cleared through the cloud", () => {
-  // The LAN reset is the primary (password); the cloud is the fallback (serial off the label).
+test("⛔ the SECOND door: the password route stays available behind the cloud, and is never promised falsely", () => {
+  // Cloud primary (serial), password second.
   const withCloud = deviceMechanismsFor("grandstream", [gdms()]);
-  assert.equal(withCloud.reset, "lan_http");
-  assert.equal(withCloud.resetFallback, "vendor_cloud");
-  assert.equal(withCloud.cloudClaimNeedsSerial, true, "the fallback is what needs the serial");
+  assert.equal(withCloud.reset, "vendor_cloud");
+  assert.equal(withCloud.resetFallback, "lan_http");
+  assert.equal(withCloud.cloudClaimNeedsSerial, true, "the primary route is what needs the serial");
 
-  // No cloud connected: there is no second door, and we must not pretend there is.
-  assert.equal(deviceMechanismsFor("grandstream", []).resetFallback, "none");
-  assert.equal(deviceMechanismsFor("grandstream", [gdms({ supportedActions: ["lookup", "reboot"] })]).resetFallback, "none");
-  // Yealink has no maker cloud here at all.
+  // No usable cloud: the password route becomes the ONLY door, so there is no second one to offer.
+  for (const readiness of [[], [gdms({ supportedActions: ["lookup", "reboot"] })], [gdms({ cloudConfigured: false })]]) {
+    const m = deviceMechanismsFor("grandstream", readiness);
+    assert.equal(m.reset, "lan_http", JSON.stringify(readiness));
+    assert.equal(m.resetFallback, "none");
+  }
+  // Yealink has no maker cloud here at all: one door, no fallback.
+  assert.equal(deviceMechanismsFor("yealink", [gdms(), rps]).reset, "lan_http");
   assert.equal(deviceMechanismsFor("yealink", [gdms(), rps]).resetFallback, "none");
 });
 
@@ -124,9 +125,14 @@ test("SWEEP: every catalogue brand, with every cloud shape, keeps the safety rul
       }
       // ⛔ Never clear or restart a phone that nothing can then hand its settings.
       if (m.reset !== "not_available" || m.restart === "vendor_cloud") assert.notEqual(m.settings, "not_available");
-      // ⛔ The fallback is never the same door as the primary, and only exists with a real cloud wipe.
+      // ⛔ The fallback is never the same door as the primary, is never "not_available" dressed up
+      // as a door, and is only offered when that mechanism really exists for this brand.
+      if (m.resetFallback !== "none") {
+        assert.notEqual(m.resetFallback, m.reset, `${brand} offers the same door twice`);
+        assert.notEqual(m.reset, "not_available", `${brand} offers a fallback with no primary`);
+      }
+      if (m.resetFallback === "lan_http") assert.equal(vendorSupportsLocalReset(brand), true, `${brand} fallback lan_http`);
       if (m.resetFallback === "vendor_cloud") {
-        assert.notEqual(m.reset, "vendor_cloud", `${brand} offers the cloud twice`);
         const r = readiness.find((x) => x.cloudConfigured && !x.redirectOnly && x.supportedActions.includes("factory_reset"));
         assert.ok(r, `${brand} claims a cloud fallback without a cloud that can wipe`);
         assert.equal(r.manufacturer === "poly" ? "polycom" : r.manufacturer, brand);

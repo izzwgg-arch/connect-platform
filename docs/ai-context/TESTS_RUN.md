@@ -1575,6 +1575,17 @@ Final release PASS: portal f2460c4f, dry run d862f0de and real job 2e769464. Pro
 
 2026-09-14 dashboard voicemail release PASS: 7d12c14f; dry run 0f33571d and real portal job 477e8dce. Full production build/types/pages, candidate and stable readiness/public checks, container commit-marker verification and done SHA passed. Live empty card/count/scope/centering checked light/dark and restored light; populated/mobile proof is actual-component fixtures. Manual container unique-code grep unavailable.
 
+## 2026-09-14 — Browser Companion (local, unfinished)
+
+- Fresh baseline: node --import tsx --test apps/desktop/src/coworker/*.test.ts — 39/39 PASS, elevated execution after restricted tsx userInfo ENOMEM.
+- After implementation: same suite — 43/43 PASS, including real loopback auth/replay/correlation/cancellation tests and mandatory browser approval profiles.
+- Desktop tsc --noEmit and emitted build with --ignoreDeprecations 5.0 — PASS (installed root TS 5.9; repository expects TS6).
+- worker.js, page.js and portal.mjs node --check — PASS.
+- node apps/desktop/scripts/browser-companion/dom-components.mjs — 8/8 PASS in isolated installed headless Chrome with sandbox enabled; first run 7/8 exposed select-label defect, fixed and all rerun green. NOT actual agent acceptance.
+- electron-builder --win --dir --publish never --config.electronVersion=41.5.0 — unpacked package produced, but dependency diagnostics mean clean-export + asar smoke checks still required. No installer/install/deploy.
+- Real application UI: nginx 403 Forbidden. Owner reports independent repair in progress. Subsequent Windows Computer Use stopped with physical Escape; no more UI actions.
+- Full handoff: docs/ai-context/AGENT_HANDOFF_BROWSER_COMPANION_2026-09-14.md. No Claude/OpenAI real-agent Chrome acceptance, packaged acceptance, vision, sustained stress or complete security matrix proven.
+
 ## Deploy autoban production acceptance (2026-09-14)
 
 - Runtime fix commit **dae5a2451fbe404da512ea1dc9547889013e904b**, pushed to origin/feat/ivr-migration-takeover and origin/codex/deploy-log-safety. Deploy Center UI used as queue fallback; SSH stayed read-only after the separately approved unblock.
@@ -1585,3 +1596,12 @@ Final release PASS: portal f2460c4f, dry run d862f0de and real job 2e769464. Pro
 - Both blue/green rollouts completed health checks and normalized upstreams to API **3001**, portal **3000**. Portal finished around **23:27 UTC**. Fresh Chrome load shows **Updates every 10s while visible**. Opening the completed preflight log at 23:28:02 UTC displayed its real log and produced exactly one additional 200 request over >30 seconds, with no terminal auto-polling.
 - At **23:27:40 UTC**, office IP absent from denylist; latest five-minute access window **zero 404s**, following the earlier full window at 23:21:52 with no renewed ban. Other permission/validation responses are not misrepresented as a clean all-200 traffic stream. Both public login URLs and API health returned **200**; the protected internal tenant-map URL remained **403** from outside the server. No security thresholds or allowlists changed.
 - Prior validation remains 15 focused tests + 6 PBX safeguards passed; portal typecheck and production builds passed. Whole-API typecheck still has 84 pre-existing diagnostics. Profile menu visually checked in light/dark; original light setting restored. Real extension DND incoming-call acceptance still requires an owner-chosen test extension.
+
+## 2026-09-14 — Desk phones: no password, the serial is asked on the extension screen
+
+- `packages/shared` `npm test` — **709 pass, 0 fail** (run twice: after the `deviceMechanismsFor` precedence flip, and again after the `usesCloud` fix). Includes the rewritten precedence tests (cloud primary / `resetFallback: "lan_http"`) and the rewritten sweep invariants (a fallback is never the primary's own door, never offered with no primary, `lan_http` only where a local reset executor really ships).
+- `apps/api` `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/*.test.ts` — **250 pass, 1 skipped, 0 fail.** `deviceCloudRoutes.test.ts` alone: 36/36. The ticked-Grandstream test was rewritten to expect `via: "vendor_cloud"` + `provisioningUrl`; "no password → the cloud route is offered" and "no password AND no serial → honest hands-on halt" both still pass, the first now through the new halt→cloud conversion.
+- `apps/portal` `node --import tsx --test components/deskPhones/setupDriver.test.ts components/deskPhones/deskPhoneWizardSource.test.ts` — **44 pass, 0 fail.**
+- Portal `tsc -p apps/portal/tsconfig.json --noEmit` — **exit 0, clean.**
+- API `tsc -p apps/api/tsconfig.json --noEmit` — errors reported, **none in any file touched this round** (only `ops/`, `billing/`, `delivery/`, `mfa/`, `storageMaintenance/`, `apiRequestProfiler`); this matches the 84 pre-existing diagnostics recorded in the entry above. The only api file changed here is `deskPhoneSetup/deskPhoneRoutes.ts`, which reports nothing.
+- ⏳ **NOT PROVEN:** nobody has typed a serial on the extension screen in a browser, and no phone has been cleared through GDMS from one. Deployment recorded separately below/after.

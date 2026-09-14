@@ -583,15 +583,16 @@ async function tickedAssigned(app: any, phone: Record<string, unknown> = {}) {
 const advance = async (app: any, base: string) =>
   body(await app.inject({ method: "POST", url: `${base}/advance`, payload: { reachableOnLan: true } }));
 
-test("a ticked Grandstream is cleared over the LAN with the password — NOT through the serial-based cloud, even when GDMS is connected", async () => {
+test("a ticked Grandstream is cleared THROUGH GDMS from its serial — the password route is not taken when the cloud is connected", async () => {
   reset();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
   const app = await makeApp(CUSTOMER);
   const { base } = await tickedAssigned(app);
   const out = await advance(app, base);
   assert.equal(out.action, "reset_over_lan", JSON.stringify(out));
-  assert.equal(out.via, undefined, "the LAN reset needs no maker cloud and no serial");
-  assert.equal(sim.tasks.length, 0, "nothing is sent to GDMS");
+  assert.equal(out.via, "vendor_cloud", "the serial route, so nobody is asked for a password");
+  assert.equal(out.provisioningUrl, FOLDER, "the office machine listens before the wipe");
+  assert.equal(sim.tasks.length, 0, "/advance decides only — the wipe itself runs through /prepare");
 });
 
 test("the same Grandstream without a connected cloud is cleared over the LAN too", async () => {

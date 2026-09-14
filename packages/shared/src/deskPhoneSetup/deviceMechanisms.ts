@@ -51,15 +51,14 @@ export type DeviceMechanisms = {
   brand: VendorSlug | null;
   reset: ResetMechanism;
   /**
-   * The SECOND door when the first one cannot be opened.
+   * The SECOND door, when the first one cannot be opened — or "none" when there is only one.
    *
-   * ⛔⛔ The LAN reset needs the phone's admin password and the cloud reset needs its serial number.
-   * A customer who does not have the password is not out of options — the maker's cloud can still
-   * clear the phone once it is added there, which needs the serial off its label (Izzy, 2026-09-14:
-   * "if the user doesn't have the password, it should ask for the serial number"). `vendor_cloud`
-   * here means exactly that fallback exists for this brand in this deployment.
+   * ⛔⛔ The cloud reset needs the phone's SERIAL (to add the device to the maker's account) and the
+   * LAN reset needs its ADMIN PASSWORD. The serial is the one the wizard asks for, once, on the
+   * screen where the person is already looking at that phone — so the cloud is the primary door and
+   * this names what is left if it cannot be used.
    */
-  resetFallback: "vendor_cloud" | "none";
+  resetFallback: "lan_http" | "vendor_cloud" | "none";
   restart: RestartMechanism;
   settings: SettingsMechanism;
   /** Which maker cloud does the cloud steps, when any does. */
@@ -99,27 +98,31 @@ export function deviceMechanismsFor(
     : null;
   const cloudDoes = (a: CloudAction) => Boolean(cloud && settings !== "not_available" && cloud.supportedActions.includes(a));
 
-  // ⛔⛔ THE OFFICE-NETWORK RESET WINS OVER THE MAKER CLOUD. Both clear the phone, but the LAN
-  // reset needs only the admin password the customer types once, while the cloud reset needs the
-  // device added to the maker's account first — which needs the serial number nobody can read off
-  // the network (Izzy, 2026-09-14: an existing customer "will have to go to the physical phone …
-  // there is no way to get the serial number"). So when a brand has a LAN reset executor we use it;
-  // the maker cloud is the fallback for a brand that has none. Both are gated on a settings profile
-  // existing, so a phone we cannot configure is never wiped.
-  const reset: ResetMechanism = vendorSupportsLocalReset(vendor) && settings !== "not_available" ? "lan_http"
-    : cloudDoes("factory_reset") ? "vendor_cloud"
-      : "not_available";
+  // ⛔⛔ THE MAKER CLOUD WINS, BECAUSE IT DOES NOT ASK FOR A PASSWORD (Izzy, 2026-09-14: "I don't
+  // want it to ask for the password"). Both doors clear a phone: the cloud needs the device added
+  // to the maker's account, which needs the SERIAL off its label — a thing the customer is now
+  // asked for once, up front, on the same screen where they choose who sits at the phone. The LAN
+  // reset needs the phone's admin password, which most people do not have and which the wizard
+  // used to demand mid-setup. So the cloud is the primary door and the password is only a fallback
+  // for a brand with no cloud at all. Both are gated on a settings profile existing, so a phone we
+  // cannot configure afterwards is never wiped.
+  const cloudWipes = cloudDoes("factory_reset");
+  const lanWipes = vendorSupportsLocalReset(vendor) && settings !== "not_available";
+  const reset: ResetMechanism = cloudWipes ? "vendor_cloud" : lanWipes ? "lan_http" : "not_available";
   const restart: RestartMechanism = http ? "lan_http"
     : cloudDoes("reboot") ? "vendor_cloud"
       : pnp ? "power_cycle"
         : "not_available";
 
-  // The maker's cloud as the SECOND door: only when it is not already the first one, and only when
-  // this deployment's cloud really implements a wipe for this brand.
-  const resetFallback: DeviceMechanisms["resetFallback"] =
-    reset !== "vendor_cloud" && cloudDoes("factory_reset") ? "vendor_cloud" : "none";
+  // The SECOND door is whichever real mechanism the primary is not. Today that is only ever the
+  // password route sitting behind the cloud route; a brand with just one way in reports "none",
+  // so nothing can promise a door that does not exist.
+  const resetFallback: DeviceMechanisms["resetFallback"] = cloudWipes && lanWipes ? "lan_http" : "none";
 
-  const usesCloud = reset === "vendor_cloud" || restart === "vendor_cloud" || resetFallback === "vendor_cloud";
+  // ⛔ The fallback is deliberately NOT consulted here: today it is only ever the LAN door, so a
+  // cloud named through it cannot exist. If a brand ever gains a cloud FALLBACK, add it here too —
+  // `cloudPlatform` must name the cloud any offered door would really use.
+  const usesCloud = reset === "vendor_cloud" || restart === "vendor_cloud";
   return {
     brand,
     reset,

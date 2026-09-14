@@ -32,5 +32,23 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   `deviceMechanismsFor` prefers `lan_http` reset over the serial-based GDMS reset. Settings stay on PnP (no
   Grandstream HTTP config write, no P237 trap). Handoff §10c. ⏳ The authenticated write is UNPROVEN on a real
   handset — Izzy types the phone password into the wizard once; a wrong shape fails safe to the PnP power-cycle.
+- ⛔⛔ **Round 5 (THIS ROUND): THE PASSWORD PROMPT IS GONE — the serial is asked ONCE, on the
+  extension screen.** Izzy: *"I don't want it to ask for the password … where they select the
+  extension, they should also be prompted to enter the serial number."* So round 4's precedence is
+  **INVERTED ON PURPOSE**: `deviceMechanismsFor` returns `reset:"vendor_cloud"` primary and
+  `resetFallback:"lan_http"` (the password) second, for a brand with a connected wiping cloud.
+  ⛔ `/advance` converts **all three shapes** of the ladder's password question —
+  `try_default_credentials`, `ask_for_password`, and the `halt` it returns on `passwordUnavailable` —
+  into the cloud route, gated on: reset unspent, ticked+approved, not registered to us, and
+  `makerCloudUnavailable !== true`. Both doors shut still ends at the honest hands-on halt.
+  `customerPhoneView` gained `serialOnFile`; the match step shows a serial box (+ the sticker
+  drawing) only when it is false, and `supplySerial` re-reads the run so the box removes itself.
+  ⛔ The LAN/password path is NOT deleted — it is the fallback, and is what a Grandstream with no
+  cloud still uses (desktop rc.16 login shape unchanged).
+- ⏳ **NOT PROVEN (round 5):** no customer has typed a serial on the extension screen, and no phone
+  has been cleared through GDMS from one. Parts 2 and 3 of Izzy's flow — **upload a photo** of the
+  label, and **text the photo** to the business number (prompt for the sending number, read the chat
+  once, refuse a blurry picture on OCR confidence) — are **NOT BUILT**, and are inert until
+  `CRM_OCR_ENABLED=true` on the api, which is Izzy's call (engine + language host already verified).
 - ⏳ **NOT PROVEN:** GDMS credential IS saved (round 2 Verify passed), but no real reset yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.

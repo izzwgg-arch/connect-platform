@@ -447,6 +447,11 @@ function customerPhoneView(row: any) {
     // never by a brand they were asked to choose. Firmware, the serial number and the
     // evidence trail stay in the technician's view.
     ip: dottedIpv4(row.ipAddress),
+    // ⛔ Whether the maker's serial number is already on file. The extension screen asks for it on
+    // any phone where it is not — ONE question, at the moment the person is already looking at that
+    // phone's row, in place of the password prompt that used to interrupt the setup. The number
+    // itself stays out of the customer view; only whether we have it.
+    serialOnFile: Boolean(row.serialNumber),
     deviceType: row.deviceType || null,
     deviceTypeLabel: row.deviceType && row.deviceType !== "unknown" ? describeDeviceType(row.deviceType as DeviceType) : null,
     identityConfidence: row.identityConfidence || null,
@@ -1446,17 +1451,28 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       if (decision.action === "reset_over_lan" && mechanisms.reset === "vendor_cloud") via = "vendor_cloud";
       if (decision.action === "set_provisioning" && mechanisms.restart === "vendor_cloud") via = "vendor_cloud";
 
-      // ⛔⛔ THE PASSWORD IS NOT THE ONLY KEY TO A PHONE (Izzy, 2026-09-14: "if the user doesn't
-      // have the password, it should ask for the serial number"). The office-network reset needs the
-      // admin password; the maker's cloud needs the device added there, which needs the serial off
-      // its label. So a person who does not have the password is NOT finished — the ladder's
-      // "reset it by hand" halt becomes the cloud route, and the wizard asks for the serial.
-      // ⛔ Only while the one reset is still unspent, the phone is ticked, it is not already working,
-      // and the person has not already told us the serial is unavailable too.
+      // ⛔⛔ NEVER ASK FOR A PASSWORD WHEN THE MAKER'S CLOUD IS THE ONE DOING THE WIPE (Izzy,
+      // 2026-09-14: "I don't want it to ask for the password"). The pure ladder still reaches for a
+      // password on a locked phone — it knows nothing about brands — so that question is converted
+      // here into the cloud route. The key that route needs is the SERIAL, and the wizard now asks
+      // for that ONCE, on the screen where the person picks who sits at the phone, rather than
+      // interrupting them mid-setup for something most people do not have.
+      // ⛔ Only while the one reset is unspent, the phone is ticked, it is not already working, and
+      // the person has not already said the serial is unavailable too — then the ladder's own halt
+      // stands and the phone ends honestly at hands-on.
+      // ⛔ THE THREE SHAPES THE PASSWORD QUESTION TAKES, all of them the same question. The ladder
+      // is pure and brand-blind: on a locked phone it tries the documented default, then asks the
+      // person, then HALTS when they say they do not have it. All three are the password door —
+      // and for a brand the maker's cloud can wipe from its serial, that door is the wrong one to
+      // be standing at. ⛔ The halt is included deliberately: without it, a customer who once said
+      // "I don't have the password" is sent to hands-on while the cloud route sits open.
+      const laddersPasswordQuestion =
+        decision.action === "ask_for_password"
+        || decision.action === "try_default_credentials"
+        || (decision.action === "halt" && condition.locked && condition.passwordUnavailable);
       if (
-        !via
-        && mechanisms.resetFallback === "vendor_cloud"
-        && observed.data.passwordUnavailable === true
+        laddersPasswordQuestion
+        && mechanisms.reset === "vendor_cloud"
         && observed.data.makerCloudUnavailable !== true
         && Number(phone.resetCount ?? 0) === 0
         && resetApprovedAt
@@ -1465,7 +1481,7 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         decision = {
           action: "reset_over_lan",
           rung: 1,
-          reason: "no password for the office-network reset; the maker's cloud can clear it once the serial is given",
+          reason: "the maker's cloud clears this brand from its serial; no password is asked of the customer",
         };
         via = "vendor_cloud";
       }

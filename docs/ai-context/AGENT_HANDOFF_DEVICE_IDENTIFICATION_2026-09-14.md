@@ -390,6 +390,40 @@ rc.16; log banner rc.16 with 0 errors; PnP armed; 167/167 desktop tests; tsc 0. 
 `dist/phoneSetup/grandstream.js` carries `cgi-bin/access` ×3, `Referer` ×5, `sha256` ×6, and `capability.js`
 carries the login cap. ⛔ NOT published — the feed still reads rc.10 (the updater refused it as a downgrade).
 
+## 10f. Round 7 — the password question is DELETED from the customer's path; the serial is asked once, on the extension screen
+
+**Izzy, 2026-09-14: "I don't want it to ask for the password. Once it finds the phone and the customer
+selects the phone, it goes to where they select the extension. Where they select the extension, they
+should also be prompted to enter the serial number."** Round 6 made the serial the *second* key. This
+round makes it the *first*, and moves the asking to a screen the person is already on.
+
+- **shared** `deviceMechanismsFor` — precedence **INVERTED ON PURPOSE** vs round 4: a brand with a
+  connected, wiping cloud is `reset:"vendor_cloud"` with `resetFallback:"lan_http"` (the password).
+  `resetFallback` widened to `"lan_http" | "vendor_cloud" | "none"`. ⛔ `usesCloud` no longer consults
+  the fallback — today it can only be the LAN door, so a cloud named through it cannot exist; the
+  comment there says to add it back if a brand ever gains a cloud *fallback*.
+  Sweep invariants rewritten: the fallback is never the primary's own door, never offered with no
+  primary, and `lan_http` only for a brand with a shipped local reset executor.
+- **`/advance`** now converts **all THREE shapes** of the ladder's password question into the cloud
+  route: `try_default_credentials`, `ask_for_password`, **and the `halt`** it returns when
+  `passwordUnavailable` (`decision.action === "halt" && condition.locked && condition.passwordUnavailable`).
+  ⛔⛔ The halt is the one that is easy to miss: without it, a customer who once said "I don't have the
+  password" is sent to hands-on while the cloud route sits open. Gated on: one reset unspent, ticked
+  with an approval, not already registered to us, and `makerCloudUnavailable !== true`.
+- **`customerPhoneView`** gained **`serialOnFile`**; **`DeskPhoneWizard`** shows a serial box + the
+  sticker drawing on the **match step** for a ticked phone when it is false, submitting through the
+  existing `scanLabel` route (so a label belonging to a different MAC is still refused).
+  ⛔ `supplySerial` now re-reads the run — without that the serial IS saved and the box just sits
+  there, which reads as "it didn't work" and invites a second entry.
+- ⛔ The password path is **not deleted from the code** — it is the fallback, and a Grandstream with
+  no configured cloud still uses it exactly as rc.16 shipped it (tested).
+
+⏳ **NOT BUILT (parts 2 and 3 of Izzy's flow):** upload a photo of the label; text the photo to the
+business number after being asked *which number it will come from*, then read that chat once and
+refuse an unreadable picture on OCR confidence. Both are inert until `CRM_OCR_ENABLED=true` on the
+api — **Izzy's decision** (Tesseract engine and the language-data host are already verified reachable,
+and inbound MMS already lands tenant-resolved as chat attachments).
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

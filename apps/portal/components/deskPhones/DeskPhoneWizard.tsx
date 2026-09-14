@@ -55,6 +55,8 @@ type CustomerPhone = {
   selected?: boolean;
   /** Its address on the office network, shown beside the hardware address (2026-09-14). */
   ip?: string | null;
+  /** Whether the maker's serial number is already on file — the extension screen asks when not. */
+  serialOnFile?: boolean;
   /** What kind of thing it is, from everything it and its maker said about itself. */
   deviceType?: string | null;
   deviceTypeLabel?: string | null;
@@ -538,10 +540,14 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       setSerialDrafts((d) => { const { [phoneId]: _gone, ...rest } = d; return rest; });
       setNeeds((n) => n.filter((x) => !(x.kind === "serial" && x.phoneId === phoneId)));
       setError(null);
+      // ⛔ Re-read the run, so the row's own `serialOnFile` flips and the box on the extension
+      // screen takes itself away. Without this the person types the serial, it IS saved, and the
+      // field just sits there — which reads as "it didn't work" and invites a second entry.
+      await loadRun(runId);
     } catch (err: any) {
       setError(err?.body?.message || `The serial number for ${label} could not be read. Check it against the label and try again.`);
     }
-  }, [runId, serialDrafts]);
+  }, [runId, serialDrafts, loadRun]);
 
   /** "I don't have it" — the phone continues without the maker's cloud. Never a wall. */
   const noSerial = useCallback((phoneId: string) => {
@@ -932,6 +938,44 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                     model is never asked, because being asked to confirm something the
                     system plainly already knows reads as the wizard not paying attention.
                   */}
+                  {/*
+                    ⛔⛔ THE SERIAL IS ASKED HERE, NOT MID-SETUP (Izzy, 2026-09-14: "where they
+                    select the extension, they should also be prompted to enter the serial number"
+                    — and "I don't want it to ask for the password"). The maker's cloud clears a
+                    phone from its serial, so asking once, on the row the person is already looking
+                    at, replaces a password prompt that interrupted the setup for something most
+                    people do not have.
+                  */}
+                  {step === "match" && isPicked(p) && p.serialOnFile === false && (
+                    <div className="dps-idrow">
+                      <label className="dps-flabel" htmlFor={`dps-serial-${p.id}`}>
+                        The serial number on the label underneath
+                      </label>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <input
+                          id={`dps-serial-${p.id}`}
+                          className="dps-input"
+                          maxLength={60}
+                          placeholder="Type it, or scan the barcode"
+                          value={serialDrafts[p.id] ?? ""}
+                          onChange={(e) => { const v = e.target.value; setSerialDrafts((d) => ({ ...d, [p.id]: v })); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") void supplySerial(p.id, p.displayName || hardwareLine(p)); }}
+                        />
+                        <button
+                          className="dps-btn dps-btn-g"
+                          disabled={!(serialDrafts[p.id] ?? "").trim()}
+                          onClick={() => void supplySerial(p.id, p.displayName || hardwareLine(p))}
+                        >
+                          Save it
+                        </button>
+                      </div>
+                      <p className="dps-hint" style={{ marginTop: 8 }}>
+                        It is on the sticker underneath the phone, next to the barcode. No password is needed.
+                      </p>
+                      <SerialStickerDrawing />
+                    </div>
+                  )}
+
                   {step === "match" && needsIdentifying(p) && (
                     <div className="dps-idrow">
                       <p className="dps-hint" style={{ margin: "0 0 8px" }}>
