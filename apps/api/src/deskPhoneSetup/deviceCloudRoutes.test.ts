@@ -481,37 +481,70 @@ test("a dry run plans without changing anything at the maker", async () => {
   assert.equal(sim.tasks.length, 0);
 });
 
-test("prepare registers the device, then refuses to restart one nobody has been assigned to", async () => {
+/** Ticking the phone on the pick screen — the consent to clear it (reset-first). */
+async function tick(app: any, runId: string, phoneIds: string[]) {
+  const r = await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/selection`, payload: { phoneIds } });
+  assert.equal(r.statusCode, 200, r.body);
+}
+
+test("an UNTICKED phone is not touched at the maker at all — reset-first needs the tick", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
-  const { base, row } = await runWithPhone(app, { serialNumber: SN });
+  const { base } = await runWithPhone(app, { serialNumber: SN });
+  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.equal(out.plan.manualAction?.code, "reset_authorization_required", JSON.stringify(out.plan));
+  assert.deepEqual(out.ran, []);
+  assert.equal(sim.addCalls, 0);
+  assert.equal(sim.tasks.length, 0);
+});
+
+test("prepare registers a ticked device, then refuses to clear one nobody has been assigned to", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row, runId } = await runWithPhone(app, { serialNumber: SN });
+  await tick(app, runId, [row.id]);
   const r = await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} });
   assert.equal(r.statusCode, 200, r.body);
   const out = body(r);
   assert.equal(out.ran[0].step, "claim");
   assert.equal(out.ran[0].ok, true);
-  const restart = out.ran.find((x: any) => x.step === "reboot");
-  assert.ok(restart, JSON.stringify(out));
-  assert.equal(restart.error, "needs_assignment");
-  assert.equal(out.stoppedAt, "reboot");
+  const wipe = out.ran.find((x: any) => x.step === "factory_reset");
+  assert.ok(wipe, JSON.stringify(out));
+  assert.equal(wipe.error, "needs_assignment");
+  assert.equal(out.stoppedAt, "factory_reset");
   assert.equal(row.vendorCloudState, "managed");
-  assert.equal(sim.tasks.length, 0, "no restart was sent");
+  assert.equal(row.resetCount, 0);
+  assert.equal(sim.tasks.length, 0, "nothing was sent to the phone");
 });
 
-test("prepare restarts an assigned, managed device through the maker's cloud and never calls it online", async () => {
+test("RESET FIRST: a ticked, assigned phone is cleared first; its restart waits for the next prepare; never called online", async () => {
   reset();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
   const app = await makeApp(CUSTOMER);
-  const { base, row } = await runWithPhone(app);
+  const { base, row, runId } = await runWithPhone(app);
   row.extNumber = "101"; row.extensionId = "e1";
-  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
-  const restart = out.ran.find((x: any) => x.step === "reboot");
-  assert.ok(restart, JSON.stringify(out));
+  await tick(app, runId, [row.id]);
+
+  const first = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.deepEqual(first.ran.map((x: any) => x.step), ["factory_reset"], JSON.stringify(first));
+  assert.equal(first.ran[0].ok, true);
+  assert.equal(sim.tasks.length, 1);
+  assert.equal(sim.tasks[0].type, 2, "the first thing sent is the reset");
+  assert.ok(first.leftForOthers.includes("reboot"), JSON.stringify(first.leftForOthers));
+  assert.equal(row.resetCount, 1);
+  assert.equal(row.state, "WAITING_FOR_REBOOT");
+
+  // Back online after the wipe: the restart goes, and no second reset.
+  const second = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.ok(!second.ran.some((x: any) => x.step === "factory_reset"), JSON.stringify(second));
+  const restart = second.ran.find((x: any) => x.step === "reboot");
+  assert.ok(restart, JSON.stringify(second));
   assert.equal(restart.ok, true);
   assert.equal(restart.outcome, "accepted");
-  assert.equal(sim.tasks.length, 1);
-  assert.equal(sim.tasks[0].type, 1);
-  assert.notEqual(out.phone.provisioningStatus, "online", "an accepted task is not a registration");
+  assert.equal(sim.tasks.length, 2);
+  assert.equal(sim.tasks[1].type, 1);
+  assert.equal(row.resetCount, 1, "never cleared twice");
+  assert.notEqual(second.phone.provisioningStatus, "online", "an accepted task is not a registration");
   assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_PREPARE_STEP" && a.metadata.step === "reboot"));
 });
 
@@ -525,7 +558,7 @@ test("prepare on a run that is no longer running reads 404", async () => {
   assert.equal(sim.apiCalls.length, 0);
 });
 
-test("a device still locked to another provider that the cloud cannot re-point asks for hands, and nothing is sent", async () => {
+test("an unticked device still locked to another provider waits for the tick, and nothing is sent", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
   const { base } = await runWithPhone(app, { serialNumber: SN, provisioningUrl: "https://oldprovider.example/cfg/" });
@@ -539,7 +572,7 @@ test("a device still locked to another provider that the cloud cannot re-point a
 
 /* ── factory reset through the maker's cloud ─────────────────────────────── */
 
-/** A maker cloud that can wipe but not restart — the only shape that plans a cloud reset. */
+/** A maker cloud that can wipe but not restart — keeps the reset the only cloud step. */
 function resetOnlyRegistry() {
   const L = load();
   class ResetOnlyProvider extends L.GrandstreamProvider {
@@ -555,10 +588,7 @@ function resetOnlyRegistry() {
 async function lockedManagedAssigned(app: any, approve: boolean) {
   const ctx = await runWithPhone(app, { provisioningUrl: "https://oldprovider.example/cfg/" });
   ctx.row.extNumber = "101"; ctx.row.extensionId = "e1";
-  if (approve) {
-    const a = await app.inject({ method: "POST", url: `/desk-phones/runs/${ctx.runId}/authorize-reset`, payload: { phoneIds: [ctx.row.id] } });
-    assert.equal(a.statusCode, 200, a.body);
-  }
+  if (approve) await tick(app, ctx.runId, [ctx.row.id]);
   return ctx;
 }
 
@@ -589,14 +619,14 @@ test("an approved wipe runs once, is counted, and the one reset is then spent", 
   assert.equal(row.provisioningUrl, null);
   assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_RESET_REQUESTED"));
 
-  // The previous provider grabs it again: the one reset is already used.
+  // The previous provider grabs it again: the one reset is already used, so none is planned.
   row.provisioningUrl = "https://oldprovider.example/cfg/";
   row.state = "RESET_AUTHORIZED";
   const again = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
-  const refused = again.ran.find((x: any) => x.step === "factory_reset");
-  assert.ok(refused, JSON.stringify(again));
-  assert.equal(refused.error, "reset_already_used");
+  assert.ok(!again.plan.steps.some((s: any) => s.step === "factory_reset"), JSON.stringify(again.plan));
+  assert.ok(!again.ran.some((x: any) => x.step === "factory_reset"), JSON.stringify(again));
   assert.equal(sim.tasks.length, 1, "never wiped twice");
+  assert.equal(row.resetCount, 1);
 });
 
 test("two prepares racing on one approved device wipe it exactly once", async () => {
@@ -613,20 +643,21 @@ test("two prepares racing on one approved device wipe it exactly once", async ()
   assert.equal(row.resetCount, 1);
 });
 
-test("a wipe the maker refuses gives the reset back; no reset permission means nothing is touched", async () => {
+test("a wipe the maker refuses gives the reset back; unticking the phone means nothing is touched", async () => {
   reset();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "offline", owner: "ours" });
   const app = await makeApp(CUSTOMER, { registry: resetOnlyRegistry() });
-  const { base, row } = await lockedManagedAssigned(app, true);
+  const { base, row, runId } = await lockedManagedAssigned(app, true);
   const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
   const wipe = out.ran.find((x: any) => x.step === "factory_reset");
   assert.equal(wipe?.error, "device_offline", JSON.stringify(out));
   assert.equal(row.resetCount, 0, "nothing reached the device, so the reset is not spent");
   assert.equal(sim.tasks.length, 0);
 
-  allowReset = false;
+  await tick(app, runId, []);
   const denied = await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} });
-  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.statusCode, 409);
+  assert.equal(body(denied).error, "phone_not_in_setup");
   assert.equal(sim.tasks.length, 0);
 });
 
@@ -646,6 +677,7 @@ test("the GDMS credential screens are staff-only and never hand a value back", a
       ["GET", "/admin/desk-phones/gdms-credentials"],
       ["POST", "/admin/desk-phones/gdms-credentials"],
       ["POST", "/admin/desk-phones/gdms-credentials/verify"],
+      ["POST", "/admin/desk-phones/gdms-credentials/lookup"],
     ]) {
       const r = await customer.inject({ method: method as any, url, payload: method === "POST" ? {} : undefined });
       assert.equal(r.statusCode, 403, url);
@@ -676,6 +708,24 @@ test("the GDMS credential screens are staff-only and never hand a value back", a
     assert.equal(body(verified).organizations, 1);
     noLeak(verified.body, secrets);
     assert.ok(state.audits.some((a: any) => a.action === "GDMS_CREDENTIALS_VERIFIED"));
+
+    // The read-only device lookup: finds a seeded device, changes nothing at GDMS.
+    sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+    const addsBefore = sim.addCalls;
+    const tasksBefore = sim.tasks.length;
+    const badMac = await staff.inject({ method: "POST", url: "/admin/desk-phones/gdms-credentials/lookup", payload: { mac: "nope" } });
+    assert.equal(badMac.statusCode, 400);
+    const looked = await staff.inject({ method: "POST", url: "/admin/desk-phones/gdms-credentials/lookup", payload: { mac: MAC } });
+    assert.equal(looked.statusCode, 200, looked.body);
+    assert.equal(body(looked).found, true);
+    assert.match(String(body(looked).device.model), /GXP2170/);
+    noLeak(looked.body, [SN, ...secrets]);
+    const missing = await staff.inject({ method: "POST", url: "/admin/desk-phones/gdms-credentials/lookup", payload: { mac: "80:5E:0C:BD:13:5A" } });
+    assert.equal(missing.statusCode, 200, missing.body);
+    assert.equal(body(missing).found, false);
+    assert.equal(sim.addCalls, addsBefore, "a lookup never adds");
+    assert.equal(sim.tasks.length, tasksBefore, "a lookup never restarts or resets");
+    assert.ok(state.audits.some((a: any) => a.action === "GDMS_DEVICE_LOOKUP"));
     noLeak(state.audits, [...secrets, "hunter2-not-real", "secretkey-12345678"]);
   } finally {
     restore();

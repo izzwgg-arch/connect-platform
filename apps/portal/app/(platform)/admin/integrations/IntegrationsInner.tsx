@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPut, ApiError } from "../../../../services/apiClient";
+import { GdmsCredentialsCard } from "./GdmsCredentialsCard";
 
 type TenantRow = { id: string; name: string; crmMode: string };
 type KeyStatus = { provider: string; configured: boolean; hint: string | null; label: string | null; updatedAt: string | null };
@@ -171,6 +172,8 @@ export function IntegrationsInner() {
 
         {msg ? <p className="sm-mut" role="status">{msg}</p> : null}
         {err ? <p className="sm-mut" role="alert">{err}</p> : null}
+
+        <GdmsCredentialsCard />
 
         {tenantId ? (
           <div className="sm-set">

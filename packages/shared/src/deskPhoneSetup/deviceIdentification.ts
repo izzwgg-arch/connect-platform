@@ -726,21 +726,28 @@ export type PreparationPlan = {
 };
 
 /**
- * Identify → validate ownership → claim → reprovision → reset ONLY when needed → SIP → verify.
+ * Identify → validate ownership → claim → FACTORY RESET → reprovision → restart → SIP → verify.
  *
- * ⛔⛔ A factory reset is planned only when three things are all true: the device is held
- * by another provider, no non-destructive path can re-point it (no cloud reprovision, no
- * managed cloud), and a mechanism that can wipe it exists. It is never planned for a
- * device we can re-point without erasing it, and it is never EXECUTABLE without the
- * person's authorization for this device.
+ * ⛔⛔ RESET FIRST, EVERY TIME (Izzy's standing rule, restated 2026-09-14: "reset every time
+ * you connect the phone"). Every phone being connected is factory reset BEFORE it is handed
+ * its settings, whoever held it before and whatever the cloud could re-point. Ticking the
+ * phone is the consent (`resetAuthorized`); a phone already cleared in this setup
+ * (`resetAlreadyDone`) is not cleared twice.
+ *
+ * Never reset: a phone already registered to us (it is not being connected), a device
+ * another account holds (not ours to wipe), a model we cannot name, and a model Loopcom
+ * cannot send settings to — wiping that one erases the only configuration it can have.
  */
 export function planDevicePreparation(input: {
   identification: DeviceIdentification;
   cloud?: CloudDeviceState | null;
   ownership: "ours" | "unclaimed" | "other_tenant" | "other_vendor_account" | "unknown";
   registeredToUs: boolean;
+  /** Informational only since reset-first: it changes the wording, never whether the phone is cleared. */
   lockedByOtherProvider: boolean | null;
   resetAuthorized: boolean;
+  /** The one reset for this phone in this setup has already been sent. */
+  resetAlreadyDone: boolean;
 }): PreparationPlan {
   const id = input.identification;
   const caps = id.capabilities;
@@ -780,40 +787,51 @@ export function planDevicePreparation(input: {
     steps.push({ step: "claim", via: "vendor_cloud", why: "register the device to Loopcom with its maker" });
   }
 
+  // ⛔ Checked BEFORE the reset: a model nothing can send settings to must never be wiped.
+  if (!caps.canAssignSip) {
+    return plan("manual_action_required", {
+      code: "no_settings_profile",
+      message: "Loopcom can't send settings to this model automatically yet. Loopcom Support can finish it.",
+    });
+  }
+
+  const resetNeeded = !input.resetAlreadyDone;
+  if (resetNeeded) {
+    // ⛔ Nothing at all — not even the maker registration — happens to an unticked phone.
+    if (!input.resetAuthorized) {
+      return plan("manual_action_required", {
+        code: "reset_authorization_required",
+        message: "Tick this phone to set it up. Ticking it approves clearing it first.",
+      }, true);
+    }
+    if (!caps.canFactoryReset) {
+      // A maker cloud can clear a device only once it holds it: register first, then this
+      // plan is decided again with the cloud's real capabilities.
+      if (steps.some((s) => s.step === "claim")) return plan("identified", null, true);
+      return plan("manual_action_required", {
+        code: "reset_needs_hands_on",
+        message: "Every phone is factory reset before it joins Loopcom, and this model can't be reset over the network. Reset it by hand once, then continue.",
+      }, true);
+    }
+    const via = caps.paths.canFactoryReset?.includes("vendor_cloud") ? "vendor_cloud" : "local_http";
+    steps.push({
+      step: "factory_reset", via,
+      why: input.lockedByOtherProvider === true
+        ? "every phone is cleared first — this one still carries its previous provider's settings"
+        : "every phone is cleared first, before it is handed its Loopcom settings",
+    });
+  }
+
   const cloudReprovision = caps.paths.canReprovision?.includes("vendor_cloud") ?? false;
   if (caps.canReprovision) {
     const via = cloudReprovision ? "vendor_cloud" : caps.paths.canReprovision?.includes("local_http") ? "local_http" : "local_pnp";
     steps.push({ step: "reprovision", via, why: "point the device at its Loopcom settings" });
   }
-
-  const nonDestructive = cloudReprovision || (caps.canCloudManage && caps.canReboot);
-  const resetNeeded = input.lockedByOtherProvider === true && !nonDestructive;
-  if (resetNeeded) {
-    if (!caps.canFactoryReset) {
-      return plan("manual_action_required", {
-        code: "reset_needs_hands_on",
-        message: "This device is still locked to its previous provider and must be reset by hand once.",
-      }, true);
-    }
-    if (!input.resetAuthorized) {
-      return plan("manual_action_required", {
-        code: "reset_authorization_required",
-        message: "This device has to be cleared before it can join Loopcom. Approve clearing it to continue.",
-      }, true);
-    }
-    const via = caps.paths.canFactoryReset?.includes("vendor_cloud") ? "vendor_cloud" : "local_http";
-    steps.push({ step: "factory_reset", via, why: "the previous provider still holds it and nothing else can re-point it" });
-  }
-
   if (caps.canReboot && steps.some((s) => s.step === "reprovision")) {
     const via = caps.paths.canReboot?.includes("vendor_cloud") ? "vendor_cloud" : "local_http";
     steps.push({ step: "reboot", via, why: "restart so the new settings take effect" });
   }
-  if (caps.canAssignSip) steps.push({ step: "assign_sip", via: "pbx_record", why: "the phone system record carries its account" });
-  else return plan("manual_action_required", {
-    code: "no_settings_profile",
-    message: "Loopcom can't send settings to this model automatically yet. Loopcom Support can finish it.",
-  }, resetNeeded);
+  steps.push({ step: "assign_sip", via: "pbx_record", why: "the phone system record carries its account" });
   steps.push({ step: "verify_registration", via: "phone_system", why: "only a registration proves it works" });
 
   return plan(cloud.managedByUs ? "managed" : "identified", null, resetNeeded);

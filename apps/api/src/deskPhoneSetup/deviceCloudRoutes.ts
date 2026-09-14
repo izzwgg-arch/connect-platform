@@ -12,9 +12,10 @@
  *
  * ⛔ Nothing here marks a device working. A maker accepting a request is "accepted"; only
  * the phone system reporting the endpoint registered is online, and that is `advance`.
- * ⛔ Nothing here factory-resets a device on its own. A reset is planned only when the
- * device is held elsewhere and nothing non-destructive can re-point it, and it needs the
- * reset permission, the person's approval for THIS phone, and the one-reset rule.
+ * ⛔ RESET FIRST (Izzy, 2026-09-14: "reset every time you connect the phone"). Every phone
+ * being connected is factory reset before it gets its settings — but only once it was
+ * TICKED (the consent), only once per setup, never one registered to us or held by another
+ * account, and the reset is the last thing sent in that request.
  * ⛔ No secret crosses these routes except the GDMS credential SAVE, which is staff-only,
  * write-only, and never echoed, logged or audited.
  */
@@ -27,6 +28,7 @@ import {
   formatMac,
   identifyDevice,
   identifyPhone,
+  normalizeMac,
   parseDeviceLabel,
   planDevicePreparation,
   provisioningStatusFor,
@@ -393,7 +395,7 @@ async function runClaim(ctx: DeviceCloudRouteContext, input: {
 
 export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloudRouteContext): void {
   const {
-    deps, db, getUser, ownRun, allowedToSetUp, allowedToReset, isSuper, mayRunSetup,
+    deps, db, getUser, ownRun, allowedToSetUp, isSuper, mayRunSetup,
     customerPhoneView, resetApprovalFor, registry,
   } = ctx;
 
@@ -673,6 +675,8 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
         registeredToUs,
         lockedByOtherProvider: current.provisioningUrl ? !ctx.isOurProvisioningUrl(current.provisioningUrl) : null,
         resetAuthorized: Boolean(resetApprovalFor(run, current.id)),
+        // Reset-first: the one reset for this phone in this setup, whichever path sent it.
+        resetAlreadyDone: Number(current.resetCount ?? 0) > 0,
       });
       return { plan, heldElsewhere };
     };
@@ -711,9 +715,9 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       p.steps.some((s) => s.via === "vendor_cloud" && (!step || s.step === step));
 
     if (body.data.dryRun || !provider || plan.manualAction || !hasCloudStep(plan)) return respond(null);
-    // ⛔ A plan that would clear the device needs the reset permission BEFORE anything at
-    // the maker is touched, including the registration that precedes it.
-    if (hasCloudStep(plan, "factory_reset") && !(await allowedToReset(user, reply))) return;
+    // ⛔ Reset-first, exactly as the ladder: TICKING the phone is the consent to clear it
+    // (Izzy, 2026-09-14). The plan names a reset only when this phone was ticked, and
+    // decideReset re-checks that approval right before the reset is spent.
 
     const maker = makerName(provider);
 
@@ -729,7 +733,6 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       if (!claimed.result.ok) return respond("claim");
       ({ plan, heldElsewhere } = await decide(row, MANAGED_BY_US));
       if (plan.manualAction || !hasCloudStep(plan)) return respond(null);
-      if (hasCloudStep(plan, "factory_reset") && !(await allowedToReset(user, reply))) return;
     }
 
     // 4. Everything else the maker's cloud does, through the provider's one loop.
@@ -797,18 +800,25 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       },
     };
 
+    // ⛔ A reset is the LAST thing sent in this request: a wiping phone cannot take its
+    // settings or a restart. Those run on the next prepare, once it is back online (the
+    // reset is then spent, so the plan carries no second one).
+    const resetAt = plan.steps.findIndex((s) => s.step === "factory_reset");
+    const sentNow = resetAt >= 0 ? { ...plan, steps: plan.steps.slice(0, resetAt + 1) } : plan;
+    const afterReset = resetAt >= 0 ? plan.steps.slice(resetAt + 1).map((s) => s.step) : [];
+
     const prepared = await provider.prepare({
       mac: String(row.macAddress),
       serialNumber: cleanSerialNumber(row.serialNumber),
       deviceName: row.displayName ?? null,
-      plan,
+      plan: sentNow,
       resetAuthorization: approvedAt
         ? { runId: run.id, phoneId: row.id, approvedAtMs: new Date(approvedAt).getTime() }
         : null,
       hooks,
     });
     ran.push(...prepared.ran);
-    return respond(prepared.stoppedAt, prepared.leftForOthers);
+    return respond(prepared.stoppedAt, [...prepared.leftForOthers, ...afterReset]);
   });
 
   /* ── Loopcom staff: the Grandstream GDMS credentials ─────────────────────── */
@@ -890,6 +900,47 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
         tenantId: user.tenantId, action: "GDMS_CREDENTIALS_VERIFY_FAILED",
         entityType: "PlatformIntegration", entityId: "gdms", actorUserId: user.sub,
         metadata: { code: f.code },
+      });
+      return reply.status(f.retryable ? 503 : 409).send({ ok: false, error: f.code, message: f.staffMessage });
+    }
+  });
+
+  /**
+   * Read-only: does GDMS know this one device? The first live proof that the saved account
+   * and the field names are right. ⛔ Looks only — never adds, restarts or resets anything.
+   */
+  app.post("/admin/desk-phones/gdms-credentials/lookup", async (req: any, reply: any) => {
+    const user = getUser(req);
+    if (!user?.sub || !isSuper(user)) return reply.status(403).send({ error: "forbidden" });
+    const parsed = z.object({ mac: z.string().max(40) }).safeParse(req.body ?? {});
+    const mac = parsed.success ? normalizeMac(parsed.data.mac) : null;
+    if (!mac) return reply.status(400).send({ ok: false, error: "invalid_mac", message: "Enter the device's hardware (MAC) address." });
+    try {
+      assertGdmsRuntimeMode(process.env);
+    } catch (err) {
+      const f = failureFromError(err, "Grandstream");
+      return reply.status(409).send({ ok: false, error: f.code, message: f.staffMessage });
+    }
+    const creds = await resolveGdmsCredentials(db);
+    if (!creds) return reply.status(409).send({ ok: false, error: "cloud_not_configured", message: "No GDMS credentials are saved." });
+    try {
+      const d = await new GdmsClient(creds, deps.gdmsRequest ?? fetch).findDevice(mac);
+      await deps.audit({
+        tenantId: user.tenantId, action: "GDMS_DEVICE_LOOKUP",
+        entityType: "PlatformIntegration", entityId: "gdms", actorUserId: user.sub,
+        metadata: { mac, found: Boolean(d) },
+      });
+      if (!d) return reply.send({ ok: true, found: false });
+      return reply.send({
+        ok: true, found: true,
+        device: { model: d.model ?? null, online: d.online ?? null, firmware: d.firmware ?? null, serialTail: serialTail(d.serialNumber ?? null) },
+      });
+    } catch (err) {
+      const f = failureFromError(err, "Grandstream");
+      await deps.audit({
+        tenantId: user.tenantId, action: "GDMS_DEVICE_LOOKUP_FAILED",
+        entityType: "PlatformIntegration", entityId: "gdms", actorUserId: user.sub,
+        metadata: { mac, code: f.code },
       });
       return reply.status(f.retryable ? 503 : 409).send({ ok: false, error: f.code, message: f.staffMessage });
     }

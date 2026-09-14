@@ -375,7 +375,7 @@ function gsIdentification(serial: string | null, cloud: CloudDeviceState) {
 test("a device already registered to us is left alone", () => {
   const plan = planDevicePreparation({
     identification: gsIdentification("20EZ115N308C605F", managed), cloud: managed,
-    ownership: "ours", registeredToUs: true, lockedByOtherProvider: true, resetAuthorized: true,
+    ownership: "ours", registeredToUs: true, lockedByOtherProvider: true, resetAuthorized: true, resetAlreadyDone: false,
   });
   assert.equal(plan.status, "online");
   assert.deepEqual(plan.steps.map((s) => s.step), ["verify_registration"]);
@@ -384,7 +384,7 @@ test("a device already registered to us is left alone", () => {
 test("a device another account holds is a conflict, never a claim", () => {
   const plan = planDevicePreparation({
     identification: gsIdentification("20EZ115N308C605F", elsewhere), cloud: elsewhere,
-    ownership: "unknown", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true,
+    ownership: "unknown", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true, resetAlreadyDone: false,
   });
   assert.equal(plan.status, "conflict");
   assert.equal(plan.manualAction?.code, "device_ownership_conflict");
@@ -394,16 +394,30 @@ test("a device another account holds is a conflict, never a claim", () => {
 test("a claim that needs a serial stops and asks for the label", () => {
   const plan = planDevicePreparation({
     identification: gsIdentification(null, unclaimed), cloud: unclaimed,
-    ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: false, resetAuthorized: false,
+    ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: false, resetAuthorized: false, resetAlreadyDone: false,
   });
   assert.equal(plan.status, "manual_action_required");
   assert.equal(plan.manualAction?.code, "serial_required");
 });
 
-test("a cloud-managed device is re-pointed, never wiped, even when another provider held it", () => {
+test("RESET FIRST: a ticked phone is cleared before it is re-pointed, even one the cloud already manages", () => {
+  for (const lockedByOtherProvider of [true, false, null]) {
+    const plan = planDevicePreparation({
+      identification: gsIdentification("20EZ115N308C605F", managed), cloud: managed,
+      ownership: "ours", registeredToUs: false, lockedByOtherProvider, resetAuthorized: true, resetAlreadyDone: false,
+    });
+    const order = plan.steps.map((s) => s.step);
+    assert.equal(plan.resetNeeded, true);
+    assert.ok(order.includes("factory_reset"), JSON.stringify(order));
+    assert.ok(order.indexOf("factory_reset") < order.indexOf("reprovision"), JSON.stringify(order));
+    assert.ok(order.indexOf("factory_reset") < order.indexOf("assign_sip"), JSON.stringify(order));
+  }
+});
+
+test("once its one reset is spent, the phone is re-pointed and restarted, never cleared again", () => {
   const plan = planDevicePreparation({
     identification: gsIdentification("20EZ115N308C605F", managed), cloud: managed,
-    ownership: "ours", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true,
+    ownership: "ours", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true, resetAlreadyDone: true,
   });
   assert.equal(plan.resetNeeded, false);
   assert.ok(!plan.steps.some((s) => s.step === "factory_reset"));
@@ -411,30 +425,32 @@ test("a cloud-managed device is re-pointed, never wiped, even when another provi
   assert.ok(plan.steps.some((s) => s.step === "verify_registration"));
 });
 
-test("a locked Yealink is reset only after authorization", () => {
+test("a Yealink is reset only once it is ticked, locked or not", () => {
   const id = identifyDevice({ mac: YEALINK_MAC, evidence: [{ source: "sip_user_agent", model: "T54W" }] });
-  const waiting = planDevicePreparation({
-    identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: false,
-  });
-  assert.equal(waiting.manualAction?.code, "reset_authorization_required");
-  assert.equal(waiting.resetNeeded, true);
-  assert.ok(!waiting.steps.some((s) => s.step === "factory_reset"));
+  for (const lockedByOtherProvider of [true, false]) {
+    const waiting = planDevicePreparation({
+      identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider, resetAuthorized: false, resetAlreadyDone: false,
+    });
+    assert.equal(waiting.manualAction?.code, "reset_authorization_required");
+    assert.equal(waiting.resetNeeded, true);
+    assert.ok(!waiting.steps.some((s) => s.step === "factory_reset"));
 
-  const approved = planDevicePreparation({
-    identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true,
-  });
-  assert.ok(approved.steps.some((s) => s.step === "factory_reset" && s.via === "local_http"));
+    const approved = planDevicePreparation({
+      identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider, resetAuthorized: true, resetAlreadyDone: false,
+    });
+    assert.ok(approved.steps.some((s) => s.step === "factory_reset" && s.via === "local_http"));
+  }
 });
 
-test("a locked device nothing can wipe is handed to a person", () => {
+test("a phone nothing can reset over the network is handed to a person to reset once", () => {
   const id = identifyDevice({ mac: GRANDSTREAM_MAC, evidence: [{ source: "sip_user_agent", model: "GXP2170" }] });
   const plan = planDevicePreparation({
-    identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: true, resetAuthorized: true,
+    identification: id, ownership: "unclaimed", registeredToUs: false, lockedByOtherProvider: false, resetAuthorized: true, resetAlreadyDone: false,
   });
   assert.equal(plan.manualAction?.code, "reset_needs_hands_on");
 });
 
-test("SWEEP: a factory reset is never planned without authorization, a lock, and an owner we may touch", () => {
+test("SWEEP: a factory reset is planned only for a ticked, unregistered phone we may touch, never twice, never before a settings profile exists", () => {
   const ownerships = ["ours", "unclaimed", "other_tenant", "other_vendor_account", "unknown"] as const;
   const clouds = [managed, unclaimed, elsewhere, { checked: false, found: null, managedByUs: null, ownedElsewhere: null, online: null }];
   const devices = [
@@ -450,16 +466,24 @@ test("SWEEP: a factory reset is never planned without authorization, a lock, and
       for (const makeId of devices)
         for (const registeredToUs of [true, false])
           for (const lockedByOtherProvider of [true, false, null])
-            for (const resetAuthorized of [true, false]) {
-              const plan = planDevicePreparation({ identification: makeId(cloud), cloud, ownership, registeredToUs, lockedByOtherProvider, resetAuthorized });
-              const resets = plan.steps.some((s) => s.step === "factory_reset");
-              checked++;
-              if (!resets) continue;
-              assert.equal(resetAuthorized, true);
-              assert.equal(lockedByOtherProvider, true);
-              assert.equal(registeredToUs, false);
-              assert.ok(ownership !== "other_tenant" && ownership !== "other_vendor_account");
-              assert.notEqual(cloud.ownedElsewhere, true);
-            }
-  assert.ok(checked > 1000);
+            for (const resetAuthorized of [true, false])
+              for (const resetAlreadyDone of [true, false]) {
+                const identification = makeId(cloud);
+                const plan = planDevicePreparation({ identification, cloud, ownership, registeredToUs, lockedByOtherProvider, resetAuthorized, resetAlreadyDone });
+                const order = plan.steps.map((s) => s.step);
+                const resets = order.includes("factory_reset");
+                checked++;
+                if (!resets) continue;
+                assert.equal(resetAuthorized, true);
+                assert.equal(resetAlreadyDone, false);
+                assert.equal(registeredToUs, false);
+                assert.ok(ownership !== "other_tenant" && ownership !== "other_vendor_account");
+                assert.notEqual(cloud.ownedElsewhere, true);
+                assert.equal(identification.capabilities.canAssignSip, true);
+                // Reset FIRST: nothing that hands the phone its settings comes before it.
+                for (const later of ["reprovision", "reboot", "assign_sip"] as const) {
+                  if (order.includes(later)) assert.ok(order.indexOf("factory_reset") < order.indexOf(later));
+                }
+              }
+  assert.ok(checked > 2000);
 });
