@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { MessageSquare, Voicemail, ArrowRight, Play } from "lucide-react";
+import { MessageSquare, Voicemail, ArrowRight } from "lucide-react";
 
 type VoicemailItem = {
   id: string;
@@ -67,22 +67,22 @@ export function CommunicationsRow({ data, loading }: Props) {
               <span className="dash-v2-comm-icon vm" aria-hidden><Voicemail size={16} /></span>
               <h3>Voicemails</h3>
             </div>
-            <span className="dash-v2-comm-count">{loading && !data ? "…" : vmCount}</span>
+            <span className="dash-v2-comm-count dash-v2-message-unread">{!data ? (loading ? "…" : "—") : `${vmCount} unread`}</span>
           </div>
-          <p className="dash-v2-comm-sub">{vmCount === 0 ? "No new voicemails" : `${vmCount} unread voicemail${vmCount === 1 ? "" : "s"}`}</p>
+          <p className="dash-v2-comm-sub">Your inbox · All dates</p>
           {vmRecent.length === 0 ? (
-            <div className="dash-v2-comm-empty">No recent voicemails.</div>
+            <div className="dash-v2-comm-empty">{!data ? (loading ? "Loading voicemails…" : "Voicemails unavailable.") : "No voicemails in your inbox."}</div>
           ) : (
             <ul className="dash-v2-comm-list" role="list">
               {vmRecent.map((vm) => (
                 <li key={vm.id} className={`dash-v2-comm-item ${!vm.read ? "is-unread" : ""}`}>
                   <Link href="/voicemail" className="dash-v2-comm-item-link">
                     <span className="dash-v2-comm-item-avatar" aria-hidden>
-                      <Play size={11} />
+                      <Voicemail size={13} />
                     </span>
                     <span className="dash-v2-comm-item-body">
-                      <span className="dash-v2-comm-item-title">{vm.callerName || vm.callerNumber || "Unknown"}</span>
-                      <span className="dash-v2-comm-item-meta">{vm.callerName && vm.callerNumber ? vm.callerNumber : ""}{" · "}{fmtDuration(vm.durationSec)}</span>
+                      <span className="dash-v2-comm-item-title">{vm.callerName || vm.callerNumber || "Unknown caller"}{!vm.read && <span className="sr-only"> (Unread)</span>}</span>
+                      <span className="dash-v2-comm-item-meta">{vm.callerName && vm.callerNumber ? `${vm.callerNumber} · ` : ""}{fmtDuration(vm.durationSec)}</span>
                     </span>
                     <span className="dash-v2-comm-item-time">{relativeTime(vm.receivedAt)}</span>
                   </Link>
@@ -116,7 +116,7 @@ export function CommunicationsRow({ data, loading }: Props) {
                       <MessageSquare size={11} />
                     </span>
                     <span className="dash-v2-comm-item-body">
-                      <span className="dash-v2-comm-item-title">{m.counterpartyLabel || "Conversation"}</span>
+                      <span className="dash-v2-comm-item-title">{m.counterpartyLabel || "Conversation"}{m.unread && <span className="sr-only"> (Unread)</span>}</span>
                       <span className="dash-v2-comm-item-meta">{m.preview || "(no content)"}</span>
                     </span>
                     <span className="dash-v2-comm-item-time">{relativeTime(m.createdAt)}</span>

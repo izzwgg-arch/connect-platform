@@ -10,4 +10,4 @@ Verification: 4 chart/date tests passed; portal typecheck passed. Local producti
 
 Historical sidebar/dashboard unread-count discrepancy remains uninvestigated beyond the source scope review; no backend count change. Earlier mockups and rejected redesign are documented in the full handoff. Preserve this narrow-polish direction in future work.
 
-Voicemail review: current live card empty/repetitive; source identifies unread ::before as a fourth grid item shifting avatar/body/time in both themes and message previews. API already sorts newest first. Play icon only navigates; missing caller details leave a leading separator. Review only, not fixed/deployed; populated live rows unavailable. See full handoff.
+Voicemail fix implemented: stable read/unread rows in both themes, real unread markers, clear inbox scope/count, centered empty/loading/unavailable states, honest navigation icon and conditional metadata separator. Actual-component Chrome fixtures passed desktop/mobile in both themes; portal typecheck passed. Production rollout pending; see full handoff.

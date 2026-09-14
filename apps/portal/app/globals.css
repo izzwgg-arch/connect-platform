@@ -21975,12 +21975,15 @@ table tr:hover {
   text-align: center;
   border-top: 1px dashed var(--dash-card-border);
   border-bottom: 1px dashed var(--dash-card-border);
+  flex: 1;
+  display: grid;
+  place-items: center;
 }
 
 .dash-v2-comm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .dash-v2-comm-item .dash-v2-comm-item-link {
   display: grid;
-  grid-template-columns: 30px 1fr auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
@@ -21995,12 +21998,19 @@ table tr:hover {
 .dash-v2-comm-item.is-unread .dash-v2-comm-item-title {
   font-weight: 600;
 }
-.dash-v2-comm-item.is-unread .dash-v2-comm-item-link::before {
+.dash-v2-comm-item.is-unread .dash-v2-comm-item-avatar::after {
   content: "";
-  position: relative;
-  display: inline-block;
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--console-accent);
+  box-shadow: 0 0 0 2px var(--dash-card);
 }
 .dash-v2-comm-item-avatar {
+  position: relative;
   width: 26px; height: 26px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--dash-card) 60%, var(--console-bg));
