@@ -30,6 +30,7 @@ type Opts = {
   writes?: boolean;
   audits?: Array<Record<string, any>>;
   superOk?: boolean;
+  gate?: { ok: true } | { ok: false; error: string; message: string };
 };
 
 async function build(o: Opts = {}) {
@@ -69,6 +70,7 @@ async function build(o: Opts = {}) {
       audits.push({ ...p, createdAt: new Date(NOW) });
     },
     writesEnabled: () => o.writes === true,
+    ownerNoticeGate: async () => o.gate ?? { ok: true },
     now: () => NOW,
   });
   const act = (payload: any, ref = REF) =>
@@ -193,6 +195,19 @@ describe("reads and writes", () => {
     // Another company's changes never count against this one.
     const otherTenant = await build({ writes: true, audits: full.map((a) => ({ ...a, tenantId: "tenant-other" })) });
     assert.equal((await otherTenant.act({ method: "POST", path: "/voicemail/greeting/reset", body: {} })).statusCode, 200);
+  });
+
+  test("⛔ a write is refused when the owner has not been notified or said STOP, and nothing is replayed", async () => {
+    for (const error of ["owner_not_notified", "stopped_by_owner"]) {
+      const { act, injected } = await build({ writes: true, gate: { ok: false, error, message: "no" } });
+      const res = await act({ method: "POST", path: "/voicemail/greeting/reset", body: {} });
+      assert.equal(res.statusCode, 409);
+      assert.equal(res.json().error, error);
+      assert.equal(injected.length, 0);
+    }
+    // Reads never need a notice.
+    const reads = await build({ writes: true, gate: { ok: false, error: "owner_not_notified", message: "no" } });
+    assert.equal((await reads.act({ method: "GET", path: "/voice/extensions" })).statusCode, 200);
   });
 
   test("⛔ a blocked path never reaches the ticket lookup or the replay", async () => {

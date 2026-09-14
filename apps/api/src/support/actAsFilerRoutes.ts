@@ -108,6 +108,8 @@ export type ActAsFilerDeps = {
     metadata?: Record<string, unknown> | null;
   }) => Promise<unknown>;
   writesEnabled: () => boolean;
+  /** Has the owner been texted what is happening, and has he not said STOP? (supportAgentNotice.ts) */
+  ownerNoticeGate: (escalationId: string) => Promise<{ ok: true } | { ok: false; error: string; message: string }>;
   now?: () => number;
   log?: { info?: (o: any, m?: string) => void; warn?: (o: any, m?: string) => void };
 };
@@ -197,6 +199,9 @@ export function registerActAsFilerRoutes(app: FastifyInstance, deps: ActAsFilerD
           message: `This company already had changes made on ${tickets.size} tickets today; the rest wait for tomorrow or a person.`,
         });
       }
+      // ⛔ The owner is told BEFORE anything changes, and his STOP is final.
+      const gate = await deps.ownerNoticeGate(esc.id);
+      if (!gate.ok) return reply.status(409).send({ error: gate.error, message: gate.message });
     }
 
     const token = deps.signFilerToken({ sub: filer.id, tenantId: filer.tenantId, email: filer.email, role: String(filer.role) });

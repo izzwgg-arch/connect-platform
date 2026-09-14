@@ -8945,3 +8945,33 @@ model SupportMessage {
   @@index([escalationId, createdAt])
   @@index([direction, readAt, createdAt])
 }
+
+/// The support agent's texts to the owner (2026-09-14, Izzy's rule): scope
+/// "tenant" = a change confined to the ticket's company — he is told what is
+/// being done and it proceeds unless he replies STOP <code>; scope "system" =
+/// a change that affects every customer — nothing happens until GO <code>.
+/// ⛔ The act-as-filer route refuses every write without a live notice whose SMS
+/// actually reached him, and refuses all writes on a ticket once he says STOP.
+model SupportAgentNotice {
+  id           String    @id @default(cuid())
+  escalationId String
+  tenantId     String
+  /// "tenant" | "system"
+  scope        String
+  /// What will change, in one plain sentence, exactly as texted.
+  summary      String
+  /// sha256 of the one-time code. ⛔ The code itself is never stored or returned.
+  codeHash     String    @unique
+  /// "proceeding" (tenant) | "awaiting_go" | "approved" (system) | "stopped"
+  status       String
+  smsSentAt    DateTime?
+  lastError    String?
+  decidedAt    DateTime?
+  /// Which owner phone replied.
+  decidedFrom  String?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([escalationId, createdAt])
+}

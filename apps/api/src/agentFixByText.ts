@@ -32,8 +32,18 @@ import {
   FIX_CODE_LENGTH,
   type FixOutcomeKind,
 } from "@connect/shared";
+import { parseNoticeReply } from "@connect/shared";
 import { resolvePlatformSmsSender, normalizeUsPhone } from "./billing/billingSmsSender";
 import { applyAgentFixAction, confirmCapabilityRegistry } from "./agentGrantRoutes";
+import { applyNoticeReply } from "./support/supportAgentNotice";
+
+/**
+ * Message ids already answered on a support-agent notice. The sweep re-reads a
+ * 30-minute window every minute, so without this a "no change" answer would be
+ * re-sent every minute. A reply that CHANGED something is answered once anyway,
+ * because the atomic claim only succeeds once.
+ */
+const noticeRepliesAnswered = new Set<string>();
 import { FIX_CODE_TTL_MS } from "./agentFixPolicy";
 
 export { FIX_CODE_TTL_MS };
@@ -135,6 +145,8 @@ export interface FixSweepSummary {
   applied: number;
   refused: number;
   ignored: number;
+  /** STOP / GO replies on support-agent notices. */
+  notices: number;
 }
 
 let running = false;
@@ -151,7 +163,7 @@ export async function sweepFixRepliesBatch(log?: {
   info: (o: any, m: string) => void;
   warn: (o: any, m: string) => void;
 }): Promise<FixSweepSummary> {
-  const summary: FixSweepSummary = { read: 0, approvals: 0, applied: 0, refused: 0, ignored: 0 };
+  const summary: FixSweepSummary = { read: 0, approvals: 0, applied: 0, refused: 0, ignored: 0, notices: 0 };
   if (running) return summary;
   running = true;
   try {
@@ -177,6 +189,19 @@ export async function sweepFixRepliesBatch(log?: {
     for (const msg of messages) {
       const parsed = parseFixReply(msg.body);
       if (!parsed) {
+        // STOP / GO on a support-agent notice — same threads, same allow-list,
+        // one reader. (supportAgentNotice.ts)
+        const notice = parseNoticeReply(msg.body);
+        if (notice) {
+          summary.notices++;
+          const out = await applyNoticeReply(db, { ...notice, from: msg.thread?.externalSmsE164 ?? "", approvers });
+          if (out.handled && out.replyTo && out.message && (out.changed || !noticeRepliesAnswered.has(msg.id))) {
+            if (noticeRepliesAnswered.size > 1000) noticeRepliesAnswered.clear();
+            noticeRepliesAnswered.add(msg.id);
+            await sendOutcomeSms(out.replyTo, out.tenantId ?? "", out.message);
+          }
+          continue;
+        }
         summary.ignored++;
         continue;
       }

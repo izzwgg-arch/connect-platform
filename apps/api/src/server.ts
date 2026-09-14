@@ -362,6 +362,7 @@ import {
   resetGreetingWithBusyMirror,
 } from "./voicemailGreetingMirror";
 import { registerActAsFilerRoutes } from "./support/actAsFilerRoutes";
+import { checkOwnerNoticeGate, registerSupportAgentNoticeRoutes, sendOwnerSmsViaPlatform } from "./support/supportAgentNotice";
 import { buildImportPlan, type PbxTenantFlowMap } from "./ivrMigration";
 import { isRecordingOfferable, shouldMarkRecordingMissing } from "./recordingAvailability";
 import { dispatchAgentEscalationsBatch } from "./agentEscalationDispatch";
@@ -373,7 +374,7 @@ import { syncAgentKnowledgeDocs, resolveAgentKnowledgeDir } from "./agentKnowled
 // The Watchman's read-only PBX probe (Phase 5b) — the same connect_read door
 // the PBX Console reads through, never a second credential path.
 import { openReadConn } from "./pbxConsole/pbxConsoleReaders";
-import { sweepFixRepliesBatch } from "./agentFixByText";
+import { fixApproverNumbers, sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
 import { registerServiceInterruptionRoutes, startServiceInterruptionSweep } from "./billing/serviceInterruption/serviceInterruptionBoot";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, resolvePersonDisplayName, type TenantDirectory, type UsedNumbers } from "@connect/shared";
@@ -42720,6 +42721,16 @@ const port = Number(process.env.PORT || 3001);
     },
     audit,
     writesEnabled: () => process.env.SUPPORT_AGENT_WRITES_ENABLED === "1",
+    ownerNoticeGate: (escalationId) => checkOwnerNoticeGate(db, escalationId),
+    log: app.log,
+  });
+  // The agent texts the owner what it is changing (and he can reply STOP), or
+  // asks before a change that affects every customer (and waits for GO). The
+  // replies are read by the existing fix-by-text sweep — one inbox reader.
+  registerSupportAgentNoticeRoutes(app, {
+    db,
+    requireSuper: (req, reply) => requireSuperAdmin(req, reply),
+    sendOwnerSms: ({ tenantId, body }) => sendOwnerSmsViaPlatform({ tenantId, body, to: fixApproverNumbers() }),
     log: app.log,
   });
   registerSupportConsoleRoutes({
