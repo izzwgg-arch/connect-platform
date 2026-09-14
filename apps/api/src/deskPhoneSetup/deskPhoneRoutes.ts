@@ -23,7 +23,8 @@ import {
   summarizeRun, vendorCanBeDrivenLocally, vendorSupportsPbxProvisioning,
   pnpArmList, planPhoneRetry, retryClears, retryableCount, inheritedResetCount,
   identifyPhone,
-  type PhoneCondition, type PhoneState,
+  describeDeviceType, describeProvisioningStatus, identifyDevice, provisioningStatusFor,
+  type DeviceType, type PhoneCondition, type PhoneState,
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 import { ensureProvisioningRecord, type RecordOutcome, type RecordQuery } from "./provisioningRecordWriter";
@@ -31,6 +32,9 @@ import { resolvePbxRouteHelperConfig } from "@connect/integrations";
 import { consoleSavePhone } from "../pbxInboundRouteHelperClient";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
 import { clientIpFromForwardedFor } from "../loginThrottle";
+import { addEvidence, cloudStateFromRow, evidenceForRow, identityColumns, reportedEvidence, sanitizeEvidence } from "./deviceIdentityStore";
+import { createDeviceProviderRegistry, type DeviceProviderRegistry } from "./deviceProviderRegistry";
+import { registerDeviceCloudRoutes } from "./deviceCloudRoutes";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -100,6 +104,17 @@ export type DeskPhoneDeps = {
     /** The public address the customer's computer reached us from (last XFF entry). */
     requesterIp?: string | null;
   }) => Promise<RecordOutcome>;
+  /**
+   * The makers' device clouds (Grandstream GDMS, Yealink RPS, Fanvil, Poly). Injectable
+   * for tests; the default builds the real adapters, which answer "not configured"
+   * honestly until credentials exist. ⛔ The wizard never branches on a brand — it asks
+   * this registry for the provider that matches what was DISCOVERED.
+   */
+  deviceProviders?: DeviceProviderRegistry;
+  /** Serializes claims for one hardware address across customers and api processes. */
+  withMacLock?: <T>(key: string, fn: (tx: any) => Promise<T>) => Promise<T>;
+  /** Transport for the GDMS credential check; tests inject the simulator. */
+  gdmsRequest?: typeof fetch;
 };
 
 /**
@@ -189,6 +204,18 @@ async function defaultIsRegistered(tenantId: string, extNumber: string): Promise
   } catch {
     return false;
   }
+}
+
+/**
+ * One claim per hardware address at a time, platform-wide: the same Postgres advisory
+ * lock shape the managed-phone service uses, so two customers (or two api processes
+ * during a blue/green cutover) can never both register the same device.
+ */
+async function defaultWithMacLock<T>(key: string, fn: (tx: any) => Promise<T>): Promise<T> {
+  return (db as any).$transaction(async (tx: any) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))::text`;
+    return fn(tx);
+  }, { timeout: 30_000, maxWait: 5_000 });
 }
 
 async function defaultProvisionedPhones(tenantId: string): Promise<PbxProvisionedPhone[]> {
@@ -382,7 +409,20 @@ function recordView(outcome: RecordOutcome | null) {
   }
 }
 
+const DOTTED_IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+/** A device-reported address is shown only when it really is one. */
+function dottedIpv4(value: unknown): string | null {
+  const s = String(value ?? "").trim();
+  return DOTTED_IPV4.test(s) ? s : null;
+}
+
 function customerPhoneView(row: any) {
+  const provisioningStatus = provisioningStatusFor({
+    phoneState: row.state,
+    vendorCloudState: row.vendorCloudState ?? null,
+    identityConfidence: row.identityConfidence ?? null,
+  });
   return {
     id: row.id,
     // ⛔ The MAC is DELIBERATELY in the customer view since 2026-08-25 — Izzy,
@@ -401,6 +441,16 @@ function customerPhoneView(row: any) {
     // ⛔ Whether the PERSON ticked this phone on the found screen. False = "left
     // exactly as it is": never advanced, never reset, not counted towards done.
     selected: !row.skippedAt,
+    // ⛔ 2026-09-14: the card says WHAT was detected — the kind of device, where it sits
+    // on the network, and how sure we are — so a person picks a device by what it IS,
+    // never by a brand they were asked to choose. Firmware, the serial number and the
+    // evidence trail stay in the technician's view.
+    ip: dottedIpv4(row.ipAddress),
+    deviceType: row.deviceType || null,
+    deviceTypeLabel: row.deviceType && row.deviceType !== "unknown" ? describeDeviceType(row.deviceType as DeviceType) : null,
+    identityConfidence: row.identityConfidence || null,
+    provisioningStatus,
+    provisioningStatusLabel: describeProvisioningStatus(provisioningStatus),
   };
 }
 
@@ -435,6 +485,34 @@ function diagnosticPhoneView(row: any) {
     registeredAt: row.registeredAt || null,
     haltedReason: row.haltedReason || null,
     technicalNote: row.technicalNote || null,
+    serialNumber: row.serialNumber || null,
+    vendorCloudState: row.vendorCloudState || "unchecked",
+    vendorCloudCheckedAt: row.vendorCloudCheckedAt || null,
+    identification: diagnosticIdentification(row),
+  };
+}
+
+/**
+ * How the identification was reached — every source that described the device, what each
+ * contributed, and where they disagreed. ⛔ Technician-only: it names probes and platforms.
+ */
+function diagnosticIdentification(row: any) {
+  const id = identifyDevice({
+    mac: String(row.macAddress ?? ""),
+    ip: row.ipAddress ?? null,
+    evidence: evidenceForRow(row),
+    cloud: cloudStateFromRow(row),
+  });
+  return {
+    manufacturer: id.manufacturer,
+    model: id.model,
+    deviceType: id.deviceType,
+    confidence: id.confidence,
+    confidenceScore: id.confidenceScore,
+    firmware: id.firmware,
+    serialNumber: id.serialNumber,
+    sources: id.identificationSources,
+    conflicts: id.conflicts,
   };
 }
 
@@ -448,6 +526,13 @@ const discoveredBody = z.object({
     model: z.string().max(120).optional(),
     firmware: z.string().max(120).optional(),
     provisioningUrl: z.string().max(500).optional(),
+    /**
+     * Which probe named the device (http_banner | sip_user_agent | http_device_api | none).
+     * ⛔ Free text on purpose: an unrecognised value is read as a plain banner, never a
+     * reason to refuse the whole discovery.
+     */
+    identitySource: z.string().max(32).optional(),
+    serialNumber: z.string().max(64).optional(),
   })).max(500),
 });
 
@@ -553,16 +638,43 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         firmware: p.firmware ? sanitizeDeviceText(p.firmware, 120) : null,
         provisioningUrl: p.provisioningUrl ? sanitizeDeviceText(p.provisioningUrl, 500) : null,
       };
+      // ⛔⛔ IDENTIFICATION (2026-09-14). What the office machine read is ONE source of
+      // evidence, kept beside every other source that has described this device — the
+      // phone system's record, the maker's cloud, the label, a person. The pipeline names
+      // the manufacturer from the hardware address and the MODEL only from evidence, and
+      // writes down how sure it is. One row per hardware address per run, so a device seen
+      // twice (or at a new address) merges into the same record.
+      const observed = reportedEvidence({
+        vendor: claimedVendor,
+        model: p.model,
+        firmware: p.firmware,
+        serialNumber: p.serialNumber,
+        identitySource: p.identitySource,
+      }, new Date().toISOString());
+      const identity = identityColumns({
+        mac,
+        ip: facts.ipAddress,
+        evidence: addEvidence(existing ? evidenceForRow(existing) : [], [observed]),
+      }).data;
       if (existing) {
         // ⛔ THE ADDRESS MOVING IS EXPECTED, NOT A NEW PHONE. Record where it was.
         const moved = existing.ipAddress && facts.ipAddress && existing.ipAddress !== facts.ipAddress;
         await db.deskPhoneSetupPhone.update({
           where: { id: existing.id },
-          data: { ...facts, previousIp: moved ? existing.ipAddress : existing.previousIp },
+          data: {
+            ...facts,
+            // ⛔ A rescan that could not read the model does not erase the one we already
+            // had — from an earlier read, the phone system's record, or a person naming it.
+            vendor: facts.vendor ?? existing.vendor ?? null,
+            model: facts.model ?? existing.model ?? null,
+            firmware: facts.firmware ?? existing.firmware ?? null,
+            previousIp: moved ? existing.ipAddress : existing.previousIp,
+            ...identity,
+          },
         });
       } else {
         await db.deskPhoneSetupPhone.create({
-          data: { tenantId: user.tenantId, runId: run.id, macAddress: mac, state: "IDENTIFIED", ...facts },
+          data: { tenantId: user.tenantId, runId: run.id, macAddress: mac, state: "IDENTIFIED", ...facts, ...identity },
         });
       }
       stored += 1;
@@ -627,6 +739,24 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
                 if (ext.displayName) patch.displayName = sanitizeDeviceText(ext.displayName, 120);
               }
             }
+          }
+          // The phone system's record is evidence too — deliberately below the device's
+          // own words, because records go stale (three phones on Izzy's desk carried other
+          // customers' records). Written only when what the record says has changed.
+          const storedEvidence = evidenceForRow(row);
+          const recordSays = sanitizeEvidence({
+            source: "pbx_provisioning_record",
+            manufacturer: rec.brand ? rec.brand.toLowerCase() : null,
+            model: rec.model,
+            observedAt: new Date().toISOString(),
+          });
+          const priorRecord = storedEvidence.find((e) => e.source === "pbx_provisioning_record");
+          if (recordSays && (!priorRecord || priorRecord.model !== recordSays.model || priorRecord.manufacturer !== recordSays.manufacturer)) {
+            Object.assign(patch, identityColumns({
+              mac: String(row.macAddress),
+              ip: row.ipAddress ?? null,
+              evidence: addEvidence(storedEvidence, [recordSays]),
+            }).data);
           }
           if (Object.keys(patch).length) {
             await db.deskPhoneSetupPhone.update({ where: { id: row.id }, data: patch });
@@ -805,9 +935,25 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       return reply.status(400).send({ error: picked.reason, message: picked.message });
     }
 
+    // ⛔ The person's answer is recorded as evidence too, so the identification and its
+    // confidence reflect it; the audit below still keeps what it replaced.
+    const namedByPerson = sanitizeEvidence({
+      source: "manual_entry",
+      manufacturer: picked.vendor,
+      model: picked.model,
+      observedAt: new Date().toISOString(),
+    });
     let updated = await db.deskPhoneSetupPhone.update({
       where: { id: phone.id },
-      data: { vendor: picked.vendor, model: picked.model },
+      data: {
+        vendor: picked.vendor,
+        model: picked.model,
+        ...identityColumns({
+          mac: String(phone.macAddress),
+          ip: phone.ipAddress ?? null,
+          evidence: addEvidence(evidenceForRow(phone), [namedByPerson]),
+        }).data,
+      },
     });
 
     /**
@@ -1771,6 +1917,27 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // ⛔ An honest 404: the screen falls back to a drawn phone rather than a broken
     // image icon, which reads as a broken product.
     return reply.status(404).send({ error: "not_found" });
+  });
+
+  /* ── the makers' device clouds: identify, register, prepare ────────────── */
+
+  // ⛔ Same guards, same audit, same wizard. These routes live in their own file only
+  // because this one is long; deskPhoneRouteOrder.test.ts holds both to the same rules.
+  registerDeviceCloudRoutes(app, {
+    deps,
+    db,
+    getUser,
+    ownRun,
+    allowedToSetUp,
+    allowedToReset,
+    isSuper,
+    mayRunSetup,
+    customerPhoneView,
+    resetApprovalFor,
+    isOurProvisioningUrl: (url) => classifyOurs(url, deps.ourProvisioningHosts()),
+    isRegistered: deps.isRegistered ?? defaultIsRegistered,
+    registry: deps.deviceProviders ?? createDeviceProviderRegistry({ db, request: deps.gdmsRequest }),
+    withMacLock: deps.withMacLock ?? defaultWithMacLock,
   });
 }
 

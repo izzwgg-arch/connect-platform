@@ -38,6 +38,8 @@ const PHONE_COLUMNS = new Set([
   "firmware", "provisioningUrl", "extensionId", "extNumber", "displayName", "state",
   "customerNote", "technicalNote", "attempts", "resetCount", "resetRequestedAt",
   "registeredAt", "haltedReason", "createdAt", "updatedAt",
+  // 2026-09-14: identification + maker-cloud state (migration 20260914190000).
+  "deviceType", "serialNumber", "identityConfidence", "identityEvidence", "vendorCloudState", "vendorCloudCheckedAt",
 ]);
 
 function checkColumns(cols: Set<string>, obj: any, where: string) {

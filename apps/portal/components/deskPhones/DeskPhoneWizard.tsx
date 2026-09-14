@@ -53,6 +53,14 @@ type CustomerPhone = {
   connectedNow?: boolean | null;
   /** False once the person left this phone unticked on the found screen. */
   selected?: boolean;
+  /** Its address on the office network, shown beside the hardware address (2026-09-14). */
+  ip?: string | null;
+  /** What kind of thing it is, from everything it and its maker said about itself. */
+  deviceType?: string | null;
+  deviceTypeLabel?: string | null;
+  identityConfidence?: string | null;
+  provisioningStatus?: string | null;
+  provisioningStatusLabel?: string | null;
   status: "Finding" | "Preparing" | "Restarting" | "Connecting" | "Ready" | "Needs attention";
   note: string | null;
   needsAttention: boolean;
@@ -270,11 +278,18 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       // printer fleet dressed up as broken phones.
       const verdict = classifyDiscoveredHosts(enriched);
       setOthersCount(verdict.othersCount);
+      // ⛔ `identitySource` says HOW the device named itself, so the server files it as its
+      // own identification source. A device that said nothing reports "none": the server
+      // then relies on the hardware address and the maker's cloud, and never records a
+      // blank reading as evidence. An older desktop build sends no source at all.
       const found = verdict.phones.map((h: any) => ({
         mac: h.mac, ip: h.ip,
         vendor: h.fingerprint?.vendor ?? undefined,
         model: h.fingerprint?.model ?? undefined,
         firmware: h.fingerprint?.firmware ?? undefined,
+        identitySource: typeof h.fingerprint?.source === "string"
+          ? h.fingerprint.source
+          : (h.fingerprint?.model || (h.fingerprint?.vendor && h.fingerprint.vendor !== "unknown")) ? undefined : "none",
       }));
       const out = await apiPost<{ phones: CustomerPhone[]; subnet: string | null; knownElsewhere?: Array<{ mac: string; model: string | null; vendor: string | null; name: string | null; connectedNow?: boolean | null }> }>(
         `/desk-phones/runs/${runId}/discovered`,
@@ -319,6 +334,39 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       setIdentifyBusy((b) => ({ ...b, [phoneId]: false }));
     }
   }, [runId, loadRun]);
+
+  /**
+   * WHAT THE LABEL SAYS, typed — or scanned, because a handheld barcode scanner types
+   * into a text box exactly like a keyboard, so this one field is the barcode fallback
+   * too (2026-09-14). The server reads the serial number, the hardware address and the
+   * model off the text, and refuses a label that belongs to a different device.
+   * ⛔ Refusals land on this phone's row, read off `.body` — the same rules as above.
+   */
+  const [labelDraft, setLabelDraft] = useState<Record<string, string>>({});
+  const scanLabel = useCallback(async (phoneId: string, text: string) => {
+    const said = text.trim();
+    if (!runId || !said) return;
+    setIdentifyBusy((b) => ({ ...b, [phoneId]: true }));
+    setIdentifyError((e) => ({ ...e, [phoneId]: "" }));
+    try {
+      await apiPost(`/desk-phones/runs/${runId}/phones/${phoneId}/scan-label`, { text: said.slice(0, 600) });
+      setLabelDraft((d) => { const next = { ...d }; delete next[phoneId]; return next; });
+      await loadRun(runId);
+    } catch (err: any) {
+      const reason = err?.body?.message;
+      setIdentifyError((e) => ({ ...e, [phoneId]: reason || "That label could not be read. Pick the make and model instead." }));
+    } finally {
+      setIdentifyBusy((b) => ({ ...b, [phoneId]: false }));
+    }
+  }, [runId, loadRun]);
+
+  /** The line under a phone's name: what it looks like and what kind of thing it is — never the same words twice. */
+  const hardwareLine = (p: CustomerPhone): string => {
+    const named = [p.vendor, p.model].filter(Boolean).join(" ");
+    const looks = p.displayName ? (named || describe(p.model)) : describe(p.model);
+    const kind = p.deviceType && p.deviceType !== "unknown" ? (p.deviceTypeLabel ?? null) : null;
+    return kind && !looks.toLowerCase().includes(kind.toLowerCase()) ? `${looks} · ${kind}` : looks;
+  };
 
   const assign = useCallback(async (phoneId: string, extensionId: string | null) => {
     if (!runId) return;
@@ -794,8 +842,8 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                       <b>{p.displayName
                         ? `${p.displayName}${p.extNumber ? ` — ext ${p.extNumber}` : ""}`
                         : ([p.vendor, p.model].filter(Boolean).join(" ") || "Desk phone")}</b>
-                      <span>{p.displayName ? ([p.vendor, p.model].filter(Boolean).join(" ") || describe(p.model)) : describe(p.model)}</span>
-                      {p.mac && <span className="dps-mac">{p.mac}</span>}
+                      <span>{hardwareLine(p)}</span>
+                      {(p.mac || p.ip) && <span className="dps-mac">{[p.mac, p.ip].filter(Boolean).join(" · ")}</span>}
                     </div>
                     {step === "match" ? (
                       <ConnectSelect
@@ -846,6 +894,30 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         onMake={(v) => setIdentifyDraft((d) => ({ ...d, [p.id]: { make: v, model: d[p.id]?.model ?? "" } }))}
                         onModel={(v) => setIdentifyDraft((d) => ({ ...d, [p.id]: { make: d[p.id]?.make ?? "", model: v } }))}
                       />
+                      {/* ⛔ The same question answered from the label itself: type what it says,
+                          or point a barcode scanner at it — a scanner types like a keyboard. */}
+                      <div style={{ marginTop: 10 }}>
+                        <label className="dps-flabel" htmlFor={`dps-label-${p.id}`}>Or type or scan what the label says</label>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <input
+                            id={`dps-label-${p.id}`}
+                            className="dps-input"
+                            maxLength={600}
+                            placeholder="Serial number, MAC or model from the label"
+                            value={labelDraft[p.id] ?? ""}
+                            disabled={!!identifyBusy[p.id]}
+                            onChange={(e) => { const v = e.target.value; setLabelDraft((d) => ({ ...d, [p.id]: v })); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") void scanLabel(p.id, labelDraft[p.id] ?? ""); }}
+                          />
+                          <button
+                            className="dps-btn dps-btn-g"
+                            disabled={!(labelDraft[p.id] ?? "").trim() || !!identifyBusy[p.id]}
+                            onClick={() => void scanLabel(p.id, labelDraft[p.id] ?? "")}
+                          >
+                            Read the label
+                          </button>
+                        </div>
+                      </div>
                       <div className="dps-idfoot">
                         <StickerDrawing />
                         <button

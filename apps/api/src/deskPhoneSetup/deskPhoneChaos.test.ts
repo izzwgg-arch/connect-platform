@@ -300,7 +300,10 @@ async function chaosRun(seed: number, steps: number) {
                 // fields stay diagnostic-only.
                 assert.ok(typeof p.mac === "string" && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(p.mac),
                   `customer view mac missing or unformatted: ${p.mac} [seed=${seed} step=${step}]`);
-                assert.equal(p.ip, undefined, `ip leaked [seed=${seed} step=${step}]`);
+                // 2026-09-14: the wizard card shows the detected IP. It must be a real
+                // dotted address or nothing — never whatever text a device reported.
+                assert.ok(p.ip === null || /^(\d{1,3}\.){3}\d{1,3}$/.test(p.ip),
+                  `customer view ip is not an address: ${p.ip} [seed=${seed} step=${step}]`);
                 assert.equal(p.provisioningUrl, undefined, `provisioning url leaked [seed=${seed} step=${step}]`);
               }
             }

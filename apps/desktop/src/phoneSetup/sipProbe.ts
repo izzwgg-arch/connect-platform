@@ -96,7 +96,7 @@ export function sipOptionsProbe(ip: string, timeoutMs = SIP_PROBE_TIMEOUT_MS): P
       const banner = parseSipBanner(msg.toString("utf8"));
       clearTimeout(timer);
       if (!banner) { done(null); return; }
-      done({ banner, fingerprint: identityFromBanner(banner) });
+      done({ banner, fingerprint: { ...identityFromBanner(banner), source: "sip_user_agent" } });
     });
     try {
       socket.send(packet, SIP_PROBE_PORT, ip, (err) => { if (err) { clearTimeout(timer); done(null); } });

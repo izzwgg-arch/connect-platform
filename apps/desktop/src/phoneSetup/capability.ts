@@ -17,7 +17,7 @@
 import { scanLan, type ScanResult } from "./lanScan";
 import { sipOptionsProbe, type SipProbeResult } from "./sipProbe";
 import {
-  buildStatusRequest, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, requestWithSchemeFallback, sendAction, testCredentials,
+  buildGrandstreamModelRequest, buildStatusRequest, fingerprintFromGrandstreamValues, fingerprintFromResponse, isLoopcomProvisioningUrl, isPrivateIpv4, requestWithSchemeFallback, sendAction, testCredentials,
   YEALINK_DEFAULT_CREDENTIALS, type DeviceFingerprint, type HttpTransport, type YealinkCredentials,
 } from "./yealink";
 import { normalizeMac } from "./pnp";
@@ -356,6 +356,18 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         if (http && http.model && http.vendor !== "unknown") {
           return { ok: true, op: "fingerprint", fingerprint: http };
         }
+        // ⛔ A Grandstream web page that answered but named no model gets ONE more read:
+        // Grandstream's own model API, which needs no password (2026-09-14). ONLY a page
+        // that already says Grandstream — never an unknown device. Asking every unnamed web
+        // server doubled what a fingerprint sends onto the office network and walked
+        // straight through the 30-a-minute flood cap (caught by the adversarial test).
+        if (http && !http.model && http.vendor === "grandstream") {
+          try {
+            const res = await requestWithSchemeFallback(deps.http, buildGrandstreamModelRequest(ip), () => buildGrandstreamModelRequest(ip, { https: true }));
+            const own = res ? fingerprintFromGrandstreamValues(res) : null;
+            if (own) return { ok: true, op: "fingerprint", fingerprint: { ...own, firmware: http.firmware ?? null } };
+          } catch { /* still unnamed; SIP is next */ }
+        }
         const sip = await probeSip(ip).catch(() => null);
         if (sip) {
           const merged: DeviceFingerprint = {
@@ -363,6 +375,7 @@ export function createPhoneCapability(deps: CapabilityDeps) {
             model: http?.model ?? sip.fingerprint.model,
             firmware: http?.firmware ?? sip.fingerprint.firmware,
             confidence: sip.fingerprint.confidence === "none" && http ? http.confidence : sip.fingerprint.confidence,
+            source: http?.model ? "http_banner" : "sip_user_agent",
           };
           return { ok: true, op: "fingerprint", fingerprint: merged };
         }

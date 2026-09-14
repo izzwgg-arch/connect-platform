@@ -212,7 +212,7 @@ test("a phone with an unreadable hardware id is counted, never stored", async ()
   assert.equal(state.phones.length, 1);
 });
 
-test("the customer's view carries no hardware id, address or firmware", async () => {
+test("the customer's view carries no raw hardware id, firmware or old provisioning address", async () => {
   reset();
   const app = await makeApp(CUSTOMER);
   const runId = await startRun(app);
@@ -221,9 +221,13 @@ test("the customer's view carries no hardware id, address or firmware", async ()
       provisioningUrl: "https://prov.oldprovider.net/x" },
   ]);
   const shown = JSON.stringify(out.phones);
-  for (const leak of ["805e0c", "192.168", "96.86", "oldprovider"]) {
+  for (const leak of ["805e0c", "96.86", "oldprovider"]) {
     assert.ok(!shown.includes(leak), `${leak} leaked to the customer's screen`);
   }
+  // 2026-09-14: the card shows what was detected — model, type, formatted MAC and IP.
+  assert.equal(out.phones[0].ip, "192.168.1.41");
+  assert.equal(out.phones[0].mac, "80:5E:0C:BD:13:5A");
+  assert.equal(out.phones[0].deviceType, "desk_phone");
 });
 
 test("the network that was searched is always returned", async () => {

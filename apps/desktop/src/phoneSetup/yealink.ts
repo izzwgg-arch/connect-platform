@@ -207,7 +207,7 @@ export function buildStatusRequest(
 }
 
 export type DeviceFingerprint = {
-  vendor: "yealink" | "grandstream" | "fanvil" | "panasonic" | "unknown";
+  vendor: "yealink" | "grandstream" | "fanvil" | "panasonic" | "poly" | "unknown";
   model: string | null;
   firmware: string | null;
   /**
@@ -217,6 +217,13 @@ export type DeviceFingerprint = {
    * eventually show a customer a picture of the wrong phone.
    */
   confidence: "reported" | "banner" | "none";
+  /**
+   * Which way the device told us (2026-09-14). The server files each as its own
+   * identification source, so staff can see that a model came from the phone's own
+   * model API rather than a web page title. Optional on purpose: an older desktop
+   * build sends none, and the server then records a generic device banner.
+   */
+  source?: "http_banner" | "sip_user_agent" | "http_device_api";
 };
 
 /**
@@ -228,8 +235,20 @@ export type DeviceFingerprint = {
  * model plus a region/colour suffix, which is why the KX branch allows the
  * trailing letter+digits. Anything that matches none of them is honestly "unknown".
  */
+// (2026-09-14) Poly VVX / CCX / Edge / Trio, and the rest of the Grandstream and Yealink
+// families the shared identification rules know (GXV video, GXW gateways, GAC conference,
+// GSC speakers, WP8 Wi-Fi, DP7 DECT bases, Yealink VP video and MP desk phones). Poly's
+// SIP User-Agent separates family and number with an underscore ("VVX_450"), which is
+// why those branches allow one separator; the model is stored with separators removed.
 const MODEL_PATTERN =
-  /\b(SIP-)?(KX-?(?:TGP|UT|HDV)\d{3}(?:[A-Z]\d{0,2})?|T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}(?:SV|SW|[SVWD])?)\b/i;
+  /\b(SIP-)?(KX-?(?:TGP|UT|HDV)\d{3}(?:[A-Z]\d{0,2})?|VVX[_ -]?\d{3,4}|CCX[_ -]?\d{3}|EDGE[_ -]?[EB]\d{2,3}|TRIO[_ -]?\d{4}|GXV\d{4}|GXW\d{4}|GAC\d{4}|GSC\d{4}|WP8\d{2}|DP7\d{2}|VP\d{2}[A-Z]?|MP\d{2}[A-Z]?|T\d{2}[A-Z]?(?:[_-]?E2)?|CP\d{3}[A-Z]?|AX\d{2}[A-Z]?|W\d{2}[A-Z]?|HT\d{3}|GXP\d{4}[A-Z]?|GRP\d{4}[A-Z]?|GDS\d{4}|PA\d|X\d{1,2}[USVG]?|i\d{2}(?:SV|SW|[SVWD])?)\b/i;
+
+/** The families only Grandstream ships — the one maker whose model API is read below. */
+const GRANDSTREAM_FAMILY = /^(GXP|GRP|GXV|GXW|GAC|GSC|GDS|HT\d|WP8|DP7)/;
+
+function canonicalFingerprintModel(model: string): string {
+  return model.toUpperCase().replace(/[_\s-]/g, "");
+}
 
 /**
  * What is this thing, from whatever it said.
@@ -243,7 +262,7 @@ export function fingerprintFromResponse(res: HttpResponse): DeviceFingerprint {
   const server = header(res, "server");
   const realm = header(res, "www-authenticate");
   const title = /<title>([^<]{0,120})<\/title>/i.exec(res.body || "")?.[1] ?? "";
-  return identityFromBanner(`${server} ${realm} ${title}`);
+  return { ...identityFromBanner(`${server} ${realm} ${title}`), source: "http_banner" };
 }
 
 /**
@@ -261,6 +280,9 @@ export function identityFromBanner(haystack: string): DeviceFingerprint {
     // The word, or a KX SIP family — a Panasonic web page titles itself by bare
     // model ("KX-TGP500") without the maker's name anywhere on it.
     : /panasonic|\bKX-?(?:TGP|UT|HDV)\d{3}/i.test(haystack) ? "panasonic"
+    // Poly signs "PolycomVVX-VVX_450-UA/…" or "Poly/CCX_600-UA/…"; a page may name only
+    // the family. ⛔ "poly" must end the word, or a "Polygon" router becomes a phone.
+    : /\bpolycom|\bpoly(?![a-z])|\b(?:VVX|CCX|TRIO)[_ -]?\d{3,4}\b|\bEDGE[_ -]?[EB]\d{2,3}\b/i.test(haystack) ? "poly"
     : "unknown";
   const model = MODEL_PATTERN.exec(haystack)?.[2] ?? null;
   const firmware = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)\b/.exec(haystack)?.[1] ?? null;
@@ -268,10 +290,54 @@ export function identityFromBanner(haystack: string): DeviceFingerprint {
   if (vendor === "unknown" && !model) return { vendor: "unknown", model: null, firmware: null, confidence: "none" };
   return {
     vendor,
-    model: model ? model.toUpperCase().replace(/[_-]/g, "") : null,
+    model: model ? canonicalFingerprintModel(model) : null,
     firmware,
     confidence: model || firmware ? "banner" : "none",
   };
+}
+
+/**
+ * Grandstream's own model read, and it needs no password: `GET
+ * /cgi-bin/api.values.get?request=phone_model` (captured off Izzy's GXP2170,
+ * 2026-09-10). A locked Grandstream web page names nothing; this names the model.
+ *
+ * ⛔ A READ, fenced to a private office address exactly like the status page, and it
+ * carries no credential of any kind.
+ */
+export function buildGrandstreamModelRequest(ip: string, opts: { https?: boolean } = {}): HttpRequest {
+  const host = canonicalPrivateIpv4(ip);
+  if (!host) throw new Error("refused: not a private office address");
+  return {
+    url: `${opts.https ? "https" : "http"}://${host}/cgi-bin/api.values.get?request=phone_model`,
+    method: "GET",
+    headers: {},
+    timeoutMs: PHONE_HTTP_TIMEOUT_MS,
+  };
+}
+
+/**
+ * ⛔ Believed only when the answer is a Grandstream model name we recognise. Another
+ * device answering the same path with anything else is left UNNAMED rather than named
+ * wrongly — the model decides which settings a device is sent.
+ */
+export function fingerprintFromGrandstreamValues(res: HttpResponse): DeviceFingerprint | null {
+  if (!res || res.status !== 200) return null;
+  const text = String(res.body ?? "").slice(0, 4096);
+  let raw: unknown = null;
+  try {
+    const parsed = JSON.parse(text);
+    raw = parsed?.body?.phone_model ?? parsed?.phone_model ?? null;
+  } catch {
+    raw = /phone_model["']?\s*[:=]\s*["']?([A-Za-z0-9_ -]{2,32})/.exec(text)?.[1] ?? null;
+  }
+  if (typeof raw !== "string") return null;
+  const candidate = raw.trim();
+  if (!/^[A-Za-z0-9_ -]{2,32}$/.test(candidate)) return null;
+  const hit = MODEL_PATTERN.exec(candidate)?.[2];
+  if (!hit) return null;
+  const model = canonicalFingerprintModel(hit);
+  if (!GRANDSTREAM_FAMILY.test(model)) return null;
+  return { vendor: "grandstream", model, firmware: null, confidence: "banner", source: "http_device_api" };
 }
 
 function header(res: HttpResponse, name: string): string {

@@ -19,8 +19,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** ⛔ CRLF-normalised: this tree is checked out CRLF under core.autocrlf=true. */
-const raw = readFileSync(join(__dirname, "deskPhoneRoutes.ts"), "utf8").replace(/\r\n/g, "\n");
+/**
+ * ⛔ CRLF-normalised: this tree is checked out CRLF under core.autocrlf=true.
+ * ⛔ BOTH route files: the maker-cloud routes (2026-09-14) live beside the wizard's and
+ * are held to exactly the same ordering rules.
+ */
+const raw = ["deskPhoneRoutes.ts", "deviceCloudRoutes.ts"]
+  .map((f) => readFileSync(join(__dirname, f), "utf8").replace(/\r\n/g, "\n"))
+  .join("\n");
 
 function stripComments(src: string): string {
   return src

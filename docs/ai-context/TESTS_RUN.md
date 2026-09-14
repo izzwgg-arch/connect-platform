@@ -4,6 +4,26 @@ Newest entries first.
 
 ---
 
+## Desk-phone automatic device identification + maker-cloud providers (2026-09-14, latest)
+
+```bash
+cd packages/shared && npm test                                                              # 698/698
+cd packages/shared && npx tsc --noEmit -p tsconfig.json                                     # 0 errors
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/deviceProviders.test.ts     # 33/33
+cd apps/api && node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/deviceCloudRoutes.test.ts   # 27/27
+cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"                # 242: 241 pass, 1 skipped (real-Postgres)
+cd apps/api && npx tsc --noEmit -p tsconfig.json                                            # 84 = baseline, 0 in deskPhoneSetup
+cd apps/desktop && node --import tsx --test "src/phoneSetup/*.test.ts"                      # 152/152
+cd apps/desktop && npx tsc -p tsconfig.json --noEmit                                        # 0
+cd apps/portal && npx tsx --test components/deskPhones/*.test.ts lib/deskPhoneWizard.test.ts lib/nativeSelectSweep.test.ts
+#   113: 112 pass; 1 fail = nativeSelectSweep on app/(platform)/orders/OrdersDesk.tsx:563 (pre-existing, not this work)
+cd apps/portal && npx tsc -p tsconfig.json --noEmit                                         # 0
+# prisma migrate diff (HEAD schema -> new schema) == migration 20260914190000 SQL
+# PORTAL_GUARD_ROOT=<HEAD export> wizardDeviceIdentity.test.ts -> 3 of 5 fail at HEAD (other 2 are regression guards)
+```
+
+Not run: any live GDMS / Yealink RPS call (no credentials stored), any real handset, any deploy.
+
 ## Desk-phone reset wired + counted only when sent (2026-09-14, later)
 
 Branch `feat/ivr-migration-takeover`. Plan doc §20f. ⛔ Every reset proof below uses a FAKE

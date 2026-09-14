@@ -8338,6 +8338,23 @@ model DeskPhoneSetupPhone {
   /// not in the app, so a reopened window cannot silently widen the selection.
   skippedAt DateTime?
 
+  /// ⛔ IDENTIFICATION (2026-09-14). What the identification pipeline decided this device
+  /// is, from every source that described it (`identifyDevice` in @connect/shared). The
+  /// MAC prefix names only a manufacturer; the model comes from evidence.
+  /// desk_phone | video_phone | ata | door_phone | intercom | conference_phone |
+  /// cordless_base | gateway | paging_device | other_supported_endpoint | unknown
+  deviceType         String?
+  /// From the label, the maker's cloud or the device itself. Cleaned; not a secret.
+  serialNumber       String?
+  /// confirmed | high | medium | low | unknown
+  identityConfidence String?
+  /// What each source said, one entry per source, bounded. ⛔ Never credentials.
+  identityEvidence   Json?
+  /// The maker's cloud's view of this device:
+  /// unchecked | not_found | claiming | managed | conflict | unavailable
+  vendorCloudState     String?
+  vendorCloudCheckedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -8348,6 +8365,8 @@ model DeskPhoneSetupPhone {
   @@unique([runId, macAddress])
   @@index([tenantId, state])
   @@index([runId, state])
+  /// The cross-customer ownership check looks a hardware address up across tenants.
+  @@index([macAddress])
 }
 
 /// A regulatory/compliance deadline (FCC, USAC, state) on LoopCom's calendar.
