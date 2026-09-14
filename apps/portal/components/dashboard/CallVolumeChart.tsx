@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useEffect } from "react";
 import { TrendingUp } from "lucide-react";
+import { smoothLine, chartTickIndices } from "./chartGeometry";
 import type { DateRangeKey } from "../DateRangeFilter";
 
 export type TrafficPoint = {
@@ -20,6 +21,8 @@ export type TrafficData = {
   range: string;
   timezone: string;
   windowMinutes: number;
+  windowFrom?: string;
+  windowTo?: string;
   bucketMinutes: number | null;
   totals: { total: number; incoming: number; outgoing: number; internal: number; missed: number; canceled?: number };
   points: TrafficPoint[];
@@ -33,43 +36,23 @@ type Props = {
 
 type HoverState = { index: number; x: number; y: number } | null;
 
-/** Generate a smooth SVG path from points using a cardinal/Catmull-Rom interpolation. */
-function smoothLine(points: Array<{ x: number; y: number }>, tension = 0.5): string {
-  if (points.length === 0) return "";
-  if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y}`;
-  const t = tension;
-  const segments: string[] = [`M ${points[0]!.x} ${points[0]!.y}`];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[i - 1] ?? points[i]!;
-    const p1 = points[i]!;
-    const p2 = points[i + 1]!;
-    const p3 = points[i + 2] ?? p2;
-    const cp1x = p1.x + ((p2.x - p0.x) / 6) * t;
-    const cp1y = p1.y + ((p2.y - p0.y) / 6) * t;
-    const cp2x = p2.x - ((p3.x - p1.x) / 6) * t;
-    const cp2y = p2.y - ((p3.y - p1.y) / 6) * t;
-    segments.push(`C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`);
-  }
-  return segments.join(" ");
-}
-
-function fmtBucketLabel(point: TrafficPoint, rangeKey: DateRangeKey): string {
+function fmtBucketLabel(point: TrafficPoint, rangeKey: DateRangeKey, timezone?: string): string {
   const start = new Date(point.start);
   if (Number.isNaN(start.getTime())) return point.label;
   if (rangeKey === "today") {
-    return start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return start.toLocaleTimeString([], { timeZone: timezone, hour: "numeric", minute: "2-digit" });
   }
-  return start.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return start.toLocaleDateString([], { timeZone: timezone, weekday: "short", month: "short", day: "numeric" });
 }
 
-function fmtTooltipTitle(point: TrafficPoint, rangeKey: DateRangeKey): string {
+function fmtTooltipTitle(point: TrafficPoint, rangeKey: DateRangeKey, timezone?: string): string {
   const start = new Date(point.start);
   if (Number.isNaN(start.getTime())) return point.label;
   if (rangeKey === "today") {
-    const hour = start.toLocaleTimeString([], { hour: "numeric" });
+    const hour = start.toLocaleTimeString([], { timeZone: timezone, hour: "numeric" });
     return hour;
   }
-  return start.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  return start.toLocaleDateString([], { timeZone: timezone, weekday: "long", month: "short", day: "numeric" });
 }
 
 export function CallVolumeChart({ data, loading, rangeKey }: Props) {
@@ -117,7 +100,7 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
   }, []);
 
   const { hoverPositions, viewBox, series, gridLines, xTicks, hasData } = useMemo(() => {
-    const padding = { top: 16, right: 16, bottom: 28, left: 36 };
+    const padding = { top: 16, right: 24, bottom: 32, left: 44 };
     const innerW = Math.max(10, size.w - padding.left - padding.right);
     const innerH = Math.max(10, size.h - padding.top - padding.bottom);
     const raw = data?.points ?? [];
@@ -155,21 +138,18 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
       return { x: xFor(i), y: Math.min(yIncoming, yOutgoing, yInternal) };
     });
 
-    // Y grid lines: 4 horizontal divisions
-    const gridDivs = 4;
+    // Nice ceilings are multiples of five (except 1 and 2): use whole-call ticks.
+    const gridDivs = Math.min(5, niceMax);
     const grid = [] as Array<{ y: number; value: number }>;
     for (let i = 0; i <= gridDivs; i++) {
       const value = (niceMax * (gridDivs - i)) / gridDivs;
       grid.push({ y: padding.top + (i * innerH) / gridDivs, value: Math.round(value) });
     }
 
-    // X ticks: at most 8 evenly-spaced labels.
-    const targetTicks = Math.min(8, raw.length);
-    const tickStep = raw.length > 1 ? Math.max(1, Math.ceil(raw.length / targetTicks)) : 1;
-    const ticks: Array<{ x: number; label: string; index: number }> = [];
-    for (let i = 0; i < raw.length; i += tickStep) {
-      ticks.push({ x: xFor(i), label: fmtBucketLabel(raw[i]!, rangeKey), index: i });
-    }
+    const ticks = chartTickIndices(raw.length, innerW).map((i) => ({
+      x: xFor(i), label: fmtBucketLabel(raw[i]!, rangeKey, data?.timezone), index: i,
+      anchor: raw.length === 1 ? "middle" as const : i === 0 ? "start" as const : i === raw.length - 1 ? "end" as const : "middle" as const,
+    }));
     const has = raw.some((p) => (p.incoming ?? 0) + (p.outgoing ?? 0) + (p.internal ?? 0) > 0);
 
     return {
@@ -251,18 +231,18 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
               {gridLines.map((g, i) => (
                 <g key={`grid-${i}`}>
                   <line
-                    x1={36} x2={size.w - 16}
+                    x1={44} x2={size.w - 24}
                     y1={g.y} y2={g.y}
                     stroke="var(--dash-card-border)"
                     strokeOpacity={i === gridLines.length - 1 ? 0.7 : 0.35}
                     strokeWidth={1}
                   />
                   <text
-                    x={28}
+                    x={36}
                     y={g.y + 3}
                     textAnchor="end"
                     fill="var(--console-muted)"
-                    fontSize="10"
+                    fontSize="11"
                     style={{ fontVariantNumeric: "tabular-nums" }}
                   >
                     {g.value}
@@ -293,9 +273,9 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                   key={`xt-${t.index}`}
                   x={t.x}
                   y={size.h - 10}
-                  textAnchor="middle"
+                  textAnchor={t.anchor}
                   fill="var(--console-muted)"
-                  fontSize="10"
+                  fontSize="11"
                 >
                   {t.label}
                 </text>
@@ -306,7 +286,7 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                 <g pointerEvents="none">
                   <line
                     x1={hover.x} x2={hover.x}
-                    y1={16} y2={size.h - 28}
+                    y1={16} y2={size.h - 32}
                     stroke="var(--console-accent)"
                     strokeOpacity={0.45}
                     strokeWidth={1}
@@ -347,7 +327,7 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
                   role="tooltip"
                   style={{ left: `${left}px`, top: `${top}px`, width: `${tooltipW}px` }}
                 >
-                  <div className="dash-v2-graph-tooltip-title">{fmtTooltipTitle(p, rangeKey)}</div>
+                  <div className="dash-v2-graph-tooltip-title">{fmtTooltipTitle(p, rangeKey, data.timezone)}</div>
                   <div className="dash-v2-graph-tooltip-total">
                     <span>Total</span>
                     <strong>{p.total.toLocaleString()}</strong>

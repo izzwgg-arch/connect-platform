@@ -1,7 +1,8 @@
 "use client";
 
 import type { LucideIcon } from "lucide-react";
-import { ArrowDown, ArrowLeftRight, ArrowUp, PhoneMissed, XCircle } from "lucide-react";
+import { useId, useState } from "react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, PhoneMissed, XCircle, Info } from "lucide-react";
 import { cn } from "../crm/cn";
 import { crm } from "../crm/crmClasses";
 
@@ -18,6 +19,12 @@ type KpiTotals = {
 type Props = {
   totals: KpiTotals;
   loading?: boolean;
+};
+
+// Matches aggregateDashboardCallActivity / normalizeDashboardDisposition.
+const STATUS_HELP = {
+  missed: "Incoming calls recorded as missed or unanswered in the selected period. This count does not show whether the caller was called back later.",
+  canceled: "Calls recorded as canceled or busy in the selected period, across all directions. This is not a count of lost incoming calls; review Call History for each call's direction and outcome.",
 };
 
 const TILE_DEFS: Array<{ accent: Accent; key: keyof KpiTotals; label: string; icon: LucideIcon }> = [
@@ -39,11 +46,13 @@ function KpiTile({
   value,
   icon: Icon,
   accent,
+  help,
 }: {
   label: string;
   value: string;
   icon: LucideIcon;
   accent: Accent;
+  help?: { id: string; expanded: boolean; toggle: () => void; close: () => void };
 }) {
   return (
     <div className={cn(crm.queueCountPill, `crm-queue-kpi-${accent}`, "relative overflow-hidden bg-crm-surface-2")}>
@@ -51,6 +60,14 @@ function KpiTile({
         <span className="min-w-0">
           <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">
             {label}
+            {help ? (
+              <button type="button" className="dash-kpi-help-button"
+                aria-label={`About ${label.toLowerCase()} calls`}
+                aria-expanded={help.expanded} aria-controls={help.id}
+                onClick={help.toggle} onKeyDown={(event) => { if (event.key === "Escape") help.close(); }}>
+                <Info size={13} aria-hidden />
+              </button>
+            ) : null}
           </span>
           <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight">
             {value}
@@ -65,6 +82,8 @@ function KpiTile({
 }
 
 export function CallActivityRow({ totals, loading = false }: Props) {
+  const [helpKey, setHelpKey] = useState<keyof typeof STATUS_HELP | null>(null);
+  const helpId = useId();
   return (
     <section className="dash-v2-section dash-v2-kpi-row" aria-label="Call activity">
       <header className="dash-v2-section-head">
@@ -81,9 +100,18 @@ export function CallActivityRow({ totals, loading = false }: Props) {
             value={fmtNumber(totals[def.key], loading)}
             icon={def.icon}
             accent={def.accent}
+            help={def.key === "missed" || def.key === "canceled" ? {
+              id: helpId,
+              expanded: helpKey === def.key,
+              toggle: () => setHelpKey((current) => current === def.key ? null : def.key as keyof typeof STATUS_HELP),
+              close: () => setHelpKey(null),
+            } : undefined}
           />
         ))}
       </section>
+      <p id={helpId} className="dash-kpi-help" hidden={!helpKey}>
+        {helpKey ? STATUS_HELP[helpKey] : null}
+      </p>
     </section>
   );
 }

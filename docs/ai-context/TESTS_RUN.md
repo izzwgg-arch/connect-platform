@@ -1403,3 +1403,19 @@ with 0 rows; 845 answers `success` with 5000 rows in the same minute.
 
 Manual Chrome verification: standalone visualization rendered, layout inspected, Overview/By direction toggle showed the observed Gesheft totals and restored correctly. No automated suite or production deployment; responsive viewport and host design controls not tested. See AGENT_HANDOFF_DASHBOARD_DESIGN_CONCEPT_2026-09-14.md.
 
+
+## 2026-09-14 — Existing dashboard polish mockup
+
+Manual Chrome check: fragment rendered through visualize wrapper; layout inspected; call-status help expanded and displayed expected text. Source/readback checked; chart uses bounded segment control points to avoid negative counts. Responsive viewport and host-only Tweak controls not browser-tested. No runtime application changes or deployment.
+
+
+## 2026-09-14 — Dedicated light dashboard mockup
+
+Read-back and wrapper render succeeded; Chrome screenshot/accessibility inspection verified fixed light surfaces and consistent blue incoming / purple outgoing / teal internal colors. No production theme change or deployment. Dark mode not tested.
+
+
+## 2026-09-14 — Dashboard polish implementation, both themes
+
+PASS: 4 chart/date regression tests (bounded cubic values, empty/single points, width-adaptive endpoint ticks, exclusive end/timezone/DST date caption). PASS: full portal tsc --noEmit --incremental false. PASS: Next development /dashboard compile + HTTP 200; Chrome light/dark card-to-chart color parity, live direction badges, help open/Escape, 390px dark chart endpoints and recent-message layout. Restricted tsx first failed OS user lookup; elevated tsx and transpiled node tests both passed. Production build/deployment pending; see dashboard design handoff for final results.
+
+Build checkpoint: Next production webpack compilation passed, then its type phase failed on another agent's untracked packages/shared/src/deskPhoneSetup/deviceMechanisms.ts importing a nonexistent VendorSlug. This file and its related dirty desk-phone files are excluded from this dashboard commit. Earlier full portal typecheck passed before those concurrent edits appeared. Production release build must verify the clean committed source. Light-mode 390px check also passed without horizontal page overflow; mobile presets wrap and Recent Messages uses a compact unread badge.

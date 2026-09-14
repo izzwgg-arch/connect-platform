@@ -15,8 +15,8 @@ export type DateRangeValue = {
 
 const PRESETS: Array<{ key: Exclude<DateRangeKey, "custom">; label: string }> = [
   { key: "today", label: "Today" },
-  { key: "7d", label: "This Week" },
-  { key: "30d", label: "This Month" },
+  { key: "7d", label: "Last 7 days" },
+  { key: "30d", label: "Last 30 days" },
 ];
 
 function toLocalDateInput(iso?: string): string {
@@ -37,9 +37,10 @@ function fromLocalDateInput(value: string, endOfDay: boolean): string | undefine
 type Props = {
   value: DateRangeValue;
   onChange: (next: DateRangeValue) => void;
+  windowLabel?: string | null;
 };
 
-export function DateRangeFilter({ value, onChange }: Props) {
+export function DateRangeFilter({ value, onChange, windowLabel }: Props) {
   const [customOpen, setCustomOpen] = useState(value.key === "custom");
   const [draftFrom, setDraftFrom] = useState(toLocalDateInput(value.from));
   const [draftTo, setDraftTo] = useState(toLocalDateInput(value.to));
@@ -88,6 +89,7 @@ export function DateRangeFilter({ value, onChange }: Props) {
           <ChevronDown size={14} aria-hidden style={{ transform: customOpen ? "rotate(180deg)" : undefined, transition: "transform 0.15s" }} />
         </button>
       </div>
+      {windowLabel ? <p className="dash-filter-window">{windowLabel}</p> : null}
       {customOpen ? (
         <div className="dash-filter-custom">
           <label className="dash-filter-custom-field">

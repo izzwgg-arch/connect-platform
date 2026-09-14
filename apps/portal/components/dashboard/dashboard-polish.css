@@ -1,0 +1,73 @@
+/* Keep the existing KPI palettes distinct. Only Overview inherits these tokens;
+   changing root tokens would also recolor other console pages. */
+:root .workspace-overview {
+  --dash-incoming: #60a5fa;
+  --dash-outgoing: #34d399;
+  --dash-internal: #a78bfa;
+}
+
+:root[data-theme="light"] .workspace-overview {
+  --dash-incoming: #2563eb;
+  --dash-outgoing: #7c3aed;
+  --dash-internal: #0d9488;
+}
+
+.workspace-overview .dash-filter-window {
+  margin: 0;
+  color: var(--console-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.workspace-overview .dash-kpi-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -6px 0 -6px 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--console-muted);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.workspace-overview .dash-kpi-help-button:focus-visible {
+  outline: 2px solid var(--console-accent);
+  outline-offset: 1px;
+}
+
+.workspace-overview .dash-kpi-help-button[aria-expanded="true"] {
+  color: var(--console-text);
+  background: var(--console-panel-soft);
+}
+
+.workspace-overview .dash-kpi-help {
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  background: var(--dash-card);
+  color: var(--console-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.workspace-overview .dash-v2-comm-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.workspace-overview .dash-v2-message-unread {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .workspace-overview .dash-filter-pills { flex-wrap: wrap; overflow: visible; }
+  .workspace-overview .dash-filter-pill { flex: 1 0 auto; justify-content: center; }
+  .workspace-overview .dash-filter-window { text-align: left; }
+}

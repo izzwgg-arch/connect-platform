@@ -17,6 +17,8 @@ import { CallActivityRow } from "../../../components/dashboard/CallActivityRow";
 import { CommunicationsRow, type CommunicationsData } from "../../../components/dashboard/CommunicationsRow";
 import { IvrAnalyticsCard, type IvrAnalyticsData } from "../../../components/dashboard/IvrAnalyticsCard";
 import { getPreferredUserDisplayName } from "../../../lib/userDisplayName";
+import { trafficWindowLabel } from "../../../components/dashboard/chartGeometry";
+import "../../../components/dashboard/dashboard-polish.css";
 import {
   buildDashboardDevPreviewCalls,
   buildDashboardDevPreviewCommunications,
@@ -256,7 +258,7 @@ export default function DashboardPage() {
               ) : null}
             </p>
           </div>
-          <DateRangeFilter value={range} onChange={setRange} />
+          <DateRangeFilter value={range} onChange={setRange} windowLabel={trafficState.refreshing ? "Updating call data…" : trafficWindowLabel(displayTrafficData)} />
         </header>
 
         {/* 1. Hourly call volume chart — top */}

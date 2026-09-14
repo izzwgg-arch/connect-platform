@@ -100,13 +100,13 @@ export function CommunicationsRow({ data, loading }: Props) {
           <div className="dash-v2-card-head">
             <div className="dash-v2-card-head-title">
               <span className="dash-v2-comm-icon msg" aria-hidden><MessageSquare size={16} /></span>
-              <h3>Unread Messages</h3>
+              <h3>Recent Messages</h3>
             </div>
-            <span className="dash-v2-comm-count">{loading && !data ? "…" : msgCount}</span>
+            <span className="dash-v2-comm-count dash-v2-message-unread">{!data ? (loading ? "…" : "—") : `${msgCount} unread`}</span>
           </div>
-          <p className="dash-v2-comm-sub">{msgCount === 0 ? "You're all caught up" : `${msgCount} unread message${msgCount === 1 ? "" : "s"}`}</p>
+          <p className="dash-v2-comm-sub">Your conversations · All dates</p>
           {msgRecent.length === 0 ? (
-            <div className="dash-v2-comm-empty">No conversations yet.</div>
+            <div className="dash-v2-comm-empty">{!data ? (loading ? "Loading conversations…" : "Conversations unavailable.") : "No conversations yet."}</div>
           ) : (
             <ul className="dash-v2-comm-list" role="list">
               {msgRecent.map((m) => (
