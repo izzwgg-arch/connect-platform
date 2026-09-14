@@ -1268,3 +1268,18 @@ hostnames (256 s deploy). No api/desktop change needed — rc.12 already carries
 ⏳ **Acceptance (Izzy):** reopen the wizard → tick the Yealink → it un-sticks and asks for
 the model → pick Yealink T53W → Continue → watch each step named live → the finished screen
 appears only after it registers.
+
+**Live watch 2026-09-14 06:00–06:10Z (read-only, nothing written):** the flow ran exactly as
+built up to the phone. 06:00:54 retry NEEDS_ATTENTION → ASSIGNED; 06:02:25 model named
+**T42S** (not T53W — confirm the label) and ✅ **the record writer's FIRST real write**:
+`provisioning.devices` id 77, MAC `80:5E:C0:B3:B2:D0`, tenant 21, account → device **130**,
+config rendered `a70274ea0f143ca0/805ec0b3b2d0.cfg` (97,391 b). 06:02:40 desktop
+`set_provisioning` → **`rebooted=false rebootRefused=locked`** — the network restart WAS sent
+and the phone refused it (not on defaults / Action-URI not allowed from us); second attempt
+`too_soon_for_this_phone`; since then listen-only every 4 s, `delivered=false`. Phone is
+alive on the LAN (ping 6 ms, tcp 80/443/5060 open), but web fingerprint = unknown (locked
+page). PBX nginx: **zero** fetches for this MAC; `T21_101` 0 contacts. ⛔ So a locked phone
+cannot be restarted remotely by design — it needs a power-cycle (PnP then answers it) or the
+approved factory reset. ⚠️ An orphan `59943f7a1616b24e/805ec0b3b2d0.cfg` dated
+2026-08-05 12:41:20 (the Create A Box BLF-fix minute) also exists with no device row —
+if the handset's stored URL points at that folder it would pull the wrong company's file.
