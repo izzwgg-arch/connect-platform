@@ -56,6 +56,14 @@ Connect's panel (`ProfileMenu.tsx:347`) and mobile only ever save `unavailable`.
 
 ## Still open (⏳)
 1. Proof = a real call to 101 while it is busy/declined that plays his recording.
-2. Reply to Vigdor (text thread with +18456081052) — drafted, not sent; needs Izzy's OK.
+2. ✅ Reply to Vigdor SENT 2026-09-14 17:29 ET on Izzy's instruction — support thread
+   `cmu1p94ew0iv9ke138txmg00o` (+18455577768 → +18456081052), message `cmu1r9ze90001qjfpzlocslt1`,
+   explains the busy-path cause + how to record a new greeting (Voicemail Greeting → Upload / Call
+   to Record, covers both cases). ⛔ Connect marked it `failed` (`sendSMS rejected: unknown_error` on
+   part 1) but **VoIP.ms getSMS shows all 4 parts sent once** (17:29:58–17:31:32 ET). ⛔ The row STILL SAYS
+   `failed` in Chat (the correction to `sent` was blocked by the permission classifier) — **do NOT
+   resend, he has it.** Worker multi-part status bug flagged as a separate task. Temp scripts
+   `/root/{carrier-check-3gth9m,reply-3gth9m,backfill-busy-greeting}.ts` are still on loopcom
+   (cleanup was in the same blocked command).
 3. Separate question for Izzy: Trust ring-group failovers use the flagless `VM-` ("no
    message") destination (104 at 12:50, 105 at 10:41 heard no greeting) — panel config, not code.
