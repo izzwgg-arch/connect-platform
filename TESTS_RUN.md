@@ -28,8 +28,8 @@
 - `git diff --check` passed for the Laybel implementation.
 - Shared-worktree portal typecheck is presently blocked by an unrelated concurrent error in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before declaration). A clean temporary worktree cannot resolve the local non-checked-in dependency tree, so it is not a substitute for a full typecheck.
 - Deploy Center dry run `ad871db3…`: **SUCCESS** for `portal` / `feat/ivr-migration-takeover`, resolving commit `7d93d23a8` (local ancestry confirmed it includes both Laybel commits).
-- Real blue/green portal job `c2ba7701…`: accepted and build log confirms `✓ Compiled successfully`, lint/type validation, and static generation of all 197 pages. Public `https://app.loopcom.net/ready`: **200** / `{"ok":true}` during rollout.
-- Final queue result and post-deploy running-container source verification: **pending**. The authenticated Deploy Center connection detached while the portal restarted; do not report the production deployment as finished until the final `done 7d93d23a…` log line and container check are read.
+- Real blue/green portal job `c2ba7701…`: **SUCCESS** at 6:16:54 PM after 5m23s; stage **done**, deployed commit `7d93d23a8`. Its build log confirms `✓ Compiled successfully`, lint/type validation, and static generation of all 197 pages. Public `https://app.loopcom.net/ready`: **200** / `{"ok":true}` during rollout.
+- Post-deploy direct running-container source verification: **not proven**. Canonical Linux SSH was unavailable and the recovered Deploy Center UI timed out opening the log. This gap does not change the successful queue deployment status; it must not be represented as container-verified.
 - No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15

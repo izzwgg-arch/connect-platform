@@ -694,4 +694,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-15 · Talk to Laybel: existing Assistant’s one push-to-talk option; blue/green portal job `c2ba7701…` build/typecheck passed + `/ready` 200, but final queue/container verification pending after browser detachment; no new AI/media/provider/backend/PBX surface → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-15 · Talk to Laybel: existing Assistant’s one push-to-talk option deployed by blue/green portal job `c2ba7701…` at `7d93d23a8`; build/typecheck + `/ready` 200, ⛔ running-container source check not proven; no new AI/media/provider/backend/PBX surface → `2026-09-15-face-to-face-ai-support-mockup.md`
