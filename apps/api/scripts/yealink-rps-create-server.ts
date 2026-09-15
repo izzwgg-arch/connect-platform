@@ -29,7 +29,7 @@ function rows(listed: unknown): ServerRow[] {
 
 async function findByName(client: YealinkRpsClient, name: string): Promise<ServerRow | null> {
   for (let skip = 0; skip < 10_000; skip += 100) {
-    const page = rows(await client.listServers({ key: name, skip, limit: 100 }));
+    const page = rows(await client.listServers({ skip, limit: 100 }));
     const found = page.find(s => s.serverName === name);
     if (found) return found;
     if (page.length < 100) return null;

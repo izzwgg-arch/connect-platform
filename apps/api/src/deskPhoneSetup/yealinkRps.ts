@@ -1,6 +1,10 @@
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
-/** Yealink JSON RPS v1, official API reference §1–3; see the handoff for sources. */
+/**
+ * Yealink YMCS v2 open API (OAuth2 client-credentials), proven live 2026-09-15
+ * against us-api.ymcs.yealink.com. The 2019 JSON RPS v1 X-Ca signature scheme is
+ * DEAD on YMCS ("Invalid request header" on every path) — see the handoff.
+ */
 export class DeviceError extends Error {
   constructor(public code: string, public status = 409) { super(code); }
 }
@@ -12,17 +16,7 @@ export function strictMac(input: string): string {
     throw new DeviceError("invalid_mac", 400);
   return mac;
 }
-export function rpsSignature(method: "POST" | "GET", api: string, key: string, secret: string,
-  body?: string, query: Record<string, string> = {}, nonce = randomUUID().replace(/-/g, ""), timestamp = String(Date.now())) {
-  const headers: Record<string, string> = { "X-Ca-Key": key, "X-Ca-Nonce": nonce, "X-Ca-Timestamp": timestamp };
-  if (body !== undefined) headers["Content-MD5"] = createHash("md5").update(body).digest("base64");
-  const q = Object.keys(query).sort().map(k => query[k] === "" ? k : `${k}=${query[k]}`).join("&");
-  const canonical = `${method}\n${Object.keys(headers).sort().map(k => `${k}:${headers[k]}`).join("\n")}\n${api.replace(/^\//, "")}${q ? `\n${q}` : ""}`;
-  headers["X-Ca-Signature"] = createHmac("sha256", secret).update(canonical).digest("base64");
-  headers["Content-Type"] = "application/json;charset=UTF-8";
-  return headers;
-}
-export type RpsDevice = { id: string; mac: string; serverId?: string; uniqueServerUrl?: string; authName?: string };
+export type RpsDevice = { id: string; mac: string; serverId?: string | null; uniqueServerUrl?: string | null; authName?: string | null };
 export type RpsAssignment = { mac: string; serverId: string; uniqueServerUrl: string; authName: string; password: string };
 export interface RpsAdapter {
   readonly mode: "live" | "disabled" | "test";
@@ -34,25 +28,31 @@ export class DisabledRps implements RpsAdapter {
   async assign() { return { state: "pending_credentials" as const }; }
   async release(): Promise<void> { throw new DeviceError("rps_credentials_required", 503); }
 }
+/** YMCS business-error codes that carry meaning for us (v2 error body: {code, message, details}). */
+const OWNED_BY_OTHER = "800004";
+const ALREADY_EXISTS = "800003";
 export class YealinkRpsClient implements RpsAdapter {
   readonly mode = "live" as const;
   private base: string;
+  private token: { value: string; expiresAt: number } | null = null;
   constructor(base: string, private key: string, private secret: string, private request: typeof fetch = fetch) {
     const url = new URL(base);
-    // Only a genuine vendor HTTPS origin. No redirects with signed credentials.
+    // Only a genuine vendor HTTPS origin. No redirects with credentials attached.
     if (url.protocol !== "https:" || !/(^|\.)yealink\.com$/.test(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname !== "/")
       throw new DeviceError("rps_endpoint_invalid", 503);
     if (!key || !secret) throw new DeviceError("rps_credentials_required", 503);
     this.base = url.origin;
   }
-  async call<T>(method: "GET" | "POST", api: string, params: Record<string, unknown> = {}): Promise<T> {
-    const body = method === "POST" ? JSON.stringify(params) : undefined;
-    const query = method === "GET" ? Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) : {};
-    const qs = new URLSearchParams(query).toString();
+  private common(): Record<string, string> {
+    return { Accept: "application/json", timestamp: String(Date.now()), nonce: randomBytes(16).toString("hex") };
+  }
+  private async accessToken(): Promise<string> {
+    if (this.token && this.token.expiresAt > Date.now()) return this.token.value;
     let response: Response;
     try {
-      response = await this.request(`${this.base}/api/open/v1/${api}${qs ? `?${qs}` : ""}`, {
-        method, body, headers: rpsSignature(method, `api/open/v1/${api}`, this.key, this.secret, body, query),
+      response = await this.request(`${this.base}/v2/token`, {
+        method: "POST", body: JSON.stringify({ grant_type: "client_credentials" }),
+        headers: { ...this.common(), "Content-Type": "application/json", Authorization: `Basic ${Buffer.from(`${this.key}:${this.secret}`).toString("base64")}` },
         signal: AbortSignal.timeout(15_000), redirect: "error",
       });
     } catch { throw new DeviceError("rps_unreachable_retry_to_reconcile", 503); }
@@ -60,46 +60,75 @@ export class YealinkRpsClient implements RpsAdapter {
     if (response.status === 401 || response.status === 403) throw new DeviceError("rps_authentication_failed", 503);
     if (response.status === 429) throw new DeviceError("rps_rate_limited_retry_later", 503);
     if (!response.ok) throw new DeviceError("rps_service_unavailable", 503);
-    let envelope: any;
-    try { envelope = await response.json(); } catch { throw new DeviceError("rps_invalid_response", 502); }
-    if (!envelope || !Number.isInteger(envelope.ret)) throw new DeviceError("rps_invalid_response", 502);
-    if (envelope.ret < 0 || envelope.error) {
-      const msg = envelope.error?.msg;
-      if (["device.mac.added.by.other", "device.operate.forbidden"].includes(msg)) throw new DeviceError("rps_ownership_conflict");
-      if (msg === "device.mac.existed") throw new DeviceError("rps_duplicate_retry_to_reconcile");
+    let body: any;
+    try { body = await response.json(); } catch { throw new DeviceError("rps_invalid_response", 502); }
+    if (!body?.access_token || !Number.isFinite(Number(body.expires_in))) throw new DeviceError("rps_invalid_response", 502);
+    this.token = { value: String(body.access_token), expiresAt: Date.now() + Math.max(0, Number(body.expires_in) - 60) * 1000 };
+    return this.token.value;
+  }
+  async call<T>(method: "GET" | "POST", api: string, params?: unknown, retried = false): Promise<T> {
+    const token = await this.accessToken();
+    const body = method === "POST" ? JSON.stringify(params ?? {}) : undefined;
+    let response: Response;
+    try {
+      response = await this.request(`${this.base}/v2/${api}`, {
+        method, body,
+        headers: { ...this.common(), ...(body !== undefined ? { "Content-Type": "application/json" } : {}), Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15_000), redirect: "error",
+      });
+    } catch { throw new DeviceError("rps_unreachable_retry_to_reconcile", 503); }
+    if (response.status === 401 && !retried) { this.token = null; return this.call(method, api, params, true); }
+    if (response.status === 401 || response.status === 403) throw new DeviceError("rps_authentication_failed", 503);
+    if (response.status === 429) throw new DeviceError("rps_rate_limited_retry_later", 503);
+    if (!response.ok) {
+      // A vendor error body carries only a code we map; its text never propagates.
+      let code = "";
+      try { code = String(((await response.json()) as any)?.code ?? ""); } catch { /* mapped below */ }
+      if (code === OWNED_BY_OTHER) throw new DeviceError("rps_ownership_conflict");
+      if (code === ALREADY_EXISTS) throw new DeviceError("rps_duplicate_retry_to_reconcile");
+      if (response.status >= 500) throw new DeviceError("rps_service_unavailable", 503);
       throw new DeviceError("rps_request_rejected_check_account", 502);
     }
-    return envelope.data as T;
+    const text = await response.text();
+    if (!text) return null as T;
+    try { return JSON.parse(text) as T; } catch { throw new DeviceError("rps_invalid_response", 502); }
   }
-  listServers(params: { key?: string; skip?: number; limit?: number } = {}) { return this.call("POST", "server/list", params); }
-  serverDetail(id: string) { return this.call("GET", "server/detail", { id }); }
-  serverExists(serverName: string) { return this.call<boolean>("GET", "server/checkServerName", { serverName }); }
-  addServer(input: { serverName: string; url: string; authName?: string; password?: string }) { return this.call("POST", "server/add", input); }
-  editServer(input: { id: string; serverName: string; url: string; authName?: string; password?: string }) { return this.call("POST", "server/edit", input); }
-  deleteServers(ids: string[]) { return this.call("POST", "server/delete", { ids }); }
-  checkMac(mac: string) { return this.call<{ existed: boolean; self: boolean | null }>("GET", "device/checkMac", { mac: strictMac(mac) }); }
-  checkDevice(mac: string) { return this.call<string>("GET", "device/checkDevice", { mac: strictMac(mac) }); }
-  deviceDetail(id: string) { return this.call<RpsDevice>("GET", "device/detail", { id }); }
-  deviceServers() { return this.call("GET", "device/serverList"); }
-  listDevices(params: { key?: string; skip?: number; limit?: number } = {}) { return this.call<{ data: RpsDevice[] }>("POST", "device/list", params); }
-  addDevices(input: Omit<RpsAssignment, "mac"> & { macs: string[] }) { return this.call<RpsDevice[]>("POST", "device/add", { ...input, macs: input.macs.map(strictMac) }); }
-  editDevice(input: Omit<RpsAssignment, "mac"> & { id: string }) { return this.call<RpsDevice>("POST", "device/edit", input); }
-  migrateDevices(ids: string[], serverId: string) { return this.call("POST", "device/migrate", { ids, serverId }); }
-  deleteDevices(ids: string[]) { return this.call("POST", "device/delete", { ids }); }
+  listServers(params: { skip?: number; limit?: number } = {}) {
+    return this.call<{ total?: number; data: any[] | null }>("POST", "rps/listServers", { skip: params.skip ?? 0, limit: params.limit ?? 100 });
+  }
+  addServer(input: { serverName: string; url: string }) { return this.call("POST", "rps/servers", input); }
+  listDevices(params: { mac?: string; skip?: number; limit?: number } = {}) {
+    return this.call<{ total?: number; data: RpsDevice[] | null }>("POST", "rps/listDevices", {
+      skip: params.skip ?? 0, limit: params.limit ?? 100, autoCount: false,
+      ...(params.mac ? { filter: { mac: strictMac(params.mac) } } : {}),
+    });
+  }
+  deviceDetail(id: string) { return this.call<RpsDevice>("GET", `rps/devices/${encodeURIComponent(id)}`); }
+  addDevices(input: Omit<RpsAssignment, "mac"> & { macs: string[] }) {
+    const { macs, ...rest } = input;
+    return this.call<unknown>("POST", "rps/addDevicesByMac", macs.map(mac => ({ mac: strictMac(mac), ...rest })));
+  }
+  deleteDevices(ids: string[]) { return this.call("POST", "rps/delDevices", { deviceIdType: "id", deviceIds: ids }); }
+  /**
+   * v2 has no checkMac: the API only ever shows OUR devices, so a MAC held by
+   * another account reads as not-found here and surfaces as OWNED_BY_OTHER only
+   * when an add is attempted. `self` is therefore true or null, never false.
+   */
+  async checkMac(mac: string): Promise<{ existed: boolean; self: boolean | null }> {
+    const found = await this.owned(strictMac(mac));
+    return found ? { existed: true, self: true } : { existed: false, self: null };
+  }
   private async owned(mac: string): Promise<RpsDevice | null> {
-    const check = await this.checkMac(mac);
-    if (!check || typeof check.existed !== "boolean") throw new DeviceError("rps_invalid_response", 502);
-    if (!check.existed) return null;
-    if (check.self !== true) throw new DeviceError("rps_ownership_conflict");
-    // The list is a fuzzy search; match the complete canonical MAC, across pages.
+    // The filter can be fuzzy; match the complete canonical MAC, across pages.
     for (let skip = 0; skip < 10_000; skip += 100) {
-      const page = await this.listDevices({ key: mac, skip, limit: 100 });
-      if (!Array.isArray(page?.data)) throw new DeviceError("rps_invalid_response", 502);
-      const found = page.data.find(d => strictMac(d.mac) === mac);
+      const page = await this.listDevices({ mac, skip, limit: 100 });
+      const rows = page?.data ?? [];
+      if (!Array.isArray(rows)) throw new DeviceError("rps_invalid_response", 502);
+      const found = rows.find(d => d?.mac && strictMac(d.mac) === mac);
       if (found?.id) return this.deviceDetail(found.id);
-      if (page.data.length < 100) break;
+      if (rows.length < 100) break;
     }
-    throw new DeviceError("rps_device_lookup_inconsistent", 502);
+    return null;
   }
   async assign(input: RpsAssignment) {
     const mac = strictMac(input.mac);
@@ -111,7 +140,8 @@ export class YealinkRpsClient implements RpsAdapter {
     }
     const { mac: ignored, ...assignment } = input;
     await this.addDevices({ ...assignment, macs: [mac] });
-    // An accepted write is not proof of assignment. Read it back, including after retries.
+    // An accepted write is not proof of assignment (a batch can refuse a row
+    // inside a 200). Read it back, including after retries.
     const after = await this.owned(mac);
     if (!after || after.serverId !== input.serverId || after.uniqueServerUrl !== input.uniqueServerUrl || after.authName !== input.authName)
       throw new DeviceError("rps_assignment_not_verified", 502);
@@ -122,7 +152,7 @@ export class YealinkRpsClient implements RpsAdapter {
     if (!current) return;
     if (current.serverId !== serverId || current.uniqueServerUrl !== expectedUrl) throw new DeviceError("rps_assignment_conflict_requires_release");
     await this.deleteDevices([current.id]);
-    if ((await this.checkMac(mac)).existed) throw new DeviceError("rps_release_not_verified", 502);
+    if (await this.owned(strictMac(mac))) throw new DeviceError("rps_release_not_verified", 502);
   }
 }
 export function configuredRps(env: NodeJS.ProcessEnv = process.env): RpsAdapter {

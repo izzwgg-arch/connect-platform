@@ -89,7 +89,7 @@ test("RPS timeout preserves encrypted credentials and retries read back remote s
   assert.equal(first.rpsState, "failed"); const envelope = f.rows()[0].secretsEncrypted;
   const second = await f.service.provision(actor, input, "b");
   assert.equal(second.rpsState, "assigned"); assert.equal(f.rows()[0].secretsEncrypted, envelope);
-  assert.equal(f.rps.calls.filter(c => c === "device/add").length, 1);
+  assert.equal(f.rps.calls.filter(c => c === "rps/addDevicesByMac").length, 1);
 });
 test("disabled RPS records pending credentials and never claims assignment", async () => {
   const f = await fixture(false); const d = await f.service.provision(actor, input, "a");

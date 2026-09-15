@@ -1,14 +1,16 @@
-import { rpsSignature, YealinkRpsClient } from "./yealinkRps";
+import { YealinkRpsClient } from "./yealinkRps";
 import type { SipConfig } from "./yealinkConfig";
 
 /**
- * ⛔ TEST-ONLY. A stateful simulator of the Yealink JSON RPS v1 HTTP contract.
+ * ⛔ TEST-ONLY. A stateful simulator of the Yealink YMCS v2 open-API HTTP
+ * contract (OAuth2 client-credentials + Bearer, /v2/rps/* endpoints), matching
+ * what us-api.ymcs.yealink.com answered on 2026-09-15.
  *
  * Imported by tests only — no runtime module may import this file, and
  * `configuredRps()` refuses YEALINK_RPS_MODE=test/mock outright, so production
- * can never be pointed at it. It verifies the request signature the same way the
- * real service would, rejects nonce replay, and can inject 401/403/429/500 and a
- * "timed out after the add was accepted" fault.
+ * can never be pointed at it. It verifies Basic credentials on the token call,
+ * requires a valid Bearer token everywhere else, rejects nonce replay, and can
+ * inject 401/403/429/500 and a "timed out after the add was accepted" fault.
  *
  * It is deliberately NOT a `*.test.ts` file: it used to live inside
  * yealinkRps.test.ts, which made every importer re-run that file's tests.
@@ -18,40 +20,70 @@ export const sip: SipConfig = { endpoint: "T21_101", username: "T21_101", authNa
 
 export class RpsSimulator {
   devices = new Map<string, any>(); servers = new Map<string, any>(); nonces = new Set<string>();
-  failNext: number | "timeout_after_add" | null = null;
+  private failQueue: Array<number | "timeout_after_add"> = [];
+  /** Enqueue one injected fault (assignment style kept for existing tests). */
+  set failNext(value: number | "timeout_after_add" | null) { if (value !== null) this.failQueue.push(value); }
+  /** Enqueue the same status several times, e.g. fail(401, 2) to defeat the one-shot token refresh. */
+  fail(status: number, times = 1) { for (let i = 0; i < times; i++) this.failQueue.push(status); }
   foreign = new Set<string>(); calls: string[] = [];
+  tokens = new Set<string>(); tokenCalls = 0;
+  /** Set to make the CURRENT token invalid once, to prove the one-shot refresh. */
+  expireToken = false;
+  private err(status: number, code: string, message: string) {
+    return new Response(JSON.stringify({ code, details: [], message, requestId: null }), { status, headers: { "Content-Type": "application/json" } });
+  }
   fetch: typeof fetch = (async (urlInput: any, init: any) => {
-    const url = new URL(String(urlInput)); const path = url.pathname.replace("/api/open/v1/", "");
+    const url = new URL(String(urlInput));
+    const path = url.pathname.replace(/^\/v2\//, "");
     this.calls.push(path);
     const headers = init.headers as Record<string, string>;
-    const nonce = headers["X-Ca-Nonce"];
-    const signing = rpsSignature(init.method, url.pathname, "test-key", "test-secret", init.body, Object.fromEntries(url.searchParams), nonce, headers["X-Ca-Timestamp"]);
-    if (this.nonces.has(nonce) || headers["X-Ca-Signature"] !== signing["X-Ca-Signature"]) return new Response("denied", { status: 401 });
+    const nonce = headers["nonce"];
+    if (!nonce || !headers["timestamp"] || this.nonces.has(nonce)) return this.err(401, "500401", "Invalid request header");
     this.nonces.add(nonce);
-    if (typeof this.failNext === "number") { const status = this.failNext; this.failNext = null; return new Response("secret-never-propagated", { status }); }
-    const p = init.body ? JSON.parse(init.body) : Object.fromEntries(url.searchParams);
-    const ok = (data: any) => Response.json({ ret: data == null ? 0 : 1, data, error: null });
-    if (path === "device/checkMac") return ok({ existed: this.devices.has(p.mac) || this.foreign.has(p.mac), self: this.foreign.has(p.mac) ? false : this.devices.has(p.mac) ? true : null });
-    if (path === "device/list") return ok({ data: [...this.devices.values()].filter(d => d.mac.includes(p.key)).slice(p.skip, p.skip + p.limit) });
-    if (path === "device/detail") return ok([...this.devices.values()].find(d => d.id === p.id));
-    if (path === "device/add") {
-      if (this.devices.has(p.macs[0])) return Response.json({ ret: -1, data: null, error: { msg: "device.mac.existed" } });
-      const made = p.macs.map((mac: string) => { const d = { ...p, mac, id: `id-${mac}` }; this.devices.set(mac, d); return d; });
-      if (this.failNext === "timeout_after_add") { this.failNext = null; throw new Error("timed out after accepted"); }
-      return ok(made);
+    if (path === "token") {
+      this.tokenCalls++;
+      if (headers["Authorization"] !== `Basic ${Buffer.from("test-key:test-secret").toString("base64")}`) return this.err(401, "500401", "Invalid request header");
+      if (JSON.parse(init.body).grant_type !== "client_credentials") return this.err(400, "900400", "Bad grant");
+      const token = `tok-${this.tokenCalls}`;
+      this.tokens.add(token);
+      return Response.json({ access_token: token, token_type: "Bearer", expires_in: 3600 });
     }
-    if (path === "device/edit" || path === "device/migrate") {
-      const ids = p.ids || [p.id]; const rows = [...this.devices.values()].filter(d => ids.includes(d.id));
-      rows.forEach(d => Object.assign(d, p)); return ok(path === "device/edit" ? rows[0] : rows);
+    const bearer = (headers["Authorization"] || "").replace("Bearer ", "");
+    if (!this.tokens.has(bearer) || this.expireToken) { this.expireToken = false; this.tokens.delete(bearer); return this.err(401, "900401", "Not logged in"); }
+    if (typeof this.failQueue[0] === "number") { const status = this.failQueue.shift() as number; return this.err(status, `900${status}`, "secret-never-propagated"); }
+    const p = init.body ? JSON.parse(init.body) : {};
+    if (path === "rps/listDevices") {
+      const mac = p?.filter?.mac ?? "";
+      const rows = [...this.devices.values()].filter(d => d.mac.includes(mac));
+      return Response.json({ skip: p.skip ?? 0, limit: p.limit ?? 100, total: rows.length, data: rows.slice(p.skip ?? 0, (p.skip ?? 0) + (p.limit ?? 100)) || null });
     }
-    if (path === "device/delete") { for (const [mac, d] of this.devices) if (p.ids.includes(d.id)) this.devices.delete(mac); return ok(null); }
-    if (path === "server/add") { const d = { ...p, id: `server-${this.servers.size}` }; this.servers.set(d.id, d); return ok(d); }
-    if (path === "server/list") return ok({ data: [...this.servers.values()] });
-    if (path === "server/detail") return ok(this.servers.get(p.id));
-    if (path === "server/checkServerName") return ok([...this.servers.values()].some(s => s.serverName === p.serverName));
-    if (path === "server/edit") { Object.assign(this.servers.get(p.id), p); return ok(this.servers.get(p.id)); }
-    if (path === "server/delete") { p.ids.forEach((id: string) => this.servers.delete(id)); return ok(null); }
+    const detail = path.match(/^rps\/devices\/(.+)$/);
+    if (detail && init.method === "GET") {
+      const row = [...this.devices.values()].find(d => d.id === decodeURIComponent(detail[1]));
+      return row ? Response.json(row) : this.err(400, "900400", "The resource does not exist or has been deleted");
+    }
+    if (path === "rps/addDevicesByMac") {
+      for (const entry of p as any[]) {
+        if (this.foreign.has(entry.mac)) return this.err(400, "800004", "Device already managed by another organization");
+        if (this.devices.has(entry.mac)) return this.err(400, "800003", "Resource already exists");
+      }
+      const made = (p as any[]).map(entry => { const d = { ...entry, id: `id-${entry.mac}` }; this.devices.set(entry.mac, d); return d; });
+      if (this.failQueue[0] === "timeout_after_add") { this.failQueue.shift(); throw new Error("timed out after accepted"); }
+      return Response.json(made);
+    }
+    if (path === "rps/delDevices") {
+      for (const [mac, d] of this.devices) if (p.deviceIds.includes(d.id) && p.deviceIdType === "id") this.devices.delete(mac);
+      return Response.json({ ok: true });
+    }
+    if (path === "rps/servers" && init.method === "POST") {
+      if (!p.url) return this.err(400, "900400", "Can not be empty");
+      const d = { ...p, id: `server-${this.servers.size}` }; this.servers.set(d.id, d); return Response.json(d);
+    }
+    if (path === "rps/listServers") {
+      const rows = [...this.servers.values()];
+      return Response.json({ skip: p.skip ?? 0, limit: p.limit ?? 100, total: rows.length, data: rows.length ? rows : null });
+    }
     throw new Error(`Simulator operation missing: ${path}`);
   }) as typeof fetch;
-  client() { return new YealinkRpsClient("https://dm.yealink.com", "test-key", "test-secret", this.fetch); }
+  client() { return new YealinkRpsClient("https://us-api.ymcs.yealink.com", "test-key", "test-secret", this.fetch); }
 }

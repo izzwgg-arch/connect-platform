@@ -2,6 +2,25 @@
 
 Newest entries first.
 
+## Yealink RPS client rewritten to the YMCS v2 OAuth API (2026-09-15)
+
+- api `node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"` →
+  **267/268 pass, 1 skipped (pre-existing), 0 fail.** yealinkRps.test.ts is rewritten for v2: the
+  X-Ca signature vector is replaced by OAuth2 tests (Basic-auth token acquired once and cached,
+  one-shot refresh on a 401, wrong credentials → `rps_authentication_failed`, never a loop); MAC
+  normalization, mock-refusal, URL guard, simulator-import guard, config/BLF tests unchanged;
+  reconcile-after-timeout (single `rps/addDevicesByMac`), foreign-MAC `rps_ownership_conflict`
+  (v2 code 800004 at add time), 401/403/429/500 mapping without body leakage, and the new
+  checkMac honesty test (v2 cannot see other accounts' devices — self is true or null, NEVER
+  false) all pass. The simulator now simulates the v2 contract (Bearer + /v2/rps/*, {code,message}
+  error bodies) as answered live by us-api.ymcs.yealink.com on 2026-09-15.
+- **Live proof against the real YMCS account** (not a customer phone, read + one server create):
+  `/v2/token` 200 (Bearer, 3600s), `/v2/rps/listDevices` 200, `/v2/rps/listServers` 200, and the
+  one-off `apps/api/scripts/yealink-rps-create-server.ts` created server "Loopcom" →
+  `https://app.loopcom.net/api/phone-provisioning/` and read it back. ⛔ The old JSON v1 X-Ca
+  scheme is DEAD on YMCS — every path answers 401 `{"code":"500401","message":"Invalid request
+  header"}`; the signature was never the problem, the whole auth scheme changed.
+
 ## Telnyx bench + provider onboarding (2026-09-15)
 
 - api `node --experimental-test-module-mocks --import tsx --test "src/telnyx/*.test.ts"` → **14/14 pass**

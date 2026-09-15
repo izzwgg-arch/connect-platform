@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { configuredRps, DeviceError, rpsSignature, strictMac, YealinkRpsClient } from "./yealinkRps";
+import { configuredRps, DeviceError, strictMac, YealinkRpsClient } from "./yealinkRps";
 import { managedModel, yealinkConfig } from "./yealinkConfig";
 import { RpsSimulator, sip } from "./yealinkRpsSimulator";
 
@@ -13,16 +12,17 @@ test("MAC input forms normalize; malformed, multicast and zero addresses refuse"
   for (const m of ["805ec0112233ZZ", "80:5e-c0:11:22:33", "ffffffffffff", "000000000000", "015ec0112233", "805ec0112233\nkey=x", "../805ec0112233"])
     assert.throws(() => strictMac(m), /invalid_mac/);
 });
-test("official signing algorithm; MD5 uses exact serialized bytes, GET has no MD5", () => {
-  const key = "example-key", secret = "example-secret";
-  const headers = rpsSignature("POST", "api/open/v1/server/list", key, secret, '{"key":"TestServer","skip":0}', {}, "nonce", "1544008291631");
-  assert.equal(headers["Content-MD5"], "SsPhq3/DEuS3yHj3kYOV9w==");
-  assert.equal(rpsSignature("POST", "api/open/v1/server/list", key, secret, "abc")["Content-MD5"], "kAFQmDzST7DWlj99KOF/cg==");
-  const expected = "POST\nContent-MD5:SsPhq3/DEuS3yHj3kYOV9w==\nX-Ca-Key:example-key\nX-Ca-Nonce:nonce\nX-Ca-Timestamp:1544008291631\napi/open/v1/server/list";
-  assert.equal(headers["X-Ca-Signature"], createHmac("sha256", secret).update(expected).digest("base64"));
-  const get = rpsSignature("GET", "api/open/v1/device/checkMac", key, secret, undefined, { mac: "805ec0112233" }, "n", "1");
-  assert.equal(get["Content-MD5"], undefined);
-  assert.equal(get["X-Ca-Signature"], createHmac("sha256", secret).update("GET\nX-Ca-Key:example-key\nX-Ca-Nonce:n\nX-Ca-Timestamp:1\napi/open/v1/device/checkMac\nmac=805ec0112233").digest("base64"));
+test("OAuth2 v2: Basic-auth token is cached across calls and refreshed once on 401", async () => {
+  const fake = new RpsSimulator(); const client = fake.client();
+  await client.listDevices({}); await client.listDevices({});
+  assert.equal(fake.tokenCalls, 1); // cached, not re-requested per call
+  fake.expireToken = true; // server-side token death → exactly one refresh, then success
+  const page = await client.listDevices({});
+  assert.equal(fake.tokenCalls, 2);
+  assert.deepEqual(page.data ?? [], []);
+  // Wrong credentials are an auth failure, not a loop.
+  const bad = new YealinkRpsClient("https://us-api.ymcs.yealink.com", "wrong", "creds", fake.fetch);
+  await assert.rejects(bad.listDevices({}), /rps_authentication_failed/);
 });
 test("runtime cannot select a mock; disabled never calls the network", async () => {
   assert.throws(() => configuredRps({ YEALINK_RPS_MODE: "test" }), /mock_not_allowed/);
@@ -60,7 +60,7 @@ test("RPS reconciles success after timeout without duplicate add; rejects other 
   const fake = new RpsSimulator(); const client = fake.client(); fake.failNext = "timeout_after_add";
   await assert.rejects(client.assign(assignment), /retry_to_reconcile/);
   assert.equal((await client.assign(assignment)).state, "assigned");
-  assert.equal(fake.calls.filter(p => p === "device/add").length, 1);
+  assert.equal(fake.calls.filter(p => p === "rps/addDevicesByMac").length, 1);
   await assert.rejects(client.assign({ ...assignment, serverId: "different" }), /conflict/);
   fake.foreign.add("805ec0112234");
   await assert.rejects(client.assign({ ...assignment, mac: "805ec0112234" }), /ownership_conflict/);
@@ -68,15 +68,22 @@ test("RPS reconciles success after timeout without duplicate add; rejects other 
   await client.release(assignment.mac, assignment.serverId, assignment.uniqueServerUrl);
   assert.equal(fake.devices.size, 0);
 });
+test("checkMac reports our devices; a foreign MAC is honestly unknown until an add is attempted", async () => {
+  const fake = new RpsSimulator(); const client = fake.client();
+  await client.assign(assignment);
+  assert.deepEqual(await client.checkMac(assignment.mac), { existed: true, self: true });
+  fake.foreign.add("805ec0112234");
+  // v2 only ever shows OUR devices: a MAC held elsewhere reads as absent, never as self:false.
+  assert.deepEqual(await client.checkMac("805ec0112234"), { existed: false, self: null });
+});
 for (const status of [401, 403, 429, 500]) test(`RPS ${status} is actionable and never exposes upstream body`, async () => {
-  const fake = new RpsSimulator(); fake.failNext = status;
+  const fake = new RpsSimulator(); fake.fail(status, status === 401 ? 2 : 1);
   await assert.rejects(fake.client().assign(assignment), e => e instanceof DeviceError && !e.message.includes("secret-never") && e.status === 503);
 });
-test("server lifecycle uses documented API operations", async () => {
+test("server create requires a url and appears in the listing", async () => {
   const fake = new RpsSimulator(); const client = fake.client();
+  await assert.rejects(client.addServer({ serverName: "Loopcom", url: "" }), /rps_request_rejected_check_account/);
   const server: any = await client.addServer({ serverName: "Loopcom", url: "https://example.com/" });
-  assert.equal(await client.serverExists("Loopcom"), true);
-  await client.editServer({ id: server.id, serverName: "Loopcom2", url: "https://example.com/" });
-  assert.equal((await client.serverDetail(server.id) as any).serverName, "Loopcom2");
-  await client.deleteServers([server.id]); assert.equal(fake.servers.size, 0);
+  const listed = await client.listServers();
+  assert.equal((listed.data ?? []).find((s: any) => s.id === server.id)?.serverName, "Loopcom");
 });
