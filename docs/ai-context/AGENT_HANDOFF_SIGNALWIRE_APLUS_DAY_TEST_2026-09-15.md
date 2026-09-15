@@ -114,38 +114,68 @@ exten => 8457826775,1,NoOp(Connect day-test: A plus main line -> SignalWire hop,
   10:09:15 → ext 112 via Local (caller +18458060616). All: `BRIDGE_ENTER` then
   `BRIDGE_EXIT` of `PJSIP/loopcom-pbx-*` in the SAME second, then
   `HANGUP {"hangupcause":58,"hangupsource":"PJSIP/loopcom-pbx-<self>","dialstatus":"ANSWER"}`.
-- Cause **58 = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL** — chan_pjsip's cause when a
-  mid-call media renegotiation (re-INVITE) fails. The hangup SOURCE is the SignalWire
-  return leg itself: Asterisk killed it, no BYE came from the caller or the extension.
+- Cause **58 = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL** — media (re)negotiation failure.
+  The hangup SOURCE is the SignalWire return leg itself: Asterisk killed it, no BYE
+  came from the caller or the extension.
 - **IVR and voicemail on the exact same path work** (BackGround 11–14 s calls; a 30 s
-  voicemail on 105 at 09:09) — the only thing that happens at extension-answer and not
-  before is the BRIDGE, and the bridge is what triggers a re-INVITE toward SignalWire:
-  `pjsip show endpoint loopcom-pbx` → `direct_media: true`, `direct_media_method:
-  invite` (T2 extension endpoints are also direct_media=true). SignalWire rejects the
-  renegotiation (RTP re-pointed at the customer's NATed phone / codec topology change);
-  Asterisk responds by hanging the channel up with cause 58.
+  voicemail on 105 at 09:09) — only the BRIDGE at extension-answer renegotiates media.
 - The 04:52/05:00 §2 "proof" calls never exercised this: they landed after-hours
-  (IVR-4 → no extension bridge). The defect was live from the first minute of the test.
-- Distinct real victims seen: +17186350969 (twice), +18458060616 (twice, incl. the
-  ext-112 leg). The forward hop pair (344022↔0001) natively re-INVITEs fine — both
-  carrier legs accept direct media; SignalWire's leg is the one that refuses.
-- ⛔ Verbose log carries NO SIP trace at this level, so the 488/4xx itself is inferred
-  from cause 58 + timing; the proof of any fix is ONE real answered call.
+  (IVR-4 → no extension bridge). The defect was live from the first minute of the
+  test — and CDR history shows **trunk 132 has NEVER carried a surviving bridged
+  answered call in its life** (every pre-09-15 inbound was NO ANSWER), so this is
+  inherent to the trunk, not a day-test artifact.
 
-**Fix options (pick one, then prove with a real answered call to 6775):**
-1. **Surgical (keeps the test running):** turn off direct media for trunk 132 only —
-   append to `/etc/asterisk/pjsip__60_custom.conf` (or the pjsip custom file that
-   exists there): `[loopcom-pbx](+)` newline `direct_media=no`, then
-   `asterisk -rx "core reload res_pjsip.so"` (or `pjsip reload`), verify with
-   `pjsip show endpoint loopcom-pbx | grep direct_media` → `false`. Blast radius:
-   trunk-132 calls only (this test + demo bench); RTP for them anchors on the PBX,
-   which is already true for every non-direct bridge. ⛔ Do NOT edit the generated
-   pjsip file — regen reverts it.
-2. **Rollback (§5):** ends the test, restores A plus to the direct VoIP.ms path.
+**ROOT CAUSE — PCAP-PROVEN 10:45 ET (capture `/tmp/sw_daytest.pcap` on the PBX,
+tcpdump on the two SignalWire edge IPs 159.65.244.171 / 152.42.144.114; worked
+example = the 10:40:40 ET call, Call-ID 86f8873f-…):** an **SRTP profile mismatch**,
+NOT direct media (the earlier direct_media hypothesis is WRONG — the re-INVITE's
+c=/port were the PBX's own, and SignalWire ACCEPTED it with 200 OK, rejecting nothing):
 
-⛔ Whatever the choice, the SignalWire MIGRATION plan inherits this: a ported number
-with direct_media left on = every desk-phone answer drops. Carry `direct_media=no`
-into the trunk-132 endpoint config as a standing requirement.
+1. SignalWire's initial INVITE offers **encrypted media**:
+   `m=audio 14132 RTP/SAVP 0 8 9 101` + `a=crypto:1 AEAD_AES_256_GCM_8 inline …`.
+   The PBX endpoint `loopcom-pbx` has `media_encryption=no`.
+2. Asterisk 20.18.2's 200 OK is **an invalid hybrid**: it echoes
+   `m=audio … RTP/SAVP` with **no a=crypto line at all** AND appends a second
+   `m=audio … RTP/AVP` m-line the offer never contained. SignalWire tolerates it at
+   setup (ACKs; plain RTP flows; IVR/VM audio fine).
+3. At extension-answer, the bridge triggers a topology re-INVITE from Asterisk
+   carrying the same malformed 2-m-line SDP (SAVP-no-crypto + AVP port 0).
+   SignalWire's **200 OK declines every stream** (`m=audio 0 RTP/SAVP 19` +
+   `m=audio 0 RTP/AVP 19`). Zero live streams → Asterisk sends
+   **BYE `Reason: Q.850;cause=58`** 44 ms after its own ACK. Call dead.
+
+**THE FIX (not yet applied): align encryption on trunk 132 — pick ONE:**
+1. **SignalWire dashboard:** set the SIP endpoint `loopcom-pbx`'s Encryption to
+   optional/off, so its INVITEs offer plain `RTP/AVP`. No PBX change at all.
+   Cleanest; needs the SignalWire portal (Izzy's Chrome session).
+2. **PBX-side SRTP:** set trunk 132's Media Encryption to SRTP (SDES) so both sides
+   speak SAVP+crypto honestly. ⛔ Do this through the VitalPBX panel trunk settings —
+   NOT by hand-editing the generated `pjsip__50-1-trunks.conf` (regen reverts), and
+   ⛔ NOT via a `[loopcom-pbx](+)` append in a custom pjsip file: FOUR sections share
+   that name (endpoint/aor/identify/registration) and a (+) append can land on the
+   wrong one and break the trunk's registration.
+Prove either with ONE real answered call that stays up (pcap or `cel`: no cause-58
+BYE, BRIDGE_ENTER without same-second BRIDGE_EXIT).
+
+⛔ MIGRATION-BOARD BLOCKER: any number ported to SignalWire drops every answered call
+until this encryption alignment is done.
+
+## §7 TEST v2 — moved to (845) 782-3064 (Izzy, 10:45 ET 2026-09-15)
+
+Izzy: *"Put 6775 back to the way it was, and we'll do the test on 3064."*
+- §5 rollback of 6775 EXECUTED and verified in the LOADED dialplan (generated
+  `_8457826775` only; rewrite gone). Backup `*.bak.signalwire-aplus-rollback.<ts>`.
+- The SAME two edits now exist for **8457823064** (A plus DID, same VoIP.ms sub
+  344022_Comfortcont, inbound route rings ext 108): the `[trk-132-in]` rewrite is
+  2053513327→8457823064 and the `[default-trunk](+)` exact exten `8457823064` carries
+  the TRUNK_ID=132 guard. Loaded-dialplan verified. Backup
+  `*.bak.signalwire-aplus3064-test.<ts>`. Rollback recipe = §5 with 3064 substituted.
+- ⛔ Until the §6 encryption fix is applied, answered calls on 3064 drop exactly like
+  6775's did; IVR/VM/hold audio (the quality-test material) works.
+- The tcpdump capture (`/tmp/sw_daytest.pcap`) was left RUNNING for validating the
+  fix; kill the `tcpdump` process and delete the file when done.
+
+## §5 HOW TO END THE TEST (rollback)
 
 ## §5 HOW TO END THE TEST (rollback)
 

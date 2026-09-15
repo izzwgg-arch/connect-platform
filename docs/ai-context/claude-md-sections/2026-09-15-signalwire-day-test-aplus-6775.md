@@ -24,16 +24,24 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_APLUS_DAY_TEST_2026-09
   out `@0001`, not trunk 132 — the 08-18 "route 123 has only trunk 132" claim is stale.
 - ⏳ NOT PROVEN: no HUMAN call yet; audio quality is the whole point of the day — judge
   it from real calls + rtpStats, not from this trace.
-- ⛔⛔ **FOUND 10:17 ET: EVERY EXTENSION ANSWER ON THIS PATH DROPS THE CALL INSTANTLY
-  (cause 58), 4/4 today** — ext 101 ×3 (10:05, 10:06, 10:08) + ext 112 (10:09), two real
-  callers. IVR and voicemail on the same path survive fine (30 s VM at 09:09); the kill
-  fires only at BRIDGE time, and CEL shows `hangupcause 58` (bearer capability not
-  available = media renegotiation failed) with `hangupsource` = the **loopcom-pbx leg
-  itself** — Asterisk tears it down when its bridge-time re-INVITE toward SignalWire is
-  rejected. Trunk 132 endpoint has `direct_media=true` (extensions too), so answering
-  triggers a direct-media re-INVITE at SignalWire pointing RTP at the customer's NATed
-  phone. The 05:00 "proof" call never bridged to an extension (after-hours IVR→VM), so
-  this was latent from the start. Fix options + full evidence: §6 of the handoff.
-  ⛔ This is a MIGRATION-BOARD blocker, not just a day-test bug — any ported number
-  would hit the same drop on every desk-phone answer until direct media is off for the
-  SignalWire trunk.
+- ⛔⛔ **EVERY EXTENSION ANSWER ON THIS PATH DROPPED THE CALL INSTANTLY (cause 58),
+  ~8 for 8 during the day** (ext 101, 105 via ring group, 112). IVR and voicemail on
+  the same path survive fine. **ROOT CAUSE PCAP-PROVEN (§6 of the handoff): an SRTP
+  mismatch, NOT direct media.** SignalWire's SIP endpoint sends encrypted media
+  (`RTP/SAVP` + `a=crypto AEAD_AES_256_GCM_8`); trunk 132's PBX endpoint has
+  `media_encryption=no`; Asterisk 20 answers with an INVALID hybrid SDP (SAVP m-line
+  with NO crypto + a second m-line the offer never had) that limps through call setup —
+  then at extension-answer the bridge triggers a topology re-INVITE carrying the same
+  malformed SDP, SignalWire's 200 OK declines every stream (all ports 0), and Asterisk
+  hangs up with cause 58 and BYE `Reason: Q.850;cause=58`. The trunk has NEVER had a
+  surviving bridged answer in its life (all prior inbounds were NO ANSWER).
+- ✅ **6775 ROLLED BACK 10:45 ET 2026-09-15 (§5 executed)** — both edits deleted, loaded
+  dialplan verified (`_8457826775` generated pattern only; rewrite gone). Backup
+  `*.bak.signalwire-aplus-rollback.*`. ⏳ real-call proof pending the next inbound.
+- **TEST v2 IS ON (845) 782-3064 NOW** (same two edits, exact exten `8457823064`,
+  loaded-dialplan verified; inbound route rings ext 108; backup
+  `*.bak.signalwire-aplus3064-test.*`). ⛔ Answered calls on 3064 WILL STILL DROP until
+  the encryption mismatch is fixed — one SignalWire-dashboard toggle (endpoint
+  encryption off/optional) or SRTP on trunk 132 PBX-side. §6/§7 of the handoff.
+  ⛔ Migration-board blocker either way: fix the encryption alignment before porting
+  any number to SignalWire.
