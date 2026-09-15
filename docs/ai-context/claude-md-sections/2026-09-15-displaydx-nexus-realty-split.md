@@ -39,7 +39,18 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   2" → IVR 18 Nexus Main (dials 102 + 104)** — so 414-3736 and Yehuda's 104 are Michael's side.
 - ✅ A session-tenant shim was built + tested 20/20 then REMOVED unshipped (only serves the
   unsafe design; a real split changes Eli's SIP identity, so one re-sign-in is unavoidable).
-  ⏳ **Izzy to choose: A real PBX split (recommended, needs PBX-write approval) / B platform
-  rework for per-extension ownership / C leave phones.**
+  ✅ **Izzy chose A — real PBX split, PREP ONLY.**
+- ✅✅ **REAL PBX SPLIT PREPPED, NOTHING LIVE (handoff §6):** PBX tenant **142 `displaydx`** linked
+  to DisplayDX (same script, no duplicate shell), outbound profiles 26+27; **ext 101** (PBX id 668,
+  `T142_101` + `T142_101_1`, every field = T6's, DTMF rfc4733 both); **ring groups 800–807**
+  field-for-field = T6's (create THEN edit — the writer never sets answered_elsewhere /
+  allow_diversions / own CoS); **Connect IVR drafts** "Displaydex" + "Quick sat main" from the
+  read-only migration plan, prompts byte-identical, **0 publishes / 0 mappings**. All 20 applies
+  re-baked clean; doorways + T6 untouched; Ellie's numbers still route to T6 IVR 16/17.
+- ⏳ **Switch night = handoff §6a runbook**, staged on loopcom `/root`, dry runs clean:
+  `displaydx-switch-pbx.ts` (DIDs → T142 + inbound routes) and `displaydx-connect-move.ts`
+  (1,289 contacts, 8 threads, 15 voicemails w/ key rewrite, 62 CDRs, devices…). Eli signs in once.
+  ⚠️ Known diffs: Eli's hold music (T6 moh3 "main" vs T142 default — form can't set it), desk
+  mobile_client off.
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.

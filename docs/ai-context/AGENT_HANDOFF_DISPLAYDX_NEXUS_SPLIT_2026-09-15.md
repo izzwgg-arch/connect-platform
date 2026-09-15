@@ -175,6 +175,81 @@ same lookup in telephony (WS connect + `getTenantId`) to be complete.
   ~25 code sites on the live call path, multi-day, high regression risk.
 - **C:** leave phones where they are; the billing split (the money) is already done.
 
+## 6. ✅ THE REAL PBX SPLIT IS PREPPED — NOTHING LIVE (2026-09-15 evening, Izzy: "do a real PBX split, but don't make it live yet. Just prep everything for a quick switch.")
+
+Every PBX write went through Connect's sanctioned writers (PBX Console routes → mirror tenant
+create / panel replay + `applyAndRebake`), each verified afterwards against `ombutel` rows AND the
+rendered config — never the route's own 200. **After every one of the 20 applies:** the doorway
+lines stayed at T1:3 / T2:1 / T105:2, the re-bake reported 2/2 tenants, `linesChanged 0`,
+`failed 0`, and tenant 6 stayed at 4 extensions / 11 ring groups / 5 routes / 3 IVRs / DIDs
+8452003535, 2128880885, 8453647474.
+
+**Built (live on the PBX, reachable by NO number):**
+| Piece | Result |
+|---|---|
+| PBX tenant | **142 `displaydx` "DisplayDX"**, path `73eb959f065ba613`, 13 rendered files, outbound profiles **26 Displaydex + 27 Quick Sat Rental** (Ellie's own caller-ID routes; 24 = Nexus, CID 845-414-3736), recordings allowed, retention copied |
+| Connect link | DisplayDX → **T142** linked in the SAME script milliseconds after create (the 5-min auto-sync would otherwise mint a duplicate Connect tenant — none appeared). T6's Connect telephony fields (webrtc/sip/dtmf/media/sms) copied onto DisplayDX first |
+| ext 101 "Eli Lovi" | PBX ext id **668**; desk `T142_101` (device 1272) + app `T142_101_1` (device 1273, WebRTC, 5 contacts); every general field byte-matches T6 ext 101 (both CIDs, feature PIN, rec in/out, call waiting, cid_on_diversions, language, VM pwd + attach/saycid/sayduration/envelope). Both render `dtmf_mode=rfc4733` (the writer's WebRTC default rendered `auto`; corrected via the console edit route with both devices passed explicitly). Connect synced an unowned DisplayDX ext 101 row (link has a SIP password, PENDING) |
+| Ring groups 800–807 | 8 groups, ids 125–132, field-for-field equal to T6's 13–20: ringall, ringtime 0, music 1, prefix = name, **tenant's own CoS 143**, answered_elsewhere + allow_diversions ON (renders `_IGNORE_DIVERSIONS=no` ×16), member ext 668, no-answer → vm_direct 668. ⛔ The create writer never sets those two switches or the CoS — each group is create THEN edit |
+| Connect IVR drafts (DisplayDX) | "Displaydex" `cmu37n6900oduqk13av09dvqy` (prompt `custom/displaydx_main_vpbx32`, 10 s, 3 tries, **dial-by-extension ON**, keys 1→802, 2→801, 3→800) and "Quick sat main" `cmu37n6f10oe2qk13trwrbpqq` (prompt `custom/displaydx_quicksat_vpbx33`, 10 s, 3 tries, OFF, keys 1→807, 2→806, 3→805, 4→804, 0→803); invalid + timeout → `sub-extensions-vm,VM-101,1` on both; values from the read-only `POST /voice/ivr/migration/plan` of T6 IVR 16/17 (no problems/warnings/codes), refs `T6_`→`T142_`. Schedule: Displaydex for every mode (the numbers pick their own menu per DID). Prompts catalogued with the byte-identical PBX recordings (sha256 `8c01f0e6…`, `f0b82a24…`) and pushed to `/var/lib/asterisk/sounds/custom/`. **0 publishes, 0 number mappings, no `connect/t_displaydx` or didmap AstDB keys** |
+
+**Known differences, deliberately left (decide on switch night or later):**
+- ⚠️ **Eli's own hold music:** T6 ext renders `moh_suggest=moh3` (group 3 "main", 16 custom tracks); T142 renders `default`. The panel form on T142 offers only "Default"/"None", so the sanctioned writer cannot set it. T6's inbound routes also use music group 3; `createInboundRoute` posts music group "" (default).
+- Desk device `mobile_client` is OFF on T142 (ON on T6): the VitalPBX Connect app is unused platform-wide and each ON device spends a licence slot.
+- `VM-101` needs no tenant prefix — `sub-send-voicemail` reads `DB(${TENANT}/extensions/101/voicemail)`, so a call entering T142 reaches `101@displaydx-voicemail`. ⏳ Prove with a real call.
+
+**Staged on loopcom `/root` (600), NOT run:** `displaydx-switch-pbx.ts` (dry run clean: T6 keeps
+only 8453647474; T142 gets exactly the two numbers — the dry run first caught an empty-form blank
+row that would have posted an empty number, fixed), `displaydx-connect-move.ts` (dry run clean,
+census below). Already run, kept as the record: `displaydx-pbx-prep.ts`, `displaydx-rg-prep.ts`,
+`displaydx-ivr-prep.ts`; recordings in `/root/displaydx-prompts/`. Container copies removed.
+Scripts run inside `app-api-1` via `docker cp` → `npx tsx <file>` → `rm`.
+
+**Connect move census (dry run 2026-09-15):** user 1, MobileDevice 2 (tenant + extension), CrmUserAccess
+1, outbound permission 1 (Nexus route "QSR" prefix 99 copied to DisplayDX), contacts 1,289 (all
+created by Eli, 0 others), SMS threads 8 (dedupeKey `sms:<tenant>:…` rewritten) / messages 29 /
+participants 16, Nexus group-chat membership 1 (removed), voicemails 15 (13 `6|101|…` keys →
+`142|101|…`, else the T142 sync re-ingests the copied spool as duplicates; 2 legacy-format keys
+untouched), VoicemailEmailRecipient 1, ConnectCdr 62 (desk `T6_101-` AND app `T6_101_1-` channels,
+or Ellie's DIDs; 0 touch both sides), CallRecord 15 (toNumber 101), CallInvite 37. History tables
+stay (AuditLog, VoiceDiagEvent, CallWakeEvent, …). The "Owner" custom role is platform-scoped and
+travels with the user.
+
+### 6a. SWITCH-NIGHT RUNBOOK (Izzy picks the night; each step verified before the next)
+
+0. **Pre-check:** 0 live calls on the two numbers; `displaydx-connect-move.ts` and
+   `displaydx-switch-pbx.ts` dry runs still clean; tell Eli he will sign in to the app once.
+   Back up every row the move touches (pg `COPY` of the census rows) to `/root`.
+1. **Voicemail spool (PBX, COPY never move):**
+   `mkdir -p /var/spool/asterisk/voicemail/displaydx-voicemail/101 && cp -a /var/spool/asterisk/voicemail/displaydex-voicemail/101/. /var/spool/asterisk/voicemail/displaydx-voicemail/101/ && chown -R asterisk:asterisk /var/spool/asterisk/voicemail/displaydx-voicemail`
+   (7 INBOX messages, 8 MB on 2026-09-15). The T6 original stays until cleanup.
+2. **PBX number move:** `displaydx-switch-pbx.ts --live` — T6 number list minus the two, T142 list
+   gets them, `createInboundRoute` ×2 on T142 → ext 668, ONE `applyAndRebake`. ⛔ ~1–2 min of no
+   answer on those two numbers between the T6 save and the apply. Verify: rendered
+   `extensions__50-142-dialplan.conf` has `_8452003535` and `_2128880885`; they are gone from
+   `extensions__50-6-dialplan.conf`; doorway counts unchanged; `_8453647474` still on T6.
+3. **Connect sync:** refresh tenant DIDs (so `PbxTenantInboundDid.connectTenantId` → DisplayDX) and
+   extensions for T142.
+4. **Connect data move:** `displaydx-connect-move.ts` (dry run, compare census) → `--live`.
+5. **IVR go-live:** `GET /voice/ivr/numbers?tenantId=cmu31fp430000pfje5qh86dja` (mints the two
+   mappings) → `POST /voice/ivr/numbers/:mappingId/assign` 200-3535 → Displaydex menu,
+   212-888-0885 → Quick sat main → `POST /voice/ivr/publish {tenantId}` → `POST
+   /voice/did/:id/switch-to-connect` for each. Verify the rendered T142 route Goto is
+   `connect-doorway,s,1`.
+6. **Eli signs out and back in** (new SIP identity `T142_101_1`; provisioning then fetches fresh).
+7. **Acceptance = real calls, never DB reads:** each number answers with its own greeting; every key
+   rings ext 101; no key → voicemail after 3 tries; dialling 101 at the Displaydex menu; a voicemail
+   lands under DisplayDX and emails eli@; outbound from Eli shows 845-200-3535 (route 26) / Quick Sat
+   route 27 (`overwrite_cid=yes`); a text in and out on 200-3535.
+8. **Cleanup — a separate, later task, only after days of clean calls:** T6 routes 30/31 (check
+   `ombu_destinations` sharers across ALL tenants first — a route delete cascades its destination
+   row), IVRs 16/17, ring groups 800–807, ext 101 on T6 (then `module reload res_pjsip.so` +
+   `app_voicemail.so`), the old Connect ext 101 row, T6 spool copy.
+
+**Rollback (any step):** PBX — `saveTenant` the two numbers back onto T6 (routes 30/31 and IVRs
+16/17 are untouched there) → apply + rebake. Connect — restore the census rows from the step-0
+backup. The prepped T142 objects are harmless to leave in place.
+
 ## 5. Rules this earned / reaffirmed
 
 - ⛔ A tenant rename is a one-column Connect write; the PBX tenant name, doorway routing and
