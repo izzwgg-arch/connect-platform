@@ -27,7 +27,10 @@
 - `apps/portal/components/floatingAssistantOpening.test.ts`: passed 11/11 using `tsx --test`, including `Talk to Laybel is a voice mode of the existing Assistant, not another agent`.
 - `git diff --check` passed for the Laybel implementation.
 - Shared-worktree portal typecheck is presently blocked by an unrelated concurrent error in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before declaration). A clean temporary worktree cannot resolve the local non-checked-in dependency tree, so it is not a substitute for a full typecheck.
-- Not run: production deployment or production browser acceptance. No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
+- Deploy Center dry run `ad871db3…`: **SUCCESS** for `portal` / `feat/ivr-migration-takeover`, resolving commit `7d93d23a8` (local ancestry confirmed it includes both Laybel commits).
+- Real blue/green portal job `c2ba7701…`: accepted and build log confirms `✓ Compiled successfully`, lint/type validation, and static generation of all 197 pages. Public `https://app.loopcom.net/ready`: **200** / `{"ok":true}` during rollout.
+- Final queue result and post-deploy running-container source verification: **pending**. The authenticated Deploy Center connection detached while the portal restarted; do not report the production deployment as finished until the final `done 7d93d23a…` log line and container check are read.
+- No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15
 
