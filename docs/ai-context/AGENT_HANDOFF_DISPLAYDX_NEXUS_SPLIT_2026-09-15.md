@@ -220,9 +220,9 @@ travels with the user.
 0. **Pre-check:** 0 live calls on the two numbers; `displaydx-connect-move.ts` and
    `displaydx-switch-pbx.ts` dry runs still clean; tell Eli he will sign in to the app once.
    Back up every row the move touches (pg `COPY` of the census rows) to `/root`.
-1. **Voicemail spool (PBX, COPY never move):**
-   `mkdir -p /var/spool/asterisk/voicemail/displaydx-voicemail/101 && cp -a /var/spool/asterisk/voicemail/displaydex-voicemail/101/. /var/spool/asterisk/voicemail/displaydx-voicemail/101/ && chown -R asterisk:asterisk /var/spool/asterisk/voicemail/displaydx-voicemail`
-   (7 INBOX messages, 8 MB on 2026-09-15). The T6 original stays until cleanup.
+1. **Voicemail spool DELTA (PBX, copy never move — the full copy was done 22:16Z 2026-09-15, §7):**
+   `for f in INBOX Old Urgent; do cp -an /var/spool/asterisk/voicemail/displaydex-voicemail/101/$f/. /var/spool/asterisk/voicemail/displaydx-voicemail/101/$f/; done && chown -R asterisk:asterisk /var/spool/asterisk/voicemail/displaydx-voicemail`
+   (`-n` never clobbers). The T6 original stays until cleanup.
 2. **PBX number move:** `displaydx-switch-pbx.ts --live` — T6 number list minus the two, T142 list
    gets them, `createInboundRoute` ×2 on T142 → ext 668, ONE `applyAndRebake`. ⛔ ~1–2 min of no
    answer on those two numbers between the T6 save and the apply. Verify: rendered
@@ -230,7 +230,17 @@ travels with the user.
    `extensions__50-6-dialplan.conf`; doorway counts unchanged; `_8453647474` still on T6.
 3. **Connect sync:** refresh tenant DIDs (so `PbxTenantInboundDid.connectTenantId` → DisplayDX) and
    extensions for T142.
-4. **Connect data move:** `displaydx-connect-move.ts` (dry run, compare census) → `--live`.
+4. **Connect re-sync + move (the backfill already copied the history, §7):** `docker cp
+   /root/displaydx-connect-move.ts app-api-1:/app/apps/api/` and `docker cp
+   /root/displaydx-backfill-map.json app-api-1:/tmp/` → dry run (re-sync plan + move census) →
+   `--live` (ONE transaction: PHASE 1 re-sync of anything changed since 22:15Z — edited/new/deleted
+   contacts, new SMS threads/messages, voicemail state, voicemails that arrived since (MOVED with
+   key rewrite); PHASE 2 move — ConnectCdr, CallRecord to 101, CallInvite, User, ext owner +
+   PROVISIONED, devices, CRM access, QSR route copy + permission, texting number, VM email
+   recipient, Nexus group-chat membership) → verify Eli's app/portal on DisplayDX →
+   `--remove-originals` (dry: writes `/tmp/displaydx-nexus-originals-backup.json`; `docker cp` it
+   out to `/root`) → `--remove-originals --confirm` (deletes the Nexus originals the map covers —
+   Izzy: "remove it from Nexus"; refuses any original without its DisplayDX copy).
 5. **IVR go-live:** `GET /voice/ivr/numbers?tenantId=cmu31fp430000pfje5qh86dja` (mints the two
    mappings) → `POST /voice/ivr/numbers/:mappingId/assign` 200-3535 → Displaydex menu,
    212-888-0885 → Quick sat main → `POST /voice/ivr/publish {tenantId}` → `POST
@@ -249,6 +259,59 @@ travels with the user.
 **Rollback (any step):** PBX — `saveTenant` the two numbers back onto T6 (routes 30/31 and IVRs
 16/17 are untouched there) → apply + rebake. Connect — restore the census rows from the step-0
 backup. The prepped T142 objects are harmless to leave in place.
+
+## 7. ✅ FULL BACKFILL DONE BEFORE THE SWITCH — COPIES, ORIGINALS UNTOUCHED (2026-09-15 22:15–22:21Z, Izzy: "do the full backfill before the switch")
+
+**Copy, never move:** Eli's live app stays on Nexus until switch night, so every original stayed
+exactly where it was. DisplayDX has no users, so nobody sees the copies until Eli moves.
+
+**Copied in ONE committed transaction (22:15Z):** 1,289 contacts (1,364 phones, 89 emails), 8 SMS
+threads (29 messages, 16 participants, 3 attachments as real file copies under
+`<DisplayDX>/<newThread>/f_…` — the download route refuses a key that doesn't embed the thread's
+tenant + id), 13 voicemails (the 2 legacy msg_id-keyed rows duplicate a pipe row and were skipped;
+the 4 with local audio got their own `<copyId>.wav`). **Voicemail spool copied 22:16:17Z**
+(INBOX 14 files + Old 4 = 18, sha256 identical, `asterisk:asterisk`) into
+`displaydx-voicemail/101`. Id map (original → copy) at loopcom
+`/root/displaydx-backfill-map.json` (600).
+
+**Field settings the traced job audit required (each prevents a real side effect):**
+- Voicemail key `6|101|X` → `142|101|X` = exactly what the T142 helper-spool sync computes
+  (helper rows drop `msg_id`) → **PROVEN: the sync scanned the copied mailbox, 9 messages, 9
+  upserts onto the copies, 0 new rows**.
+- Voicemail `emailSkipReason` = `predates_feature` when null (a set `emailedAt` + null reason + no
+  EmailJob = watchdog `job_missing` → owner SMS); `transcriptError = migrated_copy` when no
+  transcript; callback-reminder fields cleared; `pbxRecfile` context → `displaydx-voicemail`
+  (playback scans that context).
+- ⛔ ORDER: rows first, spool IMMEDIATELY after. Spool first → the 60-s sync ingests bare
+  duplicates; rows long without spool → any playback stamps `audioGoneAt` permanently.
+- SMS: original `createdAt`/`lastMessageAt` kept (outside the 30-min reconciler + forward windows);
+  `emailForwardedAt` stamped when null (the SMS-forward guardrail escalates null post-Aug-20
+  messages); participant `lastReadAt = now` (the dashboard unread count selects participants by
+  userId with NO tenant filter); `smsProviderMessageId` kept (dedupes the post-switch re-import).
+- ⛔ NOT copyable: **ConnectCdr** (`linkedId` globally unique; the app reads history per tenant →
+  MOVED at switch), CallRecord (invisible while ConnectCdr rows exist), CallInvite (a PENDING copy
+  expires into a MISSED_CALL push to Eli). ⛔ Never run `/admin/cdr/repair-recent` after the CDR
+  move — it re-resolves and rewrites `tenantId`.
+
+**Proof nothing fired (baseline 22:14:49Z → 22:20:56Z):** DisplayDX EmailJobs 6 → 6 (tonight's
+invoices), AgentEscalations 178 → 178 (latest still 21:03), Eli's NotificationLedger 22 → 22,
+`audioGoneAt` 0 on both tenants, every copied message stamped, every copied voicemail
+email-safe, Nexus still 1,289 contacts / 15 ext-101 voicemails. Switch-night script dry run:
+**nothing to re-sync yet** (0 edited/new/deleted contacts, 0 new threads/messages, 0 new
+voicemails); move census 62 CDRs (0 on both sides) / 15 CallRecords / 37 invites / 2 devices.
+
+**Lessons (both bit during this run):**
+- ⛔ **A deploy recreates `app-api-1` and wipes every `docker cp`'d script** (22:09:57Z, another
+  session's build `7d93d23a`). Re-copy immediately before each run, and put long writes in ONE
+  transaction so a mid-run recreation rolls back clean.
+- ⛔ **`process.exit()` right after `console.log` of a large JSON truncates it on the
+  `docker exec` pipe (cut at ~64 KB)** — the backfill's id map was lost that way. Write big output
+  to a file inside the container and `docker cp` it out; the map was rebuilt exactly from the data
+  (`displaydx-backfill-map-rebuild.ts`, refuses any ambiguous match).
+
+Scripts on loopcom `/root` (600): `displaydx-backfill.ts` (ran), `displaydx-backfill-map-rebuild.ts`
+(ran), `displaydx-backfill-run.log`, `displaydx-connect-move.ts` (REWRITTEN: re-sync + move +
+remove, dry run clean), `displaydx-switch-pbx.ts` (unchanged). Container copies removed.
 
 ## 5. Rules this earned / reaffirmed
 

@@ -52,5 +52,14 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   (1,289 contacts, 8 threads, 15 voicemails w/ key rewrite, 62 CDRs, devices…). Eli signs in once.
   ⚠️ Known diffs: Eli's hold music (T6 moh3 "main" vs T142 default — form can't set it), desk
   mobile_client off.
+- ✅✅ **FULL BACKFILL DONE BEFORE THE SWITCH (handoff §7) — COPIES, originals untouched so Eli's
+  live app keeps working:** 1,289 contacts, 8 SMS threads / 29 messages / 3 attachment files, 13
+  voicemails + the mailbox spool (18 files, sha256 identical) copied into DisplayDX; the T142
+  sync scanned the copied mailbox and upserted 9/9 onto the copies (0 duplicates). **Proven nothing
+  fired:** 0 new emails / escalations / pushes, 0 `audioGoneAt`. Id map
+  `/root/displaydx-backfill-map.json`. ⛔ ConnectCdr can't be copied (global `linkedId`) → moved at
+  switch. Switch-night Connect script rewritten to re-sync + move + `--remove-originals`
+  (dry run: nothing to re-sync yet). ⛔ Lessons: a deploy recreates app-api-1 and wipes
+  docker-cp'd scripts; `process.exit` truncates big stdout on the docker pipe.
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.
