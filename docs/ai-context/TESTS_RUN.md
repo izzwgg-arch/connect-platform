@@ -2,7 +2,19 @@
 
 Newest entries first.
 
-## Support agent phase 3 — code fixes shipped after the owner's GO (2026-09-15, `8bce4506`)
+## Desk-phone wizard: password dead-end → zero-touch escape (2026-09-15, `7931e768`)
+
+- portal tsc → **0 errors** (DeskPhoneWizard, ManagedPhonePanel, managedPhoneStatus clean).
+- portal wizard test files (`managedPhoneStatus`, `wizardIdentifyPhone`, `setupDriver`, `wizardDeviceIdentity`,
+  `wizardHonestFinish`, `wizardMakeAndPhotos`, `lib/deskPhoneWizard`) → **29/30 + 16/16**; the single failure
+  is the documented pre-existing "office computer keeps a STANDING provisioning listener armed" case (also in
+  the 2026-09-15 Telnyx entry's pre-existing list; untouched by this change). The FULL-SCREENS source guard
+  was updated to the new progress-list literal (`step === "live" && !managedMode && !needs.length`) — its
+  invariant (questions are full screens; the progress list waits) is unchanged and still asserted.
+- Deploy: portal `7931e768`, container `.build-commit` matches, 0 restarts, "Set up from the cloud" present in
+  the shipped desk-phones client chunk. Seen live on Izzy's machine: the app pulled the build via the in-app
+  update toast; the welcome screen shows the managed entry. ⏳ The stuck-card button itself not yet observed on
+  a live stuck run (needs a scan reaching the password wall).
 
 - watcher `node --test stress.test.mjs hands.test.mjs ship.test.mjs` → **94/94 pass** (new `ship.test.mjs`: path
   allowlist + forbidden gate/config/secret files, services and packages per file, control-byte detection, exact-match and

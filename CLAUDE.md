@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-15 · Zero-touch Yealink LIVE except handset proof: YMCS v2 OAuth (v1 X-Ca DEAD), ⛔ MAC-ONLY ADD FORBIDDEN 403 → provision by MAC+SERIAL (`265402dd`, api+portal deployed); live round-trip through prod container assign→verify→release proven, cloud clean; ⏳ real factory-boot→register leg needs a handset; "every model forever" needs per-model qualification → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
+- 2026-09-15 · Zero-touch Yealink LIVE except handset proof: YMCS v2 OAuth (v1 X-Ca DEAD), ⛔ MAC-ONLY ADD FORBIDDEN 403 → provision by MAC+SERIAL (`265402dd`); live round-trip through prod container proven, cloud clean; ⛔ a resumed run HID the wizard's welcome options — the password dead-end now offers "Set up from the cloud — no password" with MAC prefilled (`7931e768` deployed); ⏳ factory-boot→register leg needs a handset → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
 
 - 2026-09-15 · TELNYX: ⛔ ATTESTATION A PROVEN ON A REAL ANSWERED CALL — account izzy@loopcom.net at VERIFIED, number (845) 306-6825 bought+attached, PBX trunk 183 registered, T102 route 123 + inbound → ext 102 (CID must be the Telnyx number — unowned = 403 D51), dnis_format=national kills the custom-dialplan need, CDRs = record_type `sip-trunking` field `shaken_stir`; /apps/telnyx bench LIVE (lookup needs `type=` params); wizard-carrier switch built (telnyx honestly refused till wizard path exists) → `2026-09-15-telnyx-provider-onboarding-and-bench.md`
 
