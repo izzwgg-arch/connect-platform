@@ -7,6 +7,7 @@ import { resolveTaxProvider } from "./taxProvider";
 import type { BillingPricingResolution } from "./billingPricingResolution";
 import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
 import { buildExtensionInvoiceLine } from "./billingFlatRate";
+import { buildRecurringCustomInvoiceLines } from "./billingRecurringCustomLines";
 import { resolveBillingQuantities, type BillingResolvedQuantities } from "./billingQuantityOverrides";
 import { resolveTollFreeDidPriceCents } from "./billingTollFreePricing";
 import { resolveVirtualExtensionPriceCents } from "./billingVirtualExtensionPricing";
@@ -390,6 +391,12 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
       },
     });
   }
+  // Recurring named custom charges (metadata.billingRecurringCustomLines):
+  // opt-in per tenant; taxable defaults to false so the amount lands on the
+  // total without entering the tax/fee or all-inclusive math. Pushed before
+  // the period stamp so multi-month invoices scale them like any other
+  // recurring line.
+  lineItems.push(...buildRecurringCustomInvoiceLines(settings.metadata));
   applyBillingPeriodToRecurringLines(lineItems, {
     periodStart: bounds.periodStart,
     periodEnd: bounds.periodEnd,
