@@ -66,8 +66,15 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
 - ⏳ **NOT PROVEN (rounds 5–6):** no customer has typed a serial, uploaded a photo or texted one;
   no phone has been cleared through GDMS from a serial; **OCR has never run on a real photograph
   here** (the suite fakes the engine deliberately — what is tested is our judgement, not Tesseract's).
-- ⛔⛔ **PARTS 2 AND 3 ARE INERT IN PRODUCTION until `CRM_OCR_ENABLED=true` on the api** — with it
-  off, both doors answer honestly ("type the serial instead") and store nothing. Flipping it is an
-  env change + api restart and is **Izzy's decision**; engine and language host already verified.
+- ✅ **PARTS 2 AND 3 ARE LIVE IN PRODUCTION SINCE 2026-09-15** — Izzy hit the off-door while
+  testing (Landau Home, GXP2170) and decided: *"every customer that has access to deskphone setup
+  should have that photo reading turned on."* `CRM_OCR_ENABLED=true` is in `.env.platform` (backup
+  `.env.platform.bak-20260915-ocr`), carried by commit `5adb347a` (a real `apps/api/.env.example`
+  correction — an env-only change has NO deploy path, see the 2026-08-17 SIP-split handoff; a
+  same-commit redeploy skips as `no_changes`, PROVEN AGAIN this day). Blue/green deployed,
+  container-verified: `.build-commit` = `5adb347a`, `CRM_OCR_ENABLED="true"` read from the running
+  container, 0 restarts, health 200. Client gate confirmed: the "Text the photo" door now asks
+  "Which phone will you text it from?" instead of refusing. ⛔ The switch is SHARED — it also
+  turns on CRM image-document OCR (Phase 5B) platform-wide; that is the round-6 one-engine design.
 - ⏳ **NOT PROVEN:** GDMS credential IS saved (round 2 Verify passed), but no real reset yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.

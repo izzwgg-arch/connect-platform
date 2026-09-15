@@ -466,7 +466,13 @@ system prompt them which number they're going to send it from, so the system kno
   fallback wording. The length bound is now `min(1)` and the normaliser is the single judge.
 
 ⏳ **NOT PROVEN:** no real photograph has ever been OCR'd here, and nobody has uploaded or texted one.
-⛔⛔ **Both doors are INERT until `CRM_OCR_ENABLED=true` on the api** (env + restart, **Izzy's call**).
+✅ **FLIPPED 2026-09-15 — both doors are LIVE.** Izzy: photo reading on for every desk-phone-setup
+customer. `CRM_OCR_ENABLED=true` in `.env.platform` (backup `.env.platform.bak-20260915-ocr`),
+shipped via commit `5adb347a` — env-only changes have no deploy path (a pinned same-commit redeploy
+skips `no_changes`), so the flip rode a real `apps/api/.env.example` correction. Container-verified
+same day: value read from `app-api-1`, 0 restarts, health 200. ⛔ Shared switch: CRM image-document
+OCR (Phase 5B) is now ON platform-wide too. ⏳ Still unproven: no real photograph OCR'd — the
+wizard's number-prompt appeared, but no upload or texted photo has been judged yet.
 With it off they answer `photo_reading_off` — "type the serial number instead" — and store nothing.
 
 ## 11. Traps hit
