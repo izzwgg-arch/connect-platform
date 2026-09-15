@@ -101,6 +101,80 @@ BILLING_RECEIPT emails SENT. Container-verified by SQL afterwards.
    (today: DisplayDX bills a manual quantity of 1 @ $30; 4 real extensions exist on the old
    tenant and 3000-series manual counts were never per-extension-accurate).
 
+## 4b. ⛔⛔ THE PHONE/IVR MOVE WAS STOPPED BEFORE ANY LIVE WRITE (2026-09-15 evening)
+
+Izzy asked to move Eli's app + voicemails/calls/texts to DisplayDX with zero downtime and to
+migrate his IVRs from the original Displaydex. **Nothing was moved** — tracing proved the only
+design that keeps Eli on PBX tenant 6 (a second `TenantPbxLink` from DisplayDX → T6) breaks
+live call paths. Every item below was verified in code or on the live PBX (read-only).
+
+**Who owns what on the PBX — proven from the RENDERED dialplan
+(`/etc/asterisk/vitalpbx/extensions__50-6-dialplan.conf:718-751`), not table decoding:**
+
+| DID | PBX route label | Rendered Goto | Rings |
+|---|---|---|---|
+| 845-200-3535 | Displaydex | `T6_app-ivr,IVR-16` ("Displaydex": 1→rg 802 DD Sales, 2→801 DD Customer Support, 3→800 DD Accounting; invalid/timeout → VM 101) | ext 101 |
+| 212-888-0885 | Quick Sat Rental | `T6_app-ivr,IVR-17` ("Quick sat main": 1→807 Bookings, 2→806 Customer service, 3→805 Tech support, 4→804 Billing, 0→803 Other; invalid/timeout → VM 101) | ext 101 |
+| 845-364-7474 | Nexus | `T6_app-time-condition,TC-3` ("Nexus Realty", Mon–Sat 9–5; open → IVR-18, closed → pre-announcement 6) | Nexus |
+| **845-414-3736** | **Nexus 2** | `T6_app-ivr,IVR-18` ("Nexus Main": 1→808 nexus sales, 2→809 NXR Inquiries, 0→900 NXR Receptionist, 102→ext 102, **104→ext 104**; invalid/timeout → ext 103) | Michael/Yehuda |
+
+Ring groups 800–807 ring only ext 101 (pbx extension_id 33); 808/809/900 ring only ext 102
+(id 34). Recordings: 32 "Displaydex main", 33 "Quick sat main", 34 "Mexus Main", 35 "nexus after
+hours". No queues. Dial-by-extension (`freedial`) is ON for IVR 16 only.
+⛔ **So 845-414-3736 and ext 104 (Yehuda) are MICHAEL'S side, contradicting §4.2's earlier
+presumption.** Ellie's side = ext 101 + 845-200-3535 + 212-888-0885 + IVRs 16/17 + rg 800–807.
+Izzy said Ellie has three companies — only two exist on the PBX; the third is unconfirmed.
+
+**Connect rows that are Ellie's (read-only census):** all 1,289 contacts (created by eli@);
+all 8 SMS threads (+18452003535, inbox owner Eli); voicemails ext 101 = 15; CDRs 62 Eli /
+39 Nexus / 37 no owner marker (0 touch both sides); MobileDevice ×2 (iOS + Android, ext 101);
+VoicemailEmailRecipient for 101; 1 UserCustomRole + 1 CrmUserAccess (both tenant-scoped).
+
+**⛔⛔ WHY TWO CONNECT TENANTS ON ONE PBX TENANT IS UNSAFE — the platform assumes one Connect
+tenant per VitalPBX tenant, resolved by last-wins maps or unordered `findFirst`:**
+- **Ringing:** `resolvePbxEventTarget` (`server.ts:~4320`) does
+  `tenantPbxLink.findFirst({ pbxTenantId })` then looks up the extension inside THAT tenant —
+  if it picks Nexus after 101 moved, it returns null → **no CallInvite, no INCOMING_CALL push,
+  Eli's app does not ring.** Same `findFirst` in the invite lookup (`~4481`) and
+  `/internal/pbx/wake-extension` (`~36739`). VERIFIED.
+- **Call history:** `pbxTenantResolve.ts` returns on the `T6_` marker via last-wins
+  `connectByVital` before any DID lookup → every T6 call files under one tenant. VERIFIED.
+- **IVR import:** `POST /voice/ivr/migration/import` picks its target with an unordered
+  `tenantPbxLink.findFirst({ pbxTenantId })` (`server.ts:~27045`) — cannot target DisplayDX,
+  and upserts a DidRouteMapping for EVERY DID reaching the menu. VERIFIED.
+- Also (agent trace, not individually re-verified): telephony live-call tagging, extension
+  sync (only one tenant per PBX tenant synced per run), `PbxTenantInboundDid.connectTenantId`
+  sync rewrites all T6 DIDs to one tenant, IVR publish top-level AstDB keys
+  `connect/t_<slug>/*` shared (the two reconcilers would ping-pong + alert), prompt/MOH catalog
+  sync, `connect/t_<slug>/interrupted` shared, worker active-call/CDR polls run T6 twice.
+
+**Mobile app facts (traced for zero-downtime):** the login token bakes `tenantId`, never
+expires, and the app has NO refresh path. SIP creds are cached on device (registration
+survives). Incoming-call pushes (`INCOMING_CALL`) are NOT tenant-filtered in the app
+(`NotificationsContext.tsx:~150` returns before the guard); voicemail / missed-call / SMS
+alert banners ARE (`isNotificationForCurrentUser`, positive tenant mismatch → dropped).
+The telephony WebSocket trusts the token's tenant directly (`TelephonySocketServer.ts:~189`).
+`MobileDevice.tenantId` must move with the user or pushes find no device.
+
+**A session-tenant shim was written, tested (20/20) and then REMOVED unshipped:** a preHandler
+that rewrote `req.user.tenantId` from the user row (cached 60s, fail-open, SUPER_ADMIN exempt)
+plus a sync guard skipping extensions claimed by another tenant. They only serve the unsafe
+two-links design; under a real PBX split Eli's SIP identity changes anyway (T6_101 → new
+tenant), so a one-time re-sign-in is unavoidable and the shim would add per-request DB reads
+for nothing. Recreate from this description if a future move needs it — it also needs the
+same lookup in telephony (WS connect + `getTenantId`) to be complete.
+
+**Options put to Izzy:**
+- **A (recommended): real PBX split** — a new VitalPBX tenant for DisplayDX built through
+  Connect's sanctioned PBX-tenant build path (PBX write → needs Izzy's approval), replicate
+  ext 101, rg 800–807, IVRs 16/17 + recordings 32/33, repoint the two DIDs' inbound routes;
+  then link DisplayDX to it, move Connect rows (user, devices, voicemails, CDRs, SMS threads,
+  contacts, custom role, CRM access), import IVRs from the NEW tenant, publish. Eli signs in
+  once (~1 min); numbers flip at night (~35–40 s each).
+- **B:** make the platform support per-extension/per-DID ownership inside one PBX tenant —
+  ~25 code sites on the live call path, multi-day, high regression risk.
+- **C:** leave phones where they are; the billing split (the money) is already done.
+
 ## 5. Rules this earned / reaffirmed
 
 - ⛔ A tenant rename is a one-column Connect write; the PBX tenant name, doorway routing and

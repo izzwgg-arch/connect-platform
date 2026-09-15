@@ -29,10 +29,17 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   Nexus keeps ext 102 + 103 + 845-364-7474. **Eli's login still sits on the renamed tenant, so
   his portal shows "Nexus Realty" until his user moves with the phones** — moving it early
   breaks his working softphone.
-- ⛔⛔ **ELI'S LOGGED-IN APP CANNOT SWITCH TENANTS BY ITSELF** (traced for the planned move):
-  the token bakes tenantId at login, never expires, the API trusts the claim per request, and
-  a logged-in QR scan refreshes SIP only — NOT the session token. Zero-downtime = deploy a
-  token tenant-migration shim (sub→newTenant override in the preHandler) BEFORE moving his
-  User row; otherwise a ~1-minute sign-out/sign-in. Details in handoff §4.3.
+- ⛔⛔ **THE PHONE/IVR MOVE WAS STOPPED BEFORE ANY LIVE WRITE (handoff §4b).** Linking
+  DisplayDX to the SAME PBX tenant 6 breaks ringing: `resolvePbxEventTarget` picks one link by
+  unordered `findFirst({pbxTenantId})` → if Nexus, ext 101 isn't found → no invite, **Eli's app
+  doesn't ring**. Also verified: T6 call history files under one tenant (last-wins map), and the
+  IVR import can't target DisplayDX. The platform assumes ONE Connect tenant per PBX tenant.
+- ⛔ **Rendered-dialplan ownership:** 200-3535 → IVR 16 Displaydex, 212-888-0885 → IVR 17 Quick
+  sat (both ring only ext 101 via rg 800–807); 364-7474 → TC-3 Nexus Realty; **414-3736 "Nexus
+  2" → IVR 18 Nexus Main (dials 102 + 104)** — so 414-3736 and Yehuda's 104 are Michael's side.
+- ✅ A session-tenant shim was built + tested 20/20 then REMOVED unshipped (only serves the
+  unsafe design; a real split changes Eli's SIP identity, so one re-sign-in is unavoidable).
+  ⏳ **Izzy to choose: A real PBX split (recommended, needs PBX-write approval) / B platform
+  rework for per-extension ownership / C leave phones.**
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.
