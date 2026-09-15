@@ -1022,6 +1022,9 @@ model Tenant {
   mobileSimOrders                 MobileSimOrder[]
   mobilePortRequests              MobilePortRequest[]
   mobileUsageRecords              MobileUsageRecord[]
+  mobileSubscribers               MobileSubscriber[]
+  mobileTenantSettings            MobileTenantSettings?
+  mobileInvoices                  MobileInvoice[]
 }
 
 model User {
@@ -9065,6 +9068,16 @@ model MobileLine {
   /// failed. The reconcile job picks these up; nothing is retried blindly.
   needsReconcile            Boolean             @default(false)
   reconcileReason           String?
+  /// The person this line belongs to (LoopCom Mobile subscriber, NOT a portal
+  /// user — a phone can belong to someone who never signs in).
+  subscriberId              String?
+  subscriber                MobileSubscriber?   @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  /// E911: "missing" | "on_file" (address saved locally; carrier registration
+  /// follows once the line has a number+SIM — mobile/nomadic rules differ).
+  e911Status                String              @default("missing")
+  e911Address               Json?
+  /// Cycle-scoped dedupe stamp for the usage-warning email (reset by cycle).
+  usageAlertSentAt          DateTime?
   createdByUserId           String?
   createdAt                 DateTime            @default(now())
   updatedAt                 DateTime            @updatedAt
@@ -9073,6 +9086,7 @@ model MobileLine {
 
   @@index([tenantId, status])
   @@index([phoneNumber])
+  @@index([subscriberId])
 }
 
 /// A Telnyx SIM/eSIM mirrored locally. `telnyxSimId` is the reconciliation
@@ -9176,6 +9190,95 @@ model MobileUsageRecord {
   @@unique([kind, providerRecordId])
   @@index([tenantId, recordedAt])
   @@index([telnyxSimId, recordedAt])
+}
+
+/// A LoopCom Mobile subscriber: the PERSON a line belongs to. Deliberately
+/// not a portal User -- a phone can belong to someone who never signs in, and
+/// one person can hold several lines. `portalUserId` links one when it exists.
+model MobileSubscriber {
+  id           String       @id @default(cuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  firstName    String
+  lastName     String
+  email        String?
+  /// "member" | "manager" -- what tenant settings' member switches govern.
+  role         String       @default("member")
+  notifyEmail  Boolean      @default(true)
+  portalUserId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  lines        MobileLine[]
+
+  @@index([tenantId])
+}
+
+/// Per-tenant LoopCom Mobile settings (notifications, billing contacts,
+/// what plain members may do). One row per tenant, created on first save.
+model MobileTenantSettings {
+  id                  String   @id @default(cuid())
+  tenantId            String   @unique
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  usageWarnPct        Int      @default(90)
+  /// ["books@example.com", ...] -- invoice + billing notification recipients.
+  billingEmails       Json     @default("[]")
+  notifyUsage         Boolean  @default(true)
+  notifyPorts         Boolean  @default(true)
+  notifyInvoices      Boolean  @default(true)
+  notifyNewDevice     Boolean  @default(false)
+  memberCanPause      Boolean  @default(true)
+  memberCanChangePlan Boolean  @default(false)
+  memberCanReportLost Boolean  @default(true)
+  memberCanPort       Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+/// Platform-wide LoopCom Mobile settings + feature gates. Single row
+/// (id "default"). The locked gates (voice/SMS) are NOT here on purpose --
+/// they come from the live capability report and cannot be flipped by a row.
+model MobilePlatformSettings {
+  id                       String   @id @default("default")
+  defaultPlanId            String?
+  spnName                  String   @default("LoopCom")
+  balanceFloorCents        Int      @default(5000)
+  anomalyMultiplier        Float    @default(3)
+  simReorderFloor          Int      @default(20)
+  staleEsimNudgeDays       Int      @default(7)
+  selfServeLines           Boolean  @default(false)
+  topUpsEnabled            Boolean  @default(false)
+  invoicePrefix            String   @default("LM-")
+  maxLinesPerTenant        Int      @default(50)
+  maxEsimReplacementsPer30 Int      @default(3)
+  codeReadAlertPerHour     Int      @default(5)
+  deadLetterAlert          Boolean  @default(true)
+  updatedAt                DateTime @updatedAt
+  createdAt                DateTime @default(now())
+}
+
+/// A LoopCom Mobile invoice -- its OWN ledger (LM- series), deliberately
+/// separate from the Voice billing engine. `@@unique([tenantId, periodStart])`
+/// makes a generation run idempotent: run twice, same rows, no double bill.
+model MobileInvoice {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number      String    @unique
+  periodStart DateTime
+  periodEnd   DateTime
+  /// open | paid | void
+  status      String    @default("open")
+  totalCents  Int
+  /// [{ kind, label, detail, quantity, amountCents, lineId? }]
+  items       Json
+  note        String?
+  issuedAt    DateTime  @default(now())
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, periodStart])
+  @@index([tenantId, issuedAt])
 }
 
 /// Every Telnyx mobile webhook, verbatim, before any processing -- the

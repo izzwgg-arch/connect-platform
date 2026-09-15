@@ -1,0 +1,262 @@
+/* ════════════════════════════════════════════════════════════════════════
+   LoopCom Mobile — the product area's stylesheet (2026-09-16).
+   Built from the approved v2 mockup pass: same platform tokens
+   (--panel/--border/--accent/… from globals.css), SaaS-2026 finish —
+   hero, iconized KPI tiles, gradient primaries, hover depth.
+   Scoped under .lmx so nothing leaks into the rest of the portal.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.lmx {
+  --lmx-grad: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel-2) 74%, transparent));
+  --lmx-shadow: 0 10px 28px -22px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --lmx-chip: rgba(127, 127, 127, 0.1);
+  color: var(--text);
+  font-size: 14px;
+}
+:root[data-theme="light"] .lmx {
+  --lmx-grad: linear-gradient(145deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.96));
+  --lmx-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 18px 44px -28px rgba(15, 23, 42, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --lmx-chip: rgba(15, 23, 42, 0.05);
+}
+
+/* ── Page head ── */
+.lmx .lmx-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.lmx .lmx-pagehead h2 { font-size: 22px; font-weight: 750; letter-spacing: -0.022em; margin: 0; }
+.lmx .lmx-pagehead .muted { color: var(--text-dim); font-size: 13px; margin: 3px 0 0; }
+.lmx .lmx-crumb { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.lmx .lmx-crumb a, .lmx .lmx-crumb .link { color: var(--accent); font-weight: 600; cursor: pointer; }
+
+/* ── Buttons ── */
+.lmx .lbtn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 7px 13px; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: transform 0.14s ease, border-color 0.14s ease, filter 0.14s ease; }
+.lmx .lbtn:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.lmx .lbtn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; font-weight: 600; box-shadow: 0 8px 18px -9px color-mix(in srgb, var(--accent) 65%, transparent); }
+.lmx .lbtn.primary:hover { filter: brightness(1.06); }
+.lmx .lbtn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.lmx .lbtn.ghost { background: transparent; }
+.lmx .lbtn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.lmx .lbtn.lg { padding: 10px 16px; font-size: 13.5px; border-radius: 12px; justify-content: center; }
+.lmx .lbtn:disabled { opacity: 0.5; cursor: default; transform: none; }
+.lmx .lbtn svg { width: 15px; height: 15px; }
+
+/* ── Cards ── */
+.lmx .lcard { background: var(--lmx-grad); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--lmx-shadow); padding: 16px; transition: border-color 0.18s ease; }
+.lmx .lcard + .lcard { margin-top: 14px; }
+.lmx .lcard-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.lmx .lcard-h h3 { font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+.lmx .lcard-h .sub { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.lmx .seclbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin: 0 0 8px; }
+
+/* ── Hero (dashboard) ── */
+.lmx .hero { position: relative; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 24px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 22px; padding: 24px 26px; margin-bottom: 16px; box-shadow: var(--lmx-shadow); background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 9%, var(--panel)), var(--panel) 58%); }
+.lmx .hero-glow { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(620px 240px at 90% -40%, color-mix(in srgb, var(--accent-2) 24%, transparent), transparent 70%); }
+.lmx .hero-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-bottom: 7px; }
+.lmx .hero h2 { font-size: 27px; font-weight: 800; letter-spacing: -0.03em; margin: 0; }
+.lmx .hero-sub { color: var(--text-dim); font-size: 13.5px; margin-top: 6px; max-width: 62ch; line-height: 1.5; }
+.lmx .hero-cycle { margin-top: 16px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); background: color-mix(in srgb, var(--panel-2) 55%, transparent); border-radius: 14px; padding: 12px 14px; }
+.lmx .hero-cycle-top, .lmx .hero-cycle-bottom { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); }
+.lmx .hero-cycle-top { font-weight: 700; margin-bottom: 8px; color: var(--text); }
+.lmx .hero-cycle-bottom { margin-top: 8px; }
+.lmx .hero-side { position: relative; display: flex; flex-direction: column; gap: 9px; justify-content: center; }
+.lmx .hero-side .hs-note { text-align: center; font-size: 11.5px; color: var(--text-dim); }
+
+.lmx .progress { position: relative; height: 8px; border-radius: 99px; background: var(--lmx-chip); }
+.lmx .progress i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.lmx .progress em { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--warning); border-radius: 2px; }
+
+/* ── KPI tiles ── */
+.lmx .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.lmx .kpis.k3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lmx .kpis.k5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.lmx .kpi { background: var(--lmx-grad); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--lmx-shadow); padding: 15px 17px; min-height: 92px; display: flex; flex-direction: column; gap: 4px; position: relative; overflow: hidden; transition: transform 0.16s ease, border-color 0.16s ease; }
+.lmx .kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.lmx .kpi .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); }
+.lmx .kpi .val { font-size: 27px; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.lmx .kpi .val small { font-size: 13px; font-weight: 600; color: var(--text-dim); }
+.lmx .kpi .sub { font-size: 12px; color: var(--text-dim); }
+.lmx .kpi .sub.pos { color: var(--success); }
+.lmx .kpi .sub.neg { color: var(--danger); }
+.lmx .kpi .sub.warn { color: var(--warning); }
+.lmx .kico { position: absolute; top: 13px; right: 13px; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.lmx .kico svg { width: 17px; height: 17px; }
+.lmx .kico.ok { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.lmx .kico.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.lmx .kico.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* ── Pills / tags / chips ── */
+.lmx .pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.lmx .pill::before { content: ""; width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+.lmx .pill.nub::before { display: none; }
+.lmx .pill.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); background: color-mix(in srgb, var(--success) 9%, transparent); }
+.lmx .pill.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+.lmx .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.lmx .pill.info { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 9%, transparent); }
+.lmx .pill.dim { color: var(--text-dim); }
+.lmx .tag { display: inline-block; border-radius: 6px; padding: 2px 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: var(--lmx-chip); color: var(--text-dim); }
+.lmx .tag.beta { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.lmx .tag.new { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.lmx .chips { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.lmx .chip { border: 1px solid var(--border); background: var(--panel); color: var(--text-dim); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: border-color 0.12s ease, color 0.12s ease; }
+.lmx .chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text); }
+.lmx .chip.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.lmx .chip small { font-weight: 700; opacity: 0.75; margin-left: 4px; }
+
+/* ── Tables ── */
+.lmx .twrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--panel-2) 58%, transparent); }
+.lmx table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+.lmx table.t th { text-align: left; color: var(--text-dim); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 72%, transparent); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 12px; white-space: nowrap; }
+.lmx table.t td { border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); padding: 9px 12px; vertical-align: middle; }
+.lmx table.t tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.lmx table.t tbody tr:last-child td { border-bottom: 0; }
+.lmx table.t td.num, .lmx table.t th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.lmx table.t td .sub { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+.lmx table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; background: color-mix(in srgb, var(--panel) 72%, transparent); }
+.lmx .rowlink { color: var(--accent); font-weight: 600; cursor: pointer; }
+.lmx .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+
+/* ── Bars / rings ── */
+.lmx .bar { height: 6px; border-radius: 99px; background: var(--lmx-chip); overflow: hidden; min-width: 70px; }
+.lmx .bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.lmx .bar i.warn { background: var(--warning); }
+.lmx .bar i.bad { background: var(--danger); }
+.lmx .ring { width: 52px; height: 52px; border-radius: 50%; flex: 0 0 auto; display: grid; place-items: center; }
+.lmx .ring::after { content: attr(data-v); width: 40px; height: 40px; border-radius: 50%; background: var(--panel); display: grid; place-items: center; font-size: 10.5px; font-weight: 700; }
+
+/* ── Layout grids ── */
+.lmx .g2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.lmx .g3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.lmx .gmain { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.65fr); gap: 14px; align-items: start; }
+.lmx .stack { display: flex; flex-direction: column; gap: 14px; }
+.lmx .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── Banners / attention list ── */
+.lmx .banner { display: flex; gap: 10px; align-items: flex-start; border-radius: 13px; border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, var(--panel)); padding: 11px 13px; font-size: 13px; }
+.lmx .banner.bad { border-color: color-mix(in srgb, var(--danger) 34%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.lmx .banner.info { border-color: color-mix(in srgb, var(--info) 34%, var(--border)); background: color-mix(in srgb, var(--info) 8%, var(--panel)); }
+.lmx .banner .sub { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }
+.lmx .alist { display: flex; flex-direction: column; gap: 8px; }
+.lmx .aitem { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--border); border-radius: 13px; padding: 10px 12px; background: color-mix(in srgb, var(--panel-2) 62%, transparent); }
+.lmx .aitem .sev { width: 8px; height: 8px; border-radius: 99px; }
+.lmx .aitem b { font-size: 13px; font-weight: 600; display: block; }
+.lmx .aitem .sub { font-size: 12px; color: var(--text-dim); }
+
+/* ── Quick actions ── */
+.lmx .qa { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.lmx .qa button { border: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 68%, transparent); border-radius: 14px; padding: 14px 8px; display: flex; flex-direction: column; align-items: center; gap: 7px; color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; transition: transform 0.14s ease, border-color 0.14s ease; }
+.lmx .qa button:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.lmx .qa .qi { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--accent); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent-2) 13%, transparent)); }
+.lmx .qa .qi svg { width: 17px; height: 17px; }
+
+/* ── Line cards ── */
+.lmx .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.lmx .linecard { border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--panel-2) 62%, transparent); padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; cursor: pointer; transition: transform 0.14s ease, border-color 0.14s ease; }
+.lmx .linecard:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.lmx .linecard .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.lmx .linecard .num { font-weight: 700; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+.lmx .linecard .who { font-size: 12px; color: var(--text-dim); }
+
+/* ── Steppers ── */
+.lmx .stepper { display: flex; align-items: flex-start; overflow-x: auto; padding: 4px 0; }
+.lmx .step { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 96px; position: relative; text-align: center; }
+.lmx .step::before { content: ""; position: absolute; top: 11px; left: -50%; width: 100%; height: 2px; background: var(--border); }
+.lmx .step:first-child::before { display: none; }
+.lmx .step .sdot { width: 22px; height: 22px; border-radius: 99px; border: 2px solid var(--border); background: var(--panel); display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--text-dim); position: relative; z-index: 1; }
+.lmx .step.done .sdot { border-color: var(--success); background: var(--success); color: #fff; }
+.lmx .step.done::before { background: var(--success); }
+.lmx .step.now .sdot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+.lmx .step.now::before { background: var(--success); }
+.lmx .step.fail .sdot { border-color: var(--danger); background: var(--danger); color: #fff; }
+.lmx .step b { font-size: 11.5px; font-weight: 600; }
+.lmx .step small { font-size: 10.5px; color: var(--text-dim); }
+
+/* ── Tabs ── */
+.lmx .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+.lmx .tab { border: 0; background: transparent; color: var(--text-dim); font-size: 13px; font-weight: 600; padding: 8px 13px; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+.lmx .tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+
+/* ── Definition lists / forms / toggles ── */
+.lmx .dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; }
+.lmx .dl dt { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); margin-bottom: 2px; }
+.lmx .dl dd { margin: 0; font-size: 13.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; }
+.lmx .form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.lmx .form .full { grid-column: 1 / -1; }
+.lmx .field label { display: block; font-size: 11.5px; font-weight: 650; color: var(--text-dim); margin-bottom: 5px; }
+.lmx .linput { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); color: var(--text); font-size: 13px; padding: 0 10px; }
+.lmx .linput:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.lmx .help { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
+.lmx .trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 2px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); }
+.lmx .trow:last-child { border-bottom: 0; }
+.lmx .trow b { font-size: 13px; font-weight: 600; display: block; }
+.lmx .trow .sub { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+.lmx .sw { width: 36px; height: 20px; border-radius: 99px; background: var(--lmx-chip); position: relative; flex: 0 0 auto; border: 1px solid var(--border); cursor: pointer; transition: background 0.15s ease; }
+.lmx .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 99px; background: var(--text-dim); transition: 0.15s; }
+.lmx .sw.on { background: var(--accent); border-color: var(--accent); }
+.lmx .sw.on::after { left: 18px; background: #fff; }
+.lmx .sw.lock { opacity: 0.5; cursor: default; }
+
+/* ── Modal ── */
+.lmx-modal-back { position: fixed; inset: 0; z-index: 120; background: rgba(8, 12, 18, 0.55); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.lmx-modal { width: min(560px, 100%); max-height: 90vh; overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+.lmx-modal .mh { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.lmx-modal .mh h4 { font-size: 15px; font-weight: 650; margin: 0; }
+.lmx-modal .mb { padding: 16px 18px; }
+.lmx-modal .mf { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
+.lmx-modal .mx { color: var(--text-dim); font-weight: 700; cursor: pointer; background: none; border: 0; font-size: 15px; }
+
+/* ── Empty / gated states ── */
+.lmx .state-box { border: 1px dashed color-mix(in srgb, var(--border) 90%, transparent); border-radius: 13px; background: color-mix(in srgb, var(--panel-2) 52%, transparent); color: var(--text-dim); padding: 26px 16px; text-align: center; }
+.lmx .state-box b.t { display: block; color: var(--text); font-weight: 650; font-size: 14px; }
+.lmx .state-box p { margin: 4px auto 0; font-size: 12.5px; max-width: 440px; }
+.lmx .state-box .act { margin-top: 12px; display: flex; gap: 8px; justify-content: center; }
+
+/* ── Timeline ── */
+.lmx .tl { display: flex; flex-direction: column; }
+.lmx .tlrow { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; padding: 8px 2px; align-items: flex-start; }
+.lmx .tlrow .ti { width: 22px; height: 22px; border-radius: 99px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); font-size: 11px; }
+.lmx .tlrow .ti.ok { background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success); }
+.lmx .tlrow .ti.bad { background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); }
+.lmx .tlrow .ti.warn { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); }
+.lmx .tlrow b { font-size: 13px; font-weight: 600; display: block; }
+.lmx .tlrow .sub { font-size: 12px; color: var(--text-dim); }
+.lmx .tlrow time { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+
+/* ── eSIM / QR ── */
+.lmx .qrbox { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: inline-block; }
+.lmx .codebox { display: inline-block; background: var(--lmx-chip); border-radius: 8px; padding: 6px 10px; font-size: 11.5px; word-break: break-all; max-width: 460px; font-family: ui-monospace, Consolas, monospace; }
+
+/* ── Search box ── */
+.lmx .searchwrap { position: relative; display: inline-flex; align-items: center; }
+.lmx .searchwrap svg { position: absolute; left: 10px; width: 13px; height: 13px; color: var(--text-dim); pointer-events: none; }
+.lmx .searchwrap .linput { padding-left: 30px; min-width: 220px; height: 32px; }
+
+/* ── Notes / feedback ── */
+.lmx .note { border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border); font-size: 13px; }
+.lmx .note.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); background: color-mix(in srgb, var(--success) 7%, var(--panel)); }
+.lmx .note.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.lmx .dimtx { color: var(--text-dim); }
+.lmx .small { font-size: 12px; }
+
+/* ── Skeleton ── */
+.lmx .skel { border-radius: 8px; background: linear-gradient(90deg, var(--lmx-chip) 25%, color-mix(in srgb, var(--text-dim) 14%, transparent) 40%, var(--lmx-chip) 55%); background-size: 300% 100%; animation: lmxsk 1.4s infinite linear; }
+@keyframes lmxsk { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .lmx .skel { animation: none; }
+  .lmx .lbtn, .lmx .kpi, .lmx .qa button, .lmx .linecard { transition: none; }
+}
+
+/* ── Responsive ── */
+@media (max-width: 1180px) {
+  .lmx .kpis, .lmx .kpis.k5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lmx .gmain { grid-template-columns: 1fr; }
+  .lmx .qa { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lmx .g3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .lmx .hero { grid-template-columns: 1fr; }
+  .lmx .hero-side { flex-direction: row; flex-wrap: wrap; }
+  .lmx .hero-side .lbtn.lg { flex: 1; min-width: 150px; }
+}
+@media (max-width: 720px) {
+  .lmx .kpis, .lmx .kpis.k3, .lmx .kpis.k5, .lmx .g2, .lmx .g3, .lmx .form { grid-template-columns: 1fr; }
+  .lmx .qa { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

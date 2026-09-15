@@ -396,6 +396,7 @@ import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
+import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
 import { registerMobileWebhookRoutes } from "./loopcomMobile/mobileWebhookRoutes";
 import { runMobileStateReconcileCycle, runMobileUsageSyncCycle, runMobileAnomalySweep } from "./loopcomMobile/mobileSyncJobs";
 import {
@@ -3033,6 +3034,20 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // global gate. ⛔ /mobile and /admin/mobile (no -service) are the phone
   // app's device routes — do not add rules for those without tracing them.
   { prefix: "/mobile-service", permission: "can_view_workspace_mobile" },
+  // The full product area (2026-09-16): ONE KEY PER PAGE, and the API agrees
+  // with the sidebar — each page's resource prefix carries that page's own
+  // key (longest-prefix-wins), so a custom role granting one page opens
+  // exactly that page's data. The base /mobile-service rule above stays the
+  // dashboard's (can_view_workspace_mobile — the original launch key).
+  { prefix: "/mobile-service/subscribers", permission: "can_view_mobile_users" },
+  { prefix: "/mobile-service/lines", permission: "can_view_mobile_lines" },
+  { prefix: "/mobile-service/plans", permission: "can_view_mobile_plans" },
+  { prefix: "/mobile-service/usage", permission: "can_view_mobile_usage" },
+  { prefix: "/mobile-service/billing", permission: "can_view_mobile_billing" },
+  { prefix: "/mobile-service/port-requests", permission: "can_view_mobile_porting" },
+  { prefix: "/mobile-service/devices", permission: "can_view_mobile_devices" },
+  { prefix: "/mobile-service/support", permission: "can_view_mobile_support" },
+  { prefix: "/mobile-service/settings", permission: "can_view_mobile_settings" },
   { prefix: "/admin/mobile-service", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
@@ -24218,6 +24233,16 @@ registerProviderSwitchRoutes({
 // and never retried. Public webhook door: /webhooks/telnyx/mobile,
 // Ed25519-verified, fail-closed.
 registerLoopcomMobileRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+// The full product area (2026-09-16, built after Izzy approved the mockups):
+// dashboard/subscribers/lines/usage/billing/porting/devices/support/settings
+// for tenants + the 13-view console's data. Same file-level rules as above;
+// per-page permission rules live in PORTAL_API_PERMISSION_RULES so each
+// sidebar page's key opens exactly that page's data.
+registerMobileProductRoutes({
   app,
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),

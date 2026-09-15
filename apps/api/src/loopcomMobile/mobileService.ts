@@ -29,6 +29,25 @@ import {
   type WirelessSimCard,
 } from "./telnyxWirelessClient";
 import { writeMobileAuditSync } from "./mobileAudit";
+import { esimReadyEmail, lineResumedEmail, lineSuspendedEmail, queueMobileEmail, resolveMobileRecipients } from "./mobileEmails";
+
+/** Fire-and-forget customer email for a lifecycle event. Never throws. */
+async function notifyLifecycle(db: any, line: any, kind: "esim_ready" | "line_suspended" | "line_resumed", extra?: { lost?: boolean; reason?: string | null; planName?: string | null }): Promise<void> {
+  try {
+    const sub = line.subscriberId ? await db.mobileSubscriber.findUnique({ where: { id: line.subscriberId } }) : null;
+    const to = await resolveMobileRecipients(db, line.tenantId, sub?.notifyEmail ? sub?.email : null);
+    if (!to.length) return;
+    const email =
+      kind === "esim_ready"
+        ? esimReadyEmail({ subscriberName: sub ? `${sub.firstName} ${sub.lastName}`.trim() : null, lineLabel: line.label, phoneNumber: line.phoneNumber, planName: extra?.planName ?? null })
+        : kind === "line_resumed"
+          ? lineResumedEmail({ lineLabel: line.label, phoneNumber: line.phoneNumber })
+          : lineSuspendedEmail({ lineLabel: line.label, phoneNumber: line.phoneNumber, lost: Boolean(extra?.lost), reason: extra?.reason ?? null });
+    await queueMobileEmail(db, { tenantId: line.tenantId, kind, email, to, entityType: "MobileLine", entityId: line.id });
+  } catch {
+    /* notification must never fail the lifecycle action */
+  }
+}
 
 export const LOOPCOM_SIM_GROUP_NAME = "LoopCom Mobile";
 /** The SPN shown on the handset's carrier line for whitelabel eSIMs. */
@@ -170,6 +189,8 @@ export async function provisionEsimForLine(db: any, creds: StoredTelnyxCredentia
     actorUserId: input.actorUserId ?? null,
     metadata: { telnyxSimId: sim.id, iccid: sim.iccid, whitelabel: input.whitelabel !== false },
   });
+  const planName = line.planId ? (await db.mobilePlan.findUnique({ where: { id: line.planId }, select: { name: true } }))?.name ?? null : null;
+  await notifyLifecycle(db, line, "esim_ready", { planName });
   return { ok: true, simRowId: simRow.id };
 }
 
@@ -206,6 +227,7 @@ export async function suspendLine(db: any, creds: StoredTelnyxCredentials, input
     actorUserId: input.actorUserId ?? null,
     metadata: { reason: input.reason.slice(0, 300) },
   });
+  await notifyLifecycle(db, line, "line_suspended", { lost: input.lost, reason: input.reason.slice(0, 300) });
   return { ok: true };
 }
 
@@ -232,6 +254,7 @@ export async function resumeLine(db: any, creds: StoredTelnyxCredentials, input:
     entityId: line.id,
     actorUserId: input.actorUserId ?? null,
   });
+  await notifyLifecycle(db, line, "line_resumed");
   return { ok: true };
 }
 

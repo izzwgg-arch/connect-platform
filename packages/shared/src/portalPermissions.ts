@@ -3,6 +3,7 @@ export type PortalRoleBucket = (typeof PORTAL_ROLE_BUCKETS)[number];
 
 export type PortalSidebarSectionKey =
   | "workspace"
+  | "mobile"
   | "pbx"
   | "crm"
   | "apps"
@@ -14,6 +15,11 @@ export type PortalSidebarSectionKey =
 
 export const SIDEBAR_SECTIONS = [
   { id: "workspace", label: "Workspace", permission: "can_view_section_workspace" },
+  // LoopCom Mobile (2026-09-16, the approved full product area): its OWN
+  // section, like Store — can_view_section_mobile is in NO default bucket, so
+  // the whole section appears only for roles it is granted to (SUPER_ADMIN
+  // holds every key via the force-add bucket). Granting is the launch.
+  { id: "mobile", label: "LoopCom Mobile", permission: "can_view_section_mobile" },
   { id: "pbx", label: "PBX", permission: "can_view_section_pbx" },
   { id: "crm", label: "CRM", permission: "can_view_section_crm" },
   { id: "apps", label: "Apps", permission: "can_view_section_apps" },
@@ -54,11 +60,22 @@ export const SIDEBAR_ITEMS = [
   // The desktop installer link. Granted to END_USER (and so TENANT_ADMIN) in
   // END_USER_ACTIONS below, so no existing customer loses the download link.
   { id: "workspace.install", section: "workspace", label: "Install", href: "/desktop/Connect-Setup-latest.exe", permission: "can_view_workspace_install" },
-  // LoopCom Mobile (2026-09-15) — the customer mobile-service page (eSIM
-  // install, usage, suspend/resume, port drafts). In NO default bucket on
-  // purpose: like Direct/Meetings, the key's absence IS the launch gate —
-  // granting it per tenant/role is the launch.
-  { id: "workspace.mobile", section: "workspace", label: "LoopCom Mobile", href: "/mobile", permission: "can_view_workspace_mobile" },
+  // LoopCom Mobile (2026-09-15; grown into its own SECTION 2026-09-16 after
+  // Izzy approved the full-product mockups). One key per page, none in any
+  // default bucket: the section appears for exactly the roles it is granted
+  // to. ⛔ The Dashboard deliberately KEEPS the original launch key
+  // can_view_workspace_mobile so nobody already granted the page loses it
+  // (renaming a key silently strips existing grants — the IVR-routing lesson).
+  { id: "mobile.dashboard", section: "mobile", label: "Mobile Dashboard", href: "/mobile", permission: "can_view_workspace_mobile" },
+  { id: "mobile.users", section: "mobile", label: "Users", href: "/mobile/users", permission: "can_view_mobile_users" },
+  { id: "mobile.lines", section: "mobile", label: "Lines", href: "/mobile/lines", permission: "can_view_mobile_lines" },
+  { id: "mobile.plans", section: "mobile", label: "Plans", href: "/mobile/plans", permission: "can_view_mobile_plans" },
+  { id: "mobile.usage", section: "mobile", label: "Usage", href: "/mobile/usage", permission: "can_view_mobile_usage" },
+  { id: "mobile.billing", section: "mobile", label: "Mobile Billing", href: "/mobile/billing", permission: "can_view_mobile_billing" },
+  { id: "mobile.porting", section: "mobile", label: "Porting", href: "/mobile/porting", permission: "can_view_mobile_porting" },
+  { id: "mobile.devices", section: "mobile", label: "Devices & SIMs", href: "/mobile/devices", permission: "can_view_mobile_devices" },
+  { id: "mobile.support", section: "mobile", label: "Mobile Support", href: "/mobile/support", permission: "can_view_mobile_support" },
+  { id: "mobile.settings", section: "mobile", label: "Mobile Settings", href: "/mobile/settings", permission: "can_view_mobile_settings" },
 
   // Store (supermarket mode): one key PER PAGE. can_view_supermarket_orders
   // stays as the DATA capability every Store page's api calls require (the

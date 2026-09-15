@@ -15,6 +15,7 @@ import { listSimUsageRecords } from "./telnyxWirelessClient";
 import { reconcileSimsWithTelnyx } from "./mobileService";
 import { detectUsageSpike } from "./mobilePlanMath";
 import { writeMobileAudit } from "./mobileAudit";
+import { queueMobileEmail, resolveMobileRecipients, usageWarningEmail } from "./mobileEmails";
 
 const DAY_MS = 86_400_000;
 
@@ -61,7 +62,60 @@ export async function runMobileUsageSyncCycle(db: any): Promise<{ ingested: numb
       }
     }
   }
+  if (ingested > 0) {
+    await runMobileUsageWarningSweep(db).catch((err) =>
+      console.error("mobile usage-warning sweep failed", String(err?.message || err).slice(0, 160)));
+  }
   return { ingested, skipped: false };
+}
+
+/**
+ * Usage-warning emails: once a line crosses its tenant's warn threshold this
+ * cycle, the subscriber (+ billing contacts) hear about it ONCE — the
+ * `usageAlertSentAt` stamp inside the current cycle is the dedupe, so
+ * overlapping sweeps can't double-send. Respects the tenant's notifyUsage
+ * switch; detection-only lines ("block" plans) get the slows-down wording.
+ */
+export async function runMobileUsageWarningSweep(db: any): Promise<{ warned: number }> {
+  const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const lines = await db.mobileLine.findMany({
+    where: {
+      status: "active",
+      plan: { isNot: null },
+      OR: [{ usageAlertSentAt: null }, { usageAlertSentAt: { lt: start } }],
+    },
+    include: { plan: true, subscriber: true },
+  });
+  let warned = 0;
+  for (const line of lines) {
+    const included = line.plan?.includedDataMb ?? 0;
+    if (!included || included <= 0) continue;
+    const settingsRow = await db.mobileTenantSettings.findUnique({ where: { tenantId: line.tenantId } }).catch(() => null);
+    if (settingsRow && settingsRow.notifyUsage === false) continue;
+    const warnPct = settingsRow?.usageWarnPct ?? 90;
+    const agg = await db.mobileUsageRecord.aggregate({ _sum: { quantity: true }, where: { lineId: line.id, kind: "data", recordedAt: { gte: start } } });
+    const usedMb = Number(agg?._sum?.quantity ?? 0);
+    const pct = Math.round((usedMb / included) * 100);
+    if (pct < warnPct) continue;
+    const to = await resolveMobileRecipients(db, line.tenantId, line.subscriber?.notifyEmail ? line.subscriber?.email : null);
+    if (to.length) {
+      await queueMobileEmail(db, {
+        tenantId: line.tenantId,
+        kind: "usage_warning",
+        email: usageWarningEmail({
+          lineLabel: line.label, phoneNumber: line.phoneNumber, usedMb, includedMb: included, pct: Math.min(pct, 999),
+          overagePerGbCents: line.plan.dataOverageBehavior === "charge" ? line.plan.dataOverageCentsPerGb : null,
+          planName: line.plan?.name ?? null,
+        }),
+        to, entityType: "MobileLine", entityId: line.id,
+      });
+      warned += 1;
+    }
+    // Stamp even with zero recipients: the condition was seen and audited;
+    // re-sending every 15 minutes to nobody helps no one.
+    await db.mobileLine.update({ where: { id: line.id }, data: { usageAlertSentAt: new Date() } }).catch(() => undefined);
+  }
+  return { warned };
 }
 
 /** SIM/line state reconciliation against Telnyx (imports unknown SIMs, confirms optimistic states). */

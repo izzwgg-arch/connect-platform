@@ -41,6 +41,8 @@ import {
 import { runMobileStateReconcileCycle, runMobileUsageSyncCycle } from "./mobileSyncJobs";
 import { buildMobileBillingLineItems, computeUsageTotals, type MobilePlanShape } from "./mobilePlanMath";
 import { writeMobileAuditSync } from "./mobileAudit";
+import { memberMay } from "./mobileProductRoutes";
+import { planChangedEmail, queueMobileEmail, resolveMobileRecipients } from "./mobileEmails";
 
 export interface MobileRouteDeps {
   app: any;
@@ -229,6 +231,9 @@ export function registerLoopcomMobileRoutes(deps: MobileRouteDeps): void {
     if (!u) return;
     const body = suspendBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
+    if (!(await memberMay(db, req.user, "memberCanPause"))) {
+      return reply.code(403).send({ error: "member_not_allowed", message: "Pausing lines is limited to managers on this account." });
+    }
     const creds = await requireCreds(reply);
     if (!creds) return;
     try {
@@ -257,6 +262,9 @@ export function registerLoopcomMobileRoutes(deps: MobileRouteDeps): void {
   app.post("/mobile-service/lines/:id/report-lost", async (req: any, reply: any) => {
     const u = tenantUser(req, reply);
     if (!u) return;
+    if (!(await memberMay(db, req.user, "memberCanReportLost"))) {
+      return reply.code(403).send({ error: "member_not_allowed", message: "Reporting a device lost is limited to managers on this account." });
+    }
     const creds = await requireCreds(reply);
     if (!creds) return;
     try {
@@ -281,6 +289,9 @@ export function registerLoopcomMobileRoutes(deps: MobileRouteDeps): void {
     if (!u) return;
     const body = portBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
+    if (!(await memberMay(db, req.user, "memberCanPort"))) {
+      return reply.code(403).send({ error: "member_not_allowed", message: "Starting a number transfer is limited to managers on this account." });
+    }
     const digits = body.data.phoneNumber.replace(/\D/g, "").slice(-10);
     const row = await db.mobilePortRequest.create({
       data: { tenantId: u.tenantId, phoneNumber: `+1${digits}`, status: "draft", createdByUserId: u.sub },
@@ -485,8 +496,12 @@ export function registerLoopcomMobileRoutes(deps: MobileRouteDeps): void {
     const plan = await db.mobilePlan.findUnique({ where: { id: body.data.planId } });
     if (!plan) return reply.code(404).send({ error: "plan_not_found" });
     try {
-      const line = await db.mobileLine.update({ where: { id: String(req.params.id) }, data: { planId: plan.id }, include: { plan: true, sim: true } });
+      const line = await db.mobileLine.update({ where: { id: String(req.params.id) }, data: { planId: plan.id }, include: { plan: true, sim: true, subscriber: true } });
       await writeMobileAuditSync({ tenantId: line.tenantId, action: "mobile.line.plan_changed", entityType: "MobileLine", entityId: line.id, actorUserId: user.sub, metadata: { planId: plan.id, planName: plan.name } });
+      const to = await resolveMobileRecipients(db, line.tenantId, line.subscriber?.notifyEmail ? line.subscriber?.email : null);
+      if (to.length) {
+        await queueMobileEmail(db, { tenantId: line.tenantId, kind: "plan_changed", email: planChangedEmail({ lineLabel: line.label, phoneNumber: line.phoneNumber, planName: plan.name, monthlyPriceCents: plan.monthlyPriceCents }), to, entityType: "MobileLine", entityId: line.id });
+      }
       return reply.send({ line: lineSummary(line) });
     } catch {
       return reply.code(404).send({ error: "not_found" });

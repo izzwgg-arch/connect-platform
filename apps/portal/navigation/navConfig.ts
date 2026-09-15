@@ -108,11 +108,21 @@ export const navItems: NavItem[] = [
   // are the only two levers. The keys live in @connect/shared SIDEBAR_ITEMS.
   { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_direct" },
   { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_meetings" },
-  // LoopCom Mobile (2026-09-15) — the customer mobile-service page (eSIM
-  // install, usage, suspend/resume, port drafts). Own key, in NO default
-  // bucket: like Direct/Meetings, granting the key IS the launch. No force
-  // line — a granted key really shows the page (the honesty invariant).
-  { id: "workspace.mobile", href: "/mobile", label: "LoopCom Mobile", icon: "LM", lucide: Smartphone, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_mobile" },
+  // ── LoopCom Mobile — its OWN SECTION (2026-09-16, the approved full
+  // product area). One key per page, none in any default bucket; NO force
+  // lines — a granted key really shows its page (the honesty invariant).
+  // ⛔ The Dashboard keeps the original can_view_workspace_mobile key so any
+  // existing grant survives the move from workspace.mobile → mobile.dashboard.
+  { id: "mobile.dashboard", href: "/mobile", label: "Mobile Dashboard", icon: "MD", lucide: LayoutDashboard, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_workspace_mobile" },
+  { id: "mobile.users", href: "/mobile/users", label: "Users", icon: "MU", lucide: Users, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_users" },
+  { id: "mobile.lines", href: "/mobile/lines", label: "Lines", icon: "ML", lucide: Smartphone, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_lines" },
+  { id: "mobile.plans", href: "/mobile/plans", label: "Plans", icon: "MP", lucide: Grid3X3, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_plans" },
+  { id: "mobile.usage", href: "/mobile/usage", label: "Usage", icon: "MG", lucide: BarChart3, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_usage" },
+  { id: "mobile.billing", href: "/mobile/billing", label: "Mobile Billing", icon: "MB", lucide: CreditCard, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_billing" },
+  { id: "mobile.porting", href: "/mobile/porting", label: "Porting", icon: "MO", lucide: ArrowLeftRight, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_porting" },
+  { id: "mobile.devices", href: "/mobile/devices", label: "Devices & SIMs", icon: "MS", lucide: MonitorSmartphone, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_devices" },
+  { id: "mobile.support", href: "/mobile/support", label: "Mobile Support", icon: "MH", lucide: LifeBuoy, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_support" },
+  { id: "mobile.settings", href: "/mobile/settings", label: "Mobile Settings", icon: "MT", lucide: Settings2, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_settings" },
   // Remote Desktop (Izzy, 2026-09-02): a customer's own computers, and a
   // colleague's computer by Connect ID + password. Right after Meetings, per the
   // approved mockups. ⛔ The permission is the SAME action key the page and every
@@ -301,10 +311,11 @@ export const navItems: NavItem[] = [
 ];
 
 /** Sidebar section order: Workspace → PBX → CRM → Apps → Billing → Admin → Settings */
-export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "store", "pbx", "crm", "apps", "billing", "admin", "settings"];
+export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "mobile", "store", "pbx", "crm", "apps", "billing", "admin", "settings"];
 
 export const navSectionMeta: Record<NavItem["section"], { label: string; railIcon: string }> = {
   workspace: { label: "Workspace", railIcon: "WS" },
+  mobile: { label: "LoopCom Mobile", railIcon: "LM" },
   store: { label: "Store", railIcon: "SO" },
   pbx: { label: "PBX", railIcon: "PB" },
   crm: { label: "CRM", railIcon: "CR" },

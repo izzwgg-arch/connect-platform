@@ -293,6 +293,18 @@ export async function listSimCardOrders(creds: StoredTelnyxCredentials): Promise
   return rows.map(mapOrder).filter((o) => o.id);
 }
 
+// ── Account balance (read-only; the console's low-balance floor reads this) ──
+
+export async function getAccountBalance(creds: StoredTelnyxCredentials): Promise<{ balanceCents: number | null; currency: string | null; creditLimitCents: number | null }> {
+  const body = await wx<any>(creds, { path: "/balance" });
+  const d = body?.data ?? {};
+  const toCents = (v: unknown): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.round(n * 100) : null;
+  };
+  return { balanceCents: toCents(d.balance), currency: d.currency ?? null, creditLimitCents: toCents(d.credit_limit) };
+}
+
 // ── Data usage notifications (provider-side thresholds → webhooks) ───────────
 
 export async function createDataUsageNotification(creds: StoredTelnyxCredentials, simCardId: string, thresholdMb: number): Promise<{ id: string | null }> {

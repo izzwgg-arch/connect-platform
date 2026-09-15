@@ -1,286 +1,239 @@
 "use client";
 /**
- * LoopCom Mobile — the customer page (2026-09-15).
+ * LoopCom Mobile — Mobile Dashboard (2026-09-16, the approved full build).
  *
- * Branded mobile service on Telnyx wireless: lines, eSIM install (QR),
- * cycle usage, suspend/resume, lost-device, port-in drafts. Gated by
- * can_view_workspace_mobile (in NO default bucket — granting the key is the
- * launch). Everything here is tenant-scoped server-side on /mobile-service/*;
- * nothing on this page can spend money — provisioning lives on the owner's
- * Mobile Console.
+ * The section's front door: hero with cycle progress + primary actions,
+ * iconized KPI row, the needs-your-attention queue, quick actions, line
+ * cards, activity and the next-invoice estimate — all live from
+ * /mobile-service/dashboard. Gated by can_view_workspace_mobile (the
+ * original launch key, deliberately kept — see navConfig).
  */
 import { useCallback, useEffect, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
-import { PageHeader } from "../../../components/PageHeader";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, ArrowLeftRight, BarChart3, CheckCircle2, CreditCard, LifeBuoy, Plus, Smartphone } from "lucide-react";
 import { PermissionGate } from "../../../components/PermissionGate";
-import { apiGet, apiPost } from "../../../services/apiClient";
+import { useAppContext } from "../../../hooks/useAppContext";
+import { apiGet } from "../../../services/apiClient";
+import { EmptyState, LoadingCard, Note, PageHead, StatusPill, errText, fmtDateTime, gb, money } from "./MobileUi";
 
-type LineRow = {
-  id: string;
-  label: string;
-  status: string;
-  phoneNumber: string | null;
-  plan: { id: string; name: string; monthlyPriceCents: number; includedDataMb: number | null } | null;
-  sim: { id: string; type: string; status: string | null; iccid: string | null; esimInstallationStatus: string | null; hasActivationCode: boolean } | null;
-  suspendReason: string | null;
-  activatedAt: string | null;
+type Dashboard = {
+  cycle: { start: string; end: string; totals: { dataMb: number; voiceSeconds: number; smsCount: number }; byLine: Record<string, { dataMb: number }>; pooledIncludedMb: number };
+  counts: { active: number; pending: number; suspended: number; draft: number; terminated: number };
+  lines: Array<{ id: string; label: string; status: string; phoneNumber: string | null; plan: { id: string; name: string; monthlyPriceCents: number; includedDataMb: number | null } | null; sim: { type: string; esimInstallationStatus: string | null; hasActivationCode: boolean } | null; subscriber: { name: string } | null; dataUsedMb: number }>;
+  attention: Array<{ kind: string; severity: string; title: string; detail: string; action: string; lineId?: string }>;
+  activity: Array<{ action: string; entityType: string; entityId: string; createdAt: string; metadata?: any }>;
+  nextInvoice: { totalCents: number; lineCount: number; billsAt: string; items: Array<{ description: string; amountCents: number; kind: string }> };
+  settings: { usageWarnPct: number };
 };
 
-type Overview = {
-  lines: LineRow[];
-  cycle: { start: string; totals: { dataMb: number; voiceSeconds: number; smsCount: number }; byLine: Record<string, { dataMb: number }> };
+const ACTIVITY_LABEL: Record<string, string> = {
+  "mobile.esim.provisioned": "eSIM issued",
+  "mobile.esim.code_viewed": "eSIM install screen opened",
+  "mobile.line.created": "Line created",
+  "mobile.line.suspend": "Line paused",
+  "mobile.line.reported_lost": "Device reported lost",
+  "mobile.line.resume": "Line resumed",
+  "mobile.line.plan_changed": "Plan changed",
+  "mobile.line.terminate": "Line closed",
+  "mobile.line.e911_saved": "Emergency address saved",
+  "mobile.port.draft_created": "Number transfer started",
+  "mobile.port.details_updated": "Transfer details updated",
+  "mobile.subscriber.created": "Subscriber added",
+  "mobile.settings.updated": "Mobile settings changed",
+  "mobile.usage.spike": "Unusual usage flagged",
+  "mobile.invoice.generated": "Invoice issued",
 };
 
-type PlanRow = { id: string; name: string; description: string | null; monthlyPriceCents: number; includedDataMb: number | null; includedVoiceMinutes: number | null; includedSms: number | null; roamingEnabled: boolean };
-
-function errText(e: any, fallback: string): string {
-  return e?.body?.message || e?.body?.error || e?.message || fallback;
+function activityLabel(action: string): string {
+  if (ACTIVITY_LABEL[action]) return ACTIVITY_LABEL[action];
+  if (action.startsWith("mobile.email.")) return "Notification emailed";
+  if (action.startsWith("mobile.port.status_")) return `Transfer ${action.slice("mobile.port.status_".length).replace(/_/g, " ")}`;
+  return action.replace(/^mobile\./, "").replace(/[._]/g, " ");
 }
 
-function money(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function gb(mb: number | null | undefined): string {
-  if (mb == null) return "—";
-  return mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB` : `${Math.round(mb)} MB`;
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "Being set up",
-  pending_activation: "Ready to install",
-  active: "Active",
-  suspended: "Suspended",
-  lost: "Suspended (lost device)",
-  terminated: "Closed",
-};
-
-export default function LoopcomMobilePage() {
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [plans, setPlans] = useState<PlanRow[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export default function MobileDashboardPage() {
+  const router = useRouter();
+  const { user } = useAppContext() as any;
+  const [data, setData] = useState<Dashboard | null>(null);
   const [note, setNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null);
-  const [busyLineId, setBusyLineId] = useState<string | null>(null);
-  const [esim, setEsim] = useState<{ lineId: string; code: string; instructions: string[] } | null>(null);
-  const [portNumber, setPortNumber] = useState("");
-  const [portRequests, setPortRequests] = useState<Array<{ id: string; phoneNumber: string; status: string; createdAt: string }>>([]);
 
   const load = useCallback(async () => {
     try {
-      const [ov, pl, pr] = await Promise.all([
-        apiGet<Overview>("/mobile-service/overview"),
-        apiGet<{ plans: PlanRow[] }>("/mobile-service/plans"),
-        apiGet<{ portRequests: Array<{ id: string; phoneNumber: string; status: string; createdAt: string }> }>("/mobile-service/port-requests"),
-      ]);
-      setOverview(ov);
-      setPlans(pl.plans ?? []);
-      setPortRequests(pr.portRequests ?? []);
-      setLoadError(null);
+      setData(await apiGet<Dashboard>("/mobile-service/dashboard"));
+      setNote(null);
     } catch (e: any) {
-      setLoadError(errText(e, "Couldn't load your mobile service."));
+      setNote({ kind: "bad", text: errText(e, "Couldn't load your mobile service.") });
     }
   }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const act = async (lineId: string, action: "suspend" | "resume" | "report-lost", body?: any) => {
-    setBusyLineId(lineId);
-    setNote(null);
-    try {
-      await apiPost(`/mobile-service/lines/${lineId}/${action}`, body ?? {});
-      setNote({ kind: "ok", text: action === "resume" ? "The line is being turned back on." : "The line is suspended. Your number is safe." });
-      await load();
-    } catch (e: any) {
-      setNote({ kind: "bad", text: errText(e, "That didn't go through.") });
-    } finally {
-      setBusyLineId(null);
-    }
-  };
-
-  const showEsim = async (lineId: string) => {
-    setNote(null);
-    try {
-      const out = await apiGet<{ activationCode: string; instructions: string[] }>(`/mobile-service/lines/${lineId}/esim`);
-      setEsim({ lineId, code: out.activationCode, instructions: out.instructions ?? [] });
-    } catch (e: any) {
-      setNote({ kind: "bad", text: errText(e, "Couldn't fetch the eSIM install code.") });
-    }
-  };
-
-  const startPort = async () => {
-    setNote(null);
-    try {
-      const out = await apiPost<{ message: string }>("/mobile-service/port-requests", { phoneNumber: portNumber });
-      setPortNumber("");
-      setNote({ kind: "ok", text: out.message ?? "Port request saved." });
-      await load();
-    } catch (e: any) {
-      setNote({ kind: "bad", text: errText(e, "Couldn't save the port request.") });
-    }
-  };
+  const firstName = String(user?.name ?? user?.email ?? "").split(/[\s@]/)[0] || "there";
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
   return (
-    <PermissionGate permission="can_view_workspace_mobile" fallback={<div className="state-box">You do not have access to LoopCom Mobile.</div>}>
-      <div className="lm-wrap">
-        <LmStyles />
-        <PageHeader title="LoopCom Mobile" subtitle="Your mobile lines, eSIMs and usage" />
-        {note ? <div className={`lm-note ${note.kind}`}>{note.text}</div> : null}
-        {loadError ? <div className="lm-note bad">{loadError}</div> : null}
-
-        <section className="lm-card">
-          <h3 className="lm-h3">Your lines</h3>
-          {!overview ? (
-            <div className="lm-dim">Loading…</div>
-          ) : overview.lines.length === 0 ? (
-            <div className="lm-dim">
-              No mobile lines yet. When LoopCom sets one up for you, it appears here with its eSIM install screen.
-            </div>
-          ) : (
-            <table className="lm-table">
-              <thead>
-                <tr><th>Line</th><th>Number</th><th>Status</th><th>Plan</th><th>Data this cycle</th><th></th></tr>
-              </thead>
-              <tbody>
-                {overview.lines.map((line) => {
-                  const used = overview.cycle.byLine[line.id]?.dataMb ?? 0;
-                  const included = line.plan?.includedDataMb ?? null;
-                  const busy = busyLineId === line.id;
-                  return (
-                    <tr key={line.id}>
-                      <td>{line.label}</td>
-                      <td>{line.phoneNumber ?? <span className="lm-dim">not assigned yet</span>}</td>
-                      <td>
-                        <span className={`lm-pill s-${line.status}`}>{STATUS_LABEL[line.status] ?? line.status}</span>
-                        {line.suspendReason && (line.status === "suspended" || line.status === "lost") ? (
-                          <div className="lm-dim lm-small">{line.suspendReason}</div>
-                        ) : null}
-                      </td>
-                      <td>{line.plan ? `${line.plan.name} (${money(line.plan.monthlyPriceCents)}/mo)` : <span className="lm-dim">—</span>}</td>
-                      <td>{gb(used)}{included != null ? <span className="lm-dim"> of {gb(included)}</span> : null}</td>
-                      <td className="lm-actions">
-                        {line.sim?.type === "esim" && line.sim.hasActivationCode && line.status === "pending_activation" ? (
-                          <button className="lm-btn primary" onClick={() => void showEsim(line.id)}>Install eSIM</button>
-                        ) : null}
-                        {line.status === "active" ? (
-                          <>
-                            <button className="lm-btn" disabled={busy} onClick={() => void act(line.id, "suspend", { reason: "Paused by the customer" })}>Pause</button>
-                            <button className="lm-btn danger" disabled={busy} onClick={() => {
-                              if (window.confirm("Report this device lost or stolen? Service stops right away; your number is kept safe.")) {
-                                void act(line.id, "report-lost");
-                              }
-                            }}>Lost device</button>
-                          </>
-                        ) : null}
-                        {line.status === "suspended" || line.status === "lost" ? (
-                          <button className="lm-btn primary" disabled={busy} onClick={() => void act(line.id, "resume")}>Resume</button>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </section>
-
-        {esim ? (
-          <section className="lm-card">
-            <h3 className="lm-h3">Install your eSIM</h3>
-            <div className="lm-esim">
-              <div className="lm-qr"><QRCodeSVG value={esim.code} size={196} /></div>
-              <div>
-                <ol className="lm-steps">
-                  {esim.instructions.map((step, i) => (<li key={i}>{step}</li>))}
-                </ol>
-                <div className="lm-dim lm-small">Manual entry code (if the camera can't scan):</div>
-                <code className="lm-code">{esim.code}</code>
-                <div style={{ marginTop: 10 }}>
-                  <button className="lm-btn" onClick={() => setEsim(null)}>Done</button>
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        <section className="lm-card">
-          <h3 className="lm-h3">Plans</h3>
-          {plans.length === 0 ? (
-            <div className="lm-dim">Plans are being finalized — LoopCom will publish them here.</div>
-          ) : (
-            <div className="lm-plans">
-              {plans.map((p) => (
-                <div key={p.id} className="lm-plan">
-                  <div className="lm-plan-name">{p.name}</div>
-                  <div className="lm-plan-price">{money(p.monthlyPriceCents)}<span className="lm-dim">/mo</span></div>
-                  <div className="lm-dim">{p.includedDataMb != null ? `${gb(p.includedDataMb)} data` : "No data"}{p.includedVoiceMinutes != null ? ` · ${p.includedVoiceMinutes} min` : ""}{p.includedSms != null ? ` · ${p.includedSms} texts` : ""}</div>
-                  {p.description ? <div className="lm-dim lm-small">{p.description}</div> : null}
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="lm-dim lm-small" style={{ marginTop: 8 }}>To add a line or change a plan, contact LoopCom support — it takes minutes.</div>
-        </section>
-
-        <section className="lm-card">
-          <h3 className="lm-h3">Bring your number</h3>
-          <p className="lm-dim">Keep your existing mobile number: enter it and LoopCom will handle the transfer with your current carrier (you'll be asked for the account number and transfer PIN before anything moves).</p>
-          <div className="lm-row">
-            <input className="lm-input" placeholder="(555) 555-0123" value={portNumber} onChange={(e) => setPortNumber(e.target.value)} />
-            <button className="lm-btn primary" disabled={!portNumber.trim()} onClick={() => void startPort()}>Start transfer</button>
-          </div>
-          {portRequests.length > 0 ? (
-            <table className="lm-table" style={{ marginTop: 10 }}>
-              <thead><tr><th>Number</th><th>Status</th><th>Requested</th></tr></thead>
-              <tbody>
-                {portRequests.map((r) => (
-                  <tr key={r.id}><td>{r.phoneNumber}</td><td><span className={`lm-pill s-${r.status}`}>{r.status.replace(/_/g, " ")}</span></td><td>{new Date(r.createdAt).toLocaleDateString()}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          ) : null}
-        </section>
+    <PermissionGate permission="can_view_workspace_mobile" fallback={<div className="lmx"><EmptyState title="LoopCom Mobile isn't on for this account" text="Ask your account owner, or LoopCom, to switch it on — the whole section appears at once." /></div>}>
+      <div className="lmx">
+        <Note note={note} />
+        {!data ? (
+          <><LoadingCard rows={2} /><LoadingCard rows={4} /></>
+        ) : (
+          <DashboardBody data={data} greeting={greeting} firstName={firstName} go={(p) => router.push(p)} />
+        )}
       </div>
     </PermissionGate>
   );
 }
 
-function LmStyles() {
+function DashboardBody({ data, greeting, firstName, go }: { data: Dashboard; greeting: string; firstName: string; go: (path: string) => void }) {
+  const { cycle, counts, lines, attention, activity, nextInvoice } = data;
+  const start = new Date(cycle.start);
+  const end = new Date(cycle.end);
+  const now = new Date();
+  const daysLeft = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86_400_000));
+  const dayPct = Math.min(100, Math.round(((now.getTime() - start.getTime()) / (end.getTime() - start.getTime())) * 100));
+  const pooled = cycle.pooledIncludedMb;
+  const dataPct = pooled > 0 ? Math.min(100, Math.round((cycle.totals.dataMb / pooled) * 100)) : 0;
+  const activeLines = lines.filter((l) => l.status !== "terminated");
+  const healthBits: string[] = [];
+  if (counts.active > 0) healthBits.push(`${counts.active} line${counts.active === 1 ? " is" : "s are"} active`);
+  if (counts.pending > 0) healthBits.push(`${counts.pending} waiting on an eSIM install`);
+  if (counts.suspended > 0) healthBits.push(`${counts.suspended} paused with the number held safe`);
+  const health = healthBits.length ? `${healthBits.join(", ")}.` : "No mobile lines yet — when LoopCom sets one up it appears here.";
+
   return (
-    <style jsx global>{`
-      .lm-wrap { --pnl: #fff; --ln: #e3e6ec; --tx: #17202b; --dim: #64708a; --ac: #2563eb; --ok: #157347; --bad: #b42318; color: var(--tx); }
-      :root[data-theme="dark"] .lm-wrap { --pnl: #151a22; --ln: #2a3140; --tx: #e8ecf3; --dim: #8b96ab; --ac: #5b8def; --ok: #4ade80; --bad: #f87171; }
-      .lm-card { background: var(--pnl); border: 1px solid var(--ln); border-radius: 12px; padding: 16px; margin-top: 14px; }
-      .lm-h3 { margin: 0 0 10px; font-size: 15px; }
-      .lm-dim { color: var(--dim); }
-      .lm-small { font-size: 12px; }
-      .lm-note { border-radius: 10px; padding: 10px 12px; margin-top: 12px; border: 1px solid var(--ln); }
-      .lm-note.ok { color: var(--ok); }
-      .lm-note.bad { color: var(--bad); }
-      .lm-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-      .lm-table th { text-align: left; color: var(--dim); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--ln); }
-      .lm-table td { padding: 8px; border-bottom: 1px solid var(--ln); vertical-align: top; }
-      .lm-pill { display: inline-block; border: 1px solid var(--ln); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
-      .lm-pill.s-active { color: var(--ok); border-color: var(--ok); }
-      .lm-pill.s-suspended, .lm-pill.s-lost { color: var(--bad); border-color: var(--bad); }
-      .lm-pill.s-pending_activation { color: var(--ac); border-color: var(--ac); }
-      .lm-btn { border: 1px solid var(--ln); background: transparent; color: var(--tx); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
-      .lm-btn.primary { background: var(--ac); border-color: var(--ac); color: #fff; font-weight: 600; }
-      .lm-btn.danger { color: var(--bad); border-color: var(--bad); }
-      .lm-btn:disabled { opacity: 0.5; cursor: default; }
-      .lm-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-      .lm-esim { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
-      .lm-qr { background: #fff; padding: 12px; border-radius: 10px; border: 1px solid var(--ln); }
-      .lm-steps { margin: 0 0 10px; padding-left: 18px; }
-      .lm-steps li { margin-bottom: 4px; }
-      .lm-code { display: inline-block; background: rgba(127,127,127,0.12); border-radius: 6px; padding: 4px 8px; font-size: 12px; word-break: break-all; max-width: 460px; }
-      .lm-plans { display: flex; gap: 12px; flex-wrap: wrap; }
-      .lm-plan { border: 1px solid var(--ln); border-radius: 10px; padding: 12px 14px; min-width: 180px; }
-      .lm-plan-name { font-weight: 600; }
-      .lm-plan-price { font-size: 20px; font-weight: 700; margin: 2px 0; }
-      .lm-row { display: flex; gap: 8px; flex-wrap: wrap; }
-      .lm-input { border: 1px solid var(--ln); background: transparent; color: var(--tx); border-radius: 8px; padding: 7px 10px; font-size: 13.5px; min-width: 220px; }
-    `}</style>
+    <>
+      <div className="hero">
+        <div className="hero-glow" />
+        <div>
+          <div className="hero-eyebrow">LoopCom Mobile</div>
+          <h2>{greeting}, {firstName}</h2>
+          <p className="hero-sub">{health}</p>
+          <div className="hero-cycle">
+            <div className="hero-cycle-top">
+              <span>Billing cycle · {start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – {new Date(end.getTime() - 1).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+              <span>{daysLeft} day{daysLeft === 1 ? "" : "s"} left</span>
+            </div>
+            <div className="progress"><i style={{ width: `${pooled > 0 ? dataPct : dayPct}%` }} /><em style={{ left: `${dayPct}%` }} title="Today" /></div>
+            <div className="hero-cycle-bottom">
+              <span>{pooled > 0 ? `${gb(cycle.totals.dataMb)} of ${gb(pooled)} pooled data used` : `${gb(cycle.totals.dataMb)} data used this cycle`}</span>
+              <span>Next invoice est. <b style={{ color: "var(--text)" }}>{money(nextInvoice.totalCents)}</b> · bills {new Date(nextInvoice.billsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+            </div>
+          </div>
+        </div>
+        <div className="hero-side">
+          <button className="lbtn primary lg" onClick={() => go("/mobile/billing")}><CreditCard size={15} /> Billing · {money(nextInvoice.totalCents)}</button>
+          <button className="lbtn lg" onClick={() => go("/mobile/lines")}><Smartphone size={15} /> Your lines</button>
+          <button className="lbtn lg" onClick={() => go("/mobile/usage")}><BarChart3 size={15} /> View usage</button>
+        </div>
+      </div>
+
+      <div className="kpis">
+        <div className="kpi"><span className="kico ok"><CheckCircle2 /></span><span className="lbl">Active lines</span><span className="val">{counts.active}</span><span className={`sub ${counts.active > 0 ? "pos" : ""}`}>{counts.active > 0 ? "Registered on network" : "None yet"}</span></div>
+        <div className="kpi"><span className="kico"><Smartphone /></span><span className="lbl">Pending activation</span><span className="val">{counts.pending}</span><span className="sub">{counts.pending > 0 ? "eSIMs waiting to be installed" : "Nothing waiting"}</span></div>
+        <div className="kpi"><span className="kico bad"><AlertTriangle /></span><span className="lbl">Suspended</span><span className="val">{counts.suspended}</span><span className={`sub ${counts.suspended > 0 ? "neg" : ""}`}>{counts.suspended > 0 ? "Numbers held safe" : "None"}</span></div>
+        <div className="kpi"><span className="kico warn"><BarChart3 /></span><span className="lbl">Data this cycle</span><span className="val">{gb(cycle.totals.dataMb)}</span>{pooled > 0 ? <><span className="bar" style={{ marginTop: 4 }}><i className={dataPct >= 90 ? "bad" : dataPct >= 75 ? "warn" : ""} style={{ width: `${dataPct}%` }} /></span><span className="sub">{dataPct}% of {gb(pooled)} pooled</span></> : <span className="sub">across all lines</span>}</div>
+      </div>
+
+      <div className="gmain">
+        <div className="stack">
+          {attention.length > 0 ? (
+            <div className="lcard">
+              <div className="lcard-h"><h3>Needs your attention</h3><span className="pill warn nub">{attention.length} item{attention.length === 1 ? "" : "s"}</span></div>
+              <div className="alist">
+                {attention.map((a, i) => (
+                  <div key={i} className="aitem">
+                    <span className="sev" style={{ background: a.severity === "danger" ? "var(--danger)" : a.severity === "warning" ? "var(--warning)" : "var(--accent)" }} />
+                    <div><b>{a.title}</b><span className="sub">{a.detail}</span></div>
+                    <button className="lbtn sm" onClick={() => go(a.action === "open_porting" ? "/mobile/porting" : a.action === "install_esim" ? "/mobile/devices" : a.lineId ? `/mobile/lines/${a.lineId}` : "/mobile/lines")}>
+                      {a.action === "change_plan" ? "Change plan" : a.action === "install_esim" ? "Install eSIM" : a.action === "open_porting" ? "Open porting" : "Open"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="lcard">
+            <div className="lcard-h"><h3>Quick actions</h3></div>
+            <div className="qa">
+              <button onClick={() => go("/mobile/users")}><span className="qi"><Plus /></span>Add a line</button>
+              <button onClick={() => go("/mobile/porting")}><span className="qi"><ArrowLeftRight /></span>Bring a number</button>
+              <button onClick={() => go("/mobile/devices")}><span className="qi"><Smartphone /></span>Activate eSIM</button>
+              <button onClick={() => go("/mobile/usage")}><span className="qi"><BarChart3 /></span>View usage</button>
+              <button onClick={() => go("/mobile/billing")}><span className="qi"><CreditCard /></span>Billing</button>
+              <button onClick={() => go("/mobile/support")}><span className="qi"><LifeBuoy /></span>Get help</button>
+            </div>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-h">
+              <div><h3>Your lines</h3><div className="sub">{activeLines.length} line{activeLines.length === 1 ? "" : "s"} · tap a card for detail</div></div>
+              <button className="lbtn sm" onClick={() => go("/mobile/lines")}>All lines →</button>
+            </div>
+            {activeLines.length === 0 ? (
+              <EmptyState title="No mobile lines yet" text="When LoopCom sets up your first line it appears here with its eSIM install screen — usually the same day.">
+                <button className="lbtn sm primary" onClick={() => go("/mobile/support")}>Talk to us about lines</button>
+              </EmptyState>
+            ) : (
+              <div className="lcards">
+                {activeLines.slice(0, 8).map((l) => {
+                  const included = l.plan?.includedDataMb ?? null;
+                  const pct = included && included > 0 ? Math.min(100, Math.round((l.dataUsedMb / included) * 100)) : null;
+                  const color = pct == null ? "var(--accent)" : pct >= 95 ? "var(--danger)" : pct >= 80 ? "var(--warning)" : "var(--accent)";
+                  return (
+                    <div key={l.id} className="linecard" onClick={() => go(`/mobile/lines/${l.id}`)} role="link" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") go(`/mobile/lines/${l.id}`); }}>
+                      <div className="top">
+                        <div><div className="num">{l.phoneNumber ?? l.label}</div><div className="who">{l.subscriber?.name ?? "Unassigned"}</div></div>
+                        <StatusPill status={l.status} />
+                      </div>
+                      <div className="row" style={{ gap: 10 }}>
+                        <span className="ring" data-v={pct == null ? gb(l.dataUsedMb) : `${pct}%`} style={{ background: `conic-gradient(${color} ${(pct ?? 0)}%, var(--lmx-chip) 0)` }} />
+                        <div><b style={{ fontSize: 12.5 }}>{l.plan?.name ?? "No plan"}</b><div className="dimtx small">{gb(l.dataUsedMb)} used · {l.sim?.type === "esim" ? "eSIM" : l.sim?.type === "physical" ? "SIM" : "no SIM"}</div></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="stack">
+          <div className="lcard">
+            <div className="lcard-h"><h3>Next invoice</h3><span className="pill info nub">Estimate</span></div>
+            <div style={{ fontSize: 26, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{money(nextInvoice.totalCents)}</div>
+            <div className="dimtx small" style={{ marginTop: 2 }}>Bills {new Date(nextInvoice.billsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })} · {nextInvoice.lineCount} billable line{nextInvoice.lineCount === 1 ? "" : "s"}</div>
+            {nextInvoice.items.length > 0 ? (
+              <div className="twrap" style={{ marginTop: 12 }}>
+                <table className="t"><tbody>
+                  {nextInvoice.items.slice(0, 6).map((it, i) => (
+                    <tr key={i}><td style={{ fontSize: 12.5 }}>{it.description}</td><td className="num">{money(it.amountCents)}</td></tr>
+                  ))}
+                </tbody></table>
+              </div>
+            ) : <p className="dimtx small" style={{ marginTop: 10 }}>Nothing billable yet this cycle.</p>}
+            <div className="row" style={{ marginTop: 12 }}><button className="lbtn sm" onClick={() => go("/mobile/billing")}>Billing →</button></div>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-h"><h3>Recent activity</h3></div>
+            {activity.length === 0 ? (
+              <p className="dimtx small">Activity on your mobile service shows here — installs, pauses, plan changes, transfers.</p>
+            ) : (
+              <div className="tl">
+                {activity.slice(0, 8).map((a, i) => (
+                  <div key={i} className="tlrow">
+                    <span className={`ti ${a.action.includes("lost") || a.action.includes("spike") ? "warn" : a.action.includes("suspend") || a.action.includes("terminate") ? "bad" : "ok"}`}>•</span>
+                    <div><b>{activityLabel(a.action)}</b></div>
+                    <time>{fmtDateTime(a.createdAt)}</time>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

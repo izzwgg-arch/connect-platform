@@ -291,21 +291,94 @@ test("no client-side retry wrapper crept into the wireless client, and no consol
 
 test("nav + catalog + toggle contract on both sides", () => {
   const nav = repoFile("apps/portal/navigation/navConfig.ts").replace(/\r\n/g, "\n");
-  // Tenant page: own key, NO force line (granting the key is the launch).
-  assert.match(nav, /id: "workspace\.mobile", href: "\/mobile"[^\n]*permission: "can_view_workspace_mobile"/);
-  assert.doesNotMatch(stripComments(nav), /item\.id === "workspace\.mobile"/, "workspace.mobile must have no force line — the honesty rule");
-  // Console: own key + force line + fixed list.
+  // 2026-09-16: LoopCom Mobile grew into its OWN sidebar section (the approved
+  // full product area). The Dashboard KEEPS the original launch key
+  // can_view_workspace_mobile (renaming a key strips existing grants); the
+  // other nine pages get their own keys; NONE has a force line.
+  assert.match(nav, /id: "mobile\.dashboard", href: "\/mobile"[^\n]*permission: "can_view_workspace_mobile"/);
+  const MOBILE_PAGE_IDS = [
+    "mobile.dashboard", "mobile.users", "mobile.lines", "mobile.plans", "mobile.usage",
+    "mobile.billing", "mobile.porting", "mobile.devices", "mobile.support", "mobile.settings",
+  ];
+  const strippedNav = stripComments(nav);
+  for (const id of MOBILE_PAGE_IDS) {
+    assert.match(nav, new RegExp(`id: "${id.replace(".", "\\.")}"`), `${id} nav item missing`);
+    assert.doesNotMatch(strippedNav, new RegExp(`item\\.id === "${id.replace(".", "\\.")}"`), `${id} must have no force line — the honesty rule`);
+  }
+  // Every page gates on the section key so the section shows as one unit.
+  const mobileRows = nav.split("\n").filter((l) => /section: "mobile"/.test(l));
+  assert.equal(mobileRows.length, MOBILE_PAGE_IDS.length, "exactly ten customer pages in the mobile section");
+  for (const row of mobileRows) assert.match(row, /sectionPermission: "can_view_section_mobile"/);
+  // Console: own key + force line + fixed list (unchanged).
   assert.match(nav, /id: "admin\.mobile_console", href: "\/admin\/mobile-console"[^\n]*permission: "can_view_admin_mobile_console"/);
   assert.match(nav, /item\.id === "admin\.mobile_console" && backendJwtRole !== "SUPER_ADMIN"/);
   assert.match(nav, /"admin\.mobile_console",/);
-  // Shared catalog rows exist with the same ids and keys.
+  // Shared catalog rows exist with the same ids and keys + the section row.
   const catalog = repoFile("packages/shared/src/portalPermissions.ts").replace(/\r\n/g, "\n");
-  assert.match(catalog, /id: "workspace\.mobile"[^\n]*permission: "can_view_workspace_mobile"/);
+  assert.match(catalog, /id: "mobile", label: "LoopCom Mobile", permission: "can_view_section_mobile"/);
+  assert.match(catalog, /id: "mobile\.dashboard"[^\n]*permission: "can_view_workspace_mobile"/);
   assert.match(catalog, /id: "admin\.mobile_console"[^\n]*permission: "can_view_admin_mobile_console"/);
-  // Launch gate: the tenant key is in NO default bucket.
+  // Launch gate: NO mobile key is in any default bucket — the ONLY mention of
+  // each key outside comments is its own catalog row (SIDEBAR_SECTIONS/ITEMS).
   const buckets = stripComments(catalog);
-  const bucketMentions = buckets.split("can_view_workspace_mobile").length - 1;
-  assert.equal(bucketMentions, 1, "can_view_workspace_mobile must appear ONLY in its SIDEBAR_ITEMS row (no default bucket)");
+  const MOBILE_KEYS = [
+    "can_view_section_mobile", "can_view_workspace_mobile", "can_view_mobile_users", "can_view_mobile_lines",
+    "can_view_mobile_plans", "can_view_mobile_usage", "can_view_mobile_billing", "can_view_mobile_porting",
+    "can_view_mobile_devices", "can_view_mobile_support", "can_view_mobile_settings",
+  ];
+  for (const key of MOBILE_KEYS) {
+    const mentions = buckets.split(key).length - 1;
+    assert.equal(mentions, 1, `${key} must appear ONLY in its catalog row (no default bucket)`);
+  }
+  // The API agrees with the sidebar: each page's resource prefix carries that
+  // page's own key (longest-prefix-wins over the base rule).
+  const server = repoFile("apps/api/src/server.ts").replace(/\r\n/g, "\n");
+  for (const [prefix, key] of [
+    ["subscribers", "can_view_mobile_users"], ["lines", "can_view_mobile_lines"], ["plans", "can_view_mobile_plans"],
+    ["usage", "can_view_mobile_usage"], ["billing", "can_view_mobile_billing"], ["port-requests", "can_view_mobile_porting"],
+    ["devices", "can_view_mobile_devices"], ["support", "can_view_mobile_support"], ["settings", "can_view_mobile_settings"],
+  ] as const) {
+    assert.match(server, new RegExp(`\\{ prefix: "/mobile-service/${prefix}", permission: "${key}" \\}`), `prefix rule for /mobile-service/${prefix} missing`);
+  }
+});
+
+test("product routes: registered, owner-gated console, tenant-from-JWT, no money, email lane", () => {
+  const server = repoFile("apps/api/src/server.ts").replace(/\r\n/g, "\n");
+  assert.match(server, /registerMobileProductRoutes\(\{/, "product routes must be registered in server.ts");
+  const routes = src("loopcomMobile/mobileProductRoutes.ts");
+  const stripped = stripComments(routes);
+  // Every /admin route awaits requireOwner; count them against route count.
+  const adminRoutes = (stripped.match(/app\.(get|post|put|patch)\("\/admin\/mobile-service\//g) ?? []).length;
+  const ownerChecks = (stripped.match(/await requireOwner\(req, reply\)/g) ?? []).length;
+  assert.ok(adminRoutes > 8, "expected the console's data routes here");
+  assert.ok(ownerChecks >= adminRoutes, `every admin route must call requireOwner (${ownerChecks} checks for ${adminRoutes} routes)`);
+  // Tenant scoping: tenant comes from the JWT helper, never from a body.
+  assert.match(stripped, /req\.user as \{ sub\?: string; tenantId\?: string/);
+  assert.doesNotMatch(stripped, /body[^\n]*tenantId[^\n]*mobileLine\.findFirst/, "tenant must never come from the body on tenant routes");
+  // Money discipline: nothing in this file purchases or retries.
+  assert.doesNotMatch(stripped, /purchaseEsims|createSimOrder/, "the product routes must not spend money — provisioning stays in mobileRoutes");
+  // Port submission stays absent: no carrier porting call anywhere here.
+  assert.doesNotMatch(stripped, /porting_orders|createPortingOrder/i, "no route may file a port with the carrier");
+  // Invoice generation is confirm-gated and idempotent by the unique key.
+  assert.match(stripped, /confirm: z\.literal\(true\)/);
+  assert.match(stripped, /tenantId_periodStart/);
+  // Emails ride the platform outbound lane (EmailJob) — no second SMTP path.
+  const emails = stripComments(src("loopcomMobile/mobileEmails.ts"));
+  assert.match(emails, /db\.emailJob\.create/);
+  assert.doesNotMatch(emails, /createTransport|nodemailer/i, "no second SMTP path");
+  assert.match(emails, /MOBILE_/, "mobile email jobs carry their own type prefix");
+  // The transfer PIN is stored encrypted and the raw value never echoes back.
+  assert.match(stripped, /transferPinEnc/);
+  assert.doesNotMatch(stripped, /transferPin[^\n]*reply\.send/, "the PIN must never be sent back");
+});
+
+test("email templates ride the hardened billing shell with the Mobile identity", () => {
+  const emails = src("loopcomMobile/mobileEmails.ts");
+  assert.match(emails, /from "\.\.\/billing\/emailTemplates"/, "must reuse the hardened shell, never a third copy");
+  assert.match(emails, /eyebrow: "LoopCom Mobile"/);
+  assert.match(emails, /Sent by LoopCom Mobile\./);
+  // The activation code is never emailed — the install screen is the only place.
+  assert.doesNotMatch(stripComments(emails), /activationCode/, "the eSIM code must never appear in an email");
 });
 
 test("this test file's glob is registered in apps/api/package.json", () => {
