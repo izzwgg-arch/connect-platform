@@ -944,13 +944,6 @@ export default function CallsPage() {
   const [datePreset, setDatePreset]     = useState<DatePreset>("today");
   const [startDate, setStartDate]       = useState(todayDateInput());
   const [endDate, setEndDate]           = useState(todayDateInput());
-  useSearchNavigation(url => {
-    const q = url.searchParams.get("q") || "";
-    setSearch(q); setSearchDraft(q);
-    const date = url.searchParams.get("date");
-    const range = date ? searchDayRange(date) : null;
-    if (range) { setStartDate(range.startDate); setEndDate(range.endDate); }
-  });
   const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pageSize, setPageSize]         = useState(100);
@@ -973,6 +966,22 @@ export default function CallsPage() {
     if (datePreset === "yesterday") { const y = dateInputFor(1);  setStartDate(y); setEndDate(y); }
     if (datePreset === "last7")     { setStartDate(dateInputFor(6)); setEndDate(todayDateInput()); }
   }, [datePreset]);
+
+  // Apply deep links after the initial date preset, so Today cannot overwrite the selected call's day.
+  useSearchNavigation(url => {
+    const q = url.searchParams.get("q") || "";
+    setSearch(q); setSearchDraft(q);
+    const date = url.searchParams.get("date");
+    const range = date ? searchDayRange(date) : null;
+    if (range) {
+      setDatePreset("custom");
+      setStartDate(range.startDate); setEndDate(range.endDate);
+      setAdvancedOpen(true);
+    }
+    if (q || range) {
+      setActiveTab("all"); setDirectionFilter("all"); setHasRecording("all"); setPage(1);
+    }
+  });
 
   // Build API query — tenant filtering is preserved via scopedTenantId param
   const historyQuery = useMemo(() => {

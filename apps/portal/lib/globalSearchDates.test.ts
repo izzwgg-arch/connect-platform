@@ -13,3 +13,13 @@ test("call links handle eastern timezones, year boundaries and daylight savings"
 test("invalid date links cannot create invalid call filters", () => {
   for (const value of ["", "wrong", "2026-02-31", "2026-13-01"]) assert.equal(searchDayRange(value), null);
 });
+
+test("call deep links override the initial Today preset and reset conflicting filters", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../app/(platform)/calls/page.tsx", import.meta.url), "utf8");
+  const preset = source.indexOf("}, [datePreset]);");
+  const link = source.indexOf("useSearchNavigation(url => {");
+  assert.ok(preset >= 0 && link > preset);
+  const handler = source.slice(link, source.indexOf("// Build API query", link));
+  for (const expected of ['setDatePreset("custom")', 'setActiveTab("all")', 'setDirectionFilter("all")', 'setHasRecording("all")']) assert.ok(handler.includes(expected));
+});

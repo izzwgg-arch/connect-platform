@@ -31445,16 +31445,6 @@ app.get("/calls/history", async (req, reply) => {
     ];
   }
 
-  // Search reuses every access/date/filter clause above, without report totals or PBX enrichment.
-  if (query.searchOnly === "1") {
-    const rows = await db.connectCdr.findMany({
-      where, orderBy: { startedAt: "desc" }, take: 8,
-      select: { id: true, linkedId: true, fromName: true, fromNumber: true, toNumber: true, startedAt: true },
-    });
-    return { items: rows.map(row => ({ rowId: row.id, callId: row.linkedId || row.id,
-      fromName: row.fromName, fromNumber: row.fromNumber, toNumber: row.toNumber, startedAt: row.startedAt.toISOString() })) };
-  }
-
   const skip = (query.page - 1) * query.pageSize;
   const select = {
         id: true,
@@ -31588,6 +31578,12 @@ app.get("/calls/history", async (req, reply) => {
     db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),
     db.connectCdr.count({ where: { ...where, direction: "internal" } }),
   ]);
+  }
+
+  // Return lightweight search metadata only AFTER all tenant, extension and linked-SIP visibility filters.
+  if (query.searchOnly === "1") {
+    return { items: rows.slice(0, 8).map(row => ({ rowId: row.id, callId: row.linkedId || row.id,
+      fromName: row.fromName, fromNumber: row.fromNumber, toNumber: row.toNumber, startedAt: row.startedAt.toISOString() })) };
   }
 
   const extensionCandidates = Array.from(new Set(
