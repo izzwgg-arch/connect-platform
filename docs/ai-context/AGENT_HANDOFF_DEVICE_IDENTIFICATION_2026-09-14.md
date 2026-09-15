@@ -687,6 +687,46 @@ via the PBX helper/panel contract); (2) productionize the GDMS `device/config/xm
 ([[gdms-openapi-provisioning-spec]]) and wire it as the wizard's delivery step (render → push →
 reboot); (3) tests + deploy; (4) the hands-off proof: factory phone, wizard run, registers untouched.
 
+## 10n. Round 15 (2026-09-15) — BUILDING THE WIZARD TO DO IT: GDMS delivery in the client, clean per-model templates, chooseTemplate preference
+
+Izzy: "I want the WIZARD to do it, not you." So the manual fixes became product. Three pieces:
+
+✅ **A — GDMS cloud config-push in the client (`f968b531`).** `GdmsClient.pushDeviceConfigXml`
+(multipart: `mac` field + `xml` FILE part) signed by the new `gdmsFormSignature` (all params
+sorted, file value = md5(bytes); a JSON body is refused "bad signature"). `GrandstreamProvider.
+pushConfig(mac, xml)` delivers a rendered gs_provision config to a claimed device over the cloud.
+The pre-existing `pushConfig(mac)` interface stub upgraded to `(mac, xml)`. Simulator accepts the
+upload + verifies the form signature. 37/37 provider tests.
+
+✅ **B — clean per-model templates + `chooseTemplate` preference (`ba62cfec` + a PBX seed).** The
+root cause was that the only shared GXP2170 templates were Create A Box's, hand-hardcoded to their
+VPN server. FIX in two halves: (1) CODE — `PbxTemplate.generic` (the `loopcom_clean_` unique_name
+marker, read by the writer); `chooseTemplate` now prefers own → CLEAN generic → any shared. 34/34
+shared tests. (2) DATA — seeded **61 clean shared templates, one per Grandstream model**, from
+VitalPBX's OWN stock bases (`/var/lib/vitalpbx/provisioning/base_templates/grandstream/<slug>/
+template.cfg` — placeholder server `{{ $accounts[0]['sip_domain'] }}`, zero VPN), named `<MODEL>`,
+`unique_name=loopcom_clean_<model_id>`, keys blanked. Model→id map from `provisioning.phone_models`
+(lower(model)==slug). ⛔ HT814 skipped (its stock base uses a different placeholder — no sip_domain).
+Backups `/root/grandstream-template-seed-<stamp>/`. So every Grandstream model now has a clean
+default the picker prefers, for any tenant — Izzy's "one template per model."
+
+⛔⛔ **SEED SCRIPT TRAPS (both cost a rerun):** `keys` is NOT NULL (blank it to
+`{"fixed_vpk_keys":{},"dynamic_vpk_keys":{}}`, never NULL); a ~500KB `UNHEX('<hex>')` UPDATE must go
+over STDIN, never argv ("Argument list too long"). And the marker-alignment for the pre-existing
+template 60 ran AFTER the loop, so the gxp2170 iteration made a DUPLICATE loopcom_clean_64 (105) —
+deleted; device 78 stays on 60. Verify markers are unique after any reseed.
+
+⏳ **C — NOT BUILT: wire the GDMS push as the wizard's SEND step.** Today the wizard still delivers
+via the PnP resident / `set_provisioning` (LAN) — which now works because the phoneprov config is
+correct. The durable, LAN-independent send is to call `provider.pushConfig(mac, renderedXml)` from
+the server-side `/prepare` flow (render the phoneprov cfg → push → reboot). deviceMechanismsFor +
+/prepare + the driver + tests. That is the last piece for "send it from the cloud, every time."
+
+✅ **NET:** A+B DEPLOYED (api at `ba62cfec`). The wizard now produces a CORRECT config for any
+Grandstream model via clean templates, and can deliver it over the cloud (mechanism built). A
+hands-off wizard run on a factory phone is the proof still owed. Device 24 (65:4E) — rebind to a
+clean template too (or let a fresh wizard run do it now that chooseTemplate is fixed).
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
