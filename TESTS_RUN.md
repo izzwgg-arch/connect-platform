@@ -3,7 +3,8 @@
 ## Face-to-face AI Support mockup — 2026-09-15
 
 - Static fragment/assets check passed for `talk-to-ai-support.html`: 29,338 bytes, under 1 MB; correct root; no document wrapper or escaped markup; all three generated avatar assets and critical live-call, admin and transfer states are referenced.
-- Updated Concept A image was inspected after its approved tie-removal and Loopcom-infinity-pin edit; `concept-a.png` remains the asset referenced by the review mockup.
+- Updated Concept A image was inspected after its tie-removal and Loopcom-infinity-pin edit; this now-superseded avatar draft remains historical review material only.
+- Scope correction review: `talk-to-laybel.html` static fragment check passed at 9,907 bytes; no document wrapper or escaped markup; it contains the `Talk to Laybel` row and local start/end voice-state controls. It uses no avatar asset or provider integration.
 - The visualization wrapper rendered successfully.
 - Not run: application tests, production build, deploy, provider integration, LiveKit/avatar session, real browser visual acceptance, or any customer/PBX/remote-support operation. Chrome review was blocked by file-URL policy; no bypass attempted.
 

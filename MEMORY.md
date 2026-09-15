@@ -10,7 +10,7 @@ Every time Izzy gives an agent a task:
 
 The agent entry point `AGENTS.md` and `CLAUDE.md` both carry this rule so future sessions can recover it from disk.
 
-Face-to-face AI Support (2026-09-15): approved mockup direction only; no production code, deploy or policy change. Concept A is the selected look: adult male professional representative, open white collar/no tie and blue/cyan Loopcom infinity lapel pin. The existing Loopcom Assistant remains the only brain/tool/context authority. Recommended pilot is existing self-hosted LiveKit transport plus Anam as a visual avatar-track publisher, with a minimal transport adapter; preserve existing remote-support consent and human-escalation paths. Review artifact and remaining decision gates: `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`.
+Talk to Laybel (2026-09-15): review mockup only; no production code, deploy or policy change. The owner explicitly superseded the avatar/video concept: preserve the existing Loopcom `FloatingAssistant` appearance exactly, and add only a `Talk to Laybel` voice option. Laybel is the same existing Assistant—not a new model, context/tool system, avatar, video product, provider integration, or support surface. Do not revive the prior LiveKit/Anam/portrait exploration without a new explicit request. Review artifact and boundary: `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`.
 
 Profile menu review (2026-09-14): mockup only, not implementation approval. Preserve browser mute versus extension DND scope and the exact label “Include transcription in email.” Explain unassigned-extension greeting controls and avoid treating default Available presence as proven call readiness. See profile-menu design handoff.
 
