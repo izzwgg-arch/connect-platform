@@ -59,6 +59,8 @@ Browser Companion alternatives review (2026-09-14): distinguish assistant-tool U
 
 Browser Companion Playwright implementation (2026-09-15): Loopcom now launches installed Chrome in its own Loopcom Coworker profile through Playwright Core, with normalized tools, conversation tab fences, one-use state-bound approvals and workspace artifact limits. It never reads ordinary Chrome tabs or sessions. Local headless installed-Chrome test and clean NSIS payload/icon checks pass; candidate is not installed, published or live-chat accepted. Do not call this an existing-session feature or production-ready. See `docs/ai-context/AGENT_HANDOFF_BROWSER_COMPANION_2026-09-14.md`.
 
+Browser Companion installation (2026-09-15): owner approved the GitHub push and local installer. `3b414de0` is on the shared remote branch and the verified NSIS candidate was installed/restarted at the regular Loopcom path. The installed ASAR was inspected and contains the Playwright runtime/core and branded settings page. A targetable Loopcom window was unavailable to the desktop-control service after restart, so installed live-chat/provider acceptance remains unproven.
+
 ## Universal search — 2026-09-14
 
 Use the live navigation catalog and authoritative custom permissions. Every record provider must preserve its own tenant/ownership/role rules; search cannot widen access. See `docs/ai-context/AGENT_HANDOFF_UNIVERSAL_SEARCH_2026-09-14.md`. Core rule remains: read CLAUDE.md fresh at task start and update area docs, index and memory before finishing.
