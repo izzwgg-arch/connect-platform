@@ -144,21 +144,34 @@ c=/port were the PBX's own, and SignalWire ACCEPTED it with 200 OK, rejecting no
    `m=audio 0 RTP/AVP 19`). Zero live streams → Asterisk sends
    **BYE `Reason: Q.850;cause=58`** 44 ms after its own ACK. Call dead.
 
-**THE FIX (not yet applied): align encryption on trunk 132 — pick ONE:**
-1. **SignalWire dashboard:** set the SIP endpoint `loopcom-pbx`'s Encryption to
-   optional/off, so its INVITEs offer plain `RTP/AVP`. No PBX change at all.
-   Cleanest; needs the SignalWire portal (Izzy's Chrome session).
-2. **PBX-side SRTP:** set trunk 132's Media Encryption to SRTP (SDES) so both sides
-   speak SAVP+crypto honestly. ⛔ Do this through the VitalPBX panel trunk settings —
-   NOT by hand-editing the generated `pjsip__50-1-trunks.conf` (regen reverts), and
-   ⛔ NOT via a `[loopcom-pbx](+)` append in a custom pjsip file: FOUR sections share
-   that name (endpoint/aor/identify/registration) and a (+) append can land on the
-   wrong one and break the trunk's registration.
-Prove either with ONE real answered call that stays up (pcap or `cel`: no cause-58
-BYE, BRIDGE_ENTER without same-second BRIDGE_EXIT).
+**✅ THE FIX IS APPLIED (11:05 ET 2026-09-15, Izzy's "You do it"): trunk 132 now
+speaks SRTP (`media_encryption=sdes`).** What was learned applying it:
 
-⛔ MIGRATION-BOARD BLOCKER: any number ported to SignalWire drops every answered call
-until this encryption alignment is done.
+- ⛔ **The SignalWire dashboard CANNOT turn encryption off.** The `loopcom-pbx` SIP
+  Credential (resource d70efe1e-…, loopcom.signalwire.com → My Resources) offers only
+  Use Default / Required / **Optional — and it was ALREADY on Optional**: "Optional"
+  still OFFERS `RTP/SAVP` + crypto on every INVITE. A dashboard-only fix is a dead end.
+- SignalWire offers exactly ONE suite, `AEAD_AES_256_GCM_8` (every captured INVITE);
+  this Asterisk's `res_srtp.so` supports it (`aes_gcm_256_8_auth` symbols, libsrtp2).
+- **Mechanism (regen-safe):** new file `/etc/asterisk/pjsip__60_custom.conf` holding
+  `[loopcom-pbx](+)` + `media_encryption=sdes`, included by a
+  `#include pjsip__60_custom.conf` line appended to `/etc/asterisk/pjsip.conf` — the
+  same convention as `extensions__60_custom.conf` (root pjsip.conf is not VitalPBX-
+  regenerated; backup `pjsip.conf.bak.signalwire-srtp.<ts>`). Then
+  `module reload res_pjsip.so`.
+- ✅ **The `(+)` append lands on the ENDPOINT (first section wins), verified live:**
+  four sections share the name `[loopcom-pbx]` (endpoint/aor/identify/registration)
+  and after reload the endpoint shows `media_encryption: sdes` with codecs intact,
+  the registration is Registered, the AOR contact Avail (RTT 21 ms), and the identify
+  present. Rollback = delete the include line + the file, reload.
+- ⏳ **NOT PROVEN YET: no bridged answered call since the flip.** Proof = one real
+  answered call on 3064 that stays up (cel: BRIDGE_ENTER without a same-second
+  BRIDGE_EXIT/cause-58 BYE), plus the pcap showing Asterisk's 200 OK now carrying
+  a=crypto in its SAVP m-line.
+
+⛔ MIGRATION-BOARD NOTE: any future SignalWire trunk endpoint must carry
+`media_encryption=sdes` (or SignalWire must stop offering SAVP) or every answered
+call drops.
 
 ## §7 TEST v2 — moved to (845) 782-3064 (Izzy, 10:45 ET 2026-09-15)
 

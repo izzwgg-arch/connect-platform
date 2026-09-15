@@ -40,8 +40,12 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_APLUS_DAY_TEST_2026-09
   `*.bak.signalwire-aplus-rollback.*`. ⏳ real-call proof pending the next inbound.
 - **TEST v2 IS ON (845) 782-3064 NOW** (same two edits, exact exten `8457823064`,
   loaded-dialplan verified; inbound route rings ext 108; backup
-  `*.bak.signalwire-aplus3064-test.*`). ⛔ Answered calls on 3064 WILL STILL DROP until
-  the encryption mismatch is fixed — one SignalWire-dashboard toggle (endpoint
-  encryption off/optional) or SRTP on trunk 132 PBX-side. §6/§7 of the handoff.
-  ⛔ Migration-board blocker either way: fix the encryption alignment before porting
-  any number to SignalWire.
+  `*.bak.signalwire-aplus3064-test.*`).
+- ✅ **THE SRTP FIX IS APPLIED (11:05 ET): trunk 132 endpoint now `media_encryption=
+  sdes`** via new regen-safe `/etc/asterisk/pjsip__60_custom.conf` (+ include line in
+  root pjsip.conf; endpoint/registration/aor/identify all verified intact after
+  reload). ⛔ The SignalWire dashboard CANNOT disable encryption — the endpoint was
+  ALREADY on "Optional" and still offers SAVP+crypto (sole suite AEAD_AES_256_GCM_8,
+  supported by this Asterisk). ⏳ NOT PROVEN: no bridged answered call since the flip —
+  proof is one answered 3064 call that stays up. §6/§7 of the handoff.
+  ⛔ Migration-board rule: every SignalWire trunk endpoint needs `media_encryption=sdes`.
