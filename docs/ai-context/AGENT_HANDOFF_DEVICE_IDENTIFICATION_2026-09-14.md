@@ -612,6 +612,41 @@ push in gdmsClient (multipart + form signature above) + provider + wiring + simu
 push the corrected config via GDMS, watch T21_101 register from the phone's LAN IP; (4) lock it with
 a repeatable factory-reset→register test. Only then is "every Grandstream, flawlessly" earned.
 
+## 10l. Round 13 (2026-09-15) — phone REGISTERED via the GDMS push (transiently); root cause = no public GXP2170 template
+
+Izzy authorized the writes ("do the writes"). Did them, and got the real registration — briefly.
+
+✅ **The GDMS push + a corrected SIP server REGISTERED the phone.** Fetched the phoneprov cfg,
+substituted 10.8.0.1 → 209.145.60.79 (×13), pushed via `device/config/xml` (retCode 0), GDMS reboot
+task accepted. The phone applied it and **registered as `T21_101` to 209.145.60.79, contact went
+`Avail`** (proven at 13:43Z). End-to-end proof: GDMS cloud delivery + correct config = a registered
+Grandstream, no LAN/password.
+
+⛔ **But it did NOT stay registered — it flaps.** Minutes later the `T21_101/` desk contact was gone
+(only the `_1` app contact left). Cause: the phone's P237 still points at phoneprov, and phoneprov
+**regenerates the cfg on every request** from the shared Create A Box template (10.8.0.1). So on its
+provisioning re-pull the phone reverts to 10.8.0.1 and de-registers. The GDMS-pushed good config wins
+only until the next phoneprov pull.
+
+⛔⛔ **ROOT CAUSE (exact): there is NO public GXP2170 template.** `provisioning.templates` for model
+64 (GXP2170) has only id 15 ("gxp2170 102") and id 16 ("Gxp 106") — BOTH tenant 1, shared=yes, both
+carrying Create A Box's VPN server 10.8.0.1. `chooseTemplate` (packages/shared provisioningRecord.ts)
+finds no tenant-owned template for Landau, falls back to the first shared one (id 15) → 10.8.0.1.
+So EVERY GXP2170 provisioned for a non-CAB tenant through this PBX gets the VPN server. (The 3
+templates that correctly use 209.145.60.79 are for OTHER models.) ⛔ Editing template 15/16 is
+FORBIDDEN — Create A Box's live phone uses them.
+
+**The durable fix (NOT done — needs design + test, not a 2am live hack):** one of — (a) create a
+public GXP2170 template (server 209.145.60.79, no CAB hardening) and have `chooseTemplate` prefer a
+non-VPN template for public tenants; and/or (b) productionize the GDMS `device/config/xml` push in
+gdmsClient (multipart + form signature, memory [[gdms-openapi-provisioning-spec]]) AND repoint the
+phone's P237 to GDMS so GDMS is the sole config source and the phoneprov re-pull can't revert it;
+then a repeatable factory-reset→register test. Until then, no GXP2170 registers STABLY from provisioning.
+
+⚠️ **Phone state:** currently flapping / not stably registered, web+ping off (CAB hardening in the
+pushed cfg). Clean recovery = physical factory reset (hold OK ~10 s) or a GDMS factory-reset task.
+Left to Izzy — no more blind config pushes.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
