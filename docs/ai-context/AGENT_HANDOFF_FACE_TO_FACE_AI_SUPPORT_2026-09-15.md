@@ -2,33 +2,27 @@
 
 ## Status
 
-**Mockup phase approved. Concept A is the approved visual direction.** No production code was added; no deployment, database migration, PBX interaction, provider account, model, knowledge base, tool registry, customer-context service, policy, or retention setting was changed. Approval of the visual direction is not approval to procure a provider or build/release the feature.
+**The earlier avatar/video direction is superseded.** The owner clarified that the AI must look exactly like the existing Loopcom Assistant. The only requested addition is a **“Talk to Laybel”** option, where Laybel is the name for the same Assistant when speaking by voice. No production code was added; no deployment, database migration, PBX interaction, provider account, model, knowledge base, tool registry, customer-context service, policy, retention setting, avatar, or video feature was changed or approved.
 
-The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. The video avatar is a visual body only; this work honors that constraint.
+The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. Laybel is only the voice-mode name for that existing Assistant; this work honors that constraint.
 
 ## Review artifact
 
-Interactive review mockup (outside the repository, durable task visualization folder):
+Current interactive review mockup (outside the repository, durable task visualization folder):
 
-`C:/Users/izzyw/.codex/visualizations/2026/09/15/01a0a601-3008-7cd3-af27-85b8c7495b42/ai-support-review/talk-to-ai-support.html`
+`C:/Users/izzyw/.codex/visualizations/2026/09/15/01a0a601-3008-7cd3-af27-85b8c7495b42/ai-support-review/talk-to-laybel.html`
 
 It includes:
 
-- Assistant landing screen and Chat / Call / Video Call / Human selector.
-- Incoming AI call preview and camera/microphone next step.
-- Live AI video screen with mute, camera, speaker, end, screen share, captions, transcript, visible current task, diagnostics states, chat, actions and human escalation.
-- Idle/listening/diagnostic/screen-share/escalating/disconnected state switcher; the disconnected state keeps voice and context alive.
-- Explicit screen-share / remote-control consent frame. It does not imply a new permission or bypass existing remote-support gates.
-- Resolution summary, human transfer package, ticket/timeline outcome and graceful reconnect copy.
-- Admin Studio mockup for avatar/voice/greeting/personality/language/escalation/screen-share/diagnostics/hours/queue/background/branding/captions/recording/retention; every setting is visual only.
-- Three male avatar concepts shown within the real call layout, not as standalone portraits:
-  - **A (approved direction):** professional Hasidic-looking adult male representative with subtle AI treatment, natural open white shirt collar (no tie), and a small polished blue/cyan Loopcom infinity lapel pin;
-  - **B:** clearly robotic, male-coded character with respectful Hasidic-inspired cues;
-  - **C:** stylized illustrated male Hasidic AI assistant.
+- The same dark Assistant panel, header, greeting, suggestions, report/suggest actions, `Type or talk…` composer, and footer customers already recognize.
+- A single, deliberately leading row: **Talk to Laybel** — “Speak with the same Assistant by voice.”
+- A local mock voice state showing that Laybel keeps the existing Assistant conversation and page context. It deliberately shows no portrait, avatar, video call, new support console, or provider branding.
 
-Generated concept assets are in the same review folder as `concept-a.png`, `concept-b.png`, and `concept-c.png`. Concept A was revised and approved on 2026-09-15; it is still non-production concept art, not a licensed/production avatar asset.
+The earlier `talk-to-ai-support.html` and `concept-a.png`/`concept-b.png`/`concept-c.png` remain historical review material only. Do not reuse them as an approved design or implementation brief.
 
-## Recommended architecture
+## Superseded architecture exploration
+
+The following LiveKit/avatar assessment is retained as historical research only. It is **not** the approved scope and must not be used to start a provider evaluation, procurement, implementation, or deployment. The approved direction is the existing Assistant with a single voice-mode option.
 
 ```text
 Loopcom Assistant (existing brain)
@@ -89,28 +83,22 @@ For the recommended avatar layer, use time-connected rather than talking time: A
 6. **Failure is graceful.** Video loss degrades to the existing voice or text experience; no fresh conversation, tool loss or silent session death.
 7. **Policy remains existing policy.** Recording is off unless explicitly approved; any enabled recording must be visibly disclosed and governed by retention/audit controls. PBX mutation safeguards remain fully in force.
 
-## Implementation plan after approval (not authorized yet)
+## If implementation is later authorized
 
-1. **Decision gate:** approve avatar A/B/C direction, visual disclosure, voice, pilot provider, recording/retention stance, live session cap, and human escalation rules.
-2. **Feasibility spike:** build an isolated internal demo room using existing LiveKit plus provider sandbox; prove audio/video synchronization, barge-in, reconnect, captions and a strict no-data-leak message contract. No customer exposure.
-3. **Adapter:** introduce a minimal video-support session adapter that uses existing authenticated identity, assistant conversation, tool calls, speech output and escalation writer. Source guards should prohibit a new model client/knowledge-base/tool registry.
-4. **Customer UI:** port the approved mockup into the existing Assistant/Support area, including navigation and permission coverage required by the project rule. Do not create a Coworker page or separate support product.
-5. **Remote-support bridge:** surface existing consent prompts and structured diagnostics, never pixels-as-a-tool. Run-screen tool/context requires explicit per-session customer approval.
-6. **Admin configuration:** implement only approved settings with explicit roles, audit and safe defaults. No fake toggles that the runtime cannot honor.
-7. **Acceptance/security:** two-human/two-machine sessions; normal and constrained networking; voice-only fallback; tenant isolation; screen-share/control negatives; data-transfer inspection; human transfer no-repeat test; recording disclosure/retention test; container/deploy evidence.
+1. Preserve `FloatingAssistant`; do not create an Assistant replacement, separate app/page, avatar, or video interface.
+2. Add exactly one customer-facing choice labelled **Talk to Laybel** and connect it to the same existing Assistant conversation, tenant context, tools, transcript, escalation, and permission checks.
+3. Decide the existing voice transport/lifecycle and explicit disclosure requirements before writing runtime code. Do not infer a provider or introduce one from the superseded research.
+4. Test that chat, voice, context continuity, and human escalation remain one conversation; then follow normal navigation/permission, deployment, and container-verification rules.
 
 ## Verification performed for this mockup phase
 
 - Read the relevant Assistant, Technical Support Console, Meetings, Remote Support Hardening and Remote Support engine handoffs before proposing the change.
 - Generated the three requested review-only avatar directions with the built-in image-generation flow; generated assets were displayed inline.
-- Revised Concept A with the same built-in image-generation flow; inspection confirmed the tie is absent and the small Loopcom infinity lapel pin is present. The approved review image replaced `concept-a.png` so the mockup uses it.
+- Revised Concept A with the same built-in image-generation flow; inspection confirmed the tie is absent and the small Loopcom infinity lapel pin is present. That then-selected draft replaced `concept-a.png`; it is now superseded by the owner's no-avatar correction.
 - Static mockup validation passed: 29,338-byte HTML fragment, under the 1 MB visualization limit; correct root; no document wrapper; no escaped markup; all three avatar assets and critical state/admin/transfer strings present.
 - Rendering wrapper was generated successfully. A Chrome manual visual check could not proceed because browser automation rejects local `file:` URLs. No workaround was attempted. Therefore **browser visual acceptance is not proven**.
+- Owner correction received after that review: replace the avatar/video concept with the existing Assistant visual and one `Talk to Laybel` voice row. New review fragment static validation passed: 9,907 bytes, no document wrapper or escaped markup; the row and local start/end voice-state controls are present.
 
-## Decisions still required before implementation
+## Current boundary
 
-- Whether the avatar needs a visible "AI" disclosure badge/watermark in addition to voice introduction.
-- Pilot provider: recommended Anam + existing LiveKit, or another evaluated option.
-- Voice direction and greetings.
-- Recording/retention policy and third-party data-processing terms.
-- Pilot audience and maximum session length/concurrency budget.
+The requested deliverable is the review mockup only. Do not deploy or implement the voice option until the owner explicitly asks to proceed.
