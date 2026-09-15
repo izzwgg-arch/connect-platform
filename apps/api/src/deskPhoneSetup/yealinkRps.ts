@@ -17,7 +17,7 @@ export function strictMac(input: string): string {
   return mac;
 }
 export type RpsDevice = { id: string; mac: string; serverId?: string | null; uniqueServerUrl?: string | null; authName?: string | null };
-export type RpsAssignment = { mac: string; serverId: string; uniqueServerUrl: string; authName: string; password: string };
+export type RpsAssignment = { mac: string; serialNumber: string; serverId: string; uniqueServerUrl: string; authName: string; password: string };
 export interface RpsAdapter {
   readonly mode: "live" | "disabled" | "test";
   assign(input: RpsAssignment): Promise<{ state: "assigned" | "pending_credentials"; id?: string }>;
@@ -104,9 +104,19 @@ export class YealinkRpsClient implements RpsAdapter {
     });
   }
   deviceDetail(id: string) { return this.call<RpsDevice>("GET", `rps/devices/${encodeURIComponent(id)}`); }
-  addDevices(input: Omit<RpsAssignment, "mac"> & { macs: string[] }) {
-    const { macs, ...rest } = input;
-    return this.call<unknown>("POST", "rps/addDevicesByMac", macs.map(mac => ({ mac: strictMac(mac), ...rest })));
+  /**
+   * ⛔ Our YMCS account is FORBIDDEN from adding a device by MAC alone
+   * (`addDevicesByMac` → 403 "This request is forbidden", proven live 2026-09-15).
+   * Yealink requires the serial number as proof of possession before it will
+   * claim a MAC into an RPS account — the anti-hijack guarantee. So we add one
+   * device with its SN via `POST /v2/rps/devices` (returns 201), which accepts
+   * and persists our per-device `uniqueServerUrl` + `authName` (proven live).
+   */
+  addDevice(input: RpsAssignment) {
+    return this.call<RpsDevice>("POST", "rps/devices", {
+      mac: strictMac(input.mac), sn: input.serialNumber, serverId: input.serverId,
+      uniqueServerUrl: input.uniqueServerUrl, authName: input.authName, password: input.password,
+    });
   }
   deleteDevices(ids: string[]) { return this.call("POST", "rps/delDevices", { deviceIdType: "id", deviceIds: ids }); }
   /**
@@ -132,16 +142,16 @@ export class YealinkRpsClient implements RpsAdapter {
   }
   async assign(input: RpsAssignment) {
     const mac = strictMac(input.mac);
+    // Fail before any network call: RPS cannot claim a MAC without its serial.
+    if (!input.serialNumber) throw new DeviceError("serial_number_required", 400);
     const current = await this.owned(mac);
     if (current) {
       if (strictMac(current.mac) !== mac || current.serverId !== input.serverId || current.uniqueServerUrl !== input.uniqueServerUrl || current.authName !== input.authName)
         throw new DeviceError("rps_assignment_conflict_requires_release");
       return { state: "assigned" as const, id: current.id };
     }
-    const { mac: ignored, ...assignment } = input;
-    await this.addDevices({ ...assignment, macs: [mac] });
-    // An accepted write is not proof of assignment (a batch can refuse a row
-    // inside a 200). Read it back, including after retries.
+    await this.addDevice({ ...input, mac });
+    // An accepted write is not proof of assignment. Read it back, incl. after retries.
     const after = await this.owned(mac);
     if (!after || after.serverId !== input.serverId || after.uniqueServerUrl !== input.uniqueServerUrl || after.authName !== input.authName)
       throw new DeviceError("rps_assignment_not_verified", 502);

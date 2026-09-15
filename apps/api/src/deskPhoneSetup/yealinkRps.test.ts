@@ -55,18 +55,28 @@ test("BLF keys never exceed the model's physical line keys", () => {
   assert.doesNotMatch(t31, /linekey.3\./);
 });
 
-const assignment = { mac: "805ec0112233", serverId: "server", uniqueServerUrl: "https://example.com/provision/", authName: "phone", password: "test-only" };
+const assignment = { mac: "805ec0112233", serialNumber: "SN-TEST-0001", serverId: "server", uniqueServerUrl: "https://example.com/provision/", authName: "phone", password: "test-only" };
 test("RPS reconciles success after timeout without duplicate add; rejects other ownership/assignment", async () => {
   const fake = new RpsSimulator(); const client = fake.client(); fake.failNext = "timeout_after_add";
   await assert.rejects(client.assign(assignment), /retry_to_reconcile/);
   assert.equal((await client.assign(assignment)).state, "assigned");
-  assert.equal(fake.calls.filter(p => p === "rps/addDevicesByMac").length, 1);
+  assert.equal(fake.calls.filter(p => p === "rps/devices").length, 1);
   await assert.rejects(client.assign({ ...assignment, serverId: "different" }), /conflict/);
   fake.foreign.add("805ec0112234");
   await assert.rejects(client.assign({ ...assignment, mac: "805ec0112234" }), /ownership_conflict/);
   await client.release(assignment.mac, assignment.serverId, assignment.uniqueServerUrl);
   await client.release(assignment.mac, assignment.serverId, assignment.uniqueServerUrl);
   assert.equal(fake.devices.size, 0);
+});
+test("assign requires a serial and uses the SN device endpoint, never the forbidden MAC-only add", async () => {
+  const fake = new RpsSimulator(); const client = fake.client();
+  // No serial → refused before any network call (RPS forbids a MAC-only claim).
+  await assert.rejects(client.assign({ ...assignment, serialNumber: "" }), /serial_number_required/);
+  assert.equal(fake.calls.length, 0);
+  // With serial → SN-based add (rps/devices, 201), never rps/addDevicesByMac (403).
+  assert.equal((await client.assign(assignment)).state, "assigned");
+  assert.equal(fake.calls.filter(p => p === "rps/devices").length, 1);
+  assert.equal(fake.calls.filter(p => p === "rps/addDevicesByMac").length, 0);
 });
 test("checkMac reports our devices; a foreign MAC is honestly unknown until an add is attempted", async () => {
   const fake = new RpsSimulator(); const client = fake.client();

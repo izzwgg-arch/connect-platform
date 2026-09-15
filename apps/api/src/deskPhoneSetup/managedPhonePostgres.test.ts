@@ -22,7 +22,7 @@ test("real PostgreSQL: migration, advisory-lock claims, unique MAC, rollback and
     const mac = "80" + randomUUID().replace(/-/g, "").slice(0, 10);
     const sip = async () => ({ endpoint: "T21_101", username: "T21_101", authName: "T21_101", password: "test-only", server: "example.invalid", port: 5060, transport: "UDP", label: "101", displayName: "Test", blf: [] });
     const service = new ManagedPhoneService(new YealinkProvider(new DisabledRps()), database, sip, () => "https://example.invalid/api/phone-provisioning/", () => "");
-    const input = { mac, model: "T53W", extensionId: extension.id };
+    const input = { mac, serialNumber: "SN-PG-0001", model: "T53W", extensionId: extension.id };
     const results = await Promise.all([service.provision(actor, input, "one"), service.provision(actor, input, "two")]);
     assert.equal(results[0].id, results[1].id);
     assert.equal(await database.managedDeskPhone.count({ where: { macAddress: mac } }), 1);

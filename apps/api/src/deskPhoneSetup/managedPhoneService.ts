@@ -54,8 +54,12 @@ export class ManagedPhoneService {
     if (!row) throw new DeviceError("device_not_found", 404);
     return row;
   }
-  async provision(actor: Actor, input: { mac: string; model: string; extensionId: string; nickname?: string; displayName?: string; options?: DeviceConfigOptions; replacesId?: string }, requestId: string) {
+  async provision(actor: Actor, input: { mac: string; serialNumber: string; model: string; extensionId: string; nickname?: string; displayName?: string; options?: DeviceConfigOptions; replacesId?: string }, requestId: string) {
     const mac = strictMac(input.mac); this.provider.validateModel(input.model);
+    // ⛔ Yealink RPS refuses a MAC-only claim (403). The serial is proof of
+    // possession and is mandatory for the zero-touch (RPS) assignment.
+    const serialNumber = String(input.serialNumber || "").trim();
+    if (!serialNumber) throw new DeviceError("serial_number_required", 400);
     // Persist identity + unique secrets before contacting RPS. A timed-out remote
     // write can then be reconciled with exactly the same URL and credentials.
     const device = await this.lock(mac, async tx => {
@@ -75,7 +79,7 @@ export class ManagedPhoneService {
       const row = await tx.managedDeskPhone.create({ data: {
         macAddress: mac, tenantId: actor.tenantId, extensionId: input.extensionId,
         manufacturer: this.provider.manufacturer, model: input.model, endpoint: sip.endpoint,
-        nickname: input.nickname || null, displayName: input.displayName || null, options: input.options || {},
+        serialNumber, nickname: input.nickname || null, displayName: input.displayName || null, options: input.options || {},
         secretsEncrypted: encryptJson(secrets), replacesId: input.replacesId || null,
         createdBy: actor.sub, updatedBy: actor.sub,
       } });
@@ -94,7 +98,7 @@ export class ManagedPhoneService {
       let state: string; let remoteId: string | undefined; let error: string | null = null;
       try {
         const secret = decryptJson<Secrets>(row.secretsEncrypted);
-        const out = await this.provider.rps.assign({ mac: row.macAddress, serverId: this.serverId(), uniqueServerUrl: this.url(row.macAddress), authName: row.macAddress, password: secret.provisioningPassword });
+        const out = await this.provider.rps.assign({ mac: row.macAddress, serialNumber: row.serialNumber || "", serverId: this.serverId(), uniqueServerUrl: this.url(row.macAddress), authName: row.macAddress, password: secret.provisioningPassword });
         state = out.state; remoteId = out.id;
       } catch (e) { error = e instanceof DeviceError ? e.code : "rps_service_unavailable"; state = error.includes("conflict") ? "conflict" : "failed"; }
       await tx.managedDeskPhone.update({ where: { id }, data: { rpsState: state, rpsDeviceId: remoteId, rpsServerId: state === "assigned" ? this.serverId() : row.rpsServerId, lastError: error } });

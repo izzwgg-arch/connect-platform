@@ -45,7 +45,7 @@ function memoryDatabase() {
   return { database, rows: () => rows, audits: () => audits, registrations };
 }
 const actor = { tenantId: "tenant-a", sub: "admin" };
-const input = { mac: "805ec0112233", model: "T53W", extensionId: "extension-101" };
+const input = { mac: "805ec0112233", serialNumber: "SN-INT-0001", model: "T53W", extensionId: "extension-101" };
 const base = () => "https://app.example.com/api/phone-provisioning/";
 async function fixture(live = true) {
   const memory = memoryDatabase(), rps = new RpsSimulator();
@@ -89,7 +89,7 @@ test("RPS timeout preserves encrypted credentials and retries read back remote s
   assert.equal(first.rpsState, "failed"); const envelope = f.rows()[0].secretsEncrypted;
   const second = await f.service.provision(actor, input, "b");
   assert.equal(second.rpsState, "assigned"); assert.equal(f.rows()[0].secretsEncrypted, envelope);
-  assert.equal(f.rps.calls.filter(c => c === "rps/addDevicesByMac").length, 1);
+  assert.equal(f.rps.calls.filter(c => c === "rps/devices").length, 1);
 });
 test("disabled RPS records pending credentials and never claims assignment", async () => {
   const f = await fixture(false); const d = await f.service.provision(actor, input, "a");

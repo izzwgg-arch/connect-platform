@@ -62,14 +62,16 @@ export class RpsSimulator {
       const row = [...this.devices.values()].find(d => d.id === decodeURIComponent(detail[1]));
       return row ? Response.json(row) : this.err(400, "900400", "The resource does not exist or has been deleted");
     }
-    if (path === "rps/addDevicesByMac") {
-      for (const entry of p as any[]) {
-        if (this.foreign.has(entry.mac)) return this.err(400, "800004", "Device already managed by another organization");
-        if (this.devices.has(entry.mac)) return this.err(400, "800003", "Resource already exists");
-      }
-      const made = (p as any[]).map(entry => { const d = { ...entry, id: `id-${entry.mac}` }; this.devices.set(entry.mac, d); return d; });
+    // ⛔ Our account tier is FORBIDDEN from MAC-only add (proven live: 403).
+    if (path === "rps/addDevicesByMac") return this.err(403, "900403", "This request is forbidden");
+    // SN-based add — the allowed path. Requires a serial; returns 201.
+    if (path === "rps/devices" && init.method === "POST") {
+      if (!p.sn) return this.err(400, "900400", "sn required");
+      if (this.foreign.has(p.mac)) return this.err(400, "800004", "Device already managed by another organization");
+      if (this.devices.has(p.mac)) return this.err(400, "800003", "Resource already exists");
+      const d = { ...p, id: `id-${p.mac}` }; this.devices.set(p.mac, d);
       if (this.failQueue[0] === "timeout_after_add") { this.failQueue.shift(); throw new Error("timed out after accepted"); }
-      return Response.json(made);
+      return new Response(JSON.stringify(d), { status: 201, headers: { "Content-Type": "application/json" } });
     }
     if (path === "rps/delDevices") {
       for (const [mac, d] of this.devices) if (p.deviceIds.includes(d.id) && p.deviceIdType === "id") this.devices.delete(mac);
