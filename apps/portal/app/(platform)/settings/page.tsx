@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../../hooks/useAppContext";
@@ -704,6 +705,19 @@ function BlfTab() {
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>("general");
+  useSearchNavigation(url => {
+    const next = url.hash.slice(1);
+    if (TABS.some(item => item.key === next)) setTab(next as SettingsTab);
+  });
+  useEffect(() => {
+    const syncTab = () => {
+      const next = window.location.hash.slice(1);
+      if (TABS.some(item => item.key === next)) setTab(next as SettingsTab);
+    };
+    syncTab();
+    window.addEventListener("hashchange", syncTab);
+    return () => window.removeEventListener("hashchange", syncTab);
+  }, []);
 
   return (
     <div style={{ display: "flex", height: "calc(100vh - 54px)", overflow: "hidden" }}>

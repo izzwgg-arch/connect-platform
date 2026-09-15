@@ -50,3 +50,7 @@ Profile menu release (2026-09-14 18:42 Eastern): runtime `8b866ed6` pushed; job 
 Deploy autoban (2026-09-14): a queued job without a log is an expected waiting state, never a repeated public 404. All 74 404s in the office ban were Deploy Center log polling; deployment itself succeeded. Deployed API/portal fix covers all services, pauses hidden tabs, bounds retries and labels stale status. Owner approved read-only Windows SSH exception and one-IP unblock only. Do not weaken the monitor or add an allowlist. See deploy-log-autoban handoff.
 
 Deploy-log safety release verified: API dae5a245, portal descendant 68cac2f4; live queued-log reads returned 200 and the office remained unblocked. Read both direct-deploy processes/logs and queue state before retrying: a direct release may be running even when queue runningCount is zero.
+
+## Universal search — 2026-09-14
+
+Use the live navigation catalog and authoritative custom permissions. Every record provider must preserve its own tenant/ownership/role rules; search cannot widen access. See `docs/ai-context/AGENT_HANDOFF_UNIVERSAL_SEARCH_2026-09-14.md`. Core rule remains: read CLAUDE.md fresh at task start and update area docs, index and memory before finishing.

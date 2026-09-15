@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../../hooks/useSearchNavigation";
 
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2, Mail, Plus, Search, Shield, UserCog, XCircle } from "lucide-react";
@@ -154,6 +155,7 @@ function formatDate(value: string | null) {
 export default function AdminUsersPage() {
   const { tenantId: contextTenantId, role } = useAppContext();
   const [query, setQuery] = useState("");
+  useSearchNavigation(url => { setQuery(url.searchParams.get("q") || ""); });
   const [roleFilter, setRoleFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 

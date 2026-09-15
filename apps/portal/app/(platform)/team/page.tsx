@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -636,6 +637,7 @@ export default function TeamDirectoryPage() {
 
   // Search / filter / sort
   const [rawSearch, setRawSearch] = useState("");
+  useSearchNavigation(url => { setRawSearch(url.searchParams.get("q") || ""); });
   const search = useDebouncedValue(rawSearch, 180);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("extension");

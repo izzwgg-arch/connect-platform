@@ -1,4 +1,6 @@
 "use client";
+import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
+import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -48,6 +50,7 @@ interface Voicemail {
   tenantId: string | null;
   tenantName?: string | null;
   transcription?: string | null;
+  note?: string | null;
   streamUrl?: string;
 }
 
@@ -807,6 +810,12 @@ export default function VoicemailPage() {
   const [detailPlayRequest, setDetailPlayRequest] = useState(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const searchTerm = useDebouncedValue(search.trim().slice(0, 120), 450);
+  useEffect(() => { setPage(1); }, [searchTerm]);
+  useSearchNavigation(url => { setSearch(url.searchParams.get("q") || "");
+    const folder = url.searchParams.get("folder");
+    if (folder === "inbox" || folder === "old" || folder === "urgent") setActiveTab(folder);
+    setPage(1); });
   const [extensionFilter, setExtensionFilter] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -815,10 +824,11 @@ export default function VoicemailPage() {
   const buildQuery = useCallback((folder: FolderKey) => {
     const params = new URLSearchParams({ folder, page: String(page) });
     if (contextTenantId) params.set("tenantId", contextTenantId);
+    if (searchTerm) params.set("q", searchTerm);
     // Super-admin global scope: never send tenantId=global — API rejects it; fetch is skipped until a tenant is selected.
     if (extensionFilter.trim()) params.set("extension", extensionFilter.trim());
     return params.toString();
-  }, [contextTenantId, extensionFilter, page]);
+  }, [contextTenantId, extensionFilter, page, searchTerm]);
 
   const skipFetchNoTenant = adminScope === "GLOBAL" && !contextTenantId;
 
@@ -899,7 +909,7 @@ export default function VoicemailPage() {
         if (activeTab === "urgent" && vm.folder !== "urgent") return false;
         if (activeTab === "old" && vm.folder !== "old" && !isOlderThanSevenDays(vm)) return false;
         if (query) {
-          const haystack = [vm.callerName, vm.callerId, vm.extension, vm.tenantName, vm.transcription].filter(Boolean).join(" ").toLowerCase();
+          const haystack = [vm.callerName, vm.callerId, vm.extension, vm.tenantName, vm.transcription, vm.note].filter(Boolean).join(" ").toLowerCase();
           if (!haystack.includes(query)) return false;
         }
         if (dateFilter !== "all") {

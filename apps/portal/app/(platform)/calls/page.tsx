@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { ConnectSelect } from "../../../components/ConnectSelect";
 import { EmptyState } from "../../../components/EmptyState";
@@ -942,6 +943,12 @@ export default function CallsPage() {
   const [datePreset, setDatePreset]     = useState<DatePreset>("today");
   const [startDate, setStartDate]       = useState(todayDateInput());
   const [endDate, setEndDate]           = useState(todayDateInput());
+  useSearchNavigation(url => {
+    const q = url.searchParams.get("q") || "";
+    setSearch(q); setSearchDraft(q);
+    const date = url.searchParams.get("date");
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { setStartDate(date); setEndDate(date); }
+  });
   const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pageSize, setPageSize]         = useState(100);

@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../../hooks/useSearchNavigation";
 
 import { useCallback, useMemo, useState } from "react";
 import { Hash, RefreshCw, Search, Star } from "lucide-react";
@@ -129,6 +130,7 @@ export default function AdminPhoneNumbersPage() {
   const [sourceFilter, setSourceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
+  useSearchNavigation(url => { setSearch(url.searchParams.get("q") || ""); setTenantFilter(""); setSourceFilter(""); setStatusFilter(""); });
   const [reloadKey, setReloadKey] = useState(0);
   const [settingMain, setSettingMain] = useState<string | null>(null);
   const [mainNumberOverride, setMainNumberOverride] = useState<string | null>(null);

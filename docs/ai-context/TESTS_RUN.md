@@ -1605,3 +1605,7 @@ Final release PASS: portal f2460c4f, dry run d862f0de and real job 2e769464. Pro
 - Portal `tsc -p apps/portal/tsconfig.json --noEmit` — **exit 0, clean.**
 - API `tsc -p apps/api/tsconfig.json --noEmit` — errors reported, **none in any file touched this round** (only `ops/`, `billing/`, `delivery/`, `mfa/`, `storageMaintenance/`, `apiRequestProfiler`); this matches the 84 pre-existing diagnostics recorded in the entry above. The only api file changed here is `deskPhoneSetup/deskPhoneRoutes.ts`, which reports nothing.
 - ⏳ **NOT PROVEN:** nobody has typed a serial on the extension screen in a browser, and no phone has been cleared through GDMS from one. Deployment recorded separately below/after.
+
+## 2026-09-14 — Universal search
+
+24 passing search/catalog/PBX safeguard tests via `node --import tsx --test --test-concurrency=1 apps/api/src/globalSearchRoutes.test.ts apps/portal/lib/globalSearch.test.ts apps/api/src/pbxMutationSafeguard.test.ts`. Windows tsx required execution outside the sandbox because `os.userInfo()` failed within it. Light/dark actual-component browser fixture inspected with settings/record navigation and company clearing. API full typecheck has pre-existing errors; no search-module diagnostics. See universal-search handoff for final release/typecheck evidence.

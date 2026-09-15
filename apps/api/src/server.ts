@@ -1,3 +1,4 @@
+import { registerGlobalSearchRoutes } from "./globalSearchRoutes.js";
 import { registerDeployLogRoutes } from "./deployLogRoutes.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import formbody from "@fastify/formbody";
@@ -19386,6 +19387,7 @@ app.get("/voice/voicemail", async (req, reply) => {
     // desktop notification poll — none of which send it) are byte-for-byte
     // unchanged; only a caller that ASKS for less now gets less.
     pageSize:  z.coerce.number().int().min(1).max(100).optional().default(100),
+    q: z.string().max(120).optional(),
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
@@ -19492,6 +19494,12 @@ app.get("/voice/voicemail", async (req, reply) => {
       { OR: [{ pbxRecfile: { not: null } }, { pbxMsgNum: { not: null } }] },
     ],
   };
+
+  if (q.q?.trim()) {
+    const term = { contains: q.q.trim(), mode: "insensitive" };
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      { OR: [{ callerName: term }, { callerNumber: term }, { extension: term }, { note: term }, { transcript: term }] }];
+  }
 
   const [voicemailsRaw, total, unreadTotal] = await Promise.all([
     db.voicemail.findMany({ where, orderBy: { receivedAt: "desc" }, take, skip }),
@@ -31260,6 +31268,7 @@ app.get("/calls/history", async (req, reply) => {
     status: z.enum(["all", "answered", "missed", "canceled", "failed"]).optional().default("all"),
     hasRecording: z.enum(["all", "yes", "no"]).optional().default("all"),
     search: z.string().optional(),
+    searchOnly: z.enum(["1"]).optional(),
     page: z.coerce.number().int().min(1).optional().default(1),
     pageSize: z.coerce.number().int().min(10).max(200).optional().default(100),
   }).parse(req.query || {});
@@ -31391,6 +31400,7 @@ app.get("/calls/history", async (req, reply) => {
     andClauses.push({ OR: [
       { fromNumber: { contains: normalizedSearch, mode: "insensitive" } },
       { toNumber: { contains: normalizedSearch, mode: "insensitive" } },
+      { fromName: { contains: normalizedSearch, mode: "insensitive" } },
     ] });
   }
   // Merge, never overwrite — hasRecording above may already have put clauses
@@ -31401,6 +31411,16 @@ app.get("/calls/history", async (req, reply) => {
       ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
       ...andClauses,
     ];
+  }
+
+  // Search reuses every access/date/filter clause above, without report totals or PBX enrichment.
+  if (query.searchOnly === "1") {
+    const rows = await db.connectCdr.findMany({
+      where, orderBy: { startedAt: "desc" }, take: 8,
+      select: { id: true, linkedId: true, fromName: true, fromNumber: true, toNumber: true, startedAt: true },
+    });
+    return { items: rows.map(row => ({ rowId: row.id, callId: row.linkedId || row.id,
+      fromName: row.fromName, fromNumber: row.fromNumber, toNumber: row.toNumber, startedAt: row.startedAt.toISOString() })) };
   }
 
   const skip = (query.page - 1) * query.pageSize;
@@ -38955,65 +38975,11 @@ app.get("/dashboard/activity", async (req, reply) => {
   };
 });
 
-app.get("/search/global", async (req, reply) => {
-  const user = await requirePermission(req, reply, canViewCustomers);
-  if (!user) return;
-  const query = z.object({ q: z.string().min(2) }).parse(req.query || {});
-  const q = query.q.trim();
-
-  const [customers, invoices, extensions, numbers] = await Promise.all([
-    db.customer.findMany({
-      where: {
-        tenantId: user.tenantId,
-        OR: [
-          { displayName: { contains: q, mode: "insensitive" } },
-          { primaryEmail: { contains: q, mode: "insensitive" } },
-          { primaryPhone: { contains: q, mode: "insensitive" } },
-          { whatsappNumber: { contains: q, mode: "insensitive" } }
-        ]
-      },
-      take: 20
-    }),
-    db.invoice.findMany({
-      where: {
-        tenantId: user.tenantId,
-        OR: [
-          { id: { contains: q, mode: "insensitive" } },
-          { customerEmail: { contains: q, mode: "insensitive" } },
-          { customerPhone: { contains: q, mode: "insensitive" } }
-        ]
-      },
-      take: 20
-    }),
-    db.extension.findMany({
-      where: {
-        tenantId: user.tenantId,
-        OR: [
-          { extNumber: { contains: q, mode: "insensitive" } },
-          { displayName: { contains: q, mode: "insensitive" } }
-        ]
-      },
-      take: 20
-    }),
-    db.phoneNumber.findMany({
-      where: {
-        tenantId: user.tenantId,
-        OR: [
-          { phoneNumber: { contains: q, mode: "insensitive" } },
-          { friendlyName: { contains: q, mode: "insensitive" } }
-        ]
-      },
-      take: 20
-    })
-  ]);
-
-  return {
-    q,
-    customers: customers.map((r) => ({ id: r.id, displayName: r.displayName, primaryPhone: maskValue(r.primaryPhone, 3, 2), link: `/dashboard/customers/${r.id}` })),
-    invoices: invoices.map((r) => ({ id: r.id, status: r.status, amountCents: r.amountCents, link: `/dashboard/billing/invoices/${r.id}` })),
-    extensions: extensions.map((r) => ({ id: r.id, ext: r.extNumber, label: r.displayName, link: `/dashboard/extensions` })),
-    numbers: numbers.map((r) => ({ id: r.id, phoneNumber: maskValue(r.phoneNumber, 3, 2), link: `/dashboard/numbers` }))
-  };
+registerGlobalSearchRoutes(app, {
+  db,
+  permissions: resolvePortalPermissionsWithCrmUserAccess,
+  visibility: getPortalNavVisibility,
+  tenantIds: resolveTenantIdFilterSet,
 });
 
 app.get("/billing/invoices", async (req, reply) => {

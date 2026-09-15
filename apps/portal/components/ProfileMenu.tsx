@@ -7,6 +7,7 @@ import { dndUnavailableMessage } from "./profileDnd";
 import "./profile-menu.css";
 import { useRouter } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
+import { OPEN_PERSONAL_SETTINGS_EVENT } from "../lib/globalSearch";
 import { getWebRingerEnabled, setWebRingerEnabled } from "../hooks/telephonyAudioPreferences";
 import { apiDelete, apiGet, apiPost, apiPut, apiUploadVoicemailGreeting, ApiError } from "../services/apiClient";
 import { clearAuthSession } from "../services/session";
@@ -111,6 +112,14 @@ export function ProfileMenu() {
   const [open, setOpen] = useState(false);
   const [dnd, setDnd] = useState(false);
   const [section, setSection] = useState<"quick" | "voicemail">("quick");
+  useEffect(() => {
+    const showSettings = (event: Event) => {
+      const next = (event as CustomEvent).detail?.section;
+      if (next === "quick" || next === "voicemail") { setSection(next); setOpen(true); }
+    };
+    window.addEventListener(OPEN_PERSONAL_SETTINGS_EVENT, showSettings);
+    return () => window.removeEventListener(OPEN_PERSONAL_SETTINGS_EVENT, showSettings);
+  }, []);
   const [panelStatus, setPanelStatus] = useState<"loading" | "ready" | "error">("loading");
   const [panelRetry, setPanelRetry] = useState(0);
   const [preferenceError, setPreferenceError] = useState<string | null>(null);

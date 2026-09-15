@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../../hooks/useSearchNavigation";
 
 import { useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
@@ -11,6 +12,8 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 
 export default function AdminTenantsPage() {
+  const [query, setQuery] = useState("");
+  useSearchNavigation(url => setQuery(url.searchParams.get("q") || ""));
   const [refreshKey, setRefreshKey] = useState(0);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export default function AdminTenantsPage() {
   };
 
   const rows = tenants.status === "success"
-    ? tenants.data.map((tenant, idx) => ({
+    ? tenants.data.filter(t => String(t.name).toLowerCase().includes(query.toLowerCase())).map((tenant, idx) => ({
         id: String(tenant.id || idx),
         name: String(tenant.name || "-"),
         approved: tenant.isApproved === false ? "No" : "Yes",
@@ -44,6 +47,7 @@ export default function AdminTenantsPage() {
     <PermissionGate permission="can_view_admin" fallback={<div className="state-box">You do not have tenant admin access.</div>}>
       <div className="stack compact-stack">
         <PageHeader title="Tenant Administration" subtitle="Manage tenant inventory and platform tenant context mapping." />
+        <input className="input" aria-label="Search companies" placeholder="Search companies" value={query} onChange={event => setQuery(event.target.value)} />
         {toggleError ? <ErrorState message={toggleError} /> : null}
         {tenants.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
         {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}

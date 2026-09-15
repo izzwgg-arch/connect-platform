@@ -663,3 +663,5 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Shammes AI agent / PBX M-capabilities engagement → `2026-07-26-shammes-ai-agent-pbx-m-capabilities-engagement.md`
 - Onboarding automation engagement → `2026-07-26-onboarding-automation-engagement.md`
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
+
+- 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`

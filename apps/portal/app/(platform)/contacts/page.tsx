@@ -1,4 +1,5 @@
 "use client";
+import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -441,6 +442,7 @@ export default function ContactsPage() {
   const phone = useSipPhone();
   const router = useRouter();
   const [query, setQuery] = useState("");
+  useSearchNavigation(url => { setQuery(url.searchParams.get("q") || ""); });
   const [filter, setFilter] = useState<FilterKey>("all");
   const [view, setView] = useState<ViewMode>(storedView);
   const [reloadKey, setReloadKey] = useState(0);
