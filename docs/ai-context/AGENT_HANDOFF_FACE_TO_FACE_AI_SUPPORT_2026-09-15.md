@@ -4,6 +4,8 @@
 
 **Live avatar/video scope is reopened (2026-09-15).** The owner clarified that Laybel must become a real face-to-face session: the selected portrait comes alive in a video call, the existing Loopcom Assistant remains the intelligence/orchestration layer, and the complete flow must be proven live. `Talk to Laybel` is currently only the deployed push-to-talk starting point in `apps/portal/components/FloatingAssistant.tsx`; it is not the requested finished product. The owner requested mockup review before selecting an avatar provider or activating a real session. No provider account, separate model, PBX operation, or production media session has been activated by this clarification.
 
+**Portrait selection:** owner selected **Concept A** (`C:/Users/izzyw/.codex/visualizations/2026/09/15/01a0a601-3008-7cd3-af27-85b8c7495b42/ai-support-review/concept-a.png`): natural human portrait, no tie, Loopcom infinity lapel pin. Anam’s documented one-shot avatar API accepts this PNG and can join a LiveKit room as a video/audio participant while Loopcom retains its existing AI path. It needs an Anam API key and an avatar ID created from the image. Those require a third-party account/usage authorization; neither has been created or used yet.
+
 The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. Laybel is only the voice-mode name for that existing Assistant; this work honors that constraint.
 
 ## Implemented behavior
@@ -117,4 +119,4 @@ For the recommended avatar layer, use time-connected rather than talking time: A
 
 ## Current boundary
 
-The owner explicitly reauthorized the avatar/video expansion. The implementation must use a real face-to-face call, bring the selected Laybel portrait to life, preserve the existing Assistant as the sole intelligence layer, and prove a live session end to end. The next decision is the portrait/provider pairing after mockup review; use the existing LiveKit Meetings transport unless a provider's documented integration requires a reviewed adapter. Do not presume SignalWire is the video runtime, do not create a second AI brain, and do not touch PBX configuration.
+The owner explicitly reauthorized the avatar/video expansion and selected Concept A. The implementation must use a real face-to-face call, bring that portrait to life, preserve the existing Assistant as the sole intelligence layer, and prove a live session end to end. The next required authority is permission to create/use an Anam account/API key and incur its usage, then create the Concept A avatar and connect it to existing LiveKit Meetings. Do not presume SignalWire is the video runtime, do not create a second AI brain, and do not touch PBX configuration.

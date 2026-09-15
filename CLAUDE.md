@@ -696,4 +696,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-15 · Talk to Laybel: deployed push-to-talk baseline (`c2ba7701…` / `7d93d23a8`), but owner reopened real LiveKit/avatar face-to-face call after mockup review; existing Assistant remains brain, no PBX; ⛔ container source check not proven → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-15 · Talk to Laybel: deployed push-to-talk baseline (`c2ba7701…` / `7d93d23a8`); owner selected Concept A for real LiveKit/avatar face-to-face call, awaiting Anam account/API authorization; existing Assistant remains brain, no PBX → `2026-09-15-face-to-face-ai-support-mockup.md`

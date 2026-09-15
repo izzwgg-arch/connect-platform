@@ -32,6 +32,7 @@
 - Post-deploy direct running-container source verification: **not proven**. Canonical Linux SSH was unavailable and the recovered Deploy Center UI timed out opening the log. This gap does not change the successful queue deployment status; it must not be represented as container-verified.
 - Source review after the owner reported no video/call launch: confirmed expected push-to-talk wiring only — `MediaRecorder` → authenticated `transcribe` → existing Assistant `send(..., "voice")` → browser-local `speechSynthesis`. No SignalWire, video, LiveKit, WebSocket, or real-time media call is present by design.
 - Owner has now reopened the live avatar/video scope and requested mockup review. No live avatar/provider call was started or claimed as tested in this documentation update.
+- Owner selected Concept A as the Laybel portrait. Provider documentation review confirmed Anam’s API accepts a PNG source image and its LiveKit integration publishes the animated avatar as a room participant, but no account, credential, avatar ID, service usage, or live call has been created.
 - No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15
