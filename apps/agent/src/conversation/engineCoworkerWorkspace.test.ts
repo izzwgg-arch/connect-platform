@@ -75,10 +75,13 @@ beforeEach(async () => {
   delete process.env.AGENT_KILL_SWITCH;
 });
 
-function mkEngine(client: any, opts: { phone?: boolean; triage?: any; transcribe?: (b: Buffer, f: string) => Promise<string | null> } = {}) {
+function mkEngine(client: any, opts: { phone?: boolean; triage?: any; transcribe?: (b: Buffer, f: string) => Promise<string | null>; extraTools?: any[] } = {}) {
   const router = new ModelRouter({ openaiApiKey: "sk-test" } as any, audit);
   (router as any).openai = client;
-  const engine = new ConversationEngine(store, router, audit, opts.triage ?? null, null, null, false, null, null, buildTools({ readTools, prisma: {} as any }));
+  const engine = new ConversationEngine(store, router, audit, opts.triage ?? null, null, null, false, null, null, [
+    ...buildTools({ readTools, prisma: {} as any }),
+    ...(opts.extraTools ?? []),
+  ]);
   const recorded: any[] = [];
   engine.attachCoworkerWorkspace({
     hub,
@@ -176,6 +179,39 @@ test("without a turnId nothing changes: no workspace tools, no workspace prompt,
   const system = s.requests[0].input.filter((m: any) => m.role === "system").map((m: any) => m.content).join("\n");
   assert.doesNotMatch(system, /THE COWORKER WORKSPACE/);
   assert.equal(hub.size(), 0);
+});
+
+/**
+ * ⛔ The one a knowledge fix could not reach. On 2026-09-15 the workspace was asked
+ * "what can you help me with on this computer?" while the desktop app was
+ * reconnecting, and it answered with the 2026-09-02 CARD world — three tasks, three
+ * folders, "only runs after you press the button" — six days after the hands
+ * shipped. The prompts were current and the published knowledge document was
+ * current. The stale sentences were the DESCRIPTIONS of coworker_task /
+ * my_computer_tasks, which a model reads whether or not it ever calls them, and
+ * which only stepped aside when the hands happened to be connected.
+ */
+test("the card-era proposal tools are never offered on a workspace turn — hands connected or not", async () => {
+  const proposalEra = [
+    { name: "coworker_task", description: "Nothing runs until they press the button on the card.", minRole: "customer", parameters: { type: "object", properties: {}, additionalProperties: false }, run: async () => ({ ok: true }) },
+    { name: "my_computer_tasks", description: "What the Coworker has been asked to do recently.", minRole: "customer", parameters: { type: "object", properties: {}, additionalProperties: false }, run: async () => ({ ok: true }) },
+  ];
+  const s = scripted([answer("ok")]);
+  const { engine } = mkEngine(s.client, { extraTools: proposalEra });
+  hub.open("turn-ws-00009", A);
+  await engine.handleMessage({ ...A, role: "customer", turnId: "turn-ws-00009" }, "what can you do on this computer?");
+  const offered = toolNames(s.requests[0]);
+  assert.ok(!offered.includes("coworker_task"), "the card tool must not be offered in the workspace");
+  assert.ok(!offered.includes("my_computer_tasks"), "the card status tool must not be offered in the workspace");
+  assert.ok(offered.includes("ask_person") && offered.includes("show_plan"), "the workspace's own tools are still there");
+
+  // ⛔ And the dock is untouched: no turnId means the proposal tools stay exactly
+  // as they were, so FloatingAssistant's card feature is not changed by this.
+  const s2 = scripted([answer("ok")]);
+  const { engine: e2 } = mkEngine(s2.client, { extraTools: proposalEra });
+  await e2.handleMessage({ ...A, role: "customer" }, "what can you do on this computer?");
+  const dock = toolNames(s2.requests[0]);
+  assert.ok(dock.includes("coworker_task") && dock.includes("my_computer_tasks"), "outside the workspace nothing changes");
 });
 
 test("a turnId the route never opened is ignored — the hub decides, not the body", async () => {

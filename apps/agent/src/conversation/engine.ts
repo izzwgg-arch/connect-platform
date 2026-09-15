@@ -990,8 +990,27 @@ export class ConversationEngine {
         // With the hands on, the desktop's tools join the platform's, and the
         // two proposal-era tools (coworker_task / my_computer_tasks) step aside
         // so the model is not offered a card-based way to do what it can now do.
-        let turnTools: ToolSpec[] = handsOn
-          ? [...(this.tools ?? []).filter((t) => t.name !== "coworker_task" && t.name !== "my_computer_tasks"), ...dyn!.tools]
+        //
+        // ⛔ THEY STEP ASIDE ON EVERY WORKSPACE TURN, CONNECTED OR NOT — a model
+        // reads a tool's DESCRIPTION whether or not it ever calls the tool, and
+        // those two still describe the 2026-09-02 card world in their own text
+        // ("ONE task from a fixed list", the three kinds, the three folders,
+        // "Nothing runs until they press the button on the card"). Proven on a
+        // real screen 2026-09-15: asked "what can you help me with on this
+        // computer?" while the app was reconnecting, the workspace answered with
+        // that list verbatim, button press and all — six days after the hands
+        // shipped. The knowledge document and the prompts were already correct;
+        // the stale sentence was in the tool schema, where no knowledge fix could
+        // reach it. When the hands are off, `coworkerWorkspacePrompt` already
+        // supplies the honest "the app is not connected to this task" wording.
+        // ⛔ Outside the workspace (`ws` unset) nothing changes, so the dock's
+        // FloatingAssistant keeps the proposal tools exactly as before.
+        const dropProposalEra = handsOn || !!ws;
+        let turnTools: ToolSpec[] = dropProposalEra
+          ? [
+              ...(this.tools ?? []).filter((t) => t.name !== "coworker_task" && t.name !== "my_computer_tasks"),
+              ...(handsOn ? dyn!.tools : []),
+            ]
           : (this.tools ?? []);
         if (ws) {
           // The person switched the phone system off for the Coworker: those tools are
