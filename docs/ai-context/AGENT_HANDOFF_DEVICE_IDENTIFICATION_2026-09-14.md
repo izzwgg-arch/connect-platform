@@ -831,8 +831,20 @@ comment); and `POST /desk-phones/runs` **RESUMES** the tenant's live run rather 
 second one ("one live run per customer"), so two `runWithPhone` calls are ONE run — the isolation
 test has to close the first run before a second exists, or it quietly proves nothing.
 
+✅ **DEPLOYED + CONTAINER-VERIFIED `7d93d23a`.** api `69ba6ae4` → `7d93d23a806c…`, portal
+`6e3cc2b5` → `7d93d23a806c…`, both **0 restarts**, health **200**. The api code was read out of the
+RUNNING container at `/app/apps/api/src/…` (⛔ `dist/` does not exist in this image — a zero grep
+there is not a failed deploy); the portal build carries `.next/server/app/phone-setup/[token]/page.js`,
+its client + layout chunks and `ps-shell` in the CSS. Migration `20260916120000` applied, the
+`DeskPhoneScanToken` table proven present with all 12 columns, **0 rows** — inert until a link is minted.
+
+⛔ **The portal half was deployed by an AUTO Deploy Center job** (`c2ba7701`, requested_by
+`izzywgg@gmail.com (Deploy Center)`) that picked up the pushed commit on its own. My manual portal
+deploy was refused with `runningCount=1` — ⛔ that error means a REAL job is running; read
+`/ops/deploy/status` and wait, never `--skip-queue-check` past it, or two deploys collide.
+
 ⏳ **NOT PROVEN:** nobody has opened the link on a real phone, no camera frame has been decoded in
-production, and no customer has scanned a sticker. Deploy status recorded in `TESTS_RUN.md`.
+production, and no customer has scanned a sticker.
 
 ## 11. Traps hit
 

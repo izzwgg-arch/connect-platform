@@ -159,4 +159,11 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   per run — minting again revokes the last, so a link sent to the wrong person dies; missing/revoked/
   expired are ONE flat refusal that never says which; the serial never crosses to the customer view,
   only `serialOnFile`. Light + dark both shipped. Suite **287 tests, 286 pass, 0 fail, 1 skip** (+9).
+  ✅ **DEPLOYED + container-verified `7d93d23a`:** api `69ba6ae4`→`7d93d23a806c…` and portal
+  `6e3cc2b5`→`7d93d23a806c…`, both restarts **0**, health **200**; migration `20260916120000` applied
+  and the `DeskPhoneScanToken` table proven present with all 12 columns and **0 rows** (inert until a
+  link is minted); the shipped portal build carries the `phone-setup/[token]` route, its chunks and
+  `ps-shell`. ⛔ The portal half was deployed by an **auto Deploy Center job** that picked up the push —
+  my manual deploy was correctly refused with `runningCount=1`; never `--skip-queue-check` past that
+  without reading `/ops/deploy/status`, because it means a real job is running.
   ⏳ **NOT PROVEN: nobody has opened the link on a real phone; no camera frame decoded in production.**
