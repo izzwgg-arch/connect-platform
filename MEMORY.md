@@ -49,7 +49,13 @@ Profile menu release (2026-09-14 18:42 Eastern): runtime `8b866ed6` pushed; job 
 
 Deploy autoban (2026-09-14): a queued job without a log is an expected waiting state, never a repeated public 404. All 74 404s in the office ban were Deploy Center log polling; deployment itself succeeded. Deployed API/portal fix covers all services, pauses hidden tabs, bounds retries and labels stale status. Owner approved read-only Windows SSH exception and one-IP unblock only. Do not weaken the monitor or add an allowlist. See deploy-log-autoban handoff.
 
+Browser Companion (2026-09-14, resumed): local implementation only; NOT installed/deployed/production-ready. Existing hidden Electron browser cannot control real Chrome. MV3 bridge/tools plus target-bound one-use approvals, generated schema, cancellation/deduplication and bounded DOM extraction implemented. Latest Coworker 43/43, extension security 3/3, isolated-Chrome components 10/10 and TS6 build pass. Actual Loopcom access recovered; stale Google sign-in title was not a login blocker. Owner authorized desktop use, but Windows tool stopped on Chrome URL-policy verification while selecting Extensions. No extension installation or agent acceptance occurred. See docs/ai-context/AGENT_HANDOFF_BROWSER_COMPANION_2026-09-14.md; preserve all work and do not publish this candidate as complete.
+
 Deploy-log safety release verified: API dae5a245, portal descendant 68cac2f4; live queued-log reads returned 200 and the office remained unblocked. Read both direct-deploy processes/logs and queue state before retrying: a direct release may be running even when queue runningCount is zero.
+
+Browser Companion latest continuation (2026-09-14 20:04 EDT): clean NSIS candidate built and payload/icon verified; actual binary upload verifier passed. Chrome Extensions navigation again triggered the desktop tool's URL-policy stop after owner authorized full computer use. App/extension remain uninstalled and actual-agent acceptance unproven. Candidate path and SHA256 are in AGENT_HANDOFF_BROWSER_COMPANION_2026-09-14.md. Do not label this release-ready or bypass the tool safeguard.
+
+Browser Companion alternatives review (2026-09-14): distinguish assistant-tool URL-policy setup stop from unfinished product tests. Playwright is recommended as the execution foundation, preserving Loopcom policy/ownership; dedicated-profile mode is a separate capability, not proof of access to everyday Chrome sessions. Existing-session Playwright/Chrome DevTools routes still require browser setup/consent. Alternatives researched only, not installed or proven; see Browser Companion handoff.
 
 ## Universal search — 2026-09-14
 
