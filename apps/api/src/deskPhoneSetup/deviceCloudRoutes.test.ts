@@ -228,7 +228,7 @@ function registry(opts: { unconfigured?: boolean; provider?: any } = {}) {
   return L.createDeviceProviderRegistry({ db: fakeDb, env: {}, overrides: { grandstream } });
 }
 
-async function makeApp(user: any, opts: { registry?: any } = {}) {
+async function makeApp(user: any, opts: { registry?: any; renderConfig?: any } = {}) {
   const app = Fastify();
   // ⛔ Registered here because it is registered globally in server.ts — the photo door reads
   // `req.isMultipart()`, so a test app without it would answer "multipart_required" to a perfectly
@@ -244,6 +244,9 @@ async function makeApp(user: any, opts: { registry?: any } = {}) {
     withMacLock: sharedLock,
     gdmsRequest: sim.fetch,
     provisioningUrlFor: async () => FOLDER,
+    // The clean per-model template's rendered config (stubbed; the real one fetches cfg<mac>.xml).
+    renderDeviceConfig: opts.renderConfig ?? (async () =>
+      "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>"),
   });
   return app;
 }
@@ -680,6 +683,34 @@ test("RESET FIRST: a ticked, assigned phone is cleared first; its restart waits 
   assert.equal(row.resetCount, 1, "never cleared twice");
   assert.notEqual(second.phone.provisioningStatus, "online", "an accepted task is not a registration");
   assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_PREPARE_STEP" && a.metadata.step === "reboot"));
+});
+
+test("SEND: a managed Grandstream gets its config pushed over the cloud — the delivery that reaches a claimed phone", async () => {
+  // The 2026-09-15 wall's other half: a GDMS-claimed phone never hears PnP multicast and ignores an
+  // HTTP config write, so the config must be SENT through GDMS. Once the device is managed, /prepare
+  // renders the (now clean per-model) config and pushes it; the reboot makes the phone apply it.
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base, row, runId } = await runWithPhone(app);
+  row.extNumber = "101"; row.extensionId = "e1"; row.resetCount = 1; // reset already done → no wipe this run
+  await tick(app, runId, [row.id]);
+  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.equal(sim.pushedConfigs.get(MAC12), "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>", "the rendered config reached GDMS: " + JSON.stringify(out.ran));
+  assert.ok(out.ran.some((x: any) => x.step === "reprovision" && x.ok), "a reprovision (cloud send) step ran: " + JSON.stringify(out.ran));
+  assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_PREPARE_STEP" && a.metadata.step === "reprovision"));
+});
+
+test("SEND is skipped when there is no rendered config (never pushes an empty send)", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER, { renderConfig: async () => null });
+  const { base, row, runId } = await runWithPhone(app);
+  row.extNumber = "101"; row.extensionId = "e1"; row.resetCount = 1;
+  await tick(app, runId, [row.id]);
+  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.equal(sim.configPushCalls, 0, "nothing pushed when there is no config to send");
+  assert.ok(!out.ran.some((x: any) => x.step === "reprovision"), JSON.stringify(out.ran));
 });
 
 test("prepare on a run that is no longer running reads 404", async () => {

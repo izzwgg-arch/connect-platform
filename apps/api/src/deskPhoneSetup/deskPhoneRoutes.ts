@@ -80,6 +80,8 @@ export type DeskPhoneDeps = {
    * driver waits, never a wrong URL.
    */
   provisioningUrlFor?: (tenantId: string) => Promise<string | null>;
+  /** Override the phoneprov config fetch (tests). Falls back to fetching cfg<mac>.xml over HTTP. */
+  renderDeviceConfig?: (tenantId: string, mac: string) => Promise<string | null>;
   /**
    * Make the PBX hold the `provisioning.devices` row this phone needs, at the moment
    * the person says whose phone it is.
@@ -2014,6 +2016,22 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     isRegistered: deps.isRegistered ?? defaultIsRegistered,
     registry,
     withMacLock: deps.withMacLock ?? defaultWithMacLock,
+    // The rendered gs_provision config the PBX serves this device — fetched the same way the
+    // phone would (the tenant's phoneprov base + cfg<mac>.xml). Now sourced from a CLEAN per-model
+    // template, so the server is correct. Used to SEND the config over the maker cloud.
+    renderDeviceConfig: deps.renderDeviceConfig ?? (async (tenantId: string, mac: string) => {
+      try {
+        const base = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(tenantId);
+        if (!base) return null;
+        const m = String(mac ?? "").toLowerCase().replace(/[^0-9a-f]/g, "");
+        if (m.length !== 12) return null;
+        const root = /^https?:\/\//.test(base) ? base : `http://${base}`;
+        const res = await fetch(`${root.replace(/\/+$/, "")}/cfg${m}.xml`, { signal: AbortSignal.timeout(15_000) });
+        if (!res.ok) return null;
+        const xml = await res.text();
+        return xml.includes("<gs_provision") ? xml : null;
+      } catch { return null; }
+    }),
   });
 }
 

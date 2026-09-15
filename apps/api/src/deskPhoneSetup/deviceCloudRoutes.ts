@@ -95,6 +95,12 @@ export type DeviceCloudRouteContext = {
   resetApprovalFor: (run: any, phoneId: string) => string | null;
   isOurProvisioningUrl: (url: string | null | undefined) => boolean;
   isRegistered: (tenantId: string, extNumber: string) => Promise<boolean>;
+  /**
+   * The rendered gs_provision config the PBX would serve this device (from its clean per-model
+   * template), or null if none can be rendered. Used to SEND the config over the maker cloud —
+   * the delivery that actually reaches a GDMS-claimed Grandstream when PnP/LAN do not.
+   */
+  renderDeviceConfig?: (tenantId: string, mac: string) => Promise<string | null>;
   registry: DeviceProviderRegistry;
   withMacLock: <T>(key: string, fn: (tx: any) => Promise<T>) => Promise<T>;
 };
@@ -1078,7 +1084,27 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     }
 
     const ran: Array<{ step: PreparationStep; result: ActionResult }> = [];
+
+    // SEND the settings over the cloud, once the device is in the maker's account and it is NOT
+    // being wiped this round. ⛔ For Grandstream this is the delivery that WORKS: a GDMS-claimed
+    // phone never hears the office machine's PnP multicast and silently ignores an HTTP config
+    // write, but it pulls and applies a config pushed through GDMS (proven live 2026-09-15). The
+    // config comes from a CLEAN per-model template (correct server), not another customer's. A
+    // wiping phone can take nothing, so it is sent on the next prepare, once the phone is back.
+    async function sendConfigOverCloud(): Promise<void> {
+      if (!provider || provider.manufacturer !== "grandstream") return;
+      if (row.vendorCloudState !== "managed" && cloud.managedByUs !== true) return;
+      if (ran.some((r) => r.step === "factory_reset" && r.result.ok)) return; // wiping — next time
+      if (!ctx.renderDeviceConfig) return;
+      const xml = await ctx.renderDeviceConfig(user.tenantId, String(row.macAddress)).catch(() => null);
+      if (!xml) return;
+      const pushed = await provider.pushConfig({ mac: String(row.macAddress), xml });
+      ran.push({ step: "reprovision", result: pushed });
+      await auditStep(deps, user, row, provider, "reprovision", pushed);
+    }
+
     const respond = async (stoppedAt: PreparationStep | null, leftForOthers: PreparationStep[] = []) => {
+      await sendConfigOverCloud();
       const fresh = await reread(db, row.id, row);
       return reply.send({
         ok: true,
