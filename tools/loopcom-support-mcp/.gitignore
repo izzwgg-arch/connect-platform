@@ -1,6 +1,8 @@
 node_modules/
 package-lock.json
 .watch-state.json
+.ship-state.json
+.ship-state.json.tmp
 reports/
 .watch-heartbeat.json
 logs/

@@ -169,6 +169,11 @@ export async function postOwnerNotice(cfg, reference, { scope, summary }) {
   return send(cfg, "POST", `/admin/support/escalations/${encodeURIComponent(reference)}/owner-notice`, { scope, summary });
 }
 
+/** Text the owner a plain update about a ticket (ship results). Owner only — never the customer. */
+export async function postOwnerUpdate(cfg, reference, message) {
+  return send(cfg, "POST", `/admin/support/escalations/${encodeURIComponent(reference)}/owner-update`, { message: String(message ?? "").slice(0, 320) });
+}
+
 /** The notices on a ticket and whether a change may be made right now (false after STOP). */
 export async function getOwnerNotices(cfg, reference) {
   return call(cfg, `/admin/support/escalations/${encodeURIComponent(reference)}/owner-notices`);

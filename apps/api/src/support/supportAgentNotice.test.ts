@@ -19,6 +19,7 @@ import {
   hashNoticeCode,
   registerSupportAgentNoticeRoutes,
   NOTICE_TTL_MS,
+  OWNER_UPDATES_PER_TICKET_PER_DAY,
 } from "./supportAgentNotice";
 
 const NOW = Date.parse("2026-09-14T20:00:00Z");
@@ -252,6 +253,36 @@ describe("the routes", () => {
     const { app } = await build({ clientUserId: null });
     const res = await app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-notice`, payload: { scope: "tenant", summary: "Some tenant change here." } });
     assert.equal(res.statusCode, 409);
+  });
+});
+
+describe("owner updates (ship results)", () => {
+  async function build(delivered = 2) {
+    const db = fakeDb();
+    const sms = smsSink(delivered);
+    const app = Fastify();
+    registerSupportAgentNoticeRoutes(app, { db, requireSuper: () => ({ sub: "izzy" }), sendOwnerSms: sms.send, now: () => NOW });
+    return { app, sms };
+  }
+
+  test("texts the owner with the ticket and company, and caps per ticket per day", async () => {
+    const { app, sms } = await build();
+    const res = await app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-update`, payload: { message: "Shipped code fix abc12345 to api; verified." } });
+    assert.equal(res.statusCode, 200);
+    assert.match(sms.sent[0], new RegExp(REF));
+    assert.match(sms.sent[0], /Trust Bookkeepings/);
+    for (let i = 1; i < OWNER_UPDATES_PER_TICKET_PER_DAY; i++) {
+      await app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-update`, payload: { message: "another update here" } });
+    }
+    const over = await app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-update`, payload: { message: "one too many" } });
+    assert.equal(over.statusCode, 429);
+  });
+
+  test("⛔ owner not reached → 502; unknown ticket → 404; empty message → 400", async () => {
+    assert.equal((await (await build(0)).app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-update`, payload: { message: "hello owner" } })).statusCode, 502);
+    const { app } = await build();
+    assert.equal((await app.inject({ method: "POST", url: `/admin/support/escalations/ZZZZZZ/owner-update`, payload: { message: "hello owner" } })).statusCode, 404);
+    assert.equal((await app.inject({ method: "POST", url: `/admin/support/escalations/${REF}/owner-update`, payload: { message: "" } })).statusCode, 400);
   });
 });
 

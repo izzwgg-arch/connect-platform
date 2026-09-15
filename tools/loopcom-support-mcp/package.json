@@ -9,7 +9,7 @@
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check loopcom.mjs",
     "smoke": "node smoke.mjs",
-    "test": "node --test stress.test.mjs hands.test.mjs",
+    "test": "node --test stress.test.mjs hands.test.mjs ship.test.mjs",
     "status": "node status.mjs",
     "watch": "node watch.mjs"
   },

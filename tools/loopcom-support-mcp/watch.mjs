@@ -36,7 +36,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listTickets, postAgentReport } from "./loopcom.mjs";
+import { listTickets, postAgentReport, getOwnerNotices, postOwnerNotice, postOwnerUpdate } from "./loopcom.mjs";
+import { processShips } from "./ship.mjs";
 import { decideTicket, DEFAULTS, startedToday, tenantKeyOf } from "./triage.mjs";
 import { pushRun, pushWatcherBeat, stepFromEvent } from "./push.mjs";
 
@@ -183,8 +184,16 @@ const GUARDRAILS = [
   "- BEFORE your first change: call post_owner_notice with scope 'tenant' and one plain sentence saying exactly what",
   "  you are about to change. If it fails, change nothing.",
   "- Before EACH further change: call get_owner_notices. If mayChange is false, the owner said STOP — stop at once.",
-  "- A fix that needs code, a deploy, the PBX's shared configuration, or anything beyond this one company is not yours",
-  "  to make in this run: call post_owner_notice with scope 'system' describing it, then report. Do not attempt it.",
+  "- A fix that needs the PBX's shared configuration, or anything beyond this one company that is not Connect's code, is",
+  "  not yours to make: call post_owner_notice with scope 'system' describing it, then report. Do not attempt it.",
+  "",
+  "CODE FIXES (Izzy, 2026-09-15):",
+  "- If the real fix is in Connect's code, prepare it with stage_edit / stage_new_file. They write ONLY into this",
+  "  ticket's own ship worktree and ONLY under apps/api/src, apps/portal and packages/shared/src.",
+  "- Never change repo files any other way — no Bash writes, no sed, no redirects. The main folder is shared with other sessions.",
+  "- Keep the change as small as possible, and add or update a test that proves it.",
+  "- Then call request_ship with one plain sentence. It does NOT ship: the tests run, the owner is texted for GO, and",
+  "  only after his GO is it pushed, deployed, verified and rolled back if it fails. Report it as waiting, never as live.",
   "- After a change, VERIFY it (act_as_filer GET, read-only queries, logs). Only a verified result counts as fixed.",
   "",
   "HARD RULES for this run:",
@@ -210,6 +219,11 @@ export const ALLOWED_TOOLS = Object.freeze([
   "mcp__loopcom-support__act_as_filer",
   "mcp__loopcom-support__post_owner_notice",
   "mcp__loopcom-support__get_owner_notices",
+  // Phase 3 (2026-09-15): staging only. Commit/push/deploy stay in ship.mjs, after the owner's GO.
+  "mcp__loopcom-support__stage_edit",
+  "mcp__loopcom-support__stage_new_file",
+  "mcp__loopcom-support__request_ship",
+  "mcp__loopcom-support__get_ship_status",
   "Read",
   "Grep",
   "Glob",
@@ -496,6 +510,13 @@ async function main() {
           }
         }
         beat({ state: "idle" });
+      }
+
+      // Phase 3: at most one ship step per poll — checks, the GO request, or the ship itself.
+      try {
+        await processShips(cfg, { api: { getOwnerNotices, postOwnerNotice, postOwnerUpdate }, log, beat });
+      } catch (e) {
+        log("ship step failed (will retry): " + String((e && e.message) || e).slice(0, 200));
       }
     } catch (err) {
       log("poll failed (will retry): " + String((err && err.message) || err));

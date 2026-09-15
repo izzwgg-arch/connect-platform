@@ -95,7 +95,7 @@ describe("the agent's tools and rules", () => {
   const sys = args[args.indexOf("--append-system-prompt") + 1];
 
   test("⛔ the hands are pre-approved — under -p an unlisted tool is DENIED, not asked", () => {
-    for (const name of ["act_as_filer", "post_owner_notice", "get_owner_notices"]) {
+    for (const name of ["act_as_filer", "post_owner_notice", "get_owner_notices", "stage_edit", "stage_new_file", "request_ship", "get_ship_status"]) {
       const t = "mcp__loopcom-support__" + name;
       assert.ok(ALLOWED_TOOLS.includes(t), t);
       assert.ok(args.includes(t), t + " missing from argv");
@@ -120,6 +120,13 @@ describe("the agent's tools and rules", () => {
     assert.match(sys, /scope 'system'/);
     assert.match(sys, /VERIFY/);
     assert.doesNotMatch(sys, /Do not fix anything/);
+  });
+
+  test("the code-fix rules are stated: stage only, never write files another way, request_ship is not live", () => {
+    assert.match(sys, /stage_edit [/] stage_new_file/);
+    assert.match(sys, /Never change repo files any other way/);
+    assert.match(sys, /request_ship/);
+    assert.match(sys, /Report it as waiting, never as live/);
   });
 
   test("the run limit is 30 minutes by default", () => {

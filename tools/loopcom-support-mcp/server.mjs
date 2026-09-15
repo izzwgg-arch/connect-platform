@@ -30,6 +30,7 @@ import {
   actAsFiler, postOwnerNotice, getOwnerNotices,
 } from "./loopcom.mjs";
 import { formatTicket, formatCustomer, formatConversation, formatCallDiagnostics, isCustomerReport, when } from "./format.mjs";
+import { stageEdit, stageNewFile, requestShip, shipStatus } from "./ship.mjs";
 
 const cfg = readConfig();
 
@@ -217,6 +218,73 @@ server.registerTool(
     inputSchema: { reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M.") },
   },
   handler(async ({ reference }) => JSON.stringify(await getOwnerNotices(cfg, reference), null, 2))
+);
+
+// ── Phase 3: code changes. The agent STAGES; ship.mjs and the watcher do the rest. ──
+
+server.registerTool(
+  "stage_edit",
+  {
+    title: "Stage one exact code edit for this ticket's fix",
+    description:
+      "Replace exactly one occurrence of oldString with newString in a file of THIS ticket's own ship worktree (a separate " +
+      "git checkout of the branch — never the shared working folder). Only files under apps/api/src, apps/portal " +
+      "(app, components, lib, navigation, services, hooks, contexts) and packages/shared/src; the agent's own gate files, " +
+      "config, secrets, schema, package.json and tsconfig are refused. oldString must match exactly one place — include " +
+      "enough surrounding lines. Write escape sequences as text, never as raw control characters. Nothing is committed or " +
+      "shipped by this tool.",
+    inputSchema: {
+      reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M."),
+      path: z.string().min(1).max(300).describe("Repo-relative path, e.g. apps/portal/components/ProfileMenu.tsx"),
+      oldString: z.string().min(1).max(200000),
+      newString: z.string().max(200000),
+    },
+  },
+  handler(async ({ reference, path, oldString, newString }) =>
+    JSON.stringify(stageEdit({ ref: reference, path, oldString, newString }), null, 2))
+);
+
+server.registerTool(
+  "stage_new_file",
+  {
+    title: "Stage a brand-new file for this ticket's fix",
+    description:
+      "Create a NEW file (typically a test that proves the fix) in this ticket's ship worktree, under the same allowlisted " +
+      "paths as stage_edit. Refuses to overwrite an existing file. Nothing is committed or shipped by this tool.",
+    inputSchema: {
+      reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M."),
+      path: z.string().min(1).max(300),
+      content: z.string().min(1).max(200000),
+    },
+  },
+  handler(async ({ reference, path, content }) => JSON.stringify(stageNewFile({ ref: reference, path, content }), null, 2))
+);
+
+server.registerTool(
+  "request_ship",
+  {
+    title: "Submit the staged fix: tests, then the owner's GO, then deploy",
+    description:
+      "Commits the staged files in the ship worktree. It does NOT ship. Afterwards the watcher runs the tests and typecheck; " +
+      "only if they pass is the owner texted 'GO <code>' naming the commit; only after his GO is it pushed, deployed, " +
+      "verified, and rolled back automatically if verification fails. At most 3 per day. Report that the fix is waiting " +
+      "for tests and the owner's GO — never that it is live.",
+    inputSchema: {
+      reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M."),
+      summary: z.string().min(10).max(300).describe("One plain sentence saying what the change does."),
+    },
+  },
+  handler(async ({ reference, summary }) => JSON.stringify(requestShip({ ref: reference, summary }), null, 2))
+);
+
+server.registerTool(
+  "get_ship_status",
+  {
+    title: "Where this ticket's code fix is",
+    description: "staged, submitted, checks_failed, awaiting_go, shipping, deploying, shipped, rolled_back, discarded or interrupted — with the recent log.",
+    inputSchema: { reference: z.string().min(1).max(64).describe("Ticket reference like 3GTH9M.") },
+  },
+  handler(async ({ reference }) => JSON.stringify(shipStatus({ ref: reference }), null, 2))
 );
 
 const transport = new StdioServerTransport();

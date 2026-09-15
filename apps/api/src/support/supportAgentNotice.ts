@@ -37,6 +37,8 @@ import { resolveEscalationId } from "./customerUpdateRoutes";
 
 /** A notice covers the agent's work on a ticket for a day; a GO request waits a day. */
 export const NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Owner updates (ship results) per ticket per UTC day. */
+export const OWNER_UPDATES_PER_TICKET_PER_DAY = 12;
 
 export function hashNoticeCode(code: string): string {
   return createHash("sha256").update(`support-notice:${code}`).digest("hex");
@@ -248,6 +250,39 @@ export function registerSupportAgentNoticeRoutes(app: FastifyInstance, deps: Sup
       status: result.status,
       next: parsed.data.scope === "tenant" ? "You may proceed; check owner-notices before each change for a STOP." : "Wait: nothing may happen until the owner replies GO.",
     });
+  });
+
+  /**
+   * A plain update to the OWNER about a ticket (the support agent's ship results).
+   * ⛔ Owner numbers only — never the customer — and capped per ticket per day so
+   * a looping watcher cannot text his phone all night.
+   */
+  const ownerUpdatesToday = new Map<string, { day: string; count: number }>();
+  app.post("/admin/support/escalations/:reference/owner-update", async (req: any, reply: any) => {
+    const actor = await deps.requireSuper(req, reply);
+    if (!actor) return reply;
+    const reference = String((req.params as any)?.reference ?? "").trim();
+    const parsed = z.object({ message: z.string().trim().min(5).max(320) }).safeParse(req.body || {});
+    if (!reference || !parsed.success) {
+      return reply.status(400).send({ error: "invalid_request", message: "Send { message } — one plain sentence for the owner." });
+    }
+    const escalationId = await resolveEscalationId(db, reference);
+    const esc = escalationId
+      ? await db.agentEscalation.findUnique({ where: { id: escalationId }, select: { id: true, tenantId: true, tenantName: true } })
+      : null;
+    if (!esc) return reply.status(404).send({ error: "not_found", message: `No recent ticket with reference ${reference}.` });
+    const day = new Date(now()).toISOString().slice(0, 10);
+    const used = ownerUpdatesToday.get(esc.id);
+    const count = used && used.day === day ? used.count : 0;
+    if (count >= OWNER_UPDATES_PER_TICKET_PER_DAY) {
+      return reply.status(429).send({ error: "too_many", message: "That ticket already texted the owner the maximum times today." });
+    }
+    ownerUpdatesToday.set(esc.id, { day, count: count + 1 });
+    const body = `Loopcom agent — ticket ${supportReportReference(esc.id)} (${esc.tenantName}): ${parsed.data.message}`;
+    const sent = await deps.sendOwnerSms({ tenantId: esc.tenantId, body });
+    deps.log?.info?.({ reference, delivered: sent.delivered }, "support-notice: owner update texted");
+    if (sent.delivered === 0) return reply.status(502).send({ error: "owner_not_reached", detail: sent.error ?? null });
+    return reply.send({ ok: true, delivered: sent.delivered });
   });
 
   app.get("/admin/support/escalations/:reference/owner-notices", async (req: any, reply: any) => {
