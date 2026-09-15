@@ -1,4 +1,4 @@
-# ⛔ AGENT HANDOFF — LOOPCOM MOBILE UI: the full-product MOCKUP PASS (2026-09-15) — READ FIRST before building any LoopCom Mobile portal UI. The mockups are AWAITING IZZY'S APPROVAL; production build starts ONLY after he approves.
+# ⛔ AGENT HANDOFF — LOOPCOM MOBILE UI: mockups (2026-09-15) → ✅ APPROVED AND BUILT (2026-09-16, commit `5232cba2`). §0–§6 below are the mockup phase kept for the record; **§7 is the production build** — read §7 first when touching the live product area.
 
 Sibling handoff (backend, read it too): `AGENT_HANDOFF_LOOPCOM_MOBILE_2026-09-15.md`.
 
@@ -127,3 +127,117 @@ premium-SMS toggle, roaming controls where plan-driven.
   by republishing the SAME path (or pass the url), or Izzy's link dies.
 - The mockup opened from disk needs its own `[hidden]{display:none!important}` (it's
   in the file) — the artifact skeleton normally provides it; don't remove it.
+
+## 7. THE PRODUCTION BUILD (2026-09-16, `5232cba2`) — what exists now and its traps
+
+Izzy approved v2 with: "Approved. Build it. Everything should be wired and working,
+end-to-end, production-ready, with proof." Mid-build he added: "Create all the emails
+as well… with the real Loopcom logo… wire the emails in to work end-to-end."
+
+### 7.1 What shipped (all in `5232cba2` unless noted)
+
+**Schema** (`20260916030000_loopcom_mobile_product`, purely additive):
+`MobileSubscriber` (people ≠ portal users; `role` member|manager, `notifyEmail`),
+`MobileTenantSettings` (warn %, billingEmails, notify switches, member switches),
+`MobilePlatformSettings` (single row id "default": SPN, balance floor, anomaly ×,
+reorder floor, nudge days, selfServeLines/topUps gates, LM- prefix, fraud caps),
+`MobileInvoice` (⛔ `@@unique(tenantId, periodStart)` IS the idempotency — a
+generation run can never double-bill), plus MobileLine.{subscriberId, e911Status,
+e911Address, usageAlertSentAt}.
+
+**API** — `mobileProductRoutes.ts` beside the untouched foundation file:
+- Tenant: /mobile-service/{dashboard, subscribers CRUD+assign, lines (rich list w/
+  per-line recount estimate + memberActions), lines/:id/activity, lines/:id/e911,
+  lines/:id/change-plan, usage (daily rollup + projections + 6 past cycles),
+  billing (+invoices/:id — the LM- ledger), port-requests/:id GET/PATCH (⛔ the
+  transfer PIN is stored ENCRYPTED via @connect/security, `accountNumberLast4`
+  only, `pinOnFile` boolean out — the raw PIN never echoes), devices
+  (+/devices/:lineId/esim — same audited secret read, devices-page key),
+  support/diagnostics/:lineId (customer-safe, no raw provider payloads), settings.
+- Console: /admin/mobile-service/{overview (fleet+money+balance+action items),
+  tenants (rollup), platform-settings GET/PUT, inventory, port-requests GET/PATCH
+  (status mirror + notes → customer email; ⛔ FILES NOTHING with the carrier),
+  invoices/generate (⛔ PREVIOUS month only, confirm:true, idempotent, emails per
+  tenant setting), invoices GET/PATCH(status), usage-analytics, webhook-events/:id
+  (payload), compliance, audit}.
+- ⛔ ONE KEY PER PAGE ON THE API TOO: PORTAL_API_PERMISSION_RULES got nine
+  longer-prefix rules (/mobile-service/lines → can_view_mobile_lines etc.,
+  longest-prefix-wins); the base /mobile-service rule stays the dashboard's
+  can_view_workspace_mobile. Guard-tested in loopcomMobile.test.ts.
+
+**Emails** — `mobileEmails.ts`: 7 templates through the HARDENED billing shell
+(`emailShell` from billing/emailTemplates — real wordmark URL, eyebrow "LoopCom
+Mobile", footer "Sent by LoopCom Mobile."), queued as EmailJob rows type
+`MOBILE_*` on the ONE outbound lane (500/day cap applies; these are customer
+transactional, not ADMIN_ALERT — they flow). Triggers wired: esim_ready (in
+provisionEsimForLine), line_suspended/lost + line_resumed (in suspendLine/
+resumeLine — BOTH surfaces share them), plan_changed (both change-plan routes),
+port_status (admin PATCH when status changes, honors notifyPorts), invoice
+(generation, honors notifyInvoices), usage_warning
+(`runMobileUsageWarningSweep` inside the usage-sync cycle — ⛔ once per cycle per
+line via `usageAlertSentAt >= cycleStart`, stamped even with zero recipients so
+it can't spin). Recipient ladder in `resolveMobileRecipients`: subscriber email
+(if notifyEmail) → MobileTenantSettings.billingEmails →
+tenant.billingSettings.billingEmail → billing-capable users. ⛔ The eSIM
+activation code is NEVER in any email — guard-tested.
+
+**Portal customer area** — section "mobile" ("LoopCom Mobile") in
+NAV_SECTION_ORDER after workspace; ten pages under `app/(platform)/mobile/`
+(+ lines/[id], billing/[id] details) on shared `mobile.css` (.lmx scope — the v2
+mockup design system verbatim: hero, kico KPIs, gradient primaries) + MobileUi.tsx
+helpers. Devices page POLLS while the install QR is open and flips the line
+active live. All ConnectSelect, no native <select> (guard-swept).
+
+**Console** — /admin/mobile-console rebuilt: 13 views in one client page (chip
+strip), .lmx styles, `role === "SUPER_ADMIN"` gate kept, provision-eSIM keeps the
+verbatim "PURCHASES 1 eSIM … cannot be un-bought" confirm (guard-tested), invoice
+generation confirm states ledger + idempotency.
+
+### 7.2 Keys & toggles (the fourth rule — satisfied in the same commit)
+
+New: `can_view_section_mobile` + can_view_mobile_{users,lines,plans,usage,billing,
+porting,devices,support,settings}. ⛔ Dashboard KEEPS `can_view_workspace_mobile`
+(renaming strips grants — id moved workspace.mobile → mobile.dashboard). ⛔ ALL
+mobile keys in NO default bucket (SUPER_ADMIN force-add only): granting is the
+launch, per tenant, per role. Both permission editors render from navItems, so
+all rows + the LoopCom Mobile section appeared automatically —
+permissionToggleCoverage 40/40 incl. the honesty invariant and
+one-toggle-per-page. Launch recipe: grant `can_view_section_mobile` + the page
+keys to a role on /admin/roles/[id] (or per-page In-sidebar on /admin/permissions).
+
+### 7.3 Proof (what is PROVEN vs ⏳)
+
+- Tests: api loopcomMobile 19/19 (money math, ONE-request purchase, real Ed25519,
+  ~15 source guards incl. product-route owner-gating count, no-money-in-product-
+  routes, no-carrier-filing, email-lane, PIN-never-echoed, nav/catalog/bucket/
+  prefix contract). Portal nav+coverage+select suites 40/40. Portal full suite
+  638/642 — ⛔ the 4 failures are PRE-EXISTING AT HEAD in other areas
+  (deskPhone setupDriver reboot guard, coworkerHands copy, CRM campaignsIndex
+  layout, webrtcSdpDiagnostics codec) — none reads a file this build touched.
+  Api full suite: publicOrigins tree-sweep fails on server.ts
+  "m.connectcomunications.com" L42556 — introduced `2ade3422` 2026-08-21,
+  pre-existing. tsc: api exactly the 87 pre-existing ambient (0 in
+  loopcomMobile/*), portal 0.
+- Mockup artifact v3 (same URL) gained the "Emails" screen: all 7 emails rendered
+  FROM THE PRODUCTION TEMPLATES (logo embedded as data URI only for artifact CSP;
+  real emails use the absolute wordmark URL).
+- Deploy + container verification: recorded in the summary file (this handoff is
+  written mid-deploy; the summary carries the final verified state).
+- ⏳ NOT PROVEN until real objects exist: no subscriber/line/eSIM/port/invoice has
+  been created through the new UI against production data; no MOBILE_* email has
+  reached a real inbox (the queue rows + templates are tested, the worker lane is
+  the platform's existing one); Voice/SMS remain carrier-gated as designed.
+
+### 7.4 Traps for the next session
+
+- ⛔ /mobile-service/lines/:id/esim (old key) AND /mobile-service/devices/:lineId/
+  esim (devices key) BOTH exist — the devices page uses the second; don't
+  "deduplicate" one away without moving the page.
+- ⛔ `memberMay()` gates USER-jwt actions from MobileTenantSettings; TENANT_ADMIN+
+  always passes. The switches live on the customer Settings page.
+- ⛔ Invoice generation refuses nothing loudly when a tenant+period row exists —
+  it SKIPS with reason "already_generated". That is the idempotency working.
+- ⛔ The 4 pre-existing portal failures + the publicOrigins sweep failure belong
+  to OTHER areas' sessions — do not "fix" them from mobile work.
+- The old thin customer page is GONE (replaced by the dashboard at /mobile); the
+  eSIM QR now lives on /mobile/devices.

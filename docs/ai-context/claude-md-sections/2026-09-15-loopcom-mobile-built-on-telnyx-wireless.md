@@ -1,5 +1,12 @@
 # LoopCom Mobile: branded mobile service (eSIM/SIM/data) on Telnyx wireless is BUILT END TO END and INERT until the key is granted / the first eSIM is bought — 2026-09-15
 
+⛔ **SUPERSEDED IN PART 2026-09-16**: the thin `/mobile` page and the flat console
+described below were replaced by the approved FULL PRODUCT AREA (own sidebar
+section, 10 pages, 13-view console, LM- ledger, emails) — see
+`2026-09-16-loopcom-mobile-full-product-built.md` and the UI handoff §7. The
+backend facts below (client, sweeps, webhook door, money rules, prefixes) remain
+accurate and load-bearing.
+
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_2026-09-15.md`**
 
 - ✅ **Telnyx wireless is ENABLED on the real account (live-probed from app-api-1)**: sim_cards/groups/orders, eSIM purchase (`POST /actions/purchase/esims`, whitelabel SPN "LoopCom" supported), activation-code QR endpoint, usage detail records (`record_type=sim_card_usage`), data-usage notifications, `/mobile_phone_numbers` + `/mobile_voice_connections` all answer 200 (0 SIMs yet). ⛔ **Mobile Voice/VoLTE is BETA at Telnyx** (endpoints live, config docs "coming soon") — the product reports it "beta" and promises nothing. SMS on mobile DIDs needs a messaging profile + 10DLC (none). E911 = per-number, mobile rules differ, 933 tests.
