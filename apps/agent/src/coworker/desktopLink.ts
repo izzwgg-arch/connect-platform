@@ -185,6 +185,12 @@ function boundContent(content: unknown): unknown {
 
 export class DesktopLink {
   private sessions = new Map<string, Session>();
+  /**
+   * Told when the desktop reports an approval prompt on the person's screen, with
+   * the tool it is for — the Coworker workspace shows that step as "waiting for your
+   * OK" instead of spinning. ⛔ Display only; never consulted for any decision.
+   */
+  onAwaitingApproval: ((identity: LinkIdentity, tool: string) => void) | null = null;
   constructor(private now: () => number = () => Date.now()) {}
 
   /** The desktop announced itself (again). Replaces the manifest; keeps the queue. */
@@ -323,6 +329,7 @@ export class DesktopLink {
     clearTimeout(f.timer);
     f.deadlineMs += ms;
     f.timer = setTimeout(() => this.expire(s, callId), ms);
+    try { this.onAwaitingApproval?.(identity, f.name); } catch { /* display only */ }
     return true;
   }
 

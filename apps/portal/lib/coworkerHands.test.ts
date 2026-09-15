@@ -1,7 +1,11 @@
 /**
- * Source guards for the Coworker's hands on the portal side. The defect class
- * here is a CALLER that forgot to mount the card or that mounted it outside the
- * bubble — a unit test of the card's helpers passes straight through both.
+ * Source guards for the Coworker's hands on the portal side.
+ *
+ * The card-era task card (CoworkerTaskCard) stays in the repo for the portal's own
+ * corner assistant; since 2026-09-15 the bubble opens the Coworker WORKSPACE, where
+ * the computer is reached through the agent's live tools and every "yes" still
+ * comes from the desktop's own approval window. These guards pin the parts of that
+ * a helper test cannot see.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -10,16 +14,6 @@ import path from "node:path";
 
 const read = (p: string) => readFileSync(path.resolve(__dirname, p), "utf8").replace(/\r\n/g, "\n");
 const code = (s: string) => s.split("\n").filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//")).join("\n");
-
-test("FloatingAssistant mounts the task cards and the permissions view ONLY when docked, and polls only after a reply / on open", () => {
-  const src = code(read("../components/FloatingAssistant.tsx"));
-  assert.ok(/usePendingCoworkerTasks\(docked\)/.test(src), "the pending-task hook must be gated on `docked`");
-  assert.ok(/\{docked && coworkerTasks\.map\(/.test(src), "cards render only in the docked popover");
-  assert.ok(/docked && showCoworkerPerms/.test(src), "permissions view only in the docked popover");
-  assert.ok(/void refreshCoworkerTasks\(\);/.test(src), "refresh after each assistant reply");
-  assert.ok(!/setInterval\([^)]*refreshCoworkerTasks/.test(src), "never on a timer");
-  assert.ok(/\$\{COWORKER_TASK_STYLES\}/.test(src), "the card styles must ship with the panel");
-});
 
 test("the card runs the task the APPROVE route returned and never composes one; the desktop bridge is the only executor", () => {
   const src = code(read("../components/CoworkerTaskCard.tsx"));
@@ -30,7 +24,7 @@ test("the card runs the task the APPROVE route returned and never composes one; 
   assert.ok(!/child_process|node:fs|window\.require|electron/.test(src), "the page touches no filesystem");
 });
 
-test("the four questions and the never-rows are on the screen", () => {
+test("the four questions and the never-rows are on the card", () => {
   const src = read("../components/CoworkerTaskCard.tsx");
   for (const label of ["<dt>What</dt>", "<dt>Where</dt>", "<dt>Why</dt>", "<dt>Undo</dt>"]) assert.ok(src.includes(label), label);
   assert.ok(src.includes("Delete anything"));
@@ -39,7 +33,18 @@ test("the four questions and the never-rows are on the screen", () => {
   assert.ok(src.includes('The "Never" rows are not settings'));
 });
 
-test("the desktop coworker page still renders the docked assistant inside AuthGate", () => {
-  const src = read("../app/desktop/coworker/page.tsx");
-  assert.ok(/<AuthGate>/.test(src) && /<FloatingAssistant docked \/>/.test(src));
+test("⛔ the workspace never answers an approval itself: a waiting step says where to answer, and there is no approve verb in the page", () => {
+  const view = code(read("../components/coworker/CoworkerChatView.tsx"));
+  assert.match(view, /Look for the Loopcom approval box on your screen to allow or refuse this\./);
+  const all = ["../components/coworker/CoworkerChatView.tsx", "../components/coworker/CoworkerComposer.tsx", "../components/coworker/CoworkerWorkspace.tsx", "../components/coworker/useCoworkerSession.ts", "../components/coworker/coworkerBridge.ts", "../components/coworker/coworkerApi.ts"]
+    .map((p) => code(read(p))).join("\n");
+  assert.ok(!/coworkerApproval|coworker-approval|approved:\s*true/.test(all), "the hosted page must never be able to answer an approval prompt");
+  assert.ok(!/child_process|node:fs|window\.require/.test(all), "the page touches no filesystem");
+});
+
+test("⛔ raising access goes only through the desktop bridge (which asks natively); the page has no other way to change it", () => {
+  const session = code(read("../components/coworker/useCoworkerSession.ts"));
+  assert.match(session, /b\.setAccess\(profile\)/);
+  const all = ["../components/coworker/CoworkerComposer.tsx", "../components/coworker/CoworkerWorkspace.tsx", "../components/coworker/useCoworkerSession.ts"].map((p) => code(read(p))).join("\n");
+  assert.ok(!/updateSettings\(\{[^}]*coworkerPermissions/.test(all), "no path around the native confirmation");
 });

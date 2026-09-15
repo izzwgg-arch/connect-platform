@@ -7,6 +7,9 @@
  */
 export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat" | "coworker-approval" | "coworker-connections";
 
+/** Tool families the person can switch off for the Coworker on this computer. */
+export type CoworkerToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system";
+
 /** One MCP server the person configured in Coworker Settings & Connections. */
 export type CoworkerMcpServerSetting = {
   id: string;
@@ -55,6 +58,25 @@ export type DesktopSettings = {
   coworkerMcpServers?: CoworkerMcpServerSetting[];
   coworkerWorkspace?: string;
   coworkerExtraRoots?: string[];
+  /**
+   * The Coworker workspace (2026-09-15). Folders the person attached from the chat
+   * (the folder picker, or a folder dropped onto the chat) — each becomes a place the
+   * file and git tools may reach, exactly like an extra root. `repo` = it is a code
+   * project with git history. Chosen on THIS computer through a native dialog or a
+   * real drop; a web page can never name one.
+   */
+  coworkerFolders?: { path: string; name: string; repo: boolean; addedAt: string }[];
+  /**
+   * What the Coworker may use on this computer (full page → Settings → "What it can
+   * use"). Groups listed here are switched OFF: their tools are not announced and a
+   * call that still arrives is refused here, locally. Absent = everything on.
+   */
+  coworkerDisabledGroups?: CoworkerToolGroup[];
+  /**
+   * Email (webmail sites in the Coworker's browser). ⛔ Absent means BLOCKED — the
+   * person's inbox is the most private place the browser can go, so it is opt-in.
+   */
+  coworkerBlockEmail?: boolean;
   /**
    * Remote support: whether this installation will answer a request to share
    * its screen. ⛔⛔ OFF BY DEFAULT, AND THAT IS THE WHOLE FLEET-SAFETY STORY.

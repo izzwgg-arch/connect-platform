@@ -275,7 +275,7 @@ test("source guards: the engine offers the hands only through the provider, the 
   assert.doesNotMatch(engine, /cannot do\s+yet/, "no prompt may still deny a capability the tools provide");
   const routes = read(path.join(__dirname, "../conversation/routes.ts"));
   assert.match(routes, /\\bLoopcom\\\/\\d/);
-  assert.match(routes, /desktopApp \}/);
+  assert.match(routes, /viewingPath: body\.data\.context\?\.path, desktopApp,/, "the branded-UA flag still reaches the engine context");
   const server = read(path.join(__dirname, "../server.ts"));
   assert.match(server, /registerCoworkerLinkRoutes\(app, desktopLink, audit\)/);
   assert.match(server, /new ConversationEngine\([^\n]*knowledgeProvider, dynamicTools\)/);

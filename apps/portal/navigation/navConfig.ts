@@ -61,6 +61,7 @@ import {
   Server,
   SlidersHorizontal,
   Settings2,
+  Sparkles,
   Shield,
   Stethoscope,
   UserCog,
@@ -108,6 +109,8 @@ export const navItems: NavItem[] = [
   // are the only two levers. The keys live in @connect/shared SIDEBAR_ITEMS.
   { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_direct" },
   { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_meetings" },
+  // The Coworker's full page (2026-09-15). Own key, no default bucket — granting it is the launch.
+  { id: "workspace.coworker", href: "/coworker", label: "Coworker", icon: "CW", lucide: Sparkles, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_coworker" },
   // ── LoopCom Mobile — its OWN SECTION (2026-09-16, the approved full
   // product area). One key per page, none in any default bucket; NO force
   // lines — a granted key really shows its page (the honesty invariant).

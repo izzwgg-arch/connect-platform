@@ -24,6 +24,7 @@ import { DesktopLinkClient, type LinkState } from "./link";
 import { askApproval, registerApprovalIpc, openConnectionsWindow, pendingApprovals, type ApprovalDeps } from "./approvalWindow";
 import { normalizePermissions, PERMISSION_PROFILES } from "./policyCore";
 import { PlaywrightRuntime } from "./browserCompanion/playwrightRuntime";
+import { registerCoworkerUiIpc } from "./uiBridge";
 
 export type HandsDeps = {
   app: App;
@@ -53,6 +54,19 @@ export type HandsDeps = {
   onApprovalSettled?: () => void;
   /** The number of tool calls in flight changed — main drives the bubble's badge. */
   onActivity?: (active: number) => void;
+  /**
+   * The Coworker workspace bridge (coworker/uiBridge.ts). All optional so an older
+   * main keeps starting the hands; without `dialog` the workspace verbs are simply
+   * not registered (the chat then shows the switches as unavailable).
+   */
+  dialog?: Pick<import("electron").Dialog, "showMessageBox" | "showOpenDialog">;
+  bubbleEnabled?: () => boolean;
+  setBubbleEnabled?: (on: boolean) => void;
+  openCoworkerFull?: (route: string) => void;
+  openBubbleChat?: () => void;
+  isChatVisible?: () => boolean;
+  setBadge?: (state: "none" | "unread" | "working") => void;
+  notify?: (title: string, body: string) => void;
 };
 
 export type Hands = {
@@ -115,7 +129,14 @@ export function startCoworkerHands(d: HandsDeps): Hands {
   const runtime: CoworkerRuntime = new CoworkerRuntime({
     home: os.homedir(),
     workspace,
-    extraRoots: () => (d.getSettings().coworkerExtraRoots ?? []).filter((r): r is string => typeof r === "string" && !!r.trim()),
+    // Extra roots from settings PLUS the folders attached from the Coworker workspace.
+    extraRoots: () => {
+      const s = d.getSettings();
+      return [...(s.coworkerExtraRoots ?? []), ...(s.coworkerFolders ?? []).map((f) => f?.path)].filter((r): r is string => typeof r === "string" && !!r.trim());
+    },
+    disabledGroups: () => d.getSettings().coworkerDisabledGroups ?? [],
+    // ⛔ Absent = blocked: email is opt-in.
+    blockEmail: () => d.getSettings().coworkerBlockEmail !== false,
     permissions,
     isCallActive: d.isCallActive,
     coworkerEnabled: () => true,
@@ -238,6 +259,30 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     return { ok: true };
   });
   d.ipcMain.handle("coworker-admin:open-connections", () => { openConnectionsWindow(approvalDeps); return { ok: true }; });
+
+  /* ── the Coworker workspace bridge (the IDE-style chat and full page) ── */
+  if (d.dialog) {
+    registerCoworkerUiIpc({
+      ipcMain: d.ipcMain,
+      dialog: d.dialog,
+      fromWebContents: (wc) => { try { return d.BrowserWindow.fromWebContents(wc); } catch { return null; } },
+      portalUrl: d.portalUrl,
+      home: os.homedir(),
+      appVersion: d.app.getVersion(),
+      getSettings: d.getSettings,
+      writeSettings: d.writeSettings,
+      announce: () => { try { link!.announce(); } catch { /* not started */ } },
+      linkState: () => { try { return String(link!.status().state); } catch { return "off"; } },
+      bubbleEnabled: () => (d.bubbleEnabled ? d.bubbleEnabled() : !!d.getSettings().coworkerWidgetEnabled),
+      setBubbleEnabled: (on) => d.setBubbleEnabled?.(on),
+      openCoworkerFull: (route) => d.openCoworkerFull?.(route),
+      openBubbleChat: () => d.openBubbleChat?.(),
+      isChatVisible: () => (d.isChatVisible ? d.isChatVisible() : false),
+      setBadge: (s) => d.setBadge?.(s),
+      notify: (title, body) => d.notify?.(title, body),
+      log: (l) => log(`workspace: ${l}`),
+    });
+  }
 
   return {
     link, runtime, mcp, journal,

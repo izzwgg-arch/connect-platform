@@ -60,6 +60,28 @@ export const CHAT_MAX_TOKENS = Number(process.env.AGENT_CHAT_MAX_TOKENS || 4000)
  */
 export const MAX_TOOL_ITERATIONS = Number(process.env.AGENT_MAX_TOOL_ITERATIONS || 8);
 
+/**
+ * Watchers on one agentic turn — what the Coworker workspace shows live
+ * (apps/agent/src/coworker/activity.ts). ⛔ Observers only: a hook can never change
+ * a tool's arguments, its result or whether it runs, EXCEPT `shouldStop`, which only
+ * ever stops work (the person pressed Stop). Every call is wrapped so a broken
+ * watcher cannot break the turn.
+ */
+export type ToolLoopHooks = {
+  /** A model call is about to start (the model is deciding what to do next). */
+  onThinking?: () => void;
+  onToolStart?: (callId: string, name: string, args: Record<string, unknown>) => void;
+  onToolEnd?: (callId: string, name: string, args: Record<string, unknown>, result: { ok: boolean; content: unknown }) => void;
+  shouldStop?: () => boolean;
+};
+
+/** What the loop hands back when the person pressed Stop before the model finished. */
+export const STOPPED_REPLY = "Stopped. I didn't do anything else after you pressed Stop.";
+
+function safeHook(fn: () => void): void {
+  try { fn(); } catch { /* a watcher must never break the turn */ }
+}
+
 export const DEFAULT_ROUTES: RouteTable = {
   // Customer-facing conversation → OpenAI (Izzy's call, 2026-08-06). Anthropic
   // Sonnet 5 stays the failover so a provider outage never mutes the chat.
@@ -320,22 +342,39 @@ export class ModelRouter {
     messages: ChatMessage[],
     tools: ToolSpec[],
     ctx: ToolContext,
-    opts: { maxTokens?: number; conversationId?: string; maxIterations?: number } = {},
+    opts: { maxTokens?: number; conversationId?: string; maxIterations?: number; hooks?: ToolLoopHooks } = {},
   ): Promise<CompletionResult & { toolCalls: number; hitIterationCap: boolean }> {
     const route = this.routes[task];
     if (!route) throw new Error(`No route for task class ${task}`);
     const visible = toolsForRole(tools, ctx.role);
     const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
     const maxIterations = opts.maxIterations ?? MAX_TOOL_ITERATIONS;
+    const hooks = opts.hooks;
 
     // No tools visible to this role ⇒ nothing agentic to do; take the cheap path.
     if (visible.length === 0) {
+      safeHook(() => hooks?.onThinking?.());
       const res = await this.complete(task, messages, opts);
       return { ...res, toolCalls: 0, hitIterationCap: false };
     }
 
+    let callSeq = 0;
     const runTool = async (name: string, args: Record<string, unknown>) => {
-      const r = await executeTool(tools, name, args, ctx);
+      const callId = `c${++callSeq}`;
+      // ⛔ Stop is honoured BETWEEN calls too: the model may have asked for several
+      // tools in one round, and none after the press may start.
+      if (hooks?.shouldStop?.()) {
+        return { ok: false, content: { error: "task_cancelled", message: "The person pressed Stop. Do not continue; report what was done so far." }, droppedArgs: [] as string[] };
+      }
+      safeHook(() => hooks?.onToolStart?.(callId, name, args));
+      let r: Awaited<ReturnType<typeof executeTool>>;
+      try {
+        r = await executeTool(tools, name, args, ctx);
+      } catch (err) {
+        safeHook(() => hooks?.onToolEnd?.(callId, name, args, { ok: false, content: { error: "tool_threw", message: String(err).slice(0, 200) } }));
+        throw err;
+      }
+      safeHook(() => hooks?.onToolEnd?.(callId, name, args, { ok: r.ok, content: r.content }));
       await this.audit.record({
         actor: "model",
         event: r.ok ? "tool.call" : "tool.refused",
@@ -349,8 +388,8 @@ export class ModelRouter {
     try {
       const out =
         route.primary === "anthropic"
-          ? await this.anthropicToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool)
-          : await this.openaiToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool);
+          ? await this.anthropicToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool, hooks)
+          : await this.openaiToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool, hooks);
       await this.audit.record({
         actor: "model",
         event: "llm.completion",
@@ -388,6 +427,7 @@ export class ModelRouter {
     maxTokens: number,
     maxIterations: number,
     runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
+    hooks?: ToolLoopHooks,
   ) {
     if (!this.anthropic) throw new Error("Anthropic key not configured");
     const system = messages.filter((m) => m.role === "system").map((m) => chatMessageText(m.content)).join("\n");
@@ -402,6 +442,8 @@ export class ModelRouter {
     let toolCalls = 0;
 
     for (let i = 0; i < maxIterations; i++) {
+      if (hooks?.shouldStop?.()) return this.toolLoopResult(STOPPED_REPLY, inputTokens, outputTokens, toolCalls, false);
+      safeHook(() => hooks?.onThinking?.());
       const res: any = await this.anthropic.messages.create({
         model,
         max_tokens: maxTokens,
@@ -450,6 +492,7 @@ export class ModelRouter {
     maxTokens: number,
     maxIterations: number,
     runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
+    hooks?: ToolLoopHooks,
   ) {
     if (!this.openai) throw new Error("OpenAI key not configured");
     // ⛔ Tools go through /v1/responses, NOT /v1/chat/completions. Proven in
@@ -471,6 +514,8 @@ export class ModelRouter {
     let toolCalls = 0;
 
     for (let i = 0; i < maxIterations; i++) {
+      if (hooks?.shouldStop?.()) return this.toolLoopResult(STOPPED_REPLY, inputTokens, outputTokens, toolCalls, false);
+      safeHook(() => hooks?.onThinking?.());
       const res: any = await (this.openai as any).responses.create({
         model,
         max_output_tokens: maxTokens,

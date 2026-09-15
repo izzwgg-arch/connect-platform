@@ -432,6 +432,16 @@ export function setWidgetBadge(state: WidgetBadge): void {
   }
 }
 
+/** The Coworker workspace's "back to the bubble": open (or re-show) the chat popover. */
+export function showCoworkerChat(): void {
+  try { openChatPanel(); } catch (err) { deps?.log(`show chat failed: ${String(err)}`); }
+}
+
+/** The Coworker workspace's "open full page": the popover steps aside for the main window. */
+export function hideCoworkerChat(): void {
+  hideChatPanel();
+}
+
 export function destroyCoworkerWidget(): void {
   try {
     if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy();

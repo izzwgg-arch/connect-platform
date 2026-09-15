@@ -17,6 +17,7 @@ import type { ChatUploadStore } from "../attachments/uploadStore";
 import type { EscalationService } from "../escalation/escalations";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
 import { elevateForCustomOwnerRole, isPlatformStaff } from "../authRoles";
+import { TURN_ID_RE, type ActivityHub } from "../coworker/activity";
 
 const Identity = z.object({
   tenantId: z.string().min(1),
@@ -51,6 +52,8 @@ export function registerChatRoutes(
    *  researched SMS + email to the owner. Optional: without it, behaviour is
    *  exactly the old (report-nothing) behaviour. */
   escalations: EscalationService | null = null,
+  /** The Coworker workspace's live activity feed. Optional: without it a turnId is refused. */
+  hub: ActivityHub | null = null,
 ) {
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
@@ -64,7 +67,13 @@ export function registerChatRoutes(
         text: z.string().min(1).max(8000),
         channel: z.string().optional(),
         /** Finished upload ids from /agent/chat/upload/finish (this session). */
-        attachments: z.array(z.string().min(1).max(64)).max(10).optional(),
+        attachments: z.array(z.string().min(1).max(64)).max(20).optional(),
+        /** Coworker workspace: the random id this page polls /agent/coworker/activity with. */
+        turnId: z.string().regex(TURN_ID_RE).optional(),
+        /** Coworker workspace: continue THIS task (it must be the caller's own). */
+        conversationId: z.string().min(1).max(64).optional(),
+        /** Coworker workspace: "New task" — never continue the open conversation. */
+        newTask: z.boolean().optional(),
         /** Which portal page the customer has open. The widget has ALWAYS sent
          *  this ("Viewing with you: Voicemail — ask me anything on this page")
          *  — the schema silently dropped it, so the assistant answered "I
@@ -75,11 +84,26 @@ export function registerChatRoutes(
           .object({
             page: z.string().max(80).optional(),
             path: z.string().max(200).optional(),
+            /** Folders the person attached on their computer. Data for the prompt only —
+             *  what the computer may touch is decided by the desktop app, never by this. */
+            folders: z
+              .array(z.object({ path: z.string().min(1).max(400), name: z.string().min(1).max(120), repo: z.boolean().optional() }))
+              .max(20)
+              .optional(),
           })
           .optional(),
       })
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    // ⛔ A workspace turn is opened BEFORE any work, for this verified identity only;
+    // a turnId another person already owns, or one still running, is refused.
+    let turnId: string | undefined;
+    if (body.data.turnId) {
+      if (!hub || !identity.clientUserId) return reply.code(400).send({ error: "turn_not_supported" });
+      const opened = hub.open(body.data.turnId, { tenantId: identity.tenantId, clientUserId: identity.clientUserId });
+      if (!opened.ok) return reply.code(409).send({ error: opened.error });
+      turnId = body.data.turnId;
+    }
     // Attachment ids resolve ONLY within the caller's own tenant — an id from
     // another tenant simply doesn't exist here.
     const attachments = (body.data.attachments ?? [])
@@ -102,11 +126,24 @@ export function registerChatRoutes(
     // link itself is keyed by the verified identity and the desktop re-checks
     // every call locally, so a forged header gains nothing without a linked app.
     const desktopApp = /\bLoopcom\/\d/.test(String(req.headers["user-agent"] ?? ""));
-    const result = await engine.handleMessage(
-      { ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path, desktopApp },
-      body.data.text,
-      attachments,
-    );
+    let result;
+    try {
+      result = await engine.handleMessage(
+        {
+          ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path, desktopApp,
+          ...(turnId ? { turnId } : {}),
+          ...(body.data.conversationId ? { conversationId: body.data.conversationId } : {}),
+          ...(body.data.newTask ? { startNewConversation: true } : {}),
+          ...(body.data.context?.folders?.length ? { coworkerFolders: body.data.context.folders.map((f) => ({ path: f.path, name: f.name, repo: f.repo === true })) } : {}),
+        },
+        body.data.text,
+        attachments,
+      );
+    } catch (err) {
+      if (turnId) hub!.finish(turnId, false);
+      throw err;
+    }
+    if (turnId) hub!.finish(turnId, !result.degraded);
     // After the reply is decided: if the assistant just promised to pass this
     // to the human team, make that promise TRUE. Fire-and-forget — the
     // customer's chat never waits on (or breaks over) the escalation pipeline.

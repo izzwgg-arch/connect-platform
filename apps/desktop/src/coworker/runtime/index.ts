@@ -29,6 +29,34 @@ import { McpManager } from "./mcp";
 import { Journal } from "./journal";
 import type { BrowserCompanionRuntime } from "../browserCompanion/runtime";
 import { validateArgs, type CommandName } from "../browserCompanion/protocol";
+import { gitBranches, gitCheckout, gitClone, gitCommit, gitDiff, gitLog, gitPull, gitPush, gitStatus } from "./git";
+
+/** The tool family a built-in tool belongs to, for the person's on/off switches. MCP tools have none. */
+export type ToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system";
+export function toolGroup(name: string): ToolGroup | null {
+  if (name.startsWith("computer_fs_") || name === "computer_open_path" || name === "computer_artifact_register") return "files";
+  if (name.startsWith("computer_chrome_") || name.startsWith("computer_browser_")) return "browser";
+  if (name.startsWith("computer_xlsx_")) return "sheets";
+  if (name.startsWith("computer_git_")) return "git";
+  if (name === "computer_powershell") return "shell";
+  if (name === "computer_system_info" || name === "computer_processes" || name === "computer_diagnostics") return "system";
+  return null;
+}
+
+const GROUP_WORDS: Record<ToolGroup, string> = {
+  files: "Files on this computer", browser: "The web browser", sheets: "Spreadsheets", git: "Code projects", shell: "Running commands", system: "Checking this computer",
+};
+
+/** Webmail sites — the person's inbox. Blocked unless they switched Email on. */
+const WEBMAIL_HOST_RE = /(^|\.)(mail\.google\.com|gmail\.com|outlook\.live\.com|outlook\.office\.com|outlook\.office365\.com|outlook\.com|mail\.yahoo\.com|mail\.aol\.com|mail\.proton\.me|mail\.protonmail\.com|mail\.zoho\.com|app\.fastmail\.com|fastmail\.com|mail\.yandex\.com|mail\.gmx\.com|navigator-bs\.gmx\.com)$|^webmail\.|^mail\./i;
+export function isWebmailUrl(url: unknown): boolean {
+  if (typeof url !== "string") return false;
+  try {
+    const u = new URL(url);
+    return WEBMAIL_HOST_RE.test(u.hostname) || (/(^|\.)icloud\.com$/i.test(u.hostname) && /^\/mail/i.test(u.pathname));
+  } catch { return false; }
+}
+
 
 export type ApprovalRequest = {
   callId: string;
@@ -64,6 +92,10 @@ export type RuntimeDeps = {
   onActivity?: (active: number) => void;
   /** An approval prompt is about to be shown for this call — the link tells the agent to wait for the person. */
   onAwaitingApproval?: (call: { id: string; taskId: string; tool: string }) => void;
+  /** Tool families the person switched off (Coworker settings). Read per call. */
+  disabledGroups?: () => readonly string[];
+  /** True = webmail sites are off limits to the Coworker's browser. Read per call. */
+  blockEmail?: () => boolean;
   now?: () => number;
 };
 
@@ -82,8 +114,14 @@ export class CoworkerRuntime {
   }
 
   /** The manifest the desktop announces: catalogue + connected MCP tools. */
+  private groupOff(name: string): ToolGroup | null {
+    const g = toolGroup(name);
+    if (!g) return null;
+    try { return (this.deps.disabledGroups?.() ?? []).includes(g) ? g : null; } catch { return null; }
+  }
+
   manifestTools() {
-    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
+    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).filter((t) => !this.groupOff(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
     const mcp = this.deps.mcp.tools().map(({ client, tool }) => ({
       name: tool.modelName,
       description: `[${client.config.name}] ${tool.description}`.slice(0, 2000),
@@ -135,6 +173,22 @@ export class CoworkerRuntime {
       const mcp = catalog ? null : this.deps.mcp.find(call.name);
       if (!catalog && !mcp) return finish(false, { error: "unknown_tool", message: `This computer has no tool named ${call.name}.` }, "unknown", "denied");
       const spec = catalog ? catalog.spec : mcp!.tool.spec;
+
+      /* ── the person's own switches, before any verdict: an agent that announced
+       *    earlier (or ignores the manifest) still cannot use a family they turned off ── */
+      const off = catalog ? this.groupOff(call.name) : null;
+      if (off) {
+        const message = `${GROUP_WORDS[off]} is switched off in the Coworker's settings on this computer.`;
+        return finish(false, { error: "switched_off", denied: true, group: off, message }, "switched_off", "denied", message);
+      }
+      if ((call.name === "computer_chrome_open" || call.name === "computer_browser_open" || call.name === "computer_browser_download") && isWebmailUrl(args.url)) {
+        let blocked = true;
+        try { blocked = this.deps.blockEmail ? this.deps.blockEmail() : true; } catch { blocked = true; }
+        if (blocked) {
+          const message = "Email is switched off in the Coworker's settings, so it won't open your inbox. Turn Email on in Coworker settings to allow it.";
+          return finish(false, { error: "switched_off", denied: true, group: "email", message }, "switched_off", "denied", message);
+        }
+      }
 
       /* ── the verdict ── */
       const decision = decideToolCall({ spec, permissions: normalizePermissions(this.deps.permissions()), provenance: "user", callInProgress: this.deps.isCallActive(), coworkerEnabled: this.deps.coworkerEnabled() });
@@ -195,6 +249,11 @@ export class CoworkerRuntime {
       case "computer_browser_download": what = `Download ${short(args.url ?? args.text ?? args.selector)} into the workspace downloads folder.`; break;
       case "computer_browser_submit": what = `Submit the form on ${this.deps.browser.currentUrl() ?? "the current page"}.`; break;
       case "computer_xlsx_write": what = `Create the spreadsheet ${short(args.path)}.`; break;
+      case "computer_git_commit": what = `Save a checkpoint of the changes in ${short(args.repo)} with the note: ${short(args.message, 200)}`; break;
+      case "computer_git_checkout": what = `${args.create === true ? "Create and switch to" : "Switch"} the project ${short(args.repo)} ${args.create === true ? "" : "to "}branch ${short(args.branch, 80)}.`; break;
+      case "computer_git_pull": what = `Get the latest changes from the server for ${short(args.repo)}.`; break;
+      case "computer_git_push": what = `SEND the saved changes in ${short(args.repo)} to the server (${short(args.remote ?? "origin", 40)}). This sends code off this computer.`; break;
+      case "computer_git_clone": what = `Download the project ${short(args.url)} into ${short(args.into ?? "the coworker workspace")}.`; break;
       default: what = mcpTool ? `Call "${mcpTool}" on MCP server ${call.name.split("_")[1] ?? ""} with ${short(args, 300)}` : `${catalog?.description ?? call.name}\nArguments: ${short(args, 300)}`;
     }
     return {
@@ -304,6 +363,23 @@ export class CoworkerRuntime {
       }
       case "computer_browser_wait": return wrap(await this.deps.browser.wait(args));
       case "computer_browser_close": return wrap(this.deps.browser.close());
+      case "computer_git_status":
+      case "computer_git_log":
+      case "computer_git_diff":
+      case "computer_git_branches":
+      case "computer_git_commit":
+      case "computer_git_checkout":
+      case "computer_git_pull":
+      case "computer_git_push":
+      case "computer_git_clone": {
+        const gitDeps = { onSpawn: (child: ChildProcess) => { rec.children.add(child); child.once("exit", () => rec.children.delete(child)); } };
+        const run = {
+          computer_git_status: gitStatus, computer_git_log: gitLog, computer_git_diff: gitDiff, computer_git_branches: gitBranches,
+          computer_git_commit: gitCommit, computer_git_checkout: gitCheckout, computer_git_pull: gitPull, computer_git_push: gitPush, computer_git_clone: gitClone,
+        }[tool.name as "computer_git_status"];
+        const out = await run(args, env, gitDeps);
+        return wrap(signal.aborted ? { ...(out as object), ok: false, error: "task_cancelled" } : out);
+      }
       case "computer_diagnostics": return wrap(await runDiagnostics({ ...this.deps.diagnostics, shell: this.deps.shellDeps }, args.sections));
       case "computer_mcp_servers": return wrap({ ok: true, servers: this.deps.mcp.status() });
       case "computer_task_history": {
@@ -327,6 +403,8 @@ function titleFor(name: string): string {
   if (name.startsWith("computer_fs_delete")) return "Delete on this computer?";
   if (name.startsWith("computer_fs_")) return "Change a file on this computer?";
   if (name === "computer_xlsx_write") return "Create a spreadsheet?";
+  if (name === "computer_git_push") return "Send code off this computer?";
+  if (name.startsWith("computer_git_")) return "Change a code project?";
   if (name === "computer_powershell") return "Run PowerShell on this computer?";
   if (name.startsWith("computer_browser_download")) return "Download a file?";
   if (name.startsWith("computer_browser_submit")) return "Submit a web form?";

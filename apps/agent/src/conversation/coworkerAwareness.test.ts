@@ -16,7 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { COWORKER_CHAT_PATH } from "./engine";
+import { COWORKER_CHAT_PATH, COWORKER_PAGE_PATH, isCoworkerPath } from "./engine";
 
 const code = readFileSync(join(__dirname, "engine.ts"), "utf8").replace(/\r\n/g, "\n");
 const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -35,7 +35,15 @@ test("the coworker chat path matches what the desktop app loads", () => {
 
 test("the viewing block knows the bubble, and tells the truth for BOTH link states", () => {
   const view = stripComments(code.slice(code.indexOf("const inCoworker ="), code.indexOf("const staffMode =")));
-  assert.match(view, /ctx\.viewingPath\.startsWith\(COWORKER_CHAT_PATH\)/);
+  // 2026-09-15: the Coworker also has a full page (/coworker); the one helper decides both.
+  assert.match(view, /const inCoworker = isCoworkerPath\(ctx\.viewingPath\)/);
+  assert.equal(isCoworkerPath(COWORKER_CHAT_PATH), true, "the bubble is still the Coworker");
+  assert.equal(isCoworkerPath(`${COWORKER_CHAT_PATH}?x=1`), true);
+  assert.equal(isCoworkerPath(COWORKER_PAGE_PATH), true, "the full page is the Coworker");
+  assert.equal(isCoworkerPath(`${COWORKER_PAGE_PATH}?task=abc`), true);
+  assert.equal(isCoworkerPath("/coworkers-report"), false, "a page merely starting with the word is not");
+  assert.equal(isCoworkerPath("/voicemail"), false);
+  assert.equal(isCoworkerPath(undefined), false);
   assert.match(view, /talking to you through the Loopcom Coworker/);
   assert.match(view, /\? handsOn\s*\?/, "the bubble branch forks on whether the desktop is linked");
   assert.match(view, /Their Loopcom app is CONNECTED and the computer_\* tools below run on that computer/, "linked: act");

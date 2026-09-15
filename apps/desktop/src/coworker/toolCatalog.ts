@@ -207,6 +207,61 @@ export const TOOL_CATALOG: readonly CatalogTool[] = [
     parameters: { type: "object", properties: {}, additionalProperties: false },
     spec: spec("computer_browser_close", "BROWSER", "READ_ONLY", ["browser"], { timeoutMs: 10_000 }),
   },
+  /* ── code folders (git) — run as git with an argument array, never a shell ── */
+  {
+    name: "computer_git_status",
+    description: "What changed in a code project (a folder with git version history): changed, new and conflicted files, the current branch, and how far it is ahead of or behind the server. Changes nothing.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE) }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_status", "FILESYSTEM", "READ_ONLY", ["files.read"], { timeoutMs: 60_000 }),
+  },
+  {
+    name: "computer_git_log",
+    description: "The project's saved checkpoints (commit history), newest first: short id, author, date and note. Optionally only the history of one file inside the project. Changes nothing.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE), limit: num("How many checkpoints (default 20, max 200)."), path: str("Optional file inside the project, to see only its history.") }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_log", "FILESYSTEM", "READ_ONLY", ["files.read"], { timeoutMs: 60_000 }),
+  },
+  {
+    name: "computer_git_diff",
+    description: "The exact unsaved changes in a project: which files, how many lines added and removed, and the changed lines themselves (cut at maxChars). staged:true shows only changes already gathered for the next checkpoint. Changes nothing.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE), staged: bool("Only changes already staged. Default false."), maxChars: num("Cap on the changed lines returned (default 20000, max 40000).") }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_diff", "FILESYSTEM", "READ_ONLY", ["files.read"], { timeoutMs: 60_000 }),
+  },
+  {
+    name: "computer_git_branches",
+    description: "The project's branches (local and on the server), which one is being worked on, and when each last changed. Changes nothing.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE) }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_branches", "FILESYSTEM", "READ_ONLY", ["files.read"], { timeoutMs: 60_000 }),
+  },
+  {
+    name: "computer_git_commit",
+    description: "Save a checkpoint (commit) of the project's current changes with a short note. By default every change in the project is included; includeAll:false saves only what is already staged. Verify with computer_git_log afterwards.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE), message: str("A short note describing the checkpoint."), includeAll: bool("Include every change in the project (default true).") }, required: ["repo", "message"], additionalProperties: false },
+    spec: spec("computer_git_commit", "FILESYSTEM", "LOW", ["files.read", "files.write"], { timeoutMs: 120_000 }),
+  },
+  {
+    name: "computer_git_checkout",
+    description: "Switch the project to another branch, or create a new branch and switch to it (create:true). Refuses when unsaved changes would be overwritten.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE), branch: str("Branch name, e.g. 'main' or 'fix/invoice-total'."), create: bool("Create the branch first. Default false.") }, required: ["repo", "branch"], additionalProperties: false },
+    spec: spec("computer_git_checkout", "FILESYSTEM", "LOW", ["files.write"], { timeoutMs: 120_000 }),
+  },
+  {
+    name: "computer_git_pull",
+    description: "Get the latest changes for the current branch from the server (fast-forward only — it never merges on its own). Needs Git on this computer to be signed in to that server already.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE) }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_pull", "NETWORK", "MEDIUM", ["files.write"], { networked: true, timeoutMs: 10 * 60_000 }),
+  },
+  {
+    name: "computer_git_push",
+    description: "Send the current branch's saved checkpoints to the server (default remote 'origin'). This sends code off the computer, so the person is always asked first. Needs Git on this computer to be signed in to that server already.",
+    parameters: { type: "object", properties: { repo: str("The project folder. " + PATH_NOTE), remote: str("Remote name. Default 'origin'.") }, required: ["repo"], additionalProperties: false },
+    spec: spec("computer_git_push", "NETWORK", "MEDIUM", ["files.read", "external.post"], { networked: true, exfiltrationCapable: true, alwaysRequireApproval: true, timeoutMs: 10 * 60_000 }),
+  },
+  {
+    name: "computer_git_clone",
+    description: "Download a project from an https:// or git@ address into a new folder (default: a folder named after the project inside the coworker workspace). Refuses to download over something that already exists.",
+    parameters: { type: "object", properties: { url: str("The project's https:// or git@ address."), into: str("Optional new folder to download into. " + PATH_NOTE) }, required: ["url"], additionalProperties: false },
+    spec: spec("computer_git_clone", "NETWORK", "MEDIUM", ["files.write"], { networked: true, timeoutMs: 10 * 60_000 }),
+  },
   /* ── diagnostics ── */
   {
     name: "computer_diagnostics",

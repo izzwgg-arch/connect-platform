@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DesktopSettings, PhoneEngineCommand, PhoneEngineEnvelope } from "./types";
@@ -10,7 +10,7 @@ import { registerPhoneSetup } from "./phoneSetup/mainWiring";
 import { registerCoworkerHands } from "./coworker/mainWiring";
 import { startCoworkerHands, type Hands } from "./coworker/hands";
 import { iconFileForTheme, installThemeIconWatcher, resolveDark } from "./themeIcon";
-import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc, chatPanelBounds, isChatPanelVisible, restoreChatPanel, setWidgetBadge } from "./coworkerWidget/widgetWindow";
+import { createCoworkerWidget, destroyCoworkerWidget, registerCoworkerWidgetIpc, chatPanelBounds, isChatPanelVisible, restoreChatPanel, setWidgetBadge, showCoworkerChat, hideCoworkerChat } from "./coworkerWidget/widgetWindow";
 import { readShellLogTail } from "./shellLog";
 import { release as osRelease } from "node:os";
 import {
@@ -630,6 +630,18 @@ function startHands(): void {
       chatAnchor: () => chatPanelBounds(),
       onApprovalSettled: () => restoreChatPanel(),
       onActivity: (active) => coworkerActivity(active),
+      // The Coworker workspace (IDE-style chat + full page). ⛔ Every entry wrapped.
+      dialog,
+      bubbleEnabled: () => !!settings.coworkerWidgetEnabled,
+      setBubbleEnabled: (on) => { if (!!settings.coworkerWidgetEnabled !== on) toggleCoworkerWidget(); },
+      openCoworkerFull: (route) => {
+        try { hideCoworkerChat(); } catch { /* popover may not exist */ }
+        try { const win = createFullWindow(true); loadPortal(win, route); } catch (err) { diag("coworker", `open full page failed: ${String(err)}`); }
+      },
+      openBubbleChat: () => { try { showCoworkerChat(); } catch (err) { diag("coworker", `open bubble chat failed: ${String(err)}`); } },
+      isChatVisible: () => { try { return isChatPanelVisible(); } catch { return false; } },
+      setBadge: (s) => { try { setWidgetBadge(s); } catch { /* decorative */ } },
+      notify: (title, body) => { try { void showDesktopNotification({ kind: "coworker", title, body, route: "/coworker" }); } catch { /* courtesy */ } },
     });
     diag("coworker", "hands started");
     rebuildTray();

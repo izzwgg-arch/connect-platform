@@ -72,6 +72,9 @@ import { CorpusService } from "./corpus/corpus";
 import { SEED_GLOSSARY, type DialectTerm } from "./corpus/glossary";
 import { ArchiveIngestor, MemoryArchiveProgress } from "./corpus/archive";
 import { Transcriber } from "./transcription/transcriber";
+import { ActivityHub } from "./coworker/activity";
+import { CoworkerPrefsStore } from "./coworker/prefs";
+import { registerCoworkerUiRoutes, transcribeForCoworker } from "./coworker/uiRoutes";
 
 class PrismaAuditSink implements AuditSink {
   constructor(private prisma: any) {}
@@ -334,6 +337,31 @@ async function main() {
     };
     engine = new ConversationEngine(new PrismaConversationStore(prisma), router, audit, triage, rateLimiter, yiddishBridge, cfg.yiddishBridge, contextProvider, trainerLessons, chatTools, knowledgeProvider, dynamicTools);
 
+    // ── The Coworker WORKSPACE (2026-09-15): live steps, questions back, Stop, the
+    // person's Coworker settings, voice. In memory like the desktop link; finished
+    // steps are also written to the audit log for "Everything it did".
+    const coworkerHub = new ActivityHub();
+    const coworkerSweep: { unref?: () => void } = setInterval(() => { try { coworkerHub.sweep(); } catch { /* housekeeping */ } }, 60_000) as never;
+    coworkerSweep.unref?.();
+    const coworkerPrefs = new CoworkerPrefsStore(prisma, audit);
+    desktopLink!.onAwaitingApproval = (identity, tool) => { try { coworkerHub.markWaiting(identity, tool); } catch { /* display only */ } };
+    engine.attachCoworkerWorkspace({
+      hub: coworkerHub,
+      loadPrefs: (o) => coworkerPrefs.get(o),
+      transcribeAudio: async (buf, filename) => {
+        const { openaiTranscribe } = await import("./transcription/openaiStt");
+        // glossaryContext is defined further down this block; a message cannot arrive before boot finishes.
+        const r = await transcribeForCoworker({ keys: providerKeys, glossaryContext: () => glossaryContext() }, buf, filename, openaiTranscribe as any);
+        return r.ok ? r.text : null;
+      },
+      recordStep: (row) => {
+        void audit.record({
+          actor: "agent", event: "coworker.step", tenantId: row.tenantId, conversationId: row.conversationId,
+          payload: { userId: row.userId, turnId: row.turnId, kind: row.kind, label: row.label, state: row.state, tookMs: row.tookMs ?? null, changed: row.changed ?? null },
+        });
+      },
+    });
+
     // Warm the in-memory cache from the DB, then pre-translate fixed templates
     // (once) so common replies are instant. Runs in the background — never
     // blocks boot, and no-ops without a YL key.
@@ -396,7 +424,7 @@ async function main() {
     // owner's SMS + email report (sent by the api's dispatcher).
     const { EscalationService } = await import("./escalation/escalations");
     const escalations = new EscalationService(prisma, router, chatTools, audit);
-    registerChatRoutes(app, engine, uploadStore, prisma, escalations);
+    registerChatRoutes(app, engine, uploadStore, prisma, escalations, coworkerHub);
     // The Windows app's link: hello / long-poll / result / cancel / status,
     // identity from the same portal JWT the chat uses.
     if (desktopLink) registerCoworkerLinkRoutes(app, desktopLink, audit);
@@ -1014,7 +1042,14 @@ async function main() {
       return reply.code(502).send({ ok: false, error: "transcription_unavailable" });
     });
 
-    // ── STT shoot-out: run Yiddish Labs AND Everett (ivrit.ai) on the SAME
+    // The Coworker workspace's own routes (activity, answer, stop, tasks, log, prefs,
+    // voice). Registered here because the voice route needs glossaryContext.
+    registerCoworkerUiRoutes(app, {
+      hub: coworkerHub, prisma, store: new PrismaConversationStore(prisma), audit, prefs: coworkerPrefs,
+      transcribe: { keys: providerKeys, glossaryContext },
+    });
+
+    // ── STT shoot-out:run Yiddish Labs AND Everett (ivrit.ai) on the SAME
     //    audio, side by side, so the owner can compare quality + speed. ──
     app.post("/agent/transcribe/compare", async (req, reply) => {
       if (!requireOwner(req)) return reply.code(403).send({ error: "forbidden" });

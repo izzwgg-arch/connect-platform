@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   DesktopMachineInfo,
   DesktopScreenSource,
@@ -310,3 +310,29 @@ const coworkerAdminApi = {
   openConnections: () => ipcRenderer.invoke("coworker-admin:open-connections"),
 };
 contextBridge.exposeInMainWorld("coworkerAdmin", coworkerAdminApi);
+
+// ── The Coworker WORKSPACE (2026-09-15) ───────────────────────────────
+// ⛔ The IDE-style chat is the HOSTED portal, so main treats every verb as untrusted
+// (see coworker/uiBridge.ts): raising access needs a native dialog, a folder comes
+// only from the native picker or a REAL drop. The one thing this preload adds that
+// the page could not do itself: `attachDroppedFolder` turns a File the person dropped
+// into its real path via webUtils — a File a page builds in JavaScript has no path,
+// so a page cannot use this to name an arbitrary folder.
+const coworkerUiApi = {
+  state: () => ipcRenderer.invoke("coworker-ui:state"),
+  setAccess: (profile: "SAFE" | "TRUSTED" | "AUTONOMOUS") => ipcRenderer.invoke("coworker-ui:set-access", profile),
+  pickFolder: (opts?: { repo?: boolean }) => ipcRenderer.invoke("coworker-ui:pick-folder", { repo: opts?.repo === true }),
+  attachDroppedFolder: (file: File) => {
+    let p = "";
+    try { p = webUtils.getPathForFile(file); } catch { p = ""; }
+    if (!p) return Promise.resolve({ ok: false, error: "not_a_folder", message: "That isn't a folder on this computer." });
+    return ipcRenderer.invoke("coworker-ui:attach-dropped", p);
+  },
+  removeFolder: (folderPath: string) => ipcRenderer.invoke("coworker-ui:remove-folder", folderPath),
+  setGroups: (patch: Record<string, boolean>) => ipcRenderer.invoke("coworker-ui:set-groups", patch),
+  setBubble: (on: boolean) => ipcRenderer.invoke("coworker-ui:set-bubble", on),
+  openFull: (route?: string) => ipcRenderer.invoke("coworker-ui:open-full", route ?? "/coworker"),
+  openBubble: () => ipcRenderer.invoke("coworker-ui:open-bubble"),
+  taskFinished: (payload: { title?: string; body?: string; notify?: boolean }) => ipcRenderer.invoke("coworker-ui:task-finished", payload),
+};
+contextBridge.exposeInMainWorld("coworkerUi", coworkerUiApi);

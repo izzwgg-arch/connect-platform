@@ -42,6 +42,8 @@ export interface ConversationStore {
   getConversation(id: string): Promise<ConversationRow | null>;
   setLanguage(id: string, language: string): Promise<void>;
   historyVisible(tenantId: string): Promise<boolean>;
+  /** Reopen a closed conversation (the Coworker workspace continuing an old task). Optional for fakes. */
+  reopen?(id: string): Promise<void>;
 }
 
 export class PrismaConversationStore implements ConversationStore {
@@ -68,6 +70,10 @@ export class PrismaConversationStore implements ConversationStore {
 
   async close(id: string) {
     await this.prisma.agentConversation.update({ where: { id }, data: { status: "CLOSED", closedAt: new Date() } });
+  }
+
+  async reopen(id: string) {
+    await this.prisma.agentConversation.update({ where: { id }, data: { status: "OPEN", closedAt: null } });
   }
 
   async closeStale(olderThan: Date) {

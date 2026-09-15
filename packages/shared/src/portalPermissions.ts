@@ -57,6 +57,10 @@ export const SIDEBAR_ITEMS = [
   // person at a time. SUPER_ADMIN holds every key via the force-add bucket.
   { id: "workspace.direct", section: "workspace", label: "Direct", href: "/direct", permission: "can_view_workspace_direct" },
   { id: "workspace.meetings", section: "workspace", label: "Meetings", href: "/meetings", permission: "can_view_workspace_meetings" },
+  // The Coworker's full page (2026-09-15, the approved IDE-style workspace). Its
+  // own key, in NO default bucket like Direct and Meetings: granting it is the
+  // launch. The bubble's chat (/desktop/coworker) does not depend on it.
+  { id: "workspace.coworker", section: "workspace", label: "Coworker", href: "/coworker", permission: "can_view_workspace_coworker" },
   // The desktop installer link. Granted to END_USER (and so TENANT_ADMIN) in
   // END_USER_ACTIONS below, so no existing customer loses the download link.
   { id: "workspace.install", section: "workspace", label: "Install", href: "/desktop/Connect-Setup-latest.exe", permission: "can_view_workspace_install" },
