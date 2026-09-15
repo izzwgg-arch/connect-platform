@@ -261,3 +261,51 @@ no attestation observed first-hand, the support pushback is unanswered, and the
 profile Company-Name save needs re-checking once the address is in. The bench
 deploy state is recorded in TESTS_RUN.md (this session: built + tested; see the
 entry for whether the deploy happened and its container verification).
+
+## 10. THE TRUNK IS LIVE AND THE ATTESTATION IS PROVEN — SHAKEN_STIR=A on a real answered call (2026-09-15, afternoon)
+
+Izzy: *"Build the trunk on the PBX and make the test call. Wire the outbound route
+and inbound route to Ezra test extension 102."* ⛔ "Ezra ext 102" did not exist —
+no Ezra tenant has a 102; Izzy chose **Loopcom Demo (T102) ext 102 "Maya
+Feldman"** from the real options. All PBX writes under that explicit instruction.
+
+- **Account first**: izzy@loopcom.net upgraded to **VERIFIED** (all criteria green
+  incl. KYC + AI-eval; ⛔ his card was declined TWICE by the billing-address form
+  and passed on the LAST attempt before account review — never brute-force it).
+  Number **(845) 306-6825** bought ($1 + $1/mo, Izzy-approved), attached to
+  Loopcom-Primary-SIP in the cart itself.
+- **Telnyx side** (via API from inside app-api-1, key from AgentSecret): the
+  credential connection's password ROTATED to a fresh secret (generated in the
+  container, travelled to Telnyx + the panel form only, `/tmp/tx-secret` deleted
+  after; retrievable forever in the Telnyx portal → connection → Authentication)
+  and **`inbound.dnis_number_format = "national"`** — that one setting makes
+  Telnyx deliver the DID as a 10-digit request-URI, i.e. the VoIP.ms shape, so
+  **NO custom `exten => s` dialplan block was needed** (unlike SignalWire's §10.3
+  trap). The generated `trk-183-in` pattern handles it as-is.
+- **PBX build** (scripts run in app-api-1 with the SAME proven builders —
+  createTrunk / createInboundRoute / editOutboundRoute; backups
+  `/root/ombu_outbound_routes-backup-telnyx-20260915T115327Z.sql` +
+  `ombu_tenant_dids-…` + queued-changes snapshot on the PBX):
+  **trunk 183 "Telnyx Loopcom-Primary"** (registration to `sip.telnyx.com`, user
+  `userizzy67753`, UDP, ulaw-first) → **`Registered (exp 3459s)`, contact Avail
+  38ms, identify 192.76.120.10/32**; DID row `(102,'8453066825','Telnyx test')` +
+  module-99 queue + Main apply → `default-trunk _8453066825 → Loopcom Demo`;
+  inbound route in T102 → ext 102 (dest id 396); **outbound route 123 trklist →
+  183** (was 132/SignalWire) and ⛔ **route CID had to change 3479780090 →
+  8453066825** — an unowned CID is a Telnyx 403 D51, there is no send_as
+  net like SignalWire's. Tenants 2/9/25's pending panel rows verified INTACT
+  after every apply.
+- **THE PROOF** (Telnyx's own CDRs, record_type `sip-trunking`, field
+  `shaken_stir` — ⛔ "voice" answers 400/10011; the bench client now pins the
+  working strings): hairpin `Local/8453066825@T102_cos-all` ran the full loop
+  out-and-back and RANG ext 102 + its wake-dial leg; then
+  `Local/5622096644@T102_cos-all` called Izzy's cell — **ANSWERED, 18s billsec,
+  caller ID (845) 306-6825, two-way audio** — and all three CDR rows read
+  **`SHAKEN_STIR=A`**. The engagement's success criterion is met per-call, not
+  by inference.
+- ⏳ Still open: ext 102 has no registered device (inbound rings → VM after 30s);
+  E911 not registered on 845-306-6825 (⛔ dial 933 never 911 from this trunk);
+  no 10DLC so its texting won't deliver; SignalWire trunk 132 + route CID
+  3479780090 history preserved in the backups if T102 must revert; the
+  ported-DID-attestation human answer on Issue #666221 still pending — though
+  A on purchased is now first-hand fact.

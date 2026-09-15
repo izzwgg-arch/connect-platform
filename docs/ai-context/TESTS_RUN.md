@@ -2,6 +2,27 @@
 
 Newest entries first.
 
+## Telnyx trunk LIVE + attestation A PROVEN (2026-09-15, afternoon)
+
+- **THE RESULT: Telnyx's own CDRs read `SHAKEN_STIR=A` on all three test legs**, including a
+  REAL call Izzy ANSWERED on his cell (18s billsec, two-way audio, caller ID 845-306-6825).
+- PBX (Izzy's explicit instruction, backups `/root/*telnyx-20260915T115327Z*` on the PBX):
+  trunk **183 "Telnyx Loopcom-Primary"** built via the proven `createTrunk` panel replay from
+  inside app-api-1 → `Registered (exp 3459s)`, contact Avail 38ms; DID 8453066825 → T102 via
+  `ombu_tenant_dids` + module-99 queue + Main apply (`default-trunk _8453066825` rendered);
+  inbound route → ext 102 (dest 396); route 123 trklist 132→183 via the proven
+  `editOutboundRoute`; ⛔ route CID moved 3479780090→8453066825 (unowned CID = Telnyx 403 D51).
+  Tenants 2/9/25's pending panel rows verified intact after every apply.
+- Telnyx side from the container (key from AgentSecret): connection password ROTATED (secret
+  in Telnyx + panel form only; /tmp file deleted), `inbound.dnis_number_format=national` →
+  10-digit R-URI = the VoIP.ms shape, NO custom dialplan needed (the SignalWire §10.3 `s`-block
+  trap does not apply).
+- Two live API-shape fixes pinned by tests (17/17 pass): number-lookup add-ons need repeated
+  `type=` params (bare flags answer 200 with EMPTY blocks), CDRs are record_type
+  **`sip-trunking`** + field **`shaken_stir`** ("voice" answers 400/10011).
+- Deploy state of the CDR fix: see the commit after this entry; api container verification in
+  the summary file.
+
 ## Yealink RPS provision by MAC + serial; MAC-only add is forbidden (2026-09-15)
 
 - **Live against the real YMCS account** (writes deleted after; cloud verified back to 0 devices):

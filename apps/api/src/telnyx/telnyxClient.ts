@@ -440,19 +440,27 @@ export interface TelnyxDetailRecord {
 }
 
 export async function listVoiceDetailRecords(creds: StoredTelnyxCredentials, limit = 20): Promise<TelnyxDetailRecord[]> {
+  // ⛔ Proven live 2026-09-15: the record type is "sip-trunking" (hyphenated;
+  // "voice" answers 400 code 10011) and the attestation field is
+  // `shaken_stir` — the first three real calls all read A, so touch these two
+  // strings only with a CDR row on screen.
   const body = await txExpect<any>(creds, {
     path: "/detail_records",
-    query: { "filter[record_type]": "voice", "page[size]": Math.min(Math.max(limit, 1), 50) },
+    query: { "filter[record_type]": "sip-trunking", "page[size]": Math.min(Math.max(limit, 1), 50) },
   });
   const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  const sipUser = (v: unknown): string | null => {
+    const m = String(v ?? "").match(/sip:(\+?[^@;>]+)@/);
+    return m ? m[1] : null;
+  };
   return rows.map((r) => ({
     recordType: r?.record_type ?? null,
     startedAt: r?.started_at ?? r?.created_at ?? null,
-    from: r?.from ?? null,
-    to: r?.to ?? null,
+    from: r?.from || sipUser(r?.sip_from_url) || null,
+    to: r?.to || sipUser(r?.sip_full_to) || null,
     direction: r?.direction ?? null,
     durationSec: typeof r?.billed_sec === "number" ? r.billed_sec : (typeof r?.duration_sec === "number" ? r.duration_sec : null),
-    stirShaken: r?.stir_shaken ?? r?.stir_shaken_attestation ?? null,
+    stirShaken: r?.shaken_stir ?? r?.stir_shaken ?? null,
     cost: r?.cost ?? null,
   }));
 }
