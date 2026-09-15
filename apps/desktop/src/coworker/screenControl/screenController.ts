@@ -57,6 +57,10 @@ export type ScreenControllerDeps = {
 /** How long after one of our injected events we still treat activity as "ours". */
 const OWN_EVENT_WINDOW_MS = 220;
 
+/** Model-vision downscale target and the transport byte ceiling (≈675 KB → base64 < 900 k chars). */
+const MODEL_VISION_MAX_WIDTH = 1280;
+const MODEL_VISION_MAX_BYTES = 500_000;
+
 /** The injector plus its concrete `start` (not on the shared interface). */
 type StartableInjector = InputInjector & { start?(onExit?: (reason: string) => void): boolean };
 
@@ -173,6 +177,32 @@ export class ElectronScreenController implements ScreenController {
     if (!this.injector || !this.injector.available) return { ok: false, error: "input_unavailable", message: "The input helper is not running." };
     this.inject(cmd);
     return { ok: true, via: cmd.kind };
+  }
+
+  /* ───────────────────────── look (model vision, Phase 2) ───────────────────────── */
+
+  async look(_taskId: string): Promise<ScreenActionResult & { image?: { mediaType: string; dataBase64: string; width: number; height: number } }> {
+    try {
+      const display = this.deps.screen.getPrimaryDisplay();
+      const scale = display.scaleFactor || 1;
+      const full = { width: Math.round(display.size.width * scale), height: Math.round(display.size.height * scale) };
+      const sources = await this.deps.desktopCapturer.getSources({ types: ["screen"], thumbnailSize: full });
+      const primary = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
+      let img: NativeImage | undefined = primary?.thumbnail;
+      if (!img || img.isEmpty()) return { ok: false, error: "look_failed", message: "Could not see the screen." };
+      // Downscale to a model-friendly width, then JPEG-compress under the transport
+      // cap (≈675 KB base64). Step quality/size down until it fits.
+      if (img.getSize().width > MODEL_VISION_MAX_WIDTH) img = img.resize({ width: MODEL_VISION_MAX_WIDTH });
+      let quality = 55;
+      let jpeg = img.toJPEG(quality);
+      while (jpeg.byteLength > MODEL_VISION_MAX_BYTES && quality > 25) { quality -= 12; jpeg = img.toJPEG(quality); }
+      if (jpeg.byteLength > MODEL_VISION_MAX_BYTES) { img = img.resize({ width: 1024 }); jpeg = img.toJPEG(35); }
+      if (jpeg.byteLength > MODEL_VISION_MAX_BYTES) return { ok: false, error: "look_too_large", message: "The screen picture was too large to send; use computer_screen_read instead." };
+      const size = img.getSize();
+      return { ok: true, image: { mediaType: "image/jpeg", dataBase64: jpeg.toString("base64"), width: size.width, height: size.height }, note: "This is a downscaled picture of the whole screen. Coordinates for clicks are 0..1 fractions of the full screen." };
+    } catch (e) {
+      return { ok: false, error: "look_failed", message: String((e as Error)?.message ?? e).slice(0, 200) };
+    }
   }
 
   /* ───────────────────────── capture ───────────────────────── */

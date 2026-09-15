@@ -29,6 +29,8 @@ export interface ScreenController {
   begin(taskId: string, reason: string, signal: AbortSignal): Promise<ScreenActionResult & { display?: { width: number; height: number } }>;
   /** UI Automation snapshot of the foreground window's controls (buttons-first eyes). */
   read(taskId: string, args: Record<string, unknown>): Promise<ScreenActionResult>;
+  /** A downscaled screenshot the MODEL can see — `{ image: { mediaType, dataBase64, width, height } }`. */
+  look(taskId: string): Promise<ScreenActionResult & { image?: { mediaType: string; dataBase64: string; width: number; height: number } }>;
   /** One click/type/key/scroll/move — target-first (no cursor) or x/y fallback. */
   act(taskId: string, name: ScreenActionName, args: Record<string, unknown>): Promise<ScreenActionResult>;
   /** Save a PNG of the screen into the workspace (record; not model vision). */

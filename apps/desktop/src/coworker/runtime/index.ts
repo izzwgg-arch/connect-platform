@@ -61,7 +61,7 @@ export function isWebmailUrl(url: unknown): boolean {
 
 /** The screen actions that require an already-open control session (everything but begin/end). */
 const SCREEN_ACTION_TOOLS = new Set<string>([
-  "computer_screen_read", "computer_screen_click", "computer_screen_type",
+  "computer_screen_read", "computer_screen_look", "computer_screen_click", "computer_screen_type",
   "computer_screen_key", "computer_screen_scroll", "computer_screen_move", "computer_screen_capture",
 ]);
 
@@ -398,6 +398,7 @@ export class CoworkerRuntime {
       }
       case "computer_screen_begin": return wrap(this.deps.screen ? await this.deps.screen.begin(rec.taskId, typeof args.reason === "string" ? args.reason : "", signal) : { ok: false, error: "screen_control_unavailable" });
       case "computer_screen_read": return wrap(this.deps.screen ? await this.deps.screen.read(rec.taskId, args) : { ok: false, error: "screen_control_unavailable" });
+      case "computer_screen_look": return wrap(this.deps.screen ? await this.deps.screen.look(rec.taskId) : { ok: false, error: "screen_control_unavailable" });
       case "computer_screen_click":
       case "computer_screen_type":
       case "computer_screen_key":

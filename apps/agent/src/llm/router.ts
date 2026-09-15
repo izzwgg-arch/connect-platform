@@ -184,6 +184,46 @@ export function toOpenAiChatContent(m: ChatMessage): unknown {
   );
 }
 
+/** A screenshot a tool handed back for the model to SEE (the Coworker's screen tools). */
+export type ToolResultImage = { mediaType: string; dataBase64: string };
+
+/**
+ * Pull a model-viewable image out of a tool result, if the tool returned one.
+ * The Coworker's screen tools return `{ image: { mediaType, dataBase64, … } }`.
+ * The picture then rides as a real image block (Anthropic tool_result content /
+ * OpenAI input_image), while the REST of the result stays as small JSON text — so
+ * the model both SEES the screen and reads the tool's structured fields, and a
+ * 700 KB base64 blob never gets stringified into the text stream.
+ * ⛔ Only png/jpeg/webp base64 is accepted; anything else returns null (text only).
+ */
+export function extractToolResultImage(content: unknown): { image: ToolResultImage; rest: unknown } | null {
+  if (!content || typeof content !== "object" || Array.isArray(content)) return null;
+  const c = content as Record<string, unknown>;
+  const img = c.image as Record<string, unknown> | undefined;
+  if (!img || typeof img !== "object") return null;
+  const data = img.dataBase64;
+  const mt = img.mediaType;
+  if (typeof data !== "string" || !data || typeof mt !== "string" || !/^image\/(png|jpe?g|webp)$/i.test(mt)) return null;
+  const rest = { ...c };
+  delete (rest as Record<string, unknown>).image;
+  return { image: { mediaType: mt.toLowerCase(), dataBase64: data }, rest };
+}
+
+/** Anthropic tool_result block; array content with an image block when one was returned. */
+export function anthropicToolResultBlock(toolUseId: string, r: { ok: boolean; content: unknown }): unknown {
+  const base: Record<string, unknown> = { type: "tool_result", tool_use_id: toolUseId, ...(r.ok ? {} : { is_error: true }) };
+  const img = extractToolResultImage(r.content);
+  if (img) {
+    base.content = [
+      { type: "text", text: JSON.stringify(img.rest ?? null) },
+      { type: "image", source: { type: "base64", media_type: img.image.mediaType, data: img.image.dataBase64 } },
+    ];
+  } else {
+    base.content = JSON.stringify(r.content ?? null);
+  }
+  return base;
+}
+
 export interface CompletionResult {
   provider: ProviderName;
   model: string;
@@ -468,12 +508,9 @@ export class ModelRouter {
       for (const tu of toolUses) {
         toolCalls++;
         const r = await runTool(tu.name, (tu.input ?? {}) as Record<string, unknown>);
-        results.push({
-          type: "tool_result",
-          tool_use_id: tu.id,
-          content: JSON.stringify(r.content ?? null),
-          ...(r.ok ? {} : { is_error: true }),
-        });
+        // A screen tool's screenshot rides as a real image block; text-only results
+        // are stringified exactly as before.
+        results.push(anthropicToolResultBlock(tu.id, r));
       }
       // All results for one assistant turn go back in ONE user message —
       // splitting them trains the model out of parallel tool calls.
@@ -555,7 +592,12 @@ export class ModelRouter {
           // Malformed arguments are the model's error to recover from, not ours.
         }
         const r = await runTool(call.name ?? "", args);
-        input.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(r.content ?? null) });
+        // /v1/responses tool output is a STRING, so a screenshot can't ride inside
+        // function_call_output. Send the text result there, then hand the picture to
+        // the model as a following user input_image (the documented pattern).
+        const img = extractToolResultImage(r.content);
+        input.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify((img ? img.rest : r.content) ?? null) });
+        if (img) input.push({ role: "user", content: [{ type: "input_text", text: `Screenshot returned by ${call.name ?? "the tool"} (look at it to decide the next step):` }, { type: "input_image", image_url: `data:${img.image.mediaType};base64,${img.image.dataBase64}` }] });
       }
     }
     return this.toolLoopResult(

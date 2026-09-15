@@ -100,7 +100,23 @@ here — exactly the position remote-support's injector is in.
 - ⛔ **Two honest gaps to confirm with Izzy:** (1) the mockup says "Escape works normally in your other apps" — the
   v1 Escape watcher is a NON-swallowing LL hook, so that holds IF the hook works; unproven. (2) our injected events are
   classified as "ours" by a 220 ms timing window (the reused injector doesn't stamp `dwExtraInfo`), a heuristic — a
-  signature-stamping injector is the robust follow-up. (3) **model pixel-vision is Phase 2** (a screenshot into the
-  model's eyes needs a cross-provider transport; the UIA control tree is the eyes for buttons-first today).
+  signature-stamping injector is the robust follow-up.
+
+## PHASE 2 — model pixel-vision BUILT + agent-side PROVEN (2026-09-15, same day)
+
+The Coworker can now SEE the screen (not just read the control list). New tool **`computer_screen_look`** returns a
+downscaled JPEG the model actually views; it's the fallback when `computer_screen_read` (buttons-first) isn't enough
+(a drawing, a game, a chart). **The cross-provider transport is the real work and it's unit-proven** (agent-side, 11
+tests): `extractToolResultImage` pulls the picture out of the tool result so the base64 never hits the text stream;
+Anthropic gets it as a `tool_result` image block (`anthropicToolResultBlock`); OpenAI `/v1/responses` gets the text
+in `function_call_output` **plus a following `input_image` user item** (tool output there is string-only);
+`desktopLink.boundContent` is now image-aware — the screenshot rides its own ≈675 KB ceiling (under nginx's 1 MB body
+limit) while the rest stays capped, and an over-size image is DROPPED (not truncated into garbage). Desktop
+`screenController.look()` downscales to ≤1280 px and steps JPEG quality/size down to fit `MAX_IMAGE_CHARS`.
+- ⏳ NOT PROVEN: a real screenshot round-tripping through a live Anthropic/OpenAI call and the model acting on it —
+  needs the same human-on-a-real-screen run as the rest of the live leg. The transport shapes are unit-proven; a live
+  provider vision call is not.
+- **Deploy:** the transport is agent-side (`app-agent-1`) — deployable independently of the desktop app; `look` itself
+  is inert until a machine runs the (unpublished) desktop build with screen control on.
 
 ⏳ Nothing built, committed as code, deployed or tested (as of the research; the BUILD section above is current).

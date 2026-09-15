@@ -312,6 +312,12 @@ export const TOOL_CATALOG: readonly CatalogTool[] = [
     spec: spec("computer_screen_capture", "COMPUTER_USE", "READ_ONLY", ["desktop.active", "files.write"], { timeoutMs: 20_000 }),
   },
   {
+    name: "computer_screen_look",
+    description: "LOOK at the person's screen — returns a picture you can actually see, downscaled to fit. Use it as the FALLBACK when computer_screen_read (the control list) isn't enough to know what to do: a drawing, a game, an image, a chart, an unlabelled area. Prefer computer_screen_read first (it's cheaper and lets you click by name). Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    spec: spec("computer_screen_look", "COMPUTER_USE", "READ_ONLY", ["desktop.active"], { timeoutMs: 20_000 }),
+  },
+  {
     name: "computer_screen_end",
     description: "Stop controlling the person's screen and drop the blue frame. Always allowed; call it when the on-screen task is finished. The person can also stop at any time with Escape.",
     parameters: { type: "object", properties: {}, additionalProperties: false },

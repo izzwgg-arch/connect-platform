@@ -64,11 +64,26 @@ OFF-by-default opt-in and needs a human.
 6. Ask for an admin command → Windows' own UAC prompt → Yes → output returns; No → `declined_uac`.
 7. Negative: turn the tray toggle OFF mid-session → it stops at the next action.
 
+## Phase 2 — model pixel-vision (BUILT + agent-side proven 2026-09-15)
+
+The Coworker can SEE the screen now, not just read the control list. New tool `computer_screen_look` (READ_ONLY,
+desktop.active, session-gated) returns a downscaled JPEG the model views — the fallback when `computer_screen_read`
+isn't enough. The hard part was the cross-provider transport, and it is unit-proven (11 agent tests, `apps/agent/src/llm/toolImage.test.ts`):
+
+- `extractToolResultImage(content)` (router.ts) pulls `{image:{mediaType,dataBase64}}` out of a tool result and strips
+  it from the rest, so a 700 KB base64 blob never gets stringified into the text stream.
+- **Anthropic**: `anthropicToolResultBlock` builds the `tool_result` with array content `[{text: JSON-of-rest}, {image}]`.
+- **OpenAI /v1/responses**: `function_call_output.output` is string-only, so the text goes there and the picture is
+  handed to the model as a FOLLOWING `{role:"user", content:[input_text, input_image data-URL]}` item.
+- `desktopLink.boundContent` is image-aware: the screenshot keeps its own `MAX_IMAGE_CHARS` (≈675 KB) ceiling while the
+  rest is still capped at `MAX_RESULT_CHARS`; an over-size image is DROPPED with a note (never truncated into garbage).
+- Desktop `screenController.look()`: `desktopCapturer` full-res → resize ≤1280 px → JPEG, stepping quality/size down to
+  fit `MODEL_VISION_MAX_BYTES` (500 KB, under nginx's 1 MB /agent-api body limit).
+- ⏳ NOT PROVEN: a real screenshot through a live Anthropic/OpenAI vision call and the model acting on the pixels —
+  same human-on-a-real-screen run as the rest of the live leg. **Deployable now**: the transport is agent-side.
+
 ## Known follow-ups (documented, not built)
 
-- **Model pixel-vision (Phase 2):** a bounded screenshot into the model's eyes needs a cross-provider transport (the
-  agent router JSON-stringifies tool results and `desktopLink` caps at 60 k chars; images need an image content block on
-  Anthropic and a following user image on OpenAI). Today the UIA control tree is the eyes (buttons-first).
 - **Signature-stamped injector:** replace the 220 ms timing heuristic with a `dwExtraInfo` signature so the yield hook
   distinguishes our events exactly. Requires a screen-control injector variant (don't touch remote support's).
 - **Escape passthrough:** confirm the non-swallowing LL hook lets Escape reach apps; else reconcile with the mockup.

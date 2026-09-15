@@ -70,3 +70,15 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
 - ⏳ NOT run (needs a real Windows screen + a human): a real cursor moving, a real screenshot, UIA Invoke on a live
   button, the yield/Escape LL hook, and the UAC elevation. Acceptance steps are in
   `docs/ai-context/AGENT_HANDOFF_COWORKER_SCREEN_CONTROL_2026-09-15.md`.
+
+## Coworker SCREEN CONTROL — model vision (Phase 2) — 2026-09-15
+
+- `cd apps/agent && node --import tsx --test src/llm/toolImage.test.ts src/llm/multimodal.test.ts` → **11/11 pass**
+  (extractToolResultImage strips the image and refuses non-images; anthropicToolResultBlock builds the tool_result image
+  block in the API's exact shape; the OpenAI function_call_output + input_image data-URL shape; image-aware boundContent
+  keeps the screenshot under its own ceiling, still caps the rest, and DROPS an over-size image rather than truncating).
+- `cd apps/desktop && node --import tsx --test src/coworker/screenControl.test.ts src/coworker/coworkerHands.test.ts` →
+  **32/32 pass** (adds computer_screen_look + its in-session vision flow; the drift/coverage guard covers the 10th tool).
+- Desktop `tsc -p tsconfig.json --noEmit` → EXIT 0. Agent: my files (router.ts, desktopLink.ts, toolImage.test.ts) are
+  clean; the pre-existing `server.ts unref` + `packages/db webrtc*` tsc errors are unrelated toolchain issues.
+- ⏳ NOT run: a real screenshot round-tripping through a live Anthropic/OpenAI vision call and the model acting on it.

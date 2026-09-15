@@ -137,7 +137,7 @@ test("args→command: valid actions map; malformed coordinates/keys are refused,
 /* ───────────────────────── catalogue ───────────────────────── */
 
 test("catalogue: the eight screen tools declare desktop.active, the right risk, and buttons-first framing", () => {
-  const names = ["computer_screen_begin", "computer_screen_read", "computer_screen_click", "computer_screen_type", "computer_screen_key", "computer_screen_scroll", "computer_screen_move", "computer_screen_capture", "computer_screen_end"];
+  const names = ["computer_screen_begin", "computer_screen_read", "computer_screen_look", "computer_screen_click", "computer_screen_type", "computer_screen_key", "computer_screen_scroll", "computer_screen_move", "computer_screen_capture", "computer_screen_end"];
   for (const n of names) assert.ok(findTool(n), `${n} is in the catalogue`);
   assert.equal(findTool("computer_screen_begin")!.spec.alwaysRequireApproval, true, "begin always asks");
   assert.deepEqual([...findTool("computer_screen_begin")!.spec.domains], ["desktop.active"]);
@@ -150,7 +150,9 @@ test("catalogue: the eight screen tools declare desktop.active, the right risk, 
   assert.ok(findTool("computer_screen_capture")!.spec.domains.includes("files.write"));
   assert.deepEqual([...findTool("computer_screen_end")!.spec.domains], [], "ending control is always allowed");
   assert.match(findTool("computer_screen_click")!.description, /target/i);
-  assert.equal(TOOL_CATALOG.filter((t) => t.name.startsWith("computer_screen_")).length, 9);
+  assert.equal(findTool("computer_screen_look")!.spec.risk, "READ_ONLY");
+  assert.ok(findTool("computer_screen_look")!.spec.domains.includes("desktop.active"));
+  assert.equal(TOOL_CATALOG.filter((t) => t.name.startsWith("computer_screen_")).length, 10);
   // powershell learned an elevated option
   assert.ok((findTool("computer_powershell")!.parameters.properties as Record<string, unknown>).elevated);
 });
@@ -164,7 +166,9 @@ class FakeScreen implements ScreenController {
   isEnabled() { return this.enabled; }
   isApprovedFor(taskId: string) { return this.session.isApprovedFor(taskId); }
   async begin(taskId: string) { this.begins++; this.session.begin(taskId); return { ok: true, display: { width: 1920, height: 1080 } }; }
+  looks = 0;
   async read(_taskId: string) { this.reads++; return { ok: true, window: "Invoices — File Explorer", controls: [{ ref: "c1", name: "Rename", kind: "button", enabled: true }] }; }
+  async look(_taskId: string) { this.looks++; return { ok: true, image: { mediaType: "image/jpeg", dataBase64: "/9j/AAAA", width: 1280, height: 800 } }; }
   async act(_taskId: string, name: ScreenActionName, args: Record<string, unknown>) { this.acts.push({ name, args }); return { ok: true }; }
   async capture(_taskId: string, saveAs: string | undefined) { this.captures++; return { ok: true, path: saveAs ?? "C:/ws/artifacts/shot.png" }; }
   async end() { this.ends++; this.session.end(); return { ok: true, ended: true }; }
@@ -298,6 +302,18 @@ test("runtime: administrator PowerShell always asks (even AUTONOMOUS), honours t
   const un = await noHelper.runtime.handle({ id: "p4", name: "computer_powershell", args: { script: "Get-Process", elevated: true }, taskId: "T" });
   assert.equal((un.content as any).error, "elevation_unavailable");
   assert.equal(noHelper.asks.length, 1, "still asked before discovering the helper is missing");
+});
+
+test("runtime: look (model vision) flows in an approved session and returns an image envelope; refused with no session", async () => {
+  const a = rt({});
+  const before = await a.runtime.handle({ id: "l0", name: "computer_screen_look", args: {}, taskId: "T" });
+  assert.equal((before.content as any).error, "screen_not_started");
+  await a.runtime.handle({ id: "b", name: "computer_screen_begin", args: { reason: "look" }, taskId: "T" });
+  const look = await a.runtime.handle({ id: "l1", name: "computer_screen_look", args: {}, taskId: "T" });
+  assert.equal(look.ok, true);
+  assert.equal((look.content as any).image.mediaType, "image/jpeg");
+  assert.equal(a.screen.looks, 1);
+  assert.equal(a.asks.length, 1, "look does not re-ask — ask-once covers it");
 });
 
 test("runtime: capture writes only inside the fenced workspace and returns a path", async () => {

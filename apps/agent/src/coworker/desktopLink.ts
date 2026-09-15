@@ -175,8 +175,33 @@ export function parseManifest(raw: unknown): { ok: true; manifest: DesktopManife
   };
 }
 
-function boundContent(content: unknown): unknown {
+/**
+ * A screenshot for the model to SEE gets its own, larger ceiling (≈675 KB of
+ * base64) so `boundContent` never truncates the picture into garbage; the REST of
+ * the result is still held to MAX_RESULT_CHARS. Kept well under nginx's 1 MB body
+ * limit for /agent-api/.
+ */
+export const MAX_IMAGE_CHARS = 900_000;
+
+export function boundContent(content: unknown): unknown {
   if (content === undefined) return null;
+  // Image-bearing result (a Coworker screen tool): keep a bounded image, bound the rest apart.
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const c = content as Record<string, unknown>;
+    const img = c.image as Record<string, unknown> | undefined;
+    if (img && typeof img === "object" && typeof img.dataBase64 === "string") {
+      const rest: Record<string, unknown> = { ...c };
+      delete rest.image;
+      let restText: string;
+      try { restText = JSON.stringify(rest); } catch { restText = "{}"; }
+      const restBounded: unknown = restText.length <= MAX_RESULT_CHARS ? rest : { truncated: true, note: `result cut at ${MAX_RESULT_CHARS} characters`, preview: restText.slice(0, MAX_RESULT_CHARS) };
+      if (img.dataBase64.length > MAX_IMAGE_CHARS) {
+        return { ...(restBounded as object), imageDropped: true, note: "The screenshot was too large to include; act from the control list (computer_screen_read)." };
+      }
+      const mt = typeof img.mediaType === "string" ? img.mediaType : "image/png";
+      return { ...(restBounded as object), image: { mediaType: mt, dataBase64: img.dataBase64, ...(typeof img.width === "number" ? { width: img.width } : {}), ...(typeof img.height === "number" ? { height: img.height } : {}) } };
+    }
+  }
   let text: string;
   try { text = JSON.stringify(content); } catch { return { error: "unserializable_result" }; }
   if (text.length <= MAX_RESULT_CHARS) return content;
