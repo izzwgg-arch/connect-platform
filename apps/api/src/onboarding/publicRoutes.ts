@@ -12,7 +12,7 @@ import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
-import { onboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
+import { resolveOnboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
 import { fileBrandForRegistration, LEGAL_ENTITY_TYPES } from "../signalwire/signalWireTenDlc";
 import { buildE911Address } from "./e911Address";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
@@ -252,7 +252,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // are SignalWire-only filters the upgraded wizard sends. No spare pool —
     // that is a VoIP.ms master-account concept. The error contract is
     // preserved: a provider failure is NEVER collapsed into an empty list.
-    if (onboardingNumberProvider() === "signalwire") {
+    if ((await resolveOnboardingNumberProvider(db)) === "signalwire") {
       const out = await searchSignalWireOnboardingNumbers(db, {
         query: wantVanity ? vanityWord : q,
         mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
@@ -761,7 +761,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       choice: "port",
       details: d,
       // Pin the carrier exactly as apply-number does — a stamped draft keeps it.
-      provider: answers.phone?.provider || onboardingNumberProvider(),
+      provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
     };
     answers.provisioning = {
       ...(answers.provisioning || {}),
@@ -967,7 +967,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       // was searched on SignalWire must provision on SignalWire even if the
       // platform default flips before payment lands (and vice versa) — an
       // earlier stamp survives, so a resumed draft keeps its carrier.
-      provider: answers.phone?.provider || onboardingNumberProvider(),
+      provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
     };
     await (db as any).onboardingSubmission.update({
       where: { id: row.id },

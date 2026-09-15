@@ -45,6 +45,77 @@ export function onboardingNumberProvider(): OnboardingNumberProviderName {
 }
 
 /**
+ * The carrier switch (Izzy, 2026-09-15: "I should have a switch in Loopcom
+ * where I can select which provider should be in the wizard").
+ *
+ * Resolution order: the owner's STORED choice (set from /apps/telnyx's
+ * "Wizard carrier" card, kept in the AgentSecret row below — no migration,
+ * the evaluation rule) → the ONBOARDING_NUMBER_PROVIDER env → "voipms".
+ * ⛔ Every new-signup surface must ask THIS resolver, so the flip stays one
+ * place; the sync env-only function above remains as the fallback layer and
+ * for existing tests.
+ *
+ * ⛔ Fail-open to the env behaviour: a missing master key, an absent row or a
+ * decrypt failure must leave live onboarding EXACTLY as it was — this resolver
+ * can never throw into the wizard.
+ *
+ * ⛔ "telnyx" is deliberately NOT a value this returns: the wizard has no
+ * Telnyx search/provisioning path yet, and a stored value the wizard cannot
+ * honour is a lying toggle. The admin route refuses to store it; if a row
+ * somehow carries it anyway, the resolver falls back to env.
+ */
+export const ONBOARDING_PROVIDER_SECRET_KEY = "onboarding_number_provider_override";
+const PROVIDER_CACHE_MS = 30_000;
+let providerCache: { value: OnboardingNumberProviderName | null; at: number } | null = null;
+
+export function clearOnboardingProviderCache(): void {
+  providerCache = null;
+}
+
+export async function resolveOnboardingNumberProvider(db: any): Promise<OnboardingNumberProviderName> {
+  if (providerCache && Date.now() - providerCache.at < PROVIDER_CACHE_MS) {
+    return providerCache.value ?? onboardingNumberProvider();
+  }
+  let stored: OnboardingNumberProviderName | null = null;
+  try {
+    const sec = await import("@connect/security");
+    if (sec.hasCredentialsMasterKey()) {
+      const row = await db.agentSecret.findUnique({ where: { key: ONBOARDING_PROVIDER_SECRET_KEY } });
+      if (row?.valueEnc) {
+        const decrypted = sec.decryptJson<{ provider?: string }>(row.valueEnc);
+        const value = String(decrypted?.provider ?? "").trim().toLowerCase();
+        if (value === "voipms" || value === "signalwire") stored = value;
+      }
+    }
+  } catch {
+    stored = null;
+  }
+  providerCache = { value: stored, at: Date.now() };
+  return stored ?? onboardingNumberProvider();
+}
+
+/** Save (or, with null, clear) the stored wizard-carrier choice. */
+export async function storeOnboardingNumberProvider(
+  db: any,
+  value: OnboardingNumberProviderName | null,
+  updatedBy: string,
+): Promise<void> {
+  const sec = await import("@connect/security");
+  if (!sec.hasCredentialsMasterKey()) throw new Error("credentials_master_key_missing");
+  if (!value) {
+    await db.agentSecret.deleteMany({ where: { key: ONBOARDING_PROVIDER_SECRET_KEY } });
+  } else {
+    const valueEnc = sec.encryptJson({ provider: value });
+    await db.agentSecret.upsert({
+      where: { key: ONBOARDING_PROVIDER_SECRET_KEY },
+      update: { valueEnc, updatedBy },
+      create: { key: ONBOARDING_PROVIDER_SECRET_KEY, valueEnc, updatedBy },
+    });
+  }
+  clearOnboardingProviderCache();
+}
+
+/**
  * Phone-keypad letters → digits ("LOOP" → "5667"); digits pass through,
  * everything else is dropped. THE one T9 implementation for onboarding —
  * the VoIP.ms vanity path and the SignalWire pattern search both use it,

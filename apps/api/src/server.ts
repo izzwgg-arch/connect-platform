@@ -394,6 +394,7 @@ import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
+import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import {
   inboundSmsWebhookUrl as signalWireInboundSmsWebhookUrl,
   resolvePublicApiBase as resolveSignalWirePublicApiBase,
@@ -3020,6 +3021,9 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // requireSuperAdmin. The rule exists so the prefix is not silently outside
   // the global permission gate (the /admin/wake-health class).
   { prefix: "/admin/apps/telnyx", permission: "can_manage_global_settings" },
+  // Wizard carrier switch (2026-09-15) — owner only; every handler ALSO calls
+  // requireSuperAdmin. Rule exists so the prefix is inside the global gate.
+  { prefix: "/admin/carrier-switch", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
   // class, where a missing rule meant no permission check ran at all).
@@ -24180,6 +24184,16 @@ registerSignalWireRoutes({
 // cut-over: nothing here is wired into onboarding, chat, billing SMS, the
 // worker or the PBX, and no public webhook is registered. Platform owner only.
 registerTelnyxRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+
+// ── Wizard carrier switch (2026-09-15) ─────────────────────────────────────
+// Which carrier NEW sign-ups search and buy from (stored override over the
+// ONBOARDING_NUMBER_PROVIDER env; per-submission stamps still pin drafts).
+// Owner only; telnyx refused until the wizard has a Telnyx path.
+registerProviderSwitchRoutes({
   app,
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),

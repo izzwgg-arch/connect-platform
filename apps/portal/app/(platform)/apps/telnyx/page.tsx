@@ -73,6 +73,17 @@ type OutboundProfile = { id: string; name: string | null; enabled: boolean; dail
 type Portability = { number: string; portable: boolean | null; fastPortable: boolean | null; carrier: string | null; reason: string | null };
 type DetailRecord = { recordType: string | null; startedAt: string | null; from: string | null; to: string | null; direction: string | null; durationSec: number | null; stirShaken: string | null; cost: string | null };
 type TxEvent = { id: string; ts: string; actor: string; event: string; payload: Record<string, unknown> | null };
+type CarrierSwitch = {
+  effective: string;
+  env: string;
+  stored: string | null;
+  options: { value: string; label: string; selectable: boolean; reason?: string }[];
+};
+type MessagingProfile = { id: string; name: string | null; enabled: boolean; webhookUrl: string | null };
+type RcsAgent = { id: string; agentId: string | null; name: string | null; status: string | null };
+type EmailDomain = { id: string; domain: string | null; status: string | null };
+type PortingOrder = { id: string; status: string | null; customerReference: string | null; phoneNumberCount: number | null; createdAt: string | null };
+type LookupResult = { number: string; callerName: string | null; carrier: string | null; lineType: string | null; ported: string | null };
 
 function errText(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
@@ -139,6 +150,31 @@ export default function TelnyxPage() {
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [events, setEvents] = useState<TxEvent[]>([]);
 
+  // wizard carrier switch
+  const [carrier, setCarrier] = useState<CarrierSwitch | null>(null);
+  const [carrierBusy, setCarrierBusy] = useState(false);
+
+  // services
+  const [lookupNumber, setLookupNumber] = useState("");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
+  const [msgProfiles, setMsgProfiles] = useState<MessagingProfile[]>([]);
+  const [rcsAgents, setRcsAgents] = useState<RcsAgent[]>([]);
+  const [rcsInfo, setRcsInfo] = useState<string | null>(null);
+  const [rcsTo, setRcsTo] = useState("");
+  const [rcsBody, setRcsBody] = useState("Test RCS from Loopcom via Telnyx");
+  const [rcsBusy, setRcsBusy] = useState(false);
+  const [emailDomains, setEmailDomains] = useState<EmailDomain[]>([]);
+  const [emailFrom, setEmailFrom] = useState("");
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSubject, setEmailSubject] = useState("Test from Loopcom via Telnyx");
+  const [emailBody, setEmailBody] = useState("This is a Telnyx Email API test from the Loopcom bench.");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [portOrders, setPortOrders] = useState<PortingOrder[]>([]);
+  const [meetingUrl, setMeetingUrl] = useState("");
+  const [meetingBusy, setMeetingBusy] = useState(false);
+  const [meetingSession, setMeetingSession] = useState<string | null>(null);
+
   const ok = (m: string) => { setMsg(m); setErr(null); };
   const bad = (e: unknown, fallback: string) => { setErr(errText(e, fallback)); setMsg(null); };
 
@@ -194,6 +230,37 @@ export default function TelnyxPage() {
     }
   }, []);
 
+  const loadCarrier = useCallback(async () => {
+    try {
+      setCarrier(await apiGet<CarrierSwitch>("/admin/carrier-switch"));
+    } catch {
+      // The switch card simply doesn't render if the read fails.
+    }
+  }, []);
+
+  const loadServices = useCallback(async () => {
+    try {
+      const r = await apiGet<{ profiles: MessagingProfile[] }>("/admin/apps/telnyx/messaging-profiles");
+      setMsgProfiles(r.profiles ?? []);
+    } catch { /* Trial or unconfigured — panels degrade to their empty text. */ }
+    try {
+      const r = await apiGet<{ agents: RcsAgent[] }>("/admin/apps/telnyx/rcs/agents");
+      setRcsAgents(r.agents ?? []);
+      setRcsInfo(null);
+    } catch (e) {
+      setRcsAgents([]);
+      setRcsInfo(e instanceof ApiError && e.status === 409 ? null : "No RCS agents yet — registration (brand vetting through Google) comes first.");
+    }
+    try {
+      const r = await apiGet<{ domains: EmailDomain[] }>("/admin/apps/telnyx/email/domains");
+      setEmailDomains(r.domains ?? []);
+    } catch { /* same */ }
+    try {
+      const r = await apiGet<{ orders: PortingOrder[] }>("/admin/apps/telnyx/porting-orders");
+      setPortOrders(r.orders ?? []);
+    } catch { /* same */ }
+  }, []);
+
   useEffect(() => {
     if (!isOwner) return;
     void load();
@@ -201,7 +268,93 @@ export default function TelnyxPage() {
     void loadSip();
     void loadRecords();
     void loadEvents();
-  }, [isOwner, load, loadOwned, loadSip, loadRecords, loadEvents]);
+    void loadCarrier();
+    void loadServices();
+  }, [isOwner, load, loadOwned, loadSip, loadRecords, loadEvents, loadCarrier, loadServices]);
+
+  async function setWizardCarrier(value: string) {
+    setCarrierBusy(true);
+    try {
+      const r = await apiPut<{ ok: boolean; stored: string | null; effective: string }>("/admin/carrier-switch", { provider: value });
+      ok(value ? `New sign-ups now search and buy on ${r.effective}.` : `Override cleared — the wizard follows the server environment (${r.effective}).`);
+      await loadCarrier();
+    } catch (e) {
+      bad(e, "Couldn't change the wizard carrier.");
+    } finally {
+      setCarrierBusy(false);
+    }
+  }
+
+  async function runLookup() {
+    setLookupBusy(true); setLookupResult(null);
+    try {
+      const r = await apiGet<{ result: LookupResult }>(`/admin/apps/telnyx/lookup?number=${encodeURIComponent(lookupNumber)}`);
+      setLookupResult(r.result);
+    } catch (e) {
+      bad(e, "The lookup failed.");
+    } finally {
+      setLookupBusy(false);
+    }
+  }
+
+  async function sendRcs() {
+    const agent = rcsAgents[0];
+    const profile = msgProfiles[0];
+    if (!agent || !profile) return;
+    setRcsBusy(true);
+    try {
+      const r = await apiPost<{ ok: boolean; deliveredAs: string | null }>("/admin/apps/telnyx/rcs/send", {
+        agentId: agent.agentId ?? agent.id, messagingProfileId: profile.id, to: rcsTo, body: rcsBody, smsFallbackFrom: smsFrom || undefined,
+      });
+      ok(`Sent — delivered as ${r.deliveredAs ?? "?"} (RCS means the rich path worked; SMS means it fell back).`);
+      await loadEvents();
+    } catch (e) {
+      bad(e, "The RCS message did not send.");
+    } finally {
+      setRcsBusy(false);
+    }
+  }
+
+  async function sendTestEmail() {
+    setEmailBusy(true);
+    try {
+      await apiPost("/admin/apps/telnyx/email/send", { from: emailFrom, to: emailTo, subject: emailSubject, body: emailBody });
+      ok("Email accepted by Telnyx — delivery events land on their side.");
+      await loadEvents();
+    } catch (e) {
+      bad(e, "The email did not send.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function createPortDraft() {
+    const portable = (portResults ?? []).filter((r) => r.portable).map((r) => r.number);
+    if (!portable.length) return;
+    if (!window.confirm(`Create a DRAFT porting order for ${portable.join(", ")}? Free — nothing is filed or moved until a person submits it with the customer's LOA.`)) return;
+    try {
+      const r = await apiPost<{ ok: boolean; ids: string[] }>("/admin/apps/telnyx/porting-orders", { numbers: portable });
+      ok(`Draft created (${r.ids.length} order${r.ids.length === 1 ? "" : "s"} — Telnyx splits by losing carrier). It files NOTHING until submitted.`);
+      await Promise.all([loadServices(), loadEvents()]);
+    } catch (e) {
+      bad(e, "Couldn't create the draft.");
+    }
+  }
+
+  async function startMeetingBot() {
+    if (!window.confirm("Send the Telnyx meeting bot into that meeting? It costs about $0.02 per minute while it sits there.")) return;
+    setMeetingBusy(true);
+    try {
+      const r = await apiPost<{ ok: boolean; id: string | null; status: string | null }>("/admin/apps/telnyx/meetings", { meetingUrl });
+      setMeetingSession(r.id);
+      ok(`Bot dispatched (session ${r.id ?? "?"}, status ${r.status ?? "?"}). It appears in the meeting as a participant.`);
+      await loadEvents();
+    } catch (e) {
+      bad(e, "Couldn't send the meeting bot.");
+    } finally {
+      setMeetingBusy(false);
+    }
+  }
 
   async function saveCredentials() {
     setSaving(true);
@@ -397,6 +550,39 @@ export default function TelnyxPage() {
         )}
       </div>
 
+      {/* ── Wizard carrier switch ───────────────────────────────── */}
+      {carrier && (
+        <div className="tx-card">
+          <h2>Which carrier the sign-up wizard uses</h2>
+          <p className="tx-sub">
+            New sign-ups search and buy numbers on the carrier chosen here. Existing customers and already-started drafts never move — each
+            submission pins its carrier at selection time. Effective right now: <b>{carrier.effective}</b>
+            {carrier.stored ? " (set here)" : ` (from the server environment: ${carrier.env})`}.
+          </p>
+          <div className="tx-row">
+            {carrier.options.map((o) => (
+              <button
+                key={o.value}
+                className={`tx-btn ${carrier.effective === o.value ? "primary" : ""}`}
+                disabled={carrierBusy || !o.selectable || carrier.effective === o.value}
+                title={o.selectable ? undefined : o.reason}
+                onClick={() => void setWizardCarrier(o.value)}
+              >
+                {o.label}{!o.selectable ? " — not wired yet" : ""}
+              </button>
+            ))}
+            {carrier.stored && (
+              <button className="tx-btn" disabled={carrierBusy} onClick={() => void setWizardCarrier("")}>Clear override</button>
+            )}
+          </div>
+          {carrier.options.some((o) => !o.selectable) && (
+            <p className="tx-sub" style={{ marginTop: 10, marginBottom: 0 }}>
+              {carrier.options.find((o) => !o.selectable)?.reason}
+            </p>
+          )}
+        </div>
+      )}
+
       {status?.configured && (
         <>
           {/* ── Numbers ────────────────────────────────────────────── */}
@@ -568,6 +754,113 @@ export default function TelnyxPage() {
               <input className="tx-input" placeholder="Message" value={smsBody} onChange={(e) => setSmsBody(e.target.value)} />
               <button className="tx-btn primary" disabled={smsSending || !smsFrom || !smsTo || !smsBody.trim()} onClick={sendSms}>{smsSending ? "Sending…" : "Send"}</button>
             </div>
+          </div>
+
+          {/* ── Lookup ────────────────────────────────────────────── */}
+          <div className="tx-card">
+            <h2>Number lookup</h2>
+            <p className="tx-sub">Carrier + caller name for any US number (fractions of a cent per query). Handy before a port: it names the losing carrier.</p>
+            <div className="tx-row">
+              <input className="tx-input tx-narrow" placeholder="845-555-1212" value={lookupNumber} onChange={(e) => setLookupNumber(e.target.value)} />
+              <button className="tx-btn primary" disabled={lookupBusy || !lookupNumber.trim()} onClick={runLookup}>{lookupBusy ? "Looking…" : "Look up"}</button>
+            </div>
+            {lookupResult && (
+              <p className="tx-sub" style={{ marginTop: 10, marginBottom: 0 }}>
+                <b>{lookupResult.number}</b>: name <b>{lookupResult.callerName ?? "—"}</b>, carrier <b>{lookupResult.carrier ?? "—"}</b>,
+                line <b>{lookupResult.lineType ?? "—"}</b>{lookupResult.ported ? <>, ported <b>{lookupResult.ported}</b></> : null}
+              </p>
+            )}
+          </div>
+
+          {/* ── RCS ───────────────────────────────────────────────── */}
+          <div className="tx-card">
+            <h2>RCS <span className="tx-count">{rcsAgents.length} agent(s)</span></h2>
+            <p className="tx-sub">
+              iMessage-style messaging on Android — read receipts, typing, rich cards, branded verified sender — with automatic SMS fallback.
+              Each sender needs a registered <b>RCS agent</b> (brand vetted through Google; days for Google, ~4–6 weeks for carrier launch), so it is a
+              per-business onboarding, one agent per downstream customer. Registration is API-driven (US) — wired here the day the first agent is filed.
+            </p>
+            {rcsInfo && <p className="tx-sub">{rcsInfo}</p>}
+            {rcsAgents.map((a) => (
+              <div className="tx-kv" key={a.id}>
+                <span className={`tx-tag ${String(a.status ?? "").toUpperCase() === "LIVE" ? "ok" : ""}`}>{a.status ?? "?"}</span>
+                <b>{a.name ?? a.agentId ?? a.id}</b>
+              </div>
+            ))}
+            {rcsAgents.length > 0 && msgProfiles.length > 0 && (
+              <div className="tx-row" style={{ marginTop: 10 }}>
+                <input className="tx-input tx-narrow" placeholder="To" value={rcsTo} onChange={(e) => setRcsTo(e.target.value)} />
+                <input className="tx-input" placeholder="Message" value={rcsBody} onChange={(e) => setRcsBody(e.target.value)} />
+                <button className="tx-btn primary" disabled={rcsBusy || !rcsTo || !rcsBody.trim()} onClick={sendRcs}>{rcsBusy ? "Sending…" : "Send RCS (falls back to SMS)"}</button>
+              </div>
+            )}
+          </div>
+
+          {/* ── Email ─────────────────────────────────────────────── */}
+          <div className="tx-card">
+            <h2>Email <span className="tx-count">{emailDomains.length} sending domain(s)</span></h2>
+            <p className="tx-sub">
+              Telnyx's Email API ($0.15–0.30 per thousand). Sending from a Loopcom domain needs the domain verified with five DNS records first
+              (done in the Telnyx portal → Email → Domains); then this test send proves the lane.
+            </p>
+            {emailDomains.map((d) => (
+              <div className="tx-kv" key={d.id}>
+                <span className={`tx-tag ${String(d.status ?? "").toLowerCase().includes("verif") ? "ok" : ""}`}>{d.status ?? "?"}</span>
+                <b>{d.domain ?? d.id}</b>
+              </div>
+            ))}
+            <div className="tx-row" style={{ marginTop: 10 }}>
+              <input className="tx-input tx-narrow" placeholder="From (on a verified domain)" value={emailFrom} onChange={(e) => setEmailFrom(e.target.value)} />
+              <input className="tx-input tx-narrow" placeholder="To" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} />
+              <input className="tx-input tx-narrow" placeholder="Subject" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
+              <input className="tx-input" placeholder="Body" value={emailBody} onChange={(e) => setEmailBody(e.target.value)} />
+              <button className="tx-btn primary" disabled={emailBusy || !emailFrom || !emailTo || !emailSubject.trim() || !emailBody.trim()} onClick={sendTestEmail}>{emailBusy ? "Sending…" : "Send test email"}</button>
+            </div>
+          </div>
+
+          {/* ── Porting orders ────────────────────────────────────── */}
+          <div className="tx-card">
+            <h2>Porting orders <span className="tx-count">{portOrders.length}</span></h2>
+            <p className="tx-sub">
+              Telnyx has a FULL porting API (the piece SignalWire lacks): draft → end-customer LOA + bill → FOC date → webhooks → activation
+              with the connection pre-attached. A draft created here is free and files <b>nothing</b> — there is deliberately no submit button;
+              submitting a port stays a person's act with the customer's signed LOA in hand.
+            </p>
+            {portOrders.length > 0 && (
+              <div className="tx-table-wrap">
+                <table className="tx-table">
+                  <thead><tr><th>Order</th><th>Status</th><th>Numbers</th><th>Reference</th><th>Created</th></tr></thead>
+                  <tbody>
+                    {portOrders.map((o) => (
+                      <tr key={o.id}>
+                        <td className="tx-dim">{o.id.slice(0, 8)}…</td>
+                        <td><span className="tx-tag">{o.status ?? "?"}</span></td>
+                        <td>{o.phoneNumberCount ?? "—"}</td>
+                        <td>{o.customerReference ?? "—"}</td>
+                        <td className="tx-dim">{o.createdAt ? fmtTs(o.createdAt) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {(portResults ?? []).some((r) => r.portable) && (
+              <button className="tx-btn" onClick={createPortDraft}>Create DRAFT order from the portability results above</button>
+            )}
+          </div>
+
+          {/* ── Meeting bot (beta) ────────────────────────────────── */}
+          <div className="tx-card">
+            <h2>Meeting bot <span className="tx-count">beta</span></h2>
+            <p className="tx-sub">
+              Telnyx's Meeting API sends an AI participant into a Zoom / Google Meet / Teams / Webex meeting — live transcription and a
+              post-meeting summary — for ~$0.02/min. A future Loopcom Meetings feature could ride this; this panel proves the lane.
+            </p>
+            <div className="tx-row">
+              <input className="tx-input" placeholder="https://zoom.us/j/…  or a Meet / Teams / Webex link" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} />
+              <button className="tx-btn primary" disabled={meetingBusy || !/^https:\/\/\S+$/.test(meetingUrl)} onClick={startMeetingBot}>{meetingBusy ? "Dispatching…" : "Send the bot"}</button>
+            </div>
+            {meetingSession && <p className="tx-sub" style={{ marginTop: 8, marginBottom: 0 }}>Session <b>{meetingSession}</b> — transcript and summary land on the Telnyx side.</p>}
           </div>
 
           {/* ── Detail records ────────────────────────────────────── */}

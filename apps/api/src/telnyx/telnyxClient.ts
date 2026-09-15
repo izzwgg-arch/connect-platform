@@ -456,3 +456,181 @@ export async function listVoiceDetailRecords(creds: StoredTelnyxCredentials, lim
     cost: r?.cost ?? null,
   }));
 }
+
+// ── Number lookup ────────────────────────────────────────────────────────────
+
+export interface TelnyxLookupResult {
+  number: string;
+  callerName: string | null;
+  carrier: string | null;
+  lineType: string | null;
+  ported: string | null;
+}
+
+/** Carrier + caller-name lookup (~$0.002–0.007 per query — pennies, still money). */
+export async function lookupNumber(creds: StoredTelnyxCredentials, number: string): Promise<TelnyxLookupResult> {
+  // The quickstart's parameter form is bare flags (`?carrier&caller-name`),
+  // not `type=` — keep them on the path so buildUrl's empty-value skip
+  // doesn't drop them.
+  const body = await txExpect<any>(creds, { path: `/number_lookup/${encodeURIComponent(number)}?carrier&caller-name` });
+  const d = body?.data ?? {};
+  return {
+    number: d?.phone_number ?? number,
+    callerName: d?.caller_name?.caller_name ?? null,
+    carrier: d?.carrier?.name ?? null,
+    lineType: d?.carrier?.type ?? null,
+    ported: d?.portability?.ported_status ?? null,
+  };
+}
+
+// ── Messaging profiles ───────────────────────────────────────────────────────
+
+export interface TelnyxMessagingProfile {
+  id: string;
+  name: string | null;
+  enabled: boolean;
+  webhookUrl: string | null;
+}
+
+export async function listMessagingProfiles(creds: StoredTelnyxCredentials): Promise<TelnyxMessagingProfile[]> {
+  const body = await txExpect<any>(creds, { path: "/messaging_profiles", query: { "page[size]": 100 } });
+  const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  return rows.map((r) => ({
+    id: String(r?.id ?? ""),
+    name: r?.name ?? null,
+    enabled: Boolean(r?.enabled),
+    webhookUrl: r?.webhook_url ?? null,
+  })).filter((r) => r.id);
+}
+
+export async function createMessagingProfile(creds: StoredTelnyxCredentials, name: string, webhookUrl?: string | null): Promise<{ id: string | null }> {
+  const json: any = { name, enabled: true };
+  if (webhookUrl) json.webhook_url = webhookUrl;
+  const res = await txExpect<any>(creds, { path: "/messaging_profiles", method: "POST", json });
+  return { id: res?.data?.id ?? null };
+}
+
+// ── RCS ──────────────────────────────────────────────────────────────────────
+
+export interface TelnyxRcsAgent {
+  id: string;
+  agentId: string | null;
+  name: string | null;
+  status: string | null;
+}
+
+/** RCS agents (brand-verified senders). Empty until an agent is registered. */
+export async function listRcsAgents(creds: StoredTelnyxCredentials): Promise<TelnyxRcsAgent[]> {
+  const body = await txExpect<any>(creds, { path: "/rcs_agents", query: { "page[size]": 50 } });
+  const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  return rows.map((r) => ({
+    id: String(r?.id ?? r?.agent_id ?? ""),
+    agentId: r?.agent_id ?? null,
+    name: r?.agent_name ?? r?.name ?? null,
+    status: r?.status ?? null,
+  })).filter((r) => r.id);
+}
+
+/**
+ * Send an RCS message with SMS fallback. ⛔ Real money, never retried.
+ * The response's data.type says which path delivered ("RCS" or "SMS").
+ */
+export async function sendRcsMessage(creds: StoredTelnyxCredentials, input: {
+  agentId: string;
+  to: string;
+  messagingProfileId: string;
+  text: string;
+  smsFallbackFrom?: string | null;
+}): Promise<{ id: string | null; deliveredAs: string | null }> {
+  const json: any = {
+    agent_id: input.agentId,
+    to: input.to,
+    messaging_profile_id: input.messagingProfileId,
+    agent_message: { content_message: { text: input.text } },
+  };
+  if (input.smsFallbackFrom) json.sms_fallback = { from: input.smsFallbackFrom, text: input.text };
+  const res = await txExpect<any>(creds, { path: "/messages/rcs", method: "POST", json });
+  return { id: res?.data?.id ?? null, deliveredAs: res?.data?.type ?? null };
+}
+
+// ── Email ────────────────────────────────────────────────────────────────────
+
+export interface TelnyxEmailDomain {
+  id: string;
+  domain: string | null;
+  status: string | null;
+}
+
+export async function listEmailDomains(creds: StoredTelnyxCredentials): Promise<TelnyxEmailDomain[]> {
+  const body = await txExpect<any>(creds, { path: "/email_domains", query: { "page[size]": 50 } });
+  const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  return rows.map((r) => ({
+    id: String(r?.id ?? ""),
+    domain: r?.domain ?? r?.domain_name ?? null,
+    status: r?.status ?? r?.verification_status ?? null,
+  })).filter((r) => r.id);
+}
+
+/** ⛔ Real money (fractions of a cent), never retried. */
+export async function sendEmail(creds: StoredTelnyxCredentials, input: {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+}): Promise<{ id: string | null }> {
+  const res = await txExpect<any>(creds, {
+    path: "/email_messages",
+    method: "POST",
+    json: { from: input.from, to: input.to, subject: input.subject, text: input.text },
+  });
+  return { id: res?.data?.id ?? null };
+}
+
+// ── Porting orders ───────────────────────────────────────────────────────────
+
+export interface TelnyxPortingOrder {
+  id: string;
+  status: string | null;
+  customerReference: string | null;
+  phoneNumberCount: number | null;
+  createdAt: string | null;
+}
+
+export async function listPortingOrders(creds: StoredTelnyxCredentials): Promise<TelnyxPortingOrder[]> {
+  const body = await txExpect<any>(creds, { path: "/porting_orders", query: { "page[size]": 50 } });
+  const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  return rows.map((r) => ({
+    id: String(r?.id ?? ""),
+    status: r?.status?.value ?? r?.status ?? null,
+    customerReference: r?.customer_reference ?? null,
+    phoneNumberCount: typeof r?.phone_number_count === "number" ? r.phone_number_count : (Array.isArray(r?.phone_numbers) ? r.phone_numbers.length : null),
+    createdAt: r?.created_at ?? null,
+  })).filter((r) => r.id);
+}
+
+/**
+ * Create a DRAFT porting order. Free, files nothing — Telnyx auto-splits by
+ * carrier/SPID/FastPort eligibility, and NOTHING moves until a separate
+ * /submit (deliberately not wired here: submitting a port is a customer's
+ * number changing carrier, an Izzy-gated act).
+ */
+export async function createPortingOrderDraft(creds: StoredTelnyxCredentials, numbers: string[], customerReference?: string | null): Promise<{ ids: string[] }> {
+  const json: any = { phone_numbers: numbers };
+  if (customerReference) json.customer_reference = customerReference;
+  const res = await txExpect<any>(creds, { path: "/porting_orders", method: "POST", json });
+  const rows: any[] = Array.isArray(res?.data) ? res.data : (res?.data ? [res.data] : []);
+  return { ids: rows.map((r) => String(r?.id ?? "")).filter(Boolean) };
+}
+
+// ── Meeting API (beta) ───────────────────────────────────────────────────────
+
+/** ⛔ Real money while the bot sits in the meeting (~$0.02/min). */
+export async function createMeetingSession(creds: StoredTelnyxCredentials, meetingUrl: string): Promise<{ id: string | null; status: string | null }> {
+  const res = await txExpect<any>(creds, { path: "/meeting_sessions", method: "POST", json: { meeting_url: meetingUrl } });
+  return { id: res?.data?.id ?? null, status: res?.data?.status ?? null };
+}
+
+export async function getMeetingSession(creds: StoredTelnyxCredentials, id: string): Promise<any> {
+  const res = await txExpect<any>(creds, { path: `/meeting_sessions/${encodeURIComponent(id)}` });
+  return res?.data ?? null;
+}

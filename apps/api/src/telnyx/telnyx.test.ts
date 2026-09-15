@@ -189,6 +189,49 @@ test("checkConnection is READ-only, and a numbers listing refused by account lev
   } finally { f.restore(); }
 });
 
+test("lookupNumber keeps the bare-flag query the quickstart documents (?carrier&caller-name)", async () => {
+  const f = withFakeFetch(() => ({ status: 200, body: { data: { phone_number: "+18455550100", caller_name: { caller_name: "LOOPCOM" }, carrier: { name: "Verizon", type: "mobile" }, portability: { ported_status: "N" } } } }));
+  try {
+    const { lookupNumber } = await import("./telnyxClient");
+    const r = await lookupNumber(CREDS, "+18455550100");
+    assert.match(f.calls[0].url, /\/v2\/number_lookup\/%2B18455550100\?carrier&caller-name$/);
+    assert.equal(r.callerName, "LOOPCOM");
+    assert.equal(r.carrier, "Verizon");
+  } finally { f.restore(); }
+});
+
+test("sendRcsMessage posts the agent_message shape with the optional SMS fallback", async () => {
+  const f = withFakeFetch(() => ({ status: 200, body: { data: { id: "r1", type: "SMS" } } }));
+  try {
+    const { sendRcsMessage } = await import("./telnyxClient");
+    const r = await sendRcsMessage(CREDS, { agentId: "agent1", to: "+18455551212", messagingProfileId: "mp1", text: "hi", smsFallbackFrom: "+18455550100" });
+    const body = JSON.parse(f.calls[0].init.body);
+    assert.match(f.calls[0].url, /\/v2\/messages\/rcs$/);
+    assert.equal(body.agent_id, "agent1");
+    assert.deepEqual(body.agent_message, { content_message: { text: "hi" } });
+    assert.deepEqual(body.sms_fallback, { from: "+18455550100", text: "hi" });
+    assert.equal(r.deliveredAs, "SMS");
+  } finally { f.restore(); }
+});
+
+test("sendEmail posts /v2/email_messages; createPortingOrderDraft posts the numbers and maps split orders", async () => {
+  const f = withFakeFetch((url) => url.includes("email")
+    ? { status: 200, body: { data: { id: "e1" } } }
+    : { status: 200, body: { data: [{ id: "po1" }, { id: "po2" }] } });
+  try {
+    const { sendEmail, createPortingOrderDraft } = await import("./telnyxClient");
+    const e = await sendEmail(CREDS, { from: "a@loopcom.net", to: "b@x.com", subject: "s", text: "t" });
+    assert.match(f.calls[0].url, /\/v2\/email_messages$/);
+    assert.equal(e.id, "e1");
+    const p = await createPortingOrderDraft(CREDS, ["+18455550100", "+18455550101"], "T102");
+    const body = JSON.parse(f.calls[1].init.body);
+    assert.match(f.calls[1].url, /\/v2\/porting_orders$/);
+    assert.deepEqual(body.phone_numbers, ["+18455550100", "+18455550101"]);
+    assert.equal(body.customer_reference, "T102");
+    assert.deepEqual(p.ids, ["po1", "po2"]);
+  } finally { f.restore(); }
+});
+
 // ── 3. SOURCE guards ────────────────────────────────────────────────────────
 
 test("server.ts registers the routes and gives /admin/apps/telnyx a permission rule (not silently outside the global gate)", () => {
