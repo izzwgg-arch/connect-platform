@@ -33,6 +33,20 @@ drawer-nav-link geometry (34px icon well, 3px accent left border), billing-card 
 radius, uppercase 10.5px table headers, pill/state-box/KPI patterns. To update it: edit
 the file, republish the artifact from a session in this repo (same path), commit.
 
+### 1b. v2 revision (2026-09-15, after Izzy's first feedback)
+
+Izzy: make it "a lot more user-friendly, SaaS 2026, professional-looking", a polished
+dashboard, and "an admin page for all the settings and controls", staying on the Loopcom
+theme. v2 = an append-only **polish CSS layer** at the end of the `<style>` block (do not
+scatter edits through the base rules — override there) + three structural changes:
+the customer dashboard's pagehead replaced by a **hero** (greeting, cycle progress bar
+with today-marker, action rail, autopay note) and iconized KPI tiles (`.kico`, `.delta`);
+`a-settings` rebuilt as **"Settings & Controls"** (master `.gatecards` strip with locked
+gates stating why, + Access & visibility, Notifications, Data & sync, Maintenance).
+Inter is loaded from fonts.googleapis (allowed host). `<meta charset>` sits at byte 0 for
+file/localhost opens; the artifact skeleton supplies its own. Both themes verified in
+real Chrome. Published as artifact **Version 2**, same URL.
+
 ## 2. Screen inventory (30)
 
 Customer (sidebar section "LoopCom Mobile", routes `/mobile/*`):

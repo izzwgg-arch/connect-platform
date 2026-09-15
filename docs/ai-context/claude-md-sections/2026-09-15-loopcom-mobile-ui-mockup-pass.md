@@ -29,5 +29,14 @@ decision, and the wiring-gap list).
   toggles — all of it waits for approval. The handoff §4 lists the backend work the screens
   need (subscriber model, daily-usage series, invoice persistence LM- series, port
   submission, settings persistence, rollups).
+- **v2 (same day, Izzy's first revision round): "more user-friendly, SaaS 2026,
+  professional; polish the dashboard; an admin page for ALL settings and controls."**
+  Shipped as artifact Version 2 (same URL): a v2 polish CSS layer over the same tokens
+  (hero dashboard with greeting + cycle progress + action rail, iconized KPI tiles with
+  delta chips, gradient primary buttons, hover depth on cards/quick-actions/line-cards),
+  and the admin Settings view rebuilt as **"Settings & Controls"** — master-gate cards up
+  top (product ON, voice/SMS/auto-suspend LOCKED with reasons), plus Access & visibility,
+  Notifications & recipients, Data & sync, and Maintenance sections. Verified rendered in
+  BOTH themes via real Chrome (never the in-app pane). Still ⛔ awaiting approval.
 - Repo state: mockup + docs committed and pushed; **no deploy** (docs-only, zero runtime
   files touched).

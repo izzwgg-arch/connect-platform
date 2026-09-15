@@ -1,4 +1,6 @@
+<meta charset="utf-8">
 <title>LoopCom Mobile Mockups</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <style>
 /* ============================================================
    LoopCom Mobile — complete UI mockup pass (2026-09-15)
@@ -407,6 +409,99 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
   .content { padding: 14px 16px 60px; }
   .topbar .tb-search { display: none; }
 }
+
+/* ════════════════════════════════════════════════════════════
+   v2 POLISH LAYER — SaaS-2026 finish on the same Loopcom tokens.
+   Overrides only; every color still resolves through the theme.
+   ════════════════════════════════════════════════════════════ */
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+.pagehead h2 { font-size: 22px; font-weight: 750; letter-spacing: -.022em; }
+.card { border-radius: 18px; transition: border-color .18s ease, box-shadow .18s ease; }
+.card-h h3 { font-size: 15.5px; }
+.seclbl { letter-spacing: .1em; }
+
+/* KPI tiles: icon chip, bigger figure, hover lift */
+.kpi { border-radius: 18px; position: relative; overflow: hidden; padding: 15px 17px;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  box-shadow: 0 16px 34px -22px color-mix(in srgb, var(--accent) 40%, transparent), var(--card-shadow); }
+.kpi .val { font-size: 27px; font-weight: 800; letter-spacing: -.03em; }
+.kico { position: absolute; top: 13px; right: 13px; width: 34px; height: 34px; border-radius: 11px;
+  display: grid; place-items: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.kico svg { width: 17px; height: 17px; }
+.kico.ok { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.kico.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.kico.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.delta { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 800;
+  border-radius: 999px; padding: 2px 8px; vertical-align: 2px; }
+.delta.up { color: var(--success); background: color-mix(in srgb, var(--success) 13%, transparent); }
+.delta.down { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.delta.flat { color: var(--text-dim); background: var(--chip-bg); }
+
+/* Buttons: gradient primary, gentle motion */
+.btn { border-radius: 10px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease, filter .14s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent;
+  box-shadow: 0 8px 18px -9px color-mix(in srgb, var(--accent) 65%, transparent); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.lg { padding: 10px 16px; font-size: 13.5px; width: 100%; justify-content: center; border-radius: 12px; }
+
+/* Dashboard hero */
+.hero { position: relative; overflow: hidden; display: grid; grid-template-columns: minmax(0,1fr) 250px;
+  gap: 24px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 22px;
+  padding: 24px 26px; margin-bottom: 16px; box-shadow: var(--card-shadow);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 9%, var(--panel)), var(--panel) 58%); }
+.hero-glow { position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(620px 240px at 90% -40%, color-mix(in srgb, var(--accent-2) 24%, transparent), transparent 70%); }
+.hero-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 7px; }
+.hero h2 { font-size: 27px; font-weight: 800; letter-spacing: -.03em; }
+.hero-sub { color: var(--text-dim); font-size: 13.5px; margin-top: 6px; max-width: 62ch; line-height: 1.5; }
+.hero-cycle { margin-top: 16px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--panel-2) 55%, transparent); border-radius: 14px; padding: 12px 14px; }
+.hero-cycle-top, .hero-cycle-bottom { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-dim); }
+.hero-cycle-top { font-weight: 700; margin-bottom: 8px; color: var(--text); }
+.hero-cycle-bottom { margin-top: 8px; }
+.progress { position: relative; height: 8px; border-radius: 99px; background: var(--chip-bg); }
+.progress i { position: absolute; inset: 0 auto 0 0; border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.progress em { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--warning); border-radius: 2px; }
+.hero-side { position: relative; display: flex; flex-direction: column; gap: 9px; justify-content: center; }
+.hero-side .hs-note { text-align: center; font-size: 11.5px; color: var(--text-dim); }
+
+/* Quick actions + line cards: friendlier, hoverable */
+.qa button { border-radius: 14px; padding: 14px 8px; transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
+.qa button:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: 0 12px 26px -18px color-mix(in srgb, var(--accent) 50%, transparent); }
+.qa .qi { width: 40px; height: 40px; border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent-2) 13%, transparent)); }
+.lcard { border-radius: 14px; transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; cursor: pointer; }
+.lcard:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow: 0 12px 26px -18px color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* Filters, tabs, chips */
+.chip { transition: border-color .12s ease, color .12s ease; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text); }
+.tab.on { font-weight: 700; }
+.twrap { border-radius: 13px; }
+table.t tbody tr { transition: background .12s ease; }
+
+/* Settings & Controls gate cards */
+.gatecards { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); gap: 12px; }
+.gate { border: 1px solid var(--border); border-radius: 18px; padding: 14px 16px; background: var(--card-grad);
+  box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 7px;
+  transition: transform .14s ease, border-color .14s ease; }
+.gate:hover { transform: translateY(-2px); }
+.gate .g-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.gate b { font-size: 13.5px; font-weight: 700; }
+.gate .sub { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+.gate.on { border-color: color-mix(in srgb, var(--success) 42%, var(--border)); }
+.gate.locked { border-style: dashed; }
+
+@media (max-width: 900px) { .hero { grid-template-columns: 1fr; } .hero-side { flex-direction: row; flex-wrap: wrap; } .hero-side .btn.lg { width: auto; flex: 1; min-width: 150px; } }
+@media (prefers-reduced-motion: reduce) { .kpi, .btn, .qa button, .lcard, .gate { transition: none; } }
 </style>
 <svg style="display:none" aria-hidden="true">
   <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></symbol>
@@ -534,7 +629,7 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
           <button class="sb-link" data-go="a-diag"><span class="lbl">Diagnostics</span></button>
           <button class="sb-link" data-go="a-webhooks"><span class="lbl">Webhooks</span></button>
           <button class="sb-link" data-go="a-compliance"><span class="lbl">Compliance</span></button>
-          <button class="sb-link" data-go="a-settings"><span class="lbl">Settings</span></button>
+          <button class="sb-link" data-go="a-settings"><span class="lbl">Settings &amp; Controls</span></button>
         </div>
         <button class="sb-link dim" title="Existing page — not part of this mockup"><span class="sb-ico"><svg><use href="#i-server"/></svg></span><span class="lbl">Server Health</span></button>
         <button class="sb-link dim" title="Existing page — not part of this mockup"><span class="sb-ico"><svg><use href="#i-shield"/></svg></span><span class="lbl">Compliance</span></button>
@@ -604,7 +699,7 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
           <tr><td><span class="rowlink" data-go="a-diag">Diagnostics</span></td><td>Line lookup, provisioning history, recovery</td></tr>
           <tr><td><span class="rowlink" data-go="a-webhooks">Webhooks</span></td><td>Event ledger, dead letters, endpoint config</td></tr>
           <tr><td><span class="rowlink" data-go="a-compliance">Compliance</span></td><td>E911 readiness, 10DLC, audit, fraud alerts</td></tr>
-          <tr><td><span class="rowlink" data-go="a-settings">Settings</span></td><td>Defaults, thresholds, fraud controls</td></tr>
+          <tr><td><span class="rowlink" data-go="a-settings">Settings &amp; Controls</span></td><td>Master gates, defaults, thresholds, fraud, access, sync</td></tr>
         </tbody>
       </table></div>
     </div>
@@ -621,22 +716,31 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
 </section>
 <!-- ════════════════════ C1 · CUSTOMER DASHBOARD ════════════════════ -->
 <section class="screen" id="c-dash">
-  <div class="pagehead">
-    <div>
-      <h2>LoopCom Mobile</h2>
-      <p class="muted">Billing cycle Sep 1 – Sep 30 · 15 days left · next invoice estimated <b>$438.70</b></p>
+  <div class="hero">
+    <div class="hero-glow"></div>
+    <div class="hero-main">
+      <div class="hero-eyebrow">LoopCom Mobile · Loopcom Demo</div>
+      <h2>Good afternoon, Sarah</h2>
+      <p class="hero-sub">Everything is running. 12 lines are active, 2 are waiting on an eSIM install, and one lost device is safely paused — its number is held for you.</p>
+      <div class="hero-cycle">
+        <div class="hero-cycle-top"><span>Billing cycle · Sep 1 – 30</span><span>15 days left</span></div>
+        <div class="progress"><i style="width:64%"></i><em style="left:50%" title="Today — halfway through the cycle"></em></div>
+        <div class="hero-cycle-bottom"><span>84.2 of 130 GB pooled data used</span><span>Next invoice est. <b style="color:var(--text)">$438.70</b> · autopay Oct 1</span></div>
+      </div>
     </div>
-    <div class="head-actions">
-      <button class="btn"><svg><use href="#i-usage"/></svg> View usage</button>
-      <button class="btn primary"><svg><use href="#i-billing"/></svg> Pay bill</button>
+    <div class="hero-side">
+      <button class="btn primary lg" data-go="c-billing"><svg><use href="#i-billing"/></svg> Pay bill · $438.70</button>
+      <button class="btn lg" data-go="c-lines"><svg><use href="#i-plus"/></svg> Add a line</button>
+      <button class="btn lg" data-go="c-usage"><svg><use href="#i-usage"/></svg> View usage</button>
+      <span class="hs-note">Autopay is on — Visa •• 6411</span>
     </div>
   </div>
 
   <div class="kpis">
-    <div class="kpi"><span class="lbl"><span class="dot" style="background:var(--success)"></span> Active lines</span><span class="val">12</span><span class="sub pos">All registered on network</span></div>
-    <div class="kpi"><span class="lbl"><span class="dot" style="background:var(--accent)"></span> Pending activation</span><span class="val">2</span><span class="sub">eSIM waiting to be installed</span></div>
-    <div class="kpi"><span class="lbl"><span class="dot" style="background:var(--danger)"></span> Suspended</span><span class="val">1</span><span class="sub neg">1 lost device — number held safe</span></div>
-    <div class="kpi"><span class="lbl"><span class="dot" style="background:var(--warning)"></span> Data this cycle</span><span class="val">84.2 <small>GB</small></span><div class="bar" style="margin-top:4px"><i style="width:64%"></i></div><span class="sub">64% of 130 GB pooled</span></div>
+    <div class="kpi"><span class="kico ok"><svg><use href="#i-check"/></svg></span><span class="lbl">Active lines</span><span class="val">12 <span class="delta up">▲ 2</span></span><span class="sub pos">All registered on network</span></div>
+    <div class="kpi"><span class="kico"><svg><use href="#i-sim"/></svg></span><span class="lbl">Pending activation</span><span class="val">2</span><span class="sub">eSIMs waiting to be installed</span></div>
+    <div class="kpi"><span class="kico bad"><svg><use href="#i-alert"/></svg></span><span class="lbl">Suspended</span><span class="val">1</span><span class="sub neg">Lost device — number held safe</span></div>
+    <div class="kpi"><span class="kico warn"><svg><use href="#i-usage"/></svg></span><span class="lbl">Data this cycle</span><span class="val">84.2 <small>GB</small> <span class="delta flat">64%</span></span><div class="bar" style="margin-top:4px"><i style="width:64%"></i></div><span class="sub">of 130 GB pooled</span></div>
   </div>
 
   <div class="gmain">
@@ -2425,8 +2529,20 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
 <!-- ════════════════════ A13 · SETTINGS (ADMIN) ════════════════════ -->
 <section class="screen" id="a-settings">
   <div class="pagehead">
-    <div><h2>Mobile Settings — platform</h2><p class="muted">Global defaults, thresholds and controls for the whole mobile product.</p></div>
+    <div><h2>Settings &amp; Controls</h2><p class="muted">Every global setting, gate and control for LoopCom Mobile — one page, nothing hidden in code.</p></div>
+    <div class="head-actions"><span class="searchbox"><svg width="13" height="13"><use href="#i-search"/></svg> Search settings…</span></div>
   </div>
+
+  <div class="seclbl">Master controls</div>
+  <div class="gatecards" style="margin-bottom:16px">
+    <div class="gate on"><div class="g-top"><b>LoopCom Mobile product</b><span class="sw on"></span></div><span class="sub">Live for every tenant granted the section key — 11 accounts today.</span></div>
+    <div class="gate locked"><div class="g-top"><b>Cellular voice</b><span class="sw lock"></span></div><span class="sub">Locked — carrier beta. Unlocks only after a real call on a voice-enabled SIM proves it.</span></div>
+    <div class="gate locked"><div class="g-top"><b>SMS on mobile lines</b><span class="sw lock"></span></div><span class="sub">Locked — 10DLC not registered. The Compliance view tracks the checklist.</span></div>
+    <div class="gate"><div class="g-top"><b>Customer self-serve lines</b><span class="sw"></span></div><span class="sub">Off — new lines are created by LoopCom. Flip when the product is ready for it.</span></div>
+    <div class="gate"><div class="g-top"><b>Data top-up purchases</b><span class="sw"></span></div><span class="sub">Off — the 1 GB / $5 top-up stays hidden from customers until enabled.</span></div>
+    <div class="gate locked"><div class="g-top"><b>Auto-suspend on anomaly</b><span class="sw lock"></span></div><span class="sub">Deliberately locked off — usage anomalies are detection-only; a human decides.</span></div>
+  </div>
+
   <div class="g2">
     <div class="stack">
       <div class="card">
@@ -2476,19 +2592,47 @@ table.t tfoot td { border-top: 1px solid var(--border); font-weight: 700; backgr
         </div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>Feature gates</h3></div>
+        <div class="card-h"><h3>Access &amp; visibility</h3></div>
         <div class="toggles">
-          <div class="trow"><div><b>Mobile Voice</b><span class="sub">carrier beta — locked until a real call proves it</span></div><span class="sw lock"></span></div>
-          <div class="trow"><div><b>SMS on mobile lines</b><span class="sub">locked until 10DLC</span></div><span class="sw lock"></span></div>
-          <div class="trow"><div><b>Customer self-serve line creation</b><span class="sub">off = lines are created by LoopCom</span></div><span class="sw"></span></div>
-          <div class="trow"><div><b>Data top-up purchases</b></div><span class="sw"></span></div>
+          <div class="trow"><div><b>Customer section "LoopCom Mobile"</b><span class="sub">appears for every role granted its page keys</span></div><span class="pill ok">11 tenants</span></div>
+          <div class="trow"><div><b>Per-page toggles</b><span class="sub">one key per page — on /admin/permissions and in custom roles</span></div><button class="btn sm">Open permissions</button></div>
+          <div class="trow"><div><b>Mobile Console</b><span class="sub">platform staff only</span></div><span class="pill dim">Locked · SUPER_ADMIN</span></div>
         </div>
       </div>
     </div>
   </div>
-  <details class="dnote"><summary>Design notes — Settings (platform)</summary><div class="dbody">
-    Every number the sweeps and alerts already use becomes a visible, editable setting; the locked switches state <b>why</b> they're locked (beta, 10DLC, deliberate detection-only policy) per the honesty invariant. Feature gates are the same flags the customer UI grays from.
-    <div class="wire"><span class="wtag need">settings persistence (most values are env/constants today)</span><span class="wtag gate">voice + SMS locks</span></div>
+  <div class="g3" style="margin-top:14px">
+    <div class="card">
+      <div class="card-h"><h3>Notifications &amp; recipients</h3></div>
+      <div class="toggles">
+        <div class="trow"><div><b>Balance floor breach</b><span class="sub">text Izzy immediately</span></div><span class="sw on"></span></div>
+        <div class="trow"><div><b>Provisioning failure</b><span class="sub">text + owner notice</span></div><span class="sw on"></span></div>
+        <div class="trow"><div><b>New dead-letter webhook</b></div><span class="sw on"></span></div>
+        <div class="trow"><div><b>Weekly margin digest</b><span class="sub">email, Monday mornings</span></div><span class="sw"></span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Data &amp; sync</h3></div>
+      <div class="toggles">
+        <div class="trow"><div><b>Usage sweep interval</b></div><span class="select" style="width:110px">15 min <span class="car">▾</span></span></div>
+        <div class="trow"><div><b>Usage lookback</b><span class="sub">overlap is free — ingest dedupes</span></div><span class="select" style="width:110px">48 h <span class="car">▾</span></span></div>
+        <div class="trow"><div><b>Capability cache</b></div><span class="select" style="width:110px">5 min <span class="car">▾</span></span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Maintenance</h3></div>
+      <div class="stack" style="gap:8px">
+        <button class="btn">Reconcile all lines now</button>
+        <button class="btn">Re-run usage sync</button>
+        <button class="btn" data-go="a-diag">Open diagnostics →</button>
+      </div>
+      <p class="help" style="margin-top:8px">Safe any time — read-then-converge; nothing here spends money or retries a purchase.</p>
+    </div>
+  </div>
+
+  <details class="dnote"><summary>Design notes — Settings &amp; Controls</summary><div class="dbody">
+    One page owns <b>every global lever</b>: master gates up top as cards (the product's biggest switches, each locked one saying why — beta, 10DLC, deliberate detection-only policy, per the honesty invariant), then defaults, thresholds, fraud, porting, access, notifications, sync and maintenance. Every number the sweeps and alerts already use becomes a visible, editable setting; the same gate flags are what the customer UI grays from.
+    <div class="wire"><span class="wtag need">settings persistence (most values are env/constants today)</span><span class="wtag gate">voice + SMS + auto-suspend locks</span></div>
   </div></details>
 </section>
 
