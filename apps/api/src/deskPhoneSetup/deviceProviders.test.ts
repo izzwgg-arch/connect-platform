@@ -14,6 +14,7 @@ import {
   assertGdmsHost,
   assertGdmsRuntimeMode,
   GdmsClient,
+  gdmsFormSignature,
   gdmsPasswordDigest,
   gdmsSignature,
   parseGdmsDevice,
@@ -186,6 +187,43 @@ test("claim registers the device, proves it by reading it back, and is idempoten
   assert.equal(sim.addCalls, 1, "an already-registered device is never added twice");
 });
 
+test("the FORM signature sorts all params and uses the file's md5 (proven live for device/config/xml)", () => {
+  const md5 = (s: string) => createHash("md5").update(s, "utf8").digest("hex");
+  const xml = "<gs_provision><config><P47>209.145.60.79</P47></config></gs_provision>";
+  const sig = gdmsFormSignature({
+    accessToken: "tok", clientId: "id1", clientSecret: "sec1", timestamp: "1700000000000",
+    textParams: { mac: "C0:74:AD:8C:60:5F" }, fileMd5: { xml: md5(xml) },
+  });
+  // sorted keys: access_token, client_id, client_secret, mac, timestamp, xml(=md5)
+  const expected = sha(
+    `&access_token=tok&client_id=id1&client_secret=sec1&mac=C0:74:AD:8C:60:5F&timestamp=1700000000000&xml=${md5(xml)}&`,
+  );
+  assert.equal(sig, expected);
+  // ⛔ It must NOT equal the JSON-style signature — that shape is what the live cloud rejected.
+  assert.notEqual(sig, gdmsSignature({ accessToken: "tok", clientId: "id1", clientSecret: "sec1", timestamp: "1700000000000", body: xml }));
+});
+
+test("pushConfig delivers a gs_provision config to the device over the cloud, and GDMS stores it", async () => {
+  const sim = new GdmsSimulator();
+  const p = grandstream(sim);
+  const xml = "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>";
+  const r = await p.pushConfig({ mac: MAC, xml });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  if (!r.ok) return;
+  assert.equal(r.outcome, "accepted");
+  assert.equal(sim.configPushCalls, 1);
+  assert.equal(sim.pushedConfigs.get("c074ad8c605f"), xml, "GDMS received the exact config, verified by the FORM signature");
+});
+
+test("pushConfig refuses a non-gs_provision blob before it ever hits the cloud", async () => {
+  const sim = new GdmsSimulator();
+  const r = await grandstream(sim).pushConfig({ mac: MAC, xml: "not a phone config" });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.code, "gdms_config_xml_invalid");
+  assert.equal(sim.configPushCalls, 0, "a bad config never reaches GDMS");
+});
+
 test("a claim whose response timed out after the write landed is still verified by read-back", async () => {
   const sim = new GdmsSimulator();
   sim.failNext = "timeout_after_add";
@@ -323,7 +361,7 @@ test("readiness: Grandstream configured, Yealink redirect-only, Fanvil and Poly 
     const r = await p.readiness();
     assert.equal(r.cloudConfigured, false);
     assert.deepEqual(r.supportedActions, []);
-    for (const res of [await p.claim({ mac: MAC, serialNumber: SN }), await p.reboot(MAC), await p.reset({ mac: MAC, authorization: AUTH }), await p.pushConfig(MAC), await p.firmwareUpdate(MAC)]) {
+    for (const res of [await p.claim({ mac: MAC, serialNumber: SN }), await p.reboot(MAC), await p.reset({ mac: MAC, authorization: AUTH }), await p.pushConfig({ mac: MAC, xml: "<gs_provision/>" }), await p.firmwareUpdate(MAC)]) {
       assert.equal(!res.ok && res.code, "not_supported");
     }
     const sip = await p.assignSip(MAC);

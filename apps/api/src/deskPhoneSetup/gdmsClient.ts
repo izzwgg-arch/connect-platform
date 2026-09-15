@@ -61,6 +61,35 @@ export function gdmsSignature(input: {
   return sha256(canonical);
 }
 
+/**
+ * Signature for a FORM request (multipart/form-data, file upload), which GDMS signs DIFFERENTLY
+ * from JSON calls. All parameters — the common four plus every request field — are sorted in
+ * ascending order, joined `key=value` with `&`, wrapped in leading/trailing `&`, then sha256.
+ * ⛔ A FILE field contributes `md5(fileBytes)` (lowercase hex) as its value, never the file text.
+ * Proven against the live cloud 2026-09-15 for `device/config/xml`: the JSON `gdmsSignature`
+ * above is rejected "bad signature" (40003); this shape is accepted.
+ * (The JSON calls happen to pass with the simpler canonical only because their four common params
+ * are already in sorted order and carry no extra fields.)
+ */
+export function gdmsFormSignature(input: {
+  accessToken: string; clientId: string; clientSecret: string; timestamp: string;
+  /** Ordinary form fields, verbatim values. */
+  textParams?: Record<string, string>;
+  /** File fields: the value here MUST already be md5(fileBytes). */
+  fileMd5?: Record<string, string>;
+}): string {
+  const params: Record<string, string> = {
+    access_token: input.accessToken,
+    client_id: input.clientId,
+    client_secret: input.clientSecret,
+    timestamp: input.timestamp,
+    ...(input.textParams ?? {}),
+    ...(input.fileMd5 ?? {}),
+  };
+  const sorted = Object.keys(params).sort().map((k) => `${k}=${params[k]}`).join("&");
+  return sha256(`&${sorted}&`);
+}
+
 export function assertGdmsHost(host: string): string {
   if (!/^([a-z0-9-]+\.)*gdms\.cloud$/.test(host)) throw new DeviceError("gdms_endpoint_invalid", 503);
   return host;
@@ -280,6 +309,54 @@ export class GdmsClient {
       const itemCode = Number(rejected[0]?.errorMsg);
       throw new GdmsRejection("gdms_request_rejected", Number.isFinite(itemCode) ? itemCode : -1);
     }
+  }
+
+  /**
+   * Push a full config.xml to a device over the GDMS cloud — no LAN, no multicast, no phone
+   * password. GDMS delivers it to the claimed device. `xml` must be native gs_provision format
+   * (exactly what the PBX phoneprov renders). Proven live 2026-09-15: the phone pulled and applied it.
+   * ⛔ Transport is multipart/form-data — `mac` a text field, `xml` a FILE part — and the signature
+   * is the FORM method (`gdmsFormSignature`, file value = md5(bytes)). A JSON body is refused
+   * "bad signature". Sent ONCE and never retried: a timed-out write may have landed (re-read instead).
+   */
+  async pushDeviceConfigXml(input: { mac: string; xml: string; orgId?: string | number | null }): Promise<void> {
+    const n = normalizeMac(input.mac);
+    if (!n) throw new DeviceError("invalid_mac", 400);
+    const xml = String(input.xml ?? "");
+    if (!xml.includes("<gs_provision")) throw new DeviceError("gdms_config_xml_invalid", 400);
+    const textParams: Record<string, string> = { mac: formatMac(n) };
+    if (input.orgId !== undefined && input.orgId !== null && String(input.orgId).length > 0) {
+      textParams.orgId = String(input.orgId);
+    }
+    const accessToken = await this.accessToken();
+    const timestamp = String(this.now());
+    const signature = gdmsFormSignature({
+      accessToken, clientId: this.creds.apiId, clientSecret: this.creds.secretKey, timestamp,
+      textParams, fileMd5: { xml: md5(xml) },
+    });
+    const qs = new URLSearchParams({ access_token: accessToken, signature, timestamp }).toString();
+    const form = new FormData();
+    for (const [k, v] of Object.entries(textParams)) form.append(k, v);
+    form.append("xml", new Blob([Buffer.from(xml, "utf8")], { type: "text/xml" }), "config.xml");
+    let res: Response;
+    try {
+      res = await this.request(`https://${this.host}/oapi/v1.0.0/device/config/xml?${qs}`, {
+        method: "POST",
+        body: form as any,
+        signal: AbortSignal.timeout(30_000),
+        redirect: "error",
+      });
+    } catch {
+      throw new DeviceError("gdms_write_uncertain_check_again", 503);
+    }
+    if (res.status === 401 || res.status === 403) { this.token = null; throw new DeviceError("gdms_authentication_failed", 503); }
+    if (res.status === 429) throw new DeviceError("gdms_rate_limited_retry_later", 503);
+    if (!res.ok) throw new DeviceError("gdms_write_uncertain_check_again", 503);
+    let envelope: any;
+    try { envelope = await res.json(); } catch { throw new DeviceError("gdms_invalid_response", 502); }
+    const retCode = Number(envelope?.retCode);
+    if (!Number.isFinite(retCode)) throw new DeviceError("gdms_invalid_response", 502);
+    if (retCode !== 0) throw new GdmsRejection("gdms_request_rejected", retCode);
   }
 
   async createTask(input: { mac: string; type: "reboot" | "factory_reset"; name: string }): Promise<{ taskId: string | null }> {

@@ -135,6 +135,26 @@ export class GrandstreamProvider extends BaseDeviceProvider {
     }
   }
 
+  /**
+   * Deliver a rendered config.xml to a claimed device over the GDMS cloud (the wizard's send
+   * step). ⛔ The XML must be the PBX's rendered gs_provision config for THIS phone — the caller
+   * owns getting a correct one (a clean per-model template, not another tenant's). This method
+   * only delivers; it does not judge the config's contents.
+   */
+  async pushConfig(input: { mac: string; xml: string }): Promise<ActionResult> {
+    const n = normalizeMac(input.mac);
+    if (!n) return providerFailure("invalid_mac", this.makerName);
+    try {
+      const client = await this.client();
+      if (!client) return providerFailure("cloud_not_configured", this.makerName);
+      // orgId omitted → GDMS uses the account's default org (where the device was claimed).
+      await client.pushDeviceConfigXml({ mac: n, xml: input.xml });
+      return { ok: true, outcome: "accepted", taskId: null, message: "Settings sent to the device through Grandstream." };
+    } catch (err) {
+      return failureFromError(err, this.makerName);
+    }
+  }
+
   private async task(mac: string, type: "reboot" | "factory_reset"): Promise<ActionResult> {
     const n = normalizeMac(mac);
     if (!n) return providerFailure("invalid_mac", this.makerName);

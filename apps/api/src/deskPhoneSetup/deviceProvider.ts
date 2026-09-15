@@ -93,7 +93,8 @@ export interface DeviceProvider {
   reboot(mac: string): Promise<ActionResult>;
   reprovision(mac: string): Promise<ActionResult>;
   assignSip(mac: string): Promise<ActionResult>;
-  pushConfig(mac: string): Promise<ActionResult>;
+  /** Deliver a rendered gs_provision config to the device over the maker cloud. */
+  pushConfig(input: { mac: string; xml: string }): Promise<ActionResult>;
   firmwareUpdate(mac: string): Promise<ActionResult>;
   getStatus(mac: string): Promise<LookupResult>;
   getCapabilities(input: { model: string | null; deviceType: DeviceType; cloud?: CloudDeviceState | null }): Promise<DeviceCapabilities>;
@@ -323,7 +324,7 @@ export abstract class BaseDeviceProvider implements DeviceProvider {
 
   async reboot(_mac: string): Promise<ActionResult> { return this.unsupported(); }
   async reprovision(_mac: string): Promise<ActionResult> { return this.unsupported(); }
-  async pushConfig(_mac: string): Promise<ActionResult> { return this.unsupported(); }
+  async pushConfig(_input: { mac: string; xml: string }): Promise<ActionResult> { return this.unsupported(); }
   async firmwareUpdate(_mac: string): Promise<ActionResult> { return this.unsupported(); }
 
   /** ⛔ SIP accounts always ride the phone system's provisioning record. */

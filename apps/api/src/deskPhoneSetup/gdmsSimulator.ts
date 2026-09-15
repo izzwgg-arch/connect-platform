@@ -12,8 +12,9 @@
  * ⛔ The device-row field names are the simulator's assumption, exactly as unverified
  * as the parser that reads them.
  */
+import { createHash } from "node:crypto";
 import { formatMac, normalizeMac } from "@connect/shared";
-import { GdmsClient, gdmsPasswordDigest, gdmsSignature, type GdmsCredentials } from "./gdmsClient";
+import { GdmsClient, gdmsFormSignature, gdmsPasswordDigest, gdmsSignature, type GdmsCredentials } from "./gdmsClient";
 
 type SimDevice = {
   mac: string;
@@ -46,6 +47,9 @@ export class GdmsSimulator {
   };
   devices = new Map<string, SimDevice>();
   tasks: Array<{ type: number; mac: string; name: string }> = [];
+  /** Configs pushed via device/config/xml, by normalized MAC — the XML GDMS would deliver. */
+  pushedConfigs = new Map<string, string>();
+  configPushCalls = 0;
   addCalls = 0;
   tokenCalls = 0;
   apiCalls: string[] = [];
@@ -105,6 +109,32 @@ export class GdmsSimulator {
     const timestamp = url.searchParams.get("timestamp") ?? "";
     const signature = url.searchParams.get("signature") ?? "";
     if (!this.tokens.has(accessToken)) return json(401, { msg: "token invalid" });
+
+    // device/config/xml is a MULTIPART file upload signed the FORM way — handled before the
+    // JSON signature/parse path (its body is FormData, not a JSON string).
+    if (api === "v1.0.0/device/config/xml") {
+      this.configPushCalls++;
+      const fd: any = init?.body;
+      const macRaw = typeof fd?.get === "function" ? fd.get("mac") : null;
+      const orgId = typeof fd?.get === "function" ? fd.get("orgId") : null;
+      const xmlPart: any = typeof fd?.get === "function" ? fd.get("xml") : null;
+      const xml = xmlPart && typeof xmlPart.text === "function" ? await xmlPart.text()
+        : (typeof xmlPart === "string" ? xmlPart : "");
+      const textParams: Record<string, string> = {};
+      if (macRaw != null) textParams.mac = String(macRaw);
+      if (orgId != null) textParams.orgId = String(orgId);
+      const expectedForm = gdmsFormSignature({
+        accessToken, clientId: this.creds.apiId, clientSecret: this.creds.secretKey, timestamp,
+        textParams, fileMd5: { xml: createHash("md5").update(Buffer.from(xml, "utf8")).digest("hex") },
+      });
+      if (signature !== expectedForm) return json(200, { data: null, msg: "bad signature", retCode: 40003 });
+      const mac = normalizeMac(macRaw);
+      if (!mac) return json(200, { data: null, msg: "mac required", retCode: 50005 });
+      if (!xml.includes("<gs_provision")) return json(200, { data: null, msg: "bad xml", retCode: 50005 });
+      this.pushedConfigs.set(mac, xml);
+      return json(200, { data: "", msg: "", retCode: 0 });
+    }
+
     const expected = gdmsSignature({ accessToken, clientId: this.creds.apiId, clientSecret: this.creds.secretKey, timestamp, body });
     if (signature !== expected) return json(200, { data: null, msg: "signature error", retCode: 40001 });
     let payload: any;
