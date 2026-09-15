@@ -555,7 +555,7 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - "I've passed this to the Connect team" reached NOBODY for two weeks, and a hold-mu… → `2026-08-19-i-ve-passed-this-to-the-connect-team-reached-nob.md`
 - the assistant has a READ-ONLY WORKSPACE on both servers now, and its findings must… → `2026-08-18-the-assistant-has-a-read-only-workspace-on-both.md`
 - the PBX CONSOLE replaces the VitalPBX panel from inside Connect: reads + one exten… → `2026-08-19-the-pbx-console-replaces-the-vitalpbx-panel-from.md`
-- dropping the VitalPBX One subscription: POSSIBLE, but "we only use the multi-tenan… → `2026-08-18-dropping-the-vitalpbx-one-subscription-possible.md`
+- 2026-09-15 · VitalPBX subscription CANCELED (lic not yet lapsed, refreshed Sep 12); phoneprov serving 200 + backend render path verified alive post-cancellation; exit assessment + mirror inside → `2026-08-18-dropping-the-vitalpbx-one-subscription-possible.md`
 - SignalWire is being EVALUATED to replace VoIP.ms: a test bench exists at `/apps/si… → `2026-08-18-signalwire-is-being-evaluated-to-replace-voip-ms.md`
 - the voice changer: a recording comes back in a different voice, and the audio NEVE… → `2026-08-18-the-voice-changer-a-recording-comes-back-in-a-di.md`
 - a tenant can require a SIGN-IN CODE by text/email (2FA per company, "remember this… → `2026-08-19-a-tenant-can-require-a-sign-in-code-by-text-emai.md`

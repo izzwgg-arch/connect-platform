@@ -116,3 +116,26 @@ Memory: [[vitalpbx-license-is-panel-only-item-caps]].)
 - ⏳ **Izzy can read the exact used/allowed numbers in Admin → Licensing Usage**
   (robot role lacks that module). The One plan's tier ladder was NOT confirmable
   online (floor: 25 ext / $225 yr; a $125/mo entry exists) — the invoice knows.
+
+## 2026-09-15 — SUBSCRIPTION CANCELED (Izzy's word). Provisioning verified ALIVE post-cancellation, read-only.
+
+- Izzy reported the VitalPBX subscription canceled and asked whether the phone
+  provisioning server / template generation still works and whether the backend
+  can drive it. **Answer: yes to both, verified live 2026-09-15 (read-only SSH):**
+  - **Serving:** `/phoneprov/f3df739ac62197cd/805e0c4d796d.cfg` answered **200,
+    185,332 bytes, on BOTH http and https** from the box. Configs are STATIC files
+    behind a plain nginx `alias` (§17 trap) — no license check at fetch time, ever.
+  - **Generation:** the 20-phone cap lives ONLY in the panel's SAVE controller;
+    `Device::generateProvisioningFile()` via `render_phone.php` was proven
+    byte-identical on the UNLICENSED clone holding 55 phones (§17) and on prod.
+    `/opt/connect-pbx-helper/` still carries `render_phone.php` + `console_writes.py`
+    + `mirror_writes.py` — the backend path (helper `/console/phone-save|delete|render`,
+    api PBX Console add/edit/delete/Rebuild/Resync) is installed and unchanged.
+  - ⛔ **The license has NOT visibly lapsed yet:** `/var/lib/pbx-licenses/vitalpbx.lic`
+    was refreshed **Sep 12 20:32** by the panel — cancellation likely means no renewal
+    at term end, not an instant Community drop. The §"NOT PROVEN" items about
+    post-lapse panel behaviour on over-cap tenants remain unrehearsed on prod;
+    the mirror + console paths are the safety net either way.
+  - ⚠️ Spotted in passing: `/var/lib/connect-pbx-helper/audit.jsonl` is **84.8 GB**
+    (disk 63% used, 173 GB free — not urgent, but it needs rotation; helper change,
+    Izzy's install button).
