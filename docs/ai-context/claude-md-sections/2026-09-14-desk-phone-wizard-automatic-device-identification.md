@@ -66,6 +66,37 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
 - ⏳ **NOT PROVEN (rounds 5–6):** no customer has typed a serial, uploaded a photo or texted one;
   no phone has been cleared through GDMS from a serial; **OCR has never run on a real photograph
   here** (the suite fakes the engine deliberately — what is tested is our judgement, not Tesseract's).
+- ⛔⛔ **ROUND 9 (`4011fa5f`, 2026-09-15): THE LABEL'S BARCODES ARE READ FIRST — OCR is the fallback,
+  not the front door.** The first real label photo (Izzy's T42S, upside-down flash shot) went through
+  all four Tesseract passes and read NOTHING, while both Code-128 barcodes on the same sticker carry
+  the MAC and the serial exactly. New `apps/api/src/deskPhoneSetup/labelBarcodes.ts` (zxing-cpp via
+  `zxing-wasm`, offline, no native deps) decodes every symbol, emits a 12-hex value bare (parses as
+  MAC) and anything else plausible as `SN <value>` (parseDeviceLabel only takes serials behind a
+  prefix), and returns confidence 100 — a Code-128 read is checksum-verified, not a guess. ⛔ The ONE
+  gate (`recordLabel`) is still the only judge; a decoded MAC that mismatches the phone refuses
+  exactly as before; junk/no-symbol input answers empty and the OCR passes run unchanged. Round-trip
+  proven at all four rotations with the real values (`labelBarcodes.test.ts`, real engine, 4 tests;
+  bwip-js devDep generates the symbols — ⛔ its default PNG background is TRANSPARENT, which flattens
+  to black-on-black and decodes as nothing; tests set backgroundcolor FFFFFF). ⛔ zxing answers junk
+  with one EMPTY error entry, not a throw — only entries carrying text count as symbols.
+- ✅ **SAME COMMIT: the delivery form stops asking for what the system knows.** `provision` reuses the
+  vouched serial on file for the MAC (same tenant; setup rows only ever store serials that passed the
+  label gate — "a serial we cannot vouch for is never stored"), so the panel's serial box is optional
+  with honest copy; `serial_number_required` only when nothing is on file anywhere. And
+  `YEALINK_MANAGED_MODELS` grew **7 → 37** — every Yealink model with a PBX template
+  (vendorCatalog.generated) and a vendor-template key range (buttonLayout `YEALINK_KEY_COUNTS`;
+  `lineKeys` is the only field the config generator consumes — the BLF cap — and under-filling is
+  harmless by that file's own rule). Izzy's own **T42S** (identity "confirmed" from his scan) had NO
+  row, which is why the dropdown offered 7 models and he picked T31P. All new models stay
+  `pending_handset_validation`.
+- ⛔⛔ **LIVE FINDING, same day: Izzy's own T42S (`805ec0b3b2d0`) is RPS-CLAIMED BY ANOTHER
+  ORGANIZATION.** His provision attempt (audit 14:49:07→14:49:13) got Yealink code 800004 →
+  `rps_ownership_conflict`; his release then honestly removed nothing (the add never landed; our
+  account reads 0 devices, checkMac existed:false — ⛔ v2 checkMac only ever sees OUR devices, so
+  "not found" is NOT "free"). Consequence: shipped-style zero-touch for THIS unit needs the holder or
+  Yealink support to release the MAC (proof of possession = the label photo + serial, tickets
+  #530705 open); on his own LAN it still provisions fine — a factory-booting Yealink asks local PnP
+  BEFORE RPS, and the office machine answers first.
 - ⛔⛔ **ROUND 8 (`7e427c28`, DEPLOYED api+portal 2026-09-15 ~10:35Z): THE WIZARD OWNS A PHONE ON ITS
   OWN NETWORK.** Izzy, verbatim: *"the desktop wizard gets priority, and anything else is deleted.
   That phone belongs to the wizard."* Cause: his GXP2170 (…8C:60:5F), factory-reset in his house,

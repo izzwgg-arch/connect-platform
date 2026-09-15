@@ -2,6 +2,22 @@
 
 Newest entries first.
 
+## Label barcodes first, serial reuse, 37 Yealink models (2026-09-15, `4011fa5f`)
+
+- api `node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts" "src/crm/docOcrAdaptive.test.ts"`
+  -> **277+4 = 281 pass / 0 fail / 1 pre-existing skip** (labelBarcodes.test.ts runs the REAL zxing
+  engine against bwip-js-generated Code-128 at all four rotations with Izzy's phone's real values;
+  junk input answers empty so the OCR fallback can never be blocked). ⛔ Two engine traps recorded:
+  bwip-js's default PNG background is TRANSPARENT (flattens to black-on-black, decodes as nothing —
+  tests set FFFFFF), and zxing answers junk with one EMPTY error entry rather than a throw.
+- api tsc: **89 total, 0 in the changed files** (server.ts 40 + ops/webrtc/remoteSupport baseline —
+  all files this task never touched). portal tsc **0**.
+- Live server reads behind the diagnosis (read-only + his own rows): Yealink cloud checkMac
+  `805ec0b3b2d0` existed:false with 0 account devices; ManagedDeskPhone row released/retired with
+  lastError `rps_ownership_conflict`; audit trail CREATED->REQUESTED->conflict (800004) -> released
+  -> retired; DeskPhoneSetupPhone rows: model T42S confidence confirmed, serial 2142019121401463
+  on file (matches the photo's barcode exactly).
+
 ## Second VoIP.ms account attachable (2026-09-15)
 
 - api `node --test src/voipMsAccounts.test.ts` → **11/11 pass** (deletion rules — primary
