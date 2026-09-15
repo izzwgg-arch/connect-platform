@@ -1,0 +1,9 @@
+# FCC BDC filing (late, data as of June 30 2026): data ENTERED and valid — 86 iVoIP subs across 7 NY census tracts, all business, pure Over-the-Top — but CERTIFICATION IS BLOCKED because the BDC's Form 499 list is a stale USAC snapshot that doesn't contain 839208 (2026-09-15)
+
+> Full handoff: `docs/ai-context/AGENT_HANDOFF_BDC_FILING_2026-09-15.md` — open it before touching bdc.fcc.gov.
+
+- FCC second late notice 2026-09-15 → filing owed since Sept 1. Submission `/submission-overview/0038803722/2043684`; only step owed is **Fixed Voice Subscription (Non-ILEC)** (voice-only filer).
+- ✅ Tract Data Entry (7 rows, 86 subs from Extension counts as of Jul 1 + VoIP.ms e911 addresses + Census geocoder) and NY state-level (OTT 86/0 consumer) saved, all checks green in the form.
+- ⛔⛔ Final Data Checks → Error "Missing Form499 ID" hard-gates Certification, and the Entity page's validated picker CANNOT find 839208 ("83920" → No items) — FCC's list predates USAC's approval. **BDC help ticket #63588 filed** (confirmation in izzy@loopcom.net inbox); wait for their reply, then enter the ID, rerun checks, explain the all-business ratio warning, and hand Izzy the Certification page (he signs attestations himself).
+- ⏳ 12 tenants (~32 subs) need service addresses from Izzy (nowhere in Connect/VoIP.ms/PBX/onboarding — proven; don't re-hunt). ⚠ A Plus Center's E911 = Loopcom's own HQ address — confirm before trusting tract 141.02 for their 20 subs.
+- Okta login: izzy@loopcom.net + Chrome-saved password + **email-code MFA** (no phone push needed). Gmail is /u/4/ in Chrome.
