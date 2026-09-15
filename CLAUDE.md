@@ -397,7 +397,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-15 · SignalWire DAY TEST LIVE: A plus 845-782-6775 hops via SignalWire (205) 351-3327 into its own TC-1; both edits in ONE PBX custom file, TRUNK_ID=132 guard IS the anti-loop, CID preserved via 0001 hop, proven with a real answered call; rollback = §5 → `2026-09-15-signalwire-day-test-aplus-6775.md`
 
-- 2026-09-15 · iPhone App Store: Apple REJECTED 1.0/build57 → purpose strings FIXED (`db20a0a8`), storefront SET via API (USA, verified), 2.1(b) answers baked into review notes, demo acct proven live by the reviewer's own sign-in; BUILD 60 HELD on Izzy's Google-Auth mockup decision (4.8 = Apple button mandatory next to Google; mockup published); then attach + resubmit → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
+- 2026-09-15 · iPhone App Store: rejection FULLY WORKED — all 3 issues fixed (purpose strings `db20a0a8`, storefront USA via API, business-model reply SENT + thread-verified), build 60 built/attached, RESUBMITTED at 05:35 ET, `WAITING_FOR_REVIEW` UI-confirmed. ⛔ "Version is not ready" 409 = LYING error; the fix is PATCH the rejected item `{resolved:true}`, never retries. Google Auth → 1.1 (mockup published) → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
 
 - 2026-09-14 · Browser Companion: clean installer verified, NOT installed/accepted; desktop setup tool blocked; Playwright/Chrome DevTools alternatives reviewed with separate-profile versus existing-session limits → `2026-09-14-browser-companion.md`
 

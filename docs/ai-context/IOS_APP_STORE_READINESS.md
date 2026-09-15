@@ -450,16 +450,43 @@ Three separate issues. Only ONE needs a code/binary change:
   Google/Apple sign-in deliberately NOT in this build → lands in 1.1
   (mockup: https://claude.ai/artifact/6kc9wk6iD52HxwoadLuauW, Guideline 4.8
   pairing documented there).
-- **Staged for the moment the build finishes:** `eas submit -p ios --id
-  7f2e559d…` (the ASC .p8 is fetched to the gitignored `.connect-ssh/` locally
-  because eas.json's ascApiKeyPath points at loopcom), then
-  `/root/.appstoreconnect/asc-attach-resubmit-60.mjs` on loopcom — idempotent:
-  finds build 60 in ASC, waits VALID, PATCHes the version's build relationship,
-  then PATCHes reviewSubmission `f395cee7` `submitted:true` (if that PATCH is
-  refused, the "Resubmit to App Review" button in ASC is Izzy's one click).
-  ⛔ The Resolution Center REPLY (drafted above) still needs Izzy's session —
-  it can be sent in parallel any time; the storefront line should say the app
-  is now available in the United States.
+- ✅ **BUILD 60 BUILT, UPLOADED, AND ATTACHED (2026-09-15 ~05:2x ET).** EAS
+  build FINISHED in ~8 min; `eas submit --id 7f2e559d…` uploaded it (⛔ the
+  env vars `EXPO_ASC_API_KEY_PATH` etc. are IGNORED by eas-cli 24.x — it reads
+  eas.json's `ascApiKeyPath`, which points at loopcom's `/root/...`; the fix
+  was a TEMPORARY uncommitted edit of eas.json to the local gitignored
+  `.connect-ssh/AuthKey_QL5RMY8675.p8`, reverted after). ASC build id
+  `989c68d0-41e9-4e2f-8916-7661aa962963`, processingState VALID within
+  minutes. Attach PATCH 204 + read-back confirms the version 1.0 build
+  relationship = build 60; the ASC UI's Build section shows 60/1.0.0 with no
+  compliance warning.
+- ✅ **THE REPLY TO APPLE WAS SENT AND PROVEN, 2026-09-15 05:21 ET.** Izzy said
+  "You do it and send the reply" and got the full text in chat first. The ASC
+  session: the Default "Iz" Chrome profile reached the login wall; the
+  **"Sign in with iPhone"** button (QR to his iOS 17+ device) completed the
+  session WITHOUT anyone typing a password — ⛔ that button is the approved
+  path into ASC when the session is dead; never type the Apple password.
+  Reply posted via the submission page's "Reply to App Review" composer
+  (form_input the whole text, click Reply) and **verified IN THE THREAD**:
+  "Messages (2) … max weiss, Today 5:21 AM" with the full text — per the
+  compose-is-not-sent rule, the thread render is the proof, not the composer.
+- ✅✅ **RESUBMITTED — `WAITING_FOR_REVIEW`, 2026-09-15 05:35 ET, UI-CONFIRMED.**
+  ⛔⛔ **THE "Version is not ready to be submitted yet, please try again later"
+  409 IS A LYING ERROR — IT IS NOT SETTLE LAG AND NO AMOUNT OF RETRYING FIXES
+  IT.** 12+ blind retries over ~15 min all 409'd while version state, build,
+  compliance and screenshots were all clean. The REAL blocker: **the
+  reviewSubmission ITEM keeps state `REJECTED` even after every underlying fix,
+  and a submission cannot be resubmitted while it contains a REJECTED item.**
+  DELETE of the item also fails ("Item was already submitted"). The correct
+  move: **`PATCH /v1/reviewSubmissionItems/{id}` with
+  `attributes: { resolved: true }`** → item flips to `READY_FOR_REVIEW` (200),
+  then `PATCH reviewSubmissions {submitted:true}` → 200,
+  `state: WAITING_FOR_REVIEW`, submittedDate 2026-09-15T09:35:49Z. Read back
+  fresh AND verified in the ASC UI: banner "Waiting for Review", item
+  "iOS App 1.0 / 1.0.0 (60) / Waiting for Review", "Submitted By: API user
+  QL5RMY8675". Script: `/root/.appstoreconnect/asc-item-resolve.mjs`.
+  (The UI's greyed "Resubmit to App Review" button was refusing for the same
+  hidden reason.) Review clock restarts: typically ~48h, sometimes longer.
 
 ### ⛔ REMAINING HUMAN STEPS TO RESUBMIT (all need Izzy)
 1. **Build 60.** Build the iOS binary from commit `db20a0a8` (recipe in

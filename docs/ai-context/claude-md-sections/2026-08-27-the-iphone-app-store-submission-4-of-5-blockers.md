@@ -22,6 +22,19 @@
   `NODE_OPTIONS=--dns-result-order=ipv4first`. The API does NOT expose the
   rejection reasons — they were read from Apple's ASC App Review message, which
   Izzy opened; don't waste time probing the API for them.)
+- ✅✅ **2026-09-15 FINAL: RESUBMITTED, `WAITING_FOR_REVIEW` (05:35 ET),
+  UI-confirmed on build 60.** The whole loop closed in one morning: purpose
+  strings fixed (`db20a0a8`) → build 60 built/uploaded/attached (EAS
+  `7f2e559d…`, ASC `989c68d0…`) → reply to Apple SENT + thread-verified
+  (05:21 AM, via the login page's "Sign in with iPhone" QR — never type the
+  Apple password) → resubmitted via API. ⛔⛔ **TRAP FOR NEXT TIME: after a
+  rejection, `PATCH reviewSubmissions {submitted:true}` 409s "Version is not
+  ready to be submitted yet, please try again later" FOREVER — it's a LYING
+  error. The rejected ITEM must first be `PATCH reviewSubmissionItems/{id}
+  {resolved:true}` (→ READY_FOR_REVIEW); DELETE of the item 409s "already
+  submitted"; retrying the submission PATCH without resolving the item is
+  wasted time.** Script: loopcom `asc-item-resolve.mjs`. Google Auth parked
+  for 1.1 with the mockup as spec.
 - ✅ **2026-09-15 second pass (Izzy's go): storefront + notes FIXED via API,
   build HELD on his Google-Auth call.** Availability SET (USA only, 201 +
   read-back; ⛔ the v2 create demands ALL 175 territories or it 409s); review
