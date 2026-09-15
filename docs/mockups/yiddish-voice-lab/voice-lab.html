@@ -1,0 +1,1244 @@
+<title>Yiddish Voice Lab</title>
+<style>
+/* ============================================================
+   Yiddish Voice Lab — MOCKUP ONLY (2026-09-15). Not built.
+   Tokens copied from apps/portal/app/globals.css + the approved
+   docs/mockups/loopcom-mobile pass. Light on bare :root, dark via
+   OS preference or the data-theme stamp.
+   ⛔ Every Hebrew-script string on this page comes ONLY from the four
+   verbatim Yiddish Labs outputs in const Y (or exact substrings of
+   them, verified at runtime). Nothing Yiddish is written by hand.
+   ============================================================ */
+:root {
+  --bg: #f6f8fb; --bg-soft: #f8fafc;
+  --panel: #ffffff; --panel-2: #f8fafc;
+  --text: #0f172a; --text-dim: #475569;
+  --accent: #3b82f6; --accent-2: #2563eb;
+  --border: rgba(15,23,42,.12);
+  --success: #16a34a; --warning: #b45309; --danger: #dc2626; --info: #2563eb; --future: #7c3aed;
+  --console-bg: #f6f8fb; --console-panel: #ffffff; --console-border: rgba(15,23,42,.09);
+  --console-text: #0f172a; --console-muted: #475569;
+  --card-grad: linear-gradient(145deg, rgba(255,255,255,.99), rgba(248,250,252,.96));
+  --card-shadow: 0 1px 2px rgba(15,23,42,.04), 0 18px 44px -28px rgba(15,23,42,.4), inset 0 1px 0 rgba(255,255,255,.95);
+  --chip-bg: rgba(15,23,42,.05);
+  --wave: #94a3b8; --wave-played: #3b82f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1218; --bg-soft: #101923;
+    --panel: #141f2b; --panel-2: #1a2635;
+    --text: #e1e9f1; --text-dim: #8ea0b2;
+    --accent: #22a8ff; --accent-2: #4f7bff;
+    --border: #26374a;
+    --success: #34c27b; --warning: #f0b655; --danger: #ea6068; --info: #4ab2ff; --future: #b59bff;
+    --console-bg: #0b1016; --console-panel: #131b26; --console-border: #253446;
+    --console-text: #dbe6f2; --console-muted: #8ea2b8;
+    --card-grad: linear-gradient(180deg, color-mix(in srgb, #141f2b 96%, transparent), color-mix(in srgb, #1a2635 74%, transparent));
+    --card-shadow: 0 10px 28px -22px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.035);
+    --chip-bg: rgba(127,127,127,.10);
+    --wave: #3d5166; --wave-played: #22a8ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1218; --bg-soft: #101923;
+  --panel: #141f2b; --panel-2: #1a2635;
+  --text: #e1e9f1; --text-dim: #8ea0b2;
+  --accent: #22a8ff; --accent-2: #4f7bff;
+  --border: #26374a;
+  --success: #34c27b; --warning: #f0b655; --danger: #ea6068; --info: #4ab2ff; --future: #b59bff;
+  --console-bg: #0b1016; --console-panel: #131b26; --console-border: #253446;
+  --console-text: #dbe6f2; --console-muted: #8ea2b8;
+  --card-grad: linear-gradient(180deg, color-mix(in srgb, #141f2b 96%, transparent), color-mix(in srgb, #1a2635 74%, transparent));
+  --card-shadow: 0 10px 28px -22px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.035);
+  --chip-bg: rgba(127,127,127,.10);
+  --wave: #3d5166; --wave-played: #22a8ff;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif; font-size: 14px; }
+h1,h2,h3,h4,p { margin: 0; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+.yi { font-family: "Noto Sans Hebrew", "Frank Ruhl Libre", "Arial Hebrew", "David", "Segoe UI", sans-serif; unicode-bidi: isolate; }
+.yi.big { font-size: 19px; line-height: 1.9; }
+.muted { color: var(--text-dim); }
+.small { font-size: 12px; }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+
+/* mockup chrome */
+.mockbar { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-block: 8px; padding-inline: 16px; background: color-mix(in srgb, var(--warning) 12%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border)); }
+.mtag, .mock { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent); border-radius: 6px; padding: 3px 8px; background: color-mix(in srgb, var(--warning) 10%, transparent); white-space: nowrap; }
+.mtitle { font-size: 13px; font-weight: 650; }
+.msp { flex: 1; }
+.mockbar select { width: auto; max-width: 100%; }
+[hidden] { display: none !important; }
+#g-rules td:nth-child(2), #g-rules td:nth-child(3) { white-space: nowrap; }
+#g-rules td:nth-child(4) { min-width: 230px; }
+
+.shell { display: grid; grid-template-columns: 250px minmax(0,1fr); min-height: calc(100vh - 44px); }
+.side { background: var(--console-bg); border-right: 1px solid var(--console-border); padding: 14px 10px; position: sticky; top: 44px; align-self: start; height: calc(100vh - 44px); overflow-y: auto; }
+.side .brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 12px; font-weight: 800; letter-spacing: -.02em; color: var(--console-text); }
+.side .brand i { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: inline-block; }
+.side .sec { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--console-muted); padding: 12px 10px 6px; display: flex; gap: 6px; align-items: center; }
+.side button.nav { width: 100%; text-align: left; display: flex; align-items: center; gap: 9px; border: 0; background: transparent; color: var(--console-text); padding: 7px 10px; border-radius: 9px; cursor: pointer; font-size: 13px; }
+.side button.nav:hover { background: var(--chip-bg); }
+.side button.nav.on { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 650; }
+.side button.nav b { width: 20px; font-size: 11px; color: var(--console-muted); font-weight: 700; }
+.side .gate { margin: 14px 8px 0; font-size: 11.5px; color: var(--console-muted); border: 1px dashed var(--console-border); border-radius: 10px; padding: 9px; line-height: 1.45; }
+
+main { padding-block: 20px 60px; padding-inline: 24px; min-width: 0; }
+.screen { max-width: 1200px; margin: 0 auto; }
+.crumb { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.pagehead h2 { font-size: 22px; font-weight: 750; letter-spacing: -.022em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pagehead p { color: var(--text-dim); font-size: 13px; margin-top: 4px; max-width: 78ch; line-height: 1.5; }
+
+.card { background: var(--card-grad); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--card-shadow); padding: 16px; min-width: 0; }
+.card + .card { margin-top: 14px; }
+.card-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.card-h h3 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-h .sub { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.seclbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text-dim); margin: 0 0 8px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
+.grid2 > .card + .card, .grid3 > .card + .card, .stack > .card + .card { margin-top: 0; }
+.stack { display: grid; gap: 14px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.between { justify-content: space-between; }
+
+.btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 7px 13px; font-size: 13px; font-weight: 550; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: transform .14s, border-color .14s; }
+.btn:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; font-weight: 650; }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.btn.gold { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
+.btn.gold.on { background: color-mix(in srgb, var(--warning) 16%, var(--panel)); }
+.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.pill.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); background: color-mix(in srgb, var(--success) 9%, transparent); }
+.pill.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+.pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.pill.info { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 9%, transparent); }
+.pill.dim { color: var(--text-dim); }
+.fut { display: inline-flex; align-items: center; gap: 5px; border: 1px dashed color-mix(in srgb, var(--future) 70%, transparent); color: var(--future); background: color-mix(in srgb, var(--future) 8%, transparent); border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.fut::before { content: "◇"; }
+.tag { display: inline-block; border-radius: 6px; padding: 2px 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; background: var(--chip-bg); color: var(--text-dim); white-space: nowrap; }
+
+.chips { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.chip { border: 1px solid var(--border); background: var(--panel); color: var(--text-dim); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text); }
+.chip.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.chip.on.bad { background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.chip:disabled { opacity: .45; cursor: not-allowed; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; padding: 6px 11px; font-size: 12.5px; cursor: pointer; color: var(--text-dim); font-weight: 600; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+
+.field { display: grid; gap: 5px; min-width: 0; }
+.field > span { font-size: 11.5px; font-weight: 650; color: var(--text-dim); }
+input[type=text], input[type=search], input[type=number], select, textarea { width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+textarea { resize: vertical; min-height: 70px; }
+label.chk { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; cursor: pointer; }
+
+.twrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--panel-2) 58%, transparent); }
+table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.t th { text-align: left; color: var(--text-dim); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 72%, transparent); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 9px 12px; white-space: nowrap; }
+table.t td { border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); padding: 9px 12px; vertical-align: middle; }
+table.t tbody tr:last-child td { border-bottom: 0; }
+table.t tbody tr.click { cursor: pointer; }
+table.t tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+table.t tr.regress td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.banner { display: flex; gap: 10px; align-items: flex-start; border-radius: 13px; padding: 11px 13px; font-size: 13px; line-height: 1.45; border: 1px solid var(--border); background: var(--panel-2); margin-bottom: 14px; }
+.banner b { font-weight: 700; }
+.banner.warn { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, var(--panel)); }
+.banner.bad { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.banner.info { border-color: color-mix(in srgb, var(--info) 40%, var(--border)); background: color-mix(in srgb, var(--info) 7%, var(--panel)); }
+.banner.fut { border-style: dashed; border-color: color-mix(in srgb, var(--future) 55%, var(--border)); background: color-mix(in srgb, var(--future) 6%, var(--panel)); color: var(--text); font-size: 13px; font-weight: 400; border-radius: 13px; padding: 11px 13px; }
+.banner.fut::before { content: none; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 14px; }
+.kpi { background: var(--card-grad); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--card-shadow); padding: 13px 15px; }
+.kpi .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); }
+.kpi .val { font-size: 24px; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.kpi .sub { font-size: 12px; color: var(--text-dim); }
+
+/* layers */
+.layer { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--panel); position: relative; }
+.layer + .layer { margin-top: 10px; }
+.layer .lh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.layer .num { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.layer h4 { font-size: 13.5px; font-weight: 700; }
+.layer .lh .pill { white-space: normal; }
+.hl { background: color-mix(in srgb, var(--warning) 22%, transparent); border-bottom: 2px solid var(--warning); border-radius: 3px; padding: 0 2px; }
+.hl sup { font-family: Inter, sans-serif; font-size: 9.5px; font-weight: 800; color: var(--warning); margin-inline: 2px; }
+pre.req { margin: 0; white-space: pre-wrap; word-break: break-word; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+pre.req .k { color: var(--accent); } pre.req .s { color: var(--success); }
+
+/* player */
+.player { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 13px; padding: 8px 10px; background: var(--panel); }
+.player .play { width: 36px; height: 36px; border-radius: 50%; border: 0; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; cursor: pointer; flex: none; font-size: 13px; }
+.player svg { flex: 1; min-width: 0; height: 56px; display: block; }
+.player .time { font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wave-bar { fill: var(--wave); } .wave-bar.p { fill: var(--wave-played); }
+.miniplay { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); cursor: pointer; font-size: 10px; color: var(--accent); }
+
+/* ratings */
+.rate4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.rate4 button { border: 1px solid var(--border); background: var(--panel); border-radius: 12px; padding: 12px 6px; cursor: pointer; font-weight: 700; font-size: 13px; }
+.rate4 button.on[data-v="4"] { border-color: var(--success); color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--panel)); }
+.rate4 button.on[data-v="3"] { border-color: var(--info); color: var(--info); background: color-mix(in srgb, var(--info) 10%, var(--panel)); }
+.rate4 button.on[data-v="2"] { border-color: var(--warning); color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--panel)); }
+.rate4 button.on[data-v="1"] { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--panel)); }
+details.cats { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+details.cats summary { cursor: pointer; padding: 10px 12px; font-weight: 650; font-size: 13px; }
+.catrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); flex-wrap: wrap; }
+.catrow .seg button { padding: 4px 9px; font-size: 11.5px; }
+.catrow .seg button.on.w { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.meta { display: flex; gap: 8px 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; align-items: center; }
+.meta b { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* tokens */
+.tokens { direction: rtl; display: flex; flex-wrap: wrap; gap: 4px 3px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.tok { border: 1px solid transparent; background: transparent; border-radius: 7px; padding: 2px 5px; cursor: pointer; font-size: 20px; line-height: 1.6; }
+.tok:hover { background: var(--chip-bg); }
+.tok.sel { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.tok.ann { border-bottom: 2px dotted var(--warning); border-radius: 7px 7px 0 0; }
+
+/* drawer */
+.drawer-bg { position: fixed; inset: 0; background: rgba(2,6,12,.45); z-index: 80; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--bg); border-left: 1px solid var(--border); z-index: 81; overflow-y: auto; padding-block: 18px; padding-inline: 18px; box-shadow: -20px 0 50px -30px rgba(0,0,0,.5); }
+.modal { position: fixed; z-index: 81; left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(520px, calc(100% - 32px)); background: var(--bg); border: 1px solid var(--border); border-radius: 18px; padding: 18px; box-shadow: 0 30px 80px -30px rgba(0,0,0,.6); }
+
+/* timeline */
+.tl { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+.tlv { border: 1px solid var(--border); border-radius: 13px; padding: 10px 12px; background: var(--panel); cursor: pointer; position: relative; }
+.tlv.on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.tlv .v { font-weight: 800; font-size: 16px; }
+.diffline { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 3px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.diffline.add { background: color-mix(in srgb, var(--success) 12%, transparent); }
+.diffline.del { background: color-mix(in srgb, var(--danger) 11%, transparent); text-decoration: line-through; opacity: .85; }
+
+.pcard { border: 1px solid var(--border); border-radius: 15px; padding: 13px; background: var(--card-grad); box-shadow: var(--card-shadow); cursor: pointer; display: grid; gap: 6px; }
+.pcard.on { border-color: var(--accent); }
+.pcard.new { border-style: dashed; place-items: center; color: var(--accent); font-weight: 700; min-height: 110px; }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+
+.storebar { display: flex; height: 16px; border-radius: 99px; overflow: hidden; background: var(--chip-bg); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+.empty { text-align: center; padding: 28px 16px; display: grid; gap: 8px; justify-items: center; }
+.empty .ico { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; font-size: 22px; background: var(--chip-bg); }
+.empty.bad .ico { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.empty.warn .ico { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.empty h3 { font-size: 16px; }
+.empty p { color: var(--text-dim); max-width: 46ch; line-height: 1.5; font-size: 13px; }
+
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--text-dim); font-size: 11px; font-family: Inter, "Segoe UI", sans-serif; }
+.chart text.lbl { fill: var(--text); font-size: 12px; }
+.chart .axis { stroke: var(--border); }
+.chart .bar { fill: var(--accent); }
+.chart .bar.warn { fill: var(--warning); }
+.chart .few { fill: url(#hatch); }
+
+.grid3.rg-grid { grid-template-columns: minmax(0,1fr) minmax(0,2fr); }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; z-index: 99; max-width: calc(100% - 32px); }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid color-mix(in srgb, #fff 40%, transparent); border-top-color: #fff; animation: sp .7s linear infinite; display: inline-block; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.region { fill: color-mix(in srgb, var(--accent) 22%, transparent); stroke: var(--accent); }
+.ann-region { fill: color-mix(in srgb, var(--warning) 18%, transparent); }
+
+@media (max-width: 980px) {
+  .shell { grid-template-columns: minmax(0,1fr); }
+  .side { display: none; }
+  .grid3 { grid-template-columns: minmax(0,1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .tl { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 720px) {
+  main { padding-inline: 16px; }
+  .grid2 { grid-template-columns: minmax(0,1fr); }
+  .rate4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .yi.big { font-size: 17px; }
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Hebrew:wght@400;500;700&family=Frank+Ruhl+Libre:wght@400;500&display=swap">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <rect width="6" height="6" fill="transparent"/><line x1="0" y1="0" x2="0" y2="6" stroke="#8ea0b2" stroke-width="2.4"/>
+  </pattern>
+</defs></svg>
+
+<div class="mockbar">
+  <span class="mtag">MOCKUP — not built</span>
+  <span class="mtitle">Yiddish Voice Lab · /admin/voice-lab · SUPER_ADMIN only</span>
+  <span class="msp"></span>
+  <select id="screenPick" aria-label="Screen"></select>
+  <div class="seg" id="themeSeg"><button data-t="system" class="on">System</button><button data-t="light">Light</button><button data-t="dark">Dark</button></div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><i></i>Loopcom</div>
+    <div class="sec">Platform · Voice Lab <span class="tag">staff</span></div>
+    <nav id="sideNav"></nav>
+    <div class="gate">Platform staff only (SUPER_ADMIN). Not grantable to tenants or custom roles. Yiddish Labs text is <b>Serving-only</b>.</div>
+  </aside>
+
+  <main>
+
+<!-- ============ 1. GENERATE & RATE ============ -->
+<section class="screen" data-screen="1">
+  <div class="crumb">Admin › Voice Lab › Generate &amp; Rate</div>
+  <div class="pagehead"><div>
+    <h2>Generate &amp; Rate <span class="mock">MOCKUP — not built</span></h2>
+    <p>Type what the caller should hear. Yiddish Labs writes the Yiddish, our speech layer prepares it, OpenAI speaks it. Every layer is shown exactly as it happened.</p>
+  </div>
+  <div class="row">
+    <div class="field" style="min-width:250px"><span>Profile &amp; config version</span>
+      <select id="g-profile"><option>Hasidic Yiddish — Experimental v3</option><option>Hasidic Yiddish — Draft v4</option><option>Natural Yiddish — Production v7</option><option>Technical Support — Experimental v2</option></select></div>
+  </div></div>
+
+  <div class="grid2">
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3>Tester input</h3><div class="sub">English or plain description. Sent to Yiddish Labs only.</div></div><span class="pill dim" id="g-sample-lbl">Sample 2 of 4</span></div>
+        <textarea id="g-input" rows="3">Hi, this is Malky Berger. I wanted to check if the order for Thursday is ready. Please call me back, thank you.</textarea>
+        <div class="row between" style="margin-top:10px">
+          <div class="chips small" id="g-samples"></div>
+          <button class="btn primary" id="g-ask">Ask Yiddish Labs</button>
+        </div>
+      </div>
+
+      <div class="card" id="g-layers">
+        <div class="card-h"><div><h3>What happened, layer by layer</h3><div class="sub">Pipeline: input → Yiddish Labs → speech layer → OpenAI gpt-4o-mini-tts → audio</div></div></div>
+        <div class="layer">
+          <div class="lh"><span class="num">1</span><h4>What Yiddish Labs wrote</h4><span class="pill warn">Serving only — never used for training/fine-tuning exports</span></div>
+          <div class="yi big" dir="rtl" lang="yi" id="g-yl"></div>
+          <div class="small muted" style="margin-top:6px">Verbatim. Read-only. Source: Yiddish Labs terms.</div>
+        </div>
+        <div class="layer">
+          <div class="lh"><span class="num">2</span><h4>What our speech layer did</h4><span class="tag">dict v12</span><span class="tag">prep ruleset v5</span><span class="pill info" id="g-editcount"></span></div>
+          <div class="yi big" dir="rtl" lang="yi" id="g-diff"></div>
+          <div class="twrap" style="margin-top:8px"><table class="t"><thead><tr><th>#</th><th>Rule</th><th>Dictionary entry</th><th>Applied as</th><th>Status</th></tr></thead><tbody id="g-rules"></tbody></table></div>
+          <div class="small muted" style="margin-top:8px">OpenAI has no SSML, phoneme or lexicon input. A dictionary entry can only become (a) a text respelling a reviewer entered and verified, or (b) an English instruction hint. Unverified respellings are never sent.</div>
+        </div>
+        <div class="layer">
+          <div class="lh"><span class="num">3</span><h4>What was sent to OpenAI</h4><span class="tag">POST /v1/audio/speech</span><span class="pill dim">auth header omitted</span></div>
+          <pre class="req" id="g-req"></pre>
+          <div class="row small muted" style="margin-top:8px"><span id="g-chars"></span><span class="pill warn">speed: effect unverified on gpt-4o-mini-tts</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3>Audio</h3><div class="sub">voice marin · mp3 · mock audio (no file in mockup)</div></div><span class="pill info">AI voice — disclosure required for end users</span></div>
+        <div class="player" data-player="g" data-seed="7" data-dur="8.4"></div>
+        <div class="seclbl" style="margin-top:16px">Overall — one tap</div>
+        <div class="rate4" id="g-overall"><button data-v="4">Excellent</button><button data-v="3">Good</button><button data-v="2">Needs work</button><button data-v="1">Bad</button></div>
+        <details class="cats" style="margin-top:12px"><summary>Detailed categories <span class="muted small">(optional — none required)</span></summary><div id="g-cats"></div></details>
+        <div class="row" style="margin-top:14px">
+          <button class="btn gold" id="g-golden">★ Mark Golden Sample</button>
+          <button class="btn danger" id="g-reject">Reject</button>
+          <span class="msp"></span><span class="small muted" id="g-saved"></span>
+        </div>
+        <div id="g-rejectbox" hidden style="margin-top:12px">
+          <div class="seclbl">Reject reason (pick any)</div>
+          <div class="chips" id="g-reasons"></div>
+          <div class="row" style="margin-top:10px"><button class="btn sm danger" id="g-reject-save">Save rejection</button><button class="btn sm" id="g-reject-cancel">Cancel</button><span class="small muted">A rejection with a correction is kept forever.</span></div>
+        </div>
+        <div class="meta">
+          <span>Yiddish Labs <b>1,240 ms</b></span><span>OpenAI TTS <b>1,860 ms</b></span><span>Size <b>142,318 bytes</b></span>
+          <span>Created <b>2026-09-15 14:22:07 ET</b></span><span>App <b>portal mock-0915</b></span>
+          <span class="pill warn">Provenance: Yiddish Labs text · Serving-only</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Next on this sample</h3></div>
+        <div class="row"><button class="btn" data-go="2">Correct a word →</button><button class="btn" data-go="3">Mark rhythm →</button><button class="btn" data-go="4">A/B this text →</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. WORD CORRECTION ============ -->
+<section class="screen" data-screen="2" hidden>
+  <div class="crumb">Admin › Voice Lab › Generate &amp; Rate › Correct a word</div>
+  <div class="pagehead"><div>
+    <h2>Word / phrase correction <span class="mock">MOCKUP — not built</span></h2>
+    <p>Tap a word to start a selection, tap another word to extend it. The correction is saved as <b>Unverified</b> until a second reviewer verifies it.</p>
+  </div></div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3>Sample text</h3><div class="sub">From Yiddish Labs · Serving-only · sample #S-20931</div></div><button class="btn sm" id="c-clear">Clear selection</button></div>
+        <div class="tokens yi" dir="rtl" lang="yi" id="c-tokens"></div>
+        <div class="player" data-player="c" data-seed="7" data-dur="8.4" style="margin-top:12px"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Corrections saved in this session</h3></div>
+        <div id="c-saved" class="small muted">None yet.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><div><h3>Selected span</h3><div class="sub" id="c-selinfo">Nothing selected — tap a word.</div></div><span class="pill warn">Will save as Unverified</span></div>
+      <div class="yi big" dir="rtl" lang="yi" id="c-sel" style="min-height:36px; border:1px dashed var(--border); border-radius:10px; padding:4px 10px"></div>
+      <div class="grid2" style="margin-top:12px">
+        <label class="field"><span>Incorrect pronunciation heard</span><input type="text" placeholder="Describe what you heard, e.g. stress on the last syllable"></label>
+        <label class="field"><span>Preferred pronunciation</span><input type="text" placeholder="Entered by a reviewer"></label>
+        <label class="field"><span>Phonetic</span><input type="text" placeholder="[phonetic entered by reviewer]"></label>
+        <label class="field"><span>Transliteration (Latin)</span><input type="text" placeholder="[transliteration entered by reviewer]"></label>
+        <label class="field"><span>IPA</span><input type="text" placeholder="[IPA entered by reviewer]"></label>
+        <label class="field"><span>Category</span><select id="c-cat"></select></label>
+      </div>
+      <div class="field" style="margin-top:12px"><span>Reference audio</span>
+        <div class="row"><select id="c-consent" style="max-width:260px"><option value="">Pick a speaker consent record…</option><option value="S-01">Speaker S-01 · evaluation + training</option><option value="S-03">Speaker S-03 · evaluation only</option></select>
+        <button class="btn sm" id="c-attach" disabled>Attach recording</button><span class="small muted" id="c-attach-note">Consent record required before attaching.</span></div>
+      </div>
+      <label class="field" style="margin-top:12px"><span>Explanation</span><textarea placeholder="Why the current pronunciation is wrong (English is fine)"></textarea></label>
+      <label class="field" style="margin-top:10px"><span>Dialect / usage notes</span><input type="text" placeholder="e.g. Hasidic usage; differs from standard YIVO"></label>
+      <div class="seclbl" style="margin-top:14px">Context scope</div>
+      <div class="grid2">
+        <label class="field"><span>Only when next to…</span><select id="c-neighbor"><option>Any context</option></select></label>
+        <label class="field"><span>Domain</span><select><option>All domains</option><option>Orders &amp; delivery</option><option>Voicemail</option><option>Tech support</option><option>Billing</option><option>Greetings</option></select></label>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="c-save" disabled>Save to dictionary as Unverified</button><span class="small muted">Creates dict v13 draft; production dictionary unchanged until a config is promoted.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. RHYTHM ============ -->
+<section class="screen" data-screen="3" hidden>
+  <div class="crumb">Admin › Voice Lab › Generate &amp; Rate › Rhythm &amp; cadence</div>
+  <div class="pagehead"><div>
+    <h2>Rhythm &amp; cadence marking <span class="mock">MOCKUP — not built</span></h2>
+    <p>Select words and/or drag a region on the waveform, then tap what's wrong.</p>
+  </div></div>
+  <div class="banner warn"><span>⚠</span><div><b>Today these become plain-English instruction hints.</b> OpenAI TTS has no per-word prosody control (no SSML, no pause or stress markup), so a mark like "Pause longer here" is folded into the <span class="mono">instructions</span> field of a draft config and judged by listening. <span class="fut">Future capability</span> word-level prosody control if a provider offers it.</div></div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3>Sample #S-20877</h3><div class="sub">voice marin · Hasidic Yiddish — Experimental v3 · Serving-only text</div></div></div>
+        <div class="tokens yi" dir="rtl" lang="yi" id="r-tokens"></div>
+        <div class="seclbl" style="margin-top:14px">Waveform — drag to mark a region</div>
+        <div style="border:1px solid var(--border); border-radius:12px; padding:8px; background:var(--panel)">
+          <svg id="r-wave" viewBox="0 0 600 90" style="width:100%; height:auto; touch-action:none; cursor:crosshair; display:block"></svg>
+        </div>
+        <div class="small muted" style="margin-top:6px" id="r-selinfo">No selection.</div>
+        <div class="seclbl" style="margin-top:14px">Mark it</div>
+        <div class="chips" id="r-chips"></div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3>Annotations on this sample</h3><div class="sub" id="r-count"></div></div></div>
+        <div class="twrap"><table class="t"><thead><tr><th>Span</th><th>Region</th><th>Mark</th><th>By</th><th></th></tr></thead><tbody id="r-list"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><div><h3>Instruction hints this would add to a draft</h3><div class="sub">Preview — nothing is sent until a draft config is tested</div></div></div>
+        <pre class="req" id="r-hints"></pre>
+        <div class="row" style="margin-top:10px"><button class="btn" id="r-draft">Create draft config with these hints</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. A/B ============ -->
+<section class="screen" data-screen="4" hidden>
+  <div class="crumb">Admin › Voice Lab › A/B test</div>
+  <div class="pagehead"><div>
+    <h2>A/B test <span class="mock">MOCKUP — not built</span></h2>
+    <p>Same Yiddish Labs text, two configs that differ in one dimension. You don't know which is which until you vote.</p>
+  </div></div>
+  <div class="card">
+    <div class="row between">
+      <div class="field"><span>Dimension</span><div class="seg" id="ab-dim"><button data-d="voice" class="on">Voice</button><button data-d="instr">Instructions</button><button data-d="model">Model</button><button data-d="prod">Production vs Experimental</button></div></div>
+      <span class="pill info">Placement randomized, revealed after vote</span>
+    </div>
+    <div class="layer" style="margin-top:14px"><div class="lh"><h4>Text (identical for both)</h4><span class="pill warn">Yiddish Labs · Serving-only</span></div><div class="yi big" dir="rtl" lang="yi" id="ab-text"></div></div>
+    <div class="grid2" style="margin-top:14px">
+      <div class="layer"><div class="lh"><span class="num">A</span><h4>Sample A</h4><span class="small muted">config hidden</span></div><div class="player" data-player="abA" data-seed="11" data-dur="6.9"></div><div id="ab-revA" class="small" style="margin-top:8px"></div></div>
+      <div class="layer" style="margin-top:0"><div class="lh"><span class="num">B</span><h4>Sample B</h4><span class="small muted">config hidden</span></div><div class="player" data-player="abB" data-seed="23" data-dur="7.2"></div><div id="ab-revB" class="small" style="margin-top:8px"></div></div>
+    </div>
+    <div class="seclbl" style="margin-top:14px">Verdict</div>
+    <div class="rate4" id="ab-vote"><button data-v="A">A better</button><button data-v="B">B better</button><button data-v="same">About the same</button><button data-v="bad">Both bad</button></div>
+    <div id="ab-reveal" hidden class="banner info" style="margin-top:12px; margin-bottom:0"></div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" id="ab-next">Next pair →</button></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Running tally</h3><div class="sub">Win rate counts decisive votes only (ties and both-bad excluded). 95% interval shown.</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Dimension</th><th>Config A</th><th>Config B</th><th class="num">A wins</th><th class="num">B wins</th><th class="num">Same</th><th class="num">Both bad</th><th class="num">n</th><th>Win rate (A)</th><th>Confidence</th></tr></thead><tbody id="ab-tally"></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============ 5. DICTIONARY ============ -->
+<section class="screen" data-screen="5" hidden>
+  <div class="crumb">Admin › Voice Lab › Pronunciation dictionary</div>
+  <div class="pagehead"><div>
+    <h2>Pronunciation dictionary <span class="mock">MOCKUP — not built</span> <span class="tag">dict v12</span></h2>
+    <p>One entry per written form. Each entry carries a provider-neutral target (IPA) and a realization per provider. Respelling values are entered by reviewers only.</p>
+  </div><div class="row"><button class="btn primary" data-go="2">+ New entry from a sample</button></div></div>
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <input type="search" id="d-q" placeholder="Search written form…" style="max-width:260px">
+      <select id="d-verified" style="max-width:160px"><option value="">Verified: any</option><option value="y">Verified</option><option value="n">Unverified</option></select>
+    </div>
+    <div class="chips" id="d-cats" style="margin-bottom:12px"></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Written form</th><th>Category</th><th>OpenAI (respelling / hint)</th><th>ElevenLabs alias / phoneme</th><th>IPA (neutral)</th><th>Dialect</th><th class="num">Context rules</th><th>Verified</th><th>Confidence</th><th class="num">Uses</th><th>Last corrected</th></tr></thead><tbody id="d-rows"></tbody></table></div>
+    <div class="small muted" style="margin-top:8px">ElevenLabs column: <span class="fut">Future capability</span> — not in today's OpenAI pipeline; kept so entries port if a second provider is added.</div>
+  </div>
+</section>
+
+<!-- ============ 6. PROFILES ============ -->
+<section class="screen" data-screen="6" hidden>
+  <div class="crumb">Admin › Voice Lab › Style profiles &amp; versions</div>
+  <div class="pagehead"><div>
+    <h2>Style profiles &amp; versions <span class="mock">MOCKUP — not built</span></h2>
+    <p>A profile is a named style. Each version is an immutable config. Changing anything creates a new Draft version.</p>
+  </div></div>
+  <div class="pgrid" id="p-cards"></div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-h"><div><h3 id="p-title">Hasidic Yiddish — Experimental</h3><div class="sub">Learns from corrections, ratings and golden samples. Nothing about the accent is hardcoded — every change is a reviewed, versioned config.</div></div><span class="pill info">AI voice — end-user disclosure required</span></div>
+    <div class="tl" id="p-tl"></div>
+    <div class="grid2" style="margin-top:14px">
+      <div class="layer" style="margin-top:0">
+        <div class="lh"><h4 id="p-vtitle">v3 config</h4><span class="pill dim">immutable</span></div>
+        <div class="twrap"><table class="t"><tbody id="p-config"></tbody></table></div>
+        <div class="seclbl" style="margin-top:12px">Internal-only style metadata — not sent to provider</div>
+        <div class="twrap"><table class="t"><tbody id="p-internal"></tbody></table></div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="p-promote">Promote to production…</button><span class="small muted">Explicit human approval required.</span></div>
+      </div>
+      <div class="layer" style="margin-top:0">
+        <div class="lh"><h4>Diff</h4><select id="p-diffa" style="width:auto"></select><span class="muted">→</span><select id="p-diffb" style="width:auto"></select></div>
+        <div id="p-diff" style="display:grid; gap:4px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. TRAINING DATA ============ -->
+<section class="screen" data-screen="7" hidden>
+  <div class="crumb">Admin › Voice Lab › Yiddish Voice Training Data</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish Voice Training Data <span class="mock">MOCKUP — not built</span></h2>
+    <p>Every generation, rating and correction. Search a word or phrase to find every recording that contains it.</p>
+  </div></div>
+  <div class="banner info"><span>ℹ</span><div>Rows whose text came from Yiddish Labs are <b>Serving-only</b>: usable for evaluation here, excluded from every training export. Only human-authored/human-verified text and consented human reference audio are <b>Training-eligible</b>.</div></div>
+  <div class="card">
+    <div class="grid3">
+      <label class="field"><span>Search Yiddish text</span><input type="search" id="t-q" dir="rtl" lang="yi" class="yi"></label>
+      <label class="field"><span>Date</span><select><option>Last 30 days</option><option>Last 7 days</option><option>All time</option></select></label>
+      <label class="field"><span>Voice</span><select id="t-voice"><option value="">Any voice</option></select></label>
+      <label class="field"><span>Model</span><select id="t-model"><option value="">Any model</option><option>gpt-4o-mini-tts</option><option>tts-1-hd</option></select></label>
+      <label class="field"><span>Rating</span><select id="t-rating"><option value="">Any rating</option><option value="4">Excellent</option><option value="3">Good</option><option value="2">Needs work</option><option value="1">Bad</option><option value="0">Unrated</option></select></label>
+      <label class="field"><span>Profile / version</span><select id="t-prof"><option value="">Any</option><option>Hasidic v2</option><option>Hasidic v3</option><option>Natural v7</option></select></label>
+      <label class="field"><span>Issue</span><select id="t-issue"><option value="">Any issue</option><option value="pron">Pronunciation issue</option><option value="accent">Accent issue</option><option value="rhythm">Rhythm issue</option></select></label>
+      <label class="field"><span>Correction</span><select id="t-corr"><option value="">Any</option><option value="v">Verified corrections</option><option value="u">Unverified corrections</option></select></label>
+      <label class="field"><span>Provenance</span><select id="t-prov"><option value="">Any</option><option value="serve">Serving-only (Yiddish Labs)</option><option value="train">Training-eligible</option></select></label>
+    </div>
+    <div class="row" style="margin-top:12px"><label class="chk"><input type="checkbox" id="t-gold"> Golden only</label><label class="chk"><input type="checkbox" id="t-rej"> Rejected only</label><span class="msp"></span><span class="small muted" id="t-count"></span></div>
+  </div>
+  <div class="card">
+    <div class="twrap"><table class="t"><thead><tr><th></th><th>Sample</th><th>Text</th><th>Voice · model</th><th>Profile</th><th>Rating</th><th>Issues</th><th>Curation</th><th>Provenance</th><th>Created</th></tr></thead><tbody id="t-rows"></tbody></table></div>
+    <div id="t-empty" hidden class="empty"><div class="ico">⌕</div><h3>No recordings match</h3><p>Nothing matches these filters. Human-authored rows are not searchable by Yiddish text in this mockup.</p></div>
+  </div>
+</section>
+
+<!-- ============ 8. ANALYTICS ============ -->
+<section class="screen" data-screen="8" hidden>
+  <div class="crumb">Admin › Voice Lab › Analytics</div>
+  <div class="pagehead"><div>
+    <h2>Analytics <span class="mock">MOCKUP — not built</span></h2>
+    <p>Sample data. Every figure shows its sample count. Groups under n=20 are hatched and labelled "too few samples to conclude".</p>
+  </div><div class="row"><select style="width:auto"><option>Last 30 days</option><option>All time</option></select></div></div>
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">Rated samples</div><div class="val">312</div><div class="sub">of 1,284 generated</div></div>
+    <div class="kpi"><div class="lbl">Avg overall</div><div class="val">2.91 <small class="muted" style="font-size:13px">/ 4</small></div><div class="sub">n=312</div></div>
+    <div class="kpi"><div class="lbl">Rejected</div><div class="val">212</div><div class="sub">17% of generated</div></div>
+    <div class="kpi"><div class="lbl">Golden</div><div class="val">38</div><div class="sub">n=312 rated</div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><div><h3>Most common pronunciation problems</h3><div class="sub">Reject reasons · n=212 rejected samples (a sample can carry several)</div></div></div><div class="chart" id="a-problems"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Average rating by voice</h3><div class="sub">Scale 1 (Bad) – 4 (Excellent)</div></div></div><div class="chart" id="a-voice"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Average rating by model</h3></div></div><div class="chart" id="a-model"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Average rating by profile version</h3><div class="sub">Hasidic Yiddish</div></div></div><div class="chart" id="a-version"></div></div>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card"><div class="card-h"><div><h3>Most-corrected words</h3></div></div><div class="twrap"><table class="t"><thead><tr><th>Word / phrase</th><th>Category</th><th class="num">Corrections</th><th class="num">Samples (n)</th><th>Read</th></tr></thead><tbody id="a-corrected"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><div><h3>A/B win rates</h3></div></div><div class="twrap"><table class="t"><thead><tr><th>Test</th><th class="num">Win rate</th><th class="num">n</th><th>Read</th></tr></thead><tbody id="a-ab"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><div><h3>English words mispronounced</h3><div class="sub">English loanwords as written in the Yiddish text</div></div></div><div class="twrap"><table class="t"><thead><tr><th>Word</th><th class="num">Flagged</th><th class="num">Heard (n)</th><th class="num">Rate</th><th>Read</th></tr></thead><tbody id="a-english"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><div><h3>Hebrew-origin words mispronounced</h3></div></div><div class="twrap"><table class="t"><thead><tr><th>Word</th><th class="num">Flagged</th><th class="num">Heard (n)</th><th class="num">Rate</th><th>Read</th></tr></thead><tbody id="a-hebrew"></tbody></table></div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="card-h"><div><h3>Most reliable dictionary rules</h3><div class="sub">Avg pronunciation rating on samples where the rule applied vs same word before the rule existed</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Rule</th><th>Entry</th><th class="num">With rule</th><th class="num">n</th><th class="num">Before rule</th><th class="num">n</th><th class="num">Δ</th><th>Read</th></tr></thead><tbody id="a-rules"></tbody></table></div></div>
+</section>
+
+<!-- ============ 9. REGRESSION ============ -->
+<section class="screen" data-screen="9" hidden>
+  <div class="crumb">Admin › Voice Lab › Regression suites</div>
+  <div class="pagehead"><div>
+    <h2>Regression suites <span class="mock">MOCKUP — not built</span></h2>
+    <p>Fixed texts re-spoken against a candidate config and re-rated by humans, so a config that fixes one thing can't quietly break another.</p>
+  </div></div>
+  <div class="grid3 rg-grid">
+    <div class="card"><div class="card-h"><h3>Suites</h3><button class="btn sm">+ New suite</button></div><div id="rg-suites" style="display:grid; gap:6px"></div></div>
+    <div class="stack">
+      <div class="card">
+        <div class="card-h"><div><h3 id="rg-title">Core conversation</h3><div class="sub">Case texts reuse existing Yiddish Labs outputs (Serving-only; evaluation use is allowed)</div></div>
+          <div class="row"><select id="rg-target" style="width:auto"><option>Hasidic Yiddish v4 (Draft)</option><option>Hasidic Yiddish v3 (Experimental)</option></select><button class="btn primary" id="rg-run">Run against config v4</button></div></div>
+        <div class="twrap"><table class="t"><thead><tr><th>Case</th><th>Text</th><th>Tags</th><th>Checks</th></tr></thead><tbody id="rg-cases"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><div><h3>Run comparison — baseline v3 vs candidate v4</h3><div class="sub">Run R-0412 · 2026-09-15 · rated by 2 reviewers per case</div></div><span class="pill bad" id="rg-sum"></span></div>
+        <div class="twrap"><table class="t"><thead><tr><th>Case</th><th>Text</th><th class="num">Baseline v3</th><th class="num">Candidate v4</th><th class="num">Δ</th><th>Listen both</th><th>Result</th></tr></thead><tbody id="rg-compare"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 10. OPTIMIZER ============ -->
+<section class="screen" data-screen="10" hidden>
+  <div class="crumb">Admin › Voice Lab › Optimizer proposals</div>
+  <div class="pagehead"><div>
+    <h2>Optimizer proposals <span class="mock">MOCKUP — not built</span></h2>
+    <p>Patterns found in ratings, corrections and A/B votes. A proposal can only create a Draft to test.</p>
+  </div></div>
+  <div class="banner warn"><span>⛔</span><div><b>Human approval required before production.</b> The optimizer never promotes, never edits a production config and never verifies a dictionary entry.</div></div>
+  <div class="grid3" id="o-cards"></div>
+</section>
+
+<!-- ============ 11. EXPORTS ============ -->
+<section class="screen" data-screen="11" hidden>
+  <div class="crumb">Admin › Voice Lab › Exports &amp; future training</div>
+  <div class="pagehead"><div>
+    <h2>Exports &amp; future training <span class="mock">MOCKUP — not built</span></h2>
+    <p>Builds a provider-neutral JSONL manifest. Serving-only rows (Yiddish Labs text) are removed before anything is written — not a filter you can switch off.</p>
+  </div></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h"><h3>Manifest builder</h3><span class="tag">JSONL · provider-neutral</span></div>
+      <div class="seclbl">Fields</div>
+      <div id="x-fields" style="display:grid; grid-template-columns: repeat(auto-fill,minmax(210px,1fr)); gap:6px"></div>
+      <div class="seclbl" style="margin-top:14px">Row filters</div>
+      <div style="display:grid; gap:6px">
+        <label class="chk"><input type="checkbox" id="x-consent" checked> Require consent ref on any audio</label>
+        <label class="chk"><input type="checkbox" id="x-verified"> Verified corrections only</label>
+        <label class="chk"><input type="checkbox" id="x-golden"> Golden samples only</label>
+        <label class="chk" style="opacity:.55"><input type="checkbox" disabled> Include Serving-only rows <span class="pill bad">locked off — Yiddish Labs terms</span></label>
+      </div>
+      <div class="kpis" style="grid-template-columns: repeat(3,minmax(0,1fr)); margin-top:14px; margin-bottom:0">
+        <div class="kpi"><div class="lbl">Candidate rows</div><div class="val">1,284</div></div>
+        <div class="kpi"><div class="lbl">Excluded · Serving-only</div><div class="val" style="color:var(--danger)" id="x-ex">1,121</div></div>
+        <div class="kpi"><div class="lbl">In manifest</div><div class="val" style="color:var(--success)" id="x-in">163</div><div class="sub" id="x-sub"></div></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="x-build">Build manifest</button><span class="small muted">Stays on the Connect server; no provider upload.</span></div>
+    </div>
+    <div class="stack">
+      <div class="card"><div class="card-h"><h3>Preview — first row</h3><span class="pill ok">Training-eligible</span></div><pre class="req" id="x-preview"></pre></div>
+      <div class="card">
+        <div class="card-h"><h3>Provider exporters</h3></div>
+        <div style="display:grid; gap:10px" id="x-slots"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 12. CONSENT ============ -->
+<section class="screen" data-screen="12" hidden>
+  <div class="crumb">Admin › Voice Lab › Reference audio &amp; consent</div>
+  <div class="pagehead"><div>
+    <h2>Reference audio &amp; consent <span class="mock">MOCKUP — not built</span></h2>
+    <p>Human speakers who recorded reference audio, what they agreed to, and where each recording is used.</p>
+  </div><div class="row"><button class="btn primary">+ Add speaker</button></div></div>
+  <div class="banner bad"><span>⛔</span><div><b>No voice cloning without a consent record.</b> Voice creation needs a signed record with the "voice creation" scope and commercial rights. Revoking consent removes the speaker's audio from every future export and draft.</div></div>
+  <div class="card">
+    <div class="card-h"><h3>Speakers &amp; consent records</h3></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Speaker</th><th>Evaluation</th><th>Training</th><th>Voice creation</th><th>Commercial rights</th><th>Signed document</th><th class="num">Recordings</th><th>Status</th><th></th></tr></thead><tbody id="k-speakers"></tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><h3>Reference recordings</h3><span class="small muted">Attached to a text or a dictionary entry</span></div>
+    <div class="twrap"><table class="t"><thead><tr><th></th><th>Recording</th><th>Attached to</th><th>Speaker</th><th>Consent</th><th>Length</th></tr></thead><tbody id="k-recs"></tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><h3>Create a custom voice from consented audio</h3><span class="fut">Future capability</span></div>
+    <p class="muted" style="line-height:1.5">OpenAI custom voices are sales-gated and require a consent recording from the speaker; there is no self-serve API and no TTS fine-tuning today. This button stays disabled until a provider path exists <b>and</b> the selected speaker has the voice-creation scope.</p>
+    <div class="row" style="margin-top:10px"><select style="max-width:260px"><option>Speaker S-01 — voice creation: not granted</option></select><button class="btn" disabled>Request custom voice</button></div>
+  </div>
+</section>
+
+<!-- ============ 13. STORAGE ============ -->
+<section class="screen" data-screen="13" hidden>
+  <div class="crumb">Admin › Voice Lab › Storage &amp; retention</div>
+  <div class="pagehead"><div>
+    <h2>Storage &amp; retention <span class="mock">MOCKUP — not built</span></h2>
+    <p>Only audio files expire — text, settings, ratings and corrections are kept forever.</p>
+  </div></div>
+  <div class="card">
+    <div class="card-h"><div><h3>Storage used by class</h3><div class="sub">4.82 GB total · sample data</div></div></div>
+    <div class="storebar" id="s-bar"></div>
+    <div class="row legend small" id="s-legend" style="margin-top:10px; gap:14px"></div>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <div class="card-h"><h3>Retention policies</h3><span class="pill info">applies to audio only</span></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Class</th><th>Audio kept</th><th class="num">Files</th></tr></thead><tbody>
+        <tr><td>Golden samples</td><td><span class="pill ok">Keep forever</span></td><td class="num">38</td></tr>
+        <tr><td>Reference audio (consented)</td><td><span class="pill ok">Keep</span> <span class="small muted">until consent revoked</span></td><td class="num">27</td></tr>
+        <tr><td>Rejected with a correction</td><td><span class="pill ok">Keep forever</span></td><td class="num">164</td></tr>
+        <tr><td>Rejected, no correction</td><td><select style="width:auto"><option>180 days</option><option>90 days</option><option>1 year</option></select></td><td class="num">48</td></tr>
+        <tr><td>Ordinary generation</td><td><select style="width:auto"><option>90 days</option><option>30 days</option><option>180 days</option><option>1 year</option></select></td><td class="num">1,007</td></tr>
+      </tbody></table></div>
+      <div class="small muted" style="margin-top:8px">Next sweep: 2026-09-16 03:00 ET · 61 audio files due · their rows, text, ratings and corrections remain.</div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Deletion log</h3></div>
+      <div class="twrap"><table class="t"><thead><tr><th>When</th><th>What</th><th class="num">Files</th><th class="num">Freed</th><th>Why</th></tr></thead><tbody>
+        <tr><td>2026-09-15 03:00</td><td>Ordinary generation audio</td><td class="num">44</td><td class="num">6.1 MB</td><td>90-day policy</td></tr>
+        <tr><td>2026-09-14 03:00</td><td>Ordinary generation audio</td><td class="num">52</td><td class="num">7.3 MB</td><td>90-day policy</td></tr>
+        <tr><td>2026-09-12 11:41</td><td>Reference audio · Speaker S-02</td><td class="num">6</td><td class="num">38.4 MB</td><td>Consent revoked</td></tr>
+        <tr><td>2026-09-12 03:00</td><td>Rejected, no correction</td><td class="num">9</td><td class="num">1.2 MB</td><td>180-day policy</td></tr>
+      </tbody></table></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px; opacity:.72">
+    <div class="card-h"><div><h3>Customer call collection</h3><div class="sub">Separate feature — never part of Voice Lab</div></div><div class="row"><span class="pill dim">Disabled</span><span class="fut">Future capability</span></div></div>
+    <p class="muted" style="line-height:1.5">Customer calls are never imported into Voice Lab. Any future collection would be its own feature with per-tenant opt-in, caller notice, consent capture and its own retention — none of which exist.</p>
+    <div class="row" style="margin-top:10px"><label class="chk"><input type="checkbox" disabled> Collect customer calls</label><button class="btn sm" disabled>Configure consent controls</button></div>
+  </div>
+</section>
+
+<!-- ============ 14. EMPTY / ERROR ============ -->
+<section class="screen" data-screen="14" hidden>
+  <div class="crumb">Admin › Voice Lab › States</div>
+  <div class="pagehead"><div>
+    <h2>Empty &amp; error states <span class="mock">MOCKUP — not built</span></h2>
+    <p>What each screen shows when something upstream is missing or failing. Each says plainly whether anything was generated or charged.</p>
+  </div></div>
+  <div class="grid2">
+    <div class="card"><div class="empty bad"><div class="ico">⚿</div><h3>No OpenAI key configured</h3><p>Yiddish Labs text can still be generated and read, but nothing can be spoken. Add the key under Apps → OpenAI.</p><div class="row"><button class="btn primary">Open Apps → OpenAI</button></div><span class="small muted">Generate button disabled · nothing was sent</span></div></div>
+    <div class="card"><div class="empty warn"><div class="ico">₪</div><h3>Yiddish Labs is out of credits</h3><p>Yiddish Labs answered <span class="mono">402 Payment Required</span>. Top up; nothing was generated and OpenAI was not called.</p><div class="row"><button class="btn">Retry</button><button class="btn primary">Top up Yiddish Labs</button></div><span class="small muted">Request id yl_req_… · 2026-09-15 14:31 ET</span></div></div>
+    <div class="card"><div class="empty bad"><div class="ico">!</div><h3>OpenAI returned an error</h3><p>Yiddish Labs text was written (kept below), but <span class="mono">POST /v1/audio/speech</span> failed with <span class="mono">500</span> after 1 attempt. No audio was saved.</p><div class="yi" dir="rtl" lang="yi" id="e-text" style="font-size:16px; line-height:1.8"></div><div class="row"><button class="btn primary">Retry speech only</button><button class="btn">Copy request</button></div><span class="small muted">Retrying reuses the same text — Yiddish Labs is not called again.</span></div></div>
+    <div class="card"><div class="empty"><div class="ico">◎</div><h3>No samples yet</h3><p>Voice Lab is empty. Generate a first sample, rate it, and the dictionary, analytics and suites fill in from there.</p><div class="row"><button class="btn primary" data-go="1">Generate first sample</button></div><span class="small muted">Analytics show "too few samples to conclude" until n≥20 per group.</span></div></div>
+  </div>
+</section>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  // ⛔ The ONLY Hebrew-script text on this page. Verbatim Yiddish Labs outputs.
+  const Y = {
+    1: "יא, איך פארשטיי אידיש און איך קען אייך ארויסהעלפן מיט אייערע שאלות בנוגע די טעלעפאן סיסטעם.",
+    2: "העלאו, דא רעדט מלכי בערגער. איך רוף זיך נאכפרעגן אויב די ארדער פאר דאנערשטאג איז שוין גרייט. ביטע רופט מיך צוריק, יישר כח.",
+    3: "יא, ביטע פרעגט אייער שאלה, און איך וועל אייך ענטפערן א קלארע און פאסיגע תשובה.",
+    4: "איר האט נישט קיין נייע וואויס-מעילס. אייער אינבאקס איז ליידיג, ממילא זענען נישט דא קיין קאלערס צו ליסטן."
+  };
+  const EN = {
+    1: "Yes. I understand Yiddish, and I can help with your phone system questions.",
+    2: "Hi, this is Malky Berger. I wanted to check if the order for Thursday is ready. Please call me back, thank you.",
+    3: "Yes. Ask your question, and I will give you a clear and proper answer.",
+    4: "You have 0 new voicemails..."
+  };
+  // Word-level examples: must be exact substrings of a Y sentence. Verified below.
+  const ALL = Object.values(Y).join(" ");
+  function W(s) { if (!ALL.includes(s)) { console.error("NOT A SUBSTRING — refusing:", s); return "⚠"; } return s; }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const yi = (s, cls) => `<span class="yi ${cls || ""}" dir="rtl" lang="yi">${esc(s)}</span>`;
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const stripP = t => t.replace(/[.,]+$/, "");
+  let toastT;
+  function toast(msg) { let t = $(".toast"); if (!t) { t = document.createElement("div"); t.className = "toast"; document.body.appendChild(t); } t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2600); }
+
+  const VOICES = ["alloy","ash","ballad","coral","echo","fable","nova","onyx","sage","shimmer","verse","marin","cedar"];
+  const RATE = { 4: "Excellent", 3: "Good", 2: "Needs work", 1: "Bad", 0: "Unrated" };
+  const ratePill = v => v ? `<span class="pill ${v >= 4 ? "ok" : v === 3 ? "info" : v === 2 ? "warn" : "bad"}">${RATE[v]}</span>` : `<span class="pill dim">Unrated</span>`;
+
+  // ---------- screens ----------
+  const SCREENS = [
+    [1, "Generate & Rate"], [2, "Word correction"], [3, "Rhythm & cadence"], [4, "A/B test"],
+    [5, "Pronunciation dictionary"], [6, "Style profiles"], [7, "Training data"], [8, "Analytics"],
+    [9, "Regression suites"], [10, "Optimizer proposals"], [11, "Exports"], [12, "Reference audio & consent"],
+    [13, "Storage & retention"], [14, "Empty & error states"]
+  ];
+  $("#sideNav").innerHTML = SCREENS.map(([n, l]) => `<button class="nav" data-go="${n}"><b>${n}</b>${esc(l)}</button>`).join("");
+  $("#screenPick").innerHTML = SCREENS.map(([n, l]) => `<option value="${n}">${n}. ${esc(l)}</option>`).join("");
+  function go(n) {
+    n = String(n);
+    $$(".screen").forEach(s => s.hidden = s.dataset.screen !== n);
+    $$(".side button.nav").forEach(b => b.classList.toggle("on", b.dataset.go === n));
+    $("#screenPick").value = n;
+    try { history.replaceState(null, "", "#s" + n); } catch (e) {}
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener("click", e => { const b = e.target.closest("[data-go]"); if (b) go(b.dataset.go); });
+  $("#screenPick").addEventListener("change", e => go(e.target.value));
+  $$("#themeSeg button").forEach(b => b.addEventListener("click", () => {
+    $$("#themeSeg button").forEach(x => x.classList.toggle("on", x === b));
+    if (b.dataset.t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", b.dataset.t);
+  }));
+
+  // ---------- waveform player (mock audio, drawn to a fixed 600-unit timeline) ----------
+  function rng(seed) { let s = seed * 9301 + 49297; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+  function waveBars(seed, count) { const r = rng(seed); const out = []; for (let i = 0; i < count; i++) { const env = Math.sin(Math.PI * (i + 1) / (count + 1)) ** 0.6; const gap = (i % 17 === 0 || i % 29 === 0) ? 0.15 : 1; out.push(Math.max(0.06, env * gap * (0.35 + r() * 0.65))); } return out; }
+  const fmt = s => `0:${String(Math.floor(s)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`;
+  function mountPlayer(el) {
+    const seed = +el.dataset.seed, dur = +el.dataset.dur, N = 90, W0 = 600, H = 56;
+    const bars = waveBars(seed, N), bw = W0 / N;
+    el.innerHTML = `<button class="play" aria-label="Play">▶</button><svg viewBox="0 0 ${W0} ${H}" preserveAspectRatio="none">${bars.map((h, i) => `<rect class="wave-bar" x="${(i * bw + 1).toFixed(1)}" y="${((H - h * H) / 2).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${(h * H).toFixed(1)}" rx="1.5"/>`).join("")}</svg><span class="time">0:00.0 / ${fmt(dur)}</span>`;
+    const btn = el.querySelector(".play"), rects = el.querySelectorAll("rect"), time = el.querySelector(".time");
+    let raf = 0, start = 0;
+    const paint = p => { const k = Math.floor(p * N); rects.forEach((r, i) => r.classList.toggle("p", i < k)); time.textContent = `${fmt(p * dur)} / ${fmt(dur)}`; };
+    btn.addEventListener("click", () => {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; btn.textContent = "▶"; return; }
+      start = performance.now(); btn.textContent = "❚❚";
+      const tick = t => { const p = Math.min(1, (t - start) / (dur * 1000)); paint(p); if (p < 1) raf = requestAnimationFrame(tick); else { raf = 0; btn.textContent = "▶"; } };
+      raf = requestAnimationFrame(tick);
+    });
+  }
+  $$("[data-player]").forEach(mountPlayer);
+  const mini = () => `<button class="miniplay" onclick="this.textContent=this.textContent==='▶'?'❚❚':'▶'" aria-label="Play">▶</button>`;
+
+  // ---------- 1. Generate & rate ----------
+  const RULES = {
+    2: [
+      { w: W("מלכי בערגער"), id: "R-114", cat: "personal name", as: "Instruction hint: treat as a personal name; stress per reviewer note", st: "applied" },
+      { w: W("ארדער"), id: "R-031", cat: "English loanword", as: "Instruction hint: English loanword, keep Yiddish vowel colouring", st: "applied" },
+      { w: W("דאנערשטאג"), id: "R-203", cat: "Yiddish · context: orders", as: "Respelling — reviewer value not verified", st: "skipped" },
+      { w: W("יישר כח"), id: "R-087", cat: "Hebrew-origin", as: "Instruction hint: Hebrew-origin phrase, Ashkenazi-Hasidic reading", st: "applied" }
+    ],
+    1: [ { w: W("אידיש"), id: "R-002", cat: "Yiddish", as: "Instruction hint: native pronunciation", st: "applied" }, { w: W("טעלעפאן סיסטעם"), id: "R-151", cat: "phone term", as: "Instruction hint: loanword pair, even stress", st: "applied" } ],
+    3: [ { w: W("שאלה"), id: "R-090", cat: "Hebrew-origin", as: "Instruction hint: Ashkenazi-Hasidic reading", st: "applied" }, { w: W("תשובה"), id: "R-091", cat: "Hebrew-origin", as: "Respelling — no reviewer value", st: "skipped" } ],
+    4: [ { w: W("וואויס-מעילס"), id: "R-160", cat: "English loanword", as: "Instruction hint: English 'voicemails' with Yiddish plural", st: "applied" }, { w: W("אינבאקס"), id: "R-161", cat: "English loanword", as: "Instruction hint: English loanword", st: "applied" }, { w: W("ממילא"), id: "R-093", cat: "Hebrew-origin", as: "Instruction hint: Ashkenazi-Hasidic reading", st: "applied" } ]
+  };
+  let gCur = 2;
+  function renderGen(k) {
+    gCur = k;
+    const text = Y[k], rules = RULES[k];
+    $("#g-input").value = EN[k];
+    $("#g-sample-lbl").textContent = `Sample ${k} of 4`;
+    $("#g-yl").textContent = text;
+    // diff: text unchanged; highlight each rule's span (exact substring positions)
+    let html = "", i = 0; const marks = [];
+    rules.forEach((r, n) => { const at = text.indexOf(r.w); if (at >= 0) marks.push({ at, end: at + r.w.length, n: n + 1 }); });
+    marks.sort((a, b) => a.at - b.at).forEach(m => { html += esc(text.slice(i, m.at)) + `<mark class="hl">${esc(text.slice(m.at, m.end))}<sup>${m.n}</sup></mark>`; i = m.end; });
+    html += esc(text.slice(i));
+    $("#g-diff").innerHTML = html;
+    const applied = rules.filter(r => r.st === "applied").length;
+    $("#g-editcount").textContent = `0 text edits · ${applied} instruction hints · ${rules.length - applied} skipped`;
+    $("#g-rules").innerHTML = rules.map((r, n) => `<tr><td>${n + 1}</td><td class="mono">${r.id}</td><td>${yi(r.w)} <span class="small muted">· ${esc(r.cat)}</span></td><td>${esc(r.as)}</td><td>${r.st === "applied" ? '<span class="pill ok">Applied</span>' : '<span class="pill dim">Skipped · unverified</span>'}</td></tr>`).join("");
+    const hints = rules.filter(r => r.st === "applied");
+    const instr = `Speak warmly and naturally, like a Hasidic Yiddish speaker on the phone. Moderate pace.` + hints.map(r => `\n- For “${r.w}”: ${r.as.replace("Instruction hint: ", "")}.`).join("");
+    const q = s => `<span class="s">"${s}"</span>`;
+    $("#g-req").innerHTML = `{\n  <span class="k">"model"</span>: ${q("gpt-4o-mini-tts")},\n  <span class="k">"voice"</span>: ${q("marin")},\n  <span class="k">"input"</span>: <span class="s">"</span>${yi(text)}<span class="s">"</span>,\n  <span class="k">"instructions"</span>: <span class="s">"${instr.split(/(“[^”]+”)/).map(p => /^“/.test(p) ? "“" + yi(p.slice(1, -1)) + "”" : esc(p)).join("")}"</span>,\n  <span class="k">"speed"</span>: 1.0,\n  <span class="k">"response_format"</span>: ${q("mp3")}\n}`;
+    $("#g-chars").textContent = `input ${text.length} / 4096 chars · instructions ${instr.length} chars`;
+  }
+  $("#g-samples").innerHTML = [1, 2, 3, 4].map(k => `<button class="chip ${k === 2 ? "on" : ""}" data-s="${k}">Sample ${k}</button>`).join("");
+  $$("#g-samples .chip").forEach(c => c.addEventListener("click", () => { $$("#g-samples .chip").forEach(x => x.classList.toggle("on", x === c)); renderGen(+c.dataset.s); }));
+  renderGen(2);
+  $("#g-ask").addEventListener("click", () => {
+    const b = $("#g-ask"); b.disabled = true; b.innerHTML = '<span class="spin"></span> Asking Yiddish Labs…';
+    $("#g-layers").style.opacity = .45;
+    setTimeout(() => { b.disabled = false; b.textContent = "Ask Yiddish Labs"; $("#g-layers").style.opacity = 1; renderGen(gCur); toast("Mock: showing the stored Yiddish Labs output for this sample."); }, 900);
+  });
+  $$("#g-overall button").forEach(b => b.addEventListener("click", () => { $$("#g-overall button").forEach(x => x.classList.toggle("on", x === b)); $("#g-saved").textContent = `Saved · ${b.textContent}`; }));
+  const CATS = ["Pronunciation","Accent","Rhythm","Cadence","Pacing","Emotion","Mood","Naturalness","Word stress","Pauses","English/Yiddish switching","Names","Numbers","Technical terms"];
+  $("#g-cats").innerHTML = CATS.map(c => `<div class="catrow"><span>${c}</span><div class="seg">${["Excellent","Good","Needs work","Wrong"].map(o => `<button data-o="${o}">${o}</button>`).join("")}</div></div>`).join("");
+  $$("#g-cats .seg").forEach(seg => seg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; const was = b.classList.contains("on"); seg.querySelectorAll("button").forEach(x => x.classList.remove("on", "w")); if (!was) { b.classList.add("on"); if (b.dataset.o === "Wrong") b.classList.add("w"); } }));
+  $("#g-golden").addEventListener("click", e => { const on = e.currentTarget.classList.toggle("on"); e.currentTarget.textContent = on ? "★ Golden Sample" : "★ Mark Golden Sample"; toast(on ? "Marked golden — audio kept forever." : "Golden mark removed."); });
+  const REASONS = ["wrong pronunciation","wrong accent","robotic rhythm","incorrect stress","English word mangled","too fast","wrong mood"];
+  $("#g-reasons").innerHTML = REASONS.map(r => `<button class="chip">${r}</button>`).join("");
+  $$("#g-reasons .chip").forEach(c => c.addEventListener("click", () => { const on = c.classList.toggle("on"); c.classList.toggle("bad", on); }));
+  $("#g-reject").addEventListener("click", () => $("#g-rejectbox").hidden = false);
+  $("#g-reject-cancel").addEventListener("click", () => $("#g-rejectbox").hidden = true);
+  $("#g-reject-save").addEventListener("click", () => { const n = $$("#g-reasons .chip.on").length; $("#g-rejectbox").hidden = true; $("#g-saved").textContent = `Rejected · ${n} reason${n === 1 ? "" : "s"}`; toast("Rejection saved. Add a word correction to keep the audio forever."); });
+
+  // ---------- 2. Word correction ----------
+  const DICT_CATS = ["Yiddish","Hebrew-origin","personal name","business name","town/city","street","English loanword","technical","phone term","acronym","number format"];
+  $("#c-cat").innerHTML = DICT_CATS.map(c => `<option>${c}</option>`).join("");
+  const cTok = Y[2].split(" ");
+  let cA = -1, cB = -1;
+  $("#c-tokens").innerHTML = cTok.map((t, i) => `<button class="tok" data-i="${i}">${esc(t)}</button>`).join("");
+  function cRender() {
+    const lo = Math.min(cA, cB), hi = Math.max(cA, cB);
+    $$("#c-tokens .tok").forEach(b => { const i = +b.dataset.i; b.classList.toggle("sel", cA >= 0 && i >= lo && i <= hi); });
+    if (cA < 0) { $("#c-sel").textContent = ""; $("#c-selinfo").textContent = "Nothing selected — tap a word."; $("#c-save").disabled = true; $("#c-neighbor").innerHTML = "<option>Any context</option>"; return; }
+    const span = stripP(cTok.slice(lo, hi + 1).join(" "));
+    $("#c-sel").textContent = span;
+    $("#c-selinfo").textContent = `${hi - lo + 1} word${hi > lo ? "s" : ""} · exact span of the sample text`;
+    $("#c-save").disabled = false;
+    const nb = [];
+    if (lo > 0) nb.push(stripP(cTok[lo - 1]));
+    if (hi < cTok.length - 1) nb.push(stripP(cTok[hi + 1]));
+    $("#c-neighbor").innerHTML = `<option>Any context</option>` + nb.map(n => `<option lang="yi" dir="rtl">${esc(n)}</option>`).join("");
+  }
+  $("#c-tokens").addEventListener("click", e => { const b = e.target.closest(".tok"); if (!b) return; const i = +b.dataset.i; if (cA < 0 || cA !== cB) { cA = i; cB = i; } else { cB = i; } cRender(); });
+  $("#c-clear").addEventListener("click", () => { cA = cB = -1; cRender(); });
+  $("#c-consent").addEventListener("change", e => { const ok = !!e.target.value; $("#c-attach").disabled = !ok; $("#c-attach-note").textContent = ok ? (e.target.value === "S-03" ? "S-03 is evaluation-only: recording will be excluded from training exports." : "Consent on file — recording is training-eligible.") : "Consent record required before attaching."; });
+  $("#c-attach").addEventListener("click", () => toast("Mock: recording picker would open here."));
+  const cSaved = [];
+  $("#c-save").addEventListener("click", () => {
+    const span = $("#c-sel").textContent; cSaved.push({ span, cat: $("#c-cat").value });
+    $("#c-saved").innerHTML = `<div class="twrap"><table class="t"><thead><tr><th>Span</th><th>Category</th><th>Status</th></tr></thead><tbody>${cSaved.map(s => `<tr><td>${yi(s.span)}</td><td>${esc(s.cat)}</td><td><span class="pill warn">Unverified</span></td></tr>`).join("")}</tbody></table></div>`;
+    toast("Saved to dictionary draft v13 as Unverified.");
+  });
+  cRender();
+
+  // ---------- 3. Rhythm ----------
+  const rTok = Y[1].split(" ");
+  let rA = -1, rB = -1, rRegion = null;
+  $("#r-tokens").innerHTML = rTok.map((t, i) => `<button class="tok" data-i="${i}">${esc(t)}</button>`).join("");
+  const RDUR = 6.2, RW = 600, RH = 90, RN = 100;
+  const rBars = waveBars(31, RN);
+  function rDrawWave() {
+    const bw = RW / RN; let s = "";
+    ANN.forEach(a => { if (a.r) s += `<rect class="ann-region" x="${a.r[0] / RDUR * RW}" y="0" width="${(a.r[1] - a.r[0]) / RDUR * RW}" height="72"/>`; });
+    s += rBars.map((h, i) => `<rect class="wave-bar" x="${(i * bw + 1).toFixed(1)}" y="${(36 - h * 32).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${(h * 64).toFixed(1)}" rx="1.5"/>`).join("");
+    if (rRegion) s += `<rect class="region" x="${Math.min(...rRegion) / RDUR * RW}" y="0" width="${Math.abs(rRegion[1] - rRegion[0]) / RDUR * RW}" height="72" stroke-width="1"/>`;
+    for (let t = 0; t <= 6; t++) { const x = t / RDUR * RW; s += `<line x1="${x}" y1="74" x2="${x}" y2="78" stroke="currentColor" opacity=".4"/><text x="${Math.min(x + 2, RW - 20)}" y="88" font-size="10" fill="currentColor" opacity=".6">${t}s</text>`; }
+    $("#r-wave").innerHTML = s; $("#r-wave").style.color = "var(--text-dim)";
+  }
+  const ANN = [
+    { span: stripP(rTok.slice(2, 3).join(" ")), r: null, mark: "Stress this word", by: "reviewer A" },
+    { span: "", r: [3.1, 3.9], mark: "Pause longer here", by: "reviewer A" },
+    { span: stripP(rTok.slice(10).join(" ")), r: [4.9, 6.1], mark: "Less robotic", by: "reviewer B" }
+  ];
+  function rSel() {
+    const lo = Math.min(rA, rB), hi = Math.max(rA, rB);
+    $$("#r-tokens .tok").forEach(b => { const i = +b.dataset.i; b.classList.toggle("sel", rA >= 0 && i >= lo && i <= hi); });
+    const parts = [];
+    if (rA >= 0) parts.push(`${hi - lo + 1} word(s)`);
+    if (rRegion) parts.push(`region ${Math.min(...rRegion).toFixed(1)}s–${Math.max(...rRegion).toFixed(1)}s`);
+    $("#r-selinfo").textContent = parts.length ? "Selected: " + parts.join(" + ") : "No selection.";
+    $$("#r-chips .chip").forEach(c => c.disabled = !parts.length);
+  }
+  function rList() {
+    $("#r-count").textContent = `${ANN.length} annotations`;
+    $("#r-list").innerHTML = ANN.map((a, i) => `<tr><td>${a.span ? yi(a.span) : '<span class="muted small">—</span>'}</td><td class="mono">${a.r ? a.r[0].toFixed(1) + "–" + a.r[1].toFixed(1) + "s" : "—"}</td><td><span class="pill warn">${esc(a.mark)}</span></td><td class="small muted">${a.by}</td><td><button class="btn sm" data-del="${i}">Remove</button></td></tr>`).join("");
+    $("#r-hints").innerHTML = ANN.map(a => "- " + (a.span ? `Around “${yi(a.span)}”` : "") + (a.r ? `${a.span ? ", " : "At "}${a.r[0].toFixed(1)}–${a.r[1].toFixed(1)}s (reviewer reference only — not sent)` : "") + `: ${esc(a.mark.toLowerCase())}.`).join("\n");
+    rDrawWave();
+  }
+  $("#r-list").addEventListener("click", e => { const b = e.target.closest("[data-del]"); if (b) { ANN.splice(+b.dataset.del, 1); rList(); } });
+  $("#r-tokens").addEventListener("click", e => { const b = e.target.closest(".tok"); if (!b) return; const i = +b.dataset.i; if (rA < 0 || rA !== rB) { rA = rB = i; } else rB = i; rSel(); });
+  const MARKS = ["Too fast","Too slow","Pause longer here","Pause shorter here","Stress this word","Don't stress","Raise tone","Lower tone","More conversational","More serious","Warmer","More confident","Less robotic","More energetic","More relaxed"];
+  $("#r-chips").innerHTML = MARKS.map(m => `<button class="chip">${m}</button>`).join("");
+  $$("#r-chips .chip").forEach(c => c.addEventListener("click", () => {
+    const lo = Math.min(rA, rB), hi = Math.max(rA, rB);
+    const r = rRegion ? [Math.min(...rRegion), Math.max(...rRegion)] : null;
+    ANN.push({ span: rA >= 0 ? stripP(rTok.slice(lo, hi + 1).join(" ")) : "", r, mark: c.textContent, by: "you" });
+    rA = rB = -1; rRegion = null; rSel(); rList(); toast(`Marked: ${c.textContent}`);
+  }));
+  (function () {
+    const svg = $("#r-wave"); let down = false;
+    const tAt = ev => { const b = svg.getBoundingClientRect(); return Math.max(0, Math.min(RDUR, (ev.clientX - b.left) / b.width * RDUR)); };
+    svg.addEventListener("pointerdown", ev => { down = true; svg.setPointerCapture(ev.pointerId); const t = tAt(ev); rRegion = [t, t]; rDrawWave(); });
+    svg.addEventListener("pointermove", ev => { if (!down) return; rRegion[1] = tAt(ev); rDrawWave(); rSel(); });
+    svg.addEventListener("pointerup", () => { down = false; if (rRegion && Math.abs(rRegion[1] - rRegion[0]) < 0.08) rRegion = null; rDrawWave(); rSel(); });
+  })();
+  $("#r-draft").addEventListener("click", () => toast("Draft v5 created with these hints — status Draft. Nothing promoted."));
+  rSel(); rList();
+
+  // ---------- 4. A/B ----------
+  const DIMS = {
+    voice: ["Voice marin", "Voice cedar"],
+    instr: ["Instruction set A (baseline)", "Instruction set B (tech support)"],
+    model: ["gpt-4o-mini-tts", "tts-1-hd (ignores instructions)"],
+    prod: ["Production · Natural Yiddish v7", "Experimental · Hasidic Yiddish v3"]
+  };
+  let abDim = "voice", abSwap = false, abVoted = false;
+  $("#ab-text").textContent = Y[3];
+  function abNew() { abSwap = Math.random() < 0.5; abVoted = false; $("#ab-reveal").hidden = true; $("#ab-revA").textContent = ""; $("#ab-revB").textContent = ""; $$("#ab-vote button").forEach(b => b.classList.remove("on")); }
+  $$("#ab-dim button").forEach(b => b.addEventListener("click", () => { $$("#ab-dim button").forEach(x => x.classList.toggle("on", x === b)); abDim = b.dataset.d; abNew(); }));
+  $$("#ab-vote button").forEach(b => b.addEventListener("click", () => {
+    if (abVoted) return; abVoted = true; b.classList.add("on");
+    const [c1, c2] = DIMS[abDim]; const A = abSwap ? c2 : c1, B = abSwap ? c1 : c2;
+    $("#ab-revA").innerHTML = `<span class="pill info">A was: ${esc(A)}</span>`; $("#ab-revB").innerHTML = `<span class="pill info">B was: ${esc(B)}</span>`;
+    const verdict = { A: `You preferred ${A}.`, B: `You preferred ${B}.`, same: "You heard no real difference.", bad: "Both rejected — consider a word correction." }[b.dataset.v];
+    $("#ab-reveal").hidden = false; $("#ab-reveal").innerHTML = `<span>✓</span><div><b>Vote saved, then revealed.</b> ${esc(verdict)} Placement for this pair was ${abSwap ? "swapped" : "not swapped"}.</div>`;
+  }));
+  $("#ab-next").addEventListener("click", abNew);
+  function wilson(w, n) { if (!n) return [0, 0]; const z = 1.96, p = w / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [(c - m) / d, (c + m) / d]; }
+  const TALLY = [
+    ["Voice", "marin", "cedar", 18, 31, 7, 3],
+    ["Instructions", "Set A", "Set B (tech support)", 18, 31, 0, 0],
+    ["Model", "gpt-4o-mini-tts", "tts-1-hd", 9, 2, 1, 2],
+    ["Prod vs Exp", "Natural v7", "Hasidic v3", 22, 24, 11, 4]
+  ];
+  $("#ab-tally").innerHTML = TALLY.map(([d, a, b, wa, wb, s, bb]) => {
+    const n = wa + wb + s + bb, dec = wa + wb, [lo, hi] = wilson(wb, dec);
+    const few = dec < 20;
+    const read = few ? `<span class="pill dim">Too few samples to conclude (n&lt;20 decisive)</span>` : (lo > 0.5 ? `<span class="pill ok">B likely better</span>` : hi < 0.5 ? `<span class="pill ok">A likely better</span>` : `<span class="pill warn">Not significant yet</span>`);
+    return `<tr><td>${d}</td><td>${esc(a)}</td><td>${esc(b)}</td><td class="num">${wa}</td><td class="num">${wb}</td><td class="num">${s}</td><td class="num">${bb}</td><td class="num">${n}</td><td>B ${dec ? Math.round(wb / dec * 100) : 0}% <span class="small muted">(95% ${Math.round(lo * 100)}–${Math.round(hi * 100)}%, ${dec} decisive)</span></td><td>${read}</td></tr>`;
+  }).join("");
+
+  // ---------- 5. Dictionary ----------
+  const HINT = "Entered by a reviewer";
+  const DICT = [
+    { w: W("יישר כח"), c: "Hebrew-origin", oa: "hint: Ashkenazi-Hasidic reading", el: "", ipa: "", d: "Hasidic", rules: 2, v: true, conf: "High", uses: 184, last: "2026-09-14" },
+    { w: W("מלכי בערגער"), c: "personal name", oa: "hint: personal name", el: "", ipa: "", d: "—", rules: 1, v: true, conf: "Med", uses: 22, last: "2026-09-13" },
+    { w: W("דאנערשטאג"), c: "Yiddish", oa: "", el: "", ipa: "", d: "Hasidic", rules: 1, v: false, conf: "Low", uses: 41, last: "2026-09-15" },
+    { w: W("טעלעפאן סיסטעם"), c: "phone term", oa: "hint: even stress", el: "", ipa: "", d: "any", rules: 0, v: true, conf: "High", uses: 96, last: "2026-09-10" },
+    { w: W("וואויס-מעילס"), c: "English loanword", oa: "hint: English 'voicemails'", el: "", ipa: "", d: "any", rules: 1, v: true, conf: "Med", uses: 77, last: "2026-09-12" },
+    { w: W("אינבאקס"), c: "English loanword", oa: "hint: English loanword", el: "", ipa: "", d: "any", rules: 0, v: false, conf: "Low", uses: 64, last: "2026-09-15" },
+    { w: W("קאלערס"), c: "English loanword", oa: "", el: "", ipa: "", d: "any", rules: 0, v: false, conf: "Low", uses: 64, last: "2026-09-11" },
+    { w: W("ארדער"), c: "English loanword", oa: "hint: keep Yiddish vowel colouring", el: "", ipa: "", d: "Hasidic", rules: 1, v: true, conf: "Med", uses: 58, last: "2026-09-09" },
+    { w: W("ממילא"), c: "Hebrew-origin", oa: "hint: Ashkenazi-Hasidic reading", el: "", ipa: "", d: "Hasidic", rules: 0, v: true, conf: "Med", uses: 64, last: "2026-09-08" },
+    { w: W("תשובה"), c: "Hebrew-origin", oa: "", el: "", ipa: "", d: "Hasidic", rules: 0, v: false, conf: "Low", uses: 31, last: "2026-09-15" },
+    { w: W("שאלה"), c: "Hebrew-origin", oa: "hint: Ashkenazi-Hasidic reading", el: "", ipa: "", d: "Hasidic", rules: 1, v: true, conf: "High", uses: 31, last: "2026-09-07" },
+    { w: W("אידיש"), c: "Yiddish", oa: "hint: native pronunciation", el: "", ipa: "", d: "any", rules: 0, v: true, conf: "High", uses: 96, last: "2026-08-30" }
+  ];
+  let dCat = "";
+  const emptyVal = s => s ? esc(s) : `<span class="muted small" style="font-style:italic">${HINT}</span>`;
+  function dRender() {
+    const q = $("#d-q").value.trim(), vf = $("#d-verified").value;
+    $("#d-cats").innerHTML = `<button class="chip ${dCat ? "" : "on"}" data-c="">All <small>${DICT.length}</small></button>` + DICT_CATS.map(c => { const n = DICT.filter(d => d.c === c).length; return `<button class="chip ${dCat === c ? "on" : ""}" data-c="${c}">${c} <small>${n}</small></button>`; }).join("");
+    const rows = DICT.filter(d => (!dCat || d.c === dCat) && (!q || d.w.includes(q)) && (!vf || (vf === "y") === d.v));
+    $("#d-rows").innerHTML = rows.length ? rows.map(d => `<tr class="click" data-w="${esc(d.w)}"><td>${yi(d.w, "")}</td><td><span class="tag">${d.c}</span></td><td>${emptyVal(d.oa)}</td><td>${emptyVal(d.el)}</td><td class="mono">${d.ipa ? esc(d.ipa) : '<span class="muted">[IPA entered by reviewer]</span>'}</td><td>${d.d}</td><td class="num">${d.rules}</td><td>${d.v ? '<span class="pill ok">Verified</span>' : '<span class="pill warn">Unverified</span>'}</td><td><span class="pill ${d.conf === "High" ? "ok" : d.conf === "Med" ? "info" : "warn"}">${d.conf}</span></td><td class="num">${d.uses}</td><td class="small">${d.last}</td></tr>`).join("") : `<tr><td colspan="11"><div class="empty"><h3>No entries in this category</h3><p>Nothing has been corrected here yet. Entries are created from a sample on the Word correction screen.</p></div></td></tr>`;
+  }
+  $("#d-q").addEventListener("input", dRender); $("#d-verified").addEventListener("change", dRender);
+  $("#d-cats").addEventListener("click", e => { const b = e.target.closest(".chip"); if (b) { dCat = b.dataset.c; dRender(); } });
+  $("#d-rows").addEventListener("click", e => { const tr = e.target.closest("tr.click"); if (tr) openDrawer(DICT.find(d => d.w === tr.dataset.w)); });
+  function openDrawer(d) {
+    closeDrawer();
+    const samples = [1, 2, 3, 4].filter(k => Y[k].includes(d.w));
+    const bg = document.createElement("div"); bg.className = "drawer-bg"; bg.addEventListener("click", closeDrawer);
+    const dr = document.createElement("div"); dr.className = "drawer";
+    dr.innerHTML = `<div class="row between"><span class="mock">MOCKUP — not built</span><button class="btn sm" id="dr-x">Close ✕</button></div>
+      <div style="margin-top:14px">${yi(d.w, "big")}</div>
+      <div class="row" style="margin-top:6px"><span class="tag">${d.c}</span>${d.v ? '<span class="pill ok">Verified</span>' : '<span class="pill warn">Unverified</span>'}<span class="pill dim">Confidence ${d.conf}</span><span class="tag">dict v12</span></div>
+      <div class="card" style="margin-top:14px"><div class="seclbl">Realizations</div><div class="twrap"><table class="t"><tbody>
+        <tr><td>Neutral IPA</td><td class="mono muted">[IPA entered by reviewer]</td></tr>
+        <tr><td>OpenAI respelling</td><td>${emptyVal("")} <span class="small muted">· only sent once verified</span></td></tr>
+        <tr><td>OpenAI instruction hint</td><td>${emptyVal(d.oa)}</td></tr>
+        <tr><td>ElevenLabs alias / phoneme</td><td>${emptyVal("")} <span class="fut">Future capability</span></td></tr></tbody></table></div></div>
+      <div class="card"><div class="seclbl">Context rules (${d.rules})</div>${d.rules ? `<div class="twrap"><table class="t"><thead><tr><th>Type</th><th>Condition</th><th>Effect</th></tr></thead><tbody>
+        <tr><td>Neighbor words</td><td>Next to ${yi(W("צוריק"))}</td><td>Hint applies</td></tr>
+        ${d.rules > 1 ? `<tr><td>Language / grammar tag</td><td>Tagged Hebrew-origin phrase</td><td>Ashkenazi-Hasidic reading</td></tr>` : ""}
+        <tr><td>Domain</td><td>Voicemail, Orders &amp; delivery</td><td>Hint applies</td></tr></tbody></table></div>` : '<p class="muted small">No context rules — applies everywhere.</p>'}</div>
+      <div class="card"><div class="seclbl">Revision history</div><div class="twrap"><table class="t"><tbody>
+        <tr><td class="small">${d.last}</td><td>Instruction hint edited</td><td class="small muted">reviewer A</td><td class="mono">dict v12</td></tr>
+        <tr><td class="small">2026-09-02</td><td>${d.v ? "Verified" : "Flagged for second review"}</td><td class="small muted">reviewer B</td><td class="mono">dict v10</td></tr>
+        <tr><td class="small">2026-08-28</td><td>Created from sample correction</td><td class="small muted">reviewer A</td><td class="mono">dict v9</td></tr></tbody></table></div></div>
+      <div class="card"><div class="seclbl">Samples that used it · ${d.uses} total</div><div class="twrap"><table class="t"><tbody>${samples.map((k, i) => `<tr><td>${mini()}</td><td class="mono">S-2${(k * 311 + i) % 1000}</td><td>${yi(Y[k])}</td></tr>`).join("")}</tbody></table></div></div>`;
+    document.body.append(bg, dr); dr.querySelector("#dr-x").addEventListener("click", closeDrawer);
+  }
+  function closeDrawer() { $$(".drawer, .drawer-bg, .modal").forEach(x => x.remove()); }
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+  dRender();
+
+  // ---------- 6. Profiles ----------
+  const PROFILES = [
+    ["Natural Yiddish", "Production v7", 3.02, 118], ["Professional Business", "Experimental v2", 2.88, 34], ["Technical Support", "Experimental v2", 2.95, 49],
+    ["Customer Service", "Draft v1", null, 4], ["Friendly Conversation", "Experimental v1", 2.71, 21], ["Serious / Important", "Draft v1", null, 0],
+    ["Calm / Reassuring", "Experimental v1", null, 12], ["Energetic", "Draft v1", null, 0], ["Hasidic Yiddish — Experimental", "Experimental v3", 3.05, 71]
+  ];
+  $("#p-cards").innerHTML = PROFILES.map((p, i) => `<div class="pcard ${i === 8 ? "on" : ""}"><div style="font-weight:700">${esc(p[0])}</div><div class="row"><span class="pill ${/Production/.test(p[1]) ? "ok" : /Experimental/.test(p[1]) ? "info" : "dim"}">${p[1]}</span></div><div class="small muted">${p[2] == null ? (p[3] < 20 ? `Too few samples (n=${p[3]})` : "") : `Avg ${p[2].toFixed(2)} / 4 · n=${p[3]}`}</div></div>`).join("") + `<div class="pcard new">+ New custom profile</div>`;
+  const VERS = {
+    v1: { st: "Retired", voice: "coral", instr: "Speak Yiddish clearly.", speed: "1.0", dict: "v4", prep: "v1", avg: 2.31, n: 40 },
+    v2: { st: "Production", voice: "marin", instr: "Speak warmly and naturally, like a Hasidic Yiddish speaker on the phone.", speed: "1.0", dict: "v9", prep: "v3", avg: 2.72, n: 88 },
+    v3: { st: "Experimental", voice: "marin", instr: "Speak warmly and naturally, like a Hasidic Yiddish speaker on the phone. Moderate pace.", speed: "1.0", dict: "v12", prep: "v5", avg: 3.05, n: 71 },
+    v4: { st: "Draft", voice: "cedar", instr: "Speak warmly and naturally, like a Hasidic Yiddish speaker on the phone. Moderate pace. Pause briefly after greetings.", speed: "0.95", dict: "v13 (draft)", prep: "v5", avg: null, n: 9 }
+  };
+  const stPill = s => `<span class="pill ${s === "Production" ? "ok" : s === "Experimental" ? "info" : s === "Draft" ? "warn" : "dim"}">${s}</span>`;
+  let pSel = "v3";
+  function pRender() {
+    $("#p-tl").innerHTML = Object.entries(VERS).map(([k, v]) => `<div class="tlv ${k === pSel ? "on" : ""}" data-v="${k}"><div class="row between"><span class="v">${k}</span>${stPill(v.st)}</div><div class="small muted" style="margin-top:4px">${v.avg == null ? `Too few samples (n=${v.n})` : `Avg ${v.avg.toFixed(2)} · n=${v.n}`}</div></div>`).join("");
+    const v = VERS[pSel];
+    $("#p-vtitle").textContent = `${pSel} config`;
+    $("#p-config").innerHTML = [["model", "gpt-4o-mini-tts"], ["voice", v.voice], ["instructions", v.instr], ["speed", v.speed + ' <span class="pill warn">effect unverified on mini-tts</span>'], ["response_format", "mp3"], ["dictionary version", v.dict], ["preprocessing ruleset", v.prep]].map(([a, b]) => `<tr><td class="mono muted" style="white-space:nowrap">${a}</td><td>${a === "instructions" ? esc(b) : b}</td></tr>`).join("");
+    $("#p-internal").innerHTML = [["Dialect target tag", "Hasidic (evaluation label only)"], ["Learned from", `${v.n} rated samples · ${pSel === "v4" ? 3 : 12} golden · ${pSel === "v4" ? 17 : 41} corrections`], ["Reviewer notes", "Kept for reviewers; never part of the request"]].map(([a, b]) => `<tr><td class="muted" style="white-space:nowrap">${a}</td><td>${b}</td></tr>`).join("");
+    $("#p-promote").disabled = v.st === "Production" || v.st === "Retired";
+  }
+  $("#p-tl").addEventListener("click", e => { const t = e.target.closest(".tlv"); if (t) { pSel = t.dataset.v; pRender(); } });
+  ["#p-diffa", "#p-diffb"].forEach((s, i) => { $(s).innerHTML = Object.keys(VERS).map(k => `<option ${(i === 0 ? "v3" : "v4") === k ? "selected" : ""}>${k}</option>`).join(""); $(s).addEventListener("change", pDiff); });
+  function pDiff() {
+    const a = VERS[$("#p-diffa").value], b = VERS[$("#p-diffb").value]; let out = "";
+    [["voice", "voice"], ["instructions", "instr"], ["speed", "speed"], ["dictionary", "dict"], ["prep ruleset", "prep"]].forEach(([l, k]) => {
+      if (a[k] === b[k]) out += `<div class="diffline">  ${l}: ${esc(a[k])}</div>`;
+      else out += `<div class="diffline del">- ${l}: ${esc(a[k])}</div><div class="diffline add">+ ${l}: ${esc(b[k])}</div>`;
+    });
+    $("#p-diff").innerHTML = out;
+  }
+  $("#p-promote").addEventListener("click", () => {
+    closeDrawer();
+    const v = VERS[pSel];
+    const bg = document.createElement("div"); bg.className = "drawer-bg"; bg.addEventListener("click", closeDrawer);
+    const m = document.createElement("div"); m.className = "modal";
+    const few = v.n < 20;
+    m.innerHTML = `<span class="mock">MOCKUP — not built</span><h3 style="margin-top:10px">Promote Hasidic Yiddish ${pSel} to production?</h3>
+      <p class="muted" style="margin-top:6px; line-height:1.5">Production v2 becomes Retired. Callers hearing this profile get ${pSel} on their next generation. This cannot be done by the optimizer.</p>
+      ${few ? `<div class="banner bad" style="margin-top:10px"><span>⛔</span><div>Only n=${v.n} rated samples — too few to conclude. Regression run R-0412 shows 1 regression.</div></div>` : ""}
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="pm-ok"> I listened to the regression run and approve this change</label>
+      <label class="field" style="margin-top:10px"><span>Type PROMOTE to confirm</span><input type="text" id="pm-txt"></label>
+      <div class="row" style="margin-top:14px; justify-content:flex-end"><button class="btn" id="pm-cancel">Cancel</button><button class="btn primary" id="pm-go" disabled>Promote</button></div>`;
+    document.body.append(bg, m);
+    const chk = () => $("#pm-go").disabled = !($("#pm-ok").checked && $("#pm-txt").value === "PROMOTE");
+    $("#pm-ok").addEventListener("change", chk); $("#pm-txt").addEventListener("input", chk);
+    $("#pm-cancel").addEventListener("click", closeDrawer);
+    $("#pm-go").addEventListener("click", () => { closeDrawer(); toast("Mock: promotion recorded with approver + timestamp."); });
+  });
+  pRender(); pDiff();
+
+  // ---------- 7. Training data ----------
+  $("#t-voice").innerHTML += VOICES.map(v => `<option>${v}</option>`).join("");
+  const TROWS = [
+    { id: "S-20931", k: 2, voice: "marin", model: "gpt-4o-mini-tts", prof: "Hasidic v3", r: 2, iss: ["pron"], gold: false, rej: true, corr: "u", prov: "serve", at: "2026-09-15 14:22" },
+    { id: "S-20930", k: 2, voice: "cedar", model: "gpt-4o-mini-tts", prof: "Hasidic v3", r: 4, iss: [], gold: true, rej: false, corr: "", prov: "serve", at: "2026-09-15 14:19" },
+    { id: "S-20877", k: 1, voice: "marin", model: "gpt-4o-mini-tts", prof: "Hasidic v3", r: 3, iss: ["rhythm"], gold: false, rej: false, corr: "", prov: "serve", at: "2026-09-15 11:02" },
+    { id: "S-20712", k: 4, voice: "coral", model: "gpt-4o-mini-tts", prof: "Natural v7", r: 1, iss: ["pron", "accent"], gold: false, rej: true, corr: "v", prov: "serve", at: "2026-09-14 16:40" },
+    { id: "S-20655", k: 3, voice: "sage", model: "tts-1-hd", prof: "Hasidic v2", r: 2, iss: ["accent"], gold: false, rej: false, corr: "", prov: "serve", at: "2026-09-14 10:12" },
+    { id: "S-20601", k: 4, voice: "cedar", model: "gpt-4o-mini-tts", prof: "Hasidic v3", r: 4, iss: [], gold: true, rej: false, corr: "v", prov: "serve", at: "2026-09-13 15:55" },
+    { id: "S-20588", k: 1, voice: "verse", model: "gpt-4o-mini-tts", prof: "Natural v7", r: 0, iss: [], gold: false, rej: false, corr: "", prov: "serve", at: "2026-09-13 09:31" },
+    { id: "H-00041", k: 0, voice: "—", model: "human reference", prof: "—", r: 4, iss: [], gold: true, rej: false, corr: "v", prov: "train", at: "2026-09-12 13:20" },
+    { id: "H-00039", k: 0, voice: "—", model: "human reference", prof: "—", r: 0, iss: [], gold: false, rej: false, corr: "", prov: "train", at: "2026-09-11 12:02" }
+  ];
+  const ISS = { pron: "Pronunciation", accent: "Accent", rhythm: "Rhythm" };
+  function tRender() {
+    const q = $("#t-q").value.trim(), f = id => $(id).value;
+    const rows = TROWS.filter(r =>
+      (!q || (r.k && Y[r.k].includes(q))) && (!f("#t-voice") || r.voice === f("#t-voice")) && (!f("#t-model") || r.model === f("#t-model")) &&
+      (f("#t-rating") === "" || String(r.r) === f("#t-rating")) && (!f("#t-prof") || r.prof === f("#t-prof")) && (!f("#t-issue") || r.iss.includes(f("#t-issue"))) &&
+      (!f("#t-corr") || r.corr === f("#t-corr")) && (!f("#t-prov") || r.prov === f("#t-prov")) && (!$("#t-gold").checked || r.gold) && (!$("#t-rej").checked || r.rej));
+    $("#t-count").textContent = `${rows.length} of ${TROWS.length} shown (sample of 1,284)`;
+    $("#t-empty").hidden = rows.length > 0;
+    $("#t-rows").innerHTML = rows.map(r => {
+      let text = r.k ? Y[r.k] : null, cell;
+      if (text && q) { const i = text.indexOf(q); cell = `<span class="yi" dir="rtl" lang="yi">${esc(text.slice(0, i))}<mark class="hl">${esc(q)}</mark>${esc(text.slice(i + q.length))}</span>`; }
+      else cell = text ? yi(text) : `<span class="muted small" style="font-style:italic">Human-authored text (reviewer entry) — not shown in mockup</span>`;
+      const cur = [r.gold ? '<span class="pill warn">★ Golden</span>' : "", r.rej ? '<span class="pill bad">Rejected</span>' : "", r.corr === "v" ? '<span class="pill ok">Verified correction</span>' : r.corr === "u" ? '<span class="pill warn">Unverified correction</span>' : ""].join(" ");
+      return `<tr><td>${mini()}</td><td class="mono">${r.id}</td><td style="min-width:260px">${cell}</td><td>${r.voice}<span class="small muted" style="display:block">${r.model}</span></td><td>${r.prof}</td><td>${ratePill(r.r)}</td><td>${r.iss.map(i => `<span class="tag">${ISS[i]}</span>`).join(" ") || '<span class="muted">—</span>'}</td><td>${cur || '<span class="muted">—</span>'}</td><td>${r.prov === "serve" ? '<span class="pill warn">Serving-only</span>' : '<span class="pill ok">Training-eligible</span>'}</td><td class="small" style="white-space:nowrap">${r.at}</td></tr>`;
+    }).join("");
+  }
+  $("#t-q").value = W("יישר כח");
+  ["#t-q"].forEach(s => $(s).addEventListener("input", tRender));
+  ["#t-voice", "#t-model", "#t-rating", "#t-prof", "#t-issue", "#t-corr", "#t-prov", "#t-gold", "#t-rej"].forEach(s => $(s).addEventListener("change", tRender));
+  tRender();
+
+  // ---------- 8. Analytics (SVG, drawn to scale) ----------
+  function hbars(el, rows, o) {
+    const W0 = 560, L = o.labelW || 150, R = 70, rowH = 30, top = 8, H = top + rows.length * rowH + 26;
+    const min = o.min || 0, max = o.max, sx = v => L + (v - min) / (max - min) * (W0 - L - R);
+    let s = `<svg viewBox="0 0 ${W0} ${H}" role="img">`;
+    o.ticks.forEach(t => { const x = sx(t); s += `<line class="axis" x1="${x}" y1="${top - 2}" x2="${x}" y2="${H - 22}" stroke-dasharray="2 3"/><text x="${x}" y="${H - 8}" text-anchor="middle">${t}</text>`; });
+    rows.forEach((r, i) => {
+      const y = top + i * rowH, few = o.fewAt && r.n < o.fewAt;
+      s += `<text class="lbl" x="${L - 8}" y="${y + 18}" text-anchor="end">${esc(r.l)}</text>`;
+      s += `<rect class="${few ? "few" : "bar"}" x="${L}" y="${y + 6}" width="${Math.max(1, sx(r.v) - L)}" height="16" rx="3" ${few ? 'stroke="var(--text-dim)" stroke-width=".8"' : ""}/>`;
+      s += `<text x="${sx(r.v) + 6}" y="${y + 18}">${few ? "too few" : (o.fmt ? o.fmt(r.v) : r.v)} · n=${r.n}</text>`;
+    });
+    s += `<line class="axis" x1="${L}" y1="${top - 2}" x2="${L}" y2="${H - 22}"/></svg>`;
+    el.innerHTML = s + (o.fewAt && rows.some(r => r.n < o.fewAt) ? `<div class="small muted" style="margin-top:4px">Hatched: too few samples to conclude (n&lt;${o.fewAt}). Bar drawn at the observed value for reference only.</div>` : "");
+  }
+  hbars($("#a-problems"), [["wrong pronunciation", 71], ["incorrect stress", 48], ["English word mangled", 37], ["robotic rhythm", 26], ["too fast", 17], ["wrong accent", 9], ["wrong mood", 4]].map(([l, v]) => ({ l, v, n: v })), { max: 80, ticks: [0, 20, 40, 60, 80], labelW: 160 });
+  const f2 = v => v.toFixed(2);
+  hbars($("#a-voice"), [["cedar", 3.21, 64], ["marin", 3.02, 58], ["coral", 2.71, 41], ["sage", 2.60, 23], ["ash", 2.40, 12], ["verse", 2.83, 6]].map(([l, v, n]) => ({ l, v, n })), { min: 1, max: 4, ticks: [1, 2, 3, 4], fewAt: 20, fmt: f2, labelW: 90 });
+  hbars($("#a-model"), [["gpt-4o-mini-tts", 2.94, 241], ["tts-1-hd", 2.10, 14]].map(([l, v, n]) => ({ l, v, n })), { min: 1, max: 4, ticks: [1, 2, 3, 4], fewAt: 20, fmt: f2, labelW: 130 });
+  hbars($("#a-version"), [["v1", 2.31, 40], ["v2", 2.72, 88], ["v3", 3.05, 71], ["v4 (draft)", 3.30, 9]].map(([l, v, n]) => ({ l, v, n })), { min: 1, max: 4, ticks: [1, 2, 3, 4], fewAt: 20, fmt: f2, labelW: 90 });
+  const read = n => n < 20 ? '<span class="pill dim">Too few samples to conclude (n&lt;20)</span>' : '<span class="pill info">Enough to act on</span>';
+  $("#a-corrected").innerHTML = [["דאנערשטאג", "Yiddish", 14, 41], ["אינבאקס", "English loanword", 11, 64], ["יישר כח", "Hebrew-origin", 9, 184], ["מלכי בערגער", "personal name", 6, 22], ["תשובה", "Hebrew-origin", 5, 11]].map(([w, c, k, n]) => `<tr><td>${yi(W(w))}</td><td><span class="tag">${c}</span></td><td class="num">${k}</td><td class="num">${n}</td><td>${read(n)}</td></tr>`).join("");
+  $("#a-ab").innerHTML = TALLY.map(([d, a, b, wa, wb]) => { const n = wa + wb; return `<tr><td>${d}: ${esc(a)} vs ${esc(b)}</td><td class="num">${n ? Math.round(wb / n * 100) : 0}% B</td><td class="num">${n}</td><td>${read(n)}</td></tr>`; }).join("");
+  const mis = rows => rows.map(([w, k, n]) => `<tr><td>${yi(W(w))}</td><td class="num">${k}</td><td class="num">${n}</td><td class="num">${n < 20 ? "—" : Math.round(k / n * 100) + "%"}</td><td>${read(n)}</td></tr>`).join("");
+  $("#a-english").innerHTML = mis([["אינבאקס", 22, 64], ["קאלערס", 19, 64], ["וואויס-מעילס", 15, 77], ["ארדער", 9, 58], ["טעלעפאן סיסטעם", 3, 12]]);
+  $("#a-hebrew").innerHTML = mis([["יישר כח", 31, 184], ["ממילא", 12, 64], ["תשובה", 6, 11], ["שאלה", 2, 9]]);
+  $("#a-rules").innerHTML = [["R-087", "יישר כח", 3.41, 142, 2.62, 42], ["R-160", "וואויס-מעילס", 3.18, 55, 2.49, 22], ["R-114", "מלכי בערגער", 3.25, 16, 2.33, 6]].map(([id, w, a, na, b, nb]) => { const few = na < 20 || nb < 20; return `<tr><td class="mono">${id}</td><td>${yi(W(w))}</td><td class="num">${a.toFixed(2)}</td><td class="num">${na}</td><td class="num">${b.toFixed(2)}</td><td class="num">${nb}</td><td class="num" style="color:${few ? "var(--text-dim)" : "var(--success)"}">${few ? "—" : "+" + (a - b).toFixed(2)}</td><td>${few ? '<span class="pill dim">Too few samples to conclude (n&lt;20)</span>' : '<span class="pill ok">Reliable</span>'}</td></tr>`; }).join("");
+
+  // ---------- 9. Regression ----------
+  const SUITES = [["Core conversation", 12], ["Telephone", 18], ["Tech support", 9], ["Names & numbers", 14], ["Money & addresses", 0], ["English mixing", 11], ["Hebrew-origin", 8], ["Questions & emotions", 7]];
+  let rgSel = 0;
+  const CASES = [
+    ["C-01", 1, ["greeting", "Yiddish", "phone term"], "Pronunciation, Accent"],
+    ["C-02", 2, ["name", "day", "Hebrew-origin", "voicemail"], "Names, Word stress"],
+    ["C-03", 3, ["question", "Hebrew-origin"], "Mood, Naturalness"],
+    ["C-04", 4, ["English mixing", "empty inbox"], "English/Yiddish switching"]
+  ];
+  function rgRender() {
+    $("#rg-suites").innerHTML = SUITES.map(([n, c], i) => `<button class="btn ${i === rgSel ? "primary" : ""}" data-i="${i}" style="justify-content:space-between; width:100%"><span>${esc(n)}</span><span class="tag" style="${i === rgSel ? "background:rgba(255,255,255,.2);color:#fff" : ""}">${c} cases</span></button>`).join("");
+    const [name, count] = SUITES[rgSel]; $("#rg-title").textContent = name;
+    $("#rg-cases").innerHTML = count ? CASES.map(([id, k, tags, chk]) => `<tr><td class="mono">${id}</td><td style="min-width:240px">${yi(Y[k])}</td><td>${tags.map(t => `<span class="tag">${t}</span>`).join(" ")}</td><td class="small">${chk}</td></tr>`).join("") + `<tr><td colspan="4" class="small muted">+ ${count - 4 > 0 ? count - 4 : 0} more cases · showing 4</td></tr>` : `<tr><td colspan="4"><div class="empty"><h3>No cases yet</h3><p>Add a case by saving a rated sample into this suite.</p></div></td></tr>`;
+    $("#rg-run").disabled = !count;
+  }
+  $("#rg-suites").addEventListener("click", e => { const b = e.target.closest("[data-i]"); if (b) { rgSel = +b.dataset.i; rgRender(); } });
+  $("#rg-target").addEventListener("change", e => $("#rg-run").textContent = "Run against config " + (/v4/.test(e.target.value) ? "v4" : "v3"));
+  $("#rg-run").addEventListener("click", () => toast("Mock: run R-0413 queued — each case is spoken, then waits for 2 human ratings."));
+  const CMP = [["C-01", 1, 3.0, 3.5], ["C-02", 2, 2.5, 3.5], ["C-03", 3, 3.5, 2.5], ["C-04", 4, 2.0, 2.0]];
+  const reg = CMP.filter(c => c[3] < c[2]).length;
+  $("#rg-sum").textContent = `${reg} regression · ${CMP.filter(c => c[3] > c[2]).length} improved · n=2 ratings per case`;
+  $("#rg-compare").innerHTML = CMP.map(([id, k, b, c]) => { const d = c - b; return `<tr class="${d < 0 ? "regress" : ""}"><td class="mono">${id}</td><td style="min-width:220px">${yi(Y[k])}</td><td class="num">${b.toFixed(1)}</td><td class="num">${c.toFixed(1)}</td><td class="num" style="font-weight:700; color:${d < 0 ? "var(--danger)" : d > 0 ? "var(--success)" : "var(--text-dim)"}">${d > 0 ? "+" : ""}${d.toFixed(1)}</td><td><div class="row">${mini()}<span class="small muted">v3</span>${mini()}<span class="small muted">v4</span></div></td><td>${d < 0 ? '<span class="pill bad">Regression</span>' : d > 0 ? '<span class="pill ok">Improved</span>' : '<span class="pill dim">Same</span>'}</td></tr>`; }).join("");
+  rgRender();
+
+  // ---------- 10. Optimizer ----------
+  const PROPS = [
+    { t: "Voice cedar scores higher on pronunciation", ev: "Avg pronunciation 3.21 (n=64) vs marin 3.02 (n=58). Blind A/B: cedar 31 – marin 18, n=49 decisive.", conf: "Moderate", draft: "Hasidic v5 = v3 with voice cedar" },
+    { t: "17 terms frequently corrected — add to dictionary", ev: `Corrected ≥3 times each in the last 30 days; top: ${"דאנערשטאג"} (14), ${"אינבאקס"} (11). 9 are Unverified.`, yiw: ["דאנערשטאג", "אינבאקס"], conf: "High", draft: "dict v13 draft with 17 Unverified entries" },
+    { t: "Instruction set B wins for tech support", ev: "A/B 31–18, n=49 decisive; 95% interval 49–76% for B — borderline. Suggest re-test to n≥100.", conf: "Borderline", draft: "Technical Support v3 = instruction set B" },
+    { t: "tts-1-hd underperforms — too few samples", ev: "Avg 2.10 but n=14. Too few samples to conclude (n<20). No draft suggested until more ratings.", conf: "Too few samples", draft: null }
+  ];
+  $("#o-cards").innerHTML = PROPS.map((p, i) => {
+    let ev = esc(p.ev); (p.yiw || []).forEach(w => { ev = ev.replace(esc(W(w)), yi(w)); });
+    return `<div class="card"><div class="card-h"><h3>${esc(p.t)}</h3><span class="pill ${p.conf === "High" ? "ok" : p.conf === "Moderate" ? "info" : p.conf === "Borderline" ? "warn" : "dim"}">${p.conf}</span></div><p class="muted" style="line-height:1.5">${ev}</p>${p.draft ? `<div class="small" style="margin-top:8px">Would create: <b>${esc(p.draft)}</b> <span class="pill warn">Draft</span></div>` : ""}<div class="row" style="margin-top:12px"><button class="btn primary" ${p.draft ? "" : "disabled"} data-prop="${i}">Create draft config to test</button><button class="btn sm">Dismiss</button></div></div>`;
+  }).join("");
+  $("#o-cards").addEventListener("click", e => { const b = e.target.closest("[data-prop]"); if (b) { b.disabled = true; b.textContent = "Draft created ✓"; toast("Draft created. It must pass a regression run and human approval before production."); } });
+
+  // ---------- 11. Exports ----------
+  const FIELDS = [["text", "human-authored or verified text", true], ["prepared_text", "after speech layer", true], ["request_text", "exact provider request", true], ["audio", "file ref + sha256", true], ["metadata", "voice, model, versions, latency", true], ["ratings", "overall + categories", true], ["pronunciation_annotations", "dictionary corrections", true], ["prosody_annotations", "rhythm marks", true], ["accepted_rejected", "curation state", true], ["pairwise_preferences", "A/B votes", false], ["consent_ref", "required for audio", true]];
+  $("#x-fields").innerHTML = FIELDS.map(([k, d, on]) => `<label class="chk"><input type="checkbox" ${on ? "checked" : ""} ${k === "consent_ref" ? "disabled" : ""} data-f="${k}"> <span><span class="mono">${k}</span><span class="small muted" style="display:block">${d}</span></span></label>`).join("");
+  function xRender() {
+    let n = 163; if ($("#x-verified").checked) n = 97; if ($("#x-golden").checked) n = Math.round(n * 0.23); if (!$("#x-consent").checked) n += 0;
+    $("#x-in").textContent = n; $("#x-sub").textContent = !$("#x-consent").checked ? "audio without consent_ref is still dropped" : "all audio has a consent_ref";
+    const on = $$("#x-fields input:checked").map(i => i.dataset.f);
+    const sample = { text: "<human-authored text — reviewer entry>", prepared_text: "<same, after prep v5>", request_text: { model: "gpt-4o-mini-tts", voice: "cedar", instructions: "…", speed: 1.0, response_format: "mp3" }, audio: { uri: "voicelab://audio/H-00041.wav", sha256: "9f2c…e1" }, metadata: { profile: "Hasidic v3", dict: "v12", prep: "v5", provenance: "training-eligible" }, ratings: { overall: "Excellent", pronunciation: "Good" }, pronunciation_annotations: [{ span: [12, 19], ipa: "[IPA entered by reviewer]", verified: true }], prosody_annotations: [{ mark: "pause_longer", t: [3.1, 3.9] }], accepted_rejected: "accepted", pairwise_preferences: [{ a: "cfg_v3", b: "cfg_v4", winner: "b" }], consent_ref: "CR-2026-0007" };
+    const obj = {}; on.forEach(k => obj[k] = sample[k]);
+    $("#x-preview").textContent = JSON.stringify(obj, null, 2);
+  }
+  ["#x-consent", "#x-verified", "#x-golden"].forEach(s => $(s).addEventListener("change", xRender));
+  $("#x-fields").addEventListener("change", xRender);
+  $("#x-build").addEventListener("click", () => toast(`Mock: manifest with ${$("#x-in").textContent} rows written · 1,121 Serving-only rows excluded.`));
+  $("#x-slots").innerHTML = [
+    ["OpenAI custom voice", "Sales-gated; needs the speaker's consent recording. No self-serve API, no TTS fine-tuning."],
+    ["ElevenLabs PLS lexicon", "Export verified dictionary entries as a pronunciation lexicon (IPA/alias) for a second provider."],
+    ["Azure custom neural voice", "Gated application + consented speaker recordings."],
+    ["Open-source fine-tune", "Permissively licensed models (e.g. MIT / Apache-2.0) trained on Training-eligible rows only."]
+  ].map(([t, d]) => `<div class="layer" style="margin-top:0"><div class="lh"><h4>${t}</h4><span class="fut">Future capability</span></div><div class="small muted" style="line-height:1.5">${d}</div><div class="row" style="margin-top:8px"><button class="btn sm" disabled>Export</button></div></div>`).join("");
+  xRender();
+
+  // ---------- 12. Consent ----------
+  const yes = '<span class="pill ok">Granted</span>', no = '<span class="pill dim">Not granted</span>';
+  $("#k-speakers").innerHTML = [
+    ["Speaker S-01 · staff volunteer", yes, yes, no, yes, "CR-2026-0007.pdf", 18, '<span class="pill ok">Active</span>', '<button class="btn sm danger">Revoke</button>'],
+    ["Speaker S-02 · contractor", no, no, no, no, "CR-2026-0004.pdf", 0, '<span class="pill bad">Revoked 2026-09-12</span>', ""],
+    ["Speaker S-03 · reviewer", yes, no, no, no, "CR-2026-0009.pdf", 9, '<span class="pill ok">Active</span>', '<button class="btn sm danger">Revoke</button>'],
+    ["Speaker S-04 · pending", no, no, no, no, '<span class="muted">not signed</span>', 0, '<span class="pill warn">Awaiting signature</span>', '<button class="btn sm">Send form</button>']
+  ].map(r => `<tr>${r.map((c, i) => `<td class="${i === 6 ? "num" : ""}">${c}</td>`).join("")}</tr>`).join("");
+  $("#k-recs").innerHTML = [
+    ["REF-0118", `Dictionary: ${yi(W("יישר כח"))}`, "S-01", '<span class="pill ok">Evaluation + training</span>', "1.4s"],
+    ["REF-0117", `Dictionary: ${yi(W("דאנערשטאג"))}`, "S-01", '<span class="pill ok">Evaluation + training</span>', "1.1s"],
+    ["REF-0102", `Dictionary: ${yi(W("אינבאקס"))}`, "S-03", '<span class="pill info">Evaluation only</span>', "0.9s"],
+    ["REF-0099", "Text: human-authored reviewer entry H-00041", "S-01", '<span class="pill ok">Evaluation + training</span>', "6.8s"]
+  ].map(r => `<tr><td>${mini()}</td><td class="mono">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td class="num">${r[4]}</td></tr>`).join("");
+
+  // ---------- 13. Storage ----------
+  const STORE = [["Ordinary generation", 3.02, "var(--accent)"], ["Rejected with correction", 0.71, "var(--warning)"], ["Rejected, no correction", 0.19, "var(--danger)"], ["Golden", 0.41, "var(--success)"], ["Reference audio", 0.44, "var(--future)"], ["Text, ratings, corrections (never expire)", 0.05, "var(--text-dim)"]];
+  const tot = STORE.reduce((a, s) => a + s[1], 0);
+  $("#s-bar").innerHTML = STORE.map(([l, v, c]) => `<div title="${l}" style="width:${(v / tot * 100).toFixed(2)}%; background:${c}"></div>`).join("");
+  $("#s-legend").innerHTML = STORE.map(([l, v, c]) => `<span><i style="background:${c}"></i>${l} · <b>${v >= 1 ? v.toFixed(2) + " GB" : Math.round(v * 1000) + " MB"}</b></span>`).join("");
+
+  // ---------- 14. States ----------
+  $("#e-text").textContent = Y[4];
+
+  // start
+  const m = /^#s(\d+)$/.exec(location.hash || "");
+  go(m && +m[1] >= 1 && +m[1] <= 14 ? m[1] : "1");
+})();
+</script>
