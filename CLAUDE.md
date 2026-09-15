@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · DISPLAY DECKS SPLIT: old tenant renamed NEXUS REALTY (Michael TENANT_ADMIN, Amex default, autopay OFF — his $65 Sola schedule is LIVE, next Sep 26); new billing-only tenant DISPLAYDX (Ellie, Visa default, autopay ON, $30/mo); Ellie last charged May 28 → 3 OPEN invoices CC-202609-00007/8/9 ($90) created NOT charged/emailed; ⛔ phones/users NOT moved (Eli's portal shows "Nexus Realty" till they do) → `2026-09-15-displaydx-nexus-realty-split.md`
+
 - 2026-09-15 · GESHEFT STARLINK INVOICE PAID + PERIOD-GUARD FIX: CC-202609-00006 $275 emailed AND charged (Amex •1007 APPROVED, Sola ref 11050894534, receipt SENT); ⛔ the charge exposed that EVERY additive one-time/manual invoice inside a paid advance-billed month was unchargeable (`BILLING_PERIOD_ALREADY_PAID`) — fixed via `isAdditiveOneTimeInvoice()` in both charge doors, DEPLOYED `74e7730a` container-verified; monthly-service-text invoices stay guarded → `2026-09-15-gesheft-starlink-invoice.md`
 
 - 2026-09-15 · LOOPCOM MOBILE UI MOCKUP PASS: Izzy rejected the thin /mobile page ("placeholder"); 30-screen clickable mockup of the FULL product area (customer section /mobile/* + 13-view owner console) built in the platform's tokens at `docs/mockups/loopcom-mobile/index.html` + artifact JGi8xGn5FnAVPPPJKvdvmt; ⛔⛔ AWAITING HIS APPROVAL — mockup revisions only, NO production UI until he approves → `2026-09-15-loopcom-mobile-ui-mockup-pass.md`
@@ -684,4 +686,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-15 · Face-to-face AI Support mockup: existing Assistant remains the brain; approved Concept A (open collar, Loopcom infinity lapel pin); LiveKit + Anam pilot recommendation and decision gates → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-15 · Talk to Laybel mockup: preserve the existing Assistant appearance; one voice-mode option only; prior avatar/video exploration superseded → `2026-09-15-face-to-face-ai-support-mockup.md`
