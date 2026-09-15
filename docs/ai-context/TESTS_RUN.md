@@ -46,6 +46,10 @@ Newest entries first.
   OrdersDesk.tsx while the sweep was dark → converted to ConnectSelect; both files now **7/7 pass**.
 - ⛔ Nothing here calls Telnyx; no credential is stored anywhere in the repo; no number bought, no
   call placed, no PBX write. Telnyx-portal state and citations: AGENT_HANDOFF_TELNYX_ONBOARDING_2026-09-15.md.
+- ✅ DEPLOYED + CONTAINER-VERIFIED same day: `514934f7` in branch tip `b1f6357c`; both `app-api-1`
+  and `app-portal-1` `.build-commit = b1f6357c`, 0 restarts, health 200 on both hostnames; api ships
+  `/app/apps/api/src/telnyx/` + the server.ts registration, portal ships the
+  `app/(platform)/apps/telnyx/page-*.js` chunk (grepped by the `tx-wrap` string).
 
 ## GDMS device/add batch-result fix (2026-09-15, `3040f2bc`)
 
