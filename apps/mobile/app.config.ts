@@ -137,7 +137,7 @@ const config: ExpoConfig = {
     // Bumped per build so an ad-hoc install cleanly REPLACES the prior build
     // on-device. iOS can skip swapping the binary when CFBundleVersion is
     // unchanged, which looks like "nothing changed" after reinstalling.
-    buildNumber: '59',
+    buildNumber: '60',
     bundleIdentifier: 'com.connectcommunications.mobile',
     infoPlist: {
       // App Store upload rejected "Connect" as an already-taken bundle name
@@ -149,6 +149,22 @@ const config: ExpoConfig = {
       NSMicrophoneUsageDescription: 'Microphone access is required for voice calls.',
       NSContactsUsageDescription:
         'Loopcom needs access to your phone contacts so you can import them into the app and call them quickly.',
+      // ⛔ Photo-library and location strings: expo-image-picker and
+      // expo-location auto-apply their config plugins during prebuild and, when
+      // given no explicit value, inject GENERIC defaults ("Allow Loopcom to
+      // access your photos" / "…use your location"). Apple rejected build 57
+      // under Guideline 5.1.1(ii) 2026-09-15 because those defaults do not
+      // describe the use or give an example. @expo/config-plugins Permissions.js
+      // merges `passedValue || existing infoPlist value || default`, so setting
+      // an explicit value HERE wins over the plugin default. These describe the
+      // real in-app uses (chat photo/video attachments; delivery-route ETA) and
+      // each gives a concrete example, per Apple's requirement.
+      NSPhotoLibraryUsageDescription:
+        'Loopcom accesses your photo library only when you choose to attach a photo or video to a message — for example, sending a customer a picture of a finished job inside a chat thread. Nothing is uploaded until you pick it and send.',
+      NSLocationWhenInUseUsageDescription:
+        'Loopcom uses your location only while you are actively working a delivery route, so the business can give customers an accurate arrival time — for example, updating the live delivery map as you approach a stop.',
+      NSLocationAlwaysAndWhenInUseUsageDescription:
+        'Loopcom uses your location only while you are actively working a delivery route, so the business can give customers an accurate arrival time — for example, updating the live delivery map as you approach a stop. Location is not used when you are off a delivery route.',
       UIBackgroundModes: ['voip', 'remote-notification', 'audio'],
       // App Store compliance: encryption export declaration. The app uses only
       // standard HTTPS/TLS and OS-provided crypto (exempt), so this is false and
