@@ -36,6 +36,7 @@ import {
   AlertTriangle,
   Lightbulb,
   ShieldCheck,
+  PhoneCall,
 } from "lucide-react";
 import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, FEATURE_SUGGESTION_MIN, assistantGreetingLine } from "@connect/shared";
 import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
@@ -73,6 +74,8 @@ type PendingFile = {
   attachmentId?: string;
   error?: string;
 };
+
+type LaybelState = "idle" | "recording" | "transcribing" | "thinking" | "speaking" | "error";
 
 const ACK_YI = "ביטע ווארט איין רגע בשעת איך טשעק דאס איבער פאר אייך.";
 const ACK_EN = "One moment — I'm looking into that for you.";
@@ -320,6 +323,10 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  // Laybel is a voice MODE of this exact Assistant conversation — never a
+  // separate agent, websocket, avatar, provider, or conversation store.
+  const [laybelActive, setLaybelActive] = useState(false);
+  const [laybelState, setLaybelState] = useState<LaybelState>("idle");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -331,6 +338,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   // only abort path used to be stop-and-upload (owner request 2026-07-27).
   const takeRef = useRef(0);
   const cancelledTakeRef = useRef(-1);
+  const laybelActiveRef = useRef(false);
   // A permission the assistant has PREPARED but not applied. It only ever
   // becomes real after the password dialog below, which talks to the API
   // directly — the assistant never sees the password.
@@ -428,12 +436,50 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
     tick();
   }, []);
 
+  /**
+   * Read the SAME reply shown in the Assistant transcript. Native browser
+   * speech keeps voice output local to the customer's device and avoids adding
+   * a second model, TTS account, transcript store, or data recipient.
+  */
+  const speakLaybel = useCallback((text: string) => {
+    if (!laybelActiveRef.current) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setLaybelState("idle");
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      setLaybelState("speaking");
+      utterance.onstart = () => {
+        if (laybelActiveRef.current) setLaybelState("speaking");
+      };
+      utterance.onend = () => {
+        if (laybelActiveRef.current) setLaybelState("idle");
+      };
+      utterance.onerror = () => {
+        if (laybelActiveRef.current) setLaybelState("idle");
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Captions/transcript remain the reliable fallback when a browser has no
+      // usable system voice or its audio output is unavailable.
+      if (laybelActiveRef.current) setLaybelState("idle");
+    }
+  }, []);
+
+  useEffect(() => () => {
+    try { window.speechSynthesis?.cancel(); } catch { /* no browser speech */ }
+  }, []);
+
   const send = useCallback(
-    async (raw?: string) => {
+    async (raw?: string, channel: "chat" | "voice" = "chat") => {
       const ready = pendingFiles.filter((f) => f.status === "ready" && f.attachmentId);
       const stillUploading = pendingFiles.some((f) => f.status === "uploading");
       let text = (raw ?? input).trim();
       if ((!text && ready.length === 0) || sending || stillUploading) return;
+      const voiceTurn = channel === "voice";
+      if (voiceTurn) setLaybelState("thinking");
       if (!text) text = `I uploaded: ${ready.map((f) => f.name).join(", ")}`;
       setSending(true);
       uiEvent(ready.length ? `send (${ready.length} attachment(s))` : "send");
@@ -446,7 +492,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
       try {
         const res = await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", {
           text,
-          channel: "chat",
+          channel,
           context: { page: label, path: pathname },
           ...(ready.length ? { attachments: ready.map((f) => f.attachmentId) } : {}),
         });
@@ -456,8 +502,10 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
           // waiting bubble; the person's answer arrives via the polling loop.
           setMessages((m) => m.filter((msg) => msg.id !== ackId));
           setTakenOver(true);
+          if (voiceTurn) setLaybelState("idle");
         } else {
           typeOut(ackId, res.reply);
+          if (voiceTurn) speakLaybel(res.reply);
         }
         // If that turn prepared a permission change, the confirmation is now
         // waiting on the API. Ask — the assistant is not trusted to say so.
@@ -467,11 +515,12 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
         void refreshCoworkerTasks();
       } catch {
         setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
+        if (voiceTurn) setLaybelState("error");
       } finally {
         setSending(false);
       }
     },
-    [input, sending, typeOut, label, pathname, pendingFiles, refreshGrant, refreshCoworkerTasks],
+    [input, sending, typeOut, label, pathname, pendingFiles, refreshGrant, refreshCoworkerTasks, speakLaybel],
   );
 
   /** Drop a line into the transcript from outside the model — e.g. the result
@@ -634,12 +683,19 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
     cancelledTakeRef.current = takeRef.current;
     try { mediaRef.current?.stop(); } catch { /* noop */ }
     setTranscribing(false);
+    if (laybelActiveRef.current) setLaybelState("idle");
   }, []);
 
-  const startMic = useCallback(async () => {
+  const startMic = useCallback(async (destination: "compose" | "laybel" = "compose") => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Never let the device capture Laybel's own speaker output as the next
+      // customer turn. A new press-to-talk turn always interrupts playback.
+      if (destination === "laybel") window.speechSynthesis?.cancel();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 },
+      });
       const mr = new MediaRecorder(stream);
+      if (destination === "laybel") setLaybelState("recording");
       takeRef.current += 1;
       const take = takeRef.current;
       chunksRef.current = [];
@@ -649,21 +705,38 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
         setRecording(false);
         if (cancelledTakeRef.current === take) return; // discarded — never upload
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        if (blob.size < 400) return; // too short / no audio captured
+        if (blob.size < 400) {
+          if (destination === "laybel") setLaybelState("idle");
+          return; // too short / no audio captured
+        }
         setTranscribing(true);
+        if (destination === "laybel") setLaybelState("transcribing");
         try {
           const b64 = await new Promise<string>((res) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob); });
           const r = await agentPost<{ ok: boolean; text?: string }>("transcribe", { audioBase64: b64, filename: "mic.webm" });
-          if (cancelledTakeRef.current !== take && r.ok && r.text) { setInput((v) => (v ? v + " " : "") + r.text); inputRef.current?.focus(); }
-        } catch { /* silent — user can type instead */ } finally { setTranscribing(false); }
+          if (cancelledTakeRef.current !== take && r.ok && r.text) {
+            if (destination === "laybel") {
+              void send(r.text, "voice");
+            } else {
+              setInput((v) => (v ? v + " " : "") + r.text);
+              inputRef.current?.focus();
+            }
+          } else if (destination === "laybel") {
+            setLaybelState("error");
+          }
+        } catch {
+          if (destination === "laybel") setLaybelState("error");
+          // The typed Assistant remains available if capture/transcription fails.
+        } finally { setTranscribing(false); }
       };
       mediaRef.current = mr;
       mr.start();
       setRecording(true);
     } catch {
       setRecording(false); // mic permission denied / unavailable
+      if (destination === "laybel") setLaybelState("error");
     }
-  }, []);
+  }, [send]);
 
   const toggleMic = useCallback(() => {
     if (recording || transcribing) { stopMic(); return; }
@@ -671,8 +744,25 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
     // (Yiddish vs English) across the full utterance — never the browser's
     // English-only recogniser, which turns Yiddish speech into gibberish. The
     // community code-switches heavily, so detection must judge the whole clip.
-    startMic();
-  }, [recording, transcribing, startMic, stopMic]);
+    startMic(laybelActive ? "laybel" : "compose");
+  }, [recording, transcribing, startMic, stopMic, laybelActive]);
+
+  const startLaybel = useCallback(() => {
+    laybelActiveRef.current = true;
+    setLaybelActive(true);
+    setLaybelState("idle");
+    uiEvent("talk to laybel");
+  }, []);
+
+  const endLaybel = useCallback(() => {
+    laybelActiveRef.current = false;
+    cancelledTakeRef.current = takeRef.current;
+    try { mediaRef.current?.stop(); } catch { /* no active capture */ }
+    try { window.speechSynthesis?.cancel(); } catch { /* no browser speech */ }
+    setLaybelActive(false);
+    setLaybelState("idle");
+    uiEvent("end laybel voice");
+  }, []);
 
   if (HIDE_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return null;
 
@@ -884,6 +974,16 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             {docked && coworkerTasks.map((t) => (
               <CoworkerTaskCard key={t.id} task={t} sayInChat={sayInChat} onDone={dropCoworkerTask} onDismissed={dropCoworkerTask} />
             ))}
+            {laybelActive && (
+              <div className={`fa-laybel fa-laybel-${laybelState}`} role="status" aria-live="polite">
+                <span className="fa-ico"><PhoneCall size={15} /></span>
+                <span className="fa-row-txt">
+                  <b>{laybelState === "recording" ? "Laybel is listening…" : laybelState === "transcribing" ? "Turning your words into text…" : laybelState === "thinking" ? "Laybel is thinking…" : laybelState === "speaking" ? "Laybel is speaking…" : laybelState === "error" ? "Voice is unavailable right now" : "Talk to Laybel"}</b>
+                  <small>{laybelState === "error" ? "Type your message instead — your conversation is still here." : laybelState === "idle" ? "Tap the microphone below to speak, or type your message." : "Same Assistant, same conversation and context."}</small>
+                </span>
+                <button type="button" className="fa-laybel-end" onClick={endLaybel} aria-label="End Laybel voice mode">End</button>
+              </div>
+            )}
             {messages.length === 0 && (
               <div className="fa-open">
                 {supportMsgs.length > 0 && (
@@ -966,6 +1066,14 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
                   <p>What can I help with?</p>
                 </div>
                 <div className="fa-rows">
+                  <button className="fa-row fa-row-lead" onClick={startLaybel} disabled={!micAvailable}>
+                    <span className="fa-ico"><PhoneCall size={15} /></span>
+                    <span className="fa-row-txt">
+                      <b>Talk to Laybel</b>
+                      <small>{micAvailable ? "Speak with the same Assistant by voice" : "Voice input is not available in this browser"}</small>
+                    </span>
+                    <ChevronRight size={15} className="fa-chev" />
+                  </button>
                   <button className="fa-row fa-row-lead" onClick={() => send("Summarize my new voicemails")}>
                     <span className="fa-ico"><VoicemailIcon size={15} /></span>
                     <span className="fa-row-txt">
@@ -1112,13 +1220,13 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
                   if (inputRef.current) inputRef.current.style.height = "auto";
                 }
               }}
-              placeholder={recording ? "Recording… mic = use it, ✕ = cancel" : transcribing ? "Transcribing… ✕ to cancel" : "Type or talk…"}
+              placeholder={recording ? "Recording… mic = use it, ✕ = cancel" : transcribing ? "Transcribing… ✕ to cancel" : laybelActive ? "Speak to Laybel or type…" : "Type or talk…"}
               aria-label="Message"
             />
             <button
               className="fa-send"
               title="Send"
-              onClick={() => send()}
+              onClick={() => send(undefined, laybelActive ? "voice" : "chat")}
               disabled={sending || pendingFiles.some((f) => f.status === "uploading") || (!input.trim() && !pendingFiles.some((f) => f.status === "ready"))}
             >
               <Send size={16} />
@@ -1238,6 +1346,7 @@ const faCss = `
   color: var(--text, #e8ecf3); font: inherit; transition: border-color .12s ease, background .12s ease;
 }
 .fa-row:hover { border-color: var(--accent, #2f6df6); }
+.fa-row:disabled { opacity: .58; cursor: default; }
 .fa-row-lead { border-color: color-mix(in srgb, var(--accent, #2f6df6) 45%, transparent); }
 .fa-ico {
   width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
@@ -1251,6 +1360,10 @@ const faCss = `
 .fa-row-rtl { text-align: right; }
 .fa-row-rtl b { font-size: 15px; }
 .fa-chev { color: var(--text-dim, #8b9ab2); flex: 0 0 auto; }
+.fa-laybel { display: flex; align-items: center; gap: 9px; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent, #2f6df6) 48%, transparent); border-radius: 11px; background: color-mix(in srgb, var(--accent, #2f6df6) 9%, var(--panel)); }
+.fa-laybel-speaking .fa-ico, .fa-laybel-recording .fa-ico { animation: fa-pulse 1s ease-in-out infinite; }
+.fa-laybel-end { border: 1px solid var(--border, #2a3c5f); background: transparent; border-radius: 8px; padding: 6px 8px; color: var(--text-dim, #8b9ab2); cursor: pointer; font: inherit; font-size: 11.5px; }
+.fa-laybel-end:hover { color: var(--text, #e8ecf3); border-color: var(--text-dim, #8b9ab2); }
 
 /* ── report a problem / suggest a feature ───────────────────────────────── */
 .fa-upd {

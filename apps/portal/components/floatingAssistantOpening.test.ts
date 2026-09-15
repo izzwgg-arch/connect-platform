@@ -96,3 +96,12 @@ test("the chat widget's stale support language is gone", () => {
   assert.doesNotMatch(src, /Viewing with you:/, "the page context moved into the header line");
   assert.doesNotMatch(src, /fa-live/);
 });
+
+test("Talk to Laybel is a voice mode of the existing Assistant, not another agent", () => {
+  assert.match(src, /<b>Talk to Laybel<\/b>/);
+  assert.match(src, /Speak with the same Assistant by voice/);
+  assert.match(src, /channel: "chat" \| "voice"/);
+  assert.match(src, /void send\(r\.text, "voice"\)/, "the existing authenticated transcription feeds the existing send path");
+  assert.match(src, /window\.speechSynthesis\.speak\(utterance\)/, "the visible Assistant reply is read through local browser speech");
+  assert.doesNotMatch(src, /new WebSocket|from "livekit-client"|\/voice-agent\//, "Laybel must not grow a second realtime agent or media stack");
+});
