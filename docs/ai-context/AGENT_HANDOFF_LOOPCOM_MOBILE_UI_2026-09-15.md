@@ -165,11 +165,13 @@ e911Address, usageAlertSentAt}.
   longest-prefix-wins); the base /mobile-service rule stays the dashboard's
   can_view_workspace_mobile. Guard-tested in loopcomMobile.test.ts.
 
-**Emails** — `mobileEmails.ts`: 7 templates through the HARDENED billing shell
+**Emails** — `mobileEmails.ts`: 8 templates through the HARDENED billing shell
 (`emailShell` from billing/emailTemplates — real wordmark URL, eyebrow "LoopCom
 Mobile", footer "Sent by LoopCom Mobile."), queued as EmailJob rows type
 `MOBILE_*` on the ONE outbound lane (500/day cap applies; these are customer
-transactional, not ADMIN_ALERT — they flow). Triggers wired: esim_ready (in
+transactional, not ADMIN_ALERT — they flow). Triggers wired: welcome (create-line handler, ONCE per tenant — guard =
+first-line count AND the send's own `mobile.email.welcome` audit row; a
+skipped send audits `welcome_skipped` so nothing spins), esim_ready (in
 provisionEsimForLine), line_suspended/lost + line_resumed (in suspendLine/
 resumeLine — BOTH surfaces share them), plan_changed (both change-plan routes),
 port_status (admin PATCH when status changes, honors notifyPorts), invoice

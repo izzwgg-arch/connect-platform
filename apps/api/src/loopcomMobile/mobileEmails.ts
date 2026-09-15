@@ -57,6 +57,35 @@ function maskedNumber(phoneNumber: string | null, label: string): string {
 
 // ── Templates ────────────────────────────────────────────────────────────────
 
+/**
+ * Sent ONCE per tenant, the moment their FIRST mobile line is created —
+ * the "your mobile service exists now" moment. The once-guard is the send's
+ * own audit row (mobile.email.welcome), checked at the trigger.
+ */
+export function welcomeEmail(input: { tenantName: string | null; firstLineLabel: string | null }): MobileEmail {
+  const subject = "Welcome to LoopCom Mobile";
+  const url = mobilePortalUrl("/mobile");
+  const who = input.tenantName ? esc(input.tenantName) : "your company";
+  const html = emailShell(
+    "Welcome to LoopCom Mobile",
+    [
+      p(`Mobile service for <b>${who}</b> is being set up — same LoopCom account, same support, now with phone lines that live on an eSIM instead of a desk.`),
+      factBox([
+        ["Your first line", input.firstLineLabel ? esc(input.firstLineLabel) : "Being prepared"],
+        ["Where it lives", `A new <b>LoopCom Mobile</b> section in your portal`],
+        ["What's next", "An install email arrives when each eSIM is ready"],
+      ]),
+      p(`Everything is in one place: your lines and their usage, plans, a separate mobile bill, number transfers, and the eSIM install screens.`),
+      ctaButton(url, "Open LoopCom Mobile"),
+      p(`<span style="color:#64748b;font-size:14px;">Questions any time — reply to this email or open Mobile Support in the portal, and a person answers.</span>`),
+    ].join("\n"),
+    BRAND,
+    SHELL_OPTS,
+  );
+  const text = `${subject}\n\nMobile service for ${input.tenantName ?? "your company"} is being set up. Your lines, usage, plans, separate mobile billing, transfers and eSIM install screens all live under LoopCom Mobile in your portal: ${url}\nAn install email arrives when each eSIM is ready.`;
+  return { subject, html, text };
+}
+
 export function esimReadyEmail(input: { subscriberName: string | null; lineLabel: string; phoneNumber: string | null; planName: string | null }): MobileEmail {
   const who = input.subscriberName ? `${esc(input.subscriberName)}'s` : "Your";
   const subject = "Your LoopCom Mobile eSIM is ready to install";
@@ -219,7 +248,7 @@ export function mobileInvoiceEmail(input: { number: string; totalCents: number; 
 
 // ── Delivery ────────────────────────────────────────────────────────────────
 
-export type MobileEmailKind = "esim_ready" | "usage_warning" | "line_suspended" | "line_resumed" | "plan_changed" | "port_status" | "invoice";
+export type MobileEmailKind = "welcome" | "esim_ready" | "usage_warning" | "line_suspended" | "line_resumed" | "plan_changed" | "port_status" | "invoice";
 
 /** Subscriber email first, then the tenant's mobile billing contacts, deduped. */
 export async function resolveMobileRecipients(db: any, tenantId: string, subscriberEmail?: string | null): Promise<string[]> {

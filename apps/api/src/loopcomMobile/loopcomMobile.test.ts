@@ -381,6 +381,20 @@ test("email templates ride the hardened billing shell with the Mobile identity",
   assert.doesNotMatch(stripComments(emails), /activationCode/, "the eSIM code must never appear in an email");
 });
 
+test("the welcome email exists and fires ONCE per tenant, at the first line", () => {
+  const emails = src("loopcomMobile/mobileEmails.ts");
+  assert.match(emails, /export function welcomeEmail\(/);
+  assert.match(emails, /"Welcome to LoopCom Mobile"/);
+  assert.match(emails, /"welcome"/, "the MobileEmailKind union must carry 'welcome'");
+  const routes = stripComments(src("loopcomMobile/mobileRoutes.ts"));
+  // Trigger sits in the create-line handler, guarded by first-line count AND
+  // the send's own audit row — a second line can never re-welcome.
+  assert.match(routes, /welcomeEmail\(\{ tenantName/);
+  assert.match(routes, /mobileLine\.count\(\{ where: \{ tenantId: tenant\.id \} \}\)/);
+  assert.match(routes, /action: "mobile\.email\.welcome"/, "the once-guard must check the welcome audit row");
+  assert.match(routes, /lineCount === 1 && !alreadyWelcomed/);
+});
+
 test("this test file's glob is registered in apps/api/package.json", () => {
   const pkg = rootFile("package.json");
   assert.match(pkg, /src\/loopcomMobile\/\*\.test\.ts/);

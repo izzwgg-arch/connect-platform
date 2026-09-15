@@ -42,7 +42,7 @@ import { runMobileStateReconcileCycle, runMobileUsageSyncCycle } from "./mobileS
 import { buildMobileBillingLineItems, computeUsageTotals, type MobilePlanShape } from "./mobilePlanMath";
 import { writeMobileAuditSync } from "./mobileAudit";
 import { memberMay } from "./mobileProductRoutes";
-import { planChangedEmail, queueMobileEmail, resolveMobileRecipients } from "./mobileEmails";
+import { planChangedEmail, queueMobileEmail, resolveMobileRecipients, welcomeEmail } from "./mobileEmails";
 
 export interface MobileRouteDeps {
   app: any;
@@ -403,6 +403,28 @@ export function registerLoopcomMobileRoutes(deps: MobileRouteDeps): void {
       include: { plan: true, sim: true },
     });
     await writeMobileAuditSync({ tenantId: tenant.id, action: "mobile.line.created", entityType: "MobileLine", entityId: line.id, actorUserId: user.sub, metadata: { label: line.label } });
+    // Welcome email — ONCE per tenant, at their first-ever line. The
+    // once-guard is the send's own audit row (mobile.email.welcome), so a
+    // second line can never re-welcome; a first line with no reachable
+    // recipient audits "welcome_skipped" and the next line retries.
+    try {
+      const [lineCount, alreadyWelcomed] = await Promise.all([
+        db.mobileLine.count({ where: { tenantId: tenant.id } }),
+        db.auditLog.findFirst({ where: { tenantId: tenant.id, action: "mobile.email.welcome" }, select: { id: true } }),
+      ]);
+      if (lineCount === 1 && !alreadyWelcomed) {
+        const to = await resolveMobileRecipients(db, tenant.id, null);
+        if (to.length) {
+          await queueMobileEmail(db, {
+            tenantId: tenant.id, kind: "welcome",
+            email: welcomeEmail({ tenantName: tenant.name, firstLineLabel: line.label }),
+            to, entityType: "MobileLine", entityId: line.id,
+          });
+        }
+      }
+    } catch {
+      /* the welcome must never fail line creation */
+    }
     return reply.send({ line: lineSummary(line) });
   });
 

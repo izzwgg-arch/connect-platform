@@ -1,4 +1,4 @@
-# LoopCom Mobile: the APPROVED FULL PRODUCT AREA IS BUILT AND WIRED — own sidebar section, ten customer pages, 13-view console, LM- invoice ledger, seven transactional emails — 2026-09-16
+# LoopCom Mobile: the APPROVED FULL PRODUCT AREA IS BUILT AND WIRED — own sidebar section, ten customer pages, 13-view console, LM- invoice ledger, eight transactional emails — 2026-09-16
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_UI_2026-09-15.md` §7**
 (the build; §0–6 are the mockup phase). Backend foundation handoff:
@@ -27,12 +27,14 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_UI_2026-09-15.md` 
   the Voice invoiceEngine**, Carrier Status, Diagnostics, Webhooks payload viewer,
   Compliance, Settings & Controls persisted in MobilePlatformSettings).
 - **Emails wired end-to-end on the platform's ONE outbound lane** (EmailJob rows,
-  hardened billing shell, real wordmark, eyebrow "LoopCom Mobile"): eSIM ready, usage
+  hardened billing shell, real wordmark, eyebrow "LoopCom Mobile"): WELCOME (fires
+  ONCE per tenant at their first line — the once-guard is the send's own
+  `mobile.email.welcome` audit row), eSIM ready, usage
   warning (once/cycle via `usageAlertSentAt`), paused/lost/resumed, plan changed, port
   status, LM- invoice. Recipient ladder subscriber → mobile billing contacts → tenant
   billing email → billing users. ⛔ The eSIM activation code is NEVER emailed
-  (guard-tested). Mockup artifact v3 (same URL JGi8xGn5FnAVPPPJKvdvmt) shows all
-  seven rendered FROM the production templates.
+  (guard-tested). Mockup artifact v4 (same URL JGi8xGn5FnAVPPPJKvdvmt) shows all
+  eight rendered FROM the production templates.
 - **Schema**: additive migration `20260916030000_loopcom_mobile_product`
   (MobileSubscriber, MobileTenantSettings, MobilePlatformSettings, MobileInvoice +
   four MobileLine columns). API: `mobileProductRoutes.ts` (~35 routes, tenant from
