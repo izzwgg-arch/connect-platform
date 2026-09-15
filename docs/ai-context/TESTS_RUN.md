@@ -2,6 +2,28 @@
 
 Newest entries first.
 
+## The wizard provisions Grandstreams itself: GDMS push + clean templates + /prepare SEND (2026-09-15, `f968b531`+`ba62cfec`+`2e7aaafd`)
+
+- api `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/deviceProviders.test.ts
+  src/deskPhoneSetup/deviceCloudRoutes.test.ts src/deskPhoneSetup/deskPhoneRoutes.test.ts
+  src/deskPhoneSetup/deskPhoneRouteOrder.test.ts` -> **154 pass / 0 fail**. New: FORM-signature
+  contract (sorted params, file=md5 — the JSON shape the live cloud rejects must NOT match);
+  pushConfig delivers the exact XML into the simulator's pushedConfigs; a non-gs_provision blob is
+  refused before the cloud; /prepare SENDs the rendered config for a managed Grandstream and skips
+  when no config renders; RESET-FIRST invariant re-proven (the send is skipped while wiping).
+- shared `npx tsx --test src/deskPhoneSetup/provisioningRecord.test.ts` -> **34 pass / 0 fail**.
+  New: a CLEAN generic profile (loopcom_clean_ marker) beats an arbitrary shared one; the tenant's
+  OWN profile still beats generic.
+- api `... provisioningRecordWriter.test.ts` -> **21/21** (the release-over-stranger fix landed from
+  the concurrent session, verified in-tree before pushing as `0e91d3d6`).
+- api tsc: 0 errors in every touched file (gdmsClient, gdmsSimulator, grandstreamProvider,
+  deviceProvider, deviceCloudRoutes, deskPhoneRoutes, provisioningRecordWriter).
+- LIVE (deployed code, not probes): inside app-api-1 at `2e7aaafd`, the SHIPPED GdmsClient ran the
+  wizard sequence on the factory-reset GXP2170 C0:74:AD:8C:60:5F — findDevice found it, the render
+  check read P47=209.145.60.79 (0×10.8.0.1), pushDeviceConfigXml retCode 0, reboot task 15538619.
+  Registration stability watch running at entry time; PBX seed = 61 clean per-model Grandstream
+  templates (HT814 skipped, no sip_domain placeholder in its stock base).
+
 ## Label barcodes first, serial reuse, 37 Yealink models (2026-09-15, `4011fa5f`)
 
 - api `node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts" "src/crm/docOcrAdaptive.test.ts"`
