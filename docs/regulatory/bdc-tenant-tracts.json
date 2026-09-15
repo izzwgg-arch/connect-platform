@@ -1,0 +1,146 @@
+{
+  "_README": [
+    "Tenant -> 2020 census tract map for the FCC Broadband Data Collection (BDC)",
+    "Fixed Voice Subscription filing. Read by apps/api/scripts/bdc-voice-subscription-export.ts.",
+    "",
+    "WHY THIS FILE EXISTS: the BDC wants subscription counts by census tract, and the",
+    "tract comes from each customer's SERVICE ADDRESS. Those addresses live nowhere in",
+    "Connect (TenantBillingSettings.serviceAddress is NULL for every tenant; only 15 DIDs",
+    "are enrolled in VoIP.ms E911; the PBX has no address columns). On 2026-09-15 they were",
+    "assembled by hand from VoIP.ms e911Info plus Izzy's own answers, then geocoded to",
+    "tracts with the Census Bureau geocoder. Committing the result means the December round",
+    "and every round after it costs one command instead of an afternoon.",
+    "",
+    "MAINTENANCE: when a tenant is added, moved, renamed or closed, update it here. The",
+    "export script REFUSES to emit a CSV if any tenant with extensions is missing from both",
+    "'tenants' and 'excluded' - a silent omission would under-report to the FCC.",
+    "",
+    "⛔ Tracts are TEXT and must stay 11 digits (leading zeros matter). ⛔ Nothing in this",
+    "file touches VoIP.ms E911 registrations - Izzy, 2026-09-15: 'Don't turn on any e911",
+    "addresses now either. Just put the addresses in the report.'"
+  ],
+  "serviceType": {
+    "value": 1,
+    "meaning": "1 = Interconnected VoIP subscriptions. Loopcom sells no VGE/TDM lines, so every row is service_type 1.",
+    "_bdcCodes": { "0": "Voice-grade Equivalent Line", "1": "Interconnected VoIP" }
+  },
+  "consumerPolicy": {
+    "consumerCount": 0,
+    "why": "Every Loopcom customer is a business buying a business phone system; there are no residential/mass-market plans. So consumer_lines_or_subscriptions is 0 on every row and the whole book is Business/Govt."
+  },
+  "stateLevelAllocation": {
+    "overTheTop": "ALL",
+    "why": "Loopcom supplies no last-mile facilities - customers bring their own internet - so 100% of subscriptions are Over-the-Top and the 'All Other Subscriptions' block (End-User Type / Services Sold / Last-Mile Medium) is all zeros. ⛔ Never put Loopcom subscriptions in FTTP/Coaxial/FW-Satellite/Copper."
+  },
+  "tenants": {
+    "cmnlgnumi0000p9g6l7t1t0z7": {
+      "name": "A plus center",
+      "tract": "36071014102",
+      "address": "33 Route 17M, Suite C, Harriman, NY 10926",
+      "addressSource": "VoIP.ms E911 on 8456372330",
+      "⚠️": "This E911 address is LOOPCOM'S OWN HQ. Flagged to Izzy 2026-09-15; he did not move it, so it stands for the June-30 filing. Confirm their real premises before the December round - if it is Kiryas Joel these 20 subs move out of 141.02."
+    },
+    "cmnlgryp8001lp9pajhatv3t9": {
+      "name": "B Visible",
+      "tract": "36071014102",
+      "address": "97 Route 17M, Harriman, NY 10926",
+      "addressSource": "VoIP.ms E911 on 8452380478"
+    },
+    "cmnlgnumu0001p9g6xyl1pbdd": {
+      "name": "Gesheft",
+      "tract": "36071015003",
+      "address": "33 Dinev Rd, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8452449666"
+    },
+    "cmnlgryox001ip9paov24bmr0": {
+      "name": "Create A Box",
+      "tract": "36071015003",
+      "address": "18 Dinev Rd, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8457826722"
+    },
+    "cmnlgryme000up9paz1w40fg0": {
+      "name": "Relax Tires",
+      "tract": "36071015003",
+      "address": "18 Dinev Rd, Unit 103, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8457761765"
+    },
+    "cmnlgrynz0019p9panasjf6kk": {
+      "name": "ADDB Builders",
+      "tract": "36071015003",
+      "address": "1 Kerestier Ct, Unit 001, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8452433057"
+    },
+    "cmqr9cs9402qqs013m7p64lpi": {
+      "name": "Fixup Group",
+      "tract": "36071015003",
+      "address": "12 Israel Zupnick Dr, Monroe, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8458067040"
+    },
+    "cmnlgryjk0003p9pabtu1z1oj": {
+      "name": "Trimpro",
+      "tract": "36071015005",
+      "address": "2 Paksh Pl, Unit 302, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8452483973"
+    },
+    "cmnlgryob001cp9pafjjqyc99": {
+      "name": "Luxure Management",
+      "tract": "36071015005",
+      "address": "3 Tzfas Rd, Unit 202, Monroe, NY 10950",
+      "addressSource": "Izzy, 2026-09-15"
+    },
+    "cmqtgxtwr1rhgmk130kw0ustz": {
+      "name": "RSBK",
+      "tract": "36071015007",
+      "address": "19 Meron Dr, Apt 113, Kiryas Joel, NY 10950",
+      "addressSource": "VoIP.ms E911 on 8453050203"
+    },
+    "cmnlgrykx000fp9pa90gohk96": {
+      "name": "Trust Bookkeepings",
+      "tract": "36071015007",
+      "address": "15 Van Buren Dr, #001, Monroe (Kiryas Joel), NY 10950",
+      "addressSource": "Izzy, 2026-09-15",
+      "note": "The Census address geocoder has no range for Van Buren Dr; the tract came from Photon coordinates (41.3370931, -74.1667758) through the Census /geographies/coordinates endpoint."
+    },
+    "cmnlgryjz0006p9pa60892fi9": {
+      "name": "Solidify Concrete",
+      "tract": "36087012116",
+      "address": "16 Fred Eller Dr, Unit 114, Monsey, NY 10952",
+      "addressSource": "VoIP.ms E911 on 8455577879"
+    },
+    "cmnlgryom001fp9paw7le6582": {
+      "name": "Nexus Realty",
+      "formerName": "Displaydex",
+      "tract": "36087012302",
+      "address": "98 Lawrence St, Suite 203, Spring Valley, NY 10977",
+      "addressSource": "VoIP.ms E911 on 8452003535",
+      "note": "Renamed from Displaydex in the 2026-09-15 Display Decks split; same tenant id, same 4 extensions as of June 30. The NEW DisplayDX tenant is billing-only with no extensions, so it contributes nothing to this filing."
+    },
+    "cmnlgrynd0013p9pa1rq8ofnv": {
+      "name": "Yossis Wood Works",
+      "tract": "36087011102",
+      "address": "200 N State Route 303, West Nyack, NY 10994",
+      "addressSource": "VoIP.ms E911 on 8458279500",
+      "note": "The Census address geocoder returns NO MATCH for this address; the tract came from Photon coordinates (41.1017722, -73.9511333) through the Census /geographies/coordinates endpoint."
+    },
+    "cmnlgrynn0016p9pakbscpvfs": {
+      "name": "Secro Selutions",
+      "tract": "36087012109",
+      "address": "34 Main St, Monsey, NY 10952",
+      "addressSource": "Izzy, 2026-09-15",
+      "note": "Izzy corrected this mid-entry from an earlier '3 Lizensk Blvd, Monroe' answer. Monsey (Rockland 121.09) is the one that stands."
+    }
+  },
+  "excluded": {
+    "cmnlgrym4000rp9pa1sge6cpu": { "name": "McNamara Lion", "reason": "Izzy, 2026-09-15: \"don't report for now\". A real customer deliberately held out - revisit before the December round." },
+    "cmnlgryll000lp9paakiiyizj": { "name": "Landau Home", "reason": "Test tenant (Izzy, 2026-09-15)." },
+    "cmnlgryko000cp9pah88n5iqu": { "name": "Actual Home Care", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmnlgrykd0009p9path0o8x66": { "name": "Carirent", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmnlgrymq000xp9padz8ksv0v": { "name": "LUZER", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmqrbhusu00famk13ternq45u": { "name": "NY Garden Sprinkler", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmpncrq4q00flob133ypo169b": { "name": "Ribit Capital", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmnlgrylu000op9paq5bg693z": { "name": "Slim Business Funding Group", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmnlgryla000ip9par0y4f6bj": { "name": "Smooth Leasing", "reason": "Deleted tenant (Izzy, 2026-09-15)." },
+    "cmqrbhpao009fmk13ow0ass24": { "name": "Connect", "reason": "Loopcom's own internal workspace - service we provide to ourselves is not a subscription SOLD to an end user." },
+    "cmqzfigij4bt0mw13u2ulpd0t": { "name": "Connect Communications", "reason": "Loopcom's own internal workspace - not sold to an end user." }
+  }
+}
