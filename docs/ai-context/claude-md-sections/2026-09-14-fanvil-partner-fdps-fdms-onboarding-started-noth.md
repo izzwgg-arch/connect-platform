@@ -5,8 +5,8 @@
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FANVIL_ONBOARDING_2026-09-14.md`** (browser only; no code, no PBX).
 
 ## ✅ FANVIL REPLIED (2026-09-15, three emails at izzy@loopcom.net — read in Chrome, nothing replied/clicked)
-- ✅ **FDPS account ISSUED** (Jack Yu, jack.yu@fanvil.com): username izzy@loopcom.net, temp password in his email ("Re: Fw: Loopcom api.."), server https://fdps.fanvil.com, ⛔ **select region "Europe" when logging in**. ⏳ Izzy must log in himself and change the temp password — agents never type passwords.
-- ⏳ **FDMCS activation email sent** (info.fdms@fanvil.com, "Please activate your account", link to fdmcs.fanvil.com.cn) — **link EXPIRES in 3 days (~Sep 18)**. Izzy must click it and set the password. Note: Fanvil's cloud DM is called **FDMCS**, not FDMS. 4 FDMCS webinar videos linked in Jack's email.
+- ✅ **FDPS account ISSUED and Izzy is IN** (Jack Yu, jack.yu@fanvil.com): username izzy@loopcom.net, server https://fdps.fanvil.com, ⛔ **select region "Europe" when logging in**. Izzy logged in and changed the temp password 2026-09-15.
+- ⏳ **FDMCS activation still NEEDED, and ⛔ the emailed link is broken as sent**: it points at `fdmcs.fanvil.com.cn` (China host, unreachable from the US). **Swap the host to `fdmcs.fanvil.com`, same path+sn** — verified to load the real Account Activation form (username + password + terms). Expires ~Sep 18. FDMCS ≠ FDPS — the FDPS login does not activate it. Note: Fanvil's cloud DM is called **FDMCS**, not FDMS. 4 FDMCS webinar videos linked in Jack's email.
 - ⏳ **Authorized Reseller: internal review INITIATED** (Morchi Liu, sales). Not approved yet — still no reseller/partner claims.
 - ⏳ **FDPS API: under review by Jack**, docs promised "once have update". The wizard's Fanvil zero-touch integration stays blocked on this.
 - **Purchasing: Fanvil recommends master distributor 888VoIP** (Orchard Park NY, Mary Cheney, (716) 714-8004, marketing@888voip.com). VoIP Supply only sent a marketing blast — no human reply to the reseller form yet.

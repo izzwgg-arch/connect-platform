@@ -86,9 +86,15 @@ VoIP Supply so far only sent an automated Fanvil Academy marketing email — no 
 reseller lead form yet.
 
 ### What Izzy must do (agents may not create accounts or type passwords)
-- **Click the FDMCS activation link before ~Sep 18** and set a password.
-- **Log into https://fdps.fanvil.com** (izzy@loopcom.net + the temp password from Jack's email, region
-  "Europe") and **change the temp password** — it was sent in plain email.
+- ✅ **FDPS login DONE (2026-09-15):** Izzy logged into fdps.fanvil.com and changed the temp password.
+- ⏳ **FDMCS activation still NEEDED — and the emailed link is BROKEN AS SENT.** ⛔ The email links to
+  Fanvil's China host `fdmcs.fanvil.com.cn`, which is unreachable from the US (browser error page, both
+  the link and the bare host). **The fix is the same path on the global host** — verified 2026-09-15 that
+  `https://fdmcs.fanvil.com/system/activeUser?sn=YWN0aXZlVXNlcl8yMDk5NzY4NDY4MDA3MzUwMjc0XzE3ODk0NTg3ODk=`
+  loads a working "Account Activation" form (User Name + Password + Confirm + Terms checkbox + Submit;
+  password needs upper+lower+number+special, ≥8 chars). Izzy fills and submits it — same ~Sep 18 expiry —
+  then logs in at https://fdmcs.fanvil.com/login. FDMCS is a SEPARATE account from FDPS; changing the
+  FDPS password does not activate FDMCS.
 - Optional: reply thanking Morchi/Jack and nudging for the FDPS API docs; contact 888VoIP when hardware
   purchasing starts.
 
