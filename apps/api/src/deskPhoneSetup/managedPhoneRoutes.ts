@@ -10,9 +10,10 @@ const text = z.string().trim().max(80).regex(/^[^\r\n\x00-\x1f#]*$/);
 const options = z.object({ refreshMinutes: z.number().int().min(60).max(10080).optional(),
   vlan: z.number().int().min(1).max(4094).optional(), callWaiting: z.boolean().optional() }).strict();
 const provision = z.object({ mac: z.string().max(32),
-  // ⛔ Serial is mandatory: Yealink RPS forbids a MAC-only claim (403) and
-  // requires the SN as proof of possession. Alphanumeric with - . _ separators.
-  serialNumber: z.string().trim().min(3).max(64).regex(/^[A-Za-z0-9._-]+$/),
+  // ⛔ Serial is mandatory for the RPS claim (MAC-only add is 403-forbidden), but it may be
+  // OMITTED here: the service reuses the vouched serial already on file for this MAC from
+  // the setup flow, and answers serial_number_required only when there is none anywhere.
+  serialNumber: z.string().trim().min(3).max(64).regex(/^[A-Za-z0-9._-]+$/).optional(),
   model: z.string().max(16), extensionId: z.string().min(1).max(100),
   nickname: text.optional(), displayName: text.optional(), options: options.optional(), replacesId: z.string().max(100).optional() }).strict();
 const update = provision.pick({ extensionId: true, nickname: true, displayName: true, options: true }).partial();

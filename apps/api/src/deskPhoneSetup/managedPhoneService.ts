@@ -54,11 +54,23 @@ export class ManagedPhoneService {
     if (!row) throw new DeviceError("device_not_found", 404);
     return row;
   }
-  async provision(actor: Actor, input: { mac: string; serialNumber: string; model: string; extensionId: string; nickname?: string; displayName?: string; options?: DeviceConfigOptions; replacesId?: string }, requestId: string) {
+  async provision(actor: Actor, input: { mac: string; serialNumber?: string; model: string; extensionId: string; nickname?: string; displayName?: string; options?: DeviceConfigOptions; replacesId?: string }, requestId: string) {
     const mac = strictMac(input.mac); this.provider.validateModel(input.model);
     // ⛔ Yealink RPS refuses a MAC-only claim (403). The serial is proof of
     // possession and is mandatory for the zero-touch (RPS) assignment.
-    const serialNumber = String(input.serialNumber || "").trim();
+    let serialNumber = String(input.serialNumber || "").trim();
+    if (!serialNumber) {
+      // Izzy 2026-09-15: "the system should already know the serial — I've been through
+      // this step and entered it before." A serial on a setup row exists ONLY because it
+      // passed the one label gate (typed, scanned, photographed or texted), so reusing it
+      // adds no new trust. Same tenant, this exact MAC (both sides are normalised bare
+      // hex), newest first.
+      const onFile = await this.database.deskPhoneSetupPhone?.findFirst?.({
+        where: { tenantId: actor.tenantId, macAddress: mac, serialNumber: { not: null } },
+        orderBy: { updatedAt: "desc" }, select: { serialNumber: true },
+      });
+      if (onFile?.serialNumber) serialNumber = String(onFile.serialNumber).trim();
+    }
     if (!serialNumber) throw new DeviceError("serial_number_required", 400);
     // Persist identity + unique secrets before contacting RPS. A timed-out remote
     // write can then be reconciled with exactly the same URL and credentials.

@@ -60,14 +60,15 @@ export function ManagedPhonePanel({ models, onBack, initial }: { models: { model
       <form onSubmit={e => { e.preventDefault(); void action(async () => {
         const input = { extensionId, displayName, nickname, options: { refreshMinutes } };
         if (selected) await apiPost(`/desk-phones/managed/${selected.id}/update`, input);
-        else await apiPost("/desk-phones/managed", { ...input, mac, serialNumber: serial.trim(), model, replacesId });
+        else await apiPost("/desk-phones/managed", { ...input, mac, ...(serial.trim() ? { serialNumber: serial.trim() } : {}), model, replacesId });
         setSelected(null); setReplacesId(undefined); setMac(""); setSerial("");
       }); }} style={{ display: "grid", gap: 12, marginTop: 18 }}>
         <label>Manufacturer<ConnectSelect value="yealink" onChange={() => {}} options={[{ value: "yealink", label: "Yealink" }]} /></label>
         <label>Model<ConnectSelect value={model} onChange={setModel} options={models.map(m => ({ value: m.model, label: m.model }))} disabled={!!selected} /></label>
         <label>MAC address<input className="dps-managed-input" required value={mac} maxLength={17} disabled={!!selected} onChange={e => setMac(e.target.value)} placeholder="80:5E:C0:11:22:33" /></label>
-        {!selected && <label>Serial number<input className="dps-managed-input" required value={serial} maxLength={64} onChange={e => setSerial(e.target.value)} placeholder="On the box and the label under the phone" />
-          <span className="dps-hint">Yealink requires the phone&rsquo;s serial number to enable zero-touch setup.</span></label>}
+        {!selected && <label>Serial number<input className="dps-managed-input" value={serial} maxLength={64} onChange={e => setSerial(e.target.value)} placeholder="On the box and the label under the phone" />
+          <span className="dps-hint">Yealink requires the serial for zero-touch setup. If this phone already gave us its serial
+            (typed or from a label photo), leave this empty &mdash; we&rsquo;ll use the one on file.</span></label>}
         <label>Extension<ConnectSelect value={extensionId} onChange={id => { setExtensionId(id); setDisplayName(extensions.find(e => e.id === id)?.displayName || ""); }} options={extensions.map(e => ({ value: e.id, label: `${e.extNumber} · ${e.displayName}` }))} /></label>
         <label>Display name<input className="dps-managed-input" maxLength={80} value={displayName} onChange={e => setDisplayName(e.target.value)} /></label>
         <label>Phone name (optional)<input className="dps-managed-input" maxLength={80} value={nickname} onChange={e => setNickname(e.target.value)} placeholder="Front desk" /></label>
@@ -76,7 +77,7 @@ export function ManagedPhonePanel({ models, onBack, initial }: { models: { model
           <label>Refresh interval (minutes)<input className="dps-managed-input" type="number" min={60} max={10080} value={refreshMinutes} onChange={e => setRefresh(Number(e.target.value))} /></label>
         </details>
         {replacesId && <p className="dps-hint">The old phone stays active until this replacement is verified. You can cancel by removing the replacement.</p>}
-        <button className="dps-btn dps-btn-p" disabled={busy || !extensionId || (!selected && !serial.trim())}>{selected ? "Save phone configuration" : "Provision phone"}</button>
+        <button className="dps-btn dps-btn-p" disabled={busy || !extensionId}>{selected ? "Save phone configuration" : "Provision phone"}</button>
         {(selected || replacesId) && <button type="button" className="dps-btn" onClick={() => { setSelected(null); setReplacesId(undefined); setMac(""); setSerial(""); }}>Cancel edit</button>}
       </form>
       {error && <p role="alert" className="dps-hint" style={{ color: "var(--dps-warn)" }}>{error}</p>}

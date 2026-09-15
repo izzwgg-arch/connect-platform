@@ -61,6 +61,7 @@ import {
   vendorCloudStateFor,
 } from "./deviceIdentityStore";
 import { assertGdmsRuntimeMode, GdmsClient } from "./gdmsClient";
+import { readLabelBarcodes } from "./labelBarcodes";
 import {
   describeGdmsCredentials,
   resolveGdmsCredentials,
@@ -640,6 +641,16 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
         };
       }
       throw err;
+    }
+    // ⛔ BARCODES FIRST. The sticker's MAC and serial are Code-128 symbols; decoding them is
+    // rotation-proof and checksummed where OCR mangles exactly the characters that matter
+    // (proven 2026-09-15: the first real label photo — upside-down, flash glare — read as
+    // nothing through four OCR passes while both barcodes decode exactly). A decoded symbol
+    // is reported at confidence 100 because a Code-128 read is checksum-verified, not a
+    // guess; the ONE gate (recordLabel) still judges it — MAC mismatch refuses as always.
+    const barcodes = await readLabelBarcodes(buffer);
+    if (barcodes.texts.length > 0) {
+      return { ok: true, text: barcodes.texts.join("\n"), confidence: 100, pass: "barcode", passesRun: 0 };
     }
     try {
       const out = await extractTextAdaptive(provider, { buffer, mimeType: mime, fileName }, config, looksGood);
