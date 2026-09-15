@@ -6,7 +6,7 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { ConnectSelect, ConnectMultiSelect } from "../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../hooks/useAppContext";
-import { apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { normalizeUsCanadaToE164 } from "@connect/shared";
 
 type Overview = {
@@ -22,10 +22,26 @@ type Overview = {
   webhookUrlNote?: string;
 };
 
+type AccountRow = {
+  id: string;
+  label: string | null;
+  isPrimary: boolean;
+  hasCredentials: boolean;
+  usernameHint: string | null;
+  apiBaseUrl: string | null;
+  lastHealthOk: boolean | null;
+  lastHealthAt: string | null;
+  lastHealthMessage: string | null;
+  lastDidsSyncAt: string | null;
+  numberCount: number;
+};
+
 type SmsRow = {
   id: string;
   phoneE164: string;
   phoneRaw: string | null;
+  voipmsAccountId?: string;
+  voipmsAccountLabel?: string | null;
   tenantId: string | null;
   tenantName: string | null;
   smsCapable: boolean;
@@ -58,17 +74,26 @@ export default function VoipMsIntegrationPage() {
   const superOnly = role === "SUPER_ADMIN";
   const [tab, setTab] = useState<"connection" | "numbers" | "routing">("connection");
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [numbers, setNumbers] = useState<SmsRow[]>([]);
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const [numberSearch, setNumberSearch] = useState("");
 
-  // credentials form
+  // credentials form (primary account)
   const [credUser, setCredUser] = useState("");
   const [credPass, setCredPass] = useState("");
   const [credBase, setCredBase] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+
+  // add-another-account form
+  const [newAcctLabel, setNewAcctLabel] = useState("");
+  const [newAcctUser, setNewAcctUser] = useState("");
+  const [newAcctPass, setNewAcctPass] = useState("");
+  const [newAcctBase, setNewAcctBase] = useState("");
+  const [newAcctSaving, setNewAcctSaving] = useState(false);
+  const [acctBusyId, setAcctBusyId] = useState<string | null>(null);
 
   // test SMS form
   const [testFrom, setTestFrom] = useState("");
@@ -104,6 +129,8 @@ export default function VoipMsIntegrationPage() {
       if (superOnly) {
         const t = await apiGet<{ tenants: TenantRow[] }>("/admin/apps/voip-ms/tenants").catch(() => ({ tenants: [] }));
         setTenants(t.tenants ?? []);
+        const a = await apiGet<{ accounts: AccountRow[] }>("/admin/apps/voip-ms/accounts").catch(() => ({ accounts: [] }));
+        setAccounts(a.accounts ?? []);
       }
     } catch {
       setOverview(null);
@@ -177,6 +204,73 @@ export default function VoipMsIntegrationPage() {
       await load();
     } catch (e: unknown) {
       notify(String((e as Error)?.message || e), "err");
+    }
+  }
+
+  async function addAccount() {
+    if (!newAcctLabel || !newAcctUser || !newAcctPass) return;
+    setNewAcctSaving(true);
+    setMsg(null);
+    try {
+      await apiPost("/admin/apps/voip-ms/accounts", {
+        label: newAcctLabel,
+        username: newAcctUser,
+        password: newAcctPass,
+        ...(newAcctBase ? { apiBaseUrl: newAcctBase } : {}),
+      });
+      setNewAcctLabel("");
+      setNewAcctUser("");
+      setNewAcctPass("");
+      setNewAcctBase("");
+      notify("VoIP.ms account attached. Run a sync to pull its numbers in.");
+      await load();
+    } catch (e: unknown) {
+      notify(String((e as Error)?.message || e), "err");
+    } finally {
+      setNewAcctSaving(false);
+    }
+  }
+
+  async function testAccount(accountId: string) {
+    setAcctBusyId(accountId);
+    setMsg(null);
+    try {
+      await apiPost(`/admin/apps/voip-ms/accounts/${encodeURIComponent(accountId)}/test`, {});
+      notify("Connection test OK — this account's credentials are valid.");
+      await load();
+    } catch (e: unknown) {
+      notify(String((e as Error)?.message || e), "err");
+    } finally {
+      setAcctBusyId(null);
+    }
+  }
+
+  async function syncAccount(accountId: string) {
+    setAcctBusyId(accountId);
+    setMsg(null);
+    try {
+      const r = await apiPost<{ upserted?: number }>("/admin/apps/voip-ms/sync-numbers", { accountId });
+      notify(`Synced ${r.upserted ?? 0} numbers from this account.`);
+      await load();
+    } catch (e: unknown) {
+      notify(String((e as Error)?.message || e), "err");
+    } finally {
+      setAcctBusyId(null);
+    }
+  }
+
+  async function removeAccount(accountId: string, label: string) {
+    if (typeof window !== "undefined" && !window.confirm(`Remove the VoIP.ms account "${label}"? Its saved credentials are deleted from Connect (nothing changes at VoIP.ms).`)) return;
+    setAcctBusyId(accountId);
+    setMsg(null);
+    try {
+      await apiDelete(`/admin/apps/voip-ms/accounts/${encodeURIComponent(accountId)}`);
+      notify("Account removed.");
+      await load();
+    } catch (e: unknown) {
+      notify(String((e as Error)?.message || e), "err");
+    } finally {
+      setAcctBusyId(null);
     }
   }
 
@@ -343,7 +437,7 @@ export default function VoipMsIntegrationPage() {
 
                 {superOnly ? (
                   <div>
-                    <h3 style={{ marginTop: 0 }}>API Credentials</h3>
+                    <h3 style={{ marginTop: 0 }}>Primary account credentials</h3>
                     <p style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 10 }}>Never shown back after saving.</p>
                     <input
                       className="input"
@@ -382,6 +476,116 @@ export default function VoipMsIntegrationPage() {
                 ) : null}
               </div>
             </div>
+
+            {/* Accounts — the primary plus any additional VoIP.ms accounts */}
+            {superOnly ? (
+              <div className="panel stack">
+                <h3 style={{ marginTop: 0 }}>VoIP.ms accounts</h3>
+                <p style={{ fontSize: 13, color: "var(--text-dim)", margin: "0 0 10px" }}>
+                  Attach more than one VoIP.ms account. Each synced number remembers which account it lives on, and
+                  texting in and out of that number uses that account&rsquo;s credentials automatically. New sign-ups and
+                  number purchases keep using the primary account.
+                </p>
+                {accounts.length === 0 ? (
+                  <div className="state-box">No accounts yet — save the primary credentials above first.</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="table" style={{ minWidth: 640 }}>
+                      <thead>
+                        <tr>
+                          <th>Account</th>
+                          <th>Username</th>
+                          <th>Numbers</th>
+                          <th>Last health</th>
+                          <th>Last sync</th>
+                          <th style={{ minWidth: 220 }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accounts.map((a) => {
+                          const name = a.isPrimary ? "Primary account" : a.label || a.id.slice(0, 8);
+                          const busy = acctBusyId === a.id;
+                          return (
+                            <tr key={a.id}>
+                              <td style={{ fontSize: 13 }}>
+                                {name}
+                                {a.isPrimary ? <span style={{ marginLeft: 6, fontSize: 11, color: "var(--brand)" }}>primary</span> : null}
+                              </td>
+                              <td style={{ fontSize: 13 }}>{a.usernameHint || <span style={{ color: "var(--danger)" }}>missing</span>}</td>
+                              <td style={{ fontSize: 13 }}>{a.numberCount}</td>
+                              <td style={{ fontSize: 12 }}>
+                                {a.lastHealthAt ? (
+                                  <span style={{ color: a.lastHealthOk === false ? "var(--danger)" : undefined }}>
+                                    {new Date(a.lastHealthAt).toLocaleString()} — {a.lastHealthMessage || "—"}
+                                  </span>
+                                ) : (
+                                  "never"
+                                )}
+                              </td>
+                              <td style={{ fontSize: 12 }}>{a.lastDidsSyncAt ? new Date(a.lastDidsSyncAt).toLocaleString() : "never"}</td>
+                              <td>
+                                <div className="row-actions" style={{ gap: 6, flexWrap: "wrap" }}>
+                                  <button className="btn ghost" type="button" disabled={busy || !a.hasCredentials} onClick={() => void testAccount(a.id)}>
+                                    Test
+                                  </button>
+                                  <button className="btn ghost" type="button" disabled={busy || !a.hasCredentials} onClick={() => void syncAccount(a.id)}>
+                                    Sync
+                                  </button>
+                                  {!a.isPrimary ? (
+                                    <button
+                                      className="btn ghost"
+                                      type="button"
+                                      disabled={busy || a.numberCount > 0}
+                                      title={a.numberCount > 0 ? "This account still owns synced numbers." : undefined}
+                                      style={{ color: "var(--danger)" }}
+                                      onClick={() => void removeAccount(a.id, a.label || a.id.slice(0, 8))}
+                                    >
+                                      Remove
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <h4 style={{ margin: "14px 0 6px" }}>Attach another VoIP.ms account</h4>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <div style={{ flex: "1 1 140px" }}>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>Name</label>
+                    <input className="input" placeholder="e.g. Second account" value={newAcctLabel} onChange={(e) => setNewAcctLabel(e.target.value)} />
+                  </div>
+                  <div style={{ flex: "1 1 180px" }}>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>API email / username</label>
+                    <input className="input" placeholder="VoIP.ms API username" value={newAcctUser} onChange={(e) => setNewAcctUser(e.target.value)} />
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>API password</label>
+                    <input className="input" type="password" placeholder="VoIP.ms API password" value={newAcctPass} onChange={(e) => setNewAcctPass(e.target.value)} />
+                  </div>
+                  <div style={{ flex: "1 1 180px" }}>
+                    <label style={{ display: "block", fontSize: 12, color: "var(--text-dim)", marginBottom: 4 }}>API base URL (optional)</label>
+                    <input className="input" placeholder="Leave blank for default" value={newAcctBase} onChange={(e) => setNewAcctBase(e.target.value)} />
+                  </div>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => void addAccount()}
+                    disabled={!newAcctLabel || !newAcctUser || !newAcctPass || newAcctSaving}
+                    style={{ alignSelf: "flex-end" }}
+                  >
+                    {newAcctSaving ? "Attaching…" : "Attach account"}
+                  </button>
+                </div>
+                <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 6 }}>
+                  Remember to enable API access for Connect&rsquo;s server IP in that VoIP.ms account (Main Menu → SOAP and REST/JSON API), then run a sync.
+                </p>
+              </div>
+            ) : null}
 
             {/* Test SMS */}
             {superOnly ? (
@@ -478,6 +682,7 @@ export default function VoipMsIntegrationPage() {
                     <tr>
                       <th>Phone (E.164)</th>
                       <th>Raw DID</th>
+                      {accounts.length > 1 ? <th>Account</th> : null}
                       <th>SMS</th>
                       <th>MMS</th>
                       <th>Tenant</th>
@@ -492,6 +697,11 @@ export default function VoipMsIntegrationPage() {
                       <tr key={r.id}>
                         <td><code style={{ fontSize: 12 }}>{r.phoneE164}</code></td>
                         <td style={{ fontSize: 13 }}>{r.phoneRaw || "—"}</td>
+                        {accounts.length > 1 ? (
+                          <td style={{ fontSize: 12 }}>
+                            {!r.voipmsAccountId || r.voipmsAccountId === "default" ? "Primary" : r.voipmsAccountLabel || r.voipmsAccountId.slice(0, 8)}
+                          </td>
+                        ) : null}
                         <td>{r.smsCapable ? "✓" : "—"}</td>
                         <td>{r.mmsCapable ? "✓" : "—"}</td>
                         <td style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", fontSize: 13 }}>

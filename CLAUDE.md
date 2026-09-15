@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · SECOND VoIP.ms ACCOUNT attachable: GlobalVoipMsConfig = one row per account (primary keeps id "default" so provisioning/guardrail/billing stay untouched), TenantSmsNumber.voipmsAccountId stamped by sync + followed by outbound send, per-account inbound poll, send-test-sms; accounts panel on /apps/voip-ms; ⛔ second account must allowlist the server IP in ITS VoIP.ms API settings; ⏳ no real second account attached yet → `2026-09-15-voipms-second-account.md`
+
 - 2026-09-15 · GEO FIREWALL after the license cancel: enforcement ALIVE + verified live (231 blocked, us/ca/il/tv open, config clean, survived lapse + Sep-12 reboot), ⛔⛔ channel STAYS DISARMED — unlicensed ionCube builder could rebuild to the free tier's 1 country and the runner's validation would PASS the wipe (no count floor); closing ca/il/tv needs our OWN builder + Izzy's per-country call → `2026-09-15-geo-firewall-after-the-license-cancel.md`
 
 - 2026-09-15 · LOOPCOM MOBILE BUILT on Telnyx wireless: eSIM/SIM/data product end to end (7 additive tables, wireless client, /mobile customer page + /admin/mobile-console, Ed25519 fail-closed webhook door, 15-min sweeps), INERT — key `can_view_workspace_mobile` in no bucket, nothing bought, invoices NOT wired (recount preview only); ⛔ tenant API = `/mobile-service` (`/mobile` is the phone app's), Telnyx Mobile Voice = BETA (report says so), SIM usage record_type = `sim_card_usage` → `2026-09-15-loopcom-mobile-built-on-telnyx-wireless.md`

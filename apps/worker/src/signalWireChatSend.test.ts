@@ -37,7 +37,9 @@ test("connectChatSmsJob dispatches SIGNALWIRE numbers before any VoIP.ms concern
   const jobAt = src.indexOf("export async function processConnectChatSmsJob");
   const body = src.slice(jobAt);
   const dispatchAt = body.indexOf("sendConnectChatMessageViaSignalWire");
-  const credsAt = body.indexOf("const creds = await loadVoipMsCredsWorker()");
+  // Matches both the historical no-arg call and the account-aware call
+  // (second-VoIP.ms-account support) — the invariant is the ORDER, not the arity.
+  const credsAt = body.indexOf("await loadVoipMsCredsWorker(");
   const cfgAt = body.indexOf("globalVoipMsConfig.findUnique");
   assert.ok(dispatchAt > -1, "the SignalWire dispatch exists");
   assert.ok(credsAt > dispatchAt, "VoIP.ms credentials are only loaded AFTER the provider branch");

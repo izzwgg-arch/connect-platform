@@ -2,6 +2,35 @@
 
 Newest entries first.
 
+## Second VoIP.ms account attachable (2026-09-15)
+
+- api `node --test src/voipMsAccounts.test.ts` → **11/11 pass** (deletion rules — primary
+  never, numbered never; per-number creds resolution incl. fallback-to-primary and
+  unreadable-secondary answers null-not-primary; listing/counts; id collision; 3 source
+  guards pinning that the worker send follows `voipmsAccountId`, the poller groups by
+  account with per-account creds, and the sync stamps create AND update).
+  **All 3 source guards FAIL replayed against pre-feature HEAD** (`VOIPMS_GUARD_ROOT`
+  pointed at `git show HEAD:` copies — the git-archive technique, never stash here).
+- worker FULL suite → **168/168 pass** after updating two existing guards WITHOUT
+  weakening them: `signalWireChatSend.test.ts` (dispatch-before-creds ordering now
+  matches the parameterized `loadVoipMsCredsWorker(` call) and
+  `voipMsInboundSyncJob.test.ts` (fetch-once/full-page/fallback/mode-log invariants
+  asserted per account + 2 NEW assertions: grouped by account, per-account creds).
+- api targeted suites (chatTenantWidePermissions, smsSharedInbox, tenantLeakSweep,
+  tenantScopeHardening, billingSmsSender, sms/*) → **68/68 pass**.
+- api FULL suite → **4365 tests, 4329 pass, 35 fail — ALL pre-existing, none in changed
+  files**: the 7 documented `syncPbxTenantDirectoryFromRows` failures, ~25
+  setupOrchestrator/onboarding-orchestration tests, 2 signalWireOnboarding source guards
+  reading `publicRoutes.ts` (clean vs HEAD, untouched here), and the publicOrigins
+  hostname sweep tripping on `server.ts` L38798 (clean vs HEAD, untouched here).
+- typecheck: portal **0**; worker **8** (pre-existing, none in changed files); api **87 =
+  the recorded 85+2-ambient baseline** (see the LoopCom Mobile entry), none in changed files.
+- prisma: schema validates; migration `20260915220000_voipms_second_account` is
+  **byte-equivalent to `prisma migrate diff`** from HEAD's schema — purely additive
+  (2 ADD COLUMN with defaults, 1 CREATE INDEX; 0 DROP/ALTER of existing columns).
+- ⏳ NOT PROVEN: no real second VoIP.ms account attached yet; no second-account SMS
+  sent/received. Handoff: `AGENT_HANDOFF_VOIPMS_SECOND_ACCOUNT_2026-09-15.md`.
+
 ## LoopCom Mobile built on Telnyx wireless (2026-09-15)
 
 - api `node --test "src/loopcomMobile/*.test.ts"` → **17/17 pass** (money math incl. twice-run

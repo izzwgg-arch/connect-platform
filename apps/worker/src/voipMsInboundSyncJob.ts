@@ -192,8 +192,8 @@ function normalizeInboundRow(raw: unknown, tenantDidE164: string): InboundRow | 
   };
 }
 
-async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
-  const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
+async function loadVoipMsCreds(accountId: string = "default"): Promise<VoipMsStoredCreds | null> {
+  const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
   if (!row?.credentialsEncrypted) return null;
   try {
     return decryptJson<VoipMsStoredCreds>(row.credentialsEncrypted);
@@ -740,11 +740,6 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
   if (running) return;
   running = true;
   try {
-    const creds = await loadVoipMsCreds();
-    if (!creds?.username || !creds.password) {
-      console.warn("[voipms-inbound] no credentials found — skipping sync");
-      return;
-    }
     const numbers = await (db as any).tenantSmsNumber.findMany({
       // ⛔ `provider: "VOIPMS"` is load-bearing: this job polls VoIP.ms getSMS,
       // so a SIGNALWIRE number here would burn a carrier query per cycle that
@@ -755,6 +750,7 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
       select: {
         tenantId: true,
         phoneE164: true,
+        voipmsAccountId: true,
         assignedUserId: true,
         assignedExtensionId: true,
         assignedUsers: { select: { userId: true, inboxMode: true }, orderBy: { createdAt: "asc" } },
@@ -766,46 +762,69 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
       console.log("[voipms-inbound] no tenant SMS numbers to poll");
       return;
     }
-    // One account-wide fetch per cycle (see ACCOUNT_WIDE_SMS_LIMIT). A failed
-    // or FULL page falls back to the exact per-number path used before.
-    const cycleStartedAt = Date.now();
-    let batch: AccountWideBatch | null = null;
-    try {
-      const b = await fetchAccountWideRecent(creds);
-      if (b.complete) batch = b;
-      else console.warn(`[voipms-inbound] account-wide getSMS page full (${b.smsRaw.length}) — falling back to per-number fetch`);
-    } catch (err: any) {
-      console.warn("[voipms-inbound] account-wide getSMS failed — falling back to per-number fetch", err?.message || err);
-    }
-    const mode = batch ? "account" : "per_did";
-    let totalFetched = 0;
+
+    // Second-account support (2026-09-15): a getSMS call only sees the DIDs of
+    // the account whose credentials it carries, so the cycle groups numbers by
+    // `voipmsAccountId` and polls EACH account with its own credentials. Legacy
+    // rows all carry "default", which keeps the single-account cycle identical.
+    const byAccount = new Map<string, any[]>();
     for (const n of numbers) {
-      if (!n.tenantId) continue;
+      const acct = String(n.voipmsAccountId || "default");
+      const list = byAccount.get(acct) || [];
+      list.push(n);
+      byAccount.set(acct, list);
+    }
+
+    const cycleStartedAt = Date.now();
+    let totalFetched = 0;
+    const modes: string[] = [];
+    for (const [accountId, accountNumbers] of byAccount) {
+      const acctTag = accountId === "default" ? "primary" : accountId.slice(0, 8);
+      const creds = await loadVoipMsCreds(accountId);
+      if (!creds?.username || !creds.password) {
+        console.warn(`[voipms-inbound] no credentials for account ${acctTag} — skipping its ${accountNumbers.length} numbers`);
+        continue;
+      }
+      // One account-wide fetch per account per cycle (see
+      // ACCOUNT_WIDE_SMS_LIMIT). A failed or FULL page falls back to the exact
+      // per-number path used before.
+      let batch: AccountWideBatch | null = null;
       try {
-        const rows = batch
-          ? mergeInboundRowsForDid(n.phoneE164, batch.smsRaw, batch.mmsRaw)
-          : await fetchRecentSmsForDid(creds, n.phoneE164);
-        totalFetched += rows.length;
-        for (const row of rows) {
-          await importInboundMessage({
-            tenantId: n.tenantId,
-            tenantDidE164: n.phoneE164,
-            assignedUserId: n.assignedUserId,
-            assignedExtensionId: n.assignedExtensionId,
-            multiAssignedUsers: ((n as any).assignedUsers ?? []).map((u: any) => ({
-              userId: u.userId,
-              inboxMode: u.inboxMode,
-            })),
-            row,
-            sendSmsPush: opts?.sendSmsPush,
-          });
-        }
-        console.log(`[voipms-inbound] ${n.phoneE164}: fetched=${rows.length}`);
+        const b = await fetchAccountWideRecent(creds);
+        if (b.complete) batch = b;
+        else console.warn(`[voipms-inbound] (${acctTag}) account-wide getSMS page full (${b.smsRaw.length}) — falling back to per-number fetch`);
       } catch (err: any) {
-        console.warn("[voipms-inbound] sync failed", n.phoneE164, err?.message || err);
+        console.warn(`[voipms-inbound] (${acctTag}) account-wide getSMS failed — falling back to per-number fetch`, err?.message || err);
+      }
+      modes.push(`${acctTag}:${batch ? "account" : "per_did"}`);
+      for (const n of accountNumbers) {
+        if (!n.tenantId) continue;
+        try {
+          const rows = batch
+            ? mergeInboundRowsForDid(n.phoneE164, batch.smsRaw, batch.mmsRaw)
+            : await fetchRecentSmsForDid(creds, n.phoneE164);
+          totalFetched += rows.length;
+          for (const row of rows) {
+            await importInboundMessage({
+              tenantId: n.tenantId,
+              tenantDidE164: n.phoneE164,
+              assignedUserId: n.assignedUserId,
+              assignedExtensionId: n.assignedExtensionId,
+              multiAssignedUsers: ((n as any).assignedUsers ?? []).map((u: any) => ({
+                userId: u.userId,
+                inboxMode: u.inboxMode,
+              })),
+              row,
+              sendSmsPush: opts?.sendSmsPush,
+            });
+          }
+          console.log(`[voipms-inbound] ${n.phoneE164}: fetched=${rows.length}`);
+        } catch (err: any) {
+          console.warn("[voipms-inbound] sync failed", n.phoneE164, err?.message || err);
+        }
       }
     }
-    console.log(`[voipms-inbound] cycle done: numbers=${numbers.length} fetched=${totalFetched} mode=${mode} ms=${Date.now() - cycleStartedAt}`);
+    console.log(`[voipms-inbound] cycle done: numbers=${numbers.length} fetched=${totalFetched} mode=${modes.join(",") || "none"} ms=${Date.now() - cycleStartedAt}`);
   } finally {
     running = false;
   }

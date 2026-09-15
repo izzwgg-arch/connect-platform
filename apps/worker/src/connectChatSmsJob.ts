@@ -74,8 +74,8 @@ async function sendVoipMsSmsParts(
   return last;
 }
 
-async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {
-  const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
+async function loadVoipMsCredsWorker(accountId: string = "default"): Promise<VoipMsStoredCreds | null> {
+  const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
   if (!row?.credentialsEncrypted) return null;
   try {
     return decryptJson<VoipMsStoredCreds>(row.credentialsEncrypted);
@@ -124,8 +124,12 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
     return;
   }
 
-  const cfg = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
-  const creds = await loadVoipMsCredsWorker();
+  // The number's row says which VoIP.ms ACCOUNT owns it (second-account
+  // support, 2026-09-15). A never-synced from-number falls back to the
+  // primary "default" row — the exact pre-multi-account behaviour.
+  const voipmsAccountId = String((smsRow as any)?.voipmsAccountId || "default");
+  const cfg = await db.globalVoipMsConfig.findUnique({ where: { id: voipmsAccountId } });
+  const creds = await loadVoipMsCredsWorker(voipmsAccountId);
   if (!creds) {
     await db.connectChatMessage.update({
       where: { id: msg.id },

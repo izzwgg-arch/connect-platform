@@ -60,16 +60,24 @@ test("the account-wide page size is large enough to never be full on a normal da
   assert.ok(ACCOUNT_WIDE_SMS_LIMIT >= 500);
 });
 
-// ── Source guard: the cycle fetches ONCE, and falls back ────────────────────
+// ── Source guard: the cycle fetches ONCE PER ACCOUNT, and falls back ────────
+// Since the second-VoIP.ms-account support (2026-09-15) the cycle groups
+// numbers by `voipmsAccountId` and runs the SAME fetch-once-then-fall-back
+// shape once per account, with that account's own credentials. The invariants
+// this guard pins are unchanged: the account-wide fetch happens BEFORE the
+// per-number loop, a FULL page is never used as the batch, the per-number
+// fetch stays as the fallback, and the cycle logs its mode + duration.
 test("guard: the sync cycle fetches account-wide once and falls back to per-number", () => {
   const src = readFileSync(path.join(__dirname, "voipMsInboundSyncJob.ts"), "utf8").replace(/\r\n/g, "\n");
   const cycle = src.slice(src.indexOf("export async function runVoipMsInboundSyncCycle("));
-  const loop = cycle.indexOf("for (const n of numbers) {");
+  assert.ok(cycle.includes("byAccount"), "numbers must be grouped by account");
+  assert.ok(cycle.includes("await loadVoipMsCreds(accountId)"), "each account must be polled with its OWN credentials");
+  const loop = cycle.indexOf("for (const n of accountNumbers) {");
   const fetchOnce = cycle.indexOf("await fetchAccountWideRecent(creds)");
   assert.ok(fetchOnce > 0 && fetchOnce < loop, "the account-wide fetch must happen BEFORE the per-number loop");
   assert.ok(/if \(b\.complete\) batch = b;/.test(cycle), "a full page must NOT be used as the batch");
   assert.ok(/batch\s*\?\s*mergeInboundRowsForDid\(n\.phoneE164, batch\.smsRaw, batch\.mmsRaw\)\s*:\s*await fetchRecentSmsForDid\(creds, n\.phoneE164\)/.test(cycle), "per-number fetch must remain the fallback");
-  assert.ok(cycle.includes("mode=${mode} ms=${Date.now() - cycleStartedAt}"), "the cycle must log its mode and duration");
+  assert.ok(cycle.includes('mode=${modes.join(",") || "none"} ms=${Date.now() - cycleStartedAt}'), "the cycle must log its mode and duration");
   // The account-wide getSMS must carry no did and the big limit.
   assert.ok(/opts\?\.accountWide[\s\S]*?url\.searchParams\.set\("limit", String\(ACCOUNT_WIDE_SMS_LIMIT\)\)/.test(src));
 });

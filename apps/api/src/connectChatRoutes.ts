@@ -52,6 +52,13 @@ import { denoiseVoiceNote, isVoiceNoteUpload, isVoiceNoteFilename } from "./chat
 import { isConnectChatMessageMine } from "./connectChatMessageMine";
 import { isVoipMsWebhookAuthorized } from "./voipMsWebhookAuth";
 import { parseVoipMsWebhookEnvelope } from "./voipMsWebhookPayload";
+import {
+  VOIPMS_PRIMARY_ACCOUNT_ID,
+  canDeleteVoipMsAccount,
+  createVoipMsAccount,
+  listVoipMsAccounts,
+  loadVoipMsCredsForNumber,
+} from "./voipMsAccounts";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -115,8 +122,8 @@ type ChatAttachmentInput = {
 };
 type ChatDirectoryExtension = { id: string; extNumber: string; displayName: string; ownerUserId: string | null };
 
-async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
-  const row = await db.globalVoipMsConfig.findUnique({ where: { id: "default" } });
+async function loadVoipMsCreds(accountId: string = VOIPMS_PRIMARY_ACCOUNT_ID): Promise<VoipMsStoredCreds | null> {
+  const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
   if (!row?.credentialsEncrypted) return null;
   try {
     return decryptJson<VoipMsStoredCreds>(row.credentialsEncrypted);
@@ -125,11 +132,14 @@ async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
   }
 }
 
-async function voipMsApiCall(method: string, extra: Record<string, string> = {}): Promise<any> {
-  const row = await getOrCreateGlobalVoipConfig();
-  const creds = await loadVoipMsCreds();
+async function voipMsApiCall(method: string, extra: Record<string, string> = {}, accountId: string = VOIPMS_PRIMARY_ACCOUNT_ID): Promise<any> {
+  const row =
+    accountId === VOIPMS_PRIMARY_ACCOUNT_ID
+      ? await getOrCreateGlobalVoipConfig()
+      : await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
+  const creds = await loadVoipMsCreds(accountId);
   if (!creds?.username || !creds?.password) throw new Error("VOIPMS_NOT_CONFIGURED");
-  const base = (row.apiBaseUrl || creds.apiBaseUrl || "https://voip.ms/api/v1/rest.php").replace(/\/$/, "");
+  const base = (row?.apiBaseUrl || creds.apiBaseUrl || "https://voip.ms/api/v1/rest.php").replace(/\/$/, "");
   const url = new URL(base);
   url.searchParams.set("api_username", creds.username);
   url.searchParams.set("api_password", creds.password);
@@ -1853,6 +1863,102 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     return { ok: true };
   });
 
+  // ── Multiple VoIP.ms accounts ─────────────────────────────────────────────
+  // The primary account stays the "default" row (saved by the PUT above);
+  // these routes attach ADDITIONAL VoIP.ms accounts. Numbers pick their
+  // account at sync time (voipmsAccountId), and every send/poll follows it.
+
+  app.get("/admin/apps/voip-ms/accounts", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    return { accounts: await listVoipMsAccounts() };
+  });
+
+  app.post("/admin/apps/voip-ms/accounts", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    const body = z
+      .object({
+        label: z.string().trim().min(1).max(80),
+        username: z.string().min(1),
+        password: z.string().min(1),
+        apiBaseUrl: z.string().url().optional(),
+      })
+      .parse(req.body || {});
+    const enc = encryptJson({ username: body.username, password: body.password, apiBaseUrl: body.apiBaseUrl });
+    const { id } = await createVoipMsAccount({ label: body.label, credentialsEncrypted: enc, apiBaseUrl: body.apiBaseUrl || null });
+    return { ok: true, accountId: id };
+  });
+
+  app.put("/admin/apps/voip-ms/accounts/:accountId", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    const { accountId } = req.params as { accountId: string };
+    const body = z
+      .object({
+        label: z.string().trim().min(1).max(80).optional(),
+        username: z.string().min(1).optional(),
+        password: z.string().min(1).optional(),
+        apiBaseUrl: z.string().url().nullable().optional(),
+      })
+      .refine((b) => !!b.username === !!b.password, { message: "username and password must be updated together" })
+      .parse(req.body || {});
+    const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
+    if (!row) return reply.status(404).send({ error: "ACCOUNT_NOT_FOUND" });
+    const data: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.label !== undefined && accountId !== VOIPMS_PRIMARY_ACCOUNT_ID) data.label = body.label;
+    if (body.username && body.password) {
+      data.credentialsEncrypted = encryptJson({ username: body.username, password: body.password, apiBaseUrl: body.apiBaseUrl ?? undefined });
+    }
+    if (body.apiBaseUrl !== undefined) data.apiBaseUrl = body.apiBaseUrl;
+    await db.globalVoipMsConfig.update({ where: { id: accountId }, data: data as any });
+    return { ok: true };
+  });
+
+  app.post("/admin/apps/voip-ms/accounts/:accountId/test", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    const { accountId } = req.params as { accountId: string };
+    const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
+    if (!row) return reply.status(404).send({ error: "ACCOUNT_NOT_FOUND" });
+    const creds = await loadVoipMsCreds(accountId);
+    if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED" });
+    const probe = await validateVoipMsCredentials({
+      username: creds.username,
+      password: creds.password,
+      fromNumber: "+15555550100",
+      apiBaseUrl: row.apiBaseUrl || creds.apiBaseUrl,
+    });
+    const now = new Date();
+    await db.globalVoipMsConfig.update({
+      where: { id: accountId },
+      data: {
+        lastHealthAt: now,
+        lastHealthOk: probe.ok,
+        lastHealthMessage: probe.ok ? "ok" : (probe as { message: string }).message,
+        updatedAt: now,
+      },
+    });
+    return probe.ok ? { ok: true } : reply.status(400).send({ ok: false, message: (probe as { message: string }).message });
+  });
+
+  app.delete("/admin/apps/voip-ms/accounts/:accountId", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    const { accountId } = req.params as { accountId: string };
+    const row = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
+    if (!row) return reply.status(404).send({ error: "ACCOUNT_NOT_FOUND" });
+    const numberCount = await db.tenantSmsNumber.count({ where: { voipmsAccountId: accountId } as any });
+    const decision = canDeleteVoipMsAccount({ accountId, numberCount });
+    if (!decision.ok) return reply.status(400).send({ error: "ACCOUNT_NOT_REMOVABLE", message: decision.reason });
+    await db.globalVoipMsConfig.delete({ where: { id: accountId } });
+    return { ok: true };
+  });
+
   app.post("/admin/apps/voip-ms/flags", async (req, reply) => {
     const user = req.user as JwtUser;
     if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
@@ -1895,20 +2001,25 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     return probe.ok ? { ok: true } : reply.status(400).send({ ok: false, message: (probe as { message: string }).message });
   });
 
-  app.post("/admin/apps/voip-ms/sync-numbers", async (req, reply) => {
-    const user = req.user as JwtUser;
-    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
-    if (!requireCrypto(reply)) return;
-
-    // ── Step 1: Fetch all DIDs from VoIP.ms ──────────────────────────────────
-    // VoIP.ms returns all owned DIDs in a single getDIDsInfo call (no pagination
-    // for owned DIDs). We log the raw response for ops visibility.
-    const json = await voipMsApiCall("getDIDsInfo");
-    console.log("[VOIPMS_SYNC] getDIDsInfo raw status:", json?.status, "keys:", Object.keys(json || {}).join(","));
+  /**
+   * Pull every DID owned by ONE VoIP.ms account and upsert it into
+   * TenantSmsNumber, stamping `voipmsAccountId` so the poller and outbound
+   * sends use that account's credentials for the number. VoIP.ms returns all
+   * owned DIDs in a single getDIDsInfo call (no pagination for owned DIDs).
+   */
+  async function syncDidsForAccount(accountId: string, accountTag: string): Promise<{
+    upserted: number;
+    total: number;
+    skippedInvalidNumber: number;
+    smsCapableExplicit: number;
+    smsCapableUnclear: number;
+  }> {
+    const json = await voipMsApiCall("getDIDsInfo", {}, accountId);
+    console.log(`[VOIPMS_SYNC] (${accountTag}) getDIDsInfo raw status:`, json?.status, "keys:", Object.keys(json || {}).join(","));
 
     if (String(json.status || "").toLowerCase() !== "success") {
-      console.error("[VOIPMS_SYNC] API returned non-success:", JSON.stringify(json).slice(0, 500));
-      return reply.status(502).send({ error: "VOIPMS_SYNC_FAILED", detail: json });
+      console.error(`[VOIPMS_SYNC] (${accountTag}) API returned non-success:`, JSON.stringify(json).slice(0, 500));
+      throw new Error(`VoIP.ms getDIDsInfo answered ${json?.status || "(no status)"}`);
     }
 
     // VoIP.ms wraps the list under "dids" or "did" depending on API version.
@@ -1918,7 +2029,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         ? json.did
         : [];
 
-    console.log(`[VOIPMS_SYNC] Raw DID count from API: ${rawList.length}`);
+    console.log(`[VOIPMS_SYNC] (${accountTag}) Raw DID count from API: ${rawList.length}`);
 
     // Log every DID's fields so we can see exactly what VoIP.ms is returning,
     // including which fields carry SMS capability info.
@@ -1926,10 +2037,9 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       const fields = Object.entries(raw || {})
         .map(([k, v]) => `${k}=${String(v).slice(0, 40)}`)
         .join(" | ");
-      console.log(`[VOIPMS_SYNC] DID[${i}] ${fields}`);
+      console.log(`[VOIPMS_SYNC] (${accountTag}) DID[${i}] ${fields}`);
     });
 
-    // ── Step 2: Normalize + upsert ALL DIDs ──────────────────────────────────
     // CRITICAL: We import EVERY DID from VoIP.ms and let smsCapable be derived
     // from the API response. We do NOT skip DIDs based on sms capability —
     // smsenabled="0" means "SMS routing not yet configured", NOT "DID is SMS
@@ -1938,15 +2048,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     let skippedInvalidNumber = 0;
     const smsCapableCount = { yes: 0, unclear: 0 };
     const upsertedNumbers: string[] = [];
-    const skippedNumbers: string[] = [];
 
     for (const raw of rawList) {
       const row = normalizeDidRow(raw);
       if (!row) {
         skippedInvalidNumber++;
         const didStr = String(raw?.did ?? raw?.number ?? raw?.description ?? "(unknown)");
-        console.warn(`[VOIPMS_SYNC] Skipped (could not normalize to E.164): did=${didStr} raw=${JSON.stringify(raw).slice(0, 200)}`);
-        skippedNumbers.push(didStr);
+        console.warn(`[VOIPMS_SYNC] (${accountTag}) Skipped (could not normalize to E.164): did=${didStr} raw=${JSON.stringify(raw).slice(0, 200)}`);
         continue;
       }
 
@@ -1959,6 +2067,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
           phoneE164: row.e164,
           phoneRaw: row.did,
           voipmsDid: String(raw?.did ?? ""),
+          voipmsAccountId: accountId,
           smsCapable: row.sms,
           mmsCapable: row.mms,
           lastSyncedAt: new Date(),
@@ -1966,34 +2075,76 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         update: {
           phoneRaw: row.did,
           voipmsDid: String(raw?.did ?? ""),
+          // The account that RETURNS the DID owns it — a number moved between
+          // VoIP.ms accounts is restamped on the next sync.
+          voipmsAccountId: accountId,
           smsCapable: row.sms,
           mmsCapable: row.mms,
           lastSyncedAt: new Date(),
           updatedAt: new Date(),
         },
-      });
+      } as any);
       upserted++;
       upsertedNumbers.push(row.e164);
     }
 
-    console.log(`[VOIPMS_SYNC] Complete: total=${rawList.length} upserted=${upserted} skipped_invalid=${skippedInvalidNumber} sms_explicit=${smsCapableCount.yes} sms_unclear=${smsCapableCount.unclear}`);
+    console.log(`[VOIPMS_SYNC] (${accountTag}) Complete: total=${rawList.length} upserted=${upserted} skipped_invalid=${skippedInvalidNumber} sms_explicit=${smsCapableCount.yes} sms_unclear=${smsCapableCount.unclear}`);
     if (upsertedNumbers.length > 0) {
-      console.log(`[VOIPMS_SYNC] Upserted numbers: ${upsertedNumbers.join(", ")}`);
+      console.log(`[VOIPMS_SYNC] (${accountTag}) Upserted numbers: ${upsertedNumbers.join(", ")}`);
     }
 
     await db.globalVoipMsConfig.update({
-      where: { id: "default" },
+      where: { id: accountId },
       data: { lastDidsSyncAt: new Date(), smsEnabled: true, mmsEnabled: true, updatedAt: new Date() },
     });
 
     return {
-      ok: true,
       upserted,
       total: rawList.length,
       skippedInvalidNumber,
       smsCapableExplicit: smsCapableCount.yes,
       smsCapableUnclear: smsCapableCount.unclear,
     };
+  }
+
+  app.post("/admin/apps/voip-ms/sync-numbers", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    if (!requireCrypto(reply)) return;
+    const body = z.object({ accountId: z.string().optional() }).parse(req.body || {});
+
+    // Sync one account when asked, otherwise EVERY account that has
+    // credentials — so "Sync numbers" keeps meaning "the whole inventory".
+    const accounts = await listVoipMsAccounts();
+    const targets = body.accountId
+      ? accounts.filter((a) => a.id === body.accountId)
+      : accounts.filter((a) => a.hasCredentials);
+    if (body.accountId && targets.length === 0) return reply.status(404).send({ error: "ACCOUNT_NOT_FOUND" });
+    if (targets.length === 0) return reply.status(400).send({ error: "NOT_CONFIGURED" });
+
+    const perAccount: Array<{ accountId: string; label: string | null; ok: boolean; upserted?: number; total?: number; error?: string }> = [];
+    const totals = { upserted: 0, total: 0, skippedInvalidNumber: 0, smsCapableExplicit: 0, smsCapableUnclear: 0 };
+    for (const acct of targets) {
+      const tag = acct.isPrimary ? "primary" : acct.label || acct.id.slice(0, 8);
+      try {
+        const r = await syncDidsForAccount(acct.id, tag);
+        totals.upserted += r.upserted;
+        totals.total += r.total;
+        totals.skippedInvalidNumber += r.skippedInvalidNumber;
+        totals.smsCapableExplicit += r.smsCapableExplicit;
+        totals.smsCapableUnclear += r.smsCapableUnclear;
+        perAccount.push({ accountId: acct.id, label: acct.label, ok: true, upserted: r.upserted, total: r.total });
+      } catch (e: unknown) {
+        perAccount.push({ accountId: acct.id, label: acct.label, ok: false, error: String((e as Error)?.message || e) });
+      }
+    }
+
+    // Every targeted account failing is an outage; one of several failing is a
+    // partial result the operator must still see.
+    if (!perAccount.some((a) => a.ok)) {
+      return reply.status(502).send({ error: "VOIPMS_SYNC_FAILED", accounts: perAccount });
+    }
+    return { ok: true, ...totals, accounts: perAccount };
   });
 
   // ── Debug endpoint: compare VoIP.ms API vs DB ──────────────────────────────
@@ -2062,11 +2213,19 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         assignedUsers: { include: { user: { select: { email: true } } }, orderBy: { createdAt: "asc" } },
       },
     } as any) as any[];
+    // id → label map so each number can say WHICH VoIP.ms account it lives on.
+    const accountRows = await db.globalVoipMsConfig.findMany({ select: { id: true, label: true } as any }).catch(() => [] as any[]);
+    const accountLabels = new Map<string, string | null>(accountRows.map((a: any) => [a.id, a.label ?? null]));
     return {
       numbers: rows.map((r: any) => ({
         id: r.id,
         phoneE164: r.phoneE164,
         phoneRaw: r.phoneRaw,
+        voipmsAccountId: r.voipmsAccountId || VOIPMS_PRIMARY_ACCOUNT_ID,
+        voipmsAccountLabel:
+          (r.voipmsAccountId || VOIPMS_PRIMARY_ACCOUNT_ID) === VOIPMS_PRIMARY_ACCOUNT_ID
+            ? null
+            : accountLabels.get(r.voipmsAccountId) ?? null,
         tenantId: r.tenantId,
         tenantName: r.tenant?.name || null,
         smsCapable: r.smsCapable,
@@ -2298,11 +2457,20 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const toN = canonicalSmsPhone(raw.to);
     if (!fromN.ok) return reply.status(400).send({ error: "INVALID_FROM", message: `From number invalid: ${"error" in fromN ? fromN.error : "invalid phone"}` });
     if (!toN.ok) return reply.status(400).send({ error: "INVALID_TO", message: `To number invalid: ${"error" in toN ? toN.error : "invalid phone"}` });
-    const creds = await loadVoipMsCreds();
-    if (!creds) return reply.status(400).send({ error: "NOT_CONFIGURED", message: "VoIP.ms credentials not configured." });
-    const cfg = await getOrCreateGlobalVoipConfig();
+    // The FROM number's synced row says which VoIP.ms account it lives on —
+    // a test from a second-account DID must use that account's credentials.
+    const { accountId, creds } = await loadVoipMsCredsForNumber(fromN.e164);
+    if (!creds) {
+      return reply.status(400).send({
+        error: "NOT_CONFIGURED",
+        message: accountId === VOIPMS_PRIMARY_ACCOUNT_ID
+          ? "VoIP.ms credentials not configured."
+          : "The VoIP.ms account this number belongs to has no usable credentials.",
+      });
+    }
+    const cfgRow = await db.globalVoipMsConfig.findUnique({ where: { id: accountId } });
     const provider = new VoipMsSmsProvider(
-      { username: creds.username, password: creds.password, fromNumber: fromN.e164, apiBaseUrl: cfg.apiBaseUrl || creds.apiBaseUrl },
+      { username: creds.username, password: creds.password, fromNumber: fromN.e164, apiBaseUrl: cfgRow?.apiBaseUrl || creds.apiBaseUrl },
       false, // real send, not test mode
     );
     try {

@@ -4607,8 +4607,15 @@ model GlobalSolaConfig {
   updatedBy  String?
 }
 
+/// One row per VoIP.ms ACCOUNT. The primary account keeps the historical id
+/// "default" (every legacy findUnique({id:"default"}) consumer still reads it);
+/// additional accounts get random ids and a human label. TenantSmsNumber rows
+/// carry `voipmsAccountId` (default "default") saying which account owns the DID.
 model GlobalVoipMsConfig {
   id                     String    @id @default("default")
+  /// Display name for the account ("Primary", "Reseller 2", …). Null on the
+  /// legacy primary row — the UI shows "Primary account" for it.
+  label                  String?
   credentialsEncrypted   String?
   credentialsKeyId       String    @default("v1")
   apiBaseUrl             String?
@@ -4676,6 +4683,11 @@ model TenantSmsNumber {
   /// Null until assigned to a Connect tenant (synced inventory row).
   tenantId            String?
   provider            IntegrationProvider   @default(VOIPMS)
+  /// Which VoIP.ms account (GlobalVoipMsConfig.id) holds this DID. Plain string
+  /// on purpose — no FK, so legacy rows work before the "default" config row
+  /// exists. Stamped by sync-numbers; read by the inbound poller and every
+  /// outbound send so the right account's credentials are used per number.
+  voipmsAccountId     String                @default("default")
   voipmsDid           String?
   phoneRaw            String?
   phoneE164           String                @unique
@@ -4696,6 +4708,7 @@ model TenantSmsNumber {
 
   @@index([tenantId, active])
   @@index([tenantId, isTenantDefault])
+  @@index([voipmsAccountId])
 }
 
 /// Join table: a specific set of users explicitly assigned to a VoIP.ms SMS number.
