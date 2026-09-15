@@ -273,7 +273,14 @@ function heldByCreateABox() {
 }
 const reg = (contactUri: string) => ({ endpoint: "T7_106", status: "REGISTERED", lastRegisteredAt: new Date(), contactUri });
 
-test("another company's extension in use by a DIFFERENT device refuses the move and writes nothing", async () => {
+test("another company's extension live on a DIFFERENT device releases the move — the wizard on the phone's own network wins (Izzy, 2026-09-15)", async () => {
+  // ⛔ SUPERSEDES the pre-7e427c28 rule that refused here. A live registration by a
+  // DIFFERENT device (different LAN address, different public address) no longer blocks:
+  // releasing a MAC's record never touches that device's registration, so the old halt
+  // stranded a run on "Support needs to finish" over a provably stale record. The two
+  // fences that still refuse are the forger shape and a missing presence pair (sibling
+  // tests below). Here the handset is standing on the requesting customer's own network,
+  // so the record moves and the endpoint left standing is recorded as moved-from.
   const asked: string[][] = [];
   const w = writer({
     registrations: async (eps: string[]) => {
@@ -282,13 +289,13 @@ test("another company's extension in use by a DIFFERENT device refuses the move 
     },
   }, heldByCreateABox());
   const out = await ensureProvisioningRecord(w.deps, GXP_106);
-  assert.equal(out.kind, "refused");
-  if (out.kind !== "refused") return;
-  assert.equal(out.reason, "held_by_another_account");
+  assert.equal(out.kind, "written");
+  if (out.kind !== "written") return;
+  assert.equal(out.rehomedFromTenant, 7);
   assert.deepEqual(asked, [["T7_106"]], "the bare `106` must be composed into the endpoint the PBX actually names");
-  assert.equal(w.saved.length, 0);
-  assert.equal(w.rehomes.length, 0, "nothing moved, so nothing may be recorded as moved");
-  assert.ok(!/tenant|T\d+_|another company|create a box/i.test(out.customerMessage), out.customerMessage);
+  assert.equal(w.saved[0].phoneId, 24, "UPDATE the row — a MAC may exist exactly once");
+  assert.deepEqual(w.rehomes, [{ mac: "c074ad8c654e", fromTenant: 7, toTenant: LANDAU, extNumber: "101" }],
+    "the move off the other tenant is recorded, even though its device stays registered");
 });
 
 test("the only live registration being THIS handset on THIS network lets the move happen", async () => {

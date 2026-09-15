@@ -572,6 +572,46 @@ not the handset — the `_1` suffix). No fleet-wide proof exists or should be cl
 push is built. The session's OTHER fixes (batch-result read, serial-mismatch message, OCR rotation,
 rehome wizard-priority, rediscover filter, GDMS numeric status) ARE deployed and real.
 
+## 10k. Round 12 (2026-09-15) — GDMS cloud config push PROVEN; the real blocker is a moved-phone template with a VPN SIP server
+
+Izzy: *"proof that every single Grandstream phone will do this flawlessly … for years."* Built toward
+it by finding + verifying the DURABLE delivery mechanism, and in doing so uncovered the config bug
+that actually stops registration. Honest state: NO phone has registered yet; the mechanism is proven
+and the blocker is precisely diagnosed.
+
+✅ **GDMS `device/config/xml` push works end to end (durable, LAN-independent, sustainable).**
+Authoritative spec: the doc SPA at doc.grandstream.dev is backed by a public `api_data.json`; the
+full endpoint catalog + field shapes are in memory [[gdms-openapi-provisioning-spec]]. The push:
+`POST /oapi/v1.0.0/device/config/xml`, **multipart/form-data**, `mac` text field + `xml` FILE part,
+orgId optional. ⛔ Signature is the FORM method (NOT the JSON canonical the client uses today): map
+{access_token,client_id,client_secret,timestamp,mac,xml=md5(fileBytes)}, sort keys ascending, join
+key=value with &, `sha256("&"+sorted+"&")`. PROVEN LIVE on C0:74:AD:8C:60:5F: retCode 0,
+`isSynchronized:1`, and the phone PULLED + APPLIED the config over the cloud (its ping + web UI went
+dark exactly as the pushed config's hardening dictates). The native XML must be gs_provision format,
+which our phoneprov already renders. NOT YET productionized in gdmsClient (contract is proven).
+
+⛔⛔ **THE REAL BLOCKER — the moved phone's provisioning template points SIP at a VPN address.**
+Landau/tenant-21 template `a70274ea0f143ca0` has **P47 (account-1 SIP server) = 10.8.0.1** and 12
+total refs to 10.8.0.1 — Create A Box's OpenVPN gateway. The phone can NEVER register with this from
+Izzy's home (no VPN). This is NOT the delivery mechanism: the phone would fail on ANY delivery.
+Root cause: when the wizard released the record from Create A Box (tenant 7) and generated the new
+tenant-21 template, it carried CAB's VPN SIP server instead of the standard public host. Proof it's
+a one-off bug: across all provisioning templates, **3 use the correct `209.145.60.79`; only this
+moved one uses 10.8.0.1.** (OpenVPN itself is OFF — P8460 empty — and there's no VLAN/static-IP
+change; the only contamination is the SIP server + Create A Box's ping/web hardening.)
+
+⚠️ **The test phone is offline to the LAN now** — it applied the pushed config (ARP resolves at
+.172 but ping + HTTPS are dead, per CAB's hardening). Recover by a physical factory reset (hold OK
+~10 s) OR by pushing a CORRECTED config via GDMS (mechanism proven) once the template SIP server is
+fixed. ⛔ Did NOT push a corrected config or edit the PBX template — both are writes needing Izzy's
+go-ahead (PBX is read-only by default; one blind push already locked the phone).
+
+**Path to the real fleet proof:** (1) fix moved-phone template generation to use the destination
+tenant's public SIP host (209.145.60.79), not the source's; (2) productionize the GDMS `config/xml`
+push in gdmsClient (multipart + form signature above) + provider + wiring + simulator tests; (3)
+push the corrected config via GDMS, watch T21_101 register from the phone's LAN IP; (4) lock it with
+a repeatable factory-reset→register test. Only then is "every Grandstream, flawlessly" earned.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
