@@ -647,6 +647,46 @@ then a repeatable factory-reset→register test. Until then, no GXP2170 register
 pushed cfg). Clean recovery = physical factory reset (hold OK ~10 s) or a GDMS factory-reset task.
 Left to Izzy — no more blind config pushes.
 
+## 10m. Round 14 (2026-09-15) — THE SOURCE IS FIXED: clean per-model template created from the stock base; Izzy's flow is the design
+
+Izzy set the architecture, verbatim spirit: templates are reusable — ONE per model, the system
+fills it in per phone; the flow is (0) factory reset automatically, (1) ensure a template for the
+model, (2) add the phone to provisioning, (3) take the rendered template and send it to the phone +
+restart. The per-customer templates on this PBX were only his organizational habit.
+
+✅ **The exact defect and the fix, both proven:**
+- Working templates set the server with a PLACEHOLDER (`<P47>{{ $accounts[0]['sip_domain'] ?? null }}`).
+  CAB's model-64 templates 15/16 hand-hardcode `<P47>10.8.0.1</P47>` (their VPN) — poison for anyone else.
+- **VitalPBX ships clean stock bases per model:** `/var/lib/vitalpbx/provisioning/base_templates/
+  grandstream/<model>/template.cfg` — placeholder-based, zero VPN. This is the source for clean templates.
+- **Created template 60 "GXP2170"** (model 64, tenant 1, shared=yes): provision = the stock base
+  VERBATIM, VPK keys blanked (no "Mrs. Koufman" leaking). Script pattern: clone row 15 → UPDATE
+  provision via UNHEX(hex) OVER STDIN (⛔ a 1MB hex literal on argv dies "Argument list too long").
+- **Set 15/16 shared='no'.** ⛔ Blast radius verified: the shared flag ONLY affects `chooseTemplate`'s
+  fallback for NEW phones; bound devices render by template_id regardless — CAB unaffected. With 60 the
+  only shared model-64 template, `chooseTemplate` now picks it for any tenant — NO code change needed
+  for selection.
+- **Rebound device 78 → 60** and forced a re-render. ⛔⛔ THE CFG IS A DISK CACHE: `index.php` only
+  calls `generateProvisioningFile()` when the file is MISSING — a DB rebind changes nothing served
+  until you DELETE `provisioning_templates/<tenant-hash>/cfg<mac>.xml` and re-fetch. Re-render proven:
+  `P47=209.145.60.79`, zero 10.8.0.1, zero Koufman, account T21_101 intact.
+- The corrected config was pushed to the phone via GDMS + reboot (both 200); registration watch
+  running at write time. Stable this time by construction: phoneprov itself now serves the same
+  correct config, so a re-pull cannot revert it.
+
+⛔ **Device 24 = the OTHER Landau GXP2170 (C0:74:AD:8C:65:4E, .171) has the SAME bug** — still bound
+  to CAB template 16. Rebind to 60 + delete its cached cfg once 78 proves out.
+
+**PBX writes made (Izzy-authorized, backups in `/root/landau-template-fix-<stamp>/`):** template 60
+created; 15/16 shared='no'; device 78 template_id 15→60; cached cfg deleted/regenerated. Plus GDMS
+config pushes + reboot/factory-reset tasks to C0:74:AD:8C:60:5F.
+
+**REMAINING CODE BUILD (the wizard doing it, hands-off):** (1) writer ensures a clean template for
+ANY Grandstream model — create from the stock base when missing (the manual pattern above, in code,
+via the PBX helper/panel contract); (2) productionize the GDMS `device/config/xml` push
+([[gdms-openapi-provisioning-spec]]) and wire it as the wizard's delivery step (render → push →
+reboot); (3) tests + deploy; (4) the hands-off proof: factory phone, wizard run, registers untouched.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
