@@ -23,9 +23,11 @@ import { Journal } from "./runtime/journal";
 import { DesktopLinkClient, type LinkState } from "./link";
 import { askApproval, registerApprovalIpc, openConnectionsWindow, pendingApprovals, type ApprovalDeps } from "./approvalWindow";
 import { normalizePermissions, PERMISSION_PROFILES } from "./policyCore";
+import { ChromeRuntime } from "./browserCompanion/runtime";
 
 export type HandsDeps = {
   app: App;
+  safeStorage?: import("electron").SafeStorage;
   BrowserWindow: typeof BW;
   ipcMain: IpcMain;
   screen: Screen;
@@ -108,7 +110,9 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   const permissions = () => normalizePermissions({ profile: d.getSettings().coworkerPermissions ?? "SAFE", overrides: {} });
 
-  const runtime = new CoworkerRuntime({
+  const chrome = d.safeStorage ? new ChromeRuntime({userData:d.app.getPath("userData"),safeStorage:d.safeStorage,
+    env:()=>runtime.fsEnv(),journal,onStop:()=>runtime.cancel(null)}) : undefined;
+  const runtime: CoworkerRuntime = new CoworkerRuntime({
     home: os.homedir(),
     workspace,
     extraRoots: () => (d.getSettings().coworkerExtraRoots ?? []).filter((r): r is string => typeof r === "string" && !!r.trim()),
@@ -116,7 +120,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     isCallActive: d.isCallActive,
     coworkerEnabled: () => true,
     askApproval: (req, signal) => askApproval(req, signal),
-    browser, mcp, journal,
+    browser, chrome, mcp, journal,
     openPath: async (p) => { const err = await d.shell.openPath(p); if (err) throw new Error(err); },
     showInFolder: (p) => d.shell.showItemInFolder(p),
     diagnostics: { portalUrl: d.portalUrl, appVersion: d.app.getVersion(), logFile: d.logFile, phoneState: d.phoneState, linkState: () => (link ? link.status() : { state: "off" }) as unknown as Record<string, unknown> },
@@ -133,6 +137,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
       mcpServers: mcp.status().map((m) => ({ id: m.id, name: m.name, state: m.state, tools: m.tools.length })),
     };
   };
+  void chrome?.start();
 
   const getToken = async (): Promise<string | null> => {
     const win = d.fullWindow();
@@ -167,6 +172,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
       workspace: workspaceFor(s),
       appVersion: d.app.getVersion(),
       tools: runtime.manifestTools().length,
+      chrome: chrome?.status() ?? {connected:false,error:"secure_storage_unavailable"},
       mcp: mcp.status(),
       activeCalls: runtime.activeCalls(),
       pendingApprovals: pendingApprovals(),
@@ -174,6 +180,11 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     };
   };
   d.ipcMain.handle("coworker-admin:state", async () => { try { return await state(); } catch (e) { return { error: String(e) }; } });
+  d.ipcMain.handle("coworker-admin:chrome-pair", (event) => {
+    const expected = require("node:url").pathToFileURL(d.assetPath("coworkerConnections.html")).href;
+    if(event.sender.getURL()!==expected || event.senderFrame!==event.sender.mainFrame) return {ok:false,error:"not_allowed_from_this_window"};
+    return chrome?.pairing() ?? {ok:false,error:"secure_storage_unavailable"};
+  });
   d.ipcMain.handle("coworker-admin:set-profile", (event, profile: unknown) => {
     if (!isLocalAdminWindow(event)) return { ok: false, error: "not_allowed_from_this_window" };
     if (typeof profile !== "string" || !(PERMISSION_PROFILES as readonly string[]).includes(profile) || profile === "CUSTOM") return { ok: false, error: "bad_profile" };
@@ -230,7 +241,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   return {
     link, runtime, mcp, journal,
-    stop: async () => { try { runtime.cancel(null); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
+    stop: async () => { try { runtime.cancel(null); await chrome?.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
     openConnections: () => { openConnectionsWindow(approvalDeps); },
     status: () => ({ link: link!.status(), profile: permissions().profile, mcp: mcp.status().map((m) => ({ id: m.id, state: m.state, tools: m.tools.length })), active: runtime.activeCalls() }),
     busy: () => runtime.activeCalls().length > 0 || pendingApprovals().length > 0,

@@ -38,7 +38,9 @@ export class Journal {
   async append(row: JournalRow): Promise<void> {
     try {
       await fsp.mkdir(this.dir, { recursive: true });
-      const bounded = { ...row, args: row.args === undefined ? undefined : boundArgs(row.args), summary: row.summary?.slice(0, 400) };
+      const browserArgs = row.tool?.startsWith("computer_chrome_") && row.args && typeof row.args === "object"
+        ? {tabId:(row.args as any).tabId,action:(row.args as any).action} : row.args;
+      const bounded = { ...row, args: browserArgs === undefined ? undefined : boundArgs(browserArgs), summary: row.tool?.startsWith("computer_chrome_") ? `${row.tool}: ${row.outcome}` : row.summary?.slice(0, 400) };
       await fsp.appendFile(row.kind === "artifact" ? this.artifactsFile : this.file, JSON.stringify(bounded) + "\n", "utf8");
       // Keep the journal from growing forever: rotate at ~5 MB.
       const st = await fsp.stat(this.file).catch(() => null);

@@ -67,6 +67,8 @@
       </div>
 
       <h2>MCP connections</h2>
+      <h2>Chrome Browser Companion</h2>
+      <div class="card"><p>Works in your real Chrome, using separate Coworker tabs. Install Loopcom Browser Companion, then pair it here. Allow individual sites in its popup.</p><button id="chromePair">Pair Chrome</button><pre id="chromePairResult" style="white-space:pre-wrap;word-break:break-all"></pre></div>
       <div id="servers"></div>
       <div class="card">
         <div class="row">
@@ -93,6 +95,7 @@
         var api = window.coworkerAdmin;
         if (!api) { document.body.innerHTML = '<p class="err" style="padding:20px">Bridge missing — this page only works inside the Loopcom app.</p>'; return; }
         var $ = function (id) { return document.getElementById(id); };
+        $("chromePair").onclick = async function () { var r = await api.chromePair(); $("chromePairResult").textContent = r.ok ? "Paste this private code into the extension popup:\n" + r.code : r.error; setTimeout(function(){ $("chromePairResult").textContent = ""; }, 60000); };
         function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
         function fmtAgo(iso) { if (!iso) return "never"; var s = Math.round((Date.now() - new Date(iso).getTime()) / 1000); if (s < 60) return s + "s ago"; if (s < 3600) return Math.round(s / 60) + "m ago"; return Math.round(s / 3600) + "h ago"; }
         function splitArgs(s) { var out = [], m, re = /"([^"]*)"|'([^']*)'|(\S+)/g; while ((m = re.exec(s))) out.push(m[1] != null ? m[1] : m[2] != null ? m[2] : m[3]); return out; }

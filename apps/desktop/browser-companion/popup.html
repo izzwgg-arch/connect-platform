@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Loopcom Browser Companion</title><link rel="stylesheet" href="popup.css"></head><body>
+<header><span class="brand">∞</span><div><strong>Loopcom Coworker</strong><small>Browser Companion</small></div></header>
+<p id="status" role="status">Connecting…</p>
+<div class="controls"><button id="pause">Pause</button><button id="stop">Stop</button><button id="resume">Resume</button></div>
+<section><h2>Pair this computer</h2><p>In Loopcom, open Coworker Settings &amp; Connections → Pair Chrome. Paste the pairing code here. Keep it private.</p><input id="secret" type="password" autocomplete="off" aria-label="Pairing code"><button id="pair">Pair</button></section>
+<section><h2>Sites the Coworker may use</h2><p>Grant each site you want to work with. Page text cannot grant access.</p><input id="origin" type="url" placeholder="https://example.com" aria-label="Site URL"><button id="grant">Allow this site</button></section>
+<section><h2>Use this tab</h2><p>Sharing lets the Coworker change the visible page. Your typing or clicking pauses it.</p><select id="task" aria-label="Coworker task"></select><button id="share">Use this tab</button></section>
+<section><p>Screenshots and file selection use Chrome's optional debugger permission. Chrome shows when it is attached.</p><button id="debugger">Enable screenshots and uploads</button></section>
+<script src="popup.js"></script></body></html>

@@ -158,11 +158,11 @@ export class DesktopLinkClient {
     }
   }
 
-  private async handleCall(msg: { id: string; name: string; args?: unknown; taskId?: string; timeoutMs?: number }) {
+  private async handleCall(msg: { id: string; name: string; args?: unknown; taskId?: string; conversationId?: string; timeoutMs?: number }) {
     const args = msg.args && typeof msg.args === "object" && !Array.isArray(msg.args) ? (msg.args as Record<string, unknown>) : {};
     const taskId = typeof msg.taskId === "string" ? msg.taskId.slice(0, 120) : "task";
     const started = Date.now();
-    const out = await this.deps.runtime.handle({ id: msg.id, name: msg.name.slice(0, 64), args, taskId, timeoutMs: msg.timeoutMs });
+    const out = await this.deps.runtime.handle({ id: msg.id, name: msg.name.slice(0, 64), args, taskId, conversationId: typeof msg.conversationId === "string" ? msg.conversationId.slice(0,120) : undefined, timeoutMs: msg.timeoutMs });
     this.set({ calls: this.state.calls + 1 });
     for (let attempt = 0; attempt < 3; attempt++) {
       try {

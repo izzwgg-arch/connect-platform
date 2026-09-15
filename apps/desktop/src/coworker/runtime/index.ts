@@ -27,6 +27,8 @@ import { CoworkerBrowser } from "./browser";
 import { runDiagnostics } from "./diagnostics";
 import { McpManager } from "./mcp";
 import { Journal } from "./journal";
+import type { ChromeRuntime } from "../browserCompanion/runtime";
+import { validateArgs, type CommandName } from "../browserCompanion/protocol";
 
 export type ApprovalRequest = {
   callId: string;
@@ -50,6 +52,7 @@ export type RuntimeDeps = {
   /** Show the person a Yes/No and resolve their answer (false on timeout/close). */
   askApproval: (req: ApprovalRequest, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>;
   browser: CoworkerBrowser;
+  chrome?: ChromeRuntime;
   mcp: McpManager;
   journal: Journal;
   shellDeps?: ShellDeps;
@@ -64,7 +67,7 @@ export type RuntimeDeps = {
   now?: () => number;
 };
 
-export type IncomingCall = { id: string; name: string; args: Record<string, unknown>; taskId: string; timeoutMs?: number };
+export type IncomingCall = { id: string; name: string; args: Record<string, unknown>; taskId: string; conversationId?: string; timeoutMs?: number };
 export type CallOutcome = { ok: boolean; content: unknown; verdict: string; durationMs: number };
 
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -80,7 +83,7 @@ export class CoworkerRuntime {
 
   /** The manifest the desktop announces: catalogue + connected MCP tools. */
   manifestTools() {
-    const builtin = TOOL_CATALOG.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
+    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
     const mcp = this.deps.mcp.tools().map(({ client, tool }) => ({
       name: tool.modelName,
       description: `[${client.config.name}] ${tool.description}`.slice(0, 2000),
@@ -104,6 +107,7 @@ export class CoworkerRuntime {
       this.active.delete(id); n++;
     }
     if (!taskId || n) this.deps.browser.cancel();
+    this.deps.chrome?.cancel(taskId);
     this.activity();
     this.deps.log(`cancel task=${taskId ?? "all"} aborted=${n}`);
     return n;
@@ -112,7 +116,7 @@ export class CoworkerRuntime {
   async handle(call: IncomingCall): Promise<CallOutcome> {
     const startedAt = this.now();
     const abort = new AbortController();
-    const rec = { taskId: call.taskId, name: call.name, abort, children: new Set<ChildProcess>(), startedAt };
+    const rec = { taskId: call.taskId, scopeId: call.conversationId ?? call.taskId, name: call.name, abort, children: new Set<ChildProcess>(), startedAt };
     this.active.set(call.id, rec);
     this.activity();
     const finish = async (ok: boolean, content: unknown, verdict: string, outcome: "done" | "denied" | "failed" | "cancelled" | "timeout", summary?: string) => {
@@ -126,6 +130,8 @@ export class CoworkerRuntime {
     try {
       const args = call.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
       const catalog = findTool(call.name);
+      if (call.name.startsWith("computer_chrome_")) validateArgs(call.name.slice("computer_chrome_".length) as CommandName, args);
+      if (this.deps.chrome && call.name.startsWith("computer_browser_")) return finish(false, {error:"legacy_browser_disabled",message:"Use the real Chrome companion tools."}, "denied", "denied");
       const mcp = catalog ? null : this.deps.mcp.find(call.name);
       if (!catalog && !mcp) return finish(false, { error: "unknown_tool", message: `This computer has no tool named ${call.name}.` }, "unknown", "denied");
       const spec = catalog ? catalog.spec : mcp!.tool.spec;
@@ -135,9 +141,16 @@ export class CoworkerRuntime {
       if (decision.verdict === "deny") {
         return finish(false, { error: decision.code, denied: true, message: decision.message, domains: decision.domains }, decision.code, "denied", decision.message);
       }
+      let chromeAuthorization: string | undefined;
       if (decision.verdict === "ask") {
         await this.deps.journal.append({ ts: new Date().toISOString(), kind: "call", taskId: call.taskId, callId: call.id, tool: call.name, verdict: decision.code, outcome: "asked", args, summary: decision.message });
         const req = this.approvalText(call, catalog ?? null, mcp?.tool.name ?? null, args, decision);
+        if (this.deps.chrome && call.name.startsWith("computer_chrome_") && catalog?.spec.alwaysRequireApproval) {
+          const prepared = await this.deps.chrome.prepare(call.name.slice("computer_chrome_".length) as CommandName,args,call.taskId,abort.signal,rec.scopeId);
+          if (prepared.ok !== true || typeof prepared.authorization !== "string") return finish(false,prepared,"browser_prepare_failed","failed");
+          chromeAuthorization = prepared.authorization;
+          req.what = `Chrome action: ${call.name.slice("computer_chrome_".length)}\nExact arguments: ${JSON.stringify(args)}\nObserved page and target (untrusted page data): ${JSON.stringify(prepared.description)}\nApprove only if this matches your request. A changed page requires a new approval.`;
+        }
         try { this.deps.onAwaitingApproval?.({ id: call.id, taskId: call.taskId, tool: call.name }); } catch { /* the agent's deadline is a courtesy; the prompt shows regardless */ }
         let approvalTimer: ReturnType<typeof setTimeout> | null = null;
         const answer = await Promise.race([
@@ -156,6 +169,8 @@ export class CoworkerRuntime {
       /* ── run ── */
       const result = mcp
         ? await mcp.client.callTool(mcp.tool.name, args, Math.min(call.timeoutMs ?? 120_000, 10 * 60 * 1000))
+        : this.deps.chrome && chromeAuthorization
+          ? await (async()=>{const content=await this.deps.chrome!.execute(call.name.slice("computer_chrome_".length) as CommandName,args,call.taskId,abort.signal,rec.scopeId,chromeAuthorization);return {ok:content.ok!==false,content};})()
         : await this.runBuiltin(catalog!, args, rec, abort.signal);
       if (abort.signal.aborted) return finish(false, { error: "task_cancelled", message: "The person cancelled the task; the call may have partly run.", partial: result.content }, decision.code, "cancelled");
       const ok = result.ok !== false && !(result.content && typeof result.content === "object" && (result.content as { ok?: boolean }).ok === false);
@@ -189,10 +204,20 @@ export class CoworkerRuntime {
     };
   }
 
-  private async runBuiltin(tool: CatalogTool, args: Record<string, unknown>, rec: { children: Set<ChildProcess> }, signal: AbortSignal): Promise<{ ok: boolean; content: unknown }> {
+  private async runBuiltin(tool: CatalogTool, args: Record<string, unknown>, rec: { taskId: string; scopeId: string; children: Set<ChildProcess> }, signal: AbortSignal): Promise<{ ok: boolean; content: unknown }> {
     const env = this.fsEnv();
     const wrap = (content: unknown) => ({ ok: !(content && typeof content === "object" && (content as { ok?: boolean }).ok === false), content });
     switch (tool.name) {
+      case "computer_chrome_tabs":
+      case "computer_chrome_open":
+      case "computer_chrome_read":
+      case "computer_chrome_act":
+      case "computer_chrome_download":
+      case "computer_chrome_upload":
+      case "computer_chrome_screenshot":
+      case "computer_chrome_wait":
+      case "computer_chrome_close":
+        return wrap(this.deps.chrome ? await this.deps.chrome.execute(tool.name.slice("computer_chrome_".length) as CommandName, args, rec.taskId, signal, rec.scopeId) : {ok:false,error:"chrome_companion_unavailable"});
       case "computer_workspace": return wrap({
         ok: true, workspace: this.deps.workspace, downloads: path.join(this.deps.workspace, "downloads"), artifacts: path.join(this.deps.workspace, "artifacts"),
         home: this.deps.home, desktop: path.join(this.deps.home, "Desktop"), documents: path.join(this.deps.home, "Documents"), userDownloads: path.join(this.deps.home, "Downloads"),

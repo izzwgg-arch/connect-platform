@@ -6,7 +6,7 @@
   "author": "Loopcom LLC",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/browser-companion/schema.mjs && tsc -p tsconfig.json",
     "dev": "pnpm build && electron .",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",

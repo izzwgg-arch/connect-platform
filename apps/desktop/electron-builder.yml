@@ -35,6 +35,7 @@ directories:
 files:
   - dist/**
   - assets/**
+  - browser-companion/**
   - package.json
 
 win:

@@ -615,7 +615,7 @@ function startHands(): void {
   if (hands) return;
   try {
     hands = startCoworkerHands({
-      app, BrowserWindow, ipcMain, screen, session, shell,
+      app, BrowserWindow, ipcMain, screen, session, shell, safeStorage,
       portalUrl, preloadPath, assetPath,
       getSettings: () => settings,
       writeSettings: (next) => writeSettings(next),

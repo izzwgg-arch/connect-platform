@@ -300,6 +300,7 @@ const coworkerApprovalApi = {
 contextBridge.exposeInMainWorld("coworkerApproval", coworkerApprovalApi);
 
 const coworkerAdminApi = {
+  chromePair: () => ipcRenderer.invoke("coworker-admin:chrome-pair"),
   getState: () => ipcRenderer.invoke("coworker-admin:state"),
   setProfile: (profile: string) => ipcRenderer.invoke("coworker-admin:set-profile", profile),
   mcp: (action: string, id: string, config?: unknown) => ipcRenderer.invoke("coworker-admin:mcp", { action, id, config }),

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Loopcom Browser Companion",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Let Loopcom Coworker work in explicitly assigned Chrome tabs. Pause or stop at any time.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoc71B0Srx899aeVh5TXjq3tblFNs1jtn5invC17TYjPKSbQ4iPM8+gojzcehP2cZIHn+03tU/TyCOPjQtqMpFuB0XGJO4tBokonyGNxv0s52yaj5gMmt99FfjQqBPPbve6mtIouX9kbZM8JxqbrS9UF6wu4P5dY1aYpZsUTdhMs80eJY14JEkOHNLJaAUvZz1xJ1m2hd0DVvfYvURDI1fSf5VOqmMHbqk07DOms2oHfjUjwWCYX/k5NmAqOFLJc7duAdCqDDx14E/PCcTnj5U9bwfoghgyoBWvQssJBZwfD2rraO+PpWKIH65nyLpIL/ugp8pVwkMrHShJxdZ9ehJwIDAQAB",
+  "permissions": ["storage", "alarms", "scripting", "downloads", "activeTab"],
+  "optional_permissions": ["debugger"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {"service_worker": "worker.js", "type": "module"},
+  "action": {"default_title": "Loopcom Coworker", "default_popup": "popup.html"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}
+}

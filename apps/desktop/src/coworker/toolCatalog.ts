@@ -13,6 +13,7 @@
  * ⛔ Pure. No fs, no Electron.
  */
 import type { CoworkerToolSpec, PermissionDomain, RiskLevel, ToolCategory } from "./policyCore";
+import { CHROME_TOOLS } from "./browserCompanion/catalog";
 
 export type JsonSchema = { type: "object"; properties: Record<string, unknown>; required?: string[]; additionalProperties?: false };
 
@@ -38,6 +39,7 @@ function spec(name: string, category: ToolCategory, risk: RiskLevel, domains: Pe
 const PATH_NOTE = "Absolute Windows path (C:\\Users\\...\\file.txt) or a path relative to the coworker workspace.";
 
 export const TOOL_CATALOG: readonly CatalogTool[] = [
+  ...CHROME_TOOLS,
   /* ── orientation ── */
   {
     name: "computer_workspace",
