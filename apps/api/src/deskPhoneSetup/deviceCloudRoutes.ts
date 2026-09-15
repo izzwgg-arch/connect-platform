@@ -45,6 +45,7 @@ import type { DeskPhoneDeps } from "./deskPhoneRoutes";
 import {
   failureFromError,
   providerFailure,
+  serialEmbeddedMacTail,
   type ActionResult,
   type DeviceProvider,
   type PrepareHooks,
@@ -70,6 +71,7 @@ import {
 // api, one switch (CRM_OCR_ENABLED). When it is off these routes say so in plain words.
 import {
   assertOcrSizeLimit,
+  extractTextAdaptive,
   getOcrProvider,
   loadOcrConfig,
   OcrLimitError,
@@ -360,6 +362,19 @@ async function runClaim(ctx: DeviceCloudRouteContext, input: {
     result = failureFromError(err, maker);
   }
 
+  // ⛔ Name the real mistake when we can attribute it (Izzy, 2026-09-15: "let the user know
+  // that they mixed up the serial numbers"): the maker refused the MAC+serial pair AND the
+  // serial's embedded MAC tail reads as a different handset's. Two agreeing signals — the
+  // tail heuristic alone must never refuse a serial, or a phone whose serial breaks the
+  // convention locks its own owner out with nothing to argue with.
+  if (!result.ok && result.code === "gdms_request_rejected" && input.serialNumber) {
+    const tail = serialEmbeddedMacTail(input.serialNumber);
+    const n = normalizeMac(mac);
+    if (tail && n && !n.endsWith(tail)) {
+      result = providerFailure("serial_for_different_device", maker);
+    }
+  }
+
   const now = new Date();
   let data: Record<string, unknown>;
   if (result.ok) {
@@ -577,11 +592,32 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
   }
 
   type PhotoText =
-    | { ok: true; text: string; confidence: number }
+    | { ok: true; text: string; confidence: number; pass: string; passesRun: number }
     | { ok: false; status: number; error: string; message: string };
 
+  /**
+   * A PREVIEW of recordLabel's accept test, used only to pick WHICH OCR pass of a photo
+   * is worth submitting — sideways and upside-down phone photos read as garbage until the
+   * right rotation is tried. ⛔ recordLabel stays the ONE judge: a pass this preview
+   * approves is still judged there in full, and when no pass is approved the best-reading
+   * pass goes through the same refusals as before. Nothing is accepted more easily.
+   */
+  function photoPassLooksAcceptable(phone: any): (raw: string, confidence: number) => boolean {
+    return (raw, confidence) => {
+      const label = parseDeviceLabel(labelTextFromPhoto(raw));
+      if (label.mac && label.mac !== phone.macAddress) return false;
+      if (!label.serialNumber && !label.model) return false;
+      return confidence >= MIN_LABEL_PHOTO_CONFIDENCE || label.mac === phone.macAddress;
+    };
+  }
+
   /** OCRs one image in memory. ⛔ The picture is never written anywhere and never logged. */
-  async function readLabelPhoto(buffer: Buffer, mimeType: string, fileName: string): Promise<PhotoText> {
+  async function readLabelPhoto(
+    buffer: Buffer,
+    mimeType: string,
+    fileName: string,
+    looksGood: (text: string, confidence: number) => boolean,
+  ): Promise<PhotoText> {
     const config = loadOcrConfig();
     const provider = getOcrProvider(config);
     // ⛔ OFF IS AN HONEST ANSWER, NOT A FAILURE. Reading photos is one switch on the api; while it
@@ -606,8 +642,14 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       throw err;
     }
     try {
-      const out = await provider.extractText({ buffer, mimeType: mime, fileName }, config);
-      return { ok: true, text: out.text ?? "", confidence: typeof out.confidence === "number" ? out.confidence : 0 };
+      const out = await extractTextAdaptive(provider, { buffer, mimeType: mime, fileName }, config, looksGood);
+      return {
+        ok: true,
+        text: out.text ?? "",
+        confidence: typeof out.confidence === "number" ? out.confidence : 0,
+        pass: out.pass,
+        passesRun: out.passesRun,
+      };
     } catch {
       // ⛔ The engine's own error text never reaches a customer — it is noise to them and may name
       // internals. An unreadable picture gets the sentence that tells them what to do instead.
@@ -633,6 +675,8 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     via: "typed_or_scanned" | "photo" | "texted_photo",
     /** OCR's 0–100 reading of how sharp the text was; null when a person typed or scanned it. */
     confidence: number | null,
+    /** Which OCR pass produced the text and how many ran. Names and counts only — audit material. */
+    photoRead?: { pass: string; passesRun: number } | null,
   ): Promise<LabelOutcome> {
     const label = parseDeviceLabel(text);
 
@@ -711,6 +755,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
         manufacturer: label.manufacturer, modelAccepted, via,
         // ⛔ The reading, never the text: OCR output can carry anything that was in shot.
         photoConfidence: confidence === null ? null : Math.round(confidence),
+        ...(photoRead ? { photoPass: photoRead.pass, photoPassesRun: photoRead.passesRun } : {}),
       },
     });
     return {
@@ -785,10 +830,24 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     const buffer = await file.toBuffer();
     if (!buffer?.length) return reply.status(400).send({ error: "file_required" });
 
-    const read = await readLabelPhoto(buffer, String(file.mimetype || ""), String(file.filename || "label.jpg"));
+    const read = await readLabelPhoto(
+      buffer, String(file.mimetype || ""), String(file.filename || "label.jpg"), photoPassLooksAcceptable(phone),
+    );
     if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
-    const outcome = await recordLabel(user, phone, labelTextFromPhoto(read.text), "photo", read.confidence);
+    const outcome = await recordLabel(
+      user, phone, labelTextFromPhoto(read.text), "photo", read.confidence,
+      { pass: read.pass, passesRun: read.passesRun },
+    );
     if (!outcome.ok) {
+      // Numbers only — so "it couldn't read my photo" is answerable from the audit next time.
+      await deps.audit({
+        tenantId: user.tenantId, action: "DESK_PHONE_LABEL_PHOTO_REFUSED",
+        entityType: "DeskPhoneSetupPhone", entityId: phone.id, actorUserId: user.sub,
+        metadata: {
+          error: outcome.error, via: "photo",
+          photoConfidence: Math.round(read.confidence), photoPass: read.pass, photoPassesRun: read.passesRun,
+        },
+      });
       return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     }
     return reply.send(outcome.body);
@@ -900,10 +959,23 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
 
     const buffer = await readChatAttachmentBuffer(picture.storageKey).catch(() => null);
     if (!buffer?.length) return reply.send(waiting);
-    const read = await readLabelPhoto(buffer, String(picture.mimeType || ""), String(picture.fileName || "label.jpg"));
+    const read = await readLabelPhoto(
+      buffer, String(picture.mimeType || ""), String(picture.fileName || "label.jpg"), photoPassLooksAcceptable(phone),
+    );
     if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
-    const outcome = await recordLabel(user, phone, labelTextFromPhoto(read.text), "texted_photo", read.confidence);
+    const outcome = await recordLabel(
+      user, phone, labelTextFromPhoto(read.text), "texted_photo", read.confidence,
+      { pass: read.pass, passesRun: read.passesRun },
+    );
     if (!outcome.ok) {
+      await deps.audit({
+        tenantId: user.tenantId, action: "DESK_PHONE_LABEL_PHOTO_REFUSED",
+        entityType: "DeskPhoneSetupPhone", entityId: phone.id, actorUserId: user.sub,
+        metadata: {
+          error: outcome.error, via: "texted_photo",
+          photoConfidence: Math.round(read.confidence), photoPass: read.pass, photoPassesRun: read.passesRun,
+        },
+      });
       return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     }
     // Read and accepted — stop looking, so a later unrelated picture from the same number is

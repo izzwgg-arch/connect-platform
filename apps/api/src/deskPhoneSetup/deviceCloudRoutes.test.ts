@@ -116,6 +116,9 @@ class OcrLimitErrorStub extends Error {
 }
 let ocrEnabled = true;
 let ocrNext: { text: string; confidence: number } | null = { text: "", confidence: 92 };
+/** Scripted multi-pass readings (one per rotation attempt; null = that pass threw). When unset,
+ *  the adaptive reader sees the single `ocrNext` pass — old tests keep their exact behavior. */
+let ocrPassList: Array<{ text: string; confidence: number } | null> | null = null;
 mock.module("../crm/docOcrProvider", {
   namedExports: {
     OcrLimitError: OcrLimitErrorStub,
@@ -132,6 +135,22 @@ mock.module("../crm/docOcrProvider", {
         },
       }
       : null),
+    // Mirrors the real semantics: first pass the caller approves wins; otherwise the
+    // best-confidence pass is returned; a throwing pass is skipped; all-throw throws.
+    extractTextAdaptive: async (_p: any, _i: any, _c: any, isAcceptable: (t: string, c: number) => boolean) => {
+      const passes = ocrPassList ?? [ocrNext];
+      let best: any = null;
+      let lastErr: unknown = null;
+      let ran = 0;
+      for (const p of passes) {
+        ran++;
+        if (!p) { lastErr = new Error("engine failed"); continue; }
+        if (isAcceptable(p.text, p.confidence)) return { text: p.text, confidence: p.confidence, pass: `p${ran}`, passesRun: ran };
+        if (!best || p.confidence > best.confidence) best = { text: p.text, confidence: p.confidence, pass: `p${ran}` };
+      }
+      if (!best) throw lastErr ?? new Error("no pass");
+      return { ...best, passesRun: ran };
+    },
     assertOcrSizeLimit: (buf: Buffer, cfg: any) => {
       if (buf.length > cfg.maxFileBytes) throw new OcrLimitErrorStub("ocr_file_too_large", "too large");
     },
@@ -191,7 +210,7 @@ function reset() {
   allowSetup = true; allowReset = true; registered = new Set(); lockKeys = []; sharedLock = makeLock();
   // ⛔ The faked engine is part of the fixture: a test that left OCR switched off, or left a
   // blurry reading behind, would silently change the meaning of every test after it.
-  ocrEnabled = true; ocrNext = { text: "", confidence: 92 }; attachmentBytes = Buffer.from("not-a-real-jpeg");
+  ocrEnabled = true; ocrNext = { text: "", confidence: 92 }; ocrPassList = null; attachmentBytes = Buffer.from("not-a-real-jpeg");
   const L = load();
   sim = new L.GdmsSimulator();
   L.clearGdmsCredentialsCache();
@@ -469,6 +488,34 @@ test("the maker refusing the add is a POSSIBLE conflict, and the device is not m
   assert.notEqual(row.vendorCloudState, "managed");
   assert.notEqual(row.vendorCloudState, "claiming");
   assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_CLAIM_REFUSED"));
+});
+
+test("a refused serial whose embedded MAC tail names a DIFFERENT handset tells the customer they mixed up the labels", async () => {
+  reset();
+  // Izzy, 2026-09-15, after doing exactly this twice: "we need to let the user know that
+  // they mixed up the serial numbers." GDMS's registry knows this phone's true serial; the
+  // customer typed the OTHER unit's (tail 8C654E vs this phone's …8C605F). The maker
+  // refuses the pair AND the tail points elsewhere — two agreeing signals.
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "unowned" });
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  const r = await app.inject({ method: "POST", url: `${base}/claim`, payload: { serialNumber: "20EZ115N308C654E" } });
+  assert.equal(r.statusCode, 409, r.body);
+  const out = body(r);
+  assert.equal(out.error, "serial_for_different_device");
+  assert.ok(String(out.message ?? "").includes("different phone"), r.body);
+  assert.ok(!("possibleOwnershipConflict" in out) || !out.possibleOwnershipConflict);
+  assert.notEqual(row.vendorCloudState, "managed");
+});
+
+test("the tail heuristic never refuses on its own — when the maker accepts, a mismatched tail is nobody's business", async () => {
+  reset();
+  // The convention is observed, not documented: a phone whose serial breaks it must never
+  // lock its own owner out. No seed = the sim's registry has no opinion; the add lands.
+  const app = await makeApp(CUSTOMER);
+  const { base } = await runWithPhone(app);
+  const r = await app.inject({ method: "POST", url: `${base}/claim`, payload: { serialNumber: "20EZ115N30FFFFFF" } });
+  assert.equal(r.statusCode, 200, r.body);
 });
 
 test("a claim already in flight is refused; an abandoned one is not", async () => {
@@ -991,6 +1038,46 @@ test("a clear photo of the label names the phone and stores its serial — no pa
   assert.equal(audit.metadata.photoConfidence, 91);
   // ⛔ The audit carries the READING, never the text OCR pulled off the picture.
   noLeak(audit, [SN, "GXP2170 MAC"]);
+});
+
+test("a SIDEWAYS photo is read on a later rotation pass — the first garbage reading is not the verdict", async () => {
+  reset();
+  // Izzy, 2026-09-15: "It wasn't such an unclear photo. It should have been able to read it."
+  // A phone photo is routinely rotated (EXIF is ignored by the engine), so the raw-pixel pass
+  // reads garbage; the quarter-turn pass reads the label fine. The gate's rules are unchanged —
+  // the rotation loop only picks WHICH reading to judge.
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  ocrPassList = [
+    { text: "~~|||~ ..", confidence: 12 },
+    { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 88 },
+  ];
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, SN);
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED");
+  assert.equal(audit.metadata.photoPassesRun, 2);
+  assert.equal(audit.metadata.photoConfidence, 88, "the accepted pass's reading is what is recorded");
+});
+
+test("when every rotation reads badly the refusal stands, and the audit says what was tried", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  ocrPassList = [
+    { text: "~~", confidence: 9 },
+    { text: `S/N: ${SN}`, confidence: 31 },
+    { text: "..", confidence: 4 },
+  ];
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 400, r.body);
+  assert.equal(body(r).error, "photo_unreadable");
+  assert.equal(row.serialNumber, null, "a serial we cannot vouch for is never stored");
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_PHOTO_REFUSED");
+  assert.ok(audit, "a refused photo is auditable now");
+  assert.equal(audit.metadata.photoConfidence, 31, "the best pass is the one judged");
+  assert.equal(audit.metadata.photoPassesRun, 3);
+  noLeak(audit, [SN]);
 });
 
 test("⛔ a BLURRY photo is refused and stores nothing — the customer is asked for a clearer one", async () => {

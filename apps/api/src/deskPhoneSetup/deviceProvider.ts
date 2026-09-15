@@ -192,6 +192,11 @@ const WORDING: Record<string, Wording> = {
     staff: () => "GDMS refused this request with an error code (another account, a serial mismatch, or a bad field).",
     retryable: false,
   },
+  serial_for_different_device: {
+    customer: () => "That serial number belongs to a different phone. Turn over the phone you're setting up: the MAC on its sticker must match the MAC shown for this phone here, and its serial number is printed right next to it.",
+    staff: (m) => `${m} refused the MAC+serial pair, and the serial's embedded MAC tail names a different handset — the customer read another phone's label.`,
+    retryable: false,
+  },
   gdms_invalid_response: {
     customer: (m) => `${m} sent an answer Loopcom couldn't read. Loopcom Support has been told.`,
     staff: () => "GDMS returned a body that is not the documented envelope.",
@@ -267,6 +272,19 @@ export function providerFailure(code: string, maker: string, extra: Partial<Prov
 }
 
 /** ⛔ Reads only the error CODE. A vendor message or fetch error text never leaves here. */
+/**
+ * The MAC tail a Grandstream serial carries, when it carries one: its last six characters,
+ * if they read as hex. Observed on real GXP2170 labels (serial `…308C605F` ↔ MAC …8c:60:5f);
+ * Grandstream does not document the convention, so this is only ever used to EXPLAIN a
+ * refusal the maker already made — never to refuse a serial on its own.
+ */
+export function serialEmbeddedMacTail(serial: string | null | undefined): string | null {
+  const s = String(serial ?? "").trim();
+  if (s.length < 6) return null;
+  const tail = s.slice(-6);
+  return /^[0-9a-fA-F]{6}$/.test(tail) ? tail.toLowerCase() : null;
+}
+
 export function failureFromError(err: unknown, maker: string): ProviderFailure {
   const code = err instanceof DeviceError ? err.code : "provider_error";
   return providerFailure(code, maker, code === "gdms_request_rejected" ? { possibleOwnershipConflict: true } : {});

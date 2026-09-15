@@ -143,6 +143,87 @@ export class TesseractJsOcrProvider implements DocumentOcrProvider {
   }
 }
 
+// ── Adaptive multi-pass extraction ────────────────────────────────────────────
+
+export type AdaptiveOcrOutput = {
+  text: string;
+  confidence: number;
+  /** Which pass produced the returned text: "deskew", "rot90", "rot270" or "rot180". */
+  pass: string;
+  /** How many passes actually ran (numbers only — safe to audit). */
+  passesRun: number;
+};
+
+/**
+ * OCR with orientation recovery: one worker, up to four passes — auto-deskew first
+ * (Tesseract's own small-angle correction), then the three quarter-turn rotations,
+ * because a phone photo of a sticker is routinely sideways or upside down and
+ * Tesseract reads raw pixels (EXIF orientation flags are ignored).
+ *
+ * `isAcceptable` is the CALLER's preview of its own acceptance test: the first pass it
+ * approves is returned and no further passes run. When no pass is approved, the pass
+ * with the highest confidence is returned so the caller can refuse it with its own
+ * words. ⛔ This function never judges a label — it only decides which reading of the
+ * pixels is worth judging. A pass that throws is skipped; if every pass throws, the
+ * last error propagates.
+ *
+ * A provider that is not Tesseract falls back to its single extractText pass.
+ */
+export async function extractTextAdaptive(
+  provider: DocumentOcrProvider,
+  input: OcrInput,
+  config: OcrConfig,
+  isAcceptable: (text: string, confidence: number) => boolean,
+): Promise<AdaptiveOcrOutput> {
+  if (provider.name !== "tesseract_js") {
+    const out = await provider.extractText(input, config);
+    return {
+      text: out.text ?? "",
+      confidence: typeof out.confidence === "number" ? out.confidence : 0,
+      pass: "single",
+      passesRun: 1,
+    };
+  }
+
+  const { createWorker } = await import("tesseract.js");
+  const workerOptions: Record<string, unknown> = {};
+  if (config.langPath) workerOptions.langPath = config.langPath;
+  const worker = await createWorker(config.lang, 1, workerOptions);
+
+  const passes: Array<{ pass: string; options: Record<string, unknown> }> = [
+    { pass: "deskew", options: { rotateAuto: true } },
+    { pass: "rot90", options: { rotateRadians: Math.PI / 2 } },
+    { pass: "rot270", options: { rotateRadians: -Math.PI / 2 } },
+    { pass: "rot180", options: { rotateRadians: Math.PI } },
+  ];
+  try {
+    let best: AdaptiveOcrOutput | null = null;
+    let lastError: unknown = null;
+    let ran = 0;
+    for (const p of passes) {
+      ran++;
+      let text = "";
+      let confidence = 0;
+      try {
+        const result = await (worker.recognize as any)(input.buffer, p.options);
+        text = result.data.text ?? "";
+        confidence = typeof result.data.confidence === "number" ? result.data.confidence : 0;
+      } catch (err) {
+        lastError = err;
+        continue;
+      }
+      const candidate: AdaptiveOcrOutput = { text, confidence, pass: p.pass, passesRun: ran };
+      if (isAcceptable(text, confidence)) return candidate;
+      if (!best || confidence > best.confidence) best = candidate;
+    }
+    if (!best) throw lastError ?? new Error("ocr produced no readable pass");
+    return { ...best, passesRun: ran };
+  } finally {
+    // Always terminate — prevents WASM memory leak across calls
+    await worker.terminate();
+  }
+}
+
 // ── Provider registry ─────────────────────────────────────────────────────────
 
 /** Returns the configured OCR provider, or null if OCR is disabled/unconfigured. */
