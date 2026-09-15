@@ -63,11 +63,16 @@ role, line items "Billable extensions 1 × $30", zero EmailJobs).
 - **Nexus Realty: Sola charges Michael's Amex $65 on Sep 26** as it has every month. Connect
   autopay is off there, so nothing else fires.
 
-## 4. ⏳ NOT DONE — needs Izzy / a later task
+## 3b. ✅ COLLECTED 2026-09-15 19:19Z (Izzy: "Charge his card for all those invoices. Send it out to him by email before you charge the card, then charge it.")
 
-1. **Collect Ellie's $90** — his card is on file on DisplayDX; say GO to charge the three
-   invoices (Secro §2b pattern), or send the combined payment link, or email the invoices.
-   Nothing has been sent to him.
+Script `loopcom:/root/displaydx-collect.ts` (guards → emails → wait for SENT → charge, oldest
+first, STOP on first non-approval, never retries a charge). All three invoice emails were
+**SENT to eli@displaydex.com BEFORE any charge**, then all three charges on Visa ····0213
+**APPROVED**: CC-202609-00007 ref 11050937980, CC-202609-00008 ref 11050938015,
+CC-202609-00009 ref 11050938046 — $90 total, all three invoices PAID balance 0, and all three
+BILLING_RECEIPT emails SENT. Container-verified by SQL afterwards.
+
+## 4. ⏳ NOT DONE — needs Izzy / a later task
 2. **⛔ PHONES/EXTENSIONS/NUMBERS/USERS NOT MOVED — Izzy's explicit instruction.** The later
    move: DisplayDX gets ext 101 (Eli) + ext 104 (Yehuda) + (212) 888-0885 + (845) 200-3535 +
    (845) 414-3736; Nexus Realty keeps ext 102 + 103 + (845) 364-7474. ⚠️ Yehuda's login email
@@ -77,6 +82,18 @@ role, line items "Billable extensions 1 × $30", zero EmailJobs).
    as his company name in the portal/app until his user moves with the phones. Moving his user
    row early would break his working softphone (ext 101 + webrtc config live on the old
    tenant), so it was deliberately left.
+   ⛔⛔ **THE APP-SWITCH TRAP (traced 2026-09-15 for the planned move):** the login token
+   bakes `tenantId` in at sign-in (`issueLoginSession`, `server.ts` ~6316), sessions never
+   expire, the preHandler trusts the claim (`jwtVerify` only — no per-request user-row read),
+   and the mobile app has NO token-refresh path — a QR scan while logged in only redeems SIP
+   provisioning, it does NOT replace the session token (`QrProvisionScreen.tsx:73` logged-in
+   branch). So moving Eli's User row alone leaves his live app operating on the OLD tenant's
+   data indefinitely. Zero-downtime options: (a) a token tenant-migration shim in the
+   preHandler (explicit sub→newTenant map, override `req.user.tenantId` after verify;
+   MUST deploy BEFORE the row moves — every ownership guard compares resources to the
+   effective tenant, so claim-override + moved rows stay consistent), or (b) accept a
+   ~1-minute sign-out/sign-in (needs his password; SIP keeps ringing through the move since
+   PBX tenant 6 registration is untouched by the Connect-side split).
 4. **Nexus Realty's move onto Connect billing** (takeOverBillingFromSola of the $65 schedule,
    pricing per the dormant billing profile: 2 ext + DID) is a separate decision, same as the
    admin tenant's "coat one" link. Until then autopay stays OFF there.

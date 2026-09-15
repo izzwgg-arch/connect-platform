@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-15 · DISPLAY DECKS SPLIT: old tenant renamed NEXUS REALTY (Michael TENANT_ADMIN, Amex default, autopay OFF — his $65 Sola schedule is LIVE, next Sep 26); new billing-only tenant DISPLAYDX (Ellie, Visa default, autopay ON, $30/mo); Ellie last charged May 28 → 3 OPEN invoices CC-202609-00007/8/9 ($90) created NOT charged/emailed; ⛔ phones/users NOT moved (Eli's portal shows "Nexus Realty" till they do) → `2026-09-15-displaydx-nexus-realty-split.md`
+- 2026-09-15 · DISPLAY DECKS SPLIT: old tenant renamed NEXUS REALTY (Michael TENANT_ADMIN, Amex default, autopay OFF — his $65 Sola schedule is LIVE, next Sep 26); new billing-only tenant DISPLAYDX (Ellie, Visa default, autopay ON, $30/mo); Ellie's 3 missed cycles CC-202609-00007/8/9 emailed-then-CHARGED on his GO, all PAID $90, receipts SENT; ⛔ phones/users NOT moved — and Eli's logged-in app CANNOT switch tenants without a token shim or re-login (token bakes tenantId, no refresh path) → `2026-09-15-displaydx-nexus-realty-split.md`
 
 - 2026-09-15 · GESHEFT STARLINK INVOICE PAID + PERIOD-GUARD FIX: CC-202609-00006 $275 emailed AND charged (Amex •1007 APPROVED, Sola ref 11050894534, receipt SENT); ⛔ the charge exposed that EVERY additive one-time/manual invoice inside a paid advance-billed month was unchargeable (`BILLING_PERIOD_ALREADY_PAID`) — fixed via `isAdditiveOneTimeInvoice()` in both charge doors, DEPLOYED `74e7730a` container-verified; monthly-service-text invoices stay guarded → `2026-09-15-gesheft-starlink-invoice.md`
 

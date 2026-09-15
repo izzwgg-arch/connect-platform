@@ -15,10 +15,12 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   Ellie's Visa ····0213 default, $30/mo (manual qty 1 extension, same as always), day 28,
   terms 15, **autopay ON**, billingEmail eli@displaydex.com. The inert CUTOVER_COMPLETE
   displaydex Sola link moved with the card.
-- ✅ **Ellie's last charge ever was 2026-05-28 ($30)** — Sola's own schedule died at the May
-  cutover (live-probed IsActive false) and Jun/Jul/Aug 28 were block-eaten. **Three OPEN
-  invoices created on DisplayDX: CC-202609-00007/8/9, $30 each, $90 total — NOT charged, NOT
-  emailed** (0 EmailJobs). ⏳ Collect on Izzy's GO (charge / payment link / email).
+- ✅ **Ellie's last charge before the split was 2026-05-28 ($30)** — Sola's own schedule died
+  at the May cutover (live-probed IsActive false) and Jun/Jul/Aug 28 were block-eaten.
+- ✅✅ **COLLECTED 19:19Z on Izzy's GO ("send it out to him by email before you charge"):**
+  the 3 invoice emails SENT to eli@displaydex.com FIRST, then all 3 charges on Visa ····0213
+  APPROVED — CC-202609-00007 ref 11050937980, -00008 ref 11050938015, -00009 ref 11050938046,
+  $90 total, all PAID, 3 receipts SENT. Script `loopcom:/root/displaydx-collect.ts`.
 - ✅ **Worker resumes Ellie's normal billing by itself: T-3 invoice Sep 25, charge Sep 28** on
   the Visa. ⛔ Don't hand-create the Sep 28 invoice; the worker never charges the 3 late ones.
 - ⛔⛔ **PHONES/EXTENSIONS/NUMBERS/USERS NOT MOVED — Izzy's explicit "don't move any phones
@@ -27,5 +29,10 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   Nexus keeps ext 102 + 103 + 845-364-7474. **Eli's login still sits on the renamed tenant, so
   his portal shows "Nexus Realty" until his user moves with the phones** — moving it early
   breaks his working softphone.
+- ⛔⛔ **ELI'S LOGGED-IN APP CANNOT SWITCH TENANTS BY ITSELF** (traced for the planned move):
+  the token bakes tenantId at login, never expires, the API trusts the claim per request, and
+  a logged-in QR scan refreshes SIP only — NOT the session token. Zero-downtime = deploy a
+  token tenant-migration shim (sub→newTenant override in the preHandler) BEFORE moving his
+  User row; otherwise a ~1-minute sign-out/sign-in. Details in handoff §4.3.
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.
