@@ -24,7 +24,10 @@
 - Updated Concept A image was inspected after its tie-removal and Loopcom-infinity-pin edit; this now-superseded avatar draft remains historical review material only.
 - Scope correction review: `talk-to-laybel.html` static fragment check passed at 9,907 bytes; no document wrapper or escaped markup; it contains the `Talk to Laybel` row and local start/end voice-state controls. It uses no avatar asset or provider integration.
 - The visualization wrapper rendered successfully.
-- Not run: application tests, production build, deploy, provider integration, LiveKit/avatar session, real browser visual acceptance, or any customer/PBX/remote-support operation. Chrome review was blocked by file-URL policy; no bypass attempted.
+- `apps/portal/components/floatingAssistantOpening.test.ts`: passed 11/11 using `tsx --test`, including `Talk to Laybel is a voice mode of the existing Assistant, not another agent`.
+- `git diff --check` passed for the Laybel implementation.
+- Shared-worktree portal typecheck is presently blocked by an unrelated concurrent error in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before declaration). A clean temporary worktree cannot resolve the local non-checked-in dependency tree, so it is not a substitute for a full typecheck.
+- Not run: production deployment or production browser acceptance. No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15
 

@@ -694,4 +694,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-15 · Talk to Laybel mockup: preserve the existing Assistant appearance; one voice-mode option only; prior avatar/video exploration superseded → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-15 · Talk to Laybel: existing Assistant’s one opt-in push-to-talk option is implemented; it uses current transcription/conversation paths + browser-local speech, has no new AI/media/provider/backend/PBX surface; portal rollout pending → `2026-09-15-face-to-face-ai-support-mockup.md`

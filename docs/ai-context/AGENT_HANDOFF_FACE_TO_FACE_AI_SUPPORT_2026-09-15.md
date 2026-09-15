@@ -2,9 +2,23 @@
 
 ## Status
 
-**The earlier avatar/video direction is superseded.** The owner clarified that the AI must look exactly like the existing Loopcom Assistant. The only requested addition is a **“Talk to Laybel”** option, where Laybel is the name for the same Assistant when speaking by voice. No production code was added; no deployment, database migration, PBX interaction, provider account, model, knowledge base, tool registry, customer-context service, policy, retention setting, avatar, or video feature was changed or approved.
+**The earlier avatar/video direction is superseded.** The owner clarified that the AI must look exactly like the existing Loopcom Assistant. The only requested addition is a **“Talk to Laybel”** option, where Laybel is the name for the same Assistant when speaking by voice. That option is now implemented in `apps/portal/components/FloatingAssistant.tsx` and is pending the normal portal rollout. No database migration, PBX interaction, provider account, separate model, knowledge base, tool registry, customer-context service, retention change, avatar, video feature, LiveKit room, WebSocket, or new backend route was added.
 
 The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. Laybel is only the voice-mode name for that existing Assistant; this work honors that constraint.
+
+## Implemented behavior
+
+- The existing dark Assistant panel and its normal suggestions remain intact. `Talk to Laybel` is the first suggestion row and opens only a compact in-panel voice state; it does not navigate or create another agent.
+- The user explicitly starts voice mode and then uses the existing microphone control. Capture requests microphone access only at that point, with echo cancellation, noise suppression, auto gain, mono, and 48 kHz preferences.
+- The completed take uses the pre-existing authenticated `/agent/chat/transcribe` path. Its text is submitted through the existing Assistant `send` helper and `/agent/chat/message` path with `channel: "voice"`; this preserves the same conversation id, tenant/page context, response rendering, tools, transcript, and escalation behavior as typed chat.
+- The existing visible transcript remains authoritative. When browser native speech synthesis is available, the same returned Assistant text is read aloud locally. If speech synthesis is unavailable or fails, Laybel stays usable through the normal transcript and typed composer—there is no new TTS service or customer-audio storage path.
+- Starting a new push-to-talk take cancels any current speech. Ending Laybel cancels speech and marks an active capture cancelled before its recorder stops, so a just-ended take is not sent after the user presses End.
+
+## Verification for implementation
+
+- `apps/portal/components/floatingAssistantOpening.test.ts` passed **11/11** via `tsx --test`, including the new source guard that asserts the label, same-Assistant voice channel, existing send path, browser-local speech call, and absence of LiveKit/WebSocket/voice-agent additions.
+- `git diff --check` passed for the implementation.
+- The shared-worktree portal typecheck currently reaches an unrelated concurrent edit in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before its declaration). A clean temporary worktree cannot resolve this repository’s non-checked-in `node_modules`, so it cannot be used as an independent full typecheck. This is an outstanding release verification item, not an error reported in `FloatingAssistant`.
 
 ## Review artifact
 
@@ -101,4 +115,4 @@ For the recommended avatar layer, use time-connected rather than talking time: A
 
 ## Current boundary
 
-The requested deliverable is the review mockup only. Do not deploy or implement the voice option until the owner explicitly asks to proceed.
+The owner explicitly authorized the production-ready build. The only remaining step is normal portal deployment and its required log/container verification, after the concurrent portal typecheck issue is resolved or confirmed unrelated by the release path. Do not widen the scope into avatar/video, a separate Laybel brain, a voice provider, backend persistence, or PBX work.
