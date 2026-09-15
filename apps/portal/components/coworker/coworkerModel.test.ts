@@ -100,10 +100,11 @@ test("helpers: durations, turn ids the agent accepts, task groups, attachment no
 test("replies render as paragraphs, lists and bold — never as HTML", () => {
   const blocks = parseReply("Done. Your Downloads folder is organized:\n\n- **Pictures**: 88 files\n- PDFs: 61\n\n1. First\n2. Second\n<script>alert(1)</script>");
   assert.equal(blocks[0].type, "p");
-  assert.equal(blocks[1].type, "ul");
-  const ul = blocks[1] as Extract<(typeof blocks)[number], { type: "ul" }>;
+  const ul = blocks[1];
+  if (ul.type !== "ul") throw new Error(`expected a bullet list, got ${ul.type}`);
   assert.deepEqual(ul.items[0], [{ text: "Pictures", bold: true }, { text: ": 88 files", bold: false }]);
   assert.equal(blocks[2].type, "ol");
-  const last = blocks[3] as Extract<(typeof blocks)[number], { type: "p" }>;
+  const last = blocks[3];
+  if (last.type !== "p") throw new Error(`expected a paragraph, got ${last.type}`);
   assert.equal(last.inline[0].text, "<script>alert(1)</script>", "kept as text; React escapes it");
 });

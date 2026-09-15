@@ -52,8 +52,12 @@ export function CoworkerComposer({ s, t, compact }: { s: CoworkerSession; t: (x:
     if (running) { await s.stop(); return; }
     const value = text.trim();
     if (!value) return;
+    // ⛔ Clear the box NOW, not when the turn ends: `send` only resolves when the
+    // whole task is finished (minutes, with the hands), and a composer that still
+    // holds the sent message reads as "it didn't send".
+    setText("");
     const ok = await s.send(value);
-    if (ok !== false) setText("");
+    if (ok === false) setText((cur) => (cur ? cur : value));
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
