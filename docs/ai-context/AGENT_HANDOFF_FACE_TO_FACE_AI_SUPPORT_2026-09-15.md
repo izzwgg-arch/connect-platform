@@ -2,7 +2,7 @@
 
 ## Status
 
-**The earlier avatar/video direction is superseded.** The owner clarified that the AI must look exactly like the existing Loopcom Assistant. The only requested addition is a **“Talk to Laybel”** option, where Laybel is the name for the same Assistant when speaking by voice. That option is now implemented in `apps/portal/components/FloatingAssistant.tsx` and is pending the normal portal rollout. No database migration, PBX interaction, provider account, separate model, knowledge base, tool registry, customer-context service, retention change, avatar, video feature, LiveKit room, WebSocket, or new backend route was added.
+**Live avatar/video scope is reopened (2026-09-15).** The owner clarified that Laybel must become a real face-to-face session: the selected portrait comes alive in a video call, the existing Loopcom Assistant remains the intelligence/orchestration layer, and the complete flow must be proven live. `Talk to Laybel` is currently only the deployed push-to-talk starting point in `apps/portal/components/FloatingAssistant.tsx`; it is not the requested finished product. The owner requested mockup review before selecting an avatar provider or activating a real session. No provider account, separate model, PBX operation, or production media session has been activated by this clarification.
 
 The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. Laybel is only the voice-mode name for that existing Assistant; this work honors that constraint.
 
@@ -117,4 +117,4 @@ For the recommended avatar layer, use time-connected rather than talking time: A
 
 ## Current boundary
 
-The owner explicitly authorized the production-ready build; it is deployed by the successful portal queue job `c2ba7701…` at commit `7d93d23a8`. A future release-verification session should read the final `[deploy-portal] done 7d93d23a806c2d14b48c2c0196b66e1bc7187293` log line and perform the required running-container unique-source check; these are outstanding evidence only, not reasons to re-enqueue. Do not widen the scope into avatar/video, a separate Laybel brain, a voice provider, backend persistence, or PBX work.
+The owner explicitly reauthorized the avatar/video expansion. The implementation must use a real face-to-face call, bring the selected Laybel portrait to life, preserve the existing Assistant as the sole intelligence layer, and prove a live session end to end. The next decision is the portrait/provider pairing after mockup review; use the existing LiveKit Meetings transport unless a provider's documented integration requires a reviewed adapter. Do not presume SignalWire is the video runtime, do not create a second AI brain, and do not touch PBX configuration.

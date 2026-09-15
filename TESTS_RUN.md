@@ -31,6 +31,7 @@
 - Real blue/green portal job `c2ba7701…`: **SUCCESS** at 6:16:54 PM after 5m23s; stage **done**, deployed commit `7d93d23a8`. Its build log confirms `✓ Compiled successfully`, lint/type validation, and static generation of all 197 pages. Public `https://app.loopcom.net/ready`: **200** / `{"ok":true}` during rollout.
 - Post-deploy direct running-container source verification: **not proven**. Canonical Linux SSH was unavailable and the recovered Deploy Center UI timed out opening the log. This gap does not change the successful queue deployment status; it must not be represented as container-verified.
 - Source review after the owner reported no video/call launch: confirmed expected push-to-talk wiring only — `MediaRecorder` → authenticated `transcribe` → existing Assistant `send(..., "voice")` → browser-local `speechSynthesis`. No SignalWire, video, LiveKit, WebSocket, or real-time media call is present by design.
+- Owner has now reopened the live avatar/video scope and requested mockup review. No live avatar/provider call was started or claimed as tested in this documentation update.
 - No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15
