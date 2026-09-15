@@ -39,6 +39,7 @@ const ERROR_TEXT: Record<string, string> = {
   device_ownership_conflict: "This phone is already set up on another account. Contact Loopcom Support.",
   device_exists_use_management: "This phone is already on this account. Use Edit / move extension below instead.",
   invalid_replacement: "The replacement must be a different phone on the same extension.",
+  serial_number_required: "Yealink needs the phone's serial number for zero-touch setup. It is on the sticker under the phone and on the box.",
   device_not_found: "That phone couldn't be found.",
   device_retired: "That phone has been removed.",
   release_rps_before_removing_phone: "Release the zero-touch assignment before removing this phone.",

@@ -147,6 +147,8 @@ export const LIVE_NO_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000;
 export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [managedMode, setManagedMode] = useState(false);
   const [managedModels, setManagedModels] = useState<{ model: string }[]>([]);
+  /** Carries a found phone's identity into the zero-touch panel (MAC only — the serial never reaches the browser). */
+  const [managedPrefill, setManagedPrefill] = useState<{ mac?: string | null; model?: string | null } | null>(null);
   useEffect(() => {
     let active = true;
     apiGet<{ enabled: boolean; models: { model: string }[] }>("/desk-phones/managed/capabilities")
@@ -722,7 +724,8 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        {managedMode && <ManagedPhonePanel models={managedModels} onBack={() => setManagedMode(false)} />}
+        {managedMode && <ManagedPhonePanel models={managedModels} initial={managedPrefill ?? undefined}
+          onBack={() => { setManagedMode(false); setManagedPrefill(null); }} />}
         {step === "welcome" && !managedMode && (
           <>
             <div className="dps-wz-body">
@@ -1268,7 +1271,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           the wizard STOPS: no progress list, no competing information, one big
           question, big buttons, and a way out that is not a wall.
         */}
-        {step === "live" && needs.some((n) => n.kind === "reset_authorization") && (() => {
+        {step === "live" && !managedMode && needs.some((n) => n.kind === "reset_authorization") && (() => {
           const n: any = needs.find((x) => x.kind === "reset_authorization");
           const items = phones.filter((p) => n.phoneIds.includes(p.id));
           const tickedCount = n.phoneIds.filter((id: string) => clearTicks[id] !== false).length;
@@ -1322,7 +1325,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           );
         })()}
 
-        {step === "live" && !needs.some((n) => n.kind === "reset_authorization") && needs.some((n) => n.kind === "password") && (() => {
+        {step === "live" && !managedMode && !needs.some((n) => n.kind === "reset_authorization") && needs.some((n) => n.kind === "password") && (() => {
           const n: any = needs.find((x) => x.kind === "password");
           return (
             <>
@@ -1363,7 +1366,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           );
         })()}
 
-        {step === "live" && !needs.some((n) => n.kind === "reset_authorization" || n.kind === "password") && needs.some((n) => n.kind === "serial") && (() => {
+        {step === "live" && !managedMode && !needs.some((n) => n.kind === "reset_authorization" || n.kind === "password") && needs.some((n) => n.kind === "serial") && (() => {
           const n: any = needs.find((x) => x.kind === "serial");
           return (
             <>
@@ -1408,7 +1411,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           );
         })()}
 
-        {step === "live" && !needs.length && (
+        {step === "live" && !managedMode && !needs.length && (
           <>
           <div className="dps-wz-body">
             <div style={{ display: "flex", alignItems: "baseline", gap: 11, marginBottom: 11 }}>
@@ -1436,6 +1439,13 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   </div>
                   {p.needsAttention && (
                     <button className="dps-btn dps-btn-g" onClick={() => void retryPhone(p.id)}>Try again</button>
+                  )}
+                  {/* The password dead-end must never be a dead end: a found Yealink can always
+                      switch to the zero-touch path (RPS), which needs no password at all. */}
+                  {p.needsAttention && p.mac && managedModels.length > 0 && /yealink/i.test(p.vendor ?? "") && (
+                    <button className="dps-btn" onClick={() => { setManagedPrefill({ mac: p.mac, model: p.model }); setManagedMode(true); }}>
+                      Set up from the cloud &mdash; no password
+                    </button>
                   )}
                   <span className={`dps-pill ${p.status === "Ready" ? "dps-pill-ok" : p.needsAttention ? "dps-pill-hm" : "dps-pill-br"}`}>
                     {p.status !== "Ready" && !p.needsAttention && <span className="dps-spin" style={{ marginRight: 5 }} />}
@@ -1466,7 +1476,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {step === "done" && summary && (
+        {step === "done" && !managedMode && summary && (
           <>
             {/* ⛔⛔ THE MARK REFLECTS THE OUTCOME. This screen used to draw a green
                 tick UNCONDITIONALLY and say "Your office is working" whenever

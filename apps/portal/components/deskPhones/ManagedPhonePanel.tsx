@@ -14,11 +14,14 @@ const RPS_LABEL: Record<string, string> = { pending_credentials: "pending Yealin
   failed: "not assigned", conflict: "held by another provider", released: "released" };
 
 /** An additional mode INSIDE the existing wizard, using its account context and controls. */
-export function ManagedPhonePanel({ models, onBack }: { models: { model: string }[]; onBack: () => void }) {
+export function ManagedPhonePanel({ models, onBack, initial }: { models: { model: string }[]; onBack: () => void;
+  /** Prefill for a phone the office scan already found (its MAC is known; the serial stays on the label by design). */
+  initial?: { mac?: string | null; model?: string | null } }) {
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [model, setModel] = useState(models[0]?.model || "");
-  const [mac, setMac] = useState("");
+  const [model, setModel] = useState(() =>
+    (initial?.model && models.some(m => m.model === initial.model) ? initial.model : models[0]?.model) || "");
+  const [mac, setMac] = useState(initial?.mac || "");
   const [serial, setSerial] = useState("");
   const [extensionId, setExtensionId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -52,6 +55,8 @@ export function ManagedPhonePanel({ models, onBack }: { models: { model: string 
     <div className="dps-wz-body">
       <h3>{replacesId ? "Prepare a replacement phone" : "Prepare a phone for delivery"}</h3>
       <p className="dps-sub">The phone will use the account currently selected in Loopcom. Choose an existing extension, then connect the phone to Ethernet or PoE when it arrives.</p>
+      {initial?.mac && <p className="dps-hint">This phone is already in your office, so after you provision it here, reset it once by hand:
+        hold its OK button for about 10 seconds and confirm. It will then set itself up from the cloud &mdash; no password needed.</p>}
       <form onSubmit={e => { e.preventDefault(); void action(async () => {
         const input = { extensionId, displayName, nickname, options: { refreshMinutes } };
         if (selected) await apiPost(`/desk-phones/managed/${selected.id}/update`, input);

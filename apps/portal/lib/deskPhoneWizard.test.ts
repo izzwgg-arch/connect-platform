@@ -200,8 +200,8 @@ test("the person-only asks are FULL SCREENS, never cards beside a progress list"
   // dumb people will just get stuck here." When a decision is needed the wizard
   // stops and shows one question. The progress list renders only when nothing is
   // being asked.
-  assert.ok(WIZARD.includes('step === "live" && !needs.length'),
-    "the progress list no longer waits for the questions to be answered");
+  assert.ok(WIZARD.includes('step === "live" && !managedMode && !needs.length'),
+    "the progress list no longer waits for the questions to be answered (and it must also yield to the zero-touch panel)");
   assert.ok(/needs\.some\(\(n\) => n\.kind === "reset_authorization"\)/.test(WIZARD),
     "the clearing question is no longer its own screen");
 });
