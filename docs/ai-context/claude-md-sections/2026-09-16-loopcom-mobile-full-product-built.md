@@ -76,3 +76,19 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_UI_2026-09-15.md` 
   `/mobile-service/{overview,plans}` still 401 (no regression);
   unsigned POST `/api/webhooks/telnyx/mobile` = **401 (fail-closed)**;
   `/healthz` 200.
+
+## Welcome email addendum — DEPLOYED + VERIFIED (`69ba6ae4`)
+
+- Eighth email, "Welcome to LoopCom Mobile": fires from the console's
+  create-line handler ONLY when it is the tenant's first line AND no
+  `mobile.email.welcome` audit row exists (the send's own audit is the
+  once-guard; a recipient-less first line audits `welcome_skipped`).
+- api deploy done `69ba6ae4`; `app-api-1` revision `69ba6ae4`, healthy,
+  0 restarts. ⛔ The api container runs from `/app/apps/api/src` (tsx) —
+  there is NO `dist/`, so grep `src/`, not `dist/`, when verifying a deploy.
+  Container grep: `export function welcomeEmail` = 1 in mobileEmails.ts, the
+  `lineCount === 1 && !alreadyWelcomed` guard = 1 in mobileRoutes.ts.
+- Suite 20/20; api tsc still the 87 baseline. Portal untouched (no redeploy
+  needed). Artifact v4 shows it rendered from the production template.
+- ⏳ Not proven: no tenant has had a first line created since, so no welcome
+  has reached a real inbox.
