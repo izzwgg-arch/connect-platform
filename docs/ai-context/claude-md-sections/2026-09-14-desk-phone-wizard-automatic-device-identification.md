@@ -66,6 +66,16 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
 - ⏳ **NOT PROVEN (rounds 5–6):** no customer has typed a serial, uploaded a photo or texted one;
   no phone has been cleared through GDMS from a serial; **OCR has never run on a real photograph
   here** (the suite fakes the engine deliberately — what is tested is our judgement, not Tesseract's).
+- ⛔⛔ **ROUND 7 (`3040f2bc`, DEPLOYED api 2026-09-15): GDMS `device/add` IS A BATCH ENDPOINT —
+  the envelope's `retCode 0` does NOT mean the device was added.** First live GDMS write proved it:
+  Izzy typed a serial that belongs to his OTHER Grandstream unit (serial tail `8C605F` vs this
+  phone's MAC `…8C:65:4E`); GDMS answered retCode 0 with the refusal inside `data`
+  (`success:0, failure:1, errorDeviceList[0].errorMsg "30010"`). `addDevice` ignored `data`, so the
+  refusal read as success, read-back produced `claim_not_verified` (retryable) and the wizard spun
+  on "Finding" until the 10-minute watchdog. Now a per-item failure throws → `gdms_request_rejected`
+  (non-retryable; wording already names the serial-mismatch case). Simulator gained an "unowned"
+  factory-registry state; the new test fails against the pre-fix client. ⛔ A stuck run keeps its
+  wrong serial — cancel + rerun asks for the serial fresh. ⏳ No successful GDMS claim yet.
 - ✅ **PARTS 2 AND 3 ARE LIVE IN PRODUCTION SINCE 2026-09-15** — Izzy hit the off-door while
   testing (Landau Home, GXP2170) and decided: *"every customer that has access to deskphone setup
   should have that photo reading turned on."* `CRM_OCR_ENABLED=true` is in `.env.platform` (backup

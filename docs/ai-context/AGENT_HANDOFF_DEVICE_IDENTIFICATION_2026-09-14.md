@@ -475,6 +475,37 @@ OCR (Phase 5B) is now ON platform-wide too. ⏳ Still unproven: no real photogra
 wizard's number-prompt appeared, but no upload or texted photo has been judged yet.
 With it off they answer `photo_reading_off` — "type the serial number instead" — and store nothing.
 
+## 10h. Round 9 (2026-09-15) — the FIRST LIVE GDMS WRITE, and what it proved wrong (`3040f2bc`)
+
+Izzy's live run (Landau Home, GXP2170 `C0:74:AD:8C:65:4E` at 192.168.6.171): he typed serial
+`20ZE115N308C605F`, the card said *"Grandstream didn't confirm the device was added"* and the
+wizard spun on "Finding" until the 10-minute watchdog offered Keep trying / Cancel.
+
+- ⛔⛔ **`v1.0.0/device/add` is a BATCH endpoint.** Captured live: envelope `retCode 0` with
+  `data = {"total":1,"success":0,"failure":1,"errorDeviceList":[{"orgId":null,"deviceName":null,
+  "siteId":675285,"mac":"C074AD8C654E","errorMsg":"30010","sn":"20ZE115N308C605F"}]}` — and the
+  account's unfiltered device list read total 0 before AND after. `addDevice` read only the
+  envelope, so the refusal became success → read-back miss → `claim_not_verified` (retryable) →
+  the driver re-claimed forever. **Fixed:** a per-item failure now throws `GdmsRejection` →
+  `gdms_request_rejected`, non-retryable; the simulator models the proven shape through a new
+  `owner: "unowned"` factory-registry state; the new test in `deviceProviders.test.ts` fails
+  against the pre-fix client (replayed, fail 1) and passes with it.
+- ⛔ **The serial itself was the OTHER unit's.** Grandstream serials embed the device's own MAC
+  tail; `…308C605F` is the `C0:74:AD:8C:60:5F` unit (the round-2 GDMS-card test MAC), not this
+  phone (`…8C654E`). GDMS validates the pair — errorMsg 30010 (meaning not documented; we surface
+  the generic refusal wording, which already names the serial-mismatch case, and never the code).
+- ⛔ **A stuck run keeps its wrong serial** — `serialOnFile` stays true so the serial box does not
+  return mid-run; cancel + rerun creates fresh run rows and asks again. Live-verified field shapes:
+  device/list filter `mac` works (formatted, colons); site/list rows are `{id, siteName, isDefault,
+  description, children}`; errorDeviceList macs come back UPPERCASE WITHOUT colons.
+- **The probe recipe** (read-only, reusable): decrypt AgentSecret `gdms_credentials` inside
+  `app-api-1` (AES-256-GCM under `CREDENTIALS_MASTER_KEY`; row via `connectcomms-postgres` psql),
+  OAuth password grant sends `sha256(md5(password))`, every API call is `POST
+  /oapi/v1.0.0/<api>?access_token&signature&timestamp` with the canonical-string sha256 signature
+  from `gdmsSignature`. Never print the credentials; print only GDMS's answers.
+- ⏳ **Still not proven:** no successful GDMS claim (needs the RIGHT serial off THIS phone's
+  sticker), no cloud reset, no photo OCR.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

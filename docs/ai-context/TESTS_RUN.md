@@ -2,6 +2,22 @@
 
 Newest entries first.
 
+## GDMS device/add batch-result fix (2026-09-15, `3040f2bc`)
+
+- api `npx tsx --test src/deskPhoneSetup/deviceProviders.test.ts` → **34/34 pass** (1 new: a serial
+  belonging to a different handset is refused by the BATCH result — `gdms_request_rejected`,
+  non-retryable, nothing added, right serial still registers afterwards). Replayed against the
+  pre-fix `gdmsClient.ts` (HEAD copy): **fail 1** — the test catches the live bug; restored: fail 0.
+- api tsc: pre-existing diagnostics only, none in the three touched files.
+- Live evidence that motivated it: first real GDMS write ever — device/add answered retCode 0 with
+  `{success:0, failure:1, errorDeviceList:[{errorMsg:"30010"}]}` for Izzy's typed serial
+  `20ZE115N308C605F` against MAC `C0:74:AD:8C:65:4E` (the serial embeds the OTHER unit's MAC tail
+  `8C605F`); account device list total 0 before and after. Probe recipe in the handoff.
+- Deployed api `3040f2bc`, blue/green, container-verified (commit + `errorDeviceList` in shipped
+  source, `CRM_OCR_ENABLED=true` survived, 0 restarts). ⏳ Not proven: no successful claim with a
+  correct serial yet.
+
+
 ## Deploy Center autoban regression (2026-09-14)
 
 15 focused route/polling tests pass, including 74 queued-log reads with zero public 404s and all six deploy services; PBX safeguards 6/6 pass. Portal typecheck passes; API tsc has 84 existing diagnostics, none in the new route/registration. Actual-component Chrome fixture verifies queued zero-read, running log, stale error warnings, manual recovery and terminal single read. Live nginx ban/74-path aggregation proved cause; owner-approved one-IP unblock restored both login hosts and API health to 200. API/portal fix release pending; see AGENT_HANDOFF_DEPLOY_LOG_AUTOBAN_2026-09-14.md.
