@@ -26,8 +26,17 @@ Newest entries first.
 - LIVE (read-only, from inside app-api-1 with the AgentSecret key): wireless capability probe —
   every wireless endpoint 200 (0 SIMs), `/mobile_phone_numbers` 200, balance $8.46,
   publicKeySet:false. ⛔ Nothing was purchased, created, or changed on the Telnyx account.
-- Deploy: recorded below in this entry's follow-up once run (api needs the migration; portal ships
-  the two pages). ⏳ NOT PROVEN: no real eSIM installed, no live usage row, no webhook received.
+- Deploy (same day): commit `79b638a8` (be3e4c01 rebased), api + portal via deploy-direct.
+  **api**: blue/green cutover clean, container `.build-commit` = 79b638a8, 0 restarts,
+  `prisma migrate status` in-container = "Database schema is up to date", **all 7 mobile tables
+  live and countable via Prisma (0 rows each)**, `/app/apps/api/src/loopcomMobile/` present.
+  **portal**: container verified, 0 restarts, `/mobile` and `/admin/mobile-console` both 200, the
+  shipped CLIENT chunks carry `lm-wrap` (customer page) and `PURCHASES 1 eSIM` (console confirm) —
+  verified by STRING per the rule. **Gates proven live**: health 200 on BOTH hostnames
+  (app.loopcom.net + app.connectcomunications.com), `/webhooks/telnyx/mobile` unsigned POST → 401
+  (fail-closed, no public key stored), `/mobile-service/overview` without a JWT → 401.
+  ⏳ NOT PROVEN: no real eSIM installed, no live usage row, no webhook received, no page opened in
+  a browser session yet.
 
 ## Desk-phone wizard: password dead-end → zero-touch escape (2026-09-15, `7931e768`)
 
