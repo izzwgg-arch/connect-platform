@@ -92,3 +92,12 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_UI_2026-09-15.md` 
   needed). Artifact v4 shows it rendered from the production template.
 - ⏳ Not proven: no tenant has had a first line created since, so no welcome
   has reached a real inbox.
+
+## Next round — MOCKUPS ONLY, awaiting Izzy (2026-09-16)
+
+Custom plans (builder + private per-customer plans), buying eSIMs / ordering
+SIM cards, and a one-page Create-a-line flow (console + customer self-serve /
+request variants): `docs/mockups/loopcom-mobile/plans-and-lines.html`,
+artifact https://claude.ai/artifact/EpAZXqGsGaQVPnhfk5XvXC. ⛔ Nothing built.
+New back-end work it needs (incl. a Telnyx address client for SIM orders) is
+listed in the UI handoff §8.

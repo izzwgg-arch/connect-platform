@@ -243,3 +243,37 @@ keys to a role on /admin/roles/[id] (or per-page In-sidebar on /admin/permission
   to OTHER areas' sessions — do not "fix" them from mobile work.
 - The old thin customer page is GONE (replaced by the dashboard at /mobile); the
   eSIM QR now lives on /mobile/devices.
+
+## 8. Custom plans + buying eSIMs/SIM cards + creating lines — MOCKUPS ONLY, awaiting Izzy (2026-09-16)
+
+Izzy: "I should be able to create custom plans, make my own plans. Show me
+mockups. I don't have an option to buy a new eSIM or SIM card, or create a
+new line." (He briefly thought the console wasn't built — it is: Admin →
+Mobile Console.) ⛔ Same gate as §0: mockup revisions only until he approves.
+
+**Deliverable:** `docs/mockups/loopcom-mobile/plans-and-lines.html`, artifact
+**https://claude.ai/artifact/EpAZXqGsGaQVPnhfk5XvXC** (reuses the approved
+mockup's CSS verbatim). 12 screens: console Plans list (templates + Private
+column + Duplicate), Plan builder (4 sections, live customer preview, margin
+vs 55% target — warns, never blocks), Create a line (one page: customer
+search → person → plan → SIM [new eSIM / eSIM from stock / SIM card from
+stock / ship a card] → number [data-only / port / new number beta-locked],
+with customer-billed vs carrier-cost money panel + live balance), Inventory
+action cards + stock, Buy eSIMs modal (qty, into stock or onto lines), Order
+SIM cards (qty, ship-to, carrier price check, confirm), purchase outcome
+states (confirm, working, done, carrier timeout "don't press again",
+balance low, refused), customer Lines w/ Add a line, customer self-serve add
+flow (self-serve ON), request-a-line modal (self-serve OFF — today's
+default), customer Devices (new eSIM, order SIM card), and a "What it takes"
+screen.
+
+**Verified against code before drawing:** `purchaseEsims(amount)`,
+`previewSimCardOrder`, `createSimCardOrder`, `registerSimCards` all exist in
+telnyxWirelessClient.ts; the console only exposes per-line purchase + a
+raw-tenantId create-line form; `selfServeLines` is persisted but nothing
+reads it. **New work if approved:** plan↔customer allowlist (private plans)
++ hotspot/roaming-zone/stop-data/intro-price/draft fields; ⛔ a Telnyx
+ADDRESS client (SIM orders require `address_id`; none exists in apps/api);
+eSIM stock (buy unassigned, attach later); customer add-a-line + request
+routes honoring self-serve/fraud caps/line limit; customer eSIM replacement +
+SIM card order.
