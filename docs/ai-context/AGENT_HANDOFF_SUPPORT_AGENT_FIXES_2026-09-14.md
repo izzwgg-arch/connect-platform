@@ -44,7 +44,7 @@ enforced by the API, never by the agent's judgement:
 |---|---|---|
 | 1 | Act as the filer (`/act`) | ✅ DEPLOYED `cc8211c1` |
 | 2 | Owner notice + STOP/GO, write gate | ✅ DEPLOYED (`31dc0e05` inside container `12d2c318`) — see §6 |
-| 3 | System-wide lane: own worktree, tests, push+deploy only after GO, verify, rollback | not built |
+| 3 | System-wide lane: own worktree, tests, push+deploy only after GO, verify, rollback | ✅ `8bce4506` DEPLOYED (api route) + watcher restarted — see §9. ⏳ no real ticket has shipped through it |
 | 4 | Customer conversation (SupportMessage/SMS, resume session on reply, "fixed" only with proof) | not built |
 | 5 | Coworker bridge: `computer_powershell` on the filer's linked desktop, forced approval | not built |
 | — | Watcher: MCP tools act_as_filer / post_owner_notice / get_owner_notices, fixing guardrails, 10/company cap, 30-min runs, api `changeWasMade` from the audit trail | ✅ `84a5fc16` DEPLOYED + watcher restarted — see §7. ⛔ writes still OFF (`SUPPORT_AGENT_WRITES_ENABLED` unset). Read-only SSH keys NOT done (PBX write — Izzy's call) |
@@ -126,7 +126,7 @@ browser. Enforced in code:
 ## 4. Traps hit this session
 
 - ⛔ **A `Write` tool payload decodes JSON `\u` escapes into real bytes.** The phase-1
-  regex `[\\ -]` landed as literal 0x00–0x1F and git stored the file as
+  regex `[\\\u0000-\u001f]` landed as literal 0x00–0x1F and git stored the file as
   **binary** (`Bin 0 -> 10665 bytes`, commit `d1f2aa46`); fixed in `cc8211c1` with a
   char-code check written via a Python script that builds backslashes with `chr(92)`.
   Rule: no `\u`/`\b`/`\d`/`\s` in tool-written source — use `[0-9]`, `[a-z]`, char
@@ -205,3 +205,55 @@ browser. Enforced in code:
 - Unblock (a person's job — rule 10): close that tab first or it re-bans; then wait for expiry or run
   `/opt/connectcomms/scripts/unblock_ip.sh 50.48.58.53` once the 5-minute window is clean. Trust's office
   `66.250.99.208` was unaffected (200s). Follow-up task filed: make Deploy Center stop polling a 404 job log.
+
+
+## 9. Phase 3 — the agent can ship a CODE fix after the owner's GO (`8bce4506`, 2026-09-15)
+
+Izzy, 2026-09-15: "Should be able to commit and deploy as well. It's the same agent in Claude, right?" Verified: yes -
+the watcher's run transcript lives in the same Claude project folder, so the same CLAUDE.md, memory and repo. What differs
+is that nobody watches the run, a stranger's ticket starts it, and the main folder is shared. So the model still never
+holds git or deploy powers; `tools/loopcom-support-mcp/ship.mjs` does it, deterministically.
+
+- **Agent side (MCP tools):** `stage_edit` (one exact match, CRLF-aware, control characters refused), `stage_new_file`
+  (never overwrites), `request_ship` (commit by pathspec in the worktree; nothing pushed; 3 per UTC day),
+  `get_ship_status`. Writes go ONLY to `.claude/worktrees/support-ship-<ref>` (a detached `git worktree add` of the
+  branch, ignored via `.git/info/exclude`) and ONLY under apps/api/src, apps/portal (app, components, lib, navigation,
+  services, hooks, contexts) and packages/shared/src. Always refused: the agent's own gate files (actAsFilerRoutes.ts,
+  supportAgentNotice.ts, customerUpdate.ts, customerUpdateSafety.ts, agentFixByText.ts), .env, .connect-ssh, prisma and
+  migrations, package.json, pnpm-lock, tsconfig, Docker files, .github, node_modules.
+- **Why MCP tools and not Claude's Edit tool** (checked against the Claude Code docs): a path-scoped allow cannot beat a
+  deny on the main folder (deny wins), Edit/Write denies do not stop Bash or other programs from writing, and memory is
+  keyed on the git repository so worktrees share it anyway. Our own code enforcing the paths is the real boundary.
+- **Worktree packages:** the main folder's `node_modules/@connect/*` are symlinks to the MAIN folder's packages, so tests in
+  a worktree would import other sessions' uncommitted `packages/shared`. `linkWorkspacePackages` creates junctions
+  `<worktree>/node_modules/@connect/<pkg>` pointing at the worktree's own package; third-party deps still resolve from
+  the main install (shamefully-hoist).
+- **Watcher side, one step per poll (`processShips`):** submitted -> `npm run test` + `npm run typecheck` in each touched
+  package (via `cmd.exe /d /s /c` with a fixed command string); pass = tests green and no TS errors in the changed files ->
+  `post_owner_notice` scope system with a summary naming the commit, services and files. Fail -> owner told, never asked
+  for GO. awaiting_go -> STOP or expiry discards the worktree; GO -> `shipEntry`.
+- **shipEntry:** HEAD must equal the approved sha and the worktree must be clean; fetch + rebase onto the tip (conflict ->
+  abort, owner told), re-run checks if the commit moved; push `HEAD:refs/heads/feat/ivr-migration-takeover` (never forced;
+  non-fast-forward retried 3 times); then per service an ssh `bash -s` script on loopcom: wait until no heavy job
+  (bracketed ps patterns) and runningCount 0, enqueue by BRANCH (never commitHash), poll the job to a terminal status, read
+  `.build-commit`, `git merge-base --is-ancestor`, health via `--resolve <host>:443:127.0.0.1` on both hostnames plus the
+  portal root. A HEAVY JOB collision is waited out and retried (3 times). Not verified -> check out the tip, `git revert`,
+  push, redeploy, owner told "ROLLED BACK"; if that fails too -> "URGENT ... needs a person". A ship interrupted by a
+  watcher restart is marked `interrupted` and NEVER resumed. Staged-but-never-submitted worktrees are discarded after 6 h.
+- **api:** `POST /admin/support/escalations/:ref/owner-update {message}` texts the owner's numbers (SUPER_ADMIN, 12 per
+  ticket per UTC day, owner only, never the customer). Used for every ship outcome.
+- **SSH from the watcher:** Git's `C:/Program Files/Git/usr/bin/ssh.exe` is preferred - Windows OpenSSH warned "Bad
+  permissions" on the repo key (it still connected, but do not depend on it).
+- **Tests:** `ship.test.mjs` (fake exec: path allowlist, services and packages, control bytes, exact-match + CRLF staging,
+  commit by pathspec with no push, daily cap, GO decisions, notice text, result parsing + verdict, approved-commit binding,
+  dirty worktree, rebase conflict, rollback, heavy-job retry, checks-failed never asks GO, interrupted never resumes,
+  source guards: no shell:true / force / add-all / commitHash) and the owner-update route tests. Watcher suite 94/94, api
+  support 129/129. api tsc 85 = the 84 baseline + 1 from another session's `7f2e9557` (globalSearchCallScope.test.ts).
+- **Deployed:** api job `b91dfd96` -> container `8bce4506`, restarts 0, healthy, owner-update route present, health 200 on
+  both hostnames. Watcher restarted (pid 17812) and polling 30 tickets (office IP no longer banned).
+- **Found while documenting:** THIS handoff had gone BINARY - section 4 quoted the phase-1 regex and the Write tool decoded
+  its backslash-u escapes into two real control bytes, so git stored the doc as binary from `fd68d4c5`. Repaired
+  2026-09-15 (the bytes are now the text `u0000`/`u001f` after a backslash); the consolidated memory `support-watcher.md`
+  had the same two bytes and was repaired too. Scan EVERY tool-written file, docs included.
+- NOT PROVEN: no ticket has staged, been approved or shipped through this; no rollback has run for real. The first real
+  use should be watched: expect a GO text naming a commit, then "Shipped ... verified" or "ROLLED BACK".

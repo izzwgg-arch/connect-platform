@@ -407,7 +407,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-14 · Deploy 403 prevention deployed/verified: queued-log waiting responses, bounded polling, live 200s and no renewed ban → `2026-09-14-deploy-log-autoban.md`
 
-- 2026-09-14 · Support agent HANDS: acts as the ticket filer via `/act` (phase 1 DEPLOYED `cc8211c1`), owner SMS + STOP/GO gate (phase 2 DEPLOYED in `12d2c318`), watcher hooked up `84a5fc16`; writes still OFF; phases 3–5 not built → `2026-09-14-support-agent-acts-as-the-filer.md`
+- 2026-09-14 · Support agent HANDS: acts as the ticket filer via `/act` (phase 1 DEPLOYED `cc8211c1`), owner SMS + STOP/GO gate (phase 2 DEPLOYED in `12d2c318`), watcher hooked up `84a5fc16`; phase 3 code-ship-after-GO DEPLOYED `8bce4506` (nothing shipped through it yet); writes still OFF; phases 4–5 not built → `2026-09-14-support-agent-acts-as-the-filer.md`
 
 - 2026-09-14 · Profile menu deployment proven; office autoban explained/recovered; live DND test awaits extension → `2026-09-14-profile-menu-design.md`
 

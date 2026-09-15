@@ -24,8 +24,16 @@ customer's PC through the Coworker in the Loopcom app with the user's approval p
   the customer may be told "fixed" only when the audit trail shows a 2xx act write. ⛔ Restart = `Stop-Process` the node
   pid (the scheduled-task Stop/Start did NOT replace it). ⛔ **Writes still OFF** — `SUPPORT_AGENT_WRITES_ENABLED` must be
   set by Izzy (AGENTS.md rule 10) or flipped in code.
-- ⏳ **NOT BUILT:** phase 3 system lane, phase 4 customer conversation, phase 5 Coworker bridge (desktop build), read-only
-  SSH keys (a PBX write). No ticket has run with the new tools yet.
+- ✅ **Phase 3 — the agent can ship a CODE fix after Izzy's GO (`8bce4506`, api deployed + container-verified, watcher
+  restarted; handoff §9).** The agent only STAGES (`stage_edit` / `stage_new_file` into its own
+  `.claude/worktrees/support-ship-<ref>`, allowlisted paths, its own gate files/env/keys/prisma/package.json/tsconfig
+  refused) and calls `request_ship` (commit by pathspec, nothing pushed). `ship.mjs` in the watcher then runs npm
+  test + typecheck, texts a GO naming the commit, and only after GO: re-checks the approved commit, rebases + re-tests,
+  fast-forward pushes, deploys the BRANCH through the queue, verifies container ancestry + health on both hostnames,
+  reverts + redeploys on failure, texts the result (`POST …/owner-update`). 3 ships/day; interrupted ships never resume.
+  ⏳ Nothing has shipped through it yet.
+- ⏳ **NOT BUILT:** phase 4 customer conversation, phase 5 Coworker bridge (desktop build), read-only SSH keys (a PBX
+  write). ⛔ Writes as the filer still OFF (`SUPPORT_AGENT_WRITES_ENABLED`).
 - ⛔ **Incident 22:29Z:** Izzy's office IP `50.48.58.53` auto-banned by nginx (req/min>600 + 404>60/5m) by an open Deploy
   Center tab polling a 404 deploy-job log; expires 23:29Z; close the tab first. Handoff §8.
 - ⛔ **3GTH9M WAS worked automatically** (claimed 20:33Z, report 20:45Z, widget update delivered 20:46Z, unread) — the

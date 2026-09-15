@@ -2,6 +2,23 @@
 
 Newest entries first.
 
+## Support agent phase 3 — code fixes shipped after the owner's GO (2026-09-15, `8bce4506`)
+
+- watcher `node --test stress.test.mjs hands.test.mjs ship.test.mjs` → **94/94 pass** (new `ship.test.mjs`: path
+  allowlist + forbidden gate/config/secret files, services and packages per file, control-byte detection, exact-match and
+  CRLF staging, new files never overwrite, commit by pathspec with no push, 3/day cap, GO decisions, GO text, result
+  parsing + verdict, approved-commit binding, dirty worktree refused, rebase conflict aborts, verification failure rolls
+  back, heavy-job collision retried, checks failing never asks GO, interrupted ship never resumes, source guards).
+  `node --check` on ship/server/loopcom/watch/triage ✅.
+- api `src/support/supportAgentNotice.test.ts src/support/actAsFilerRoutes.test.ts src/support/verifiedChange.test.ts
+  src/support/customerUpdate.test.ts src/agentFixByText.test.ts` → **129/129 pass** (new: owner-update texts the owner,
+  12/ticket/day cap, 502 when unreachable, 404 unknown, 400 empty).
+- api tsc 85 = the 84 baseline + 1 error in another session's `7f2e9557` (`globalSearchCallScope.test.ts`); 0 in touched files.
+- Guards against HEAD by symbol count (stage_edit, processShips, owner-update, postOwnerUpdate) → 0 in HEAD. Control-byte scan: 0.
+- Deployed: api job `b91dfd96` → container 8bce4506, healthy, 0 restarts, route present, health 200 on both hostnames.
+  Watcher restarted (pid 17812), polling.
+- ⛔ Not proven: nothing has shipped through it; no real rollback has run.
+
 ## Telnyx trunk LIVE + attestation A PROVEN (2026-09-15, afternoon)
 
 - **THE RESULT: Telnyx's own CDRs read `SHAKEN_STIR=A` on all three test legs**, including a
