@@ -1,0 +1,1620 @@
+<title>Yiddish Learning Engine</title>
+<style>
+/* ============================================================
+   Yiddish Learning Engine — MOCKUP ONLY (2026-09-15). Not built.
+   Visual language copied from docs/mockups/yiddish-voice-lab/voice-lab.html.
+   Architecture: docs/ai-context/AGENT_HANDOFF_YIDDISH_LEARNING_ENGINE_2026-09-15.md
+   ⛔ Every Hebrew-script string on this page comes ONLY from the four
+   verbatim Yiddish Labs outputs in const Y (or exact substrings of
+   them, verified at runtime by W()). Nothing Yiddish is written by hand.
+   ⛔ No customer voicemail/call/chat content appears anywhere — counts only.
+   ============================================================ */
+:root {
+  --bg: #f6f8fb; --bg-soft: #f8fafc;
+  --panel: #ffffff; --panel-2: #f8fafc;
+  --text: #0f172a; --text-dim: #475569;
+  --accent: #3b82f6; --accent-2: #2563eb;
+  --border: rgba(15,23,42,.12);
+  --success: #16a34a; --warning: #b45309; --danger: #dc2626; --info: #2563eb; --future: #7c3aed;
+  --console-bg: #f6f8fb; --console-panel: #ffffff; --console-border: rgba(15,23,42,.09);
+  --console-text: #0f172a; --console-muted: #475569;
+  --card-grad: linear-gradient(145deg, rgba(255,255,255,.99), rgba(248,250,252,.96));
+  --card-shadow: 0 1px 2px rgba(15,23,42,.04), 0 18px 44px -28px rgba(15,23,42,.4), inset 0 1px 0 rgba(255,255,255,.95);
+  --chip-bg: rgba(15,23,42,.05);
+  --wave: #94a3b8; --wave-played: #3b82f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1218; --bg-soft: #101923;
+    --panel: #141f2b; --panel-2: #1a2635;
+    --text: #e1e9f1; --text-dim: #8ea0b2;
+    --accent: #22a8ff; --accent-2: #4f7bff;
+    --border: #26374a;
+    --success: #34c27b; --warning: #f0b655; --danger: #ea6068; --info: #4ab2ff; --future: #b59bff;
+    --console-bg: #0b1016; --console-panel: #131b26; --console-border: #253446;
+    --console-text: #dbe6f2; --console-muted: #8ea2b8;
+    --card-grad: linear-gradient(180deg, color-mix(in srgb, #141f2b 96%, transparent), color-mix(in srgb, #1a2635 74%, transparent));
+    --card-shadow: 0 10px 28px -22px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.035);
+    --chip-bg: rgba(127,127,127,.10);
+    --wave: #3d5166; --wave-played: #22a8ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1218; --bg-soft: #101923;
+  --panel: #141f2b; --panel-2: #1a2635;
+  --text: #e1e9f1; --text-dim: #8ea0b2;
+  --accent: #22a8ff; --accent-2: #4f7bff;
+  --border: #26374a;
+  --success: #34c27b; --warning: #f0b655; --danger: #ea6068; --info: #4ab2ff; --future: #b59bff;
+  --console-bg: #0b1016; --console-panel: #131b26; --console-border: #253446;
+  --console-text: #dbe6f2; --console-muted: #8ea2b8;
+  --card-grad: linear-gradient(180deg, color-mix(in srgb, #141f2b 96%, transparent), color-mix(in srgb, #1a2635 74%, transparent));
+  --card-shadow: 0 10px 28px -22px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.035);
+  --chip-bg: rgba(127,127,127,.10);
+  --wave: #3d5166; --wave-played: #22a8ff;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif; font-size: 14px; }
+h1,h2,h3,h4,p { margin: 0; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+.yi { font-family: "Noto Sans Hebrew", "Frank Ruhl Libre", "Arial Hebrew", "David", "Segoe UI", sans-serif; unicode-bidi: isolate; }
+.yi.big { font-size: 19px; line-height: 1.9; }
+.muted { color: var(--text-dim); }
+.small { font-size: 12px; }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+
+/* mockup chrome */
+.mockbar { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-block: 8px; padding-inline: 16px; background: color-mix(in srgb, var(--warning) 12%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border)); }
+.mtag, .mock { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent); border-radius: 6px; padding: 3px 8px; background: color-mix(in srgb, var(--warning) 10%, transparent); white-space: nowrap; }
+.mtitle { font-size: 13px; font-weight: 650; }
+.msp { flex: 1; }
+.mockbar select { width: auto; max-width: 100%; }
+[hidden] { display: none !important; }
+
+.shell { display: grid; grid-template-columns: 250px minmax(0,1fr); min-height: calc(100vh - 44px); }
+.side { background: var(--console-bg); border-right: 1px solid var(--console-border); padding: 14px 10px; position: sticky; top: 44px; align-self: start; height: calc(100vh - 44px); overflow-y: auto; }
+.side .brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 12px; font-weight: 800; letter-spacing: -.02em; color: var(--console-text); }
+.side .brand i { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: inline-block; }
+.side .sec { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--console-muted); padding: 12px 10px 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.side .sub-sec { font-size: 10px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; color: var(--console-muted); padding: 10px 10px 4px 20px; }
+.side button.nav, .side a.nav { width: 100%; text-align: left; display: flex; align-items: center; gap: 9px; border: 0; background: transparent; color: var(--console-text); padding: 7px 10px; border-radius: 9px; cursor: pointer; font-size: 13px; text-decoration: none; }
+.side a.nav { padding-left: 20px; font-size: 12.5px; }
+.side button.nav:hover, .side a.nav:hover { background: var(--chip-bg); }
+.side button.nav.on { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 650; }
+.side button.nav b { width: 20px; font-size: 11px; color: var(--console-muted); font-weight: 700; flex: none; }
+.side button.nav.ph { color: var(--console-muted); font-style: italic; border: 1px dashed var(--console-border); }
+.side .gate { margin: 14px 8px 0; font-size: 11.5px; color: var(--console-muted); border: 1px dashed var(--console-border); border-radius: 10px; padding: 9px; line-height: 1.45; }
+
+main { padding-block: 20px 60px; padding-inline: 24px; min-width: 0; }
+.screen { max-width: 1200px; margin: 0 auto; }
+.crumb { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.pagehead h2 { font-size: 22px; font-weight: 750; letter-spacing: -.022em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pagehead p { color: var(--text-dim); font-size: 13px; margin-top: 4px; max-width: 78ch; line-height: 1.5; }
+
+.card { background: var(--card-grad); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--card-shadow); padding: 16px; min-width: 0; }
+.card + .card { margin-top: 14px; }
+.card-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.card-h h3 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-h .sub { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.seclbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text-dim); margin: 0 0 8px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
+.grid2 > .card + .card, .grid3 > .card + .card, .stack > .card + .card { margin-top: 0; }
+.stack { display: grid; gap: 14px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.between { justify-content: space-between; }
+.mt { margin-top: 14px; }
+
+.btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 7px 13px; font-size: 13px; font-weight: 550; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: transform .14s, border-color .14s; text-decoration: none; }
+.btn:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; font-weight: 650; }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.btn.gold { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
+.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.pill.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); background: color-mix(in srgb, var(--success) 9%, transparent); }
+.pill.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+.pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.pill.info { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 9%, transparent); }
+.pill.dim { color: var(--text-dim); }
+.pill.wrap { white-space: normal; }
+.fut { display: inline-flex; align-items: center; gap: 5px; border: 1px dashed color-mix(in srgb, var(--future) 70%, transparent); color: var(--future); background: color-mix(in srgb, var(--future) 8%, transparent); border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.fut::before { content: "◇"; }
+.tag { display: inline-block; border-radius: 6px; padding: 2px 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; background: var(--chip-bg); color: var(--text-dim); white-space: nowrap; }
+.live { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--success); white-space: nowrap; }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.samp { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+.prov { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--border); border-radius: 7px; padding: 2px 7px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+.chips { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.chip { border: 1px solid var(--border); background: var(--panel); color: var(--text-dim); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text); }
+.chip.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.chip.on.bad { background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.chip:disabled { opacity: .45; cursor: not-allowed; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; padding: 6px 11px; font-size: 12.5px; cursor: pointer; color: var(--text-dim); font-weight: 600; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+
+.field { display: grid; gap: 5px; min-width: 0; }
+.field > span { font-size: 11.5px; font-weight: 650; color: var(--text-dim); }
+input[type=text], input[type=search], input[type=number], select, textarea { width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+textarea { resize: vertical; min-height: 70px; }
+label.chk { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; cursor: pointer; }
+label.chk.dis { opacity: .55; cursor: not-allowed; }
+
+.twrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--panel-2) 58%, transparent); }
+table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.t th { text-align: left; color: var(--text-dim); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 72%, transparent); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 9px 12px; white-space: nowrap; }
+table.t td { border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); padding: 9px 12px; vertical-align: middle; }
+table.t tbody tr:last-child td { border-bottom: 0; }
+table.t tbody tr.click { cursor: pointer; }
+table.t tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+table.t tr.regress td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+table.t tr.sel td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+table.t tr.walled td { background: repeating-linear-gradient(135deg, transparent 0 8px, color-mix(in srgb, var(--danger) 6%, transparent) 8px 16px); }
+table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.banner { display: flex; gap: 10px; align-items: flex-start; border-radius: 13px; padding: 11px 13px; font-size: 13px; line-height: 1.45; border: 1px solid var(--border); background: var(--panel-2); margin-bottom: 14px; }
+.banner b { font-weight: 700; }
+.banner.warn { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, var(--panel)); }
+.banner.bad { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.banner.info { border-color: color-mix(in srgb, var(--info) 40%, var(--border)); background: color-mix(in srgb, var(--info) 7%, var(--panel)); }
+.banner.futb { border-style: dashed; border-color: color-mix(in srgb, var(--future) 55%, var(--border)); background: color-mix(in srgb, var(--future) 6%, var(--panel)); }
+
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 14px; }
+.kpi { background: var(--card-grad); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--card-shadow); padding: 13px 15px; min-width: 0; }
+.kpi .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); }
+.kpi .val { font-size: 24px; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.kpi .sub { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+
+.layer { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--panel); position: relative; }
+.layer + .layer { margin-top: 10px; }
+.layer .lh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.layer h4 { font-size: 13.5px; font-weight: 700; }
+.hl { background: color-mix(in srgb, var(--warning) 22%, transparent); border-bottom: 2px solid var(--warning); border-radius: 3px; padding: 0 2px; }
+pre.req { margin: 0; white-space: pre-wrap; word-break: break-word; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.miniplay { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); cursor: pointer; font-size: 10px; color: var(--accent); flex: none; }
+.miniplay:disabled { color: var(--text-dim); cursor: not-allowed; opacity: .55; }
+
+/* tokens (alignment) */
+.tokens { direction: rtl; display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.atok { border: 1px solid var(--border); border-radius: 9px; padding: 4px 8px 3px; background: var(--panel); display: grid; justify-items: center; gap: 1px; cursor: pointer; }
+.atok .w { font-size: 18px; line-height: 1.5; }
+.atok .tm { direction: ltr; font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--text-dim); }
+.atok.low { border-color: color-mix(in srgb, var(--warning) 60%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--panel)); border-style: dashed; }
+.atok.sel { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent); }
+.tcol .tokens { gap: 4px; padding: 10px; }
+.ttok { font-size: 16px; line-height: 1.6; padding: 0 4px; border-radius: 5px; }
+.ttok.miss { color: var(--danger); font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.ttok.dis { background: color-mix(in srgb, var(--warning) 18%, transparent); }
+
+.drawer-bg { position: fixed; inset: 0; background: rgba(2,6,12,.45); z-index: 80; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--bg); border-left: 1px solid var(--border); z-index: 81; overflow-y: auto; padding-block: 18px; padding-inline: 18px; box-shadow: -20px 0 50px -30px rgba(0,0,0,.5); }
+
+.empty { text-align: center; padding: 28px 16px; display: grid; gap: 8px; justify-items: center; }
+.empty .ico { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; font-size: 22px; background: var(--chip-bg); }
+.empty.bad .ico { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.empty.warn .ico { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.empty h3 { font-size: 16px; }
+.empty p { color: var(--text-dim); max-width: 52ch; line-height: 1.5; font-size: 13px; }
+
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--text-dim); font-size: 11px; font-family: Inter, "Segoe UI", sans-serif; }
+.chart text.lbl { fill: var(--text); font-size: 12px; }
+.chart text.yi { font-family: "Noto Sans Hebrew", "Segoe UI", sans-serif; }
+.chart .axis { stroke: var(--border); }
+.chart .bar { fill: var(--accent); }
+.chart .bar.ok { fill: var(--success); }
+.chart .bar.warn { fill: var(--warning); }
+.chart .few { fill: url(#hatch); }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+.chart .dot { fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+.chart .knee { stroke: var(--warning); stroke-dasharray: 4 3; }
+.chart .edge { stroke: var(--border); stroke-width: 1.4; }
+.chart .node { fill: var(--panel); stroke: var(--border); }
+.chart .node.c { stroke: var(--accent); stroke-width: 2; fill: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.chart .node.v { stroke: var(--success); }
+.chart .node.x { stroke: var(--warning); }
+.chart .node.s { stroke: var(--future); }
+.chart .node.o { stroke: var(--info); }
+.lane-speech { fill: color-mix(in srgb, var(--accent) 55%, transparent); }
+.lane-music { fill: color-mix(in srgb, var(--future) 55%, transparent); }
+.lane-sil { fill: var(--chip-bg); }
+.lane-yi { fill: color-mix(in srgb, var(--accent) 40%, transparent); }
+.lane-he { fill: color-mix(in srgb, var(--warning) 55%, transparent); }
+.lane-en { fill: color-mix(in srgb, var(--success) 50%, transparent); }
+.wtok { fill: color-mix(in srgb, var(--accent) 16%, var(--panel)); stroke: color-mix(in srgb, var(--accent) 45%, transparent); }
+.wtok.low { fill: color-mix(in srgb, var(--warning) 22%, var(--panel)); stroke: var(--warning); stroke-dasharray: 3 2; }
+.wave-bar { fill: var(--wave); }
+.pitch { fill: none; stroke: var(--danger); stroke-width: 1.6; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+/* governance */
+.wall { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.wallbox { border: 1px dashed color-mix(in srgb, var(--danger) 55%, var(--border)); border-radius: 12px; padding: 10px 12px; background: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--danger) 5%, transparent) 10px 20px); }
+.opt { border: 1px solid var(--border); border-radius: 13px; padding: 11px 12px; background: var(--panel); display: grid; gap: 5px; opacity: .78; }
+.opt.cur { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); opacity: 1; }
+.opt label { display: flex; gap: 8px; align-items: center; font-weight: 700; cursor: not-allowed; }
+.flow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.flow .arr { color: var(--text-dim); }
+.qitem { border: 1px solid var(--border); border-radius: 13px; padding: 10px 12px; background: var(--panel); cursor: pointer; display: grid; gap: 5px; }
+.qitem + .qitem { margin-top: 8px; }
+.qitem.on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.qitem.done { opacity: .55; }
+.prio { font-weight: 800; font-size: 11px; font-variant-numeric: tabular-nums; }
+.meter { height: 8px; border-radius: 99px; background: var(--chip-bg); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; z-index: 99; max-width: calc(100% - 32px); }
+
+@media (max-width: 980px) {
+  .shell { grid-template-columns: minmax(0,1fr); }
+  .side { display: none; }
+  .grid3 { grid-template-columns: minmax(0,1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 720px) {
+  main { padding-inline: 16px; }
+  .grid2 { grid-template-columns: minmax(0,1fr); }
+  .yi.big { font-size: 17px; }
+  .kpi .val { font-size: 20px; }
+}
+.kpis.k2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.kpis.k3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.grid2.qgrid { grid-template-columns: minmax(0,1fr) minmax(0,1.2fr); }
+@media (max-width: 720px) { .grid2.qgrid { grid-template-columns: minmax(0,1fr); } .kpis.k3 { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (max-width: 560px) {
+  .kpis.k2, .kpis.k3 { grid-template-columns: minmax(0,1fr); }
+  .kpis { grid-template-columns: minmax(0,1fr); }
+  .grid3 { grid-template-columns: minmax(0,1fr) !important; }
+  .pagehead h2 { font-size: 19px; }
+  .mockbar { padding-inline: 16px; }
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Hebrew:wght@400;500;700&family=Frank+Ruhl+Libre:wght@400;500&display=swap">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <rect width="6" height="6" fill="transparent"/><line x1="0" y1="0" x2="0" y2="6" stroke="#dc2626" stroke-opacity=".55" stroke-width="2.4"/>
+  </pattern>
+</defs></svg>
+
+<div class="mockbar">
+  <span class="mtag">MOCKUP — not built</span>
+  <span class="mtitle">Yiddish Learning · /admin/yiddish-learning · SUPER_ADMIN only</span>
+  <span class="msp"></span>
+  <select id="screenPick" aria-label="Screen"></select>
+  <div class="seg" id="themeSeg"><button data-t="system" class="on">System</button><button data-t="light">Light</button><button data-t="dark">Dark</button></div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><i></i>Loopcom</div>
+    <div class="sec">Platform · Yiddish Learning <span class="tag">staff</span></div>
+    <nav id="sideNav"></nav>
+    <div class="gate">Platform staff only (SUPER_ADMIN). Not grantable to tenants or custom roles. Voice Lab is this section's <b>evaluation module</b>, not a separate product. Customer data is <b>walled</b>; Yiddish Labs output is <b>serving only</b>.</div>
+  </aside>
+
+  <main>
+
+<!-- ============ 1. LEARNING DASHBOARD ============ -->
+<section class="screen" data-screen="1">
+  <div class="crumb">Admin › Yiddish Learning › Learning Dashboard</div>
+  <div class="pagehead"><div>
+    <h2>Learning Dashboard <span class="mock">MOCKUP — not built</span></h2>
+    <p>What the engine knows, where it came from, and what it is allowed to use. It starts from the honest live state: the corpus table has 1 row, the glossary 0, the archive 0.</p>
+  </div>
+  <div class="row"><div class="seg" id="d-mode"><button data-m="live" class="on">Live inventory 2026-09-15</button><button data-m="sample">Sample — illustrative populated state</button></div></div></div>
+  <div id="d-modebanner"></div>
+  <div class="kpis" id="d-kpis"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><div><h3>Corpus hours by quality tier</h3><div class="sub">A human-verified · B reliable transcript · C text+translation · D raw audio · E unverified</div></div><span id="d-tag1"></span></div><div class="chart" id="d-tiers"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Hours by governance class</h3><div class="sub">Hatched red = counted behind the customer data wall, not in the corpus</div></div><span class="live">Live inventory 2026-09-15</span></div><div class="chart" id="d-gov"></div></div>
+  </div>
+  <div class="grid3 mt">
+    <div class="card"><div class="card-h"><h3>Audio processed vs awaiting</h3><span id="d-tag2"></span></div><div id="d-audio"></div></div>
+    <div class="card"><div class="card-h"><h3>Knowledge</h3><span id="d-tag3"></span></div><div class="twrap"><table class="t"><tbody id="d-know"></tbody></table></div></div>
+    <div class="card wall"><div class="card-h"><div><h3>⛔ Customer data wall</h3><div class="sub">Counted, never read</div></div><span class="pill bad">CLOSED</span></div><div id="d-wall"></div></div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Learning over time</h3><div class="sub">From <span class="mono">YCMetricSnapshot</span> — cumulative, every point shows the items processed in its bucket</div></div>
+      <div class="row"><span id="d-tag4"></span><div class="seg" id="d-gran"><button data-g="day" class="on">Day</button><button data-g="week">Week</button><button data-g="month">Month</button></div></div></div>
+    <div class="grid2"><div class="chart" id="d-lex"></div><div class="chart" id="d-rules"></div></div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><h3>Recent discoveries</h3><span id="d-tag5"></span></div><div id="d-disc"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Current voice profile vs Baseline v1</h3><div class="sub">From Voice Lab (evaluation module)</div></div><span id="d-tag6"></span></div><div id="d-prof"></div></div>
+  </div>
+</section>
+
+<!-- ============ 2. CORPUS EXPLORER ============ -->
+<section class="screen" data-screen="2" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Corpus Explorer</div>
+  <div class="pagehead"><div>
+    <h2>Corpus Explorer <span class="mock">MOCKUP — not built</span></h2>
+    <p>Every corpus record points back at its original row or URL. The corpus references originals; it never copies-and-overwrites them.</p>
+  </div></div>
+  <div class="card">
+    <div class="grid2">
+      <label class="field"><span>Literal search (exact written form)</span><input type="search" id="x-q" dir="rtl" lang="yi" class="yi"></label>
+      <div class="field"><span>Semantic search</span><div class="row"><span class="fut">Future capability</span><span class="small muted">needs pgvector (not available in postgres:15 image) — a platform-wide image change</span></div></div>
+    </div>
+    <div class="grid3 mt" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      <label class="field"><span>Source</span><select id="x-src"><option value="">Any source</option></select></label>
+      <label class="field"><span>Governance class</span><select id="x-gov"><option value="">Any class</option><option>PLATFORM</option><option>CUSTOMER_PRIVATE</option><option>EXTERNAL</option></select></label>
+      <label class="field"><span>Tier</span><select id="x-tier"><option value="">Any tier</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></label>
+      <label class="field"><span>Has audio</span><select id="x-au"><option value="">Any</option><option value="1">Yes</option><option value="0">No</option></select></label>
+      <label class="field"><span>Has transcript</span><select id="x-tr"><option value="">Any</option><option value="1">Yes</option><option value="0">No</option></select></label>
+      <label class="field"><span>Has translation</span><select id="x-tl"><option value="">Any</option><option value="1">Yes</option><option value="0">No</option></select></label>
+      <label class="field"><span>Provider</span><select id="x-prov"><option value="">Any provider</option></select></label>
+      <label class="field"><span>Date</span><select><option>All time</option><option>Last 30 days</option><option>Last 7 days</option></select></label>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Results</h3><div class="sub" id="x-count"></div></div><span class="samp">Sample rows · live corpus = 1 row</span></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Record</th><th>Text</th><th>Source</th><th>Class</th><th>Tier</th><th>Has</th><th>Provider</th><th>Training use</th><th>Origin (provenance)</th></tr></thead><tbody id="x-rows"></tbody></table></div>
+    <div id="x-empty" hidden class="empty"><div class="ico">⌕</div><h3>No corpus records match</h3><p>Nothing in the searchable corpus matches. Customer-private sources are not searched at all (see below).</p></div>
+  </div>
+  <div class="card wall">
+    <div class="card-h"><div><h3>Not searched — behind the customer data wall</h3><div class="sub">These rows are counted, never read. A search never touches their content, and no match count is computed.</div></div><span class="live">Live inventory 2026-09-15</span></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Origin</th><th class="num">Rows</th><th>Audio</th><th>Class</th><th>Content</th><th>Notes</th></tr></thead><tbody id="x-walled"></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============ 3. WORD / PHRASE DETAIL ============ -->
+<section class="screen" data-screen="3" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Corpus Explorer › Word / phrase</div>
+  <div class="pagehead"><div>
+    <h2><span id="w-head"></span> <span class="mock">MOCKUP — not built</span></h2>
+    <p><span class="tag">YCLexeme</span> origin HE (Hebrew-origin phrase) · an observation is never a rule; rules need evidence above threshold <b>and</b> human approval when high-impact.</p>
+  </div><div class="row"><span class="samp">Sample evidence — assumes the Yiddish24 pilot ran</span></div></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><div><h3>Knowledge graph</h3><div class="sub">lexeme ↔ variants ↔ contexts ↔ speakers ↔ sources</div></div></div><div class="chart" id="w-graph"></div>
+      <div class="row legend small muted mt" style="gap:12px"><span><i style="background:var(--accent)"></i>lexeme</span><span><i style="background:var(--success)"></i>variant</span><span><i style="background:var(--warning)"></i>context</span><span><i style="background:var(--future)"></i>speaker cluster</span><span><i style="background:var(--info)"></i>source</span></div></div>
+    <div class="card"><div class="card-h"><div><h3>Variants</h3><div class="sub">Tracked with shares — a single global pronunciation is never forced</div></div></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Variant</th><th>Realization</th><th class="num">Share</th><th>Evidence score</th><th class="num">Speakers</th><th>Status</th></tr></thead><tbody id="w-vars"></tbody></table></div>
+      <div class="small muted" style="margin-top:8px" id="w-ident"></div></div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Evidence by source</h3><div class="sub">Scored per source class so any source can be excluded without recomputing everything else. Repeats from one speaker saturate at 3× their speaker count.</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Include</th><th>Source class</th><th class="num">Variant A</th><th class="num">Variant B</th><th class="num">Variant C</th><th class="num">Weight</th><th>Counts toward</th><th>Training use</th></tr></thead><tbody id="w-src"></tbody></table></div>
+    <div class="small muted" style="margin-top:8px">Score = Beta posterior mean (1+a)/(2+a+b) of independence-weighted support. Thresholds are calibrated after the pilot, never hardcoded — the 0.80 line here is illustrative.</div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><h3>Pronunciation observations</h3><span class="small muted">"We heard this."</span></div><div class="twrap"><table class="t"><thead><tr><th>Obs</th><th>Realization</th><th>Speaker</th><th>Source</th><th>Context</th><th class="num">Conf</th><th>Kind</th></tr></thead><tbody id="w-obs"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><h3>Audio occurrences</h3><span class="small muted">Playable only where rights allow</span></div><div class="twrap"><table class="t"><thead><tr><th></th><th>Occurrence</th><th>Source</th><th>Rights</th></tr></thead><tbody id="w-audio"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><h3>TTS outputs &amp; corrections</h3><span class="small muted">From Voice Lab</span></div><div class="twrap"><table class="t"><thead><tr><th></th><th>Item</th><th>Detail</th><th>Result</th></tr></thead><tbody id="w-tts"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><h3>Rules</h3><span class="small muted">"We apply this." Versioned.</span></div><div class="twrap"><table class="t"><thead><tr><th>Rule</th><th>Realization</th><th>State</th><th>Dictionary</th><th>Approved by</th></tr></thead><tbody id="w-rules"></tbody></table></div>
+      <div class="seclbl mt">Related words</div><div class="chips" id="w-rel"></div></div>
+  </div>
+</section>
+
+<!-- ============ 4. ALIGNMENT VIEWER ============ -->
+<section class="screen" data-screen="4" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Alignment viewer</div>
+  <div class="pagehead"><div>
+    <h2>Audio / transcript alignment <span class="mock">MOCKUP — not built</span></h2>
+    <p>Word timings, confidence and acoustic lanes for one asset. Ambiguous alignments are flagged, never forced into rules.</p>
+  </div></div>
+  <div class="banner info"><span>ℹ</span><div><b>Synthetic sample — not customer audio.</b> Voice Lab TTS output S-20930 (voice cedar) of a Yiddish Labs sentence. <span class="pill warn">Yiddish Labs output = serving only, never training</span></div></div>
+  <div class="card">
+    <div class="card-h"><div><h3>Asset VL-S-20930 · 8.4 s · 24 kHz mono</h3><div class="sub">Time runs left → right; the text reads right → left</div></div><span class="pill info">PLATFORM</span></div>
+    <div class="chart" id="al-lanes" style="overflow-x:auto"></div>
+    <div class="row legend small muted" style="gap:12px; margin-top:6px"><span><i class="lg" style="background:color-mix(in srgb,var(--accent) 55%,transparent)"></i>speech</span><span><i style="background:color-mix(in srgb,var(--future) 55%,transparent)"></i>music</span><span><i style="background:var(--chip-bg)"></i>silence</span><span><i style="background:color-mix(in srgb,var(--accent) 40%,transparent)"></i>yi</span><span><i style="background:color-mix(in srgb,var(--warning) 55%,transparent)"></i>Hebrew-origin</span><span><i style="background:color-mix(in srgb,var(--success) 50%,transparent)"></i>English-origin</span><span><i style="background:var(--danger)"></i>pitch contour</span></div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><div><h3>Tokens with word timings</h3><div class="sub">Dashed = alignment confidence &lt; 0.50 → ambiguous — not used for rules</div></div></div>
+      <div class="tokens yi" dir="rtl" lang="yi" id="al-tokens"></div><div class="small" style="margin-top:8px" id="al-sel"></div></div>
+    <div class="stack">
+      <div class="card"><div class="card-h"><h3>Prosody</h3><span class="samp">Sample</span></div><div class="kpis k2" style="margin-bottom:10px" id="al-pros"></div>
+        <div class="twrap"><table class="t"><thead><tr><th>Pause after</th><th>At</th><th class="num">Length</th></tr></thead><tbody id="al-pauses"></tbody></table></div></div>
+    </div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Multiple transcripts of the same audio</h3><div class="sub">All transcripts are kept (YCTranscript). Consensus needs ≥2 of 3 agreeing <b>and</b> mean alignment confidence ≥ 0.60.</div></div><span class="samp">Sample engines on synthetic audio</span></div>
+    <div class="grid3" id="al-trs"></div>
+    <div class="twrap mt"><table class="t"><thead><tr><th>#</th><th>Engine 1</th><th>Engine 2</th><th>Engine 3</th><th class="num">Align conf</th><th>Result</th></tr></thead><tbody id="al-diff"></tbody></table></div>
+    <div class="banner warn mt" style="margin-bottom:0"><span>⛔</span><div><b>The real version of this comparison is walled.</b> 603 customer voicemails have both a Voicemail transcript and a Supermarket draft transcript — an independent second transcript with real evaluation value. <span class="live">Live inventory 2026-09-15</span> Shown here only as a count until the owner decides.</div></div>
+  </div>
+</section>
+
+<!-- ============ 5. REVIEW QUEUE ============ -->
+<section class="screen" data-screen="5" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Review queue</div>
+  <div class="pagehead"><div>
+    <h2>Review queue <span class="mock">MOCKUP — not built</span></h2>
+    <p>Active learning: the engine asks the question whose answer resolves the most occurrences first. Customer-private items are never displayed here.</p>
+  </div><div class="row"><span class="samp">Sample queue</span><span class="pill dim" id="q-left"></span></div></div>
+  <div class="grid2 qgrid">
+    <div class="card"><div class="card-h"><h3>Prioritized</h3><div class="chips" id="q-filt"></div></div><div id="q-list"></div>
+      <div class="small muted mt">0 items from CUSTOMER_PRIVATE sources shown — the wall is closed.</div></div>
+    <div class="card" id="q-detail"></div>
+  </div>
+</section>
+
+<!-- ============ 6. VOICE BENCHMARK ============ -->
+<section class="screen" data-screen="6" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Voice benchmark</div>
+  <div class="pagehead"><div>
+    <h2>Voice benchmark <span class="mock">MOCKUP — not built</span></h2>
+    <p>Baseline v1 freezes today's model, voice, instructions and rules. Every candidate is rated against it by humans before it can move toward production.</p>
+  </div><div class="row"><button class="btn primary" id="b-run">Run benchmark</button><a class="btn" href="../yiddish-voice-lab/voice-lab.html#s4">Open A/B in Voice Lab ↗</a></div></div>
+  <div class="banner warn"><span>⚠</span><div><b>Live inventory 2026-09-15:</b> Baseline v1 is not frozen yet — Voice Lab has 0 tables and the benchmark has 0 cases. Everything below is <b>Sample</b>.</div></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><h3>Baseline v1</h3><span class="pill dim">frozen · immutable</span></div><div class="twrap"><table class="t"><tbody id="b-base"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><h3>Candidate</h3><select id="b-cand" style="width:auto"><option value="c1">Hasidic Yiddish v4 (TESTING)</option><option value="c2">Hasidic Yiddish v5 (CANDIDATE)</option></select></div><div class="twrap"><table class="t"><tbody id="b-candt"></tbody></table></div></div>
+  </div>
+  <div class="kpis mt" id="b-kpis"></div>
+  <div class="card">
+    <div class="card-h"><div><h3>By category</h3><div class="sub">Average human rating 1 (Bad) – 4 (Excellent). A regression = candidate lower by ≥ 0.20 with n ≥ 20 on both sides.</div></div><span class="samp">Sample</span></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Category</th><th class="num">Cases</th><th class="num">Baseline v1</th><th class="num">n</th><th class="num">Candidate</th><th class="num">n</th><th class="num">Δ</th><th>Read</th></tr></thead><tbody id="b-cats"></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============ 7. PROGRESS ANALYTICS ============ -->
+<section class="screen" data-screen="7" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Learning progress</div>
+  <div class="pagehead"><div>
+    <h2>Learning progress <span class="mock">MOCKUP — not built</span></h2>
+    <p>What each window of processing actually added. No fabricated accuracy figure.</p>
+  </div><div class="row"><span class="samp">Sample</span><div class="seg" id="p-win"><button data-w="1h">1 h</button><button data-w="10h">10 h</button><button data-w="24h" class="on">24 h</button><button data-w="1w">1 week</button><button data-w="1m">1 month</button></div></div></div>
+  <div class="banner info"><span>ℹ</span><div><b>No accuracy number: no ground truth.</b> There is no verified reference transcript set for Yiddish telephone speech, so the engine reports counts, confidence distributions and human benchmark ratings — never "% accurate".</div></div>
+  <div class="kpis" id="p-kpis"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><div><h3>Diminishing returns</h3><div class="sub">Novel share (utterances adding a new lexeme, variant or speaker) vs cumulative hours processed</div></div></div><div class="chart" id="p-curve"></div></div>
+    <div class="card"><div class="card-h"><div><h3>What this window added, by source</h3><div class="sub" id="p-srcsub"></div></div></div><div class="chart" id="p-src"></div>
+      <div class="twrap mt"><table class="t"><thead><tr><th>Style finding</th><th>Evidence</th><th>Status</th></tr></thead><tbody id="p-style"></tbody></table></div></div>
+  </div>
+</section>
+
+<!-- ============ 8. SOURCE MANAGER ============ -->
+<section class="screen" data-screen="8" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources</div>
+  <div class="pagehead"><div>
+    <h2>External source manager <span class="mock">MOCKUP — not built</span></h2>
+    <p>Every source is an adapter that emits normalized SourceItem records. No source logic leaks downstream, and every record inherits its source's governance.</p>
+  </div><div class="row"><button class="btn primary" id="s-add">+ Add source</button></div></div>
+  <div class="card">
+    <div class="twrap"><table class="t"><thead><tr><th>Source</th><th>Adapter</th><th>Class</th><th>Rights</th><th>Training eligibility</th><th>Budget</th><th>State</th><th class="num">Items</th></tr></thead><tbody id="s-rows"></tbody></table></div>
+    <div class="small muted" style="margin-top:8px"><span class="live">Live inventory 2026-09-15</span> item counts; budgets and states are Sample (no engine exists).</div>
+  </div>
+</section>
+
+<!-- ============ 9. TRAINING DATASET EXPORT ============ -->
+<section class="screen" data-screen="9" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Training dataset export</div>
+  <div class="pagehead"><div>
+    <h2>Training dataset export <span class="mock">MOCKUP — not built</span></h2>
+    <p>Governance filters run before anything is written, and they cannot be switched off. Today's honest result is an empty manifest.</p>
+  </div></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h"><h3>Fields</h3><span class="tag">JSONL · provider-neutral</span></div>
+      <div id="e-fields" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:6px"></div>
+      <div class="seclbl mt">Include</div>
+      <label class="chk"><input type="checkbox" id="e-sample"> Add Voice Lab human rows <span class="samp">Sample</span></label>
+      <div style="display:grid; gap:6px; margin-top:8px">
+        <label class="chk dis"><input type="checkbox" disabled> Yiddish Labs-derived rows <span class="pill bad">locked off</span></label>
+        <label class="chk dis"><input type="checkbox" disabled> CUSTOMER_PRIVATE rows <span class="pill bad">locked off — owner decision</span></label>
+        <label class="chk dis"><input type="checkbox" disabled> EXTERNAL rows with rights Unknown / Restricted <span class="pill bad">locked off</span></label>
+      </div>
+      <div class="kpis k3 mt" style="margin-bottom:0" id="e-kpis"></div>
+      <div class="row mt"><button class="btn primary" id="e-build">Build manifest</button><span class="small muted">Stays on the server. No provider upload.</span></div>
+    </div>
+    <div class="stack">
+      <div class="card"><div class="card-h"><div><h3>Exclusion breakdown</h3><div class="sub">A row excluded for several reasons is counted once in the total</div></div><span class="live">Live inventory 2026-09-15</span></div>
+        <div class="twrap"><table class="t"><thead><tr><th>Origin</th><th class="num">Rows</th><th>YL-derived</th><th>Customer-private</th><th>External rights</th><th>Result</th></tr></thead><tbody id="e-ex"></tbody></table></div></div>
+      <div class="card"><div class="card-h"><h3>Preview — first row</h3><span id="e-prevtag"></span></div><pre class="req" id="e-prev"></pre></div>
+      <div class="card"><div class="card-h"><h3>Provider exporters</h3></div><div style="display:grid; gap:10px" id="e-slots"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 10. GOVERNANCE & BUDGETS ============ -->
+<section class="screen" data-screen="10" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Governance &amp; budgets</div>
+  <div class="pagehead"><div>
+    <h2>Governance &amp; budgets <span class="mock">MOCKUP — not built</span></h2>
+    <p>The rules that decide what the engine may read, keep, learn from and spend. Nothing here can be changed by the engine itself.</p>
+  </div></div>
+  <div id="g-wall"></div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><h3>Per-source rights records</h3><span class="live">Live inventory 2026-09-15</span></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Source</th><th>Terms</th><th>Checked</th><th>Allowed use</th></tr></thead><tbody id="g-rights"></tbody></table></div>
+      <div class="seclbl mt">Governance gaps found in production</div>
+      <ul class="small" style="margin:0; padding-left:18px; line-height:1.7" id="g-gaps"></ul></div>
+    <div class="card"><div class="card-h"><h3>Budgets</h3><div class="row"><span class="pill warn" id="g-state">Paused</span><button class="btn sm" id="g-pause">Resume</button></div></div>
+      <div class="grid2">
+        <label class="field"><span>Daily API spend (USD)</span><input type="number" value="5.00" step="0.5"></label>
+        <label class="field"><span>Transcription minutes / day</span><input type="number" value="60"></label>
+        <label class="field"><span>Storage max (GB)</span><input type="number" value="20"></label>
+        <label class="field"><span>Concurrency</span><input type="number" value="2"></label>
+      </div>
+      <div class="field mt"><span>Mode</span><div class="seg" id="g-mode"><button data-m="a" class="on">Audio-only</button><button data-m="s">Selective</button><button data-m="f">Full</button></div></div>
+      <div class="small muted" style="margin-top:6px" id="g-modenote"></div>
+      <div class="layer mt"><div class="lh"><h4>Worker</h4><span class="pill bad">Worker: not provisioned</span></div>
+        <div class="small" style="line-height:1.55">No GPU on the call server. The Connect box (18 vCPU · 94 GiB · no GPU) runs production calls, LiveKit, rtpengine and Postgres, so <b>bulk analysis, alignment and clustering are refused on it</b> and wait for a separate worker. <span class="live">Live inventory 2026-09-15</span></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm" disabled>Register worker</button><span class="small muted">Owner decision #4 (compute) pending</span></div></div>
+    </div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><div><h3>Promotion states</h3><div class="sub">Rules, dictionaries, profiles and evaluation sets</div></div></div>
+      <div class="flow" id="g-flow"></div>
+      <div class="banner bad mt" style="margin-bottom:0"><span>⛔</span><div><b>No uncontrolled self-modification.</b> PRODUCTION needs a benchmark run against Baseline v1, A/B evidence and a named human approver. Learning algorithms are versioned (<span class="mono">processingVersion</span>) so old results stay reproducible.</div></div></div>
+    <div class="card"><div class="card-h"><h3>Processing queue</h3><span class="small muted">DB-row leases, survive restarts</span></div>
+      <div class="twrap"><table class="t"><thead><tr><th>State</th><th class="num">Live</th><th class="num">Sample</th><th></th></tr></thead><tbody id="g-queue"></tbody></table></div></div>
+  </div>
+</section>
+
+<!-- ============ 11. YIDDISH24 · SOURCE DASHBOARD ============ -->
+<section class="screen" data-screen="11" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Source dashboard</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Source dashboard <span class="mock">MOCKUP — not built</span></h2>
+    <p>Source #1 of the Learning Engine — an external adapter inside this section, not a separate product. Everything here comes from a read-only inspection of the public site on 2026-09-15.</p>
+  </div><div class="row"><span class="pill info">Source #1 inside the Learning Engine</span><button class="btn sm" data-go="8">All sources →</button></div></div>
+  <div class="y24rights"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><h3>What is possible today</h3><span class="pill ok">metadata only</span></div><div id="y-can"></div></div>
+    <div class="card wall"><div class="card-h"><h3>What is blocked</h3><span class="pill bad">audio</span></div><div id="y-cant"></div></div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Discovered — public metadata catalog</h3><div class="sub">Counts read from the site's own listings. The three lists overlap, so they are not a total.</div></div><span class="samp">Catalog estimate 2026-09-15</span></div>
+    <div class="kpis" id="y-disc" style="margin-bottom:0"></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Learned from this source</h3><div class="sub">Every figure that needs audio is 0 and stays 0 until permission exists</div></div><span class="pill bad">blocked</span></div>
+    <div class="kpis" id="y-learn" style="margin-bottom:0"></div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><h3>Request permission</h3><span class="pill warn">Draft ready — Izzy sends it</span></div><div id="y-perm"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Site-change detection</h3><div class="sub">The adapter is brittle by nature: it reads an undocumented custom site. If an assumption breaks it must alert, never silently report zero.</div></div></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Parser assumption</th><th>Health</th><th>Checked</th></tr></thead><tbody id="y-health"></tbody></table></div>
+      <div class="small muted mt">Alert rule: two consecutive runs returning 0 new items, or any assumption failing its probe, opens an alert and pauses the source. A run that finds nothing is never reported as "nothing new".</div></div>
+  </div>
+</section>
+
+<!-- ============ 12. YIDDISH24 · EPISODE BROWSER ============ -->
+<section class="screen" data-screen="12" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Episode browser</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Episode browser <span class="mock">MOCKUP — not built</span></h2>
+    <p>The public catalog as the adapter sees it. The site publishes no description, no tags and no canonical URL, and no transcripts exist anywhere on it.</p>
+  </div><div class="row"><span class="pill info">Source #1 inside the Learning Engine</span><span class="samp">Sample rows</span></div></div>
+  <div class="y24rights"></div>
+  <div class="card">
+    <div class="grid3" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">
+      <label class="field"><span>Main category</span><select id="y-fcat"><option value="">All categories</option></select></label>
+      <label class="field"><span>Series</span><select id="y-fser"><option value="">All series (~136)</option></select></label>
+      <label class="field"><span>Search (title / id)</span><input type="search" id="y-fq" placeholder="e.g. 167071"></label>
+      <label class="field"><span>Processing status</span><select id="y-fst"><option value="">Any status</option><option>Discovered</option><option>Queued</option></select></label>
+    </div>
+    <div class="small muted mt">Series names are published as base64 of a URL-encoded Hebrew string — <b>decoded at ingest</b> and stored as published. Hebrew text is never written by us.</div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Episodes</h3><div class="sub" id="y-ecount"></div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Category</th><th>Series</th><th>Episode</th><th>Host</th><th>Date (as published)</th><th class="num">Duration</th><th>Status</th><th>Novelty</th><th>Speech %</th><th>Transcript</th><th>Audio analyzed</th></tr></thead><tbody id="y-erows"></tbody></table></div>
+    <div class="row between mt"><span class="small muted" id="y-pag"></span><div class="row"><button class="btn sm" disabled>← Previous</button><button class="btn sm">Next 10 →</button></div></div>
+  </div>
+</section>
+
+<!-- ============ 13. YIDDISH24 · EPISODE LEARNING DETAIL ============ -->
+<section class="screen" data-screen="13" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Episode browser › Episode</div>
+  <div class="pagehead"><div>
+    <h2>Episode learning detail <span class="mock">MOCKUP — not built</span></h2>
+    <p>Everything the adapter holds for one episode shell (<span class="mono">/live/{catId}/{postId}</span>, loaded by the site through <span class="mono">POST /ajax/page.php</span>).</p>
+  </div><div class="row"><button class="btn sm" data-go="12">← Episode browser</button></div></div>
+  <div class="y24rights"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><h3>Metadata as published</h3><span class="samp">Sample episode</span></div>
+      <div class="twrap"><table class="t"><tbody id="y-meta"></tbody></table></div>
+      <div class="small muted mt">No description, no tags, no canonical URL exist on the site. Nothing above is invented, translated or completed by us.</div></div>
+    <div class="stack">
+      <div class="card"><div class="card-h"><h3>Audio</h3><span class="pill bad">403 without the site's Referer</span></div><div id="y-player"></div></div>
+      <div class="card"><div class="card-h"><h3>Learning value</h3><span class="pill dim">not computable</span></div><div id="y-value"></div></div>
+    </div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Timeline — the lanes that would exist</h3><div class="sub">Drawn empty on purpose: the engine will not guess a waveform it is not allowed to fetch.</div></div><span class="pill bad">requires permitted audio</span></div>
+    <div class="chart" id="y-lanes" style="overflow-x:auto"></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Related internal corpus records</h3><div class="sub">Metadata-level only — the site publishes no text to match on</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Internal record</th><th>Match basis</th><th>Strength</th><th></th></tr></thead><tbody id="y-rel"></tbody></table></div>
+  </div>
+</section>
+
+<!-- ============ 14. YIDDISH24 · PROCESSING QUEUE ============ -->
+<section class="screen" data-screen="14" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Processing queue</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Processing queue <span class="mock">MOCKUP — not built</span></h2>
+    <p>Source-level states with DB-row leases. Today every item stops at the metadata stages.</p>
+  </div><div class="row"><span class="pill info">Source #1 inside the Learning Engine</span></div></div>
+  <div class="y24rights"></div>
+  <div class="banner bad"><span>⛔</span><div><b>No audio stage can run.</b> Fetch-audio, segment, speaker clustering, transcription and alignment are all held at the gate. Needs written permission from Yiddish24 — audio is hotlink-protected; we do not bypass it.</div></div>
+  <div class="card">
+    <div class="card-h"><div><h3>States</h3><div class="sub">DISCOVERED / QUEUED / ANALYZED / PARTIAL / FULL / SKIPPED / DUPLICATE / FAILED / NEEDS_RETRY</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>State</th><th class="num">Items</th><th>Stage that fills it</th><th>Can run today</th><th>Note</th></tr></thead><tbody id="y-qstates"></tbody></table></div>
+  </div>
+  <div class="grid2 mt">
+    <div class="card"><div class="card-h"><div><h3>Fingerprint &amp; dedupe</h3><div class="sub">What makes two items "the same thing"</div></div></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Fingerprint input</th><th>Available</th><th>Used for</th></tr></thead><tbody id="y-fp"></tbody></table></div></div>
+    <div class="card"><div class="card-h"><h3>Recent runs</h3><span class="samp">Sample</span></div>
+      <div class="twrap"><table class="t"><thead><tr><th>Run</th><th>What ran</th><th class="num">New</th><th class="num">Dupes</th><th>Result</th></tr></thead><tbody id="y-runs"></tbody></table></div></div>
+  </div>
+</section>
+<!-- ============ 15. YIDDISH24 · CATEGORY PRIORITIES ============ -->
+<section class="screen" data-screen="15" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Category priorities</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Category priorities <span class="mock">MOCKUP — not built</span></h2>
+    <p>Which of the site's nine main categories the engine would work through first, once it is permitted to work through anything at all.</p>
+  </div><div class="row"><span class="pill info">Source #1 inside the Learning Engine</span></div></div>
+  <div class="y24rights"></div>
+  <div class="banner info"><span>ℹ</span><div><b>Priority is an order, not a filter.</b> Nothing is deleted and nothing is permanently ignored — a low priority only means "later". Priorities are adjustable at any time and re-ordering the queue costs nothing.</div></div>
+  <div class="card">
+    <div class="twrap"><table class="t"><thead><tr><th>Main category</th><th>Priority</th><th>Why</th><th>Series share</th><th>Status today</th></tr></thead><tbody id="y-prio"></tbody></table></div>
+    <div class="small muted mt">Series share: the inspection could count ~136 series in total and establish that music is roughly 8% of them. The rest is <b>unknown</b> and is shown as unknown, not estimated.</div>
+  </div>
+</section>
+
+<!-- ============ 16. YIDDISH24 · CONTINUOUS LEARNING CONTROLS ============ -->
+<section class="screen" data-screen="16" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Continuous learning</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Continuous learning controls <span class="mock">MOCKUP — not built</span></h2>
+    <p>Run state, budgets and mode for this one source. Global budgets on Governance still apply on top of these.</p>
+  </div><div class="row"><span class="pill warn" id="y-run-state">Stopped</span></div></div>
+  <div class="y24rights"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><h3>Run</h3><span class="small muted">metadata catalog only</span></div>
+      <div class="row" id="y-runbtns"></div>
+      <div class="small muted mt" id="y-runnote">Stopped. Starting would walk the public listings and record metadata only — no audio is fetched.</div>
+      <div class="seclbl mt">Mode</div>
+      <div style="display:grid; gap:8px" id="y-modes"></div>
+    </div>
+    <div class="card"><div class="card-h"><h3>Limits &amp; budgets</h3><span class="pill dim">per source</span></div>
+      <div class="grid2">
+        <label class="field"><span>Request rate (requests / minute)</span><input type="number" value="30"></label>
+        <label class="field"><span>Max concurrent jobs</span><input type="number" value="2"></label>
+        <label class="field"><span>Daily transcription minutes</span><input type="number" value="0" disabled></label>
+        <label class="field"><span>Daily API spend (USD)</span><input type="number" value="0.00" step="0.5" disabled></label>
+        <label class="field"><span>Storage budget (GB)</span><input type="number" value="0" disabled></label>
+        <label class="field"><span>Stop after (items)</span><input type="number" value="500"></label>
+      </div>
+      <div class="banner warn mt" style="margin-bottom:0"><span>⚠</span><div><b>Polite crawl.</b> One request every two seconds, one listing page at a time, no parallel fetches, normal browser identification, and a hard stop on any 429 or Cloudflare challenge. The site is a small publisher's custom PHP app — the engine must never be a load problem.</div></div>
+      <label class="chk mt"><input type="checkbox" checked> Alert on site change (parser assumptions, endpoints, empty runs)</label>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 17. YIDDISH24 · LEARNING DISCOVERIES ============ -->
+<section class="screen" data-screen="17" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Discoveries</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Learning discoveries <span class="mock">MOCKUP — not built</span></h2>
+    <p>What this source has taught the engine. Today: nothing, and the screen says so plainly.</p>
+  </div><div class="row"><span class="pill info">Source #1 inside the Learning Engine</span></div></div>
+  <div class="y24rights"></div>
+  <div class="card"><div class="empty warn"><div class="ico">◌</div><h3>0 discoveries — audio not permitted yet</h3>
+    <p>Discoveries come from listening: pronunciation observations, speaker clusters, prosody and novel vocabulary. None of that can be produced from a title, an image and a duration.</p>
+    <div class="row"><button class="btn" data-go="11">Request permission →</button><button class="btn" data-go="14">See the queue →</button></div></div></div>
+  <div class="card">
+    <div class="card-h"><div><h3>What this source would contribute once permitted</h3><div class="sub">Stated as expectations, never as results</div></div><span class="pill dim">not measured</span></div>
+    <div class="grid3" id="y-would"></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><div><h3>Why a second source matters — cross-source confidence</h3></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Evidence combination</th><th>Weight</th><th>What it proves</th></tr></thead><tbody id="y-cross"></tbody></table></div>
+    <div class="small muted mt">One tenant supplies ~68% of our internal Yiddish voicemail, so internal data alone would learn one business's callers. An independent source is how a habit is told apart from an accent — which is exactly why its rights question has to be settled properly rather than worked around.</div>
+  </div>
+</section>
+
+<!-- ============ 18. YIDDISH24 · PROGRESS OVER TIME ============ -->
+<section class="screen" data-screen="18" hidden>
+  <div class="crumb">Admin › Yiddish Learning › Sources › Yiddish24 › Progress over time</div>
+  <div class="pagehead"><div>
+    <h2>Yiddish24 · Progress over time <span class="mock">MOCKUP — not built</span></h2>
+    <p>One line can move today — items discovered in the public catalog. Every other line starts when permission is granted.</p>
+  </div><div class="row"><div class="seg" id="y-gran"><button data-g="day" class="on">Day</button><button data-g="week">Week</button><button data-g="month">Month</button></div></div></div>
+  <div class="y24rights"></div>
+  <div class="grid2">
+    <div class="card"><div class="card-h"><div><h3>Items discovered (metadata)</h3><div class="sub">The only metric that can run today — and it has not been started</div></div><span class="pill ok">allowed</span></div><div class="chart" id="y-pdisc"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Hours analyzed</h3><div class="sub">Needs permitted audio</div></div><span class="pill bad">blocked</span></div><div class="chart" id="y-phours"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Pronunciation observations</h3><div class="sub">Needs permitted audio</div></div><span class="pill bad">blocked</span></div><div class="chart" id="y-pobs"></div></div>
+    <div class="card"><div class="card-h"><div><h3>Diminishing returns — the shape to expect</h3><div class="sub">Explained, not measured: no point on this curve exists for Yiddish24</div></div><span class="pill dim">illustrative shape</span></div><div class="chart" id="y-pcurve"></div></div>
+  </div>
+  <div class="card mt">
+    <div class="card-h"><div><h3>Site-change detection</h3><div class="sub">Same probes as the source dashboard — a flat zero line must always be explainable</div></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>Parser assumption</th><th>Health</th><th>Checked</th></tr></thead><tbody id="y-health2"></tbody></table></div>
+  </div>
+</section>
+  </main>
+</div>
+<script>
+(function () {
+  "use strict";
+  // ⛔ The ONLY Hebrew-script text on this page. Verbatim Yiddish Labs outputs.
+  const Y = {
+    1: "יא, איך פארשטיי אידיש און איך קען אייך ארויסהעלפן מיט אייערע שאלות בנוגע די טעלעפאן סיסטעם.",
+    2: "העלאו, דא רעדט מלכי בערגער. איך רוף זיך נאכפרעגן אויב די ארדער פאר דאנערשטאג איז שוין גרייט. ביטע רופט מיך צוריק, יישר כח.",
+    3: "יא, ביטע פרעגט אייער שאלה, און איך וועל אייך ענטפערן א קלארע און פאסיגע תשובה.",
+    4: "איר האט נישט קיין נייע וואויס-מעילס. אייער אינבאקס איז ליידיג, ממילא זענען נישט דא קיין קאלערס צו ליסטן."
+  };
+  // Word-level examples: must be exact substrings of a Y sentence. Verified below.
+  const ALL = Object.values(Y).join(" ");
+  function W(s) { if (!ALL.includes(s)) { console.error("NOT A SUBSTRING — refusing:", s); return "⚠"; } return s; }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const yi = (s, cls) => `<span class="yi ${cls || ""}" dir="rtl" lang="yi">${esc(W(s))}</span>`;
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const stripP = t => t.replace(/[.,]+$/, "");
+  const fmtN = n => Number(n).toLocaleString("en-US");
+  let toastT;
+  function toast(msg) { let t = $(".toast"); if (!t) { t = document.createElement("div"); t.className = "toast"; document.body.appendChild(t); } t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+  const mini = (on, title) => `<button class="miniplay" ${on ? `onclick="this.textContent=this.textContent==='▶'?'❚❚':'▶'"` : "disabled"} title="${esc(title || (on ? "Play" : "Not playable"))}" aria-label="Play">▶</button>`;
+
+  // ---------- governance chips ----------
+  const GOVC = { PLATFORM: "info", CUSTOMER_PRIVATE: "bad", EXTERNAL: "warn" };
+  const gov = c => c ? `<span class="pill ${GOVC[c]}">${c}</span>` : `<span class="pill dim">not classified</span>`;
+  const ELC = { UNKNOWN: "dim", ALLOWED: "ok", RESTRICTED: "warn", EXCLUDED: "bad" };
+  const elig = e => `<span class="pill ${ELC[e]}">${e}</span>`;
+  const YLCHIP = `<span class="pill warn">Yiddish Labs output = serving only, never training</span>`;
+  const PROVUNK = `<span class="pill bad">⚠ Provider unknown per row</span>`;
+  const prov = t => `<span class="prov">↗ ${esc(t)}</span>`;
+  const LIVE = `<span class="live">Live inventory 2026-09-15</span>`;
+  const SAMP = `<span class="samp">Sample</span>`;
+
+  // ---------- screens (extend here: add an entry + a matching <section data-screen="…">) ----------
+  const SCREENS = [
+    { id: "1", label: "Learning Dashboard", group: "engine" },
+    { id: "2", label: "Corpus Explorer", group: "engine" },
+    { id: "3", label: "Word / phrase detail", group: "engine" },
+    { id: "4", label: "Alignment viewer", group: "engine" },
+    { id: "5", label: "Review queue", group: "engine" },
+    { id: "6", label: "Voice benchmark", group: "engine" },
+    { id: "7", label: "Learning progress", group: "engine" },
+    { id: "8", label: "Sources", group: "engine" },
+    { id: "9", label: "Training dataset export", group: "engine" },
+    { id: "10", label: "Governance & budgets", group: "engine" },
+    { id: "11", label: "Yiddish24 · Source dashboard", short: "Source dashboard", group: "y24" },
+    { id: "12", label: "Yiddish24 · Episode browser", short: "Episode browser", group: "y24" },
+    { id: "13", label: "Yiddish24 · Episode learning detail", short: "Episode detail", group: "y24" },
+    { id: "14", label: "Yiddish24 · Processing queue", short: "Processing queue", group: "y24" },
+    { id: "15", label: "Yiddish24 · Category priorities", short: "Category priorities", group: "y24" },
+    { id: "16", label: "Yiddish24 · Continuous learning controls", short: "Learning controls", group: "y24" },
+    { id: "17", label: "Yiddish24 · Learning discoveries", short: "Discoveries", group: "y24" },
+    { id: "18", label: "Yiddish24 · Progress over time", short: "Progress over time", group: "y24" }
+  ];
+  const GROUPS = [["engine", "Learning Engine"], ["voicelab", "Voice Lab · evaluation module"], ["y24", "Yiddish24 · Source #1"]];
+  const VOICE_LAB = [[1, "Generate & Rate"], [4, "A/B test"], [5, "Pronunciation dictionary"], [9, "Regression suites"], [7, "Training data"], [12, "Reference audio & consent"]];
+  const VL_URL = n => `../yiddish-voice-lab/voice-lab.html#s${n}`;
+  // Yiddish24 — facts from the read-only site inspection of 2026-09-15. Nothing here is assumed.
+  const PERM = "Needs written permission from Yiddish24 — audio is hotlink-protected; we do not bypass it.";
+  const Y24CATS = ["News", "Interviews", "Analysis", "Miscellaneous", "Health", "Business", "Video", "Music", "Torah"];
+  const HEBDATE = "[Hebrew-calendar date as published]";
+
+  $("#sideNav").innerHTML = GROUPS.map(([g, name]) => {
+    const head = `<div class="sub-sec">${esc(name)}</div>`;
+    if (g === "voicelab") return head + VOICE_LAB.map(([n, l]) => `<a class="nav" href="${VL_URL(n)}">${esc(l)} <span class="small muted">↗</span></a>`).join("");
+    return head + SCREENS.filter(s => s.group === g).map(s => `<button class="nav ${s.placeholder ? "ph" : ""}" data-go="${s.id}"><b>${s.placeholder ? "…" : esc(s.id)}</b>${esc(s.short || s.label)}</button>`).join("");
+  }).join("");
+  $("#screenPick").innerHTML = GROUPS.map(([g, name]) => `<optgroup label="${esc(name)}">` + (g === "voicelab"
+    ? VOICE_LAB.map(([n, l]) => `<option value="vl:${n}">Voice Lab › ${esc(l)} ↗</option>`).join("")
+    : SCREENS.filter(s => s.group === g).map(s => `<option value="${s.id}">${s.placeholder ? "" : s.id + ". "}${esc(s.label)}</option>`).join("")) + `</optgroup>`).join("");
+  function go(id) {
+    id = String(id);
+    if (!SCREENS.some(s => s.id === id)) id = "1";
+    $$(".screen").forEach(s => s.hidden = s.dataset.screen !== id);
+    $$(".side button.nav").forEach(b => b.classList.toggle("on", b.dataset.go === id));
+    $("#screenPick").value = id;
+    try { history.replaceState(null, "", "#s" + id); } catch (e) {}
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener("click", e => { const b = e.target.closest("[data-go]"); if (b) go(b.dataset.go); });
+  $("#screenPick").addEventListener("change", e => { const v = e.target.value; if (v.startsWith("vl:")) location.href = VL_URL(v.slice(3)); else go(v); });
+  $$("#themeSeg button").forEach(b => b.addEventListener("click", () => {
+    $$("#themeSeg button").forEach(x => x.classList.toggle("on", x === b));
+    if (b.dataset.t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", b.dataset.t);
+  }));
+  function seg(sel, cb) { $$(sel + " button").forEach(b => b.addEventListener("click", () => { $$(sel + " button").forEach(x => x.classList.toggle("on", x === b)); cb(b); })); }
+
+  // ---------- charts (SVG, drawn to scale, always show n) ----------
+  function hbars(el, rows, o) {
+    const W0 = 560, L = o.labelW || 150, R = o.right || 120, rowH = 30, top = 8, H = top + rows.length * rowH + 26;
+    const min = o.min || 0, max = o.max, sx = v => L + (Math.min(v, max) - min) / (max - min) * (W0 - L - R);
+    let s = `<svg viewBox="0 0 ${W0} ${H}" role="img">`;
+    o.ticks.forEach(t => { const x = sx(t); s += `<line class="axis" x1="${x}" y1="${top - 2}" x2="${x}" y2="${H - 22}" stroke-dasharray="2 3"/><text x="${x}" y="${H - 8}" text-anchor="middle">${esc(o.tickFmt ? o.tickFmt(t) : t)}</text>`; });
+    rows.forEach((r, i) => {
+      const y = top + i * rowH, w = sx(r.v) - L;
+      s += `<text class="lbl" x="${L - 8}" y="${y + 18}" text-anchor="end">${esc(r.l)}</text>`;
+      s += `<rect class="${r.hatch ? "few" : "bar " + (r.cls || "")}" x="${L}" y="${y + 6}" width="${Math.max(r.v > 0 ? 1.5 : 0, w)}" height="16" rx="3" ${r.hatch ? 'stroke="var(--danger)" stroke-width=".8"' : ""}/>`;
+      if (r.v === 0) s += `<line x1="${L}" y1="${y + 5}" x2="${L}" y2="${y + 23}" stroke="var(--text-dim)" stroke-width="2"/>`;
+      s += `<text x="${Math.max(L, sx(r.v)) + 6}" y="${y + 18}">${esc(r.txt)}</text>`;
+    });
+    s += `<line class="axis" x1="${L}" y1="${top - 2}" x2="${L}" y2="${H - 22}"/></svg>`;
+    el.innerHTML = s + (o.foot ? `<div class="small muted" style="margin-top:4px">${o.foot}</div>` : "");
+  }
+  function lineChart(el, pts, o) {
+    const W0 = 560, H = 190, L = 50, R = 70, T = 22, B = 30;
+    const max = o.max, n = pts.length, sx = i => L + (n < 2 ? 0 : i / (n - 1)) * (W0 - L - R), sy = v => T + (1 - v / max) * (H - T - B);
+    let s = `<svg viewBox="0 0 ${W0} ${H}" role="img"><text class="lbl" x="${L}" y="12">${esc(o.title)}</text>`;
+    o.ticks.forEach(t => { s += `<line class="axis" x1="${L}" y1="${sy(t)}" x2="${W0 - R}" y2="${sy(t)}" stroke-dasharray="2 3"/><text x="${L - 6}" y="${sy(t) + 4}" text-anchor="end">${fmtN(t)}</text>`; });
+    const every = Math.ceil(n / 7);
+    pts.forEach((p, i) => { if (i % every === 0 || i === n - 1) s += `<text x="${sx(i)}" y="${H - 10}" text-anchor="middle">${esc(p.x)}</text>`; });
+    if (n && pts.some(p => p.y > 0)) {
+      s += `<path class="line" d="${pts.map((p, i) => (i ? "L" : "M") + sx(i).toFixed(1) + " " + sy(p.y).toFixed(1)).join(" ")}"/>`;
+      pts.forEach((p, i) => { s += `<circle class="dot" cx="${sx(i)}" cy="${sy(p.y)}" r="2.8"><title>${esc(p.x)}: ${fmtN(p.y)} · n=${fmtN(p.n)} items</title></circle>`; });
+      const last = pts[n - 1]; s += `<text x="${sx(n - 1) + 6}" y="${sy(last.y) + 4}">${fmtN(last.y)}</text>`;
+    } else {
+      s += `<line x1="${L}" y1="${sy(0)}" x2="${W0 - R}" y2="${sy(0)}" stroke="var(--text-dim)" stroke-width="2"/><text x="${(L + W0 - R) / 2}" y="${sy(0) - 30}" text-anchor="middle" class="lbl">No snapshots — nothing has been processed</text>`;
+    }
+    s += `<line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/></svg>`;
+    el.innerHTML = s + `<div class="small muted">n = ${fmtN(pts.reduce((a, p) => a + p.n, 0))} items processed across ${n} ${esc(o.unit)} buckets</div>`;
+  }
+
+  // ---------- 1. Dashboard ----------
+  const DASH = {
+    live: {
+      kpis: [["Corpus hours", "0.0 h", "n=1 corpus row (AgentTranscript), 0 with audio"], ["Transcripts · translations · pairs", "1 · 0 · 0", "493 AgentTranslation rows not indexed (YL, serving-only)"], ["Speaker clusters · lexemes", "0 · 0", "AgentDialectTerm glossary = 0 rows"], ["Golden · benchmark", "0 · 0", "Voice Lab = 0 tables · archive ingestor = 0"]],
+      tiers: [["A", 0, 0], ["B", 0, 0], ["C", 0, 0], ["D", 0, 0], ["E", 0, 1, "text-only"]], tierMax: 10,
+      audio: { done: 0, wait: 0, note: "Nothing is queued: the engine and its YCProcessingJob table do not exist. The 1,839 local voicemail WAVs (21.9 h) are behind the wall and are not \"awaiting\"." },
+      know: [["Pronunciation observations", 0], ["High-confidence rules", 0], ["Open conflicts", 0], ["Unique lexemes", 0], ["Speaker clusters", 0], ["Golden samples", 0], ["Benchmark cases", 0]],
+      series: null, disc: null, prof: null
+    },
+    sample: {
+      kpis: [["Corpus hours", "42.6 h", "n=5,318 items across 3 sources"], ["Transcripts · translations · pairs", "2,452 · 1,204 · 1,388", "pairs = audio + aligned transcript"], ["Speaker clusters · lexemes", "214 · 6,812", "clusters are anonymous"], ["Golden · benchmark", "38 · 240", "benchmark cases in 18 categories"]],
+      tiers: [["A", 2.1, 312], ["B", 18.4, 2140], ["C", 0, 493, "text-only"], ["D", 17.6, 1706], ["E", 4.5, 667]], tierMax: 20,
+      audio: { done: 38.1, wait: 4.5, note: "Awaiting = discovered and budget-queued. Selective transcription reuses existing transcripts first." },
+      know: [["Pronunciation observations", 48930], ["High-confidence rules", 312], ["Open conflicts", 47], ["Unique lexemes", 6812], ["Speaker clusters", 214], ["Golden samples", 38], ["Benchmark cases", 240]],
+      series: true,
+      disc: [["PROPOSED", "Yes/no questions rise at the end", "n=412 utterances · 61 speaker clusters"], ["TESTING", "Conversational rate 5.8 syl/s vs TTS 4.1 syl/s", "n=1,930 utterances · 118 clusters"], ["NEEDS_REVIEW", "New variant split on a Hebrew-origin phrase", "n=184 occurrences · 9 clusters"], ["PROPOSED", "Speaker Cluster 204 — new, 14 min", "n=31 segments"]],
+      prof: [["Baseline v1 (frozen)", "2.72", 88], ["Hasidic Yiddish v4 (TESTING)", "3.05", 71]]
+    }
+  };
+  let dMode = "live", dGran = "day";
+  function series(g) {
+    const cfg = { day: [14, i => "Sep " + (2 + i), 90], week: [10, i => "W" + (28 + i), 620], month: [6, i => ["Apr", "May", "Jun", "Jul", "Aug", "Sep"][i], 2400] }[g];
+    const [k, lab, per] = cfg; const lex = [], rul = [];
+    let a = 0, b = 0;
+    for (let i = 0; i < k; i++) { const n = Math.round(per * (0.7 + ((i * 37) % 10) / 20)); a += Math.round(6812 / k * (1.6 - i / k)); b += Math.round(312 / k * (0.4 + i / k * 1.2)); lex.push({ x: lab(i), y: a, n }); rul.push({ x: lab(i), y: b, n }); }
+    const sa = 6812 / a, sb = 312 / b; lex.forEach(p => p.y = Math.round(p.y * sa)); rul.forEach(p => p.y = Math.round(p.y * sb));
+    return { lex, rul };
+  }
+  function renderDash() {
+    const D = DASH[dMode], tag = dMode === "live" ? LIVE : SAMP;
+    ["#d-tag1", "#d-tag2", "#d-tag3", "#d-tag4", "#d-tag5", "#d-tag6"].forEach(s => $(s).innerHTML = tag);
+    $("#d-modebanner").innerHTML = dMode === "live"
+      ? `<div class="banner warn"><span>⚠</span><div><b>Live inventory 2026-09-15 — the engine has learned nothing yet.</b> Corpus table <span class="mono">AgentTranscript</span> = 1 row · glossary <span class="mono">AgentDialectTerm</span> = 0 · archive ingestor = 0 (<span class="mono">AGENT_ARCHIVE_ROOT</span> unset). Almost all existing Yiddish data is customer-private <b>and</b> Yiddish Labs-derived. <span class="pill bad">Worker: not provisioned</span></div></div>`
+      : `<div class="banner info"><span>ℹ</span><div><b>Sample — illustrative populated state</b> after Voice Lab corrections and an approved external pilot. Not a projection; no numbers here are real.</div></div>`;
+    $("#d-kpis").innerHTML = D.kpis.map(([l, v, s]) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join("");
+    hbars($("#d-tiers"), D.tiers.map(([t, h, n, note]) => ({ l: "Tier " + t, v: h, txt: `${h.toFixed(1)} h · n=${fmtN(n)}${note ? " · " + note : ""}` })), { max: D.tierMax, ticks: [0, D.tierMax / 2, D.tierMax], tickFmt: t => t + " h", labelW: 70, right: 150 });
+    const A = D.audio, tot = A.done + A.wait;
+    $("#d-audio").innerHTML = `<div class="row between"><span class="small">Processed <b>${A.done.toFixed(1)} h</b></span><span class="small">Awaiting <b>${A.wait.toFixed(1)} h</b></span></div>
+      <div class="meter" style="margin-top:6px"><i style="width:${tot ? (A.done / tot * 100).toFixed(1) : 0}%"></i></div>
+      <div class="small muted" style="margin-top:8px; line-height:1.5">${esc(A.note)}</div>`;
+    $("#d-know").innerHTML = D.know.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num"><b>${fmtN(v)}</b></td></tr>`).join("");
+    if (D.series) { const S = series(dGran); lineChart($("#d-lex"), S.lex, { title: "Unique lexemes (cumulative)", max: 8000, ticks: [0, 4000, 8000], unit: dGran }); lineChart($("#d-rules"), S.rul, { title: "High-confidence rules (cumulative)", max: 400, ticks: [0, 200, 400], unit: dGran }); }
+    else { const k = { day: 14, week: 10, month: 6 }[dGran]; const z = Array.from({ length: k }, (_, i) => ({ x: dGran === "month" ? ["Apr", "May", "Jun", "Jul", "Aug", "Sep"][i] : (dGran === "day" ? "Sep " + (2 + i) : "W" + (28 + i)), y: 0, n: 0 })); lineChart($("#d-lex"), z, { title: "Unique lexemes (cumulative)", max: 10, ticks: [0, 10], unit: dGran }); lineChart($("#d-rules"), z, { title: "High-confidence rules (cumulative)", max: 10, ticks: [0, 10], unit: dGran }); }
+    $("#d-disc").innerHTML = D.disc
+      ? `<div class="twrap"><table class="t"><tbody>${D.disc.map(([st, t, ev]) => `<tr><td><span class="pill ${st === "TESTING" ? "info" : st === "NEEDS_REVIEW" ? "warn" : "dim"}">${st}</span></td><td>${esc(t)}<span class="small muted" style="display:block">${esc(ev)}</span></td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty"><div class="ico">◎</div><h3>No discoveries</h3><p>Nothing has been processed, so there is nothing to find. Discoveries appear as YCFinding rows once a permitted source runs.</p></div>`;
+    $("#d-prof").innerHTML = D.prof
+      ? `<div class="twrap"><table class="t"><thead><tr><th>Config</th><th class="num">Avg / 4</th><th class="num">n</th></tr></thead><tbody>${D.prof.map(([c, a, n]) => `<tr><td>${esc(c)}</td><td class="num">${a}</td><td class="num">${n}</td></tr>`).join("")}</tbody></table></div><div class="small muted" style="margin-top:8px">Δ +0.33 · A/B 31–18 (n=49 decisive, 95% 49–76%) — borderline. <a href="#s6" data-go="6">Open benchmark →</a></div>`
+      : `<div class="empty warn"><div class="ico">⌛</div><h3>Baseline v1 not frozen</h3><p>Voice Lab has 0 tables. The first benchmark run freezes today's model, voice, instructions and rules as Baseline v1.</p><div class="row"><a class="btn sm" href="${VL_URL(1)}">Open Voice Lab ↗</a></div></div>`;
+  }
+  // governance hours are always live
+  hbars($("#d-gov"), [
+    { l: "PLATFORM · in corpus", v: 0, txt: "0.0 h · n=1 row" },
+    { l: "EXTERNAL · in corpus", v: 0, txt: "0.0 h · n=0 · Yiddish24 not approved" },
+    { l: "CUSTOMER_PRIVATE · voicemail", v: 35.8, hatch: true, txt: "≈35.8 h · n=3,510 · walled" },
+    { l: "CUSTOMER_PRIVATE · calls", v: 1707, hatch: true, txt: "≈1,707 h · n=74,176 · walled" }
+  ], { max: 1800, ticks: [0, 600, 1200, 1800], tickFmt: t => fmtN(t) + " h", labelW: 190, right: 150, foot: "Drawn to one scale: the 35.8 h voicemail bar is 2% of the call-recording bar. Call recordings' Yiddish share is unknown." });
+  $("#d-wall").innerHTML = `<div class="wallbox small" style="line-height:1.6">
+      <div><b>3,510</b> Yiddish voicemail transcripts ≈ <b>35.8 h</b> · 23 tenants ${PROVUNK}</div>
+      <div><b>74,176</b> call recordings ≈ <b>1,707 h</b> · language unknown</div>
+      <div><b>1,863</b> supermarket drafts · <b>29</b> assistant chats · <b>42</b> chat messages</div>
+      <div style="margin-top:4px">Content: <b>walled</b> — pending the owner's decision.</div></div>
+    <div class="row" style="margin-top:8px">${LIVE}<button class="btn sm" data-go="10">Decision card →</button></div>`;
+  seg("#d-mode", b => { dMode = b.dataset.m; renderDash(); });
+  seg("#d-gran", b => { dGran = b.dataset.g; renderDash(); });
+  renderDash();
+
+  // ---------- 2. Corpus Explorer ----------
+  const CORPUS = [
+    { id: "VL-S-20930", k: 2, src: "Voice Lab", gov: "PLATFORM", tier: "B", au: 1, tr: 1, tl: 1, provider: "Yiddish Labs → OpenAI TTS", yl: true, el: "EXCLUDED", origin: "VoiceLabGeneration · S-20930", link: 3 },
+    { id: "VL-S-20931", k: 2, src: "Voice Lab", gov: "PLATFORM", tier: "E", au: 1, tr: 1, tl: 1, provider: "Yiddish Labs → OpenAI TTS", yl: true, el: "EXCLUDED", origin: "VoiceLabGeneration · S-20931 (rejected)", link: 3 },
+    { id: "AT-t0419", k: 4, src: "Yiddish Labs translation cache", gov: "PLATFORM", tier: "C", au: 0, tr: 0, tl: 1, provider: "Yiddish Labs", yl: true, el: "EXCLUDED", origin: "AgentTranslation · id t0419 (pinned template)" },
+    { id: "AT-t0388", k: 1, src: "Yiddish Labs translation cache", gov: "PLATFORM", tier: "C", au: 0, tr: 0, tl: 1, provider: "Yiddish Labs", yl: true, el: "EXCLUDED", origin: "AgentTranslation · id t0388" },
+    { id: "VL-S-20655", k: 3, src: "Voice Lab", gov: "PLATFORM", tier: "B", au: 1, tr: 1, tl: 1, provider: "Yiddish Labs → OpenAI TTS", yl: true, el: "EXCLUDED", origin: "VoiceLabGeneration · S-20655" },
+    { id: "VL-H-00041", k: 0, src: "Voice Lab", gov: "PLATFORM", tier: "A", au: 1, tr: 1, tl: 0, provider: "Human", yl: false, el: "ALLOWED", origin: "VoiceLabReference · REF-0099 · consent CR-2026-0007" },
+    { id: "CORPUS-1", k: 0, src: "Corpus (AgentTranscript)", gov: null, tier: "E", au: 0, tr: 1, tl: 0, provider: "unknown", yl: false, el: "UNKNOWN", origin: "AgentTranscript · the 1 live row", live: true }
+  ];
+  const uniq = a => [...new Set(a)];
+  $("#x-src").innerHTML += uniq(CORPUS.map(r => r.src)).concat(["Yiddish24"]).map(s => `<option>${esc(s)}</option>`).join("");
+  $("#x-prov").innerHTML += uniq(CORPUS.map(r => r.provider)).map(s => `<option>${esc(s)}</option>`).join("");
+  function xRender() {
+    const q = $("#x-q").value.trim(), f = id => $(id).value;
+    const rows = CORPUS.filter(r => (!q || (r.k && Y[r.k].includes(q))) && (!f("#x-src") || r.src === f("#x-src")) && (!f("#x-gov") || r.gov === f("#x-gov")) && (!f("#x-tier") || r.tier === f("#x-tier")) &&
+      (f("#x-au") === "" || String(r.au) === f("#x-au")) && (f("#x-tr") === "" || String(r.tr) === f("#x-tr")) && (f("#x-tl") === "" || String(r.tl) === f("#x-tl")) && (!f("#x-prov") || r.provider === f("#x-prov")));
+    $("#x-count").textContent = `${rows.length} of ${CORPUS.length} sample records${q ? " contain the literal search" : ""} · Yiddish24: 0 items (pilot not approved)`;
+    $("#x-empty").hidden = rows.length > 0;
+    $("#x-rows").innerHTML = rows.map(r => {
+      let cell;
+      if (r.k) { const t = Y[r.k]; if (q && t.includes(q)) { const i = t.indexOf(q); cell = `<span class="yi" dir="rtl" lang="yi">${esc(t.slice(0, i))}<mark class="hl">${esc(q)}</mark>${esc(t.slice(i + q.length))}</span>`; } else cell = yi(t); }
+      else cell = `<span class="muted small" style="font-style:italic">${r.live ? "Live row — content not shown in mockup" : "Human-authored reviewer text — not shown in mockup"}</span>`;
+      const has = [r.au ? "audio" : "", r.tr ? "transcript" : "", r.tl ? "translation" : ""].filter(Boolean).map(h => `<span class="tag">${h}</span>`).join(" ");
+      return `<tr class="${r.link ? "click" : ""}" ${r.link ? `data-go="${r.link}"` : ""}><td class="mono">${r.id}${r.live ? `<div>${LIVE}</div>` : ""}</td><td style="min-width:260px">${cell}</td><td>${esc(r.src)}</td><td>${gov(r.gov)}</td><td><span class="tag">${r.tier}</span></td><td>${has}</td><td class="small">${esc(r.provider)}</td><td>${elig(r.el)}${r.yl ? `<div style="margin-top:4px">${YLCHIP}</div>` : ""}</td><td>${prov(r.origin)}</td></tr>`;
+    }).join("");
+  }
+  $("#x-q").value = W("יישר כח");
+  $("#x-q").addEventListener("input", xRender);
+  ["#x-src", "#x-gov", "#x-tier", "#x-au", "#x-tr", "#x-tl", "#x-prov"].forEach(s => $(s).addEventListener("change", xRender));
+  xRender();
+  $("#x-walled").innerHTML = [
+    ["Voicemail · transcriptLanguage yi / yi-en", "3,510", "1,839 local WAV (21.9 h) · rest on PBX spool", "≈35.8 h · 23 tenants · " + PROVUNK],
+    ["SupermarketOrderDraft (1 tenant)", "1,863", "joins to voicemail audio", "603 transcripts · 411 translations · YL"],
+    ["ConnectCdr.recordingPath / PBX monitor spool", "74,176", "≈1,707 h · 185 GB", "language unknown · no recording-consent field"],
+    ["AgentConversation / AgentMessage (yi)", "29", "none", "151 Hebrew-script messages · YL bridge"],
+    ["ConnectChatMessage", "42", "82 attachments", "language of audio unknown"],
+    ["SupermarketPhraseLesson", "11", "none", "tenant business data"]
+  ].map(([o, n, a, note]) => `<tr class="walled"><td>${prov(o)}</td><td class="num"><b>${n}</b></td><td class="small">${a}</td><td>${gov("CUSTOMER_PRIVATE")}</td><td><span class="pill bad">walled</span></td><td class="small">${note}</td></tr>`).join("");
+
+  // ---------- 3. Word / phrase detail ----------
+  const LEX = W("יישר כח");
+  $("#w-head").innerHTML = yi(LEX, "big");
+  const REAL = { A: "[realization A · IPA entered by reviewer]", B: "[realization B · IPA entered by reviewer]", C: "[realization C · IPA entered by reviewer]" };
+  const WSRC = [
+    { k: "internal", l: "Internal · Voice Lab ratings & corrections", w: 1, ident: .70, sup: { A: [46, 9], B: [12, 4], C: [3, 1] }, counts: "pronunciation + identity", use: elig("ALLOWED") + " <span class='small muted'>human rows</span>" },
+    { k: "yl", l: "Yiddish Labs lexical (spelling & meaning)", w: 0, ident: .60, sup: { A: [0, 0], B: [0, 0], C: [0, 0] }, counts: "lexeme identity only — no pronunciation weight", use: elig("EXCLUDED") + " " + YLCHIP },
+    { k: "y24", l: "Yiddish24 · external audio", w: .8, ident: .75, sup: { A: [88, 31], B: [41, 12], C: [0, 0] }, counts: "pronunciation + identity", use: elig("UNKNOWN") + " <span class='small muted'>rights not recorded</span>" },
+    { k: "human", l: "Human confirmations (reviewers)", w: 5, ident: .90, sup: { A: [3, 2], B: [0, 0], C: [0, 0] }, counts: "dominates", use: elig("ALLOWED") }
+  ];
+  const wOn = { internal: true, yl: true, y24: true, human: true };
+  const effOf = (s, v) => s.w * Math.min(s.sup[v][0], 3 * s.sup[v][1]);
+  function wCalc() {
+    const inc = WSRC.filter(s => wOn[s.k]);
+    const eff = {}; ["A", "B", "C"].forEach(v => eff[v] = inc.reduce((a, s) => a + effOf(s, v), 0));
+    const tot = eff.A + eff.B + eff.C;
+    const spk = {}; ["A", "B", "C"].forEach(v => spk[v] = inc.reduce((a, s) => a + s.sup[v][1], 0));
+    const score = v => (1 + eff[v]) / (2 + tot);
+    const ident = 1 - inc.reduce((a, s) => a * (1 - s.ident), 1);
+    const human = inc.some(s => s.k === "human" && s.sup.A[0] > 0);
+    return { eff, tot, spk, score, ident, human };
+  }
+  function wRender() {
+    const c = wCalc();
+    $("#w-vars").innerHTML = ["A", "B", "C"].map(v => {
+      const sc = c.score(v), share = c.tot ? c.eff[v] / c.tot : 0;
+      const st = (v === "A" && sc >= .70 && c.human) ? `<span class="pill ok">Rule · PRODUCTION</span>` : sc >= .20 ? `<span class="pill info">Variant · tracked</span>` : `<span class="pill warn">Saturated — one speaker</span>`;
+      return `<tr><td><b>${v}</b></td><td class="mono">${esc(REAL[v])}</td><td class="num">${(share * 100).toFixed(0)}%</td><td class="num">${sc.toFixed(2)}</td><td class="num">${c.spk[v]}</td><td>${st}</td></tr>`;
+    }).join("");
+    $("#w-ident").innerHTML = `Lexeme identity confidence <b>${c.ident.toFixed(2)}</b> · independence-weighted support total <b>${c.tot.toFixed(1)}</b> · ${c.human ? "human confirmation present" : `<span class="pill warn">no human confirmation — cannot be a rule</span>`}`;
+    $("#w-src").innerHTML = WSRC.map(s => `<tr class="${wOn[s.k] ? "" : "walled"}"><td><label class="chk"><input type="checkbox" data-src="${s.k}" ${wOn[s.k] ? "checked" : ""}> ${wOn[s.k] ? "in" : "out"}</label></td><td>${esc(s.l)}</td>${["A", "B", "C"].map(v => `<td class="num">${s.sup[v][0]} obs · ${s.sup[v][1]} spk<span class="small muted" style="display:block">eff ${effOf(s, v).toFixed(1)}</span></td>`).join("")}<td class="num">${s.w.toFixed(1)}</td><td class="small">${esc(s.counts)}</td><td>${s.use}</td></tr>`).join("");
+    // graph
+    const N = [
+      { x: 280, y: 150, r: 40, c: "c", t: LEX, yi: 1, sub: "lexeme" },
+      { x: 80, y: 55, r: 34, c: "v", t: "Variant A", sub: (c.score("A") * 100).toFixed(0) + "%" },
+      { x: 70, y: 150, r: 30, c: "v", t: "Variant B", sub: (c.score("B") * 100).toFixed(0) + "%" },
+      { x: 80, y: 245, r: 26, c: "v", t: "Variant C", sub: (c.score("C") * 100).toFixed(0) + "%" },
+      { x: 470, y: 75, r: 40, c: "x", t: W("רופט מיך צוריק"), yi: 1, sub: "context · n=41" },
+      { x: 470, y: 195, r: 36, c: "x", t: "domain: voicemail", sub: "context · n=96" },
+      { x: 205, y: 32, r: 24, c: "s", t: "Cluster 017", sub: "9 min" },
+      { x: 345, y: 32, r: 24, c: "s", t: "Cluster 041", sub: "4 min" },
+      { x: 275, y: 282, r: 26, c: "o", t: "Voice Lab", sub: "internal" },
+      { x: 400, y: 282, r: 26, c: "o", t: "Yiddish24", sub: "external" },
+      { x: 150, y: 282, r: 26, c: "o", t: "Yiddish Labs", sub: "lexical" }
+    ];
+    let g = `<svg viewBox="0 0 560 320" role="img">`;
+    N.slice(1).forEach(n => g += `<line class="edge" x1="280" y1="150" x2="${n.x}" y2="${n.y}"/>`);
+    N.forEach(n => {
+      g += `<circle class="node ${n.c}" cx="${n.x}" cy="${n.y}" r="${n.r}"/>`;
+      g += `<text class="lbl ${n.yi ? "yi" : ""}" x="${n.x}" y="${n.y + (n.yi ? 3 : 0)}" text-anchor="middle" ${n.yi ? 'direction="rtl"' : ""} font-size="${n.yi ? 13 : 11}">${esc(n.t)}</text>`;
+      g += `<text x="${n.x}" y="${n.y + n.r + 12}" text-anchor="middle" font-size="10">${esc(n.sub)}</text>`;
+    });
+    g += `</svg>`;
+    $("#w-graph").innerHTML = g + `<div class="small muted" style="margin-top:4px">n = 184 occurrences · 9 speaker clusters · 3 sources · 2 contexts</div>`;
+  }
+  $("#w-src").addEventListener("change", e => { const b = e.target.closest("[data-src]"); if (b) { wOn[b.dataset.src] = b.checked; wRender(); toast(b.checked ? "Source included — score recomputed." : "Source excluded — score recomputed from the remaining classes only."); } });
+  wRender();
+  $("#w-obs").innerHTML = [
+    ["O-48122", "A", "Cluster 017", "Yiddish24 · ep. 412 (sample)", W("רופט מיך צוריק"), .91, "ACOUSTIC_ALIGNED"],
+    ["O-48120", "A", "Cluster 041", "Yiddish24 · ep. 388 (sample)", W("ביטע רופט מיך צוריק"), .84, "ACOUSTIC_ALIGNED"],
+    ["O-47990", "B", "Cluster 004", "Yiddish24 · ep. 355 (sample)", W("צוריק, יישר כח"), .62, "ACOUSTIC_ALIGNED"],
+    ["O-47812", "A", "Cluster 001", "Voice Lab · REF-0118", "reference recording", .97, "HUMAN"],
+    ["O-47654", "A", "Cluster 001", "Voice Lab · S-20931", "TTS correction", .88, "TTS_CORRECTION"],
+    ["O-47001", "C", "Cluster 122", "Yiddish24 · ep. 201 (sample)", W("יישר כח"), .44, "ACOUSTIC_ALIGNED"]
+  ].map(([id, v, spk, src, ctx, conf, kind]) => `<tr><td class="mono">${id}</td><td class="mono">${esc(REAL[v])}</td><td>${spk}</td><td class="small">${esc(src)}</td><td>${/^[A-Za-z]/.test(ctx) ? `<span class="small muted">${esc(ctx)}</span>` : yi(ctx)}</td><td class="num" style="color:${conf < .5 ? "var(--warning)" : "inherit"}">${conf.toFixed(2)}</td><td><span class="tag">${kind}</span></td></tr>`).join("");
+  $("#w-audio").innerHTML = [
+    [1, "REF-0118 · 1.4 s", "Voice Lab reference · Speaker S-01", `<span class="pill ok">Consent CR-2026-0007 · evaluation + training</span>`],
+    [1, "VL-S-20930 · 7.9–8.4 s", "Voice Lab TTS output", `<span class="pill info">PLATFORM · our own output</span>`],
+    [0, "Y24 ep. 412 · 12:04.2–12:04.9", "Yiddish24 (sample)", `<span class="pill warn">Rights UNKNOWN — features + time reference only, media not stored</span>`],
+    [0, "Customer voicemail occurrences", "Voicemail · CUSTOMER_PRIVATE", `<span class="pill bad">Walled — not searched, not counted per word</span>`]
+  ].map(([on, t, s, r]) => `<tr><td>${mini(on)}</td><td class="small">${esc(t)}</td><td class="small">${esc(s)}</td><td>${r}</td></tr>`).join("");
+  $("#w-tts").innerHTML = [
+    [1, "S-20930 · cedar", "rule R-087 v3 applied", `<span class="pill ok">Excellent</span>`],
+    [1, "S-20931 · marin", "rule R-087 v3 applied", `<span class="pill warn">Needs work · word stress</span>`],
+    [1, "S-20655 · sage · tts-1-hd", "instructions ignored by model", `<span class="pill warn">Needs work</span>`],
+    [0, "Correction C-0412", "reviewer A · stress on the second word", `<span class="pill warn">Unverified</span>`],
+    [0, "Correction C-0390", "reviewer B · verified 2026-09-10", `<span class="pill ok">Verified</span>`]
+  ].map(([on, t, d, r]) => `<tr><td>${mini(on)}</td><td class="mono">${esc(t)}</td><td class="small">${esc(d)}</td><td>${r}</td></tr>`).join("");
+  $("#w-rules").innerHTML = [
+    ["R-087 v3", "A", `<span class="pill ok">PRODUCTION</span>`, "dict v12", "reviewer B · 2026-09-10"],
+    ["R-087 v4", "A", `<span class="pill info">TESTING</span>`, "dict v13 (draft)", "—"],
+    ["R-087 v2", "B", `<span class="pill dim">RETIRED</span>`, "dict v9", "reviewer A · 2026-08-28"]
+  ].map(([id, v, st, d, by]) => `<tr><td class="mono">${id}</td><td class="mono">${esc(REAL[v])}</td><td>${st}</td><td><span class="tag">${d}</span></td><td class="small">${esc(by)}</td></tr>`).join("");
+  $("#w-rel").innerHTML = [[W("שאלה"), "Hebrew-origin"], [W("תשובה"), "Hebrew-origin"], [W("ממילא"), "Hebrew-origin"], [W("צוריק"), "neighbor context"]].map(([w, why]) => `<span class="chip">${yi(w)} <span class="small muted">· ${esc(why)}</span></span>`).join("");
+
+  // ---------- 4. Alignment viewer ----------
+  const AT = Y[2].split(" ");
+  const ACONF = [.93, .88, .90, .58, .82, .95, .89, .91, .41, .86, .94, .79, .92, .46, .90, .88, .72, .93, .87, .90, .84, .44, .69];
+  const AEN = [0, 11], AHE = [21, 22]; // English-origin / Hebrew-origin token indexes
+  const ADUR = 8.4;
+  const ATOK = (() => {
+    let t = 0.45; const out = [];
+    AT.forEach((w, i) => { const d = 0.07 + stripP(w).length * 0.05, s = t; t += d; const pause = /[.,]$/.test(w) ? 0.32 : 0.05; out.push({ w, i, s, e: t, pause }); t += pause; });
+    const k = (ADUR - 0.55) / (t - 0.45);
+    out.forEach(o => { o.s = 0.45 + (o.s - 0.45) * k; o.e = 0.45 + (o.e - 0.45) * k; o.pause = o.pause * k; });
+    return out;
+  })();
+  const LANG = i => AHE.includes(i) ? "he" : AEN.includes(i) ? "en" : "yi";
+  function alLanes() {
+    const W0 = 1000, X = 56, R = 14, w = W0 - X - R, sx = t => X + t / ADUR * w;
+    const rows = [[36, "Waveform"], [110, "Speech / music / silence"], [150, "Speaker"], [190, "Language"], [230, "Words"], [290, "Pitch"]];
+    let s = `<svg viewBox="0 0 ${W0} 330" role="img" style="min-width:720px">`;
+    rows.forEach(([y, l]) => s += `<text x="4" y="${y + 4}" font-size="10">${esc(l)}</text>`);
+    // waveform
+    let seed = 7;
+    for (let i = 0; i < 160; i++) {
+      const t = i / 160 * ADUR, tok = ATOK.find(o => t >= o.s && t <= o.e);
+      seed = (seed * 9301 + 49297) % 233280; const r = seed / 233280;
+      const h = tok ? (6 + r * 22) : (t < 0.3 ? 5 + r * 6 : 1.2);
+      s += `<rect class="wave-bar" x="${sx(t)}" y="${36 - h / 2}" width="${w / 170}" height="${h}" rx="1"/>`;
+    }
+    // class lane
+    s += `<rect class="lane-music" x="${sx(0)}" y="100" width="${sx(.3) - sx(0)}" height="16" rx="3"><title>music 0.00–0.30 s (synthetic chime)</title></rect>`;
+    s += `<rect class="lane-sil" x="${sx(.3)}" y="100" width="${sx(.45) - sx(.3)}" height="16" rx="3"/>`;
+    ATOK.forEach(o => { s += `<rect class="lane-speech" x="${sx(o.s)}" y="100" width="${Math.max(1, sx(o.e) - sx(o.s))}" height="16" rx="3"/>`; if (o.pause > 0.2) s += `<rect class="lane-sil" x="${sx(o.e)}" y="100" width="${sx(o.e + o.pause) - sx(o.e)}" height="16" rx="3"><title>pause ${(o.pause * 1000).toFixed(0)} ms</title></rect>`; });
+    // speaker lane
+    s += `<rect class="lane-speech" x="${sx(.45)}" y="140" width="${sx(ADUR - .1) - sx(.45)}" height="16" rx="3" opacity=".55"/><text x="${sx(.6)}" y="152" font-size="10" fill="var(--text)">Speaker Cluster TTS-cedar (synthetic · 1 speaker)</text>`;
+    // language lane
+    ATOK.forEach(o => s += `<rect class="lane-${LANG(o.i)}" x="${sx(o.s)}" y="180" width="${Math.max(1, sx(o.e) - sx(o.s))}" height="16" rx="3"><title>${LANG(o.i)}</title></rect>`);
+    // word lane
+    ATOK.forEach(o => {
+      const low = ACONF[o.i] < .5;
+      s += `<rect class="wtok ${low ? "low" : ""}" x="${sx(o.s)}" y="218" width="${Math.max(2, sx(o.e) - sx(o.s))}" height="26" rx="4"><title>${esc(o.w)} · ${o.s.toFixed(2)}–${o.e.toFixed(2)}s · conf ${ACONF[o.i].toFixed(2)}</title></rect>`;
+      if (o.e - o.s > .28) s += `<text class="yi" x="${(sx(o.s) + sx(o.e)) / 2}" y="${236}" text-anchor="middle" font-size="12" direction="rtl" fill="var(--text)">${esc(stripP(o.w))}</text>`;
+    });
+    // pitch contour
+    let p = "";
+    ATOK.forEach((o, n) => { const steps = 6; for (let j = 0; j <= steps; j++) { const t = o.s + (o.e - o.s) * j / steps; const v = 290 - 14 - Math.sin(j / steps * Math.PI) * 10 - (n > 17 ? (n - 17) * 1.6 : 0) - ((n * 13) % 7); p += (p ? "L" : "M") + sx(t).toFixed(1) + " " + v.toFixed(1) + " "; } });
+    s += `<path class="pitch" d="${p}"/>`;
+    // time axis
+    for (let t = 0; t <= 8; t++) s += `<line class="axis" x1="${sx(t)}" y1="30" x2="${sx(t)}" y2="306"/><text x="${sx(t)}" y="320" text-anchor="middle" font-size="10">${t}s</text>`;
+    s += `</svg>`;
+    $("#al-lanes").innerHTML = s;
+  }
+  alLanes();
+  function alTokens(sel) {
+    $("#al-tokens").innerHTML = ATOK.map(o => `<button class="atok ${ACONF[o.i] < .5 ? "low" : ""} ${sel === o.i ? "sel" : ""}" data-i="${o.i}"><span class="w">${esc(o.w)}</span><span class="tm">${o.s.toFixed(2)}–${o.e.toFixed(2)} · ${ACONF[o.i].toFixed(2)}</span></button>`).join("");
+    const lows = ATOK.filter(o => ACONF[o.i] < .5).length;
+    $("#al-sel").innerHTML = sel == null
+      ? `<span class="muted">Tap a token. ${lows} of ${ATOK.length} tokens are below 0.50 — <b>ambiguous: not used for rules</b>.</span>`
+      : `Token ${sel + 1}/${ATOK.length} ${yi(ATOK[sel].w)} · ${ATOK[sel].s.toFixed(2)}–${ATOK[sel].e.toFixed(2)} s · alignment confidence <b>${ACONF[sel].toFixed(2)}</b> · language span <span class="tag">${LANG(sel) === "he" ? "Hebrew-origin" : LANG(sel) === "en" ? "English-origin" : "yi"}</span> ${ACONF[sel] < .5 ? `<span class="pill warn">ambiguous — not used for rules</span>` : `<span class="pill ok">usable as an observation</span>`}`;
+  }
+  alTokens(null);
+  $("#al-tokens").addEventListener("click", e => { const b = e.target.closest(".atok"); if (b) alTokens(+b.dataset.i); });
+  const totalSpeech = ATOK.reduce((a, o) => a + (o.e - o.s), 0);
+  $("#al-pros").innerHTML = [
+    ["Speech rate", (ATOK.reduce((a, o) => a + stripP(o.w).length, 0) / 5 / ADUR).toFixed(1) + " syl/s", "rough estimate from token length · n=" + ATOK.length + " tokens"],
+    ["Speech / silence", (totalSpeech / ADUR * 100).toFixed(0) + "% / " + (100 - totalSpeech / ADUR * 100).toFixed(0) + "%", "music 0.30 s"],
+    ["Mean alignment conf.", (ACONF.reduce((a, b) => a + b, 0) / ACONF.length).toFixed(2), "n=" + ACONF.length + " tokens"],
+    ["Pitch range", "sample", "contour lane only — no F0 model on this box"]
+  ].map(([l, v, s]) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val" style="font-size:18px">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join("");
+  $("#al-pauses").innerHTML = ATOK.filter(o => o.pause > 0.15).map(o => `<tr><td>${yi(o.w)}</td><td class="mono">${o.e.toFixed(2)} s</td><td class="num">${(o.pause * 1000).toFixed(0)} ms</td></tr>`).join("");
+  // three transcripts of the same synthetic audio
+  const ENGS = [
+    { n: "Engine 1 · stt-yi path", drop: [], unk: [] },
+    { n: "Engine 2 · supermarket-draft path", drop: [8], unk: [21] },
+    { n: "Engine 3 · ivrit fallback", drop: [13, 16, 21], unk: [] }
+  ];
+  const disagree = ATOK.map(o => o.i).filter(i => ENGS.some(e => e.drop.includes(i) || e.unk.includes(i)));
+  $("#al-trs").innerHTML = ENGS.map((e, n) => `<div class="tcol"><div class="row between" style="margin-bottom:6px"><b class="small">${esc(e.n)}</b><span class="tag">${n === 0 ? "consensus base" : "sample"}</span></div>
+    <div class="tokens yi" dir="rtl" lang="yi">${ATOK.map(o => e.drop.includes(o.i) ? `<span class="ttok miss">∅</span>` : e.unk.includes(o.i) ? `<span class="ttok miss">[unintelligible]</span>` : `<span class="ttok ${disagree.includes(o.i) ? "dis" : ""}">${esc(o.w)}</span>`).join("")}</div>
+    <div class="small muted" style="margin-top:6px">${ATOK.length - e.drop.length - e.unk.length}/${ATOK.length} tokens · ${e.drop.length} missing · ${e.unk.length} unintelligible</div></div>`).join("");
+  $("#al-diff").innerHTML = disagree.map(i => {
+    const cell = e => e.drop.includes(i) ? `<span class="pill bad">∅ missing</span>` : e.unk.includes(i) ? `<span class="pill warn">[unintelligible]</span>` : yi(ATOK[i].w);
+    const agree = ENGS.filter(e => !e.drop.includes(i) && !e.unk.includes(i)).length;
+    const conf = ACONF[i];
+    const ok = agree >= 2 && conf >= .6;
+    return `<tr class="${ok ? "" : "regress"}"><td class="num">${i + 1}</td>${ENGS.map(e => `<td>${cell(e)}</td>`).join("")}<td class="num">${conf.toFixed(2)}</td><td>${ok ? `<span class="pill ok">Consensus (${agree}/3)</span>` : `<span class="pill bad">No consensus: confidence too low</span>`}</td></tr>`;
+  }).join("") + `<tr><td colspan="6" class="small muted">Positions where the three engines agree are omitted (${ATOK.length - disagree.length} of ${ATOK.length}). Nothing here is invented text: an engine either repeats the token or reports it missing / unintelligible.</td></tr>`;
+
+  // ---------- 5. Review queue ----------
+  const QK = { conflict: "Conflicting evidence", freq: "High-frequency, low-confidence", tts: "Major TTS error", term: "New terminology", name: "Name", lex: "Uncertain lexical match", rule: "High-impact rule" };
+  const QUEUE = [
+    { id: "RV-2041", kind: "conflict", w: W("יישר כח"), resolves: 184, why: "Two realizations split 72% / 25% across 9 speaker clusters and 3 sources. The engine cannot pick a variant without a human, and it will not force one.", ev: "score A 0.72 · B 0.25 · human confirmations 3", impact: 96 },
+    { id: "RV-2038", kind: "freq", w: W("דאנערשטאג"), resolves: 41, why: "Heard often, but every observation comes from 2 speaker clusters — repeats from one speaker saturate, so the score stays at 0.44.", ev: "41 occurrences · 2 clusters · mean align conf 0.46", impact: 74 },
+    { id: "RV-2036", kind: "tts", w: W("אינבאקס"), resolves: 64, why: "Rated \"English word mangled\" on 22 of 64 samples. A dictionary hint can only be sent once a reviewer enters and verifies it.", ev: "22/64 rejections cite this word", impact: 71 },
+    { id: "RV-2033", kind: "term", w: W("טעלעפאן סיסטעם"), resolves: 96, why: "New two-word term with no entry. It appears in the assistant's own templates, so it will be spoken constantly.", ev: "96 uses · 0 rules", impact: 66 },
+    { id: "RV-2030", kind: "name", w: W("מלכי בערגער"), resolves: 22, why: "Personal names are always human-approved — no automatic rule is ever created for a name.", ev: "22 uses · 1 unverified correction", impact: 61 },
+    { id: "RV-2028", kind: "lex", w: W("וואויס-מעילס"), resolves: 77, why: "Yiddish Labs offers a lexical candidate, but YL text is serving-only and carries no pronunciation weight. Needs an acoustic or human observation.", ev: "YL lexical only · 0 acoustic observations", impact: 52 },
+    { id: "RV-2021", kind: "rule", w: W("ממילא"), resolves: 64, why: "Candidate rule R-093 would change a production profile. High-impact rules need a named approver even when the score is high.", ev: "score 0.86 · 6 clusters · benchmark Δ +0.19 (n=42)", impact: 88 }
+  ];
+  const DUPE = { "RV-2021": "You answered a similar question for " + W("שאלה") + " on 2026-09-07 (Hebrew-origin · Ashkenazi-Hasidic reading).", "RV-2036": "You answered a similar question for " + W("קאלערס") + " on 2026-09-11 (English loanword)." };
+  const qState = {};
+  let qSel = QUEUE[0].id, qFilt = "";
+  $("#q-filt").innerHTML = `<button class="chip on" data-k="">All</button>` + Object.entries(QK).map(([k, l]) => `<button class="chip" data-k="${k}">${esc(l)}</button>`).join("");
+  function qRender() {
+    const rows = QUEUE.filter(q => !qFilt || q.kind === qFilt).sort((a, b) => b.impact - a.impact);
+    $("#q-left").textContent = `${QUEUE.filter(q => !qState[q.id]).length} open · ${QUEUE.length} total`;
+    $("#q-list").innerHTML = rows.map(q => `<div class="qitem ${q.id === qSel ? "on" : ""} ${qState[q.id] ? "done" : ""}" data-q="${q.id}">
+      <div class="row between"><span class="row"><span class="prio">#${q.impact}</span><span class="tag">${esc(QK[q.kind])}</span></span>${qState[q.id] ? `<span class="pill ok">${esc(qState[q.id])}</span>` : `<span class="pill dim">open</span>`}</div>
+      <div>${yi(q.w, "big")}</div>
+      <div class="small muted">Resolves <b>${fmtN(q.resolves)}</b> occurrences · ${esc(q.ev)}</div></div>`).join("") || `<div class="empty"><div class="ico">✓</div><h3>Nothing in this group</h3><p>The queue only shows items the engine cannot settle on its own.</p></div>`;
+    const q = QUEUE.find(x => x.id === qSel);
+    $("#q-detail").innerHTML = `<div class="card-h"><div><h3>${esc(q.id)} · ${esc(QK[q.kind])}</h3><div class="sub">Resolves ${fmtN(q.resolves)} occurrences across the corpus</div></div>${qState[q.id] ? `<span class="pill ok">${esc(qState[q.id])}</span>` : `<span class="pill warn">Needs a person</span>`}</div>
+      <div>${yi(q.w, "big")}</div>
+      <div class="layer mt"><div class="lh"><h4>Why you are being asked</h4></div><div class="small" style="line-height:1.6">${esc(q.why)}</div>
+        <div class="small muted" style="margin-top:6px">Evidence: ${esc(q.ev)}</div></div>
+      ${DUPE[q.id] ? `<div class="banner info mt" style="margin-bottom:0"><span>↺</span><div><b>You've already answered something similar.</b> ${esc(DUPE[q.id])} Applying the same answer resolves both.<div class="row" style="margin-top:6px"><button class="btn sm" data-act="Same answer applied">Apply the same answer</button></div></div></div>` : ""}
+      <div class="seclbl mt">Realization (reviewer entry)</div>
+      <div class="row"><input type="text" class="mono" placeholder="[realization · IPA entered by reviewer]" style="max-width:340px"><span class="small muted">IPA or neutral phonetic — never an invented respelling</span></div>
+      <div class="seclbl mt">Decision</div>
+      <div class="row"><button class="btn primary" data-act="Approved">Approve</button><button class="btn danger" data-act="Rejected">Reject</button><button class="btn" data-act="Edited">Edit</button><button class="btn" data-act="Acceptable variant">Mark acceptable variant</button><button class="btn" data-act="Deferred">Defer</button></div>
+      <div class="small muted mt">An approval creates a rule <b>Candidate</b> only. It reaches production through a benchmark run, A/B evidence and a named approver.</div>`;
+  }
+  $("#q-list").addEventListener("click", e => { const b = e.target.closest("[data-q]"); if (b) { qSel = b.dataset.q; qRender(); } });
+  $("#q-detail").addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b) { qState[qSel] = b.dataset.act; toast(`${qSel}: ${b.dataset.act} — ${fmtN(QUEUE.find(x => x.id === qSel).resolves)} occurrences resolved.`); qRender(); } });
+  $("#q-filt").addEventListener("click", e => { const b = e.target.closest(".chip"); if (b) { qFilt = b.dataset.k; $$("#q-filt .chip").forEach(c => c.classList.toggle("on", c === b)); const first = QUEUE.filter(q => !qFilt || q.kind === qFilt)[0]; if (first) qSel = first.id; qRender(); } });
+  qRender();
+
+  // ---------- 6. Voice benchmark ----------
+  const BASE = [["state", `<span class="pill dim">frozen 2026-09-01 · immutable</span>`], ["model", "gpt-4o-mini-tts"], ["voice", "marin"], ["instructions", "Speak warmly and naturally, like a Hasidic Yiddish speaker on the phone."], ["speed", "1.0"], ["dictionary", "dict v9"], ["rules frozen", "41 rules · PRODUCTION at freeze time"], ["benchmark set", "240 cases · 18 categories"]];
+  const CANDS = {
+    c1: { rows: [["state", `<span class="pill info">TESTING</span>`], ["model", "gpt-4o-mini-tts"], ["voice", "marin"], ["instructions", "…+ Moderate pace."], ["speed", "1.0"], ["dictionary", "dict v12"], ["rules", "58 rules (+17)"], ["run", "R-0412 · 2 reviewers per case"]], win: [31, 18, 7, 3], delta: .21 },
+    c2: { rows: [["state", `<span class="pill warn">CANDIDATE</span>`], ["model", "gpt-4o-mini-tts"], ["voice", "cedar"], ["instructions", "…+ Moderate pace. Pause briefly after greetings."], ["speed", "0.95"], ["dictionary", "dict v13 (draft)"], ["rules", "59 rules (+18)"], ["run", "R-0414 · 1 reviewer per case"]], win: [12, 9, 2, 1], delta: .08 }
+  };
+  const BCATS = [
+    ["Conversation", 22, 2.80, 3.10], ["Business", 18, 2.75, 2.98], ["Tech support", 16, 2.60, 2.95], ["Telephone", 20, 2.88, 3.05],
+    ["Names", 14, 2.30, 2.61], ["Numbers", 12, 3.05, 3.02], ["Addresses", 10, 2.70, 2.44], ["Money", 9, 2.95, 3.00],
+    ["Dates", 11, 2.66, 2.90], ["Hebrew-derived", 17, 2.41, 2.95], ["English loanwords", 19, 2.22, 2.58], ["Fast speech", 8, 2.44, 2.20],
+    ["Questions", 13, 2.90, 3.18], ["Statements", 15, 2.98, 3.05], ["Emotional", 9, 2.55, 2.61], ["Long", 12, 2.70, 2.66],
+    ["Short", 10, 3.10, 3.14], ["Code-switching", 5, 2.35, 2.40]
+  ];
+  function wilson(w, n) { if (!n) return [0, 0]; const z = 1.96, p = w / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [(c - m) / d, (c + m) / d]; }
+  function bRender() {
+    const C = CANDS[$("#b-cand").value];
+    const trow = ([a, b]) => `<tr><td class="mono muted" style="white-space:nowrap">${esc(a)}</td><td>${/^</.test(b) ? b : esc(b)}</td></tr>`;
+    $("#b-base").innerHTML = BASE.map(trow).join("");
+    $("#b-candt").innerHTML = C.rows.map(trow).join("");
+    const [wa, wb, same, bad] = C.win, dec = wa + wb, [lo, hi] = wilson(wa, dec);
+    const nb = BCATS.reduce((a, c) => a + c[1], 0);
+    const regs = BCATS.filter(c => c[3] < c[2] - .2 && c[1] >= 20).length, regsAll = BCATS.filter(c => c[3] < c[2]).length;
+    $("#b-kpis").innerHTML = [
+      ["Benchmark size", fmtN(nb) + " cases", "18 categories · 2 ratings per case"],
+      ["Mean rating", (BCATS.reduce((a, c) => a + c[3] * c[1], 0) / nb).toFixed(2) + " / 4", "baseline " + (BCATS.reduce((a, c) => a + c[2] * c[1], 0) / nb).toFixed(2) + " · n=" + fmtN(nb * 2) + " ratings"],
+      ["A/B win rate (candidate)", dec ? Math.round(wa / dec * 100) + "%" : "0%", `n=${dec} decisive (95% ${Math.round(lo * 100)}–${Math.round(hi * 100)}%) · ${same} same · ${bad} both bad` + (dec < 20 ? " · too few to conclude" : "")],
+      ["Regressions", regs + " blocking", regsAll + " categories lower overall; blocking = Δ ≤ −0.20 with n ≥ 20"]
+    ].map(([l, v, s]) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join("");
+    $("#b-cats").innerHTML = BCATS.map(([l, n, b, c]) => {
+      const d = c - b, few = n < 20, blocking = d < -.2 && !few;
+      return `<tr class="${blocking ? "regress" : ""}"><td>${esc(l)}</td><td class="num">${n}</td><td class="num">${b.toFixed(2)}</td><td class="num">${n * 2}</td><td class="num">${c.toFixed(2)}</td><td class="num">${n * 2}</td><td class="num" style="font-weight:700; color:${d < 0 ? "var(--danger)" : d > 0 ? "var(--success)" : "var(--text-dim)"}">${d > 0 ? "+" : ""}${d.toFixed(2)}</td><td>${blocking ? `<span class="pill bad">Regression — blocks promotion</span>` : few ? `<span class="pill dim">Too few cases to conclude (n&lt;20)</span>` : d > 0 ? `<span class="pill ok">Improved</span>` : `<span class="pill warn">Lower, within noise</span>`}</td></tr>`;
+    }).join("");
+  }
+  $("#b-cand").addEventListener("change", bRender);
+  $("#b-run").addEventListener("click", () => toast("Mock: run queued — every case is spoken, then waits for human ratings. Nothing is promoted by a run."));
+  bRender();
+
+  // ---------- 7. Learning progress ----------
+  const WINS = {
+    "1h": { h: 1.0, vocab: 38, ev: 412, rules: 0, spk: 2, red: .41, bench: null, n: 61 },
+    "10h": { h: 9.6, vocab: 214, ev: 3980, rules: 2, spk: 11, red: .48, bench: .04, n: 602 },
+    "24h": { h: 22.4, vocab: 407, ev: 9120, rules: 5, spk: 19, red: .55, bench: .09, n: 1414 },
+    "1w": { h: 118.0, vocab: 1642, ev: 44120, rules: 27, spk: 84, red: .68, bench: .21, n: 7390 },
+    "1m": { h: 402.5, vocab: 4190, ev: 151200, rules: 96, spk: 176, red: .79, bench: .33, n: 24810 }
+  };
+  const WSRCS = { "1h": [["Yiddish24 (sample)", .8], ["Voice Lab", .2], ["Internal (walled)", 0]], "10h": [["Yiddish24 (sample)", 8.1], ["Voice Lab", 1.5], ["Internal (walled)", 0]], "24h": [["Yiddish24 (sample)", 19.2], ["Voice Lab", 3.2], ["Internal (walled)", 0]], "1w": [["Yiddish24 (sample)", 104], ["Voice Lab", 14], ["Internal (walled)", 0]], "1m": [["Yiddish24 (sample)", 361], ["Voice Lab", 41.5], ["Internal (walled)", 0]] };
+  const STYLE = [["Questions rise at the end", "n=412 utterances · 61 clusters", `<span class="pill dim">PROPOSED</span>`], ["Conversational rate 5.8 syl/s vs TTS 4.1", "n=1,930 utterances · 118 clusters", `<span class="pill info">TESTING</span>`], ["Pause after a greeting ≈ 380 ms", "n=204 utterances · 47 clusters", `<span class="pill info">TESTING</span>`], ["Hebrew-origin phrases carry stress later", "n=96 utterances · 9 clusters", `<span class="pill warn">NEEDS_REVIEW</span>`]];
+  let pWin = "24h";
+  function pRender() {
+    const w = WINS[pWin];
+    $("#p-kpis").innerHTML = [
+      ["Audio processed", w.h.toFixed(1) + " h", "n=" + fmtN(w.n) + " items"],
+      ["New unique vocabulary", fmtN(w.vocab), "lexemes not seen before"],
+      ["New pronunciation evidence", fmtN(w.ev), "observations, not rules"],
+      ["New validated rules", fmtN(w.rules), "human-approved in this window"],
+      ["New speaker clusters", fmtN(w.spk), "anonymous"],
+      ["Redundancy rate", Math.round(w.red * 100) + "%", "utterances adding nothing new"],
+      ["Benchmark delta", w.bench == null ? "—" : "+" + w.bench.toFixed(2), w.bench == null ? "no benchmark run in this window" : "vs Baseline v1 · n=480 ratings"],
+      ["Accuracy", "not reported", "no ground truth exists"]
+    ].map(([l, v, s]) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val" style="font-size:20px">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join("");
+    $("#p-srcsub").textContent = `Hours processed in the last ${{ "1h": "1 hour", "10h": "10 hours", "24h": "24 hours", "1w": "week", "1m": "month" }[pWin]}`;
+    const rows = WSRCS[pWin];
+    hbars($("#p-src"), rows.map(([l, v]) => ({ l, v, txt: v ? v.toFixed(1) + " h" : "0.0 h · wall closed", hatch: l.indexOf("walled") > 0 })), { max: Math.max(1, rows[0][1] * 1.15), ticks: [0, rows[0][1] / 2, rows[0][1]], tickFmt: t => t.toFixed(1) + " h", labelW: 150, right: 140 });
+    // curve
+    const W0 = 560, H = 210, L = 46, R = 16, T = 14, B = 34, HMAX = 420, YMAX = .7;
+    const sx = h => L + h / HMAX * (W0 - L - R), sy = v => T + (1 - v / YMAX) * (H - T - B);
+    const f = h => .62 * Math.exp(-h / 55) + .06;
+    let pts = ""; for (let h = 0; h <= HMAX; h += 5) pts += (pts ? "L" : "M") + sx(h).toFixed(1) + " " + sy(f(h)).toFixed(1) + " ";
+    let s = `<svg viewBox="0 0 ${W0} ${H}" role="img">`;
+    [0, .2, .4, .6].forEach(v => s += `<line class="axis" x1="${L}" y1="${sy(v)}" x2="${W0 - R}" y2="${sy(v)}" stroke-dasharray="2 3"/><text x="${L - 6}" y="${sy(v) + 4}" text-anchor="end">${Math.round(v * 100)}%</text>`);
+    [0, 100, 200, 300, 400].forEach(h => s += `<text x="${sx(h)}" y="${H - 12}" text-anchor="middle">${h} h</text>`);
+    s += `<path class="line" d="${pts}"/>`;
+    const knee = 110;
+    s += `<line class="knee" x1="${sx(knee)}" y1="${T}" x2="${sx(knee)}" y2="${H - B}"/><circle class="dot" cx="${sx(knee)}" cy="${sy(f(knee))}" r="4"/>`;
+    s += `<text class="lbl" x="${sx(knee) + 6}" y="${sy(f(knee)) - 8}">knee ≈ ${knee} h · novel share ${Math.round(f(knee) * 100)}%</text>`;
+    s += `<text x="${sx(knee) + 6}" y="${sy(f(knee)) + 8}" font-size="10">past here, each new hour mostly repeats what is known</text>`;
+    [[10, 602], [110, 7390], [402, 24810]].forEach(([h, n]) => s += `<circle cx="${sx(h)}" cy="${sy(f(h))}" r="2.6" fill="var(--accent)"><title>${h} h · n=${fmtN(n)} items</title></circle>`);
+    s += `<line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${H - B}" x2="${W0 - R}" y2="${H - B}"/></svg>`;
+    $("#p-curve").innerHTML = s + `<div class="small muted" style="margin-top:4px">n = 24,810 items across 402 h processed (Sample). Measured per source: a second source restarts its own curve.</div>`;
+    $("#p-style").innerHTML = STYLE.map(([t, e, st]) => `<tr><td>${esc(t)}</td><td class="small muted">${esc(e)}</td><td>${st}</td></tr>`).join("");
+  }
+  seg("#p-win", b => { pWin = b.dataset.w; pRender(); });
+  pRender();
+
+  // ---------- 8. Source manager ----------
+  const SRCS = [
+    ["Internal voicemail transcripts", "INTERNAL_TABLE · <span class='mono'>Voicemail</span>", "CUSTOMER_PRIVATE", "Tenant data · no voicemail consent field", "EXCLUDED", "—", `<span class="pill bad">Walled</span>`, "3,510", PROVUNK + " · YL-first with an ivrit fallback in a bare catch"],
+    ["Internal call recordings", "INTERNAL_TABLE · <span class='mono'>ConnectCdr.recordingPath</span>", "CUSTOMER_PRIVATE", "No recording-consent field · no retention policy", "EXCLUDED", "—", `<span class="pill bad">Walled</span>`, "74,176", "≈1,707 h · 185 GB · Yiddish share unknown"],
+    ["Supermarket drafts", "INTERNAL_TABLE · <span class='mono'>SupermarketOrderDraft</span>", "CUSTOMER_PRIVATE", "One tenant's business data", "EXCLUDED", "—", `<span class="pill bad">Walled</span>`, "1,863", "603 transcripts · 411 translations · second transcript of the same audio"],
+    ["Yiddish Labs translation cache", "INTERNAL_TABLE · <span class='mono'>AgentTranslation</span>", "PLATFORM", "Yiddish Labs terms · no training", "EXCLUDED", "—", `<span class="pill warn">Serving-only</span>`, "493", "434 translate-yiddish (379 pinned UI/template) + 59 translate-english · UI glossary seed"],
+    ["Voice Lab", "VOICE_LAB", "PLATFORM", "Our own generations + signed speaker consent records", "ALLOWED", "inherits global", `<span class="pill dim">Not built</span>`, "0", "Human-authored and consented rows are ALLOWED; Yiddish Labs-derived rows are EXCLUDED, per row"],
+    ["Purpose-built corpus", "INTERNAL_TABLE · <span class='mono'>AgentTranscript</span>", null, "—", "UNKNOWN", "—", `<span class="pill dim">Idle</span>`, "1", "Schema already has trainingEligible / reviewStatus / correctedText. Reuse it — it was never fed"],
+    ["Archive / news-hotline ingestor", "INTERNAL_TABLE · <span class='mono'>corpus/archive.ts</span>", null, "—", "UNKNOWN", "—", `<span class="pill dim">Unused</span>`, "0", "<span class='mono'>AGENT_ARCHIVE_ROOT</span> unset — walker, progress and drain code exist"],
+    ["Yiddish24", "EXTERNAL_ADAPTER · <span class='mono'>yiddish24</span>", "EXTERNAL", "Checked 2026-09-15: no terms page exists · \"All Rights Reserved\" · robots.txt sets no signal", "UNKNOWN", "$0 / day", `<span class="pill warn">Pilot not approved</span>`, "0", "Storing audio is itself a rights question. Default: features + time references only"]
+  ];
+  $("#s-rows").innerHTML = SRCS.map(([n, a, g, r, e, b, st, items, note]) => `<tr><td><b>${esc(n)}</b><div class="small muted" style="max-width:38ch; line-height:1.4">${note}</div></td><td class="small">${a}</td><td>${gov(g)}</td><td class="small" style="max-width:24ch">${esc(r)}</td><td>${elig(e)}</td><td class="small">${esc(b)}</td><td>${st}</td><td class="num"><b>${items}</b></td></tr>`).join("");
+  $("#s-add").addEventListener("click", () => {
+    $$(".drawer, .drawer-bg").forEach(x => x.remove());
+    const bg = document.createElement("div"); bg.className = "drawer-bg"; bg.addEventListener("click", () => bg.remove() || $$(".drawer").forEach(x => x.remove()));
+    const dr = document.createElement("div"); dr.className = "drawer";
+    dr.innerHTML = `<div class="row between"><span class="mock">MOCKUP — not built</span><button class="btn sm" id="sa-x">Close ✕</button></div>
+      <h3 style="margin-top:14px">Add a source</h3>
+      <p class="muted small" style="margin-top:6px; line-height:1.6">A source is an adapter. It emits normalized <span class="mono">YCSourceItem</span> records and nothing else — no source-specific logic reaches the corpus, the learner or the exporter.</p>
+      <label class="field mt"><span>Name</span><input type="text" placeholder="e.g. Licensed lecture archive"></label>
+      <label class="field mt"><span>Adapter kind</span><select><option>EXTERNAL_ADAPTER</option><option>INTERNAL_TABLE</option><option>VOICE_LAB</option></select></label>
+      <div class="grid2 mt"><label class="field"><span>Governance class</span><select><option>EXTERNAL</option><option>PLATFORM</option><option>CUSTOMER_PRIVATE</option></select></label>
+      <label class="field"><span>Training export eligibility</span><select><option>UNKNOWN</option><option>ALLOWED</option><option>RESTRICTED</option><option>EXCLUDED</option></select></label></div>
+      <label class="field mt"><span>Terms URL</span><input type="text" placeholder="https://…"></label>
+      <div class="seclbl mt">Adapter interface</div>
+      <pre class="req">interface YCSourceAdapter {
+  key: string;
+  discover(cursor?): Promise&lt;SourceItem[]&gt;;   // ids + metadata the source states
+  fetchAudio(item): Promise&lt;AudioRef&gt;;        // REFERENCE_ONLY unless rights allow STORED
+  fetchText?(item): Promise&lt;TranscriptRef&gt;;   // only if the source publishes text
+  describeRights(): RightsRecord;             // termsUrl, checkedAt, allowedUse
+}</pre>
+      <div class="banner warn mt"><span>⛔</span><div>A new source starts <b>disabled</b>, with <b>UNKNOWN</b> training eligibility and a $0 budget. Enabling it needs a rights record and the owner's go.</div></div>
+      <div class="row"><button class="btn primary" disabled>Create source</button><span class="small muted">Disabled in the mockup</span></div>`;
+    document.body.append(bg, dr);
+    dr.querySelector("#sa-x").addEventListener("click", () => { bg.remove(); dr.remove(); });
+  });
+
+  // ---------- 9. Training dataset export ----------
+  const EF = [["audio", "file ref + sha256", 1], ["aligned_text", "tokens with word timings", 1], ["translations", "meaning pairs", 1], ["pronunciation_labels", "IPA / neutral phonetic", 1], ["style_labels", "prosody, mood, rate", 1], ["speaker_metadata", "anonymous cluster + consent ref", 1], ["ratings", "human ratings with n", 1], ["positives", "accepted samples", 1], ["negatives", "rejected with reason", 1], ["preference_pairs", "A/B winners", 0]];
+  $("#e-fields").innerHTML = EF.map(([k, d, on]) => `<label class="chk"><input type="checkbox" ${on ? "checked" : ""} data-f="${k}"> <span><span class="mono">${k}</span><span class="small muted" style="display:block">${d}</span></span></label>`).join("");
+  const EEX = [
+    ["Voicemail (yi / yi-en) transcripts", 3510, 1, 1, 0, "Excluded — can't prove not YL, and customer-private"],
+    ["Voicemail local WAV", 1839, 0, 1, 0, "Excluded — customer-private, unconsented, 8 kHz"],
+    ["SupermarketOrderDraft transcripts / translations", 1014, 1, 1, 0, "Excluded"],
+    ["Call recordings", 74176, 0, 1, 0, "Excluded"],
+    ["AgentTranslation (YL)", 493, 1, 0, 0, "Excluded — serving only"],
+    ["Assistant chat (yi) messages", 151, 1, 1, 0, "Excluded"],
+    ["ConnectChatMessage + attachments", 124, 0, 1, 0, "Excluded"],
+    ["SupermarketPhraseLesson", 11, 0, 1, 0, "Excluded"],
+    ["AgentTranscript (corpus)", 1, 0, 0, 0, "Excluded — eligibility UNKNOWN, never reviewed"],
+    ["Yiddish24", 0, 0, 0, 1, "Excluded — rights UNKNOWN, pilot not approved"]
+  ];
+  const ETOTAL = EEX.reduce((a, r) => a + r[1], 0);
+  $("#e-ex").innerHTML = EEX.map(([o, n, yl, cp, ex, res]) => `<tr class="walled"><td>${prov(o)}</td><td class="num">${fmtN(n)}</td><td>${yl ? `<span class="pill bad">YL-derived</span>` : `<span class="muted">—</span>`}</td><td>${cp ? `<span class="pill bad">customer-private</span>` : `<span class="muted">—</span>`}</td><td>${ex ? `<span class="pill warn">UNKNOWN</span>` : `<span class="muted">—</span>`}</td><td class="small">${esc(res)}</td></tr>`).join("")
+    + `<tr><td><b>Total considered</b></td><td class="num"><b>${fmtN(ETOTAL)}</b></td><td colspan="3" class="small muted">A row excluded for several reasons is counted once</td><td><b>0 rows survive</b></td></tr>`;
+  function eRender() {
+    const sample = $("#e-sample").checked, rows = sample ? 163 : 0, gold = sample ? 38 : 0;
+    $("#e-kpis").innerHTML = [["Candidate rows", fmtN(ETOTAL + (sample ? 1284 : 0)), sample ? "incl. 1,284 Voice Lab rows" : LIVE], ["Excluded", fmtN(ETOTAL + (sample ? 1121 : 0)), sample ? "1,121 of them Yiddish Labs-derived" : "every live row"], ["In manifest", fmtN(rows), sample ? gold + " golden · consented audio only" : "nothing is exportable today"]]
+      .map(([l, v, s], i) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val" style="color:${i === 1 ? "var(--danger)" : i === 2 ? (rows ? "var(--success)" : "var(--danger)") : "inherit"}">${v}</div><div class="sub">${s.startsWith("<") ? s : esc(s)}</div></div>`).join("");
+    $("#e-prevtag").innerHTML = rows ? `<span class="pill ok">Training-eligible</span>` : `<span class="pill bad">Empty</span>`;
+    if (!rows) { $("#e-prev").textContent = "// 0 rows.\n// Every live row is customer-private, Yiddish Labs-derived, or of unknown eligibility.\n// Clean training data has to come from new sources:\n//   · Voice Lab human corrections and verified text\n//   · consented speakers (signed consent record, training scope)\n//   · licensed external audio"; return; }
+    const on = $$("#e-fields input:checked").map(i => i.dataset.f);
+    const S = { audio: { uri: "yc://audio/H-00041.wav", sha256: "9f2c…e1", consent_ref: "CR-2026-0007" }, aligned_text: "<human-authored reviewer text> + 23 word timings", translations: [{ direction: "yi→en", engine: "human" }], pronunciation_labels: [{ span: [12, 19], realization: "[IPA entered by reviewer]", verified: true }], style_labels: { rate_syl_s: 5.4, mood: "warm", pauses_ms: [380] }, speaker_metadata: { cluster: "Speaker Cluster 001", consent_ref: "CR-2026-0007", scope: "evaluation + training" }, ratings: { overall: "Excellent", n_reviewers: 2 }, positives: true, negatives: null, preference_pairs: [{ a: "cfg_v3", b: "cfg_v4", winner: "b" }] };
+    const obj = { provenance: { source: "Voice Lab", governance: "PLATFORM", training_export_eligibility: "ALLOWED", yl_derived: false } };
+    on.forEach(k => obj[k] = S[k]);
+    $("#e-prev").textContent = JSON.stringify(obj, null, 2);
+  }
+  $("#e-sample").addEventListener("change", eRender);
+  $("#e-fields").addEventListener("change", eRender);
+  $("#e-build").addEventListener("click", () => toast($("#e-sample").checked ? "Mock: 163 rows written · 1,121 Yiddish Labs-derived rows removed first." : "Nothing to build: 0 rows survive the governance filters."));
+  $("#e-slots").innerHTML = [["OpenAI custom voice", "Sales-gated; needs the speaker's consent recording. No self-serve API, no TTS fine-tuning."], ["ElevenLabs PLS lexicon", "Verified dictionary entries as a pronunciation lexicon (IPA / alias) for a second provider."], ["Azure custom neural voice", "Gated application + consented speaker recordings."], ["Open-source fine-tune", "Permissively licensed models trained on ALLOWED rows only — on a worker, never the call server."]]
+    .map(([t, d]) => `<div class="layer" style="margin-top:0"><div class="lh"><h4>${esc(t)}</h4><span class="fut">Future capability</span></div><div class="small muted" style="line-height:1.5">${esc(d)}</div><div class="row" style="margin-top:8px"><button class="btn sm" disabled>Export</button></div></div>`).join("");
+  eRender();
+
+  // ---------- 10. Governance & budgets ----------
+  $("#g-wall").innerHTML = `<div class="card wall">
+    <div class="card-h"><div><h3>⛔ Customer data wall <span class="pill bad">CLOSED</span></h3><div class="sub">Customer voicemails, calls and chats are counted. Their content does not enter the corpus, benchmarks, exports or the review queue.</div></div><div class="row">${LIVE}<span class="pill warn">Owner decision required</span></div></div>
+    <div class="twrap"><table class="t"><thead><tr><th>What</th><th class="num">Count</th><th class="num">Hours</th><th>Content</th><th>Notes</th></tr></thead><tbody>
+      ${[["Yiddish voicemail transcripts", "3,510", "≈35.8 h", "23 tenants · Jul 1,100 · Aug 1,637 · Sep (½) 773 · " + PROVUNK],
+        ["Voicemail audio (local WAV)", "1,839", "21.9 h", "1.4 GB volume · 8 kHz telephony (inferred) · no retention job deletes it"],
+        ["Call recordings", "74,176", "≈1,707 h", "185 GB · 111,481 wav · language unknown · no consent field"],
+        ["PBX voicemail spool", "10,520", "—", "3.3 GB"],
+        ["Supermarket drafts", "1,863", "—", "603 transcripts · 411 translations"],
+        ["Assistant + Connect chat", "222", "—", "29 yi conversations · 151 + 42 messages · 82 audio attachments"]]
+        .map(r => `<tr class="walled"><td>${esc(r[0])}</td><td class="num"><b>${r[1]}</b></td><td class="num">${r[2]}</td><td><span class="pill bad">walled</span></td><td class="small">${r[3]}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="seclbl mt">The owner's decision — what basis, if any, customer data may be used on</div>
+    <div class="grid3" id="g-opts"></div>
+    <div class="row mt"><button class="btn primary" disabled>Record decision</button><span class="small muted">Disabled: only the owner decides, and it is written as a rights record, never as a toggle the engine can flip. Skew warning: one tenant supplies ~68% of Yiddish voicemail and all supermarket data — learning from internal data alone would learn one business's callers.</span></div>
+  </div>`;
+  $("#g-opts").innerHTML = [
+    ["Excluded", 1, "Current default. Counts only. Nothing from customers ever reaches the corpus, a benchmark or an export.", "Cost: the largest Yiddish audio we have stays unusable."],
+    ["Aggregate statistics only", 0, "Acoustic and lexical statistics computed in place; no text, no audio, no per-row storage.", "Needs: a written basis, plus a guarantee that no utterance can be reconstructed."],
+    ["Per-tenant opt-in with consent", 0, "A tenant opts in; callers are notified; consent is captured per recording.", "Needs: consent capture, caller notice, retention policy, per-row STT provider — none exist today."]
+  ].map(([t, cur, d, n]) => `<div class="opt ${cur ? "cur" : ""}"><label><input type="radio" name="wall" ${cur ? "checked" : ""} disabled> ${esc(t)} ${cur ? `<span class="pill bad">current</span>` : ""}</label><div class="small muted" style="line-height:1.5">${esc(d)}</div><div class="small" style="line-height:1.5">${esc(n)}</div></div>`).join("");
+  $("#g-rights").innerHTML = [
+    ["Yiddish Labs", "docs/ai-support-agent/YL_NO_TRAINING_POLICY.md", "2026-09-15", `Serving only: lexical candidates, meaning, translation. ${YLCHIP} Enforced per record via <span class="mono">trainingUse</span>, never by convention.`],
+    ["Customer data (voicemail, calls, chat)", "Loopcom customer terms — no recording or voicemail consent field", "2026-09-15", "Counting only. No content use on any basis until the owner decides."],
+    ["Yiddish24", "not recorded — §2 live inspection pending", "—", `${elig("UNKNOWN")} Storing audio is itself a rights question. Default: derived features + time references; media only if rights allow.`],
+    ["Voice Lab speakers", "signed consent records CR-2026-####", "2026-09-12", "Scope per speaker: evaluation / training / voice creation. Revoking removes the audio from every future export and draft."],
+    ["OpenAI TTS output", "provider terms", "2026-09-15", "Our own generations. Usable for evaluation; treated as synthetic for learning."]
+  ].map(([s, t, c, u]) => `<tr><td><b>${esc(s)}</b></td><td class="small">${prov(t)}</td><td class="small">${esc(c)}</td><td class="small" style="line-height:1.5">${u}</td></tr>`).join("");
+  $("#g-gaps").innerHTML = ["No voicemail or recording consent flag.", "No per-tenant training opt-in.", "No recording retention policy — nothing deletes the 185 GB.", "No per-row STT provider: <span class='mono'>yiddishPass</span> must stamp <span class='mono'>sttProvider</span> from day one (an agent change, manual rebuild).", "<span class='mono'>Tenant.yiddishEnabled</span> is true for 2 of 52 tenants, yet 23 tenants produce Yiddish voicemail.", "Skew: one tenant is ~68% of Yiddish voicemail and all supermarket data."].map(t => `<li>${t}</li>`).join("");
+  let gPaused = true;
+  $("#g-pause").addEventListener("click", () => { gPaused = !gPaused; $("#g-state").className = "pill " + (gPaused ? "warn" : "ok"); $("#g-state").textContent = gPaused ? "Paused" : "Running (mock)"; $("#g-pause").textContent = gPaused ? "Resume" : "Pause"; toast(gPaused ? "Paused: leases expire, in-flight jobs finish, nothing new starts." : "Mock only — there is no engine and no worker to run it."); });
+  const GMODE = { a: "Audio-only: segment, features, clustering and fingerprints. No paid transcription.", s: "Selective: transcribe only novel, conflicting, clear or benchmark-worthy audio, inside the daily budget.", f: "Full: transcribe everything discovered. Blocked while no worker exists and while the daily budget is $0-capped for external sources." };
+  $("#g-modenote").textContent = GMODE.a;
+  seg("#g-mode", b => $("#g-modenote").textContent = GMODE[b.dataset.m]);
+  $("#g-flow").innerHTML = ["CANDIDATE", "TESTING", "APPROVED", "PRODUCTION", "RETIRED"].map((s, i) => `${i ? '<span class="arr">→</span>' : ""}<span class="pill ${s === "PRODUCTION" ? "ok" : s === "RETIRED" ? "dim" : s === "TESTING" ? "info" : "warn"}">${s}</span>`).join("");
+  $("#g-queue").innerHTML = [["DISCOVERED", 0, 1412], ["QUEUED", 0, 318], ["PROCESSING", 0, 4], ["AUDIO_ANALYZED", 0, 1106], ["NEEDS_TRANSCRIPTION", 0, 212], ["TRANSCRIBED", 0, 890], ["ALIGNED", 0, 842], ["INDEXED", 0, 806], ["LEARNED", 0, 771], ["NEEDS_REVIEW", 0, 7], ["FAILED", 0, 12], ["SKIPPED", 0, 96], ["DUPLICATE", 0, 61]]
+    .map(([s, l, sa]) => `<tr><td class="mono">${s}</td><td class="num">${l}</td><td class="num muted">${fmtN(sa)}</td><td>${s === "FAILED" ? `<span class="pill dim">retry with backoff</span>` : s === "NEEDS_REVIEW" ? `<span class="pill warn">goes to the review queue</span>` : ""}</td></tr>`).join("")
+    + `<tr><td colspan="4" class="small muted">Live column is the truth: no YCProcessingJob table exists. Jobs use DB-row leases, not in-memory loops, so they survive restarts.</td></tr>`;
+
+  // ---------- 11–18. Yiddish24 (Source #1, inside this engine) ----------
+  const RIGHTS = `<div class="card wall" style="margin-bottom:14px">
+    <div class="card-h"><div><h3>⛔ Rights — unresolved</h3><div class="sub">Read-only inspection of the public site, 2026-09-15. No terms page exists; the footer says "All Rights Reserved"; robots.txt carries only Cloudflare's commented content-signals preamble — no directives, no ai-train signal.</div></div><div class="row">${gov("EXTERNAL")}${elig("UNKNOWN")}<span class="pill warn">Pilot not approved</span></div></div>
+    <div class="row"><span class="pill warn">Analysis: Unknown</span><span class="pill bad">Storing audio: Not permitted</span><span class="pill bad">Training: Unknown / not allowed</span></div>
+    <div class="wallbox small mt" style="line-height:1.6"><b>Audio is blocked until permission exists.</b> The MP3s (<span class="mono">cloudfront.yiddish24.com</span>, ≈92 kbps, ≈48 MB/hour) are hotlink-protected: <span class="mono">403</span> without the site's own <span class="mono">Referer</span> header. Forging that header from our server would bypass an access control, so we do not do it. No audio fetch, no audio analysis, no transcription, no waveform for this source today.</div>
+    <div class="small muted mt">Contact <span class="mono">Info@yiddish24.com</span> · the Icecast live streams (<span class="mono">music.y24.app</span>) are a separate thing from this on-demand archive and are out of scope.</div></div>`;
+  $$(".y24rights").forEach(el => el.innerHTML = RIGHTS);
+  const ULI = (items, cls) => `<ul class="small" style="margin:0; padding-left:18px; line-height:1.8">${items.map(t => `<li${cls ? ` class="${cls}"` : ""}>${t}</li>`).join("")}</ul>`;
+  $("#y-can").innerHTML = ULI([
+    "Walk the 9 main categories (<span class='mono'>/mainCategory/{id}</span>) and the ~136 series (<span class='mono'>/cat/{catId}/</span>).",
+    "Record the metadata the site publishes: post id, MP3 URL (recorded as a string, never fetched), image, series name, episode title, host, Hebrew-calendar date, duration.",
+    "Decode series names at ingest (they are published as base64 of a URL-encoded Hebrew string) and store them exactly as published.",
+    "Page deeper listings through the site's own undocumented POST endpoints, 10 items at a time, politely.",
+    "Dedupe on post id + MP3 URL + duration, and count the catalog over time.",
+    "Watch for site changes and alert when a parser assumption breaks."
+  ]) + `<div class="small muted mt">There is no RSS feed, API, sitemap or <span class="mono">wp-json</span> — all 404 — so discovery is HTML plus those POST endpoints.</div>`;
+  $("#y-cant").innerHTML = ULI([
+    "<b>Fetching any MP3</b> — 403 without the site's Referer. " + esc(PERM),
+    "Audio analysis: segmentation, speech/music split, speaker clustering, acoustic features.",
+    "Transcription — and the site publishes no transcripts anywhere, so there is nothing to reuse either.",
+    "Alignment, pronunciation observations, prosody and style findings.",
+    "Benchmark cases and golden samples drawn from this source.",
+    "Storing audio — a rights question of its own, currently <b>Not permitted</b>.",
+    "Any training export — eligibility is UNKNOWN, so every derived record is EXCLUDED by default."
+  ]);
+  const kpiHTML = rows => rows.map(([l, v, s, bad]) => `<div class="kpi"><div class="lbl">${esc(l)}</div><div class="val" style="font-size:20px${bad ? "; color:var(--danger)" : ""}">${esc(v)}</div><div class="sub">${s}</div></div>`).join("");
+  $("#y-disc").innerHTML = kpiHTML([
+    ["Latest updates", "≈34,760", "items · many short news clips of 24–38 s"],
+    ["Popular", "≈10,330", "items · overlaps Latest updates"],
+    ["Video podcast", "≈3,600", "items · audio track only, and only if permitted"],
+    ["Series", "≈136", "music ≈8% of them · 9 main categories"],
+    ["Transcripts on the site", "0", "none exist anywhere on Yiddish24"],
+    ["Date range", "Unknown", "the oldest listing page did not render — shown as unknown, not guessed"]
+  ]);
+  $("#y-learn").innerHTML = kpiHTML([
+    ["Hours analyzed", "0", "blocked — " + esc(PERM), 1],
+    ["Items transcribed", "0", "blocked · no transcripts on the site to reuse", 1],
+    ["Segments", "0", "needs audio", 1],
+    ["Speaker clusters", "0", "needs audio", 1],
+    ["Pronunciation observations", "0", "needs audio", 1],
+    ["Failures", "0", "nothing has run"],
+    ["Queue depth", "awaiting audio permission", "metadata stages only"],
+    ["Novelty · redundancy", "awaiting audio permission", "both are audio-derived"]
+  ]);
+  $("#y-perm").innerHTML = `<div class="small" style="line-height:1.7">The draft asks Yiddish24 for four things in plain language:</div>
+    ${ULI(["permission to <b>analyze</b> episodes for Yiddish speech research;", "whether <b>audio may be stored</b> on our server, or only derived features and time references;", "whether anything may be used to <b>train</b> a speech model;", "who to talk to, and what attribution or limits they want."])}
+    <div class="row mt"><span class="pill warn">Draft ready — Izzy sends it</span><span class="prov">Info@yiddish24.com</span></div>
+    <div class="row mt"><button class="btn" id="y-perm-open">Open the draft</button><button class="btn sm" id="y-perm-copy">Copy to clipboard</button></div>
+    <div class="small muted mt">There is deliberately <b>no send button</b>: the first contact with a publisher is a person's, not an engine's. Until a reply is recorded here as a rights record, this source stays metadata-only.</div>`;
+  $("#y-perm-open").addEventListener("click", () => toast("Mock: the draft lives in §2b of the handoff — nothing is sent from this screen."));
+  $("#y-perm-copy").addEventListener("click", () => toast("Mock: copied. Izzy sends it from his own mailbox."));
+  const HEALTH = [
+    ["Listing item data attributes (post id, mp3, image, series, title, host, date, duration)", "ok", "All present", "2026-09-15"],
+    ["<span class='mono'>POST /ajax/page.php</span> — episode shell loader", "ok", "Responds · undocumented", "2026-09-15"],
+    ["<span class='mono'>POST /ajax/cat_pagination.php</span> — 10 items per page", "ok", "Responds · undocumented", "2026-09-15"],
+    ["Series name = base64 of URL-encoded Hebrew", "ok", "Decodes cleanly at ingest", "2026-09-15"],
+    ["MP3 Referer requirement", "bad", "Enforced — 403 for us, by design", "2026-09-15"],
+    ["RSS / API / sitemap / wp-json", "dim", "Absent — all 404", "2026-09-15"],
+    ["robots.txt", "dim", "No directives · Cloudflare content-signals preamble only", "2026-09-15"],
+    ["Cloudflare in front of the site", "warn", "Present — challenge risk, crawl politely", "2026-09-15"]
+  ];
+  const healthHTML = HEALTH.map(([a, c, s, d]) => `<tr><td class="small">${a}</td><td><span class="pill ${c}">${esc(s)}</span></td><td class="small muted">${d}</td></tr>`).join("");
+  $("#y-health").innerHTML = healthHTML;
+  $("#y-health2").innerHTML = healthHTML;
+
+  // 12. Episode browser
+  const Y24EP = [
+    { cat: "Interviews", ser: "Series 227", ep: "Series 227 · episode 167071", dur: "1:09:40", st: "Discovered" },
+    { cat: "News", ser: "Series 14", ep: "Series 14 · episode 166980", dur: "0:00:31", st: "Discovered" },
+    { cat: "News", ser: "Series 14", ep: "Series 14 · episode 166979", dur: "0:00:24", st: "Discovered" },
+    { cat: "Analysis", ser: "Series 88", ep: "Series 88 · episode 166902", dur: "0:38:12", st: "Queued" },
+    { cat: "Business", ser: "Series 51", ep: "Series 51 · episode 166844", dur: "0:24:05", st: "Discovered" },
+    { cat: "Torah", ser: "Series 102", ep: "Series 102 · episode 166790", dur: "0:41:33", st: "Discovered" },
+    { cat: "Health", ser: "Series 63", ep: "Series 63 · episode 166711", dur: "0:07:19", st: "Discovered" },
+    { cat: "Video", ser: "Series 119", ep: "Series 119 · episode 166655", dur: "1:42:58", st: "Discovered" },
+    { cat: "Music", ser: "Series 31", ep: "Series 31 · episode 166601", dur: "0:04:52", st: "Discovered" },
+    { cat: "Miscellaneous", ser: "Series 205", ep: "Series 205 · episode 166540", dur: "0:00:38", st: "Discovered" }
+  ];
+  $("#y-fcat").innerHTML += Y24CATS.map(c => `<option>${c}</option>`).join("");
+  $("#y-fser").innerHTML += uniq(Y24EP.map(e => e.ser)).map(s => `<option>${s}</option>`).join("");
+  function yeRender() {
+    const q = $("#y-fq").value.trim().toLowerCase(), c = $("#y-fcat").value, s = $("#y-fser").value, st = $("#y-fst").value;
+    const rows = Y24EP.filter(e => (!c || e.cat === c) && (!s || e.ser === s) && (!st || e.st === st) && (!q || e.ep.toLowerCase().includes(q)));
+    $("#y-ecount").innerHTML = `${rows.length} of ${Y24EP.length} sample rows · catalog estimate ≈34,760 items · ${SAMP}`;
+    $("#y-erows").innerHTML = rows.map(e => `<tr><td><span class="tag">${esc(e.cat)}</span></td><td>${esc(e.ser)}<span class="small muted" style="display:block">[series name as published]</span></td><td class="mono">${esc(e.ep)}</td><td class="small muted">[host as published]</td><td class="small muted">${esc(HEBDATE)}</td><td class="num mono">${e.dur}</td><td><span class="pill dim">${e.st}</span></td><td><span class="pill dim">n/a — needs audio</span></td><td><span class="pill dim">unknown — needs audio</span></td><td><span class="pill bad">No — site has none</span></td><td><span class="pill bad" title="${esc(PERM)}">Blocked</span></td></tr>`).join("")
+      || `<tr><td colspan="11"><div class="empty"><div class="ico">⌕</div><h3>No rows match</h3><p>These are sample rows. Real listings are walked from the site's own pages.</p></div></td></tr>`;
+    $("#y-pag").innerHTML = `Deeper pages come <b>10 at a time</b> from the site's undocumented <span class="mono">POST /ajax/cat_pagination.php</span> — there is no API, feed or sitemap. The adapter pages politely and stops on any 429 or Cloudflare challenge.`;
+  }
+  ["#y-fcat", "#y-fser", "#y-fst"].forEach(s => $(s).addEventListener("change", yeRender));
+  $("#y-fq").addEventListener("input", yeRender);
+  yeRender();
+  $("#y-erows").addEventListener("click", e => { if (e.target.closest("tr")) go("13"); });
+
+  // 13. Episode learning detail
+  $("#y-meta").innerHTML = [
+    ["Post id", `<span class="mono">167071</span>`],
+    ["Episode shell", `<span class="mono">/live/227/167071</span> <span class="small muted">· loaded by the site through POST /ajax/page.php</span>`],
+    ["Main category", `Interviews <span class="small muted">· /mainCategory/{id}</span>`],
+    ["Series name", `<span class="muted">[series name as published]</span> <span class="small muted">· base64 of a URL-encoded Hebrew string, <b>decoded at ingest</b>, stored as published</span>`],
+    ["Episode title", `<span class="muted">[episode title as published]</span> <span class="small muted">· shown in lists as "Series 227 · episode 167071"</span>`],
+    ["Host (subtitle)", `<span class="muted">[host as published]</span>`],
+    ["Date", `<span class="muted">${esc(HEBDATE)}</span> <span class="small muted">· the site publishes a Hebrew-calendar date only — no Gregorian date exists to read</span>`],
+    ["Duration", `<span class="mono">1:09:40</span>`],
+    ["Image", `<span class="mono">https://…/thumb.jpg</span> <span class="pill ok">available</span>`],
+    ["MP3", `<span class="mono">https://cloudfront.yiddish24.com/…/167071.mp3</span> <span class="pill bad">recorded as a reference · never fetched</span> <span class="small muted">≈92 kbps · ≈48 MB/hour</span>`],
+    ["Description · tags · canonical URL", `<span class="muted">not published by the site</span>`],
+    ["Transcript", `<span class="pill bad">none — the site has no transcripts</span>`]
+  ].map(([a, b]) => `<tr><td class="muted" style="white-space:nowrap">${esc(a)}</td><td>${b}</td></tr>`).join("");
+  $("#y-player").innerHTML = `<div class="player" style="opacity:.55"><button class="play" disabled title="${esc(PERM)}">▶</button><svg viewBox="0 0 600 56" preserveAspectRatio="none"><rect x="0" y="26" width="600" height="4" rx="2" fill="var(--wave)"/></svg><span class="time">—:—</span></div>
+    <div class="banner bad mt" style="margin-bottom:0"><span>⛔</span><div><b>Playback and fetch are disabled.</b> ${esc(PERM)} A request without that header returns <span class="mono">403</span>; sending it anyway would be bypassing an access control.</div></div>
+    <div class="row mt"><button class="btn sm" disabled>Fetch audio</button><button class="btn sm" disabled>Analyze</button><button class="btn sm" disabled>Transcribe</button><button class="btn sm" data-go="11">Request permission →</button></div>`;
+  $("#y-value").innerHTML = ULI([
+    "Novelty score: <b>cannot be computed</b> — it is measured from the audio, not the title.",
+    "Speech vs music share: <b>unknown</b>.",
+    "Speaker count: <b>unknown</b>.",
+    "Transcription cost: not estimated — it needs both a permitted fetch and a provider price.",
+    "The only real signal we hold is the duration: <b>1:09:40</b> of audio we are not allowed to open."
+  ]) + `<div class="small muted mt">The engine will not publish a guessed learning value. An unknown is shown as an unknown.</div>`;
+  (function () {
+    const W0 = 1000, X = 56, R = 14, w = W0 - X - R;
+    const lanes = [["Speech / music", 36], ["Speaker", 76], ["Utterances", 116], ["Pitch", 156]];
+    let s = `<svg viewBox="0 0 ${W0} 210" role="img" style="min-width:720px; opacity:.55">`;
+    lanes.forEach(([l, y]) => { s += `<text x="4" y="${y + 14}" font-size="10">${esc(l)}</text><rect x="${X}" y="${y}" width="${w}" height="20" rx="4" fill="url(#hatch)" stroke="var(--border)"/>`; });
+    for (let t = 0; t <= 10; t++) { const x = X + t / 10 * w; s += `<line class="axis" x1="${x}" y1="30" x2="${x}" y2="186"/><text x="${x}" y="200" text-anchor="middle" font-size="10">${Math.round(t * 6.97)}m</text>`; }
+    s += `<text class="lbl" x="${X + w / 2}" y="195" text-anchor="middle" font-size="13" opacity="0"></text></svg>`;
+    $("#y-lanes").innerHTML = s + `<div class="banner bad" style="margin:8px 0 0"><span>⛔</span><div><b>Empty on purpose — requires permitted audio.</b> These are the lanes that would exist (speech/music classification, speaker clusters, aligned utterances, pitch contour). Nothing is drawn because nothing may be fetched.</div></div>`;
+  })();
+  $("#y-rel").innerHTML = [
+    ["Corpus lexeme candidates", "none — the site publishes no text to match on", `<span class="pill dim">—</span>`, ""],
+    ["Series name token (decoded at ingest)", "metadata string compare against corpus sources", `<span class="pill warn">weak — metadata only</span>`, `<button class="btn sm" data-go="2">Corpus explorer →</button>`],
+    ["Voice Lab benchmark categories", "category mapping (Interviews → conversation, Business → business)", `<span class="pill dim">planning only</span>`, `<button class="btn sm" data-go="6">Benchmark →</button>`],
+    ["Internal speaker clusters", "would need audio from both sides", `<span class="pill bad">blocked</span>`, ""]
+  ].map(r => `<tr><td>${esc(r[0])}</td><td class="small muted">${esc(r[1])}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("");
+
+  // 14. Processing queue
+  $("#y-qstates").innerHTML = [
+    ["DISCOVERED", "34,760", "listing walk (metadata)", 1, "Catalog estimate — not yet a stored count, because no run has happened"],
+    ["QUEUED", "0", "queue writer", 1, "Nothing queued: the stage after it cannot run"],
+    ["ANALYZED", "0", "audio analysis", 0, PERM],
+    ["PARTIAL", "0", "audio + selective transcription", 0, PERM],
+    ["FULL", "0", "full analysis + alignment", 0, PERM],
+    ["SKIPPED", "0", "junk filter (music-dominant, corrupt, unintelligible)", 0, "Needs audio to judge — nothing is skipped on a guess"],
+    ["DUPLICATE", "0", "fingerprint dedupe", 2, "Metadata fingerprint works today; the acoustic fingerprint needs audio"],
+    ["FAILED", "0", "any stage", 1, "Retry with backoff · the error is kept"],
+    ["NEEDS_RETRY", "0", "fetch / challenge", 1, "429 or Cloudflare challenge → back off, retry later, alert if it persists"]
+  ].map(([st, n, stage, can, note]) => `<tr><td class="mono">${st}</td><td class="num"><b>${n}</b></td><td class="small">${esc(stage)}</td><td>${can === 1 ? `<span class="pill ok">Yes</span>` : can === 2 ? `<span class="pill warn">Partly</span>` : `<span class="pill bad">No</span>`}</td><td class="small muted">${esc(note)}</td></tr>`).join("");
+  $("#y-fp").innerHTML = [
+    ["Post id", 1, "primary identity"],
+    ["MP3 URL (string)", 1, "identity + re-publication detection"],
+    ["Duration", 1, "identity + re-upload detection"],
+    ["Series + title", 1, "weak identity, cross-listing matches"],
+    ["Image URL", 1, "weak identity"],
+    ["Audio sha256", 0, "blocked — the file may not be fetched"],
+    ["Acoustic fingerprint", 0, "blocked — needs decoded audio"]
+  ].map(([f, ok, use]) => `<tr><td>${esc(f)}</td><td>${ok ? `<span class="pill ok">Yes</span>` : `<span class="pill bad">No</span>`}</td><td class="small muted">${esc(use)}</td></tr>`).join("");
+  $("#y-runs").innerHTML = `<tr><td colspan="5"><div class="empty"><div class="ico">◌</div><h3>No runs yet</h3><p>The source has never been started. When it is, each run records what it walked, what was new, what was a duplicate — and any parser assumption that failed.</p><div class="row"><button class="btn sm" data-go="16">Learning controls →</button></div></div></td></tr>`;
+
+  // 15. Category priorities
+  const PRIO = [
+    ["Interviews", "High", "Conversational speech, many speakers, long items — the closest thing to how our callers talk", "unknown"],
+    ["Analysis", "High", "Spontaneous speech with varied vocabulary", "unknown"],
+    ["Business", "High", "Business and phone vocabulary — the domain the assistant actually serves", "unknown"],
+    ["News", "High", "Frequent and fresh, but many items are 24–38 s clips, so value per item is small", "unknown"],
+    ["Health", "Medium", "Domain vocabulary; fewer items", "unknown"],
+    ["Torah", "Medium", "Hebrew-heavy reading style — useful for Hebrew-origin words, less for conversation", "unknown"],
+    ["Miscellaneous", "Medium", "Mixed content; judged item by item once audio is permitted", "unknown"],
+    ["Video", "Low", "≈3,600 video-podcast items — audio track only, and only if permitted", "unknown"],
+    ["Music", "Low", "≈8% of series and mostly singing — low value for speech learning, never deleted", "≈8% of ~136 series"]
+  ];
+  $("#y-prio").innerHTML = PRIO.map(([c, p, why, share]) => `<tr><td><b>${esc(c)}</b></td><td><select style="width:auto" data-cat="${esc(c)}">${["High", "Medium", "Low", "Later"].map(o => `<option ${o === p ? "selected" : ""}>${o}</option>`).join("")}</select></td><td class="small muted" style="max-width:46ch">${esc(why)}</td><td class="small">${esc(share)}</td><td><span class="pill dim">Discovered only</span></td></tr>`).join("");
+  $("#y-prio").addEventListener("change", e => { const s = e.target.closest("[data-cat]"); if (s) toast(`${s.dataset.cat} → ${s.value}. Order changed; nothing was deleted or ignored.`); });
+
+  // 16. Continuous learning controls
+  let yRun = "stopped";
+  const MODES = [
+    ["Metadata-only", 1, "Walk listings, record public metadata, dedupe, count. The only mode that can run today."],
+    ["Audio-only", 0, "Fetch, segment, cluster speakers, acoustic features — no transcription. " + PERM],
+    ["Selective transcription", 0, "Audio analysis plus transcription of novel or conflicting material. " + PERM],
+    ["Full analysis", 0, "Everything, including alignment and observations for every item. " + PERM]
+  ];
+  function yRunRender() {
+    const running = yRun === "running", paused = yRun === "paused";
+    $("#y-run-state").className = "pill " + (running ? "ok" : paused ? "warn" : "dim");
+    $("#y-run-state").textContent = running ? "Running (mock) — metadata only" : paused ? "Paused" : "Stopped";
+    $("#y-runbtns").innerHTML = `<button class="btn primary" data-run="running" ${running ? "disabled" : ""}>${paused ? "Start over" : "Start"}</button>
+      <button class="btn" data-run="paused" ${running ? "" : "disabled"}>Pause</button>
+      <button class="btn" data-run="running" ${paused ? "" : "disabled"}>Resume</button>
+      <button class="btn danger" data-run="stopped" ${yRun === "stopped" ? "disabled" : ""}>Stop after current</button>`;
+    $("#y-runnote").innerHTML = running ? "Walking public listings and recording metadata only. No audio is fetched, at any rate, in any mode." : paused ? "Paused: the current item finishes, leases expire, nothing new starts." : "Stopped. Starting walks the public listings and records metadata only — no audio is fetched.";
+    $("#y-modes").innerHTML = MODES.map(([n, on, d], i) => `<div class="opt ${i === 0 ? "cur" : ""}" style="${on ? "" : "opacity:.6"}"><label><input type="radio" name="y24mode" ${i === 0 ? "checked" : ""} ${on ? "" : "disabled"}> ${esc(n)} ${on ? `<span class="pill ok">available</span>` : `<span class="pill bad">blocked</span>`}</label><div class="small muted" style="line-height:1.5">${esc(d)}</div></div>`).join("");
+  }
+  $("#y-runbtns").addEventListener("click", e => { const b = e.target.closest("[data-run]"); if (b && !b.disabled) { yRun = b.dataset.run; yRunRender(); toast(yRun === "running" ? "Mock: metadata walk started — audio stages stay closed." : yRun === "paused" ? "Paused." : "Will stop after the current item."); } });
+  yRunRender();
+
+  // 17. Discoveries
+  $("#y-would").innerHTML = [
+    ["New vocabulary at scale", "Tens of thousands of items across nine subject areas — words our internal corpus has never seen, in context.", "needs audio"],
+    ["Pronunciation across many speakers", "Independent speakers per series, so a realization can be told apart from one person's habit. Repeats from one speaker saturate; distinct speakers do not.", "needs audio"],
+    ["Cross-source agreement", "Where Yiddish24 and our internal corpus hear the same realization, the evidence is independent — the strongest kind this engine has.", "needs audio"]
+  ].map(([t, d, n]) => `<div class="card" style="box-shadow:none"><div class="card-h"><h3>${esc(t)}</h3><span class="pill bad">${esc(n)}</span></div><div class="small muted" style="line-height:1.6">${esc(d)}</div></div>`).join("");
+  $("#y-cross").innerHTML = [
+    ["Internal only (Voice Lab + corrections)", "1.0 per observation, saturating at 3× the speaker count", "That our own users say it this way — one business's callers dominate our data"],
+    ["+ Yiddish Labs lexical", "0 for pronunciation — identity only", "That the written form and meaning are right; it proves nothing about sound, and it never trains anything"],
+    ["+ Yiddish24 (once permitted)", "0.8 per observation, same saturation", "Independent agreement from unrelated speakers — the highest-weighted machine evidence"],
+    ["+ Human confirmation", "5.0 per confirmation", "Dominates every other source, and is required before any high-impact rule reaches production"]
+  ].map(([c, w, p]) => `<tr><td>${esc(c)}</td><td class="mono">${esc(w)}</td><td class="small muted">${esc(p)}</td></tr>`).join("");
+
+  // 18. Progress over time
+  let yGran = "day";
+  function yProg() {
+    const k = { day: 14, week: 10, month: 6 }[yGran];
+    const lab = i => yGran === "day" ? "Sep " + (2 + i) : yGran === "week" ? "W" + (28 + i) : ["Apr", "May", "Jun", "Jul", "Aug", "Sep"][i];
+    const zeros = Array.from({ length: k }, (_, i) => ({ x: lab(i), y: 0, n: 0 }));
+    lineChart($("#y-pdisc"), zeros, { title: "Items discovered (metadata) — allowed today", max: 1000, ticks: [0, 500, 1000], unit: yGran });
+    $("#y-pdisc").insertAdjacentHTML("beforeend", `<div class="small muted">This is the only line that can move today, and it is flat because the source has never been started — not because the site is empty (≈34,760 items are listed).</div>`);
+    lineChart($("#y-phours"), zeros, { title: "Hours analyzed — blocked", max: 100, ticks: [0, 50, 100], unit: yGran });
+    lineChart($("#y-pobs"), zeros, { title: "Pronunciation observations — blocked", max: 1000, ticks: [0, 500, 1000], unit: yGran });
+    ["#y-phours", "#y-pobs"].forEach(s => $(s).insertAdjacentHTML("beforeend", `<div class="small muted">Starts when permission is granted. ${esc(PERM)}</div>`));
+  }
+  (function () {
+    const W0 = 560, H = 190, L = 46, R = 16, T = 14, B = 34, HMAX = 400, YMAX = .7;
+    const sx = h => L + h / HMAX * (W0 - L - R), sy = v => T + (1 - v / YMAX) * (H - T - B), f = h => .62 * Math.exp(-h / 55) + .06;
+    let p = ""; for (let h = 0; h <= HMAX; h += 5) p += (p ? "L" : "M") + sx(h).toFixed(1) + " " + sy(f(h)).toFixed(1) + " ";
+    let s = `<svg viewBox="0 0 ${W0} ${H}" role="img">`;
+    [0, .2, .4, .6].forEach(v => s += `<line class="axis" x1="${L}" y1="${sy(v)}" x2="${W0 - R}" y2="${sy(v)}" stroke-dasharray="2 3"/><text x="${L - 6}" y="${sy(v) + 4}" text-anchor="end">${Math.round(v * 100)}%</text>`);
+    [0, 100, 200, 300, 400].forEach(h => s += `<text x="${sx(h)}" y="${H - 12}" text-anchor="middle">${h} h</text>`);
+    s += `<path class="line" d="${p}" stroke-dasharray="6 4" opacity=".5"/>`;
+    s += `<text class="lbl" x="${(L + W0 - R) / 2}" y="${T + 24}" text-anchor="middle">Shape only — n=0 measured points for this source</text>`;
+    s += `<line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${H - B}" x2="${W0 - R}" y2="${H - B}"/></svg>`;
+    $("#y-pcurve").innerHTML = s + `<div class="small muted" style="margin-top:4px">Novel share falls as hours accumulate: the first hours teach the most, and a point comes where each new hour mostly repeats what is known. Each source has its own curve, so this one starts at zero the day permission arrives.</div>`;
+  })();
+  seg("#y-gran", b => { yGran = b.dataset.g; yProg(); });
+  yProg();
+
+  // start
+  const m = /^#s([\w-]+)$/.exec(location.hash || "");
+  go(m ? m[1] : "1");
+})();
+</script>
