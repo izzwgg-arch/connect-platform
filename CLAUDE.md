@@ -681,3 +681,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
+- 2026-09-15 · Face-to-face AI Support mockup: existing Assistant remains the brain; approved Concept A (open collar, Loopcom infinity lapel pin); LiveKit + Anam pilot recommendation and decision gates → `2026-09-15-face-to-face-ai-support-mockup.md`
