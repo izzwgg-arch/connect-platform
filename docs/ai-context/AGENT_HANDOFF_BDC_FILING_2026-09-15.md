@@ -37,7 +37,31 @@ Verbatim: *"If you are a new provider and just created your 499 ID it may not be
 2. ~~A Plus Center~~ — flagged to Izzy (E911 = our HQ); he didn't move it; left in 141.02. E911 itself stays untouched per his instruction.
 3. **Watch for FCC replies** (ticket #63588 + BroadbandDataInquiries) in izzy@loopcom.net. When 839208 becomes enterable: Entity Info → uncheck the box → add 839208 → Save & Continue → rerun Final Data Checks → fill the ratio-warning Explanation ("all subscribers are businesses; Loopcom sells business phone service only") → Certification.
 4. **Certification = Izzy.** Project precedent (RMD): Izzy signs legal attestations himself. Have everything green, then hand him the Certification page (it will also want the Explanations & Comments note about the recently-issued 499 ID per the FCC help pattern, and the late-filing context).
-5. **December round**: data as of Dec 31 2026, window opens Jan 1, due **March 1 2027** — already seeded in the compliance calendar (`bdc-december-data`). The method above is the recipe; keep E911 registrations current so the address hunt dies.
+5. **December round**: data as of Dec 31 2026, window opens Jan 1, due **March 1 2027** — seeded in the compliance calendar (`bdc-december-data`). ✅ **DO NOT HAND-TYPE IT AGAIN — it is generated now (see below).**
+
+## ✅ THE FILING IS GENERATED FROM THE DATABASE NOW (2026-09-15, Izzy: "build it")
+- **`apps/api/scripts/bdc-voice-subscription-export.ts`** — one command produces the whole filing:
+  ```
+  cd apps/api && pnpm exec tsx scripts/bdc-voice-subscription-export.ts --as-of 2026-12-31
+  ```
+  It prints a per-tenant reconciliation, writes the **tract-level CSV** for the BDC's Upload Files tab (`tract,service_type,total_lines_or_subscriptions,consumer_lines_or_subscriptions`), and prints the **State-Level** numbers to type. Flags: `--out`, `--no-header`, `--map`, `--allow-unmapped`. ⛔ Read-only: it touches no database, PBX, VoIP.ms or E911 record.
+- **`docs/regulatory/bdc-tenant-tracts.json`** — the tenant → census-tract map, carrying each service address, where it came from, and Izzy's exclusion rulings verbatim. This is the file that made today expensive; committing it means the address hunt never repeats.
+- ⛔⛔ **THE GUARD THAT MATTERS: if a tenant has extensions on the as-of date but is in NEITHER `tenants` NOR `excluded`, the script refuses to write a CSV and exits non-zero.** A new customer silently missing from a federal filing is the failure mode this exists to prevent. `--allow-unmapped` overrides it but prints a loud warning.
+- ✅ **PROVEN, not just written**: run against the live database in `app-api-1` for `--as-of 2026-06-30` it reproduces the June filing EXACTLY — 8 tract rows, 102 subscriptions, per-tract 30 / 31 / 12 / 10 / 7 / 6 / 2 / 4, byte-identical to what was hand-entered into the BDC. An independent SQL aggregation returned the same 8 tracts and the same sums.
+- ⏳ **NOT PROVEN: no generated CSV has been uploaded to the BDC yet** (the June round was typed in by hand before the script existed, and it is still blocked at certification). ⛔ **Open question — the header row.** The FCC names the four headers but its worked example shows a bare data row, and its "CSV sample" attachment could not be retrieved (fcc.gov 403s every non-browser fetch and the in-page link bounces back to the article). The script writes a header by default; **if the BDC rejects the upload, re-run with `--no-header`.**
+- The two live `bdc-*` reminder rows now carry the command in their `details`, so the reminder email/SMS itself says how to produce the filing.
+
+## AUTOMATION AUDIT — every compliance item, what can actually be automated (2026-09-15)
+| Item | Automatable? | Reality |
+|---|---|---|
+| **BDC voice subscriptions** (Sept 1 / Mar 1) | ✅ **Generated** | CSV upload is supported; our script builds it. API exists but is challenge-only. |
+| **CPNI certification** (Mar 1, EB Docket 06-36) | ⚠️ Read-only | The [ECFS public API](https://www.fcc.gov/ecfs/help/public_api) (`publicapi.fcc.gov/ecfs`, free key) is **GET-only** — `/filings`, `/filing/{id}`, `/proceedings`, `/documents`. No POST, so **filing stays manual**; the API can VERIFY a filing posted and fetch its confirmation. |
+| **FCC Form 499-A** (Apr 1, USAC) | ❌ Manual | USAC E-File has no public filing API. A bulk multi-filer upload exists for 499-**Q** only. |
+| **RMD recertification** (Mar 1) | ❌ Manual | ServiceNow portal, Okta + push MFA, perjury declaration signed by an officer. |
+| **CVAA / RCCCI** (Apr 1) | ❌ Manual | FCC registry web form. |
+| **D.C. agent renewal** (Aug 20) | ❌ Manual | Just confirm the card on file did not fail. |
+- ⛔⛔ **THE FCC FORM 499 FILER DATABASE API IS DEAD — do not build a watcher on it.** It is documented at `apps.fcc.gov/cgb/form499/docs/index.htm` (v01.03.06, **2011**) and returns an FCC error page for *every* query — including the FCC's own documented sample call — from a clean server IP and from a real browser alike, while the plain HTML search page returns 200. So there is **no programmatic way to watch for Filer ID 839208 appearing**; checking the BDC's own picker by hand (or waiting for their ~monthly refresh) is the only option.
+- ⛔ Non-browser fetches of `www.fcc.gov` and `apps.fcc.gov` are Akamai-blocked (403 "Access Denied") from both this workstation and the loopcom server — `help.bdc.fcc.gov` is NOT blocked and curls fine from the server. Budget for that when scripting anything against FCC hosts.
 6. Decision on record: **excluded** Loopcom's own/internal tenants ("Connect", "Connect Communications" x2, demos, agent-test junk) — self-provided service is not a subscription *sold*; **included** unapproved-but-live April-migration tenants (they had DIDs + extensions in service). Counting unit = extensions (seats). Consumer count 0 (Hanna, the one free/residential-ish tenant, was created Aug 20 — after the June 30 as-of date).
 
 ## Traps burned into this session
