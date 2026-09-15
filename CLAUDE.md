@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · COWORKER IDE REDESIGN: live mockup v1 (artifact 9rkPBPFRp6hqQJcYCaSDXG) — bubble chat with live plain-English steps + in-chat approvals, full page with plan/live-window/settings; NOT BUILT, awaiting Izzy; ⛔ in-chat approval vs today's local approval window needs a security call first → `2026-09-15-coworker-ide-redesign-mockup.md`
+
 - 2026-09-15 · COWORKER DESKTOP CONTROL + ADMIN POWERSHELL: RESEARCH ONLY — no whole-desktop mouse/screen tool exists (click/screenshot = its own browser only; `desktop.active` reserved, unused); PowerShell never elevated; Windows has ONE cursor so a truly separate agent mouse needs a second session (UFO² PiP, not in their public repo); admin = remote-support elevated-helper pattern; awaiting Izzy's approach/mockup call → `2026-09-15-coworker-desktop-control-research.md`
 
 - 2026-09-15 · B VISIBLE MISSED CHARGES + RECURRING CUSTOM LINES: flat rate absorbed Lester's ext 111 ($25) and the $40 Contabo server was never configured — one-time catch-up CC-202609-00010 $65 created, emailed AND **CHARGED PAID** (Visa •5023 APPROVED, Sola ref 11051029517, receipt SENT); NEW opt-in engine key `metadata.billingRecurringCustomLines` (api `5573d567` DEPLOYED container-verified) puts both on every cycle invoice — deployed preview proves next cycle + October at $205; ⛔ never ALSO bump the flat rate for Lester (double-charge); ⏳ first real $205 cycle charge is Oct 2 → `2026-09-15-bvisible-missed-charges-recurring-custom-lines.md`
