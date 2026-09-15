@@ -417,7 +417,7 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 
 - 2026-09-14 · Desk Phone Wizard device identification + maker clouds; per-brand mechanisms (`deviceMechanismsFor`); ⛔ THE WIZARD NEVER ASKS FOR A PHONE PASSWORD — cloud/serial is the primary reset, asked once on the extension screen by typing, by PHOTO, or by TEXTING one in (all three through ONE gate `recordLabel`), LAN/password is the fallback; ⛔ photo doors INERT until `CRM_OCR_ENABLED=true` (Izzy's call); desktop rc.16 (unpublished); no real photo has ever been OCR'd → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
-- Fanvil partner / FDPS / FDMS onboarding STARTED, nothing submitted → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
+- 2026-09-15 · Fanvil REPLIED: FDPS account ISSUED (login is Izzy's to do, region "Europe"), FDMCS activation link expires ~Sep 18, reseller review + FDPS API review started, buy via 888VoIP → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
 - Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome → `2026-09-14-grandstream-business-onboarding-itsp-reseller-gd.md`
 - ZERO-TOUCH YEALINK (RPS) PROVISIONING is built into the existing Desk Phone Wizard… → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
 - the desk-phone RECORD WRITER exists now, and two defects that would have broken it… → `2026-09-14-the-desk-phone-record-writer-exists-now-and-two.md`
