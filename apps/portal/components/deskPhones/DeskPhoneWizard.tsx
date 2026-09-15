@@ -30,7 +30,7 @@ import {
 import { orderPhonesByMake, toldUsPhrase } from "./makeHint";
 import { IdentityPicker, SerialStickerDrawing, StickerDrawing } from "./PhoneIdentity";
 import { ManagedPhonePanel } from "./ManagedPhonePanel";
-import { apiGet, apiPost } from "../../services/apiClient";
+import { apiGet, apiPost, apiUploadDeskPhoneLabelPhoto } from "../../services/apiClient";
 import { ConnectSelect } from "../ConnectSelect";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
 import { getRecordingToken } from "../../services/recordingPlayback";
@@ -555,6 +555,75 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     setNeeds((n) => n.filter((x) => !(x.kind === "serial" && x.phoneId === phoneId)));
   }, []);
 
+  /**
+   * ⛔⛔ THE OTHER TWO WAYS TO GIVE US THE SERIAL (Izzy, 2026-09-14): "enter the actual number /
+   * upload a photo of the back of the phone / text the photos through our business number."
+   * Typing it is above; these are the same answer arriving differently, and all three land on the
+   * SAME server gate, so a label from a different handset is refused whichever door it came through.
+   *
+   * ⛔ Every message shown here is the SERVER'S sentence, not one invented in the browser — the
+   * server is the only side that knows whether the picture was sharp enough, whether photo reading
+   * is switched on at all, and whether the label belongs to this phone.
+   */
+  const [photoBusy, setPhotoBusy] = useState<Record<string, boolean>>({});
+  const [photoNote, setPhotoNote] = useState<Record<string, string>>({});
+  const [textOpen, setTextOpen] = useState<Record<string, boolean>>({});
+  const [textFrom, setTextFrom] = useState<Record<string, string>>({});
+  const [textPrompt, setTextPrompt] = useState<Record<string, string>>({});
+
+  const uploadLabelPhoto = useCallback(async (phoneId: string, file: File) => {
+    if (!runId) return;
+    setPhotoBusy((b) => ({ ...b, [phoneId]: true }));
+    setPhotoNote((n) => ({ ...n, [phoneId]: "" }));
+    try {
+      await apiUploadDeskPhoneLabelPhoto(runId, phoneId, file);
+      // The row is re-read, so `serialOnFile` flips and this whole block takes itself away.
+      await loadRun(runId);
+    } catch (err: any) {
+      setPhotoNote((n) => ({
+        ...n,
+        [phoneId]: err?.message || "That photo couldn't be read. Take another one and try again.",
+      }));
+    } finally {
+      setPhotoBusy((b) => ({ ...b, [phoneId]: false }));
+    }
+  }, [runId, loadRun]);
+
+  /** Tell the server which phone the picture will come FROM, and hear back where to send it. */
+  const startTextPhoto = useCallback(async (phoneId: string) => {
+    if (!runId) return;
+    const from = (textFrom[phoneId] ?? "").trim();
+    if (!from) return;
+    setPhotoNote((n) => ({ ...n, [phoneId]: "" }));
+    try {
+      const r = await apiPost<{ message?: string }>(
+        `/desk-phones/runs/${runId}/phones/${phoneId}/label-photo/expect`,
+        { fromNumber: from },
+      );
+      setTextPrompt((p) => ({ ...p, [phoneId]: r?.message || "Text the photo, then press “I've sent it”." }));
+    } catch (err: any) {
+      setPhotoNote((n) => ({ ...n, [phoneId]: err?.body?.message || "That number didn't work. Check it and try again." }));
+    }
+  }, [runId, textFrom]);
+
+  /** "I've sent it" — one read of the chat, on demand. Nothing polls the inbox. */
+  const checkTextPhoto = useCallback(async (phoneId: string) => {
+    if (!runId) return;
+    setPhotoBusy((b) => ({ ...b, [phoneId]: true }));
+    setPhotoNote((n) => ({ ...n, [phoneId]: "" }));
+    try {
+      const r = await apiPost<{ waiting?: boolean; message?: string }>(
+        `/desk-phones/runs/${runId}/phones/${phoneId}/label-photo/check`, {},
+      );
+      if (r?.waiting) setPhotoNote((n) => ({ ...n, [phoneId]: r.message || "It hasn't arrived yet." }));
+      else await loadRun(runId);
+    } catch (err: any) {
+      setPhotoNote((n) => ({ ...n, [phoneId]: err?.body?.message || "We couldn't read that photo. Send a clearer one." }));
+    } finally {
+      setPhotoBusy((b) => ({ ...b, [phoneId]: false }));
+    }
+  }, [runId, loadRun]);
+
   /** "I don't know the password" — a complete answer, never a wall. */
   const dontKnowPassword = useCallback((phoneId: string) => {
     driverRef.current?.passwordUnknown(phoneId);
@@ -972,6 +1041,82 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                       <p className="dps-hint" style={{ marginTop: 8 }}>
                         It is on the sticker underneath the phone, next to the barcode. No password is needed.
                       </p>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        {/* A label styled as a button: the file input itself stays hidden, and
+                            `capture` opens the camera straight away on a phone. */}
+                        <label className="dps-btn dps-btn-g" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center" }}>
+                          {photoBusy[p.id] ? "Reading the photo…" : "Upload a photo of the label"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            hidden
+                            disabled={!!photoBusy[p.id]}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              // Cleared so choosing the SAME file again still fires a change.
+                              e.target.value = "";
+                              if (f) void uploadLabelPhoto(p.id, f);
+                            }}
+                          />
+                        </label>
+                        <button
+                          className="dps-btn dps-btn-g"
+                          onClick={() => setTextOpen((t) => ({ ...t, [p.id]: !t[p.id] }))}
+                        >
+                          {textOpen[p.id] ? "Never mind texting it" : "Text the photo instead"}
+                        </button>
+                      </div>
+
+                      {textOpen[p.id] && (
+                        <div style={{ marginTop: 10 }}>
+                          {textPrompt[p.id] ? (
+                            <>
+                              <p className="dps-hint" style={{ margin: "0 0 8px" }}>{textPrompt[p.id]}</p>
+                              <button
+                                className="dps-btn dps-btn-g"
+                                disabled={!!photoBusy[p.id]}
+                                onClick={() => void checkTextPhoto(p.id)}
+                              >
+                                {photoBusy[p.id] ? "Looking…" : "I've sent it"}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <label className="dps-flabel" htmlFor={`dps-textfrom-${p.id}`}>
+                                Which phone will you text it from?
+                              </label>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <input
+                                  id={`dps-textfrom-${p.id}`}
+                                  className="dps-input"
+                                  maxLength={30}
+                                  placeholder="(845) 555-0112"
+                                  value={textFrom[p.id] ?? ""}
+                                  onChange={(e) => { const v = e.target.value; setTextFrom((t) => ({ ...t, [p.id]: v })); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter") void startTextPhoto(p.id); }}
+                                />
+                                <button
+                                  className="dps-btn dps-btn-g"
+                                  disabled={!(textFrom[p.id] ?? "").trim()}
+                                  onClick={() => void startTextPhoto(p.id)}
+                                >
+                                  Use this number
+                                </button>
+                              </div>
+                              <p className="dps-hint" style={{ marginTop: 6 }}>
+                                We only look for a picture from this number, so tell us the one you'll send from.
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {photoNote[p.id] && (
+                        <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 8 }}>{photoNote[p.id]}</p>
+                      )}
+
                       <SerialStickerDrawing />
                     </div>
                   )}

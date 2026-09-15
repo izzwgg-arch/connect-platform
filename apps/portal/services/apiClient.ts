@@ -469,6 +469,62 @@ export async function apiUploadChatAttachment(
   }
 }
 
+/**
+ * A photo of the sticker underneath a desk phone, for the setup wizard (field name `file`).
+ *
+ * ⛔ The picture is READ AND DISCARDED — the server OCRs it, keeps only the serial/model it
+ * could read, and stores no image. It answers `photo_unreadable` when the picture is not sharp
+ * enough to trust, which is the wizard's cue to ask for a clearer one rather than to save a
+ * half-read serial number.
+ */
+export async function apiUploadDeskPhoneLabelPhoto(
+  runId: string,
+  phoneId: string,
+  file: File,
+  token?: string,
+): Promise<{
+  ok: boolean;
+  found?: { model: string | null; manufacturer: string; serialFound: boolean };
+  phone?: Record<string, unknown>;
+}> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch(
+      `${baseUrl()}/desk-phones/runs/${encodeURIComponent(runId)}/phones/${encodeURIComponent(phoneId)}/label-photo`,
+      {
+        method: "POST",
+        headers: {
+          ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+          ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+        },
+        body: fd,
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: unknown = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
+      noteUnauthorizedResponse(res.status, errPayload, token || browserToken());
+      const ep = errPayload as { error?: string; message?: string } | null;
+      // ⛔ The server's own sentence is what the person reads — it is already plain English and
+      // says what to do next ("take another one straight on…"). Never replace it with a code.
+      throw new ApiError(ep?.message || ep?.error || `Upload failed (${res.status})`, res.status);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Multipart upload for tenant-scoped contact avatars (field name `file`). */
 export async function apiUploadContactAvatar(
   contactId: string,

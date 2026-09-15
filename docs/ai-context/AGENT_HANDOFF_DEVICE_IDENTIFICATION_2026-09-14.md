@@ -424,6 +424,51 @@ refuse an unreadable picture on OCR confidence. Both are inert until `CRM_OCR_EN
 api — **Izzy's decision** (Tesseract engine and the language-data host are already verified reachable,
 and inbound MMS already lands tenant-resolved as chat attachments).
 
+## 10g. Round 8 — the label as a PHOTO: uploaded, or texted to the business number
+
+**Izzy, 2026-09-14:** *"upload a photo of the back of the phone / text the photos through our
+business number … the system should check if it's a clear picture. If not, tell them to send a clear
+picture if it's not readable"* and *"we don't need an OCR that would constantly check. Just when they
+send a text message, the system will check the chat and find the message. You can also make the
+system prompt them which number they're going to send it from, so the system knows what to look for."*
+
+- ⛔⛔ **ONE GATE, THREE DOORS.** `recordLabel()` in `deviceCloudRoutes.ts` is now the only place a
+  label is judged and written; `scan-label` was refactored onto it rather than copied. The doors are
+  typed/scanned, uploaded photo, texted photo. **Never add a fourth by copying the third** — a second
+  copy is how one door comes to accept what another refuses, which here means a serial silently
+  attached to the wrong handset.
+- **Routes** (all run-scoped, `ownRun` first — proven by `deskPhoneRouteOrder.test.ts`):
+  `POST …/phones/:phoneId/label-photo` (multipart `file`, ≤10 MB, OCR in memory, **nothing stored,
+  nothing logged**); `POST …/label-photo/expect` `{fromNumber}` → normalises via
+  `normalizeUsCanadaToE164`, refuses when no tenant number is `mmsCapable`, stores
+  `labelPhotoFromE164` + `labelPhotoAskedAt`, answers with the number to text; `POST …/label-photo/check`
+  → one bounded lookup, OCR, same gate, clears the expectation **only** on an accepted label.
+- ⛔ **The clarity rule (`MIN_LABEL_PHOTO_CONFIDENCE = 55`)**: accept a photo only when OCR's own
+  confidence clears the bar **or** the MAC on the sticker matches this phone. A serial we cannot
+  vouch for is worse than none — it fails at GDMS minutes later, as an error about a number the
+  customer never typed.
+- ⛔ **The accusation rule**: a MAC mismatch read *below* the bar answers `photo_unreadable`, not
+  `label_for_different_device`. 8/B, 0/D, 5/S and 1/I are what OCR mangles first on a soft photo.
+- ⛔ `labelTextFromPhoto()` exists because `parseDeviceLabel` reads only the first 600 characters —
+  fine for a typed line, NOT for a photo of an underside carrying regulatory small print. Whitespace
+  is collapsed and the window is centred on the S/N / MAC marker, or the serial is truncated away
+  and a perfectly good photo is reported unreadable.
+- ⛔ Evidence source stays **`barcode_label`** for photos: a photograph of the label IS the label, and
+  a new source would mean touching the shared identification union and its confidence ordering
+  across every brand to record something only the audit needs (`metadata.via` carries it instead).
+- **Test harness changes worth knowing:** the fake db's `matches()` now really compares `gte/gt/lte/lt`
+  (it used to wave every object filter through, which would have passed the "an older photo is never
+  used" test while the real query did the opposite); `makeApp` registers `@fastify/multipart` because
+  `server.ts` does; the OCR engine is **faked on purpose** — what is under test is our judgement of a
+  picture, not Tesseract's.
+- **A real defect the tests caught:** `expect` validated `fromNumber` with `z.string().min(7)`, so a
+  short typo ("nope") answered a bare `invalid_request` with no sentence and the browser showed its
+  fallback wording. The length bound is now `min(1)` and the normaliser is the single judge.
+
+⏳ **NOT PROVEN:** no real photograph has ever been OCR'd here, and nobody has uploaded or texted one.
+⛔⛔ **Both doors are INERT until `CRM_OCR_ENABLED=true` on the api** (env + restart, **Izzy's call**).
+With it off they answer `photo_reading_off` — "type the serial number instead" — and store nothing.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

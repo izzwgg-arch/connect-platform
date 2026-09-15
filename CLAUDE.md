@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-14 · Browser Companion local implementation: 43 Coworker/security + 8 isolated-Chrome DOM tests pass; NOT installed/release-ready; real-app acceptance blocked by nginx 403 and UI stopped with Escape → `2026-09-14-browser-companion.md`
+- 2026-09-14 · Browser Companion: clean installer verified, NOT installed/accepted; desktop setup tool blocked; Playwright/Chrome DevTools alternatives reviewed with separate-profile versus existing-session limits → `2026-09-14-browser-companion.md`
 
 - 2026-09-14 · Deploy 403 prevention deployed/verified: queued-log waiting responses, bounded polling, live 200s and no renewed ban → `2026-09-14-deploy-log-autoban.md`
 
@@ -415,7 +415,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 Every file below is in `docs/ai-context/claude-md-sections/` (title starts with its date). Open it, then the full `AGENT_HANDOFF_*.md` it names. One line per area — never expand here.
 
-- 2026-09-14 · Desk Phone Wizard device identification + maker clouds; per-brand mechanisms (`deviceMechanismsFor`); ⛔ THE WIZARD NEVER ASKS FOR A PHONE PASSWORD — cloud/serial is the primary reset and the serial is asked once on the extension screen (`serialOnFile`), LAN/password is the fallback; desktop rc.16 (unpublished); no customer has typed a serial there yet, and the photo/text-a-photo parts are NOT built → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
+- 2026-09-14 · Desk Phone Wizard device identification + maker clouds; per-brand mechanisms (`deviceMechanismsFor`); ⛔ THE WIZARD NEVER ASKS FOR A PHONE PASSWORD — cloud/serial is the primary reset, asked once on the extension screen by typing, by PHOTO, or by TEXTING one in (all three through ONE gate `recordLabel`), LAN/password is the fallback; ⛔ photo doors INERT until `CRM_OCR_ENABLED=true` (Izzy's call); desktop rc.16 (unpublished); no real photo has ever been OCR'd → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
 - Fanvil partner / FDPS / FDMS onboarding STARTED, nothing submitted → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
 - Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome → `2026-09-14-grandstream-business-onboarding-itsp-reseller-gd.md`

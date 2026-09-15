@@ -12,7 +12,12 @@ import Fastify from "fastify";
 
 // ─── fake db ─────────────────────────────────────────────────────────────────
 
-const state: any = { runs: [], phones: [], extensions: [], tenants: [], audits: [], managed: [] };
+const state: any = {
+  runs: [], phones: [], extensions: [], tenants: [], audits: [], managed: [],
+  // "Text me a photo of the label": the tenant's own texting numbers, and the chat a picture
+  // arrives in. Seeded per test — empty means "this customer has no number that takes photos".
+  smsNumbers: [], threads: [], messages: [],
+};
 let seq = 0;
 const nextId = (p: string) => `${p}_${++seq}`;
 
@@ -22,6 +27,20 @@ const matches = (row: any, where: any): boolean =>
     if (v && typeof v === "object" && !(v instanceof Date)) {
       if ("in" in v) return (v as any).in.includes(row[k]);
       if ("not" in v) return !same(row[k], (v as any).not);
+      // ⛔⛔ DATES MUST REALLY COMPARE. "Only a picture that arrived AFTER we asked" is a `gte`
+      // filter, and it is the whole reason an older photo already sitting in a customer's thread
+      // cannot be mistaken for the answer to this question. A fake that waved every object filter
+      // through would pass that test while the real query did the opposite — the test would be
+      // proving nothing and saying it proved something.
+      if ("gte" in v || "gt" in v || "lte" in v || "lt" in v) {
+        if (row[k] === null || row[k] === undefined) return false;
+        const at = new Date(row[k]).getTime();
+        if ("gte" in v && at < new Date((v as any).gte).getTime()) return false;
+        if ("gt" in v && at <= new Date((v as any).gt).getTime()) return false;
+        if ("lte" in v && at > new Date((v as any).lte).getTime()) return false;
+        if ("lt" in v && at >= new Date((v as any).lt).getTime()) return false;
+        return true;
+      }
       return true;
     }
     return same(row[k], v);
@@ -56,10 +75,16 @@ const fakeDb: any = {
     customerNote: null, technicalNote: null, resetRequestedAt: null, registeredAt: null, haltedReason: null,
     skippedAt: null, deviceType: null, serialNumber: null, identityConfidence: null, identityEvidence: null,
     vendorCloudState: null, vendorCloudCheckedAt: null,
+    labelPhotoFromE164: null, labelPhotoAskedAt: null,
   })),
   extension: table("extensions", () => ({ id: nextId("ext"), status: "ACTIVE" })),
   tenant: table("tenants", () => ({ id: nextId("t") })),
   managedDeskPhone: table("managed", () => ({ id: nextId("mdp"), retiredAt: null })),
+  tenantSmsNumber: table("smsNumbers", () => ({
+    id: nextId("num"), active: true, smsCapable: true, mmsCapable: true, isTenantDefault: false, createdAt: new Date(),
+  })),
+  connectChatThread: table("threads", () => ({ id: nextId("thr"), lastMessageAt: new Date() })),
+  connectChatMessage: table("messages", () => ({ id: nextId("msg"), createdAt: new Date(), attachments: [] })),
   agentSecret: {
     findUnique: async () => null,
     upsert: async () => ({}),
@@ -76,6 +101,52 @@ mock.module("../permissionGates", {
     userHasActionPermission: async (_u: any, key: string) =>
       key === "can_setup_desk_phones" ? allowSetup : key === "can_authorize_phone_reset" ? allowReset : false,
   },
+});
+
+/**
+ * ⛔⛔ THE OCR ENGINE IS FAKED, ON PURPOSE. Two reasons, both about what is actually under test:
+ * a WASM engine in a unit suite is slow, needs a language download, and turns a logic test into
+ * an image-quality lottery — and "is this picture sharp enough to trust a serial from?" is OUR
+ * decision, not Tesseract's. Faking what the engine SAW is what makes that decision testable.
+ * `ocrEnabled` mirrors the CRM_OCR_ENABLED switch; `ocrNext` is what it "read" (null = it threw).
+ */
+class OcrLimitErrorStub extends Error {
+  code: string;
+  constructor(code: string, message: string) { super(message); this.name = "OcrLimitError"; this.code = code; }
+}
+let ocrEnabled = true;
+let ocrNext: { text: string; confidence: number } | null = { text: "", confidence: 92 };
+mock.module("../crm/docOcrProvider", {
+  namedExports: {
+    OcrLimitError: OcrLimitErrorStub,
+    loadOcrConfig: () => ({
+      enabled: ocrEnabled, maxFileBytes: 10 * 1024 * 1024, provider: "tesseract_js", lang: "eng", langPath: undefined,
+    }),
+    getOcrProvider: (cfg: any) => (cfg?.enabled
+      ? {
+        name: "tesseract_js",
+        supports: (m: string) => String(m ?? "").startsWith("image/"),
+        extractText: async () => {
+          if (!ocrNext) throw new Error("engine failed");
+          return { text: ocrNext.text, confidence: ocrNext.confidence, pageCount: 1, metadata: {} };
+        },
+      }
+      : null),
+    assertOcrSizeLimit: (buf: Buffer, cfg: any) => {
+      if (buf.length > cfg.maxFileBytes) throw new OcrLimitErrorStub("ocr_file_too_large", "too large");
+    },
+    resolveImageMime: (mime: string, fileName: string) => {
+      const m = String(mime ?? "").toLowerCase();
+      if (m.startsWith("image/")) return m;
+      return /\.(jpe?g)$/i.test(String(fileName ?? "")) ? "image/jpeg" : "";
+    },
+  },
+});
+
+/** The bytes behind a texted picture. null = the file is gone from storage. */
+let attachmentBytes: Buffer | null = Buffer.from("not-a-real-jpeg");
+mock.module("../chatAttachmentStorage", {
+  namedExports: { readChatAttachmentBuffer: async () => attachmentBytes },
 });
 
 // ⛔ Loaded lazily, AFTER the mocks: apps/api compiles to CommonJS.
@@ -118,6 +189,9 @@ let sharedLock = makeLock();
 function reset() {
   for (const k of Object.keys(state)) state[k].length = 0;
   allowSetup = true; allowReset = true; registered = new Set(); lockKeys = []; sharedLock = makeLock();
+  // ⛔ The faked engine is part of the fixture: a test that left OCR switched off, or left a
+  // blurry reading behind, would silently change the meaning of every test after it.
+  ocrEnabled = true; ocrNext = { text: "", confidence: 92 }; attachmentBytes = Buffer.from("not-a-real-jpeg");
   const L = load();
   sim = new L.GdmsSimulator();
   L.clearGdmsCredentialsCache();
@@ -137,6 +211,11 @@ function registry(opts: { unconfigured?: boolean; provider?: any } = {}) {
 
 async function makeApp(user: any, opts: { registry?: any } = {}) {
   const app = Fastify();
+  // ⛔ Registered here because it is registered globally in server.ts — the photo door reads
+  // `req.isMultipart()`, so a test app without it would answer "multipart_required" to a perfectly
+  // good upload and the suite would be testing a server that does not exist.
+  const multipart = require("@fastify/multipart");
+  await app.register(multipart.default ?? multipart);
   app.addHook("preHandler", async (req: any) => { req.user = user; });
   await load().routes(app as any, {
     audit: async (p: any) => { state.audits.push(p); },
@@ -253,6 +332,12 @@ test("another customer's device is indistinguishable from one that does not exis
     ["POST", `${base}/vendor-lookup`, {}],
     ["POST", `${base}/claim`, { serialNumber: SN }],
     ["POST", `${base}/scan-label`, { text: `S/N: ${SN}` }],
+    // ⛔ The three doors added 2026-09-14 are held to the SAME rule: a stranger who guessed the
+    // run id reads 404, never a 400 about multipart or a 409 about which number to text from —
+    // either of which would confirm the run exists. `ownRun` runs before every other check.
+    ["POST", `${base}/label-photo`, {}],
+    ["POST", `${base}/label-photo/expect`, { fromNumber: "845-555-0112" }],
+    ["POST", `${base}/label-photo/check`, {}],
     ["POST", `${base}/prepare`, {}],
   ];
   for (const [method, url, payload] of calls) {
@@ -855,4 +940,209 @@ test("verifying refuses a simulated GDMS selected at runtime", async () => {
   } finally {
     restore();
   }
+});
+
+/* ── the label as a PHOTO: uploaded, or texted in ────────────────────────── */
+
+/** One file in a multipart body, shaped the way a browser sends it. */
+function photoUpload(fileName = "label.jpg", mime = "image/jpeg", bytes = "pretend-jpeg-bytes") {
+  const boundary = "----deskphonetestboundary";
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mime}\r\n\r\n`),
+    Buffer.from(bytes),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  return { payload, headers: { "content-type": `multipart/form-data; boundary=${boundary}` } };
+}
+const upload = async (app: any, base: string, file = photoUpload()) =>
+  app.inject({ method: "POST", url: `${base}/label-photo`, payload: file.payload, headers: file.headers });
+
+/** The tenant's own number that can receive pictures. */
+function seedTextingNumber(e164 = "+18455550112", over: Record<string, unknown> = {}) {
+  state.smsNumbers.push({
+    id: nextId("num"), tenantId: "t_abc", phoneE164: e164, active: true,
+    smsCapable: true, mmsCapable: true, isTenantDefault: true, createdAt: new Date(), ...over,
+  });
+}
+
+/** A picture sitting in the chat from `from`, at `at`. */
+function seedTextedPhoto(from: string, at: Date, over: Record<string, unknown> = {}) {
+  const threadId = nextId("thr");
+  state.threads.push({ id: threadId, tenantId: "t_abc", externalSmsE164: from, lastMessageAt: at });
+  state.messages.push({
+    id: nextId("msg"), tenantId: "t_abc", threadId, direction: "INBOUND", createdAt: at,
+    attachments: [{ storageKey: "k_1", mimeType: "image/jpeg", mediaKind: "image", fileName: "label.jpg" }],
+    ...over,
+  });
+}
+
+test("a clear photo of the label names the phone and stores its serial — no password, no typing", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(body(r).found.serialFound, true);
+  assert.equal(row.serialNumber, SN);
+  assert.ok(row.identityEvidence.some((e: any) => e.source === "barcode_label"));
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED");
+  assert.equal(audit.metadata.via, "photo");
+  assert.equal(audit.metadata.photoConfidence, 91);
+  // ⛔ The audit carries the READING, never the text OCR pulled off the picture.
+  noLeak(audit, [SN, "GXP2170 MAC"]);
+});
+
+test("⛔ a BLURRY photo is refused and stores nothing — the customer is asked for a clearer one", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  // Low confidence, and nothing on it corroborates that the read came out clean.
+  ocrNext = { text: `S/N: ${SN}`, confidence: 21 };
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 400, r.body);
+  assert.equal(body(r).error, "photo_unreadable");
+  assert.match(String(body(r).message), /clear|sharp|another one/i);
+  assert.equal(row.serialNumber, null, "a serial we cannot vouch for is never stored");
+});
+
+test("a soft photo IS accepted when the address on it matches this very phone", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  // ⛔ The corroboration rule: the sticker's own hardware address matching THIS handset is what
+  // proves the read came out clean, so a soft picture is still trusted when it does.
+  ocrNext = { text: `MAC ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 38 };
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, SN);
+});
+
+test("⛔ a photo of ANOTHER phone's label: refused as the wrong device when read clearly, as unreadable when not", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+
+  ocrNext = { text: `MAC: 805E0CBD135A S/N: ABCDE12345`, confidence: 88 };
+  const clear = await upload(app, base);
+  assert.equal(clear.statusCode, 409, clear.body);
+  assert.equal(body(clear).error, "label_for_different_device");
+
+  // ⛔ The SAME mismatch read badly must NOT accuse them of holding the wrong phone — on a soft
+  // picture the address is the first thing OCR mangles, and "that's a different device" is an
+  // accusation somebody holding the right handset cannot argue with.
+  ocrNext = { text: `MAC: 805E0CBD135A S/N: ABCDE12345`, confidence: 19 };
+  const soft = await upload(app, base);
+  assert.equal(soft.statusCode, 400, soft.body);
+  assert.equal(body(soft).error, "photo_unreadable");
+  assert.equal(row.serialNumber, null);
+});
+
+test("with photo reading switched off the wizard says so plainly and stores nothing", async () => {
+  reset();
+  ocrEnabled = false;
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  const r = await upload(app, base);
+  assert.equal(r.statusCode, 503, r.body);
+  assert.equal(body(r).error, "photo_reading_off");
+  assert.match(String(body(r).message), /type the serial/i);
+  assert.equal(row.serialNumber, null);
+});
+
+test("texting it in: we say where to send it, and remember which number it comes from", async () => {
+  reset();
+  seedTextingNumber();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  const r = await app.inject({
+    method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "(845) 555-9999" },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.match(String(body(r).textTo), /\(845\) 555-0112/);
+  assert.equal(row.labelPhotoFromE164, "+18455559999", "stored normalised, so the lookup can match it");
+  assert.ok(row.labelPhotoAskedAt instanceof Date);
+
+  const bad = await app.inject({ method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "nope" } });
+  assert.equal(bad.statusCode, 400);
+  assert.equal(body(bad).error, "bad_number");
+});
+
+test("⛔ no number of ours can receive pictures: say so, rather than send them texting into a hole", async () => {
+  reset();
+  seedTextingNumber("+18455550112", { mmsCapable: false });
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  const r = await app.inject({ method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "8455559999" } });
+  assert.equal(r.statusCode, 409, r.body);
+  assert.equal(body(r).error, "no_texting_number");
+  assert.match(String(body(r).message), /type the serial|upload/i);
+  assert.equal(row.labelPhotoFromE164, null);
+});
+
+test("checking before anyone was asked is refused, not answered with a shrug", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { base } = await runWithPhone(app);
+  const r = await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} });
+  assert.equal(r.statusCode, 409, r.body);
+  assert.equal(body(r).error, "not_expecting_a_photo");
+});
+
+test("the texted photo is read once, the serial lands, and we stop looking", async () => {
+  reset();
+  seedTextingNumber();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  await app.inject({ method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "8455559999" } });
+
+  const nothingYet = body(await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} }));
+  assert.equal(nothingYet.waiting, true, "not an error — it simply has not arrived");
+
+  seedTextedPhoto("+18455559999", new Date(Date.now() + 1000));
+  ocrNext = { text: `GXP2170 MAC ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 87 };
+  const r = await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, SN);
+  assert.equal(row.labelPhotoFromE164, null, "read and accepted — a later picture is not pulled in");
+  assert.equal(row.labelPhotoAskedAt, null);
+  assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED" && a.metadata.via === "texted_photo"));
+});
+
+test("⛔ a picture that was ALREADY in the thread, or came from another number, is never used", async () => {
+  reset();
+  seedTextingNumber();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+
+  // Sent an hour before anybody was asked — a photo of something else entirely.
+  seedTextedPhoto("+18455559999", new Date(Date.now() - 3_600_000));
+  // And a picture from a different phone altogether.
+  seedTextedPhoto("+18455551234", new Date(Date.now() + 1000));
+  await app.inject({ method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "8455559999" } });
+  ocrNext = { text: `S/N: ${SN}`, confidence: 95 };
+
+  const r = body(await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} }));
+  assert.equal(r.waiting, true, "the old photo and the stranger's photo are both invisible to this");
+  assert.equal(row.serialNumber, null);
+});
+
+test("an unreadable texted photo keeps us looking, so a better one still works", async () => {
+  reset();
+  seedTextingNumber();
+  const app = await makeApp(CUSTOMER);
+  const { base, row } = await runWithPhone(app);
+  await app.inject({ method: "POST", url: `${base}/label-photo/expect`, payload: { fromNumber: "8455559999" } });
+  seedTextedPhoto("+18455559999", new Date(Date.now() + 1000));
+
+  ocrNext = { text: "blurry nonsense", confidence: 12 };
+  const blurry = await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} });
+  assert.equal(blurry.statusCode, 400, blurry.body);
+  assert.equal(body(blurry).error, "photo_unreadable");
+  assert.equal(row.labelPhotoFromE164, "+18455559999", "still expecting — they can simply text a better one");
+
+  ocrNext = { text: `MAC ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 90 };
+  const good = await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} });
+  assert.equal(good.statusCode, 200, good.body);
+  assert.equal(row.serialNumber, SN);
 });

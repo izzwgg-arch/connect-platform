@@ -29,6 +29,7 @@ import {
   identifyDevice,
   identifyPhone,
   normalizeMac,
+  normalizeUsCanadaToE164,
   parseDeviceLabel,
   planDevicePreparation,
   provisioningStatusFor,
@@ -65,6 +66,16 @@ import {
   storeGdmsCredentials,
   validateGdmsCredentials,
 } from "./gdmsCredentials";
+// Reading a PHOTO of the label. ⛔ The same engine the CRM uses — one OCR implementation in this
+// api, one switch (CRM_OCR_ENABLED). When it is off these routes say so in plain words.
+import {
+  assertOcrSizeLimit,
+  getOcrProvider,
+  loadOcrConfig,
+  OcrLimitError,
+  resolveImageMime,
+} from "../crm/docOcrProvider";
+import { readChatAttachmentBuffer } from "../chatAttachmentStorage";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -535,38 +546,131 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     });
   });
 
-  /**
-   * The label underneath the device, when nothing on the network could name it: whatever a
-   * barcode/QR scanner typed, or what a person copied off the sticker.
-   * ⛔ A label for a DIFFERENT device is refused, never attached to this one.
-   */
-  app.post("/desk-phones/runs/:id/phones/:phoneId/scan-label", async (req: any, reply: any) => {
-    const owned = await ownRun(req, reply); if (!owned) return;
-    const { user, run } = owned;
-    if (!(await allowedToSetUp(user, reply))) return;
-    const body = z.object({ text: z.string().trim().min(1).max(600) }).safeParse(req.body ?? {});
-    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
-    const phone = await db.deskPhoneSetupPhone.findFirst({
-      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
-    });
-    if (!phone) return reply.status(404).send({ error: "not_found" });
+  /* ── the label, however it reaches us ─────────────────────────────────── */
 
-    const label = parseDeviceLabel(body.data.text);
+  /** Below this, OCR's own reading of the picture is not sharp enough to trust a serial from. */
+  const MIN_LABEL_PHOTO_CONFIDENCE = 55;
+  /** Matches the OCR engine's own default ceiling; a phone camera shot is far under it. */
+  const MAX_LABEL_PHOTO_BYTES = 10 * 1024 * 1024;
+  const PHOTO_UNREADABLE =
+    "We couldn't read that picture clearly enough to be sure. Take another one straight on, "
+    + "close enough that the small print is sharp, with the light behind you rather than behind the phone.";
+  const PHOTO_READING_OFF =
+    "Reading photos isn't switched on for your account yet. Type the serial number instead — "
+    + "it's the line on the sticker that starts with S/N.";
+
+  /**
+   * The bit of a photo's text that could hold a label. ⛔ `parseDeviceLabel` reads the first 600
+   * characters, which is plenty for a typed line but NOT for a photo: a picture of the underside
+   * catches regulatory small print, barcodes and a compliance paragraph, and the serial can easily
+   * sit past the cut. So whitespace is collapsed and, when it is still too long, the window is
+   * centred on whichever marker appears — otherwise the serial is silently truncated away and the
+   * customer is told their own clear photo was unreadable.
+   */
+  function labelTextFromPhoto(raw: string): string {
+    const flat = String(raw ?? "").replace(/\s+/g, " ").trim();
+    if (flat.length <= 600) return flat;
+    const marker = /\b(?:S\/?N|SERIAL|MAC)\b/i.exec(flat);
+    if (!marker) return flat.slice(0, 600);
+    const start = Math.max(0, marker.index - 120);
+    return flat.slice(start, start + 600);
+  }
+
+  type PhotoText =
+    | { ok: true; text: string; confidence: number }
+    | { ok: false; status: number; error: string; message: string };
+
+  /** OCRs one image in memory. ⛔ The picture is never written anywhere and never logged. */
+  async function readLabelPhoto(buffer: Buffer, mimeType: string, fileName: string): Promise<PhotoText> {
+    const config = loadOcrConfig();
+    const provider = getOcrProvider(config);
+    // ⛔ OFF IS AN HONEST ANSWER, NOT A FAILURE. Reading photos is one switch on the api; while it
+    // is off the person is told to type the serial, which always works and needs no password.
+    if (!provider) return { ok: false, status: 503, error: "photo_reading_off", message: PHOTO_READING_OFF };
+    const mime = resolveImageMime(mimeType, fileName);
+    if (!mime || !provider.supports(mime)) {
+      return {
+        ok: false, status: 400, error: "unsupported_image",
+        message: "That file isn't a photo we can read. Send a JPG or PNG straight from the phone's camera.",
+      };
+    }
+    try {
+      assertOcrSizeLimit(buffer, config);
+    } catch (err) {
+      if (err instanceof OcrLimitError) {
+        return {
+          ok: false, status: 400, error: "photo_too_large",
+          message: "That picture is too big to read. Send it at normal quality rather than full resolution.",
+        };
+      }
+      throw err;
+    }
+    try {
+      const out = await provider.extractText({ buffer, mimeType: mime, fileName }, config);
+      return { ok: true, text: out.text ?? "", confidence: typeof out.confidence === "number" ? out.confidence : 0 };
+    } catch {
+      // ⛔ The engine's own error text never reaches a customer — it is noise to them and may name
+      // internals. An unreadable picture gets the sentence that tells them what to do instead.
+      return { ok: false, status: 400, error: "photo_unreadable", message: PHOTO_UNREADABLE };
+    }
+  }
+
+  type LabelOutcome =
+    | { ok: false; status: number; error: string; message: string }
+    | { ok: true; body: Record<string, unknown> };
+
+  /**
+   * ⛔⛔ ONE GATE FOR EVERY WAY A LABEL REACHES US — typed, scanned off a barcode, photographed,
+   * or texted in. There were three arrivals added on 2026-09-14 and there must stay ONE set of
+   * rules: a second copy is how one door comes to accept what another refuses, which on this
+   * screen means a serial silently attached to the wrong handset.
+   */
+  async function recordLabel(
+    user: JwtUser,
+    phone: any,
+    text: string,
+    /** How it arrived. Audit only — see the evidence note below. */
+    via: "typed_or_scanned" | "photo" | "texted_photo",
+    /** OCR's 0–100 reading of how sharp the text was; null when a person typed or scanned it. */
+    confidence: number | null,
+  ): Promise<LabelOutcome> {
+    const label = parseDeviceLabel(text);
+
+    // ⛔⛔ A MISREAD ADDRESS MUST NOT READ AS "THAT IS A DIFFERENT PHONE". The hardware address is
+    // the first thing OCR mangles on a soft photo (8/B, 0/D, 5/S, 1/I), so below the confidence
+    // bar a mismatch is far more likely a poor picture than the wrong handset — and "that label
+    // belongs to a different device" is an accusation the person cannot argue with while holding
+    // the right phone. Under the bar we ask for a clearer picture; at or above it, a mismatch is
+    // real and is refused exactly as a scanned label always has been.
+    const trusted = confidence === null || confidence >= MIN_LABEL_PHOTO_CONFIDENCE;
     if (label.mac && label.mac !== phone.macAddress) {
-      return reply.status(409).send({
-        ok: false, error: "label_for_different_device",
+      if (!trusted) return { ok: false, status: 400, error: "photo_unreadable", message: PHOTO_UNREADABLE };
+      return {
+        ok: false, status: 409, error: "label_for_different_device",
         message: `That label belongs to a different device (${formatMac(label.mac)}). Scan the label on this one.`,
-      });
+      };
     }
     if (!label.serialNumber && !label.model) {
-      return reply.status(400).send({
-        ok: false, error: "label_unreadable",
-        message: "We couldn't read a model or serial number from that. Scan the barcode again, or type what the label says.",
-      });
+      return confidence === null
+        ? {
+          ok: false, status: 400, error: "label_unreadable",
+          message: "We couldn't read a model or serial number from that. Scan the barcode again, or type what the label says.",
+        }
+        : { ok: false, status: 400, error: "photo_unreadable", message: PHOTO_UNREADABLE };
+    }
+    // ⛔ A serial read off a picture we cannot vouch for is WORSE than no serial: it is stored, the
+    // maker's cloud rejects it minutes later, and the customer is left holding an error about a
+    // number they never typed. The address on the sticker matching this phone is the one thing
+    // that proves the read came out clean, so a soft photo is accepted only when it does.
+    if (!trusted && label.mac !== phone.macAddress) {
+      return { ok: false, status: 400, error: "photo_unreadable", message: PHOTO_UNREADABLE };
     }
 
     const staff = isSuper(user);
     const readiness = await readinessList(registry);
+    // ⛔ A photograph of the label IS the label, so the evidence source stays `barcode_label`.
+    // Inventing a `label_photo` source would mean touching the shared identification union and its
+    // confidence ordering — a change across every brand — to record something only the audit needs.
     const fromLabel = sanitizeEvidence({
       source: "barcode_label",
       manufacturer: label.manufacturer !== "unknown" ? label.manufacturer : null,
@@ -604,15 +708,211 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       actorUserId: user.sub,
       metadata: {
         mac: phone.macAddress, model: label.model, serialTail: serialTail(label.serialNumber),
-        manufacturer: label.manufacturer, modelAccepted,
+        manufacturer: label.manufacturer, modelAccepted, via,
+        // ⛔ The reading, never the text: OCR output can carry anything that was in shot.
+        photoConfidence: confidence === null ? null : Math.round(confidence),
       },
+    });
+    return {
+      ok: true,
+      body: {
+        ok: true,
+        found: { model: label.model, manufacturer: label.manufacturer, serialFound: Boolean(label.serialNumber) },
+        phone: customerPhoneView(updated),
+        identification: identificationView(identify(updated, readiness), updated, staff),
+      },
+    };
+  }
+
+  /** (845) 555-0112 — how a number is shown to a person, never the raw E.164. */
+  function prettyNumber(e164: string): string {
+    const d = String(e164 ?? "").replace(/\D/g, "");
+    const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+    return ten.length === 10 ? `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}` : String(e164 ?? "");
+  }
+
+  /**
+   * The label underneath the device, when nothing on the network could name it: whatever a
+   * barcode/QR scanner typed, or what a person copied off the sticker.
+   * ⛔ A label for a DIFFERENT device is refused, never attached to this one.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/scan-label", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    const body = z.object({ text: z.string().trim().min(1).max(600) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    // ⛔ Typed or scanned text is trusted as read — a person looking at the sticker is not an OCR
+    // guess — so no confidence is passed. Every refusal below lives in `recordLabel`, shared with
+    // the photo and text-message doors.
+    const outcome = await recordLabel(user, phone, body.data.text, "typed_or_scanned", null);
+    if (!outcome.ok) {
+      return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    }
+    return reply.send(outcome.body);
+  });
+
+  /**
+   * A PHOTO of the sticker (Izzy, 2026-09-14: "upload a photo of the back of the phone").
+   *
+   * ⛔ THE PICTURE IS READ AND DROPPED. Nothing is written to storage and no image or OCR text is
+   * logged — only what the label said (model, serial) is kept, exactly as a typed label would be.
+   * ⛔ "Is it a clear picture?" is answered here rather than left to the customer to judge
+   * (Izzy: "the system should check if it's a clear picture … tell them to send a clear picture").
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/label-photo", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    if (!req.isMultipart?.()) return reply.status(400).send({ error: "multipart_required" });
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    let file: any = null;
+    try {
+      file = await req.file({ limits: { fileSize: MAX_LABEL_PHOTO_BYTES } });
+    } catch (err: any) {
+      return reply.status(400).send({ error: "multipart_parse_failed", detail: err?.message });
+    }
+    if (!file) return reply.status(400).send({ error: "file_required" });
+    const buffer = await file.toBuffer();
+    if (!buffer?.length) return reply.status(400).send({ error: "file_required" });
+
+    const read = await readLabelPhoto(buffer, String(file.mimetype || ""), String(file.filename || "label.jpg"));
+    if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
+    const outcome = await recordLabel(user, phone, labelTextFromPhoto(read.text), "photo", read.confidence);
+    if (!outcome.ok) {
+      return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    }
+    return reply.send(outcome.body);
+  });
+
+  /**
+   * "I'll text the photo" — the customer says WHICH number it will come from, and we say which
+   * number to send it to (Izzy, 2026-09-14: "make the system prompt them which number they're
+   * going to send it from, so the system knows what to look for").
+   *
+   * ⛔ Asking for the sending number is what makes the next step a LOOKUP rather than a watch: we
+   * read one thread, from one number, for messages after this moment — never the tenant's inbox
+   * at large, and never on a timer (Izzy: "we don't need an OCR that would constantly check").
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/label-photo/expect", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    // ⛔ ONE JUDGE OF "IS THIS A PHONE NUMBER", and it is the normaliser below — not this length
+    // bound. A schema minimum here would answer a short typo with a bare `invalid_request` and no
+    // sentence, so the person reads the browser's fallback wording instead of being told to enter
+    // the 10 digits. The bound stays only to cap what we parse.
+    const body = z.object({ fromNumber: z.string().trim().min(1).max(30) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+
+    const parsed = normalizeUsCanadaToE164(body.data.fromNumber);
+    if (!parsed.ok || !parsed.e164) {
+      return reply.status(400).send({
+        ok: false, error: "bad_number",
+        message: "That doesn't look like a US or Canadian mobile number. Enter the 10 digits of the phone you'll text from.",
+      });
+    }
+    // ⛔ A picture can only arrive on a number that can RECEIVE pictures. Promising "text it to us"
+    // on an SMS-only number would leave the customer texting into a hole and blaming themselves.
+    const inbox = await db.tenantSmsNumber.findFirst({
+      where: { tenantId: user.tenantId, active: true, mmsCapable: true },
+      orderBy: [{ isTenantDefault: "desc" }, { createdAt: "asc" }],
+    });
+    if (!inbox?.phoneE164) {
+      return reply.status(409).send({
+        ok: false, error: "no_texting_number",
+        message: "None of your numbers can receive photos yet, so texting one in won't work. Type the serial number instead, or upload the photo here.",
+      });
+    }
+    await db.deskPhoneSetupPhone.update({
+      where: { id: phone.id },
+      data: { labelPhotoFromE164: parsed.e164, labelPhotoAskedAt: new Date() },
     });
     return reply.send({
       ok: true,
-      found: { model: label.model, manufacturer: label.manufacturer, serialFound: Boolean(label.serialNumber) },
-      phone: customerPhoneView(updated),
-      identification: identificationView(identify(updated, readiness), updated, staff),
+      textTo: prettyNumber(inbox.phoneE164),
+      fromNumber: prettyNumber(parsed.e164),
+      message: `Text one photo of the sticker to ${prettyNumber(inbox.phoneE164)} from ${prettyNumber(parsed.e164)}, then press "I've sent it".`,
     });
+  });
+
+  /**
+   * "I've sent it" — read the chat ONCE and look for that picture.
+   *
+   * ⛔ Bounded on every axis, deliberately: the customer's own tenant, the one number they named,
+   * messages that arrived AFTER they were asked, inbound only, newest first, one message, one
+   * image. An older photo already sitting in the thread can never be mistaken for this answer.
+   * ⛔ An unreadable picture does NOT clear the expectation — they can simply text a better one
+   * and press this again. Only a label we actually accepted stops us looking.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/label-photo/check", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+    if (!phone.labelPhotoFromE164 || !phone.labelPhotoAskedAt) {
+      return reply.status(409).send({
+        ok: false, error: "not_expecting_a_photo",
+        message: "Tell us which number you'll text from first.",
+      });
+    }
+
+    const waiting = {
+      ok: true, waiting: true,
+      message: `We haven't seen a photo from ${prettyNumber(phone.labelPhotoFromE164)} yet. Send it, give it a moment, then press this again.`,
+    };
+    const thread = await db.connectChatThread.findFirst({
+      where: { tenantId: user.tenantId, externalSmsE164: phone.labelPhotoFromE164 },
+      orderBy: { lastMessageAt: "desc" },
+    });
+    if (!thread) return reply.send(waiting);
+    const msg = await db.connectChatMessage.findFirst({
+      where: {
+        tenantId: user.tenantId,
+        threadId: thread.id,
+        direction: "INBOUND",
+        createdAt: { gte: phone.labelPhotoAskedAt },
+        attachments: { some: {} },
+      },
+      orderBy: { createdAt: "desc" },
+      include: { attachments: true },
+    });
+    const picture = (msg?.attachments ?? []).find(
+      (a: any) => a?.mediaKind === "image" || String(a?.mimeType ?? "").toLowerCase().startsWith("image/"),
+    );
+    if (!picture?.storageKey) return reply.send(waiting);
+
+    const buffer = await readChatAttachmentBuffer(picture.storageKey).catch(() => null);
+    if (!buffer?.length) return reply.send(waiting);
+    const read = await readLabelPhoto(buffer, String(picture.mimeType || ""), String(picture.fileName || "label.jpg"));
+    if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
+    const outcome = await recordLabel(user, phone, labelTextFromPhoto(read.text), "texted_photo", read.confidence);
+    if (!outcome.ok) {
+      return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    }
+    // Read and accepted — stop looking, so a later unrelated picture from the same number is
+    // never pulled into this phone's record.
+    await db.deskPhoneSetupPhone.update({
+      where: { id: phone.id },
+      data: { labelPhotoFromE164: null, labelPhotoAskedAt: null },
+    });
+    return reply.send(outcome.body);
   });
 
   /**

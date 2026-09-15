@@ -8355,6 +8355,16 @@ model DeskPhoneSetupPhone {
   vendorCloudState     String?
   vendorCloudCheckedAt DateTime?
 
+  /// ⛔ "TEXT ME THE LABEL" (2026-09-14, Izzy: "You can also make the system prompt them which
+  /// number they're going to send it from, so the system knows what to look for"). The customer
+  /// says which phone they will text from; we store it normalised (+1XXXXXXXXXX) and then look
+  /// for ONE picture from exactly that number. ⛔ NOT a standing watch on the inbox: the chat is
+  /// read only when the wizard asks, and only for messages that arrived after `labelPhotoAskedAt`
+  /// — so an old photo in the thread can never be mistaken for this one, and nothing scans a
+  /// customer's texts in the background.
+  labelPhotoFromE164 String?
+  labelPhotoAskedAt  DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

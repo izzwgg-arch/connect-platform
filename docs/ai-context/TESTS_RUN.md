@@ -1577,6 +1577,8 @@ Final release PASS: portal f2460c4f, dry run d862f0de and real job 2e769464. Pro
 
 ## 2026-09-14 — Browser Companion (local, unfinished)
 
+Resume verification, 19:49 EDT: Coworker suite **43/43 PASS**; `node --test apps/desktop/scripts/browser-companion/security.test.mjs` **3/3 PASS** (one-use exact approval binding, extension schema, HMAC/challenge); DOM components **10/10 PASS** in isolated installed Chrome (new CSS-hidden redaction and changed form/link approval refusal). TS6.0.3 typecheck and build **PASS**, with no tsconfig override. Generated extension schema was refreshed. These are component/security checks, **not actual extension or natural-language agent acceptance**. Loopcom dashboard access recovered. Windows tool stopped Chrome Extensions selection due inability to verify the current URL for policy enforcement; no installation or further UI input occurred.
+
 - Fresh baseline: node --import tsx --test apps/desktop/src/coworker/*.test.ts — 39/39 PASS, elevated execution after restricted tsx userInfo ENOMEM.
 - After implementation: same suite — 43/43 PASS, including real loopback auth/replay/correlation/cancellation tests and mandatory browser approval profiles.
 - Desktop tsc --noEmit and emitted build with --ignoreDeprecations 5.0 — PASS (installed root TS 5.9; repository expects TS6).
@@ -1605,6 +1607,21 @@ Final release PASS: portal f2460c4f, dry run d862f0de and real job 2e769464. Pro
 - Portal `tsc -p apps/portal/tsconfig.json --noEmit` — **exit 0, clean.**
 - API `tsc -p apps/api/tsconfig.json --noEmit` — errors reported, **none in any file touched this round** (only `ops/`, `billing/`, `delivery/`, `mfa/`, `storageMaintenance/`, `apiRequestProfiler`); this matches the 84 pre-existing diagnostics recorded in the entry above. The only api file changed here is `deskPhoneSetup/deskPhoneRoutes.ts`, which reports nothing.
 - ⏳ **NOT PROVEN:** nobody has typed a serial on the extension screen in a browser, and no phone has been cleared through GDMS from one. Deployment recorded separately below/after.
+- **Deployed and container-verified** `6cae33e2`: `app-api-1` and `app-portal-1` both report `.build-commit` = `6cae33e2`, 0 restarts, running; `serialOnFile` present in the shipped portal chunks. ⛔ A first probe read `0` for the api change because it grepped a `/app/apps/api/dist/…` path that does not exist — the container runs TypeScript from `/app/apps/api/src/…`. Re-checked there: `laddersPasswordQuestion` ×2, `condition.locked && condition.passwordUnavailable` ×1, `serialOnFile` ×1. A grep reading 0 is not evidence of a failed deploy until the path is confirmed.
+
+## 2026-09-14 — Desk phones, parts 2 and 3: the label as a photo (uploaded or texted)
+
+- `apps/api` `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/*.test.ts` — **262 tests, 261 pass, 1 skipped, 0 fail**, including 11 new photo/text tests and a re-run of the route-order security guard against the three new run-scoped routes.
+- API `tsc -p apps/api/tsconfig.json --noEmit` — **no errors in any file touched** (`deskPhoneSetup`, `docOcr`, `chatAttachment`); the rest remain the documented pre-existing 84.
+- `apps/portal` `node --import tsx --test components/deskPhones/setupDriver.test.ts components/deskPhones/deskPhoneWizardSource.test.ts` — **44 pass, 0 fail**.
+- Portal `tsc --noEmit --incremental false` — clean apart from one error in `app/(platform)/voicemail/page.tsx`, which is another session's in-flight file, not this work. (`--incremental false` also avoids dirtying the tracked `tsconfig.tsbuildinfo`.)
+- **A test caught a real defect, not a typo:** `label-photo/expect` validated `fromNumber` with `z.string().min(7)`, so a short typo answered a bare `invalid_request` with no sentence and the browser fell back to its own vague wording. Fixed to `min(1)` with `normalizeUsCanadaToE164` as the single judge, which always returns the "enter the 10 digits" message.
+- **Harness changes:** the fake db's `matches()` now really compares `gte/gt/lte/lt` — it previously returned `true` for every unrecognised object filter, which would have passed the "a photo that predates the request is never used" test while the real query did the opposite; `makeApp` registers `@fastify/multipart` (as `server.ts` does) so the upload path is exercised for real.
+- ⛔ **The OCR engine is FAKED on purpose.** What these tests prove is our judgement of a picture (the confidence bar, the MAC-corroboration rule, the refusal wording), not Tesseract's accuracy. ⏳ **No real photograph has ever been OCR'd here**, and nobody has uploaded or texted one.
+- ⏳ Both doors are **inert in production until `CRM_OCR_ENABLED=true`** on the api — with it off they answer `photo_reading_off` and store nothing.
+
+### Browser Companion second resume — 2026-09-14 20:04 EDT
+Clean NSIS build PASS from isolated production dependencies (Electron 41.5.0). ASAR payload presence checks 5/5 PASS; exact candidate embedded icon PASS (7/7 frames). Installer SHA256: 29A6CD35CE9253FAAE424957356B602A31EE53A9A09003F7A32173AFCAC14E26. node --test apps/desktop/scripts/browser-companion/portal.test.mjs: 1/1 PASS, actual binary file hash and cross-origin rejection. Script syntax checks PASS. No installation/pairing or real-agent acceptance; Windows tool again refused chrome://extensions URL-policy verification.
 
 ## 2026-09-14 — Universal search
 

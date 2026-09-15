@@ -45,10 +45,29 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   drawing) only when it is false, and `supplySerial` re-reads the run so the box removes itself.
   ⛔ The LAN/password path is NOT deleted — it is the fallback, and is what a Grandstream with no
   cloud still uses (desktop rc.16 login shape unchanged).
-- ⏳ **NOT PROVEN (round 5):** no customer has typed a serial on the extension screen, and no phone
-  has been cleared through GDMS from one. Parts 2 and 3 of Izzy's flow — **upload a photo** of the
-  label, and **text the photo** to the business number (prompt for the sending number, read the chat
-  once, refuse a blurry picture on OCR confidence) — are **NOT BUILT**, and are inert until
-  `CRM_OCR_ENABLED=true` on the api, which is Izzy's call (engine + language host already verified).
+- ⛔⛔ **Round 6 (THIS ROUND): PARTS 2 AND 3 — the label as a PHOTO, uploaded or texted in.**
+  Three doors now reach ONE gate (`recordLabel` in `deviceCloudRoutes.ts`): typed/scanned, an
+  uploaded photo, and a photo texted to the business number. New routes: `POST …/label-photo`
+  (multipart, OCR'd in memory, **image never stored**), `POST …/label-photo/expect` (the customer
+  says which number they'll text FROM; we answer with the tenant's MMS-capable number), and
+  `POST …/label-photo/check` (**one** read of the chat, on demand — nothing polls).
+  New columns `labelPhotoFromE164` / `labelPhotoAskedAt` (migration `20260915000000`, additive).
+- ⛔⛔ **THE TWO JUDGEMENT RULES, both tested — do not "simplify" either:**
+  **(a)** a serial read off a picture we cannot vouch for is WORSE than no serial (it is stored, the
+  maker's cloud rejects it later, and the customer sees an error about a number they never typed),
+  so a photo is accepted only when OCR confidence ≥ 55 **or** the MAC on the sticker matches this
+  very phone; **(b)** a LOW-confidence MAC mismatch reports "unreadable", never "that is a different
+  device" — on a soft photo the address is the first thing OCR mangles, and that accusation is one
+  a person holding the right handset cannot argue with. A HIGH-confidence mismatch still refuses.
+- ⛔ Part 3 is bounded on every axis: the caller's own tenant, the one number they named, INBOUND
+  only, **after** `labelPhotoAskedAt`, newest first, one message, one image. An older picture
+  already in the thread can never answer this question (tested). An unreadable text keeps the
+  expectation open so a better photo works; only an accepted label clears it.
+- ⏳ **NOT PROVEN (rounds 5–6):** no customer has typed a serial, uploaded a photo or texted one;
+  no phone has been cleared through GDMS from a serial; **OCR has never run on a real photograph
+  here** (the suite fakes the engine deliberately — what is tested is our judgement, not Tesseract's).
+- ⛔⛔ **PARTS 2 AND 3 ARE INERT IN PRODUCTION until `CRM_OCR_ENABLED=true` on the api** — with it
+  off, both doors answer honestly ("type the serial instead") and store nothing. Flipping it is an
+  env change + api restart and is **Izzy's decision**; engine and language host already verified.
 - ⏳ **NOT PROVEN:** GDMS credential IS saved (round 2 Verify passed), but no real reset yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.
