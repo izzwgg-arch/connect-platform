@@ -37,9 +37,19 @@ Summary file: `docs/ai-context/claude-md-sections/2026-09-15-bvisible-missed-cha
 - **Email SENT**: `POST /admin/billing/invoices/:id/send` → 200
   `{sentTo:"ap@bvisible.us"}`; EmailJob row SENT 19:27:41 UTC; invoice
   `lastEmailStatus` SENT.
-- ⛔ **The card was NOT charged.** Manual invoices are excluded from the autopay
-  cycle — this $65 sits OPEN until paid via the pay link/customer page or charged
-  by hand (admin /pay). Izzy asked for invoice + send only.
+- ✅ **CHARGED AND PAID** — Izzy's follow-up made the intent explicit ("I asked
+  you to charge the card"), so the invoice was charged by hand (manual invoices
+  are outside autopay): `POST /admin/billing/invoices/:id/pay` with the tenant's
+  default method `cmq6myjgk00n9lo13j03jcdu6` (**Visa •5023**, the card autopay
+  used Sep 2) and `confirmLive:true`. **APPROVED**, Sola ref **11051029517**,
+  auth 03586G, tx `cmu34ab9e0e3bpa13pd2m76cb`, `billingChargeOperationId`
+  `cmu34ab8v0e39pa13u5wo36x4`. Verified: exactly ONE PaymentTransaction row for
+  the invoice; invoice PAID, amountPaid 6500, balance 0, paidAt 20:21:20 UTC;
+  receipt "Payment successful — CC-202609-00010" SENT 20:21:35 UTC. The charge
+  going through inside the paid Sep period is the `isAdditiveOneTimeInvoice`
+  carve-out (`74e7730a`) working as designed.
+  ⚠️ AVS came back "No Match" (NNN) but the issuer approved — same as this
+  card's normal autopay behaviour; noted only so nobody reads it as fraud.
 
 ## 3. The new feature: `metadata.billingRecurringCustomLines` (api `5573d567`)
 
@@ -99,7 +109,8 @@ billingTelecomFees rewrites Fixup Group's and RSBK's tax rows,
   Oct 2 – Nov 2 cycle invoice at **$205.00** in the T-3 window (~Sep 29) and
   autopay charges it **Oct 2**. Check `BillingInvoice` for period 2026-10-02 →
   2026-11-02 and its `PaymentTransaction`.
-- ⏳ CC-202609-00010 ($65) is OPEN and outside autopay — someone must collect it.
+- ~~CC-202609-00010 ($65) is OPEN~~ — **collected**: charged + PAID + receipted
+  (see §2).
 - ⛔ **Never ALSO bump B Visible's flat rate for Lester** — the $25 rides as a
   recurring custom line; doing both double-charges.
 - The two known pre-existing typecheck errors

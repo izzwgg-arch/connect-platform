@@ -24,9 +24,12 @@ Full handoff: `docs/ai-context/AGENT_HANDOFF_BVISIBLE_RECURRING_CUSTOM_LINES_202
   **excluded from autopay**.
 - **Emailed: lastEmailStatus SENT** to `ap@bvisible.us` 19:27:41 UTC
   ("Invoice CC-202609-00010 — $65.00 due").
-- ⛔ **NOT charged to the card** — Izzy asked invoice + send, not charge. Autopay
-  will NEVER pick up a manual invoice; if he wants it on the saved card it must be
-  charged by hand (admin /pay).
+- ✅ **CHARGED AND PAID** (Izzy's follow-up: "I asked you to charge the card"):
+  $65.00 APPROVED on the default **Visa •5023** via `POST
+  /admin/billing/invoices/:id/pay` (`confirmLive:true`), Sola ref **11051029517**,
+  auth 03586G, tx `cmu34ab9e0e3bpa13pd2m76cb`, paidAt 20:21:20 UTC. Exactly ONE
+  transaction row; invoice PAID, balance 0. Receipt "Payment successful —
+  CC-202609-00010" **SENT** to ap@bvisible.us 20:21:35 UTC.
 
 ## Recurring going forward — NEW ENGINE FEATURE, DEPLOYED + LIVE-PROVEN
 - The engine had NO named recurring add-on mechanism (only flat rate / virtual
