@@ -407,6 +407,40 @@ Three separate issues. Only ONE needs a code/binary change:
 >
 > Happy to hop on a call if that's easier. Thank you.
 
+### ✅ 2026-09-15 (second pass, Izzy's go): API-SIDE FIXES DONE, BUILD HELD ON THE GOOGLE-AUTH MOCKUP DECISION
+- ✅ **Storefront (2.1) FIXED AT THE SOURCE**: `POST /v2/appAvailabilities` 201 —
+  USA available, all other 174 territories false, `availableInNewTerritories:
+  false`; verified by fresh read-back (`AVAILABLE_FOR_SALE_UNRELEASED_APP`).
+  ⛔ The v2 create DEMANDS an entry for EVERY territory (175) with temp-id
+  `${XXX}` + included `territories` relationships — a USA-only payload 409s
+  listing the missing ones. Script: `/root/.appstoreconnect/asc-set-availability2.mjs`.
+  ⛔ "Salable storefront" = the COUNTRY App Store, not prices — a free app
+  qualifies; no price display needed; billing stays on loopcom.net.
+- ✅ **Review notes hardened**: appended BUSINESS MODEL (all six 2.1(b) answers),
+  PERMISSIONS (5.1.1 fix note), STOREFRONT (US-only) to appStoreReviewDetail
+  `165cb89c…` (PATCH 200, read back, 2229 chars). The resubmission now answers
+  2.1(b) even before any Resolution Center reply.
+- ✅ **Demo account proven live BY THE REVIEWER**: `loopcom.review@example.com`
+  ACTIVE, `lastLoginAt` **2026-09-15 03:51** — the Apple reviewer signed in with
+  it during this very review. No completeness risk there.
+- ✅ **Android parity verified**: no `apps/mobile` commits exist in origin/main
+  or feat/ai-agent that aren't in HEAD; the Sep-6 fleet APK's commits are all in
+  this branch → iOS build 60 from HEAD is a strict superset of the Android build.
+- ✅ **supportsTablet: false** (iPad reviews run iPhone-compatibility mode) and
+  **no third-party login in the mobile app today** (no 4.8 exposure in build 60
+  as-is).
+- ⏳ **BUILD 60 HELD on Izzy's mockup decision.** Izzy asked for Google Auth in
+  the build AND a mockup first. Mockup published:
+  **https://claude.ai/artifact/6kc9wk6iD52HxwoadLuauW** — faithful shipped
+  screen + "Continue with Apple" + "Continue with Google" (login-only), with the
+  ⛔ Guideline 4.8 warning: Google login REQUIRES Sign in with Apple alongside
+  it, so Google-only is an auto-rejection. Option A = build now with just the
+  fixes, auth in 1.1 (fastest approval). Option B = wire Google+Apple first
+  (app + server token exchange + invite-only matching), then build.
+- EAS is authenticated on Izzy's Windows machine too (`izz8457`, verified via
+  `npx eas-cli whoami` in apps/mobile) — the build can be kicked from either
+  machine once he decides.
+
 ### ⛔ REMAINING HUMAN STEPS TO RESUBMIT (all need Izzy)
 1. **Build 60.** Build the iOS binary from commit `db20a0a8` (recipe in
    `ios-testflight-pipeline-state` memory / this doc: loopcom, checkout the

@@ -22,6 +22,17 @@
   `NODE_OPTIONS=--dns-result-order=ipv4first`. The API does NOT expose the
   rejection reasons — they were read from Apple's ASC App Review message, which
   Izzy opened; don't waste time probing the API for them.)
+- ✅ **2026-09-15 second pass (Izzy's go): storefront + notes FIXED via API,
+  build HELD on his Google-Auth call.** Availability SET (USA only, 201 +
+  read-back; ⛔ the v2 create demands ALL 175 territories or it 409s); review
+  notes now carry the six 2.1(b) business-model answers; demo account proven
+  live by the REVIEWER's own sign-in (lastLoginAt 09-15 03:51); Android parity
+  verified (no mobile commits outside HEAD → build 60 ⊇ the Sep-6 fleet APK).
+  Izzy asked for Google Auth in build 60 + a mockup first → mockup published
+  (https://claude.ai/artifact/6kc9wk6iD52HxwoadLuauW) showing Google + Apple
+  buttons, ⛔ because Guideline 4.8 makes Sign in with Apple MANDATORY next to
+  Google. Build 60 waits on his Option A (build now, auth in 1.1) vs Option B
+  (wire auth first). EAS auth works from Izzy's Windows machine too (izz8457).
 
 
 - ⛔⛔ **2026-09-09 STATUS: STILL `WAITING_FOR_REVIEW` AFTER 10.5 DAYS, AND APPLE HAS BEEN SILENT ON
