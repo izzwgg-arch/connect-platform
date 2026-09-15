@@ -757,6 +757,30 @@ proof, and it is Izzy's to trigger (his machine, his phone). Until then: mechani
 end-to-end hands-off run is not yet witnessed. ⛔ HT814 has no clean template (its stock base uses a
 different placeholder — no sip_domain); every other Grandstream model is covered.
 
+## 10p. Round 17 (2026-09-15) — the deployed-code pass: every step correct, but the phone is OFFLINE in GDMS so nothing lands
+
+Took another pass with the DEPLOYED code — imported the SHIPPED GdmsClient from
+/app/apps/api/src/deskPhoneSetup/gdmsClient.ts inside app-api-1 (via `npx tsx` from /app/apps/api),
+not probe re-implementations — and ran the wizard's send sequence on C0:74:AD:8C:60:5F:
+findDevice → found (model GXP2170); render → P47=209.145.60.79, 0×10.8.0.1, gs_provision=true;
+pushDeviceConfigXml → retCode 0; createTask reboot → task 15538619. Every step executed correctly.
+
+⛔⛔ **BUT the phone is OFFLINE in GDMS (`device/list` status:0).** It pings on the LAN and serves
+HTTP 200 (factory-clean, on the network) but has NOT re-attached to the GDMS cloud since its factory
+reset. So the push and reboot QUEUE against a phone that is not connected — retCode 0 on the push,
+reboot task stuck at status 2 (never completes) — and a 13-minute registration watch saw 0 T21_101
+desk registrations. Only the app (T21_101_1) is registered.
+
+⛔ **THE LESSON: retCode 0 ≠ delivered. GDMS delivery requires the phone ONLINE in GDMS.** A phone
+phones home to fm.grandstream.com/gs on boot with internet; until it does, the cloud send silently
+waits. For a real out-of-box customer phone that check-in is the normal path, but it is a genuine
+link in the chain and has NOT been witnessed completing once. Recovery for Izzy's phone: power-cycle
+it so it re-checks into GDMS, then the queued config+reboot apply and it should register (and STAY,
+because phoneprov now serves the same correct config). Memory: [[grandstream-zero-touch-needs-gdms-redirect-not-lan]].
+
+Also this round: landed the TESTS_RUN entry (`d36d829a`) and a stranded local BDC-filing commit
+(`fc31c28d`); realigned the local branch to origin (all desk-phone code was already pushed; kept
+origin's newer handoff copy). No code change this round — it was a verification pass.
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
