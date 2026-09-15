@@ -1017,6 +1017,11 @@ model Tenant {
   /// they have personally verified their mobile number.
   loopcomDirectEnabled            Boolean                           @default(true)
   loopcomDirectIdentities         LoopcomDirectIdentity[]
+  mobileLines                     MobileLine[]
+  mobileSims                      MobileSim[]
+  mobileSimOrders                 MobileSimOrder[]
+  mobilePortRequests              MobilePortRequest[]
+  mobileUsageRecords              MobileUsageRecord[]
 }
 
 model User {
@@ -8984,4 +8989,199 @@ model SupportAgentNotice {
   updatedAt    DateTime  @updatedAt
 
   @@index([escalationId, createdAt])
+}
+
+// --- LoopCom Mobile (2026-09-15) ---------------------------------------------
+// Branded mobile connectivity on Telnyx wireless (eSIM/SIM, data, SMS, and --
+// once Telnyx's Mobile Voice beta opens -- cellular voice). LoopCom owns the
+// customer; Telnyx is the underlying network. Every customer-facing object is
+// tenant-scoped; every Telnyx id is preserved for reconciliation. See
+// docs/ai-context/AGENT_HANDOFF_LOOPCOM_MOBILE_2026-09-15.md.
+
+/// A LoopCom-owned mobile plan. Platform-wide (admin-defined) -- the customer
+/// never sees Telnyx wholesale pricing; `telnyxCostCentsEstimate` exists so
+/// the console can show margin, never the customer.
+model MobilePlan {
+  id                      String       @id @default(cuid())
+  name                    String
+  description             String?
+  active                  Boolean      @default(true)
+  monthlyPriceCents       Int
+  activationFeeCents      Int          @default(0)
+  simFeeCents             Int          @default(0)
+  esimFeeCents            Int          @default(0)
+  /// null = no data on this plan.
+  includedDataMb          Int?
+  includedVoiceMinutes    Int?
+  includedSms             Int?
+  /// "block" (SIM group data limit stops service) | "charge" (bill overage per GB)
+  dataOverageBehavior     String       @default("block")
+  dataOverageCentsPerGb   Int          @default(0)
+  roamingEnabled          Boolean      @default(false)
+  telnyxCostCentsEstimate Int          @default(0)
+  sortOrder               Int          @default(0)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  lines                   MobileLine[]
+}
+
+/// One customer mobile line: the durable identity a phone number + SIM + plan
+/// hang off. Lifecycle: draft -> pending_activation -> active <-> suspended ->
+/// terminated (plus "lost" as a suspended flavor that preserves the number).
+model MobileLine {
+  id                        String              @id @default(cuid())
+  tenantId                  String
+  tenant                    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  label                     String
+  status                    String              @default("draft")
+  planId                    String?
+  plan                      MobilePlan?         @relation(fields: [planId], references: [id], onDelete: SetNull)
+  /// E.164. Null until a number is assigned.
+  phoneNumber               String?
+  /// Telnyx /phone_numbers id (a DID bought on the account).
+  telnyxPhoneNumberId       String?
+  /// Telnyx /mobile_phone_numbers id (the Mobile Voice surface), when it exists.
+  telnyxMobilePhoneNumberId String?
+  simId                     String?             @unique
+  sim                       MobileSim?          @relation(fields: [simId], references: [id], onDelete: SetNull)
+  activatedAt               DateTime?
+  suspendedAt               DateTime?
+  suspendReason             String?
+  terminatedAt              DateTime?
+  /// Partial-failure recovery: a provider call succeeded but a later step
+  /// failed. The reconcile job picks these up; nothing is retried blindly.
+  needsReconcile            Boolean             @default(false)
+  reconcileReason           String?
+  createdByUserId           String?
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+  usage                     MobileUsageRecord[]
+  portRequests              MobilePortRequest[]
+
+  @@index([tenantId, status])
+  @@index([phoneNumber])
+}
+
+/// A Telnyx SIM/eSIM mirrored locally. `telnyxSimId` is the reconciliation
+/// anchor; `raw` keeps the last provider snapshot. The eSIM activation code
+/// (the QR contents) is stored ENCRYPTED -- it is the key to installing the
+/// line's identity on a device.
+model MobileSim {
+  id                     String              @id @default(cuid())
+  tenantId               String?
+  tenant                 Tenant?             @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  telnyxSimId            String              @unique
+  iccid                  String?
+  /// "esim" | "physical"
+  type                   String
+  /// Telnyx status.value: registering|ready|enabled|disabled|standby|deleted...
+  status                 String?
+  esimInstallationStatus String?
+  eid                    String?
+  msisdn                 String?
+  voiceEnabled           Boolean             @default(false)
+  simCardGroupId         String?
+  dataLimitMb            Int?
+  /// AES-256-GCM envelope (CREDENTIALS_MASTER_KEY) around the eSIM activation
+  /// QR contents. Never logged; returned only to the line's own tenant.
+  activationCodeEnc      String?
+  lastSyncAt             DateTime?
+  replacedBySimId        String?
+  raw                    Json?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  line                   MobileLine?
+  usage                  MobileUsageRecord[]
+
+  @@index([tenantId, status])
+  @@index([iccid])
+}
+
+/// A physical-SIM order placed with Telnyx (inventory + shipping).
+model MobileSimOrder {
+  id              String   @id @default(cuid())
+  tenantId        String?
+  tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  telnyxOrderId   String   @unique
+  quantity        Int
+  status          String?
+  costAmount      String?
+  costCurrency    String?
+  trackingUrl     String?
+  raw             Json?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// A mobile number port into LoopCom Mobile. Mirrors the Telnyx porting order
+/// where one exists; "draft" rows are LoopCom-side only -- nothing is filed
+/// with Telnyx until an explicit submit (an owner-gated act).
+model MobilePortRequest {
+  id                   String      @id @default(cuid())
+  tenantId             String
+  tenant               Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lineId               String?
+  line                 MobileLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  phoneNumber          String
+  /// draft|submitted|pending|foc|action_required|completed|rejected|cancelled
+  status               String      @default("draft")
+  telnyxPortingOrderId String?     @unique
+  carrier              String?
+  focDate              DateTime?
+  detail               Json?
+  createdByUserId      String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([tenantId, status])
+}
+
+/// Normalized usage, stored locally (never billed straight off a live API
+/// response). kind=data -> quantity is MB; voice -> seconds; sms -> messages.
+/// providerRecordId dedupes detail-record ingestion (unique per kind).
+model MobileUsageRecord {
+  id               String      @id @default(cuid())
+  tenantId         String?
+  tenant           Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  lineId           String?
+  line             MobileLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  simId            String?
+  sim              MobileSim?  @relation(fields: [simId], references: [id], onDelete: SetNull)
+  telnyxSimId      String?
+  recordedAt       DateTime
+  /// "data" | "voice" | "sms"
+  kind             String
+  quantity         Float
+  costCents        Int         @default(0)
+  /// "detail_record" | "sim_snapshot"
+  source           String      @default("detail_record")
+  providerRecordId String?
+  raw              Json?
+  createdAt        DateTime    @default(now())
+
+  @@unique([kind, providerRecordId])
+  @@index([tenantId, recordedAt])
+  @@index([telnyxSimId, recordedAt])
+}
+
+/// Every Telnyx mobile webhook, verbatim, before any processing -- the
+/// idempotency ledger (providerEventId unique) and the searchable event log.
+model MobileWebhookEvent {
+  id              String    @id @default(cuid())
+  providerEventId String?   @unique
+  eventType       String
+  occurredAt      DateTime?
+  payload         Json
+  /// received|processed|failed|duplicate|dead_letter
+  status          String    @default("received")
+  error           String?
+  attempts        Int       @default(0)
+  tenantId        String?
+  telnyxSimId     String?
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+
+  @@index([eventType, receivedAt])
+  @@index([status, receivedAt])
 }

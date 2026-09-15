@@ -38,6 +38,7 @@ import {
   Lock,
   Mail,
   Map,
+  Smartphone,
   ListOrdered,
   Megaphone,
   MessageCircle,
@@ -107,6 +108,11 @@ export const navItems: NavItem[] = [
   // are the only two levers. The keys live in @connect/shared SIDEBAR_ITEMS.
   { id: "workspace.direct", href: "/direct", label: "Direct", icon: "DR", lucide: AtSign, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_direct" },
   { id: "workspace.meetings", href: "/meetings", label: "Meetings", icon: "VC", lucide: Video, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_meetings" },
+  // LoopCom Mobile (2026-09-15) — the customer mobile-service page (eSIM
+  // install, usage, suspend/resume, port drafts). Own key, in NO default
+  // bucket: like Direct/Meetings, granting the key IS the launch. No force
+  // line — a granted key really shows the page (the honesty invariant).
+  { id: "workspace.mobile", href: "/mobile", label: "LoopCom Mobile", icon: "LM", lucide: Smartphone, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_mobile" },
   // Remote Desktop (Izzy, 2026-09-02): a customer's own computers, and a
   // colleague's computer by Connect ID + password. Right after Meetings, per the
   // approved mockups. ⛔ The permission is the SAME action key the page and every
@@ -186,6 +192,11 @@ export const navItems: NavItem[] = [
   // it shows every company's escalations, so it shares an owner-held key and
   // there is deliberately no grantable one yet.
   { id: "admin.support", href: "/admin/support", label: "Support Desk", icon: "SD", lucide: LifeBuoy, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_support" },
+  // LoopCom Mobile provider console (2026-09-15) — plans, fleet, eSIM
+  // provisioning. Forced SUPER_ADMIN-only in isNavItemVisibleForUser (the
+  // provisioning routes spend the platform's own money), own key, listed in
+  // OWNER_ONLY_FIXED_NAV_ITEMS so the role editor is honest.
+  { id: "admin.mobile_console", href: "/admin/mobile-console", label: "Mobile Console", icon: "MC", lucide: Smartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_mobile_console" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
@@ -337,6 +348,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.pbx_routing",
   "admin.pbx_teams",
   "admin.support",
+  "admin.mobile_console",
   "admin.compliance",
   "admin.billing",
   // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every
@@ -400,5 +412,9 @@ export function isNavItemVisibleForUser(
   // The compliance calendar is the platform's own regulatory ledger — owner
   // only, same pattern as the console items above.
   if (item.id === "admin.compliance" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The Mobile Console's provisioning routes buy eSIMs/SIMs on the platform's
+  // own Telnyx account; owner only. (workspace.mobile — the customer page —
+  // has NO force line on purpose: granting its key is the launch.)
+  if (item.id === "admin.mobile_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

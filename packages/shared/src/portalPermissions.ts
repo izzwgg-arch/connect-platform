@@ -54,6 +54,11 @@ export const SIDEBAR_ITEMS = [
   // The desktop installer link. Granted to END_USER (and so TENANT_ADMIN) in
   // END_USER_ACTIONS below, so no existing customer loses the download link.
   { id: "workspace.install", section: "workspace", label: "Install", href: "/desktop/Connect-Setup-latest.exe", permission: "can_view_workspace_install" },
+  // LoopCom Mobile (2026-09-15) — the customer mobile-service page (eSIM
+  // install, usage, suspend/resume, port drafts). In NO default bucket on
+  // purpose: like Direct/Meetings, the key's absence IS the launch gate —
+  // granting it per tenant/role is the launch.
+  { id: "workspace.mobile", section: "workspace", label: "LoopCom Mobile", href: "/mobile", permission: "can_view_workspace_mobile" },
 
   // Store (supermarket mode): one key PER PAGE. can_view_supermarket_orders
   // stays as the DATA capability every Store page's api calls require (the
@@ -166,6 +171,10 @@ export const SIDEBAR_ITEMS = [
   // rows on both permission editors stop moving together; none is in any
   // default bucket, and the editors render them Locked.
   { id: "admin.support", section: "admin", label: "Support Desk", href: "/admin/support", permission: "can_view_admin_support" },
+  // LoopCom Mobile provider console (2026-09-15) — plans, fleet, provisioning
+  // (the only place an eSIM purchase can be triggered). SUPER_ADMIN-forced in
+  // navConfig + requireSuperAdmin at the api; it spends the platform's money.
+  { id: "admin.mobile_console", section: "admin", label: "Mobile Console", href: "/admin/mobile-console", permission: "can_view_admin_mobile_console" },
   { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
   { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
   { id: "admin.pbx_routing", section: "admin", label: "Trunks & Routing", href: "/admin/pbx-console?mod=routing", permission: "can_view_admin_pbx_routing" },

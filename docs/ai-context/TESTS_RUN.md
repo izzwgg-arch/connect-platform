@@ -2,6 +2,33 @@
 
 Newest entries first.
 
+## LoopCom Mobile built on Telnyx wireless (2026-09-15)
+
+- api `node --test "src/loopcomMobile/*.test.ts"` → **17/17 pass** (money math incl. twice-run
+  recount identity; fake-fetch client — ONE request per eSIM purchase, a timeout is NOT re-sent;
+  REAL Ed25519 webhook verification — tampered body / stale timestamp / wrong key all refuse;
+  JWT-bypass shapes; source guards: server wiring + BOTH permission-prefix rules, requireOwner on
+  every console route, tenant-from-JWT only, fail-closed webhook + rawBody, no-retry/no-log-leak,
+  nav+catalog+toggle contract, package.json glob). ⛔ Guard lesson: stripComments EATS server.ts
+  regions (a `/*` inside a string literal) — the server guard matches RAW source.
+- api combined `src/telnyx + src/signalwire + src/loopcomMobile` → **74/74 pass**.
+- portal `navigation/loopcomMobileNav.test.ts` (registered BY NAME in package.json) → **5/5**;
+  nav suites incl. `permissionToggleCoverage` with the two new rows → **37/37**.
+- portal FULL suite → **641 tests, 637 pass, 4 fail — the SAME 4 pre-existing failures** the
+  2026-09-15 Telnyx entry recorded (campaigns scroll trap, four-questions screen, standing
+  provisioning listener, checkOfferCompatibility), all in files another session has in flight;
+  this task's +5 tests all pass (632/636 → 637/641).
+- portal tsc → **0 errors**. api tsc → **87 = 85 pre-existing ambient + 2 NEW of the same ambient
+  class** (`registerShutdownTimer(setTimeout(...))` number-vs-Timeout, identical to every existing
+  sweep registration); **0 errors in `src/loopcomMobile/*`**.
+- prisma: schema validates; migration `20260915180000_loopcom_mobile` generated via
+  `prisma migrate diff` from HEAD's schema — **purely additive** (7 CREATE TABLE, 0 DROP/ALTER).
+- LIVE (read-only, from inside app-api-1 with the AgentSecret key): wireless capability probe —
+  every wireless endpoint 200 (0 SIMs), `/mobile_phone_numbers` 200, balance $8.46,
+  publicKeySet:false. ⛔ Nothing was purchased, created, or changed on the Telnyx account.
+- Deploy: recorded below in this entry's follow-up once run (api needs the migration; portal ships
+  the two pages). ⏳ NOT PROVEN: no real eSIM installed, no live usage row, no webhook received.
+
 ## Desk-phone wizard: password dead-end → zero-touch escape (2026-09-15, `7931e768`)
 
 - portal tsc → **0 errors** (DeskPhoneWizard, ManagedPhonePanel, managedPhoneStatus clean).

@@ -395,6 +395,9 @@ import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
+import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
+import { registerMobileWebhookRoutes } from "./loopcomMobile/mobileWebhookRoutes";
+import { runMobileStateReconcileCycle, runMobileUsageSyncCycle, runMobileAnomalySweep } from "./loopcomMobile/mobileSyncJobs";
 import {
   inboundSmsWebhookUrl as signalWireInboundSmsWebhookUrl,
   resolvePublicApiBase as resolveSignalWirePublicApiBase,
@@ -3024,6 +3027,13 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // Wizard carrier switch (2026-09-15) — owner only; every handler ALSO calls
   // requireSuperAdmin. Rule exists so the prefix is inside the global gate.
   { prefix: "/admin/carrier-switch", permission: "can_manage_global_settings" },
+  // LoopCom Mobile (2026-09-15). The tenant surface keys on the sidebar
+  // page's own permission; the console is owner-only (handlers ALSO call
+  // requireSuperAdmin). Both rules exist so neither prefix sits outside the
+  // global gate. ⛔ /mobile and /admin/mobile (no -service) are the phone
+  // app's device routes — do not add rules for those without tracing them.
+  { prefix: "/mobile-service", permission: "can_view_workspace_mobile" },
+  { prefix: "/admin/mobile-service", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
   // class, where a missing rule meant no permission check ran at all).
@@ -24199,6 +24209,21 @@ registerProviderSwitchRoutes({
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),
 });
 
+// ── LoopCom Mobile (2026-09-15) ────────────────────────────────────────────
+// Branded mobile connectivity on Telnyx wireless (eSIM/SIM + data; voice
+// stays capability-gated while Telnyx's Mobile Voice is beta). Tenant routes
+// live on /mobile-service (⛔ NOT /mobile — that prefix belongs to the phone
+// app's device routes); the provider console on /admin/mobile-service is
+// owner-only and holds the only money-spending handlers, each confirm-gated
+// and never retried. Public webhook door: /webhooks/telnyx/mobile,
+// Ed25519-verified, fail-closed.
+registerLoopcomMobileRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+registerMobileWebhookRoutes({ app, db });
+
 // ── Carrier migration (2026-09-10) ─────────────────────────────────────────
 // Moving all 52 live numbers off VoIP.ms and onto SignalWire, a few at a time.
 // Incoming calls move by themselves (Main's default-trunk routes on the
@@ -39992,6 +40017,23 @@ const receiptReconciliationTimer = registerShutdownTimer(
   setInterval(runReceiptReconciliationSweep, 10 * 60_000),
 );
 receiptReconciliationTimer.unref();
+
+// ── LoopCom Mobile sweeps (2026-09-15) ──────────────────────────────────────
+// Idempotent by construction (usage rows dedupe on provider record id, SIM
+// mirroring is an upsert). With zero mobile rows and/or no Telnyx credential
+// each cycle is one cheap DB count and exits. Interval env-tunable; 0 disables.
+const mobileUsageSyncMs = Number(process.env.MOBILE_USAGE_SYNC_INTERVAL_MS || 15 * 60_000);
+if (mobileUsageSyncMs > 0) {
+  const runMobileSweeps = () => {
+    runMobileUsageSyncCycle(db)
+      .then(() => runMobileStateReconcileCycle(db))
+      .then(() => runMobileAnomalySweep(db))
+      .catch((e) => app.log.error({ err: e }, "loopcom mobile sweep failed"));
+  };
+  registerShutdownTimer(setTimeout(runMobileSweeps, 120_000));
+  const mobileSweepTimer = registerShutdownTimer(setInterval(runMobileSweeps, mobileUsageSyncMs));
+  mobileSweepTimer.unref();
+}
 
 const invoiceOverdueTimer = registerShutdownTimer(
   setInterval(() => {

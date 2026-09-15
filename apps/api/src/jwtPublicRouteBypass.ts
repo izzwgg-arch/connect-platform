@@ -244,10 +244,16 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // the registry API (signalwire/signalWireTenDlc.ts), and the handler
       // throttles itself, so no signature is required for safety.
       "/webhooks/signalwire/registry",
+      // LoopCom Mobile (2026-09-15): Telnyx wireless webhooks. The handler
+      // verifies the account's Ed25519 signature over timestamp|rawBody and
+      // FAILS CLOSED when no public key is stored
+      // (loopcomMobile/mobileWebhookRoutes.ts).
+      "/webhooks/telnyx/mobile",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
     || path.endsWith("/auth/google/start") || path.endsWith("/auth/google/callback") || path.endsWith("/auth/google/complete")
     || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
     || path.endsWith("/webhooks/signalwire/registry")
+    || path.endsWith("/webhooks/telnyx/mobile")
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")
