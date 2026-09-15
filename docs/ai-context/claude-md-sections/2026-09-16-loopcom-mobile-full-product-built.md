@@ -101,3 +101,14 @@ request variants): `docs/mockups/loopcom-mobile/plans-and-lines.html`,
 artifact https://claude.ai/artifact/EpAZXqGsGaQVPnhfk5XvXC. ⛔ Nothing built.
 New back-end work it needs (incl. a Telnyx address client for SIM orders) is
 listed in the UI handoff §8.
+
+## Gap pass — 2026-09-15 evening (mockups only, awaiting Izzy)
+
+Izzy re-sent the original brief. He chose a live review plus a gap list plus mockups for the gaps only. Live, every page is an empty state (0 lines), and the owner side is one chip-tab page. ⚠️ Telnyx balance is $26.32, under the $50 floor. Verified defects:
+- 9 console settings are saved but never enforced.
+- The invoice uses a CSS "L" placeholder and `window.print()`, with no pay button.
+- Line service pills are hard-coded.
+- "Add a line" goes to Users.
+- The assign-line API has no UI.
+
+Mockups: `docs/mockups/loopcom-mobile/gap-pass.html` (https://claude.ai/artifact/1i8SFgTZ98WXdLe4NXrf9n). Details in UI handoff §9. ⛔ Nothing built.

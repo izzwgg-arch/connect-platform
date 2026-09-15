@@ -277,3 +277,24 @@ ADDRESS client (SIM orders require `address_id`; none exists in apps/api);
 eSIM stock (buy unassigned, attach later); customer add-a-line + request
 routes honoring self-serve/fraud caps/line limit; customer eSIM replacement +
 SIM card order.
+
+## §9 — 2026-09-15 evening: Izzy re-sent the original "too sparse" brief; live look + code gap audit (NO build)
+
+- ⛔ Izzy's prompt was the pre-mockup brief again ("do the mockups first"). The approved build already shipped (`5232cba2`). Asked him, and he chose **"review live, list gaps, mockups for the gaps only, nothing built until approved"**.
+- **Live look** (real Chrome, `app.loopcom.net`, signed in as the Support user):
+  - Every page loads.
+  - With 0 lines, 0 plans and 0 subscribers, every page is an empty state. That is the main cause of "sparse".
+  - The owner side is ONE page with 13 chip tabs, not a sidebar section, so views can't be linked.
+  - **Real alert on the owner page: Telnyx balance $26.32, below the $50 floor. eSIM purchases will fail until it is topped up.**
+- **Code audit, verified findings:**
+  - (1) Console settings are saved but **never enforced**: `selfServeLines`, `topUpsEnabled`, `maxLinesPerTenant`, `maxEsimReplacementsPer30`, `codeReadAlertPerHour`, `defaultPlanId`, `spnName`, `deadLetterAlert`, `anomalyMultiplier` appear only as defaults and zod validation (`mobileProductRoutes.ts:132-134, 853-859`). These are toggles that do nothing.
+  - (2) The mobile invoice draws a gradient "L" box instead of the wordmark (`mobile/billing/[id]/page.tsx:54`). "PDF" is `window.print()` (`:47`). There is no pay button and no Sola code in `loopcomMobile/*`.
+  - (3) Line detail's Data/Voice/SMS pills are hard-coded, not driven by capability.
+  - (4) The customer "Add a line" quick action goes to /mobile/users, which has no add-line flow.
+  - (5) Subscriber assign/unassign-line API exists, but no UI calls it.
+  - (6) Plans: "Most popular" is just the second card, and the eSIM fee has no admin input.
+  - (7) No IMEI field, no replace-eSIM route, no document upload for porting.
+  - (8) Compliance "Carrier beta" and "Not registered" KPIs are hard-coded strings.
+  - (9) Customer Support reads lines from the dashboard endpoint, so a user without the Dashboard grant sees "No lines".
+  - (10) The admin usage view never draws the `daily` series the API returns.
+- **Gap mockups:** `docs/mockups/loopcom-mobile/gap-pass.html` (artifact https://claude.ai/artifact/1i8SFgTZ98WXdLe4NXrf9n), screens A–O (operator sidebar section, enriched overview/dashboard, subscriber detail, line detail and list, device manager and replace-eSIM, a real invoice with pay/autopay, reconciliation, porting docs, usage filters, support, honest settings showing enforced vs not, live compliance/carrier, state gallery). ⏳ Awaiting Izzy. ⛔ NOTHING BUILT.
