@@ -136,6 +136,15 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // (the browser has no Bearer token). Only /track/* — dispatcher tracking-link mint/revoke
   // lives under /delivery/* and remains JWT-gated.
   const isPublicTrackingPath = pathWithoutApiPrefix.startsWith("/track/");
+  // Public desk-phone SCAN link (2026-09-16): the customer opens /phone-setup/<token>
+  // on their own phone and scans the barcode sticker under each handset. The token is
+  // the whole credential — validated in-handler against DeskPhoneScanToken (stored
+  // hashed, scoped to one run, expirable and revocable), because the customer's browser
+  // carries no Bearer token. Same shape as /track/ and the pay links.
+  // ⛔ ONLY /phone-setup/* is open. Minting and revoking a link live under
+  // /desk-phones/runs/* and stay JWT-gated behind can_setup_desk_phones.
+  // ⛔ Anchored to the path start, never a substring match.
+  const isPublicPhoneSetupPath = pathWithoutApiPrefix.startsWith("/phone-setup/");
   // CRM Email OAuth callback: Google redirects the user's browser here with code+state.
   // The browser cannot carry our Bearer token. Auth is performed inside the handler via
   // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
@@ -192,6 +201,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isOnboardingPublicPath
     || isPublicCrmFormPath
     || isPublicTrackingPath
+    || isPublicPhoneSetupPath
     || isCrmEmailOauthCallbackPath
     || isInternalSupermarketPayIvrPath
     || isMarketingUnsubscribePath

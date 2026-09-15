@@ -163,6 +163,26 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   const [subnet, setSubnet] = useState<string | null>(null);
   const [extensions, setExtensions] = useState<Array<{ id: string; extNumber: string; displayName: string }>>([]);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The customer's scan link for THIS run (Izzy, 2026-09-16: "when a customer puts in
+   * their phones, they're going to get a link"). ⛔ The api returns the URL exactly
+   * once — it stores only a hash — so it is held here until the screen is closed and
+   * never re-read. Minting again revokes the previous link.
+   * ⛔ Declared AFTER runId and error: it reads both, and a hook placed above them
+   * references a block-scoped variable before it exists (caught by tsc, 2026-09-16).
+   */
+  const [scanLink, setScanLink] = useState<string | null>(null);
+  const [scanLinkCopied, setScanLinkCopied] = useState(false);
+  const makeScanLink = useCallback(async () => {
+    if (!runId) return;
+    setError(null);
+    try {
+      const out = await apiPost<{ url: string }>(`/desk-phones/runs/${runId}/scan-link`, {});
+      setScanLink(out.url); setScanLinkCopied(false);
+    } catch {
+      setError("We could not make the customer's link just now. Try again.");
+    }
+  }, [runId]);
   const [busy, setBusy] = useState(false);
   const [knowsPhone, setKnowsPhone] = useState<"yes" | "no" | null>(null);
   const [phoneBrand, setPhoneBrand] = useState("");
@@ -1521,6 +1541,33 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                   </div>
                 ))}
               </div>
+            </div>
+            {/* The customer's own scan link: they open it on their phone and scan the
+                sticker under each handset. Offered here because this is the moment the
+                order is settled — and it is the honest answer for any phone this run
+                could not finish by itself. */}
+            <div className="dps-wz-body" style={{ paddingTop: 0 }}>
+              {!scanLink ? (
+                <button className="dps-btn" onClick={() => void makeScanLink()}>
+                  Send the customer a link to scan their phones
+                </button>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <span className="dps-hint">
+                    Text or email this to the customer. It opens the camera on their phone and expires in 30 days.
+                  </span>
+                  <input className="dps-managed-input" readOnly value={scanLink} onFocus={(e) => e.currentTarget.select()} />
+                  <button
+                    className="dps-btn"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(scanLink).then(
+                        () => setScanLinkCopied(true),
+                        () => setScanLinkCopied(false),
+                      );
+                    }}
+                  >{scanLinkCopied ? "Copied" : "Copy the link"}</button>
+                </div>
+              )}
             </div>
             <div className="dps-wz-foot">
               <span className="dps-hint">Everything is saved.</span>

@@ -143,3 +143,20 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   turns on CRM image-document OCR (Phase 5B) platform-wide; that is the round-6 one-engine design.
 - ⏳ **NOT PROVEN:** GDMS credential IS saved (round 2 Verify passed), but no real reset yet (Izzy enters it on the card → Verify → Look up `C0:74:AD:8C:60:5F`);
   GDMS field names unverified; no real phone has gone through reset-first Prepare Device; neither screen seen in a browser.
+- ⛔⛔ **ROUND 18 (2026-09-15): THE CUSTOMER SCANS THEIR OWN PHONES** (mockups approved first). New
+  `DeskPhoneScanToken` + migration `20260916120000_desk_phone_scan_link` (additive): staff mint one
+  link per run from the wizard's done screen; the customer opens `/phone-setup/<token>` on their
+  phone, points the camera at each sticker, and the phones match themselves. ⛔ **Only the token's
+  SHA-256 hash is stored** — the raw token is shown once, in the URL. ⛔⛔ **The browser decodes
+  NOTHING**: it posts a frame every 1.5 s and the SERVER reads it through the same barcode→OCR chain
+  and the same ONE gate (`recordLabel`) as the typed/uploaded/texted doors, so an old browser is
+  never a dead end and there is one set of rules for what may be attached to a phone. ⛔ Matching is
+  **by hardware address, never "the next phone in the list"**; an address not on the order is refused
+  with the maker NAMED from its OUI, brand-agnostically across the four we are approved for
+  (Fanvil / Grandstream / Yealink / Poly — Izzy: *"Not all 20 vendors for now"*; nothing widened).
+  `/phone-setup/*` is anchored into the JWT bypass (the token IS the credential, re-checked every
+  request) while minting and revoking stay JWT-gated behind `can_setup_desk_phones`. One live link
+  per run — minting again revokes the last, so a link sent to the wrong person dies; missing/revoked/
+  expired are ONE flat refusal that never says which; the serial never crosses to the customer view,
+  only `serialOnFile`. Light + dark both shipped. Suite **287 tests, 286 pass, 0 fail, 1 skip** (+9).
+  ⏳ **NOT PROVEN: nobody has opened the link on a real phone; no camera frame decoded in production.**

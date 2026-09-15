@@ -19,6 +19,7 @@
  * ⛔ No secret crosses these routes except the GDMS credential SAVE, which is staff-only,
  * write-only, and never echoed, logged or audited.
  */
+import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
@@ -28,6 +29,10 @@ import {
   formatMac,
   identifyDevice,
   identifyPhone,
+  // The maker read off the sticker's own hardware address. Covers exactly the makers
+  // we are approved for (grandstream | yealink | fanvil | poly); anything else comes
+  // back "other"/"unknown" rather than being guessed at.
+  manufacturerFromOui,
   normalizeMac,
   normalizeUsCanadaToE164,
   parseDeviceLabel,
@@ -79,6 +84,9 @@ import {
   resolveImageMime,
 } from "../crm/docOcrProvider";
 import { readChatAttachmentBuffer } from "../chatAttachmentStorage";
+// ⛔ The platform's public identity lives in ONE module — the customer link must be
+// built from the same origin the pay links and billing emails use, never a literal.
+import { canonicalPortalOrigin } from "../publicOrigins";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -1353,5 +1361,205 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       });
       return reply.status(f.retryable ? 503 : 409).send({ ok: false, error: f.code, message: f.staffMessage });
     }
+  });
+
+  /* ── THE CUSTOMER'S SCAN LINK ────────────────────────────────────────────────
+   * Izzy, 2026-09-16: "they open the link, and it would open to a camera … scan 1,
+   * scan 2, scan 3, and the system will already match it to where it's supposed to go."
+   *
+   * ⛔⛔ THE SAME ONE GATE. Every label that arrives here goes through `recordLabel`
+   * exactly as a typed, uploaded or texted one does. This is a new DOOR, never a
+   * second set of rules — a second copy is how one door comes to accept what another
+   * refuses, which on this screen means a serial attached to the wrong handset.
+   * ⛔ The token is the whole credential (hashed at rest, one run, revocable), so
+   * every read and write below is scoped to that run and answers the CUSTOMER
+   * projection only — never the technician's view.
+   * ⛔ BRAND-AGNOSTIC BY THE STICKER, not by a brand the customer picks: the MAC on
+   * the barcode names the maker through `manufacturerFromOui`, which covers exactly
+   * the makers we are approved for (grandstream | yealink | fanvil | poly) and says
+   * "other"/"unknown" honestly for anything else.
+   * ────────────────────────────────────────────────────────────────────────── */
+
+  const hashScanToken = (raw: string) => createHash("sha256").update(String(raw)).digest("hex");
+
+  /** The run behind a link, or null for missing / revoked / expired — never says which. */
+  async function scanLink(rawToken: unknown): Promise<{ row: any; run: any } | null> {
+    const raw = String(rawToken ?? "");
+    if (!raw || raw.length < 20 || raw.length > 200) return null;
+    const row = await db.deskPhoneScanToken.findUnique({ where: { tokenHash: hashScanToken(raw) } });
+    if (!row || row.revokedAt) return null;
+    if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
+    const run = await db.deskPhoneSetupRun.findFirst({ where: { id: row.runId, tenantId: row.tenantId } });
+    if (!run) return null;
+    return { row, run };
+  }
+
+  /**
+   * ⛔ The actor for a customer scan is the PERSON WHO MINTED THE LINK. Two reasons,
+   * both deliberate: the audit's actor must be a real user row, and "who put this link
+   * in a customer's hands" is the accountable party. It is never a super-admin, so
+   * `isSuper` is false and the staff-only projection stays closed.
+   * ⛔ The audit's `via` is the ordinary `photo` / `typed_or_scanned` of the one gate —
+   * a customer scan is NOT a separate kind of evidence and must not claim to be. That a
+   * label arrived through a customer link is recoverable from this actor plus the link's
+   * own `scanCount` / `lastUsedAt`, which are the rows that actually record it.
+   */
+  const scanActor = (row: any): JwtUser =>
+    ({ sub: String(row.createdByUserId), tenantId: String(row.tenantId), email: "", role: "USER" });
+
+  /** What the customer may see about one phone — the customer projection, plus done-ness. */
+  const scanPhoneView = (p: any) => ({ ...customerPhoneView(p), done: Boolean(p.serialNumber) });
+
+  /** GET the link: which phones this order has, and which are already scanned. */
+  app.get("/phone-setup/:token", async (req: any, reply: any) => {
+    const link = await scanLink(req.params.token);
+    if (!link) return reply.status(404).send({ ok: false, error: "link_not_found", message: "This link is no longer active. Ask Loopcom for a new one." });
+    const [tenant, phones] = await Promise.all([
+      db.tenant.findUnique({ where: { id: link.row.tenantId } }),
+      db.deskPhoneSetupPhone.findMany({ where: { runId: link.run.id, tenantId: link.row.tenantId }, orderBy: { createdAt: "asc" } }),
+    ]);
+    if (!link.row.firstOpenedAt) {
+      await db.deskPhoneScanToken.update({ where: { id: link.row.id }, data: { firstOpenedAt: new Date() } }).catch(() => null);
+    }
+    const wanted = phones.filter((p: any) => !p.skippedAt);
+    return reply.send({
+      ok: true,
+      company: tenant?.name ?? null,
+      total: wanted.length,
+      scanned: wanted.filter((p: any) => p.serialNumber).length,
+      phones: wanted.map(scanPhoneView),
+    });
+  });
+
+  /**
+   * A camera frame. We decode it, read the hardware address off the sticker, and find
+   * WHICH phone of this order it belongs to — the customer never picks from a list.
+   * ⛔ Unknown MAC = an honest refusal, never attached to "the next" phone.
+   */
+  app.post("/phone-setup/:token/scan", async (req: any, reply: any) => {
+    const link = await scanLink(req.params.token);
+    if (!link) return reply.status(404).send({ ok: false, error: "link_not_found", message: "This link is no longer active. Ask Loopcom for a new one." });
+    if (!req.isMultipart?.()) return reply.status(400).send({ ok: false, error: "multipart_required" });
+
+    const phones = await db.deskPhoneSetupPhone.findMany({
+      where: { runId: link.run.id, tenantId: link.row.tenantId },
+    });
+    const inOrder = new Map<string, any>(phones.filter((p: any) => !p.skippedAt).map((p: any) => [String(p.macAddress), p]));
+
+    let file: any = null;
+    try { file = await req.file({ limits: { fileSize: MAX_LABEL_PHOTO_BYTES } }); }
+    catch (err: any) { return reply.status(400).send({ ok: false, error: "multipart_parse_failed", detail: err?.message }); }
+    if (!file) return reply.status(400).send({ ok: false, error: "file_required" });
+    const buffer = await file.toBuffer();
+    if (!buffer?.length) return reply.status(400).send({ ok: false, error: "file_required" });
+
+    // A pass is worth submitting when it yields a hardware address belonging to THIS
+    // order — the match-by-MAC form of the single-phone preview used by the other doors.
+    const looksGood = (raw: string, _confidence: number) => {
+      const seen = parseDeviceLabel(labelTextFromPhoto(raw));
+      return Boolean(seen.mac && inOrder.has(seen.mac));
+    };
+    const read = await readLabelPhoto(buffer, String(file.mimetype || ""), String(file.filename || "scan.jpg"), looksGood);
+    if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
+
+    const text = labelTextFromPhoto(read.text);
+    const seen = parseDeviceLabel(text);
+    if (!seen.mac) {
+      return reply.status(400).send({ ok: false, error: "photo_unreadable", message: PHOTO_UNREADABLE });
+    }
+    const phone = inOrder.get(seen.mac);
+    if (!phone) {
+      // Name the maker anyway — "a Grandstream we don't have on this order" is a far
+      // more useful sentence than "unknown phone", and the OUI gives it for free.
+      const maker = manufacturerFromOui(seen.mac).manufacturer;
+      const makerWord = MAKER_NAMES[maker] ?? null;
+      return reply.status(409).send({
+        ok: false, error: "phone_not_in_order",
+        message: makerWord
+          ? `That ${makerWord} isn't one of the phones on this order. Scan one of the phones we sent you.`
+          : "That phone isn't one of the phones on this order. Scan one of the phones we sent you.",
+      });
+    }
+
+    const actor = scanActor(link.row);
+    const outcome = await recordLabel(actor, phone, text, "photo", read.confidence, { pass: read.pass, passesRun: read.passesRun });
+    if (!outcome.ok) {
+      return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    }
+    await db.deskPhoneScanToken.update({
+      where: { id: link.row.id },
+      data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },
+    }).catch(() => null);
+
+    const after = await db.deskPhoneSetupPhone.findMany({ where: { runId: link.run.id, tenantId: link.row.tenantId } });
+    const wanted = after.filter((p: any) => !p.skippedAt);
+    const updated = wanted.find((p: any) => p.id === phone.id) ?? phone;
+    const maker = manufacturerFromOui(seen.mac).manufacturer;
+    return reply.send({
+      ok: true, matched: true,
+      phone: scanPhoneView(updated),
+      maker, makerLabel: MAKER_NAMES[maker] ?? null,
+      total: wanted.length,
+      scanned: wanted.filter((p: any) => p.serialNumber).length,
+    });
+  });
+
+  /** Typed fallback for a phone with no usable camera — same gate, same refusals. */
+  app.post("/phone-setup/:token/phones/:phoneId/label", async (req: any, reply: any) => {
+    const link = await scanLink(req.params.token);
+    if (!link) return reply.status(404).send({ ok: false, error: "link_not_found", message: "This link is no longer active. Ask Loopcom for a new one." });
+    const body = z.object({ text: z.string().trim().min(1).max(600) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_request" });
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: link.run.id, tenantId: link.row.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ ok: false, error: "not_found" });
+
+    const outcome = await recordLabel(scanActor(link.row), phone, body.data.text, "typed_or_scanned", null);
+    if (!outcome.ok) return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    await db.deskPhoneScanToken.update({
+      where: { id: link.row.id }, data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },
+    }).catch(() => null);
+    return reply.send(outcome.body);
+  });
+
+  /* ── minting the link (STAFF, JWT-gated) ─────────────────────────────────── */
+
+  /** Create (or replace) the customer link for a run. Returns the URL once — we store only its hash. */
+  app.post("/desk-phones/runs/:id/scan-link", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    // ⛔ One live link per run: minting again revokes the old one, so a link that was
+    // sent to the wrong person stops working the moment a new one is made.
+    await db.deskPhoneScanToken.updateMany({
+      where: { runId: run.id, tenantId: user.tenantId, revokedAt: null }, data: { revokedAt: new Date() },
+    });
+    const raw = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60_000);
+    await db.deskPhoneScanToken.create({
+      data: { tenantId: user.tenantId, runId: run.id, tokenHash: hashScanToken(raw), createdByUserId: user.sub, expiresAt },
+    });
+    await deps.audit({
+      tenantId: user.tenantId, action: "DESK_PHONE_SCAN_LINK_CREATED",
+      entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub,
+      metadata: { expiresAt: expiresAt.toISOString() },
+    });
+    return reply.send({ ok: true, url: `${canonicalPortalOrigin()}/phone-setup/${raw}`, expiresAt: expiresAt.toISOString() });
+  });
+
+  /** Kill the link. */
+  app.post("/desk-phones/runs/:id/scan-link/revoke", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+    const out = await db.deskPhoneScanToken.updateMany({
+      where: { runId: run.id, tenantId: user.tenantId, revokedAt: null }, data: { revokedAt: new Date() },
+    });
+    await deps.audit({
+      tenantId: user.tenantId, action: "DESK_PHONE_SCAN_LINK_REVOKED",
+      entityType: "DeskPhoneSetupRun", entityId: run.id, actorUserId: user.sub, metadata: { revoked: out.count },
+    });
+    return reply.send({ ok: true, revoked: out.count });
   });
 }

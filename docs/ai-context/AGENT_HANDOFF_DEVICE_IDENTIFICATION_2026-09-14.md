@@ -781,6 +781,59 @@ because phoneprov now serves the same correct config). Memory: [[grandstream-zer
 Also this round: landed the TESTS_RUN entry (`d36d829a`) and a stranded local BDC-filing commit
 (`fc31c28d`); realigned the local branch to origin (all desk-phone code was already pushed; kept
 origin's newer handoff copy). No code change this round — it was a verification pass.
+
+## 10q. Round 18 (2026-09-15) — THE CUSTOMER SCANS THEIR OWN PHONES: a public link, their phone's camera, matched by hardware address
+
+Izzy's brief, verbatim: *"When a customer puts in their phones, they're going to get a link. They
+open the link, and it would open to a camera or a scanner where they can go scan the barcodes on the
+phone, and then it would upload automatically … just open the link, scan 1, scan 2, scan 3, and the
+system will already match it to where it's supposed to go."* Mockups were shown and approved first.
+
+**The shape.** `DeskPhoneScanToken` (migration `20260916120000_desk_phone_scan_link`, additive):
+tokenHash unique, tenantId, runId, createdByUserId, expiresAt (30 days), revokedAt, firstOpenedAt,
+lastUsedAt, scanCount. ⛔ **Only the SHA-256 hash is stored** — the raw token is returned once, in
+the URL, and never again. Staff mint at `POST /desk-phones/runs/:id/scan-link` (JWT + the existing
+`can_setup_desk_phones`); the wizard's done screen offers "Send the customer a link to scan their
+phones" with a copy button.
+
+**⛔⛔ THE BROWSER DECODES NOTHING.** The page grabs a camera frame every 1.5 s and POSTs it; the
+SERVER decodes with the same `readLabelBarcodes` → OCR chain and the same ONE gate (`recordLabel`)
+that the typed, uploaded and texted doors already go through. That is deliberate: one set of rules
+for what may be attached to a phone, and an old browser is never a dead end. The typed fallback
+(`POST /phone-setup/:token/phones/:phoneId/label`) exists for anyone with no usable camera.
+
+**⛔ Matching is BY HARDWARE ADDRESS, never "the next one in the list".** The scan route builds the
+run's phones into a MAC map and looks the decoded address up. An address that is not on the order is
+refused with the maker NAMED from its OUI ("That Yealink isn't one of the phones on this order") —
+brand-agnostic, so Fanvil / Grandstream / Yealink / Poly all work with no brand ever being chosen by
+a human. ⛔ Izzy's scope, verbatim: *"Not all 20 vendors for now, only the ones we are approved
+for."* `SUPPORTED_MANUFACTURERS` already is exactly those four; nothing was widened.
+
+**The public door.** `/phone-setup/*` is anchored into `jwtPublicRouteBypass.ts` — the token IS the
+credential and is re-checked in the handler on every request. ⛔ Minting and revoking stay JWT-gated;
+a test asserts both, plus that `/x/phone-setup/…` and `/admin/phone-setup/tokens` do NOT inherit the
+bypass (the `/chat/a/` substring lesson).
+
+**Rules worth keeping:** one live link per run (minting again revokes the old one, so a link sent to
+the wrong person stops working); missing / revoked / expired are ONE flat refusal that never says
+which; the customer projection is `customerPhoneView` + `done`, so `serialOnFile` crosses but the
+serial itself never does; the audit actor is the person who minted the link, and `via` stays the
+ordinary `photo` / `typed_or_scanned` — a customer scan is not a new kind of evidence.
+
+**Tests (9 new, all green):** `deskPhoneSetup` suite **287 tests, 286 pass, 0 fail, 1 pre-existing
+skip** (was 278). Harness additions: `findUnique` on the fake table (the link is looked up by its
+unique token hash — a fake without it would be the only thing failing), and `applyAtomics` so a
+Prisma `{ increment: 1 }` really increments instead of landing the object in the column.
+
+⛔ **Two test-writing traps, both caught by the tests themselves, both the TEST being wrong:**
+`formatMac` UPPER-cases (its own doc comment shows lowercase — trust the behaviour, not the
+comment); and `POST /desk-phones/runs` **RESUMES** the tenant's live run rather than creating a
+second one ("one live run per customer"), so two `runWithPhone` calls are ONE run — the isolation
+test has to close the first run before a second exists, or it quietly proves nothing.
+
+⏳ **NOT PROVEN:** nobody has opened the link on a real phone, no camera frame has been decoded in
+production, and no customer has scanned a sticker. Deploy status recorded in `TESTS_RUN.md`.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

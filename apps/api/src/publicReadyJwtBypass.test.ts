@@ -29,6 +29,24 @@ test("shouldSkipJwtVerification: public multi-invoice pay links skip JWT; admin 
   assert.equal(shouldSkipJwtVerification("/admin/billing/pay-links"), false);
 });
 
+test("shouldSkipJwtVerification: the customer's desk-phone scan link is public; minting it is not", () => {
+  // The customer opens this on their own phone with no Bearer token; the token in the
+  // path is the whole credential and is re-checked in the handler on every request.
+  assert.equal(shouldSkipJwtVerification("/phone-setup/Zt7xK2qF9bQ1mR4sV8wLd3Np"), true);
+  assert.equal(shouldSkipJwtVerification("/api/phone-setup/Zt7xK2qF9bQ1mR4sV8wLd3Np"), true);
+  assert.equal(shouldSkipJwtVerification("/phone-setup/Zt7xK2qF9bQ1mR4sV8wLd3Np/scan"), true);
+  assert.equal(shouldSkipJwtVerification("/phone-setup/Zt7xK2qF9bQ1mR4sV8wLd3Np/phones/p_1/label"), true);
+  // ⛔ MINTING AND REVOKING A LINK STAY JWT-GATED. If these ever went public, anyone
+  // could mint a link to any run — the whole point of the token is that only staff
+  // behind can_setup_desk_phones can create one.
+  assert.equal(shouldSkipJwtVerification("/desk-phones/runs/run_1/scan-link"), false);
+  assert.equal(shouldSkipJwtVerification("/desk-phones/runs/run_1/scan-link/revoke"), false);
+  // ⛔ ANCHORED, never a substring: a future route that merely CONTAINS the fragment
+  // must not inherit the bypass (the /chat/a/ lesson).
+  assert.equal(shouldSkipJwtVerification("/x/phone-setup/Zt7xK2qF9bQ1mR4sV8wLd3Np"), false);
+  assert.equal(shouldSkipJwtVerification("/admin/phone-setup/tokens"), false);
+});
+
 test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler secret auth)", () => {
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/override"), true);
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/upload-asset"), true);

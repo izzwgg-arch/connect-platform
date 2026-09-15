@@ -7495,6 +7495,37 @@ model EtaSnapshot {
 // ── SUPERMARKET DELIVERY TRACKING — Phase 6 (customer tracking link) ───────────
 /// Secure customer tracking link. Token stored HASHED; high-entropy, expiring,
 /// tenant+order bound, revocable. OTP fields gate tier-2 (sensitive) detail.
+/// The public link a CUSTOMER opens to scan the stickers on the desk phones of ONE
+/// setup run (2026-09-16, Izzy: "they open the link, and it would open to a camera…
+/// scan 1, scan 2, scan 3, and the system will already match it to where it's
+/// supposed to go").
+///
+/// ⛔ Token-authenticated INSIDE the handler — the customer's browser has no Bearer
+/// token — exactly the TrackingToken / pay-link pattern. Only the SHA-256 HASH is
+/// stored: the token itself exists once, in the link we hand out.
+/// ⛔ Scoped to one run, so a link can only ever reach the phones of that run, and
+/// only the customer-safe projection of them.
+model DeskPhoneScanToken {
+  id        String @id @default(cuid())
+  tenantId  String
+  runId     String
+  tokenHash String @unique
+
+  createdByUserId String
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+
+  /// Audit only — "did the customer ever open it?" is the first support question.
+  firstOpenedAt DateTime?
+  lastUsedAt    DateTime?
+  scanCount     Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, runId])
+}
+
 model TrackingToken {
   id           String    @id @default(cuid())
   tenantId     String

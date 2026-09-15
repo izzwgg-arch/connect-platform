@@ -14,6 +14,8 @@ import Fastify from "fastify";
 
 const state: any = {
   runs: [], phones: [], extensions: [], tenants: [], audits: [], managed: [],
+  // The customer's scan links — one live per run; minting again revokes the last.
+  scanTokens: [],
   // "Text me a photo of the label": the tenant's own texting numbers, and the chat a picture
   // arrives in. Seeded per test — empty means "this customer has no number that takes photos".
   smsNumbers: [], threads: [], messages: [],
@@ -46,14 +48,34 @@ const matches = (row: any, where: any): boolean =>
     return same(row[k], v);
   });
 
+/**
+ * Prisma's atomic number ops. ⛔ Without this a `{ increment: 1 }` write lands the
+ * OBJECT in the column, so a counter silently becomes garbage and any assertion on it
+ * tests the fake instead of the code.
+ */
+function applyAtomics(row: any, data: any): any {
+  const out: any = {};
+  for (const [k, v] of Object.entries(data ?? {})) {
+    if (v && typeof v === "object" && !(v instanceof Date) && "increment" in (v as any)) {
+      out[k] = Number(row?.[k] ?? 0) + Number((v as any).increment);
+    } else out[k] = v;
+  }
+  return out;
+}
+
 function table(bucket: string, defaults: () => any) {
   return {
     findFirst: async ({ where }: any = {}) => state[bucket].find((r: any) => matches(r, where)) ?? null,
+    // ⛔ The real client HAS findUnique on a unique column and production code uses it —
+    // the scan link is looked up by its token HASH, which is the unique index. A fake
+    // without it would throw in tests on a route that works in production, i.e. the fake
+    // would be the only thing failing. The fake follows reality, never the other way.
+    findUnique: async ({ where }: any = {}) => state[bucket].find((r: any) => matches(r, where)) ?? null,
     findMany: async ({ where }: any = {}) => state[bucket].filter((r: any) => matches(r, where)),
     create: async ({ data }: any) => { const row = { ...defaults(), ...data }; state[bucket].push(row); return row; },
     update: async ({ where, data }: any) => {
       const row = state[bucket].find((r: any) => r.id === where.id);
-      Object.assign(row, data); return row;
+      Object.assign(row, applyAtomics(row, data)); return row;
     },
     updateMany: async ({ where, data }: any = {}) => {
       const rows = state[bucket].filter((r: any) => matches(r, where));
@@ -80,6 +102,10 @@ const fakeDb: any = {
   extension: table("extensions", () => ({ id: nextId("ext"), status: "ACTIVE" })),
   tenant: table("tenants", () => ({ id: nextId("t") })),
   managedDeskPhone: table("managed", () => ({ id: nextId("mdp"), retiredAt: null })),
+  deskPhoneScanToken: table("scanTokens", () => ({
+    id: nextId("tok"), scanCount: 0, revokedAt: null, expiresAt: null,
+    firstOpenedAt: null, lastUsedAt: null, createdAt: new Date(), updatedAt: new Date(),
+  })),
   tenantSmsNumber: table("smsNumbers", () => ({
     id: nextId("num"), active: true, smsCapable: true, mmsCapable: true, isTenantDefault: false, createdAt: new Date(),
   })),
@@ -1263,4 +1289,202 @@ test("an unreadable texted photo keeps us looking, so a better one still works",
   const good = await app.inject({ method: "POST", url: `${base}/label-photo/check`, payload: {} });
   assert.equal(good.statusCode, 200, good.body);
   assert.equal(row.serialNumber, SN);
+});
+
+/* ── the customer's own scan link ────────────────────────────────────────── */
+
+/**
+ * The link we text a customer so they can scan the stickers themselves.
+ *
+ * ⛔ PUBLIC BY TOKEN. There is no sign-in: the token in the path IS the credential, so
+ * every one of these tests is written from the customer's side with NO jwt behind it —
+ * `makeApp` still pins a user, but these routes never read `req.user`, they read the
+ * token. What they must prove is therefore the opposite of the staff routes: that the
+ * token alone decides, that it reaches exactly one run, and that it can be killed.
+ */
+
+/** Mint a link for a run and hand back the raw token out of the URL we return once. */
+async function mintScanLink(app: any, runId: string) {
+  const r = await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/scan-link`, payload: {} });
+  assert.equal(r.statusCode, 200, r.body);
+  const url = String(body(r).url);
+  const token = url.split("/").pop() as string;
+  assert.ok(token && token.length >= 20, `a real token came back: ${url}`);
+  return { token, url };
+}
+
+const scanUpload = async (app: any, token: string, file = photoUpload("scan.jpg")) =>
+  app.inject({ method: "POST", url: `/phone-setup/${token}/scan`, payload: file.payload, headers: file.headers });
+
+test("the link lists the customer's own phones, in the customer's view — never the serial", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  const r = await app.inject({ method: "GET", url: `/phone-setup/${token}` });
+  assert.equal(r.statusCode, 200, r.body);
+  const out = body(r);
+  assert.equal(out.company, "ABC Company");
+  assert.equal(out.total, 1);
+  assert.equal(out.scanned, 0);
+  const p = out.phones[0];
+  assert.equal(p.mac, "C0:74:AD:8C:60:5F", "the address is shown the way a person reads it off the sticker");
+  assert.equal(p.done, false);
+  assert.equal(p.serialOnFile, false);
+  // ⛔ The technician's fields never cross to a page that anyone holding a link can open.
+  for (const k of ["provisioningUrl", "identityEvidence", "technicalNote", "firmware", "serialNumber"]) {
+    assert.ok(!(k in p), `the customer view must not carry ${k}`);
+  }
+  assert.ok(state.scanTokens[0].firstOpenedAt, "the first open is stamped once");
+});
+
+test("a scanned sticker finds its own phone BY ADDRESS — the customer never picks from a list", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  const r = await scanUpload(app, token);
+  assert.equal(r.statusCode, 200, r.body);
+  const out = body(r);
+  assert.equal(out.matched, true);
+  assert.equal(out.makerLabel, "Grandstream", "the maker is named from the address, not from anything the customer chose");
+  assert.equal(out.total, 1);
+  assert.equal(out.scanned, 1);
+  assert.equal(out.phone.done, true);
+  assert.equal(row.serialNumber, SN, "the serial reached the phone record through the one gate");
+  // ⛔ Stored, never echoed: the page that shows this is public to anyone holding the link.
+  noLeak(out, [SN]);
+  assert.equal(state.scanTokens[0].scanCount, 1, "the counter really increments (not a {increment:1} object)");
+  assert.ok(state.scanTokens[0].lastUsedAt);
+
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED");
+  assert.equal(audit.actorUserId, CUSTOMER.sub, "audited against whoever put the link in the customer's hands");
+  assert.equal(audit.tenantId, "t_abc");
+});
+
+test("a phone that is not on this order is refused BY MAKER, never attached to whatever is next", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  // A Yealink sticker (805ec0…): a maker we are approved for, but not this order's phone.
+  // ⛔ The brand is read off the address, so this works for every approved maker without
+  // the scanner being told which brand to expect.
+  ocrNext = { text: "Yealink T53W MAC: 805EC0C89B86 S/N: 2142019121401463", confidence: 93 };
+  const r = await scanUpload(app, token);
+  assert.equal(r.statusCode, 409, r.body);
+  assert.equal(body(r).error, "phone_not_in_order");
+  assert.match(body(r).message, /Yealink/, "naming the maker is the whole point of the refusal");
+  assert.equal(row.serialNumber, null, "nothing was attached to the phone we DO have");
+  assert.equal(state.scanTokens[0].scanCount, 0, "a refusal is not a scan");
+});
+
+test("no camera: typing what the sticker says goes through the same one gate", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/phones/${row.id}/label`,
+    payload: { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}` },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(body(r).found.serialFound, true);
+  assert.equal(row.serialNumber, SN);
+  noLeak(body(r).phone, [SN]);
+  assert.equal(state.scanTokens[0].scanCount, 1);
+});
+
+test("missing, revoked and expired links are ONE flat refusal that never says which", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+
+  const bogus = await app.inject({ method: "GET", url: `/phone-setup/${"z".repeat(32)}` });
+  assert.equal(bogus.statusCode, 404, bogus.body);
+  assert.equal(body(bogus).error, "link_not_found");
+  const flat = body(bogus).message;
+
+  const { token: revoked } = await mintScanLink(app, runId);
+  const rev = await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/scan-link/revoke`, payload: {} });
+  assert.equal(rev.statusCode, 200, rev.body);
+  assert.equal(body(rev).revoked, 1);
+  const afterRevoke = await app.inject({ method: "GET", url: `/phone-setup/${revoked}` });
+  assert.equal(afterRevoke.statusCode, 404);
+  assert.equal(body(afterRevoke).message, flat, "a revoked link must not be distinguishable from a wrong one");
+
+  const { token: expired } = await mintScanLink(app, runId);
+  state.scanTokens.find((t: any) => !t.revokedAt).expiresAt = new Date(Date.now() - 1000);
+  const afterExpiry = await app.inject({ method: "GET", url: `/phone-setup/${expired}` });
+  assert.equal(afterExpiry.statusCode, 404);
+  assert.equal(body(afterExpiry).message, flat);
+});
+
+test("minting again kills the old link — one sent to the wrong person stops working", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token: first } = await mintScanLink(app, runId);
+  const { token: second } = await mintScanLink(app, runId);
+
+  assert.notEqual(first, second);
+  assert.equal((await app.inject({ method: "GET", url: `/phone-setup/${first}` })).statusCode, 404);
+  assert.equal((await app.inject({ method: "GET", url: `/phone-setup/${second}` })).statusCode, 200);
+  assert.equal(state.scanTokens.filter((t: any) => !t.revokedAt).length, 1, "exactly one live link per run");
+});
+
+test("a link reaches ONLY its own run's phones", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const a = await runWithPhone(app);
+  const { token } = await mintScanLink(app, a.runId);
+
+  // ⛔ ONE LIVE RUN PER CUSTOMER: a second `POST /desk-phones/runs` RESUMES the first
+  // and answers `resumed: true`, so a second run only exists once this one is closed —
+  // which is exactly how it happens in life, when a customer sets up another batch of
+  // phones weeks later. Closing it here is what makes the two runs real; without it both
+  // "runs" are one run and this test would quietly prove nothing.
+  state.runs.find((r: any) => r.id === a.runId).status = "done";
+  const b = await runWithPhone(app, { mac: "80:5E:C0:C8:9B:86", vendor: "Yealink", model: "T53W" });
+  assert.notEqual(b.runId, a.runId, "the second batch really is its own run");
+
+  const out = body(await app.inject({ method: "GET", url: `/phone-setup/${token}` }));
+  assert.equal(out.total, 1);
+  assert.equal(out.phones[0].id, a.row.id, "the other run's phone is not even listed");
+
+  // ⛔ And naming the other run's phone id outright is refused, not silently honoured.
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/phones/${b.row.id}/label`,
+    payload: { text: `Yealink T53W MAC: 805EC0C89B86 S/N: 2142019121401463` },
+  });
+  assert.equal(r.statusCode, 404, r.body);
+  assert.equal(b.row.serialNumber, null);
+});
+
+test("another company cannot mint a link for someone else's run", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+
+  const intruder = await makeApp(OTHER);
+  const r = await intruder.inject({ method: "POST", url: `/desk-phones/runs/${runId}/scan-link`, payload: {} });
+  assert.notEqual(r.statusCode, 200, r.body);
+  assert.equal(state.scanTokens.length, 0, "no link exists to be sent anywhere");
+});
+
+test("minting a link needs the desk-phone permission", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+
+  allowSetup = false;
+  const r = await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/scan-link`, payload: {} });
+  assert.notEqual(r.statusCode, 200, r.body);
+  assert.equal(state.scanTokens.length, 0);
+  allowSetup = true;
 });
