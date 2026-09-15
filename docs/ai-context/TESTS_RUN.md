@@ -63,6 +63,14 @@ Newest entries first.
   and `app-portal-1` `.build-commit = b1f6357c`, 0 restarts, health 200 on both hostnames; api ships
   `/app/apps/api/src/telnyx/` + the server.ts registration, portal ships the
   `app/(platform)/apps/telnyx/page-*.js` chunk (grepped by the `tx-wrap` string).
+- WAVE 2 (`c0e12018`): 26 telnyx+providerSwitch tests pass (12 new: resolver precedence through the
+  REAL encryption, telnyx/garbage stored values ignored, resolver never throws into onboarding, PUT
+  refuses telnyx 409, RCS/email/porting-draft/lookup client shapes); onboarding glob differential
+  CLEAN — pbxTenantBuild+setupOrchestrator fail 25 with my changes and 25 replayed against HEAD
+  copies (pre-existing; ⚠️ during that replay a `cp` back was refused "Permission denied" once —
+  worktree briefly held HEAD copies; re-copy succeeded, verified by the 8 new-export greps). api tsc
+  85 = ambient (0 in touched files); portal tsc 0; new wiring guards read 0 at HEAD. DEPLOYED +
+  CONTAINER-VERIFIED: both containers `.build-commit = c0e12018`, 0 restarts, 200 both hostnames.
 
 ## GDMS device/add batch-result fix (2026-09-15, `3040f2bc`)
 
