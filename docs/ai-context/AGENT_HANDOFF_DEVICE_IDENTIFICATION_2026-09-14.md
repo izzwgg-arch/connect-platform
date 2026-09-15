@@ -506,6 +506,36 @@ wizard spun on "Finding" until the 10-minute watchdog offered Keep trying / Canc
 - ⏳ **Still not proven:** no successful GDMS claim (needs the RIGHT serial off THIS phone's
   sticker), no cloud reset, no photo OCR.
 
+## 10i. Round 10 (2026-09-15) — the wizard owns the phone; the neighborhood stops being imported (`7e427c28`)
+
+Izzy's live run, continued. After the right serial went in, the claim VERIFIED and the cloud reset
+ran — and the run halted on `held_by_another_account`: the MAC was still recorded under Create A
+Box (provisioning.devices row 23, bound to T7_102, whose real 102 is live on two other contacts).
+Izzy released it by hand (his explicit instruction; backup
+`pbx:/root/landau-gxp-record-release-20260915T100155Z/` — rows + the per-MAC cfg xml), then ruled:
+*"the desktop wizard gets priority, and anything else is deleted. That phone belongs to the wizard."*
+
+- **`decideRehome` policy change (shared):** live registrations by OTHER devices no longer refuse —
+  releasing a MAC record does not touch a registration. Kept refusals: unreadable registration
+  state; missing presence pair (discoveredIp + requesterIp); the forger shape — this handset's own
+  LAN address registered from a DIFFERENT public address ("a claim from elsewhere never takes it").
+  `RehomeDecision.releasedOverLive` names what stayed live; auditRehome records every move.
+  ⛔ An OPEN item: a halt that still happens is silent — Izzy wants a notify; only the audit exists.
+- **Driver `rediscover` (portal setupDriver):** posts only MACs already in the run. It posted raw
+  hosts and imported 87 home devices as phones (the 2026-08 pre-filter bug through a second door).
+  The ghosts were cleaned by marking them skipped in the run — note the wizard's progress screen
+  LISTS skipped rows in its count ("0 of 88"), a cosmetic oddity left alone.
+- **GDMS field truths (first real rows ever):** device/list row = {orgId, deviceName, deviceType
+  (model!), mac (colons), sn, publicIp, privateip, firmwareVersion, lastTime, status (NUMBER; 1 =
+  online, proven), accountStatus, dnd, siteId, siteName, isSynchronized, …}. site/list rows carry
+  {id, siteName, isDefault, description, children}. `parseGdmsDevice` now maps numeric 1 → online;
+  other numbers stay null on purpose (offline gates cloud tasks; nobody has seen a real offline row).
+- **Ops notes from the night:** deploy-direct refuses while another session's queue job builds
+  ("HEAVY JOB ALREADY RUNNING") — retry, do not force; a portal deploy pops "Connect was updated —
+  Reload" in the desktop and the reload KILLS the wizard driver (the run resumes via POST /runs,
+  one-live-run-per-customer); closing the Loopcom window stops the driver too (audit:
+  DESK_PHONE_OFFICE_STOPPED) — both looked like "stuck on restart" until read from the audits.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
