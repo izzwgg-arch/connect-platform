@@ -131,3 +131,21 @@ Primary sources inspected: https://github.com/microsoft/playwright-mcp ; https:/
 On 2026-09-15 the owner expressly approved push and installation. Commit `3b414de0` and the installation-verification record are on `origin/feat/ivr-migration-takeover`. The NSIS candidate was installed silently, the old Loopcom processes were replaced, and Loopcom restarted from `C:\Users\izzyw\AppData\Local\Programs\@connectdesktop\Loopcom.exe`. An elevated ASAR check on that installed path confirmed `playwrightRuntime.js`, `playwright-core/index.js`, `playwright-core/package.json`, and `coworkerConnections.html`; multiple current Loopcom processes were observed from that installed executable.
 
 The user’s normal Chrome profile, logged-in sessions and tabs remain inaccessible by design. Existing-profile access needs a separate, consented Chrome connection and a full security/acceptance pass. The desktop-control service did not enumerate a targetable Loopcom window after restart, so there is no live-chat/provider or visible Settings acceptance claim. Provider/tool routing, vision transport, 2FA pause/resume, restart/stress coverage and packaged live-chat acceptance remain unproven. Do not represent this as production-ready until those tests are completed.
+
+## Coworker IDE chat mockup — 2026-09-15
+
+### Owner request
+
+Before replacing the current Coworker chat, the owner requested a preview that feels like a task-oriented IDE such as GPT or Claude while visibly showing Coworker using the computer. The requested light and dark modes must use the same layout rather than separate designs.
+
+### Preview design
+
+- A left rail holds **New task**, recent task history, and connection context.
+- The center pane is the task conversation: a plain-language request, a compact plan, readable computer/tool activity, a human approval card, and a persistent task composer.
+- The right inspector makes execution inspectable with the active run, completed/current/pending steps, and resulting artifacts. It communicates progress without exposing raw model prompts or tool JSON.
+- The light and dark versions retain the same information architecture, spacing, controls, and task sequence. Loopcom blue is the active brand color; status green and approval amber retain their meaning in both themes.
+- The review fragment is `C:\Users\izzyw\.codex\visualizations\2026\09\14\01a0a218-54a1-72d0-ad19-420a644477fd\loopcom-coworker-ide-mockup.html`. Its theme switch can show Light, Dark, or both side by side.
+
+### Status and verification
+
+This is a mockup only. No desktop or portal UI source, Browser Companion policy, model/provider route, package, or deployment changed. A static fragment check confirmed it is under 1 MB, has no document wrapper or escaped markup, contains its preview root, and has balanced primary content elements. Product UI tests and desktop packaging were deliberately not run; implementation awaits owner feedback on the preview.

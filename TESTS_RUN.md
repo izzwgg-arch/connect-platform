@@ -15,3 +15,8 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
 - Installed `Connect-Setup-0.1.17-rc.16.exe` with owner approval, restarted Loopcom, and observed the current processes running from `C:\Users\izzyw\AppData\Local\Programs\@connectdesktop\Loopcom.exe`.
 - Elevated ASAR inspection of the installed app passed for `playwrightRuntime.js`, `playwright-core/index.js`, `playwright-core/package.json`, and `coworkerConnections.html`.
 - The desktop-control service returned no targetable Loopcom window after restart. No visible Settings or live agent conversation assertion was made.
+
+## Coworker IDE mockup — 2026-09-15
+
+- Static fragment check passed for `loopcom-coworker-ide-mockup.html`: it is under 1 MB, has the required preview root, contains no document wrapper or escaped markup, and has balanced main/article elements.
+- Not run: product UI tests, desktop build, packaging, or browser acceptance. This task produced a review mockup only; no application source changed.

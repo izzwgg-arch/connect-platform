@@ -61,6 +61,8 @@ Browser Companion Playwright implementation (2026-09-15): Loopcom now launches i
 
 Browser Companion installation (2026-09-15): owner approved the GitHub push and local installer. `3b414de0` is on the shared remote branch and the verified NSIS candidate was installed/restarted at the regular Loopcom path. The installed ASAR was inspected and contains the Playwright runtime/core and branded settings page. A targetable Loopcom window was unavailable to the desktop-control service after restart, so installed live-chat/provider acceptance remains unproven.
 
+Coworker IDE redesign preview (2026-09-15): owner requested a mockup before any implementation. The preview uses one consistent IDE workspace in light and dark themes: recent tasks on the left, task conversation and composer in the center, live computer/tool activity plus approvals/artifacts on the right. No product UI, deployed behavior, or browser-control policy changed; await design feedback before building it. See `docs/ai-context/AGENT_HANDOFF_BROWSER_COMPANION_2026-09-14.md`.
+
 ## Universal search — 2026-09-14
 
 Use the live navigation catalog and authoritative custom permissions. Every record provider must preserve its own tenant/ownership/role rules; search cannot widen access. See `docs/ai-context/AGENT_HANDOFF_UNIVERSAL_SEARCH_2026-09-14.md`. Core rule remains: read CLAUDE.md fresh at task start and update area docs, index and memory before finishing.

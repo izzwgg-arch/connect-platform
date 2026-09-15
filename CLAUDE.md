@@ -413,7 +413,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-15 · iPhone App Store: rejection FULLY WORKED — all 3 issues fixed (purpose strings `db20a0a8`, storefront USA via API, business-model reply SENT + thread-verified), build 60 built/attached, RESUBMITTED at 05:35 ET, `WAITING_FOR_REVIEW` UI-confirmed. ⛔ "Version is not ready" 409 = LYING error; the fix is PATCH the rejected item `{resolved:true}`, never retries. Google Auth → 1.1 (mockup published) → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
 
-- 2026-09-15 · Browser Companion: Playwright Core now drives the installed Loopcom app’s isolated branded Chrome profile with scoped tabs and state-bound one-use approvals; commit is on origin and installed ASAR/process checks pass, but live-chat acceptance and existing-session access remain unproven → `2026-09-14-browser-companion.md`
+- 2026-09-15 · Browser Companion: Playwright Core now drives the installed Loopcom app’s isolated branded Chrome profile with scoped tabs and state-bound one-use approvals; commit is on origin and installed ASAR/process checks pass, but live-chat acceptance and existing-session access remain unproven. IDE-style Coworker chat mockup previewed in identical light/dark layouts; no UI build yet → `2026-09-14-browser-companion.md`
 
 - 2026-09-14 · Deploy 403 prevention deployed/verified: queued-log waiting responses, bounded polling, live 200s and no renewed ban → `2026-09-14-deploy-log-autoban.md`
 
