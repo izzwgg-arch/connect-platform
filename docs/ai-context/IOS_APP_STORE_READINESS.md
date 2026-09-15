@@ -331,3 +331,97 @@ nothing changed on Apple's side.**
   (+ `asc-probe-rc.mjs`, `asc-probe-includes.mjs`). ⛔ Node on loopcom needs
   `NODE_OPTIONS=--dns-result-order=ipv4first` for api.appstoreconnect.apple.com
   now — the box's IPv6 route to Apple is dead and default-order fetch times out.
+
+## ⛔ 2026-09-15 — THE REJECTION MESSAGE, READ IN FULL (submission f395cee7, reviewed on iPad Air 11" M3, ver 1.0 build 57)
+
+Three separate issues. Only ONE needs a code/binary change:
+
+1. **Guideline 5.1.1(ii) — Privacy, purpose strings (THE ONLY CODE FIX).**
+   The photo-library and location purpose strings were expo-image-picker /
+   expo-location's GENERIC auto-plugin defaults ("Allow Loopcom to access your
+   photos" / "…use your location"). ✅ FIXED in `apps/mobile/app.config.ts`
+   commit `db20a0a8` (branch feat/ivr-migration-takeover): explicit
+   `NSPhotoLibraryUsageDescription`, `NSLocationWhenInUseUsageDescription`,
+   `NSLocationAlwaysAndWhenInUseUsageDescription` set in `ios.infoPlist`, each
+   describing the real use + a concrete example. `buildNumber` bumped 59→60.
+   ⛔ **In the BINARY → a new build (60) MUST be built and attached.** Verified
+   with `expo config --type prebuild --json` that the explicit strings resolve
+   (they win over the plugin default per `@expo/config-plugins`
+   `ios/Permissions.js` line 32: `passed || existing || default`).
+   iOS-only surface (guardrails §2) — the change is entirely inside the `ios:`
+   block and cannot touch Android.
+2. **Guideline 2.1 — "Which is (are) the salable storefront(s)? Please update
+   at the App Store Connect."** METADATA ONLY, no new build. The app's
+   territory availability is not configured (ASC API: `appAvailabilityV2`
+   returns 404 NOT_FOUND for the app, and the price schedule has baseTerritory
+   USA with one manual price). Fix in **ASC → app → Pricing and Availability
+   (Availability section) → tick the storefront(s) the app is sold in** (at
+   least United States). Reviewer can't tell where it's salable.
+3. **Guideline 2.1(b) — business model questions.** A written REPLY, no code
+   change. Apple wants to confirm the paid-content model. Loopcom is a B2B VoIP
+   service: employees are invited by the business that subscribes; the service
+   is billed to the business OUTSIDE the app (web portal / Sola-Cardknox); no
+   in-app purchase, no in-app sign-up, no consumer digital content. Draft reply
+   below answers all six questions.
+
+### ⛔ DRAFTED REPLY TO APPLE (paste into ASC → App Review → Reply; Izzy must send — sending needs his OK and his signed-in session)
+
+> Hello, thank you for the review. Responses below, plus the fixes we've made.
+>
+> **Guideline 5.1.1(ii) — purpose strings.** Fixed in the next build (v1.0,
+> build 60). The photo-library and location prompts now describe the specific
+> use and give an example: the photo library is accessed only when a user
+> chooses to attach a photo or video to a message (e.g. sending a customer a
+> picture of a finished job in a chat), and location is used only while a user
+> is actively working a delivery route so the business can show customers an
+> accurate arrival time (e.g. updating the live delivery map as the driver
+> approaches a stop). Location is not used when the user is off a route.
+>
+> **Guideline 2.1 — salable storefronts.** We have updated Pricing and
+> Availability so the app is available in the United States. [Izzy: adjust the
+> country list here to match what you actually set.]
+>
+> **Guideline 2.1(b) — business model.**
+> 1. *Who uses the paid content/services?* Employees of businesses that
+>    subscribe to Loopcom's phone service. Loopcom is a business (B2B) VoIP
+>    phone system; the app is the softphone client the business's staff use to
+>    place and receive the company's calls, voicemail, texts and team chat.
+> 2. *Where are the services purchased?* The phone service is sold by Loopcom
+>    directly to the business, outside the app, via a signed service
+>    arrangement and the web billing portal. Nothing is sold inside the app.
+> 3. *What previously-purchased services can a user access in the app?* The
+>    business communication features the company already pays Loopcom for:
+>    inbound/outbound business calls, voicemail, SMS/MMS, and internal team
+>    chat/contacts for that company's phone system.
+> 4. *What paid features are unlocked in-app without In-App Purchase?* None are
+>    sold or unlocked in the app. The app is a client for a service the
+>    business buys from Loopcom directly; there is no in-app purchase and no
+>    paywall.
+> 5. *Are the enterprise services sold to single users, consumers, or family?*
+>    They are sold to businesses (companies), not to individual consumers or
+>    for family use. This is an enterprise/B2B service.
+> 6. *How do users get an account? Is there a fee to create one?* Accounts are
+>    created only by invitation from the subscribing business's administrator.
+>    There is no public/in-app sign-up and the end user pays no fee to create
+>    or use their account — the business pays Loopcom for the service.
+>
+> Happy to hop on a call if that's easier. Thank you.
+
+### ⛔ REMAINING HUMAN STEPS TO RESUBMIT (all need Izzy)
+1. **Build 60.** Build the iOS binary from commit `db20a0a8` (recipe in
+   `ios-testflight-pipeline-state` memory / this doc: loopcom, checkout the
+   pushed commit, `npx --yes eas-cli build -p ios --profile ios-prod
+   --non-interactive --no-wait --json` from `apps/mobile`, then
+   `eas-cli submit --id <build>`). EAS session on loopcom = user `izz8457`
+   (`~/.expo/state.json`). ⛔ Guardrails §4: a human runs the Android
+   cold-call smoke test before an iOS build ships — the change is iOS-only so
+   Android can't regress, but do the smoke test anyway.
+2. **Availability (2.1):** ASC → Pricing and Availability → set the storefront(s).
+3. **Reply (2.1b + confirmations):** paste the draft above into App Review → Reply.
+   ⛔ Sending a message on Izzy's behalf needs his explicit OK.
+4. **Attach build 60** to the version, then **Resubmit to App Review**.
+   (Apple's email: metadata-only issues don't need a resubmit, but 5.1.1 is a
+   binary fix, so a resubmit with build 60 IS required.)
+⛔ The purpose strings show in the iOS permission dialogs the CUSTOMER sees —
+Izzy should read the three strings in `app.config.ts` (commit db20a0a8) and
+tweak wording before build 60 bakes them in.

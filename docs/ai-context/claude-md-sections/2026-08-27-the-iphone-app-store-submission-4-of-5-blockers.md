@@ -2,19 +2,26 @@
 
 > Moved verbatim from `CLAUDE.md` on 2026-09-14 when CLAUDE.md was cut down to rules + index. Keep editing THIS file for this area; its one-line entry lives in CLAUDE.md's HANDOFF INDEX.
 
-- ⛔⛔ **2026-09-15: APPLE REJECTED VERSION 1.0.** Submission `f395cee7…` went
-  `UNRESOLVED_ISSUES`, the version reads `REJECTED`, two boilerplate emails hit
-  iw5626644@gmail.com Sep 14 11:57 PM ET ("Changes needed"). ⛔ **The REASONS are
-  only on the App Review page in ASC — the public API does not expose Resolution
-  Center (every rejection-ish path 404s; probed, do not re-probe), and Apple's
-  emails no longer carry them.** The Default-profile ASC web session is expired
-  (login wall), so reading the reasons needs ONE Izzy action: click the Claude
-  extension icon in the **jacob** Chrome window (left open on the app's ASC page)
-  or sign in to ASC. ⛔ Change NOTHING on the listing or build until the reasons
-  are read — a metadata-only rejection is answered WITHOUT a resubmit. Full
-  detail + closed-routes list: `IOS_APP_STORE_READINESS.md` §2026-09-15.
-  (Also: loopcom's IPv6 to api.appstoreconnect.apple.com is dead — run ASC
-  scripts with `NODE_OPTIONS=--dns-result-order=ipv4first`.)
+- ⛔⛔ **2026-09-15: APPLE REJECTED VERSION 1.0 (build 57); THE CODE FIX IS DONE,
+  THE RESUBMIT NEEDS IZZY.** Izzy pasted Apple's full message. THREE issues:
+  **(1) 5.1.1(ii) purpose strings** — the photo-library + location strings were
+  expo's generic auto-plugin defaults. ✅ FIXED, commit `db20a0a8`: explicit
+  descriptive `NSPhotoLibraryUsageDescription` / `NSLocationWhenInUseUsageDescription`
+  / `NSLocationAlwaysAndWhenInUseUsageDescription` in `ios.infoPlist` (each with
+  an example), `buildNumber` 59→60. iOS-only surface; verified they resolve via
+  `expo config`. ⛔ In the BINARY → **needs a new build 60**. **(2) 2.1 salable
+  storefronts** — availability not configured (ASC `appAvailabilityV2` 404);
+  METADATA fix in ASC Pricing & Availability, no build. **(3) 2.1(b) business
+  model** — a written REPLY (Loopcom is B2B VoIP, billed outside the app, no IAP,
+  invite-only). ⛔ Remaining steps are ALL Izzy's: build 60 + Android smoke test,
+  set availability, SEND the drafted reply (sending needs his OK), attach build
+  60, Resubmit. Draft reply + exact steps: `IOS_APP_STORE_READINESS.md`
+  §2026-09-15 "THE REJECTION MESSAGE". ⛔ The purpose strings show in the
+  customer's iOS permission dialogs — Izzy should read/tweak wording before
+  build 60. (Note: loopcom IPv6→Apple API is dead; ASC scripts need
+  `NODE_OPTIONS=--dns-result-order=ipv4first`. The API does NOT expose the
+  rejection reasons — they were read from Apple's ASC App Review message, which
+  Izzy opened; don't waste time probing the API for them.)
 
 
 - ⛔⛔ **2026-09-09 STATUS: STILL `WAITING_FOR_REVIEW` AFTER 10.5 DAYS, AND APPLE HAS BEEN SILENT ON
