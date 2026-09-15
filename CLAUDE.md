@@ -397,6 +397,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-15 · Zero-touch Yealink (RPS): YMCS account ISSUED (izzy@loopcom.net, permission RPS, us.ymcs.yealink.com; AccessKey + API domain at System → Integration → API, Izzy's to fetch); one-off server script `apps/api/scripts/yealink-rps-create-server.ts` exists; still INERT, no live RPS call → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
 
+- 2026-09-15 · TELNYX: real account is izzy@loopcom.net (TRIAL — Paid upgrade blocks numbers/calls, Izzy's 5-min job), Loopcom-Primary-SIP + -Outbound built on Telnyx side, attestation A = number ON the account (cited; support AI's "ported→B" contradicts their docs, human answer pending on Issue #666221), /apps/telnyx bench BUILT (14 tests, guards fail vs HEAD) → `2026-09-15-telnyx-provider-onboarding-and-bench.md`
+
 - 2026-09-15 · SignalWire DAY TEST LIVE: A plus 845-782-6775 hops via SignalWire (205) 351-3327 into its own TC-1; both edits in ONE PBX custom file, TRUNK_ID=132 guard IS the anti-loop, CID preserved via 0001 hop, proven with a real answered call; rollback = §5 → `2026-09-15-signalwire-day-test-aplus-6775.md`
 
 - 2026-09-15 · iPhone App Store: rejection FULLY WORKED — all 3 issues fixed (purpose strings `db20a0a8`, storefront USA via API, business-model reply SENT + thread-verified), build 60 built/attached, RESUBMITTED at 05:35 ET, `WAITING_FOR_REVIEW` UI-confirmed. ⛔ "Version is not ready" 409 = LYING error; the fix is PATCH the rejected item `{resolved:true}`, never retries. Google Auth → 1.1 (mockup published) → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`

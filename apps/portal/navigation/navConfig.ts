@@ -271,6 +271,11 @@ export const navItems: NavItem[] = [
   // SUPER_ADMIN-only in isNavItemVisibleForUser (like pbx.ivr_migration): it
   // spends the platform's own money and there is deliberately no grantable key.
   { id: "apps.signalwire", href: "/apps/signalwire", label: "SignalWire", icon: "SW", lucide: Radio, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_signalwire" },
+  // Telnyx evaluation console (2026-09-15) — the third carrier bench, beside
+  // SignalWire. Same contract: forced SUPER_ADMIN-only in
+  // isNavItemVisibleForUser (it spends the platform's own money), own key,
+  // listed in OWNER_ONLY_FIXED_NAV_ITEMS so the role editor is honest.
+  { id: "apps.telnyx", href: "/apps/telnyx", label: "Telnyx", icon: "TX", lucide: Radio, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_telnyx" },
   { id: "apps.customers", href: "/apps/customers", label: "Customer Hub", icon: "CU", lucide: UsersRound, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_customer_hub" },
 
   { id: "tracking.dashboard", href: "/tracking/dashboard", label: "Dashboard", icon: "TD", lucide: LayoutDashboard, section: "tracking", sectionPermission: "can_view_section_tracking", permission: "can_view_tracking_dashboard" },
@@ -324,6 +329,7 @@ export const OWNER_ONLY_LIFTABLE_NAV_ITEMS: readonly string[] = [];
 export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "pbx.ivr_migration",
   "apps.signalwire",
+  "apps.telnyx",
   "admin.carrier_migration",
   "admin.pbx_console",
   "admin.integrations",
@@ -371,6 +377,8 @@ export function isNavItemVisibleForUser(
   if (item.id === "pbx.ivr_migration" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The SignalWire test bench spends the platform owner's money; owner only.
   if (item.id === "apps.signalwire" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The Telnyx test bench spends the platform owner's money; owner only.
+  if (item.id === "apps.telnyx" && backendJwtRole !== "SUPER_ADMIN") return false;
   // Carrier migration decides when a paying customer's number changes carrier,
   // and a port is not reversible in minutes. Owner only, always.
   if (item.id === "admin.carrier_migration" && backendJwtRole !== "SUPER_ADMIN") return false;

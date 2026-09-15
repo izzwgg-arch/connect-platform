@@ -28,6 +28,7 @@ import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient
 import { browserTenantContext, getPortalApiBaseUrl } from "../../../services/apiClient";
 import { readAuthToken } from "../../../services/session";
 import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
+import { ConnectSelect } from "../../../components/ConnectSelect";
 import { CustomerTypeahead, type CustomerHit } from "./CustomerTypeahead";
 
 /** A card on file — the register's stored cards + ones saved here via Sola. */
@@ -560,9 +561,13 @@ function OrdersList() {
             </span>
             <span className="sm-rpp">
               {t("Rows per page")}
-              <select className="sm-select" value={String(pageSize)} aria-label={t("Rows per page")} onChange={(e) => setParams({ size: Number(e.target.value) === SM_DEFAULT_PAGE_SIZE ? null : e.target.value })}>
-                {SM_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
+              <ConnectSelect
+                className="sm-select"
+                ariaLabel={t("Rows per page")}
+                value={String(pageSize)}
+                onChange={(v) => setParams({ size: Number(v) === SM_DEFAULT_PAGE_SIZE ? null : v })}
+                options={SM_PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }))}
+              />
             </span>
           </div>
         ) : null}

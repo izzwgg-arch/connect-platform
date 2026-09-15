@@ -114,6 +114,8 @@ export const SIDEBAR_ITEMS = [
   { id: "apps.voip_ms", section: "apps", label: "VoIP.ms", href: "/apps/voip-ms", permission: "can_view_apps_voip_ms" },
   // Platform-only carrier test bench (SUPER_ADMIN force line); own key.
   { id: "apps.signalwire", section: "apps", label: "SignalWire", href: "/apps/signalwire", permission: "can_view_apps_signalwire" },
+  // Platform-only carrier test bench #3 (SUPER_ADMIN force line); own key.
+  { id: "apps.telnyx", section: "apps", label: "Telnyx", href: "/apps/telnyx", permission: "can_view_apps_telnyx" },
   { id: "apps.customers", section: "apps", label: "Customer Hub", href: "/apps/customers", permission: "can_view_apps_customer_hub" },
 
   { id: "tracking.dashboard", section: "tracking", label: "Dashboard", href: "/tracking/dashboard", permission: "can_view_tracking_dashboard" },

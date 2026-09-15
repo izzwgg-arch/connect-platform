@@ -393,6 +393,7 @@ import { pushPromptToHelper, PromptPushError } from "./pbxPromptPushClient";
 import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
+import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import {
   inboundSmsWebhookUrl as signalWireInboundSmsWebhookUrl,
   resolvePublicApiBase as resolveSignalWirePublicApiBase,
@@ -3014,6 +3015,11 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   // PBX Console (2026-08-19) — platform-owner only; every handler also calls requireOwner.
   { prefix: "/admin/pbx-console", permission: "can_manage_global_settings" },
   { prefix: "/admin/apps/signalwire", permission: "can_manage_global_settings" },
+  // Telnyx evaluation console (2026-09-15) — the third carrier bench, beside
+  // SignalWire. Platform-owner only; every handler ALSO calls
+  // requireSuperAdmin. The rule exists so the prefix is not silently outside
+  // the global permission gate (the /admin/wake-health class).
+  { prefix: "/admin/apps/telnyx", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
   // class, where a missing rule meant no permission check ran at all).
@@ -24162,6 +24168,18 @@ registerMeetingRoutes(app);
 registerLoopcomDirectRoutes(app, { sendPushToUserDevices });
 
 registerSignalWireRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+
+// ── Telnyx evaluation console (2026-09-15) ─────────────────────────────────
+// The third carrier on the bench, beside SignalWire — evaluated because
+// Telnyx signs outbound calls from account numbers at STIR/SHAKEN attestation
+// A automatically, where SignalWire signs C until vetted. A test bench, not a
+// cut-over: nothing here is wired into onboarding, chat, billing SMS, the
+// worker or the PBX, and no public webhook is registered. Platform owner only.
+registerTelnyxRoutes({
   app,
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),

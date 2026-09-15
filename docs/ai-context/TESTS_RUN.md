@@ -2,6 +2,32 @@
 
 Newest entries first.
 
+## Telnyx bench + provider onboarding (2026-09-15)
+
+- api `node --experimental-test-module-mocks --import tsx --test "src/telnyx/*.test.ts"` → **14/14 pass**
+  (credential shape; URL build + Telnyx `{errors:[…]}` classing; fake-fetch client: Bearer header,
+  search-limit clamped to 50, ⛔ orderNumber sends ONE request and a timeout is never a retry;
+  source guards: server.ts wiring + permission rule, requireOwner on every /admin/apps/telnyx route,
+  no-VoIP.ms/onboarding/worker imports, no secret in audit rows, nav force line + Locked list +
+  shared-catalog key, and the package.json glob registration itself). **All 5 wiring guards replayed
+  against HEAD read 0 matches** — non-vacuous.
+- api signalwire suite (its guards read server.ts, which this task edits) → **40/40 pass**.
+- api tsc: **85 diagnostics, 0 in src/telnyx and 0 from this task's server.ts hunks** (the 85th is
+  another session's in-flight `registerLoopcomDirectRoutes` push-payload mismatch at server.ts:24168).
+- portal nav guard tests (consoleNavGuard + permissionToggleCoverage + navVisibility +
+  navAuthoritativeWiring) → **32/32 pass** with apps.telnyx added (Locked chip via
+  OWNER_ONLY_FIXED_NAV_ITEMS, honesty invariant green).
+- portal FULL suite → **632/636**; the 4 failures (campaigns index layout, desk-phone four-questions,
+  office provisioning listener, checkOfferCompatibility codec) are all in files this task never
+  touched and dirty-free at HEAD — pre-existing.
+- portal tsc → **0**.
+- ⛔ Found live: apps/portal/package.json's test script had `wizardDeviceIdentity.test.tslib/…` —
+  a missing space silently UNREGISTERING two test files (the documented unregistered-test trap).
+  Fixed; re-enabling nativeSelectSweep immediately caught a native `<select>` that had crept into
+  OrdersDesk.tsx while the sweep was dark → converted to ConnectSelect; both files now **7/7 pass**.
+- ⛔ Nothing here calls Telnyx; no credential is stored anywhere in the repo; no number bought, no
+  call placed, no PBX write. Telnyx-portal state and citations: AGENT_HANDOFF_TELNYX_ONBOARDING_2026-09-15.md.
+
 ## GDMS device/add batch-result fix (2026-09-15, `3040f2bc`)
 
 - api `npx tsx --test src/deskPhoneSetup/deviceProviders.test.ts` → **34/34 pass** (1 new: a serial
