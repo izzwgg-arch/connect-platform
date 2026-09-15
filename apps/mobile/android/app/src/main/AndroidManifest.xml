@@ -1,4 +1,44 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <!-- ⛔⛔ TABLET / EVERY-DEVICE COMPATIBILITY — DO NOT DELETE ANY OF THESE.
+       Google Play filters the store listing on IMPLIED hardware features: a
+       permission the app requests silently becomes a REQUIRED <uses-feature>
+       unless it is declared required="false" here. Before 2026-09-15 this
+       manifest declared NONE of them, so `aapt2 dump badging` on the shipped
+       build reported SIX required features and the Play listing read "not
+       compatible" on every Wi-Fi-only tablet:
+
+         telephony        <- CALL_PHONE (injected by react-native-callkeep)
+                             + READ_PHONE_STATE     ← the tablet killer
+         camera           <- CAMERA (rear camera; a front-camera-only tablet
+                             is excluded by this one alone)
+         microphone       <- RECORD_AUDIO
+         bluetooth        <- BLUETOOTH
+         location(.gps/.network) <- ACCESS_FINE/COARSE_LOCATION (Firebase)
+         screen.portrait  <- android:screenOrientation="portrait" on MainActivity
+
+       None of these is actually REQUIRED to run the app: it is a SIP softphone
+       over the data network, never the cellular radio. Every one of them has a
+       proven soft-failure path — TelecomBridge.ensurePhoneAccountRegistered
+       null-checks TELECOM_SERVICE and IncomingCallFirebaseService falls back to
+       its own full-screen notification; setupNativeCalling() try/catches;
+       the camera is only ever reached from the QR screens, which ask for the
+       permission first. Guard: src/ui/deviceCompatibility.test.ts. -->
+  <uses-feature android:name="android.hardware.telephony" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+  <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
+  <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
+  <uses-feature android:name="android.hardware.location" android:required="false"/>
+  <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+  <uses-feature android:name="android.hardware.location.network" android:required="false"/>
+  <uses-feature android:name="android.hardware.screen.portrait" android:required="false"/>
+  <uses-feature android:name="android.hardware.screen.landscape" android:required="false"/>
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+  <uses-feature android:name="android.hardware.faketouch" android:required="false"/>
+  <uses-feature android:name="android.hardware.wifi" android:required="false"/>
   <uses-permission android:name="android.permission.BLUETOOTH"/>
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
   <uses-permission android:name="android.permission.CAMERA"/>

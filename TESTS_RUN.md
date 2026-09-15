@@ -27,13 +27,7 @@
 - `apps/portal/components/floatingAssistantOpening.test.ts`: passed 11/11 using `tsx --test`, including `Talk to Laybel is a voice mode of the existing Assistant, not another agent`.
 - `git diff --check` passed for the Laybel implementation.
 - Shared-worktree portal typecheck is presently blocked by an unrelated concurrent error in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before declaration). A clean temporary worktree cannot resolve the local non-checked-in dependency tree, so it is not a substitute for a full typecheck.
-- Deploy Center dry run `ad871db3…`: **SUCCESS** for `portal` / `feat/ivr-migration-takeover`, resolving commit `7d93d23a8` (local ancestry confirmed it includes both Laybel commits).
-- Real blue/green portal job `c2ba7701…`: **SUCCESS** at 6:16:54 PM after 5m23s; stage **done**, deployed commit `7d93d23a8`. Its build log confirms `✓ Compiled successfully`, lint/type validation, and static generation of all 197 pages. Public `https://app.loopcom.net/ready`: **200** / `{"ok":true}` during rollout.
-- Post-deploy direct running-container source verification: **not proven**. Canonical Linux SSH was unavailable and the recovered Deploy Center UI timed out opening the log. This gap does not change the successful queue deployment status; it must not be represented as container-verified.
-- Source review after the owner reported no video/call launch: confirmed expected push-to-talk wiring only — `MediaRecorder` → authenticated `transcribe` → existing Assistant `send(..., "voice")` → browser-local `speechSynthesis`. No SignalWire, video, LiveKit, WebSocket, or real-time media call is present by design.
-- Owner has now reopened the live avatar/video scope and requested mockup review. No live avatar/provider call was started or claimed as tested in this documentation update.
-- Owner selected Concept A as the Laybel portrait. Provider documentation review confirmed Anam’s API accepts a PNG source image and its LiveKit integration publishes the animated avatar as a room participant, but no account, credential, avatar ID, service usage, or live call has been created.
-- No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
+- Not run: production deployment or production browser acceptance. No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
 ## Browser Companion Playwright engine — 2026-09-15
 
@@ -71,14 +65,28 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
   button, the yield/Escape LL hook, and the UAC elevation. Acceptance steps are in
   `docs/ai-context/AGENT_HANDOFF_COWORKER_SCREEN_CONTROL_2026-09-15.md`.
 
-## Coworker SCREEN CONTROL — model vision (Phase 2) — 2026-09-15
+## Android TABLET / every-device compatibility — 2026-09-15
 
-- `cd apps/agent && node --import tsx --test src/llm/toolImage.test.ts src/llm/multimodal.test.ts` → **11/11 pass**
-  (extractToolResultImage strips the image and refuses non-images; anthropicToolResultBlock builds the tool_result image
-  block in the API's exact shape; the OpenAI function_call_output + input_image data-URL shape; image-aware boundContent
-  keeps the screenshot under its own ceiling, still caps the rest, and DROPS an over-size image rather than truncating).
-- `cd apps/desktop && node --import tsx --test src/coworker/screenControl.test.ts src/coworker/coworkerHands.test.ts` →
-  **32/32 pass** (adds computer_screen_look + its in-session vision flow; the drift/coverage guard covers the 10th tool).
-- Desktop `tsc -p tsconfig.json --noEmit` → EXIT 0. Agent: my files (router.ts, desktopLink.ts, toolImage.test.ts) are
-  clean; the pre-existing `server.ts unref` + `packages/db webrtc*` tsc errors are unrelated toolchain issues.
-- ⏳ NOT run: a real screenshot round-tripping through a live Anthropic/OpenAI vision call and the model acting on it.
+- `cd apps/mobile && npx tsx --test src/ui/deviceCompatibility.test.ts` -> **4/4 pass**.
+  Replayed against the pre-fix tree (`MOBILE_GUARD_ROOT=<git archive HEAD checkout>`) -> **3 of 4 FAIL**,
+  so the guard is real and not a tautology. (The 4th, "nothing is declared required=true", passes on HEAD
+  because HEAD declared no `<uses-feature>` at all — that one guards the future.)
+- `cd apps/mobile && npx tsc --noEmit` -> **EXIT 0**.
+- **THE BEFORE**, `aapt2 dump badging apps/mobile/dist/connectcomms-v1.0.0+20260906-115729.apk`
+  (the fleet APK whose code matches Play vc102): **six `uses-implied-feature` lines** —
+  telephony (`reason='requested a telephony permission'`), camera, microphone, bluetooth, location,
+  screen.portrait. `supports-screens` was already all four sizes, so that was never the cause.
+- **THE AFTER**, same command on a release APK assembled from the fixed manifest
+  (`android/app/build/outputs/apk/release/app-release.apk`, `versionCode=103`):
+  **ZERO `uses-feature` and ZERO `uses-implied-feature` lines; all 16 read `uses-feature-not-required`**
+  (bluetooth, bluetooth_le, camera, camera.any, camera.autofocus, camera.front, faketouch, location,
+  location.gps, location.network, microphone, screen.landscape, screen.portrait, telephony, touchscreen, wifi).
+- **The shipped bundle carries it**: `apps/mobile/dist/loopcom-play-vc103.aab` (55,799,932 b, BUILD SUCCESSFUL
+  in 7m59s via `scripts/android-play-bundle.ps1 -VersionCode 103 -VersionName 1.0.0`); all 16 feature names are
+  present in its `base/manifest/AndroidManifest.xml`.
+- Source-traced, not guessed: `grep -rn hasSystemFeature` over `apps/mobile/src` and the native Kotlin/Java
+  returns **nothing**, so no code branches on any of these — the change is store-side only.
+- ⏳ NOT run / NOT proven: the AAB is **NOT uploaded to Play** (owner's call), and **no real tablet has installed
+  it**. The honest test is a Wi-Fi-only tablet showing an **Install** button instead of "Your device isn't
+  compatible with this version", then a call ringing on it.
+- ⛔ Still excluded and NOT addressed here: x86/x86_64 (the AAB carries `armeabi-v7a` + `arm64-v8a` only).

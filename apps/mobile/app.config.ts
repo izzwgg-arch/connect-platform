@@ -36,6 +36,53 @@ const withCallKeepManifest: ConfigPlugin = (config) =>
     return mod;
   });
 
+// ⛔⛔ TABLET / EVERY-DEVICE COMPATIBILITY. Google Play turns requested
+// permissions into REQUIRED <uses-feature> entries and filters the store
+// listing on them, so before 2026-09-15 the shipped build implied SIX required
+// features (telephony, camera, microphone, bluetooth, location,
+// screen.portrait) and read "not compatible" on every Wi-Fi-only tablet.
+// None is genuinely required — this is a SIP softphone on the data network.
+//
+// ⛔ android/ is BARE, so the list that actually ships lives in
+// android/app/src/main/AndroidManifest.xml. This plugin exists so a future
+// `expo prebuild` regenerates the same list instead of silently re-excluding
+// every tablet that day. KEEP THE TWO IN SYNC — src/ui/deviceCompatibility.test.ts
+// reads both files and fails if they drift.
+const OPTIONAL_HARDWARE_FEATURES = [
+  'android.hardware.telephony',
+  'android.hardware.camera',
+  'android.hardware.camera.any',
+  'android.hardware.camera.front',
+  'android.hardware.camera.autofocus',
+  'android.hardware.microphone',
+  'android.hardware.bluetooth',
+  'android.hardware.bluetooth_le',
+  'android.hardware.location',
+  'android.hardware.location.gps',
+  'android.hardware.location.network',
+  'android.hardware.screen.portrait',
+  'android.hardware.screen.landscape',
+  'android.hardware.touchscreen',
+  'android.hardware.faketouch',
+  'android.hardware.wifi',
+];
+
+const withOptionalHardwareFeatures: ConfigPlugin = (config) =>
+  withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest as any;
+    const features: any[] = manifest['uses-feature'] ?? [];
+    for (const name of OPTIONAL_HARDWARE_FEATURES) {
+      const existing = features.find((f) => f.$?.['android:name'] === name);
+      if (existing) {
+        existing.$['android:required'] = 'false';
+      } else {
+        features.push({ $: { 'android:name': name, 'android:required': 'false' } });
+      }
+    }
+    manifest['uses-feature'] = features;
+    return mod;
+  });
+
 function resolveProfile(): string {
   return String(process.env.EAS_BUILD_PROFILE || process.env.EXPO_BUILD_PROFILE || 'dev').toLowerCase();
 }
@@ -271,6 +318,7 @@ const config: ExpoConfig = {
     // uses; renaming it orphans every device already on the navy icon.
     ['expo-alternate-app-icons', [{ name: 'Navy', ios: './assets/icons/ios-icon-navy.png' }]],
     withCallKeepManifest,
+    withOptionalHardwareFeatures,
     './plugins/withIncomingCallService',
     // iOS VoIP push wiring (PushKit → RNVoipPushNotificationManager).
     // No-op on Android. See plugins/withIosVoipPush.js for the full contract

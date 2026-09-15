@@ -34,7 +34,8 @@
     "test:voicemail-client-scope": "tsx src/api/voicemailClientScope.test.ts",
     "test:wake-registration": "tsx --test src/sip/mobileWakeRegistration.test.ts",
     "test:voicemail-ring-stop": "tsx --test src/screens/tabs/voicemailPausesOnRing.test.ts",
-    "test:window-width": "tsx --test src/ui/windowWidth.test.ts"
+    "test:window-width": "tsx --test src/ui/windowWidth.test.ts",
+    "test:device-compat": "tsx --test src/ui/deviceCompatibility.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.26.0",
