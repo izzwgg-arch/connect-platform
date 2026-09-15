@@ -27,7 +27,7 @@ import { CoworkerBrowser } from "./browser";
 import { runDiagnostics } from "./diagnostics";
 import { McpManager } from "./mcp";
 import { Journal } from "./journal";
-import type { ChromeRuntime } from "../browserCompanion/runtime";
+import type { BrowserCompanionRuntime } from "../browserCompanion/runtime";
 import { validateArgs, type CommandName } from "../browserCompanion/protocol";
 
 export type ApprovalRequest = {
@@ -52,7 +52,7 @@ export type RuntimeDeps = {
   /** Show the person a Yes/No and resolve their answer (false on timeout/close). */
   askApproval: (req: ApprovalRequest, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>;
   browser: CoworkerBrowser;
-  chrome?: ChromeRuntime;
+  chrome?: BrowserCompanionRuntime;
   mcp: McpManager;
   journal: Journal;
   shellDeps?: ShellDeps;

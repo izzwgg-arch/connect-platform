@@ -7,8 +7,23 @@ import { DEFAULT_PORT, type CommandName } from "./protocol";
 import { resolveUserPath, type FsEnv } from "../runtime/fs";
 import type { Journal } from "../runtime/journal";
 
+/**
+ * The desktop runtime deliberately exposes only Loopcom's narrow browser
+ * command set.  Both the legacy extension bridge and the Playwright-backed
+ * Loopcom Coworker profile implement this shape; neither exposes a generic
+ * evaluate-JavaScript or arbitrary-tab capability to the model.
+ */
+export type BrowserCompanionRuntime = {
+  start(): Promise<void> | void;
+  stop(): Promise<void> | void;
+  cancel(taskId: string | null): void;
+  status(): Record<string, unknown>;
+  prepare(command: CommandName, args: Record<string, unknown>, taskId: string, signal: AbortSignal, scopeId?: string): Promise<Record<string, unknown>>;
+  execute(command: CommandName, args: Record<string, unknown>, taskId: string, signal: AbortSignal, scopeId?: string, authorization?: string): Promise<Record<string, unknown>>;
+};
+
 export const COMPANION_EXTENSION_ID = "alogeebhboibbnncnkchchogajlejnpp";
-export class ChromeRuntime {
+export class ChromeRuntime implements BrowserCompanionRuntime {
   private bridge: BrowserCompanionBridge | null = null;
   private error: string | null = null;
   private secret: string | null = null;

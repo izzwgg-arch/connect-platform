@@ -23,7 +23,7 @@ import { Journal } from "./runtime/journal";
 import { DesktopLinkClient, type LinkState } from "./link";
 import { askApproval, registerApprovalIpc, openConnectionsWindow, pendingApprovals, type ApprovalDeps } from "./approvalWindow";
 import { normalizePermissions, PERMISSION_PROFILES } from "./policyCore";
-import { ChromeRuntime } from "./browserCompanion/runtime";
+import { PlaywrightRuntime } from "./browserCompanion/playwrightRuntime";
 
 export type HandsDeps = {
   app: App;
@@ -110,8 +110,8 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   const permissions = () => normalizePermissions({ profile: d.getSettings().coworkerPermissions ?? "SAFE", overrides: {} });
 
-  const chrome = d.safeStorage ? new ChromeRuntime({userData:d.app.getPath("userData"),safeStorage:d.safeStorage,
-    env:()=>runtime.fsEnv(),journal,onStop:()=>runtime.cancel(null)}) : undefined;
+  const chrome = new PlaywrightRuntime({userData:d.app.getPath("userData"),
+    env:()=>runtime.fsEnv(),journal,onStop:()=>runtime.cancel(null),log});
   const runtime: CoworkerRuntime = new CoworkerRuntime({
     home: os.homedir(),
     workspace,
@@ -137,7 +137,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
       mcpServers: mcp.status().map((m) => ({ id: m.id, name: m.name, state: m.state, tools: m.tools.length })),
     };
   };
-  void chrome?.start();
+  void chrome.start();
 
   const getToken = async (): Promise<string | null> => {
     const win = d.fullWindow();
@@ -172,7 +172,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
       workspace: workspaceFor(s),
       appVersion: d.app.getVersion(),
       tools: runtime.manifestTools().length,
-      chrome: chrome?.status() ?? {connected:false,error:"secure_storage_unavailable"},
+      chrome: chrome.status(),
       mcp: mcp.status(),
       activeCalls: runtime.activeCalls(),
       pendingApprovals: pendingApprovals(),
@@ -183,7 +183,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
   d.ipcMain.handle("coworker-admin:chrome-pair", (event) => {
     const expected = require("node:url").pathToFileURL(d.assetPath("coworkerConnections.html")).href;
     if(event.sender.getURL()!==expected || event.senderFrame!==event.sender.mainFrame) return {ok:false,error:"not_allowed_from_this_window"};
-    return chrome?.pairing() ?? {ok:false,error:"secure_storage_unavailable"};
+    return { ok: false, error: "playwright_profile_requires_no_pairing", message: "Loopcom starts its separate branded Chrome profile when you ask it to browse." };
   });
   d.ipcMain.handle("coworker-admin:set-profile", (event, profile: unknown) => {
     if (!isLocalAdminWindow(event)) return { ok: false, error: "not_allowed_from_this_window" };
@@ -241,7 +241,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   return {
     link, runtime, mcp, journal,
-    stop: async () => { try { runtime.cancel(null); await chrome?.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
+    stop: async () => { try { runtime.cancel(null); await chrome.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
     openConnections: () => { openConnectionsWindow(approvalDeps); },
     status: () => ({ link: link!.status(), profile: permissions().profile, mcp: mcp.status().map((m) => ({ id: m.id, state: m.state, tools: m.tools.length })), active: runtime.activeCalls() }),
     busy: () => runtime.activeCalls().length > 0 || pendingApprovals().length > 0,

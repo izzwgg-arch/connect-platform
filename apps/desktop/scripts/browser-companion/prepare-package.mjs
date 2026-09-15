@@ -12,7 +12,13 @@ await fs.mkdir(stage,{recursive:false});
 for(const name of ["dist","assets","browser-companion"]) await fs.cp(path.join(desktop,name),path.join(stage,name),{recursive:true});
 const pkg=JSON.parse(await fs.readFile(path.join(desktop,"package.json"),"utf8"));
 delete pkg.devDependencies;delete pkg.scripts;
-pkg.dependencies={"electron-updater":require("electron-updater/package.json").version};
+// The staged app is deliberately independent from the monorepo's node_modules.
+// Keep every runtime dependency explicit so an installer cannot accidentally
+// work only on the development machine.
+pkg.dependencies={
+  "electron-updater":require("electron-updater/package.json").version,
+  "playwright-core":pkg.dependencies?.["playwright-core"],
+};
 await fs.writeFile(path.join(stage,"package.json"),JSON.stringify(pkg,null,2)+"\n");
 await fs.copyFile(path.join(desktop,"electron-builder.yml"),path.join(stage,"electron-builder.yml"));
 await fs.writeFile(path.join(repo,"scratchpad","browser-companion-package-path.txt"),stage);

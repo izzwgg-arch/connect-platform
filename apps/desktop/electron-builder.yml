@@ -37,6 +37,9 @@ files:
   - assets/**
   - browser-companion/**
   - package.json
+  # Playwright Core drives the installed Chrome channel. It has no bundled
+  # browser binary, but its runtime library must travel with the app.
+  - node_modules/playwright-core/**
 
 win:
   target: nsis

@@ -107,3 +107,25 @@ Recommendation (assessment, not implemented or proven): use Microsoft Playwright
 - Browser Use: MIT core; an alternative browser-agent framework. Lower fit as the first choice here because Loopcom already has its own model reasoning/tool orchestration. Switching frameworks does not itself supply the missing acceptance evidence or remove legitimate browser consent.
 
 Primary sources inspected: https://github.com/microsoft/playwright-mcp ; https://github.com/microsoft/playwright.dev/blob/main/mcp/configuration/browser-extension.mdx ; https://github.com/ChromeDevTools/chrome-devtools-mcp ; https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/advanced-usage.md ; https://github.com/browser-use/browser-use ; repository license files. No alternative was installed, connected to the user profile, or tested through Loopcom in this review. No claim that an alternative has passed. No runtime changes or tests in this review.
+
+## Playwright implementation — 2026-09-15
+
+### What changed
+
+- `apps/desktop/src/coworker/browserCompanion/playwrightRuntime.ts` is now the active runtime wired by `hands.ts`. It calls the locally installed Google Chrome channel through `playwright-core@1.63.0` and uses a dedicated user-data directory named `Loopcom Coworker Chrome Profile`. It is lazy: Chrome starts only after a browser tool reaches execution.
+- The runtime preserves Loopcom's normalized `tabs/open/read/act/download/upload/screenshot/wait/close` surface. It does not attach generic Playwright MCP tools and does not give the model `evaluate`, arbitrary selectors, DevTools or access to user-owned tabs.
+- Each tab has an explicit Coworker conversation scope. A read issues random short-lived element references held only in the desktop process. A write approval is one-use and checks command, canonical arguments, task, scope, tab, URL, document epoch, target signature, and a private digest of the page's non-sensitive form state immediately before execution. Password, OTP, token and hidden controls are omitted from reads.
+- Downloads are restricted to same-origin, saved inside the workspace downloads folder, limited to 25 MB and journaled. Uploads accept only a fenced, existing file under 25 MB and require a separate submission action. Screenshots are local artifacts; no model-vision transport was added.
+- Settings text is now Loopcom-branded and states that the separate Coworker profile cannot read/control ordinary Chrome tabs or sessions. The old extension remains in source for a future explicit existing-session mode but is not started by default.
+- `prepare-package.mjs` stages Playwright Core explicitly. `electron-builder.yml` includes it, fixing an initial candidate where it was absent from ASAR.
+
+### Verification on 2026-09-15
+
+- `pnpm --filter @connect/desktop build` passed using TS 6.
+- Complete Coworker tests passed (including the pre-existing policy/runtime suite); extension security checks passed 3/3.
+- New `playwrightRuntime.test.ts` launched installed Chrome headlessly with a temporary isolated profile and controlled loopback page. It passed: scoped tabs are invisible to another conversation; foreign reads are denied; page state changing after approval invalidates that approval; a token cannot replay; form fill succeeds with a fresh approval; a same-origin CSV download is byte-verified in the workspace.
+- Clean package staging then `npm install --omit=dev --ignore-scripts` and Electron Builder produced `scratchpad/browser-companion-package-20260915162157175/release/Connect-Setup-0.1.17-rc.16.exe`, SHA-256 `F015056D9E3D85B73C3328D816D7F662AA699C3C2440203FE79436318987C85B`. Its ASAR contains `playwrightRuntime.js`, `playwright-core/index.js`, `playwright-core/package.json`, and the Settings page. `verify-built-icon.ts` passed all 7 Loopcom icon frames on its unpacked `Loopcom.exe`.
+
+### Current limit / release status
+
+This candidate is **not installed, published, pushed, deployed or accepted through the live Loopcom conversation**. The user’s normal Chrome profile, logged-in sessions and tabs remain inaccessible by design. Existing-profile access needs a separate, consented Chrome connection and a full security/acceptance pass. Provider/tool routing, vision transport, 2FA pause/resume, restart/stress coverage and packaged live-chat acceptance remain unproven. Do not represent this as production-ready until those tests are completed.
