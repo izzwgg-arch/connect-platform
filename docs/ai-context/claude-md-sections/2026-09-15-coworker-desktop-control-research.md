@@ -46,4 +46,11 @@ Follow-up: can the Coworker run PowerShell as administrator, with permission?
 3. Phase 2: separate session (child session / RDP loopback) for a genuinely separate mouse.
 4. Admin PowerShell: per-call UAC via the existing elevated-helper pattern, denylist kept.
 
+## Izzy's decision (2026-09-15, later same day)
+
+*"The mouse is not that important. One mouse, I'll live with that."* → the separate-session phase (option 3) is
+DROPPED. Build = one shared cursor (UIA where available, SendInput otherwise), edge overlay, Escape ends, agent yields
+when the person moves the mouse/types, admin PowerShell via UAC. Hard limits still stand: the UAC prompt and the lock
+screen cannot be driven; DRM-protected windows capture black.
+
 ⏳ Nothing built, committed as code, deployed or tested.
