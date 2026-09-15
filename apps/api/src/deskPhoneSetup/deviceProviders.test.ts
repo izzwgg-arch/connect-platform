@@ -124,6 +124,8 @@ test("parseGdmsDevice reads the fields defensively and never guesses online", ()
   assert.equal(d!.firmware, "1.0.11.64");
   assert.equal(parseGdmsDevice({ mac: MAC, status: "sleeping" })!.online, null, "an unreadable status is unknown, never false");
   assert.equal(parseGdmsDevice({ mac: MAC, status: true })!.online, true);
+  assert.equal(parseGdmsDevice({ mac: MAC, status: 1 })!.online, true, "the live cloud sends numbers (proven 2026-09-15)");
+  assert.equal(parseGdmsDevice({ mac: MAC, status: 0 })!.online, null, "an unobserved number stays unknown, never a guessed offline");
   assert.equal(parseGdmsDevice([{ mac: MAC }]), null);
   assert.equal(parseGdmsDevice({ mac: "not-a-mac" }), null);
   assert.equal(parseGdmsDevice(null), null);

@@ -152,20 +152,39 @@ test("an instruction this machine cannot perform is not hammered forever", async
   assert.equal(d2.everythingStalled(), false);
 });
 
-test("rediscover reports what it found by hardware id, never by address", async () => {
-  const api = fakeApi([phone("p1", { state: "WAITING_FOR_REBOOT" })], { p1: { action: "rediscover" } });
+test("rediscover re-matches KNOWN phones by hardware id and never imports the rest of the network", async () => {
+  // ⛔ The raw host list once went to the server whole: on 2026-09-15 one post-reset sweep
+  // imported 87 of a customer's home devices — the router included — as "Desk phone" cards.
+  // A rediscover exists to find a phone the run already knows at its new address; new
+  // devices are the initial discovery's job, behind its phone-evidence filter.
+  const api = fakeApi(
+    [phone("p1", { state: "WAITING_FOR_REBOOT", mac: "80:5e:0c:00:00:01" })],
+    { p1: { action: "rediscover" } },
+  );
   const bridge = {
     ops: [] as any[],
     run: async (req: any) => {
       bridge.ops.push(req);
-      return { ok: true, scan: { subnet: "192.168.1.0/24", hosts: [{ mac: "80:5e:0c:00:00:01", ip: "192.168.1.99" }] } };
+      return {
+        ok: true,
+        scan: {
+          subnet: "192.168.1.0/24",
+          hosts: [
+            { mac: "80:5e:0c:00:00:01", ip: "192.168.1.99" },
+            { mac: "24:f3:e3:f5:b8:92", ip: "192.168.1.1" },
+            { mac: "a0:dd:6c:49:2b:d8", ip: "192.168.1.30" },
+          ],
+        },
+      };
     },
   };
   const d = createSetupDriver("r1", api, bridge);
   await d.tick();
   const report = api.calls.find((c) => c.path.endsWith("/discovered"))!;
   assert.ok(report, "the rediscovery was never reported");
+  assert.equal(report.body.phones.length, 1, "only the run's own phone is re-submitted");
   assert.equal(report.body.phones[0].mac, "80:5e:0c:00:00:01");
+  assert.equal(report.body.phones[0].ip, "192.168.1.99", "the NEW address is what the re-match carries");
 });
 
 test("a failing advance on one phone does not stop the others", async () => {

@@ -253,12 +253,13 @@ export async function ensureProvisioningRecord(
 
   // ⛔⛔ MOVING A RECORD OFF ANOTHER CUSTOMER NEEDS PROOF IT IS STALE (2026-09-14).
   // "This phone is on my network" is reported by the customer's OWN computer and the
-  // server cannot verify it, so without this any customer with the desk-phone permission
-  // could name another company's working handset and silently re-point it. The rule
-  // lives in `decideRehome`: moved only when nothing live uses the other extension, or
-  // when the only live registration there IS this handset on this network. Anything
-  // unreadable refuses — a stale row left for Support costs a phone call; a live phone
-  // taken costs another customer their line.
+  // server cannot verify it beyond the presence pair, so the rule lives in `decideRehome`.
+  // Since 2026-09-15 (Izzy: "the desktop wizard gets priority ... that phone belongs to the
+  // wizard") a live registration by a DIFFERENT device no longer blocks the release —
+  // removing a MAC's record never touches another device's registration. What still
+  // refuses: unreadable registration state, a missing presence pair, and the forger shape
+  // (this handset's own LAN address live from another public address). Every release over
+  // a live extension is audited via auditRehome and logged with the endpoints left standing.
   if (plan.rehomedFromTenant != null) {
     const bound = (ctx.existing?.boundDeviceIds ?? []).filter(
       (d): d is number => typeof d === "number" && d > 0,

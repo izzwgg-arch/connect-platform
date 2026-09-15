@@ -466,7 +466,13 @@ export type RehomeEvidence = {
   windowMs?: number;
 };
 
-export type RehomeDecision = { allow: boolean; why: string };
+export type RehomeDecision = {
+  allow: boolean;
+  why: string;
+  /** Endpoints whose live registrations were deliberately left standing while the record was
+   *  released — other devices, untouched by a MAC-record release. Audit material. */
+  releasedOverLive?: string[];
+};
 
 const cleanHost = (h: string | null | undefined): string | null => {
   const v = String(h ?? "").trim().replace(/^\[|\]$/g, "").toLowerCase();
@@ -545,6 +551,39 @@ export function decideRehome(e: RehomeEvidence): RehomeDecision {
       why: `the only live registration on ${live.map((r) => r.endpoint).join(", ")} is this handset (${discovered}) on this customer's own network (${requester})`,
     };
   }
-  const s = strangers[0];
-  return { allow: false, why: `${s.endpoint} is in use by another device (${s.contactUri ?? "no contact address"})` };
+  // ⛔⛔ THE WIZARD OWNS A PHONE STANDING ON ITS OWN NETWORK (Izzy, 2026-09-15, verbatim:
+  // "They run the desktop wizard, the desktop wizard gets priority, and anything else is
+  // deleted. That phone belongs to the wizard."). A live registration by a DIFFERENT device
+  // stops blocking the release: removing a MAC's record never touches another device's
+  // registration, and the halt it used to cause stranded a run on "Support needs to finish"
+  // over a provably stale record (lived 2026-09-15: a GXP2170 standing factory-reset in the
+  // requesting customer's house, refused because the OTHER tenant's real phone was registered
+  // at the extension the stale record named). Two fences survive, both proof-of-presence:
+  //   1. the office machine must have SEEN the handset on the customer's LAN — the presence
+  //      pair (discoveredIp AND requesterIp). Without both, nothing distinguishes the wizard
+  //      from a forged report naming another company's hardware address.
+  //   2. no live registration may look like THIS handset alive ELSEWHERE: its LAN address in
+  //      a contact registered from a different public address is the forger shape and refuses.
+  if (!discovered || !requester) {
+    return {
+      allow: false,
+      why: `${strangers[0].endpoint} has live registrations and the handset's presence on the requesting network is unproven`,
+    };
+  }
+  const imposter = live.find((r) => {
+    const { publicHost, lanHost } = contactAddresses(r.contactUri);
+    return lanHost !== null && lanHost === discovered && publicHost !== requester;
+  });
+  if (imposter) {
+    return {
+      allow: false,
+      why: `${imposter.endpoint} shows this handset's own address live from another network (${imposter.contactUri ?? "no contact address"}) — a claim from elsewhere never takes it`,
+    };
+  }
+  const kept = strangers.map((r) => String(r.endpoint));
+  return {
+    allow: true,
+    why: `released while ${kept.join(", ")} stays live: those registrations are other devices and are untouched, and this handset is standing on the requesting customer's own network (${discovered} behind ${requester})`,
+    releasedOverLive: kept,
+  };
 }

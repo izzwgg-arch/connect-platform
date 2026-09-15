@@ -96,6 +96,11 @@ export function parseGdmsDevice(row: unknown): GdmsDevice | null {
   if (typeof status === "boolean") online = status;
   else if (typeof status === "string" && /^online$/i.test(status.trim())) online = true;
   else if (typeof status === "string" && /^offline$/i.test(status.trim())) online = false;
+  // Proven on the live cloud 2026-09-15 (first real device row): GDMS sends `status` as a
+  // NUMBER — a device known to be online carried status:1. Only the observed value maps;
+  // other numbers stay unknown rather than guessed (0 is PROBABLY offline, but nobody has
+  // seen a real offline row yet, and "unknown" is honest while "offline" gates cloud tasks).
+  else if (typeof status === "number" && status === 1) online = true;
   return {
     mac,
     model: text(["model", "deviceModel", "productModel", "deviceType"], 40),

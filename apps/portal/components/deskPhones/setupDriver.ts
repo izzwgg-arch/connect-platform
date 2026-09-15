@@ -18,7 +18,7 @@
  * feed the gentle branches.
  */
 
-import { vendorSupportsHttpActions, vendorSupportsPnpHandoff } from "@connect/shared";
+import { normalizeMac, vendorSupportsHttpActions, vendorSupportsPnpHandoff } from "@connect/shared";
 
 export type DriverApi = {
   get: <T>(path: string) => Promise<T>;
@@ -454,9 +454,20 @@ export function createSetupDriver(
         say(phone.id, HINT_FINDING);
         const scan = await bridge.run({ op: "discover" }).catch(() => null);
         if (scan?.ok) {
-          const hosts = (scan.scan?.hosts ?? []).map((h: any) => ({ mac: h.mac, ip: h.ip }));
-          // The server re-matches by hardware id, so a phone that came back on a new
-          // address is found again without anyone tracking addresses.
+          // ⛔⛔ ONLY HOSTS THE RUN ALREADY KNOWS ARE SUBMITTED. A rediscover exists to
+          // re-match a KNOWN phone that came back on a new address after a restart — the
+          // server re-matches by hardware id. Posting the raw host list re-created the
+          // exact bug the initial discovery's classify filter was built against
+          // (2026-08: "We found 23 desk phones", 19 of them printers) through a second
+          // door: on 2026-09-15 one post-reset sweep imported 87 of a customer's home
+          // devices — router included — as "Desk phone / Finding" cards. NEW devices are
+          // the initial discovery's job, behind its evidence filter.
+          const known = new Set(
+            (out.phones as DiagnosticPhone[]).map((p) => normalizeMac(p.mac ?? "")).filter(Boolean),
+          );
+          const hosts = (scan.scan?.hosts ?? [])
+            .map((h: any) => ({ mac: h.mac, ip: h.ip }))
+            .filter((h: any) => known.has(normalizeMac(h.mac ?? "")));
           await api.post(`/desk-phones/runs/${runId}/discovered`, {
             subnet: scan.scan?.subnet ?? undefined, phones: hosts,
           }).catch(() => null);

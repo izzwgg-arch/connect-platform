@@ -377,13 +377,16 @@ test("unreadable registration state refuses — never move what cannot be proven
   assert.equal(d.allow, false);
 });
 
-test("another company's extension in use by a DIFFERENT device is never taken", () => {
+test("another company's extension live on a DIFFERENT device releases — the wizard on the phone's own network wins (Izzy, 2026-09-15)", () => {
+  // Releasing a MAC's record never touches the other device's registration; the halt this
+  // used to cause stranded a customer on "Support needs to finish" over a stale record.
   const d = decideRehome({
     boundEndpoints: ["T7_102"], registrations: [T7_102_THEIR_OFFICE],
     discoveredIp: "192.168.6.172", requesterIp: RIG_PUBLIC, now: NOW,
   });
-  assert.equal(d.allow, false);
-  assert.match(d.why, /T7_102/);
+  assert.equal(d.allow, true, d.why);
+  assert.deepEqual(d.releasedOverLive, ["T7_102"]);
+  assert.match(d.why, /untouched/);
 });
 
 test("the only live registration being THIS handset on THIS network lets it move", () => {
@@ -411,21 +414,24 @@ test("an unknown customer address can never prove presence", () => {
   assert.equal(d.allow, false);
 });
 
-test("one live registration by this phone and one by another device still refuses", () => {
+test("this handset here plus another device live elsewhere releases — only the other device's endpoint is noted", () => {
   const d = decideRehome({
     boundEndpoints: ["T7_106", "T7_102"], registrations: [T7_106_THIS_RIG, T7_102_THEIR_OFFICE],
     discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
   });
-  assert.equal(d.allow, false);
+  assert.equal(d.allow, true, d.why);
+  assert.deepEqual(d.releasedOverLive, ["T7_102"]);
 });
 
-test("a registration without the NAT marker cannot be proven to be this phone", () => {
+test("a markerless registration from the customer's own public address no longer blocks — it cannot be an imposter claim", () => {
+  // No LAN marker means it cannot match the forger shape (this handset's address from another
+  // network); presence is proven by the office machine, so the wizard takes the record.
   const d = decideRehome({
     boundEndpoints: ["T7_106"],
     registrations: [{ ...T7_106_THIS_RIG, contactUri: "sip:T7_106@50.48.58.53:36493" }],
     discoveredIp: "192.168.6.171", requesterIp: RIG_PUBLIC, now: NOW,
   });
-  assert.equal(d.allow, false);
+  assert.equal(d.allow, true, d.why);
 });
 
 test("a registration older than the window stops counting; one inside it still counts", () => {
@@ -433,8 +439,12 @@ test("a registration older than the window stops counting; one inside it still c
   const old = { ...T7_102_THEIR_OFFICE, status: "UNREGISTERED", lastRegisteredAt: new Date(NOW.getTime() - REHOME_LIVE_WINDOW_MS - day) };
   const recent = { ...T7_102_THEIR_OFFICE, status: "UNREGISTERED", lastRegisteredAt: new Date(NOW.getTime() - 3 * day) };
   const base = { boundEndpoints: ["T7_102"], discoveredIp: "192.168.6.172", requesterIp: RIG_PUBLIC, now: NOW };
-  assert.equal(decideRehome({ ...base, registrations: [old] }).allow, true);
-  assert.equal(decideRehome({ ...base, registrations: [recent] }).allow, false);
+  const stale = decideRehome({ ...base, registrations: [old] });
+  assert.equal(stale.allow, true);
+  assert.equal(stale.releasedOverLive, undefined, "an expired registration is simply stale, not released-over");
+  const liveOne = decideRehome({ ...base, registrations: [recent] });
+  assert.equal(liveOne.allow, true, liveOne.why);
+  assert.deepEqual(liveOne.releasedOverLive, ["T7_102"], "a registration inside the window is still LIVE and is recorded as released-over");
 });
 
 test("a registration on an endpoint the record is NOT bound to is ignored", () => {
