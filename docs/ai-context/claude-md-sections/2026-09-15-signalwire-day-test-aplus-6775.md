@@ -41,11 +41,18 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_APLUS_DAY_TEST_2026-09
 - **TEST v2 IS ON (845) 782-3064 NOW** (same two edits, exact exten `8457823064`,
   loaded-dialplan verified; inbound route rings ext 108; backup
   `*.bak.signalwire-aplus3064-test.*`).
-- ✅ **THE SRTP FIX IS APPLIED (11:05 ET): trunk 132 endpoint now `media_encryption=
-  sdes`** via new regen-safe `/etc/asterisk/pjsip__60_custom.conf` (+ include line in
-  root pjsip.conf; endpoint/registration/aor/identify all verified intact after
-  reload). ⛔ The SignalWire dashboard CANNOT disable encryption — the endpoint was
-  ALREADY on "Optional" and still offers SAVP+crypto (sole suite AEAD_AES_256_GCM_8,
-  supported by this Asterisk). ⏳ NOT PROVEN: no bridged answered call since the flip —
-  proof is one answered 3064 call that stays up. §6/§7 of the handoff.
-  ⛔ Migration-board rule: every SignalWire trunk endpoint needs `media_encryption=sdes`.
+- ✅ **THE FIX IS FOUR PIECES, ALL LIVE + IVR-PROVEN 12:27 ET (§6):** ① trunk 132
+  `media_encryption=sdes` **+ `media_encryption_optimistic=yes`** (regen-safe
+  `/etc/asterisk/pjsip__60_custom.conf` + include in root pjsip.conf) — sdes ALONE
+  488s EVERYTHING because SignalWire's INVITE has TWO audio m-lines and strict sdes
+  hard-fails on the second; ② SignalWire dashboard Custom Ciphers = AES_CM_128 only
+  (GCM_8 AND both AES_256_CM 488'd on this build — a res_srtp symbols check is NOT a
+  support check); ③ `Set(CALLERID(dnid)=${SWDID})` in `[trk-132-in]` — 3064's route
+  is the connect-doorway, which keys on DNID, and SignalWire INVITEs to `sip:s@…`
+  (the "rings then goodbye" symptom); ④ probes out 0001 need a CallerID (call file,
+  not CLI originate) or telocall eats them with its own announcement. **Proven: probe
+  → 200 OK, SRTP up, doorway resolved 3064, A plus IVR answered + WaitExten 15 s.**
+  ⏳ NOT PROVEN: an extension ANSWER surviving the bridge (the original cause-58
+  complaint) — one human call: dial 3064, press an option, answer. ⛔ Dashboard
+  cannot disable encryption ("Optional" still offers SAVP). ⛔ Migration-board rule:
+  SignalWire trunks = sdes + optimistic + AES_CM_128 ciphers on the SW endpoint.

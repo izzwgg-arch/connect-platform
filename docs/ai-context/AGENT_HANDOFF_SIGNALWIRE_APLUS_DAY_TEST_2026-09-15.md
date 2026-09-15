@@ -164,10 +164,47 @@ speaks SRTP (`media_encryption=sdes`).** What was learned applying it:
   and after reload the endpoint shows `media_encryption: sdes` with codecs intact,
   the registration is Registered, the AOR contact Avail (RTT 21 ms), and the identify
   present. Rollback = delete the include line + the file, reload.
-- ⏳ **NOT PROVEN YET: no bridged answered call since the flip.** Proof = one real
-  answered call on 3064 that stays up (cel: BRIDGE_ENTER without a same-second
-  BRIDGE_EXIT/cause-58 BYE), plus the pcap showing Asterisk's 200 OK now carrying
-  a=crypto in its SAVP m-line.
+- ⛔⛔ **`sdes` ALONE MADE IT WORSE (proven live 11:54 ET): Asterisk 488-REJECTED every
+  SignalWire INVITE** — with media_encryption=sdes, Asterisk REQUIRES a crypto suite
+  it accepts, and SignalWire was offering ONLY `AEAD_AES_256_GCM_8`, which this
+  Asterisk's sdes answering path refuses at runtime **even though res_srtp.so carries
+  the GCM symbols — a symbols-in-the-binary check is NOT a supported-suite check.**
+  Izzy's test call rang (SignalWire retried the INVITE ~10×, caller heard ringback)
+  and never reached the IVR: 3064 inbound was fully dead, worse than drop-on-answer.
+- ✅ **THE FIX IS TWO-SIDED (both halves deployed ~12:00 ET):**
+  1. SignalWire dashboard → loopcom-pbx SIP Credential → Codecs And Ciphers →
+     **Custom Ciphers → UNCHECK `AEAD_AES_256_GCM_8`** (the four AES_CM/SHA1 suites
+     stay on; "Resource deployed successfully"). SignalWire now offers suites
+     Asterisk's sdes accepts.
+  2. PBX `media_encryption=sdes` re-applied in `pjsip__60_custom.conf` (endpoint
+     verified sdes, registration Registered, AOR Avail 30 ms).
+  Rollback of half 2 alone (sed sdes→no + reload) restores the morning state
+  (IVR works / answers drop) — that is the instant fallback if a call still fails.
+- ⛔⛔ **THE CIPHER WAS NEVER THE WHOLE STORY — the final fix is FOUR pieces, each
+  proven by its own failure (12:07–12:27 ET):**
+  1. `media_encryption=sdes` alone → 488 on EVERY suite, even AES_CM_128_HMAC_SHA1_80.
+     Debug (`logger add channel` + `core set debug 4`) showed stream 0 negotiating
+     PERFECTLY (SRTP policy activated, answer crypto built) and then
+     `res_pjsip_sdp_rtp.c: Incompatible crypto` on **stream 1** — SignalWire's INVITE
+     carries TWO audio m-lines, and strict sdes hard-488s the whole INVITE over the
+     second one. **Fix: `media_encryption_optimistic=yes` alongside sdes.**
+  2. SignalWire ciphers restricted to AES_CM_128_HMAC_SHA1_80/32 (dashboard Custom
+     Ciphers; GCM_8 + both AES_256_CM suites UNCHECKED — 256 also 488'd on this build).
+  3. ⛔ A CLI/call-file probe out `@0001` with NO CALLER ID never reaches SignalWire —
+     telocall answers it with its own error announcement (~7 s) and the "SignalWire
+     didn't deliver" looks like an endpoint failure. **Probe with a CallerID via an
+     `/var/spool/asterisk/outgoing` call file** (CLI `channel originate` can't set CID).
+  4. ⛔ 3064's route is `connect-doorway`, which keys on the channel's **DNID** — and
+     SignalWire INVITEs to `sip:s@…`, so the doorway saw no DID and played
+     `vm-goodbye` (the "rings then goodbye" symptom). The 6775 test never hit this
+     (its route was a TC, not the doorway). **Fix: `Set(CALLERID(dnid)=${SWDID})` in
+     `[trk-132-in]`** right after the DID vars.
+- ✅ **PROVEN 12:27 ET (probe call, CDR + log):** SignalWire INVITE → 200 OK (no 488),
+  SRTP up, doorway resolved 8457823064, **A plus's Connect IVR answered and ran
+  WaitExten for the full 15 s probe.** ⏳ Still unproven: an EXTENSION answer surviving
+  the bridge (the original cause-58 complaint) — needs one human call: dial 3064,
+  press an option, answer, talk. Cleanup after the test: kill the `tcpdump` writing
+  `/tmp/sw_daytest.pcap`, delete `/tmp/sdes_debug*.log`.
 
 ⛔ MIGRATION-BOARD NOTE: any future SignalWire trunk endpoint must carry
 `media_encryption=sdes` (or SignalWire must stop offering SAVP) or every answered
