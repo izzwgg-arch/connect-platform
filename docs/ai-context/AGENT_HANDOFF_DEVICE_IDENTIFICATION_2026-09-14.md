@@ -536,6 +536,42 @@ Izzy released it by hand (his explicit instruction; backup
   one-live-run-per-customer); closing the Loopcom window stops the driver too (audit:
   DESK_PHONE_OFFICE_STOPPED) — both looked like "stuck on restart" until read from the audits.
 
+## 10j. Round 11 (2026-09-15) — the Grandstream LAST MILE is fragile; the durable path is GDMS redirection, NOT BUILT
+
+Izzy: *"proof that every single Grandstream phone will do this flawlessly … rock-solid, for the long
+term, sustainable for years."* Chasing that on his factory-reset GXP2170 exposed that the wizard's
+config-DELIVERY last mile is running on two mechanisms that are not rock-solid — and it could not be
+proven fleet-wide, so it is NOT claimed. Findings, all live:
+
+- **Local HTTP config push silently no-ops on a GDMS-claimed phone.** The GWT web API works
+  (`cgi-bin/access` → `dologin` with sha256(md5(pw)) then sha256(pw+token) → `config_update?sid=` with
+  JSON `{"alias":{},"pvalue":{"237":"…","212":"2"}}`; read via `config_get?pvalues=237,212&sid=`;
+  the metaconfig alias map is `cgi-bin/metaconfig_get`). Auth with admin/admin succeeded, but the
+  write returns `{}` and read-back keeps the factory default `fm.grandstream.com/gs`. The phone is
+  GDMS-claimed with `provisioning.3cxAutoProvision=1`; GDMS owns provisioning direction. ⛔ Do NOT
+  build on these reverse-engineered cgi endpoints — it is the P237-URL trap in a new form, breaks per
+  firmware, the opposite of sustainable.
+- **PnP multicast never reached the desktop resident.** `resident: told`/`resident: heard` = 0 across
+  the ENTIRE day; every `set_provisioning` logged `delivered=false`, and a fresh GDMS/self reboot
+  produced no delivery either. Multicast PnP needs office-PC + phone on one L2 segment, multicast
+  unfiltered — environment-dependent, not fleet-durable.
+- **api-change_default_password** authenticates and returns success but the phone's own strength rule
+  silently rejects a weak/short new password (default P2 on the PBX template is 4 chars) — the phone
+  stays on admin/admin. Nothing was left changed on the handset; it is still factory + GDMS-claimed.
+
+✅ **THE DURABLE ANSWER — GDMS PROVISIONING REDIRECTION (build item).** Factory P237 defaults to
+`fm.grandstream.com/gs` = GDMS's redirect endpoint. Configuring GDMS to hand claimed devices our
+`209.145.60.79/phoneprov/<hash>` (HTTPS) means any factory-reset Grandstream with only outbound
+internet self-provisions — no LAN, no multicast, no password. `gdmsClient.ts` has lookup/claim/reboot/
+reset/status but NOT the template/redirect push; that is the gap. Fleet proof = build the redirect
+push, wire it into the claim step, then a repeatable factory-reset→register test (N times,
+source-guarded). Memory: [[grandstream-zero-touch-needs-gdms-redirect-not-lan]].
+
+⏳ **HONEST STATE:** the desk phone did NOT register (the live `T21_101_1` contact is the WebRTC app,
+not the handset — the `_1` suffix). No fleet-wide proof exists or should be claimed until the redirect
+push is built. The session's OTHER fixes (batch-result read, serial-mismatch message, OCR rotation,
+rehome wizard-priority, rediscover filter, GDMS numeric status) ARE deployed and real.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
