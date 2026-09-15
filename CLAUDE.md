@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-15 · GESHEFT STARLINK INVOICE: CC-202609-00006 $275 ($200 install service call + $75 data, no tax) created + emailed to Contact@/ap@gesheftkosher.com; ⛔ card NOT charged by the agent — Izzy charges Amex •1007 from /admin/billing/invoices (manual invoices are excluded from autopay) → `2026-09-15-gesheft-starlink-invoice.md`
+- 2026-09-15 · GESHEFT STARLINK INVOICE PAID + PERIOD-GUARD FIX: CC-202609-00006 $275 emailed AND charged (Amex •1007 APPROVED, Sola ref 11050894534, receipt SENT); ⛔ the charge exposed that EVERY additive one-time/manual invoice inside a paid advance-billed month was unchargeable (`BILLING_PERIOD_ALREADY_PAID`) — fixed via `isAdditiveOneTimeInvoice()` in both charge doors, DEPLOYED `74e7730a` container-verified; monthly-service-text invoices stay guarded → `2026-09-15-gesheft-starlink-invoice.md`
 
 - 2026-09-15 · LOOPCOM MOBILE UI MOCKUP PASS: Izzy rejected the thin /mobile page ("placeholder"); 30-screen clickable mockup of the FULL product area (customer section /mobile/* + 13-view owner console) built in the platform's tokens at `docs/mockups/loopcom-mobile/index.html` + artifact JGi8xGn5FnAVPPPJKvdvmt; ⛔⛔ AWAITING HIS APPROVAL — mockup revisions only, NO production UI until he approves → `2026-09-15-loopcom-mobile-ui-mockup-pass.md`
 
