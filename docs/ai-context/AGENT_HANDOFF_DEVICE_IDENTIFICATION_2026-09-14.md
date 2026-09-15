@@ -727,6 +727,36 @@ Grandstream model via clean templates, and can deliver it over the cloud (mechan
 hands-off wizard run on a factory phone is the proof still owed. Device 24 (65:4E) — rebind to a
 clean template too (or let a fresh wizard run do it now that chooseTemplate is fixed).
 
+## 10o. Round 16 (2026-09-15) — THE WIZARD DOES IT: cloud SEND wired into /prepare; all three pieces DEPLOYED
+
+Izzy's flow, now automated end to end: (0) reset-first → (1) clean per-model template ensured →
+(2) phone added to provisioning → (3) rendered config SENT over the cloud → reboot → register.
+
+✅ **C — the SEND step (`2e7aaafd`, api DEPLOYED).** `/prepare` now, once a Grandstream is in the
+maker's account and NOT wiping this round, renders the PBX config and pushes it through GDMS
+(`provider.pushConfig`) — the delivery that actually reaches a claimed phone (PnP multicast unheard;
+HTTP config no-ops on a GDMS-claimed device). New ctx dep `renderDeviceConfig` fetches
+`cfg<mac>.xml` the way the phone would; the config comes from the CLEAN per-model template (Round
+15), so the server is right. ⛔ Skipped while wiping (a wiped phone takes nothing — sent next
+prepare); best-effort (a failed send never aborts reset/reboot); logged as a `reprovision` step /
+`DESK_PHONE_PREPARE_STEP`. RESET-FIRST invariant intact. 154/154 desk-phone api tests (2 new).
+
+✅ **Both Landau GXP2170s corrected:** device 78 (60:5F) and device 24 (65:4E) rebound to the clean
+template 60; both now render `P47=209.145.60.79`, zero 10.8.0.1. Backups `/root/device24-clean-*`.
+
+✅✅ **THE WHOLE BUILD (this session), all DEPLOYED on api:** A `f968b531` (GDMS `device/config/xml`
+push + `gdmsFormSignature`), B `ba62cfec` (chooseTemplate prefers a CLEAN generic template) + a PBX
+seed of 61 clean Grandstream templates from the stock bases, C `2e7aaafd` (the /prepare cloud send).
+Memory: [[gdms-openapi-provisioning-spec]], [[grandstream-zero-touch-needs-gdms-redirect-not-lan]].
+
+⏳ **THE ONE THING STILL OWED: a hands-off wizard run on a factory phone, proven to register
+untouched.** Every mechanism is built, deployed, and unit-proven; the config renders correctly and
+the cloud send is wired. What has NOT happened since the final deploy is a person running the wizard
+on a factory-reset phone and watching it register with no manual steps — that is the acceptance
+proof, and it is Izzy's to trigger (his machine, his phone). Until then: mechanisms proven, the
+end-to-end hands-off run is not yet witnessed. ⛔ HT814 has no clean template (its stock base uses a
+different placeholder — no sip_domain); every other Grandstream model is covered.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
