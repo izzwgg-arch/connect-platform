@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · GESHEFT STARLINK INVOICE: CC-202609-00006 $275 ($200 install service call + $75 data, no tax) created + emailed to Contact@/ap@gesheftkosher.com; ⛔ card NOT charged by the agent — Izzy charges Amex •1007 from /admin/billing/invoices (manual invoices are excluded from autopay) → `2026-09-15-gesheft-starlink-invoice.md`
+
 - 2026-09-15 · LOOPCOM MOBILE UI MOCKUP PASS: Izzy rejected the thin /mobile page ("placeholder"); 30-screen clickable mockup of the FULL product area (customer section /mobile/* + 13-view owner console) built in the platform's tokens at `docs/mockups/loopcom-mobile/index.html` + artifact JGi8xGn5FnAVPPPJKvdvmt; ⛔⛔ AWAITING HIS APPROVAL — mockup revisions only, NO production UI until he approves → `2026-09-15-loopcom-mobile-ui-mockup-pass.md`
 
 - 2026-09-15 · FCC BDC FILING (late, June-30-2026 data): DATA COMPLETE — 102 iVoIP subs across 8 NY tracts + NY state-level saved (all business, pure OTT; Izzy's rulings: 7 tenants deleted, Landau test, McNamara held out; ⛔ never touch E911 from BDC work), Final Checks ⛔ "Missing Form499 ID" hard-blocks Certification because the BDC's stale 499 list can't find 839208 — help ticket #63588 pending; then ratio-warning explanation + Izzy certifies; no revenue/transactions in BDC (that's USAC 499-A) → `2026-09-15-fcc-bdc-filing-late-notice.md`
@@ -433,6 +435,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 Every file below is in `docs/ai-context/claude-md-sections/` (title starts with its date). Open it, then the full `AGENT_HANDOFF_*.md` it names. One line per area — never expand here.
 
+- 2026-09-15 · B Visible IVR: owner’s call disproved Connect recovery; authorized original PBX route 35/destination 293 restored 13:53:13 ET; post-restore call and PBX Main direct extension dialing pending; publisher 500 unresolved → `2026-09-15-b-visible-ivr-migration-recovery.md`
 - 2026-09-15 · Desk Phone Wizard device identification + maker clouds; ⛔ NEVER asks a phone password — serial via typing/PHOTO/TEXT through ONE gate `recordLabel`; ✅ the FIRST real photo (Izzy's T42S, upside-down) beat all four OCR passes → **BARCODES ARE READ FIRST now** (zxing, checksum-backed, `4011fa5f`), OCR is the fallback; provision reuses the vouched serial ON FILE; Yealink managed models 7→37 (his T42S had no row); ⛔ his T42S MAC is RPS-claimed by ANOTHER org (800004; LAN PnP still wins at factory boot); ⛔ GDMS add is a BATCH (`3040f2bc`); ⛔⛔ wizard OWNS a phone on its own network (`7e427c28`) → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
 - 2026-09-15 · Fanvil REPLIED: FDPS account ISSUED (login is Izzy's to do, region "Europe"), FDMCS activation link expires ~Sep 18, reseller review + FDPS API review started, buy via 888VoIP → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
