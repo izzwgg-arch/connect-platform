@@ -88,7 +88,7 @@ export async function readRecordContext(
 
   let templates: PbxTemplate[] = [];
   try {
-    const rows = await query("SELECT id, model_id, tenant, shared FROM provisioning.templates", []);
+    const rows = await query("SELECT id, model_id, tenant, shared, unique_name FROM provisioning.templates", []);
     templates = (rows ?? []).map((t: any) => ({
       id: Number(t.id),
       modelId: Number(t.model_id) || 0,
@@ -98,6 +98,9 @@ export async function readRecordContext(
       // to another; reading it as a boolean only would make none of them shared and
       // leave every new model needing a profile nobody has made.
       shared: t.shared === 1 || t.shared === true || String(t.shared ?? "").toLowerCase() === "yes",
+      // Loopcom's clean model-default seed carries the `loopcom_clean_` unique_name marker;
+      // chooseTemplate prefers it over any customer's shared profile.
+      generic: String(t.unique_name ?? "").toLowerCase().startsWith("loopcom_clean_"),
     }));
   } catch {
     // A missing templates read costs the profile, never the whole decision — the plan

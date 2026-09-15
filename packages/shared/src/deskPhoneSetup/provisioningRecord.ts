@@ -104,7 +104,7 @@ export type RecordTarget = {
   templates: PbxTemplate[];
 };
 
-/** A `provisioning.templates` row, reduced to the three columns that decide anything. */
+/** A `provisioning.templates` row, reduced to the columns that decide anything. */
 export type PbxTemplate = {
   id: number;
   /** `provisioning.templates.model_id`. A profile only fits the model it was made for. */
@@ -113,16 +113,25 @@ export type PbxTemplate = {
   tenant: number | null;
   /** VitalPBX's own "this one is shared" flag. */
   shared: boolean;
+  /**
+   * A CLEAN model-default profile Loopcom seeded from VitalPBX's stock base — placeholder
+   * server, no customer's hand-hardcoded overrides. Identified by the `loopcom_clean_` unique_name
+   * marker. Preferred over an arbitrary shared profile so a moved/new phone can never inherit
+   * another customer's baked-in server (the Create A Box VPN poisoning, 2026-09-15).
+   */
+  generic?: boolean;
 };
 
 /**
  * Which settings profile this handset should use.
  *
  * ⛔ ORDER IS THE POLICY. The customer's OWN profile for this model wins, because it
- * carries whatever they have already had set up — timezone, keys, the lot. A shared
- * profile is the fallback. Nothing else is ever substituted: a profile built for a
- * DIFFERENT model writes settings this handset does not have, which is worse than no
- * profile at all because it looks like it worked.
+ * carries whatever they have already had set up — timezone, keys, the lot. Then the CLEAN
+ * generic profile (placeholder server, no baked-in overrides) — this is what keeps a moved
+ * or brand-new phone from inheriting ANOTHER customer's hardcoded server (the Create A Box
+ * VPN poisoning, 2026-09-15). An arbitrary shared profile is the last resort. Nothing else is
+ * ever substituted: a profile built for a DIFFERENT model writes settings this handset does
+ * not have, which is worse than no profile at all because it looks like it worked.
  */
 export function chooseTemplate(
   pbxModelId: number,
@@ -132,6 +141,8 @@ export function chooseTemplate(
   const forModel = (templates ?? []).filter((t) => t && Number(t.modelId) === pbxModelId);
   const own = forModel.find((t) => Number(t.tenant) === pbxTenantNumber);
   if (own) return own.id;
+  const generic = forModel.find((t) => t.generic && (t.shared || t.tenant == null));
+  if (generic) return generic.id;
   const shared = forModel.find((t) => t.shared || t.tenant == null);
   return shared ? shared.id : null;
 }

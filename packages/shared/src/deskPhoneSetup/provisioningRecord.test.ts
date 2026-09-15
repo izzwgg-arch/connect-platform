@@ -266,6 +266,20 @@ test("the customer's OWN profile beats a shared one", () => {
   assert.equal(chooseTemplate(M_T53W, LANDAU, TEMPLATES), 90, "nobody owns one, so the shared one");
 });
 
+test("a CLEAN generic profile beats an arbitrary shared one — a moved phone never inherits another customer's server", () => {
+  // The wall of 2026-09-15: the only shared GXP2170 profiles were Create A Box's, hand-hardcoded
+  // to their VPN server, so a Landau phone that fell to the shared fallback got 10.8.0.1. A seeded
+  // generic profile (placeholder server) now wins the fallback.
+  const withGeneric: PbxTemplate[] = [
+    { id: 16, modelId: M_GXP2170, tenant: 7, shared: true },                 // a customer's, still shared
+    { id: 60, modelId: M_GXP2170, tenant: 1, shared: true, generic: true },  // the clean seed
+  ];
+  assert.equal(chooseTemplate(M_GXP2170, 999, withGeneric), 60, "the clean generic profile, not the customer's");
+  // ⛔ The tenant's OWN profile still wins over generic — it carries their real setup.
+  const ownWins: PbxTemplate[] = [...withGeneric, { id: 77, modelId: M_GXP2170, tenant: 999, shared: false }];
+  assert.equal(chooseTemplate(M_GXP2170, 999, ownWins), 77, "own beats even the clean generic");
+});
+
 test("a profile built for a DIFFERENT model is never substituted", () => {
   // ⛔ It would write settings this handset does not have — worse than none, because
   // it looks like it worked.
