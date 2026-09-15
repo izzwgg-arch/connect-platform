@@ -469,10 +469,12 @@ export interface TelnyxLookupResult {
 
 /** Carrier + caller-name lookup (~$0.002–0.007 per query — pennies, still money). */
 export async function lookupNumber(creds: StoredTelnyxCredentials, number: string): Promise<TelnyxLookupResult> {
-  // The quickstart's parameter form is bare flags (`?carrier&caller-name`),
-  // not `type=` — keep them on the path so buildUrl's empty-value skip
-  // doesn't drop them.
-  const body = await txExpect<any>(creds, { path: `/number_lookup/${encodeURIComponent(number)}?carrier&caller-name` });
+  // ⛔ Proven live 2026-09-15: the quickstart's bare-flag form
+  // (`?carrier&caller-name`) answers 200 but with EMPTY carrier/caller_name
+  // blocks — the add-ons only activate with repeated `type=` params (the SDK
+  // form). Keep them on the path so buildUrl's empty-value skip can't touch
+  // them.
+  const body = await txExpect<any>(creds, { path: `/number_lookup/${encodeURIComponent(number)}?type=carrier&type=caller-name` });
   const d = body?.data ?? {};
   return {
     number: d?.phone_number ?? number,

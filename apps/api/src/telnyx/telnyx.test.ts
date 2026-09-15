@@ -189,12 +189,12 @@ test("checkConnection is READ-only, and a numbers listing refused by account lev
   } finally { f.restore(); }
 });
 
-test("lookupNumber keeps the bare-flag query the quickstart documents (?carrier&caller-name)", async () => {
+test("⛔ lookupNumber sends the repeated type= params — the bare-flag form answers 200 with EMPTY add-on blocks (proven live 2026-09-15)", async () => {
   const f = withFakeFetch(() => ({ status: 200, body: { data: { phone_number: "+18455550100", caller_name: { caller_name: "LOOPCOM" }, carrier: { name: "Verizon", type: "mobile" }, portability: { ported_status: "N" } } } }));
   try {
     const { lookupNumber } = await import("./telnyxClient");
     const r = await lookupNumber(CREDS, "+18455550100");
-    assert.match(f.calls[0].url, /\/v2\/number_lookup\/%2B18455550100\?carrier&caller-name$/);
+    assert.match(f.calls[0].url, /\/v2\/number_lookup\/%2B18455550100\?type=carrier&type=caller-name$/);
     assert.equal(r.callerName, "LOOPCOM");
     assert.equal(r.carrier, "Verizon");
   } finally { f.restore(); }
