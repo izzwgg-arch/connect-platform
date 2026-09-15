@@ -440,6 +440,26 @@ Three separate issues. Only ONE needs a code/binary change:
 - EAS is authenticated on Izzy's Windows machine too (`izz8457`, verified via
   `npx eas-cli whoami` in apps/mobile) — the build can be kicked from either
   machine once he decides.
+- ✅ **IZZY CHOSE OPTION A ("a") — BUILD 60 IS RUNNING.** EAS build
+  `7f2e559d-2bd6-4e50-ba93-f1666f42c591` (ios-prod, STORE, appBuildVersion 60,
+  SDK 54), kicked 2026-09-15 ~05:09 ET from Izzy's Windows machine (785 MB
+  archive; ⛔ progress lines don't flush to a redirected log — it looked stuck
+  at 0/785 and wasn't). Archived commit `32309b26` — verified: contains
+  `db20a0a8` (the purpose-string fix) and differs from the validated commit by
+  DOCS + desk-phone portal commits only, **zero apps/mobile difference**.
+  Google/Apple sign-in deliberately NOT in this build → lands in 1.1
+  (mockup: https://claude.ai/artifact/6kc9wk6iD52HxwoadLuauW, Guideline 4.8
+  pairing documented there).
+- **Staged for the moment the build finishes:** `eas submit -p ios --id
+  7f2e559d…` (the ASC .p8 is fetched to the gitignored `.connect-ssh/` locally
+  because eas.json's ascApiKeyPath points at loopcom), then
+  `/root/.appstoreconnect/asc-attach-resubmit-60.mjs` on loopcom — idempotent:
+  finds build 60 in ASC, waits VALID, PATCHes the version's build relationship,
+  then PATCHes reviewSubmission `f395cee7` `submitted:true` (if that PATCH is
+  refused, the "Resubmit to App Review" button in ASC is Izzy's one click).
+  ⛔ The Resolution Center REPLY (drafted above) still needs Izzy's session —
+  it can be sent in parallel any time; the storefront line should say the app
+  is now available in the United States.
 
 ### ⛔ REMAINING HUMAN STEPS TO RESUBMIT (all need Izzy)
 1. **Build 60.** Build the iOS binary from commit `db20a0a8` (recipe in
