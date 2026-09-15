@@ -21,7 +21,13 @@ type SimDevice = {
   sn: string;
   firmwareVersion: string;
   status: "online" | "offline";
-  owner: "ours" | "other";
+  /**
+   * "ours" = in the simulated account; "other" = bound to a different GDMS account;
+   * "unowned" = GDMS's factory registry knows the MAC+SN pair but no account holds it —
+   * invisible to device/list, addable only with the serial that really belongs to the MAC
+   * (the live cloud refuses a mismatched pair per-item with errorMsg 30010).
+   */
+  owner: "ours" | "other" | "unowned";
   deviceName?: string;
 };
 
@@ -129,7 +135,18 @@ export class GdmsSimulator {
           if (!item?.sn) return json(200, { data: null, msg: "sn required", retCode: 10002 });
           const existing = this.devices.get(mac);
           if (existing && existing.owner === "other") return json(200, { data: null, msg: "device bound to another account", retCode: 10003 });
-          if (existing && existing.sn !== item.sn) return json(200, { data: null, msg: "sn mismatch", retCode: 10004 });
+          // The one PROVEN rejection shape (live cloud, 2026-09-15): a serial that does not
+          // belong to this MAC comes back per-item inside a retCode-0 envelope, NOT as an
+          // envelope-level error. errorMsg carried the numeric string "30010".
+          if (existing && existing.sn !== item.sn) {
+            return json(200, {
+              data: {
+                total: 1, success: 0, failure: 1,
+                errorDeviceList: [{ orgId: null, deviceName: item.deviceName ?? null, siteId: item.siteId, mac: formatMac(mac).replace(/:/g, ""), errorMsg: "30010", sn: String(item.sn) }],
+              },
+              msg: "", retCode: 0,
+            });
+          }
           this.devices.set(mac, {
             mac, model: existing?.model ?? "GXP2170", sn: String(item.sn), firmwareVersion: existing?.firmwareVersion ?? "1.0.11.64",
             status: existing?.status ?? "online", owner: "ours", deviceName: item.deviceName,

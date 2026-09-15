@@ -263,7 +263,18 @@ export class GdmsClient {
     const item: Record<string, string> = { mac: formatMac(n), sn, siteId: input.siteId };
     const name = cleanDeviceText(input.deviceName, 60);
     if (name) item.deviceName = name;
-    await this.call("v1.0.0/device/add", [item], { write: true });
+    const data = await this.call<any>("v1.0.0/device/add", [item], { write: true });
+    // ⛔ device/add is a BATCH call: retCode 0 only means the request was well-formed. Each
+    // device succeeds or fails on its own inside data — proven on the live cloud 2026-09-15:
+    // {"total":1,"success":0,"failure":1,"errorDeviceList":[{"errorMsg":"30010",...}]} for a
+    // serial that belongs to a different handset. Ignoring this read a refused add as success,
+    // and the read-back's claim_not_verified sent the wizard into a forever-retry.
+    const rejected = Array.isArray(data?.errorDeviceList) ? data.errorDeviceList : [];
+    const failureCount = Number(data?.failure);
+    if (rejected.length > 0 || (Number.isFinite(failureCount) && failureCount > 0)) {
+      const itemCode = Number(rejected[0]?.errorMsg);
+      throw new GdmsRejection("gdms_request_rejected", Number.isFinite(itemCode) ? itemCode : -1);
+    }
   }
 
   async createTask(input: { mac: string; type: "reboot" | "factory_reset"; name: string }): Promise<{ taskId: string | null }> {

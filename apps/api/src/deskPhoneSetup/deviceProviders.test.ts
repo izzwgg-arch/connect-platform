@@ -194,6 +194,27 @@ test("a claim whose response timed out after the write landed is still verified 
   assert.equal(sim.addCalls, 1, "the write is never retried");
 });
 
+test("a serial belonging to a different handset is refused by the BATCH result, never read as success (live shape, 2026-09-15)", async () => {
+  // The live cloud answered the add with retCode 0 and the refusal inside data
+  // (success:0, failure:1, errorDeviceList[0].errorMsg "30010"). Reading only the
+  // envelope turned that refusal into claim_not_verified — retryable — and the
+  // wizard spun on "Finding" forever with a serial that could never work.
+  const sim = new GdmsSimulator();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1.0.11.64", status: "offline", owner: "unowned" });
+  const p = grandstream(sim);
+  const r = await p.claim({ mac: MAC, serialNumber: "20ZE115N30WRONG0" });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.code, "gdms_request_rejected");
+  assert.equal(r.retryable, false, "a refused MAC+serial pair must stop the driver's retry loop");
+  assert.equal(sim.addCalls, 1);
+  noLeak(r, ["30010", "errorMsg", "errorDeviceList"]);
+  const look = await p.lookup(MAC);
+  assert.equal(look.ok && look.state.found, false, "nothing was added to the account");
+  const good = await p.claim({ mac: MAC, serialNumber: SN });
+  assert.equal(good.ok, true, "the right serial still registers the device afterwards");
+});
+
 test("a device bound to another GDMS account is refused as a POSSIBLE conflict, with no vendor text", async () => {
   const sim = new GdmsSimulator();
   sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "other" });
