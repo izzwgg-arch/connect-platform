@@ -14,7 +14,7 @@ import {
   queueReceiptEmailOnce,
   queueRefundEmailOnce,
 } from "./billingEmailLifecycle";
-import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
+import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage, isAdditiveOneTimeInvoice } from "./billingPeriodGuards";
 
 /** Keys used to detect duplicate webhook deliveries (same processor ref and/or same event id). */
 export function buildBillingWebhookDedupeOrClause(params: { processorRef: string; eventId: string }) {
@@ -157,12 +157,16 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
     err.code = "INVOICE_ALREADY_PAID";
     throw err;
   }
-  const paidCoverage = await findPaidBillingPeriodCoverage({
-    tenantId: invoice.tenantId,
-    periodStart: invoice.periodStart,
-    periodEnd: invoice.periodEnd,
-    excludeInvoiceId: invoice.id,
-  });
+  // An additive one-time/manual invoice bills no service period — a paid cycle
+  // invoice covering its date is not a double charge, so the guard skips it.
+  const paidCoverage = (await isAdditiveOneTimeInvoice(invoice))
+    ? null
+    : await findPaidBillingPeriodCoverage({
+      tenantId: invoice.tenantId,
+      periodStart: invoice.periodStart,
+      periodEnd: invoice.periodEnd,
+      excludeInvoiceId: invoice.id,
+    });
   if (paidCoverage) throw billingPeriodAlreadyPaidError(paidCoverage);
 
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
@@ -351,12 +355,15 @@ export async function chargeBillingInvoiceWithSut(
     err.code = "INVOICE_ALREADY_PAID";
     throw err;
   }
-  const paidCoverage = await findPaidBillingPeriodCoverage({
-    tenantId: invoice.tenantId,
-    periodStart: invoice.periodStart,
-    periodEnd: invoice.periodEnd,
-    excludeInvoiceId: invoice.id,
-  });
+  // Same additive-invoice skip as chargeBillingInvoice above.
+  const paidCoverage = (await isAdditiveOneTimeInvoice(invoice))
+    ? null
+    : await findPaidBillingPeriodCoverage({
+      tenantId: invoice.tenantId,
+      periodStart: invoice.periodStart,
+      periodEnd: invoice.periodEnd,
+      excludeInvoiceId: invoice.id,
+    });
   if (paidCoverage) throw billingPeriodAlreadyPaidError(paidCoverage);
 
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));

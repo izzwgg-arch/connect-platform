@@ -53,3 +53,54 @@ test("paid monthly-service one-time invoice covers recurring billing but unrelat
   assert.equal(unrelatedCoverage, null);
   mock.restoreAll();
 });
+
+test("an additive one-time/manual invoice being charged skips the paid-period guard; a monthly-service one does not", async () => {
+  mock.module("@connect/db", {
+    namedExports: { db: { billingInvoice: { findMany: async () => [] } } },
+  });
+  const { isAdditiveOneTimeInvoice } = await import("./billingPeriodGuards");
+
+  // Manual invoice (Starlink install) — additive, guard skipped.
+  assert.equal(await isAdditiveOneTimeInvoice({
+    id: "inv-manual",
+    source: "MANUAL",
+    metadata: { source: "manual_invoice" },
+    lineItems: [{ description: "Service call — Starlink installation" }, { description: "Starlink data" }],
+  }), true);
+
+  // One-time charge drawer invoice — additive.
+  assert.equal(await isAdditiveOneTimeInvoice({
+    id: "inv-otc",
+    metadata: { source: "one_time_charge" },
+    lineItems: [{ description: "Router installation" }],
+  }), true);
+
+  // One-time invoice that REPLACES a monthly cycle charge — stays guarded.
+  assert.equal(await isAdditiveOneTimeInvoice({
+    id: "inv-monthly",
+    metadata: { source: "one_time_charge" },
+    lineItems: [{ description: "Monthly service balance (May 5, 2026 - Jun 4, 2026)" }],
+  }), false);
+
+  // Ordinary cycle invoice — never additive.
+  assert.equal(await isAdditiveOneTimeInvoice({
+    id: "inv-cycle",
+    metadata: null,
+    lineItems: [{ description: "Extensions" }],
+  }), false);
+
+  // Line items fetched from the db when the caller loaded the invoice bare
+  // (the admin /pay route does findUnique without include).
+  const fetched: string[] = [];
+  const dbOverride = {
+    billingInvoiceLineItem: {
+      findMany: async ({ where }: any) => {
+        fetched.push(where.invoiceId);
+        return [{ description: "Monthly service balance (Jul 2026)" }];
+      },
+    },
+  };
+  assert.equal(await isAdditiveOneTimeInvoice({ id: "inv-bare", source: "MANUAL", metadata: { source: "manual_invoice" } }, dbOverride), false);
+  assert.deepEqual(fetched, ["inv-bare"]);
+  mock.restoreAll();
+});

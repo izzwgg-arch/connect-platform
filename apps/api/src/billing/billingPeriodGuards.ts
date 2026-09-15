@@ -77,6 +77,29 @@ function coverageReason(invoice: any, periodStart: Date, periodEnd: Date): strin
   return null;
 }
 
+/**
+ * The mirror of coverageReason()'s one_time_charge carve-out, applied to the
+ * invoice being CHARGED: an additive one-time/manual invoice (hardware, a
+ * service call) does not bill a service period, so a paid cycle invoice
+ * covering its date is not a double charge and must not block it. A one-time
+ * invoice whose text says "monthly service" / "service balance" REPLACES a
+ * cycle charge and stays guarded. Same rule autopayCycle.ts applies at
+ * selection ("a custom invoice must be purely additive").
+ */
+export async function isAdditiveOneTimeInvoice(invoice: any, dbOverride?: any): Promise<boolean> {
+  const meta = asRecord(invoice?.metadata);
+  const source = String(meta.source || "");
+  const additive = source === "one_time_charge" || source === "manual_invoice" || invoice?.source === "MANUAL";
+  if (!additive) return false;
+  const _db = dbOverride ?? db;
+  const lineItems = Array.isArray(invoice?.lineItems)
+    ? invoice.lineItems
+    : typeof (_db as any).billingInvoiceLineItem?.findMany === "function"
+      ? await (_db as any).billingInvoiceLineItem.findMany({ where: { invoiceId: invoice.id } })
+      : [];
+  return !oneTimeMonthlyServiceText({ ...invoice, lineItems });
+}
+
 export async function findPaidBillingPeriodCoverage(input: PaidCoverageInput): Promise<PaidBillingPeriodCoverage | null> {
   const _db = input.dbOverride ?? db;
   if (typeof (_db as any).billingInvoice?.findMany !== "function") return null;
