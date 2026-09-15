@@ -2,6 +2,20 @@
 
 > Moved verbatim from `CLAUDE.md` on 2026-09-14 when CLAUDE.md was cut down to rules + index. Keep editing THIS file for this area; its one-line entry lives in CLAUDE.md's HANDOFF INDEX.
 
+- ⛔⛔ **2026-09-15: APPLE REJECTED VERSION 1.0.** Submission `f395cee7…` went
+  `UNRESOLVED_ISSUES`, the version reads `REJECTED`, two boilerplate emails hit
+  iw5626644@gmail.com Sep 14 11:57 PM ET ("Changes needed"). ⛔ **The REASONS are
+  only on the App Review page in ASC — the public API does not expose Resolution
+  Center (every rejection-ish path 404s; probed, do not re-probe), and Apple's
+  emails no longer carry them.** The Default-profile ASC web session is expired
+  (login wall), so reading the reasons needs ONE Izzy action: click the Claude
+  extension icon in the **jacob** Chrome window (left open on the app's ASC page)
+  or sign in to ASC. ⛔ Change NOTHING on the listing or build until the reasons
+  are read — a metadata-only rejection is answered WITHOUT a resubmit. Full
+  detail + closed-routes list: `IOS_APP_STORE_READINESS.md` §2026-09-15.
+  (Also: loopcom's IPv6 to api.appstoreconnect.apple.com is dead — run ASC
+  scripts with `NODE_OPTIONS=--dns-result-order=ipv4first`.)
+
 
 - ⛔⛔ **2026-09-09 STATUS: STILL `WAITING_FOR_REVIEW` AFTER 10.5 DAYS, AND APPLE HAS BEEN SILENT ON
   THE MIGRATION CASE SINCE 09-02.** Read live from the ASC API + Izzy's signed-in Chrome: submission

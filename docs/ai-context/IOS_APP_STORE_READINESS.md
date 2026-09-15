@@ -284,3 +284,50 @@ nothing changed.**
   "J"), the default extension connection is profile "Iz". Izzy must click the
   extension icon in the jacob window to connect it (`list_connected_browsers`
   then shows it as a second browser; pick it via `select_browser`).
+
+## ⛔⛔ 2026-09-15 — APPLE REJECTED VERSION 1.0 (submission f395cee7), AND THE REASONS ARE UNREACHABLE WITHOUT A HUMAN CLICK
+
+Read live 2026-09-15 ~04:00 ET (ASC API from loopcom + the iw5626644 Gmail at
+`/mail/u/5/` in the Default "Iz" Chrome profile). **Read-only — nothing sent,
+nothing changed on Apple's side.**
+
+- **The facts:** version 1.0 `appStoreState = REJECTED` / `appVersionState =
+  REJECTED`; review submission `f395cee7-6db2-4abf-9aa6-26aa43d8125c` state
+  `UNRESOLVED_ISSUES`, its single item (the app version) `REJECTED`,
+  `lastUpdatedByActor = APPLE`. Two emails landed at iw5626644@gmail.com
+  **Mon Sep 14, 11:57 PM ET**: "Your App Review Feedback — Changes needed" and
+  "There's an issue with your Loopcom (iOS) submission." (addressed to
+  "max" — the ASC user is max weiss). ⛔ **Both emails are BOILERPLATE.** Apple
+  no longer puts rejection reasons in email; they say only "go to the App
+  Review page in App Store Connect" and note "there may be more than one
+  reason" and that metadata-only fixes don't need a re-submit.
+- ⛔⛔ **The rejection REASONS are only on the App Review (Resolution Center)
+  page, which the public ASC API does NOT expose.** Probed 2026-09-15, all
+  404 PATH_ERROR: `resolutionCenterThreads` (bare, by app, by submission),
+  `resolutionCenterMessages`, `reviewRejections`, `rejectionReasons`,
+  `reviewSubmissions/{id}/messages`. `appStoreReviewDetails?filter` is 403.
+  A full-include read of the submission returns states only. **Do not burn
+  time re-probing; the API will not say WHY.**
+- ⛔ **Every non-human route to the page was tried and is closed:** the Default
+  ("Iz") profile's ASC web session is EXPIRED (`/login?…authResult=FAILED` →
+  password field; entering credentials is prohibited); the jacob profile's
+  Claude extension connects only via a manual click on the extension icon
+  (launching `chrome.exe --profile-directory="Profile 2"` does NOT connect
+  it); computer-use browser grants are read-only and the grant dialog cannot
+  be raised from a non-interactive session; Control_Chrome MCP is
+  macOS-only (osascript). The rejection emails were read at Gmail `/mail/u/5/`
+  (iw5626644 IS signed into Google there — it's only the APPLE session that
+  lives in jacob).
+- **What was left staged:** a jacob-profile Chrome window open at
+  `appstoreconnect.apple.com/apps/6796392950/distribution/ios/version/inflight`.
+  **Next = ONE Izzy action:** click the Claude extension icon in that jacob
+  window (connect it), or sign in to ASC in any connected profile — then read
+  App Review → the rejection message(s), fix each named issue, and reply /
+  resubmit from there.
+- ⛔ Until the reasons are read, **change NOTHING on the listing or the build**
+  — "fix" without the reason list is guessing, and a metadata-only rejection
+  is answered from the App Review page without a new submission.
+- Probe scripts kept on loopcom: `/root/.appstoreconnect/asc-rejection.mjs`
+  (+ `asc-probe-rc.mjs`, `asc-probe-includes.mjs`). ⛔ Node on loopcom needs
+  `NODE_OPTIONS=--dns-result-order=ipv4first` for api.appstoreconnect.apple.com
+  now — the box's IPv6 route to Apple is dead and default-order fetch times out.

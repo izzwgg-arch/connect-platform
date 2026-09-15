@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · iPhone App Store submission: Apple REJECTED 1.0 (Sep 14 11:57 PM, emails are boilerplate, reasons ONLY on the ASC App Review page, API doesn't expose them); needs Izzy's one click (Claude extension in jacob Chrome window) before ANY fix; change nothing until reasons are read → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
+
 - 2026-09-14 · Browser Companion: clean installer verified, NOT installed/accepted; desktop setup tool blocked; Playwright/Chrome DevTools alternatives reviewed with separate-profile versus existing-session limits → `2026-09-14-browser-companion.md`
 
 - 2026-09-14 · Deploy 403 prevention deployed/verified: queued-log waiting responses, bounded polling, live 200s and no renewed ban → `2026-09-14-deploy-log-autoban.md`
@@ -487,7 +489,6 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - every extension gets FIVE contacts, desk AND WebRTC → `2026-08-30-every-extension-gets-five-contacts-desk-and-webr.md`
 - SIGNALWIRE ONBOARDING IS BUILT END TO END and INERT until two env flips → `2026-08-30-signalwire-onboarding-is-built-end-to-end-and-in.md`
 - a SignalWire inbound call rang NOBODY: the one-shot ring push raced the tenant, TW… → `2026-08-29-a-signalwire-inbound-call-rang-nobody-the-one-sh.md`
-- the iPhone App Store submission: 4 of 5 blockers CLOSED, only SCREENSHOTS and two… → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
 - 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RAC… → `2026-08-27-7-day-audit-of-voicemail-sms-forwarding-both-lan.md`
 - Relax Tires round 2: "vibrating but no incoming call until I opened the app" is AN… → `2026-09-01-relax-tires-round-2-vibrating-but-no-incoming-ca.md`
 - Relax Tires "it only rang my cell, not the app": the PBX rang the app on EVERY cal… → `2026-08-27-relax-tires-it-only-rang-my-cell-not-the-app-the.md`
