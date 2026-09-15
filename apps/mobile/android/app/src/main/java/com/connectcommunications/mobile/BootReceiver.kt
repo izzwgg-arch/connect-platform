@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.util.Log
 
 /**
@@ -45,8 +46,17 @@ class BootReceiver : BroadcastReceiver() {
     }
     val enabled = isEnabled(context)
     Log.i(TAG, "onReceive action=$action keepaliveEnabled=$enabled")
-    if (enabled) {
-      SipKeepAliveService.start(context)
+    if (!enabled) return
+    // Android 15+ forbids BOOT_COMPLETED receivers from launching the
+    // phoneCall/dataSync/microphone foreground service types this service
+    // declares (ForegroundServiceStartNotAllowedException), so the dispatch
+    // could never succeed here. The keep-alive comes up instead on the first
+    // high-priority FCM wake push (IncomingCallFirebaseService) or app open,
+    // both of which are exempt from the restriction.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+      Log.i(TAG, "onReceive: Android 15+ boot-launch restriction — leaving keepalive to the next wake push or app open")
+      return
     }
+    SipKeepAliveService.start(context)
   }
 }
