@@ -105,6 +105,48 @@ exten => 8457826775,1,NoOp(Connect day-test: A plus main line -> SignalWire hop,
   outbound moved.
 - SMS on 6775: untouched (voice-only change).
 
+## §6 THE ANSWER-DROP (found 2026-09-15 10:17 ET, complaint from A plus: "we answer and it disconnects")
+
+**Every call an extension answered on this path today died the instant it was answered
+— 4 out of 4.** CEL (`mysql asterisk`, table `cel`, times UTC):
+
+- 10:05:24 ET → ext 101, 10:06:24 → ext 101 (caller +17186350969), 10:08:56 → ext 101,
+  10:09:15 → ext 112 via Local (caller +18458060616). All: `BRIDGE_ENTER` then
+  `BRIDGE_EXIT` of `PJSIP/loopcom-pbx-*` in the SAME second, then
+  `HANGUP {"hangupcause":58,"hangupsource":"PJSIP/loopcom-pbx-<self>","dialstatus":"ANSWER"}`.
+- Cause **58 = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL** — chan_pjsip's cause when a
+  mid-call media renegotiation (re-INVITE) fails. The hangup SOURCE is the SignalWire
+  return leg itself: Asterisk killed it, no BYE came from the caller or the extension.
+- **IVR and voicemail on the exact same path work** (BackGround 11–14 s calls; a 30 s
+  voicemail on 105 at 09:09) — the only thing that happens at extension-answer and not
+  before is the BRIDGE, and the bridge is what triggers a re-INVITE toward SignalWire:
+  `pjsip show endpoint loopcom-pbx` → `direct_media: true`, `direct_media_method:
+  invite` (T2 extension endpoints are also direct_media=true). SignalWire rejects the
+  renegotiation (RTP re-pointed at the customer's NATed phone / codec topology change);
+  Asterisk responds by hanging the channel up with cause 58.
+- The 04:52/05:00 §2 "proof" calls never exercised this: they landed after-hours
+  (IVR-4 → no extension bridge). The defect was live from the first minute of the test.
+- Distinct real victims seen: +17186350969 (twice), +18458060616 (twice, incl. the
+  ext-112 leg). The forward hop pair (344022↔0001) natively re-INVITEs fine — both
+  carrier legs accept direct media; SignalWire's leg is the one that refuses.
+- ⛔ Verbose log carries NO SIP trace at this level, so the 488/4xx itself is inferred
+  from cause 58 + timing; the proof of any fix is ONE real answered call.
+
+**Fix options (pick one, then prove with a real answered call to 6775):**
+1. **Surgical (keeps the test running):** turn off direct media for trunk 132 only —
+   append to `/etc/asterisk/pjsip__60_custom.conf` (or the pjsip custom file that
+   exists there): `[loopcom-pbx](+)` newline `direct_media=no`, then
+   `asterisk -rx "core reload res_pjsip.so"` (or `pjsip reload`), verify with
+   `pjsip show endpoint loopcom-pbx | grep direct_media` → `false`. Blast radius:
+   trunk-132 calls only (this test + demo bench); RTP for them anchors on the PBX,
+   which is already true for every non-direct bridge. ⛔ Do NOT edit the generated
+   pjsip file — regen reverts it.
+2. **Rollback (§5):** ends the test, restores A plus to the direct VoIP.ms path.
+
+⛔ Whatever the choice, the SignalWire MIGRATION plan inherits this: a ported number
+with direct_media left on = every desk-phone answer drops. Carry `direct_media=no`
+into the trunk-132 endpoint config as a standing requirement.
+
 ## §5 HOW TO END THE TEST (rollback)
 
 Delete the `[default-trunk](+)` block AND the one `ExecIf($["${SWDID}"="2053513327"]…)`

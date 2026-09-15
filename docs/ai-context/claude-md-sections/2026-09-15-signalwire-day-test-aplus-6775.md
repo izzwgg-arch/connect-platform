@@ -24,3 +24,16 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_SIGNALWIRE_APLUS_DAY_TEST_2026-09
   out `@0001`, not trunk 132 — the 08-18 "route 123 has only trunk 132" claim is stale.
 - ⏳ NOT PROVEN: no HUMAN call yet; audio quality is the whole point of the day — judge
   it from real calls + rtpStats, not from this trace.
+- ⛔⛔ **FOUND 10:17 ET: EVERY EXTENSION ANSWER ON THIS PATH DROPS THE CALL INSTANTLY
+  (cause 58), 4/4 today** — ext 101 ×3 (10:05, 10:06, 10:08) + ext 112 (10:09), two real
+  callers. IVR and voicemail on the same path survive fine (30 s VM at 09:09); the kill
+  fires only at BRIDGE time, and CEL shows `hangupcause 58` (bearer capability not
+  available = media renegotiation failed) with `hangupsource` = the **loopcom-pbx leg
+  itself** — Asterisk tears it down when its bridge-time re-INVITE toward SignalWire is
+  rejected. Trunk 132 endpoint has `direct_media=true` (extensions too), so answering
+  triggers a direct-media re-INVITE at SignalWire pointing RTP at the customer's NATed
+  phone. The 05:00 "proof" call never bridged to an extension (after-hours IVR→VM), so
+  this was latent from the start. Fix options + full evidence: §6 of the handoff.
+  ⛔ This is a MIGRATION-BOARD blocker, not just a day-test bug — any ported number
+  would hit the same drop on every desk-phone answer until direct media is off for the
+  SignalWire trunk.
