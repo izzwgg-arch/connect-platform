@@ -33,3 +33,15 @@ Results are never cached publicly (`private, no-store`). The client debounces 45
 ## Release
 
 Prepared on top of `6cae33e2`; commit/push and API/portal production deploy evidence will be appended here. Browser Deploy Center is the write path because the standing Windows SSH exception is read-only. Before dispatch, check both queue state and direct-deploy processes; no concurrent deploy was running at preparation. Earlier false-positive ban was already resolved in a separate task.
+
+### Production rollout progress
+
+- Search implementation committed as `23e6041ec40ccf2c8d13ed0d2d2298a4ad2f0a0d`, pushed to the working branch and `codex/universal-search`.
+- API dry-run job `65f7fd86-4767-40a6-ba60-adfa72b522a6` succeeded against that SHA.
+- A separate authorized desk-phone rollout started during preflight at descendant `2a8f4f835f76c1c4ecf165ecafd883d282c1b1c4`. `git merge-base --is-ancestor 23e6041e 2a8f4f83` succeeded. No competing queue deployment was launched; do not roll back that newer work to the search-only SHA.
+- API direct log `/var/log/connect-deploys/direct-api-20260915T002151Z.log` ended `[deploy-api] done 2a8f4f83 requested_by=direct:root`; `/app/.build-commit` matches. `registerGlobalSearchRoutes` and `searchOnly` were read from the running API container. Portal rollout at the same SHA started in `/var/log/connect-deploys/direct-portal-20260915T002649Z.log`; final verification pending.
+- Additional browser fixture checks: hidden pages omitted after permission change, old slow response cannot replace a newer Alice result, Ctrl K reopens, failure shows manual Try again. The test fixtures use no real user data and are removed after verification.
+
+### Call date-link correction
+
+During release review, identified that API search dates are UTC while Call History date inputs are local. A late-evening call could therefore open an empty next-day filter. `globalSearchDates.ts` converts the entire result UTC day into the viewer's local start/end dates, including eastern timezones, year boundaries and DST. Three focused tests and a strict standalone typecheck passed. This is a portal-only follow-up; the API search handler is unchanged. The 24 existing voicemail/CRM ownership/custom-role regression checks also passed, for 51 checks total across the targeted suites.

@@ -1,4 +1,5 @@
 "use client";
+import { searchDayRange } from "../../../lib/globalSearchDates";
 import { useSearchNavigation } from "../../../hooks/useSearchNavigation";
 
 import { ConnectSelect } from "../../../components/ConnectSelect";
@@ -947,7 +948,8 @@ export default function CallsPage() {
     const q = url.searchParams.get("q") || "";
     setSearch(q); setSearchDraft(q);
     const date = url.searchParams.get("date");
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { setStartDate(date); setEndDate(date); }
+    const range = date ? searchDayRange(date) : null;
+    if (range) { setStartDate(range.startDate); setEndDate(range.endDate); }
   });
   const [hasRecording, setHasRecording] = useState<"all" | "yes" | "no">("all");
   const [advancedOpen, setAdvancedOpen] = useState(false);
