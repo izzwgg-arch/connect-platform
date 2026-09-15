@@ -539,7 +539,7 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - "Hanna" is a FREE tenant: LIVE with ext 101 + (845) 557-7194 + SMS, and NO billing… → `2026-08-20-hanna-is-a-free-tenant-live-with-ext-101-845-557.md`
 - Teams / Google Meet VIDEO interop is CLOSED to third parties → `2026-08-21-teams-google-meet-video-interop-is-closed-to-thi.md`
 - the PLATFORM-AUTH PROGRAM (Google / Meta / Microsoft-Outlook / TikTok): RESEARCHED… → `2026-08-21-the-platform-auth-program-google-meta-microsoft.md`
-- GOOGLE PLAY STORE: the ORGANIZATION ACCOUNT EXISTS as of 2026-08-29 (Loopcom, ID 4… → `2026-08-29-google-play-store-the-organization-account-exist.md`
+- GOOGLE PLAY STORE: vc101 LIVE since 09-07 (verified 09-15); the store-page icon is the SEPARATE listing 512 asset, still the old 08-20 dark one — swap to blue-2b 512 + resubmit is the fix; Android-15 FGS/BOOT_COMPLETED warning open → `2026-08-29-google-play-store-the-organization-account-exist.md`
 - Loopcom Direct is BUILT: cross-company chat by phone number + the video call that… → `2026-08-21-loopcom-direct-is-built-cross-company-chat-by-ph.md`
 - "Loopcom Direct" plan + mockups — SUPERSEDED by the BUILD section above; kept for… → `2026-08-20-loopcom-direct-plan-mockups-superseded-by-the-bu.md`
 - the support desk redesign is BUILT: the Inbox is gone at the SCHEMA, the agent has… → `2026-08-24-the-support-desk-redesign-is-built-the-inbox-is.md`
