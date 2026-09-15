@@ -2,6 +2,27 @@
 
 Newest entries first.
 
+## Yealink RPS provision by MAC + serial; MAC-only add is forbidden (2026-09-15)
+
+- **Live against the real YMCS account** (writes deleted after; cloud verified back to 0 devices):
+  `POST /v2/rps/addDevicesByMac` → **403 "This request is forbidden"** (our tier); `POST /v2/rps/devices`
+  (add with serial) → **201**, persisting our per-device `uniqueServerUrl` + `authName`. Full round-trip
+  through the DEPLOYED container `app-api-1` (`265402dd`): `configuredRps()` live → `assign({mac,serialNumber,…})`
+  → assigned + id → `deviceDetail` shows serverId=Loopcom + our URL + authName=mac → `release` → gone.
+- api `node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"` →
+  **267 pass / 1 fail / 1 skip.** The 1 fail is `provisioningRecordWriter.test.ts` "another company's
+  extension … refuses the move" (expects `refused`, gets `written`) — it imports ONLY
+  `./provisioningRecordWriter`, fails in ISOLATION on clean HEAD, and is fallout from `7e427c28`'s
+  stranger-registration rewrite, NOT this change. Filed as task_cd5351d0. My own new/changed tests
+  (assign requires serial + uses `rps/devices` not the forbidden `addDevicesByMac`; sim models 403 vs 201;
+  integration + postgres inputs carry a serial) all pass.
+- api tsc **85 = baseline, 0 in the changed files** (yealinkRps/managedPhone*/simulator). portal tsc **0**
+  (ManagedPhonePanel serial field clean; shipped in the desk-phones client chunk).
+- Live endpoint auth on `app.loopcom.net`: no creds → 401 + `WWW-Authenticate: Basic` + `no-store`;
+  wrong creds → 401 (never 200); `/api/desk-phones/managed/*` → 401 without a JWT. Deploy: api+portal
+  `265402dd`, container `.build-commit` matches, 0 restarts each.
+- ⏳ NOT tested here (needs a real handset, by design): factory-boot → RPS → config fetch → registration.
+
 ## Wizard-priority rehome + rediscover filter + GDMS numeric status (2026-09-15, `7e427c28`)
 
 - shared `npx tsx --test src/deskPhoneSetup/provisioningRecord.test.ts` → **33/33** (4 rewritten to

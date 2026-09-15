@@ -395,7 +395,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-15 · Zero-touch Yealink LIVE except handset proof: YMCS issued, ⛔ v1 X-Ca API is DEAD (v2 OAuth client-credentials, client rewritten `b1f6357c`), server "Loopcom" created, env set, api deployed + container-verified, handset route 401s; ⏳ no real phone through it yet → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
+- 2026-09-15 · Zero-touch Yealink LIVE except handset proof: YMCS v2 OAuth (v1 X-Ca DEAD), ⛔ MAC-ONLY ADD FORBIDDEN 403 → provision by MAC+SERIAL (`265402dd`, api+portal deployed); live round-trip through prod container assign→verify→release proven, cloud clean; ⏳ real factory-boot→register leg needs a handset; "every model forever" needs per-model qualification → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
 
 - 2026-09-15 · TELNYX: real account is izzy@loopcom.net (TRIAL — Paid upgrade blocks numbers/calls, Izzy's 5-min job), Loopcom-Primary-SIP + -Outbound built on Telnyx side, attestation A = number ON the account (cited; support AI's "ported→B" contradicts their docs, human answer pending on Issue #666221), /apps/telnyx bench BUILT (14 tests, guards fail vs HEAD) → `2026-09-15-telnyx-provider-onboarding-and-bench.md`
 

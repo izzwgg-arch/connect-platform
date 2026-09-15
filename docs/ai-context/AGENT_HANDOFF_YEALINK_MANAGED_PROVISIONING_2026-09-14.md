@@ -10,6 +10,18 @@ RPS server record exists (id `01a0a48be8567d07b8eac49abab70f13` →
 ⏳ NOT PROVEN: §7 step 4 — no real phone has checked in or registered through this
 path yet; `MANAGED_PHONE_SIP_PORT=5060/UDP` is set but not yet qualified on a handset.
 
+## 0b. ⛔⛔ 2026-09-15 (later) — OUR ACCOUNT CANNOT ADD A MAC WITHOUT ITS SERIAL; PROVISION IS BY MAC + SN
+
+Proven live against `us-api.ymcs.yealink.com` (real writes, deleted after, cloud left clean):
+
+- `POST /v2/rps/addDevicesByMac` (add by MAC alone) → **403 `{"code":"900403","message":"This request is forbidden"}`** for our account tier, on every body shape. Our client USED this call, so as first written it would 403 on every real phone.
+- `POST /v2/rps/devices` `{mac, sn, serverId, uniqueServerUrl, authName, password}` (add WITH serial) → **201 Created**, and it **persists our per-device `uniqueServerUrl` and `authName`** (confirmed by `GET /v2/rps/devices/{id}`). This is the anti-hijack guarantee: Yealink requires the serial as proof of possession before it will claim a MAC into an RPS account.
+- ⛔ The SN is NOT validated against the MAC at add time (a placeholder SN was accepted), but it is REQUIRED and non-empty. Real phones supply their real SN; the wizard already collects it (serial-on-the-extension-screen).
+- **Fix committed `265402dd` (deployed):** the client adds one device with its SN (`addDevice` → `rps/devices`); `assign()` fails fast without a serial (`serial_number_required`, 400); `ManagedPhoneService.provision` REQUIRES and stores `serialNumber` (the column already existed) and passes it to `assign` at reconcile; the route validates it (`z.string().min(3).max(64).regex(/^[A-Za-z0-9._-]+$/)`); `ManagedPhonePanel` has a required Serial number field. Read-back verify via `deviceDetail` is unchanged.
+- **LIVE ROUND-TRIP PROVEN through the DEPLOYED container** (`app-api-1`, commit `265402dd`): `configuredRps()` (mode live) → `assign({mac, serialNumber, …})` → `state:assigned` + device id → `deviceDetail` shows `serverId`=our Loopcom server, `uniqueServerUrl`=`https://app.loopcom.net/api/phone-provisioning/<mac>/`, `authName`=`<mac>` → `release` → `checkMac` gone. Cloud verified back to **0 devices**.
+- **LIVE endpoint auth** (`https://app.loopcom.net/api/phone-provisioning/<mac>/<mac>.cfg`): no creds → **401** + `WWW-Authenticate: Basic realm="Loopcom phone provisioning"` + `Cache-Control: no-store, private`; wrong creds → **401** (never 200); `/api/desk-phones/managed/*` → 401 without a JWT.
+- ⛔ **v2 `checkMac` can never see another account's device** (v2 only lists ours), so a foreign owner surfaces ONLY as code 800004 at add time — the wizard's cloud lookup cannot pre-say "owned elsewhere" for Yealink before a claim.
+
 ## 0. ⛔⛔ 2026-09-15 — THE v1 JSON API IS DEAD ON YMCS; THE CLIENT IS A v2 OAUTH CLIENT NOW
 
 - The 2019/2020 "Json API for RPS Management Platform" (X-Ca-Key/X-Ca-Signature HMAC
@@ -93,6 +105,13 @@ service do not change. The existing office-scan / PnP / reset ladder is untouche
 - `apps/api/src/jwtPublicRouteBypass.ts` — anchored handset-filename exception only.
 - `apps/portal/components/deskPhones/ManagedPhonePanel.tsx` + `managedPhoneStatus.ts`.
 - `packages/db/prisma/migrations/20260914150000_managed_desk_phones/` (additive).
+
+## 3b. What is proven vs what only a handset can prove (2026-09-15)
+
+- ✅ PROVEN LIVE: YMCS auth; the Loopcom RPS server record; **device claim by MAC + serial → RPS redirect to our exact per-device URL with the phone's Basic username**; release; endpoint auth (401/no-store/WWW-Authenticate). All reversible; cloud left at 0 devices.
+- ✅ PROVEN BY TEST: the generated Yealink `.cfg` is well-formed (`#!version:1.0.0.1`, `account.1.*`, bounded line keys) — the SAME code the endpoint serves.
+- ⏳ ONLY A HANDSET CAN PROVE (by design — the per-device provisioning password lives ONLY in RPS + on the phone, never in our API in the clear): the phone factory-booting → consulting RPS → fetching `<mac>.cfg` with its Basic creds → applying it → REGISTERING the desk endpoint. RPS consults happen ONLY at factory boot.
+- ⛔ "Works on EVERY model, flawlessly, for years" is NOT provable from one handset. One handset proves the UNIVERSAL mechanism (RPS-redirect-at-factory-boot + auto-provision), which is identical across RPS-capable Yealinks. Per-MODEL correctness (config-key set, physical line-key count, firmware-specific params) still needs per-model validation: every model in `YEALINK_MANAGED_MODELS` stays `qualification: "pending_handset_validation"` until a real handset of that model registers. Sustainability layer = that qualification list + a firmware floor + the existing rpsState/served/registration evidence.
 
 ## 4. APIs
 
