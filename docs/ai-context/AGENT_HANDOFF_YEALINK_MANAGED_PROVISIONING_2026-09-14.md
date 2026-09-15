@@ -103,12 +103,25 @@ Secrets: env only (compose `env_file`, never an `environment:` override — see 
 compose trap in CLAUDE.md). Device passwords live AES-GCM encrypted in
 `ManagedDeskPhone.secretsEncrypted` (`CREDENTIALS_MASTER_KEY`).
 
-## 7. Enabling LIVE, step by step (when Yealink answers)
+## 7. Enabling LIVE, step by step (Yealink answered 2026-09-15)
 
-1. Obtain from Yealink: RPS open-API AccessKey ID + Secret and the **regional base URL**.
-   Confirm the JSON v1 API is entitled for the account (the 2019 doc predates 2026 accounts).
-2. Create the provisioning server once (a one-off script using `YealinkRpsClient.addServer`
-   with `url: https://app.loopcom.net/api/phone-provisioning/`) and record its id.
+**2026-09-15: the YMCS account EXISTS** — "[YMCS] Account Set up" email to izzy@loopcom.net
+(permission: RPS; login https://us.ymcs.yealink.com/manager/login; temporary password in the
+email — Izzy signs in and changes it; never record it). Ticket #530705 "Confirmed and Fixing":
+Wynn_Yealink — "RPS account come with RPS API in default"; API guide:
+https://support.yealink.com/document-detail/7212879a94584800aa1b8f9e3697c9b5. #530712 closed as
+duplicate.
+
+1. In YMCS (as super admin): **System → Integration → API** — this screen shows the
+   **enterprise's API domain name** (→ `YEALINK_RPS_BASE_URL`) and issues the AccessKey ID +
+   Secret. (Older notes said "System Management → API Service → Acquire"; the 2026-08 doc says
+   System → Integration → API.) Still confirm the JSON v1 request shape with a live read
+   (`server/list`) before trusting it — the 2019 doc predates 2026 accounts.
+2. Create the provisioning server once: **`apps/api/scripts/yealink-rps-create-server.ts`**
+   (from `apps/api`: `YEALINK_RPS_BASE_URL=… YEALINK_RPS_ACCESS_KEY_ID=… YEALINK_RPS_ACCESS_KEY_SECRET=…
+   pnpm exec tsx scripts/yealink-rps-create-server.ts`). Idempotent: finds an existing
+   "Loopcom" server by name, refuses one pointing at a different URL, reads the create back,
+   prints `YEALINK_RPS_SERVER_ID=<id>`. Defaults `url: https://app.loopcom.net/api/phone-provisioning/`.
    The per-device `uniqueServerUrl` still points each MAC at `…/<mac>/`.
 3. Set in `/opt/connectcomms/env/.env.platform`: the variables in §6. Deploy api
    through the queue (an env-only change needs a real api commit to rebuild).

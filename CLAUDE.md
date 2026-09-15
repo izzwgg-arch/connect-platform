@@ -395,6 +395,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-15 · Zero-touch Yealink (RPS): YMCS account ISSUED (izzy@loopcom.net, permission RPS, us.ymcs.yealink.com; AccessKey + API domain at System → Integration → API, Izzy's to fetch); one-off server script `apps/api/scripts/yealink-rps-create-server.ts` exists; still INERT, no live RPS call → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
+
 - 2026-09-15 · SignalWire DAY TEST LIVE: A plus 845-782-6775 hops via SignalWire (205) 351-3327 into its own TC-1; both edits in ONE PBX custom file, TRUNK_ID=132 guard IS the anti-loop, CID preserved via 0001 hop, proven with a real answered call; rollback = §5 → `2026-09-15-signalwire-day-test-aplus-6775.md`
 
 - 2026-09-15 · iPhone App Store: rejection FULLY WORKED — all 3 issues fixed (purpose strings `db20a0a8`, storefront USA via API, business-model reply SENT + thread-verified), build 60 built/attached, RESUBMITTED at 05:35 ET, `WAITING_FOR_REVIEW` UI-confirmed. ⛔ "Version is not ready" 409 = LYING error; the fix is PATCH the rejected item `{resolved:true}`, never retries. Google Auth → 1.1 (mockup published) → `2026-08-27-the-iphone-app-store-submission-4-of-5-blockers.md`
@@ -423,7 +425,6 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
 - 2026-09-15 · Fanvil REPLIED: FDPS account ISSUED (login is Izzy's to do, region "Europe"), FDMCS activation link expires ~Sep 18, reseller review + FDPS API review started, buy via 888VoIP → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
 - Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome → `2026-09-14-grandstream-business-onboarding-itsp-reseller-gd.md`
-- ZERO-TOUCH YEALINK (RPS) PROVISIONING is built into the existing Desk Phone Wizard… → `2026-09-14-zero-touch-yealink-rps-provisioning-is-built-int.md`
 - the desk-phone RECORD WRITER exists now, and two defects that would have broken it… → `2026-09-14-the-desk-phone-record-writer-exists-now-and-two.md`
 - Izzy's HANDS-OFF mandate: factory-reset FIRST (he was told the cost and reaffirmed… → `2026-09-11-izzy-s-hands-off-mandate-factory-reset-first-he.md`
 - the desk-phone wizard WORKS FOR EVERY BRAND now, not just Yealink; the hour-long "… → `2026-09-11-the-desk-phone-wizard-works-for-every-brand-now.md`
