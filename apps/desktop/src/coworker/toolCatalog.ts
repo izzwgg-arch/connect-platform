@@ -136,8 +136,8 @@ export const TOOL_CATALOG: readonly CatalogTool[] = [
   },
   {
     name: "computer_powershell",
-    description: "Run ONE PowerShell script on this computer and return stdout, stderr and the exit code (output cut at 30000 characters; default timeout 60 s, max 600). Prefer the specific file/system tools when one does the job. Never use it to change security, services, network settings or install software — such commands are refused. The person's permission profile may require their approval for every run.",
-    parameters: { type: "object", properties: { script: str("The PowerShell code to run."), timeoutSec: num("Seconds before the script is killed (default 60, max 600)."), cwd: str("Working directory (default: the coworker workspace).") }, required: ["script"], additionalProperties: false },
+    description: "Run ONE PowerShell script on this computer and return stdout, stderr and the exit code (output cut at 30000 characters; default timeout 60 s, max 600). Prefer the specific file/system tools when one does the job. Never use it to change security, services, network settings or install software — such commands are refused. The person's permission profile may require their approval for every run. Pass elevated:true to run AS ADMINISTRATOR — Windows shows its own prompt and the person clicks Yes; every elevated run is always approved by the person first, and the same refusals still apply.",
+    parameters: { type: "object", properties: { script: str("The PowerShell code to run."), timeoutSec: num("Seconds before the script is killed (default 60, max 600)."), cwd: str("Working directory (default: the coworker workspace)."), elevated: bool("Run as administrator (Windows UAC prompt, the person clicks Yes). Default false.") }, required: ["script"], additionalProperties: false },
     spec: spec("computer_powershell", "SHELL", "MEDIUM", ["shell"], { timeoutMs: 600_000 }),
   },
   /* ── browser (the Coworker's own hidden Chromium; never the person's Chrome) ── */
@@ -261,6 +261,61 @@ export const TOOL_CATALOG: readonly CatalogTool[] = [
     description: "Download a project from an https:// or git@ address into a new folder (default: a folder named after the project inside the coworker workspace). Refuses to download over something that already exists.",
     parameters: { type: "object", properties: { url: str("The project's https:// or git@ address."), into: str("Optional new folder to download into. " + PATH_NOTE) }, required: ["url"], additionalProperties: false },
     spec: spec("computer_git_clone", "NETWORK", "MEDIUM", ["files.write"], { networked: true, timeoutMs: 10 * 60_000 }),
+  },
+  /* ── screen control (the person's REAL desktop; buttons-first via UI Automation, cursor as fallback) ── */
+  {
+    name: "computer_screen_begin",
+    description: "Start controlling the person's actual desktop screen — mouse and keyboard on their real windows, not the Coworker's own browser. Ask for this only when a task genuinely needs the live screen (an app with no file/PowerShell way to do it). The person approves once; a blue Loopcom frame then lights every edge, and they can stop any time with Escape. After this, prefer computer_screen_read + computer_screen_click by target (no cursor movement) over moving the mouse.",
+    parameters: { type: "object", properties: { reason: str("One short sentence, in plain English, saying what you will do on their screen — shown to the person on the approval and the status strip.") }, required: ["reason"], additionalProperties: false },
+    spec: spec("computer_screen_begin", "COMPUTER_USE", "MEDIUM", ["desktop.active"], { alwaysRequireApproval: true, timeoutMs: 6 * 60_000 }),
+  },
+  {
+    name: "computer_screen_read",
+    description: "Read the controls on the person's active window as a list you can act on: the window title, and each button/menu/field/list item with its name, kind, whether it is enabled, and a ref. This is the 'buttons-first' way to see the screen — no cursor moves. Click a control by passing its ref or exact name to computer_screen_click. Read again after every click, because the window changes. Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { maxControls: num("Cap on controls returned (default 120, max 400).") }, additionalProperties: false },
+    spec: spec("computer_screen_read", "COMPUTER_USE", "READ_ONLY", ["desktop.active"], { timeoutMs: 30_000 }),
+  },
+  {
+    name: "computer_screen_click",
+    description: "Click on the person's screen. PREFER target: pass the ref or exact visible name of a control from computer_screen_read and it is invoked directly, with NO cursor movement, so the person's mouse never jumps. Only fall back to x/y (0..1 fractions of the whole screen) when a control cannot be reached by name (a game, a canvas). Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { target: str("Ref (from computer_screen_read) or exact visible name of the control to click. Preferred."), x: num("Horizontal position as a 0..1 fraction of the screen — cursor fallback only."), y: num("Vertical position as a 0..1 fraction — cursor fallback only."), button: { type: "string", enum: ["left", "right", "middle"], description: "Default left." }, double: bool("Double-click. Default false.") }, additionalProperties: false },
+    spec: spec("computer_screen_click", "COMPUTER_USE", "LOW", ["desktop.active"], { timeoutMs: 20_000 }),
+  },
+  {
+    name: "computer_screen_type",
+    description: "Type text into whatever control has keyboard focus on the person's screen (click the field first). Types the characters themselves, independent of keyboard layout. Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { text: str("The text to type.") }, required: ["text"], additionalProperties: false },
+    spec: spec("computer_screen_type", "COMPUTER_USE", "LOW", ["desktop.active"], { timeoutMs: 20_000 }),
+  },
+  {
+    name: "computer_screen_key",
+    description: "Press a key or a shortcut on the person's screen: a named key (enter, tab, escape, delete, up, f5…) optionally with modifiers (ctrl, shift, alt, meta), e.g. key 'a' modifiers ['ctrl'] for Select All. Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { key: str("A named key or a single character."), modifiers: { type: "array", items: { type: "string", enum: ["ctrl", "shift", "alt", "meta"] }, description: "Modifiers to hold." } }, required: ["key"], additionalProperties: false },
+    spec: spec("computer_screen_key", "COMPUTER_USE", "LOW", ["desktop.active"], { timeoutMs: 20_000 }),
+  },
+  {
+    name: "computer_screen_scroll",
+    description: "Scroll the person's screen at a position (x/y as 0..1 fractions), a number of notches (amount: positive up, negative down). Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { x: num("0..1 fraction."), y: num("0..1 fraction."), amount: num("Notches; positive up, negative down. ±1..±10.") }, required: ["x", "y", "amount"], additionalProperties: false },
+    spec: spec("computer_screen_scroll", "COMPUTER_USE", "LOW", ["desktop.active"], { timeoutMs: 15_000 }),
+  },
+  {
+    name: "computer_screen_move",
+    description: "Move the mouse pointer to a position (x/y as 0..1 fractions of the screen) without clicking — to reveal a hover menu or a tooltip. Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { x: num("0..1 fraction."), y: num("0..1 fraction.") }, required: ["x", "y"], additionalProperties: false },
+    spec: spec("computer_screen_move", "COMPUTER_USE", "LOW", ["desktop.active"], { timeoutMs: 10_000 }),
+  },
+  {
+    name: "computer_screen_capture",
+    description: "Save a PNG snapshot of the person's screen into the workspace artifacts folder and return its path and size. Use it to keep a record of what a step looked like. (It does not let you see pixels directly — read controls with computer_screen_read.) Only works after computer_screen_begin.",
+    parameters: { type: "object", properties: { saveAs: str("Optional destination .png path. " + PATH_NOTE) }, additionalProperties: false },
+    spec: spec("computer_screen_capture", "COMPUTER_USE", "READ_ONLY", ["desktop.active", "files.write"], { timeoutMs: 20_000 }),
+  },
+  {
+    name: "computer_screen_end",
+    description: "Stop controlling the person's screen and drop the blue frame. Always allowed; call it when the on-screen task is finished. The person can also stop at any time with Escape.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    spec: spec("computer_screen_end", "COMPUTER_USE", "READ_ONLY", [], { timeoutMs: 10_000 }),
   },
   /* ── diagnostics ── */
   {

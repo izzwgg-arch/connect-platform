@@ -1,0 +1,85 @@
+<!doctype html>
+<!--
+  The Loopcom edge frame — shown while the Coworker controls the real screen.
+  Transparent, click-through, non-focusable (the main process makes the window so).
+  It only RECEIVES state (frame colour + status) over window.coworkerScreenOverlay.onState;
+  it can do nothing back. No Node, no network. CSP below.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+    <title>Loopcom Coworker — screen control</title>
+    <style>
+      :root { color-scheme: dark; --c:#22a8ff; --deep:#1e5cff; }
+      html, body { margin:0; height:100%; width:100%; background:transparent; overflow:hidden; -webkit-user-select:none; user-select:none; }
+      /* The frame: an inset glow on all four edges, brighter at the corners. */
+      .frame { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity .25s ease; }
+      .frame::after { content:""; position:absolute; inset:0;
+        box-shadow:
+          inset 0 0 0 2px var(--c),
+          inset 0 0 22px 2px color-mix(in srgb, var(--c) 45%, transparent),
+          inset 0 0 70px 10px color-mix(in srgb, var(--c) 18%, transparent);
+      }
+      .frame .corners { position:absolute; inset:0;
+        background:
+          radial-gradient(24vmin 24vmin at 0 0, color-mix(in srgb,var(--c) 40%,transparent), transparent 70%),
+          radial-gradient(24vmin 24vmin at 100% 0, color-mix(in srgb,var(--c) 40%,transparent), transparent 70%),
+          radial-gradient(24vmin 24vmin at 0 100%, color-mix(in srgb,var(--c) 40%,transparent), transparent 70%),
+          radial-gradient(24vmin 24vmin at 100% 100%, color-mix(in srgb,var(--c) 40%,transparent), transparent 70%);
+        mix-blend-mode:screen; opacity:.5;
+      }
+      .frame.on { opacity:1; }
+      .frame.working { animation:breathe 3.4s ease-in-out infinite; }
+      @keyframes breathe { 0%,100%{filter:none} 50%{filter:brightness(1.28)} }
+      @media (prefers-reduced-motion: reduce){ .frame.working{ animation:none } }
+
+      /* colour per state */
+      .frame.working { --c:#22a8ff; }
+      .frame.paused  { --c:#8b9ab2; }
+      .frame.asking  { --c:#f0b655; }
+      .frame.green   { --c:#4ad991; }
+
+      /* the live status strip, top-centre */
+      .strip { position:fixed; top:14px; left:50%; transform:translateX(-50%);
+        display:flex; align-items:center; gap:11px; padding:8px 15px; border-radius:12px;
+        background:rgba(11,24,46,.86); border:1px solid color-mix(in srgb,var(--c) 55%,transparent);
+        box-shadow:0 10px 30px -10px rgba(0,0,0,.6); font:13px/1.3 "Segoe UI", system-ui, sans-serif; color:#eaf1fb;
+        opacity:0; transition:opacity .25s ease; max-width:70vw; }
+      .strip.on { opacity:1; }
+      .mark { width:22px; height:22px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center;
+        color:#fff; font-weight:700; font-size:13px; background:linear-gradient(135deg,var(--deep),var(--c)); }
+      .txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .esc { margin-left:2px; font-size:11px; color:#aebfe0; border:1px solid rgba(255,255,255,.18); border-radius:6px; padding:2px 7px; white-space:nowrap; }
+    </style>
+  </head>
+  <body>
+    <div class="frame" id="frame"><div class="corners"></div></div>
+    <div class="strip" id="strip">
+      <span class="mark">∞</span>
+      <span class="txt" id="txt">Loopcom Coworker</span>
+      <span class="esc">Esc to stop</span>
+    </div>
+    <script>
+      (function () {
+        var frame = document.getElementById("frame");
+        var strip = document.getElementById("strip");
+        var txt = document.getElementById("txt");
+        var COLOURS = { blue: "working", grey: "paused", amber: "asking", green: "green" };
+        function apply(s) {
+          var f = (s && s.frame) || "none";
+          frame.className = "frame";
+          strip.classList.remove("on");
+          if (f === "none") { frame.classList.remove("on"); return; }
+          frame.classList.add("on");
+          var cls = COLOURS[f];
+          if (cls) frame.classList.add(cls);
+          txt.textContent = (s && s.status) ? String(s.status).slice(0, 160) : "Loopcom Coworker";
+          strip.classList.add("on");
+        }
+        var api = window.coworkerScreenOverlay;
+        if (api && api.onState) api.onState(apply);
+      })();
+    </script>
+  </body>
+</html>

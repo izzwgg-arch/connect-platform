@@ -299,6 +299,18 @@ const coworkerApprovalApi = {
 };
 contextBridge.exposeInMainWorld("coworkerApproval", coworkerApprovalApi);
 
+// The edge-frame overlay (assets/coworkerScreenOverlay.html) — receive-only: main
+// pushes the frame colour + status text; the page can do nothing back. It never
+// takes input (the window is click-through), so there is no verb here at all.
+const coworkerScreenOverlayApi = {
+  onState: (cb: (s: { frame: string; status: string }) => void) => {
+    const wrapped = (_e: unknown, s: { frame: string; status: string }) => { try { cb(s); } catch { /* renderer guard */ } };
+    ipcRenderer.on("coworker-screen-overlay:state", wrapped);
+    return () => ipcRenderer.removeListener("coworker-screen-overlay:state", wrapped);
+  },
+};
+contextBridge.exposeInMainWorld("coworkerScreenOverlay", coworkerScreenOverlayApi);
+
 const coworkerAdminApi = {
   chromePair: () => ipcRenderer.invoke("coworker-admin:chrome-pair"),
   getState: () => ipcRenderer.invoke("coworker-admin:state"),

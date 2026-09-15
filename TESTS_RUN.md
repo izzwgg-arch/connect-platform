@@ -53,3 +53,18 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
 
 - Static fragment check passed for `loopcom-coworker-ide-mockup.html`: it is under 1 MB, has the required preview root, contains no document wrapper or escaped markup, and has balanced main/article elements.
 - Not run: product UI tests, desktop build, packaging, or browser acceptance. This task produced a review mockup only; no application source changed.
+
+## Coworker SCREEN CONTROL — 2026-09-15
+
+- `cd apps/desktop && node --import tsx --test src/coworker/screenControl.test.ts` → **13/13 pass** (pure session
+  state machine; `shouldYieldTo`; `screenArgsToCommand`; the 8-tool catalogue; runtime integration against a fake
+  controller incl. the **500-action ask-once stress with 0 re-asks**, no-session refusal, per-task consent,
+  denied-override precedence, call-deferral, admin-PowerShell-always-asks + denylist, fenced capture).
+- `node --import tsx --test src/coworker/coworkerHands.test.ts` → **18/18 pass** (existing suite; the drift/coverage
+  guard now covers the 9 new `computer_screen_*` runtime cases — every catalogue tool still has a runtime case).
+- `node --import tsx --test src/coworker/*.test.ts src/remoteSupport/*.test.ts` → **110/110 pass** (no regression from
+  reusing `remoteSupport/inputInjector.ts`).
+- `node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit` → **EXIT 0** (clean, incl. the new Electron surface).
+- ⏳ NOT run (needs a real Windows screen + a human): a real cursor moving, a real screenshot, UIA Invoke on a live
+  button, the yield/Escape LL hook, and the UAC elevation. Acceptance steps are in
+  `docs/ai-context/AGENT_HANDOFF_COWORKER_SCREEN_CONTROL_2026-09-15.md`.

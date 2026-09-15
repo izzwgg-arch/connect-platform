@@ -20,7 +20,9 @@ import type { ChildProcess } from "node:child_process";
 import { decideToolCall, normalizePermissions, type PermissionSettings, type PolicyDecision } from "../policyCore";
 import { findTool, TOOL_CATALOG, type CatalogTool } from "../toolCatalog";
 import { fsCopy, fsDelete, fsList, fsMkdir, fsMove, fsRead, fsSearch, fsStat, fsWrite, resolveUserPath, type FsEnv } from "./fs";
-import { runPowerShellChecked, type ShellDeps } from "./shell";
+import { runPowerShellChecked, checkShellScript, type ShellDeps } from "./shell";
+import type { ScreenController, RunElevatedPowerShell } from "../screenControl/controller";
+import type { ScreenActionName } from "../screenControl/session";
 import { processes, systemInfo } from "./windows";
 import { readXlsxFile, writeXlsxFile, type Sheet } from "./xlsx";
 import { CoworkerBrowser } from "./browser";
@@ -57,6 +59,11 @@ export function isWebmailUrl(url: unknown): boolean {
   } catch { return false; }
 }
 
+/** The screen actions that require an already-open control session (everything but begin/end). */
+const SCREEN_ACTION_TOOLS = new Set<string>([
+  "computer_screen_read", "computer_screen_click", "computer_screen_type",
+  "computer_screen_key", "computer_screen_scroll", "computer_screen_move", "computer_screen_capture",
+]);
 
 export type ApprovalRequest = {
   callId: string;
@@ -81,6 +88,10 @@ export type RuntimeDeps = {
   askApproval: (req: ApprovalRequest, signal: AbortSignal) => Promise<{ approved: boolean; how: string }>;
   browser: CoworkerBrowser;
   chrome?: BrowserCompanionRuntime;
+  /** Drives the person's REAL desktop. Absent = screen control is not wired (tools hidden). */
+  screen?: ScreenController;
+  /** Runs one PowerShell script elevated (UAC). Absent = admin runs unavailable. */
+  runElevatedPowerShell?: RunElevatedPowerShell;
   mcp: McpManager;
   journal: Journal;
   shellDeps?: ShellDeps;
@@ -121,7 +132,7 @@ export class CoworkerRuntime {
   }
 
   manifestTools() {
-    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).filter((t) => !this.groupOff(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
+    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).filter((t) => this.deps.screen ? true : !t.name.startsWith("computer_screen_")).filter((t) => !this.groupOff(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
     const mcp = this.deps.mcp.tools().map(({ client, tool }) => ({
       name: tool.modelName,
       description: `[${client.config.name}] ${tool.description}`.slice(0, 2000),
@@ -190,8 +201,37 @@ export class CoworkerRuntime {
         }
       }
 
+      /* ── screen control: the per-machine opt-in, and the ask-once-then-flow gate ──
+       *    begin() faces the policy ask (alwaysRequireApproval); once the person has
+       *    approved it for THIS task, the action tools flow without re-asking (Izzy's
+       *    chosen autonomy). The risky sub-actions (delete/pay/send/admin) are separate
+       *    tools and still ask through the ordinary gate. A screen action with no open
+       *    approved session is refused outright — the mouse never moves by surprise. */
+      let screenPreApproved = false;
+      if (call.name.startsWith("computer_screen_")) {
+        const sc = this.deps.screen;
+        if (!sc) return finish(false, { error: "screen_control_unavailable", denied: true, message: "This computer cannot control its own screen from the Coworker." }, "screen_control_unavailable", "denied");
+        if (call.name === "computer_screen_begin" && !sc.isEnabled()) {
+          const message = "Screen control is turned off. Turn on “Let the Coworker control the screen” in the Coworker's settings on this computer first.";
+          return finish(false, { error: "screen_control_off", denied: true, message }, "screen_control_off", "denied", message);
+        }
+        if (SCREEN_ACTION_TOOLS.has(call.name)) {
+          if (!sc.isApprovedFor(call.taskId)) {
+            const message = "Nothing is being controlled on the screen yet. Call computer_screen_begin first — the person approves once, then screen actions run without asking again.";
+            return finish(false, { error: "screen_not_started", denied: true, message }, "screen_not_started", "denied", message);
+          }
+          screenPreApproved = true;
+        }
+      }
+
+      /* ── administrator PowerShell: elevation raises the risk and always asks ── */
+      let effSpec = spec;
+      if (call.name === "computer_powershell" && args.elevated === true) {
+        effSpec = { ...spec, risk: "HIGH", alwaysRequireApproval: true };
+      }
+
       /* ── the verdict ── */
-      const decision = decideToolCall({ spec, permissions: normalizePermissions(this.deps.permissions()), provenance: "user", callInProgress: this.deps.isCallActive(), coworkerEnabled: this.deps.coworkerEnabled() });
+      const decision = decideToolCall({ spec: effSpec, permissions: normalizePermissions(this.deps.permissions()), provenance: "user", approved: screenPreApproved || undefined, callInProgress: this.deps.isCallActive(), coworkerEnabled: this.deps.coworkerEnabled() });
       if (decision.verdict === "deny") {
         return finish(false, { error: decision.code, denied: true, message: decision.message, domains: decision.domains }, decision.code, "denied", decision.message);
       }
@@ -244,7 +284,8 @@ export class CoworkerRuntime {
       case "computer_fs_move": what = `Move ${short(args.from)} to ${short(args.to)}.`; break;
       case "computer_fs_copy": what = `Copy ${short(args.from)} to ${short(args.to)}.`; break;
       case "computer_fs_delete": what = `DELETE ${short(args.path)}${args.recursive ? " and everything inside it" : ""}. This cannot be undone.`; break;
-      case "computer_powershell": what = `Run this PowerShell script:\n${short(args.script, 600)}`; break;
+      case "computer_powershell": what = `${args.elevated === true ? "Run this PowerShell script AS ADMINISTRATOR (Windows will ask you to confirm too):" : "Run this PowerShell script:"}\n${short(args.script, 600)}`; break;
+      case "computer_screen_begin": what = `Control your screen — move the mouse and type on your real desktop:\n${short(args.reason, 240)}\nA blue frame will show while it works; press Escape to take back the screen any time.`; break;
       case "computer_browser_open": what = `Open ${short(args.url)} in the Coworker's own background browser.`; break;
       case "computer_browser_download": what = `Download ${short(args.url ?? args.text ?? args.selector)} into the workspace downloads folder.`; break;
       case "computer_browser_submit": what = `Submit the form on ${this.deps.browser.currentUrl() ?? "the current page"}.`; break;
@@ -339,11 +380,35 @@ export class CoworkerRuntime {
       case "computer_system_info": return wrap(await systemInfo(this.deps.shellDeps));
       case "computer_processes": return wrap(await processes(args, this.deps.shellDeps));
       case "computer_powershell": {
+        // Administrator run (UAC) — the denylist still applies; elevation just runs
+        // through the elevated helper instead of the ordinary child process.
+        if (args.elevated === true) {
+          const script = typeof args.script === "string" ? args.script : "";
+          if (!script.trim()) return wrap({ ok: false, error: "empty_script", message: "script is required." });
+          const chk = checkShellScript(script);
+          if (!chk.ok) return wrap(chk);
+          if (!this.deps.runElevatedPowerShell) return wrap({ ok: false, error: "elevation_unavailable", message: "Running as administrator isn't available on this computer." });
+          const r = await this.deps.runElevatedPowerShell(script, { timeoutSec: typeof args.timeoutSec === "number" ? args.timeoutSec : undefined, signal });
+          return wrap(signal.aborted ? { ...r, ok: false, error: "task_cancelled" } : r);
+        }
         const cwdArg = typeof args.cwd === "string" && args.cwd.trim() ? await resolveUserPath(args.cwd, env, { mustExist: true }) : null;
         if (cwdArg && !cwdArg.ok) return wrap(cwdArg);
         const r = await runPowerShellChecked({ ...args, cwd: cwdArg ? cwdArg.abs : undefined }, { defaultCwd: this.deps.workspace, deps: this.deps.shellDeps, onSpawn: (child) => { rec.children.add(child); child.once("exit", () => rec.children.delete(child)); } });
         return wrap(signal.aborted ? { ...r, ok: false, error: "task_cancelled" } : r);
       }
+      case "computer_screen_begin": return wrap(this.deps.screen ? await this.deps.screen.begin(rec.taskId, typeof args.reason === "string" ? args.reason : "", signal) : { ok: false, error: "screen_control_unavailable" });
+      case "computer_screen_read": return wrap(this.deps.screen ? await this.deps.screen.read(rec.taskId, args) : { ok: false, error: "screen_control_unavailable" });
+      case "computer_screen_click":
+      case "computer_screen_type":
+      case "computer_screen_key":
+      case "computer_screen_scroll":
+      case "computer_screen_move": return wrap(this.deps.screen ? await this.deps.screen.act(rec.taskId, tool.name as ScreenActionName, args) : { ok: false, error: "screen_control_unavailable" });
+      case "computer_screen_capture": {
+        let saveAs: string | undefined;
+        if (typeof args.saveAs === "string" && args.saveAs.trim()) { const r = await resolveUserPath(args.saveAs, env); if (!r.ok) return wrap(r); saveAs = r.abs; }
+        return wrap(this.deps.screen ? await this.deps.screen.capture(rec.taskId, saveAs) : { ok: false, error: "screen_control_unavailable" });
+      }
+      case "computer_screen_end": return wrap(this.deps.screen ? await this.deps.screen.end(rec.taskId) : { ok: true, ended: true });
       case "computer_browser_open": return wrap(await this.deps.browser.open(args));
       case "computer_browser_read": return wrap(await this.deps.browser.read(args));
       case "computer_browser_click": return wrap(await this.deps.browser.click(args));
@@ -405,6 +470,7 @@ function titleFor(name: string): string {
   if (name === "computer_xlsx_write") return "Create a spreadsheet?";
   if (name === "computer_git_push") return "Send code off this computer?";
   if (name.startsWith("computer_git_")) return "Change a code project?";
+  if (name === "computer_screen_begin") return "Let the Coworker control your screen?";
   if (name === "computer_powershell") return "Run PowerShell on this computer?";
   if (name.startsWith("computer_browser_download")) return "Download a file?";
   if (name.startsWith("computer_browser_submit")) return "Submit a web form?";

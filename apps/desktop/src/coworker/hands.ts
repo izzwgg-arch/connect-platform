@@ -13,10 +13,12 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import type { App, BrowserWindow as BW, IpcMain, Screen, Session, Shell } from "electron";
+import type { App, BrowserWindow as BW, DesktopCapturer, IpcMain, Screen, Session, Shell } from "electron";
 import type { DesktopSettings, CoworkerMcpServerSetting } from "../types";
 import type { Rect } from "../coworkerWidget/widgetGeometry";
 import { CoworkerRuntime } from "./runtime";
+import { ElectronScreenController } from "./screenControl/screenController";
+import { makeRunElevatedPowerShell } from "./screenControl/elevatedShell";
 import { CoworkerBrowser } from "./runtime/browser";
 import { McpManager, parseServerConfig } from "./runtime/mcp";
 import { Journal } from "./runtime/journal";
@@ -32,6 +34,7 @@ export type HandsDeps = {
   BrowserWindow: typeof BW;
   ipcMain: IpcMain;
   screen: Screen;
+  desktopCapturer: DesktopCapturer;
   session: { fromPartition(p: string, o?: { cache?: boolean }): Session };
   shell: Shell;
   portalUrl: string;
@@ -126,6 +129,22 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   const chrome = new PlaywrightRuntime({userData:d.app.getPath("userData"),
     env:()=>runtime.fsEnv(),journal,onStop:()=>runtime.cancel(null),log});
+
+  // Screen control — OFF unless the person opted in. onEnded (Escape / time limit)
+  // cancels the owning task so the agent stops too.
+  const screenController = new ElectronScreenController({
+    app: d.app, BrowserWindow: d.BrowserWindow, screen: d.screen, desktopCapturer: d.desktopCapturer,
+    assetPath: d.assetPath, preloadPath: d.preloadPath,
+    artifactsDir: () => path.join(workspaceFor(d.getSettings()), "artifacts"),
+    isEnabled: () => d.getSettings().coworkerScreenControlEnabled === true,
+    isCallActive: d.isCallActive,
+    log: (l) => log(`screen: ${l}`),
+    attachDiag: d.attachDiag,
+    onEnded: (taskId) => { try { runtime.cancel(taskId); } catch { /* not started */ } },
+    registerArtifact: (a) => { void journal.append({ ts: new Date().toISOString(), kind: "artifact", taskId: "artifact", artifact: a }); },
+  });
+  const runElevatedPowerShell = makeRunElevatedPowerShell(d.app.getPath("userData"));
+
   const runtime: CoworkerRuntime = new CoworkerRuntime({
     home: os.homedir(),
     workspace,
@@ -142,6 +161,8 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     coworkerEnabled: () => true,
     askApproval: (req, signal) => askApproval(req, signal),
     browser, chrome, mcp, journal,
+    screen: screenController,
+    runElevatedPowerShell,
     openPath: async (p) => { const err = await d.shell.openPath(p); if (err) throw new Error(err); },
     showInFolder: (p) => d.shell.showItemInFolder(p),
     diagnostics: { portalUrl: d.portalUrl, appVersion: d.app.getVersion(), logFile: d.logFile, phoneState: d.phoneState, linkState: () => (link ? link.status() : { state: "off" }) as unknown as Record<string, unknown> },
@@ -286,7 +307,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   return {
     link, runtime, mcp, journal,
-    stop: async () => { try { runtime.cancel(null); await chrome.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
+    stop: async () => { try { runtime.cancel(null); await screenController.end(undefined, "app_quit"); await chrome.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
     openConnections: () => { openConnectionsWindow(approvalDeps); },
     status: () => ({ link: link!.status(), profile: permissions().profile, mcp: mcp.status().map((m) => ({ id: m.id, state: m.state, tools: m.tools.length })), active: runtime.activeCalls() }),
     busy: () => runtime.activeCalls().length > 0 || pendingApprovals().length > 0,

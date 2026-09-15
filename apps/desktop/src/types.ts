@@ -5,7 +5,7 @@
  * token. The portal's useSipPhone treats "coworker-chat" as a proxy window for that
  * reason — a chat popover must never register a second phone.
  */
-export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat" | "coworker-approval" | "coworker-connections";
+export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat" | "coworker-approval" | "coworker-connections" | "coworker-screen-overlay";
 
 /** Tool families the person can switch off for the Coworker on this computer. */
 export type CoworkerToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system";
@@ -49,6 +49,13 @@ export type DesktopSettings = {
    * allowed under both; the never-allowed rows are not a profile at all.
    */
   coworkerPermissions?: "SAFE" | "TRUSTED" | "AUTONOMOUS";
+  /**
+   * Screen control (2026-09-15) — lets the Coworker move the mouse and type on the
+   * REAL desktop (a blue frame shows; Escape stops it). ⛔ OFF unless set true: the
+   * `computer_screen_*` tools refuse `begin` until the person opts in here, and the
+   * tools are hidden from the agent's manifest entirely when no controller is wired.
+   */
+  coworkerScreenControlEnabled?: boolean;
   /**
    * The Coworker's hands (2026-09-09). MCP servers the person added in Coworker
    * Settings & Connections; the workspace folder the file tools resolve relative

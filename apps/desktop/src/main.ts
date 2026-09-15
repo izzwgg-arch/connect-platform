@@ -517,6 +517,13 @@ function rebuildTray(): void {
       : []),
     { type: "separator" },
     {
+      // Screen control takes effect at once (read per action), so no "after restart".
+      label: "Let the Coworker control the screen",
+      type: "checkbox",
+      checked: settings.coworkerScreenControlEnabled === true,
+      click: () => toggleScreenControl(),
+    },
+    {
       // ⛔ The label says "after restart" because it is true, and a toggle that
       // silently does nothing until later is how somebody concludes the feature
       // is broken. See webPreferences() for why it cannot apply immediately.
@@ -615,7 +622,7 @@ function startHands(): void {
   if (hands) return;
   try {
     hands = startCoworkerHands({
-      app, BrowserWindow, ipcMain, screen, session, shell, safeStorage,
+      app, BrowserWindow, ipcMain, screen, desktopCapturer, session, shell, safeStorage,
       portalUrl, preloadPath, assetPath,
       getSettings: () => settings,
       writeSettings: (next) => writeSettings(next),
@@ -670,6 +677,17 @@ function toggleCoworkerWidget(): void {
  * withdrawn permission" must never be something the customer has to restart to
  * mean, so the teardown does not wait for it.
  */
+function toggleScreenControl(): void {
+  try {
+    const enabled = !settings.coworkerScreenControlEnabled;
+    writeSettings({ ...settings, coworkerScreenControlEnabled: enabled });
+    rebuildTray();
+    diag("coworker", `screen control ${enabled ? "allowed" : "turned off"}`);
+  } catch (err) {
+    diag("coworker", `screen control toggle failed: ${String(err)}`);
+  }
+}
+
 function toggleRemoteSupport(): void {
   try {
     const enabled = !settings.remoteSupportEnabled;
