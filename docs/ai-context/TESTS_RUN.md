@@ -2,6 +2,19 @@
 
 Newest entries first.
 
+## Wizard-priority rehome + rediscover filter + GDMS numeric status (2026-09-15, `7e427c28`)
+
+- shared `npx tsx --test src/deskPhoneSetup/provisioningRecord.test.ts` → **33/33** (4 rewritten to
+  the wizard-owns-the-phone policy; both forger refusals and the unreadable-state refusal kept).
+- api `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/deviceProviders.test.ts`
+  → **34/34** (numeric status 1 → online; 0 stays unknown).
+- portal `npx tsx --test components/deskPhones/setupDriver.test.ts` → **44/44** (rediscover submits
+  only known run MACs; the raw-host regression test carries the 87-ghost story).
+- Deployed api + portal `7e427c28`, blue/green, both container-verified, 0 restarts, CRM_OCR_ENABLED
+  intact. Earlier same day: OCR photo path multi-pass suite (see the 3040f2bc entry below).
+- ⏳ Live proof pending at write time: the 60:5F GXP2170 mid-provisioning on the resumed run.
+
+
 ## Yealink RPS client rewritten to the YMCS v2 OAuth API (2026-09-15)
 
 - api `node --experimental-test-module-mocks --import tsx --test "src/deskPhoneSetup/*.test.ts"` →

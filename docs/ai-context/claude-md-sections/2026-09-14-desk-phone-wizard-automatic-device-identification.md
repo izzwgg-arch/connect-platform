@@ -66,6 +66,30 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
 - ⏳ **NOT PROVEN (rounds 5–6):** no customer has typed a serial, uploaded a photo or texted one;
   no phone has been cleared through GDMS from a serial; **OCR has never run on a real photograph
   here** (the suite fakes the engine deliberately — what is tested is our judgement, not Tesseract's).
+- ⛔⛔ **ROUND 8 (`7e427c28`, DEPLOYED api+portal 2026-09-15 ~10:35Z): THE WIZARD OWNS A PHONE ON ITS
+  OWN NETWORK.** Izzy, verbatim: *"the desktop wizard gets priority, and anything else is deleted.
+  That phone belongs to the wizard."* Cause: his GXP2170 (…8C:60:5F), factory-reset in his house,
+  halted on "Loopcom Support needs to finish" — its MAC still recorded under Create A Box T7_102
+  whose REAL 102 is live on other devices, and `decideRehome` refused on ANY stranger registration.
+  New policy in `decideRehome` (shared `provisioningRecord.ts`): stranger registrations stop
+  blocking (releasing a MAC record never touches another device's registration); the release names
+  them (`releasedOverLive`) and rides the existing auditRehome. ⛔ TWO FENCES SURVIVE, not
+  negotiable: the presence pair (discoveredIp+requesterIp — without it a forged report could name
+  another company's MAC) and the FORGER SHAPE (this handset's own LAN address live from another
+  public address still refuses). Unreadable registration state still refuses. 33 rehome tests, 4
+  rewritten, forger cases kept. Memory: [[the-wizard-owns-a-phone-on-its-own-network]].
+- ⛔⛔ **SAME COMMIT: the driver's `rediscover` submits ONLY hardware ids the run already knows.**
+  It posted the RAW host list — the pre-filter bug back through a second door: one post-reset sweep
+  imported 87 of Izzy's home devices (router included) as "Desk phone / Finding" cards. New devices
+  are the initial discovery's job, behind `classifyDiscoveredHosts`. Also `parseGdmsDevice` maps the
+  PROVEN numeric `status: 1` → online (first real GDMS row; unobserved numbers stay unknown, never a
+  guessed offline — offline gates cloud tasks).
+- ✅ **THE FIRST REAL GDMS LIFECYCLE HAPPENED 2026-09-15 on Landau Home:** claim VERIFIED (device
+  "Home" in the account, site Default), factory reset delivered through the cloud (twice — reset-first
+  on the resumed selection), real device-row field shapes recorded in handoff §10h/§10i. The stale
+  T7 record was released by hand under Izzy's explicit instruction (backup
+  `pbx:/root/landau-gxp-record-release-20260915T100155Z/`), and the wizard then wrote the phone's
+  record under tenant 21 ext 101 — the writer path proven end to end.
 - ⛔⛔ **ROUND 7 (`3040f2bc`, DEPLOYED api 2026-09-15): GDMS `device/add` IS A BATCH ENDPOINT —
   the envelope's `retCode 0` does NOT mean the device was added.** First live GDMS write proved it:
   Izzy typed a serial that belongs to his OTHER Grandstream unit (serial tail `8C605F` vs this
