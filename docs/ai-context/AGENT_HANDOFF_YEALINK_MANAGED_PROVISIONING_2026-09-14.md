@@ -1,8 +1,43 @@
 # Managed Yealink provisioning (zero-touch via Yealink RPS) — 2026-09-14
 
-Status: **code complete, tested, deployed INERT.** Nothing reaches a customer until
-`MANAGED_PHONE_PROVISIONING_ENABLED=1`. No Yealink credentials exist, no RPS call
-has been made, no handset has checked in, no PBX write was made.
+Status as of **2026-09-15: LIVE except the handset proof.** The YMCS account exists,
+the client is rewritten for the real (v2) API and proven against it, the "Loopcom"
+RPS server record exists (id `01a0a48be8567d07b8eac49abab70f13` →
+`https://app.loopcom.net/api/phone-provisioning/`, console shows Servers: 1), all
+§6 env vars are set on loopcom (`.env.platform`, backup
+`.env.platform.bak-20260915-yealink`), api is deployed at `b1f6357c`
+(container-verified, 0 restarts) and the handset route answers 401 (was 404 inert).
+⏳ NOT PROVEN: §7 step 4 — no real phone has checked in or registered through this
+path yet; `MANAGED_PHONE_SIP_PORT=5060/UDP` is set but not yet qualified on a handset.
+
+## 0. ⛔⛔ 2026-09-15 — THE v1 JSON API IS DEAD ON YMCS; THE CLIENT IS A v2 OAUTH CLIENT NOW
+
+- The 2019/2020 "Json API for RPS Management Platform" (X-Ca-Key/X-Ca-Signature HMAC
+  scheme, `/api/open/v1/*`) is **rejected by us-api.ymcs.yealink.com on every path
+  with 401 `{"code":"500401","message":"Invalid request header"}`**. Do not debug the
+  signature — the whole auth scheme changed.
+- The real YMCS open API: **OAuth2 client-credentials.** `POST /v2/token` with
+  `Authorization: Basic base64(AccessKeyId:AccessKeySecret)`, body
+  `{"grant_type":"client_credentials"}`, plus `timestamp` (ms) and `nonce` headers →
+  `{access_token, expires_in: 3600}`; then `Authorization: Bearer` + the same two
+  headers on every call. Endpoints: `POST /v2/rps/listDevices`
+  `{skip,limit,autoCount,filter:{mac}}` → `{total,data|null}`; `GET /v2/rps/devices/{id}`;
+  `POST /v2/rps/addDevicesByMac` `[{mac,serverId?,uniqueServerUrl?,authName?,password?}]`;
+  `POST /v2/rps/delDevices` `{deviceIdType:"mac"|"id",deviceIds}`; `POST /v2/rps/servers`
+  `{serverName,url}`; `POST /v2/rps/listServers`. Errors are `{code,message,details}`:
+  **800004** = MAC managed by another org → `rps_ownership_conflict`; **800003** =
+  already exists → `rps_duplicate_retry_to_reconcile`. (Shape learned from
+  nethesis/falconieri `libs/ymcs` and proven live.)
+- ⛔ **v2 has NO checkMac and only ever shows OUR devices.** `checkMac()` now returns
+  `{existed:true,self:true}` or `{existed:false,self:null}` — `self:false` can never
+  happen; a foreign owner surfaces only as 800004 when an add is attempted. The wizard's
+  cloud lookup therefore can no longer say "owned elsewhere" for Yealink before a claim.
+- The AccessKey lives at **YMCS → System → Integration → API** (super admin), which
+  also shows the API **Domain** (`us-api.ymcs.yealink.com`) → `YEALINK_RPS_BASE_URL=https://us-api.ymcs.yealink.com/`.
+  A key was generated 2026-09-15 (values live ONLY in `.env.platform`; the "Reacquire"
+  button invalidates the old key immediately).
+- The simulator simulates the v2 contract now (Bearer + nonce replay + v2 error bodies);
+  the one-shot 401 token refresh is tested; suite 267/268 (1 pre-existing skip).
 
 ## 1. What this is, and the four separate systems
 
@@ -185,8 +220,9 @@ bootstrap adapter) and select it in `ManagedPhoneService` by `manufacturer`.
 - RPS cannot reboot, reset or push firmware. `reboot/factoryReset/firmwareUpdate` are `false`.
 - A MAC already claimed by another RPS account can only be released by that account/Yealink.
 - SIP User-Agent carries no MAC → physical identity usually unverifiable from the PBX.
-- NOT PROVEN: any live RPS call, any handset download, any real registration through this path,
-  and whether the JSON v1 endpoint is available to a 2026 account.
+- ~~NOT PROVEN: any live RPS call~~ **2026-09-15: live v2 calls proven** (token, listDevices,
+  listServers, server create with read-back). STILL NOT PROVEN: any handset download or real
+  registration through this path (needs the designated test Yealink), and the SIP 5060/UDP choice.
 - `firmware`/`serialNumber` columns exist but nothing fills them yet.
 
 ## Sources
