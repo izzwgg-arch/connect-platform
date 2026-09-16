@@ -87,8 +87,23 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     const who = await tenantOf(req, reply);
     if (!who) return;
     const id = String((req.query as any)?.jobId || "");
-    const job = await db.creativeJob.findFirst({ where: { id, tenantId: who.tenantId } });
+    let job = await db.creativeJob.findFirst({ where: { id, tenantId: who.tenantId } });
     if (!job) return reply.code(404).send({ error: "not_found" });
+
+    // ⛔ Wait here rather than making the model poll. A chat turn has a small
+    // number of tool calls in it; an image takes ~15s, so without this the
+    // model spends its whole budget asking "is it done yet?" and runs out
+    // before it can answer the person. Bounded well under the request timeout.
+    const waitMs = Math.max(0, Math.min(25_000, Number((req.query as any)?.waitMs || 0)));
+    if (waitMs && !["succeeded", "failed", "cancelled"].includes(job.status)) {
+      const until = Date.now() + waitMs;
+      while (Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 1500));
+        job = await db.creativeJob.findFirst({ where: { id, tenantId: who.tenantId } });
+        if (!job || ["succeeded", "failed", "cancelled"].includes(job.status)) break;
+      }
+      if (!job) return reply.code(404).send({ error: "not_found" });
+    }
     let assets: any[] = [];
     if (job.status === "succeeded") {
       const gen = await db.creativeGeneration.findFirst({ where: { jobId: job.id, tenantId: who.tenantId }, orderBy: { createdAt: "desc" } });

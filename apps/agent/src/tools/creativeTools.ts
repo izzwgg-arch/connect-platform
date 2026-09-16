@@ -181,7 +181,7 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
     {
       name: "creative_check_job",
       description:
-        "How a piece of work is getting on. Returns its state, a percentage, and — when it is finished — the pictures or video with links. Poll this every few seconds while something is rendering, and tell the person what step it is on rather than going quiet.",
+        "How a piece of work is getting on. It WAITS for up to 20 seconds before answering, so a picture is usually finished by the time it returns. ⛔ Call it at most twice per reply: if it is still rendering after that, tell the person plainly that it is still going and that it will be in their library when it is done — do not keep polling, or you will run out of steps before you can answer them.",
       parameters: {
         type: "object",
         properties: { job_id: { type: "string" } },
@@ -190,7 +190,9 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
       },
       minRole: "customer",
       async run(args, ctx) {
-        return call(deps, "GET", "/internal/agent/creative/job", { ...who(ctx), jobId: String(args.job_id || "") });
+        // Waits server-side for up to ~20s, so a picture is usually finished in
+        // ONE call and the turn does not run out of steps polling.
+        return call(deps, "GET", "/internal/agent/creative/job", { ...who(ctx), jobId: String(args.job_id || ""), waitMs: 20000 });
       },
     },
 
@@ -360,7 +362,7 @@ export const creativeToolsPrompt = [
   "CREATIVE STUDIO — you can make pictures, video and voiceovers for this company.",
   "Read creative_studio_context first: it gives you their brand, what they like, and what is left of this month's allowance.",
   "Pictures are quick and cheap. VIDEO COSTS REAL MONEY: always say the estimate and get a clear yes before calling creative_make_video.",
-  "Nothing blocks: making something returns a job. Poll creative_check_job and tell them what step it is on.",
+  "Nothing blocks: making something returns a job. creative_check_job waits up to 20s, so ONE call usually returns the finished picture. ⛔ At most two checks per reply — then tell them it is still rendering rather than polling until you run out of steps.",
   "A single shot is at most 15 seconds. A longer film is several shots — plan them, then make them one at a time.",
   "Before changing a design, call creative_inspect_design and use the revision it gives you. If a change is refused as stale, read it again — somebody moved something by hand.",
   "When they say what was wrong, call creative_remember_preference so the next one is better without them repeating themselves.",
