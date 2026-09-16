@@ -309,3 +309,121 @@ Feldman"** from the real options. All PBX writes under that explicit instruction
   3479780090 history preserved in the backups if T102 must revert; the
   ported-DID-attestation human answer on Issue #666221 still pending — though
   A on purchased is now first-hand fact.
+
+## 11. THE WIZARD RUNS ON TELNYX (2026-09-16) — what was built
+
+Izzy: *"switch the onboarding wizard to Telnyx. It's going to be Telnyx for now, and then stress test
+the fuck out of it because I want to have people use it today. Make sure that it works end to end. I'm
+even giving you permission to buy one phone number for the test, and then same with porting."*
+
+Switch state: **effective carrier = telnyx** (AgentSecret `onboarding_number_provider_override`,
+stored 2026-09-16 with a `carrier.wizard_provider_set` audit row). Revert = the /apps/telnyx
+"Wizard carrier" card, or store `voipms`. Stamped drafts keep whatever carrier they were stamped with.
+
+Modules (all under apps/api/src):
+- `telnyx/telnyxOnboardingClient.ts` — the onboarding half of the Telnyx client (the bench client keeps
+  its "not wired into onboarding" promise). Search (10031 = empty, not outage), `placeNumberOrder`
+  (once), `getNumberOrder`, `findOwnedNumber`, `configureOwnedNumber` (⛔ messaging profile via
+  `/phone_numbers/{id}/messaging`), CNAM (≤15 A-Z0-9), `createAddress` (validate_address) +
+  `enableEmergency`, porting (create/get/list/patch/requirements/confirm), `uploadDocument` (base64
+  JSON), 10DLC brand/campaign/assign, messaging profile create.
+- `onboarding/telnyxNumbers.ts` — wizard search. Concurrency 4, 429 retry ×3 jittered, 60 s cache,
+  `LOCALITY_ALIASES` (`NY:MONSEY → SPRING VALLEY`), town fallback only when an area code/pattern still
+  narrows the search, "RATE CENTER:SUB" → town.
+- `onboarding/telnyxProvisioning.ts` — number stage (gate `TELNYX_AUTO_PROVISION`, "on" in both api
+  compose blocks). Connection by NAME `Loopcom-Primary-SIP` (or env `TELNYX_PBX_CONNECTION_ID`),
+  messaging profile by NAME `Loopcom Sign-ups` (created with the `/webhooks/telnyx/sms` URL if absent;
+  env pin `TELNYX_MESSAGING_PROFILE_ID`). `answers.provisioning.telnyxOrders[e164]` = order id
+  persisted BEFORE polling. `customer_reference = loopcom:<tenantSlug>`. E911 → `provisioned` only on
+  emergency_status `active`, else `pending_activation` (sweep finishes it). Port = temp number first
+  (ported area code, then 845), filing LAST.
+- `onboarding/telnyxPortFiling.ts` — `portFiling {provider:"telnyx", status filing|submitted|
+  needs_attention|ported, orderIds, loaDocumentId, invoiceDocumentId, telnyxStatus, focDate}`. LOA =
+  the Port queue's generated PDF from the typed signature; bill = first `PORTING_BILL` upload.
+  `mapPortRequirements` maps the live requirement names ("Letter of Authorization (LOA) for Porting",
+  "Latest Invoice from Current Carrier (Within 90 Days)") to doc ids; unknown ones are never guessed.
+- `onboarding/telnyxPortWatchdog.ts` — `startTelnyxSignupSweep` (armed in server.ts, boot kick 90 s,
+  every 10 min, kill `TELNYX_SIGNUP_SWEEP_DISABLED=1`). Re-files `needs_attention` ONLY when
+  `numberStatus === "ready"` (a concurrent re-file during the stage could open a second port order).
+  Landing steps each recorded under `portLanding.*`: configure number → 911 on the ported number at the
+  same address → copy the temp route's PBX destination (portLanding's helper) + publish → **caller-ID
+  switch** (`editOutboundRoute` + `applyAndRebake` on the stored `pbxOutboundRouteId`) → TenantSmsNumber
+  TELNYX → email WITHOUT the "temp is switched off" paragraph (⛔ the temp number is KEPT: it is the 911
+  callback CID; releasing it makes emergency calls present an unowned CID that Telnyx refuses).
+- `onboarding/serverOwnedAnswers.ts` — see §12 bug 1.
+- PBX build (`pbxTenantBuild.ts`): `TELNYX_SHARED_TRUNK_NAME = "Telnyx Loopcom-Primary"` (trunk 183,
+  Main), route trunks [183, 0001]; ⛔ a Telnyx PORT build presents the TEMP number as caller ID (403 D51
+  on an unowned CID) — the landing switches it.
+- 10DLC (`signalwire/signalWireTenDlc.ts`): ONE state machine, `registryFor(reg.provider)` picks the
+  SignalWire or Telnyx registry; the TenantSmsNumber provider follows. Telnyx campaign usecase
+  LOW_VOLUME_MIXED → `LOW_VOLUME`; the brand needs the structured address (publicRoutes passes it).
+- `syncOnboardingSms` is VoIP.ms-only now (it used to call VoIP.ms `setSMS` for SignalWire numbers).
+- Portal: `page.tsx` maps `provider: "telnyx"` onto the modern search surface. Customers never see a
+  carrier name.
+
+## 12. THE LIVE BUGS — found only by running it (read before touching this path)
+
+1. **Autosave wiped `answers.phone.provider`.** The wizard autosave replaces `answers` wholesale; the
+   first live run reached the pay page with NO stamp → payment would have provisioned on VoIP.ms.
+   Fix: `carryServerOwnedAnswers` (phone.provider + provisioning) in the save route; /submit pins the
+   carrier. ⛔ `texting` is wizard-owned (form state) — carrying it would freeze customer edits.
+   Pre-existing: every SignalWire sign-up had it.
+2. **422/10027** "messaging_profile_id is not reachable here" on `PATCH /phone_numbers/{id}`.
+3. **No Main DID dispatch for shared-trunk builds.** Tenant-context applies never render Main.
+   ⛔⛔ A bare `applyAndRebake(Main)` STILL left it missing — the mirror tenant-create writes rows and
+   queues nothing for Main's `tenants` module (99). What works (proven on tenant 143): panel
+   `saveTenant(Main, tenantId, {inboundNumbers: same list})` → VitalPBX queues (1, 99) → then
+   `applyAndRebake(Main)` → `_8457774807 → Forwarding call to Loopcom Telnyx Test` and
+   `incoming-calls → Goto(T143_default-trunk)`. Doorways re-baked 4/4, 0 failed. Verify with
+   `asterisk -rx "dialplan show <did>@default-trunk"` — if only the catch-all `_[+*#0-9A-Za-z].`
+   answers, the dispatch is NOT there.
+4. **An interrupted build never resumed** — `resolveTenantPath` trusted the stale REST list; the mirror
+   refused "already exists"; the panel fallback failed; every watchdog retry failed. Now DB first.
+5. **`pbx_tenant_not_in_directory`** — same stale list in `findPbxDirectoryEntry`. DB fallback feeds
+   the FULL `ombu_tenants` table (⛔ the sync deletes unlisted rows), only if the new slug is present
+   and rows ≥ half the known directory. Live check before shipping: 31 = 31, would-delete none.
+6. Smaller: 429 past ~17 concurrent searches; Monsey is not a rate center (Niagara Falls fallback);
+   `COMPTON:COMPTON DA` localities; a resumed emergency-location step said "911 broken"; a bash heredoc
+   put BACKSPACE bytes into a regex — check new files with `grep -P "[\x00-\x08\x0e-\x1f]"`.
+7. ⛔ My own api deploy restarted the container mid-build (a tsx script inside the container dies
+   with it). Never deploy api while a sign-up build is running in that container.
+
+## 13. WHAT IS PROVEN LIVE (2026-09-16)
+
+- Search: 45 parallel live searches (found #6); switch on; Telnyx stock survey by area code.
+- Wizard in Chrome (keystrokes stopped reaching the tab mid-run; drove it with native-setter input
+  events), all 7 steps → Sola pay page, quote $35 (1 ext + 1 number). Stamp `telnyx` verified in the
+  DB after every autosave.
+- ⛔ The card was NOT charged: test invoice CC-202609-00012 was marked PAID in the DB by Claude
+  (`metadata.testPaymentMarkedBy`), and the timeline says so. Pay-page code unchanged by this work.
+- Number stage: ONE order `e9f5eb60-…` for **+18457774807**; the first run failed on bug 2; the
+  automatic retry ADOPTED the number (no second purchase); routed to Loopcom-Primary-SIP + profile
+  `4001a0ab-3699-450e-83b9-77ac48c3f0dc`; CNAM requested.
+- E911: Telnyx 85009 "must be manually validated" for `33 NY-17M Suite C, Harriman` (also
+  "33 Route 17M"); `30 Robert Pitt Dr, Monsey` validates. The build recorded `failed / needs a person`
+  and withheld the E911 email — correct behaviour.
+- PBX: tenant 143 `loopcom_telnyx_test_bqy1lb` path `1e7750f5d990d22b`, outbound route 180
+  (CID 8457774807, trunks [183, 72]), ARS 308, ext 101 (id 672), inbound route, Main dispatch.
+  Trunk 183 `Registered` on the PBX (Telnyx's own `registration_status` field reads "Not Registered" —
+  stale, ignore it).
+- Connect: billing moved to live tenant `cmu4e9l1i01wgqk129z4f2eyn`, billing defaults stamped, ext 101
+  synced + SIP, owner `izzy+telnyx-e2e@loopcom.net` TENANT_ADMIN, 1 invite SENT, submission ACTIVE.
+- Webhook public key: `GET /v2/public_key` returns it (no portal login needed) — saved into the
+  credentials; `publicKeySet: true`. Telnyx inbound SMS is no longer blocked on it.
+- Porting on live DRAFTS for +15622096644 (never confirmed; DELETE 204 ×3): create → LOA upload →
+  invoice upload → PATCH with end_user/location/BTN/PIN/phone_number_configuration/documents/
+  requirements all accepted and read back. `requirements_met` stays false on a draft.
+
+## 14. OPEN / NEXT (⏳)
+
+- **A human call**: dial (845) 777-4807 → should ring ext 101 (no device → voicemail); sign in as the
+  invited owner to answer on the app; outbound from ext 101 should show 845-777-4807 and the Telnyx CDR
+  `shaken_stir` should read A.
+- **A real port**: Izzy picks the number + provides the carrier account #, PIN, name/address on the bill
+  and a recent bill PDF. Only a real CONFIRM shows whether Telnyx accepts the requirements as sent.
+  The landing sweep then needs its first real run.
+- Telnyx 10DLC filing with a real EIN; the E911 manual-validation path (Telnyx support) for addresses
+  like 33 NY-17M; NYC-core area codes (212/718/347/646/917/332/201) have NO Telnyx stock.
+- Scoped "transfer a number only" links on Telnyx still park the port in the Port queue (not auto-filed).
+- Wipe the "Loopcom Telnyx Test" tenant (PBX T143 via the two-step panel protocol + Connect tenant)
+  after the call test; release 845-777-4807 only if Izzy doesn't want it kept.
