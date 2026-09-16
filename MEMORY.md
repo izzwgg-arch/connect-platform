@@ -1,5 +1,7 @@
 # Loopcom / Connect project memory
 
+Laybel latency update (2026-09-16): owner confirms the call works but reports excessive reply delay. Source-proven whole-answer buffering before avatar speech; streaming requires server/router plus avatar integration. No live timing or speedup deployed. This supersedes older lack-of-owner-audio-confirmation notes, not pending Yiddish wiring, restart/disconnect reliability, or rollout gates. See Laybel handoff.
+
 ## Fundamental task rule — owner instruction, 2026-09-14
 
 Every time Izzy gives an agent a task:

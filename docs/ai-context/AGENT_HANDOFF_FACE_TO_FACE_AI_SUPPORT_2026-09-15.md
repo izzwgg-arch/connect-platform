@@ -1,5 +1,15 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
+## Response-delay review and owner acceptance update (2026-09-16)
+
+- Owner now says **it is working**, but speech-to-spoken-response is too slow. Record that as owner-reported call success, superseding the earlier lack of owner audio confirmation; it is NOT acceptance of the still-unimplemented Yiddish path, quantified latency, repeat-start reliability or prior disconnect cause.
+- Source-proven serial path: Anam finalized user history -> LaybelTurns.ask -> FloatingAssistant.send awaiting whole message POST -> ConversationEngine awaiting complete/completeWithTools (including tool execution) -> optional full YL output translation -> complete reply -> Anam talk(). Thus avatar speech cannot begin while the answer is being generated. No live timing measured, so this is a structural delay, not a quantified dominant cause.
+- Verified provider support: Anam `createTalkMessageStream().streamMessageChunk()` is present in installed SDK 4.27.0 and documented for lower latency at https://anam.ai/docs/javascript-sdk/reference/talk-commands . Current SDK also exposes USER_SPEECH_ENDED; provider documents endOfSpeechSensitivity at https://anam.ai/docs/changelog . No sensitivity change made: aggressive endpointing can interrupt deliberate/Yiddish pauses.
+- Recommended implementation: measure end-of-user-speech -> final transcript -> Assistant request/first final-answer sentence -> first actual playback; stream final answer sentences through the SAME authenticated Assistant, preserving tool completion/authorization and interruption/takeover/stop. Do not stream private reasoning, speculative action-completion claims or tool arguments. Do not call current `setState(speaking)`/talk dispatch proof of audible start.
+- For requested Yiddish mode, preserve original English for speech and YL translations for chat; allow output translation and English speech preparation to overlap, with visible translation status/failure rather than presenting mismatched fallback text as the answer. Do not remove YL, substitute another brain or silently downgrade its model to claim speed.
+- Not a one-line avatar change: server chat/router currently return whole results, so chunking an already-complete reply in the browser alone does NOT remove model-generation wait. UI typewriter and fire-and-forget refresh calls are not awaited by the voice return path.
+- Review only: no runtime edits, tests, live microphone/provider calls, deployment or before/after measurement. No speedup claimed. Customer rollout stays disabled.
+
 ## Owner language requirement — Yiddish chat, English speech (2026-09-16)
 
 - Owner requires Yiddish microphone input through **Yiddish Labs transcription**, YL Yiddish-to-English translation into the existing Assistant, AI English answer translated back through YL for the **Yiddish chat**, and **English spoken output** while the Yiddish voice is not ready. Laybel stays the same Assistant, not another brain.

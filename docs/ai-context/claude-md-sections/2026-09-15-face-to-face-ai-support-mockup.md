@@ -1,4 +1,6 @@
-# Talk to Laybel — live screen test, acceptance still open (2026-09-16)
+# Talk to Laybel — owner confirms call works; latency needs improvement (2026-09-16)
+
+- Latest owner feedback: call works, but replies are too slow. Source trace shows whole-answer buffering before avatar speech. Streaming requires server/router and avatar integration, not just browser chunking. No live timing or speedup implemented. Prior unconfirmed-audio notes below are historical; Yiddish wiring and reliability remain open.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`**.
 
