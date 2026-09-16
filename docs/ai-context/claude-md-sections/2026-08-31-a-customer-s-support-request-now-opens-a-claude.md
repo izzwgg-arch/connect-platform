@@ -177,3 +177,56 @@ agent kicks open an agent in here on my computer."*
   exercised the follow-up; the watchdog has not yet revived a killed watcher
   (acceptance: kill the hidden `node watch.mjs`, expect a restart line in
   `logs/watchdog.log` within 10 min).
+
+---
+
+## ⛔⛔ 2026-09-15 — "STOP THIS TICKET SESSION" (44B6TB): three traps in stopping ONE ticket, and the one that bit
+
+Izzy: *"44B6TB stop this ticket session."* Full detail:
+**`docs/ai-context/AGENT_HANDOFF_SUPPORT_WATCHER_STOP_A_TICKET_2026-09-15.md`**.
+Read it before you kill `node watch.mjs`, hand-edit `.watch-state.json`, or
+answer "is that ticket still running".
+
+- ✅ **DONE: 44B6TB is terminal.** `.watch-state.json` → `status:
+  "stopped_by_owner"`, `attempts: 2`, `stoppedReason`. Survived the watcher
+  restart (new pid loaded it and has not re-claimed it).
+- ⛔ **"Is it still running" is answered by the STATE FILE, not by the ticket.**
+  44B6TB's agent run was already dead when he asked — killed by the **30-minute
+  hard timeout** at 00:31:30Z (`error: "run exceeded 30 min and was killed"`),
+  partial report on disk. What still needed stopping was the **pending retry**.
+- ⛔⛔ **THE REQUEUE BRANCH RETURNS BEFORE THE DAILY-CAP CHECK
+  (`triage.mjs:177` and `:190`, cap at `:205`).** So "the platform lane is at
+  3/3, it can't run again today" is **FALSE** — a `failed` or `stale` ticket
+  inside its `attempts` bound is retried **regardless of the cap**. The cap only
+  gates a ticket with NO prior. Do not reason about a retry from the cap.
+- ⛔⛔ **A HAND-EDIT TO `.watch-state.json` IS SILENTLY CLOBBERED.**
+  `loadState()` runs **once**, at `main()` (`watch.mjs:389`); every
+  `claim`/`settle`/`note` writes the WHOLE file from memory. So a state edit
+  only sticks if you **kill the watcher first** and let `run-watcher.cmd`
+  restart it (~30 s, and it did — new pid in 5 s here). Editing a live
+  watcher's state is writing to a file that is about to be overwritten.
+- ⛔⛔ **THE ONE THAT BIT, AND IT IS THE SHAPE TO WATCH FOR: "the ticket I was
+  waiting on settled" IS NOT "the watcher is idle."** The poll loop walks
+  **many tickets per poll**, so the watcher claimed the NEXT ticket **one second**
+  after the one I was watching finished (GU9ZKD done 01:52:26Z → **GEAGCD
+  claimed 01:52:27Z**). My kill 83 s later therefore killed a **live
+  customer-lane run**. ⛔ **The idle signal is `.watch-heartbeat.json`'s
+  `state`/`ticket` field — read THAT, never one ticket's status.**
+  ✅ Recovered by the design: GEAGCD sat `running/attempts 1`, so the stale-run
+  path requeues it once ~30 min after its claim. ⛔ **But it spends its one
+  retry** — a ticket killed this way has no bound left if the retry also fails.
+  (Here the cost was small: GEAGCD is Loopcom Demo asking for one website image.)
+- ⛔ **`stopped_by_owner` is the convention for "a person took this off the
+  agent".** Any status that is not `running` and not `failed` falls through to
+  `skip_claimed` forever, and unlike the `skipped_*` statuses it still COUNTS in
+  `startedToday` — correct, because the run really did happen.
+- ⛔⛔ **CORRECTION — and it is the point: 877-220-5058 is an ORPHAN, not an
+  outage, and the SAME alarm files a NEW ticket every 6 h.** No PBX route, no
+  `ombu_tenant_dids` row, no tenant, 0 calls — **no customer is affected**
+  (`AGENT_HANDOFF_VOIPMS_DUPLICATE_SUBACCOUNTS_2026-09-02.md:249`). The trunk
+  guardrail re-arms on a 6 h de-dupe (**20 escalations for this one orphan in 7
+  days**), and each re-fire is a **NEW reference with no prior**, so
+  `stopped_by_owner` on 44B6TB does nothing for the next one. It is also what
+  spends the 3/day platform lane at midnight. ⛔ **The durable stop is Izzy's and
+  all three options are still untaken since 2026-09-09: release the number, route
+  it, or give the guardrail an ignore list.**
