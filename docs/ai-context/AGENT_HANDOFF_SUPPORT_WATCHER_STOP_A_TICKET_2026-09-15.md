@@ -131,9 +131,19 @@ with forward slashes**, or use the Write tool rather than a heredoc.
   re-claimed it.
 - `GU9ZKD` → `done` at 01:52:26Z with its report — the wait did protect it.
 - Watcher alive again on a new pid, polling, running FNPVAH's ship checks.
-- ⏳ **NOT PROVEN at the time of writing:** that GEAGCD's stale-run requeue
-  actually fires at ~02:22Z. A background watch was left on it. If it did NOT
-  fire, that is a real defect in the stale-run path and it belongs in §3.
+- ✅ **PROVEN, not assumed — the stale-run requeue DID fire.** A background watch
+  polled the state file every 15 s and caught the re-claim:
+  `02:23:06.662Z  GEAGCD  status running, attempts 2` — **30 min 39 s** after the
+  original 01:52:27Z claim, i.e. the first poll past `staleRunMs`. So the
+  recovery path in §3 is real, and a run killed mid-flight genuinely does come
+  back on its own. ⛔ It came back at **attempts 2 == maxAttempts**: the bound is
+  now spent, and if this attempt also dies the ticket is terminal and lost in
+  silence. That is the true cost of killing a live run, and it is why the
+  heartbeat must be read first.
+- ⏳ Still open at the time of writing: that retry was **still running** at
+  02:40Z (heartbeat live, 17 min in). It either settles `done` or hits its own
+  30-min kill at ~02:53Z. Ordinary operation either way — nothing here depends
+  on which.
 
 ## 6. ⛔⛔ CORRECTION, and the thing that actually matters: 877-220-5058 is an ORPHAN, and the SAME alarm files a NEW ticket every 6 hours
 

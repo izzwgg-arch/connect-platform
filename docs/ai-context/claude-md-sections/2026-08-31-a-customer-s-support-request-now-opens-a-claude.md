@@ -212,8 +212,9 @@ answer "is that ticket still running".
   claimed 01:52:27Z**). My kill 83 s later therefore killed a **live
   customer-lane run**. ⛔ **The idle signal is `.watch-heartbeat.json`'s
   `state`/`ticket` field — read THAT, never one ticket's status.**
-  ✅ Recovered by the design: GEAGCD sat `running/attempts 1`, so the stale-run
-  path requeues it once ~30 min after its claim. ⛔ **But it spends its one
+  ✅ **Recovery PROVEN, not assumed:** GEAGCD sat `running/attempts 1` and the
+  stale-run path re-claimed it at **02:23:06Z, 30 min 39 s** after the original
+  claim (caught by a 15 s poll on the state file). ⛔ **But it spends its one
   retry** — a ticket killed this way has no bound left if the retry also fails.
   (Here the cost was small: GEAGCD is Loopcom Demo asking for one website image.)
 - ⛔ **`stopped_by_owner` is the convention for "a person took this off the
