@@ -388,13 +388,14 @@ function portRow(extraProv: Row = {}): Row {
   });
 }
 
-function fakePorting(opts: { confirmThrows?: boolean; existingStatus?: string } = {}) {
+function fakePorting(opts: { confirmThrows?: boolean; existingStatus?: string; fast?: boolean } = {}) {
   const calls: string[] = [];
   const deps = {
     resolveCreds: async () => CREDS,
     createPortingOrders: async (_c: any, nums: string[]) => { calls.push(`create:${nums.join(",")}`); return [{ id: "po-1", status: "draft", statusDetails: [], phoneNumbers: nums, focDate: null, supportKey: null }]; },
-    getPortingOrder: async (_c: any, id: string) => ({ id, status: opts.existingStatus || "draft", statusDetails: [], phoneNumbers: [], focDate: null, supportKey: null }),
-    updatePortingOrder: async (_c: any, id: string, body: any) => { calls.push(`patch:${id}:${body.documents?.loa}:${body.documents?.invoice}`); return { id, status: "draft" }; },
+    getPortingOrder: async (_c: any, id: string) => ({ id, status: opts.existingStatus || "draft", statusDetails: [], phoneNumbers: [], focDate: null, supportKey: null, fastPortEligible: !!(opts as any).fast, focRequested: null }),
+    updatePortingOrder: async (_c: any, id: string, body: any) => { calls.push(`patch:${id}:${body.documents?.loa}:${body.documents?.invoice}${body.activation_settings ? `:foc=${body.activation_settings.foc_datetime_requested}` : ""}`); return { id, status: "draft" }; },
+    getAllowedFocWindows: async () => [{ start: "2026-09-18T11:00:00Z", end: "2026-09-19T01:00:00Z" }, { start: "2026-09-21T11:00:00Z", end: "2026-09-22T01:00:00Z" }],
     confirmPortingOrder: async (_c: any, id: string) => {
       calls.push(`confirm:${id}`);
       if (opts.confirmThrows) throw new TelnyxError(422, "invalid_request", "refused", { errors: [{ code: "10015", title: "Missing documents", detail: "invoice is required" }] });
@@ -842,4 +843,22 @@ test("wiring: orchestrator texts on a failed 911; the admin retry route exists a
   const i = routes.indexOf('app.post("/admin/onboarding/submissions/:id/retry-e911"');
   assert.ok(i > 0);
   assert.match(routes.slice(i, i + 300), /const admin = await requireSuperAdmin\(req, reply\); if \(!admin\) return;/);
+});
+
+
+test("FASTPORT: an eligible order requests Telnyx's EARLIEST allowed switch-over window; a non-eligible one sends no activation", async () => {
+  reset(portRow());
+  const p = fakePorting({ fast: true });
+  const filing = await fileTelnyxPortForSubmission(state.submission, "3475550182", CTX, p.deps);
+  assert.equal(filing.status, "submitted");
+  assert.equal(filing.fastPort, true);
+  assert.equal(filing.focRequested, "2026-09-18T11:00:00Z");
+  assert.ok(p.calls.some((c: string) => c.endsWith(":foc=2026-09-18T11:00:00Z")), p.calls.join(" | "));
+  assert.ok(state.events.some((e) => e.includes("FASTPORT")));
+
+  reset(portRow());
+  const q = fakePorting();
+  const f2 = await fileTelnyxPortForSubmission(state.submission, "3475550182", CTX, q.deps);
+  assert.equal(f2.fastPort, undefined);
+  assert.ok(!q.calls.some((c: string) => c.includes(":foc=")));
 });

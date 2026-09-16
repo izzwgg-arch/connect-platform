@@ -341,6 +341,9 @@ export interface TxPortingOrder {
   phoneNumbers: string[];
   focDate: string | null;
   supportKey: string | null;
+  /** Telnyx's own verdict (activation_settings.fast_port_eligible) — read live 2026-09-16. */
+  fastPortEligible: boolean;
+  focRequested: string | null;
 }
 
 function mapPortingOrder(r: any): TxPortingOrder {
@@ -353,6 +356,8 @@ function mapPortingOrder(r: any): TxPortingOrder {
     phoneNumbers: Array.isArray(r?.phone_numbers) ? r.phone_numbers.map((p: any) => String(p?.phone_number ?? p)) : [],
     focDate: r?.activation_settings?.foc_datetime_actual ?? r?.activation_settings?.foc_datetime_requested ?? null,
     supportKey: r?.support_key ?? null,
+    fastPortEligible: r?.activation_settings?.fast_port_eligible === true,
+    focRequested: r?.activation_settings?.foc_datetime_requested ?? null,
   };
 }
 
@@ -382,6 +387,20 @@ export async function listPortingOrdersByReference(creds: StoredTelnyxCredential
 export async function updatePortingOrder(creds: StoredTelnyxCredentials, id: string, json: Record<string, unknown>): Promise<TxPortingOrder> {
   const body = await expect<any>(creds, { path: `/porting_orders/${encodeURIComponent(id)}`, method: "PATCH", json, timeoutMs: 45_000 });
   return mapPortingOrder(body?.data ?? {});
+}
+
+/**
+ * The switch-over windows Telnyx will accept for this order (FastPort orders are
+ * "scheduled": the number moves at the requested moment). Read live 2026-09-16:
+ * business-day windows 11:00Z–01:00Z (7 AM–9 PM ET), earliest two days out.
+ */
+export async function getAllowedFocWindows(creds: StoredTelnyxCredentials, id: string): Promise<Array<{ start: string; end: string }>> {
+  const body = await expect<any>(creds, { path: `/porting_orders/${encodeURIComponent(id)}/allowed_foc_windows` });
+  const rows: any[] = Array.isArray(body?.data) ? body.data : [];
+  return rows
+    .map((w) => ({ start: String(w?.started_at ?? w?.start_time ?? ""), end: String(w?.ended_at ?? w?.end_time ?? "") }))
+    .filter((w) => w.start)
+    .sort((a, b) => a.start.localeCompare(b.start));
 }
 
 /** ⛔ SUBMITS the port — the customer's number starts moving. Sent once. */

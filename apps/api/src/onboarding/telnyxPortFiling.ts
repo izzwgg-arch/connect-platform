@@ -34,6 +34,7 @@ import {
   createPortingOrders,
   getPortingOrder,
   getPortingRequirements,
+  getAllowedFocWindows,
   updatePortingOrder,
   uploadDocument,
   telnyxErrorDetail,
@@ -51,6 +52,7 @@ export type PortFilingDeps = {
   confirmPortingOrder: typeof confirmPortingOrder;
   uploadDocument: typeof uploadDocument;
   getPortingRequirements: typeof getPortingRequirements;
+  getAllowedFocWindows: typeof getAllowedFocWindows;
   buildLoa: (row: any) => Promise<Buffer>;
   readUpload: (storageKey: string) => Buffer | null;
 };
@@ -64,6 +66,7 @@ export function realPortFilingDeps(): PortFilingDeps {
     confirmPortingOrder,
     uploadDocument,
     getPortingRequirements,
+    getAllowedFocWindows,
     buildLoa: async (row) => {
       const q = buildPortQueueRow(row);
       if (!q) throw new Error("port_queue_row_unbuildable");
@@ -151,6 +154,9 @@ type Filing = {
   invoiceDocumentId?: string | null;
   submittedAt?: string | null;
   filedAt?: string | null;
+  /** FastPort (Izzy 2026-09-16: "make it a fastport") — the switch-over moment requested. */
+  fastPort?: boolean;
+  focRequested?: string | null;
   portReference?: string | null;
   error?: string | null;
   scopedLink?: boolean;
@@ -234,9 +240,22 @@ export async function fileTelnyxPortForSubmission(
         const docs = { loa: filing.loaDocumentId || null, invoice: filing.invoiceDocumentId || null };
         const reqs = await deps.getPortingRequirements(creds, orderId).catch(() => []);
         const requirements = mapPortRequirements(reqs, docs);
+        // FASTPORT: when Telnyx marks the order eligible, request the EARLIEST
+        // window it allows — the number then moves at that moment instead of
+        // on the losing carrier's schedule. Not eligible → Telnyx's normal
+        // flow, unchanged. A window-list failure never blocks the filing.
+        let activation: Record<string, unknown> | null = null;
+        if (current.fastPortEligible) {
+          const windows = await deps.getAllowedFocWindows(creds, orderId).catch(() => []);
+          if (windows[0]?.start) {
+            activation = { foc_datetime_requested: windows[0].start };
+            filing = { ...filing, fastPort: true, focRequested: windows[0].start };
+          }
+        }
         await deps.updatePortingOrder(creds, orderId, {
           ...buildTelnyxPortPatch(row, portedDid, ctx, docs),
           ...(requirements.length ? { requirements } : {}),
+          ...(activation ? { activation_settings: activation } : {}),
         });
         const confirmed = await deps.confirmPortingOrder(creds, orderId);
         statuses[orderId] = String(confirmed.status || "in-process").toLowerCase();
@@ -259,7 +278,12 @@ export async function fileTelnyxPortForSubmission(
 
     const at = new Date().toISOString();
     await save({ status: "submitted", telnyxStatus: statuses, submittedAt: at, filedAt: at, portReference: (filing.orderIds || []).join(", "), error: null });
-    await logEvent(submissionId, `Port of ${portedDid} SUBMITTED to Telnyx (order ${(filing.orderIds || []).join(", ")}). The losing carrier sets the date; the number switches over by itself when it lands.`);
+    await logEvent(
+      submissionId,
+      filing.fastPort && filing.focRequested
+        ? `Port of ${portedDid} SUBMITTED to Telnyx as a FASTPORT (order ${(filing.orderIds || []).join(", ")}) — switch-over requested for ${filing.focRequested}.`
+        : `Port of ${portedDid} SUBMITTED to Telnyx (order ${(filing.orderIds || []).join(", ")}). The losing carrier sets the date; the number switches over by itself when it lands.`,
+    );
     return filing;
   } catch (e) {
     const detail = telnyxErrorDetail(e);
