@@ -396,7 +396,6 @@ import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import { registerTelnyxWebhookRoutes } from "./telnyx/telnyxWebhooks";
-import { wireTextingRegistration } from "./textingRegistration/wire";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
@@ -3099,7 +3098,6 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
   { prefix: "/admin/ten-dlc", permission: "can_view_admin_ops_center" },
-  { prefix: "/admin/texting-registration", permission: "can_view_admin_texting_registration" },
   { prefix: "/admin/sbc", permission: "can_view_settings_system_health" },
 
   { prefix: "/dashboard", permission: "can_view_workspace_overview" },
@@ -24252,10 +24250,6 @@ registerTelnyxRoutes({
 // Phase 1, 2026-09-16). Ed25519-verified, fail-closed; path listed in
 // jwtPublicRouteBypass.ts. See telnyx/telnyxWebhooks.ts.
 registerTelnyxWebhookRoutes({ app, db });
-// 10DLC texting registration (2026-09-16): /admin/texting-registration, the
-// customer's private link, the public policy page and the registry webhook.
-// See textingRegistration/wire.ts.
-wireTextingRegistration({ app, db, requireSuperAdmin, userHasActionPermission });
 
 // ── Wizard carrier switch (2026-09-15) ─────────────────────────────────────
 // Which carrier NEW sign-ups search and buy from (stored override over the
