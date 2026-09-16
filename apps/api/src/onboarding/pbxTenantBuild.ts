@@ -833,7 +833,15 @@ export async function buildPbxTenant(
         log,
       );
     } catch (e: any) {
-      log(`⛔ emergency calling NOT set up: ${e?.message || e} — 911 still works via the carrier, but this tenant cannot be interrupted for non-payment until it is fixed`);
+      // A RESUMED build re-runs this step after the first run already created
+      // the location — "already in use" then means it IS set up (seen live on
+      // the Telnyx end-to-end resume, 2026-09-16), not that 911 is broken.
+      if (/location name is already in use/i.test(String(e?.message || e))) {
+        log(`emergency location already set up by the earlier run — kept`);
+        s.setTenant(tenantPath);
+      } else {
+        log(`⛔ emergency calling NOT set up: ${e?.message || e} — 911 still works via the carrier, but this tenant cannot be interrupted for non-payment until it is fixed`);
+      }
     }
     s.setTenant(tenantPath);
   } else {
