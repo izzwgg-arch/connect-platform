@@ -120,7 +120,8 @@ export function buildTelnyxSearch(
 
 function mapResult(r: TxAvailable, kind: "local" | "tollfree"): OnboardingNumberResult {
   const d = r.phoneNumber.replace(/\D/g, "").replace(/^1/, "");
-  const title = (s: string | null) => (s ? s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : "");
+  // Telnyx sometimes returns "COMPTON:COMPTON DA" (rate center:sub-area) — show the town only.
+  const title = (s: string | null) => (s ? s.split(":")[0].trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : "");
   const has = (f: string) => r.features.includes(f);
   return {
     number: formatTenDigits(d),
