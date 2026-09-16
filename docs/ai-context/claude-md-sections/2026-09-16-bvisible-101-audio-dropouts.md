@@ -96,3 +96,16 @@ sampler needs ~10 s of call, so short dead calls leave no rtpStats row.
 **One actionable detail for the customer conversation:** the double NAT reset happened
 at 1:17 AM and 2:07 AM — ask whether the router auto-reboots nightly / ISP renews; a
 router that flushes NAT twice in an hour overnight can do the same midday under load.
+
+## Round 3 — ⛔ "not enough ports, open more ports" was considered and is WRONG
+
+Izzy asked whether the phones are fighting over too few ports. No: 5 phones use a
+handful of mappings out of tens of thousands a router tracks; ports 14237-41 are
+distinct with zero collisions; the overnight changes were the router WIPING its NAT
+table (all phones re-mapped simultaneously), not exhaustion; and the dead-mic call's
+audio never left the office, which no port count fixes. ⛔ Do NOT forward/open ports on
+the customer router (not needed for outbound-registering phones, and standing-open
+SIP/RTP ports attract scanner traffic/ghost calls). Server RTP range was already
+widened 2026-08-23 and every other tenant on this server is clean. The real router-side
+fix candidates remain: disable SIP ALG (proven meddling — one registration passed
+unrewritten :5060), stop/explain the overnight resets, wire the Wi-Fi-capable Yealinks.
