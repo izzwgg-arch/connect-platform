@@ -261,7 +261,7 @@ details.more .inner{padding:0 13px 12px}
 </style>
 
 <div class="mockbar">
-  <span class="mockpill">MOCKUP · V2</span>
+  <span class="mockpill">MOCKUP · V3</span>
   <nav class="jump" aria-label="Screens">
     <a href="#a1">Board</a><a href="#a2">Send link</a><a href="#e1">Email</a><a href="#c1">Customer form</a>
     <a href="#c2">Phone</a><a href="#c3">Sent</a><a href="#a3">Review &amp; file</a><a href="#a4">Tracking</a>
@@ -272,7 +272,7 @@ details.more .inner{padding:0 13px 12px}
 
 <main class="doc">
   <section class="intro">
-    <h1>10DLC Registration, v2: the customer fills it in</h1>
+    <h1>10DLC Registration, v3: the customer fills it in</h1>
     <p>Each customer gets a private link. You copy it or send it in a standard Loopcom email. The customer opens a Loopcom-branded form in light or dark mode where <b>everything the system already knows or can write is shown but locked</b>, and only what we genuinely need from them can be typed. Their answers land in Loopcom. You review them and press <b>File with Telnyx</b>. Filing automatically can be switched on later.</p>
     <p>Nothing here is built. Businesses, people and numbers are examples. The customer's email and form never mention a carrier by name.</p>
     <div class="flow" aria-label="The flow">
@@ -343,7 +343,7 @@ details.more .inner{padding:0 13px 12px}
         <div class="hint">Works for 30 days or until it's sent back. Creating a new link turns this one off.</div></div>
       <div class="fld" style="margin-bottom:12px"><label for="a2-to">Email it to</label><input class="in" id="a2-to" value="Dana Okafor <office@hvtire.com>">
         <div class="hint">Filled from the account owner. You can change it.</div></div>
-      <div class="note" style="margin-bottom:14px">Filled in from the account before they open it: business name, phone, email, contact, their numbers, and every carrier-required message. They type in <b>legal name, EIN, business type, IRS address, website</b>, and tick consent.</div>
+      <div class="note" style="margin-bottom:14px">Filled in from the account before they open it: business name, phone, email, contact, their numbers, and every carrier-required message. They type in <b>legal name, EIN, business type, IRS address, and website (or Google/Facebook page)</b>, and tick consent.</div>
       <div class="op-actions"><button class="op-btn" type="button">Preview email</button><button class="op-btn" type="button">Fill it in myself</button><span style="flex:1"></span><button class="op-btn primary" type="button">Send email</button></div>
     </div></div></div>
     <p class="why">Copy for texting it over WhatsApp or pasting into a support chat; Send for the normal case. "Fill it in myself" opens the same form for you, for customers who'd rather read the EIN out on a call.</p>
@@ -370,7 +370,7 @@ details.more .inner{padding:0 13px 12px}
               <li>Your legal business name, exactly as it appears on your IRS letter</li>
               <li>Your EIN (federal tax ID)</li>
               <li>The business address the IRS has on file</li>
-              <li>Your website</li>
+              <li>Your website, or your Google Business or Facebook page</li>
             </ul>
             <a class="mail-btn" href="#c1">Complete your texting registration</a>
             <div class="mail-divider"></div>
@@ -407,7 +407,7 @@ details.more .inner{padding:0 13px 12px}
                 <div class="fld"><label for="cl-ein">EIN (federal tax ID)<span class="req">*</span></label><input class="in" id="cl-ein" placeholder="12-3456789" inputmode="numeric"></div>
                 <div class="fld"><label for="cl-type">Business type<span class="req">*</span></label><select class="in" id="cl-type"><option>Choose…</option><option>LLC or corporation</option><option>Non-profit</option><option>Publicly traded company</option><option>Government</option><option>Just me, no EIN</option></select></div>
                 <div class="fld full"><label for="cl-addr">Address the IRS has on file<span class="req">*</span></label><input class="in" id="cl-addr" placeholder="Street, city, state, ZIP"><div class="hint">No PO boxes.</div></div>
-                <div class="fld full"><label for="cl-web">Website<span class="req">*</span></label><input class="in" id="cl-web" placeholder="https://"></div>
+                <div class="fld full"><label for="cl-web">Website, Google Business page or Facebook page<span class="req">*</span></label><input class="in" id="cl-web" placeholder="https://"><div class="hint">No website? Paste the link to your Google Business listing or Facebook page.</div></div>
               </div>
             </div>
 
@@ -434,14 +434,14 @@ details.more .inner{padding:0 13px 12px}
                 <div class="msg"><span class="k">When someone replies HELP</span><span class="bubble">Hudson Valley Tire Co.: for help call (845) 555-0142 or email office@hvtire.com. Reply STOP to opt out.</span></div>
                 <div class="msg"><span class="k">When someone replies START</span><span class="bubble">Hudson Valley Tire Co.: you're subscribed to texts about your orders and appointments. Msg frequency varies. Msg &amp; data rates may apply. Reply HELP for help, STOP to opt out.</span></div>
                 <div class="msg"><span class="k">Words that stop texts</span>STOP, END, CANCEL, UNSUBSCRIBE, QUIT</div>
-                <div class="msg"><span class="k">Texting privacy</span>Hudson Valley Tire Co. never sells or shares phone numbers or texting consent with anyone. Published for you at loopcom.net/sms-privacy/hudson-valley-tire</div>
+                <div class="msg"><span class="k">Texting privacy policy and terms</span>Written in Hudson Valley Tire Company LLC's name: "No mobile information will be shared with third parties or affiliates for marketing or promotional purposes. Text messaging opt-in data and consent will not be shared with any third parties." Published for you at a public page and attached to the registration.</div>
               </div></details>
             </div>
 
             <div class="consent"><span class="box" aria-hidden="true">✓</span><span>I'm authorized to act for this business. The information above is true, and Loopcom LLC may register it with mobile carriers and the industry registry for business texting.</span></div>
             <div class="fld" style="margin-top:11px"><label for="cl-sig">Type your full name to sign<span class="req">*</span></label><input class="in" id="cl-sig" placeholder="Your full name"></div>
             <button class="cp-btn" type="button">Send my registration</button>
-            <p class="cp-small">Your EIN is used only for this registration and is deleted once carriers accept it.</p>
+            <p class="cp-small">Your EIN is stored as a secure token, used only for this registration, and deleted once it's verified.</p>
           </div>
         </div>
       </div>
@@ -461,7 +461,7 @@ details.more .inner{padding:0 13px 12px}
                 <div class="fld"><label for="cd-ein">EIN (federal tax ID)<span class="req">*</span></label><input class="in" id="cd-ein" value="••-•••4821"></div>
                 <div class="fld"><label for="cd-type">Business type<span class="req">*</span></label><select class="in" id="cd-type"><option>LLC or corporation</option></select></div>
                 <div class="fld full"><label for="cd-addr">Address the IRS has on file<span class="req">*</span></label><input class="in" id="cd-addr" value="1180 Route 9W, Newburgh, NY 12550"></div>
-                <div class="fld full"><label for="cd-web">Website<span class="req">*</span></label><input class="in" id="cd-web" value="https://hvtire.com"></div>
+                <div class="fld full"><label for="cd-web">Website, Google Business page or Facebook page<span class="req">*</span></label><input class="in" id="cd-web" value="https://hvtire.com"></div>
               </div>
             </div>
             <div class="cp-sec">
@@ -483,7 +483,7 @@ details.more .inner{padding:0 13px 12px}
             <div class="consent"><span class="box" aria-hidden="true">✓</span><span>I'm authorized to act for this business. The information above is true, and Loopcom LLC may register it with mobile carriers and the industry registry for business texting.</span></div>
             <div class="fld" style="margin-top:11px"><label for="cd-sig">Type your full name to sign<span class="req">*</span></label><input class="in" id="cd-sig" value="Dana Okafor"></div>
             <button class="cp-btn" type="button">Send my registration</button>
-            <p class="cp-small">Your EIN is used only for this registration and is deleted once carriers accept it.</p>
+            <p class="cp-small">Your EIN is stored as a secure token, used only for this registration, and deleted once it's verified.</p>
           </div>
         </div>
       </div>
@@ -563,7 +563,7 @@ details.more .inner{padding:0 13px 12px}
             </div>
             <div class="op-card">
               <div class="op-k" style="margin-bottom:8px">Campaign <span class="src sys">written by the system</span></div>
-              <div class="fld" style="margin-bottom:9px"><span class="lab">Program</span><div class="seg"><span class="on">Conversations and updates · $1.50/mo</span><span>Customer care · $10/mo</span><span>Marketing · $10/mo</span></div></div>
+              <div class="fld" style="margin-bottom:9px"><span class="lab">Program</span><div class="op-v">Conversations and updates</div></div>
               <div class="fld" style="margin-bottom:9px"><label for="a3-s1">Sample message 1</label><textarea class="in" id="a3-s1">Hudson Valley Tire Co.: your tires are in. We can mount them Thursday at 10am. Reply to book. Reply STOP to opt out.</textarea></div>
               <div class="fld"><label for="a3-s2">Sample message 2</label><textarea class="in" id="a3-s2">Hudson Valley Tire Co.: reminder, your alignment is booked for Sat 9am. Reply C to confirm. Reply STOP to opt out.</textarea></div>
               <p class="dim" style="font-size:12px;margin:8px 0 0">You can edit anything here before filing. The customer couldn't. + 7 more fields (opt-in flow, HELP/STOP/START replies, keywords, privacy link)</p>
@@ -577,18 +577,20 @@ details.more .inner{padding:0 13px 12px}
                 <li class="pass">Website loads and shows "Hudson Valley Tire"</li>
                 <li class="warn">IRS address differs from the 911 address on file (Unit 2). That's allowed; just confirm it's right.</li>
                 <li class="pass">Every sample names the business and has STOP wording</li>
+                <li class="pass">Privacy policy and SMS terms generated in the legal name, published, attached</li>
                 <li class="pass">Both numbers are on Telnyx and can join a campaign</li>
               </ul>
             </div>
             <div class="op-card">
-              <div class="op-k" style="margin-bottom:6px">Telnyx charges when filed</div>
+              <div class="op-k" style="margin-bottom:6px">Charged when filed</div>
               <table class="bill">
                 <tr><td>Business check (brand)</td><td>$4.50</td></tr>
                 <tr><td>Carrier review</td><td>$15.00</td></tr>
-                <tr><td>First 3 months at $1.50</td><td>$4.50</td></tr>
+                <tr><td>Campaign registration</td><td>$4.50</td></tr>
                 <tr class="tot"><td>Charged now</td><td>$24.00</td></tr>
               </table>
-              <p class="dim" style="font-size:12px;margin:8px 0 0">Balance after: $2.32. None of it is refundable.</p>
+              <div class="note good" style="margin-top:10px">Added to <b>Hudson Valley Tire Co.'s next invoice</b> as a one-time $24.00 "Business texting registration".</div>
+              <p class="dim" style="font-size:12px;margin:8px 0 0">Telnyx balance after: $2.32. None of it is refundable.</p>
             </div>
             <button class="op-btn primary" type="button" style="padding:12px;font-size:14px">File with Telnyx · $24.00</button>
             <button class="op-btn" type="button">Send back to customer with a note</button>
@@ -607,7 +609,7 @@ details.more .inner{padding:0 13px 12px}
         <div class="op-card">
           <ol class="tl">
             <li class="ok"><i></i><strong>Customer sent the form</strong><span>Sep 16, 10:02am · Dana Okafor</span></li>
-            <li class="ok"><i></i><strong>Business verified by the registry</strong><span>10:44am · EIN deleted from Loopcom</span></li>
+            <li class="ok"><i></i><strong>Business verified by the registry</strong><span>10:44am · EIN token destroyed</span></li>
             <li class="ok"><i></i><strong>Telnyx compliance accepted the campaign</strong><span>2:10pm</span></li>
             <li class="now"><i></i><strong>Carriers reviewing</strong><span>Usually 1–3 business days</span>
               <div class="carriers">
@@ -624,8 +626,8 @@ details.more .inner{padding:0 13px 12px}
             <table class="log">
               <tr><td>2:31pm</td><td>AT&amp;T approved</td></tr>
               <tr><td>2:14pm</td><td>T-Mobile approved</td></tr>
-              <tr><td>10:44am</td><td>Brand verified · EIN purged</td></tr>
-              <tr><td>10:42am</td><td>Filed by Izzy · $24.00</td></tr>
+              <tr><td>10:44am</td><td>Brand verified · EIN token destroyed</td></tr>
+              <tr><td>10:42am</td><td>Filed by Izzy · $24.00 added to next invoice</td></tr>
               <tr><td>10:39am</td><td>EIN shown to Izzy</td></tr>
               <tr><td>10:02am</td><td>Sent back by customer</td></tr>
               <tr><td>Sep 15</td><td>Link emailed to office@hvtire.com · opened 9:47am</td></tr>
@@ -713,13 +715,10 @@ details.more .inner{padding:0 13px 12px}
   <section class="screen" id="d">
     <header><span class="tag">BEFORE BUILDING</span><h3>What changed from v1, and what I still need</h3></header>
     <div class="decisions">
-      <div class="decision done"><h4>Settled by your answer</h4><p>Customer link plus email; customers see the system-written parts but can't edit them; you press File with Telnyx; automatic filing later. The sole-proprietor PIN also goes on the customer's link, since the PIN is texted to their phone.</p></div>
-      <div class="decision"><h4>1 · The EIN has to be kept until you file</h4><p>Because you file after they send it, Loopcom must hold the EIN for a while. <b>My recommendation:</b> encrypted in its own column, masked as last 4, revealed only with a permission and a history entry, <b>deleted automatically once the registry verifies the business</b>, or after 14 days if never filed. The old 10DLC form's base64 EINs get the same cleanup.</p></div>
-      <div class="decision"><h4>2 · Customers without a texting privacy policy</h4><p>Carriers want the business's own policy, not Loopcom's. Most small customers won't have one. <b>Option:</b> Loopcom publishes a short privacy page in each customer's name (shown on the form). Telnyx hasn't confirmed carriers accept that; the first filings would prove it. <b>Or:</b> make them add one to their website.</p></div>
-      <div class="decision"><h4>3 · Who pays the $24 and the monthly fee?</h4><p>Add it to the customer's invoice, or Loopcom absorbs it. Customers see no price on the form either way.</p></div>
-      <div class="decision"><h4>4 · Marketing texts</h4><p>The form files every customer as "conversations and updates" ($1.50/mo). Promotions need the $10/mo marketing program and stricter wording. Should the customer be able to ask for it, or do you choose on the review screen (my recommendation)?</p></div>
-      <div class="decision"><h4>5 · When approved, move the numbers' texting to Telnyx automatically?</h4><p><b>My recommendation: yes</b>, keeping the old carrier as backup.</p></div>
-      <div class="decision"><h4>6 · Fix the two old 10DLC checks too?</h4><p>The SMS Campaigns page check that can never pass, and the live-texting switch that only reads the old form's table.</p></div>
+      <div class="decision done"><h4>Settled</h4><p>Customer link plus email; customers see the system-written parts but can't edit them; you press File with Telnyx; automatic filing later. <b>EIN is tokenized</b>: stored as an encrypted token, shown as the last 4 digits, revealed only with a permission and a history entry, destroyed once the registry verifies the business (or after 14 days if never filed). The old form's base64 EINs get the same treatment. <b>The $24.00 up-front charge goes on the customer's invoice.</b> The monthly fee and marketing texts are left out entirely until you decide; nothing on any screen mentions them.</p></div>
+      <div class="decision"><h4>1 · Privacy policy: researched, here's the plan</h4><p><b>The registry doesn't technically require it</b> (the field is optional at The Campaign Registry and at Telnyx), <b>but its own guide says a compliant policy is required</b>, and reviewers reject without one. That holds even when customers text first: that only removes the need for extra permission, not the policy. Telnyx says the policy must be <b>the business's own, never the reseller's</b>. It does not say where it has to live. Other providers accept a public PDF, a Google Drive link, or a Google Business or Facebook page as the business's online presence. <b>Plan:</b> Loopcom writes a short privacy policy and SMS terms in each customer's legal name, publishes them at a public page (loopcom.net/sms/hudson-valley-tire), and attaches them to the filing. Customers without a website give their Google Business or Facebook link instead. Still unproven until the first real filings: whether carriers accept a policy in the customer's name hosted on Loopcom's domain. OK to go with this?</p></div>
+      <div class="decision"><h4>2 · When approved, move the numbers' texting to Telnyx automatically?</h4><p><b>My recommendation: yes</b>, keeping the old carrier as backup.</p></div>
+      <div class="decision"><h4>3 · Fix the two old 10DLC checks too?</h4><p>The SMS Campaigns page check that can never pass, and the live-texting switch that only reads the old form's table.</p></div>
     </div>
   </section>
 </main>

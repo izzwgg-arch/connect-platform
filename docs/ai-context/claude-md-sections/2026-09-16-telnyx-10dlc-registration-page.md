@@ -1,6 +1,6 @@
-# 2026-09-16 · TELNYX 10DLC REGISTRATION — MOCKUPS V2 AWAITING IZZY (customer link flow), NOTHING BUILT
+# 2026-09-16 · TELNYX 10DLC REGISTRATION — MOCKUPS V3 AWAITING IZZY (customer link flow), NOTHING BUILT
 
-Full handoff: **`docs/ai-context/AGENT_HANDOFF_TELNYX_10DLC_2026-09-16.md`** (§0 = revision 2)
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_TELNYX_10DLC_2026-09-16.md`** (§00 = revision 3 decisions + privacy research, §0 = revision 2)
 
 - Izzy asked whether Loopcom can submit 10DLC to Telnyx: **it can't** — no Telnyx brand/campaign
   code exists. He asked for an Admin page, mockups first.
@@ -18,4 +18,14 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_TELNYX_10DLC_2026-09-16.md`** (§
 - ⛔ Telnyx docs contradict its OpenAPI spec in 5+ places — build to the spec (handoff §2).
 - ⛔⛔ Found: legacy `TenDlcSubmission.einEncrypted` is plain base64; the SMS Campaigns 10DLC gate
   can never open; the `/settings/sms-mode` LIVE gate reads only the legacy table.
-- ⏳ Blocked on 6 decisions (handoff §0). Nothing built, no Telnyx call made.
+- ✅ **Decided (V3):** EIN TOKENIZED (encrypted token, audited reveal, destroyed on brand
+  verification); the ~$24 up-front charge goes on the CUSTOMER'S invoice. ⛔ Monthly fee and
+  marketing DEFERRED — "don't say anything about that" — removed from every screen; add nothing
+  about them until Izzy decides.
+- ⛔ **Privacy policy (researched):** not a hard registry field, but TCR's own guide says a
+  compliant policy is REQUIRED and reviewers reject without one — even for customer-texts-first.
+  Telnyx: must be the BRAND's policy, never the reseller's. Plan awaiting OK: generate policy +
+  SMS terms in the customer's legal name on a public Loopcom-hosted page; no-website customers
+  give a Google Business/Facebook link. Hosting on the ISV domain is UNCONFIRMED with carriers.
+- ⏳ Remaining open: privacy plan OK, auto-move texting to Telnyx, fix the two legacy gates.
+  Nothing built, no Telnyx call made.

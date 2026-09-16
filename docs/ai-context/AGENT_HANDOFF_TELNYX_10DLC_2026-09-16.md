@@ -9,7 +9,59 @@ mockups before you build it."*
 deploy exists. Do not start implementation until he approves and answers §4.
 
 - Mockup file: `docs/mockups/telnyx-10dlc/index.html`
-- Artifact: https://claude.ai/artifact/UjnMidL2iSzitYgutQCvbk (Version 2 is current — the customer-link flow)
+- Artifact: https://claude.ai/artifact/UjnMidL2iSzitYgutQCvbk (Version 3 is current — customer-link flow + decisions)
+
+## 00. ⛔⛔ REVISION 3 (same day) — IZZY'S DECISIONS + THE PRIVACY-POLICY RESEARCH
+
+Izzy, verbatim: *"Yes, EIN should be tokenized. So, the $25 a month that's on the customer. The
+$150 a month, I will decide later. For now, don't say anything about that. The same with the
+marketing. What do you mean? I cannot have a business text message if I don't have a privacy
+policy page?"* then *"check on the internet what people say and what Telnyx says … Dig in."*
+
+**Decided (mockup V3, same artifact, Version 3):**
+- ✅ **EIN is TOKENIZED**: encrypted token, masked last-4, reveal = permission + audit row,
+  token destroyed when the registry verifies the brand (or 14 days unfiled). Legacy base64 EINs
+  get the same treatment.
+- ✅ **Up-front charge goes on the customer's invoice.** Read as the ~$24 up-front Telnyx cost
+  (brand $4.50 + carrier review $15 + campaign $4.50) — he said "$25 a month"; the only ~$25
+  figure shown was the $24 up-front, so that is the interpretation. ⚠️ Confirm on the build if
+  in doubt. Mockup shows a one-time "Business texting registration $24.00" on the next invoice.
+- ⛔ **The monthly campaign fee ("$1.50") and MARKETING are deferred — "don't say anything about
+  that."** Removed from EVERY screen (guarded in the mockup build: no "$1.50", "$10/mo",
+  "Marketing ·"). Every customer is filed as the conversational program with no price shown.
+  Do not add a program picker or monthly line until he decides.
+
+**Privacy policy research (2026-09-16, full cited report in this session; key facts):**
+- **Not a hard registry field** — TCR CSP User Guide Oct 2025: *"While this field is optional in
+  TCR, having a compliant Privacy Policy is required."* Telnyx `campaignBuilder.privacyPolicyLink`
+  is optional. Reviewers (DCAs) reject without one.
+- **Customer-texts-first does NOT waive it** — CTIA / T-Mobile / Telnyx only waive extra
+  PERMISSION for customer-initiated threads; no source waives the policy. Bandwidth 7107 even
+  wants verbal opt-in scripts to reference it.
+- **Telnyx (support 10645583, updated 2026-01-12):** reseller *"cannot substitute your privacy
+  policy in lieue of the brand's"*; Google's policy not accepted; must say mobile info is not
+  sold **or shared**. Telnyx 9940291 (2025-11-06): no website → Google Business Profile or social
+  links. Sole-prop guide asks only for a website/social URL.
+- **Hosting**: TCR accepts uploaded PDFs (CTA/Privacy/T&C multimedia upload, 10MB, 5 files);
+  Bandwidth accepts PDFs and Drive/Dropbox links; Vonage/Plivo/RingCentral/Quo want a real
+  website. **No official source addresses a policy written in the customer's name but hosted on
+  the ISV's domain — UNCONFIRMED either way.**
+- **Twilio made Privacy + T&C URLs REQUIRED for API campaign registrations from 2026-06-30**
+  (errors 30933/30934) — the direction of travel is stricter.
+- **Accepted wording** (Plivo/Telnyx/HawkSoft-TCR): *"No mobile information will be shared with
+  third parties/affiliates for marketing/promotional purposes. All the above categories exclude
+  text messaging originator opt-in data and consent; this information will not be shared with any
+  third parties."* Don't mention marketing on a non-marketing campaign (Bandwidth 7200).
+- ⏳ UNCONFIRMED: whether Telnyx's API exposes TCR's document-upload field (not found in the
+  research); Reddit first-hand reports were unreachable.
+
+**Plan in V3 (awaiting his OK):** Loopcom generates a privacy policy + SMS terms in each customer's
+LEGAL name, publishes them on a public page (e.g. loopcom.net/sms/<slug>), and attaches them if
+the API allows; the form's website field accepts a Google Business or Facebook link for
+no-website customers. First real filings are the proof.
+
+**Remaining open:** (1) privacy plan OK?; (2) auto-move approved numbers' texting to Telnyx with
+backup; (3) fix the two broken legacy 10DLC gates.
 
 ## 0. ⛔⛔ REVISION 2 (same day) — THE CUSTOMER FILLS IT IN; IZZY PRESSES "FILE WITH TELNYX"
 
