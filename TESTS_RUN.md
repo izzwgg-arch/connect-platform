@@ -1,5 +1,14 @@
 # Tests run
 
+## Texting switcher (VoIP.ms → Telnyx on landing) — 2026-09-16 (night)
+
+- apps/api `src/textingRegistration/switcher.test.ts` **13/13** (new): not-on-Telnyx and port-pending left alone; landed+live → profile set, flipped, History event without a carrier name, registration kicked, engine attach list includes it; chosen profile never overwritten; only VOIPMS rows with a tenant (0 Telnyx reads otherwise); concurrent sweeps flip/record/kick once; draft / no registration; one error isolated; no creds = no reads; guards: VoIP.ms DID sync never writes provider, VoIP.ms poll selects VOIPMS, switcher's only write.
+- Mutation: removing `provider: "VOIPMS"` from the flip's where → 2 FAIL (exactly-once + write guard).
+- `src/textingRegistration/*.test.ts` **54/54**. tsc on switcher/wire/test: 0 errors (pre-existing elsewhere only; full api tsc blocked by another session's uncommitted `deviceCloudRoutes.ts:1523` syntax error).
+- Prod dry run before deploy: 18 VOIPMS rows, none active on Telnyx (Telnyx owns 723-1213 port-pending, 460-9054, 777-4807, 306-6825 active).
+- DEPLOYED: api `56879d0f` (`.build-commit`, 0 restarts, health 200, `TEXTING_SWITCHER_ARMED`); after first run 21:31Z: VOIPMS 18 / TELNYX 1 unchanged, 0 audit rows.
+- NOT proven: a real landing → flip → campaign attach → text sent/received.
+
 ## 10DLC "texting is on" email could never queue — fixed (2026-09-16)
 
 - `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/signalwire/*.test.ts` → **41/41 pass**
