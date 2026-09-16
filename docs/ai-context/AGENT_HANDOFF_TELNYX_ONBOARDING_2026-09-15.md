@@ -427,3 +427,46 @@ Modules (all under apps/api/src):
 - Scoped "transfer a number only" links on Telnyx still park the port in the Port queue (not auto-filed).
 - Wipe the "Loopcom Telnyx Test" tenant (PBX T143 via the two-step panel protocol + Connect tenant)
   after the call test; release 845-777-4807 only if Izzy doesn't want it kept.
+
+## 15. 911 IN POSTAL FORM + OWNER ALERT + RETRY, FASTPORT, AND THE 723-1213 PORT (2026-09-16, evening)
+
+Izzy: *"yes, do it"* (alert + retry), *"the 33 should be 33 State Route 17M. I think there are two ways of
+doing it. We had the same problem with Facebook"*, *"submit a real port through the wizard for 7231213"*,
+*"make it a fastport"*.
+
+- **The two ways, proven on Telnyx's validator:** the NY State record / Facebook form `33 NY 17M` (and
+  `NY-17M`, `Route 17M`) → **85009 manual validation, no suggestion**; the postal/911 form
+  **`33 State Route 17M` + `Ste C` → valid**; `Suite C` → 20209 invalid extended address.
+  `e911Normalize.ts` rewrites NY route forms → `State Route N` (NY only) and unit words → USPS
+  abbreviations; `chooseRegistrableAddress` validates → takes Telnyx's correction ONCE (same house number
+  + state only) → validates → only then creates the address. **LIVE: the office address was written as
+  `33 State Route 17M, Ste C, Harriman NY 10926` and CREATED at Telnyx.**
+- ⛔⛔ **NEW BLOCKER (Izzy's to clear): `enable_emergency` answers 10015 "You must accept the Emergency
+  Terms of Service before you can enable emergency services for a phone number" (/user_id).** An
+  account-level legal acceptance in the Telnyx portal — NOT accepted by the agent (terms acceptance is the
+  owner's). Until then NO Telnyx number can get 911. After acceptance the sweep retries within the hour, or
+  `POST /admin/onboarding/submissions/:id/retry-e911`.
+- **Owner alert:** `e911Escalation.ts` — `AgentEscalation` row (SMS within 30 s), never ADMIN_ALERT,
+  de-duped per number while open; raised at build end when 911 is failed/address_incomplete and by the sweep
+  when an automatic retry still fails.
+- **Retry:** sweep retries Telnyx `failed` 911 hourly ×6 then every 6 h (`e911RetryDue`; never
+  `address_incomplete`); success → "E911 is set" email if the build is done. Shared implementation
+  `retryTelnyxE911ForSubmission` also behind the SUPER_ADMIN route above. **LIVE: the sweep's boot run
+  retried the test number by itself right after deploy.** VoIP.ms sign-ups get the alert but no retry.
+- **FastPort (`42cccd3a`):** read live on a deleted draft for +18457231213: `fast_port_eligible: true`,
+  `activation_type: scheduled`, `allowed_foc_windows` business days 11:00Z–01:00Z (7 AM–9 PM ET), earliest
+  two business days out; requirements = LOA + "Latest Invoice from Current Carrier (Within 90 Days)" (must
+  show name, number, carrier name/logo, issue date, account number). The filer requests the EARLIEST
+  allowed window on eligible orders (`fastPort`, `focRequested` on portFiling). Current carrier per Telnyx:
+  **BANDWIDTH.COM CLEC, LLC - NY** (VoIP.ms's underlying).
+- **The 723-1213 port — Izzy chose "submit through the wizard anyway" after being shown the blast radius:**
+  (1) the platform texting sender (`billingSmsSender.ts`) is hard-wired to VoIP.ms — at switch-over every pay
+  link, receipt and sign-in code stops sending until platform texting moves to Telnyx with an approved
+  registration; (2) the wizard lands the number in a NEW tenant, not T35 "Connect Communications";
+  (3) it is on the migration board's PROTECTED list; escalation texts also go TO 723-1213.
+  Link `CQ4nspf33rQgh4JGtlmIXBgHe9gkRfnC` (submission `cmu4gjgu30000r17t3dczbxxx`): company Loopcom LLC,
+  contact Israel Weinstock / izzy@loopcom.net, address 33 State Route 17M Suite C Harriman NY 10926, port
+  number (845) 723-1213, carrier VoIP.ms, account 344022 — prefilled by the agent. ⛔ **Left for Izzy: name on
+  account (as on the bill), the TYPED SIGNATURE (a legal authorization — never typed by the agent), the
+  VoIP.ms bill upload, extensions, and payment.** Nothing is filed until payment; then the number stage buys a
+  temporary Telnyx number and files the FastPort.
