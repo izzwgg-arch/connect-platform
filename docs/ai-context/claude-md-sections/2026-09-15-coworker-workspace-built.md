@@ -99,6 +99,47 @@ Supersedes the mockup-only section `2026-09-15-coworker-ide-redesign-mockup.md`.
   settings saves; unauthenticated 403, bad turn id 400, unknown turn 404, malformed JSON 400,
   oversized answer 400; agent still healthy afterwards.
 
+## ⛔ THREE DEFECTS THAT ONLY A REAL SCREEN FOUND — all three fixed and deployed
+
+Every one of these passed the tests, the typechecks and the container greps. They were found by
+typing one sentence into the live workspace in a browser.
+
+1. **The composer kept the sent text until the whole task ended.** `send` only resolves when the
+   turn is *finished* — minutes, with the hands — so the box still holding the message read as
+   "it didn't send". It clears immediately now and only restores the text if the send is refused.
+2. **The published knowledge document still described the card-era Coworker** ("press the button",
+   "not possible yet"), six days after the hands shipped. Fixed in `361946ea`; the api publishes
+   `docs/agent-knowledge/` at boot, so a knowledge edit needs an **api deploy**, not an agent one.
+3. ⛔⛔ **And the sentence that survived both fixes was in a TOOL DESCRIPTION** (`90e8a5ca`).
+   Asked "what can you help me with on this computer?" while the desktop app was reconnecting, the
+   workspace answered with the 2026-09-02 card world verbatim — the three kinds, the three folders,
+   "each task appears on screen and only runs after you press the button". The prompts were right.
+   The knowledge row in the database was right (verified: new wording present, card-era wording
+   gone). The stale text was the `description` of `coworker_task` / `my_computer_tasks`, **which a
+   model reads whether or not it ever calls the tool**, and which only stepped aside when
+   `handsOn` was true. The app was reconnecting, so `handsOn` was false and the model was handed
+   the card world. They now step aside on **every** workspace turn; outside the workspace nothing
+   changes, so the dock's `FloatingAssistant` card path is untouched.
+
+4. ⛔⛔ **And fixing 3 exposed a fourth: the full page could never touch the computer at all.**
+   With the card wording gone, the honest answer underneath it read "right now the app isn't
+   connected" — while the same screen's pill said **"On this computer: connected"**. The hands were
+   gated on `viewingPath.startsWith("/desktop/coworker")`, so only the desktop BUBBLE ever got
+   them; `/coworker` — the full page, the one surface where folders and git projects are attached —
+   was locked out of the feature those attachments exist for. Now gated on `isCoworkerPath`, so
+   every Coworker surface gets the hands (`90e8a5ca`+).
+   ⛔ **This widened no security property, and the reason matters:** `viewingPath` is
+   CLIENT-SUPPLIED, so any caller could always have claimed the bubble's path — it was never a
+   boundary. The boundary is unchanged: the desktop's own policy core re-validates every call and
+   approvals are answered in the desktop's **native window**, never on the hosted page; the hands
+   stay keyed to `{tenantId, clientUserId}`, so a person only ever reaches their own computer.
+   A source guard now forbids the bubble-only test from coming back.
+
+⛔ **The lesson is wider than "update the knowledge doc": a capability the model reads about
+anywhere is a capability it will describe.** Prompts, per-turn blocks, the knowledge document AND
+every tool description are all places the model learns what it is. A guard test now replays red
+against the previous condition. See [[a-capability-the-prompt-denies-is-not-a-capability]].
+
 ## ⏳ NOT PROVEN — the honest list
 
 - **Nobody has typed a task into the rebuilt bubble and watched the steps run.** Everything above is

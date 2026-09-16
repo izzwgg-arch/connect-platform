@@ -11,7 +11,7 @@ import { Notifier } from "./notify/notifier";
 import { ModelRouter, PING_MAX_TOKENS } from "./llm/router";
 import { loadManifest, executableCapabilities } from "./manifest/manifest";
 import { getPrisma } from "./db";
-import { ConversationEngine } from "./conversation/engine";
+import { ConversationEngine, isCoworkerPath } from "./conversation/engine";
 import { PrismaConversationStore } from "./conversation/store";
 import { registerChatRoutes } from "./conversation/routes";
 import { ReadTools } from "./tools/readTools";
@@ -23,7 +23,7 @@ import { buildContactsTools } from "./tools/contactsTools";
 import { makeContactsInfoClient } from "./pbx/contactsInfoClient";
 import { buildSelfServiceTools } from "./tools/selfServiceTools";
 import { buildPortStatusTools } from "./tools/portStatusTools";
-import { buildCoworkerTaskTools, COWORKER_CHAT_PATH } from "./tools/coworkerTaskTools";
+import { buildCoworkerTaskTools } from "./tools/coworkerTaskTools";
 import { DesktopLink } from "./coworker/desktopLink";
 import { buildDesktopTools, coworkerHandsPrompt, COWORKER_NOT_CONNECTED_PROMPT, COWORKER_MAX_TOOL_ITERATIONS } from "./coworker/desktopTools";
 import { registerCoworkerLinkRoutes } from "./coworker/routes";
@@ -317,9 +317,24 @@ async function main() {
     desktopLink = new DesktopLink();
     setInterval(() => { try { desktopLink!.sweep(); } catch { /* housekeeping */ } }, 60_000).unref();
     const dynamicTools = async (ctx: { tenantId: string; clientUserId: string | null; viewingPath?: string; desktopApp?: boolean }, conversationId: string) => {
-      const inBubble = typeof ctx.viewingPath === "string" && ctx.viewingPath.startsWith(COWORKER_CHAT_PATH);
-      const empty = { tools: [], prompt: inBubble ? COWORKER_NOT_CONNECTED_PROMPT : null };
-      if (!ctx.clientUserId || !(ctx.desktopApp || inBubble)) return empty;
+      // ⛔ EVERY Coworker surface gets the hands, not only the desktop bubble.
+      // This read `startsWith("/desktop/coworker")`, so the full-page workspace at
+      // `/coworker` could NEVER touch the computer — while its own status pill said
+      // "On this computer: connected". Proven on a real screen 2026-09-15: the page
+      // promised a connected computer and the same turn answered "the app isn't
+      // connected". The full page is where folders and git projects are attached, so
+      // it is exactly the surface that needs them.
+      //
+      // ⛔ This widens NO security property, and it is important to understand why:
+      // `viewingPath` is CLIENT-SUPPLIED, so any caller could always have sent
+      // "/desktop/coworker" and got the same tools — it was never a boundary. The
+      // real boundary is unchanged and lives where it always did: the desktop's own
+      // policy core re-validates every call, and approvals are answered in the
+      // desktop's native window, never on this hosted page. The hands are also keyed
+      // by {tenantId, clientUserId}, so a person only ever reaches their OWN computer.
+      const onCoworkerSurface = isCoworkerPath(ctx.viewingPath);
+      const empty = { tools: [], prompt: onCoworkerSurface ? COWORKER_NOT_CONNECTED_PROMPT : null };
+      if (!ctx.clientUserId || !(ctx.desktopApp || onCoworkerSurface)) return empty;
       const identity = { tenantId: ctx.tenantId, clientUserId: ctx.clientUserId };
       const manifest = desktopLink!.manifest(identity);
       if (!manifest || manifest.tools.length === 0) return empty;

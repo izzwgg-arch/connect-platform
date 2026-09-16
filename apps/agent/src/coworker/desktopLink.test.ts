@@ -279,6 +279,15 @@ test("source guards: the engine offers the hands only through the provider, the 
   const server = read(path.join(__dirname, "../server.ts"));
   assert.match(server, /registerCoworkerLinkRoutes\(app, desktopLink, audit\)/);
   assert.match(server, /new ConversationEngine\([^\n]*knowledgeProvider, dynamicTools\)/);
-  assert.match(server, /ctx\.desktopApp \|\| inBubble/, "tools are offered from the app's windows or the bubble, never a browser tab");
+  // ⛔ 2026-09-15: this used to pin `ctx.desktopApp || inBubble`, where inBubble meant
+  // the path started with "/desktop/coworker" — which locked the FULL-PAGE workspace
+  // at /coworker out of the computer while its own pill said "connected". The hands
+  // are offered on every Coworker surface now. This was never a security boundary:
+  // `viewingPath` is client-supplied, so any caller could always claim the bubble's
+  // path. The boundary is the desktop's own policy core and its native approval
+  // window, and the hands stay keyed to {tenantId, clientUserId} — your own computer.
+  assert.match(server, /ctx\.desktopApp \|\| onCoworkerSurface/, "the hands are offered on the Coworker surfaces or the app's own windows");
+  assert.match(server, /const onCoworkerSurface = isCoworkerPath\(ctx\.viewingPath\)/, "one shared definition of what a Coworker surface is");
+  assert.doesNotMatch(server, /startsWith\(COWORKER_CHAT_PATH\)/, "the bubble-only path test must not come back");
   assert.equal(identityKey(me), "t1:u1");
 });
