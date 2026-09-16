@@ -4,9 +4,24 @@
    reuses .lc-login (background + theme toggle anchor). */
 
 .tr-page {
-  align-items: flex-start;
+  /* ⛔ The portal locks html/body scrolling (the signed-in shell scrolls its
+     own pane), so a public page must be its own scroll container — without
+     this the bottom of the form, including Send, is unreachable. */
+  display: block;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 72px 16px 48px;
+  box-sizing: border-box;
 }
+
+/* ConnectSelect sets its width INLINE (160px), so filling the column needs
+   !important — otherwise State runs into the ZIP box. */
+.tr-field .cs-wrap,
+.tr-field .cs-trigger { width: 100% !important; min-width: 0; box-sizing: border-box; }
+.tr-field .cs-trigger { min-height: 40px; }
 
 .tr-card {
   position: relative;
@@ -101,7 +116,7 @@
   cursor: not-allowed;
 }
 .tr-invalid .tr-input,
-.tr-invalid .connect-select-trigger { border-color: var(--danger); }
+.tr-invalid .cs-trigger { border-color: var(--danger); }
 .tr-hint { margin-top: 4px; font-size: 12px; color: var(--text-dim); }
 .tr-error { margin-top: 4px; font-size: 12px; color: var(--danger); font-weight: 600; }
 

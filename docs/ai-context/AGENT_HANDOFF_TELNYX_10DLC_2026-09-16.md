@@ -1,15 +1,105 @@
-# ⛔⛔ AGENT HANDOFF — TELNYX 10DLC REGISTRATION ADMIN PAGE: MOCKUPS AWAITING IZZY, NOTHING BUILT (2026-09-16) — READ FIRST before building /admin/texting-registration or any Telnyx 10DLC code
+# ⛔⛔ AGENT HANDOFF — TELNYX 10DLC REGISTRATION ADMIN PAGE: BUILT + DEPLOYED, LIVE-PROVEN TO READY-TO-FILE, NO REAL FILING YET (2026-09-16) — READ FIRST before building /admin/texting-registration or any Telnyx 10DLC code
 
 Izzy, 2026-09-16: *"Does Loopcom already have a place where I can submit the 10DLC into
 Telnyx?"* → answer was NO → *"Build it end-to-end. Make sure it works, is rock-hard, solid,
 and sustainable for years to come, and put it in the admin section (new page). Show me
 mockups before you build it."*
 
-⛔ **His gate: mockups → approval → build.** Mockups are published; NO code, schema or
-deploy exists. Do not start implementation until he approves and answers §4.
+✅ **Approved and BUILT the same day** (§000). The mockup sections below are the design record.
 
 - Mockup file: `docs/mockups/telnyx-10dlc/index.html`
 - Artifact: https://claude.ai/artifact/UjnMidL2iSzitYgutQCvbk (Version 3 is current — customer-link flow + decisions)
+
+## 000. ✅ BUILT, DEPLOYED, LIVE-PROVEN UP TO "READY TO FILE" (2026-09-16 evening) — READ THIS FIRST
+
+Izzy: *"Go ahead and build it end-to-end, stress test it, and be ready to send it out today."*
+Plus, on the email: *"should not say anything about Telnyx … just explain that these are the
+regulations, and to continue using SMS, you need to fill out the 10DLC form. That's it. Then a link
+to the form."*
+
+**Commits:** `85dee5bc` (module, pages, schema, keys) + `34ff3aae` (server.ts wiring).
+⛔ Worktree hazard hit on the way: another session's `2acf52b8` swept this module's UNCOMMITTED
+server.ts wiring into its own commit (origin would not boot); a third session took it back in
+`5f279499`; this task committed the module on a PRIVATE INDEX (only its 24 files) and re-wired
+by pathspec. The shared index was then re-synced for every path (it showed the new files as
+deleted — a plain `git commit` by anyone would have deleted them).
+
+### What exists (all under platform-staff + key gates)
+- **api `apps/api/src/textingRegistration/`** — `content.ts` (generated carrier wording, the
+  business's own privacy policy + SMS terms, every published rejection-cause check),
+  `tokens.ts` (EIN AES-GCM token bound to the registration id, masked last-4, 14-day TTL; link
+  token = 32 random bytes, only SHA-256 stored, one live link per registration, 30 days),
+  `phases.ts` (raw registry states → Loopcom states; unknown NEVER approves),
+  `registryClient.ts` (Telnyx 10DLC per the OpenAPI spec — separate from the wizard's
+  `telnyxOnboardingClient.ts` whose early "approved" would be wrong here), `engine.ts`
+  (create/link/draft/submit/send-back/file/advance/appeal/deactivate/PIN/sweep),
+  `emails.ts`, `routes.ts`, `wire.ts` (ALL dependencies; server.ts is 3 lines).
+- **Tables** (migration `20260916210000_texting_registration`, additive): `TextingRegistration`,
+  `TextingRegistrationLink`, `TextingRegistrationEin`, `TextingRegistrationEvent`.
+  ⛔ Deliberately NOT `TenantSmsRegistration` — the wizard's sweep would advance these rows.
+  A tenant the wizard already registered at Telnyx is refused (one brand per EIN).
+- **Routes**: `/admin/texting-registration/*` (board, customers, prefill, create, detail, link
+  [+email], revoke, email-preview, reveal-ein, content, business, send-back, file, refresh,
+  appeal, deactivate); public `/texting-registration/:token` (+draft, submit, pin, resend-pin),
+  `/texting-registration/policy/:slug`; webhook `/webhooks/telnyx/10dlc` (Ed25519 fail-closed,
+  a TRIGGER to re-read only). JWT bypass anchored; api prefix rule
+  `/admin/texting-registration → can_view_admin_texting_registration`.
+- **Portal**: `/admin/texting-registration` (board: Needs you / Waiting on customer / In review /
+  Live; New registration picker) and `/admin/texting-registration/[id]` (send email / create &
+  copy link / turn off, business with source tags + "Fill it in myself", EIN Show (audited),
+  wording editor — locked after filing except samples/HELP/opt-in, checks, charges,
+  File with Telnyx confirm, send back with ticked fields + note + auto-email, progress per
+  carrier + numbers, appeal, history, deactivate by typing the name). Public
+  `/texting-registration/[token]` (logo, light/dark via the sign-in toggle, EDITABLE only legal
+  name / type / EIN / IRS address / website (+ owner mobile for sole prop) / signature / consent;
+  account facts + carrier wording LOCKED; fix mode unlocks only `fixFields`; PIN step; sent
+  receipt). Public `/texting-policy/[slug]` — ⛔ SERVER-RENDERED (reviewer tools read raw HTML),
+  fetched via `PORTAL_API_INTERNAL_URL`.
+- **Keys**: page `can_view_admin_texting_registration` + actions `can_send_texting_registration_link`,
+  `can_view_texting_registration_ein`, `can_file_texting_registration`,
+  `can_fix_texting_registration`, `can_deactivate_texting_registration`; none in a default bucket;
+  nav id `admin.texting_registration` is SUPER_ADMIN-forced + in OWNER_ONLY_FIXED (Locked).
+- **The invite email** (`TEXTING_REGISTRATION_INVITE`, never ADMIN_ALERT): subject "Action needed:
+  complete the 10DLC form for <business>"; body = carriers now require registration (10DLC) →
+  "To continue using SMS for <business>, please fill out the 10DLC form" → button + plain link.
+  Ready email `TEXTING_REGISTRATION_READY` once on live. No carrier name anywhere.
+
+### The money path (traced before building — do not change without re-tracing)
+Registration charge = `createOneTimeChargeInvoice` for **$24.00** "Business texting (10DLC)
+registration", created once (claim on `chargeAddedAt`) when the BRAND is created, with DEFAULT
+dates (start = end = the filing moment). Traced: autopay selects only invoices whose period
+contains the payment instant; a paid `one_time_charge` never counts as covering a period unless its
+text says "monthly service"; the service cutoff counts only FAILED/OVERDUE (never auto-set);
+creation sends no email. ⛔ So it is a SEPARATE OPEN invoice that a person collects — not a line
+on the next cycle invoice (billing has no one-shot-line mechanism; adding one touches the
+preview builder used by ~7 read routes). Monthly campaign fee + marketing: DEFERRED, shown nowhere.
+
+### Rules the engine keeps
+States advance only from registry re-reads; creating writes claim a `…StartedAt` column
+atomically and are reconciled (brand by display name, campaign by referenceId) after a timeout,
+never resent; after 20 min unreconciled → `error` for a person. Per-registration in-flight lock
+(the stress run found two concurrent checks double-assigning a number). EIN destroyed on
+verification or 14 days unfiled. Usecase spelling read from `/10dlc/enum/usecase` at first
+filing. Sweep every 10 min, boot kick 2 min, kill switch `TEXTING_REGISTRATION_SWEEP_DISABLED=1`,
+boot line `TEXTING_REGISTRATION_SWEEP_ARMED`. Numbers: only tenant `TenantSmsNumber` rows with
+provider TELNYX are attached; VoIP.ms numbers wait until moved (checked hourly while live).
+
+### Proven (see TESTS_RUN.md for numbers)
+41 unit/engine/stress tests incl. 300 customers; api + portal typecheck clean in these files;
+deployed api `34ff3aae` (migration applied, sweep armed); LIVE inside the container on the
+"Loopcom Telnyx Test" tenant up to Ready to file: 25 concurrent submits → 1; EIN token has no
+digits; audited reveal; 422 field errors; invite email really SENT; random-token flood 404 +
+per-IP 429; forged webhooks 401; TENANT_ADMIN 403.
+
+### Browser proof + the two bugs only it found
+In real Chrome on app.loopcom.net: public form light+dark with logo, empty Send → 10 errors + focus, typed submit → thank-you; admin board, review page, audited EIN Show, Close. ⛔ Found: (1) the public page could not scroll — the portal locks `html/body { overflow: hidden }` for the signed-in shell, so ANY public page must be its own scroll container (`.tr-page { height:100dvh; overflow-y:auto }`); (2) ConnectSelect sets `width:160px` inline — fill a column with `!important`. Both fixed in the CSS redeploy.
+
+### ⏳ NOT PROVEN — the acceptance test is the first REAL customer filing
+Nothing has been filed with Telnyx (costs $24 and needs a real EIN): brand verification, campaign
+review, number assignment, the charge invoice, the ready email and a real 10DLC webhook have only
+run against the simulated registry. The sole-prop PIN on a real phone. A human filling the form in
+a browser. ⛔ Customer links use `canonicalPortalOrigin()` = **app.connectcomunications.com**
+(the same domain every customer email uses today) — Izzy may want app.loopcom.net for this.
 
 ## 00. ⛔⛔ REVISION 3 (same day) — IZZY'S DECISIONS + THE PRIVACY-POLICY RESEARCH
 
