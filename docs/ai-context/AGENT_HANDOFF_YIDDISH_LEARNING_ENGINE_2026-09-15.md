@@ -347,3 +347,136 @@ preview honestly reports **0 exportable rows**.
 - ⛔ **origin carried a syntax error**: `navConfig.ts:1` was
   `import type { LucideIcon   FolderOpen,`, which broke every portal typecheck.
   Repaired in this commit, with all Creative Studio icons and entries preserved.
+
+
+# §12 — HARDENING PASS, 2026-09-16 (`e6b975d2` … `2627b1be`, all deployed and container-verified)
+
+Read this before touching the worker, the adapter or the stage list.
+
+## §12.1 The lesson that produced every fix in this section
+
+The build shipped with a green suite and a correct-looking dashboard. Six real
+defects were sitting in the deployed system anyway, and NONE of them were
+visible from the tests — they were found by reading the live database, the
+discovery cursor and the raw route payloads. Two of them were actively
+disguised as healthy behaviour:
+
+- `no handler for stage "observe"` was recorded as a **SKIP**, and in this
+  system a SKIP is a lawful refusal with a reason. The queue screen showed
+  exactly what it should show for a stage that had never been written.
+- The worker looked busy while doing nothing, because the one in-flight guard
+  was held for minutes by a politely-paced crawl.
+
+⛔ **So: when this engine is changed, read the job table and the cursor on
+production afterwards.** A green suite says the code does what it was written
+to do; it cannot say the pipeline has all its steps.
+
+## §12.2 The two worker lanes (`jobs.ts`)
+
+`startYiddishWorker` now runs two independent loops with separate in-flight
+guards:
+
+- **work lane** — `excludeStages: ["discover"]`, `limit` = `YC_WORK_BATCH`.
+- **discovery lane** — `stages: ["discover"]`, `limit: 1`, kicked by the work
+  tick with `void`, never awaited.
+
+⛔ The filter is applied **inside the claim query**, not after it. A post-filter
+would still run the conditional write that claims the row and burns an attempt,
+then discard it — so a long discover job would keep eating the batch every
+tick, which is the exact bug this replaced. `claimJobs` takes `stages` /
+`excludeStages`; both lanes are proven unable to claim the same row.
+
+## §12.3 Pacing — what is tunable and what is deliberately not
+
+`docker-compose.app.yml`, on **api and api_candidate** (a candidate must behave
+like stable during blue/green):
+
+| var | default | what it changes |
+|---|---|---|
+| `YIDDISH_WORK_BATCH` | 50 | jobs claimed per work tick (hard-capped at 50 by `claimJobs`) |
+| `YIDDISH_WORKER_INTERVAL_MS` | 20000 | how often the work tick runs |
+| `YIDDISH_DISCOVERY_EVERY_MS` | 300000 | how often a source is re-walked |
+| `YIDDISH_DISCOVER_MAX_PAGES` | 60 | listing pages per discover run |
+
+⛔⛔ **Every one of these is LOCAL work or WALK LENGTH. None of them changes how
+fast Yiddish24 is asked.** The ≥2 s floor (`YIDDISH24_MIN_REQUEST_GAP_MS`), the
+30/min ceiling (`YIDDISH24_MAX_RPM`) and the hard stop on 429 / Cloudflare live
+in the adapter and are not environment-tunable, on purpose. If you ever add a
+knob that moves the request rate, it belongs in front of Izzy, not in compose.
+At these settings the crawl is ~12 requests/minute.
+
+## §12.4 `observe` and `aggregate` — the line between hearing and guessing
+
+`observe` does two separate things, and the separation is the point:
+
+1. **Vocabulary**, from text alone. `upsertLexemesFromText` is idempotent
+   through its own ingest ledger, so re-running the stage cannot inflate a
+   frequency. Proven by test.
+2. **Pronunciation**, only from sound. An observation is written ONLY when the
+   transcript is tied to an aligned segment, and is stamped ACOUSTIC_ALIGNED.
+
+⛔ It re-reads the customer wall itself rather than trusting whoever queued the
+job, because a source can be walled after its items were discovered.
+
+`aggregate` writes rules at **CANDIDATE** and findings at **PROPOSED**, and
+nothing downstream reads a CANDIDATE. A genuine split (two variants each above
+the share floor) becomes a `PRONUNCIATION_CONFLICT` finding carrying its
+sample and speaker counts — the engine states the disagreement, a person
+settles it.
+
+⛔ **The stage-coverage guard in `learningStages.test.ts` is the important
+test in this whole folder.** Every declared stage must have a handler or be
+audio-gated. Add a stage to `YC_STAGES` without a handler and it fails.
+
+## §12.5 Opening the audio gate now reaches the backlog
+
+`POST /sources/:key/audio-mode` with `OWNER_AUTHORIZED` requeues that source's
+SKIPPED audio jobs and reports `requeuedAudioJobs`. Turning audio OFF requeues
+nothing.
+
+⛔ This opens nothing by itself — guard-tested to contain no reference to
+`audioFetchMode`, `ycRightsRecord` or `contentAllowed`. Every requeued job
+re-asks the gate immediately before it runs, so a partial or withdrawn grant
+simply skips again with the current reason.
+
+`POST /queue/retry` also takes `state`: `FAILED` (default, unchanged for every
+existing caller) or `SKIPPED`. They are kept separate because a skip was a
+lawful refusal, and re-running it only makes sense once the reason has changed.
+
+## §12.6 Categories, and the backfill
+
+The listing rows carry **no category**. The only honest source is the series
+catalog in the nav. The cursor now keeps `catId → main-category label`, and the
+nav is re-read when that map is missing — not only when a walk starts, or a
+walk already under way files everything as null for days.
+
+`apps/api/scripts/yc-backfill-categories.ts` repairs existing rows: one polite
+page read, map by series name, never overwrite a real label, leave unplaceable
+series NULL. Re-runnable. Run twice on production (519, then 1,747 rows).
+
+```
+docker exec -w /app/apps/api app-api-1 npx tsx scripts/yc-backfill-categories.ts --apply
+```
+
+## §12.7 Two source files were binary
+
+`corpusService.ts` and `lexicon.ts` used a **raw NUL byte** as a hash separator
+instead of the escape, so git and grep classified them as binary — the hazard
+CLAUDE.md records for this repo. Replaced with `\u0000`: identical string at
+runtime, so every existing fingerprint still matches, and the files diff as
+text again. ⛔ Watch for this when generating source through a heredoc.
+
+## §12.8 State on production at the end of this pass
+
+- Catalog walking unattended: 270 → 519 → 2,593 items and climbing; cursor at
+  series 57, page 245 of 324, 135 series queued, 136 categories mapped.
+- **0 audio assets have ever been downloaded. 0 transcripts. Audio DISABLED.**
+- Every item carries a real main-category label; no colour, no null.
+- 0 `no handler` rows. Every `observe` skip says "this item has no transcript
+  yet, so there is nothing to observe".
+- Worker heartbeat live; queue drains faster than discovery fills it.
+
+⛔ **Still Izzy's to decide, unchanged:** the customer-data basis (excluded /
+aggregate-only / per-tenant opt-in with consent); whether to email
+Info@yiddish24.com for permission (draft in §2b); a separate worker box for
+bulk audio; pgvector for semantic search.

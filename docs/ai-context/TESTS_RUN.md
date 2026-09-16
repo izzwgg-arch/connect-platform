@@ -1965,3 +1965,25 @@ with `mock.module is not a function` and you will chase a ghost (I did).
 Not run: the full api suite, portal, agent, desktop — unchanged by this work.
 Not proven: no extension has been created through the hardened route on
 production, because the mirror's grants are still not installed.
+
+## 2026-09-16 — Yiddish Learning Engine, hardening pass
+
+- `apps/api` folder suite `src/yiddishCorpus/*.test.ts`: **157 tests, 157 pass,
+  0 fail** (was 127 at build time). New files/blocks:
+  - `learningStages.test.ts` (11) — the stage-coverage guard plus `observe` /
+    `aggregate` behaviour, including "never invents a pronunciation without an
+    aligned segment" and "proposes CANDIDATE, never APPROVED".
+  - `scheduler.test.ts` (+4) — the two worker lanes: the work lane never claims
+    a discover job and leaves it PENDING with attempts untouched.
+  - `routes.test.ts` (+3) — the audio requeue may only move SKIPPED audio
+    stages to PENDING, and is asserted to contain no `audioFetchMode`,
+    `ycRightsRecord` or `contentAllowed` reference.
+  - `yiddish24Adapter.test.ts` (+2) — a category is never a CSS colour; a
+    mid-walk catalog refresh does not reshuffle the queue.
+- `npx tsc --noEmit -p apps/api`: 0 errors in `yiddishCorpus`.
+- **Production** `scripts/yc-stress.ts` inside `app-api-1`: **21 passed, 0 failed.**
+- ⚠️ The ~36 unrelated `apps/api` failures on this workstation are still the
+  stale gitignored `packages/integrations/dist` (2026-05-24 artifact vs
+  2026-08-12 source). Not ours; the server builds fresh.
+- The stage-coverage guard's "fails before the fix" proof is production itself:
+  `no handler for stage "observe"` × 214 rows in `YcProcessingJob`.

@@ -61,3 +61,66 @@ Izzy: *"Build this end-to-end... Yiddish24, 24/7... stress-tested end-to-end, re
 - ⏳ **Still Izzy's to decide:** the customer-data basis; whether to email
   Info@yiddish24.com for permission (draft in handoff §2b); a worker box for
   bulk audio; pgvector for semantic search.
+
+## HARDENED AND PROVEN RUNNING — 2026-09-16 (`e6b975d2` → `2627b1be`)
+
+Izzy: *"bring it to good condition so the agent can start learning right up …
+stress-tested the fuck out of end-to-end, ready to use."*
+
+**The build was green and the deployed system was not right.** All six defects
+below were found by reading production — the cursor, the job table, the route
+payloads — not by a test. Every one now has a regression test.
+
+1. **Every catalogued item's category was `"darkred"`.** The listing rows carry
+   no category, and the parser fell back to `data-cat-color`, which is the CSS
+   swatch the site paints the row with. The catalog browser's category filter
+   was meaningless. The honest source is the series catalog; unknown is now
+   NULL, never a colour.
+2. **Discovery held the only worker lane.** A discover job walks listing pages
+   at the ≥2 s politeness gap, so it runs for MINUTES, and it shared the single
+   in-flight guard with everything else. The queue read "busy" while every
+   cheap local stage stood still. Discovery now has its own lane and guard;
+   the stage filter is applied in the CLAIM QUERY, so a post-filter can never
+   claim-then-drop a row and burn its attempt.
+3. **5 jobs a minute.** Against ~35k items × ~10 job rows each that is weeks.
+   Now 50 per 20 s. ⛔ These knobs change how much LOCAL work a tick does —
+   never how fast Yiddish24 is asked. Measured after: 150 jobs/min, and items
+   climbing at the same time, which is the proof the lanes are independent.
+4. **`observe` and `aggregate` had no handler at all.** Both are declared in
+   `YC_STAGES`; neither existed. `runDueJobs` fell through to
+   `no handler for stage "observe"` and marked the job SKIPPED — and a SKIP is
+   a lawful outcome with a reason, so the pipeline looked healthy while its
+   last two steps did not exist. 214 jobs had already "skipped" that way.
+   The audio stages never hit this because the rights gate answers first.
+5. **A rights grant would not have reached the backlog.** SKIPPED is terminal,
+   so the day Izzy records permission the already-catalogued episodes would
+   have stayed skipped for ever and only NEW items would get audio.
+6. **A walk in progress never learned the category map.** It was written only
+   when a walk STARTED, and a walk under way does not start.
+
+**What `observe` and `aggregate` do, and what they refuse to do.**
+`observe` tokenizes an item's transcripts into lexemes — vocabulary is the part
+text alone can honestly teach — and records a pronunciation observation ONLY
+where the text is pinned to an aligned segment, stamped ACOUSTIC_ALIGNED.
+⛔ It will not infer a pronunciation from spelling: that would put a guess in
+the evidence table where everything downstream reads it as something we heard.
+`aggregate` scores observations with the existing evidence module and writes
+rules at CANDIDATE and findings at PROPOSED. ⛔⛔ It never approves, and a real
+split becomes a conflict finding for a person instead of the engine choosing.
+
+**Proven on production, 2026-09-16:**
+- 157/157 folder tests; 21/21 stress harness run INSIDE the api container.
+- Every read route 200 with honest empty-state notes; all 10 portal pages 200.
+- Dashboard numbers are real: `audioHours` 0 against `catalogDurationHours`
+  (published, never fetched), 0 audio assets ever, wall counts live (72,548
+  call recordings / 1,707.6 h; 3,514 voicemail transcripts / 35.8 h).
+- Catalog grew unattended 270 → 519 → 2,593 items; 0 `no handler` rows left;
+  every item carries a real main-category label.
+- `scripts/yc-backfill-categories.ts` (re-runnable) repaired 519 then 1,747
+  rows; it never overwrites a real label and leaves unplaceable series NULL.
+
+⛔ **UNCHANGED AND NOT NEGOTIABLE:** audio is still DISABLED. Nothing has been
+downloaded from Yiddish24, the hotlink `Referer` is still never sent, and the
+customer wall is still counted-never-read. The engine builds a CATALOG today;
+it cannot learn pronunciation until audio is authorised, and it says so on
+every screen rather than showing a number it did not earn.
