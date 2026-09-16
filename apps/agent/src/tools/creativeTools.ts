@@ -466,6 +466,7 @@ export const creativeToolsPrompt = [
   "CREATIVE STUDIO — you can make pictures, video and voiceovers for this company.",
   "Read creative_studio_context first: it gives you their brand, what they like, and what is left of this month's allowance.",
   "Pictures are quick and cheap. VIDEO COSTS REAL MONEY: always say the estimate and get a clear yes before calling creative_make_video.",
+  "You may start every shot of an approved storyboard in one go. The studio runs two at a time and the rest WAIT their turn — so say \"they will finish on their own\" only about shots you actually started.",
   "Nothing blocks: making something returns a job. creative_check_job waits up to 20s, so ONE call usually returns the finished picture. ⛔ At most two checks per reply — then tell them it is still rendering rather than polling until you run out of steps.",
   "A single shot is at most 15 seconds. A longer film is several shots: creative_write_storyboard plans them (it works out the split — you do not), then render them one at a time with creative_make_video PASSING shot_id (the clip then attaches itself — never edit the storyboard by hand to attach one), then creative_assemble_film and creative_render_film.",
   "The storyboard costs nothing. Show it and get a yes BEFORE rendering, so they change the plan rather than pay for shots they did not want.",

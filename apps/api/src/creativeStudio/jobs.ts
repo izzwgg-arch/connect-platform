@@ -89,9 +89,25 @@ export async function checkQuota(db: any, tenantId: string, capability: string, 
     }
   }
 
-  const running = await db.creativeJob.count({ where: { tenantId, status: { in: ["queued", "claimed", "running", "evaluating", "retrying"] } } });
-  if (running >= quota.maxConcurrent) {
-    return { ok: false, code: "quota_concurrent", reason: `You already have ${running} jobs running. They will finish on their own — try again in a moment.` };
+  // ⛔ The cap is on what is RUNNING, not on what is waiting.
+  //
+  // It used to count queued jobs too, so "render all four shots" accepted two
+  // and refused the rest — and the Coworker, having been refused, told the
+  // person "the other two will start automatically" when nothing would ever
+  // start them. A cap that makes the queue lie is worse than no cap.
+  //
+  // Waiting work is still bounded, generously, so a runaway loop cannot fill
+  // the queue with a thousand renders. Money is bounded where it belongs: by
+  // the monthly allowance above, which is checked before anything is queued.
+  const running = await db.creativeJob.count({ where: { tenantId, status: { in: ["claimed", "running", "evaluating", "retrying"] } } });
+  const waiting = await db.creativeJob.count({ where: { tenantId, status: "queued" } });
+  const queueCap = Math.max(10, quota.maxConcurrent * 6);
+  if (running + waiting >= queueCap) {
+    return {
+      ok: false,
+      code: "quota_queue",
+      reason: `There are already ${running + waiting} pieces of work waiting. They will finish on their own — try again in a few minutes.`,
+    };
   }
   return { ok: true };
 }

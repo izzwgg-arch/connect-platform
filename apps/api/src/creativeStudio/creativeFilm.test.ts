@@ -394,6 +394,50 @@ test("a problem with Loopcom's own account is not blamed on the customer, and is
 });
 
 /* ------------------------------------------------------------------ */
+/* 6c. a queue that does not lie                                       */
+/* ------------------------------------------------------------------ */
+
+test("every shot of an approved storyboard is accepted, not two of them", async () => {
+  // ⛔ The failure this pins, seen in a real Coworker turn: the concurrency cap
+  // counted QUEUED work, so "render all four shots" took two and refused the
+  // rest — and the Coworker then told the person "the other two will start
+  // automatically" when nothing would ever start them.
+  const { checkQuota } = await import("./jobs");
+  const counts: Record<string, number> = { running: 2, queued: 2 };
+  const db: any = {
+    creativeQuota: { async findUnique() { return null; } },
+    creativeUsage: { async groupBy() { return []; } },
+    creativeJob: {
+      async count({ where }: any) {
+        return where.status === "queued" ? counts.queued : counts.running;
+      },
+    },
+  };
+  // Two already running and two waiting: the third and fourth shot still go in.
+  const verdict = await checkQuota(db, "t1", "video.generate", { seconds: 3 });
+  assert.equal(verdict.ok, true, "a shot must be allowed to WAIT even when two are running");
+
+  // But a runaway loop is still stopped.
+  counts.queued = 40;
+  const full = await checkQuota(db, "t1", "video.generate", { seconds: 3 });
+  assert.equal(full.ok, false);
+  assert.equal((full as any).code, "quota_queue");
+  assert.match((full as any).reason, /finish on their own/);
+});
+
+test("the monthly allowance is still checked before anything is queued", async () => {
+  const { checkQuota } = await import("./jobs");
+  const db: any = {
+    creativeQuota: { async findUnique() { return { videoSeconds: 10, images: 100, storageGb: 5, maxConcurrent: 2, premiumEngines: false }; } },
+    creativeUsage: { async groupBy() { return [{ measure: "video_seconds", _sum: { quantity: 9 } }]; } },
+    creativeJob: { async count() { return 0; } },
+  };
+  const verdict = await checkQuota(db, "t1", "video.generate", { seconds: 4 });
+  assert.equal(verdict.ok, false, "queueing must not become a way around the allowance");
+  assert.match((verdict as any).reason, /seconds of video/);
+});
+
+/* ------------------------------------------------------------------ */
 /* 7. source guards                                                    */
 /* ------------------------------------------------------------------ */
 
