@@ -169,6 +169,7 @@ import {
 } from "./voicemail/audioStore";
 import { sweepStalledOnboardingSetups } from "./onboarding/setupWatchdog";
 import { defaultPortWatchdogDeps, sweepOpenPorts } from "./onboarding/portWatchdog";
+import { startTelnyxSignupSweep } from "./onboarding/telnyxPortWatchdog";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -40237,6 +40238,20 @@ const portWatchdogTimer = registerShutdownTimer(
   }, Number(process.env.PORT_WATCHDOG_INTERVAL_MS || 15 * 60_000)),
 );
 portWatchdogTimer.unref();
+
+// Telnyx sign-up sweep (2026-09-16) — lands submitted Telnyx ports (caller ID,
+// 911, texting, the "your number is live" email) and confirms Telnyx 911
+// activations. VoIP.ms ports stay on the watchdog above; the two never select
+// the same row. Boot kick + interval + TELNYX_SIGNUP_SWEEP_DISABLED=1 kill switch.
+const telnyxSignupSweep = startTelnyxSignupSweep(app.log as any, {
+  publishTenant: async (tenantId: string) => {
+    const r = await didInjectAsService(app, "POST", "/voice/ivr/publish", "telnyx-port-landing", { tenantId });
+    if (r.statusCode !== 200) {
+      throw new Error(`publish refused (${r.statusCode}): ${JSON.stringify(r.body).slice(0, 200)}`);
+    }
+  },
+});
+void telnyxSignupSweep;
 
 async function processIvrScheduleBatch(): Promise<void> {
   const now = new Date();

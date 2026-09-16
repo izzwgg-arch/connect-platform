@@ -534,10 +534,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // subaccount: inbound rides the shared trunk 132 and is routed by DID.
     const providerStamp = String((fresh.answers as any)?.phone?.provider || "voipms");
     const isSignalWire = providerStamp === "signalwire";
-    const sub = isSignalWire ? null : readSubaccount(fresh);
+    // Telnyx (2026-09-16) is shaped like SignalWire here: no subaccount, one
+    // shared trunk (183 "Telnyx Loopcom-Primary"), inbound routed by DID.
+    const isTelnyx = providerStamp === "telnyx";
+    const sharedTrunkCarrier = isSignalWire || isTelnyx;
+    const sub = sharedTrunkCarrier ? null : readSubaccount(fresh);
     const did = String(fresh.provisionedDid || "");
     if (did.length !== 10) throw new Error("number_stage_missing_did");
-    if (!isSignalWire && !sub) throw new Error("number_stage_missing_subaccount_or_did");
+    if (!sharedTrunkCarrier && !sub) throw new Error("number_stage_missing_subaccount_or_did");
     if (!company) throw new Error("company_name_missing");
     if (!people.length) throw new Error("no_extensions_requested");
 
@@ -582,7 +586,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       label: identity.pbxLabel,
       did,
       portedDid,
-      numberProvider: isSignalWire ? "signalwire" : "voipms",
+      numberProvider: isTelnyx ? "telnyx" : isSignalWire ? "signalwire" : "voipms",
       voipms: sub ? { user: sub.username, pass: sub.password, server: sub.server } : undefined,
       people,
       emergency,
@@ -591,7 +595,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     if (!live) {
       await logEvent(
         submissionId,
-        `[dry-run] Build VitalPBX tenant "${company}": ${isSignalWire ? "shared SignalWire trunk" : `trunk ${sub!.username}@${sub!.server}`}, DID ${did}, ${people.length} extension(s)` +
+        `[dry-run] Build VitalPBX tenant "${company}": ${isTelnyx ? "shared Telnyx trunk" : isSignalWire ? "shared SignalWire trunk" : `trunk ${sub!.username}@${sub!.server}`}, DID ${did}, ${people.length} extension(s)` +
           `${people.some((p) => p.cellNumber) ? ` (incl. ${people.filter((p) => p.cellNumber).length} with cell routing)` : ""}, inbound route → ext ${people[0].ext}.`,
       );
       await logEvent(submissionId, "[dry-run] Would sync extensions into Connect, verify users + SIP, and email every extension its invitation.");
@@ -638,6 +642,19 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
         { tenantCreator: resolveMirrorTenantCreator(pbx.instanceId), tenantRenderer: resolveMirrorTenantRenderer(pbx.instanceId) },
       );
       tenantPath = result.tenantPath;
+      // The Telnyx port landing switches THIS route's caller ID to the real
+      // number when it arrives (telnyxPortWatchdog.ts) — so keep its id.
+      try {
+        // Re-read first: the Telnyx sweep may have written answers during the
+        // build, and a stale copy here would silently revert it.
+        const latest = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, select: { answers: true } });
+        const answersNow: any = { ...((latest?.answers as any) || (fresh.answers as any) || {}) };
+        answersNow.provisioning = { ...(answersNow.provisioning || {}), pbxOutboundRouteId: String(result.routeId || "") };
+        fresh.answers = answersNow;
+        await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { answers: answersNow } });
+      } catch {
+        /* best-effort — the landing says so if it is missing */
+      }
     } finally {
       releaseAccount(account);
     }

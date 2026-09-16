@@ -67,10 +67,21 @@ test("a stored choice beats the env, round-tripped through the real encryption",
   });
 });
 
-test("⛔ a stored value the wizard cannot honour (telnyx, garbage) is IGNORED, never returned", async () => {
+test("a stored telnyx choice is honoured since the wizard grew its Telnyx path (2026-09-16)", async () => {
   await withEnv({ CREDENTIALS_MASTER_KEY: TEST_MASTER_KEY, ONBOARDING_NUMBER_PROVIDER: undefined }, async () => {
     const sec = await import("@connect/security");
-    for (const provider of ["telnyx", "carrier-x", ""]) {
+    clearOnboardingProviderCache();
+    assert.equal(await resolveOnboardingNumberProvider(fakeDb({ valueEnc: sec.encryptJson({ provider: "telnyx" }) })), "telnyx");
+  });
+  await withEnv({ CREDENTIALS_MASTER_KEY: undefined, ONBOARDING_NUMBER_PROVIDER: "telnyx" }, async () => {
+    assert.equal(onboardingNumberProvider(), "telnyx");
+  });
+});
+
+test("⛔ a stored value the wizard cannot honour (garbage) is IGNORED, never returned", async () => {
+  await withEnv({ CREDENTIALS_MASTER_KEY: TEST_MASTER_KEY, ONBOARDING_NUMBER_PROVIDER: undefined }, async () => {
+    const sec = await import("@connect/security");
+    for (const provider of ["carrier-x", "TELNYX-ish", ""]) {
       clearOnboardingProviderCache();
       const db = fakeDb({ valueEnc: sec.encryptJson({ provider }) });
       assert.equal(await resolveOnboardingNumberProvider(db), "voipms", `stored "${provider}" must fall back to env`);
@@ -103,7 +114,7 @@ test("store writes the encrypted row; clear deletes it; both clear the cache", a
   });
 });
 
-test("⛔ the PUT route refuses telnyx with the reason, and the GET declares telnyx unselectable", async () => {
+test("the PUT route stores telnyx, refuses garbage, and the GET declares every carrier selectable", async () => {
   await withEnv({ CREDENTIALS_MASTER_KEY: TEST_MASTER_KEY, ONBOARDING_NUMBER_PROVIDER: undefined }, async () => {
     const routes: Record<string, (req: any, reply: any) => Promise<any>> = {};
     const app = {
@@ -121,13 +132,19 @@ test("⛔ the PUT route refuses telnyx with the reason, and the GET declares tel
 
     const put = replyRecorder();
     await routes["PUT /admin/carrier-switch"]({ body: { provider: "telnyx" } }, put);
-    assert.equal(put.statusCode, 409);
-    assert.match(String(put.body?.message), /isn't wired into the sign-up wizard yet/);
+    assert.equal(put.statusCode, 200);
+    assert.equal(put.body?.stored, "telnyx");
+
+    const bad = replyRecorder();
+    await routes["PUT /admin/carrier-switch"]({ body: { provider: "carrier-x" } }, bad);
+    assert.equal(bad.statusCode, 400);
 
     const get = replyRecorder();
     await routes["GET /admin/carrier-switch"]({}, get);
-    const telnyxOpt = (get.body?.options ?? []).find((o: any) => o.value === "telnyx");
-    assert.ok(telnyxOpt && telnyxOpt.selectable === false && telnyxOpt.reason, "the GET must declare telnyx unselectable with the reason");
+    const opts = get.body?.options ?? [];
+    for (const v of ["voipms", "signalwire", "telnyx"]) {
+      assert.ok(opts.find((o: any) => o.value === v)?.selectable === true, `${v} must be selectable`);
+    }
   });
 });
 

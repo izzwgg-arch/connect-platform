@@ -354,12 +354,14 @@ test("applyOnboardingNumber DISPATCHES on the submission's provider stamp (dynam
 
 test("apply-number STAMPS the provider at selection time (an earlier stamp survives)", () => {
   const src = read("publicRoutes.ts");
-  assert.match(src, /provider: answers\.phone\?\.provider \|\| onboardingNumberProvider\(\)/);
+  // Since 2026-09-15 the stamp asks the RESOLVER (stored switch > env).
+  assert.match(src, /provider: answers\.phone\?\.provider \|\| \(await resolveOnboardingNumberProvider\(db\)\)/);
 });
 
 test("the numbers route has a SignalWire branch that keeps the error contract", () => {
   const src = read("publicRoutes.ts");
-  assert.match(src, /onboardingNumberProvider\(\) === "signalwire"/);
+  assert.match(src, /const searchProvider = await resolveOnboardingNumberProvider\(db\);/);
+  assert.match(src, /if \(searchProvider === "signalwire"\)/);
   assert.match(src, /searchSignalWireOnboardingNumbers\(/);
   // A provider failure must NEVER collapse into a silent empty list.
   assert.match(src, /out\.reason === "unconfigured"/);
@@ -377,6 +379,7 @@ test("buildPbxTenant: a SignalWire build uses the SHARED trunk and never creates
 
 test("the orchestrator passes the provider into the PBX job and skips the subaccount requirement for SignalWire", () => {
   const src = read("setupOrchestrator.ts");
-  assert.match(src, /numberProvider: isSignalWire \? "signalwire" : "voipms"/);
-  assert.match(src, /if \(!isSignalWire && !sub\) throw new Error\("number_stage_missing_subaccount_or_did"\)/);
+  assert.match(src, /numberProvider: isTelnyx \? "telnyx" : isSignalWire \? "signalwire" : "voipms"/);
+  assert.match(src, /const sharedTrunkCarrier = isSignalWire \|\| isTelnyx;/);
+  assert.match(src, /if \(!sharedTrunkCarrier && !sub\) throw new Error\("number_stage_missing_subaccount_or_did"\)/);
 });

@@ -38,10 +38,10 @@ import { resolveSignalWireCredentials } from "../signalwire/signalWireCredential
  * mockups' decision #1). Every new-signup surface must ask THIS function, so
  * the flip is one place.
  */
-export type OnboardingNumberProviderName = "voipms" | "signalwire";
+export type OnboardingNumberProviderName = "voipms" | "signalwire" | "telnyx";
 export function onboardingNumberProvider(): OnboardingNumberProviderName {
   const raw = String(process.env.ONBOARDING_NUMBER_PROVIDER || "").trim().toLowerCase();
-  return raw === "signalwire" ? "signalwire" : "voipms";
+  return raw === "signalwire" || raw === "telnyx" ? raw : "voipms";
 }
 
 /**
@@ -59,10 +59,11 @@ export function onboardingNumberProvider(): OnboardingNumberProviderName {
  * decrypt failure must leave live onboarding EXACTLY as it was — this resolver
  * can never throw into the wizard.
  *
- * ⛔ "telnyx" is deliberately NOT a value this returns: the wizard has no
- * Telnyx search/provisioning path yet, and a stored value the wizard cannot
- * honour is a lying toggle. The admin route refuses to store it; if a row
- * somehow carries it anyway, the resolver falls back to env.
+ * "telnyx" became a real value on 2026-09-16 (Izzy: "switch the onboarding
+ * wizard to Telnyx") — the day the wizard grew a Telnyx search
+ * (telnyxNumbers.ts), provisioning (telnyxProvisioning.ts), port filing
+ * (telnyxPortFiling.ts) and PBX path. Until then it was refused as a lying
+ * toggle; an unknown stored value still falls back to env.
  */
 export const ONBOARDING_PROVIDER_SECRET_KEY = "onboarding_number_provider_override";
 const PROVIDER_CACHE_MS = 30_000;
@@ -84,7 +85,7 @@ export async function resolveOnboardingNumberProvider(db: any): Promise<Onboardi
       if (row?.valueEnc) {
         const decrypted = sec.decryptJson<{ provider?: string }>(row.valueEnc);
         const value = String(decrypted?.provider ?? "").trim().toLowerCase();
-        if (value === "voipms" || value === "signalwire") stored = value;
+        if (value === "voipms" || value === "signalwire" || value === "telnyx") stored = value;
       }
     }
   } catch {

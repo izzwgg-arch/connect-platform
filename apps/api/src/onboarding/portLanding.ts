@@ -104,7 +104,7 @@ export type PortLandingDeps = {
 };
 
 /** Default copy: helper inspect on both routes, then the native set-destination. */
-async function defaultCopyPbxDestination(
+export async function defaultCopyPbxDestination(
   db: any,
   tenantId: string,
   tempDid: string,

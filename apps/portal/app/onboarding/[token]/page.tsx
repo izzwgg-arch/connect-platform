@@ -498,7 +498,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       );
       const list = Array.isArray(r.numbers) ? r.numbers : [];
       setNumbers(list);
-      setNumbersProvider(r.provider === "signalwire" ? "signalwire" : "voipms");
+      // Telnyx (2026-09-16) answers the same search contract as SignalWire —
+      // state/city filters, capability chips, no spare pool — so it draws the
+      // same surface. The "signalwire" value names the SURFACE, not a carrier
+      // (customers never see a carrier name).
+      setNumbersProvider(r.provider === "signalwire" || r.provider === "telnyx" ? "signalwire" : "voipms");
       // A 200 carrying `error`/`note` is the provider having failed, not empty
       // stock — the API answers 200 either way, so the BODY is the only thing
       // that tells them apart. Read it, or an outage renders as "not available".

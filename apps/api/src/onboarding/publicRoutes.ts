@@ -13,6 +13,7 @@ import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { resolveOnboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
+import { searchTelnyxOnboardingNumbers } from "./telnyxNumbers";
 import { fileBrandForRegistration, LEGAL_ENTITY_TYPES } from "../signalwire/signalWireTenDlc";
 import { buildE911Address } from "./e911Address";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
@@ -252,7 +253,24 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // are SignalWire-only filters the upgraded wizard sends. No spare pool —
     // that is a VoIP.ms master-account concept. The error contract is
     // preserved: a provider failure is NEVER collapsed into an empty list.
-    if ((await resolveOnboardingNumberProvider(db)) === "signalwire") {
+    const searchProvider = await resolveOnboardingNumberProvider(db);
+    // ── Telnyx branch (2026-09-16) — the same contract as SignalWire below.
+    // `provider: "telnyx"` draws the same modern search surface in the wizard.
+    if (searchProvider === "telnyx") {
+      const out = await searchTelnyxOnboardingNumbers(db, {
+        query: wantVanity ? vanityWord : q,
+        mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
+        type: wantTollFree ? "tollfree" : "local",
+        region: String((req.query as any)?.region || "").trim() || undefined,
+        city: String((req.query as any)?.city || "").trim() || undefined,
+        limit: 12,
+      });
+      if (out.ok) return { numbers: out.numbers.slice(0, 12), provider: "telnyx" };
+      if (out.reason === "unconfigured") return { numbers: [], provider: "telnyx", note: "number_provider_unconfigured" };
+      if (out.reason === "pattern_too_short") return { numbers: [], provider: "telnyx", note: "pattern_too_short" };
+      return { numbers: [], provider: "telnyx", error: "number_search_failed" };
+    }
+    if (searchProvider === "signalwire") {
       const out = await searchSignalWireOnboardingNumbers(db, {
         query: wantVanity ? vanityWord : q,
         mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
@@ -394,6 +412,21 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     let number = String((req.query as any)?.number || "").replace(/\D/g, "");
     if (number.length === 11 && number.startsWith("1")) number = number.slice(1);
     if (number.length !== 10) return { portable: null, note: "need_full_number" };
+
+    // Telnyx sign-ups ask Telnyx — the carrier that will actually file the port.
+    if ((await resolveOnboardingNumberProvider(db)) === "telnyx") {
+      try {
+        const { resolveTelnyxCredentials } = await import("../telnyx/telnyxCredentials");
+        const { checkPortability } = await import("../telnyx/telnyxClient");
+        const txCreds = await resolveTelnyxCredentials(db);
+        if (!txCreds) return { portable: null, note: "provider_unconfigured" };
+        const rows = await checkPortability(txCreds, [`+1${number}`]);
+        const hit = rows[0];
+        return { portable: hit ? hit.portable : null };
+      } catch {
+        return { portable: null };
+      }
+    }
 
     const creds = await loadGlobalVoipMsCreds();
     if (!creds) return { portable: null, note: "provider_unconfigured" };
@@ -756,17 +789,20 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     }
     const portedDigits = d.numbers.replace(/\D/g, "").replace(/^1/, "");
     const answers: any = { ...((row.answers as any) || {}) };
+    const scopedProvider = answers.phone?.provider || (await resolveOnboardingNumberProvider(db));
     answers.phone = {
       ...(answers.phone || {}),
       choice: "port",
       details: d,
       // Pin the carrier exactly as apply-number does — a stamped draft keeps it.
-      provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
+      provider: scopedProvider,
     };
     answers.provisioning = {
       ...(answers.provisioning || {}),
       portFiling: {
-        provider: "signalwire",
+        // A scoped port has no paid build behind it, so it is always a
+        // Port-queue package for a person — labelled with the carrier it is for.
+        provider: scopedProvider === "telnyx" ? "telnyx" : "signalwire",
         status: "awaiting_manual_filing",
         portedDid: portedDigits,
         requestedAt: new Date().toISOString(),
@@ -892,9 +928,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       sample2: body.sample2 || null,
       status: body.classification === "sole_prop" ? "awaiting_manual_filing" : "collected",
     };
+    // The registry follows the carrier the number lives on — a Telnyx number
+    // can only be attached to a campaign filed at Telnyx.
+    const registryProvider =
+      ((row.answers as any)?.phone?.provider || (await resolveOnboardingNumberProvider(db))) === "telnyx" ? "telnyx" : "signalwire";
     const reg = await (db as any).tenantSmsRegistration.upsert({
       where: { submissionId: row.id },
-      create: { submissionId: row.id, provider: "signalwire", ...regData },
+      create: { submissionId: row.id, provider: registryProvider, ...regData },
       update: regData,
     });
 
@@ -935,6 +975,12 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       contactEmail: String(row.mainEmail || row.billingEmail || answers?.contact?.email || "").trim(),
       contactPhone: String(answers?.contact?.phone || row.mainPhone || "").replace(/\D/g, "").slice(-10) || "8457231213",
       companyAddress: companyAddress || "33 NY-17M Suite C, Harriman, NY 10926",
+      address: {
+        street: [addr.address.streetNumber, addr.address.streetName].filter(Boolean).join(" "),
+        city: addr.address.city,
+        state: addr.address.state,
+        zip: addr.address.zip,
+      },
     });
     return {
       ok: true,

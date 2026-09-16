@@ -9,9 +9,9 @@
  * ONBOARDING control spanning all carriers — and because the Telnyx bench
  * module carries a source-guarded promise never to touch onboarding.
  *
- * ⛔ "telnyx" is refused, with the reason, until the wizard actually has a
- * Telnyx search/provisioning path — a stored value the wizard cannot honour
- * is a lying toggle (the /admin/roles honesty rule, applied to carriers).
+ * "telnyx" is selectable since 2026-09-16, when the wizard grew its Telnyx
+ * search/provisioning/porting path. ⛔ The honesty rule still stands: an
+ * option only becomes selectable the day the wizard can actually honour it.
  *
  * ⛔ Flipping the switch changes which carrier NEW sign-ups search and buy
  * from. Existing customers and stamped drafts are untouched (the per-
@@ -77,12 +77,7 @@ export function registerProviderSwitchRoutes(deps: ProviderSwitchRouteDeps): voi
       options: [
         { value: "voipms", label: "VoIP.ms", selectable: true },
         { value: "signalwire", label: "SignalWire", selectable: true },
-        {
-          value: "telnyx",
-          label: "Telnyx",
-          selectable: false,
-          reason: "The wizard has no Telnyx search/provisioning path yet — the switch will offer it the day that path exists.",
-        },
+        { value: "telnyx", label: "Telnyx", selectable: true },
       ],
     });
   });
@@ -91,14 +86,8 @@ export function registerProviderSwitchRoutes(deps: ProviderSwitchRouteDeps): voi
     const user = await requireOwner(req, reply);
     if (!user) return;
     const raw = String(req.body?.provider ?? "").trim().toLowerCase();
-    if (raw === "telnyx") {
-      return reply.code(409).send({
-        error: "not_wired",
-        message: "Telnyx isn't wired into the sign-up wizard yet — numbers can't be searched or provisioned there. The switch will offer Telnyx the day that path is built.",
-      });
-    }
-    if (raw && raw !== "voipms" && raw !== "signalwire") {
-      return reply.code(400).send({ error: "invalid_provider", message: "Pick voipms or signalwire (or blank to clear the override and follow the server environment)." });
+    if (raw && raw !== "voipms" && raw !== "signalwire" && raw !== "telnyx") {
+      return reply.code(400).send({ error: "invalid_provider", message: "Pick voipms, signalwire or telnyx (or blank to clear the override and follow the server environment)." });
     }
     const value = (raw || null) as OnboardingNumberProviderName | null;
     try {
