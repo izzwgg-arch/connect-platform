@@ -73,10 +73,32 @@ Play Console account / upload recipe / version-code ladder:
   Then uploads are one CLI command and none of the above matters. ⛔ A speculative `submit.production.android`
   block was added and then REVERTED this session because it is unproven without that key — do not re-add it
   until the key exists.
-- **STATUS:** ✅ code committed, guard green, `tsc --noEmit` clean, and
-  `loopcom-play-vc103.aab` BUILT with **zero required features left**
-  (`aapt2` re-run on the artifact — see `TESTS_RUN.md`).
-  ✅ **UPLOADED AND IN REVIEW** (Production 103 (1.0.0), Start full rollout); next
-  version code after this is **104**. ⏳ **NOT PROVEN:** nobody has opened the store page on a real
-  Wi-Fi-only tablet and seen **Install** instead of "Your device isn't
-  compatible with this version", and no call has rung on a tablet.
+- **STATUS:** ✅ code committed, guard green, `tsc --noEmit` clean,
+  `loopcom-play-vc103.aab` BUILT with **zero required features left**, and
+  ✅✅ **LIVE ON THE STORE as of 2026-09-15** — the public listing reads
+  **"Updated on Sep 15, 2026"** with vc103's own note *"Loopcom now installs on
+  tablets and a much wider range of Android devices."* Next version code is **104**.
+  ⏳ **NOT PROVEN:** nobody has opened the store page on a real Wi-Fi-only tablet
+  and seen **Install**, and no call has rung on a tablet. Device-side Play Store
+  caches lag the catalogue by hours — have a tablet user force-stop / clear the
+  Play Store cache before treating a fresh "still hidden" report as a new bug.
+- ⛔⛔ **ROUND 2 — "people search LoopCom and it doesn't come up" IS TWO CAUSES, and
+  only one is this bug (handoff §8).** (a) **Tablets:** correct and now fixed — the Play
+  Store app **filters search by device compatibility**, so an incompatible app is *absent*
+  from results, not ranked low; every tablet searching before today got nothing. (b) **Phones:
+  not a bug, a NAME COLLISION.** Measured on the US/en storefront: `loopcom` → **#1**,
+  `loopcom phone` → **#1**, but `loopcom app` and `loopcomm` → **#2 behind "LoopCom
+  Messenger"** (Looptech Company), and **`loop com` with a space → NOT IN THE TOP 30 AT
+  ALL**. Two near-identical apps exist (**LoopCom Messenger**, **LoopCOM** by Macrotech), so a
+  customer who types it with a space, adds "app", or mistypes one letter finds *someone else's*
+  app and reports ours missing. The listing has **"1+ downloads" and zero ratings**, so it has
+  no ranking signal to fight back with. ⛔ The lever is the **title** — today it is the bare
+  word `Loopcom`, 7 of 30 allowed characters, with no keyword; e.g. `Loopcom: Business Phone`
+  would match split/generic queries and separate us visually from LoopCom Messenger.
+  **NOT DONE — outward-facing, Izzy's call, and Console-walled.** Meanwhile the reliable
+  answer for a customer is the **direct link** already in the welcome email's Play badge.
+- ⛔ **PLAY CONSOLE IS WALLED behind a NEW Terms-of-Service acceptance** (2026-09-15): every
+  `/console/u/N/...` URL redirects to `/console/u/N/accept-terms` on **all three** signed-in
+  Google accounts. **Accept was deliberately not clicked** — accepting a legal agreement is
+  Izzy's to do. Until he does, **country/region availability, the device-catalog supported-device
+  count, and the rollout state are all UNREADABLE** — never report them as verified.

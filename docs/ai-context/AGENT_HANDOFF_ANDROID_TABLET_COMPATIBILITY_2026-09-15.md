@@ -147,3 +147,66 @@ session, because it is unproven without that key — do not re-add it until the 
 
 See `docs/ai-context/claude-md-sections/2026-09-15-android-tablet-compatibility.md`
 for the live status line; it is kept current there rather than duplicated here.
+
+## 8. ROUND 2 — "people say Loopcom doesn't come up when they search" (2026-09-15, later the same day)
+
+Izzy: *"A lot of people are telling me that when they're searching for LoopCom in the
+Play Store, it doesn't come up. For me it's coming up, but a lot of people are saying
+it's not, especially on tablets."*
+
+**It is TWO separate causes, and only one of them is the tablet bug.**
+
+### 8a. vc103 IS LIVE — the tablet half is fixed as of today
+Read off the PUBLIC listing (`play.google.com/store/apps/details?id=com.connectcommunications.mobile`,
+`hl=en_US&gl=US`), not off the Console:
+- **"Updated on Sep 15, 2026"**, and **What's new = "Loopcom now installs on tablets and a
+  much wider range of Android devices."** — that is vc103's own release note, so the review
+  passed and the rollout went out. Previous status line said "in review"; it is now LIVE.
+- ⛔ **This explains "especially on tablets" completely, and the reports were RIGHT.** The
+  Play Store app **filters search results by device compatibility** — an incompatible app is
+  not ranked low, it is **absent**. Every tablet, on every build before today, searched
+  "loopcom" and got nothing. There was never anything wrong with their spelling.
+- ⏳ **Still not proven and still needs a human:** nobody has opened the store page on a real
+  Wi-Fi-only tablet since. Device-side Play Store caches lag the catalogue by hours — tell a
+  tablet user to force-stop Play Store / clear its cache if it still hides, before treating a
+  fresh report as a new bug.
+
+### 8b. The PHONE half is NOT a bug — it is a NAME COLLISION plus a zero-signal listing
+The listing is indexed and ranks fine on its exact name. Measured, same session, US/en storefront:
+
+| Query | Where Loopcom ranks |
+|---|---|
+| `loopcom` | **#1** ✅ |
+| `loopcom phone` | **#1** ✅ |
+| `loopcom app` | **#2** — beaten by **LoopCom Messenger** (Looptech Company) |
+| `loopcomm` (one typo) | **#2** — beaten by **LoopCom Messenger** |
+| `loop com` (with a space) | ⛔ **NOT IN THE TOP 30 AT ALL.** Microsoft Loop wins it. |
+
+- ⛔⛔ **There are two other apps named almost exactly ours** and they sit directly above/below
+  us on every fuzzy query: **"LoopCom Messenger"** (Looptech Company) and **"LoopCOM"**
+  (Macrotech Business Solution Limited). A customer told *"search LoopCom"* who types it with
+  a space, adds "app", or fat-fingers one letter **finds somebody else's app and reports that
+  ours is missing.** That is almost certainly what most of the phone reports are.
+- **The listing has no ranking signal to fight back with: "1+ downloads", zero ratings.** Play
+  leans on install/engagement, so a fresh listing loses to established near-name apps. This
+  improves on its own as installs accrue; it will NOT close the `loop com` gap.
+- **Title is the lever, and it is 7 of the 30 allowed characters.** Today the app title is the
+  bare word `Loopcom` and the short description is *"Your business phone in your pocket — calls,
+  texts, voicemail, and your team."* — neither carries a keyword that a split or generic query
+  can match. Something like `Loopcom: Business Phone` would match the split/generic queries AND
+  visually separate us from LoopCom Messenger. ⛔ **NOT DONE — a store-listing title change is
+  outward-facing and is Izzy's call, and it is Console work, which is currently walled (8c).**
+- **The reliable answer for a customer TODAY is to not make them search at all:** send the
+  direct listing link, which the welcome email already carries as the official Play badge
+  (`66eb7096`, see `2026-09-15-onboarding-welcome-email-google-play-badge.md`).
+
+### 8c. ⛔ PLAY CONSOLE IS WALLED BEHIND A NEW TERMS-OF-SERVICE ACCEPTANCE
+Every `play.google.com/console/u/N/...` URL redirects to **`/console/u/N/accept-terms`**,
+"New Play Console Terms of Service … you must read and accept these terms", on **all three**
+signed-in Google accounts (`Izzywkg@gmail.com`, `support@…`, `izzywkg@gmail.com`). The dialog's
+**Accept** button is one click away and was deliberately **NOT clicked** — accepting a legal
+agreement on Izzy's behalf is his to do, and the terms should be read by a person.
+⛔ **Until he accepts, NOTHING Console-side is readable**, which left three things unchecked
+this round: **country/region availability**, the **device-catalog supported-device count**
+(the number that would prove tablets are now included), and the **rollout state**. Do not
+report any of those three as verified until someone has been through that wall.
