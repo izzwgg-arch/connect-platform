@@ -265,7 +265,7 @@ or Ellie's DIDs; 0 touch both sides), CallRecord 15 (toNumber 101), CallInvite 3
 stay (AuditLog, VoiceDiagEvent, CallWakeEvent, …). The "Owner" custom role is platform-scoped and
 travels with the user.
 
-### 6a. SWITCH-NIGHT RUNBOOK (Izzy picks the night; each step verified before the next)
+### 6a. SWITCH-NIGHT RUNBOOK — ✅ EXECUTED 2026-09-16 (see §8: steps 2, 4 and 5 were WRONG or INCOMPLETE as written — read §8a before re-using this for any other split)
 
 0. **Pre-check:** 0 live calls on the two numbers; `displaydx-connect-move.ts` and
    `displaydx-switch-pbx.ts` dry runs still clean; tell Eli he will sign in to the app once.
@@ -362,6 +362,107 @@ voicemails); move census 62 CDRs (0 on both sides) / 15 CallRecords / 37 invites
 Scripts on loopcom `/root` (600): `displaydx-backfill.ts` (ran), `displaydx-backfill-map-rebuild.ts`
 (ran), `displaydx-backfill-run.log`, `displaydx-connect-move.ts` (REWRITTEN: re-sync + move +
 remove, dry run clean), `displaydx-switch-pbx.ts` (unchanged). Container copies removed.
+
+## 8. ✅✅ THE SWAP IS LIVE — 2026-09-16 10:34–11:01Z (06:34–07:01 ET), Izzy: "Do the full swap and end-to-end test it. Make sure everything is working 100%."
+
+**Result, proven by REAL CARRIER CALLS, not DB reads:** 845-200-3535 and 212-888-0885 enter from
+VoIP.ms → Main `default-trunk` → **`Forwarding call to DisplayDX tenant` → `T142_default-trunk`** →
+T142 inbound routes 318/319 → `Goto(connect-doorway,s,1)` → the Connect menus: 200-3535 plays
+`custom/displaydx_main_vpbx32`, 212-888-0885 plays `custom/displaydx_quicksat_vpbx33`. Every key was
+probed live and lands on the same ring group T6 used (Displaydex 1→802, 2→801, 3→800; Quick Sat
+0→803, 1→807, 2→806, 3→805, 4→804); timeout/invalid → `sub-extensions-vm,VM-101` — **identical to
+T6's rendered IVR-16/17**. Every ring group dials `Local/101@T142_ring-group-dial` →
+`PJSIP/T142_101&PJSIP/T142_101_1`. 845-364-7474 still → `T6_default-trunk` → "Nexus" (proven by
+carrier call); 845-414-3736 untouched on T6. Doorway counts elsewhere unchanged (T1:3, T2:1, T105:2);
+T142 now has 2. Reconciler quiet 15 min after go-live.
+
+**Connect move (ONE transaction, `displaydx-connect-move.ts --live`):** Eli's user → DisplayDX; new
+ext 101 (`T142_101_1`) owned + PROVISIONED; old Nexus ext 101 unowned; iPhone + moto MobileDevice →
+DisplayDX/new ext; texting number +18452003535 → DisplayDX/new ext; VM email recipient
+eli@displaydex.com → new ext; QSR outbound route copied + permission; CrmUserAccess; 65 ConnectCdr,
+15 CallRecord, 37 CallInvite moved; Nexus group-chat membership removed. **Verified through Eli's own
+session** (hand-minted JWT): `/me` = DisplayDX, `/voice/me/extension` = `T142_101_1`,
+`/voice/me/calls` 38, voicemail inbox 5 (== what he saw on Nexus — the list hides 0-second
+recordings; 10 rows, 8 inbox / 2 old, exact parity with the originals), chat 9, outbound route QSR.
+Ring target replayed read-only: PBX tenant 142 → only link DisplayDX → ext 101 owner Eli; T6 ext 101
+owner null (a straggler to T6_101 pushes nobody). `wake_canary` is set for both T6_101 and T142_101.
+Yehuda (Nexus USER) sees 0 of Eli's calls; Michael (Nexus admin) sees 0 of Eli's voicemails / calls /
+texts.
+
+**Originals removed from Nexus (`--remove-originals --confirm`):** 1,289 contacts (ALL `createdBy`
+Eli — Nexus had no other contacts, so Nexus now correctly shows 0) and 8 SMS threads HARD-deleted;
+15 ext-101 voicemails **SOFT-deleted** (trap 5). Backup
+`loopcom:/root/displaydx-nexus-originals-backup-20260916.json` (980 KB).
+
+**Backups on loopcom `/root` (all 600):** `displaydx-premove-snapshot-20260916.json` (every row the
+move rewrote), `displaydx-nexus-originals-backup-20260916.json`,
+`displaydx-ivrschedule-before-20260916.json`, `displaydx-probe-cdrs-backup-20260916.json`; logs
+`displaydx-switch-pbx-live.log`, `displaydx-connect-move-{dry,live}.log`,
+`displaydx-remove-{dry,confirm}.log`. PBX: `/root/displaydx-probe-voicemails-20260916/` (the 8
+quarantined probe voicemails), `/root/displaydx-carrier-probe.sh`.
+
+### 8a. ⛔⛔ THE FIVE THINGS THE RUNBOOK GOT WRONG — each one would have left it broken
+
+1. ⛔⛔ **Apply in the T142 context does NOT regenerate Main's DID→tenant dispatch.** After
+   `displaydx-switch-pbx.ts --live` (saveTenant ×2 + routes + `applyAndRebake(T142_PATH)`),
+   `ombu_tenant_dids` correctly said 142 and the T142 + T6 files re-rendered — but
+   `extensions__50-1-dialplan.conf` kept its 09-15 17:39 mtime and **still forwarded both numbers to
+   `T6_default-trunk`**. The tenant number list is saved THROUGH Main, so Main's config must be
+   generated too: `applyAndRebake(s, MAIN_TENANT_PATH_DEFAULT /* 2dc3974017c1bc65 */)`
+   (`loopcom:/root/displaydx-apply-main.ts`). Verify with `dialplan show <did>@default-trunk` →
+   `Goto(T<n>_default-trunk`, never with the DB.
+2. ⛔⛔ **The migrated IVR schedule overrode per-number menus 24/7.** DisplayDX's `IvrScheduleConfig`
+   was `isActive:true`, `businessHoursRules: []`, `afterHours/holidayProfileId = Displaydex`. No
+   business hours → mode is ALWAYS `afterhours` → `didBuildPublishValues` → `resolveDidmapProfileId`
+   swaps EVERY number's `connect/didmap/<did>/profile_id` to the after-hours menu → **212-888-0885
+   played the Displaydex greeting** (caught only by the real carrier call; the DB mapping said Quick
+   Sat). T6 IVR 16/17 had no time condition. Fix: `afterHoursProfileId = null, holidayProfileId =
+   null` (`displaydx-ivr-schedule-fix.ts`, audit `DISPLAYDX_SPLIT_IVR_SCHEDULE_POINTERS_CLEARED`) →
+   republish → didmap 2128880885 = Quick Sat. Traced first: the tenant-level fallback
+   (`ivrFindActiveProfile`) still resolves to `defaultProfileId`; the worker's schedule cycle picks
+   menus by TYPE; the other `afterHoursProfileId` readers are the HOLD-MUSIC schedule (different
+   table). ⛔ Any other tenant migrated the same way with ≥2 numbers on different menus has the same
+   defect.
+3. **`DidRouteMapping.e164` is `+` + 10 digits (e.g. `+8452003535`), not `+1…`.** The go-live script
+   keyed on `+1…` and found nothing; its GET-list parser also returned `[]`. Read mappings from the DB.
+4. **Verification calls leave real artifacts.** A key pressed into a ring group whose extension has no
+   owner/registration fails over to voicemail → 8 silent voicemails (0–1 s) landed in DisplayDX 101
+   and were ingested (emails skipped `too_short`; no owner, so no push) → quarantined + 8 rows deleted.
+   The probe calls also wrote 18 ConnectCdr rows that showed in Eli's recents ("QSR Billing →
+   2128880885*4") → backed up + deleted. The 2 T6-era baseline probes (caller ID 845-364-7474 → Eli's
+   numbers) tripped the move's "call touches both companies" stop → allowed by exact id
+   (`BOTH_TO_DDX`). ⚠️ **The first T6 baseline carrier call (10:39:32Z) sent Eli's iPhone ONE
+   `INCOMING_CALL_WAKE` push.**
+5. ⛔⛔ **`--remove-originals` must SOFT-delete voicemails while the old spool exists.** The script
+   hard-deleted; T6's `displaydex-voicemail/101` spool still holds the 9 messages (cleanup is a later
+   task), and the worker voicemail sync upserts by `pbxMessageId` → a hard delete would be re-created
+   under Nexus next cycle. The upsert's `update` never touches `deletedAt` and nothing sweeps
+   soft-deleted voicemails, so `deletedAt = now` hides them permanently. Patched before `--confirm`.
+
+### 8b. Method that worked — the REAL-CARRIER probe
+
+`pbx:/root/displaydx-carrier-probe.sh <did> "<a>&&&<b>&&&<c>" "<forbidden-regex>" <waitSecs>` drops a
+call FILE into `/var/spool/asterisk/outgoing/` (`Channel: PJSIP/1<did>@344022_eli`, `CallerID:
+<8453647474>`), so the call leaves through VoIP.ms and comes back in exactly like a customer's (it
+arrived on trunk 37 `344022_Comfortcont`), then asserts the ordered trace for THAT linkedid.
+⛔ `channel originate` with no caller ID gets **VoIP.ms 503** (seen with `pjsip set logger host`).
+`/root/ivr-e2e.sh` (`[connect-probe]`) only works once a number has a Connect didmap — use the carrier
+probe for the PBX leg. ⛔ A deploy recreated `app-api-1` THREE times during the swap — `docker cp` and
+`npx tsx` must be in the SAME ssh command.
+
+### 8c. ⏳ NOT PROVEN — needs a human
+
+- **Eli must sign out of the app and sign back in once** (new SIP identity `T142_101_1`; his cached
+  provisioning is still `T6_101_1`). Until he does, calls still reach the IVR and voicemail and the
+  push still targets his phones, but the app registers with the old identity. Portal: reload.
+- A real answered call with audio on Eli's app; an inbound + outbound text on 845-200-3535; a real
+  voicemail landing under DisplayDX and emailing eli@displaydex.com; outbound caller ID 845-200-3535 /
+  the Quick Sat route.
+- Known cosmetic diff (unchanged from §6): hold music T6 moh3 "main" vs T142 default.
+- **Cleanup (§6a step 8) is still a separate later task** — T6 routes 30/31, IVRs 16/17, ring groups
+  800–807, T6 ext 101, the old Connect ext 101 row, the T6 spool copy. Rollback until then: PBX
+  `saveTenant` the two numbers back onto T6 **and apply in BOTH the T6 and Main contexts** +
+  `displaydx-ivr-golive.ts unswitch <did>`; Connect from `displaydx-premove-snapshot-20260916.json`.
 
 ## 5. Rules this earned / reaffirmed
 

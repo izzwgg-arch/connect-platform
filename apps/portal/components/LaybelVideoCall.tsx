@@ -28,6 +28,8 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   }, []);
   const videoId = `laybel-${useId().replace(/:/g, "")}`;
   const video = useRef<HTMLVideoElement>(null);
+  const callPanel = useRef<HTMLElement>(null);
+  useEffect(() => { callPanel.current?.scrollIntoView({ block: "start" }); }, []);
   const client = useRef<AnamClient | null>(null);
   const turns = useRef<LaybelTurns | null>(null);
   const callbacks = useRef({ onTurn, onSpeaker });
@@ -124,7 +126,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   }, [retry, videoId, started]);
 
   const live = !["ready", "connecting", "error", "ended"].includes(state);
-  return <section aria-label="Video call with Laybel" className="laybel-call">
+  return <section ref={callPanel} aria-label="Video call with Laybel" className="laybel-call">
     {state === "ready" && <div className="laybel-consent">
       <b>Meet Laybel</b>
       <p>Laybel is your AI Assistant, not a person. This call sends your microphone audio and the Assistant’s replies to Anam to animate and voice him. Your camera stays off.</p>
@@ -152,10 +154,10 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
     <small>Your microphone audio and spoken replies are processed by Anam for this call. The conversation stays in your Loopcom chat.</small>
     {backendJwtRole === "SUPER_ADMIN" && status && state === "ready" && <LaybelSetup status={status} onSaved={setStatus} />}
     <style jsx>{`
-      .laybel-call { border:1px solid var(--border); border-radius:12px; overflow:hidden; padding:10px; background:var(--panel); }
-      .laybel-stage { position:relative; aspect-ratio:1; background:#101827; border-radius:8px; overflow:hidden; }
+      .laybel-call { flex:0 0 auto; border:1px solid var(--border); border-radius:12px; overflow:hidden; padding:10px; background:var(--panel); }
+      .laybel-stage { position:relative; aspect-ratio:16/9; background:#101827; border-radius:8px; overflow:hidden; }
       .laybel-stage[hidden] { display:none; }
-      video { width:100%; height:100%; object-fit:cover; }
+      video { display:block; width:100%; height:100%; object-fit:contain; }
       .laybel-badge { position:absolute; left:10px; top:10px; color:white; background:#152438cc; padding:5px 8px; border-radius:7px; font-size:11px; }
       .laybel-overlay { position:absolute; inset:0; display:grid; place-items:center; color:white; }
       .laybel-play { position:absolute; bottom:15px; left:20%; width:60%; }

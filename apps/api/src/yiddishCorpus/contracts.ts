@@ -19,6 +19,13 @@
 
 export const YC_API_PREFIX = "/admin/yiddish";
 
+/**
+ * Why a music item is excluded. ⛔ Also the exact marker the worker checks
+ * (item.state SKIPPED + this error), so the wording must not drift.
+ */
+export const YC_MUSIC_EXCLUDED_MESSAGE =
+  "Music, not speech. The engine only learns from people talking, so this episode is excluded before any stage runs.";
+
 /** Governance class of a source. Inherited by everything beneath it. */
 export type YcGovernanceClass = "PLATFORM" | "CUSTOMER_PRIVATE" | "EXTERNAL";
 

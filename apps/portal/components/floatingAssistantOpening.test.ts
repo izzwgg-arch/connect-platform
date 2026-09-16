@@ -110,6 +110,15 @@ test("Talk to Laybel adds video to the existing Assistant, not another agent", (
 
 import { LaybelTurns } from "../lib/laybelTurns";
 
+test("the live avatar cannot flex-collapse or be scrolled away by transcript updates", () => {
+  const video = readFileSync(join(process.cwd(), "components/LaybelVideoCall.tsx"), "utf8");
+  assert.match(video, /\.laybel-call\s*\{\s*flex:\s*0 0 auto;/);
+  assert.match(video, /aspect-ratio:\s*16\/9/);
+  assert.match(video, /object-fit:\s*contain/);
+  assert.match(video, /callPanel\.current\?\.scrollIntoView\(\{ block: "start" \}\)/);
+  assert.match(src, /if \(open && !laybelVideo\) bottomRef\.current\?\.scrollIntoView/);
+});
+
 test("video capture requires explicit consent and cleans up owned media", () => {
   const video = readFileSync(join(process.cwd(), "components/LaybelVideoCall.tsx"), "utf8");
   assert.match(video, /if \(!started\) return/);

@@ -20,11 +20,11 @@
  * ⛔ No episode title, series name or duration is written here — all of it is
  *    published by the site, read by the adapter, and rendered from the API.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { useAppContext } from "../../../../../hooks/useAppContext";
-import { apiPost } from "../../../../../services/apiClient";
+import { apiGet, apiPost } from "../../../../../services/apiClient";
 import {
   Card,
   EligibilityChip,
@@ -144,6 +144,7 @@ export default function Yiddish24Page() {
       ) : (
         <>
           <AudioBanner source={source} />
+          <NowListening />
           <Note note={note} />
 
           <div className="chips">
@@ -165,6 +166,304 @@ export default function Yiddish24Page() {
         </>
       )}
     </YiddishPage>
+  );
+}
+
+// ── Now listening ───────────────────────────────────────────────────────────
+//
+// Izzy: "I want to be able to hear and see at all times what the agent is
+// listening to." Visible above every tab, refreshed every 5 seconds.
+//
+// ⛔ "Hear" opens the episode on yiddish24.com, where the site's own player
+// plays it. The portal never embeds the MP3: the site's CDN refuses any page
+// but its own, and the engine does not hold the audio. Music series are
+// excluded by the site's own "Music" category and shown as excluded.
+
+type NowItem = {
+  id: string;
+  title: string | null;
+  seriesName: string | null;
+  category: string | null;
+  publishedLabel: string | null;
+  durationSec: number | null;
+  listenUrl: string | null;
+  itemState: string;
+  kind: "SPEECH" | "MUSIC_EXCLUDED";
+  excludedReason: string | null;
+  stage: string | null;
+  jobState: string | null;
+  jobNote: string | null;
+  touchedAt: string | null;
+};
+
+type NowView = {
+  checkedAt: string;
+  registered: boolean;
+  note?: string;
+  worker?: { alive: boolean; lastTickAt: string | null };
+  crawl?: {
+    state: "WALKING" | "WAITING" | "PAUSED" | "STOPPED";
+    seriesId: string | null;
+    seriesName: string | null;
+    category: string | null;
+    page: number | null;
+    totalPages: number | null;
+    pendingSeries: number;
+    completedSeries: number;
+    musicSeriesExcluded: number;
+    lastRunAt: string | null;
+    lastRunStoppedReason: string | null;
+    nextCheckAt: string | null;
+    note: string;
+  };
+  current?: NowItem | null;
+  recent?: NowItem[];
+  totals?: { items: number; speechItems: number; musicExcluded: number; speechHours: number; musicHoursExcluded: number };
+  audio?: { fetching: boolean; blockedReason: string | null };
+  listenNote?: string;
+};
+
+const NOW_POLL_MS = 5_000;
+
+function clock(sec: number | null): string {
+  if (sec == null) return "—";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function ago(iso: string | null): string {
+  if (!iso) return "—";
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+  return fmtDateTime(iso);
+}
+
+function ListenLink({ url }: { url: string | null }) {
+  if (!url) return <span className="muted small">No episode page</span>;
+  return (
+    <a className="lbtn sm" href={url} target="_blank" rel="noopener noreferrer" title="Plays on yiddish24.com's own player">
+      ▶ Listen on Yiddish24 ↗
+    </a>
+  );
+}
+
+function NowListening() {
+  const [view, setView] = useState<NowView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showMusic, setShowMusic] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const load = async () => {
+      // A hidden tab does not poll; it catches up the moment it is shown.
+      if (typeof document !== "undefined" && document.hidden) {
+        timer = setTimeout(load, NOW_POLL_MS);
+        return;
+      }
+      try {
+        const out = await apiGet<NowView>(`${YC_API_PREFIX}/now`);
+        if (!live) return;
+        setView(out);
+        setError(null);
+      } catch (e: any) {
+        if (!live) return;
+        setError(errText(e, "The live view could not be loaded."));
+      } finally {
+        if (live) timer = setTimeout(load, NOW_POLL_MS);
+      }
+    };
+    void load();
+    const onShow = () => {
+      if (!document.hidden) {
+        if (timer) clearTimeout(timer);
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", onShow);
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onShow);
+    };
+  }, []);
+
+  if (!view && !error) return <LoadingCard rows={2} label="Loading what the engine is on right now" />;
+  if (!view) return <ErrorCard error={new Error(error ?? "No answer")} what="The live view" />;
+  if (!view.registered) {
+    return (
+      <Card title="Now listening">
+        <EmptyState title="Not registered" text={view.note ?? "The Yiddish24 source is not registered."} />
+      </Card>
+    );
+  }
+
+  const crawl = view.crawl!;
+  const statePill =
+    crawl.state === "WALKING" ? (
+      <span className="pill ok">● Walking now</span>
+    ) : crawl.state === "WAITING" ? (
+      <span className="pill info">Waiting</span>
+    ) : crawl.state === "PAUSED" ? (
+      <span className="pill warn">Paused</span>
+    ) : (
+      <span className="pill bad">Stopped</span>
+    );
+  const cur = view.current;
+  const recent = (view.recent ?? []).filter((r) => showMusic || r.kind !== "MUSIC_EXCLUDED");
+
+  return (
+    <Card
+      title="Now listening"
+      sub={
+        <>
+          Live · refreshes every 5 seconds · checked {ago(view.checkedAt)}
+          {error ? <span className="pill warn" style={{ marginLeft: 8 }}>Last refresh failed — showing the previous answer</span> : null}
+        </>
+      }
+      right={
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {statePill}
+          <span className={`pill ${view.worker?.alive ? "ok" : "bad"}`} title={view.worker?.lastTickAt ?? undefined}>
+            Worker {view.worker?.alive ? "alive" : "not ticking"}
+          </span>
+        </div>
+      }
+    >
+      <div className="g2">
+        <div>
+          <div className="small muted">Crawl</div>
+          {crawl.seriesId ? (
+            <div style={{ margin: "4px 0 8px" }}>
+              <b>
+                <YiddishText text={crawl.seriesName ?? `Series ${crawl.seriesId}`} />
+              </b>
+              {crawl.category ? (
+                <>
+                  {" · "}
+                  <YiddishText text={crawl.category} />
+                </>
+              ) : null}
+              <div className="small muted">
+                Page {num(crawl.page)}
+                {crawl.totalPages ? ` of ${num(crawl.totalPages)}` : ""}
+              </div>
+            </div>
+          ) : (
+            <div className="small" style={{ margin: "4px 0 8px" }}>
+              {crawl.note}
+              {crawl.nextCheckAt ? <div className="muted">Next check {fmtDateTime(crawl.nextCheckAt)}</div> : null}
+            </div>
+          )}
+          <div className="small muted">
+            {num(crawl.completedSeries)} series walked · {num(crawl.pendingSeries)} queued ·{" "}
+            {num(crawl.musicSeriesExcluded)} music series never walked · last run {ago(crawl.lastRunAt)}
+          </div>
+        </div>
+
+        <div>
+          <div className="small muted">Last episode the engine touched</div>
+          {cur ? (
+            <div style={{ margin: "4px 0" }}>
+              <b>
+                <YiddishText text={cur.title ?? "(untitled)"} />
+              </b>
+              <div className="small muted">
+                <YiddishText text={cur.seriesName ?? ""} />
+                {cur.category ? (
+                  <>
+                    {" · "}
+                    <YiddishText text={cur.category} />
+                  </>
+                ) : null}
+                {" · "}
+                {clock(cur.durationSec)}
+                {cur.publishedLabel ? (
+                  <>
+                    {" · "}
+                    <YiddishText text={cur.publishedLabel} />
+                  </>
+                ) : null}
+              </div>
+              <div className="small" style={{ margin: "4px 0 6px" }}>
+                {cur.kind === "MUSIC_EXCLUDED" ? (
+                  <span className="pill dim">Music — excluded</span>
+                ) : (
+                  <span className="pill ok">Speech</span>
+                )}{" "}
+                <span className="muted">
+                  {cur.stage ? `${titleCase(cur.stage)} · ${titleCase(cur.jobState ?? "")}` : ""} · {ago(cur.touchedAt)}
+                </span>
+              </div>
+              <ListenLink url={cur.listenUrl} />
+            </div>
+          ) : (
+            <EmptyState title="Nothing touched yet" text="The worker has not processed an episode for this source." />
+          )}
+        </div>
+      </div>
+
+      {view.totals ? (
+        <div className="kpis k3" style={{ marginTop: 12 }}>
+          <Kpi label="People talking" value={num(view.totals.speechItems)} sub={`${hours(view.totals.speechHours)} catalogued`} />
+          <Kpi label="Music excluded" value={num(view.totals.musicExcluded)} sub={`${hours(view.totals.musicHoursExcluded)} never used`} />
+          <Kpi label="Audio downloaded" value="0" sub="Blocked until Yiddish24 grants permission" tone="warn" />
+        </div>
+      ) : null}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 6px", gap: 8, flexWrap: "wrap" }}>
+        <b className="small">Recent episodes</b>
+        <label className="small muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={showMusic} onChange={(e) => setShowMusic(e.target.checked)} />
+          Show excluded music
+        </label>
+      </div>
+      {recent.length ? (
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                <th>Episode</th>
+                <th>Series</th>
+                <th>Length</th>
+                <th>Kind</th>
+                <th>Stage</th>
+                <th>When</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {recent.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <YiddishText text={r.title ?? "(untitled)"} />
+                  </td>
+                  <td>
+                    <YiddishText text={r.seriesName ?? ""} />
+                  </td>
+                  <td className="mono">{clock(r.durationSec)}</td>
+                  <td>{r.kind === "MUSIC_EXCLUDED" ? <span className="pill dim">Music</span> : <span className="pill ok">Speech</span>}</td>
+                  <td className="small">
+                    {r.stage ? titleCase(r.stage) : "—"}
+                    {r.jobState ? <span className="muted"> · {titleCase(r.jobState)}</span> : null}
+                  </td>
+                  <td className="small muted">{ago(r.touchedAt)}</td>
+                  <td>
+                    <ListenLink url={r.listenUrl} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
+      ) : (
+        <EmptyState title="No recent speech episodes" text="Nothing has been processed recently, or everything recent was music." />
+      )}
+      {view.listenNote ? <div className="small muted" style={{ marginTop: 8 }}>{view.listenNote}</div> : null}
+    </Card>
   );
 }
 

@@ -51,6 +51,19 @@ export const SWEEP_EVENT = "voipms_trunk.sweep";
 /** Platform tenant the escalation is filed under (same as the other guardrails). */
 const ADMIN_ALERT_TENANT_ID = "connect-admin-tenant-v1";
 
+/**
+ * Known orphans the owner has already been told about and does not want to hear
+ * about again (Izzy, 2026-09-16: "stop it from telling me this. I know it
+ * already."). Keyed by subaccount AND its exact numbers: toll-free 877-220-5058
+ * routes to `344022_fox`, a subaccount VoIP.ms deleted — no PBX route, no
+ * tenant, 0 calls. It re-filed a ticket every 6 h for 12 days. If ANY other
+ * number is ever routed to that account, it is no longer this orphan and alarms
+ * as normal.
+ */
+export const IGNORED_TRUNK_ORPHANS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["344022_fox", ["8772205058"]],
+]);
+
 export type TrunkState = {
   /** login name → number of rows VoIP.ms holds under it */
   rowsByName: Map<string, number>;
@@ -83,8 +96,17 @@ export function decideTrunkVerdict(input: {
   state: TrunkState;
   previousUnregistered: string[];
   tenantNameByDid?: Map<string, string>;
+  /** subaccount -> the exact numbers that make it a known, muted orphan (default: none) */
+  ignoredOrphans?: ReadonlyMap<string, readonly string[]>;
 }): TrunkVerdict {
   const { state } = input;
+  const ignored = input.ignoredOrphans ?? new Map<string, readonly string[]>();
+  const isKnownOrphan = (acct: string) => {
+    const expect = ignored.get(acct);
+    if (!expect) return false;
+    const have = [...(state.didsByAccount.get(acct) || [])].sort();
+    return have.length === expect.length && [...expect].sort().every((d, i) => d === have[i]);
+  };
   const duplicates = [...state.rowsByName]
     .filter(([, n]) => n > 1)
     .map(([account, rows]) => ({ account, rows }))
@@ -97,6 +119,7 @@ export function decideTrunkVerdict(input: {
   const isDown = (v: string) => v === "no" || /invalid_account/i.test(v);
   const unregisteredNow = [...state.didsByAccount]
     .filter(([acct]) => acct !== state.master)
+    .filter(([acct]) => !isKnownOrphan(acct))
     .filter(([acct]) => isDown(String(state.registration.get(acct) ?? "").toLowerCase()))
     .map(([acct]) => acct)
     .sort();
@@ -294,6 +317,7 @@ export async function runVoipmsTrunkSweep(opts?: {
   windowMs?: number;
   fetch?: () => Promise<TrunkState | null>;
   now?: () => number;
+  ignoredOrphans?: ReadonlyMap<string, readonly string[]>;
 }): Promise<{ ran: boolean; offenders: number; duplicates: number; alerted: boolean }> {
   const log = opts?.log;
   const database = opts?.database ?? db;
@@ -312,7 +336,12 @@ export async function runVoipmsTrunkSweep(opts?: {
     const previous = await readPreviousUnregistered(database);
     const allDids = [...state.didsByAccount].filter(([a]) => a !== state!.master).flatMap(([, d]) => d);
     const tenantNameByDid = await tenantNamesForDids(allDids, database);
-    const verdict = decideTrunkVerdict({ state, previousUnregistered: previous ?? [], tenantNameByDid });
+    const verdict = decideTrunkVerdict({
+      state,
+      previousUnregistered: previous ?? [],
+      tenantNameByDid,
+      ignoredOrphans: opts?.ignoredOrphans ?? IGNORED_TRUNK_ORPHANS,
+    });
 
     let alerted = false;
     if (verdict.offenders.length) {
