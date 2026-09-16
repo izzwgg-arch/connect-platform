@@ -155,3 +155,19 @@ OFF by default (by design) — no silent diagnostics exist. Paths forward: (a) t
 prompt to the CUSTOMER'S own office agent, (b) install the Loopcom Windows app on one
 office PC + sign 101 in — fallback softphone (T9_101_1 finally registers, log noise
 stops) plus a consent-based diagnostic foothold for next time.
+
+## Round 7 — the customer's "office agent" is a CLOUD SANDBOX; replaced with a double-click .bat
+
+The round-5 prompt came back run inside an isolated ChatGPT-Work Linux runtime — no
+office gateway, no Wi-Fi radio, not even ping — the report honestly says "not measured"
+throughout. ⛔ B Visible's agent does NOT sit on their LAN; never route diagnostics
+through it again. Replacement handed to Izzy: **`Loopcom-Network-Test.bat`** (in this
+session's scratchpad + sent as a file) — double-click on any office PC on the phones'
+network, read-only, ~10 min, auto-detects the gateway (usebackq/pipe-free — ⛔ the first
+version's `for /f '…^|…'` quoting BROKE and shipped an empty GW; caught only by
+actually RUNNING a fast copy), runs the split test (100 pings to gateway / 209.145.60.79
+/ 8.8.8.8), pathping, arp -a, router page title, writes
+`Desktop\loopcom-network-report.txt`. Smoke-tested end-to-end on Izzy's machine, which
+also provides the healthy control: gateway 14 ms, PBX 44 ms, internet 18 ms, 0% loss.
+The PBX answers external ICMP (verified), so the split test is valid. ⏳ Awaiting the
+office's report file; interpret with the round-5 key.
