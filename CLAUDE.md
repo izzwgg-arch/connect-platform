@@ -717,4 +717,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-16 · Laybel live video layout fixed/deployed 40c3ba2a; portrait and controlled restart shown; disconnect/audio acceptance unresolved, customer rollout off → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-16 · Laybel layout deployed 40c3ba2a; live audio acceptance open, rollout off; YL Yiddish input/chat + English spoken-output requirement traced, not wired → `2026-09-15-face-to-face-ai-support-mockup.md`

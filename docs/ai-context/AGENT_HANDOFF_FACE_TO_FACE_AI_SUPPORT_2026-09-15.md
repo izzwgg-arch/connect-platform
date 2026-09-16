@@ -1,5 +1,14 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
+## Owner language requirement — Yiddish chat, English speech (2026-09-16)
+
+- Owner requires Yiddish microphone input through **Yiddish Labs transcription**, YL Yiddish-to-English translation into the existing Assistant, AI English answer translated back through YL for the **Yiddish chat**, and **English spoken output** while the Yiddish voice is not ready. Laybel stays the same Assistant, not another brain.
+- Intended split: reuse the original English answer for avatar speech/lip-sync; keep both user transcript and assistant visible reply in Yiddish. Do not translate the Yiddish reply back to English unnecessarily or read Yiddish text with an English voice. YL supplies transcription/translation; current avatar provider supplies the English voice and animation. No new Yiddish TTS requirement in this interim mode.
+- Source inspection: `/agent/chat/transcribe` already tries YL first, but silently falls back to OpenAI; YL-required mode must not mislabel that fallback as YL. `ConversationEngine.finishBridged` stores `content` (YL Yiddish) + `contentEn` (original English), but current ChatResult returns only `reply` (Yiddish). `LaybelTurns` speaks that same reply. Live video input currently comes from Anam MESSAGE_HISTORY_UPDATED, bypassing the existing YL microphone route. These are the wiring gaps, not evidence the new language mode works.
+- Preserve existing tenant identity, conversation, tools, permissions, takeover, interrupt/stop behavior and YL serving-only policy. Fail visibly if required transcription/translation is unavailable; do not silently invent Yiddish or speak an answer inconsistent with a failed/fallback chat translation.
+- Acceptance: owner speaks a fresh Yiddish question, YL provider evidence confirms transcription and both translation legs, Yiddish transcript/reply appear, Laybel audibly answers in English with synchronized animation; repeat turn/start and interruption/end also work. A cached phrase or token success is insufficient.
+- This turn clarified and traced the requirement only: **no runtime implementation, provider requests, tests or deployment**. Current customer rollout remains disabled and earlier live-call failures remain unresolved. Do not claim this mode is connected.
+
 ## Live screen test and layout correction — 2026-09-16
 
 - Owner explicitly required screen takeover and proof before any claim of working. Persisted this as a standing CLAUDE rule. Green tests/token/deployment alone are not call proof.
