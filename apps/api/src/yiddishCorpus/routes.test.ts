@@ -635,13 +635,15 @@ test("/now shows what the engine is on, links to the episode PAGE, and never lea
     "ycSourceItem.count": 2,
     "ycSourceItem.aggregate": (args: any) =>
       args?.where?.error ? { _count: { _all: 1 }, _sum: { durationSec: 300 } } : { _sum: { durationSec: 420 } },
-    "ycMetricSnapshot.findFirst": { createdAt: new Date() },
+    // Today's row was created hours ago; the live tick time is in `value`.
+    "ycMetricSnapshot.findFirst": { createdAt: new Date(Date.now() - 10 * 3600_000), value: Date.now() - 20_000 },
   });
   const routes = register(db, allowingGate);
   const reply = fakeReply();
   await routes.get("GET /admin/yiddish/now")!({ query: {}, params: {}, body: {} }, reply);
   const p = reply.payload;
 
+  assert.equal(p.worker.alive, true, "a worker that ticked 20s ago is alive, whatever the row's createdAt says");
   assert.equal(p.crawl.state, "WALKING");
   assert.equal(p.crawl.seriesName, "בולעטין");
   assert.equal(p.crawl.page, 3);

@@ -1454,7 +1454,11 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
           : "WAITING";
     const seriesId = cursor?.catId ? String(cursor.catId) : null;
 
-    const lastTickAt = heartbeat?.createdAt ? new Date(heartbeat.createdAt).toISOString() : null;
+    // ⛔ The heartbeat row is UPSERTED once per day: `createdAt` is when today's
+    // row was made, the live tick time is `value` (ms). Reading createdAt showed
+    // a working worker as dead from the first tick of the day onward.
+    const beatMs = Number(heartbeat?.value);
+    const lastTickAt = Number.isFinite(beatMs) && beatMs > 0 ? new Date(beatMs).toISOString() : null;
     const musicCount = num(musicAgg?._count?._all);
     const musicSec = num(musicAgg?._sum?.durationSec);
     const allSec = num(allAgg?._sum?.durationSec);
