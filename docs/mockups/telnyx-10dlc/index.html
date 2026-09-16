@@ -1,0 +1,690 @@
+<title>10DLC Registration Desk</title>
+<!--
+  MOCKUP ONLY — nothing here is built. Example businesses and numbers throughout; none are real customers.
+  Admin page: /admin/texting-registration  ("10DLC Registration" in the Admin section).
+  Styling follows the live admin idiom (apps/portal/app/(platform)/admin/onboarding/ports/ports.css — op-* on the
+  app shell's theme tokens) and the portal tokens from globals.css. Carrier names appear here because this is a
+  platform-staff screen; per Izzy's 2026-09-16 rule no CUSTOMER surface ever names Telnyx.
+  Telnyx facts (fees, statuses, limits) come from Telnyx's OpenAPI spec + support articles, researched 2026-09-16.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f6f8fb; --bg-soft:#eef2f7; --panel:#ffffff; --panel-2:#f8fafc;
+  --text:#0f172a; --text-dim:#64748b; --border:rgba(15,23,42,.12);
+  --accent:#3b82f6; --accent-2:#2563eb;
+  --success:#16a34a; --warning:#b86e04; --danger:#dc2626; --info:#0284c7;
+  --shadow:0 8px 30px rgba(15,23,42,.10);
+  --mock:#d97706; --mock-ink:#1a1206;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c1218; --bg-soft:#101923; --panel:#141f2b; --panel-2:#1a2635;
+    --text:#e1e9f1; --text-dim:#8ea0b2; --border:#26374a;
+    --accent:#22a8ff; --accent-2:#4f7bff;
+    --success:#34c27b; --warning:#f0b655; --danger:#ea6068; --info:#4ab2ff;
+    --shadow:0 8px 30px rgba(0,0,0,.28); --mock:#f0b655;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c1218; --bg-soft:#101923; --panel:#141f2b; --panel-2:#1a2635;
+  --text:#e1e9f1; --text-dim:#8ea0b2; --border:#26374a;
+  --accent:#22a8ff; --accent-2:#4f7bff;
+  --success:#34c27b; --warning:#f0b655; --danger:#ea6068; --info:#4ab2ff;
+  --shadow:0 8px 30px rgba(0,0,0,.28); --mock:#f0b655;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font:14px/1.5 Inter,"Segoe UI",Roboto,Arial,sans-serif;padding-inline:16px}
+h1,h2,h3{text-wrap:balance}
+.num{font-variant-numeric:tabular-nums}
+.dim{color:var(--text-dim)}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── mockup chrome (not part of the design) ── */
+.mockbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:50;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;
+  margin-inline:-16px;padding:9px 16px;background:color-mix(in srgb,var(--mock) 13%,var(--bg));border-bottom:1px solid color-mix(in srgb,var(--mock) 40%,transparent)}
+.mockpill{background:var(--mock);color:var(--mock-ink);font-weight:800;font-size:10.5px;letter-spacing:.08em;padding:3px 9px;border-radius:999px}
+.jump{display:flex;flex-wrap:wrap;gap:5px}
+.jump a{color:var(--text);text-decoration:none;font-size:11.5px;font-weight:600;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--panel)}
+.jump a:hover{border-color:var(--accent)}
+.themebtn{margin-left:auto;border:1px solid var(--border);background:var(--panel);color:var(--text);font:600 11.5px Inter,sans-serif;border-radius:999px;padding:4px 11px;cursor:pointer}
+.doc{max-width:1180px;margin:0 auto;padding-block:26px 90px}
+.intro{max-width:74ch}
+.intro h1{font-size:26px;font-weight:800;letter-spacing:-.02em;margin:0 0 6px}
+.intro p{margin:0 0 10px;color:var(--text-dim)}
+.screen{margin-top:48px}
+.screen>header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin-bottom:12px}
+.screen>header h2{font-size:17px;font-weight:750;margin:0}
+.tag{font-size:10.5px;font-weight:800;letter-spacing:.06em;color:var(--text-dim);border:1px solid var(--border);border-radius:999px;padding:1px 8px}
+.why{max-width:78ch;margin:12px 0 0;color:var(--text-dim);font-size:13px;border-left:3px solid color-mix(in srgb,var(--accent) 50%,transparent);padding-left:12px}
+.frame{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg-soft);box-shadow:var(--shadow)}
+.frame .bar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
+.frame .dots{display:flex;gap:5px}.frame .dots i{width:9px;height:9px;border-radius:50%;background:var(--border)}
+.frame .url{flex:1;max-width:420px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--panel-2);border:1px solid var(--border);border-radius:7px;padding:2px 11px;font-size:11px;color:var(--text-dim)}
+
+/* app shell */
+.shell{display:grid;grid-template-columns:196px minmax(0,1fr);min-height:420px}
+.side{background:var(--panel);border-right:1px solid var(--border);padding:12px 8px;font-size:12.5px}
+.side .sec{font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;margin:12px 8px 5px}
+.side .it{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;color:var(--text-dim)}
+.side .it b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:var(--panel-2);border:1px solid var(--border);font-size:8.5px;font-weight:800;color:var(--text-dim)}
+.side .it.on{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--text);font-weight:650}
+.side .it.on b{background:var(--accent);border-color:var(--accent);color:#fff}
+.nu{position:relative;outline:1.5px dashed color-mix(in srgb,var(--mock) 80%,transparent);outline-offset:1px}
+.nu::after{content:"NEW";position:absolute;top:-8px;right:-4px;background:var(--mock);color:var(--mock-ink);font-size:7.5px;font-weight:900;letter-spacing:.06em;padding:0 4px;border-radius:5px;line-height:1.5}
+@media(max-width:760px){.shell{grid-template-columns:1fr}.side{display:none}}
+
+/* page — the live op-* idiom */
+.op-root{padding:18px 22px 30px;min-width:0}
+.op-title{font-size:20px;font-weight:800;letter-spacing:-.3px;margin:0 0 4px}
+.op-sub{font-size:13px;color:var(--text-dim);margin:0 0 16px;max-width:80ch;line-height:1.55}
+.op-section{font-size:14px;font-weight:700;margin:20px 0 10px}
+.op-card{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:15px 17px;margin:0 0 12px}
+.op-card-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.op-company{font-size:15px;font-weight:750}
+.op-num{font-size:13px;color:var(--text-dim);font-variant-numeric:tabular-nums}
+.op-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 16px;margin-bottom:10px}
+.op-k{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-dim)}
+.op-v{font-size:13.5px;word-break:break-word}
+.op-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--border);padding-top:11px}
+.op-btn{border:1.5px solid var(--border);background:transparent;color:var(--text);border-radius:9px;padding:7px 13px;font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;text-decoration:none;white-space:nowrap}
+.op-btn:hover{border-color:var(--accent)}
+.op-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.op-btn.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--border))}
+.op-btn[disabled]{opacity:.45;cursor:not-allowed}
+.op-table{width:100%;border-collapse:collapse;font-size:13px}
+.op-table th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-dim);padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+.op-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.op-table tr.hot td{background:color-mix(in srgb,var(--warning) 6%,transparent)}
+.op-wrap-x{overflow-x:auto}
+.st{display:inline-block;font-size:10.5px;font-weight:750;border-radius:12px;padding:2px 8px;white-space:nowrap}
+.st.ok{background:color-mix(in srgb,var(--success) 14%,transparent);color:var(--success)}
+.st.pending{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.st.wait{background:color-mix(in srgb,var(--warning) 16%,transparent);color:var(--warning)}
+.st.bad{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
+.st.off{background:color-mix(in srgb,var(--text-dim) 12%,transparent);color:var(--text-dim)}
+.sub2{display:block;font-size:11.5px;color:var(--text-dim);margin-top:2px}
+
+/* summary strip */
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:11px 13px}
+.tile .v{font-size:21px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .l{font-size:11.5px;color:var(--text-dim)}
+.tile.attn{border-color:color-mix(in srgb,var(--warning) 55%,var(--border))}
+.tile.attn .v{color:var(--warning)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{border:1.5px solid var(--border);border-radius:999px;padding:4px 11px;font-size:12px;font-weight:650;background:var(--panel);color:var(--text-dim)}
+.chip.on{border-color:var(--accent);color:var(--text);background:color-mix(in srgb,var(--accent) 10%,var(--panel))}
+.chip i{font-style:normal;font-variant-numeric:tabular-nums;margin-left:4px;opacity:.75}
+.health{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--text-dim);margin-bottom:14px}
+.health span::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);margin-right:6px;vertical-align:1px}
+.health span.w::before{background:var(--warning)}
+
+/* stepper + forms */
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;counter-reset:s}
+.steps div{counter-increment:s;display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:650;color:var(--text-dim);padding:5px 12px 5px 6px;border-radius:999px;border:1.5px solid var(--border);background:var(--panel)}
+.steps div::before{content:counter(s);display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--panel-2);border:1px solid var(--border);font-size:11px}
+.steps div.done{color:var(--text)}
+.steps div.done::before{content:"✓";background:var(--success);border-color:var(--success);color:#fff}
+.steps div.on{border-color:var(--accent);color:var(--text)}
+.steps div.on::before{background:var(--accent);border-color:var(--accent);color:#fff}
+.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.form .full{grid-column:1/-1}
+@media(max-width:640px){.form{grid-template-columns:1fr}}
+.fld label{display:block;font-size:12px;font-weight:650;margin-bottom:4px}
+.fld .hint{font-size:11.5px;color:var(--text-dim);margin-top:3px}
+.in{width:100%;border:1.5px solid var(--border);background:var(--panel-2);color:var(--text);border-radius:9px;padding:8px 11px;font:inherit;font-size:13px}
+textarea.in{resize:vertical;min-height:62px;line-height:1.45}
+.in.lock{background:color-mix(in srgb,var(--text-dim) 7%,var(--panel-2));color:var(--text-dim)}
+.from{font-size:10px;font-weight:750;letter-spacing:.3px;color:var(--success);margin-left:6px;text-transform:uppercase}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg span{border:1.5px solid var(--border);border-radius:9px;padding:6px 11px;font-size:12.5px;font-weight:600;color:var(--text-dim);background:var(--panel)}
+.seg span.on{border-color:var(--accent);color:var(--text);background:color-mix(in srgb,var(--accent) 10%,var(--panel))}
+.note{border-radius:10px;padding:10px 13px;font-size:12.5px;line-height:1.5;border:1px solid var(--border);background:var(--panel-2)}
+.note.warn{border-color:color-mix(in srgb,var(--warning) 45%,var(--border));background:color-mix(in srgb,var(--warning) 8%,var(--panel))}
+.note.bad{border-color:color-mix(in srgb,var(--danger) 45%,var(--border));background:color-mix(in srgb,var(--danger) 7%,var(--panel))}
+.note.good{border-color:color-mix(in srgb,var(--success) 40%,var(--border));background:color-mix(in srgb,var(--success) 7%,var(--panel))}
+.note b{color:var(--text)}
+.two{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px;align-items:start}
+@media(max-width:900px){.two{grid-template-columns:1fr}}
+
+/* checks */
+.checks{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:12.5px}
+.checks li{display:flex;gap:8px;align-items:flex-start}
+.checks li::before{flex:none;width:17px;height:17px;border-radius:50%;display:inline-grid;place-items:center;font-size:10px;font-weight:900;margin-top:1px}
+.checks li.pass::before{content:"✓";background:color-mix(in srgb,var(--success) 18%,transparent);color:var(--success)}
+.checks li.fail::before{content:"!";background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger)}
+.checks li.warn::before{content:"?";background:color-mix(in srgb,var(--warning) 18%,transparent);color:var(--warning)}
+
+/* money */
+.bill{width:100%;border-collapse:collapse;font-size:13px}
+.bill td{padding:6px 0;border-bottom:1px dashed var(--border)}
+.bill td:last-child{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bill tr.tot td{border-bottom:0;font-weight:800;padding-top:9px;font-size:14px}
+
+/* timeline */
+.tl{list-style:none;margin:0;padding:0;position:relative}
+.tl li{position:relative;padding:0 0 15px 28px}
+.tl li::before{content:"";position:absolute;left:8px;top:18px;bottom:0;width:2px;background:var(--border)}
+.tl li:last-child::before{display:none}
+.tl li i{position:absolute;left:0;top:2px;width:18px;height:18px;border-radius:50%;border:2px solid var(--border);background:var(--panel)}
+.tl li.ok i{background:var(--success);border-color:var(--success)}
+.tl li.now i{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 20%,transparent)}
+.tl li.bad i{background:var(--danger);border-color:var(--danger)}
+.tl strong{display:block;font-size:13px}
+.tl span{font-size:12px;color:var(--text-dim)}
+.carriers{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:8px 0 2px}
+.carrier{border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--panel-2)}
+.carrier strong{display:block;font-size:12.5px}
+.log{font-size:12px;border-collapse:collapse;width:100%}
+.log td{padding:5px 8px 5px 0;border-bottom:1px solid var(--border);vertical-align:top}
+.log td:first-child{color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+code,.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+
+/* modal */
+.modalwrap{display:grid;place-items:center;padding:28px 16px;background:color-mix(in srgb,#000 38%,var(--bg-soft))}
+.modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
+.modal h3{margin:0 0 6px;font-size:17px}
+.decisions{display:grid;gap:10px}
+.decision{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:13px 15px}
+.decision h3{margin:0 0 4px;font-size:14px}
+.decision p{margin:0;font-size:13px;color:var(--text-dim)}
+.decision p b{color:var(--text)}
+.mx{width:100%;border-collapse:collapse;font-size:12.5px}
+.mx th,.mx td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:left}
+.mx th{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim)}
+.tog{display:inline-block;width:30px;height:17px;border-radius:999px;background:var(--border);position:relative;vertical-align:middle}
+.tog::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff}
+.tog.on{background:var(--accent)}.tog.on::after{left:15px}
+.counter{float:right;font-size:11px;color:var(--text-dim);font-weight:500}
+</style>
+
+<div class="mockbar">
+  <span class="mockpill">MOCKUP</span>
+  <nav class="jump" aria-label="Screens">
+    <a href="#s1">Board</a><a href="#s2">1 · Business</a><a href="#s3">2 · Campaign</a><a href="#s4">3 · Numbers</a>
+    <a href="#s5">Confirm charges</a><a href="#s6">Registration</a><a href="#s7">Rejected</a><a href="#s8">Sole proprietor</a>
+    <a href="#s9">Requests</a><a href="#s10">Settings</a><a href="#s11">Permissions</a><a href="#s12">Decisions</a>
+  </nav>
+  <button class="themebtn" id="themebtn" type="button">Switch theme</button>
+</div>
+
+<main class="doc">
+  <section class="intro">
+    <h1>10DLC Registration, inside Loopcom</h1>
+    <p>A new Admin page, <b>/admin/texting-registration</b>, where platform staff register a customer's business with the carriers through Telnyx and follow it until their number can text. One brand and one campaign per customer business (Telnyx's own reseller rule), filed from Loopcom, watched by Loopcom, and switched on in chat automatically when the carriers approve.</p>
+    <p>Nothing here is built. Businesses and numbers are examples. Dashed amber marks what is new in the sidebar. Twelve screens, then the decisions I need from you before building.</p>
+  </section>
+
+  <!-- ───────────── S1 BOARD ───────────── -->
+  <section class="screen" id="s1">
+    <header><span class="tag">SCREEN 1</span><h2>The board: every registration, what needs you first</h2></header>
+    <div class="frame">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/texting-registration</span></div>
+      <div class="shell">
+        <aside class="side">
+          <div class="sec">Admin</div>
+          <div class="it"><b>OB</b>Onboarding</div>
+          <div class="it"><b>CM</b>Carrier Migration</div>
+          <div class="it on nu"><b>10</b>10DLC Registration</div>
+          <div class="it"><b>CO</b>Compliance</div>
+          <div class="it"><b>MC</b>Mobile Console</div>
+          <div class="sec">Apps</div>
+          <div class="it"><b>TX</b>Telnyx</div>
+        </aside>
+        <div class="op-root">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;justify-content:space-between">
+            <div>
+              <h3 class="op-title">10DLC Registration</h3>
+              <p class="op-sub">Register a customer's business and texting program with US carriers through Telnyx. Numbers can text customers only after their campaign is approved and assigned.</p>
+            </div>
+            <button class="op-btn primary" type="button">New registration</button>
+          </div>
+          <div class="health">
+            <span>Telnyx connected · Verified account</span>
+            <span>Status updates arriving · last 4 min ago</span>
+            <span class="w">Balance $26.32 · a new registration costs $24.00–$49.50 up front</span>
+          </div>
+          <div class="strip">
+            <div class="tile attn"><div class="v">3</div><div class="l">Need you</div></div>
+            <div class="tile"><div class="v">4</div><div class="l">In carrier review</div></div>
+            <div class="tile"><div class="v">11</div><div class="l">Live and texting</div></div>
+            <div class="tile"><div class="v num">$38.50</div><div class="l">Monthly campaign fees</div></div>
+          </div>
+          <div class="chips" role="tablist" aria-label="Filter">
+            <span class="chip on">Needs you<i>3</i></span><span class="chip">In review<i>4</i></span><span class="chip">Live<i>11</i></span>
+            <span class="chip">Drafts<i>2</i></span><span class="chip">Deactivated<i>1</i></span><span class="chip">All<i>21</i></span>
+          </div>
+          <div class="op-wrap-x">
+            <table class="op-table">
+              <thead><tr><th>Customer</th><th>Business check</th><th>Campaign</th><th>Numbers</th><th>What's next</th></tr></thead>
+              <tbody>
+                <tr class="hot">
+                  <td><b>Maple Dental Group</b><span class="sub2">Private company · Healthcare</span></td>
+                  <td><span class="st ok">Verified</span></td>
+                  <td><span class="st bad">Carrier rejected</span><span class="sub2">Customer care · AT&amp;T declined</span></td>
+                  <td class="num">0 of 2</td>
+                  <td>Fix and appeal: sample messages don't name the practice<span class="sub2">Rejected 2h ago</span></td>
+                </tr>
+                <tr class="hot">
+                  <td><b>Summit Realty Partners</b><span class="sub2">Private company · Real estate</span></td>
+                  <td><span class="st bad">Not verified</span></td>
+                  <td><span class="st off">Not filed</span></td>
+                  <td class="num">0 of 3</td>
+                  <td>Legal name doesn't match the IRS record<span class="sub2">Telnyx feedback: Tax ID</span></td>
+                </tr>
+                <tr class="hot">
+                  <td><b>Rivera Landscaping</b><span class="sub2">Sole proprietor · Construction</span></td>
+                  <td><span class="st wait">Waiting for PIN</span></td>
+                  <td><span class="st off">Blocked until PIN</span></td>
+                  <td class="num">0 of 1</td>
+                  <td>Owner hasn't entered the texted PIN<span class="sub2">PIN sent 19h ago · expires in 5h</span></td>
+                </tr>
+                <tr>
+                  <td><b>Hudson Valley Tire Co.</b><span class="sub2">Private company · Retail</span></td>
+                  <td><span class="st ok">Verified</span></td>
+                  <td><span class="st pending">Carrier review</span><span class="sub2">T-Mobile approved · 2 of 4 carriers</span></td>
+                  <td class="num">0 of 2</td>
+                  <td>Nothing to do. Usually 1–3 business days.</td>
+                </tr>
+                <tr>
+                  <td><b>Northside Bakery</b><span class="sub2">Private company · Retail</span></td>
+                  <td><span class="st ok">Verified</span></td>
+                  <td><span class="st ok">Approved</span><span class="sub2">Low volume mixed · renews Dec 3</span></td>
+                  <td class="num">1 of 1</td>
+                  <td><span class="st ok">Live</span> texting in chat since Sep 2</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="why">The default filter is "Needs you", so the three rows a person must act on come first, each with its next step in plain words. Status words are Loopcom's; the raw Telnyx codes (<code>MNO_REJECTED</code>, <code>REGISTRATION_FAILED</code>) sit on the detail screen. The balance line warns before you start a registration the account can't pay for, since Telnyx charges up front.</p>
+  </section>
+
+  <!-- ───────────── S2 BUSINESS ───────────── -->
+  <section class="screen" id="s2">
+    <header><span class="tag">SCREEN 2</span><h2>Step 1 · The business (the brand)</h2></header>
+    <div class="frame">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/texting-registration/new</span></div>
+      <div class="op-root">
+        <div class="steps"><div class="on">Business</div><div>Campaign</div><div>Numbers</div><div>Review &amp; file</div></div>
+        <div class="two">
+          <div class="op-card">
+            <div class="form">
+              <div class="fld full"><label for="f-tenant">Loopcom customer</label>
+                <input class="in" id="f-tenant" value="Hudson Valley Tire Co. — 4 extensions, 2 Telnyx numbers">
+                <div class="hint">Fields marked "from account" are filled from the customer's Loopcom account. Check them against the IRS letter; they must match it exactly.</div></div>
+              <div class="fld full"><label>Business type</label>
+                <div class="seg"><span class="on">Private company</span><span>Public company</span><span>Non-profit</span><span>Government</span><span>Sole proprietor (no EIN)</span></div></div>
+              <div class="fld"><label for="f-legal">Legal name <span class="from">from account</span></label><input class="in" id="f-legal" value="Hudson Valley Tire Company LLC"><div class="hint">Exactly as on the IRS CP-575 letter.</div></div>
+              <div class="fld"><label for="f-dba">Name customers see</label><input class="in" id="f-dba" value="Hudson Valley Tire"></div>
+              <div class="fld"><label for="f-ein">EIN</label><input class="in" id="f-ein" value="••-•••4821" inputmode="numeric"><div class="hint">Sent straight to Telnyx. Loopcom never saves it.</div></div>
+              <div class="fld"><label for="f-vert">Industry</label><input class="in" id="f-vert" value="Retail"></div>
+              <div class="fld full"><label for="f-street">Address <span class="from">from account</span></label><input class="in" id="f-street" value="1180 Route 9W, Newburgh, NY 12550"><div class="hint">The IRS address, not the 911 service address, when the two differ. No PO boxes.</div></div>
+              <div class="fld"><label for="f-web">Website</label><input class="in" id="f-web" value="https://hvtire.com"></div>
+              <div class="fld"><label for="f-mail">Business email</label><input class="in" id="f-mail" value="office@hvtire.com"><div class="hint">On the business's own domain. A Gmail address is a common rejection.</div></div>
+              <div class="fld"><label for="f-phone">Business phone</label><input class="in" id="f-phone" value="(845) 555-0142"></div>
+              <div class="fld"><label for="f-contact">Contact name</label><input class="in" id="f-contact" value="Dana Okafor"></div>
+            </div>
+          </div>
+          <div style="display:grid;gap:12px">
+            <div class="op-card">
+              <div class="op-k" style="margin-bottom:8px">Before you continue</div>
+              <ul class="checks">
+                <li class="pass">Legal name ends in LLC, as the IRS letter shows</li>
+                <li class="pass">Website loads and shows the business name</li>
+                <li class="pass">Email is on hvtire.com, same as the website</li>
+                <li class="warn">Address differs from the 911 address on file (Unit 2). Use the one the IRS has.</li>
+                <li class="pass">This EIN has no other brand on the account (one brand per EIN)</li>
+              </ul>
+            </div>
+            <div class="note">Telnyx checks this against the IRS record within minutes. If it comes back <b>Not verified</b>, the campaign can't be filed; you'll get the reason and a Fix button (screen 7). The $4.50 brand fee is charged once, even if it fails.</div>
+          </div>
+        </div>
+        <div class="op-actions" style="margin-top:14px"><button class="op-btn" type="button">Save draft</button><button class="op-btn primary" type="button">Continue to campaign</button></div>
+      </div>
+    </div>
+    <p class="why">Brand problems are nearly always a mismatch with the IRS record, so the form says "match the IRS letter" at each field that fails for that reason and checks what it can before anything is spent. The EIN follows the rule the SignalWire filing already keeps: it is sent to the carrier and never written to a Loopcom table, log or draft. A draft saved here leaves the EIN field empty.</p>
+  </section>
+
+  <!-- ───────────── S3 CAMPAIGN ───────────── -->
+  <section class="screen" id="s3">
+    <header><span class="tag">SCREEN 3</span><h2>Step 2 · The texting program (the campaign), checked as you type</h2></header>
+    <div class="frame">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/texting-registration/new?step=campaign</span></div>
+      <div class="op-root">
+        <div class="steps"><div class="done">Business</div><div class="on">Campaign</div><div>Numbers</div><div>Review &amp; file</div></div>
+        <div class="two">
+          <div class="op-card">
+            <div class="form">
+              <div class="fld full"><label>What will they text about?</label>
+                <div class="seg"><span class="on">Conversations and updates · $1.50/mo</span><span>Customer care · $10/mo</span><span>Marketing · $10/mo</span><span>Appointment and account alerts · $10/mo</span><span>Mixed · $10/mo</span></div>
+                <div class="hint">Prices are read live from Telnyx for this business before filing. "Conversations and updates" is Telnyx's low-volume class: up to 2,000 texts a day on T-Mobile, 75 a minute on AT&amp;T.</div></div>
+              <div class="fld full"><label>Also covers (pick 2–5)</label>
+                <div class="seg"><span class="on">Customer care</span><span class="on">Account notifications</span><span>Delivery notifications</span><span>Marketing</span></div></div>
+              <div class="fld full"><label for="c-desc">Description <span class="counter">146 / 40–4096</span></label>
+                <textarea class="in" id="c-desc">Hudson Valley Tire texts customers who call or visit the shop about their tire orders, service appointments and questions they asked, and replies to texts customers send first.</textarea></div>
+              <div class="fld full"><label for="c-flow">How customers agree to texts <span class="counter">212 / 40–2048</span></label>
+                <textarea class="in" id="c-flow">Customers give their mobile number at the counter or on the service form at hvtire.com/service and tick an optional box: "Text me about my order and appointments from Hudson Valley Tire. Msg frequency varies. Msg &amp; data rates may apply. Reply STOP to opt out, HELP for help."</textarea></div>
+              <div class="fld full"><label for="c-s1">Sample message 1</label>
+                <textarea class="in" id="c-s1" data-sample>Hudson Valley Tire: your 4 Michelin Defenders are in. We can mount them Thursday at 10am. Reply to book. Reply STOP to opt out.</textarea></div>
+              <div class="fld full"><label for="c-s2">Sample message 2</label>
+                <textarea class="in" id="c-s2" data-sample>Thanks for calling. Your alignment is booked for Sat 9am.</textarea></div>
+              <div class="fld"><label for="c-help">Reply to HELP</label><textarea class="in" id="c-help">Hudson Valley Tire: for help call (845) 555-0142 or email office@hvtire.com. Reply STOP to opt out.</textarea></div>
+              <div class="fld"><label for="c-stop">Reply to STOP</label><textarea class="in" id="c-stop">Hudson Valley Tire: you're unsubscribed and won't get more texts. Reply START to resubscribe.</textarea></div>
+              <div class="fld"><label for="c-priv">Privacy policy (the customer's own)</label><input class="in" id="c-priv" value="https://hvtire.com/privacy"></div>
+              <div class="fld"><label for="c-terms">Terms page</label><input class="in" id="c-terms" value="https://hvtire.com/terms"></div>
+              <div class="fld full"><label>Messages include</label>
+                <div class="seg"><span class="on">Links</span><span class="on">Phone numbers</span><span>Age-restricted content</span><span>Loans or lending</span></div></div>
+            </div>
+          </div>
+          <div style="display:grid;gap:12px;position:sticky;top:60px">
+            <div class="op-card" aria-live="polite">
+              <div class="op-k" style="margin-bottom:8px">Carrier checks <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:500">· update as you type</span></div>
+              <ul class="checks" id="livechecks">
+                <li class="pass">Description is long enough (40+ characters)</li>
+                <li class="pass">Opt-in explains frequency, rates, STOP and HELP</li>
+                <li class="pass">Sample 1 names the business</li>
+                <li class="pass">Sample 1 includes opt-out wording</li>
+                <li class="fail">Sample 2 doesn't name the business. Start it with "Hudson Valley Tire:".</li>
+                <li class="pass">"Links" is on and a sample contains no link: add one or turn it off</li>
+                <li class="pass">HELP reply names the business and a way to reach it</li>
+                <li class="pass">Privacy policy is on the business's own website, not Loopcom's</li>
+              </ul>
+              <div class="hint" style="margin-top:9px;font-size:11.5px;color:var(--text-dim)">Try it: edit sample 2 above.</div>
+            </div>
+            <div class="note warn"><b>Only sample messages and the HELP reply can be changed after filing.</b> Everything else is locked once Telnyx accepts it. A mistake means a new campaign and a new fee.</div>
+          </div>
+        </div>
+        <div class="op-actions" style="margin-top:14px"><button class="op-btn" type="button">Back</button><button class="op-btn" type="button">Save draft</button><button class="op-btn primary" type="button" disabled>Continue to numbers — fix 1 check first</button></div>
+      </div>
+    </div>
+    <p class="why">The checks are Telnyx's own published rejection causes (brand name in every sample, opt-out wording, the seven opt-in items, the customer's own privacy policy, links declared must appear in samples), run before any fee. A failing check blocks Continue; a question mark only warns. HELP and STOP replies are pre-written from the business name, which is the part people most often get wrong.</p>
+  </section>
+
+  <!-- ───────────── S4 NUMBERS ───────────── -->
+  <section class="screen" id="s4">
+    <header><span class="tag">SCREEN 4</span><h2>Step 3 · Which numbers will text</h2></header>
+    <div class="frame">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/texting-registration/new?step=numbers</span></div>
+      <div class="op-root">
+        <div class="steps"><div class="done">Business</div><div class="done">Campaign</div><div class="on">Numbers</div><div>Review &amp; file</div></div>
+        <div class="op-card">
+          <div class="op-wrap-x">
+            <table class="op-table">
+              <thead><tr><th></th><th>Number</th><th>Rings</th><th>Texting profile</th><th>Can it be added?</th></tr></thead>
+              <tbody>
+                <tr><td>☑</td><td class="num"><b>(845) 555-0142</b></td><td>Main menu</td><td>Loopcom SMS</td><td><span class="st ok">Yes</span></td></tr>
+                <tr><td>☑</td><td class="num"><b>(845) 555-0198</b></td><td>Ext 102 · Service desk</td><td><span class="st wait">None yet</span><span class="sub2">Loopcom adds it to the texting profile first</span></td><td><span class="st ok">Yes</span></td></tr>
+                <tr><td>☐</td><td class="num">(800) 555-0110</td><td>Main menu</td><td>—</td><td><span class="st off">No</span><span class="sub2">Toll-free numbers use a separate verification, not 10DLC</span></td></tr>
+                <tr><td>☐</td><td class="num">(845) 555-0177</td><td>Ext 104</td><td>—</td><td><span class="st off">No</span><span class="sub2">On VoIP.ms, not Telnyx. Move it on Carrier Migration first.</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note" style="margin-top:12px">Numbers are attached <b>after</b> the carriers approve the campaign, automatically. Until then each number shows "waiting for approval" in chat settings and its texts stay on whatever carries them today. A number can belong to one campaign only.</div>
+        </div>
+        <div class="op-actions"><button class="op-btn" type="button">Back</button><button class="op-btn primary" type="button">Review charges</button></div>
+      </div>
+    </div>
+    <p class="why">Only numbers Telnyx can actually register are selectable, and each "No" says why and where to fix it. Loopcom handles the messaging-profile prerequisite itself instead of failing on it later. Nothing changes for a number until approval, so filing never interrupts texting that already works.</p>
+  </section>
+
+  <!-- ───────────── S5 CONFIRM ───────────── -->
+  <section class="screen" id="s5">
+    <header><span class="tag">SCREEN 5</span><h2>Review &amp; file: the exact charges, confirmed once</h2></header>
+    <div class="frame">
+      <div class="modalwrap">
+        <div class="modal" role="dialog" aria-labelledby="m5">
+          <h3 id="m5">File Hudson Valley Tire with the carriers?</h3>
+          <p class="op-sub" style="margin-bottom:12px">Telnyx charges these to the Loopcom account as soon as each step is accepted. None are refundable.</p>
+          <table class="bill">
+            <tr><td>Business check (brand)</td><td>$4.50</td></tr>
+            <tr><td>Carrier review of the campaign</td><td>$15.00</td></tr>
+            <tr><td>First 3 months of "Conversations and updates" ($1.50/mo)</td><td>$4.50</td></tr>
+            <tr><td>Carrier surcharges per text (T-Mobile $0.003, AT&amp;T $0.003, Verizon $0.0045)</td><td class="dim">per use</td></tr>
+            <tr class="tot"><td>Charged now</td><td>$24.00</td></tr>
+          </table>
+          <div class="note warn" style="margin:12px 0">Telnyx balance after filing: <b class="num">$2.32</b>. Top up before the campaign renews on <b>Dec 16</b> or it can be suspended.</div>
+          <div class="fld" style="margin-bottom:12px"><div class="op-k" style="margin-bottom:5px">Bill the customer</div>
+            <div class="seg"><span class="on">One-time $24.00 on their next invoice + $1.50/mo</span><span>Loopcom absorbs it</span></div></div>
+          <div class="op-actions"><button class="op-btn" type="button">Cancel</button><button class="op-btn primary" type="button">File and pay $24.00</button></div>
+        </div>
+      </div>
+    </div>
+    <p class="why">Filing spends real money, so it is one deliberate confirm with the charges itemised, never a retry. Each create carries a Loopcom reference id, so a timeout is resolved by looking the brand or campaign up, not by filing twice (the house rule for every creating write). Whether fees go on the customer's invoice is your call: decision 2 below.</p>
+  </section>
+
+  <!-- ───────────── S6 DETAIL ───────────── -->
+  <section class="screen" id="s6">
+    <header><span class="tag">SCREEN 6</span><h2>One registration: where it is, per carrier</h2></header>
+    <div class="frame">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/texting-registration/reg_hvtire</span></div>
+      <div class="op-root">
+        <div class="op-card-head"><span class="op-company" style="font-size:19px">Hudson Valley Tire Co.</span><span class="st pending">Carrier review</span><span class="op-num">Filed Sep 16, 10:42am by Izzy</span></div>
+        <div class="two">
+          <div style="display:grid;gap:12px">
+            <div class="op-card">
+              <div class="op-k" style="margin-bottom:10px">Progress</div>
+              <ol class="tl">
+                <li class="ok"><i></i><strong>Business verified</strong><span>Sep 16, 10:44am · checked against the IRS record</span></li>
+                <li class="ok"><i></i><strong>Telnyx compliance approved the campaign</strong><span>Sep 16, 2:10pm · same-day review</span></li>
+                <li class="now"><i></i><strong>Carriers reviewing</strong><span>Usually 1–3 business days</span>
+                  <div class="carriers">
+                    <div class="carrier"><strong>T-Mobile</strong><span class="st ok">Approved</span></div>
+                    <div class="carrier"><strong>AT&amp;T</strong><span class="st ok">Approved</span></div>
+                    <div class="carrier"><strong>Verizon</strong><span class="st pending">Reviewing</span></div>
+                    <div class="carrier"><strong>US Cellular</strong><span class="st pending">Reviewing</span></div>
+                  </div></li>
+                <li><i></i><strong>Attach 2 numbers</strong><span>Automatic after approval · usually about 2 hours</span></li>
+                <li><i></i><strong>Texting on in Loopcom chat</strong><span>Numbers move to Telnyx for texting; the customer gets the "texting is ready" email</span></li>
+              </ol>
+            </div>
+            <div class="op-card">
+              <div class="op-k" style="margin-bottom:8px">Numbers</div>
+              <div class="op-wrap-x"><table class="op-table">
+                <thead><tr><th>Number</th><th>Attachment</th><th>In chat</th></tr></thead>
+                <tbody>
+                  <tr><td class="num">(845) 555-0142</td><td><span class="st off">Waiting for approval</span></td><td>Still texting on VoIP.ms</td></tr>
+                  <tr><td class="num">(845) 555-0198</td><td><span class="st off">Waiting for approval</span></td><td>Not texting yet</td></tr>
+                </tbody></table></div>
+            </div>
+            <div class="op-card">
+              <div class="op-k" style="margin-bottom:6px">History</div>
+              <table class="log">
+                <tr><td>2:31pm</td><td>AT&amp;T approved the campaign <span class="dim">· status update from Telnyx, confirmed by re-reading the campaign</span></td></tr>
+                <tr><td>2:14pm</td><td>T-Mobile approved the campaign</td></tr>
+                <tr><td>2:10pm</td><td>Telnyx compliance accepted; $15.00 review charged</td></tr>
+                <tr><td>10:44am</td><td>Brand verified (identity: Verified)</td></tr>
+                <tr><td>10:42am</td><td>Filed by Izzy · brand $4.50 · campaign 3 months $4.50</td></tr>
+              </table>
+            </div>
+          </div>
+          <div style="display:grid;gap:12px">
+            <div class="op-card">
+              <div class="op-grid" style="grid-template-columns:1fr 1fr">
+                <div><div class="op-k">Program</div><div class="op-v">Conversations and updates</div></div>
+                <div><div class="op-k">Monthly fee</div><div class="op-v num">$1.50 · renews Dec 16</div></div>
+                <div><div class="op-k">Daily limit</div><div class="op-v num">2,000 (T-Mobile)</div></div>
+                <div><div class="op-k">Loopcom cap set</div><div class="op-v num">2,000 / day</div></div>
+                <div><div class="op-k">Brand id</div><div class="op-v mono">4b20…a17c</div></div>
+                <div><div class="op-k">Campaign id</div><div class="op-v mono">CQ7X2PL</div></div>
+              </div>
+              <div class="op-actions">
+                <button class="op-btn" type="button">Edit sample messages</button>
+                <button class="op-btn" type="button">Check now</button>
+                <button class="op-btn" type="button">Raw Telnyx record</button>
+                <button class="op-btn danger" type="button">Deactivate…</button>
+              </div>
+            </div>
+            <div class="note">"Check now" re-reads the brand, campaign and numbers from Telnyx. Loopcom also re-reads them every 10 minutes and whenever Telnyx sends an update, so nothing depends on a webhook arriving.</div>
+            <div class="note bad"><b>Deactivate is permanent.</b> Telnyx can't restore a deactivated campaign; texting stops on its numbers within hours. You'll be asked to type the business name.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="why">Carrier review is where registrations sit for days, so it is broken out per carrier with Telnyx's own per-carrier status. States only ever advance from a fresh read of Telnyx, the same rule the SignalWire chain follows; an incoming webhook is a nudge to re-read, never the source of truth. The final step is the point of the whole page: approval switches the numbers into chat without anyone remembering to.</p>
+  </section>
+
+  <!-- ───────────── S7 REJECTED ───────────── -->
+  <section class="screen" id="s7">
+    <header><span class="tag">SCREEN 7</span><h2>When it's refused: the reason, the fix, the appeal</h2></header>
+    <div style="display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))">
+      <div class="frame"><div class="op-root">
+        <div class="op-card-head"><span class="op-company">Maple Dental Group</span><span class="st bad">Carrier rejected</span></div>
+        <div class="note bad" style="margin-bottom:12px"><b>AT&amp;T declined the campaign.</b> Reason from Telnyx: "Sample messages do not reference the brand name." T-Mobile and Verizon approved; US Cellular is waiting on AT&amp;T's outcome.</div>
+        <div class="fld" style="margin-bottom:10px"><label for="r-s1">Sample message 1</label><textarea class="in" id="r-s1">Maple Dental Group: reminder, your cleaning is Tue Oct 7 at 3:30pm. Reply C to confirm or call (914) 555-0133. Reply STOP to opt out.</textarea><div class="hint" style="color:var(--success)">✓ Now names the practice</div></div>
+        <div class="fld" style="margin-bottom:10px"><label for="r-why">Appeal note to Telnyx</label><textarea class="in" id="r-why">Both samples now open with the practice name "Maple Dental Group". No other content changed.</textarea></div>
+        <div class="op-actions"><button class="op-btn" type="button">Start over as a new campaign ($15 + 3 months)</button><button class="op-btn primary" type="button">Save samples and appeal</button></div>
+      </div></div>
+      <div class="frame"><div class="op-root">
+        <div class="op-card-head"><span class="op-company">Summit Realty Partners</span><span class="st bad">Not verified</span></div>
+        <div class="note bad" style="margin-bottom:12px"><b>Telnyx couldn't match the business to the IRS record.</b> Feedback category: Tax ID. "The legal company name does not match the name registered with the EIN."</div>
+        <div class="op-grid" style="grid-template-columns:1fr 1fr">
+          <div><div class="op-k">Filed as</div><div class="op-v">Summit Realty Partners</div></div>
+          <div><div class="op-k">Common fix</div><div class="op-v">Add the suffix: "Summit Realty Partners LLC"</div></div>
+        </div>
+        <div class="fld" style="margin-bottom:10px"><label for="r-legal">Legal name</label><input class="in" id="r-legal" value="Summit Realty Partners LLC"></div>
+        <div class="fld" style="margin-bottom:10px"><label for="r-ein">EIN (enter again, not saved)</label><input class="in" id="r-ein" placeholder="12-3456789"></div>
+        <div class="note" style="margin-bottom:10px">Fixing updates the same brand, no new $4.50 fee. A re-check ("re-vet") is allowed once, then once every 3 months.</div>
+        <div class="op-actions"><button class="op-btn primary" type="button">Update and re-check</button></div>
+      </div></div>
+    </div>
+    <p class="why">Telnyx's docs disagree with each other on whether a rejected campaign can be appealed; its API spec has an appeal call for exactly this state, so the page uses it and offers a new campaign as the costlier fallback, with the price on the button. Brand fixes update in place so nobody pays twice for the same business. Because the EIN is never stored, fixing a brand asks for it again.</p>
+  </section>
+
+  <!-- ───────────── S8 SOLE PROP ───────────── -->
+  <section class="screen" id="s8">
+    <header><span class="tag">SCREEN 8</span><h2>Sole proprietors: the owner confirms by text</h2></header>
+    <div class="frame"><div class="op-root">
+      <div class="op-card-head"><span class="op-company">Rivera Landscaping</span><span class="st wait">Waiting for PIN</span><span class="op-num">Owner's mobile (914) 555-0187</span></div>
+      <div class="two">
+        <div class="op-card">
+          <ol class="tl">
+            <li class="ok"><i></i><strong>Brand created as a sole proprietor</strong><span>Sep 15, 3:02pm · $4.50</span></li>
+            <li class="now"><i></i><strong>PIN texted to the owner</strong><span>Delivered to handset Sep 15, 3:03pm · expires Sep 16, 3:03pm</span></li>
+            <li><i></i><strong>Owner's PIN entered</strong><span>Then the campaign can be filed (1 campaign, 1 number, about 1,000 texts a day)</span></li>
+          </ol>
+          <div class="form" style="margin-top:6px">
+            <div class="fld"><label for="p-pin">PIN the owner read out</label><input class="in" id="p-pin" placeholder="6 digits" inputmode="numeric"></div>
+            <div class="fld" style="align-self:end"><button class="op-btn primary" type="button">Verify PIN</button></div>
+          </div>
+          <div class="op-actions" style="margin-top:12px"><button class="op-btn" type="button">Resend PIN</button><button class="op-btn" type="button">Copy the owner's confirmation link</button></div>
+        </div>
+        <div class="note">The text the owner receives: <i>"Loopcom: your texting registration code for Rivera Landscaping is 482913. Share it only with Loopcom support."</i><br><br>Sole proprietor registration is for a person with no EIN. A name with LLC, Inc or Corp is refused by the registry.</div>
+      </div>
+    </div></div>
+    <p class="why">Until now sole proprietors landed in a manual queue with no way through. Telnyx automates it with a texted PIN. The owner can read the PIN to staff on a call, or enter it on a one-time confirmation link so staff never handle it; which of the two ships is decision 5.</p>
+  </section>
+
+  <!-- ───────────── S9 REQUESTS ───────────── -->
+  <section class="screen" id="s9">
+    <header><span class="tag">SCREEN 9</span><h2>Requests already waiting, turned into drafts</h2></header>
+    <div class="frame"><div class="op-root">
+      <p class="op-sub">Customers have asked for texting in two older places: the sign-up wizard (filed to SignalWire) and the old 10DLC form. Each can become a pre-filled Telnyx draft. Nothing is filed until someone reviews and confirms it.</p>
+      <div class="op-wrap-x"><table class="op-table">
+        <thead><tr><th>Customer</th><th>Came from</th><th>State there</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>Greenleaf Cafe</b></td><td>Sign-up wizard · SignalWire</td><td><span class="st wait">Manual filing (sole proprietor)</span></td><td><button class="op-btn" type="button">Make Telnyx draft</button></td></tr>
+          <tr><td><b>Brightline Auto Glass</b></td><td>Sign-up wizard · SignalWire</td><td><span class="st pending">Brand filed</span><span class="sub2">Leave it: already moving on SignalWire</span></td><td><button class="op-btn" type="button" disabled>Make Telnyx draft</button></td></tr>
+          <tr><td><b>Oak Street Pharmacy</b></td><td>Old 10DLC form</td><td><span class="st off">Submitted Jul 2 · never filed</span></td><td><button class="op-btn" type="button">Make Telnyx draft</button></td></tr>
+        </tbody></table></div>
+    </div></div>
+    <p class="why">One place to see every open texting request so none sit forgotten. A registration already moving on SignalWire can't be copied, which prevents filing the same business twice at two carriers.</p>
+  </section>
+
+  <!-- ───────────── S10 SETTINGS ───────────── -->
+  <section class="screen" id="s10">
+    <header><span class="tag">SCREEN 10</span><h2>Settings: the plumbing, with its health shown</h2></header>
+    <div class="frame"><div class="op-root">
+      <div class="op-grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px">
+        <div class="op-card" style="margin:0">
+          <div class="op-k">Telnyx account</div>
+          <div class="op-v" style="margin:4px 0 8px">Verified level · key saved on the Telnyx page</div>
+          <div class="op-k">Texting profile numbers join</div>
+          <div class="op-v" style="margin-top:4px">Loopcom SMS <span class="dim mono">4001…9e2</span></div>
+        </div>
+        <div class="op-card" style="margin:0">
+          <div class="op-k">Status updates from Telnyx</div>
+          <div class="op-v" style="margin:4px 0"><span class="st ok">Signed and arriving</span></div>
+          <div class="hint dim" style="font-size:12px">https://app.loopcom.net/webhooks/telnyx/10dlc · 38 received this week · 0 rejected signatures</div>
+        </div>
+        <div class="op-card" style="margin:0">
+          <div class="op-k">Background re-check</div>
+          <div class="op-v" style="margin:4px 0">Every 10 min · last ran 3 min ago · 7 checked</div>
+          <div class="op-k" style="margin-top:6px">Alert when stuck</div>
+          <div class="op-v">Carrier review over 7 business days <span class="tog on" aria-hidden="true"></span></div>
+        </div>
+        <div class="op-card" style="margin:0">
+          <div class="op-k">Low balance warning</div>
+          <div class="op-v" style="margin:4px 0">Below $50 <span class="tog on" aria-hidden="true"></span></div>
+          <div class="op-k" style="margin-top:6px">Renewals next 30 days</div>
+          <div class="op-v num">6 campaigns · $33.00</div>
+        </div>
+      </div>
+    </div></div>
+    <p class="why">Status webhooks are a plumbing detail, so the page states whether they are working rather than asking anyone to configure them. The re-check runs whether or not webhooks work, and renewals are shown because a campaign Telnyx can't bill gets suspended.</p>
+  </section>
+
+  <!-- ───────────── S11 PERMISSIONS ───────────── -->
+  <section class="screen" id="s11">
+    <header><span class="tag">SCREEN 11</span><h2>Toggles, on both permission screens</h2></header>
+    <div class="frame"><div class="op-root">
+      <p class="op-sub">Per your standing rule: the page gets its In-sidebar switch on <b>/admin/permissions</b> and a toggle for every permission on <b>/admin/roles/[id]</b>, in the Admin section, in the same commit.</p>
+      <div class="op-wrap-x"><table class="mx">
+        <thead><tr><th>Permission</th><th>What it allows</th><th>Custom role</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">can_view_admin_texting_registration</td><td>See the page and every registration</td><td><span class="tog on"></span></td></tr>
+          <tr><td class="mono">can_file_texting_registration</td><td>Create drafts and file (spends money)</td><td><span class="tog"></span></td></tr>
+          <tr><td class="mono">can_fix_texting_registration</td><td>Edit samples, fix brands, appeal, verify PINs</td><td><span class="tog"></span></td></tr>
+          <tr><td class="mono">can_deactivate_texting_registration</td><td>Permanently deactivate a campaign</td><td><span class="tog"></span></td></tr>
+        </tbody></table></div>
+    </div></div>
+    <p class="why">Viewing, spending, fixing and the one irreversible action are separate keys, so a support person can watch and fix without being able to spend or deactivate. None go in a default bucket. Whether a non-staff role can ever hold them is decision 3.</p>
+  </section>
+
+  <!-- ───────────── S12 DECISIONS ───────────── -->
+  <section class="screen" id="s12">
+    <header><span class="tag">BEFORE BUILDING</span><h2>Decisions I need from you</h2></header>
+    <div class="decisions">
+      <div class="decision"><h3>1 · Never store the EIN?</h3><p><b>My recommendation: yes, never store it</b>, the rule the sign-up wizard already keeps. The cost is re-typing it to fix a brand. Also found: the old 10DLC form saves EINs as plain base64 in a column called <code>einEncrypted</code>. I'd like to clean that up in the same build.</p></div>
+      <div class="decision"><h3>2 · Who pays the fees?</h3><p>Charge the customer ($24 one-time on their next invoice plus the monthly fee as a recurring line), or Loopcom absorbs it. Onboarding currently tells customers $15 one-time with the monthly fee included.</p></div>
+      <div class="decision"><h3>3 · Platform staff only?</h3><p><b>My recommendation: staff only</b> (like Carrier Migration and the Telnyx page), with the four keys grantable to staff roles only. Customers don't see this page.</p></div>
+      <div class="decision"><h3>4 · When a number is approved, move its texting to Telnyx automatically?</h3><p><b>My recommendation: yes</b>, reusing the Phase 1 messaging router, with the previous carrier kept as the backup route. The alternative is an "Approved, switch when ready" button per number.</p></div>
+      <div class="decision"><h3>5 · Sole-proprietor PIN: staff enters it, or a link for the owner?</h3><p><b>My recommendation: both</b>, with the link as the default so staff never handle it.</p></div>
+      <div class="decision"><h3>6 · Also fix the SMS Campaigns page gate?</h3><p>Found while researching: its 10DLC check reads a response shape the API doesn't send, so it always says "not registered", even for an approved customer. Fixing it means pointing it at this system's status.</p></div>
+    </div>
+    <p class="why">Build order once approved: schema (additive), Telnyx 10DLC client with a test for every call, filing and re-check engine, signed status webhook, the page and its toggles, then a live filing on Loopcom's own business as proof before any customer is filed.</p>
+  </section>
+</main>
+
+<script>
+(function(){
+  var root=document.documentElement,btn=document.getElementById('themebtn');
+  btn.addEventListener('click',function(){
+    var cur=root.getAttribute('data-theme');
+    if(!cur){cur=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+    root.setAttribute('data-theme',cur==='dark'?'light':'dark');
+  });
+  var brand='hudson valley tire';
+  var s2=document.getElementById('c-s2'),list=document.getElementById('livechecks');
+  var rows=list.querySelectorAll('li');
+  function run(){
+    var t=s2.value.toLowerCase();
+    var named=t.indexOf(brand)!==-1;
+    rows[4].className=named?'pass':'fail';
+    rows[4].textContent=named?'Sample 2 names the business':'Sample 2 doesn\'t name the business. Start it with "Hudson Valley Tire:".';
+    var links=/https?:\/\/|\.com\b/.test(document.getElementById('c-s1').value+' '+s2.value);
+    rows[5].className=links?'pass':'warn';
+    rows[5].textContent=links?'"Links" is on and a sample shows one':'"Links" is on but no sample contains a link: add one or turn it off';
+    var btns=document.querySelectorAll('#s3 .op-btn.primary')[0];
+    var fails=list.querySelectorAll('li.fail').length;
+    btns.disabled=fails>0;
+    btns.textContent=fails>0?'Continue to numbers — fix '+fails+' check'+(fails>1?'s':'')+' first':'Continue to numbers';
+  }
+  s2.addEventListener('input',run);document.getElementById('c-s1').addEventListener('input',run);run();
+})();
+</script>
