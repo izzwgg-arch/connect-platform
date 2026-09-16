@@ -1924,3 +1924,44 @@ Clean NSIS build PASS from isolated production dependencies (Electron 41.5.0). A
 - ✅ **Migration `20260916120000_desk_phone_scan_link` applied and PROVEN, not assumed:** `_prisma_migrations` shows it finished, `DeskPhoneScanToken` really exists with all 12 columns, and it holds **0 rows** — correctly inert, because nobody has minted a link in production. ⛔ "The migrations row says done" and "the table exists" are two different claims; my first probe errored on its own quoting and I re-checked rather than treating the migration row as proof.
 - ⛔ **The portal deploy was NOT mine to run, and the queue guard was right to refuse it.** My manual `deploy-direct.sh portal` failed with `runningCount=1`; the running job turned out to be an **auto Deploy Center job** (`c2ba7701`, requested_by `izzywgg@gmail.com (Deploy Center)`) already deploying *the same commit* after the push. ⛔ Never reach for `--skip-queue-check` on that error without reading `/ops/deploy/status` first — it means a real job is running and break-glass would have collided with it.
 - ⏳ **NOT PROVEN:** nobody has opened the link on a real phone, no camera frame has been decoded in production, and no customer has scanned a sticker.
+
+## 2026-09-16 — licence-refusal hardening + the deploy that shipped nothing (api `c892d4b9`)
+
+**New: `apps/api/src/pbx/licenceRefusal.test.ts` — 16 tests, 16 pass.**
+6 of them are SOURCE guards. Replayed against pre-fix HEAD (worktree at
+`96f9d86b`, `PORTAL_GUARD_ROOT=<that worktree>`): **10 pass / 6 FAIL** —
+- the console's extension EDIT fallback uses the wide gate, not the old substring
+- no file may re-implement a licence substring outside licenceRefusal.ts
+- THE MIRROR LEADS: the console create tries the mirror before the panel
+- a mirror create whose APPLY failed must never fall back to the panel
+- a mirror 200 is not proof — the create reads the extension back
+- onboarding names the mirror when the licence refuses the app device
+
+**New: `apps/api/src/deploySkipGuard.test.ts` — 4 tests, 4 pass.**
+Replayed against pre-fix scripts (worktree at `617154b8`): **2 pass / 2 FAIL**
+(deploy-api.sh and deploy-portal.sh both refusing a no_changes skip on an
+unknown baseline).
+
+**Regression check, measured both ways** with the project's own runner
+(`node --experimental-test-module-mocks --import tsx --test`) over
+`src/pbxConsole/*.test.ts` + `src/pbx/*.test.ts` + `src/onboarding/*.test.ts`:
+
+| | tests | pass | fail |
+|---|---|---|---|
+| pre-fix HEAD (`96f9d86b`) | 553 | 526 | **27** |
+| with the fix | 569 | 542 | **27** |
+
+⛔ The 27 are PRE-EXISTING and unrelated: 8 onboarding files whose
+`mock.module("@connect/integrations", …)` does not export
+`resolvePbxRouteHelperConfig`, and one `pbxTenantBuild.test.ts` assertion on the
+message `"job needs company, did, voipms"` where the source now says
+`"job needs company and did"`. Neither is touched by this change.
+
+⛔ **Run these with `--experimental-test-module-mocks`** or 8 whole files fail
+with `mock.module is not a function` and you will chase a ghost (I did).
+
+`npx tsc -p apps/api --noEmit`: **0 errors.**
+
+Not run: the full api suite, portal, agent, desktop — unchanged by this work.
+Not proven: no extension has been created through the hardened route on
+production, because the mirror's grants are still not installed.

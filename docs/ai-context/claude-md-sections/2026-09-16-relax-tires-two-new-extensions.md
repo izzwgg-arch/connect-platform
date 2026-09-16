@@ -141,3 +141,84 @@ against `127.0.0.1:3001` inside `app-api-1`:
    His desk phone works today.
 2. Nothing has charged on Sep 26 yet.
 3. Neither invitee has signed in.
+
+---
+
+## 7. ✅ THE ROAD IS HARDENED NOW (api `617154b8`) — Izzy: *"harden the fuck out of this new route so no agent makes another mistake like this. The subscription is dead. The mirror is the main route for everything now."*
+
+**The defect in one line: the code recognised ONE licence sentence.**
+
+```ts
+String(e.message).includes("maximum number of al")   // extensions.max_reached, and nothing else
+```
+
+`extensions.vitxi_clients.max_reached` sailed straight past it, so no fallback
+ran, the route answered a raw 422 carrying a JSON blob cut at 200 characters,
+and the extension was left half-built.
+
+### What shipped
+
+| | |
+|---|---|
+| **`apps/api/src/pbx/licenceRefusal.ts`** | **every** licence sentence the panel can answer with — 16 rules, each carrying its **i18n key**, all read off the running PBX (`/usr/share/vitalpbx/i18n/en_US/*.txt`). ⛔ `en_US` is what the robot session receives; `zh_CN` words the same key differently, which is how the first reading of this bug went wrong. |
+| **the silent downgrade** | `import_extensions.vitxi_client.max_reached` / `…mobile_client…` — over the cap the importer does **not** refuse: it imports the row, clears the WebRTC/Mobile flag, and still says *"Import Completed Successfully"*. The customer gets a desk phone where a softphone was sold and **nothing downstream ever notices**. Both the console and onboarding now treat it as a failed import. |
+| **the mirror leads** | `POST /admin/pbx-console/extensions` tries `/mirror/extension-add` **first**, panel second. |
+| **plain English** | the mirror's `(1142, "INSERT command denied…")` is translated into a sentence naming `mirror-extension-grants-20260916.sql`; a create that dies part-way says the rows exist and Asterisk does not have them, and tells you to check `pjsip show endpoints`. |
+| **onboarding speaks** | the app-device refusal throws `device-webrtc-licence` naming the mirror and the grants file, instead of `[device-webrtc] unexpected response: {` cut mid-JSON. |
+
+### ⛔ The safety properties, deliberately chosen — do not "simplify" these away
+
+- **Mirror-first is strictly no worse than panel-first.** While the grants are
+  missing the mirror refuses in milliseconds on a permission error, we fall
+  through, and the panel runs exactly as it did. Nothing about today's
+  behaviour changes until the grants land.
+- ⛔ **A mirror run whose ROWS landed and whose APPLY failed never falls back.**
+  The extension exists at that point; a panel retry would answer "already
+  exists" and bury the real failure. It gets its own step and says *"do NOT
+  create it again"*.
+- ⛔ **A helper 200 is not proof.** The create reads the extension back and
+  requires **both** devices before reporting success — the same discipline the
+  panel's "Import Completed Successfully" earned in 2026-08-23.
+- ⛔ **An under-cap silent no-op import still stays loud.** That was the one
+  protection the old cap gate carried, and it survives the inversion: a no-op on
+  a tenant under 12 extensions is some OTHER fault and must not be papered over
+  by the mirror. (A guard test caught me dropping it.)
+- **`PBX_EXTENSION_CREATE_MODE=panel`** forces the old order back.
+- **A tenant refusal is still not an extension refusal** — `"maximum number of
+  free tenants"` must never reach an extension fallback. Kept, and tested.
+
+### ⛔ Proof, not assertion
+
+- **`apps/api/src/pbx/licenceRefusal.test.ts` — 16 tests, and 6 of them are
+  SOURCE guards that FAIL when replayed against pre-fix HEAD**
+  (`PORTAL_GUARD_ROOT=<worktree at 96f9d86b>` → 10 pass / **6 fail**; against the
+  fix 16/16). They read the routes' source because the defect was *which
+  predicate the route called* — a unit test of either predicate passes straight
+  through that bug.
+- **No regressions, measured both ways:** suites `pbxConsole` + `pbx` +
+  `onboarding` on pre-fix code = **553 tests, 526 pass, 27 fail**; with the fix =
+  **569 tests, 542 pass, 27 fail**. The 27 are pre-existing and unrelated (a
+  `@connect/integrations` mock missing `resolvePbxRouteHelperConfig`, and a
+  `pbxTenantBuild.test.ts` assertion on a message that drifted).
+  ⛔ Run them the way the project does — `node --experimental-test-module-mocks
+  --import tsx --test` — or 8 whole files fail on `mock.module is not a function`
+  and you will chase a ghost.
+- `apps/api` typecheck: **0 errors**.
+- `scripts/pbx/mirror/README.md` now opens with the standing warning, because
+  that is the first thing anyone touching the mirror reads.
+
+### ⏳ Still open after this
+
+1. **The grants are still not installed** — `mirror-extension-grants-20260916.sql`,
+   Izzy's Run button. Until then every new extension is desk-phone-only and the
+   hardening's job is only to say so clearly.
+2. **`/mirror/device-add` does not exist.** Adding an app device to an EXISTING
+   extension has no mirror route — `extension-add` builds the pair for a NEW
+   extension only, and `mapExtensionSaveToMirrorEdit` refuses *"adding a device"*
+   by name. Workaround is delete + re-add. This is Felix's exact case.
+3. **Onboarding still takes the panel road for the desk+app pair.** Making the
+   mirror primary there needs the numeric tenant id plumbed through
+   `addExtensionToTenant` (the `tenantCreator` pattern) — and it should not be
+   done until the mirror has succeeded once on production, which is the
+   acceptance §26 of the licence-exit handoff already demands. Its failure is
+   loud and correctly named in the meantime.

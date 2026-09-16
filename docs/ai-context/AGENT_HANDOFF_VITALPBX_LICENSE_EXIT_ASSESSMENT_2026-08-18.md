@@ -1606,3 +1606,102 @@ is the only proof. A `PATCH /admin/pbx-console/extensions/:id` touching only
 EXISTING devices succeeds and runs the apply, which is how ext 103 was made live.
 
 Full detail: `docs/ai-context/claude-md-sections/2026-09-16-relax-tires-two-new-extensions.md`.
+
+## 27. ✅ THE ROAD IS HARDENED (2026-09-16, api `c892d4b9` — DEPLOYED and container-verified)
+
+Izzy: *"harden the fuck out of this new route so no agent makes another mistake
+like this. The subscription is dead. The mirror is the main route for everything
+now. That was hooked up to the subscription before."*
+
+**`apps/api/src/pbx/licenceRefusal.ts`** is now the single place that knows how
+the licence talks: 16 rules, each carrying its **i18n key**, every one read off
+the running PBX's `en_US` catalogue. ⛔ `en_US` is what the robot session gets;
+`zh_CN` words `extensions.vitxi_clients.max_reached` differently, and reading the
+wrong locale is what sent the first diagnosis astray.
+
+It also carries the thing nobody had noticed at all:
+
+> `import_extensions.vitxi_client.max_reached` /
+> `import_extensions.mobile_client.max_reached` — over the app-client cap the CSV
+> importer does **not** refuse. It imports the row, **clears the WebRTC/Mobile
+> flag**, and still answers *"Import Completed Successfully"*. The extension
+> exists, an endpoint loads, and the customer has a desk phone where a softphone
+> was sold. **There is no other signal anywhere.** Both the console and
+> onboarding now treat that note as a failed import.
+
+**Wiring changed:**
+- `POST /admin/pbx-console/extensions` tries **`/mirror/extension-add` first**,
+  panel second. Safe by construction: while the grants are missing the mirror
+  refuses in milliseconds and the panel runs exactly as before, so this is never
+  worse than the old order. `PBX_EXTENSION_CREATE_MODE=panel` forces it back.
+- ⛔ A mirror run whose **rows landed and whose apply failed never falls back** —
+  the extension exists at that point and a panel retry would answer "already
+  exists", burying the real failure.
+- ⛔ **A helper 200 is not proof**: the create reads the extension back and
+  requires both devices. Same discipline §25 earned from the importer.
+- ⛔ The **under-cap silent no-op still stays loud** — the one protection the old
+  cap gate carried, kept through the inversion (a guard test caught it being
+  dropped mid-rewrite).
+- The extension EDIT fallback gates on the shared detector instead of the one
+  substring; onboarding's app-device refusal throws `device-webrtc-licence`
+  naming the mirror and the grants file.
+
+**Proof:** `apps/api/src/pbx/licenceRefusal.test.ts` — 16 tests, **6 of them
+source guards that FAIL when replayed against pre-fix HEAD** via
+`PORTAL_GUARD_ROOT`. Suites `pbxConsole` + `pbx` + `onboarding`: **27 failures
+before, 27 after** (all pre-existing — a `@connect/integrations` mock missing
+`resolvePbxRouteHelperConfig`, and a drifted message assertion), 526 → 542
+passing. `apps/api` typecheck 0 errors.
+
+### ⛔⛔ AND THE DEPLOY THAT SHIPPED NOTHING WHILE SAYING "success"
+
+Deploying the above exposed a second, worse problem — **every api deploy on this
+host was silently a no-op**:
+
+```
+[deploy-api] checkout advanced cd0d4e4c→617154b8; re-exec deploy-api.sh …
+[deploy-common] skip=no_changes
+[deploy-api] deployed commit already at 617154b8 — skipping install/build/restart
+[deploy-direct] success
+```
+
+The container kept serving the old code; the new module was simply **absent from
+the image**. Caught only because the deploy was verified against the running
+container instead of believing the word "success".
+
+**Cause:** `OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"`. On this host
+`DEPLOY_QUEUE_STATE_DIR` is **unset** (so no marker) *and*
+`app-api-1:/app/.build-commit` was **1 byte — a bare newline** — so the documented
+fallback returned empty too. `OLD_HEAD` degenerated to `PRE_SYNC_HEAD`, which the
+re-exec had already advanced to the new commit, so change-detect compared the new
+commit **against itself**. The comment above that code says it exists to prevent
+exactly this; an empty `.build-commit` walks straight through it.
+
+✅ **Fixed in `scripts/deploy-api.sh` AND `scripts/deploy-portal.sh`** (same code,
+same flaw): the `no_changes` skip is now only taken when `PERSISTED_OLD_HEAD` is
+non-empty. An unknown baseline logs *"refusing to skip"* and rebuilds. Guard:
+`apps/api/src/deploySkipGuard.test.ts`, 4 tests, 2 replay-failing.
+
+⛔ **Workaround used to get the stuck deploy out:** seed the marker —
+`DEPLOY_QUEUE_STATE_DIR=/opt/connectcomms/deploy-state` with
+`last-deployed/api.sha` holding the PREVIOUS commit. That directory now exists on
+loopcom and the container's `.build-commit` is stamped correctly again
+(`617154b8…`, then `c892d4b9…`), so the ordinary fallback works from here.
+⏳ **Setting `DEPLOY_QUEUE_STATE_DIR` permanently in
+`/opt/connectcomms/env/.env.deploy-queue` is a server config change and is
+Izzy's call** — it is not required now that the stamp is good, but it is the
+belt to the braces.
+
+⛔ **The lesson, again: "deploy said success" is not deployment.** Read
+`/app/.build-commit` and grep the image for a line only the new code has.
+
+### ⏳ Still open
+
+1. **`mirror-extension-grants-20260916.sql` is still not installed** — Izzy's Run
+   button. Until it is, every new extension platform-wide is desk-phone-only.
+2. **`/mirror/device-add` still does not exist** — adding an app device to an
+   EXISTING extension has no mirror route. Workaround: delete + re-add.
+3. **Onboarding still takes the panel road for the desk+app pair.** Making the
+   mirror primary there needs the numeric tenant id plumbed through
+   `addExtensionToTenant` (the `tenantCreator` pattern) and should wait until the
+   mirror has succeeded once on production — the acceptance §26 already demands.
