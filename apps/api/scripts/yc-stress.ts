@@ -88,12 +88,15 @@ async function main() {
     fingerprint: `${STRESS_PREFIX}fp`,
     durationSec: 100,
   } as any);
-  const reread2 = await db.ycSourceItem.findUnique({ where: { id: item2?.id ?? item2 } }).catch(() => null);
-  check("second item with the same fingerprint is DUPLICATE", reread2?.state === "DUPLICATE", String(reread2?.state));
-  check("duplicate points at the original", !!reread2?.duplicateOfId);
+  // upsertSourceItem returns { item, ... } — read the rows back by externalId so
+  // the harness never depends on the wrapper shape.
+  const rowA = await db.ycSourceItem.findFirst({ where: { externalId: `${STRESS_PREFIX}1` } });
+  const rowB = await db.ycSourceItem.findFirst({ where: { externalId: `${STRESS_PREFIX}2` } });
+  check("second item with the same fingerprint is DUPLICATE", rowB?.state === "DUPLICATE", String(rowB?.state));
+  check("duplicate points at the original", rowB?.duplicateOfId === rowA?.id, `${rowB?.duplicateOfId ?? "null"} vs ${rowA?.id ?? "null"}`);
 
   section("4. Worker leases (no double-processing)");
-  const itemId = (item1 as any)?.id ?? String(item1);
+  const itemId = rowA?.id ?? null;
   const made = await db.ycProcessingJob.createMany({
     data: Array.from({ length: 25 }, (_, i) => ({
       sourceKey: `${STRESS_PREFIX}${YIDDISH24_SOURCE_KEY}`,

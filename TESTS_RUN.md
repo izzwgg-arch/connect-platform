@@ -142,3 +142,49 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
   `103 (1.0.0)`, notes set, only the benign no-deobfuscation warning, Save → Submit → confirm. Publishing
   overview now reads **"Changes in review"**, one row: **Production · 103 (1.0.0) · Start full rollout**.
   Managed publishing OFF, so approval puts it live by itself. ⏳ Approval and real-tablet install still pending.
+
+## 2026-09-16 — Yiddish Learning Engine, built end to end (`88682602`)
+
+**apps/api/src/yiddishCorpus — 127/127 pass** (registered in `apps/api/package.json`
+as `src/yiddishCorpus/*.test.ts`, alongside the creativeStudio glob):
+- governance / evidence / corpusService: 47 — customer content unreadable and
+  unexportable; a legacy `stt-yi` row with an unprovable provider counts as
+  Yiddish-Labs-derived (and `sttProvider:"ivrit"` proves the opposite); the audio
+  gate refuses on each half alone; a 500-repeat single-speaker flood loses to ten
+  speakers; a NAME lexeme cannot become a rule without a human; fingerprint
+  dedupe; consensus refuses below the confidence floor; retention never removes text.
+- yiddish24Adapter / jobs / audioPipeline: 46 — real saved HTML fixtures parse;
+  the rate limiter actually spaces requests; audio stages are SKIPPED, not failed,
+  while the gate refuses; a lease prevents double-claim; retries then FAILED with
+  the error kept; two empty discovery runs raise a health alert instead of
+  "nothing new"; ffmpeg-missing degrades to `{available:false}`; a source guard
+  asserts the `Referer` literal appears once and sits after the gate.
+- routes / benchmark: 34 — every route 403s for a non-SUPER_ADMIN; rights and
+  audio-mode refuse without an acknowledgement; export preview reports 0
+  exportable with the breakdown; a second BASELINE is refused; runBenchmark
+  resumes and stops at the budget; compareRuns refuses a verdict below the
+  sample floor.
+
+**Migration** `20260916180000_yiddish_corpus_learning_engine` — test-applied to a
+throwaway database on the server BEFORE production: 21 tables created, defaults
+verified (`audioFetchMode=DISABLED`, `contentAllowed=false`, eligibility
+`UNKNOWN`), `YcSourceItem` cascade-deletes with its source, database dropped.
+
+**Live-site parser check** (read-only, 2 polite requests, no audio): `/cat/227/`
+→ 10 episodes, 100% field coverage (media/duration/title/series/date label),
+`totalPages=8 perPage=10 catId=227`, 136 series links, 10/10 unique fingerprints,
+`1:09:40 → 4180 s`.
+
+**Typecheck:** `tsc -p apps/api` — 0 errors in `yiddishCorpus`, 0 on any line we
+added to `server.ts`. `tsc -p apps/portal` — clean.
+
+**Portal:** `permissionToggleCoverage` 13/13, nav guards 30/30, full suite
+645/650 (the 5 failures are pre-existing, in creative/campaigns/coworker/
+deskPhone/webrtc files we did not touch).
+
+⚠️ **36 api tests fail on this workstation and none are ours** — setupOrchestrator
+24, pbxTenantDirectorySync 7, signalWireOnboarding 2, pbxTenantBuild 1,
+complianceCalendar 1, publicOrigins 1. Cause: `packages/integrations/dist/index.js`
+is a gitignored build artifact dated 2026-05-24 while its source is 2026-08-12, so
+those suites load a stale build missing `resolvePbxRouteHelperConfig`. Every file
+involved is byte-identical to HEAD; the server builds fresh in Docker.

@@ -32,3 +32,32 @@ Mockups: `docs/mockups/yiddish-learning-engine/learning-engine.html` (artifact h
   - Worker box.
   - pgvector.
 - ⏳ Nothing built, crawled, downloaded or deployed.
+
+## BUILT END TO END — 2026-09-16, commit `88682602`
+
+Izzy: *"Build this end-to-end... Yiddish24, 24/7... stress-tested end-to-end, ready to use."*
+
+- **Shipped:** 21 additive `Yc*` tables + migration `20260916180000`; the api module
+  `apps/api/src/yiddishCorpus/` (contract, governance, evidence, corpus, lexicon,
+  internal indexer, retention, Yiddish24 adapter, audio pipeline, novelty, site
+  health, leased worker, 34 routes, benchmark, seed); ten portal pages at
+  `/admin/yiddish-learning` with 10 per-page keys, all platform-staff Locked; a
+  `yiddish-corpus` docker volume.
+- **Runs continuously today: METADATA ONLY.** The worker walks and dedupes the
+  Yiddish24 catalog, ≥2 s per request, stopping on 429/Cloudflare. Audio stages
+  are SKIPPED with a reason, never failed.
+- ⛔⛔ **The three walls are code with guard tests**, not convention: customer
+  voicemails/calls/chats are counted-never-read; Yiddish Labs output is
+  serving-only (an unprovable `stt-yi` provider counts as YL); external audio
+  needs `audioFetchMode=OWNER_AUTHORIZED` **and** a GRANTED rights record. The
+  Yiddish24 `Referer` literal exists once, inside that gate, guard-tested.
+- **Proof:** 127/127 tests in the new folder; migration test-applied to a
+  throwaway DB (21 tables, safe defaults, cascades) before production; the
+  parser run against the LIVE site (10 episodes, 100% field coverage,
+  totalPages=8/perPage=10/catId=227, 136 series).
+- ⚠️ **36 api tests fail on the workstation and none are ours** —
+  `packages/integrations/dist/index.js` is a gitignored artifact from 2026-05-24
+  vs source from 2026-08-12, so those suites load a stale build. Server builds fresh.
+- ⏳ **Still Izzy's to decide:** the customer-data basis; whether to email
+  Info@yiddish24.com for permission (draft in handoff §2b); a worker box for
+  bulk audio; pgvector for semantic search.

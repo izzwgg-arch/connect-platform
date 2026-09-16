@@ -260,3 +260,90 @@ Junk (music-dominant, noisy, corrupt, unintelligible, duplicate, known synthetic
 2. Yiddish24: after the terms findings, approve a 10–30 episode pilot? Storing audio vs features-only? Ask the site owner for permission to train?
 3. Yiddish Labs: confirm serving-only use in the engine (lexical candidates, meaning) and exclusion from training exports.
 4. Compute: local analysis on the Connect server vs a separate worker box (depends on §1 numbers).
+
+---
+
+# §11 — BUILT END TO END (2026-09-16, commit `88682602`)
+
+Izzy: *"Build this end-to-end and bring it to good condition so the agent can start
+learning right up. Yiddish24, 24/7... Make sure every button, every feature,
+everything is stress-tested."* This section records what exists, what is proven,
+and the one switch that is deliberately left off.
+
+## What shipped
+
+| Piece | Where | Notes |
+|---|---|---|
+| 21 tables | `packages/db/prisma/schema.prisma` (`Yc*`) + migration `20260916180000_yiddish_corpus_learning_engine` | Additive only. Originals are REFERENCED, never copied over. |
+| Contract | `apps/api/src/yiddishCorpus/contracts.ts` | Route list, governance types, evidence weights. Everything else is written against it. |
+| Governance | `governance.ts` | The enforcement layer: `assertContentReadable`, `assertAudioFetchAllowed`, `trainingEligibilityOf`, `filterExportable`, `exclusionBreakdown`. |
+| Evidence model | `evidence.ts` | Independence-weighted scoring; a single speaker saturates at 3× their speaker count. |
+| Corpus | `corpusService.ts`, `lexicon.ts`, `internalIndexer.ts`, `retention.ts` | Fingerprint dedupe, multi-transcript consensus, counts-only internal inventory, audio-only retention. |
+| Yiddish24 adapter | `yiddish24Adapter.ts` (+ `fixtures/`) | Catalog walk, pagination, base64 series names, fingerprints, site probes, gated `fetchAudio`. |
+| Audio | `audioPipeline.ts` | ffmpeg/ffprobe: silence segmentation, music/speech heuristic, features. Degrades honestly when ffmpeg is absent. |
+| Worker | `jobs.ts` | DB-row leases, boot run + interval, backoff, budgets, graceful stop. |
+| Routes | `routes.ts` (34 routes under `/admin/yiddish`) | SUPER_ADMIN only, tenant-free. |
+| Benchmark | `benchmark.ts` | Baseline v1 freeze, resumable runs, category comparison with sample floors. |
+| Portal | `apps/portal/app/(platform)/admin/yiddish-learning/` (10 routes) | Real data only; honest empty states; governance chips everywhere. |
+| Permissions | `navConfig.ts`, `portalPermissions.ts` | 10 keys, one per page, all in `OWNER_ONLY_FIXED_NAV_ITEMS`, SUPER_ADMIN force-lined. |
+| Storage | `docker-compose.app.yml` | New `yiddish-corpus` volume on api + api_candidate. |
+
+## The three walls, enforced in code with guard tests
+
+1. **Customer data is counted, never read.** `contentAllowed=false` on every
+   CUSTOMER_PRIVATE source; `assertContentReadable` throws. The 3,510 Yiddish
+   voicemail transcripts (35.8 h) and ~1,707 h of call recordings are inventory
+   numbers only. ⏳ Izzy's decision (excluded / aggregate-only / per-tenant
+   consent) is still open and the engine cannot make it.
+2. **Yiddish Labs output is serving-only.** A legacy `stt-yi` row whose provider
+   cannot be proven counts as YL-derived, because `yiddishPass` never recorded
+   which engine won. Excluded from every export.
+3. ⛔⛔ **External audio needs a recorded human grant.** `fetchAudio` refuses
+   unless `audioFetchMode=OWNER_AUTHORIZED` AND a GRANTED rights record exists.
+   Yiddish24's CDN returns 403 without its own `Referer`; that literal appears
+   **once**, inside the gated branch, and a source-guard test asserts it sits
+   after the gate and is not hoisted. Nothing forges it.
+
+## What runs today, continuously
+
+METADATA-ONLY. The worker discovers and dedupes the public catalog on its
+interval, ≥2 s between requests, stopping on any 429 or Cloudflare challenge.
+Every audio stage is SKIPPED (not failed) with a plain-English reason. Export
+preview honestly reports **0 exportable rows**.
+
+## Proof
+
+- **Tests: 127/127** in `apps/api/src/yiddishCorpus` (governance 47 incl. evidence
+  and corpus, adapter/jobs/audio 46, routes + benchmark 34).
+- **Migration test-applied to a throwaway database** before it ever touched
+  production: 21 tables, defaults verified (`audioFetchMode=DISABLED`,
+  `contentAllowed=false`, eligibility `UNKNOWN`), cascade delete verified, DB dropped.
+- **The parser was run against the live site**: `/cat/227/` → 10 episodes, 100%
+  field coverage, `totalPages=8 perPage=10 catId=227`, 136 series links, unique
+  fingerprints 10/10, `1:09:40 → 4180 s`. This also answered the open question:
+  the whole ~136-series catalog is reachable from the nav on any page.
+- api typecheck: **0 errors in `yiddishCorpus`**; the 43 in `server.ts` and ~47
+  elsewhere are pre-existing ambient errors on lines we did not touch.
+- ⚠️ **36 api tests fail on this workstation and none of them are ours**
+  (setupOrchestrator 24, pbxTenantDirectorySync 7, signalWireOnboarding 2,
+  pbxTenantBuild 1, complianceCalendar 1, publicOrigins 1). Cause:
+  `packages/integrations/dist/index.js` is a gitignored build artifact dated
+  **2026-05-24** while its source is from 2026-08-12, so the tests load a stale
+  build missing `resolvePbxRouteHelperConfig`. Every file involved is identical
+  to HEAD. The server builds fresh in Docker, so production is unaffected.
+
+## Traps for the next session
+
+- ⛔ **`prisma format` rewrites the whole schema file.** In a shared worktree that
+  sweeps other sessions' models into your diff. Commit the schema as
+  "origin + your block", never the formatted tree copy.
+- ⛔ **`prisma migrate diff` from the live DB emits platform-wide drift.** The raw
+  diff contained DROP CONSTRAINT / DROP INDEX for CRM, email and onboarding
+  tables. Only the `Yc` statements were kept (21 creates, 34 indexes, 15 FKs,
+  zero destructive). Never ship that diff unfiltered.
+- ⛔ **origin moved 8 commits mid-build** and touched every shared file. Blobs
+  built from HEAD would have reverted the Creative Studio work. Build
+  "origin + my hunks", and diff against origin before committing.
+- ⛔ **origin carried a syntax error**: `navConfig.ts:1` was
+  `import type { LucideIcon   FolderOpen,`, which broke every portal typecheck.
+  Repaired in this commit, with all Creative Studio icons and entries preserved.

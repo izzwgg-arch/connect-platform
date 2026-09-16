@@ -32,6 +32,15 @@ import { recordProbes, noteDiscoveryRun, alertIfBroken } from "./siteHealth";
 
 export const YC_DEFAULT_LEASE_MS = 5 * 60_000;
 export const YC_DEFAULT_INTERVAL_MS = 60_000;
+
+/**
+ * How often a source is re-walked for new material. The worker tick is cheap
+ * and frequent; discovery is not, so it gets its own, much slower clock.
+ * ⛔ Without this, nothing ever creates the first `discover` job — `enqueueNext`
+ * deliberately never re-queues `discover`, so the engine would sit idle for
+ * ever while looking healthy.
+ */
+export const YC_DISCOVERY_EVERY_MS = Number(process.env.YIDDISH_DISCOVERY_EVERY_MS || 30 * 60 * 1000);
 export const YC_BACKOFF_BASE_MS = 30_000;
 export const YC_BACKOFF_MAX_MS = 6 * 60 * 60_000;
 export const YC_WORKER_HEARTBEAT_METRIC = "worker_heartbeat_ms";
@@ -621,6 +630,8 @@ export interface YiddishWorkerOptions extends RunDueJobsDeps {
   /** Skip the boot run. Only tests should ever pass this. */
   skipBootRun?: boolean;
   onError?: (err: unknown) => void;
+  /** How often each source is re-walked. Defaults to YC_DISCOVERY_EVERY_MS. */
+  discoveryIntervalMs?: number;
 }
 
 export interface YiddishWorkerHandle {
@@ -640,6 +651,61 @@ export interface YiddishWorkerHandle {
  * twice, and `stop()` waits for the tick in flight so a shutdown never leaves
  * a lease held by a process that is gone.
  */
+/**
+ * Keep every enabled adapter source walking. Called on each worker tick.
+ *
+ * A source is scheduled only when ALL of these hold, so this can never become a
+ * runaway or spend money by itself:
+ *   - the source is enabled and has an adapter,
+ *   - its budget (or the global one) is not paused and allows `discover`,
+ *   - it has no discover job already PENDING or RUNNING,
+ *   - its last discovery is older than YC_DISCOVERY_EVERY_MS.
+ */
+export async function ensureDiscoveryScheduled(
+  db: any,
+  opts: { now?: Date; discoveryIntervalMs?: number } = {},
+): Promise<{ scheduled: string[]; skipped: { key: string; why: string }[] }> {
+  const now = opts.now ?? new Date();
+  const every = opts.discoveryIntervalMs ?? YC_DISCOVERY_EVERY_MS;
+  const scheduled: string[] = [];
+  const skipped: { key: string; why: string }[] = [];
+
+  const sources = await db.ycSource.findMany({ where: { enabled: true } }).catch(() => []);
+  for (const source of sources || []) {
+    const key = String(source.key);
+    const isAdapter = String(source.kind) === "EXTERNAL_ADAPTER" || !!source.adapterKey;
+    if (!isAdapter) continue; // internal tables are counted by the indexer, not walked
+
+    const budget = await loadBudget(db, key);
+    const verdict = budgetVerdict(budget, "discover", now);
+    if (!verdict.allowed) {
+      skipped.push({ key, why: verdict.reason || "the budget refuses discovery" });
+      continue;
+    }
+
+    const inFlight = await db.ycProcessingJob
+      .count({ where: { sourceKey: key, stage: "discover", state: { in: ["PENDING", "RUNNING"] } } })
+      .catch(() => 0);
+    if (inFlight > 0) {
+      skipped.push({ key, why: "a discover job is already queued or running" });
+      continue;
+    }
+
+    const lastAt = source.lastDiscoveryAt ?? source.lastRunAt;
+    const age = lastAt ? now.getTime() - new Date(lastAt).getTime() : Number.POSITIVE_INFINITY;
+    if (age < every) {
+      skipped.push({ key, why: `walked ${Math.round(age / 60000)} min ago` });
+      continue;
+    }
+
+    await db.ycProcessingJob.create({
+      data: { sourceKey: key, stage: "discover", priority: 5, nextRunAt: now, payload: { scheduledBy: "worker" } },
+    });
+    scheduled.push(key);
+  }
+  return { scheduled, skipped };
+}
+
 export function startYiddishWorker(db: any, opts: YiddishWorkerOptions = {}): YiddishWorkerHandle {
   const intervalMs = Math.max(5_000, opts.intervalMs ?? YC_DEFAULT_INTERVAL_MS);
   const leaseOwner = opts.leaseOwner || `yc-worker-${process.pid}`;
@@ -652,6 +718,11 @@ export function startYiddishWorker(db: any, opts: YiddishWorkerOptions = {}): Yi
     inFlight = (async () => {
       try {
         await writeHeartbeat(db);
+        // Schedule before running, so a fresh install starts walking on its
+        // first tick instead of waiting for someone to queue a job by hand.
+        await ensureDiscoveryScheduled(db, { discoveryIntervalMs: opts.discoveryIntervalMs }).catch((err) => {
+          if (opts.onError) opts.onError(err);
+        });
         return await runDueJobs(db, { ...opts, leaseOwner });
       } catch (err) {
         if (opts.onError) opts.onError(err);
