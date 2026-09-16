@@ -133,6 +133,12 @@ services:
       # default so no new secret is required for turn-up.
       PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
       YIDDISH_CORPUS_STORAGE_DIR: ${YIDDISH_CORPUS_STORAGE_DIR:-/var/lib/connect/yiddish-corpus}
+      # 24/7 corpus worker pacing. The metadata stages are local DB work, so
+      # the stock 25-per-minute meant the Yiddish24 catalog would take weeks.
+      # These change how much LOCAL work we do per tick - never how fast we
+      # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
+      YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
+      YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
       PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
       # ── Android APK distribution ─────────────────────────────────────────
@@ -322,6 +328,12 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
       PROMPT_STORAGE_DIR: ${PROMPT_STORAGE_DIR:-/var/lib/connect/ivr-prompts}
       YIDDISH_CORPUS_STORAGE_DIR: ${YIDDISH_CORPUS_STORAGE_DIR:-/var/lib/connect/yiddish-corpus}
+      # 24/7 corpus worker pacing. The metadata stages are local DB work, so
+      # the stock 25-per-minute meant the Yiddish24 catalog would take weeks.
+      # These change how much LOCAL work we do per tick - never how fast we
+      # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
+      YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
+      YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
       PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
       APK_DOWNLOAD_DIR: ${APK_DOWNLOAD_DIR:-/var/lib/connect/downloads}
