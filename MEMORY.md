@@ -1,5 +1,7 @@
 # Loopcom / Connect project memory
 
+Laybel release gate (2026-09-16): bb16c34b committed in isolated scratchpad/laybel-release, not pushed/deployed. Auto-review blocked the two-branch GitHub push; explicit owner approval requested for codex/laybel-live-video-20260916 + feat/ivr-migration-takeover at izzwgg-arch/connect-platform. Do not bypass. Assistant-only restart approval is already granted. Final portal typecheck passed; no live latency claim.
+
 Laybel latency update (2026-09-16): owner confirms call works. Implemented final-answer-only streaming through the existing Assistant/tool gates; no commentary/tool arguments, no partially spoken replay. 76 agent + 23 portal tests pass. Owner approved Assistant-only release with rollback (queue lacks agent target); deployment/live speedup pending. Timing means speech queued, not audible playback. English output can precede YL chat translation; YL video microphone input remains unwired. See Laybel handoff.
 
 ## Fundamental task rule — owner instruction, 2026-09-14

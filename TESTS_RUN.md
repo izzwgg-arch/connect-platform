@@ -2,6 +2,8 @@
 
 ## Laybel streaming latency implementation — 2026-09-16
 
+- Final repeat portal typecheck PASS. Release bb16c34b remains local: auto-review rejected the two-branch GitHub push; owner approval requested. No production build/deploy or live speed comparison occurred.
+
 - PASS: 76 agent tests (auth/roles, engine/identity/workspace/bridge/tools, streaming router and real local HTTP streaming). Includes early final speech, no commentary/unphased/tool speech, no partial-answer failover/tool replay, verified tenant identity, and English speech before YL output translation.
 - PASS: 23 portal tests (Assistant/layout/consent/takeover, incremental UTF8 NDJSON, sentences, early speech, barge-in and failure no-retry).
 - PASS: portal typecheck. Agent default typecheck reports pre-existing packages/db shared-subpath module-resolution errors; new test schema type fixed. Agent typecheck with --moduleResolution bundler --module esnext passes. Default configuration is not claimed green.

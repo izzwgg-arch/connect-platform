@@ -4,6 +4,8 @@
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`**.
 
+- Release `bb16c34b` is committed locally, NOT deployed. Safety review blocked the push to the existing release and shared integration branches; explicit approval requested. Do not bypass the rejection. Assistant-only deployment permission is already granted; GitHub push approval and live latency evidence remain pending.
+
 - Owner demands user-visible proof before any working claim. Tests, deployment, tokens and Connected status are not a substitute for a heard question and audible reply.
 - New owner language contract: Yiddish Labs transcribes Yiddish speech and translates into English for the same AI; its English answer is translated through YL for Yiddish chat, while original English drives spoken avatar output. Current video bypasses YL input and speaks the chat reply; required wiring is NOT implemented. Source trace and acceptance criteria in full handoff; no runtime change/deploy in this requirements turn.
 - Restricted session-token-only Anam key stored encrypted; approved no-tie/infinity-pin custom Laybel avatar configured. Existing Assistant is still the brain. Customer rollout remains disabled; owner preview enabled. No paid upgrade.
