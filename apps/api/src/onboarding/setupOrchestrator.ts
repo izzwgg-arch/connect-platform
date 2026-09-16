@@ -250,6 +250,37 @@ async function findPbxDirectoryEntry(
         String(d.displayName || "").trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (hit) return hit;
+    // ⛔ The REST list is a 40+ minute stale cache — a brand-new tenant is
+    // routinely missing from it (proven live 2026-09-16: the Telnyx end-to-end
+    // tenant 143 failed `pbx_tenant_not_in_directory` long after it existed).
+    // Fall back to the PBX DATABASE. ⛔⛔ The directory sync DELETES every entry
+    // not in the rows it is handed, so it gets the FULL ombu_tenants table,
+    // never one row — and only when that table looks whole (≥ half of what we
+    // already know), so a bad read can never wipe the directory.
+    try {
+      const inst = await (db as any).pbxInstance.findUnique({ where: { id: instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+      const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+      const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+      if (c.ok) {
+        let rows: any[] = [];
+        try {
+          const [r] = await c.conn.query("SELECT tenant_id, name, description FROM ombutel.ombu_tenants");
+          rows = r as any[];
+        } finally {
+          await c.conn.end().catch(() => {});
+        }
+        const known = dirs.length;
+        const inDb = rows.some((t) => String(t?.name || "").toLowerCase() === slug.toLowerCase());
+        if (inDb && rows.length >= Math.ceil(known / 2)) {
+          await syncPbxTenantDirectoryFromRows(db as any, instanceId, rows);
+          const again = await (db as any).pbxTenantDirectory.findMany({ where: { pbxInstanceId: instanceId } });
+          const dbHit = again.find((d: any) => String(d.tenantSlug || "").toLowerCase() === slug.toLowerCase());
+          if (dbHit) return dbHit;
+        }
+      }
+    } catch {
+      /* fall through to the next REST attempt */
+    }
     await sleep(Math.min(retryBaseMs() * 5, retryBaseMs() * (i + 1)));
   }
   return null;

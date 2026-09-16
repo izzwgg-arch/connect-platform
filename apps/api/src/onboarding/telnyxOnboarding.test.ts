@@ -693,3 +693,11 @@ test("⛔ the orchestrator finds an existing tenant in the PBX DATABASE before t
   const rest = block.indexOf("pbx.client.listTenants()");
   assert.ok(db > 0 && rest > 0 && db < rest, "MySQL lookup must come before REST");
 });
+
+test("⛔ directory fallback hands the sync the FULL tenant table with a sanity floor (the sync deletes anything not listed)", () => {
+  const src = read("setupOrchestrator.ts");
+  const i = src.indexOf("async function findPbxDirectoryEntry(");
+  const block = src.slice(i, i + 4000);
+  assert.match(block, /SELECT tenant_id, name, description FROM ombutel\.ombu_tenants"\)/, "full table — no WHERE");
+  assert.match(block, /if \(inDb && rows\.length >= Math\.ceil\(known \/ 2\)\) \{/);
+});
