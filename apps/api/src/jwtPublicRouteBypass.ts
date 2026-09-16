@@ -12,7 +12,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
   if (pathWithoutApiPrefix.startsWith("/creative/download/")) return true;
   // The Coworker's Creative Studio door: server-to-server, authenticated by
   // the shared secret inside each handler (same contract as the MOH upload
-  // door above). Every new /internal/agent/* path must be listed here or it
+  // door above). ⛔ Every new /internal/agent/* path must be listed here or it
   // answers "unauthorized" no matter what the handler does.
   if (pathWithoutApiPrefix.startsWith("/internal/agent/creative/")) return true;
   // Handsets authenticate with per-device HTTP Basic in the handler. Anchored
@@ -268,11 +268,17 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // FAILS CLOSED when no public key is stored
       // (loopcomMobile/mobileWebhookRoutes.ts).
       "/webhooks/telnyx/mobile",
+      // Unified messaging Phase 1 (2026-09-16): Telnyx MESSAGING webhooks
+      // (inbound SMS/MMS + delivery receipts) → the shared chat ingest. Same
+      // Ed25519 fail-closed contract as /webhooks/telnyx/mobile
+      // (telnyx/telnyxWebhooks.ts).
+      "/webhooks/telnyx/sms",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
     || path.endsWith("/auth/google/start") || path.endsWith("/auth/google/callback") || path.endsWith("/auth/google/complete")
     || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
     || path.endsWith("/webhooks/signalwire/registry")
     || path.endsWith("/webhooks/telnyx/mobile")
+    || path.endsWith("/webhooks/telnyx/sms")
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")

@@ -32,19 +32,24 @@ function stripComments(src: string): string {
     .join("\n");
 }
 
-test("connectChatSmsJob dispatches SIGNALWIRE numbers before any VoIP.ms concern", () => {
+test("connectChatSmsJob dispatches registry providers before any VoIP.ms concern", () => {
+  // 2026-09-16 unified messaging Phase 1: the inline `=== "SIGNALWIRE"` branch
+  // became the messagingDispatch registry. The INVARIANT is unchanged: the
+  // provider decision runs BEFORE any VoIP.ms credential/config concern, so a
+  // SignalWire/Telnyx number can never fail VOIPMS_NOT_CONFIGURED.
   const src = stripComments(readSrc("./connectChatSmsJob.ts"));
   const jobAt = src.indexOf("export async function processConnectChatSmsJob");
   const body = src.slice(jobAt);
-  const dispatchAt = body.indexOf("sendConnectChatMessageViaSignalWire");
-  // Matches both the historical no-arg call and the account-aware call
-  // (second-VoIP.ms-account support) — the invariant is the ORDER, not the arity.
+  const dispatchAt = body.indexOf("getOutboundChatAdapter(primaryProvider)");
   const credsAt = body.indexOf("await loadVoipMsCredsWorker(");
   const cfgAt = body.indexOf("globalVoipMsConfig.findUnique");
-  assert.ok(dispatchAt > -1, "the SignalWire dispatch exists");
-  assert.ok(credsAt > dispatchAt, "VoIP.ms credentials are only loaded AFTER the provider branch");
-  assert.ok(cfgAt > dispatchAt, "VoIP.ms config is only read AFTER the provider branch");
-  assert.ok(body.includes('"SIGNALWIRE"'), "branch keys on the number row's provider");
+  assert.ok(dispatchAt > -1, "the registry dispatch exists");
+  assert.ok(credsAt > dispatchAt, "VoIP.ms credentials are only loaded AFTER the provider dispatch");
+  assert.ok(cfgAt > dispatchAt, "VoIP.ms config is only read AFTER the provider dispatch");
+  const registrySrc = stripComments(readSrc("./messagingDispatch.ts"));
+  assert.ok(registrySrc.includes('"SIGNALWIRE"'), "registry carries the SignalWire adapter");
+  assert.ok(registrySrc.includes('"TELNYX"'), "registry carries the Telnyx adapter");
+  assert.ok(registrySrc.includes("sendConnectChatMessageViaSignalWire"), "SignalWire adapter is the proven send path");
 });
 
 test("the VoIP.ms inbound poll only polls VoIP.ms numbers", () => {

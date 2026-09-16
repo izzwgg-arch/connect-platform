@@ -1,4 +1,70 @@
-# 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — MOCKUPS ONLY, awaiting Izzy's approval; NOTHING BUILT
+# 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — BUILD APPROVED; PHASE 1 (Messaging Router + Telnyx) BUILT
+
+## ✅ PHASE 1 BUILT (same day, after the approval): the Messaging Router + Telnyx chat wiring
+**What exists now (all tested; deploy state recorded below):**
+- **`apps/worker/src/messagingDispatch.ts`** — the provider REGISTRY that
+  replaced the inline `if (provider === "SIGNALWIRE")` at connectChatSmsJob.ts:116.
+  SIGNALWIRE + TELNYX resolve adapters; VoIP.ms (and any unknown value, exactly
+  as before) is the job-body fallthrough, byte-identical. Source-guarded; the
+  old guard in signalWireChatSend.test.ts was updated to the registry shape and
+  the new guards FAIL replayed against pre-change HEAD.
+- **`packages/integrations/src/telnyxSms.ts`** — `TelnyxSmsProvider`
+  (POST /v2/messages, Bearer, `telnyx:<uuid>` prefixed ids, 10-media chunking,
+  1600-char body chunks, 30s timeout, TELNYX_* error taxonomy,
+  `SIMULATE_PROVIDER_FAILURE_TELNYX` chaos hook mirroring the SignalWire one).
+- **`apps/worker/src/telnyxChatSend.ts`** — the TELNYX adapter, mirroring
+  signalWireChatSend: original audio (⛔ NO MP4 conversion), MMS→signed-link
+  fallback, creds from AgentSecret `telnyx_credentials` (env TELNYX_API_KEY dev
+  fallback). ⛔ TELNYX_NOT_CONFIGURED THROWS `__configError` so the job can try
+  the backup route; with none it stamps failed WITHOUT BullMQ retries.
+- **PROVIDER-LEVEL BACKUP ROUTE** (`TenantSmsNumber.fallbackProvider`, null =
+  today's behavior for every existing row): fires ONLY on an error whose
+  `__anySent === false` EXPLICITLY — a partial delivery or an unflagged error
+  is NEVER re-sent (one message, one delivery). All three send paths attach the
+  flag (VoIP.ms via a transparent `trackVoipMsAcceptance` wrapper; the two
+  adapters set it at each acceptance). `attemptProviderFallback` is
+  dependency-injected and 8 behavior tests pin every rule. ⛔ VOIPMS as a
+  backup TARGET is deliberately unsupported yet (needs the VoIP.ms path
+  extracted from the job body). Success stamps
+  `metadata.{sentViaBackupRoute,backupCarrier,primaryCarrier,primaryError}` —
+  customer UI wording is "sent via backup route", carrier names platform-only.
+- **`apps/api/src/telnyx/telnyxWebhooks.ts`** — `/webhooks/telnyx/sms`:
+  Ed25519 fail-closed (reuses `verifyTelnyxSignature` from the LoopCom-Mobile
+  door; public key stored with the bench credentials), `message.received` →
+  the ONE shared ingest (`telnyx:` prefix, media urls), `message.finalized` →
+  FINAL states only (delivered / failed family + TELNYX_<code>),
+  `message.sent` writes NOTHING (never downgrade delivered — the SignalWire
+  rule), post-auth always 200 (dedupe is the safety, not the status code).
+  Registered in server.ts beside registerTelnyxRoutes; jwtPublicRouteBypass
+  entries added (alignment test 12/12).
+- **Migration `20260916170000_messaging_telnyx_fallback`** — additive:
+  `IntegrationProvider` + TELNYX, `TenantSmsNumber.fallbackProvider`.
+- **Tests: worker 186/186; api telnyx 27/27 (11 new webhook tests sign with a
+  REAL Ed25519 keypair), sms 20/20, bypass 12/12.** One test caught a real
+  defect pre-commit (backup fired on an unflagged error; now explicit-false
+  only). Full detail in TESTS_RUN.md.
+- ⛔ **Worktree hazards handled during this increment, worth knowing:** the
+  shared worktree's schema.prisma was a 1,990-line pure REORDER by another
+  session (same 333 models both sides — verified by inventory count, not
+  assumed); my schema change was re-applied onto HEAD's copy so the commit
+  stays +11 lines. TESTS_RUN.md's worktree copy was STALE vs HEAD with two
+  in-flight entries mixed in — rebuilt from HEAD + their entries + mine
+  (backups of both in the session scratchpad).
+- ⏳ **NOT PROVEN:** no TELNYX-provider TenantSmsNumber row exists yet, so no
+  live send; the Telnyx messaging profile has no webhook URL configured and
+  the account's Ed25519 public key isn't saved in the bench credentials, so no
+  real inbound/DLR has flowed. Wiring those + a real round-trip text on
+  (845) 306-6825 is the Phase-1 acceptance test.
+- **Next phases:** RCS (bench send exists; chat wiring + composer), portal UI
+  additions (frozen-look rule) + permission toggles for every new page/feature
+  (his 2026-09-16 requirement: toggles in custom roles on EVERYTHING),
+  WhatsApp (⛔ fix the schema drift FIRST), Messenger, GIF/sticker picker
+  (RCS: native GIFs; WhatsApp: real .webp stickers; Messenger: both; SMS→MMS
+  gif degrade — Izzy asked "wire them all in", 2026-09-16; needs a GIF search
+  provider decision, Tenor is the default candidate), mobile, then the full
+  stress/soak/chaos + proof package.
+
+# (Original design record follows — MOCKUPS approved 2026-09-16)
 
 ## ⛔⛔ REVISION 3 (same day) — SECOND STANDING RULE: NO CARRIER NAMES FOR CUSTOMERS, and THE BUILD IS APPROVED
 Izzy: *"The customer should never see the word Telnyx or wire, signal wire, or

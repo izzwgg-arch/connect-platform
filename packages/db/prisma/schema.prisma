@@ -417,6 +417,11 @@ enum IntegrationProvider {
   /// switch). Numbers ride the master Space; chat send/receive dispatches on
   /// this per-number value, VoIP.ms rows untouched.
   SIGNALWIRE
+  /// Telnyx — third messaging carrier (2026-09-16 unified messaging Phase 1).
+  /// Outbound chat dispatches through the worker's messagingDispatch registry;
+  /// inbound + delivery receipts arrive on /webhooks/telnyx/sms
+  /// (Ed25519-verified, fail-closed).
+  TELNYX
 }
 
 enum SmsSendMode {
@@ -4702,6 +4707,12 @@ model TenantSmsNumber {
   /// exists. Stamped by sync-numbers; read by the inbound poller and every
   /// outbound send so the right account's credentials are used per number.
   voipmsAccountId     String                @default("default")
+  /// Backup carrier for OUTBOUND chat messages on this number (unified
+  /// messaging Phase 1). Fired only when the primary provably accepted
+  /// NOTHING (`__anySent !== true` on the thrown error) — one message, one
+  /// delivery, never both. Null = no backup route (the default for every
+  /// existing row, i.e. exactly the pre-Phase-1 behaviour).
+  fallbackProvider    IntegrationProvider?
   voipmsDid           String?
   phoneRaw            String?
   phoneE164           String                @unique

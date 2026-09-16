@@ -393,6 +393,7 @@ import { registerElevenLabsRoutes } from "./voice/elevenLabsRoutes";
 import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
+import { registerTelnyxWebhookRoutes } from "./telnyx/telnyxWebhooks";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
@@ -24243,6 +24244,10 @@ registerTelnyxRoutes({
   db,
   requireOwner: (req, reply) => requireSuperAdmin(req, reply),
 });
+// Telnyx messaging webhooks → the shared chat ingest (unified messaging
+// Phase 1, 2026-09-16). Ed25519-verified, fail-closed; path listed in
+// jwtPublicRouteBypass.ts. See telnyx/telnyxWebhooks.ts.
+registerTelnyxWebhookRoutes({ app, db });
 
 // ── Wizard carrier switch (2026-09-15) ─────────────────────────────────────
 // Which carrier NEW sign-ups search and buy from (stored override over the

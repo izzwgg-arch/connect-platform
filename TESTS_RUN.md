@@ -1,5 +1,15 @@
 # Tests run
 
+## Unified messaging Phase 1 (Messaging Router + Telnyx) — 2026-09-16
+
+- apps/worker full suite **186/186 pass** (was ~168 + 25 new): telnyxChatSend (7 — provider JSON shape/Bearer/E.164/media_urls, refusal taxonomy, chaos hook, chunking, no-MP4 guard, config-error contract), messagingDispatch (11 — registry map, no-inline-if/else guard, and the one-message-one-delivery backup-route rules incl. partial-delivery and unflagged-error refusals), updated signalWireChatSend guard to the registry architecture.
+- Guard replay vs pre-change HEAD: HEAD carries the inline SIGNALWIRE branch, no registry file — new guards FAIL there (verified by grep on git show HEAD).
+- ⛔ One test caught a real defect before commit: the backup route fired on an error carrying NO __anySent flag; fixed to fire only on an EXPLICIT false (may-have-sent is never retried).
+- apps/api: src/telnyx **27/27** (11 new webhook tests with REAL Ed25519 signatures — fail-closed 401s, ingest wiring with the telnyx: prefix, final-states-only DLR, message.sent writes nothing, ingest-failure still 200), publicReadyJwtBypass **12/12**, src/sms **20/20**.
+- Typechecks: worker + integrations clean in all touched files (worker baseline has 8 pre-existing module-resolution errors in packages/db/src/webrtcPlatformOutageService.ts, untouched); api my-files clean (49 total pre-existing ambient, none in telnyx/, server.ts additions clean).
+- Prisma client regenerated against the schema + migration 20260916170000 (TELNYX enum value, TenantSmsNumber.fallbackProvider).
+- NOT proven yet: no deploy at test time (deploy follows in the same task), no real Telnyx inbound/DLR (needs webhook URL configured on the messaging profile + the account public key saved), no live send on a TELNYX-provider number (none exists yet).
+
 ## Laybel live screen proof and layout correction — 2026-09-16
 
 - Reproduced real production bug: connected call's video panel collapsed to 21.6 px. Initial call speech reached existing Assistant transcript and replies appeared; audible playback not confirmed.
@@ -268,3 +278,19 @@ complianceCalendar 1, publicOrigins 1. Cause: `packages/integrations/dist/index.
 is a gitignored build artifact dated 2026-05-24 while its source is 2026-08-12, so
 those suites load a stale build missing `resolvePbxRouteHelperConfig`. Every file
 involved is byte-identical to HEAD; the server builds fresh in Docker.
+
+## Browser Companion desktop install — 2026-09-16
+
+- Owner-approved silent NSIS installation of `Connect-Setup-0.1.17-rc.18.exe` completed.
+- Read-only installed-archive inspection passed for `hybridRuntime.js`, the MV3 manifest,
+  and the branded icon asset; the regular installed `Loopcom.exe` process was observed
+  after launch.
+
+Not run: Chrome Developer Mode unpacked extension loading, pairing, and live Coworker/provider acceptance. The available supported UI control cannot claim `chrome://extensions`.
+
+## Laybel live-video adapter — 2026-09-15
+
+- `apps/api`: `node --import tsx --test src/laybel.test.ts src/pbxMutationSafeguard.test.ts` — **14/14 pass**. Auth, disabled rollout/owner preview, no client config overrides, write-only credentials, partial settings validation, sanitized failures, rate limiting, PBX safeguards.
+- `apps/portal`: `node --import tsx --test components/floatingAssistantOpening.test.ts` — final **16/16 pass**. Existing support paths, same-brain video wiring, consent/cleanup guards, duplicate/serial turn handling, interruption, close/late-response suppression, takeover and no automatic retries.
+- Full portal typecheck passed with `--noEmit --incremental false --types node,react,react-dom`. Final focused portal/API typechecks **passed** using `scratchpad/laybel-typecheck.json` (includes Next declarations) and `scratchpad/laybel-api-typecheck.json` (extends actual workspace aliases). Default ambient discovery failed on missing emscripten declaration; sandbox tsx failed initializing `os.userInfo` but authorized elevated tests passed. Initial standalone API/portal focused commands omitted required workspace/Next declarations; corrected configs passed without source suppression.
+- No live Anam/SignalWire session, production deployment, provider portrait, microphone/playback or browser visual verification proven. Unit tests do not establish live-call readiness.

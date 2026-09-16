@@ -4,6 +4,7 @@ import { VoipMsSmsProvider } from "@connect/integrations";
 import { buildChatAttachmentIdSignedDownloadUrl, buildChatDbSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
 import { splitVoipMsSendSmsParts, voipMsSmsPayloadLogFields } from "@connect/shared";
 import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
+import { getOutboundChatAdapter, type OutboundChatAdapterInput } from "./messagingDispatch";
 import { resolveSmsPublicApiBase } from "./smsPublicApiBase";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
@@ -108,20 +109,45 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
   const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: data.tenantId } });
 
   // ⛔ PROVIDER DISPATCH — decided by the NUMBER's row, before any VoIP.ms
-  // concern (credentials included). A SignalWire number must never fail
-  // "VOIPMS_NOT_CONFIGURED", and its MMS capability is SignalWire's business,
-  // not the VoIP.ms `mmsCapable` sync flag. This is the "system sees it's a
-  // SignalWire number, so it uses this" switch (Izzy, 2026-08-29) — VoIP.ms
-  // numbers take the unchanged path below.
-  if (String((smsRow as any)?.provider || "") === "SIGNALWIRE") {
-    const { sendConnectChatMessageViaSignalWire } = await import("./signalWireChatSend");
-    await sendConnectChatMessageViaSignalWire({
-      msg: { id: msg.id, threadId: msg.threadId, body: msg.body, metadata: msg.metadata, attachments: msg.attachments as any },
-      tenantId: data.tenantId,
-      to: ext,
-      from: tenantDid,
-    });
-    return;
+  // concern (credentials included). A SignalWire/Telnyx number must never fail
+  // "VOIPMS_NOT_CONFIGURED", and its MMS capability is that carrier's
+  // business, not the VoIP.ms `mmsCapable` sync flag. This is the "system sees
+  // whose number it is, so it uses this" switch (Izzy, 2026-08-29), now a
+  // REGISTRY (messagingDispatch.ts) instead of an inline if/else — VoIP.ms
+  // numbers (and any unknown provider value, exactly as before) take the
+  // unchanged path below.
+  const primaryProvider = String((smsRow as any)?.provider || "VOIPMS").toUpperCase();
+  const fallbackProvider = String((smsRow as any)?.fallbackProvider || "").toUpperCase() || null;
+  const adapterInput: OutboundChatAdapterInput = {
+    msg: { id: msg.id, threadId: msg.threadId, body: msg.body, metadata: msg.metadata, attachments: msg.attachments as any },
+    tenantId: data.tenantId,
+    to: ext,
+    from: tenantDid,
+  };
+  const primaryAdapter = await getOutboundChatAdapter(primaryProvider);
+  if (primaryAdapter) {
+    try {
+      await primaryAdapter(adapterInput);
+      return;
+    } catch (primaryErr: any) {
+      const handled = await attemptProviderFallback({
+        messageId: msg.id, threadId: msg.threadId, tenantId: data.tenantId,
+        primaryProvider, fallbackProvider, primaryErr, to: ext, from: tenantDid,
+      });
+      if (handled) return;
+      if (primaryErr?.__configError) {
+        // Not configured and no working backup route: stamp failed WITHOUT a
+        // BullMQ rethrow — a missing credential does not fix itself in 12
+        // exponential retries (matches the pre-registry not-configured
+        // semantics of all three providers).
+        await db.connectChatMessage.update({
+          where: { id: msg.id },
+          data: { deliveryStatus: "failed", deliveryError: String(primaryErr?.code || primaryErr?.message || primaryErr).slice(0, 2000) },
+        });
+        return;
+      }
+      throw primaryErr;
+    }
   }
 
   // The number's row says which VoIP.ms ACCOUNT owns it (second-account
@@ -160,14 +186,22 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
   const publicBase = resolveSmsPublicApiBase(process.env);
 
   const testMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
-  const provider = new VoipMsSmsProvider(
-    {
-      username: creds.username,
-      password: creds.password,
-      fromNumber: tenantDid,
-      apiBaseUrl: cfg?.apiBaseUrl || creds.apiBaseUrl,
-    },
-    testMode,
+  // Fallback contract: flips true on the FIRST VoIP.ms acceptance. The
+  // tracking wrapper is transparent — same calls, same results — it only
+  // records that the carrier accepted something, so the provider-level backup
+  // route below can never duplicate a partially delivered message.
+  const acceptance = { anySent: false };
+  const provider = trackVoipMsAcceptance(
+    new VoipMsSmsProvider(
+      {
+        username: creds.username,
+        password: creds.password,
+        fromNumber: tenantDid,
+        apiBaseUrl: cfg?.apiBaseUrl || creds.apiBaseUrl,
+      },
+      testMode,
+    ),
+    acceptance,
   );
 
   try {
@@ -305,6 +339,12 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       },
     });
   } catch (e: any) {
+    if (e && typeof e === "object" && e.__anySent === undefined) e.__anySent = acceptance.anySent;
+    const handled = await attemptProviderFallback({
+      messageId: msg.id, threadId: msg.threadId, tenantId: data.tenantId,
+      primaryProvider, fallbackProvider, primaryErr: e, to: ext, from: tenantDid,
+    });
+    if (handled) return;
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: {
@@ -313,5 +353,127 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
       },
     });
     throw e;
+  }
+}
+
+/** Transparent acceptance tracker for the VoIP.ms provider — see the fallback contract. */
+function trackVoipMsAcceptance(p: VoipMsSmsProvider, flag: { anySent: boolean }): VoipMsSmsProvider {
+  return {
+    sendMessage: async (input: any) => {
+      const r = await p.sendMessage(input);
+      flag.anySent = true;
+      return r;
+    },
+    sendMms: async (input: any) => {
+      const r = await p.sendMms(input);
+      flag.anySent = true;
+      return r;
+    },
+  } as unknown as VoipMsSmsProvider;
+}
+
+/**
+ * Provider-level BACKUP ROUTE (unified messaging Phase 1). Fires ONLY when:
+ *  - the number has a `fallbackProvider` configured (null = today's behaviour,
+ *    the default for every existing row), and it differs from the primary;
+ *  - the primary provably accepted NOTHING (`__anySent !== true` — a partial
+ *    delivery is NEVER duplicated through a second carrier; an error that
+ *    carries no flag is treated as "may have sent" and is not retried);
+ *  - a registry adapter exists for the backup carrier (VOIPMS as a backup
+ *    target is deliberately not supported yet — it needs the VoIP.ms path
+ *    extracted from the job body; documented in the handoff).
+ *
+ * On success the message reads `sent` (stamped by the adapter) and the
+ * metadata records the route for the message-info drawer — the CUSTOMER-facing
+ * copy for this is "sent via backup route"; carrier names surface only on
+ * platform-staff screens.
+ */
+export type ProviderFallbackDeps = {
+  getAdapter: typeof getOutboundChatAdapter;
+  loadMessage: (messageId: string, tenantId: string) => Promise<{
+    id: string; threadId: string; body: string | null; metadata: unknown;
+    attachments: Array<{ id: string; storageKey: string; mimeType: string | null; fileName: string | null; sizeBytes: number | null }>;
+  } | null>;
+  readMetadata: (messageId: string) => Promise<unknown>;
+  writeMetadata: (messageId: string, metadata: Record<string, unknown>) => Promise<void>;
+};
+
+const defaultFallbackDeps: ProviderFallbackDeps = {
+  getAdapter: getOutboundChatAdapter,
+  loadMessage: async (messageId, tenantId) => {
+    const row = await db.connectChatMessage.findFirst({
+      where: { id: messageId, tenantId },
+      include: { attachments: { orderBy: { createdAt: "asc" } } },
+    });
+    return row ? { id: row.id, threadId: row.threadId, body: row.body, metadata: row.metadata, attachments: row.attachments as any } : null;
+  },
+  readMetadata: async (messageId) => {
+    const row = await db.connectChatMessage.findFirst({ where: { id: messageId }, select: { metadata: true } });
+    return row?.metadata ?? null;
+  },
+  writeMetadata: async (messageId, metadata) => {
+    await db.connectChatMessage.update({ where: { id: messageId }, data: { metadata: metadata as any } });
+  },
+};
+
+export async function attemptProviderFallback(input: {
+  messageId: string;
+  threadId: string;
+  tenantId: string;
+  primaryProvider: string;
+  fallbackProvider: string | null;
+  primaryErr: any;
+  to: string;
+  from: string;
+}, deps: ProviderFallbackDeps = defaultFallbackDeps): Promise<boolean> {
+  const fb = String(input.fallbackProvider || "").toUpperCase();
+  if (!fb || fb === input.primaryProvider) return false;
+  // ⛔ Conservative by construction: the backup fires ONLY when the error says
+  // `__anySent === false` EXPLICITLY. A flag of true is a partial delivery; a
+  // MISSING flag is an error from outside the adapters ("may have sent") and
+  // is never retried — a duplicate text is worse than a failed one.
+  if (!input.primaryErr || typeof input.primaryErr !== "object" || input.primaryErr.__anySent !== false) return false;
+  const adapter = await deps.getAdapter(fb);
+  if (!adapter) return false;
+  const primaryError = String(input.primaryErr?.code || input.primaryErr?.message || input.primaryErr).slice(0, 300);
+  console.warn(JSON.stringify({
+    event: "chat_provider_fallback",
+    tenantId: input.tenantId, threadId: input.threadId, messageId: input.messageId,
+    primaryProvider: input.primaryProvider, backupProvider: fb, primaryError,
+  }));
+  try {
+    // Fresh read: the primary attempt may have rewritten metadata (link
+    // fallback flags) or attachments-adjacent state; the backup adapter must
+    // see the row as it is NOW, not as the job first loaded it.
+    const fresh = await deps.loadMessage(input.messageId, input.tenantId);
+    if (!fresh) return false;
+    await adapter({
+      msg: fresh,
+      tenantId: input.tenantId,
+      to: input.to,
+      from: input.from,
+    });
+    const postMeta = await deps.readMetadata(input.messageId);
+    const meta = postMeta && typeof postMeta === "object" && !Array.isArray(postMeta) ? (postMeta as Record<string, any>) : {};
+    await deps.writeMetadata(input.messageId, {
+      ...meta,
+      sentViaBackupRoute: true,
+      backupCarrier: fb,
+      primaryCarrier: input.primaryProvider,
+      primaryError,
+    });
+    console.info(JSON.stringify({
+      event: "chat_provider_fallback_sent",
+      tenantId: input.tenantId, threadId: input.threadId, messageId: input.messageId,
+      backupProvider: fb,
+    }));
+    return true;
+  } catch (fbErr: any) {
+    console.warn(JSON.stringify({
+      event: "chat_provider_fallback_failed",
+      tenantId: input.tenantId, threadId: input.threadId, messageId: input.messageId,
+      backupProvider: fb, err: String(fbErr?.message || fbErr).slice(0, 300),
+    }));
+    return false;
   }
 }
