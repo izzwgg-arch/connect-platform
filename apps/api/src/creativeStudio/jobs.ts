@@ -250,7 +250,11 @@ export async function bumpEngineStat(db: any, engineId: string, capability: stri
 }
 
 export async function failJob(db: any, job: any, error: string, errorCode: string, opts: { permanent?: boolean } = {}): Promise<void> {
-  const permanent = opts.permanent || errorCode === "refused" || errorCode === "no_key" || job.attempts >= job.maxAttempts;
+  // ⛔ "provider_account" is OUR bill, not a wobble: retrying it just spends
+  // three attempts hitting the same wall and makes the person wait longer
+  // for the same answer.
+  const permanent =
+    opts.permanent || errorCode === "refused" || errorCode === "no_key" || errorCode === "provider_account" || job.attempts >= job.maxAttempts;
   await db.creativeJob.update({
     where: { id: job.id },
     data: permanent

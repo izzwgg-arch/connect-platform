@@ -166,9 +166,30 @@ async function openaiFetch(path: string, key: string, init: RequestInit & { time
   }
 }
 
+/**
+ * Turn a provider's refusal into something a person can act on.
+ *
+ * ⛔ Providers do not agree on where the reason lives: OpenAI puts it in
+ * `error.message`, ElevenLabs in `detail.message`. Reading only one of them
+ * threw the real reason away — a lapsed ElevenLabs subscription came out as
+ * "The voice engine refused (401)", which tells the customer nothing and tells
+ * us nothing either. Proven on production 2026-09-16.
+ *
+ * And a problem with OUR account is never the customer's fault to solve, so it
+ * says so plainly rather than quoting the provider's billing page at them.
+ */
 function errorFrom(body: any, fallback: string): { error: string; errorCode: string } {
-  const msg = body?.error?.message || body?.message || fallback;
-  const code = body?.error?.code || body?.error?.type || "provider_error";
+  const detail = body?.detail && typeof body.detail === "object" ? body.detail : null;
+  const msg = body?.error?.message || detail?.message || body?.message || (typeof body?.detail === "string" ? body.detail : "") || fallback;
+  const code = body?.error?.code || body?.error?.type || detail?.code || detail?.status || "provider_error";
+
+  // Our bill, our problem — and the job must not be retried into the same wall.
+  if (/payment|billing|quota_exceeded|insufficient|subscription/i.test(String(code) + " " + String(msg))) {
+    return {
+      error: "That service is unavailable on Loopcom's side at the moment — it is not something you did, and we have been told. Everything else in the studio still works.",
+      errorCode: "provider_account",
+    };
+  }
   return { error: String(msg).slice(0, 500), errorCode: String(code).slice(0, 80) };
 }
 

@@ -370,6 +370,30 @@ test("nothing found means nothing to add to the prompt", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 6b. what a provider's refusal turns into                            */
+/* ------------------------------------------------------------------ */
+
+test("a provider's real reason survives, wherever that provider puts it", () => {
+  const src = read("engines.ts");
+  // ⛔ OpenAI puts it in error.message, ElevenLabs in detail.message. Reading
+  // only one threw the reason away: a lapsed subscription came out as "The
+  // voice engine refused (401)" on production.
+  assert.match(src, /detail\?\.message/);
+  assert.match(src, /body\?\.error\?\.message/);
+});
+
+test("a problem with Loopcom's own account is not blamed on the customer, and is not retried", () => {
+  const engines = read("engines.ts");
+  const block = engines.slice(engines.indexOf("function errorFrom"), engines.indexOf("function errorFrom") + 1600);
+  assert.match(block, /payment\|billing\|quota_exceeded\|insufficient\|subscription/);
+  assert.match(block, /not something you did/);
+  assert.match(block, /errorCode: "provider_account"/);
+
+  const jobs = read("jobs.ts");
+  assert.match(jobs, /errorCode === "provider_account"/, "it must be permanent — retrying hits the same wall three times");
+});
+
+/* ------------------------------------------------------------------ */
 /* 7. source guards                                                    */
 /* ------------------------------------------------------------------ */
 
