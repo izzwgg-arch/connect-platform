@@ -651,3 +651,24 @@ test("result towns: Telnyx's 'RATE CENTER:SUB-AREA' shows as the town only", asy
   });
   assert.equal(out.numbers[0].location, "Compton, CA");
 });
+
+test("⛔ client: the messaging profile goes to /phone_numbers/{id}/messaging, NEVER the general PATCH (live 422/10027)", async () => {
+  const { setTelnyxFetch } = await import("../telnyx/telnyxClient");
+  const { configureOwnedNumber } = await import("../telnyx/telnyxOnboardingClient");
+  const seen: Array<{ url: string; body: any }> = [];
+  setTelnyxFetch(async (url: string, init: any) => {
+    seen.push({ url, body: init.body ? JSON.parse(init.body) : null });
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => "{}" };
+  });
+  try {
+    await configureOwnedNumber(CREDS, "n1", { connectionId: "c1", messagingProfileId: "mp1", customerReference: "ref" });
+  } finally {
+    setTelnyxFetch(null);
+  }
+  assert.equal(seen.length, 2);
+  assert.match(seen[0].url, /\/phone_numbers\/n1$/);
+  assert.equal(seen[0].body.messaging_profile_id, undefined);
+  assert.deepEqual(seen[0].body, { connection_id: "c1", customer_reference: "ref" });
+  assert.match(seen[1].url, /\/phone_numbers\/n1\/messaging$/);
+  assert.deepEqual(seen[1].body, { messaging_profile_id: "mp1" });
+});

@@ -176,11 +176,21 @@ export async function configureOwnedNumber(
 ): Promise<void> {
   const json: any = {};
   if (patch.connectionId) json.connection_id = patch.connectionId;
-  if (patch.messagingProfileId !== undefined && patch.messagingProfileId !== null) json.messaging_profile_id = patch.messagingProfileId;
   if (patch.customerReference) json.customer_reference = patch.customerReference.slice(0, 100);
   if (patch.tags) json.tags = patch.tags;
-  if (!Object.keys(json).length) return;
-  await expect(creds, { path: `/phone_numbers/${encodeURIComponent(id)}`, method: "PATCH", json });
+  if (Object.keys(json).length) {
+    await expect(creds, { path: `/phone_numbers/${encodeURIComponent(id)}`, method: "PATCH", json });
+  }
+  // ⛔ Proven live 2026-09-16 (the first real Telnyx sign-up): the general
+  // number PATCH refuses messaging_profile_id with 422/10027 "not reachable
+  // here" — the messaging profile lives on its OWN sub-resource.
+  if (patch.messagingProfileId) {
+    await expect(creds, {
+      path: `/phone_numbers/${encodeURIComponent(id)}/messaging`,
+      method: "PATCH",
+      json: { messaging_profile_id: patch.messagingProfileId },
+    });
+  }
 }
 
 /** Outbound CNAM — ≤15 chars, A-Z 0-9 space. Free. */
