@@ -105,6 +105,19 @@ to `signalWireClient.ts` (`/api/relay/rest/registry/beta/…`).
   creator. The upsert runs BEFORE the status flips to active so a failed write
   retries. The activation email is type `SMS_REGISTRATION_ACTIVE` — never
   ADMIN_ALERT (muted).
+  ⛔⛔ **FIXED 2026-09-16 (`966c9110`): until then this email could NEVER queue.**
+  `queueActivationEmail` wrote `status: "PENDING"` (not an `EmailJobStatus` —
+  QUEUED|RUNNING|SENT|FAILED|SKIPPED) and `tenantId: reg.tenantId || null`
+  (`EmailJob.tenantId` is required); the caller's `.catch(() => {})` swallowed
+  Prisma's rejection, and the test's fake `emailJob.create` accepted anything,
+  so the suite was green. Live DB at fix time: 0 `SMS_REGISTRATION_ACTIVE`
+  EmailJobs and 0 `TenantSmsRegistration` rows — no customer missed it yet.
+  Now `buildActivationEmailJobData` omits status (→ QUEUED), returns null with
+  no tenant (skip + `SMS_REGISTRATION_ACTIVE_EMAIL_SKIPPED_NO_TENANT` warn), and a
+  failed insert logs `SMS_REGISTRATION_ACTIVE_EMAIL_QUEUE_FAILED`. The fake db
+  now validates every EmailJob create against `schema.prisma`'s enum + required
+  tenantId. ⛔ A fake db must enforce the real column rules, or it certifies
+  writes Prisma refuses.
 - ⛔⛔ **THE EIN HAS NO COLUMN AND MUST NEVER GROW ONE.** `TenantSmsRegistration`
   stores classification/identity/brand+campaign ids and states — a
   schema-reading guard test fails if an EIN-shaped column appears. The wizard

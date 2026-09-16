@@ -1,5 +1,15 @@
 # Tests run
 
+## 10DLC "texting is on" email could never queue — fixed (2026-09-16)
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/signalwire/*.test.ts` → **41/41 pass**
+  (1 new: activation EmailJob payload valid against `schema.prisma` — status omitted/QUEUED, tenantId required,
+  own type not ADMIN_ALERT, no carrier name; the fake db now validates every EmailJob create). Against the
+  pre-fix `signalWireTenDlc.ts` the same file fails **2** (the new test + the existing activation test).
+- `tsc --noEmit` (apps/api): 0 errors in touched files (51 pre-existing elsewhere: yiddishCorpus, webrtc*, packages/db).
+- Live DB read-only: 0 `SMS_REGISTRATION_ACTIVE` EmailJobs, 0 `TenantSmsRegistration` rows.
+- Deployed api at origin tip `56879d0f` (contains fix `966c9110`; waited out a peer portal build first). Container `.build-commit` = `56879d0f`, fix is an ancestor, `signalWireTenDlc.ts` in the container has the QUEUE_FAILED log and no `status: "PENDING"`, 0 restarts, health 200.
+
 ## Laybel live reply failure and Yiddish Labs microphone wiring — 2026-09-16
 
 - CONFIRMED LIVE FAILURE: owner transcripts present; agent requests req-8ou/req-8p1 at 16:49Z return 500, Prisma invalid AgentChannel VOICE. Agent health 200 did not prove chat. Portal observed build 47584ef643ec9a5f68867a9546824ee2fa9f18bd.
@@ -17,6 +27,7 @@
 - PASS: 23 portal tests (Assistant/layout/consent/takeover, incremental UTF8 NDJSON, sentences, early speech, barge-in and failure no-retry).
 - PASS: portal typecheck. Agent default typecheck reports pre-existing packages/db shared-subpath module-resolution errors; new test schema type fixed. Agent typecheck with --moduleResolution bundler --module esnext passes. Default configuration is not claimed green.
 - Pending: deployment/build and live before/after audible latency evidence. No performance improvement claimed from synthetic tests.
+
 
 ## Onboarding cold-calling / CRM pricing + phone-wizard step-1 fix — 2026-09-16 (night)
 

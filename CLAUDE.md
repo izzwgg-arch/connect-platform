@@ -558,7 +558,7 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - the supermarket search finds the WHOLE catalog now, and negative stock stopped ste… → `2026-08-30-the-supermarket-search-finds-the-whole-catalog-n.md`
 - FixUp's "Windows app gets no messages" is the desktop notifier only firing on NEW… → `2026-08-30-fixup-s-windows-app-gets-no-messages-is-the-desk.md`
 - every extension gets FIVE contacts, desk AND WebRTC → `2026-08-30-every-extension-gets-five-contacts-desk-and-webr.md`
-- SIGNALWIRE ONBOARDING IS BUILT END TO END and INERT until two env flips → `2026-08-30-signalwire-onboarding-is-built-end-to-end-and-in.md`
+- SIGNALWIRE ONBOARDING IS BUILT END TO END and INERT until two env flips (09-16: 10DLC activation email could never queue — fixed `966c9110`) → `2026-08-30-signalwire-onboarding-is-built-end-to-end-and-in.md`
 - a SignalWire inbound call rang NOBODY: the one-shot ring push raced the tenant, TW… → `2026-08-29-a-signalwire-inbound-call-rang-nobody-the-one-sh.md`
 - 7-day audit of voicemail + SMS forwarding: both lanes CLEAN, but an audio-copy RAC… → `2026-08-27-7-day-audit-of-voicemail-sms-forwarding-both-lan.md`
 - Relax Tires round 2: "vibrating but no incoming call until I opened the app" is AN… → `2026-09-01-relax-tires-round-2-vibrating-but-no-incoming-ca.md`
