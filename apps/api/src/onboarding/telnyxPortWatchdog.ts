@@ -323,6 +323,22 @@ export async function landTelnyxPort(deps: TelnyxSweepDeps, creds: any, row: any
 
   const tenantId = String(row.createdTenantId || "");
   const tempDid = tenDigits(prov.temporaryDid || row.provisionedDid);
+  // ⛔ The number already lived on our PBX in ANOTHER tenant before the port
+  // (Loopcom's own 845-723-1213 → T35): it keeps ringing there by DID, so the
+  // landing must not copy destinations, switch this tenant's caller ID to it, or
+  // move its texting row to this tenant.
+  const existingOwner = String(prov.portedDidExistingPbxTenant || "");
+  if (existingOwner && (!landing.pbxDestinationAt || !landing.callerIdAt || !landing.textingAt)) {
+    await save({
+      pbxDestinationAt: landing.pbxDestinationAt || new Date().toISOString(),
+      pbxDestination: `kept in existing PBX tenant ${existingOwner}`,
+      callerIdAt: landing.callerIdAt || new Date().toISOString(),
+      callerId: "unchanged (number belongs to another tenant)",
+      textingAt: landing.textingAt || new Date().toISOString(),
+    });
+    await logEvent(db, row.id, `${portedDid} landed on the new carrier and keeps ringing PBX tenant ${existingOwner} — no PBX, caller-ID or texting change made.`);
+  }
+
   if (!landing.pbxDestinationAt) {
     if (!tenantId || !deps.copyPbxDestination) {
       await save({ pbxDestinationAt: new Date().toISOString(), pbxDestination: "skipped (no tenant or no PBX helper)" });

@@ -862,3 +862,22 @@ test("FASTPORT: an eligible order requests Telnyx's EARLIEST allowed switch-over
   assert.equal(f2.fastPort, undefined);
   assert.ok(!q.calls.some((c: string) => c.includes(":foc=")));
 });
+
+
+test("⛔ a port of a number ALREADY on our PBX: the build leaves it in its tenant; the landing moves nothing on the PBX or texting", async () => {
+  const src = read("setupOrchestrator.ts");
+  assert.match(src, /const owner = await findExistingPbxDidOwner\(portedDid, fresh\);/);
+  assert.match(src, /portedDidExistingPbxTenant: String\(owner\)/);
+  assert.match(src, /if \(!c\.ok\) throw new Error\(`ported_number_owner_check_unavailable/, "an unreadable PBX DB must fail the build, not risk claiming a live number");
+  const i = src.indexOf("const owner = await findExistingPbxDidOwner");
+  const job = src.indexOf("const job: PbxBuildJob");
+  assert.ok(i > 0 && job > i, "the check runs BEFORE the build job is assembled");
+
+  reset({ ...landedRow(), answers: { ...landedRow().answers, provisioning: { ...landedRow().answers.provisioning, portedDidExistingPbxTenant: "35" } } });
+  const { deps, calls } = sweepDeps();
+  const s = await sweepTelnyxSignups(deps);
+  assert.equal(s.landed, 1, state.events.join(" | "));
+  assert.ok(!calls.includes("copy-dest") && !calls.some((c) => c.startsWith("cid:")) && !calls.includes("publish"), calls.join(" | "));
+  assert.equal(state.smsUpserts.length, 0, "the texting row must stay with its tenant");
+  assert.ok(calls.includes("configure:num-0182"), "the carrier side is still configured");
+});
