@@ -672,3 +672,12 @@ test("⛔ client: the messaging profile goes to /phone_numbers/{id}/messaging, N
   assert.match(seen[1].url, /\/phone_numbers\/n1\/messaging$/);
   assert.deepEqual(seen[1].body, { messaging_profile_id: "mp1" });
 });
+
+test("⛔ a shared-trunk build applies MAIN so the DID dispatch exists (live: 845-777-4807 hit only the catch-all)", () => {
+  const src = read("setupOrchestrator.ts");
+  const i = src.indexOf("tenantPath = result.tenantPath;");
+  const block = src.slice(i, i + 2200);
+  assert.match(block, /if \(sharedTrunkCarrier\) \{/);
+  assert.match(block, /await applyAndRebake\(session, panelCfg\.mainTenant,/);
+  assert.doesNotMatch(block.slice(0, block.indexOf("applyAndRebake(session")), /try \{/, "a failed Main apply must fail the build, not be swallowed");
+});

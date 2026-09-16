@@ -642,6 +642,24 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
         { tenantCreator: resolveMirrorTenantCreator(pbx.instanceId), tenantRenderer: resolveMirrorTenantRenderer(pbx.instanceId) },
       );
       tenantPath = result.tenantPath;
+      // ⛔ SHARED-TRUNK carriers (Telnyx trunk 183, SignalWire trunk 132) live in
+      // MAIN, so an inbound call is dispatched by Main's default-trunk
+      // `_<DID> → T<n>_default-trunk` entry. The tenant-context applies above
+      // never regenerate Main's dialplan — proven on the first live Telnyx
+      // sign-up 2026-09-16: 845-777-4807 hit only the catch-all, i.e. calls
+      // to the customer's number went nowhere (same mechanism as the DisplayDX
+      // move, see pbx-number-move-needs-main-apply). VoIP.ms builds don't need
+      // it: their per-tenant trunk routes straight into the tenant.
+      // applyAndRebake (not a bare apply) so the Connect doorways a Main
+      // regen disturbs are re-baked immediately. Not caught: a customer whose
+      // inbound calls go nowhere must be a failed build, not a green one.
+      if (sharedTrunkCarrier) {
+        const { applyAndRebake } = await import("../pbxConsole/pbxConsoleWrites");
+        const quiet = { info: () => {}, warn: () => {}, error: () => {} };
+        await applyAndRebake(session, panelCfg.mainTenant, { db, log: quiet, pbxInstanceId: pbx.instanceId }, "onboarding-main-did-dispatch");
+        session.setTenant(tenantPath);
+        await logEvent(submissionId, `PBX build: Main applied — ${did}${portedDid ? ` and ${portedDid}` : ""} dispatch to the new tenant.`);
+      }
       // The Telnyx port landing switches THIS route's caller ID to the real
       // number when it arrives (telnyxPortWatchdog.ts) — so keep its id.
       try {
