@@ -238,6 +238,108 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
     },
 
     {
+      name: "creative_write_storyboard",
+      description:
+        "Plan a film as shots and save it as the project's storyboard. Write one shot per beat, each with what the camera sees. ⛔ You do NOT work out the seconds — hand over the shots and the total length you are aiming for, and the studio splits it so no shot passes the 15-second engine ceiling. Nothing is rendered and nothing is charged by this; it gives the person something to change before a penny is spent.",
+      parameters: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          total_seconds: { type: "number", description: "How long the whole film should be." },
+          ratio: { type: "string", enum: ["16:9", "9:16", "1:1", "4:5"] },
+          shots: {
+            type: "array",
+            description: "In order. Describe what is SEEN, not the branding — their brand kit is applied for you.",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                prompt: { type: "string" },
+                seconds: { type: "number", description: "Only if this shot must be a particular length." },
+              },
+              required: ["prompt"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["project_id", "shots"],
+        additionalProperties: false,
+      },
+      minRole: "customer",
+      async run(args, ctx) {
+        const shots = Array.isArray(args.shots) ? args.shots : [];
+        if (!shots.length) return { error: "no_shots", reason: "A storyboard needs at least one shot." };
+        return call(deps, "POST", "/internal/agent/creative/storyboard", {
+          ...who(ctx),
+          projectId: String(args.project_id || ""),
+          totalSeconds: args.total_seconds ? Math.round(Number(args.total_seconds)) : undefined,
+          ratio: args.ratio ? String(args.ratio) : undefined,
+          shots: shots.slice(0, 24).map((shot: any) => ({
+            title: shot?.title ? String(shot.title).slice(0, 120) : undefined,
+            prompt: String(shot?.prompt || "").slice(0, 2000),
+            seconds: shot?.seconds ? Math.max(1, Math.min(MAX_SECONDS, Math.round(Number(shot.seconds)))) : undefined,
+          })),
+        });
+      },
+    },
+
+    {
+      name: "creative_assemble_film",
+      description:
+        "Put the rendered shots together into one cut, in storyboard order. Any voiceover, music or captions already on the film are kept. Shots that have not been rendered yet are skipped rather than left as gaps — the answer tells you how many were skipped, so you can say what is still missing. Free, and instant.",
+      parameters: {
+        type: "object",
+        properties: { project_id: { type: "string" } },
+        required: ["project_id"],
+        additionalProperties: false,
+      },
+      minRole: "customer",
+      async run(args, ctx) {
+        return call(deps, "POST", "/internal/agent/creative/assemble", { ...who(ctx), projectId: String(args.project_id || "") });
+      },
+    },
+
+    {
+      name: "creative_render_film",
+      description:
+        "Render the cut into one finished video: the shots joined, the voiceover and music laid under them, the captions burned in and a .srt saved beside it. This runs on Loopcom's own machines, so it costs nothing per run — but it takes a minute or two, so it returns a job to poll. Call creative_assemble_film first if the shots have changed.",
+      parameters: {
+        type: "object",
+        properties: { project_id: { type: "string" } },
+        required: ["project_id"],
+        additionalProperties: false,
+      },
+      minRole: "customer",
+      async run(args, ctx) {
+        return call(deps, "POST", "/internal/agent/creative/render", { ...who(ctx), projectId: String(args.project_id || "") });
+      },
+    },
+
+    {
+      name: "creative_export_file",
+      description:
+        "Make the file for each place it is going — WhatsApp Status, Instagram Reel or post, Facebook, TikTok, YouTube, YouTube Shorts, a landscape commercial or a square. Video is cropped to fit rather than stretched. ⛔ This does NOT post anything anywhere: it makes files the person downloads and sends themselves.",
+      parameters: {
+        type: "object",
+        properties: {
+          asset_id: { type: "string", description: "The finished video or picture to export." },
+          presets: {
+            type: "array",
+            items: { type: "string", enum: ["whatsapp_status", "instagram_reel", "instagram_post", "facebook", "tiktok", "youtube", "youtube_shorts", "landscape", "square"] },
+          },
+        },
+        required: ["asset_id", "presets"],
+        additionalProperties: false,
+      },
+      minRole: "customer",
+      async run(args, ctx) {
+        const presets = (Array.isArray(args.presets) ? args.presets : []).map((p: any) => String(p)).filter(Boolean).slice(0, 9);
+        if (!presets.length) return { error: "no_presets", reason: "Say where it is going — each place is its own file." };
+        return call(deps, "POST", "/internal/agent/creative/export", { ...who(ctx), assetId: String(args.asset_id || ""), presets });
+      },
+    },
+
+    {
       name: "creative_list_assets",
       description:
         "What this company already has: pictures, video, logos, uploads. Use it to reuse their real product photos and people instead of inventing new ones, and to find something they are referring to.",
@@ -363,7 +465,9 @@ export const creativeToolsPrompt = [
   "Read creative_studio_context first: it gives you their brand, what they like, and what is left of this month's allowance.",
   "Pictures are quick and cheap. VIDEO COSTS REAL MONEY: always say the estimate and get a clear yes before calling creative_make_video.",
   "Nothing blocks: making something returns a job. creative_check_job waits up to 20s, so ONE call usually returns the finished picture. ⛔ At most two checks per reply — then tell them it is still rendering rather than polling until you run out of steps.",
-  "A single shot is at most 15 seconds. A longer film is several shots — plan them, then make them one at a time.",
+  "A single shot is at most 15 seconds. A longer film is several shots: creative_write_storyboard plans them (it works out the split — you do not), then render them one at a time with creative_make_video, then creative_assemble_film and creative_render_film.",
+  "The storyboard costs nothing. Show it and get a yes BEFORE rendering, so they change the plan rather than pay for shots they did not want.",
+  "Exporting makes files. It never posts anything anywhere — say so plainly, and tell them where to find the downloads.",
   "Before changing a design, call creative_inspect_design and use the revision it gives you. If a change is refused as stale, read it again — somebody moved something by hand.",
   "When they say what was wrong, call creative_remember_preference so the next one is better without them repeating themselves.",
   "If a request is refused for a trademark or a real person, explain it in their words and offer the version you CAN make.",

@@ -84,6 +84,8 @@ export interface TimelineClip {
   assetId: string;
   startMs?: number;
   durationMs?: number;
+  /** Where in the source clip this piece begins — what a split produces. */
+  inMs?: number;
 }
 
 export interface TimelineAudio {
@@ -107,6 +109,48 @@ export interface TimelineDoc {
 }
 
 /**
+ * The editor and the renderer share ONE document.
+ *
+ * A person dragging a clip and the Coworker sending an op both write the same
+ * `objects` array, because that is the only way "the agent edits the same
+ * project you do" can be true rather than a claim. This turns that array into
+ * the lanes FFmpeg needs. A document that already carries `clips` (an older
+ * one, or a render asked for directly) is passed through untouched.
+ */
+export function normaliseTimeline(doc: any): TimelineDoc | null {
+  if (!doc || typeof doc !== "object") return null;
+  if (Array.isArray(doc.clips) && doc.clips.length) return doc as TimelineDoc;
+  const objects: any[] = Array.isArray(doc.objects) ? doc.objects : [];
+  if (!objects.length) return null;
+
+  const byStart = (a: any, b: any) => Number(a.startMs || 0) - Number(b.startMs || 0);
+  const of = (type: string) => objects.filter((o) => o?.type === type && o?.assetId).sort(byStart);
+  const audio = (type: string) =>
+    of(type).map((o) => ({ assetId: String(o.assetId), startMs: Number(o.startMs || 0), gain: o.gain != null ? Number(o.gain) : undefined, duck: o.duck === true }));
+
+  return {
+    width: Number(doc.width || 1280),
+    height: Number(doc.height || 720),
+    fps: Number(doc.fps || 30),
+    clips: of("clip").map((o) => ({
+      assetId: String(o.assetId),
+      startMs: Number(o.startMs || 0),
+      durationMs: o.durationMs != null ? Number(o.durationMs) : undefined,
+      inMs: o.inMs != null ? Number(o.inMs) : undefined,
+    })),
+    voice: audio("voice"),
+    music: audio("music"),
+    effects: audio("sfx"),
+    captions: objects
+      .filter((o) => o?.type === "caption" && String(o.text || "").trim())
+      .sort(byStart)
+      .map((o) => ({ startMs: Number(o.startMs || 0), endMs: Number(o.endMs ?? Number(o.startMs || 0) + Number(o.durationMs || 2000)), text: String(o.text) })),
+    burnCaptions: doc.burnCaptions !== false,
+    captionStyle: doc.captionStyle || {},
+  };
+}
+
+/**
  * The finished film: join the shots, lay the sound under them, burn the
  * captions in, and keep a .srt beside it for the platforms that want one.
  */
@@ -114,10 +158,10 @@ export async function runTimelineRenderJob(deps: LocalDeps, job: any): Promise<{
   const { db } = deps;
   const req = job.request as any;
 
-  let timeline: TimelineDoc | null = req.timeline || null;
+  let timeline: TimelineDoc | null = normaliseTimeline(req.timeline);
   if (!timeline && job.projectId) {
     const doc = await db.creativeDocument.findFirst({ where: { projectId: job.projectId, tenantId: job.tenantId, type: "timeline" } });
-    timeline = (doc?.doc as any) || null;
+    timeline = normaliseTimeline(doc?.doc);
   }
   if (!timeline?.clips?.length) throw new Error("There is nothing on the timeline to render.");
 
@@ -134,13 +178,17 @@ export async function runTimelineRenderJob(deps: LocalDeps, job: any): Promise<{
       const f = path.join(dir, `clip-${i}.mp4`);
       await fs.writeFile(f, got.buffer);
       let use = f;
-      if (clip.durationMs && got.asset.durationMs && clip.durationMs < got.asset.durationMs - 120) {
+      const inMs = Math.max(0, Number(clip.inMs || 0));
+      const source = Number(got.asset.durationMs || 0);
+      const wants = Number(clip.durationMs || 0);
+      // Trim when the piece starts late in the source, or is shorter than it.
+      if (inMs > 120 || (wants && source && wants < source - inMs - 120)) {
         const trimmed = path.join(dir, `clip-${i}-trim.mp4`);
-        await media.trimTo(f, trimmed, clip.durationMs / 1000);
+        await media.trimTo(f, trimmed, (wants || Math.max(100, source - inMs)) / 1000, inMs / 1000);
         use = trimmed;
       }
       clipFiles.push(use);
-      totalMs += clip.durationMs || got.asset.durationMs || 0;
+      totalMs += wants || Math.max(0, source - inMs);
     }
     if (!clipFiles.length) throw new Error("None of the shots on the timeline could be read.");
 

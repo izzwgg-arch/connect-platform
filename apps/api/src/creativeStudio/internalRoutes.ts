@@ -15,7 +15,9 @@
  */
 import { z } from "zod";
 import { startGeneration } from "./service";
-import { cancelJob, quotaFor, usedThisPeriod } from "./jobs";
+import { cancelJob, checkQuota, createJob, quotaFor, usedThisPeriod } from "./jobs";
+import { EXPORT_PRESETS, normaliseTimeline } from "./localJobs";
+import { assembleFilm, storyboardDoc } from "./film";
 import { assetSummary, jobSummary, projectSummary } from "./routes";
 import { applyOps, loadBrandKit } from "./helpers";
 import { activeMemoryFor, recordFeedback } from "./memory";
@@ -191,6 +193,123 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
       }).catch(() => undefined);
     }
     return reply.send({ revision: saved.revision, doc: saved.doc });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* the film: storyboard → assemble → render → export                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Write the storyboard. The agent hands over the shots it wrote; the SPLIT —
+   * how many seconds each shot gets — is worked out here by `storyboardDoc`,
+   * the same code the browser uses, so the model cannot talk itself past the
+   * 15-second ceiling.
+   */
+  app.post("/internal/agent/creative/storyboard", async (req: any, reply: any) => {
+    if (!guard(req, reply)) return;
+    const who = await tenantOf(req, reply);
+    if (!who) return;
+    const body = z.object({
+      projectId: z.string().max(40),
+      totalSeconds: z.number().int().min(1).max(600).optional(),
+      ratio: z.string().max(12).optional(),
+      shots: z.array(z.object({
+        title: z.string().max(120).optional(),
+        prompt: z.string().min(1).max(2000),
+        seconds: z.number().int().min(1).max(15).optional(),
+      })).min(1).max(24),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
+
+    const project = await db.creativeProject.findFirst({ where: { id: body.data.projectId, tenantId: who.tenantId, deletedAt: null } });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+
+    const doc = storyboardDoc(body.data.shots, body.data.totalSeconds || 0, body.data.ratio || "16:9");
+    const existing = await db.creativeDocument.findFirst({ where: { projectId: project.id, tenantId: who.tenantId, type: "storyboard" } });
+    const saved = existing
+      ? await db.creativeDocument.update({ where: { id: existing.id }, data: { doc, revision: { increment: 1 }, updatedByType: "coworker", updatedByUserId: who.userId } })
+      : await db.creativeDocument.create({ data: { tenantId: who.tenantId, projectId: project.id, type: "storyboard", doc, revision: 1, updatedByType: "coworker", updatedByUserId: who.userId } });
+
+    return reply.send({
+      documentId: saved.id,
+      revision: saved.revision,
+      shots: doc.objects.map((o: any) => ({ id: o.id, title: o.title, seconds: o.seconds, prompt: o.prompt })),
+      totalSeconds: doc.objects.reduce((n: number, o: any) => n + Number(o.seconds || 0), 0),
+    });
+  });
+
+  /** Put the rendered shots together into a cut — the same call the button makes. */
+  app.post("/internal/agent/creative/assemble", async (req: any, reply: any) => {
+    if (!guard(req, reply)) return;
+    const who = await tenantOf(req, reply);
+    if (!who) return;
+    const projectId = String((req.body as any)?.projectId || "");
+    const project = await db.creativeProject.findFirst({ where: { id: projectId, tenantId: who.tenantId, deletedAt: null } });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+    const res = await assembleFilm(db, { tenantId: who.tenantId, projectId: project.id, userId: who.userId, actorType: "coworker" });
+    if (!res.ok) return reply.code(400).send({ error: res.code, reason: res.reason });
+    return reply.send({ documentId: res.documentId, revision: res.revision, clips: res.clips, skipped: res.skipped });
+  });
+
+  /** Render the cut. Ours, with FFmpeg — no engine, no per-run cost. */
+  app.post("/internal/agent/creative/render", async (req: any, reply: any) => {
+    if (!guard(req, reply)) return;
+    const who = await tenantOf(req, reply);
+    if (!who) return;
+    const projectId = String((req.body as any)?.projectId || "");
+    const project = await db.creativeProject.findFirst({ where: { id: projectId, tenantId: who.tenantId, deletedAt: null } });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+
+    const document = await db.creativeDocument.findFirst({ where: { projectId: project.id, tenantId: who.tenantId, type: "timeline" } });
+    const timeline = normaliseTimeline(document?.doc);
+    if (!timeline?.clips?.length) return reply.code(400).send({ error: "empty_timeline", reason: "There are no shots on the timeline yet." });
+
+    const quota = await checkQuota(db, who.tenantId, "timeline.render", {});
+    if (!quota.ok) return reply.code(429).send({ error: "quota_blocked", reason: quota.reason });
+
+    const { job, deduped } = await createJob(db, {
+      tenantId: who.tenantId,
+      capability: "timeline.render",
+      projectId: project.id,
+      requestedByUserId: who.userId,
+      idempotencyKey: `render:${project.id}:${document?.revision ?? 0}`,
+      request: { timeline },
+      priority: 50,
+    });
+    if (!job) return reply.code(503).send({ error: "no_engine" });
+    return reply.send({ job: jobSummary(job), deduped });
+  });
+
+  /** Make the files for the places it is going. ⛔ Never posts them anywhere. */
+  app.post("/internal/agent/creative/export", async (req: any, reply: any) => {
+    if (!guard(req, reply)) return;
+    const who = await tenantOf(req, reply);
+    if (!who) return;
+    const body = z.object({
+      assetId: z.string().max(40),
+      presets: z.array(z.string().max(40)).min(1).max(9),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "invalid_body" });
+
+    const asset = await db.creativeAsset.findFirst({ where: { id: body.data.assetId, tenantId: who.tenantId, deletedAt: null } });
+    if (!asset) return reply.code(404).send({ error: "not_found" });
+    const unknown = body.data.presets.filter((p) => !EXPORT_PRESETS[p]);
+    if (unknown.length) return reply.code(400).send({ error: "unknown_preset", detail: unknown, known: Object.keys(EXPORT_PRESETS) });
+
+    const jobs: any[] = [];
+    for (const preset of body.data.presets) {
+      const { job } = await createJob(db, {
+        tenantId: who.tenantId,
+        capability: "export",
+        projectId: asset.projectId || null,
+        requestedByUserId: who.userId,
+        idempotencyKey: `export:${asset.id}:${preset}:png`,
+        request: { assetId: asset.id, preset },
+        priority: 40,
+      });
+      if (job) jobs.push(jobSummary(job));
+    }
+    return reply.send({ jobs });
   });
 
   app.get("/internal/agent/creative/context", async (req: any, reply: any) => {

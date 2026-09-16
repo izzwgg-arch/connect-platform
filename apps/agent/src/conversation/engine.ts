@@ -884,7 +884,7 @@ export class ConversationEngine {
       // Creative Studio: described only when its tools are actually on the
       // table this turn, so the model is never told about a capability it
       // does not have.
-      ...(this.tools.some((t) => t.name.startsWith("creative_")) ? [{ role: "system" as const, content: creativeToolsPrompt }] : []),
+      ...((this.tools ?? []).some((t) => t.name.startsWith("creative_")) ? [{ role: "system" as const, content: creativeToolsPrompt }] : []),
       ...(ws
         ? [{ role: "system" as const, content: coworkerWorkspacePrompt({ folders: ctx.coworkerFolders ?? [], memory: wsPrefs.memory, detail: wsPrefs.detail, phoneTools: wsPrefs.phone, handsOn, email: wsPrefs.email }) }]
         : []),

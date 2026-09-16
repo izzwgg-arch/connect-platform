@@ -103,9 +103,21 @@ export async function lastFrame(input: string, output: string): Promise<void> {
   await run(FFMPEG, [...SAFE_PROTOCOLS, "-y", "-ss", String(at), "-i", input, "-frames:v", "1", output], 120_000);
 }
 
-export async function trimTo(input: string, output: string, seconds: number): Promise<void> {
+/**
+ * Take a piece out of a clip. `fromSeconds` is what makes splitting a shot in
+ * the editor honest: without it the second half would start at the beginning
+ * of the source again, which looks like the editor ignoring you.
+ *
+ * ⛔ -ss goes BEFORE -i so FFmpeg seeks instead of decoding and throwing away
+ * everything up to the cut; with a 15-second clip the difference is small, but
+ * on a minute of footage it is the difference between instant and a wait.
+ */
+export async function trimTo(input: string, output: string, seconds: number, fromSeconds = 0): Promise<void> {
+  const from = Math.max(0, Number(fromSeconds) || 0);
   await run(FFMPEG, [
-    ...SAFE_PROTOCOLS, "-y", "-i", input, "-t", String(Math.max(0.1, seconds)),
+    ...SAFE_PROTOCOLS, "-y",
+    ...(from > 0.01 ? ["-ss", String(from)] : []),
+    "-i", input, "-t", String(Math.max(0.1, seconds)),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-movflags", "+faststart", output,
   ]);

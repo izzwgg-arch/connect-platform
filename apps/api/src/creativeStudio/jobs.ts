@@ -21,6 +21,7 @@ import { ADAPTERS, chooseEngine, Capability, EngineContext, EngineOutput, planVi
 import { getObject, deleteObject } from "./storage";
 import { saveOutputAsset } from "./assets";
 import { LOCAL_CAPABILITIES, runLocalJob } from "./localJobs";
+import { Evaluation, evaluateOutput, describeRetry, retryHint } from "./evaluate";
 import * as media from "./media";
 
 export const LEASE_MS = 60_000;
@@ -526,6 +527,126 @@ async function finishVideoJob(deps: RunnerDeps, job: any, plan: any): Promise<vo
   await completeJob(deps, job, [], { renderMs: 0, costMicros: job.costMicros, existingAssetIds: [finalAsset.id] });
 }
 
+/* ------------------------------------------------------------------ */
+/* looking at the result before the customer does                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How many times a visibly broken result may be re-rendered. Money is real: a
+ * 15-second shot is two provider calls, so video gets ONE second chance and
+ * pictures get two. After that the result is handed over with its verdict
+ * attached rather than spent on again.
+ */
+const QUALITY_RETRY_LIMIT: Record<string, number> = {
+  "image.generate": 2,
+  "image.edit": 1,
+  "video.generate": 1,
+};
+
+/** The bytes we would be handing over — freshly rendered, or already stored. */
+async function bytesToCheck(db: any, tenantId: string, outputs: EngineOutput[], existingAssetIds: string[]): Promise<{ buffer: Buffer; mime: string } | null> {
+  const fresh = outputs.find((o) => o?.buffer?.length);
+  if (fresh) return { buffer: fresh.buffer, mime: fresh.mime };
+  for (const id of existingAssetIds) {
+    const asset = await db.creativeAsset.findFirst({ where: { id, tenantId } }).catch(() => null);
+    if (!asset) continue;
+    const got = await getObject(asset.storageKey).catch(() => null);
+    if (got?.body?.length) return { buffer: got.body, mime: asset.mime || got.contentType };
+  }
+  return null;
+}
+
+/**
+ * Checks a generated picture or shot, and says whether it is fit to hand over.
+ * ⛔ Returns null — meaning "carry on" — for anything it does not judge: our own
+ * FFmpeg joins and exports, voiceovers, and any attempt that has already used
+ * up its second chances. A checker that cannot answer never blocks a result.
+ */
+async function qualityGate(deps: RunnerDeps, job: any, outputs: EngineOutput[], existingAssetIds: string[]): Promise<Evaluation | null> {
+  const limit = QUALITY_RETRY_LIMIT[String(job.capability)];
+  if (limit === undefined) return null;
+  const request: any = job.request || {};
+  if (request.skipEvaluation === true) return null;
+
+  const bytes = await bytesToCheck(deps.db, job.tenantId, outputs, existingAssetIds);
+  if (!bytes) return null;
+
+  // ⛔ The job stays "running" while it is checked, and the lease is pushed out
+  // first. A separate status would be invisible to sweepLostLeases(), so a
+  // crash mid-check would strand the job forever; this way it is recovered by
+  // exactly the same path as any other interrupted render.
+  await deps.db.creativeJob
+    .update({
+      where: { id: job.id },
+      data: { progress: 95, progressNote: "Checking it over", leaseExpiresAt: new Date(Date.now() + LEASE_MS * 2), heartbeatAt: new Date() },
+    })
+    .catch(() => undefined);
+
+  const evaluation = await evaluateOutput({
+    db: deps.db,
+    kind: job.capability.startsWith("video") ? "video" : "image",
+    buffer: bytes.buffer,
+    mime: bytes.mime,
+    intent: String(request.request || request.prompt || ""),
+  }).catch(() => null);
+
+  return evaluation;
+}
+
+/** Puts a rejected attempt back in the queue with wording that avoids the fault. */
+async function requeueForQuality(deps: RunnerDeps, job: any, evaluation: Evaluation, existingAssetIds: string[]): Promise<void> {
+  const { db } = deps;
+
+  // The broken attempt does not belong in the customer's library, but the
+  // record of it does — so the asset is soft-deleted, never silently dropped.
+  for (const id of existingAssetIds) {
+    await db.creativeAsset.updateMany({ where: { id, tenantId: job.tenantId }, data: { deletedAt: new Date() } }).catch(() => undefined);
+  }
+
+  const request: any = { ...(job.request || {}) };
+  request.qualityRetries = Number(request.qualityRetries || 0) + 1;
+  const hint = retryHint(evaluation);
+  if (hint) request.prompt = `${String(request.prompt || "")}\n\nAvoid what went wrong last time: ${hint}.`.slice(0, 6000);
+  // A video re-plans its segments from scratch; the old parts are not reused.
+  delete request.plan;
+
+  await db.creativeGeneration
+    .create({
+      data: {
+        tenantId: job.tenantId,
+        projectId: job.projectId,
+        jobId: job.id,
+        capability: job.capability,
+        request: String((job.request as any)?.request || "").slice(0, 2000),
+        builtPrompt: String((job.request as any)?.prompt || "").slice(0, 4000),
+        engineId: job.engineId || "unknown",
+        params: { qualityRetry: request.qualityRetries } as any,
+        referenceIds: [],
+        outputAssetIds: existingAssetIds,
+        workerId: job.workerId || deps.workerId,
+        costMicros: job.costMicros || 0,
+        evaluation: evaluation as any,
+        outcome: "rejected",
+      },
+    })
+    .catch(() => undefined);
+
+  await db.creativeJob.update({
+    where: { id: job.id },
+    data: {
+      status: "queued",
+      providerJobId: null,
+      request: request as any,
+      progress: 0,
+      progressNote: describeRetry(evaluation),
+      workerId: null,
+      leaseExpiresAt: null,
+      error: null,
+      errorCode: null,
+    },
+  });
+}
+
 export async function completeJob(
   deps: RunnerDeps,
   job: any,
@@ -534,6 +655,20 @@ export async function completeJob(
 ): Promise<any[]> {
   const { db } = deps;
   const kind = job.capability.startsWith("video") ? "video" : job.capability.startsWith("audio") ? "audio" : "image";
+
+  // ⛔ Before anything is handed over: is it actually usable? A serious defect
+  // buys ONE more render (two for a picture), never an endless spend.
+  const evaluation = await qualityGate(deps, job, outputs, opts.existingAssetIds || []);
+  if (evaluation && !evaluation.ok) {
+    const used = Number((job.request as any)?.qualityRetries || 0);
+    const limit = QUALITY_RETRY_LIMIT[String(job.capability)] ?? 0;
+    if (used < limit && job.attempts < job.maxAttempts) {
+      await requeueForQuality(deps, job, evaluation, opts.existingAssetIds || []);
+      return [];
+    }
+    // Out of second chances: hand it over anyway, with the verdict attached,
+    // because a flawed picture is worth more to the customer than nothing.
+  }
 
   const assets: any[] = [];
   for (const id of opts.existingAssetIds || []) {
@@ -570,6 +705,10 @@ export async function completeJob(
       workerId: job.workerId || deps.workerId,
       renderMs: opts.renderMs || null,
       costMicros: opts.costMicros || 0,
+      evaluation: (evaluation as any) || undefined,
+      // "kept" even when the check found faults — the evaluation JSON carries
+      // ok:false, so "why was this handed over?" is answerable either way.
+      outcome: "kept",
     },
   }).catch(() => undefined);
 

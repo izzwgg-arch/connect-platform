@@ -187,3 +187,40 @@
 @media (prefers-reduced-motion: reduce) {
   .cse * { animation-duration: 0s !important; transition: none !important; }
 }
+
+/* --------------------------------------------------------------- */
+/* storyboard — one card per shot, ported from the mockup           */
+/* --------------------------------------------------------------- */
+.cse-shots { display: flex; gap: 0; overflow-x: auto; padding-bottom: 6px; align-items: stretch; }
+.cse-shot { flex: 0 0 236px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
+.cse-shot.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cse-shot.drag { opacity: 0.4; }
+.cse-shot .sh { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid var(--border-2); font-size: 12px; font-weight: 600; cursor: grab; }
+.cse-shot .sb { padding: 9px; display: grid; gap: 7px; flex: 1; }
+.cse-shot .prompt { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; min-height: 48px; width: 100%; resize: vertical; border: 1px solid var(--border-2); border-radius: 8px; background: var(--panel-2); padding: 6px 7px; font-family: inherit; }
+.cse-shot .acts { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 9px 9px; }
+.cse-transition { flex: 0 0 74px; display: grid; place-items: center; gap: 4px; align-content: center; color: var(--text-dim); font-size: 11px; text-align: center; }
+.cse-transition button { border: 1px dashed var(--border); border-radius: 99px; padding: 3px 8px; background: var(--panel-2); font-size: 11px; color: var(--text-dim); cursor: pointer; }
+.cse-lanes { display: grid; gap: 6px; margin-top: 12px; }
+.cse-lane { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 12px; }
+.cse-lane .lname { display: flex; gap: 6px; align-items: center; color: var(--text-dim); font-weight: 600; }
+.cse-lane .lbar { display: flex; gap: 3px; }
+.cse-lane .lseg { height: 26px; border-radius: 6px; display: flex; align-items: center; padding: 0 8px; font-size: 11px; color: #fff; overflow: hidden; white-space: nowrap; }
+
+/* --------------------------------------------------------------- */
+/* the video editor timeline                                        */
+/* --------------------------------------------------------------- */
+.cse-tlwrap { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 10px; box-shadow: var(--cse-card-shadow); }
+.cse-tlscroll { overflow-x: auto; position: relative; }
+.cse-tlinner { min-width: 760px; position: relative; }
+.cse-ruler { position: relative; height: 22px; border-bottom: 1px solid var(--border); margin-left: 104px; font-size: 10px; color: var(--text-faint); }
+.cse-ruler i { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--border-2); padding-left: 3px; font-style: normal; }
+.cse-track { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 0; align-items: center; border-bottom: 1px solid var(--border-2); min-height: 44px; }
+.cse-track .tname { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--text-dim); font-weight: 600; padding-right: 8px; }
+.cse-lanebox { position: relative; height: 38px; }
+.cse-clip { position: absolute; top: 3px; bottom: 3px; border-radius: 7px; padding: 4px 7px; font-size: 11px; color: #fff; overflow: hidden; white-space: nowrap; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.25); text-align: left; }
+.cse-clip.on { outline: 2px solid #fff; outline-offset: -1px; box-shadow: 0 0 0 2px var(--accent); }
+.cse-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 4; pointer-events: none; }
+.cse-playhead::before { content: ""; position: absolute; top: -6px; left: -5px; border: 6px solid transparent; border-top-color: var(--danger); }
+.cse .cse-tile.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cse .cse-thumb.on { outline: 2px solid var(--accent); outline-offset: 1px; }

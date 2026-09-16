@@ -440,7 +440,10 @@ test("the routes are actually registered on the server", () => {
 test("every Creative route sits behind a permission rule", () => {
   const server = apiFile("src/server.ts");
   for (const rule of [
-    '{ prefix: "/creative", permission: "can_view_creative_home" }',
+    // ⛔ The SECTION key, not a page's: shared calls (/creative/jobs and
+    // friends) fall under this catch-all, so keying it on one page would give
+    // a person granted a different page a working link and a 403 behind it.
+    '{ prefix: "/creative", permission: "can_view_section_creative" }',
     '{ prefix: "/creative/projects", permission: "can_view_creative_projects" }',
     '{ prefix: "/creative/brand-kit", permission: "can_view_creative_brand_kit" }',
     '{ prefix: "/admin/creative", permission: "can_manage_global_settings" }',

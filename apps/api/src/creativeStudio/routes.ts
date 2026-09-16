@@ -15,7 +15,9 @@ import { z } from "zod";
 import { resolveUrlSigningKey } from "../urlSigningSecret";
 import { buildKey, putObject, getObjectStream, deleteObject, sniffMime, ALLOWED_UPLOAD_MIME, kindForMime, keyBelongsToTenant, tenantBytes } from "./storage";
 import { listMemory, recordFeedback } from "./memory";
-import { cancelJob, quotaFor, usedThisPeriod, periodOf } from "./jobs";
+import { cancelJob, checkQuota, createJob, quotaFor, usedThisPeriod, periodOf } from "./jobs";
+import { EXPORT_PRESETS, normaliseTimeline } from "./localJobs";
+import { assembleFilm } from "./film";
 import { chooseEngine } from "./engines";
 import { loadBrandKit, applyOps } from "./helpers";
 import { startGeneration } from "./service";
@@ -522,6 +524,130 @@ export function registerCreativeStudioRoutes({ app, db, requireOwner, hasPermiss
     if (!res.ok && res.reason === "not_found") return reply.code(404).send({ error: "not_found" });
     await audit({ tenantId: u.tenantId, actorType: "user", actorId: u.sub, action: "creative.job.cancelled", targetType: "CreativeJob", targetId: String(req.params.id), result: res.ok ? "ok" : "failed", ip: req.ip });
     return reply.send(res);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* the cut, and the sizes it goes out in                             */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Turn the storyboard into a cut. Same implementation the Coworker uses, so
+   * asking it to "put the film together" and pressing the button here give the
+   * same timeline rather than two that drift apart.
+   */
+  app.post("/creative/projects/:id/assemble", async (req: any, reply: any) => {
+    const u = tenantUser(req, reply);
+    if (!u) return;
+    const project = await db.creativeProject.findFirst({ where: { id: String(req.params.id), tenantId: u.tenantId, deletedAt: null } });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+
+    const res = await assembleFilm(db, { tenantId: u.tenantId, projectId: project.id, userId: u.sub, actorType: "user" });
+    if (!res.ok) return reply.code(400).send({ error: res.code, reason: res.reason });
+    return reply.send({ documentId: res.documentId, revision: res.revision, clips: res.clips, skipped: res.skipped });
+  });
+
+  /**
+   * Render the timeline into one film. This runs on our own machines with
+   * FFmpeg — the customer's finished cut never passes through a third party to
+   * be joined — so it costs nothing per run and no engine is chosen.
+   */
+  app.post("/creative/projects/:id/render", async (req: any, reply: any) => {
+    const u = tenantUser(req, reply);
+    if (!u) return;
+    if (!(await needs(req, reply, "can_creative_generate_video", "render a film"))) return;
+
+    const project = await db.creativeProject.findFirst({ where: { id: String(req.params.id), tenantId: u.tenantId, deletedAt: null } });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+
+    const document = await db.creativeDocument.findFirst({ where: { projectId: project.id, tenantId: u.tenantId, type: "timeline" } });
+    const timeline = normaliseTimeline(document?.doc);
+    if (!timeline?.clips?.length) {
+      return reply.code(400).send({ error: "empty_timeline", reason: "There are no shots on the timeline yet." });
+    }
+
+    const quota = await checkQuota(db, u.tenantId, "timeline.render", {});
+    if (!quota.ok) return reply.code(429).send({ error: "quota_blocked", reason: quota.reason });
+
+    const { job, deduped } = await createJob(db, {
+      tenantId: u.tenantId,
+      capability: "timeline.render",
+      projectId: project.id,
+      requestedByUserId: u.sub,
+      // The revision is part of the key, so re-rendering an UNCHANGED timeline
+      // returns the same job instead of doing the work twice — but one edit
+      // makes it a new render.
+      idempotencyKey: `render:${project.id}:${document?.revision ?? 0}`,
+      request: { timeline },
+      priority: 50,
+    });
+    if (!job) return reply.code(503).send({ error: "no_engine" });
+
+    await audit({ tenantId: u.tenantId, actorType: "user", actorId: u.sub, action: "creative.render.started", targetType: "CreativeJob", targetId: job.id, detail: { projectId: project.id, clips: timeline.clips.length }, ip: req.ip });
+    return reply.send({ job: jobSummary(job), deduped });
+  });
+
+  /**
+   * The voices a voiceover can be read in. Borrowed from the platform's own
+   * ElevenLabs helper rather than a second list, so the studio and the IVR
+   * never disagree about what exists. A list we cannot fetch is an empty list,
+   * not an error — the default voice still works.
+   */
+  app.get("/creative/voices", async (req: any, reply: any) => {
+    const u = tenantUser(req, reply);
+    if (!u) return;
+    try {
+      const { resolveCreativeSecret } = await import("./engines");
+      const key = await resolveCreativeSecret(db, "elevenlabs_api_key");
+      if (!key) return reply.send({ voices: [] });
+      const { listElevenLabsVoices } = await import("../voice/elevenLabs");
+      const voices = await listElevenLabsVoices(key);
+      return reply.send({ voices: (voices || []).slice(0, 60) });
+    } catch {
+      return reply.send({ voices: [] });
+    }
+  });
+
+  app.get("/creative/export-presets", async (req: any, reply: any) => {
+    const u = tenantUser(req, reply);
+    if (!u) return;
+    return reply.send({ presets: Object.entries(EXPORT_PRESETS).map(([id, p]) => ({ id, ...p })) });
+  });
+
+  app.post("/creative/export", async (req: any, reply: any) => {
+    const u = tenantUser(req, reply);
+    if (!u) return;
+    if (!(await needs(req, reply, "can_creative_export", "export finished work"))) return;
+
+    const body = z.object({
+      assetId: z.string().max(40),
+      presets: z.array(z.string().max(40)).min(1).max(9),
+      projectId: z.string().max(40).optional(),
+      format: z.enum(["png", "jpg", "webp"]).optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });
+
+    const asset = await db.creativeAsset.findFirst({ where: { id: body.data.assetId, tenantId: u.tenantId, deletedAt: null } });
+    if (!asset) return reply.code(404).send({ error: "not_found" });
+
+    const unknown = body.data.presets.filter((p) => !EXPORT_PRESETS[p]);
+    if (unknown.length) return reply.code(400).send({ error: "unknown_preset", detail: unknown });
+
+    const jobs: any[] = [];
+    for (const preset of body.data.presets) {
+      const { job } = await createJob(db, {
+        tenantId: u.tenantId,
+        capability: "export",
+        projectId: body.data.projectId || asset.projectId || null,
+        requestedByUserId: u.sub,
+        idempotencyKey: `export:${asset.id}:${preset}:${body.data.format || "png"}`,
+        request: { assetId: asset.id, preset, format: body.data.format },
+        priority: 40,
+      });
+      if (job) jobs.push(jobSummary(job));
+    }
+
+    await audit({ tenantId: u.tenantId, actorType: "user", actorId: u.sub, action: "creative.export.started", targetType: "CreativeAsset", targetId: asset.id, detail: { presets: body.data.presets }, ip: req.ip });
+    return reply.send({ jobs });
   });
 
   /* ---------------------------------------------------------------- */

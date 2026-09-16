@@ -397,14 +397,14 @@ import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes"
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
 import { registerCreativeStudioRoutes } from "./creativeStudio/routes";
-import { registerYiddishCorpusRoutes } from "./yiddishCorpus/routes";
-import { seedYiddishSources } from "./yiddishCorpus/seed";
-import { startYiddishWorker } from "./yiddishCorpus/jobs";
 import { registerCreativeAdminRoutes } from "./creativeStudio/adminRoutes";
 import { registerCreativeInternalRoutes } from "./creativeStudio/internalRoutes";
 import { seedEngines } from "./creativeStudio/engines";
 import { runCreativeCycle, sweepExpiredAssets } from "./creativeStudio/jobs";
 import { registerMobileWebhookRoutes } from "./loopcomMobile/mobileWebhookRoutes";
+import { registerYiddishCorpusRoutes } from "./yiddishCorpus/routes";
+import { seedYiddishSources } from "./yiddishCorpus/seed";
+import { startYiddishWorker } from "./yiddishCorpus/jobs";
 import { runMobileStateReconcileCycle, runMobileUsageSyncCycle, runMobileAnomalySweep } from "./loopcomMobile/mobileSyncJobs";
 import {
   inboundSmsWebhookUrl as signalWireInboundSmsWebhookUrl,
@@ -3058,13 +3058,13 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/mobile-service/support", permission: "can_view_mobile_support" },
   { prefix: "/mobile-service/settings", permission: "can_view_mobile_settings" },
   { prefix: "/admin/mobile-service", permission: "can_manage_global_settings" },
-  { prefix: "/creative", permission: "can_view_creative_home" },
-  // Yiddish Corpus + Learning Engine (2026-09-15) — platform data, never
-  // tenant-scoped. Every handler ALSO calls requireSuperAdmin; this rule
-  // exists so the prefix is not silently outside the global permission gate
-  // (the /admin/wake-health class, where a missing rule meant no permission
-  // check ran at all).
-  { prefix: "/admin/yiddish", permission: "can_manage_global_settings" },
+  // ⛔ The SECTION key, not the home page's. Shared calls (/creative/jobs,
+  // /creative/voices, /creative/export-presets) fall under this catch-all, and
+  // keying it on one PAGE would mean a person granted only the storyboard saw
+  // the page and got 403s inside it. Everyone who can see any Creative page
+  // holds the section key; the per-page keys still decide which pages appear,
+  // and the handlers still gate spending on their own action keys.
+  { prefix: "/creative", permission: "can_view_section_creative" },
   { prefix: "/creative/download", permission: null },
   { prefix: "/creative/projects", permission: "can_view_creative_projects" },
   { prefix: "/creative/assets", permission: "can_view_creative_assets" },
@@ -3072,6 +3072,12 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/creative/brand-kit", permission: "can_view_creative_brand_kit" },
   { prefix: "/creative/memory", permission: "can_view_creative_memory" },
   { prefix: "/admin/creative", permission: "can_manage_global_settings" },
+  // Yiddish Corpus + Learning Engine (2026-09-15) — platform data, never
+  // tenant-scoped. Every handler ALSO calls requireSuperAdmin; this rule
+  // exists so the prefix is not silently outside the global permission gate
+  // (the /admin/wake-health class, where a missing rule meant no permission
+  // check ran at all).
+  { prefix: "/admin/yiddish", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
   // class, where a missing rule meant no permission check ran at all).
@@ -24285,7 +24291,6 @@ registerCreativeAdminRoutes({ app, db, requireOwner: (req: any, reply: any) => r
 // The Coworker's door: shared-secret, server-to-server, same service layer.
 registerCreativeInternalRoutes({ app, db });
 
-// ── Carrier migration (2026-09-10) ─────────────────────────────────────────
 // ── Yiddish Corpus + Learning Engine (2026-09-15) ───────────────────────────
 // Platform data, never tenant-scoped: sources, rights records, lexemes,
 // pronunciation observations and the voice benchmark. SUPER_ADMIN only on
@@ -24327,6 +24332,7 @@ if (yiddishEngineEnabled) {
   });
 }
 
+// ── Carrier migration (2026-09-10) ─────────────────────────────────────────
 // Moving all 52 live numbers off VoIP.ms and onto SignalWire, a few at a time.
 // Incoming calls move by themselves (Main's default-trunk routes on the
 // dialled number and both carriers converge there); the ONLY gap is between a

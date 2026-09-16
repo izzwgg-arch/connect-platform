@@ -134,6 +134,13 @@ export const navItems: NavItem[] = [
   { id: "creative.design", href: "/creative/design", label: "Design editor", icon: "CD", lucide: LayoutTemplate, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_design" },
   { id: "creative.assets", href: "/creative/assets", label: "Assets", icon: "CA", lucide: Layers, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_assets" },
   { id: "creative.brand", href: "/creative/brand", label: "Brand kit", icon: "CB", lucide: Palette, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_brand_kit" },
+  // The film pipeline: storyboard → editor → voice/music → export. Each is its
+  // own page with its own key, because a company may well let somebody write a
+  // storyboard without letting them spend on renders or publish an export.
+  { id: "creative.storyboard", href: "/creative/storyboard", label: "Storyboard", icon: "CT", lucide: LayoutGrid, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_storyboard" },
+  { id: "creative.timeline", href: "/creative/timeline", label: "Video editor", icon: "CE", lucide: SlidersHorizontal, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_timeline" },
+  { id: "creative.audio", href: "/creative/audio", label: "Voice & music", icon: "CU", lucide: Music, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_audio" },
+  { id: "creative.export", href: "/creative/export", label: "Export", icon: "CX", lucide: Download, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_export" },
   { id: "creative.memory", href: "/creative/memory", label: "Creative memory", icon: "CM", lucide: Brain, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_memory" },
   { id: "mobile.dashboard", href: "/mobile", label: "Mobile Dashboard", icon: "MD", lucide: LayoutDashboard, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_workspace_mobile" },
   { id: "mobile.users", href: "/mobile/users", label: "Users", icon: "MU", lucide: Users, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_users" },
