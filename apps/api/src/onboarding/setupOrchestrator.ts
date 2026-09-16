@@ -614,6 +614,32 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     const resolveTenantPath = async (slug: string, label: string): Promise<string | null> => {
       // slug/label are the unique per-submission identity (buildPbxTenant
       // passes them through) — never match on the bare company name here.
+      //
+      // ⛔ The PBX DATABASE first. VitalPBX's REST tenant list is a cache that
+      // runs 40+ minutes stale (vitalpbx-rest-tenant-list-is-a-stale-cache).
+      // Proven on the live Telnyx end-to-end sign-up 2026-09-16: a build
+      // interrupted AFTER its tenant was created could never resume — REST
+      // did not list the tenant, the mirror refused "already exists", the panel
+      // fallback failed, and every watchdog retry failed the same way.
+      try {
+        const inst = await (db as any).pbxInstance.findUnique({ where: { id: pbx.instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+        const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+        const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+        if (c.ok) {
+          try {
+            const [rows] = await c.conn.query(
+              `SELECT path FROM \`${c.schema}\`.ombu_tenants WHERE name = ? OR TRIM(description) = ? LIMIT 2`,
+              [slug, label.trim()],
+            );
+            const list = rows as Array<{ path?: string }>;
+            if (list.length === 1 && list[0]?.path) return String(list[0].path);
+          } finally {
+            await c.conn.end().catch(() => {});
+          }
+        }
+      } catch {
+        /* fall through to the REST list */
+      }
       try {
         const tenants = (await pbx.client.listTenants()) as any[];
         const hit = tenants.find(

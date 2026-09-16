@@ -681,3 +681,12 @@ test("⛔ a shared-trunk build applies MAIN so the DID dispatch exists (live: 84
   assert.match(block, /await applyAndRebake\(session, panelCfg\.mainTenant,/);
   assert.doesNotMatch(block.slice(0, block.indexOf("applyAndRebake(session")), /try \{/, "a failed Main apply must fail the build, not be swallowed");
 });
+
+test("⛔ the orchestrator finds an existing tenant in the PBX DATABASE before the stale REST list (live: interrupted builds could never resume)", () => {
+  const src = read("setupOrchestrator.ts");
+  const i = src.indexOf("const resolveTenantPath = async");
+  const block = src.slice(i, i + 2600);
+  const db = block.indexOf("ombu_tenants WHERE name = ?");
+  const rest = block.indexOf("pbx.client.listTenants()");
+  assert.ok(db > 0 && rest > 0 && db < rest, "MySQL lookup must come before REST");
+});
