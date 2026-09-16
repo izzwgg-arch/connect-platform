@@ -242,13 +242,17 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
   const loadSource = async (key: string) => db.ycSource.findUnique({ where: { key: String(key) } });
 
   async function sourceSummary(source: any): Promise<YcSourceSummary> {
-    const [rights, health, budget, itemCount, transcriptCount, durationAgg] = await Promise.all([
+    const [rights, health, budget, itemCount, transcriptCount, durationAgg, assetAgg] = await Promise.all([
       safe<any[]>(db.ycRightsRecord.findMany({ where: { sourceId: source.id } }), []),
       safe<any[]>(db.ycSourceHealth.findMany({ where: { sourceId: source.id } }), []),
       safe<any>(db.ycBudget.findFirst({ where: { sourceId: source.id } }), null),
       safe<number>(db.ycSourceItem.count({ where: { sourceId: source.id } }), 0),
       safe<number>(db.ycTranscript.count({ where: { item: { sourceId: source.id } } }), 0),
       safe<any>(db.ycSourceItem.aggregate({ _sum: { durationSec: true }, where: { sourceId: source.id } }), null),
+      safe<any>(
+        db.ycAudioAsset.aggregate({ _sum: { durationMs: true }, where: { item: { sourceId: source.id }, deletedAt: null } }),
+        null,
+      ),
     ]);
     return {
       key: String(source.key),
@@ -264,7 +268,13 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
       termsCheckedAt: source.termsCheckedAt ? new Date(source.termsCheckedAt).toISOString() : null,
       rightsNote: source.rightsNote ?? null,
       itemCount: num(itemCount),
-      audioHours: Math.round((num(durationAgg?._sum?.durationSec) / 3600) * 100) / 100,
+      // ⛔ Two different things, and calling both "audio hours" was a lie the
+      // screens repeated: the catalogue duration is metadata the site published
+      // about files we have never opened; analysed hours are audio we actually
+      // hold and processed. While the gate is shut the second is 0, and it must
+      // read 0.
+      catalogDurationHours: Math.round((num(durationAgg?._sum?.durationSec) / 3600) * 100) / 100,
+      audioHours: Math.round((num(assetAgg?._sum?.durationMs) / 3_600_000) * 100) / 100,
       transcriptCount: num(transcriptCount),
       lastRunAt: source.lastRunAt ? new Date(source.lastRunAt).toISOString() : null,
       budget: budgetView(budget),
@@ -324,6 +334,10 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     // A "pair" is the valuable thing: one asset WITH a transcript. It is not the
     // translation count — reporting 434 translations as 434 aligned pairs made
     // an empty corpus look half-built.
+    const assetHoursAgg = await safe<any>(
+      db.ycAudioAsset.aggregate({ _sum: { durationMs: true }, where: { deletedAt: null } }),
+      null,
+    );
     const pairs = await safe<number>(
       db.ycSourceItem.count({ where: { assets: { some: {} }, transcripts: { some: {} } } }),
       0,
@@ -366,7 +380,10 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     const view: YcDashboardView & { note: string; badges: Record<string, YcGovernanceBadge> } = {
       corpus: {
         items: num(items),
-        audioHours: Math.round((num(durationAgg?._sum?.durationSec) / 3600) * 100) / 100,
+        // Audio we actually hold and have processed. The catalogue's published
+        // durations are metadata about files we have never opened.
+        audioHours: Math.round((num(assetHoursAgg?._sum?.durationMs) / 3_600_000) * 100) / 100,
+        catalogDurationHours: Math.round((num(durationAgg?._sum?.durationSec) / 3600) * 100) / 100,
         transcripts: num(transcripts),
         translations: num(translations),
         pairs: num(pairs),
@@ -1203,8 +1220,8 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
         note: String(inv.note ?? "Counted, never read."),
       };
     });
-    const budget = await safe(db.ycBudget.findFirst({ where: { scope: "global" } }), null);
-    const sourceBudgets = await safe(db.ycBudget.findMany({ where: { NOT: { scope: "global" } } }), []);
+    const budget = await safe<any>(db.ycBudget.findFirst({ where: { scope: "global" } }), null);
+    const sourceBudgets = await safe<any[]>(db.ycBudget.findMany({ where: { NOT: { scope: "global" } } }), []);
     const beat = await safe(
       db.ycMetricSnapshot.findFirst({ where: { metric: "worker_heartbeat_ms" }, orderBy: { createdAt: "desc" } }),
       null as any,

@@ -161,7 +161,10 @@ export interface YcSourceSummary {
   termsCheckedAt: string | null;
   rightsNote: string | null;
   itemCount: number;
+  /** Audio we hold and have processed. 0 while the audio gate is shut. */
   audioHours: number;
+  /** Duration the SOURCE published about files we may never have opened. */
+  catalogDurationHours: number;
   transcriptCount: number;
   lastRunAt: string | null;
   budget: YcBudgetView | null;
@@ -187,7 +190,10 @@ export interface YcBudgetView {
 export interface YcDashboardView {
   corpus: {
     items: number;
+    /** Audio actually held and processed. */
     audioHours: number;
+    /** Published durations from catalogued items, not audio we hold. */
+    catalogDurationHours: number;
     transcripts: number;
     translations: number;
     pairs: number;
