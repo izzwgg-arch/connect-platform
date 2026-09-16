@@ -90,3 +90,39 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
   it**. The honest test is a Wi-Fi-only tablet showing an **Install** button instead of "Your device isn't
   compatible with this version", then a call ringing on it.
 - ⛔ Still excluded and NOT addressed here: x86/x86_64 (the AAB carries `armeabi-v7a` + `arm64-v8a` only).
+
+## Onboarding welcome email → Google Play badge — 2026-09-15
+
+- `cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/*.test.ts"`
+  -> **1,423 tests, 1,414 pass, 9 fail**. ⛔ **All 9 are PRE-EXISTING and unrelated to this change**:
+  7 × `syncPbxTenantDirectoryFromRows`, `the model really exists in the schema (the (db as any)
+  transposition trap)`, and `apps/api/src: the old hostname and mail domain appear as CODE only in
+  publicOrigins.ts` — that last one flags `"m.connectcomunications.com"` in `server.ts`, which is
+  **present at HEAD** (`git show HEAD:apps/api/src/server.ts | grep -n` -> L42556) and which this
+  change never touches (`git diff` added zero hostname literals).
+- `src/androidApkInviteUrl.test.ts` + `src/userEmailTemplates.invite.test.ts` -> **25/25 pass** after
+  a real catch: the new guard `the template resolves BOTH Play URLs itself` **failed on first run**
+  because its `!/androidApkUrl/` regex matched the *historical comment* explaining why the field was
+  removed. Tightened to `/androidApkUrl\s*\?*\s*:/` + `/input\.androidApkUrl/`, so prose stays legal
+  and only the field or a read of it fails the build.
+- `src/onboarding/setupOrchestrator.test.ts` fails **wholesale** on
+  `(0 , import_pbxInboundRouteHelperClient.resolvePbxRouteHelperConfig) is not a function`.
+  ⛔ Pre-existing, from `1c1d067e` (another session's PBX-mirror work): the suite never mocks that
+  module, and this change's only edit to that file is removing one import + the `androidApkUrl` field.
+- `cd apps/api && npx tsc --noEmit -p tsconfig.json` -> **87 errors, ZERO in any file this change
+  touched** (`grep -E "userEmailTemplates|androidApkInviteUrl|setupOrchestrator"` over the output is
+  empty). The 87 are the repo's standing api type debt (Timeout/unref, storage-maintenance types, …).
+- **Rendered from the real template**, `PUBLIC_PORTAL_URL=https://app.loopcom.net npx tsx` over
+  `welcomeCreatePasswordEmail()`: badge `<img>` at 180×70 linked to
+  `play.google.com/store/apps/details?id=com.connectcommunications.mobile`, plain text carrying the
+  same URL, no APK wording left.
+- **DEPLOYED + container-verified** (api then portal, `scripts/deploy-direct.sh … --commit 66eb7096…`):
+  both `.build-commit` = `66eb7096c6f96bcfed71682d520bbe8fe73d0ff9`, **0 restarts**, both running.
+  `welcomeCreatePasswordEmail()` **executed inside `app-api-1`** emits the badge linked to the
+  listing and resolves the image to `https://app.connectcomunications.com/brand/google-play/…`
+  (temp proof file removed after). Badge over HTTPS: **200, 4,904 b, image/png on BOTH hostnames**.
+  `https://app.loopcom.net/api/mobile/android/download` -> **200**, so the APK is not withdrawn.
+- ⏳ **NOT run / NOT proven: no invitation has been SENT since the deploy**, so no email has been
+  opened in a real client and **Outlook's Word engine has never rendered the badge**. The honest
+  test is the 2026-08-09 one: invite a spare address, then read the last `USER_INVITE` `EmailJob`
+  bodies and confirm **both** paths (admin invite AND self-service sign-up) carry the Play URL.
