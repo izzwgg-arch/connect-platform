@@ -92,7 +92,7 @@ digits; audited reveal; 422 field errors; invite email really SENT; random-token
 per-IP 429; forged webhooks 401; TENANT_ADMIN 403.
 
 ### Browser proof + the two bugs only it found
-In real Chrome on app.loopcom.net: public form light+dark with logo, empty Send → 10 errors + focus, typed submit → thank-you; admin board, review page, audited EIN Show, Close. ⛔ Found: (1) the public page could not scroll — the portal locks `html/body { overflow: hidden }` for the signed-in shell, so ANY public page must be its own scroll container (`.tr-page { height:100dvh; overflow-y:auto }`); (2) ConnectSelect sets `width:160px` inline — fill a column with `!important`. Both fixed in the CSS redeploy.
+In real Chrome on app.loopcom.net: public form light+dark with logo, empty Send → 10 errors + focus, typed submit → thank-you; admin board, review page, audited EIN Show, Close. ⛔ Found: (1) the public page could not scroll — the portal locks `html/body { overflow: hidden }` for the signed-in shell, so ANY public page must be its own scroll container (`.tr-page { height:100dvh; overflow-y:auto }`); (2) ConnectSelect sets `width:160px` inline — fill a column with `!important`. Both fixed (`6c2ef93e`, then `9a04bb2c` — ⛔ ConnectSelect's `.cs-wrap` also carries `min-width:160px`, so `min-width:0 !important` is needed too). Portal live = `9a04bb2c`. ⚠️ After a portal deploy a browser holding an old HTTP/2 connection can get 502s for minutes (old nginx workers route to removed blue/green ports) — use the other hostname to get a fresh connection when verifying; platform fix spawned as its own task.
 
 ### ⏳ NOT PROVEN — the acceptance test is the first REAL customer filing
 Nothing has been filed with Telnyx (costs $24 and needs a real EIN): brand verification, campaign
