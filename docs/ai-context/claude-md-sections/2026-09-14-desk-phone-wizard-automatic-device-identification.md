@@ -184,3 +184,16 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   scan took ~2 min vs the promised ~30s (slow probing, not frozen — /discovered landed);
   physical leg still open: his T42S needs its one hand reset; no phone yet registered
   end-to-end from a customer scan.
+- ⛔⛔ **ROUND 20 (2026-09-16, handoff §10s — `020298b1`, tip `6c2ef93e`): THE SCAN PAGE IS A REAL
+  SCANNER NOW.** Izzy: *"It doesn't really go into focus to actually scan. It needs to scan very
+  efficiently right away."* Round 18 was a PHOTOGRAPHER — one JPEG POSTed to the server every 1.5s,
+  camera asked for nothing → blurry at reading distance, almost never decodes. Now the browser runs
+  the SAME `zxing-wasm/reader` ON-DEVICE (~7×/s on a centre crop), asks `getUserMedia` for 1080p +
+  `focusMode:"continuous"`, shows a torch button where the phone has `torch`, and sends only the
+  decoded TEXT to NEW `POST /phone-setup/:token/scan-text`. ⛔ THE SERVER STAYS THE ONLY JUDGE:
+  shared `labelTextsFromSymbols` (extracted from `labelBarcodes.ts`) → `parseDeviceLabel` →
+  match-by-MAC → the one gate, same refusals (maker-named 409, `nothing_matched_yet`, dies-with-link).
+  Old browser with no wasm → the original photo-POST path still runs. ⛔ reader wasm served from OUR
+  origin (`public/zxing/zxing_reader.wasm`; CSP blocks the CDN) — live `200 application/wasm`. Tests:
+  deviceCloudRoutes 66 (+4 scan-text); both apps tsc clean on touched files. ⏳ nobody has scanned a
+  real sticker through the on-device path — next, on Izzy's phone.

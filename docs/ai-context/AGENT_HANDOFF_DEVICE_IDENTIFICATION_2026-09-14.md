@@ -900,6 +900,41 @@ per-host probing, not a freeze; the searching screen needs live progress words. 
 the crash cause, and the physical leg — his T42S still needs its one hand reset, and no phone
 has yet registered end-to-end from a customer scan.
 
+## 10s. Round 20 (2026-09-16) — THE SCAN PAGE IS A REAL SCANNER, not a photographer (`020298b1`, tip `6c2ef93e`)
+
+Izzy opened his own link, got the camera (round 19's fix), and it would not read: *"It doesn't
+really go into focus to actually scan. It needs to scan very efficiently right away. Can't make the
+customer get annoyed by it just scanning and taking forever."* He was right — round 18 built a
+PHOTOGRAPHER: one full JPEG POSTed to the server every 1.5 s (`SCAN_EVERY_MS`), the camera asked
+for nothing. On a phone at reading distance the sticker sits blurry and a decode almost never lands.
+
+**Now the browser is a fast READER, the server still the only JUDGE.** `/phone-setup/[token]` runs
+the SAME `zxing-wasm/reader` the server uses, on-device, ~7×/s against a centre crop (the reticle),
+and asks `getUserMedia` for 1080p + `focusMode:"continuous"` where the phone admits it, with a
+torch button when `getCapabilities().torch` is present. Only the decoded TEXT crosses the wire, to
+NEW `POST /phone-setup/:token/scan-text` — which re-shapes the values through the SHARED
+`labelTextsFromSymbols` (extracted from `labelBarcodes.ts` so browser and server speak one
+language), re-parses with `parseDeviceLabel`, matches by MAC against the order, and pushes through
+the ONE gate (`recordLabel`). Same refusals: maker-named 409 off the OUI, `nothing_matched_yet`
+(400, silent on the page) while only a serial symbol has been read, dies-with-the-link 404.
+
+⛔ **NEVER a second judge in the browser.** The page decodes for speed only; a forged or garbled
+value ends at the same gate as a typed one. ⛔ Old browser with no wasm → the original photo-POST
+path (`/scan`) still runs, so nothing regresses. ⛔ The reader wasm is served from OUR origin
+(`apps/portal/public/zxing/zxing_reader.wasm`, `prepareZXingModule` `locateFile` → `/zxing/…`)
+because the artifact/portal CSP blocks the CDN default — verified live: `/zxing/zxing_reader.wasm`
+= 200 `application/wasm`.
+
+Tests: `deviceCloudRoutes` 66 (4 new scan-text: match-by-MAC, maker-named 409, `nothing_matched_yet`,
+dies-with-the-link). Both apps typecheck clean on every touched file. ⛔ `managedPhonePostgres.test`
+self-skips without a generated Prisma client (it did in a fresh worktree) — unrelated, imports none
+of this. ⛔ Deploy note carried again: pin the ORIGIN TIP, never a stale `--branch` capture — a peer
+`--branch` build shipped `34ff3aae` (pre-my-push) and briefly reverted portal; both apps are now on
+`6c2ef93e` (contains `020298b1`), landed by peer deploys of the tip.
+
+⏳ **NOT PROVEN: nobody has scanned a real sticker through the on-device path.** That is the next
+thing, on Izzy's own phone.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
