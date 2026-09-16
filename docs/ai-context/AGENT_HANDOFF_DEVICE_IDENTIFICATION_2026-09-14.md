@@ -846,6 +846,60 @@ deploy was refused with `runningCount=1` — ⛔ that error means a REAL job is 
 ⏳ **NOT PROVEN:** nobody has opened the link on a real phone, no camera frame has been decoded in
 production, and no customer has scanned a sticker.
 
+## 10r. Round 19 (2026-09-16) — IZZY RAN IT HIMSELF, AND THREE "DONE" THINGS WERE NOT: the password we
+already had, the link that hid, and the scan page that lied
+
+Izzy, live on his own T42S, verbatim: *"We should not need the fucking password"* — then, after
+pressing "I don't have the password": *"it's still not asking me to send a link to scan"* — then,
+opening his own scan link on his phone: *"I got a page that's off all phones already. Never got a
+camera or anything to scan."* All three were real, all three were mine, all three are fixed and
+container-verified in `9c0fefde` (api+portal) and `a78d7ee8` (portal, tip `47584ef6`).
+
+**(1) A password WE set is never asked of a customer.** Our Yealink provisioning writes
+`static.security.user_password = admin:<password>` into the config the phone downloads — so a
+Loopcom-provisioned phone that answers "locked" is locked with a password THIS SYSTEM generated
+and still serves. New `POST /desk-phones/runs/:id/phones/:phoneId/known-credential` reads it back
+out of the phone's own rendered cfg (the tenant's folder, plus the folder the phone is pointed at
+when that is ours) and the wizard puts it into the DESKTOP credential store through the existing
+`rememberCredential` — the password never touches React state, a log, the audit (which records
+only that a credential was served) or the api's own storage. Tried ONCE per phone; a phone we
+never provisioned still gets the password screen. ⛔ PROVEN live: the route answered 200 with the
+real credential for Izzy's own phone (probe, redacted), and the wizard called it itself twice
+during his run (audits 12:05:56 and 12:13:38).
+
+⛔⛔ **AND THE HONEST LIMIT, so nobody oversells this:** Izzy's own T42S still refused that
+password — because THAT unit was provisioned by the PREVIOUS provider (the same unit that is
+RPS-claimed by another org, 800004). The password it holds is theirs, which no config of ours can
+ever contain. For such a phone the ladder's hands-on halt (hold OK ~10s) is the truth, ONCE —
+after that boot, LAN PnP hands it OUR config and every later run is passwordless. This mechanism
+removes the password question for every phone WE have ever provisioned; it cannot mind-read a
+stranger's lock.
+
+**(2) The scan link is offered from every screen that has phones** — found, match, live (including
+the password and hands-on screens) and done — one shared `scanLinkOffer`, not a done-screen-only
+block. PROVEN on his machine: the button showed on the found screen and the password screen, and
+the link was minted from mid-run (audit 12:13:42).
+
+**(3) The scan PAGE never hides the camera and never says "ready" about a sticker.** With every
+serial already on file, `/phone-setup/<token>` computed remaining=0, headlined "All your phones
+are ready" (about a phone sitting on a halt screen!) and rendered NO scan button at all — the
+unconditional-tick lie rebuilt on the one page whose entire job is the camera. Now: "Scan a
+phone" / "Scan another phone" is ALWAYS rendered while the link is live, and the all-scanned
+state says "Every sticker is scanned … setup continues on our side." Container-verified: the new
+strings are in the shipped bundle and "All your phones are ready" greps 0.
+
+⛔⛔ **DEPLOY AT THE TIP, NEVER AT YOUR OWN SHA.** This round I deployed `--commit 9c0fefde` while
+the branch tip was ahead — silently rolling back another session's live work (their session
+caught it and redeployed the tip). The rule, now followed here: `git fetch`, deploy the ORIGIN
+TIP that contains your commit, and check `git merge-base --is-ancestor <live-commit> <target>`.
+
+Also real this round: the app CRASHED once mid-scan (window vanished during Find My Phones;
+Izzy confirmed and reopened), and one scan attempt took ~2 minutes against the screen's "about
+thirty seconds" — the /discovered POST landed and the found screen followed, so it is slow
+per-host probing, not a freeze; the searching screen needs live progress words. ⏳ Open: that,
+the crash cause, and the physical leg — his T42S still needs its one hand reset, and no phone
+has yet registered end-to-end from a customer scan.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless
