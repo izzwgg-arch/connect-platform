@@ -213,6 +213,7 @@ export const SIDEBAR_ITEMS = [
   // (the only place an eSIM purchase can be triggered). SUPER_ADMIN-forced in
   // navConfig + requireSuperAdmin at the api; it spends the platform's money.
   { id: "admin.creative_console", section: "admin", label: "Creative Console", href: "/admin/creative-console", permission: "can_view_admin_creative_console" },
+  { id: "admin.texting_registration", section: "admin", label: "10DLC Registration", href: "/admin/texting-registration", permission: "can_view_admin_texting_registration" },
   { id: "admin.mobile_console", section: "admin", label: "Mobile Console", href: "/admin/mobile-console", permission: "can_view_admin_mobile_console" },
   { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
   // Yiddish Learning Engine (2026-09-15) — the corpus + learning engine and
@@ -269,6 +270,14 @@ export function customRoleGrantsAccountOwner(perms: readonly string[]): boolean 
 
 export const ACTION_PERMISSION_KEYS = [
   "can_act_as_account_owner",
+  // 10DLC texting registration (2026-09-16). Platform-staff page; none is in a
+  // default bucket. Filing spends money, the EIN reveal is audited, and
+  // deactivating a campaign cannot be undone — so each is its own toggle.
+  "can_send_texting_registration_link",
+  "can_view_texting_registration_ein",
+  "can_file_texting_registration",
+  "can_fix_texting_registration",
+  "can_deactivate_texting_registration",
   // Creative Studio verbs. None is in a default bucket: a person who can see
   // the studio still cannot spend money on video until it is granted.
   "can_creative_generate_image",

@@ -180,7 +180,7 @@ export function loopComShell(opts: {
 }
 
 /** Brand-blue CTA. Gradient over a solid bgcolor so Outlook degrades to flat. */
-function lcCtaButton(label: string, url: string): string {
+export function lcCtaButton(label: string, url: string): string {
   return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" class="lc-btn" style="margin:30px 0 4px;">
   <tr>
     <td align="center" bgcolor="#22a8ff" style="border-radius:10px;background:#22a8ff;background-image:linear-gradient(135deg,#22a8ff,#4f7bff);">

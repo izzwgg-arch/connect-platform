@@ -47,6 +47,19 @@ test("shouldSkipJwtVerification: the customer's desk-phone scan link is public; 
   assert.equal(shouldSkipJwtVerification("/admin/phone-setup/tokens"), false);
 });
 
+test("shouldSkipJwtVerification: the customer's 10DLC form link and policy page are public; staff routes are not", () => {
+  assert.equal(shouldSkipJwtVerification("/texting-registration/Zt7xK2qF9bQ1mR4sV8wLd3NpZt7xK2qF9bQ1mR4sV8w"), true);
+  assert.equal(shouldSkipJwtVerification("/api/texting-registration/Zt7xK2qF9bQ1mR4sV8wLd3NpZt7xK2qF9bQ1mR4sV8w/submit"), true);
+  assert.equal(shouldSkipJwtVerification("/texting-registration/policy/hudson-valley-tire"), true);
+  assert.equal(shouldSkipJwtVerification("/webhooks/telnyx/10dlc"), true);
+  assert.equal(shouldSkipJwtVerification("/api/webhooks/telnyx/10dlc"), true);
+  // ⛔ Staff routes stay JWT-gated, and the public prefix is anchored.
+  assert.equal(shouldSkipJwtVerification("/admin/texting-registration"), false);
+  assert.equal(shouldSkipJwtVerification("/admin/texting-registration/reg_1/file"), false);
+  assert.equal(shouldSkipJwtVerification("/api/admin/texting-registration/reg_1/reveal-ein"), false);
+  assert.equal(shouldSkipJwtVerification("/x/texting-registration/abc"), false);
+});
+
 test("shouldSkipJwtVerification: internal agent MOH doors skip JWT (in-handler secret auth)", () => {
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/override"), true);
   assert.equal(shouldSkipJwtVerification("/internal/agent/moh/upload-asset"), true);

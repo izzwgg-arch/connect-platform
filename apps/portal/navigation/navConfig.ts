@@ -7,6 +7,7 @@ import {
   Layers,
   Palette,
   Brain,
+  MessageSquareCheck,
 } from "lucide-react";
 import {
   isNavItemHiddenBySetting,
@@ -329,6 +330,7 @@ export const navItems: NavItem[] = [
   { id: "admin.elevenlabs", href: "/elevenlabs", label: "ElevenLabs", icon: "EL", lucide: Mic2, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_elevenlabs" },
   { id: "admin.polly", href: "/polly", label: "Amazon Polly", icon: "PY", lucide: AudioLines, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_polly" },
   { id: "admin.carrier_migration", href: "/admin/carrier-migration", label: "Carrier Migration", icon: "CM", lucide: ArrowLeftRight, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_carrier_migration" },
+  { id: "admin.texting_registration", href: "/admin/texting-registration", label: "10DLC Registration", icon: "10", lucide: MessageSquareCheck, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_texting_registration" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
 
@@ -411,6 +413,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.support",
   "admin.mobile_console",
   "admin.creative_console",
+  "admin.texting_registration",
   // The Yiddish Learning Engine's ten pages. Every one is SUPER_ADMIN-forced
   // in isNavItemVisibleForUser and requireSuperAdmin at the api, so a granted
   // key could only ever draw a door that refuses — they render Locked.
@@ -492,6 +495,7 @@ export function isNavItemVisibleForUser(
   // has NO force line on purpose: granting its key is the launch.)
   if (item.id === "admin.mobile_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.creative_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.texting_registration" && backendJwtRole !== "SUPER_ADMIN") return false;
   // The Yiddish Learning Engine reads across every tenant's material (the
   // customer data wall counts it) and its Governance screen carries the switch
   // that authorizes fetching third-party audio. Platform staff only, always —
