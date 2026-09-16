@@ -202,4 +202,4 @@ Mine checked out `737331c3`, the other checked out `fb563e27` mid-build; my log 
 with no fix. Caught only by `/app/.build-commit` + grepping for `IGNORED_TRUNK_ORPHANS`. Redeployed
 after confirming no deploy process was running and that the tip added no other api change.
 
-**Live proof.** See the line appended below by the sweep check (first sweep after the 10:52Z boot).
+**Live proof (PROVEN on production).** First sweep on `737331c3`, 2026-09-16 11:08:30Z: `checked: 61, unregisteredNow: [], offenders: [], alerted: false`. Every sweep before it carried the fox subaccount in `unregisteredNow`.
