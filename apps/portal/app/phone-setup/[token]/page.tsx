@@ -246,12 +246,17 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
           <h1 className="ps-h1">
             {remaining > 0
               ? `Let’s set up your ${order.total} desk ${order.total === 1 ? "phone" : "phones"}`
-              : "All your phones are ready"}
+              : "Every sticker is scanned"}
           </h1>
           <p className="ps-sub">
+            {/* ⛔ HONEST WORDS ONLY (Izzy, 2026-09-16). This page knows about STICKERS, not
+                whether a phone is working — "All your phones are ready" here was the
+                unconditional-tick lie all over again, shown to a customer whose phone was
+                sitting on a halt screen. A serial on file means we have what the sticker
+                says; the setting-up still happens on our side. */}
             {remaining > 0
               ? "Scan the sticker under each phone. We’ll do the rest."
-              : "Plug them in when they arrive — each one sets itself up. There’s nothing else to do."}
+              : "That’s everything we needed from the stickers. Setup continues on our side — you can still scan a phone if another one arrives."}
           </p>
           {order.company && <p className="ps-sub">{order.company}</p>}
 
@@ -271,7 +276,14 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
           </div>
 
           {problem && <div className="ps-note" data-kind="bad">{problem}</div>}
-          {remaining > 0 && <button type="button" className="ps-btn" onClick={() => { void startCamera(); }}>Scan a phone</button>}
+          {/* ⛔⛔ THE CAMERA IS NEVER HIDDEN (Izzy, 2026-09-16, opening his own link: "Never got
+              a camera or anything to scan"). With every serial already on file, this page used
+              to offer NOTHING — on the one page whose entire job is the camera. Scanning is
+              always allowed: a replacement phone, a re-check, a phone they are not sure about.
+              The server's one gate still judges every frame exactly as before. */}
+          <button type="button" className="ps-btn" onClick={() => { void startCamera(); }}>
+            {remaining > 0 ? "Scan a phone" : "Scan another phone"}
+          </button>
         </div>
       )}
 
