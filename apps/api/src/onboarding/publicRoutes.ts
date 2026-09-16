@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { prepareOnboardingCheckout, quoteForSubmission } from "./onboardingPayment";
-import { quoteInputForSubmission, isTollFreeNumberKind } from "./quoteInput";
+import { quoteInputForSubmission, isTollFreeNumberKind, readOnboardingPricing, resolvePricingCount } from "./quoteInput";
 import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
@@ -470,7 +470,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
           publicToken: token,
           status: "IN_PROGRESS" as OnboardingStatus,
           currentStep: body.currentStep || null,
-          answers: body.answers ?? null,
+          // Nothing stored yet — the carry still strips server-owned keys
+          // (admin pricing) a client may have sent.
+          answers: (carryServerOwnedAnswers(null, body.answers ?? null) as any) ?? null,
           events: { create: { type: "CREATED", message: "Submission created (lazy)" } },
         },
       });
@@ -672,9 +674,15 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // The wizard passes its live pick too — apply-number is fire-and-forget
     // and autosave is debounced, so the stored numberKind can lag the screen.
     const kindParam = String(q.numberKind ?? "").toLowerCase();
+    const liveExtensions =
+      Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions;
+    // ⛔ Admin pricing (cold calling / CRM) re-resolved against the LIVE count —
+    // dropping it here would show $30 on review and charge $65 at checkout.
+    const pricing = readOnboardingPricing((full || row)?.answers);
     const input = {
-      extensions:
-        Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions,
+      coldCallingExtensions: resolvePricingCount(pricing.coldCalling?.extensions, liveExtensions),
+      crmExtensions: resolvePricingCount(pricing.crm?.extensions, liveExtensions),
+      extensions: liveExtensions,
       phoneNumbers: derived.phoneNumbers,
       smsEnabled: smsParam === "1" ? true : smsParam === "0" ? false : derived.smsEnabled,
       tollFreeNumber: ["local", "tollfree", "vanity"].includes(kindParam)

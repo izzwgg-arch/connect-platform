@@ -840,6 +840,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       if (stamp.stamped) {
         await logEvent(submissionId, "Monthly billing set up to match the sign-up quote (E911 per number + telecom & regulatory fees).");
       }
+      // Cold calling / CRM, re-counted against the extensions actually built.
+      const { applyOnboardingAddOnBilling } = await import("./onboardingBillingDefaults");
+      const { onboardingAddOnsForSubmission } = await import("./onboardingPayment");
+      const addOns = onboardingAddOnsForSubmission(fresh);
+      const addOnResult = await applyOnboardingAddOnBilling(db as any, tenantId, addOns);
+      if (addOnResult.changed) {
+        await logEvent(submissionId, `Monthly billing add-ons set: cold calling ${addOns.coldCallingAll ? "on every extension ($65 each)" : `${addOns.coldCallingExtensions} extension(s)`}, CRM ${addOns.crmExtensions} extension(s).`);
+      }
     }
 
     // Retry the extension sync until every requested extension is present and

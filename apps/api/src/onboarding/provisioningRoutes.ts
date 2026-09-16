@@ -6,6 +6,7 @@ import { buildVitalPbxCsvForSubmission, listAdminSubmissions, readAdminSubmissio
 import { applyOnboardingNumber, syncOnboardingSms } from "./voipMsProvisioning";
 import { resolveOnboardingStoragePath } from "./storage";
 import { runOnboardingSetup } from "./setupOrchestrator";
+import { buildOnboardingPricing } from "./quoteInput";
 import { registerOnboardingInvitationRoutes } from "./invitationRoutes";
 import { buildLoaPdf, buildPortQueueRow } from "./portQueue";
 
@@ -43,7 +44,11 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
         // Scoped links ("just submit a port" / "just add extensions") carry
         // their purpose in answers.linkKind — the wizard reads it off
         // /validate and renders the single-purpose flow.
-        ...(body.kind && body.kind !== "full" ? { answers: { linkKind: body.kind } } : {}),
+        ...(() => {
+          const pricing = body.kind && body.kind !== "full" ? undefined : buildOnboardingPricing(body);
+          const answers = { ...(body.kind && body.kind !== "full" ? { linkKind: body.kind } : {}), ...(pricing ? { pricing } : {}) };
+          return Object.keys(answers).length ? { answers } : {};
+        })(),
         events: { create: { type: "CREATED", message: "Admin-created link" } },
       },
     });

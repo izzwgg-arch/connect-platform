@@ -5,7 +5,48 @@
 // submit — before that, the autosaved answers are the truth. The same goes for
 // the smsEnabled column, which is stamped at submit and stays false until then.
 
-export type QuoteInput = { extensions: number; phoneNumbers: number; smsEnabled: boolean; tollFreeNumber: boolean };
+export type QuoteInput = {
+  extensions: number;
+  phoneNumbers: number;
+  smsEnabled: boolean;
+  tollFreeNumber: boolean;
+  /** Admin-set on the link (answers.pricing) — see readOnboardingPricing. */
+  coldCallingExtensions: number;
+  crmExtensions: number;
+};
+
+/**
+ * What an ADMIN set on the link before sending it (Izzy, 2026-09-16): a
+ * cold-calling company pays $65 per cold-calling extension, and CRM is $20 per
+ * extension. `"all"` follows however many extensions the customer sets up; a
+ * number is "this many of them". Lives in answers.pricing, which the autosave
+ * can never write (serverOwnedAnswers.ts).
+ */
+export type OnboardingPricingCount = "all" | number;
+export type OnboardingPricing = { coldCalling?: { extensions: OnboardingPricingCount }; crm?: { extensions: OnboardingPricingCount } };
+
+function readCount(v: any): OnboardingPricingCount | null {
+  const raw = v?.extensions;
+  if (raw === "all") return "all";
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function readOnboardingPricing(answers: any): OnboardingPricing {
+  const p = answers?.pricing;
+  const out: OnboardingPricing = {};
+  const cc = readCount(p?.coldCalling);
+  if (cc != null) out.coldCalling = { extensions: cc };
+  const crm = readCount(p?.crm);
+  if (crm != null) out.crm = { extensions: crm };
+  return out;
+}
+
+/** Resolve a count against the extensions actually set up. */
+export function resolvePricingCount(count: OnboardingPricingCount | undefined, extensions: number): number {
+  if (count == null) return 0;
+  return count === "all" ? extensions : Math.min(extensions, count);
+}
 
 /** "tollfree" and "vanity" picks both price as the $15/month toll-free number. */
 export function isTollFreeNumberKind(kind: unknown): boolean {
@@ -48,5 +89,32 @@ export function quoteInputForSubmission(sub: {
   const choice = String(sub?.answers?.phone?.choice ?? "");
   const tollFreeNumber = choice !== "port" && isTollFreeNumberKind(sub?.answers?.phone?.numberKind);
 
-  return { extensions, phoneNumbers, smsEnabled, tollFreeNumber };
+  const pricing = readOnboardingPricing(sub?.answers);
+  const coldCallingExtensions = resolvePricingCount(pricing.coldCalling?.extensions, extensions);
+  const crmExtensions = resolvePricingCount(pricing.crm?.extensions, extensions);
+
+  return { extensions, phoneNumbers, smsEnabled, tollFreeNumber, coldCallingExtensions, crmExtensions };
+}
+
+/**
+ * Admin form input → the stored answers.pricing shape. `enabled:false` or a
+ * missing block means "not on this link". `extensions` null/"all" = every
+ * extension; a positive number = that many. Returns undefined when neither
+ * add-on is on, so a plain link stores nothing.
+ */
+export function buildOnboardingPricing(input: {
+  coldCalling?: { enabled?: boolean; extensions?: number | "all" | null } | null;
+  crm?: { enabled?: boolean; extensions?: number | "all" | null } | null;
+}): OnboardingPricing | undefined {
+  const one = (b: any): { extensions: OnboardingPricingCount } | undefined => {
+    if (!b?.enabled) return undefined;
+    const n = Math.floor(Number(b.extensions));
+    return { extensions: b.extensions == null || b.extensions === "all" || !(n > 0) ? "all" : n };
+  };
+  const out: OnboardingPricing = {};
+  const cc = one(input.coldCalling);
+  const crm = one(input.crm);
+  if (cc) out.coldCalling = cc;
+  if (crm) out.crm = crm;
+  return cc || crm ? out : undefined;
 }

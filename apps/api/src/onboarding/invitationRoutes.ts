@@ -20,6 +20,7 @@ import { buildJourneyStory } from "./journeyStory";
 import { buildJourneyPatterns } from "./journeyPatterns";
 import { queueOnboardingInviteEmail } from "./inviteEmail";
 import { onboardingLinkForToken } from "../publicOrigins";
+import { buildOnboardingPricing } from "./quoteInput";
 
 const OPENED_MSG = "Customer opened the sign-up link";
 const RETURNED_MSG = "Customer came back to the sign-up link";
@@ -68,7 +69,22 @@ const createInvitationSchema = z.object({
   // port", or "just add extensions". Scoped links open a short single-purpose
   // flow and can never reach payment/checkout.
   kind: z.enum(["full", "port", "extension"]).optional().default("full"),
+  // Admin-set pricing, ticked BEFORE the link goes out (Izzy 2026-09-16):
+  // cold calling $65 per cold-calling extension, CRM $20 per extension.
+  // extensions: "all"/null = every extension they set up, N = that many.
+  coldCalling: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional(),
+  crm: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional(),
 });
+
+const pricingSchema = z.object({ coldCalling: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional(), crm: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional() });
 
 const resendSchema = z.object({ email: emailField.optional() });
 
@@ -214,7 +230,12 @@ export async function registerOnboardingInvitationRoutes(
         status: "INVITE_SENT",
         // The kind lives in answers so the wizard can read it off /validate
         // with no schema change; absent = the full wizard.
-        ...(kind !== "full" ? { answers: { linkKind: kind } } : {}),
+        ...(() => {
+          // Pricing only applies to a full sign-up — scoped links never pay.
+          const pricing = kind === "full" ? buildOnboardingPricing(parsed.data) : undefined;
+          const answers = { ...(kind !== "full" ? { linkKind: kind } : {}), ...(pricing ? { pricing } : {}) };
+          return Object.keys(answers).length ? { answers } : {};
+        })(),
         events: { create: { type: "CREATED", message: kind === "port" ? "Admin-created link (port a number)" : kind === "extension" ? "Admin-created link (add extensions)" : "Admin-created link" } },
       },
     });
@@ -239,6 +260,34 @@ export async function registerOnboardingInvitationRoutes(
       .catch(() => {});
 
     return { ok: true, submissionId: created.id, link, sent: result.sent, emailError: result.error ?? null };
+  });
+
+  // ── Change cold calling / CRM on a link that is already out ──────────────
+  // Refused once they have paid: the money moved for what the invoice listed.
+  // An unpaid invoice re-lines itself on their next checkout visit.
+  app.put("/admin/onboarding/submissions/:id/pricing", async (req, reply) => {
+    const admin = await requireOwner(req, reply);
+    if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const parsed = pricingSchema.safeParse((req as any).body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", message: firstProblem(parsed.error, "That pricing is not valid.") });
+    }
+    const row = await (db as any).onboardingSubmission.findUnique({ where: { id }, select: { id: true, paidAt: true, answers: true } });
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    if (row.paidAt) return reply.code(409).send({ error: "already_paid", message: "This sign-up is already paid — change their billing on the account instead." });
+    const pricing = buildOnboardingPricing(parsed.data);
+    const prev = row.answers && typeof row.answers === "object" && !Array.isArray(row.answers) ? { ...(row.answers as any) } : {};
+    if (pricing) prev.pricing = pricing;
+    else delete prev.pricing;
+    await (db as any).onboardingSubmission.update({
+      where: { id },
+      data: {
+        answers: prev,
+        events: { create: { type: "STATUS_CHANGED", message: `Pricing set by admin: cold calling ${pricing?.coldCalling ? pricing.coldCalling.extensions : "off"}, CRM ${pricing?.crm ? pricing.crm.extensions : "off"}` } },
+      },
+    });
+    return { ok: true, pricing: pricing ?? null };
   });
 
   // ── Resend the SAME link ──────────────────────────────────────────────────
