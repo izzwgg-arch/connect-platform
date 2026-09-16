@@ -10,6 +10,11 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // authentication, exactly like hold-music audio. The key never leaves the
   // server and the link expires in minutes.
   if (pathWithoutApiPrefix.startsWith("/creative/download/")) return true;
+  // The Coworker's Creative Studio door: server-to-server, authenticated by
+  // the shared secret inside each handler (same contract as the MOH upload
+  // door above). Every new /internal/agent/* path must be listed here or it
+  // answers "unauthorized" no matter what the handler does.
+  if (pathWithoutApiPrefix.startsWith("/internal/agent/creative/")) return true;
   // Handsets authenticate with per-device HTTP Basic in the handler. Anchored
   // filename grammar; no management API is included in this exception.
   if (/^\/phone-provisioning\/[0-9a-f]{12}\/(?:[0-9a-f]{12}\.(?:cfg|boot)|y[0-9]{12}\.(?:cfg|boot))$/i.test(pathWithoutApiPrefix)) return true;

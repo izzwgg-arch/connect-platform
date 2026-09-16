@@ -526,3 +526,11 @@ test("this test file's glob is registered in apps/api/package.json", () => {
   const pkg = apiFile("package.json");
   assert.match(pkg, /src\/creativeStudio\/\*\.test\.ts/, "an unregistered test file is silently never run");
 });
+
+test("the Coworker's door is in the JWT bypass list, or it answers unauthorized", () => {
+  // Learned the hard way on the first production run: the handler checks the
+  // shared secret, but the JWT preHandler rejects the request before the
+  // handler is ever reached.
+  const bypass = apiFile("src/jwtPublicRouteBypass.ts");
+  assert.match(bypass, /internal\/agent\/creative\//, "every /internal/agent/* door must be listed in the bypass");
+});
