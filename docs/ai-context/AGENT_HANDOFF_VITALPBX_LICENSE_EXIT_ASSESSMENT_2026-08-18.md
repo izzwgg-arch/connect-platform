@@ -1547,3 +1547,62 @@ detected cap). Panel DELETE and the panel's regen work over the cap (proven).
 proof. Also in §8.9: three renderer byte-bugs fixed (pjsip option order,
 voicemail tz position, tz=None column bug), the 62-check stress battery, and
 the ROBOT PANEL PASSWORD ROTATION (done — the leaked password is dead).
+
+## 26. ⛔⛔ CORRECTION (2026-09-16, hit live on a paying customer): `/mirror/extension-add` HAS NEVER BEEN ABLE TO RUN ON PRODUCTION — the clone proof used MySQL **root**, and the prod grants cover tenant-create only
+
+Found while adding two extensions to **Relax Tires (T25)**. Both doors were shut
+at once, for two unrelated reasons:
+
+1. **The panel refuses every app/WebRTC device now.**
+   `extensions.vitxi_clients.max_reached` — *"You've reached the maximum number
+   of Mobile/WebRTC clients allowed for your current license."* The 62nd device
+   (ext 102's `102_1`) went in; the 63rd was refused.
+   ⛔ **Freeing a slot did NOT reopen it.** One VitXi device was unlinked
+   (count 62 → 61) and the panel refused again immediately, and again 20 minutes
+   later. Whatever figure the licence check reads, it is **not** a live
+   `SELECT COUNT(*) FROM ombu_devices WHERE vitxi_client='yes'`. Do not plan
+   around reclaiming slots — treat that door as permanently closed.
+
+2. **The mirror refuses too — but only because of a missing GRANT.**
+   ```
+   (1142, "INSERT command denied to user 'connect_route_helper'@'localhost'
+           for table `ombutel`.`ombu_extensions`")
+   ```
+   ⛔⛔ **This is not "the mirror was never tested".** It was tested hard. The
+   acceptance that proved it, `scripts/pbx/mirror/add-extension-accept.py`, opens
+   `pymysql.connect(user="root")` **and refuses to run where a licence file
+   exists** — i.e. it only ever ran on the clone, as root. §12's production grant
+   block (`mirror-grants-20260819.sql`) was written for **`/mirror/tenant-create`**
+   and predates the extension-add endpoint (§25, helper 2026.08.23.1). The helper's
+   own MySQL user was never extended to the extension tables, and until 2026-09-16
+   nothing on production had ever called that endpoint, so nobody found out.
+
+**The fix, written and waiting for a Run button:**
+`scripts/pbx/mirror/mirror-extension-grants-20260916.sql` — idempotent, additive,
+**INSERT only** (no DELETE, no widened UPDATE), on exactly the seven tables
+`mirror_writes.add_extension` inserts into: `ombu_extensions`, `ombu_devices`,
+`ombu_pjsip_devices`, `ombu_extensions_vm`, `ombu_extensions_contact_info`,
+`ombu_followme`, `ombu_extension_diversions` (`ombu_numbers` already granted).
+Back the current grants up first, exactly as the 2026-08-19 file says.
+
+**Blast radius while it is unrun: every new extension platform-wide is
+desk-phone-only** — the desk (PJSIP) device still creates through the panel, the
+app/WebRTC one cannot be created by any path. Relax Tires' ext 103 (Felix Nieto)
+is live on a desk phone and has no softphone for exactly this reason.
+
+⛔ **A second gap the same day:** the console route only falls back to the mirror
+on the `extension-import-capped` step (the 12-extension silent no-op). A
+`vitxi_clients.max_reached` refusal at the *device* step has **no** fallback, and
+`mapExtensionSaveToMirrorEdit` explicitly refuses *"adding a device"*. So even
+with the grants installed, adding an app device to an **existing** extension has
+no route — `/mirror/extension-add` builds the desk+app pair for a **new** one.
+Today's workaround is delete + re-add; a `/mirror/device-add` (already named in
+§10's endpoint list, never built) is the real answer.
+
+⛔ **And a trap worth its own line:** when the console's create throws at the
+device step, the extension's ROWS exist on the PBX and **nothing is in
+Asterisk** — the throw happens before `applyAndRebake`. `pjsip show endpoints`
+is the only proof. A `PATCH /admin/pbx-console/extensions/:id` touching only
+EXISTING devices succeeds and runs the apply, which is how ext 103 was made live.
+
+Full detail: `docs/ai-context/claude-md-sections/2026-09-16-relax-tires-two-new-extensions.md`.
