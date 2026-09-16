@@ -1,10 +1,47 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
-## Status
+## Current status — live video explicitly requested, not yet proven
 
-**Live avatar/video scope is reopened (2026-09-15).** The owner clarified that Laybel must become a real face-to-face session: the selected portrait comes alive in a video call, the existing Loopcom Assistant remains the intelligence/orchestration layer, and the complete flow must be proven live. `Talk to Laybel` is currently only the deployed push-to-talk starting point in `apps/portal/components/FloatingAssistant.tsx`; it is not the requested finished product. The owner requested mockup review before selecting an avatar provider or activating a real session. No provider account, separate model, PBX operation, or production media session has been activated by this clarification.
+### Approved continuation — 2026-09-16, release preparation
 
-**Portrait selection:** owner selected **Concept A** (`C:/Users/izzyw/.codex/visualizations/2026/09/15/01a0a601-3008-7cd3-af27-85b8c7495b42/ai-support-review/concept-a.png`): natural human portrait, no tie, Loopcom infinity lapel pin. Anam’s documented one-shot avatar API accepts this PNG and can join a LiveKit room as a video/audio participant while Loopcom retains its existing AI path. It needs an Anam API key and an avatar ID created from the image. Those require a third-party account/usage authorization; neither has been created or used yet.
+- Owner explicitly approved repairing the installer lockfile churn and using Windows SSH for this task. Windows SSH reached `vmi3101417`; queue was idle. This exception is scoped to this release, not a rewrite of the canonical SSH rule.
+- Repaired the shared lockfile and applied only 18 additive lines (Anam SDK 4.27.0 and buffer 6.0.3). A malformed intermediate proposal was rejected before writing; the corrected patch preserved all existing dependencies. Isolated checkout frozen/offline validation passed with pnpm 10.30.2.
+- Release worktree: `scratchpad/laybel-release`, branch `codex/laybel-live-video-20260916`, based on current remote `617154b8`. Does not include unrelated shared-tree edits. API/PBX focused suite 14/14 and Assistant suite 16/16 rerun successfully on the release source.
+- Production configuration read returned only `signalwire_credentials`; no Anam/Laybel AgentSecret or ANAM_/LAYBEL_ environment keys exist. Browser inventory/access timed out again; do not claim avatar/key/voice setup or live media proof.
+- Customer video remains disabled by default. No portrait upload, recording-retention verification or live Anam/SignalWire call has occurred. Deployment status will be recorded below after the scripted release.
+
+The owner's later instructions explicitly require real animated video of the approved Concept A portrait, the existing Assistant brain, a SignalWire comparison, production deployment and live proof. The earlier push-to-talk-only interpretation below is historical and was incorrect as a final scope. Desktop Commander is not a dependency for shipping this feature.
+
+### Local code added this turn
+
+- `apps/api/src/laybel/laybelRoutes.ts`, registered in `server.ts`: encrypted `AgentSecret` configuration (`laybel_avatar_config`), write-only provider key, owner settings, authenticated status/session routes, strict rejection of client persona/tenant overrides, server-selected `CUSTOMER_CLIENT_V1` custom LLM, bounded 60–600-second sessions, 15-second upstream timeout, 3 requests/user/minute, sanitized provider errors. Rollout defaults disabled; owner may preview. No schema migration or PBX access.
+- `apps/portal/components/LaybelVideoCall.tsx`: explicitly consented microphone-only Anam SDK stream, no user camera, actual remote video element, live speech history back into the existing Assistant `send`, spoken existing replies, interruption, mute/speaker/end/retry and voice-only fallback. Cleans media tracks/SDK connection on late permission, timeout, end, unmount, pagehide and human takeover. Call fails honestly if provider settings are missing.
+- `LaybelSetup.tsx`: owner-only setup UI with write-only API-key input and approved-avatar/voice IDs. Saving preserves existing rollout state; it does not enable customers automatically.
+- `apps/portal/lib/laybelTurns.ts`: serial, deduplicated tool-bearing turns; no automatic action retries, no late speech after stop/interruption, stop on human takeover.
+- `FloatingAssistant.tsx`: same panel and same authenticated chat brain, adds video surface only after Talk to Laybel; voice-only fallback remains. Stops media when minimizing/new chat/identity switch/leaving visible chat. Normal Coworker window does not gain the video option. No separate provider LLM or tool registry.
+
+### Verification and release blockers
+
+- Focused API/security suite: 14/14 passing (8 Laybel, 6 PBX safeguard).
+- Final Assistant suite: **16/16 passing**, including consent/cleanup source guards and duplicate/serial/interruption/end/takeover controller tests.
+- Full portal typecheck completed successfully with explicit `--types node,react,react-dom`. Final focused portal (including setup and Next declarations) and API typechecks also **passed** using ignored scratchpad configs that extend the repository configs. Default ambient discovery failed on missing root `@types/emscripten/index.d.ts`; an initial standalone API command lacked workspace aliases and reported the unbuilt security declaration, resolved by extending the actual base config. The sandbox blocks tsx `os.userInfo`; authorized elevated execution passes.
+- No provider API key or approved avatar/voice IDs have been verified. Existing Anam Lab build tab: `/build/3bf340c5-4686-401b-88ea-c4caa5d7eeb1` (this is not assumed to be an avatar ID). Browser inventory works but selecting this tab repeatedly times out. No new paid plan or charge was authorized/executed.
+- Anam receives mic audio and spoken replies; the UI discloses this before capture. Account-level recording/retention is NOT established by the ephemeral persona. Verify retention and Yiddish quality before enabling customer rollout. Original camera/screen/live-human-media requirements and the SignalWire adapter are not implemented in this turn.
+- Docker Linux deployment runtime was not running. Local `docker desktop start` launched Docker processes but its command and subsequent engine version check never completed; only these two waiting CLI commands were interrupted. No Docker data was removed and no server changes/deployment occurred. Do not claim deployed or working end-to-end from unit tests.
+- `pnpm --filter @connect/portal add @anam-ai/js-sdk@4.27.0 --lockfile-only` ran with pnpm 11.1.1 against a pnpm 10.30.2 installation and caused extensive unrelated lockfile churn. Bulk inverse patch was rejected by auto-review; user restoration approval was requested. Do not ship that broad lockfile diff. SDK is pinned at 4.27.0 in portal package.json; isolated SDK inspection copy exists under ignored `scratchpad/laybel-sdk/`.
+- Shared tree contains many other sessions' changes, including server.ts, and stale staged versions of FloatingAssistant. Compare to HEAD and isolate only this task's hunks for any commit. Nothing from this turn has been committed/pushed/deployed.
+
+### Official provider references checked
+
+- https://anam.ai/docs/javascript-sdk/examples/custom-llm
+- https://anam.ai/docs/api-reference/sessions/create-session-token
+- https://anam.ai/docs/personas/session/duration
+- https://anam.ai/docs/personas/avatars/custom-avatars
+- https://anam.ai/docs/security/privacy
+
+## Historical status — push-to-talk-only implementation, superseded by explicit video request
+
+**The earlier avatar/video direction is superseded.** The owner clarified that the AI must look exactly like the existing Loopcom Assistant. The only requested addition is a **“Talk to Laybel”** option, where Laybel is the name for the same Assistant when speaking by voice. That option is now implemented in `apps/portal/components/FloatingAssistant.tsx` and is pending the normal portal rollout. No database migration, PBX interaction, provider account, separate model, knowledge base, tool registry, customer-context service, retention change, avatar, video feature, LiveKit room, WebSocket, or new backend route was added.
 
 The owner specifically required the existing Loopcom AI Assistant to remain the intelligence/orchestration layer. Laybel is only the voice-mode name for that existing Assistant; this work honors that constraint.
 
@@ -12,7 +49,6 @@ The owner specifically required the existing Loopcom AI Assistant to remain the 
 
 - The existing dark Assistant panel and its normal suggestions remain intact. `Talk to Laybel` is the first suggestion row and opens only a compact in-panel voice state; it does not navigate or create another agent.
 - The user explicitly starts voice mode and then uses the existing microphone control. Capture requests microphone access only at that point, with echo cancellation, noise suppression, auto gain, mono, and 48 kHz preferences.
-- `Talk to Laybel` is deliberately **not** a SignalWire call, video call, LiveKit room, or any real-time media session. After activating the in-panel state, the user presses the microphone to begin recording and presses it again to submit; the clip is transcribed through the established authenticated `transcribe` route, sent through the existing Assistant conversation path, and the visible reply is read with browser-local speech synthesis where available. The user reported expecting a video/call launch after pressing the row; this behavior is therefore an expectation clarification, not evidence of a failed SignalWire connection.
 - The completed take uses the pre-existing authenticated `/agent/chat/transcribe` path. Its text is submitted through the existing Assistant `send` helper and `/agent/chat/message` path with `channel: "voice"`; this preserves the same conversation id, tenant/page context, response rendering, tools, transcript, and escalation behavior as typed chat.
 - The existing visible transcript remains authoritative. When browser native speech synthesis is available, the same returned Assistant text is read aloud locally. If speech synthesis is unavailable or fails, Laybel stays usable through the normal transcript and typed composer—there is no new TTS service or customer-audio storage path.
 - Starting a new push-to-talk take cancels any current speech. Ending Laybel cancels speech and marks an active capture cancelled before its recorder stops, so a just-ended take is not sent after the user presses End.
@@ -22,7 +58,6 @@ The owner specifically required the existing Loopcom AI Assistant to remain the 
 - `apps/portal/components/floatingAssistantOpening.test.ts` passed **11/11** via `tsx --test`, including the new source guard that asserts the label, same-Assistant voice channel, existing send path, browser-local speech call, and absence of LiveKit/WebSocket/voice-agent additions.
 - `git diff --check` passed for the implementation.
 - The shared-worktree portal typecheck currently reaches an unrelated concurrent edit in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before its declaration). A clean temporary worktree cannot resolve this repository’s non-checked-in `node_modules`, so it cannot be used as an independent full typecheck. This is an outstanding release verification item, not an error reported in `FloatingAssistant`.
-- Deploy Center dry run `ad871db3…` passed for `portal` / `feat/ivr-migration-takeover` and resolved `7d93d23a8`; local ancestry checks prove both Laybel commits are ancestors of that revision. Real blue/green job `c2ba7701…` completed **SUCCESS** at 6:16:54 PM (5m23s, stage `done`, deployed commit `7d93d23a8`). Its build log reported `✓ Compiled successfully`, completed lint/type validation, and completed static generation for all 197 pages; the candidate image was built from that artifact. Public `https://app.loopcom.net/ready` returned `200 {"ok":true}` during the job. The portal is therefore deployed through the authorized queue. The required direct running-container source grep is **not proven**: canonical Linux SSH was unavailable and the recovered Deploy Center UI timed out when opening the log control. Do not overstate that verification.
 
 ## Review artifact
 
@@ -119,4 +154,4 @@ For the recommended avatar layer, use time-connected rather than talking time: A
 
 ## Current boundary
 
-The owner explicitly reauthorized the avatar/video expansion and selected Concept A. The implementation must use a real face-to-face call, bring that portrait to life, preserve the existing Assistant as the sole intelligence layer, and prove a live session end to end. The next required authority is permission to create/use an Anam account/API key and incur its usage, then create the Concept A avatar and connect it to existing LiveKit Meetings. Do not presume SignalWire is the video runtime, do not create a second AI brain, and do not touch PBX configuration.
+The owner explicitly authorized the production-ready build. The only remaining step is normal portal deployment and its required log/container verification, after the concurrent portal typecheck issue is resolved or confirmed unrelated by the release path. Do not widen the scope into avatar/video, a separate Laybel brain, a voice provider, backend persistence, or PBX work.

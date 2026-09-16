@@ -1,5 +1,12 @@
 # Tests run
 
+## Laybel isolated release — 2026-09-16
+
+- Frozen/offline lockfile validation: pnpm 10.30.2, all 15 workspaces, passed; 18 additive lock lines only.
+- API + PBX safeguard focused tests: 14/14 passed on isolated release source.
+- Assistant + consent/turn lifecycle tests: 16/16 passed on isolated release source.
+- Production configuration existence checked without returning secrets: SignalWire configured; Anam/Laybel absent. No live media test performed.
+
 ## Creative Studio build — 2026-09-16
 
 - `apps/api` creativeStudio suite: **40/40 pass**

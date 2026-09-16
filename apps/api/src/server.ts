@@ -416,6 +416,7 @@ import { resolvePbxSipEndpointId } from "./onboarding/signalWireProvisioning";
 import { registerCarrierMigrationRoutes } from "./carrierMigration/routes";
 import { startCarrierMigrationWatch } from "./carrierMigration/arrivalWatcher";
 import { registerMeetingRoutes } from "./meetings/meetingRoutes";
+import { registerLaybelRoutes } from "./laybel/laybelRoutes";
 import { registerLoopcomDirectRoutes } from "./loopcomDirect/directRoutes";
 import { registerPbxConsoleRoutes } from "./pbxConsole/pbxConsoleRoutes";
 import { registerTeamRoutes } from "./pbx/teamRoutes";
@@ -24216,6 +24217,7 @@ registerPollyRoutes({
 // bypass list; everything else is ordinary JWT. Answers 503
 // meetings_not_configured until LIVEKIT_URL / _API_KEY / _API_SECRET are set.
 registerMeetingRoutes(app);
+registerLaybelRoutes(app, { db, requireOwner: (req, reply) => requireSuperAdmin(req, reply) });
 registerLoopcomDirectRoutes(app, { sendPushToUserDevices });
 
 registerSignalWireRoutes({

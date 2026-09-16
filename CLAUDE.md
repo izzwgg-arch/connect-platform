@@ -716,4 +716,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-15 · Talk to Laybel: owner renewed live-avatar requirement; local Anam/same-Assistant adapter + encrypted setup and tests added, provider configuration/deploy/live proof and SignalWire remain unresolved; do not stall on Desktop Commander → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-16 · Laybel: approved lock repair + Windows SSH; isolated Anam media release, 30 tests; provider config/live proof and SignalWire comparison pending → `2026-09-15-face-to-face-ai-support-mockup.md`

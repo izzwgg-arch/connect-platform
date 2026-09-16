@@ -42,6 +42,7 @@ import { SUPPORT_REPORT_AREAS, SUPPORT_REPORT_PROBLEM_MIN, FEATURE_SUGGESTION_MI
 import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiClient";
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
+import { LaybelVideoCall } from "./LaybelVideoCall";
 import { CoworkerTaskCard, CoworkerPermissionsView, usePendingCoworkerTasks, COWORKER_TASK_STYLES } from "./CoworkerTaskCard";
 
 type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; pending?: boolean };
@@ -188,6 +189,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   const [view, setView] = useState<PanelView>("chat");
   const minimize = () => {
     uiEvent("minimize");
+    endLaybel();
     if (docked) {
       const w = window as unknown as { coworkerWidget?: { closeChat?: () => void } };
       try { w.coworkerWidget?.closeChat?.(); } catch { /* not inside the desktop app */ }
@@ -323,9 +325,13 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  // Laybel is a voice MODE of this exact Assistant conversation — never a
-  // separate agent, websocket, avatar, provider, or conversation store.
+  // Laybel uses this exact Assistant conversation. The avatar supplies media,
+  // never another brain, tool permission system, or conversation store.
   const [laybelActive, setLaybelActive] = useState(false);
+  const [laybelVideo, setLaybelVideo] = useState(false);
+  const laybelSpeakerRef = useRef<((text: string) => void) | null>(null);
+  const laybelGenerationRef = useRef(0);
+  const sendInFlightRef = useRef(false);
   const [laybelState, setLaybelState] = useState<LaybelState>("idle");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -437,12 +443,12 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, []);
 
   /**
-   * Read the SAME reply shown in the Assistant transcript. Native browser
-   * speech keeps voice output local to the customer's device and avoids adding
-   * a second model, TTS account, transcript store, or data recipient.
+   * Read the SAME reply shown in the Assistant transcript. Video supplies its
+   * own speaker; voice-only fallback uses the local browser voice.
   */
   const speakLaybel = useCallback((text: string) => {
     if (!laybelActiveRef.current) return;
+    if (laybelSpeakerRef.current) { laybelSpeakerRef.current(text); return; }
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setLaybelState("idle");
       return;
@@ -473,11 +479,13 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, []);
 
   const send = useCallback(
-    async (raw?: string, channel: "chat" | "voice" = "chat") => {
+    async (raw?: string, channel: "chat" | "voice" = "chat", speakReply = true) => {
       const ready = pendingFiles.filter((f) => f.status === "ready" && f.attachmentId);
       const stillUploading = pendingFiles.some((f) => f.status === "uploading");
       let text = (raw ?? input).trim();
-      if ((!text && ready.length === 0) || sending || stillUploading) return;
+      if ((!text && ready.length === 0) || sendInFlightRef.current || stillUploading) return;
+      sendInFlightRef.current = true;
+      const laybelGeneration = laybelGenerationRef.current;
       const voiceTurn = channel === "voice";
       if (voiceTurn) setLaybelState("thinking");
       if (!text) text = `I uploaded: ${ready.map((f) => f.name).join(", ")}`;
@@ -505,7 +513,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
           if (voiceTurn) setLaybelState("idle");
         } else {
           typeOut(ackId, res.reply);
-          if (voiceTurn) speakLaybel(res.reply);
+          if (voiceTurn && speakReply && laybelGeneration === laybelGenerationRef.current) speakLaybel(res.reply);
         }
         // If that turn prepared a permission change, the confirmation is now
         // waiting on the API. Ask — the assistant is not trusted to say so.
@@ -513,10 +521,12 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
         // Same for a task on the computer: the card comes from the API's record,
         // never from the assistant's reply.
         void refreshCoworkerTasks();
+        return res;
       } catch {
         setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
         if (voiceTurn) setLaybelState("error");
       } finally {
+        sendInFlightRef.current = false;
         setSending(false);
       }
     },
@@ -573,6 +583,12 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, []);
 
   const newChat = useCallback(async () => {
+    laybelGenerationRef.current += 1;
+    laybelActiveRef.current = false;
+    laybelSpeakerRef.current = null;
+    setLaybelVideo(false);
+    setLaybelActive(false);
+    try { window.speechSynthesis?.cancel(); } catch { /* no browser speech */ }
     if (conversationId) {
       try { await agentPost("close", { conversationId }); } catch { /* non-fatal */ }
     }
@@ -748,21 +764,31 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, [recording, transcribing, startMic, stopMic, laybelActive]);
 
   const startLaybel = useCallback(() => {
+    if (sendInFlightRef.current) return;
+    laybelGenerationRef.current += 1;
     laybelActiveRef.current = true;
     setLaybelActive(true);
+    setLaybelVideo(true);
     setLaybelState("idle");
     uiEvent("talk to laybel");
   }, []);
 
   const endLaybel = useCallback(() => {
+    laybelGenerationRef.current += 1;
+    laybelSpeakerRef.current = null;
     laybelActiveRef.current = false;
     cancelledTakeRef.current = takeRef.current;
     try { mediaRef.current?.stop(); } catch { /* no active capture */ }
     try { window.speechSynthesis?.cancel(); } catch { /* no browser speech */ }
     setLaybelActive(false);
+    setLaybelVideo(false);
     setLaybelState("idle");
-    uiEvent("end laybel voice");
+    uiEvent("end laybel call");
   }, []);
+
+  // Leaving the visible conversation or switching identity must release media.
+  useEffect(() => { endLaybel(); }, [user?.id, user?.tenantId, endLaybel]);
+  useEffect(() => { if (!open || view !== "chat" || HIDE_ON.some(p => pathname === p || pathname.startsWith(`${p}/`))) endLaybel(); }, [open, view, pathname, endLaybel]);
 
   if (HIDE_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return null;
 
@@ -962,7 +988,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             </div>
             <div className="fa-head-actions">
               {docked && <button title="What the Coworker may do on this computer" onClick={() => { uiEvent("coworker permissions"); setShowCoworkerPerms((v) => !v); }}><ShieldCheck size={16} /></button>}
-              <button title="New chat" onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
+              <button title="New chat" disabled={sending} onClick={() => { uiEvent("new chat"); newChat(); }}><Plus size={16} /></button>
               <button title="Minimize" onClick={minimize}><X size={16} /></button>
             </div>
           </div>
@@ -971,10 +997,21 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             <div className="fa-msgs custom-scrollbar"><CoworkerPermissionsView onBack={() => setShowCoworkerPerms(false)} /></div>
           ) : (<>
           <div className="fa-msgs custom-scrollbar">
+            {!docked && messages.length > 0 && !laybelActive && <button className="fa-row" onClick={startLaybel} disabled={!micAvailable || sending}>
+              <span className="fa-ico"><PhoneCall size={15} /></span><span className="fa-row-txt"><b>Talk to Laybel</b><small>Continue this conversation in a video call</small></span>
+            </button>}
             {docked && coworkerTasks.map((t) => (
               <CoworkerTaskCard key={t.id} task={t} sayInChat={sayInChat} onDone={dropCoworkerTask} onDismissed={dropCoworkerTask} />
             ))}
-            {laybelActive && (
+            {!docked && laybelActive && laybelVideo && (
+              <LaybelVideoCall
+                onTurn={text => send(text, "voice", false)}
+                onEnd={endLaybel}
+                onVoiceOnly={() => { laybelSpeakerRef.current = null; setLaybelVideo(false); setLaybelState("idle"); }}
+                onSpeaker={speaker => { laybelSpeakerRef.current = speaker; }}
+              />
+            )}
+            {laybelActive && !laybelVideo && (
               <div className={`fa-laybel fa-laybel-${laybelState}`} role="status" aria-live="polite">
                 <span className="fa-ico"><PhoneCall size={15} /></span>
                 <span className="fa-row-txt">
@@ -1066,14 +1103,14 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
                   <p>What can I help with?</p>
                 </div>
                 <div className="fa-rows">
-                  <button className="fa-row fa-row-lead" onClick={startLaybel} disabled={!micAvailable}>
+                  {!docked && !laybelActive && <button className="fa-row fa-row-lead" onClick={startLaybel} disabled={!micAvailable || sending}>
                     <span className="fa-ico"><PhoneCall size={15} /></span>
                     <span className="fa-row-txt">
                       <b>Talk to Laybel</b>
-                      <small>{micAvailable ? "Speak with the same Assistant by voice" : "Voice input is not available in this browser"}</small>
+                      <small>{micAvailable ? "A video call with your Assistant" : "Voice input is not available in this browser"}</small>
                     </span>
                     <ChevronRight size={15} className="fa-chev" />
-                  </button>
+                  </button>}
                   <button className="fa-row fa-row-lead" onClick={() => send("Summarize my new voicemails")}>
                     <span className="fa-ico"><VoicemailIcon size={15} /></span>
                     <span className="fa-row-txt">
@@ -1188,7 +1225,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
                 <X size={17} />
               </button>
             )}
-            {micAvailable && (
+            {micAvailable && !laybelVideo && (
               <button
                 className={`fa-icon${recording ? " fa-icon-on" : ""}`}
                 title={recording ? "Stop and transcribe" : "Speak — auto-detects Yiddish or English"}
@@ -1216,7 +1253,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  send();
+                  send(undefined, laybelActive && !laybelVideo ? "voice" : "chat");
                   if (inputRef.current) inputRef.current.style.height = "auto";
                 }
               }}
@@ -1226,7 +1263,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             <button
               className="fa-send"
               title="Send"
-              onClick={() => send(undefined, laybelActive ? "voice" : "chat")}
+              onClick={() => send(undefined, laybelActive && !laybelVideo ? "voice" : "chat")}
               disabled={sending || pendingFiles.some((f) => f.status === "uploading") || (!input.trim() && !pendingFiles.some((f) => f.status === "ready"))}
             >
               <Send size={16} />

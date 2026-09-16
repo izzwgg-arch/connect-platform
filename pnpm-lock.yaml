@@ -401,6 +401,9 @@ importers:
 
   apps/portal:
     dependencies:
+      '@anam-ai/js-sdk':
+        specifier: 4.27.0
+        version: 4.27.0
       '@cardknox/react-ifields':
         specifier: ^2.2.86
         version: 2.2.86
@@ -663,6 +666,9 @@ packages:
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
     engines: {node: '>=10'}
+
+  '@anam-ai/js-sdk@4.27.0':
+    resolution: {integrity: sha512-oU0izvlv1Q+25gL/EoW7QYUFxSNEY48/G/efmL1f24AYuI0WU16albNIpbNDEivqJAFFsdHa52mWQXciAi13Hg==}
 
   '@anthropic-ai/sdk@0.60.0':
     resolution: {integrity: sha512-9zu/TXaUy8BZhXedDtt1wT3H4LOlpKDO1/ftiFpeR3N1PCr3KJFKkxxlQWWt1NNp08xSwUNJ3JNY8yhl8av6eQ==}
@@ -3441,6 +3447,9 @@ packages:
 
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
+
+  buffer@6.0.3:
+    resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
 
   builder-util-runtime@9.5.1:
     resolution: {integrity: sha512-qt41tMfgHTllhResqM5DcnHyDIWNgzHvuY2jDcYP9iaGpkWxTUzV6GQjDeLnlR1/DtdlcsWQbA7sByMpmJFTLQ==}
@@ -7672,6 +7681,10 @@ snapshots:
 
   '@alloc/quick-lru@5.2.0': {}
 
+  '@anam-ai/js-sdk@4.27.0':
+    dependencies:
+      buffer: 6.0.3
+
   '@anthropic-ai/sdk@0.60.0': {}
 
   '@aws-crypto/crc32@5.2.0':
@@ -11494,6 +11507,11 @@ snapshots:
   buffer-from@1.1.2: {}
 
   buffer@5.7.1:
+    dependencies:
+      base64-js: 1.5.1
+      ieee754: 1.2.1
+
+  buffer@6.0.3:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
