@@ -37,9 +37,19 @@ added to `jwtPublicRouteBypass.ts` (which says so in its own comment); and a pat
 `} from "lucide-react";` also matched inside `import type { LucideIcon }` on navConfig line 1 and merged
 them — **another session caught and repaired that on origin**. Both are pinned by tests now.
 
-⏳ **NOT DONE:** the **portal is not deployed** (`deploy-direct.sh portal` refused with `HEAVY JOB ALREADY
-RUNNING` — another session was mid-build; pages are committed and typecheck clean); the **agent is not
-rebuilt**, so the 10 `creative_*` tools are in git but not yet live in a chat; **no key is granted to
-anybody** (granting IS the launch); MinIO is using ROOT credentials (scoped service account is the
-follow-up); and the storyboard, timeline UI, audio/captions, export screen and self-evaluation are not
-built yet. 40 tests pass (`apps/api/src/creativeStudio/creativeStudio.test.ts`).
+✅ **A REAL COWORKER TURN, live:** the model chose the tools itself, created a project “Website delivery
+photo”, made the image and answered *“All set — your image is ready and saved in Creative Studio…”*.
+⛔ The first turn replied *“ran out of investigation steps”* because it polled until its tool budget was
+gone — fixed by making `creative_check_job` wait 20s server-side and bounding polling in the prompt.
+✅ **Stress:** ten identical requests at once → **one job**; five different → the rest refused with a plain
+“you already have 2 running”; queue drained **11 succeeded, 0 stuck** while the api container was being
+replaced mid-flight; and a job forced to “claimed by a dead worker with an expired lease” was swept,
+re-claimed and **succeeded** in ~20s.
+
+✅ **Deployed:** api `6316a27a`, portal `6ff2f685` (all nine routes 200, every key in the shipped bundle),
+agent rebuilt with the tools.
+
+⏳ **NOT DONE:** no human has clicked the screens in a browser; **no key is granted to anybody** (granting
+IS the launch); MinIO is on ROOT credentials (a scoped service account is the follow-up — there is no `mc`
+on the box); and the storyboard, timeline UI, audio/captions, export screen and self-evaluation are not
+built. 40 tests pass (`apps/api/src/creativeStudio/creativeStudio.test.ts`).

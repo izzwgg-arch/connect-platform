@@ -1,5 +1,56 @@
 # Tests run
 
+## Creative Studio build — 2026-09-16
+
+- `apps/api` creativeStudio suite: **40/40 pass**
+  (`node --experimental-test-module-mocks --import tsx --test "src/creativeStudio/*.test.ts"`).
+  Three layers: pure logic (15s segment planning against Sora's real 4/8/12 limit, trademark and
+  real-person refusals, brand-kit prompt building, storage-key escaping, SRT, export presets); the job
+  engine against an in-memory database (idempotency — the same request twice is one job, a different
+  company is a different job; the licence gate refusing a non-commercial engine; quota before spend;
+  two runners cannot claim one job; a dead lease is re-queued but a provider-side job keeps polling;
+  cancel records part-done work; one company cannot cancel another's); and source guards (routes
+  registered, permission rules present, the JWT bypass, navConfig's import shape, no publishing tool,
+  FFmpeg protocol whitelist, the test glob registered in package.json).
+- **Two real bugs the tests caught:** a run of dots surviving `safeSegment` (a key could contain `..`),
+  and `cancelJob()` reading `job.status` after its own update (worked with Prisma's detached rows,
+  silently skipped the spend record otherwise). Both fixed.
+- Typecheck: `apps/portal` **0 errors**; `apps/api` — my files clean, the rest are the documented
+  pre-existing set on this shared worktree (billing `accountPricing`, delivery, mfa, `apiRequestProfiler`,
+  `ops/hostMetrics`), none in `src/creativeStudio/*`.
+- ⛔ The repo-wide api suite was NOT run for this change: it has a large pre-existing failure set on this
+  workstation (stale `packages/integrations/dist`), and this build is a new directory plus registration
+  lines in `server.ts`.
+
+### Proven on PRODUCTION (not a harness)
+
+- **Image:** queued → succeeded in 15s; 2,022,197-byte PNG at the requested 4:5; FFmpeg thumbnail made.
+- **Video:** a 4s shot in 74s — h264+aac, 1280×720, duration 4.1s.
+- **A 15-second shot from a 12-second engine:** planned **12 + 4**, two provider jobs, part 2 started
+  from part 1's last frame, joined and trimmed → **duration exactly 15.000000s**, 3,900,780 bytes.
+- **Refusals:** Coca-Cola logo → 422 with a customer-ready sentence; wrong internal secret → 403;
+  another company asking for the same job → **404, not 403**; their asset list empty; tampered signed
+  URL → 401 while the correct one served exactly 2,022,197 bytes as `image/png`.
+- **Learning loop:** three identical rejections → `suggested(1) → suggested(2) → active(3)`; the next
+  generation returned `appliedMemory:["Prefers a slower pace"]` and the prompt actually sent carried
+  *"Pacing: slower, let shots breathe."*
+- **A real Coworker turn** (agent chat, gpt-5, real user identity): the model chose the tools itself,
+  created a project "Website delivery photo", generated the image and replied
+  *"All set — your image is ready and saved in Creative Studio…"* with sensible next steps.
+  ⛔ The FIRST attempt replied "ran out of investigation steps" — it burned its tool budget polling.
+  Fixed by making `creative_check_job` wait up to 20s server-side and bounding the polling in the prompt.
+- **Stress:** ten identical requests fired at once → **exactly one job created, one job id returned**;
+  five different requests → some accepted, the rest refused with *"You already have 2 jobs running…"*;
+  the queue drained to **11 succeeded, 0 stuck** — while the API container was being replaced mid-flight.
+- **Worker death:** a live job forced to "claimed by dead-worker, lease expired 5 minutes ago" was swept,
+  re-claimed, ran and **succeeded** within ~20 seconds.
+
+### Not proven
+
+No human has used the portal screens in a browser (the pages serve 200 and the shipped bundle carries
+every permission key, but nobody has clicked them); no customer holds a Creative Studio key; the
+storyboard, timeline UI, audio/captions, export screen and the self-evaluation pass are not built.
+
 ## B Visible missed charges + billingRecurringCustomLines — 2026-09-15
 
 - `node --experimental-test-module-mocks --import tsx --test src/billing/billingRecurringCustomLines.test.ts src/billing/billingPeriodGuards.test.ts` (apps/api): **8/8 pass** — parse junk-tolerance/caps/taxable-strictness, built-line shape, CRLF-normalised source guard pinning the engine push BEFORE `applyBillingPeriodToRecurringLines`, plus both existing period-guard tests. ⛔ Plain `tsx --test` fails billingPeriodGuards on `mock.module is not a function` — the runner flag, not a regression.

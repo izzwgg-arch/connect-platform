@@ -25,9 +25,14 @@ Everything below was run against **production** on 2026-09-16, not a test harnes
 | Another company asking for the same job | **404** (not 403 — no existence leak); their asset list came back empty |
 | Tampered signed URL | **401**; the correct one served exactly 2,022,197 bytes as `image/png` |
 | **The learning loop** | 3 identical rejections → `suggested(1)`, `suggested(2)`, **`active(3)`**; the next generation returned `appliedMemory:["Prefers a slower pace"]` and the prompt actually sent contained *"Pacing: slower, let shots breathe."* |
+| **A real Coworker turn** | agent chat, gpt-5, real user identity: the model chose the tools itself, created a project *"Website delivery photo"*, generated the image and replied *"All set — your image is ready and saved in Creative Studio…"* with sensible next steps |
+| Stress: ten identical requests at once | **exactly one job created**, one job id returned |
+| Stress: five different requests at once | some accepted, the rest refused with *"You already have 2 jobs running…"*; queue drained to **11 succeeded, 0 stuck** — while the api container was being replaced mid-flight |
+| Worker death | a live job forced to *claimed by dead-worker, lease expired 5 minutes ago* was swept, re-claimed, ran and **succeeded** in ~20s |
 
-⏳ **NOT yet proven:** nobody has used the portal screens in a browser (the portal deploy was blocked by
-another session's build — see §7), and no customer has been granted a key.
+⏳ **NOT yet proven:** no human has clicked the portal screens in a browser (all nine routes serve 200 and
+the shipped bundle carries every permission key, but that is not the same as somebody using them), and no
+customer has been granted a key.
 
 ## 2. THE FACTS THAT MADE THIS BUILDABLE TODAY (all verified 2026-09-16)
 
@@ -114,13 +119,15 @@ Coworker tools ──────┘        (safety → engine choice → quota 
 
 ## 7. WHAT IS NOT DONE
 
-- ⏳ **The portal is NOT deployed yet.** `scripts/deploy-direct.sh portal` refused with
-  `HEAVY JOB ALREADY RUNNING: deploy-queue:portal:compose-build-portal` — another session was mid-build.
-  The pages are committed and typecheck clean; the deploy has to be run when that build finishes.
-  Container was still `66eb7096` at the time of writing.
-- ⏳ **The agent is NOT rebuilt**, so the `creative_*` tools are in git but not yet offered in a live chat.
-  Agent deploy is the compose profile:
-  `docker compose -f docker-compose.app.yml -f docker-compose.agent.yml up -d --build agent`.
+- ✅ **Portal deployed** (`6ff2f685`): `/creative`, `/creative/images|video|assets|brand|memory|projects|
+  design` and `/admin/creative-console` all serve **200**, and the shipped chunks carry all eight
+  `can_view_creative_*` keys. ⛔ The first attempt refused with `HEAVY JOB ALREADY RUNNING:
+  deploy-queue:portal:compose-build-portal` — another session was mid-build; that is a wait, not a fault.
+- ✅ **Agent rebuilt** (compose profile:
+  `docker compose -f docker-compose.app.yml -f docker-compose.agent.yml up -d --build agent`), and a real
+  chat turn used the tools. ⛔ The FIRST turn replied *"ran out of investigation steps"* — the model spent
+  its whole tool budget polling. Fixed: `creative_check_job` now waits up to 20s server-side and the
+  prompt bounds it to two checks per reply. Re-tested: a proper answer.
 - ⏳ **No permission key is granted to anybody.** Every key is in no default bucket: granting them IS the
   launch. Nine view keys + seven action keys, listed in §8.
 - ⛔ **MinIO is being used with its ROOT credentials** (added to `/opt/connectcomms/env/.env.platform` as
