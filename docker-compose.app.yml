@@ -139,6 +139,11 @@ services:
       # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
       YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
       YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
+      # How often a source is re-walked. Discovery has its own worker lane, so
+      # this paces the CRAWL, not the pipeline: 60 pages every 5 minutes is
+      # about 12 requests a minute, well under the adapter's own 30/min ceiling
+      # and its >=2s floor, and it walks the whole catalog in hours not weeks.
+      YIDDISH_DISCOVERY_EVERY_MS: ${YIDDISH_DISCOVERY_EVERY_MS:-300000}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
       PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
       # ── Android APK distribution ─────────────────────────────────────────
@@ -334,6 +339,11 @@ services:
       # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
       YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
       YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
+      # How often a source is re-walked. Discovery has its own worker lane, so
+      # this paces the CRAWL, not the pipeline: 60 pages every 5 minutes is
+      # about 12 requests a minute, well under the adapter's own 30/min ceiling
+      # and its >=2s floor, and it walks the whole catalog in hours not weeks.
+      YIDDISH_DISCOVERY_EVERY_MS: ${YIDDISH_DISCOVERY_EVERY_MS:-300000}
       PROMPT_SYNC_SHARED_SECRET: ${PROMPT_SYNC_SHARED_SECRET:-}
       PROMPT_URL_SIGNING_SECRET: ${PROMPT_URL_SIGNING_SECRET:-}
       APK_DOWNLOAD_DIR: ${APK_DOWNLOAD_DIR:-/var/lib/connect/downloads}

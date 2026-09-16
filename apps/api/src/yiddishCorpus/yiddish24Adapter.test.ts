@@ -486,3 +486,54 @@ test("an item's category is never a CSS colour", () => {
   const withCat = parseListingHtml(html, { category: "Interviews" });
   assert.equal(withCat[0].category, "Interviews");
 });
+
+test("a walk already in progress still learns the category map, without losing its place", async () => {
+  // The listing rows carry no category, so the nav map is the only honest
+  // source for one. It used to be written only when a walk STARTED, so a walk
+  // already under way filed every item as null until the whole 136-series
+  // catalog finished. This pins the mid-walk refresh — and pins that it does
+  // NOT reshuffle the queue.
+  const calls: string[] = [];
+  setYiddish24Fetch(async (url: any) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("/mainCategory/1")) {
+      return { ok: true, status: 200, text: async () => NAV };
+    }
+    return { ok: true, status: 200, text: async () => LISTING };
+  });
+  try {
+    const saved: any[] = [];
+    const source = {
+      id: "src-1",
+      key: "yiddish24",
+      // Mid-walk: a series in hand, more queued, and NO category map.
+      discoveryCursor: JSON.stringify({ catId: "57", page: 2, totalPages: 3, pending: ["58", "59"], completed: [] }),
+    };
+    const db: any = {
+      ycSource: {
+        findUnique: async () => source,
+        findFirst: async () => source,
+        update: async ({ data }: any) => {
+          if (data.discoveryCursor) saved.push(JSON.parse(data.discoveryCursor));
+          return source;
+        },
+      },
+      ycBudget: { findFirst: async () => ({ paused: false, mode: "METADATA_ONLY", requestsPerMinute: 30 }) },
+      ycSourceItem: { findUnique: async () => null, findFirst: async () => null, create: async ({ data }: any) => ({ id: "i1", ...data }), update: async ({ data }: any) => ({ id: "i1", ...data }) },
+      ycRightsRecord: { findMany: async () => [] },
+    };
+
+    await discover(db, { maxPages: 2, sleep: async () => {} } as any);
+
+    assert.ok(calls.some((u) => u.includes("/mainCategory/1")), "the nav must be re-read when the map is missing");
+    const withCats = saved.find((c) => c.categories && Object.keys(c.categories).length > 0);
+    assert.ok(withCats, "the category map must be written");
+    // ⛔ And the queue must be untouched by that refresh.
+    assert.equal(withCats.catId, "57", "the series in hand must not change");
+    assert.deepEqual(withCats.pending, ["58", "59"], "the queue must not be reshuffled");
+    assert.equal(withCats.page, 2, "the page must not be rewound");
+  } finally {
+    setYiddish24Fetch(null);
+  }
+});

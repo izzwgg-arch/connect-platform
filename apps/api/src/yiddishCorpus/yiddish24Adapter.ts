@@ -653,28 +653,44 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
       cursor.pending = [...opts.catIds];
       cursor.catId = null;
       cursor.page = 1;
-    } else if (!cursor.pending?.length && !cursor.catId) {
-      const navHtml = await getText(`${YIDDISH24_ORIGIN}/mainCategory/1`, limiter);
-      pages += 1;
-      const series = parseSeriesLinks(navHtml);
-      probes.push({
-        probeKey: "series_catalog_nav",
-        state: series.length >= 20 ? "OK" : series.length > 0 ? "DEGRADED" : "BROKEN",
-        detail: `${series.length} series links in the nav`,
-      });
-      const completed = new Set(cursor.completed ?? []);
-      // Never-seen series first; already-completed ones get their page-1 check after.
-      cursor.pending = [
-        ...series.filter((s) => !completed.has(s.catId)).map((s) => s.catId),
-        ...series.filter((s) => completed.has(s.catId)).map((s) => s.catId),
-      ];
-      // Keep the main-category label per series: the listing rows do not carry
-      // it, and it is the only honest source for an item's category.
-      cursor.categories = Object.fromEntries(
-        series.filter((x) => x.mainCategoryLabel).map((x) => [x.catId, x.mainCategoryLabel as string]),
-      );
-      cursor.catalogAt = new Date().toISOString();
-      await saveCursor(cursor);
+    } else {
+      // The nav is re-read in two cases: a fresh walk (nothing queued), or a
+      // walk in progress that has no category map.
+      //
+      // ⛔ THE SECOND CASE IS NOT COSMETIC. The listing rows carry no category
+      // at all, so the map is the ONLY honest source for one. It used to be
+      // written only when a walk STARTED, which meant a walk already under way
+      // filed every item it found as null until the whole 136-series catalog
+      // finished - days of items with no category. One extra page read fixes
+      // that, and it never disturbs the queue: on this path `pending`, `catId`
+      // and `page` are left exactly as they are.
+      const startingFresh = !cursor.pending?.length && !cursor.catId;
+      const missingCategories = Object.keys(cursor.categories ?? {}).length === 0;
+      if (startingFresh || missingCategories) {
+        const navHtml = await getText(`${YIDDISH24_ORIGIN}/mainCategory/1`, limiter);
+        pages += 1;
+        const series = parseSeriesLinks(navHtml);
+        probes.push({
+          probeKey: "series_catalog_nav",
+          state: series.length >= 20 ? "OK" : series.length > 0 ? "DEGRADED" : "BROKEN",
+          detail: `${series.length} series links in the nav`,
+        });
+        if (startingFresh) {
+          const completed = new Set(cursor.completed ?? []);
+          // Never-seen series first; already-completed ones get their page-1 check after.
+          cursor.pending = [
+            ...series.filter((s) => !completed.has(s.catId)).map((s) => s.catId),
+            ...series.filter((s) => completed.has(s.catId)).map((s) => s.catId),
+          ];
+        }
+        // Keep the main-category label per series: the listing rows do not
+        // carry it, and it is the only honest source for an item's category.
+        cursor.categories = Object.fromEntries(
+          series.filter((x) => x.mainCategoryLabel).map((x) => [x.catId, x.mainCategoryLabel as string]),
+        );
+        cursor.catalogAt = new Date().toISOString();
+        await saveCursor(cursor);
+      }
     }
 
     // 2. Walk the series, one page at a time.
