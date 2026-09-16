@@ -360,8 +360,9 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   const greeting = useMemo(() => assistantGreetingLine(user?.name), [user?.name, open]);
 
   useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, open]);
+    // Keep the picture and End/Mute controls visible during transcript updates.
+    if (open && !laybelVideo) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, open, laybelVideo]);
 
   // The unheard count for the opening screen. ⛔ `pageSize: 1` on purpose — we
   // want the COUNT, not the rows. Asking for a full page here would be the

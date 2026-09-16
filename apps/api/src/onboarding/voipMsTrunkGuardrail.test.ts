@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import {
   DUPLICATE_ALARM_KEY,
+  IGNORED_TRUNK_ORPHANS,
   SWEEP_EVENT,
   UNREGISTERED_ALARM_KEY,
   decideTrunkVerdict,
@@ -77,6 +78,41 @@ test("a number routed to a subaccount that no longer exists counts as down (foun
   assert.deepEqual(v.unregisteredNow, ["344022_fox"]);
   assert.equal(v.offenders.length, 1);
   assert.match(v.unregisteredSms, /877-220-5058/);
+});
+
+test("the known orphan 877-220-5058 -> 344022_fox is muted by the sweep, and ONLY that exact shape", async () => {
+  const orphan = () =>
+    state({
+      didsByAccount: new Map([
+        ["344022_iniimi92gh2m", ["6469846023"]],
+        ["344022_fox", ["8772205058"]],
+      ]),
+      registration: new Map([
+        ["344022_iniimi92gh2m", "yes"],
+        ["344022_fox", "error:voipms getRegistrationStatus failed: invalid_account (This is not a valid account)"],
+      ]),
+    });
+  const { database, escalations, audits } = fakeDb();
+  for (let i = 0; i < 3; i++) await runVoipmsTrunkSweep({ database, fetch: async () => orphan() });
+  assert.equal(escalations.length, 0, "the owner must not be texted about the known orphan again");
+  assert.deepEqual(audits.at(-1).payload.unregisteredNow, []);
+
+  // Any OTHER number landing on that dead subaccount is a new fault and alarms.
+  const v = decideTrunkVerdict({
+    state: state({
+      didsByAccount: new Map([["344022_fox", ["8772205058", "8455550100"]]]),
+      registration: new Map([["344022_fox", "error:invalid_account"]]),
+    }),
+    previousUnregistered: ["344022_fox"],
+    ignoredOrphans: IGNORED_TRUNK_ORPHANS,
+  });
+  assert.equal(v.offenders.length, 1);
+
+  // A real customer trunk going down still alarms with the muting in force.
+  const { database: db2, escalations: e2 } = fakeDb();
+  await runVoipmsTrunkSweep({ database: db2, fetch: async () => state() });
+  await runVoipmsTrunkSweep({ database: db2, fetch: async () => state() });
+  assert.equal(e2.length, 1);
 });
 
 test("a provider error on one account is not 'no' — it neither alarms nor becomes a candidate", () => {

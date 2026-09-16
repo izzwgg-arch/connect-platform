@@ -124,3 +124,112 @@ downloaded from Yiddish24, the hotlink `Referer` is still never sent, and the
 customer wall is still counted-never-read. The engine builds a CATALOG today;
 it cannot learn pronunciation until audio is authorised, and it says so on
 every screen rather than showing a number it did not earn.
+
+## 2026-09-16 (later) — "listen until I say stop", and the R / CH accent
+
+Izzy: *"Make it start listening to Yiddish24 right now, and until I say 'stop
+listening Yiddish24,' do not stop."* Then: *"major focus on improving its
+accent, grammar, and dialogue. What mainly, it's accents the R and the CH."*
+
+**⛔⛔ What "listening" can and cannot mean today.** The engine walks and
+catalogues Yiddish24 continuously. It does NOT download or hear the audio: the
+CDN refuses requests without the site's own Referer (a hotlink restriction)
+and the site says "All Rights Reserved". Working around that is bypassing an
+access control, which Izzy's own brief forbids and which no agent may do on a
+"just start" instruction. Audio starts only through the gate: OWNER_AUTHORIZED
+**and** a GRANTED rights record, i.e. real permission from Yiddish24 (draft
+email in handoff §2b). Until then the stop phrase stops the METADATA crawl:
+pause the `source:yiddish24` budget.
+
+**The crawler paused itself the day it finished (fixed, `fb563e27`).** 09:46 —
+all 136 series walked (32,210 items, ~11,084 h catalogued). The next two
+re-checks correctly found no new episodes, and site health's "two empty runs =
+the site or parser changed" rule paused the source at 10:01. A run now counts
+empty only when it recognised NOTHING (no new item AND no known one). Once the
+catalog is caught up, re-checks run hourly (`YIDDISH_RECHECK_EVERY_MS`) — a
+full re-check is one page per series, so the 5-minute clock would have been
+~27 requests/min for ever. Unpaused through the real budget route; the 11:03
+re-check re-read 581 known episodes, probe OK, 0 broken probes, still running.
+
+**R and CH.** What actually speaks Yiddish is OpenAI: `gpt-realtime` (voice
+`cedar`) on the voice agent, `gpt-4o-mini-tts` in the benchmark. Neither can be
+trained on accent. The one real lever is the spoken-delivery `instructions`
+field. ⛔ That is STEERING, not learning, and only a native ear can say whether
+it moved anything.
+
+A/B ear test sent 2026-09-16: 6 sentences taken VERBATIM from
+`AgentTranslation` (densest in ר and ח/כ/ך — `יישר כח`, `רופט מיך צוריק`,
+`דערנאך`), `gpt-4o-mini-tts`/`cedar`, A = no instructions, B = instructions
+asking for a uvular R (never American, never rolled) and a guttural "kh" for
+ח / final ך / undotted כ (never English "ch", never "k", never "h"). ~1¢.
+Script ran once inside the container and was removed; nothing written to the
+corpus. ⏳ **Izzy's per-pair verdict decides the next step:** if B is better,
+make it a versioned profile in the benchmark and carry the same instruction to
+the realtime voice agent; if not, the honest answer is that prompting cannot
+fix R/CH and real improvement needs recorded native audio (a hired speaker
+with a written voice-rights contract, or Yiddish24 permission).
+
+⛔ **Grammar and dialogue are the TEXT side**, and Yiddish text comes from
+Yiddish Labs — whose credits were OUT at the time of this note
+(`[YIDDISH_CREDITS] still out` in the api log). That degrades grammar before
+any voice work can help.
+
+## 2026-09-16 (afternoon) — Now listening, no music, and a rollback by another session
+
+Izzy: *"I want to be able to hear and see at all times what the agent is
+listening to. It shouldn't be just listening to music. There are also music
+spots there, so no music, just audio of people talking."*
+
+**DEPLOYED and container-verified: api + portal `3ace3d4e`** (the branch tip).
+The shipped page chunk carries "Now listening" and "Listen on Yiddish24";
+`/now` answers worker alive, crawl WAITING (hourly re-check), 0 bytes fetched.
+
+**Now listening.** `GET /admin/yiddish/now` + a panel ABOVE every tab of the
+Yiddish24 page, refreshed every 5 s (not while the tab is hidden). It shows the
+crawl state (walking / waiting + next check / paused / stopped), the series and
+page in hand, the last episode the worker touched with its stage, a 25-row
+recent trail (music hidden unless "Show excluded music" is ticked), and
+speech-vs-music totals.
+⛔ **"Hear" is a link to the episode's own page on yiddish24.com**, where the
+site's player plays it. The raw MP3 URL is never put in the payload (test
+asserts no `cloudfront` in it): the CDN refuses any page but its own, and
+embedding it in our portal would be working around that.
+
+**No music, decided by the site, never by a title guess.**
+- Series under the site's Music main category (id 7, נגינה, 11 series) plus
+  `YIDDISH24_EXTRA_MUSIC_SERIES` = #233 נגינה ווידעאס (music videos, filed under
+  Video) are never walked.
+- An item from one is skipped at the FIRST stage (`fingerprint`), marked
+  `state SKIPPED` + `error = YC_MUSIC_EXCLUDED_MESSAGE`. A guard in `runDueJobs`
+  refuses any stage already queued for a marked item. No other code sets an item
+  to SKIPPED, so the marker cannot collide.
+- Production: 4,182 items / ~1,049 h excluded, 4,180 queued jobs skipped;
+  28,029 speech episodes / ~10,036 h remain.
+- ⏳ **Open for Izzy:** two series inside Music are people talking about music
+  (נגינה אינטערוויוס, מוזיקאלישע שמועסן). They are excluded by default.
+- ⛔ **Music INSIDE a talk episode** (jingles, song breaks) cannot be seen from
+  metadata. Only the audio pipeline's SPEECH/MUSIC segment classifier can, and
+  it only runs once audio is permitted.
+
+**The category parser was wrong.** The live page carries the nav more than once
+and the old parser let the LAST sighting of a series decide its category, so
+news bulletins were filed as Torah and NO series as news. It now reads the
+category block a link sits in (first block wins; a block stops at the next
+heading — an unclosed list in the saved fixture had swallowed the next category,
+caught by the new test). Proven on the live page: 136 series, 9 categories,
+News 12 (was 0), Music 11. `catalogVersion` makes an old cursor re-read the nav
+once. `scripts/yc-backfill-categories.ts --relabel --apply` relabelled 7,469
+items to נייעס (Torah 9,517 → 2,048).
+
+**Heartbeat.** The worker's heartbeat row is UPSERTED per day: tick time is
+`value`, not `createdAt`. `/now` first read `createdAt` and showed a working
+worker as dead; fixed in `3ace3d4e`, and the test fails replayed on `4266093d`.
+
+⛔⛔ **Another session's deploy rolled this back.** api was deployed at
+`9c0fefde` (desk-phones, an older base) at 11:51 UTC and portal at 11:54. That
+reverted the music exclusion, the live view and the quiet-re-check fix, and the
+crawler paused itself at 12:03 on the exact false alarm `fb563e27` fixes. The
+deploy log said `success`. Recovered by deploying the branch tip (contains their
+commits too) and unpausing through the budget route; all three peer sessions
+were messaged. **Deploy the origin tip, and after any deploy check your fixes
+are ancestors of the live `/app/.build-commit`.**

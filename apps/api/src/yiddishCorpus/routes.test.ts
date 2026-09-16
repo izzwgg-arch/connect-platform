@@ -576,3 +576,85 @@ test("queue/retry defaults to FAILED and treats SKIPPED as a separate, deliberat
   // The handler must honour the field rather than hardcoding FAILED.
   assert.match(src, /const where: any = \{ state: parsed\.data\.state \}/);
 });
+
+// ── /now: the live view ─────────────────────────────────────────────────────
+
+import { YC_MUSIC_EXCLUDED_MESSAGE } from "./contracts";
+
+test("/now shows what the engine is on, links to the episode PAGE, and never leaks the MP3 url", async () => {
+  const items = [
+    {
+      id: "i-talk",
+      title: "בולעטין",
+      seriesName: "בולעטין",
+      category: "נייעס",
+      durationSec: 120,
+      canonicalUrl: "https://www.yiddish24.com/news/bulletin/1",
+      mediaUrl: "https://cloudfront.yiddish24.com/a.mp3",
+      state: "QUEUED",
+      error: null,
+    },
+    {
+      id: "i-music",
+      title: "ניגון",
+      seriesName: "ניגונים",
+      category: "נגינה",
+      durationSec: 300,
+      canonicalUrl: "https://www.yiddish24.com/news/900/2",
+      mediaUrl: "https://cloudfront.yiddish24.com/b.mp3",
+      state: "SKIPPED",
+      error: YC_MUSIC_EXCLUDED_MESSAGE,
+    },
+  ];
+  const db = fakeDb({
+    "ycSource.findUnique": {
+      id: "src1",
+      key: "yiddish24",
+      enabled: true,
+      governanceClass: "EXTERNAL",
+      audioFetchMode: "DISABLED",
+      lastDiscoveryAt: new Date(),
+      discoveryCursor: JSON.stringify({
+        catId: "57",
+        page: 3,
+        totalPages: 9,
+        pending: ["58"],
+        completed: ["1"],
+        musicCatIds: ["900"],
+        seriesNames: { "57": "בולעטין" },
+        categories: { "57": "נייעס" },
+      }),
+    },
+    "ycBudget.findFirst": { paused: false },
+    "ycProcessingJob.count": 1,
+    "ycProcessingJob.findMany": [
+      { itemId: "i-talk", stage: "novelty", state: "DONE", updatedAt: new Date() },
+      { itemId: "i-music", stage: "fingerprint", state: "SKIPPED", updatedAt: new Date(Date.now() - 1000), error: YC_MUSIC_EXCLUDED_MESSAGE },
+    ],
+    "ycSourceItem.findMany": items,
+    "ycSourceItem.count": 2,
+    "ycSourceItem.aggregate": (args: any) =>
+      args?.where?.error ? { _count: { _all: 1 }, _sum: { durationSec: 300 } } : { _sum: { durationSec: 420 } },
+    // Today's row was created hours ago; the live tick time is in `value`.
+    "ycMetricSnapshot.findFirst": { createdAt: new Date(Date.now() - 10 * 3600_000), value: Date.now() - 20_000 },
+  });
+  const routes = register(db, allowingGate);
+  const reply = fakeReply();
+  await routes.get("GET /admin/yiddish/now")!({ query: {}, params: {}, body: {} }, reply);
+  const p = reply.payload;
+
+  assert.equal(p.worker.alive, true, "a worker that ticked 20s ago is alive, whatever the row's createdAt says");
+  assert.equal(p.crawl.state, "WALKING");
+  assert.equal(p.crawl.seriesName, "בולעטין");
+  assert.equal(p.crawl.page, 3);
+  assert.equal(p.current.id, "i-talk");
+  assert.equal(p.current.kind, "SPEECH");
+  assert.equal(p.current.listenUrl, "https://www.yiddish24.com/news/bulletin/1");
+  assert.equal(p.recent.find((r: any) => r.id === "i-music").kind, "MUSIC_EXCLUDED");
+  assert.equal(p.totals.musicExcluded, 1);
+  assert.equal(p.totals.speechItems, 1);
+  assert.equal(p.audio.fetching, false);
+  // The CDN refuses any page but the site's own. Handing the MP3 to the portal
+  // would invite embedding it, i.e. working around that restriction.
+  assert.equal(JSON.stringify(p).includes("cloudfront"), false, "the raw media url must never reach the screen");
+});

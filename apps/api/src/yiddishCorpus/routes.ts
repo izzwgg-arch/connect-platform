@@ -39,6 +39,7 @@ import {
   YC_AUDIO_STAGES,
   YC_CUSTOMER_WALL_MESSAGE,
   YC_MIN_SAMPLES_FOR_CONCLUSION,
+  YC_MUSIC_EXCLUDED_MESSAGE,
   YC_STAGES,
   YC_YL_SERVING_ONLY_MESSAGE,
   YIDDISH24_SOURCE_KEY,
@@ -57,6 +58,7 @@ import {
   type YcExclusionReason,
 } from "./governance";
 import { searchCorpus } from "./corpusService";
+import { YC_DISCOVERY_EVERY_MS, YC_RECHECK_EVERY_MS } from "./jobs";
 import { reindexInternal } from "./internalIndexer";
 import { scoreVariants } from "./evidence";
 import { discover as discoverYiddish24 } from "./yiddish24Adapter";
@@ -1353,6 +1355,164 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     return reply.send({ ...(out ?? {}), note: "Counts only. No customer voicemail, call or chat content was read." });
   });
 
+  // ══════════════════════════ NOW LISTENING ═════════════════════════════════
+  //
+  // Izzy: "I want to be able to hear and see at all times what the agent is
+  // listening to." This is the live view: what the crawl is walking this
+  // second, the episode the worker touched last, and the recent trail.
+  //
+  // ⛔ "Hear" is a LINK to the episode's own page on yiddish24.com, where the
+  // site's own player plays it. We never embed or proxy the MP3: the CDN
+  // refuses any page but its own (a hotlink restriction), and serving it from
+  // here would be working around that. The payload says so in `listenNote`.
+  //
+  // ⛔ Numbers are read, never invented. When the crawl is waiting, it says
+  // waiting and when the next check is due — it never shows a fake "now".
+
+  const nowItemView = (it: any, job: any | null) => {
+    const isMusic = String(it?.state) === "SKIPPED" && it?.error === YC_MUSIC_EXCLUDED_MESSAGE;
+    return {
+      id: String(it.id),
+      title: it.title ?? null,
+      seriesName: it.seriesName ?? null,
+      category: it.category ?? null,
+      publishedLabel: it.publishedLabel ?? null,
+      durationSec: it.durationSec == null ? null : num(it.durationSec),
+      listenUrl: it.canonicalUrl ?? null,
+      itemState: String(it.state),
+      kind: isMusic ? "MUSIC_EXCLUDED" : "SPEECH",
+      excludedReason: isMusic ? YC_MUSIC_EXCLUDED_MESSAGE : null,
+      stage: job ? String(job.stage) : null,
+      jobState: job ? String(job.state) : null,
+      jobNote: job?.error ?? null,
+      touchedAt: job?.updatedAt ? new Date(job.updatedAt).toISOString() : it.updatedAt ? new Date(it.updatedAt).toISOString() : null,
+    };
+  };
+
+  app.get(`${P}/now`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+
+    const source = await safe<any>(db.ycSource.findUnique({ where: { key: YIDDISH24_SOURCE_KEY } }), null);
+    if (!source) {
+      return reply.send({ checkedAt: new Date().toISOString(), registered: false, note: "The Yiddish24 source is not registered." });
+    }
+    let cursor: any = {};
+    try {
+      cursor = source.discoveryCursor ? JSON.parse(String(source.discoveryCursor)) : {};
+    } catch {
+      cursor = {};
+    }
+
+    const [budget, heartbeat, discoverRunning, recentJobs, rights, totalItems, musicAgg, allAgg] = await Promise.all([
+      safe<any>(db.ycBudget.findFirst({ where: { scope: `source:${YIDDISH24_SOURCE_KEY}` } }), null),
+      safe<any>(db.ycMetricSnapshot.findFirst({ where: { metric: "worker_heartbeat_ms" }, orderBy: { createdAt: "desc" } }), null),
+      safe<number>(db.ycProcessingJob.count({ where: { sourceKey: YIDDISH24_SOURCE_KEY, stage: "discover", state: "RUNNING" } }), 0),
+      safe<any[]>(
+        db.ycProcessingJob.findMany({
+          where: { sourceKey: YIDDISH24_SOURCE_KEY, itemId: { not: null } },
+          orderBy: { updatedAt: "desc" },
+          take: 300,
+        }),
+        [],
+      ),
+      safe<any[]>(db.ycRightsRecord.findMany({ where: { sourceId: source.id } }), []),
+      safe<number>(db.ycSourceItem.count({ where: { sourceId: source.id } }), 0),
+      safe<any>(
+        db.ycSourceItem.aggregate({
+          where: { sourceId: source.id, state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE },
+          _count: { _all: true },
+          _sum: { durationSec: true },
+        }),
+        null,
+      ),
+      safe<any>(db.ycSourceItem.aggregate({ where: { sourceId: source.id }, _sum: { durationSec: true } }), null),
+    ]);
+
+    // The recent trail: one row per episode, newest touch first.
+    const latestJobByItem = new Map<string, any>();
+    for (const j of recentJobs ?? []) {
+      if (j.itemId && !latestJobByItem.has(j.itemId)) latestJobByItem.set(String(j.itemId), j);
+      if (latestJobByItem.size >= 25) break;
+    }
+    const ids = [...latestJobByItem.keys()];
+    const items = ids.length ? await safe<any[]>(db.ycSourceItem.findMany({ where: { id: { in: ids } } }), []) : [];
+    const byId = new Map((items ?? []).map((it: any) => [String(it.id), it]));
+    const recent = ids.filter((id) => byId.has(id)).map((id) => nowItemView(byId.get(id), latestJobByItem.get(id)));
+
+    // Crawl state, stated from the cursor and the budget — nothing inferred.
+    const lastRunAt = source.lastDiscoveryAt ?? source.lastRunAt ?? null;
+    const caughtUp = cursor?.lastRunStoppedReason === "catalog walked" && !cursor?.catId && !(cursor?.pending?.length > 0);
+    const windowMs = caughtUp ? Math.max(YC_DISCOVERY_EVERY_MS, YC_RECHECK_EVERY_MS) : YC_DISCOVERY_EVERY_MS;
+    const nextCheckAt = lastRunAt ? new Date(new Date(lastRunAt).getTime() + windowMs).toISOString() : null;
+    const crawlState = !source.enabled
+      ? "STOPPED"
+      : budget?.paused
+        ? "PAUSED"
+        : discoverRunning > 0
+          ? "WALKING"
+          : "WAITING";
+    const seriesId = cursor?.catId ? String(cursor.catId) : null;
+
+    // ⛔ The heartbeat row is UPSERTED once per day: `createdAt` is when today's
+    // row was made, the live tick time is `value` (ms). Reading createdAt showed
+    // a working worker as dead from the first tick of the day onward.
+    const beatMs = Number(heartbeat?.value);
+    const lastTickAt = Number.isFinite(beatMs) && beatMs > 0 ? new Date(beatMs).toISOString() : null;
+    const musicCount = num(musicAgg?._count?._all);
+    const musicSec = num(musicAgg?._sum?.durationSec);
+    const allSec = num(allAgg?._sum?.durationSec);
+
+    return reply.send({
+      checkedAt: new Date().toISOString(),
+      registered: true,
+      worker: {
+        alive: Boolean(lastTickAt && Date.now() - new Date(lastTickAt).getTime() < 5 * 60_000),
+        lastTickAt,
+      },
+      crawl: {
+        state: crawlState,
+        seriesId,
+        seriesName: seriesId ? cursor?.seriesNames?.[seriesId] ?? null : null,
+        category: seriesId ? cursor?.categories?.[seriesId] ?? null : null,
+        page: seriesId ? num(cursor?.page ?? 1) : null,
+        totalPages: seriesId && cursor?.totalPages != null ? num(cursor.totalPages) : null,
+        pendingSeries: Array.isArray(cursor?.pending) ? cursor.pending.length : 0,
+        completedSeries: Array.isArray(cursor?.completed) ? cursor.completed.length : 0,
+        musicSeriesExcluded: Array.isArray(cursor?.musicCatIds) ? cursor.musicCatIds.length : 0,
+        lastRunAt: lastRunAt ? new Date(lastRunAt).toISOString() : null,
+        lastRunStoppedReason: cursor?.lastRunStoppedReason ?? null,
+        nextCheckAt: crawlState === "WAITING" ? nextCheckAt : null,
+        note:
+          crawlState === "PAUSED"
+            ? "Paused. Nothing is being walked until the budget is unpaused."
+            : crawlState === "STOPPED"
+              ? "This source is switched off."
+              : crawlState === "WALKING"
+                ? "Walking the catalog now, one page at a time, at least 2 seconds apart."
+                : caughtUp
+                  ? "The whole catalog is walked. Waiting for the next check for new episodes."
+                  : "Between walks. The next one is scheduled.",
+      },
+      current: recent[0] ?? null,
+      recent,
+      totals: {
+        items: num(totalItems),
+        speechItems: Math.max(0, num(totalItems) - musicCount),
+        musicExcluded: musicCount,
+        speechHours: Math.round((Math.max(0, allSec - musicSec) / 3600) * 10) / 10,
+        musicHoursExcluded: Math.round((musicSec / 3600) * 10) / 10,
+      },
+      audio: {
+        fetching: false,
+        blockedReason: audioBlockedReason(source, rights ?? []),
+      },
+      listenNote:
+        "Open an episode to hear it on yiddish24.com's own player. The engine does not hold or stream the audio; " +
+        "it reads the public catalog, and audio stays blocked until Yiddish24 grants permission.",
+    });
+  });
+
   // ══════════════════════════ HEALTH ════════════════════════════════════════
 
   app.get(`${P}/health`, async (req: any, reply: any) => {
@@ -1380,6 +1540,7 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
 /** Every route this file registers, in one list, so a gate test can walk them
  *  all without guessing. Kept beside the registrations on purpose. */
 export const YC_REGISTERED_ROUTES: { method: "GET" | "POST"; path: string }[] = [
+  { method: "GET", path: `${YC_API_PREFIX}/now` },
   { method: "GET", path: `${YC_API_PREFIX}/dashboard` },
   { method: "GET", path: `${YC_API_PREFIX}/sources` },
   { method: "POST", path: `${YC_API_PREFIX}/sources/:key/enable` },

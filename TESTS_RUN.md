@@ -1,5 +1,19 @@
 # Tests run
 
+## Laybel live screen proof and layout correction — 2026-09-16
+
+- Reproduced real production bug: connected call's video panel collapsed to 21.6 px. Initial call speech reached existing Assistant transcript and replies appeared; audible playback not confirmed.
+- Portal fix 40c3ba2a: 17/17 Assistant tests, full isolated typecheck passed. Production build generated 221 pages; scripted blue/green rollout completed.
+- Running container build SHA equals 40c3ba2a; built chunk contains flex:0 0 auto, aspect-ratio:16/9 and object-fit:contain. Stable upstream :3000, public /ready 200. Final log said fb563e27 due concurrent shared-clone advancement; this mismatch was investigated, not treated as matching proof.
+- Post-fix browser: actual approved portrait, Connected, panel 287.8 px/video 310.4 x 174.6 px. Call later disconnected, reason unknown. Owner reported repeat-start trouble; End > Talk to Laybel > Start connected a second session in controlled Chrome. Screenshot shown. No post-fix spoken question/reply or audible output confirmed. Ended test; microphone off and start screen left open. Customer rollout disabled; end-to-end acceptance remains open.
+
+## Laybel key/avatar activation — 2026-09-16
+
+- Anam UI confirmed no existing keys; explicitly approved session-token-only key created (all resource scopes None). Approved portrait upload and completed custom Laybel avatar verified visually/in UI.
+- Loopcom owner settings Saved; reload/reopen showed enabled Start video call. Live API status 200: configured/available/apiKeySet true, enabled false. Session endpoint 200 with a token; token/secret not logged. Persisted avatar and voice IDs matched the UI.
+- No microphone/WebRTC/animated call or audible/Yiddish evaluation performed. No customer rollout, paid upgrade, code change, unit-test rerun or redeploy in this activation turn.
+
+
 ## Laybel production release verification — 2026-09-16 UTC
 
 - API/PBX 14/14 + Assistant/consent/turns 16/16 passed on isolated release. Frozen/offline pnpm 10.30.2 lock validation and full portal typecheck passed. Production portal build passed, generating 217 pages.

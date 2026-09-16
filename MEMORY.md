@@ -1,5 +1,7 @@
 # Loopcom / Connect project memory
 
+Laybel latency update (2026-09-16): owner confirms the call works but reports excessive reply delay. Source-proven whole-answer buffering before avatar speech; streaming requires server/router plus avatar integration. No live timing or speedup deployed. This supersedes older lack-of-owner-audio-confirmation notes, not pending Yiddish wiring, restart/disconnect reliability, or rollout gates. See Laybel handoff.
+
 ## Fundamental task rule — owner instruction, 2026-09-14
 
 Every time Izzy gives an agent a task:
@@ -10,7 +12,7 @@ Every time Izzy gives an agent a task:
 
 The agent entry point `AGENTS.md` and `CLAUDE.md` both carry this rule so future sessions can recover it from disk.
 
-Talk to Laybel (2026-09-16): approved lock repair (18 additive lines, frozen pnpm 10.30.2 passes) and scoped Windows SSH exception used. API/portal blue-green deployed b6d3310e with matching container SHA/code, 30 focused tests, production build and live auth guards verified. Anam key/approved avatar/voice IDs absent; no live animated call proven. Owner setup deployed; customer rollout remains disabled. SignalWire comparison/retention/Yiddish proof pending. Preserve same Assistant brain; do not stall on Desktop Commander. See `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`.
+Talk to Laybel (2026-09-16): owner requires concrete user-visible proof BEFORE claiming working; tests/tokens/deploy are insufficient. Restricted Anam key saved encrypted, approved custom portrait configured; customer enabled=false. Live test exposed 21.6px collapsed video. Portal 40c3ba2a layout fix deployed and container/browser verified; real portrait now 310.4x174.6px. First call microphone transcription and Assistant chat replies observed, audible output unverified. Post-fix call connected then disconnected; repeat End > Talk > Start connected in controlled Chrome, but owner reported start trouble. No post-fix spoken question/reply confirmed. Ended test, microphone off, Start screen open. End-to-end acceptance, disconnect cause, voice/Yiddish, retention/duration and SignalWire comparison still open. See `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`. New owner requirement: YL Yiddish STT -> English translation -> existing AI -> YL Yiddish chat; speak original English through avatar until Yiddish voice ready. This split is not wired yet; video currently uses Anam STT and speaks reply rather than contentEn. Never claim live language acceptance from existing text-bridge code alone.
 
 Profile menu review (2026-09-14): mockup only, not implementation approval. Preserve browser mute versus extension DND scope and the exact label “Include transcription in email.” Explain unassigned-extension greeting controls and avoid treating default Available presence as proven call readiness. See profile-menu design handoff.
 
