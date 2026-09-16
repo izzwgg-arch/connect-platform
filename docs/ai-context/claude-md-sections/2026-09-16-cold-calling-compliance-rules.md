@@ -91,6 +91,15 @@ Verified in code 2026-09-16:
 - **Shortcut lane:** commercial scrub APIs (DNC.com/PossibleNOW) ~$1k–3k/yr bundle
   federal + STATE DNC lists + known-litigator screening behind a real-time API — the
   better lane if this grows past one customer.
+- **The onboarding flow (Izzy's follow-up #3): no API keys exist — the customer's SAN IS
+  the key.** Customer registers as a SELLER at telemarketing.donotcall.gov (~15 min,
+  free ≤5 area codes), hands us the SAN. Loopcom registers ONCE as a Telemarketer/
+  Service Provider (TM/SP) profile — free, and every future cold-calling customer's SAN
+  just gets added under it; downloads run under our TM/SP login on the seller's behalf
+  (FTC-sanctioned). Access = automated file downloads (full list once, then DAILY change
+  files), not REST. Build notes: SAN + renewal date live on the tenant (⛔ calling on an
+  EXPIRED SAN is itself a violation — nag before expiry), and the dial-time block FAILS
+  CLOSED if the sync goes staler than the 31-day scrub window.
 
 ## Not proven / not built
 ⏳ No cap enforcement, hours enforcement, or per-tenant outbound throttle exists in Connect
