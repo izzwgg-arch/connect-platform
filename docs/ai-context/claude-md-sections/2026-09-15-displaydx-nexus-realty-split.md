@@ -69,7 +69,7 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   allow_diversions / own CoS); **Connect IVR drafts** "Displaydex" + "Quick sat main" from the
   read-only migration plan, prompts byte-identical, **0 publishes / 0 mappings**. All 20 applies
   re-baked clean; doorways + T6 untouched; Ellie's numbers still route to T6 IVR 16/17.
-- ⏳ **Switch night = handoff §6a runbook**, staged on loopcom `/root`, dry runs clean:
+- ✅ (DONE 09-16, see below) **Switch night = handoff §6a runbook**, staged on loopcom `/root`, dry runs clean:
   `displaydx-switch-pbx.ts` (DIDs → T142 + inbound routes) and `displaydx-connect-move.ts`
   (1,289 contacts, 8 threads, 15 voicemails w/ key rewrite, 62 CDRs, devices…). Eli signs in once.
   ⚠️ Known diffs: Eli's hold music (T6 moh3 "main" vs T142 default — form can't set it), desk
@@ -83,5 +83,23 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   switch. Switch-night Connect script rewritten to re-sync + move + `--remove-originals`
   (dry run: nothing to re-sync yet). ⛔ Lessons: a deploy recreates app-api-1 and wipes
   docker-cp'd scripts; `process.exit` truncates big stdout on the docker pipe.
+- ✅✅✅ **THE SWAP IS LIVE — 2026-09-16 06:34–07:01 ET (handoff §8), Izzy: "Do the full swap and
+  end-to-end test it."** Proven by REAL CARRIER CALLS: 845-200-3535 + 212-888-0885 → Main → **T142** →
+  Connect doorway → each its OWN greeting; all 8 keys land on the same ring groups as T6's IVR-16/17
+  (→ `T142_101` + `T142_101_1`); 845-364-7474 still on T6. Eli's user, ext 101 (`T142_101_1`,
+  PROVISIONED), both phones, texting number, VM email, QSR route, 65 CDRs moved in one transaction;
+  verified through HIS OWN session (`/me` = DisplayDX, calls/voicemail/chat parity). Nexus originals
+  removed (1,289 contacts + 8 threads hard, 15 voicemails SOFT), all backed up on loopcom `/root`.
+  ⛔⛔ FIVE runbook defects found live (§8a): **apply in T142 context never regenerated Main's DID
+  dispatch** (needs an apply in Main too); **the migrated IVR schedule (no business hours +
+  after-hours pointer) made 212-888-0885 play the Displaydex greeting** → pointers cleared;
+  `DidRouteMapping.e164` is `+`+10 digits; probe calls leave voicemails + CDRs (cleaned) and the first
+  baseline sent Eli's iPhone one wake push; `--remove-originals` must SOFT-delete voicemails while the
+  T6 spool exists. ⏳ **Eli must sign out + back in once**; a real answered call / text / voicemail
+  email is still a human step; T6 cleanup is a later task.
+- ✅ **09-16 11:49Z: account renamed "Displaydex" (Izzy: "there is an E") and a fresh welcome /
+  create-password email SENT to eli@displaydex.com** (verified body: Displaydex, ext 101, Play badge, no
+  Nexus). Eli is INVITED + forcePasswordReset — old password gone. PBX label/slug `displaydx` left
+  internal on purpose (handoff §8d).
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.

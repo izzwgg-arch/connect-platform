@@ -85,13 +85,28 @@ function readCursor(raw: string | null | undefined): Record<string, any> {
 export async function noteDiscoveryRun(
   db: any,
   sourceKey: string,
-  result: { discovered: number; pages?: number; healthy?: boolean; stoppedReason?: string | null },
+  result: {
+    discovered: number;
+    duplicates?: number;
+    pages?: number;
+    healthy?: boolean;
+    stoppedReason?: string | null;
+  },
 ): Promise<{ emptyRuns: number }> {
   const source = await db.ycSource.findUnique({ where: { key: sourceKey }, select: { id: true, discoveryCursor: true } });
   if (!source) return { emptyRuns: 0 };
   const cursor = readCursor(source.discoveryCursor);
   const found = Number(result?.discovered) > 0;
-  const emptyRuns = found ? 0 : (Number(cursor.emptyRuns) || 0) + 1;
+  // ⛔ "Nothing NEW" is not "nothing". Once the whole catalog has been walked,
+  // a re-check that parses page after page of episodes we already hold is the
+  // site and the parser working perfectly on a quiet day. Counting that as an
+  // empty run paused the crawler on 2026-09-16, two re-checks after the
+  // catalog finished, on a false alarm. A run only counts as empty when it
+  // recognised NOTHING - no new item and no known one - which is what a
+  // changed page or a broken parser actually looks like.
+  const reSeen = Number(result?.duplicates) || 0;
+  const alive = found || reSeen > 0;
+  const emptyRuns = alive ? 0 : (Number(cursor.emptyRuns) || 0) + 1;
   cursor.emptyRuns = emptyRuns;
   cursor.lastRunAt = new Date().toISOString();
   cursor.lastRunPages = Number(result?.pages) || 0;
@@ -101,7 +116,15 @@ export async function noteDiscoveryRun(
     data: { discoveryCursor: JSON.stringify(cursor), lastRunAt: new Date() },
   });
 
-  if (!found) {
+  if (!found && reSeen > 0) {
+    await recordProbes(db, sourceKey, [
+      {
+        probeKey: YC_DISCOVERY_YIELD_PROBE,
+        state: "OK",
+        detail: `no new episodes since the last check; ${reSeen} known episode(s) re-read correctly`,
+      },
+    ]);
+  } else if (!found) {
     await recordProbes(db, sourceKey, [
       {
         probeKey: YC_DISCOVERY_YIELD_PROBE,

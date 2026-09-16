@@ -1,45 +1,54 @@
 /**
- * Yiddish24 — repair the `category` column on already-catalogued items.
+ * Yiddish24 — repair `category` on catalogued items, and exclude music.
  *
- * WHY THIS EXISTS: `parseListingHtml` used to fall back to the row's
- * `data-cat-color` attribute, which is a CSS swatch, so every item ever
- * discovered was filed under "darkred". The parser is fixed; this repairs the
- * rows that were written before the fix.
+ * WHY THIS EXISTS (two real defects, both fixed in the adapter):
+ *  1. `parseListingHtml` once filed every item under a CSS colour ("darkred").
+ *  2. `parseSeriesLinks` once let the LAST place a series appeared on the page
+ *     decide its category. The live page carries the nav more than once, so
+ *     news bulletins were filed as Torah and no series at all as news. The
+ *     first version of THIS script inherited that, and wrote the wrong labels.
  *
- * The listing markup does not carry a category at all. The only honest source
- * is the series catalog in the site nav, which groups every series under a
- * main category. So this reads the catalog ONCE (one polite request, no audio,
- * no Referer to the media host), maps seriesName -> main category label, and
- * writes that label onto items that have no real category yet.
+ * The listing rows carry no category, so the only honest source is the series
+ * catalog in the nav. This reads it ONCE — the same page discovery reads, one
+ * polite request, no audio, no Referer to the media host — and:
+ *   - writes each item's real main-category label (with --relabel, it also
+ *     REPLACES a label that disagrees with the catalog — the old ones are
+ *     provably wrong);
+ *   - marks every item from a music series SKIPPED with the exact marker the
+ *     worker reads, and skips any stage already queued for it.
+ * A series name the catalog cannot place, or places under two categories, is
+ * left alone. Unknown is honest; a guess is not.
  *
- * ⛔ It never overwrites a category that is already a real label, and a series
- * it cannot place is left NULL — unknown is honest, a colour is not.
- *
- *   docker exec -w /app/apps/api app-api-1 npx tsx scripts/yc-backfill-categories.ts [--apply]
+ *   docker exec -w /app/apps/api app-api-1 npx tsx scripts/yc-backfill-categories.ts [--relabel] [--apply]
  *
  * Without --apply it prints the plan and writes nothing.
  */
 import { db } from "@connect/db";
 import {
+  isMusicSeries,
   parseSeriesLinks,
   YIDDISH24_ORIGIN,
   YIDDISH24_USER_AGENT,
 } from "../src/yiddishCorpus/yiddish24Adapter";
-import { YIDDISH24_SOURCE_KEY } from "../src/yiddishCorpus/contracts";
+import { YC_MUSIC_EXCLUDED_MESSAGE, YIDDISH24_SOURCE_KEY } from "../src/yiddishCorpus/contracts";
 
 const APPLY = process.argv.includes("--apply");
+const RELABEL = process.argv.includes("--relabel");
 
-/** A value that is a CSS colour, not a category. These are the bad rows. */
-const COLOUR_RE = /^(dark|light|medium)?(red|blue|green|orange|purple|violet|grey|gray|black|white|brown|pink|yellow|cyan|magenta|teal|olive|navy|maroon|gold|silver)$/i;
+/** A value that is a CSS colour, not a category. */
+const COLOUR_RE =
+  /^(dark|light|medium)?(red|blue|green|orange|purple|violet|grey|gray|black|white|brown|pink|yellow|cyan|magenta|teal|olive|navy|maroon|gold|silver)$/i;
 
 async function main() {
-  console.log(`yc-backfill-categories — ${new Date().toISOString()} — ${APPLY ? "APPLY" : "dry run"}`);
+  console.log(
+    `yc-backfill-categories — ${new Date().toISOString()} — ${APPLY ? "APPLY" : "dry run"}${RELABEL ? " + relabel" : ""}`,
+  );
 
   const source = await db.ycSource.findUnique({ where: { key: YIDDISH24_SOURCE_KEY } });
   if (!source) throw new Error("yiddish24 source row missing — run the seed first");
 
-  // 1. the catalog, from one page. Every page carries the whole nav.
-  const res = await fetch(`${YIDDISH24_ORIGIN}/`, {
+  // 1. The catalog, from the SAME page discovery reads.
+  const res = await fetch(`${YIDDISH24_ORIGIN}/mainCategory/1`, {
     headers: {
       "user-agent": YIDDISH24_USER_AGENT,
       accept: "text/html,application/xhtml+xml,*/*;q=0.8",
@@ -48,42 +57,62 @@ async function main() {
   });
   if (!res.ok) throw new Error(`site answered ${res.status} — not repairing anything`);
   const series = parseSeriesLinks(await res.text());
-  const byName = new Map<string, string>();
-  for (const s of series) {
-    if (s.name && s.mainCategoryLabel) byName.set(s.name.trim(), s.mainCategoryLabel.trim());
-  }
-  console.log(`catalog: ${series.length} series, ${byName.size} of them placed under a main category`);
-  if (byName.size === 0) throw new Error("catalog parsed no placed series — refusing to touch any row");
+  if (series.length < 20) throw new Error(`catalog parsed only ${series.length} series — refusing to touch any row`);
 
-  // 2. the rows that are wrong or unknown.
+  const labelsByName = new Map<string, Set<string>>();
+  const musicByName = new Map<string, boolean>();
+  for (const s of series) {
+    if (!s.name) continue;
+    const name = s.name.trim();
+    if (s.mainCategoryLabel) {
+      if (!labelsByName.has(name)) labelsByName.set(name, new Set());
+      labelsByName.get(name)!.add(s.mainCategoryLabel.trim());
+    }
+    if (isMusicSeries(s.mainCategoryId, s.catId)) musicByName.set(name, true);
+  }
+  const musicNames = [...musicByName.keys()];
+  console.log(`catalog: ${series.length} series; music series: ${musicNames.length}`);
+  console.log(`  music: ${musicNames.join(" | ")}`);
+
+  // 2. Every item, decided from the catalog.
   const rows = await db.ycSourceItem.findMany({
     where: { sourceId: source.id },
-    select: { id: true, seriesName: true, category: true },
+    select: { id: true, seriesName: true, category: true, state: true, error: true },
   });
-  const needsRepair = rows.filter((r: any) => !r.category || COLOUR_RE.test(r.category));
-  console.log(`items: ${rows.length} total, ${needsRepair.length} with no real category`);
 
-  const plan = new Map<string, string[]>(); // label -> ids
-  // Rows we cannot place AND that currently hold a colour. Collected HERE, in
-  // the same pass, so the clear step below can never touch a row this run just
-  // gave a real label to.
-  const toClear: string[] = [];
+  const relabel = new Map<string, string[]>(); // label -> ids
+  const music: string[] = [];
   let unplaceable = 0;
-  for (const r of needsRepair) {
-    const label = r.seriesName ? byName.get(r.seriesName.trim()) : undefined;
-    if (!label) {
+  let ambiguous = 0;
+  for (const r of rows) {
+    const name = String(r.seriesName ?? "").trim();
+    if (name && musicByName.get(name)) {
+      if (!(r.state === "SKIPPED" && r.error === YC_MUSIC_EXCLUDED_MESSAGE)) music.push(r.id);
+    }
+    const labels = name ? labelsByName.get(name) : undefined;
+    if (!labels) {
       unplaceable += 1;
-      if (r.category && COLOUR_RE.test(r.category)) toClear.push(r.id);
       continue;
     }
-    if (!plan.has(label)) plan.set(label, []);
-    plan.get(label)!.push(r.id);
+    if (labels.size !== 1) {
+      ambiguous += 1;
+      continue;
+    }
+    const label = [...labels][0];
+    const wrongOrMissing = !r.category || COLOUR_RE.test(r.category);
+    const disagrees = RELABEL && r.category && r.category !== label;
+    if (wrongOrMissing || disagrees) {
+      if (!relabel.has(label)) relabel.set(label, []);
+      relabel.get(label)!.push(r.id);
+    }
   }
 
-  for (const [label, ids] of [...plan.entries()].sort((a, b) => b[1].length - a[1].length)) {
-    console.log(`  ${String(ids.length).padStart(5)}  ${label}`);
+  console.log(`items: ${rows.length}`);
+  for (const [label, ids] of [...relabel.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    console.log(`  relabel ${String(ids.length).padStart(6)} -> ${label}`);
   }
-  console.log(`  ${String(unplaceable).padStart(5)}  (series not in the catalog — cleared to NULL)`);
+  console.log(`  mark as music     ${String(music.length).padStart(6)}`);
+  console.log(`  series not in the catalog (left alone) ${unplaceable}; name under two categories (left alone) ${ambiguous}`);
 
   if (!APPLY) {
     console.log("\ndry run — nothing written. Re-run with --apply.");
@@ -91,27 +120,35 @@ async function main() {
   }
 
   let placed = 0;
-  for (const [label, ids] of plan) {
+  for (const [label, ids] of relabel) {
     for (let i = 0; i < ids.length; i += 500) {
-      const chunk = ids.slice(i, i + 500);
-      const r = await db.ycSourceItem.updateMany({ where: { id: { in: chunk } }, data: { category: label } });
+      const r = await db.ycSourceItem.updateMany({ where: { id: { in: ids.slice(i, i + 500) } }, data: { category: label } });
       placed += r.count;
     }
   }
-  // A colour on a series the catalog does not list: NULL is the honest value.
-  let cleared = 0;
-  for (let i = 0; i < toClear.length; i += 500) {
+
+  let marked = 0;
+  let jobsSkipped = 0;
+  for (let i = 0; i < music.length; i += 500) {
+    const chunk = music.slice(i, i + 500);
     const r = await db.ycSourceItem.updateMany({
-      where: { id: { in: toClear.slice(i, i + 500) } },
-      data: { category: null },
+      where: { id: { in: chunk } },
+      data: { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE },
     });
-    cleared += r.count;
+    marked += r.count;
+    // Anything queued for them stops here. RUNNING rows are left to the worker's
+    // own guard, which refuses them on the next claim anyway.
+    const j = await db.ycProcessingJob.updateMany({
+      where: { itemId: { in: chunk }, state: "PENDING" },
+      data: { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE, leaseOwner: null, leaseUntil: null },
+    });
+    jobsSkipped += j.count;
   }
-  console.log(`wrote ${placed} real categories; cleared ${cleared} unplaceable colour values to NULL`);
+  console.log(`\nwrote ${placed} category labels; marked ${marked} music items; skipped ${jobsSkipped} queued jobs`);
 
   const after = await db.ycSourceItem.groupBy({ by: ["category"], where: { sourceId: source.id }, _count: { _all: true } });
   for (const g of after.sort((a: any, b: any) => b._count._all - a._count._all)) {
-    console.log(`  ${String(g._count._all).padStart(5)}  ${g.category ?? "(null)"}`);
+    console.log(`  ${String(g._count._all).padStart(6)}  ${g.category ?? "(null)"}`);
   }
 }
 

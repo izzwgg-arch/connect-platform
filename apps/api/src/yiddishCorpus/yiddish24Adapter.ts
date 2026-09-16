@@ -70,6 +70,60 @@ export const YIDDISH24_MAIN_CATEGORIES: { id: number; label: string }[] = [
 ];
 
 /**
+ * The site's own "Music" main category (נגינה). ⛔ The engine learns from
+ * people TALKING. Series under this category are never walked, and any item
+ * that reaches the pipeline from one is skipped before its first stage.
+ * This is decided by the SITE's own grouping, never by guessing from titles.
+ * Music inside a talk episode (jingles, song breaks) is a different problem:
+ * only the audio pipeline's SPEECH/MUSIC segment classifier can see that.
+ */
+export const YIDDISH24_MUSIC_MAIN_CATEGORY_ID = "7";
+
+/**
+ * Bump when parseSeriesLinks changes how it attributes series to categories.
+ * A cursor carrying an older version re-reads the nav once, so a map built by
+ * a wrong parser is replaced instead of trusted for ever.
+ */
+export const YIDDISH24_CATALOG_PARSER_VERSION = 2;
+
+/**
+ * Music series the site files OUTSIDE its Music category. A named, reviewable
+ * decision by catId — never inferred from a title at runtime.
+ *   233  נגינה ווידעאס  (music videos, filed under Video) — excluded 2026-09-16
+ *        on Izzy's "no music, just audio of people talking".
+ */
+export const YIDDISH24_EXTRA_MUSIC_SERIES: readonly string[] = ["233"];
+
+/** True when this series is music: under the site's Music category, or named above. */
+export function isMusicSeries(mainCategoryId: string | null | undefined, catId?: string | null): boolean {
+  if (catId != null && YIDDISH24_EXTRA_MUSIC_SERIES.includes(String(catId))) return true;
+  return String(mainCategoryId ?? "") === YIDDISH24_MUSIC_MAIN_CATEGORY_ID;
+}
+
+/**
+ * Is this catalogued item music? Decided only from the site's own grouping,
+ * held in the discovery cursor: the item's series is one of the Music
+ * category's series. Unknown (no catalog yet) is NOT music — we never skip an
+ * episode on a guess.
+ */
+export function isMusicItem(
+  item: { seriesName?: string | null; category?: string | null },
+  discoveryCursorRaw: string | null | undefined,
+): boolean {
+  let cursor: any = {};
+  try {
+    cursor = discoveryCursorRaw ? JSON.parse(String(discoveryCursorRaw)) : {};
+  } catch {
+    return false;
+  }
+  const musicIds: string[] = Array.isArray(cursor?.musicCatIds) ? cursor.musicCatIds : [];
+  if (!musicIds.length) return false;
+  const names = new Set(musicIds.map((id) => cursor?.seriesNames?.[id]).filter(Boolean).map((n: string) => n.trim()));
+  const series = String(item?.seriesName ?? "").trim();
+  return series.length > 0 && names.has(series);
+}
+
+/**
  * A normal desktop browser UA. We identify as a browser because the site is
  * behind Cloudflare and a blank UA is what gets challenged — not to disguise
  * anything. Rate, not identity, is what keeps this polite.
@@ -263,8 +317,32 @@ export function parseSeriesLinks(html: string): Yiddish24SeriesLink[] {
   const body = html.replace(COMMENT_RE, "");
   const out = new Map<string, Yiddish24SeriesLink>();
 
-  // Main-category anchors, in document order, so a series link can be
-  // attributed to the group it sits under.
+  // ⛔ STRUCTURE FIRST. The nav nests each series inside its main category:
+  //   <a href="/mainCategory/N">label</a> <ul class="submenu_list"> …/cat/X… </ul>
+  // The old parser attributed a series to whichever mainCategory anchor came
+  // before it in the DOCUMENT, and let a later sighting overwrite an earlier
+  // one. The live page carries the nav more than once, so the LAST sighting
+  // (under the wrong heading) won: news bulletins were filed as Torah and no
+  // series at all was filed as news. Membership is now read from the block
+  // the link sits in, and the first block that names a series wins.
+  const blockRe =
+    /<a\b[^>]*href="\/mainCategory\/(\d+)"[^>]*>([\s\S]{0,300}?)<\/a>\s*<ul\b[^>]*class="[^"]*submenu_list[^"]*"[^>]*>((?:(?!href="\/mainCategory\/)[\s\S])*?)(?:<\/ul>|(?=<a\b[^>]*href="\/mainCategory\/)|$)/gi;
+  // ⛔ A block ends at its </ul> OR at the next category heading, whichever
+  // comes first. Without the second stop, one unclosed list (the saved fixture
+  // has one) swallowed the next category and filed its series under the wrong
+  // heading — exactly how a music series would have been walked as talk.
+  const blockOf = new Map<string, { id: string; label: string | null }>();
+  let b: RegExpExecArray | null;
+  while ((b = blockRe.exec(body))) {
+    const group = { id: b[1], label: stripHtml(b[2]) || null };
+    const catRe = /href="\/cat\/(\d+)\/?"/gi;
+    let c: RegExpExecArray | null;
+    while ((c = catRe.exec(b[3]))) {
+      if (!blockOf.has(c[1])) blockOf.set(c[1], group);
+    }
+  }
+
+  // Document-order fallback, used ONLY for a series no block names.
   const groups: { at: number; id: string; label: string | null }[] = [];
   const gRe = /<a\b[^>]*href="\/mainCategory\/(\d+)"[^>]*>([\s\S]{0,300}?)<\/a>/gi;
   let g: RegExpExecArray | null;
@@ -286,13 +364,19 @@ export function parseSeriesLinks(html: string): Yiddish24SeriesLink[] {
     }
     if (!name) name = stripHtml(inner) || null;
 
-    let group: { id: string; label: string | null } | null = null;
-    for (const cand of groups) {
-      if (cand.at < m.index) group = cand;
-      else break;
+    let group: { id: string; label: string | null } | null = blockOf.get(catId) ?? null;
+    if (!group) {
+      for (const cand of groups) {
+        if (cand.at < m.index) group = cand;
+        else break;
+      }
     }
     const prev = out.get(catId);
-    if (prev && prev.name && !name) continue;
+    if (prev) {
+      // First sighting keeps its category; a later one may only fill a name.
+      if (!prev.name && name) prev.name = name;
+      continue;
+    }
     out.set(catId, {
       catId,
       name,
@@ -551,6 +635,14 @@ interface DiscoveryCursor {
   completed?: string[];
   /** catId -> main category label, from the series catalog. */
   categories?: Record<string, string>;
+  /** catId -> the site's main category id. Music is decided from this. */
+  mainCategoryIds?: Record<string, string>;
+  /** catId -> series name, so a screen can say what is being walked. */
+  seriesNames?: Record<string, string>;
+  /** Series under the Music category. Never walked. */
+  musicCatIds?: string[];
+  /** YIDDISH24_CATALOG_PARSER_VERSION that built the maps above. */
+  catalogVersion?: number;
   /** Series catalog refreshed at this ISO time. */
   catalogAt?: string | null;
   /** How many consecutive runs found nothing (siteHealth reads this). */
@@ -666,7 +758,8 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
       // and `page` are left exactly as they are.
       const startingFresh = !cursor.pending?.length && !cursor.catId;
       const missingCategories = Object.keys(cursor.categories ?? {}).length === 0;
-      if (startingFresh || missingCategories) {
+      const staleParser = (cursor.catalogVersion ?? 1) < YIDDISH24_CATALOG_PARSER_VERSION;
+      if (startingFresh || missingCategories || staleParser) {
         const navHtml = await getText(`${YIDDISH24_ORIGIN}/mainCategory/1`, limiter);
         pages += 1;
         const series = parseSeriesLinks(navHtml);
@@ -675,14 +768,26 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
           state: series.length >= 20 ? "OK" : series.length > 0 ? "DEGRADED" : "BROKEN",
           detail: `${series.length} series links in the nav`,
         });
+        const music = series.filter((x) => isMusicSeries(x.mainCategoryId, x.catId)).map((x) => x.catId);
+        const musicSet = new Set(music);
         if (startingFresh) {
           const completed = new Set(cursor.completed ?? []);
+          const talk = series.filter((x) => !musicSet.has(x.catId));
           // Never-seen series first; already-completed ones get their page-1 check after.
           cursor.pending = [
-            ...series.filter((s) => !completed.has(s.catId)).map((s) => s.catId),
-            ...series.filter((s) => completed.has(s.catId)).map((s) => s.catId),
+            ...talk.filter((x) => !completed.has(x.catId)).map((x) => x.catId),
+            ...talk.filter((x) => completed.has(x.catId)).map((x) => x.catId),
           ];
+        } else if (cursor.pending?.length) {
+          // A walk in progress drops any music series it had queued.
+          cursor.pending = cursor.pending.filter((id) => !musicSet.has(id));
         }
+        cursor.musicCatIds = music;
+        cursor.mainCategoryIds = Object.fromEntries(
+          series.filter((x) => x.mainCategoryId).map((x) => [x.catId, x.mainCategoryId as string]),
+        );
+        cursor.seriesNames = Object.fromEntries(series.filter((x) => x.name).map((x) => [x.catId, x.name as string]));
+        cursor.catalogVersion = YIDDISH24_CATALOG_PARSER_VERSION;
         // Keep the main-category label per series: the listing rows do not
         // carry it, and it is the only honest source for an item's category.
         cursor.categories = Object.fromEntries(
@@ -696,12 +801,22 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
     // 2. Walk the series, one page at a time.
     while (pages < maxPages) {
       if (!cursor.catId) {
-        cursor.catId = cursor.pending?.shift() ?? null;
+        const music = new Set(cursor.musicCatIds ?? []);
+        let next = cursor.pending?.shift() ?? null;
+        while (next && music.has(next)) next = cursor.pending?.shift() ?? null;
+        cursor.catId = next;
         cursor.page = 1;
         if (!cursor.catId) {
           stoppedReason = "catalog walked";
           break;
         }
+      }
+      if ((cursor.musicCatIds ?? []).includes(cursor.catId)) {
+        // A series already in hand when it was found to be music: leave it.
+        cursor.catId = null;
+        cursor.page = 1;
+        cursor.totalPages = null;
+        continue;
       }
       const catId = cursor.catId;
       const page = Math.max(1, cursor.page ?? 1);
