@@ -157,3 +157,124 @@ navConfig import shape, no-publish tools, FFmpeg protocol whitelist).
 ⛔ Run them with `cd apps/api && node --experimental-test-module-mocks --import tsx --test
 "src/creativeStudio/*.test.ts"`. The repo-wide api suite has **pre-existing** failures in other areas
 (billing tests, delivery, mfa, `apiRequestProfiler`) that have nothing to do with this work.
+
+---
+
+# ⛔⛔ ROUND TWO — THE FILM PIPELINE (2026-09-16, later the same day)
+
+§1–§9 above describe generation. This part describes everything that turns generated shots into a finished
+film, and the six bugs that only appeared when it was actually run.
+
+## 10. WHAT EXISTS NOW
+
+```
+storyboard → render each shot → assemble → voice, music, captions → the cut → export
+```
+
+| Piece | Where |
+|---|---|
+| Storyboard page | `apps/portal/app/(platform)/creative/storyboard/page.tsx` |
+| Video editor | `.../creative/timeline/page.tsx` |
+| Voice, music & captions | `.../creative/audio/page.tsx` (+ `apps/portal/lib/creativeCaptions.ts`) |
+| Export | `.../creative/export/page.tsx` |
+| The one editing channel | `.../creative/useProjectDoc.ts` — load, ops, 409 handling |
+| Splitting + assembling | `apps/api/src/creativeStudio/film.ts` |
+| Looking at the result | `apps/api/src/creativeStudio/evaluate.ts` |
+
+New doors: `POST /creative/projects/:id/assemble`, `POST /creative/projects/:id/render`,
+`POST /creative/export`, `GET /creative/export-presets`, `GET /creative/voices`, and the matching
+`/internal/agent/creative/{storyboard,assemble,render,export}`.
+
+New agent tools: `creative_write_storyboard`, `creative_assemble_film`, `creative_render_film`,
+`creative_export_file`, plus `shot_id` on `creative_make_video`. ⛔ Still nothing that posts, sends or
+publishes — a test asserts no such tool exists.
+
+New keys, all in no default bucket: `can_view_creative_storyboard|timeline|audio|export`.
+
+## 11. THE RULES THIS ROUND ADDED, AND WHY EACH ONE EXISTS
+
+- ⛔ **One implementation per thing, used by both doors.** `assembleFilm()` is called by the button and by
+  the agent; `storyboardDoc()` decides the split for both. The portal does NOT assemble the cut itself — a
+  test asserts that, because a second implementation is the one nobody tests and the one a customer gets.
+- ⛔ **A rendered clip attaches ITSELF to its shot** (`attachToShot` in `jobs.ts`, driven by
+  `request.shotId`). It used to be a second step the model had to remember; the once it forgets, the
+  storyboard says "not rendered" beside a clip the customer has paid for.
+- ⛔ **The job stays `running` while it is being checked**, with its lease extended. A separate
+  `"evaluating"` status would be invisible to `sweepLostLeases()`, so a crash mid-check would strand the job
+  for ever.
+- ⛔ **A checker that cannot answer PASSES the work.** Never hold a good picture hostage to our own check.
+- ⛔ **Money asks first, still.** The monthly allowance is checked before anything is queued, so queueing is
+  not a way around it.
+
+## 12. THE SIX BUGS — every one found by running it, not by reading it
+
+1. **The check was looking at nothing.** Its stored verdict read
+   `{"ok":true,"checked":false,"note":"the checker could not answer"}` after 11 seconds. **Reasoning tokens
+   count against `max_completion_tokens`**, which was 400: the model spent the whole budget thinking and
+   returned empty content. 2000 on `gpt-5-mini` now; the next generation came back `"checked":true` in 7.5s.
+   ⛔ A test fails if the budget drops below 1500.
+2. **A 5-second shot cost two renders and a join.** `planVideoSegments(5)` planned 4+4. One call is used
+   wherever one will do (`5 → [8]`, `9 → [12]`, `15 → [12,4]` as before). And the storyboard's default beat
+   was 5 seconds, which Sora BILLS as 8 — it is **4** now, the engine's own smallest clip, so a 15-second
+   film costs 16 seconds of engine time instead of 24.
+3. **Every video was stored twice** — a raw `clip.mp4` and a re-encoded `shot.mp4` 20 KB bigger — because
+   the single-segment shortcut compared exactly and a 4.1s clip for a 4s ask fell through to the join path.
+   Half a second of tolerance, the piece is promoted in place, and raw pieces are `source: "segment"`:
+   hidden from the library, the project view and the Coworker's own listing, swept after a week. Verified:
+   **one 4-second shot now produces exactly one file.**
+4. **"Render all four shots" rendered two, and the Coworker said the rest were coming.** The concurrency cap
+   counted QUEUED work, so 3 and 4 were refused — and the model replied *"As soon as those finish, Shots 3
+   and 4 will start automatically."* Nothing would ever have started them. ⛔ **A cap that makes the queue
+   lie is worse than no cap.** It limits what is RUNNING; the rest wait and the runner drains two at a time,
+   which is what the model was already telling people.
+5. **Re-writing a storyboard threw away clips already paid for.** The document was replaced with fresh ids;
+   two rendered shots were orphaned and the project read "0 of 4 rendered". `mergeStoryboard()` keeps the id
+   and the clip of any shot whose description is unchanged (whitespace and case do not count), drops the
+   clip of one that now says something else, and reports `keptClips` / `droppedClips`.
+6. **A provider's real reason was thrown away.** A voiceover came back as "The voice engine refused (401)"
+   while the body said *"Your subscription has a failed or incomplete payment."* `errorFrom` only read
+   OpenAI's `error.message`; it reads ElevenLabs' `detail.message` too now. A problem with **our** account
+   becomes *"not something you did, and we have been told"* and is **permanent** — retrying spends three
+   attempts on the same wall.
+
+⛔ A seventh, which is model behaviour rather than a defect: asked to change a shot, the Coworker created a
+**second project with the same name** and left the rendered clips in the first. Creating a project with a
+title and kind that already exist **today** now hands back the existing one with `reused: true`.
+
+## 13. THE ELEVENLABS FINDING — NOT A CODE PROBLEM, AND IZZY HAS TO FIX IT
+
+⛔⛔ The platform's ElevenLabs **subscription has a failed or incomplete payment**. Proven from inside the
+api container: the key decrypts fine, `/v1/user/subscription` answers **200** (Creator tier, 49,878 of
+1,036,000 characters used) and `/v1/voices` lists **38 voices** — but **every** `/v1/text-to-speech/…` call
+answers **401 `payment_issue`**. So Creative Studio voiceovers and music cannot work, and anything else on
+the platform that synthesises speech through ElevenLabs is in the same position until that invoice is paid.
+
+## 14. PROVEN ON PRODUCTION
+
+- **By hand, through the agent's own doors:** project → storyboard (12s → three 4-second shots, the studio
+  doing the split) → three shots rendered, each clip attaching itself → assemble (3 clips, 0 skipped) → two
+  captions through the ops door → **a stale write refused** with the current document → the cut rendered by
+  FFmpeg in 16 seconds: **`final-cut.mp4`, 1280×720, exactly 12,000 ms**, plus `captions.srt` → exported to
+  1920×1080, 1080×1920 and 1080×1080, all three succeeded.
+- **By the Coworker, in a real chat:** it wrote a four-shot storyboard (`updatedByType: coworker`) and
+  started **zero jobs** until asked; quoted the cost and the remaining allowance; rendered; and when told
+  two clips were missing it assembled *"2 used, 2 skipped"* and rendered **1080×1920, exactly 6,000 ms** —
+  $1.20 of engine spend.
+- **The pages:** all twelve `/creative/*` routes 200; all four new keys in the shipped bundle; api, portal
+  and agent containers at 0 restarts.
+
+⛔ **My own mistake, for the record:** a shell loop written as a `for` over `$(cat file)` split on
+WHITESPACE, so it fired one render per WORD — five jobs for three shots, about **$1.60 wasted**, and the
+last one had to be cancelled through the real door. Read lines with `while IFS='|' read -r`.
+
+## 15. WHAT IS STILL NOT DONE
+
+- ⏳ **Nobody has opened these screens in a browser.** 200s and bundle greps are not a person using them.
+- ⏳ **No key is granted to anybody.** Granting IS the launch. ⛔ Grant them as a SET: the shared calls sit
+  under the `/creative` catch-all, which asks for `can_view_section_creative`.
+- ⏳ The reject-and-re-render path is proven by test (8 cases in `creativeRetry.test.ts`), not yet by a real
+  generator producing a real six-fingered hand.
+- ⏳ MinIO is still on root credentials.
+- ⏳ The agent-design-mode screen from the mockup is still unbuilt.
+- ⚠️ `storyboardDoc` honours the shot count the model chooses, so four shots for a 12-second film gives 3s
+  beats — billed as 4s each. Not wrong, but a model that picks shot counts fitting 4/8/12 spends less.

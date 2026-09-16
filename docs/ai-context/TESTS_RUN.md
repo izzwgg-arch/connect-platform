@@ -2,6 +2,70 @@
 
 Newest entries first.
 
+## Creative Studio — the film pipeline, and six real bugs it found (2026-09-16)
+
+- `apps/api` Creative Studio suite: **104 tests, all pass**
+  (`npx tsx --test --experimental-test-module-mocks "src/creativeStudio/*.test.ts"`). 64 of them are new,
+  in two new files: `creativeFilm.test.ts` (splitting a film into shots, the storyboard document, storyboard
+  → timeline, what the editor draws vs what FFmpeg is given, assembling against an in-memory database, the
+  wording of a re-render, and source guards) and `creativeRetry.test.ts` (what happens when the automatic
+  check says no).
+- `apps/portal` `lib/creativeCaptions.test.ts`: **11 tests** — captions are cut at sentences, broken on word
+  boundaries, never lose or duplicate a word, cover the spoken audio end to end with no gap or overlap, give
+  a longer line longer on screen, start where the voiceover starts and never flash past faster than 0.7s.
+- Typecheck: `apps/api`, `apps/portal` and `apps/agent` all clean in every file this work touched.
+
+### Six bugs, every one found by running it rather than reading it
+
+1. **The check that looks at every result was looking at nothing.** Its stored verdict on production read
+   `{"ok":true,"checked":false,"note":"the checker could not answer"}` after spending 11 seconds. Reasoning
+   tokens count against `max_completion_tokens`, which was 400 — the model spent the whole budget thinking
+   and returned empty content. Raised to 2000 on gpt-5-mini; the next generation came back
+   `{"ms":7521,"ok":true,"model":"gpt-5-mini","checked":true,"problems":[]}`.
+2. **A 5-second shot cost two renders and a join.** `planVideoSegments(5)` planned 4+4 — two provider jobs,
+   a continuation and a concat — for something one 8-second render covers. And the storyboard's default beat
+   was 5 seconds, which the engine BILLS as 8. Now: one call wherever one will do, and 4-second beats (the
+   engine's own smallest clip), so a 15-second film costs 16 seconds of engine time instead of 24.
+3. **Every video was stored twice.** Each 4-second shot left both a raw `clip.mp4` and a re-encoded
+   `shot.mp4` 20 KB bigger, because the single-segment shortcut compared exactly and a 4.1s clip for a 4s ask
+   fell through to the join path. Verified after the fix: **one 4-second shot now produces exactly one file.**
+4. **"Render all four shots" rendered two, and the Coworker said the rest were coming.** The concurrency cap
+   counted QUEUED work, so shots 3 and 4 were refused — and the model replied *"As soon as those finish,
+   Shots 3 and 4 will start automatically"* when nothing would ever have started them. The cap now limits
+   what is RUNNING; the rest wait and drain. Re-tested live: all four accepted.
+5. **Re-writing a storyboard threw away clips already paid for.** Two rendered shots were orphaned when the
+   document was replaced with fresh ids; the project read "0 of 4 rendered" with $0.60 stranded. Storyboards
+   are merged now: an unchanged description keeps its id and its clip, a changed one starts without one, and
+   the answer says how many were kept and dropped.
+6. **A provider's real reason was being thrown away.** A voiceover came back as "The voice engine refused
+   (401)"; the body said *"Your subscription has a failed or incomplete payment"*. `errorFrom` only read
+   OpenAI's shape. It reads ElevenLabs' too now, and a problem with Loopcom's own account becomes
+   *"not something you did, and we have been told"* — and is permanent, so it does not burn three attempts.
+
+### Proven on PRODUCTION, driven through the same doors the Coworker uses
+
+- **The whole pipeline, by hand:** project → storyboard (12s asked for → three 4-second shots, the studio
+  doing the split) → three shots rendered, **each clip attaching itself to its shot** → assemble (3 clips,
+  0 skipped) → two captions added through the ops door → a stale write **refused** with the current document
+  → the cut rendered by FFmpeg in 16 seconds: **`final-cut.mp4`, 1280×720, exactly 12,000 ms**, plus
+  `captions.srt` → exported to three sizes (1920×1080, 1080×1920, 1080×1080), all three succeeded.
+- **The whole pipeline, by the Coworker, in a real chat:** asked for a 12-second advert it wrote a four-shot
+  storyboard (`updatedByType: coworker`) and started **zero jobs** until asked; quoted the cost and the
+  remaining allowance before spending; rendered the shots; and when told two clips were missing, assembled
+  *"2 used, 2 skipped"* and rendered **`final-cut.mp4`, 1080×1920, exactly 6,000 ms** — for $1.20.
+- **The ElevenLabs finding, which is not a code problem:** the key is valid (Creator tier, 49,878 of
+  1,036,000 characters) and lists 38 voices, but EVERY text-to-speech call returns 401
+  `payment_issue` — *"Your subscription has a failed or incomplete payment."* Voiceovers and music cannot
+  work until that invoice is paid.
+
+### Not proven
+
+Still nobody has opened these screens in a browser (all twelve `/creative/*` routes serve 200 and the
+shipped bundle carries every key, but that is not a person using them); no customer holds a Creative Studio
+key; the reject-and-re-render path is proven by test and not yet by a real generator producing a real
+six-fingered hand; and MinIO is still on root credentials.
+
+
 ## The Coworker workspace, round 2: the three things only a real screen found (2026-09-15, `90e8a5ca` + `04fb30b9`)
 
 - ⛔ **All three defects below passed the entire suite, the typechecks and the container greps.** They were found by typing one sentence into the live workspace in a browser. This is the `a-green-suite-is-not-a-driven-feature` rule paying for itself twice in one day.
