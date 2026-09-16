@@ -405,6 +405,17 @@ test("a checker that cannot answer passes the work rather than blocking it", () 
   assert.match(src, /could not answer/, "an unparseable verdict must not fail a good picture");
 });
 
+test("the checker is given room to think, or it never answers at all", () => {
+  // Proven on production: with max_completion_tokens 400 the model spent the
+  // whole budget on reasoning and returned EMPTY content, so every single
+  // check came back "the checker could not answer" — the feature looked like
+  // it was running and was looking at nothing.
+  const src = read("evaluate.ts");
+  const budget = Number((src.match(/max_completion_tokens: (\d+)/) || [])[1] || 0);
+  assert.ok(budget >= 1500, `max_completion_tokens is ${budget} — reasoning tokens eat that before an answer is written`);
+  assert.match(src, /REASONING TOKENS COUNT AGAINST THIS/);
+});
+
 test("the re-render is bounded, and video is bounded harder than pictures", () => {
   const src = read("jobs.ts");
   const block = src.slice(src.indexOf("QUALITY_RETRY_LIMIT"), src.indexOf("QUALITY_RETRY_LIMIT") + 400);

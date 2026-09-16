@@ -84,13 +84,19 @@ async function askVision(key: string, model: string, prompt: string, dataUrl: st
             ],
           },
         ],
-        max_completion_tokens: 400,
+        // ⛔ REASONING TOKENS COUNT AGAINST THIS. Proven on production: with 400
+        // the model spent the whole budget thinking, returned EMPTY content and
+        // every check came back "could not answer" — so nothing was ever really
+        // looked at. A trivial one-line prompt already burned 192 reasoning
+        // tokens; a six-point checklist on a real frame needs far more room.
+        max_completion_tokens: 2000,
       }),
     });
     if (!res.ok) return null;
     const body: any = await res.json();
     const text = body?.choices?.[0]?.message?.content;
     if (!text) return null;
+    // The answer may arrive fenced (```json … ```); take the object itself.
     const match = String(text).match(/\{[\s\S]*\}/);
     if (!match) return null;
     return JSON.parse(match[0]);
@@ -153,7 +159,10 @@ export async function evaluateOutput(input: EvaluateInput): Promise<Evaluation> 
       .catch(() => frame);
   }
 
-  const model = input.model || process.env.CREATIVE_EVAL_MODEL || "gpt-5";
+  // gpt-5-mini sees as well as its bigger sibling for "are these hands right?"
+  // and thinks for a fraction of the tokens, which is the whole cost of this
+  // check. Overridable per install.
+  const model = input.model || process.env.CREATIVE_EVAL_MODEL || "gpt-5-mini";
   const dataUrl = `data:${look === frame && input.kind === "image" ? input.mime : "image/jpeg"};base64,${look.toString("base64")}`;
   const parsed = await askVision(key, model, buildPrompt(input.intent), dataUrl, input.timeoutMs ?? 60_000);
 
