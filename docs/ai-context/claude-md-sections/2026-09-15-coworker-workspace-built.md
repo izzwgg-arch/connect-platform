@@ -140,14 +140,36 @@ anywhere is a capability it will describe.** Prompts, per-turn blocks, the knowl
 every tool description are all places the model learns what it is. A guard test now replays red
 against the previous condition. See [[a-capability-the-prompt-denies-is-not-a-capability]].
 
+## ✅ A REAL TASK RAN ON A REAL COMPUTER — the gap this file used to lead with is closed
+
+Asked on `/coworker` in a browser: *"Tell me this computer's Windows version and how much free disk
+space is on C:."* It ran end to end, with the hands, from the full page:
+
+- Two live plain-English steps — **This computer** "Checking this computer" (6s), **Command**
+  "Running a command on this computer" (2s) — header **Done · 2 of 2 steps · 28s**.
+- RIGHT NOW showed the computer with both steps ticked; THIS TASK counted **Steps done 2 ·
+  Time 28s · Things changed None · Asked you 0 times**; MADE OR CHANGED stayed empty, which is
+  correct for a read-only job.
+- The answer carried real values off that machine: `Microsoft Windows Server 2025 Datacenter
+  10.0.26100 (Build 26100)`, `320.22 GB free of 399.68 GB (80.1% free)`.
+- No tool name, no command, no JSON appeared anywhere on screen.
+
+⛔ Note which machine that is: the linked desktop is the **dev box**, not Izzy's own Windows 11
+laptop — his machine still runs the pre-rc.17 app. So this proves the workspace → hands → computer
+path completely, and does NOT prove rc.17's own new pieces (voice, drag-and-drop, folder/git
+attach, the access dialog), which ship in the installer nobody has run yet.
+
 ## ⏳ NOT PROVEN — the honest list
 
-- **Nobody has typed a task into the rebuilt bubble and watched the steps run.** Everything above is
-  tests, container greps, and load — not one real turn with the hands on a real computer.
-  Acceptance: install rc.17, open the bubble, ask "organize my Downloads folder" → the plan appears,
-  steps run, the approval box appears (SAFE), the steps end green and the reply is plain English.
-- Voice, drag-and-drop, folder attach, the access dialog and the full page have not been used by a
-  person. The full page needs `can_view_workspace_coworker` granted (it is in no default bucket).
-- The desktop rc.17 is not installed and not published.
+- **No task that CHANGES anything has run, so no approval has ever been answered.** The proven task
+  was read-only and needed no approval. Acceptance: ask "organize my Downloads folder" → the plan
+  appears, the approval box appears **in the desktop's own window** (SAFE), pressing Yes lets the
+  steps finish green, and MADE OR CHANGED lists the moves.
+- **Voice, drag-and-drop, folder attach and the access dialog have not been used by a person**, and
+  they cannot be until rc.17 is installed — they are the parts that live in the desktop app.
+- **The desktop rc.17 is built but NOT installed and NOT published.** Izzy's own machine runs the
+  older app; installing closes the running app and the phone with it, so it is his call.
+- The full page needs `can_view_workspace_coworker` granted to anyone who should see it (it is in
+  no default bucket) — nobody but Izzy has it.
 
 Full detail lives in this file; there is no separate `AGENT_HANDOFF_*` for it.
