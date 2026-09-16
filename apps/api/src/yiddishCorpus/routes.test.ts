@@ -500,3 +500,36 @@ test("GET /governance carries the wall counts, the budget and the worker heartbe
   assert.ok(v.worker.lastTickAt, "the screen shows when the worker last ticked");
   assert.ok(v.promotionStates, "promotion states are part of this screen");
 });
+
+test("the dashboard counts pairs as audio+transcript, and the wall as counted inventory", async () => {
+  const db = fakeDb({
+    "ycSource.findMany": [
+      {
+        id: "s1",
+        key: "voicemail",
+        name: "Voicemail transcripts",
+        governanceClass: "CUSTOMER_PRIVATE",
+        contentAllowed: false,
+        audioFetchMode: "DISABLED",
+        config: { inventory: { items: 3510, audioHours: 35.8 } },
+      },
+    ],
+    "ycTranslation.count": 434,
+    "ycSourceItem.count": 7,
+  });
+  const routes = register(db, allowingGate);
+  const reply = fakeReply();
+  await routes.get(`GET ${YC_API_PREFIX}/dashboard`)!({ query: {}, user: SUPER_ADMIN }, reply);
+  const v = reply.payload;
+
+  // 434 translations are not 434 aligned pairs. Reporting them as pairs made an
+  // empty corpus look half-built.
+  assert.notEqual(v.corpus.pairs, 434, "pairs must never be the translation count");
+
+  // The wall must show what the indexer counted in place, not the (zero)
+  // ingested rows — internal sources are counted, never ingested.
+  const row = v.walled.find((w: any) => w.label === "Voicemail transcripts");
+  assert.ok(row, "the customer wall must list voicemail");
+  assert.equal(row.count, 3510, `the wall showed ${row.count} instead of the counted 3,510`);
+  assert.equal(row.hours, 35.8);
+});

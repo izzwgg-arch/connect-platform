@@ -321,16 +321,29 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
       .sort((a, b) => b - a)[0];
     const alive = Boolean(lastTick && Date.now() - lastTick < 15 * 60_000);
 
+    // A "pair" is the valuable thing: one asset WITH a transcript. It is not the
+    // translation count — reporting 434 translations as 434 aligned pairs made
+    // an empty corpus look half-built.
+    const pairs = await safe<number>(
+      db.ycSourceItem.count({ where: { assets: { some: {} }, transcripts: { some: {} } } }),
+      0,
+    );
+
     // The walls, stated as counts of what is NOT usable — never hidden.
     const walled: YcDashboardView["walled"] = [];
     for (const s of sources) {
       const badge = badgeForSource(s);
+      // ⛔ Internal sources are COUNTED IN PLACE and never ingested, so they own
+      // no YcSourceItem rows. Their real size lives in config.inventory, written
+      // by the indexer. Reading item counts here showed a wall of zeros and made
+      // the biggest Yiddish holding we have look like nothing.
+      const inv = (s.config as any)?.inventory ?? {};
+      const counted = inv.items == null ? await safe<number>(db.ycSourceItem.count({ where: { sourceId: s.id } }), 0) : Number(inv.items);
+      const hours = inv.audioHours == null ? null : Number(inv.audioHours);
       if (badge.governanceClass === "CUSTOMER_PRIVATE" && !badge.contentAllowed) {
-        const count = await safe<number>(db.ycSourceItem.count({ where: { sourceId: s.id } }), 0);
-        walled.push({ label: String(s.name), count: num(count), hours: null, note: YC_CUSTOMER_WALL_MESSAGE });
+        walled.push({ label: String(s.name), count: num(counted), hours, note: YC_CUSTOMER_WALL_MESSAGE });
       } else if (badge.ylDerived) {
-        const count = await safe<number>(db.ycSourceItem.count({ where: { sourceId: s.id } }), 0);
-        walled.push({ label: String(s.name), count: num(count), hours: null, note: YC_YL_SERVING_ONLY_MESSAGE });
+        walled.push({ label: String(s.name), count: num(counted), hours, note: YC_YL_SERVING_ONLY_MESSAGE });
       }
     }
 
@@ -356,7 +369,7 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
         audioHours: Math.round((num(durationAgg?._sum?.durationSec) / 3600) * 100) / 100,
         transcripts: num(transcripts),
         translations: num(translations),
-        pairs: num(translations),
+        pairs: num(pairs),
         lexemes: num(lexemes),
         observations: num(observations),
         rules: num(rules),
