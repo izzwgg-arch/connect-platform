@@ -596,6 +596,21 @@ test("the film pipeline has one implementation, used by both doors", () => {
   assert.ok(!/type: "clip", track: 0/.test(page), "the page must not assemble the cut itself");
 });
 
+test("the Coworker cannot split one job across two projects with the same name", () => {
+  // ⛔ Production, 2026-09-16: asked to change a shot in a film it had already
+  // half-rendered, the model created a SECOND "Answering Service — 12s Ad".
+  // The empty twin is what the person would have opened; the rendered clips
+  // were in the first one.
+  const src = read("internalRoutes.ts");
+  const block = src.slice(src.indexOf("ONE PROJECT PER PIECE OF WORK"), src.indexOf("ONE PROJECT PER PIECE OF WORK") + 1400);
+  assert.match(block, /createdAt: \{ gte: since \}/, "a project made for the same thing TODAY is reused");
+  assert.match(block, /reused: true/, "and the answer says so, so the model can tell the person");
+  assert.match(block, /kind: body\.data\.kind, title: body\.data\.title/);
+
+  const tools = readFileSync(path.join(SRC, "..", "..", "..", "agent", "src", "tools", "creativeTools.ts"), "utf8");
+  assert.match(tools, /ONE project per piece of work/i);
+});
+
 test("every export destination the agent may name really exists", () => {
   const tools = readFileSync(path.join(SRC, "..", "..", "..", "agent", "src", "tools", "creativeTools.ts"), "utf8");
   const block = tools.slice(tools.indexOf("creative_export_file"), tools.indexOf("creative_export_file") + 1400);

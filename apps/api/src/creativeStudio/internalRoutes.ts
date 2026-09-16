@@ -132,11 +132,25 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     if (!who) return;
     const body = z.object({ title: z.string().min(1).max(160), kind: z.string().max(40).default("image"), brief: z.string().max(4000).optional() }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "invalid_body" });
+
+    // ⛔ ONE PROJECT PER PIECE OF WORK. Seen on production: asked to change a
+    // shot in a film it had already half-rendered, the model called this again
+    // and got a SECOND "Answering Service — 12s Ad" — an empty twin, while the
+    // rendered clips sat in the first one. The person would have opened the
+    // wrong one and found nothing. A project made for the same thing today is
+    // handed back instead of twinned, and the answer says so.
+    const since = new Date(Date.now() - 24 * 3600_000);
+    const twin = await db.creativeProject.findFirst({
+      where: { tenantId: who.tenantId, deletedAt: null, kind: body.data.kind, title: body.data.title, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (twin) return reply.send({ project: projectSummary(twin), reused: true });
+
     const kit = await db.creativeBrandKit.findFirst({ where: { tenantId: who.tenantId, isDefault: true } });
     const project = await db.creativeProject.create({
       data: { tenantId: who.tenantId, title: body.data.title, kind: body.data.kind, brief: body.data.brief || null, ownerUserId: who.userId, brandKitId: kit?.id || null, status: "working" },
     });
-    return reply.send({ project: projectSummary(project) });
+    return reply.send({ project: projectSummary(project), reused: false });
   });
 
   app.get("/internal/agent/creative/project", async (req: any, reply: any) => {

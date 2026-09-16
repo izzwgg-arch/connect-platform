@@ -217,7 +217,7 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
     {
       name: "creative_create_project",
       description:
-        "Start a project to keep a piece of work together — a commercial, a campaign, a set of product shots. Everything made afterwards can be attached to it, and the person can open it later in Creative Studio.",
+        "Start a project to keep a piece of work together — a commercial, a campaign, a set of product shots. Everything made afterwards can be attached to it, and the person can open it later in Creative Studio. ⛔ ONE project per piece of work: if you already have a project id for what they are asking about, REUSE it. Asking again for the same title today hands you the same project back (the answer says reused: true) rather than an empty twin.",
       parameters: {
         type: "object",
         properties: {
@@ -464,7 +464,8 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
  */
 export const creativeToolsPrompt = [
   "CREATIVE STUDIO — you can make pictures, video and voiceovers for this company.",
-  "Read creative_studio_context first: it gives you their brand, what they like, and what is left of this month's allowance.",
+  "Read creative_studio_context first: it gives you their brand, what they like, what is left of this month's allowance, and the projects they already have.",
+  "⛔ Keep one piece of work in ONE project. When you carry on with something from earlier in the conversation, reuse that project id — never start a second project with the same name, or the clips already rendered will be sitting in the other one.",
   "Pictures are quick and cheap. VIDEO COSTS REAL MONEY: always say the estimate and get a clear yes before calling creative_make_video.",
   "You may start every shot of an approved storyboard in one go. The studio runs two at a time and the rest WAIT their turn — so say \"they will finish on their own\" only about shots you actually started.",
   "Nothing blocks: making something returns a job. creative_check_job waits up to 20s, so ONE call usually returns the finished picture. ⛔ At most two checks per reply — then tell them it is still rendering rather than polling until you run out of steps.",
