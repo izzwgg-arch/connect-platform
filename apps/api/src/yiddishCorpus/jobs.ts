@@ -20,7 +20,17 @@
  *  4. Budgets are checked before the work, not after the spend.
  */
 
-import { YC_STAGES, YC_AUDIO_STAGES, YC_AUDIO_BLOCKED_MESSAGE, type YcStage } from "./contracts";
+import {
+  YC_STAGES,
+  YC_AUDIO_STAGES,
+  YC_AUDIO_BLOCKED_MESSAGE,
+  YC_CUSTOMER_WALL_MESSAGE,
+  YC_MIN_SAMPLES_FOR_CONCLUSION,
+  YC_RULE_SCORE_THRESHOLD,
+  type YcStage,
+} from "./contracts";
+import { upsertLexemesFromText } from "./lexicon";
+import { scoreVariants, conflictsFor } from "./evidence";
 import {
   discover as discoverYiddish24,
   fetchAudio as fetchYiddish24Audio,
@@ -497,6 +507,208 @@ export const defaultStageHandlers: Partial<Record<YcStage, StageHandler>> = {
       },
     });
     return { ok: true, advance: true };
+  },
+
+  /**
+   * OBSERVE - the stage that actually learns from an item.
+   *
+   * Two jobs, in this order, and the order matters:
+   *  1. VOCABULARY, which works from text alone. Every transcript is tokenized
+   *     and each token becomes (or bumps) a lexeme. `upsertLexemesFromText` is
+   *     idempotent through its own ingest ledger, so re-running this stage
+   *     never inflates a frequency.
+   *  2. PRONUNCIATION, which needs sound. An observation is recorded ONLY for
+   *     a transcript tied to an aligned segment, and it is stamped
+   *     ACOUSTIC_ALIGNED because that is what it is.
+   *
+   * WHAT IT WILL NOT DO: invent a pronunciation from spelling. With no aligned
+   * audio there is no acoustic evidence, and writing an observation anyway
+   * would put a guess into the evidence table, where everything downstream
+   * would treat it as something we heard. It says so instead.
+   *
+   * AN OBSERVATION IS NOT A RULE. This stage records what was seen;
+   * `aggregate` proposes, and a person promotes.
+   */
+  async observe({ db, item, job }) {
+    if (!item) return { ok: false, reason: "no item on this job" };
+
+    // The customer wall is re-read here, not inherited from whoever queued the
+    // job: a source can be walled after its items were discovered.
+    const source = await db.ycSource.findUnique({ where: { id: item.sourceId } }).catch(() => null);
+    if (source && source.contentAllowed === false) {
+      return { ok: true, skipped: true, reason: YC_CUSTOMER_WALL_MESSAGE, advance: false };
+    }
+
+    const transcripts = await db.ycTranscript.findMany({ where: { itemId: item.id } }).catch(() => []);
+    if (!transcripts.length) {
+      return {
+        ok: true,
+        skipped: true,
+        reason:
+          "this item has no transcript yet, so there is nothing to observe - the audio stages "
+          + "are still gated, and nothing is learned from a title",
+        advance: false,
+      };
+    }
+
+    // Prefer the consensus reading when one exists; otherwise index them all
+    // and let the ingest ledger keep that from double-counting.
+    const consensus = transcripts.filter((t: any) => t.isConsensus);
+    const toIndex = consensus.length ? consensus : transcripts;
+
+    let tokens = 0;
+    let createdLexemes = 0;
+    let observations = 0;
+    for (const t of toIndex) {
+      const res = await upsertLexemesFromText(db, String(t.text ?? ""), {
+        sourceKey: job.sourceKey,
+        itemId: item.id,
+        source,
+      });
+      tokens += res.tokens;
+      createdLexemes += res.created;
+
+      // Acoustic evidence only where the text is pinned to a segment we cut.
+      if (!t.segmentId || res.alreadyIngested) continue;
+      const segment = await db.ycSegment.findUnique({ where: { id: t.segmentId } }).catch(() => null);
+      if (!segment) continue;
+      for (const lexemeId of res.lexemeIds) {
+        const lexeme = await db.ycLexeme.findUnique({ where: { id: lexemeId } }).catch(() => null);
+        if (!lexeme) continue;
+        try {
+          await db.ycPronunciationObservation.create({
+            data: {
+              lexemeId,
+              // No phonetic transcription exists, so the variant is named by
+              // the form as written in this segment. A real, checkable key -
+              // not a guess at how it sounded.
+              variantKey: lexeme.normalized || lexeme.writtenForm,
+              realization: null,
+              sourceId: item.sourceId,
+              sourceKey: job.sourceKey,
+              itemId: item.id,
+              segmentId: t.segmentId,
+              speakerClusterId: segment.speakerClusterId ?? null,
+              context: null,
+              confidence: typeof t.confidence === "number" ? t.confidence : 0.5,
+              evidenceKind: "ACOUSTIC_ALIGNED",
+            },
+          });
+          observations += 1;
+        } catch {
+          // one bad observation must not lose the whole item's vocabulary
+        }
+      }
+    }
+
+    await db.ycSourceItem.update({ where: { id: item.id }, data: { state: "INDEXED" } }).catch(() => {});
+    return {
+      ok: true,
+      reason: `${tokens} tokens, ${createdLexemes} new lexemes, ${observations} acoustic observations`,
+      advance: true,
+    };
+  },
+
+  /**
+   * AGGREGATE - turn observations into PROPOSALS.
+   *
+   * THIS STAGE NEVER CHANGES HOW THE VOICE SPEAKS. It writes rules at status
+   * CANDIDATE and findings at status PROPOSED, and nothing downstream reads a
+   * CANDIDATE. Promotion to TESTING / APPROVED / PRODUCTION is a human action
+   * through the review screen. That separation is the whole reason
+   * observations and rules are different tables.
+   *
+   * It also refuses to call a winner early: `scoreVariants` is given the
+   * contract's sample floor, and a variant that has not cleared it comes back
+   * ineligible with a reason rather than quietly becoming a rule.
+   */
+  async aggregate({ db, item }) {
+    const lexemeIds: string[] = item
+      ? (
+          await db.ycPronunciationObservation
+            .findMany({ where: { itemId: item.id }, select: { lexemeId: true }, distinct: ["lexemeId"] })
+            .catch(() => [])
+        ).map((r: any) => r.lexemeId)
+      : [];
+
+    if (!lexemeIds.length) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "no observations belong to this item yet, so there is nothing to aggregate",
+        advance: false,
+      };
+    }
+
+    let proposed = 0;
+    let conflicts = 0;
+    for (const lexemeId of lexemeIds) {
+      const lexeme = await db.ycLexeme.findUnique({ where: { id: lexemeId } }).catch(() => null);
+      if (!lexeme) continue;
+      const obs = await db.ycPronunciationObservation.findMany({ where: { lexemeId } }).catch(() => []);
+      const variants = scoreVariants(obs, {
+        origin: lexeme.origin,
+        minSamplesForConclusion: YC_MIN_SAMPLES_FOR_CONCLUSION,
+        ruleScoreThreshold: YC_RULE_SCORE_THRESHOLD,
+      });
+      if (!variants.length) continue;
+
+      const conflict = conflictsFor(variants);
+      if (conflict.open) {
+        conflicts += 1;
+        await db.ycFinding
+          .create({
+            data: {
+              kind: "PRONUNCIATION_CONFLICT",
+              statement: `"${lexeme.writtenForm}" is said more than one way. ${conflict.note}`,
+              evidence: { lexemeId, variants: conflict.variantKeys, shareFloor: conflict.shareFloor },
+              sampleCount: obs.length,
+              speakerCount: new Set(obs.map((o: any) => o.speakerClusterId ?? "unknown")).size,
+              status: "PROPOSED",
+            },
+          })
+          .catch(() => {});
+      }
+
+      for (const v of variants) {
+        if (!v.eligibleForRule) continue;
+        // CANDIDATE, always. Nothing in the engine may write an APPROVED rule.
+        try {
+          await db.ycPronunciationRule.upsert({
+            where: {
+              lexemeId_variantKey_dictionaryVersion: {
+                lexemeId,
+                variantKey: v.variantKey,
+                dictionaryVersion: 1,
+              },
+            },
+            update: {
+              evidenceScore: v.score,
+              supportSummary: v.support as any,
+              realization: v.realization,
+            },
+            create: {
+              lexemeId,
+              variantKey: v.variantKey,
+              realization: v.realization,
+              status: "CANDIDATE",
+              evidenceScore: v.score,
+              supportSummary: v.support as any,
+              dictionaryVersion: 1,
+            },
+          });
+          proposed += 1;
+        } catch {
+          // a losing race on the unique key is fine; the row exists either way
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      reason: `${proposed} candidate rules, ${conflicts} conflicts flagged for a person`,
+      advance: false,
+    };
   },
 };
 
