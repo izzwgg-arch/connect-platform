@@ -78,6 +78,20 @@ Verified in code 2026-09-16:
   ring buffer, batches lost if a window dies; old bundles record nothing), it was
   built for support, not as a compliance audit log. A gap proves nothing either way.
 
+## DNC hookup cost + dial-time blocking (Izzy's follow-up #2, same day)
+- **FTC registry fees (the customer's cost, not ours):** first 5 area codes FREE;
+  $82/area-code/yr FY2026 → $85 from Oct 1 2026; all-US cap $22,626. ⛔ The SAN must be
+  in the SELLER's (customer's) name — SANs cannot be shared; Loopcom as service provider
+  may download under the customer's SAN. Regional campaign ≤5 area codes = $0.
+- **No FTC real-time API** — you download list + change files per subscribed area code.
+  Wiring shape: DNC table in Connect + nightly sync under the customer's SAN + dial-time
+  lookup on flagged extensions at the PBX outbound path (curl-to-Connect, the doorway
+  pattern; ⛔ PBX-write territory — clone rehearsal + reconciler rules apply). The
+  customer's internal DNC list (legally mandatory) rides the same table.
+- **Shortcut lane:** commercial scrub APIs (DNC.com/PossibleNOW) ~$1k–3k/yr bundle
+  federal + STATE DNC lists + known-litigator screening behind a real-time API — the
+  better lane if this grows past one customer.
+
 ## Not proven / not built
 ⏳ No cap enforcement, hours enforcement, or per-tenant outbound throttle exists in Connect
 today — those are build items if Izzy signs this customer. No rider template written.
