@@ -422,6 +422,7 @@ export function registerCreativeStudioRoutes({ app, db, requireOwner, hasPermiss
     durationMs: z.number().int().min(1000).max(120000).optional(),
     engineId: z.string().max(80).optional(),
     seed: z.string().max(40).optional(),
+    shotId: z.string().max(60).optional(),
     turnId: z.string().max(80).optional(),
   });
 
@@ -467,6 +468,7 @@ export function registerCreativeStudioRoutes({ app, db, requireOwner, hasPermiss
       durationMs: b.durationMs,
       engineId: b.engineId,
       seed: b.seed,
+      shotId: b.shotId || null,
       turnId: b.turnId || null,
     });
 

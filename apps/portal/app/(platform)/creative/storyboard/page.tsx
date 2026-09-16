@@ -103,10 +103,12 @@ function StoryboardScreen() {
           setJobs((prev) => ({ ...prev, [shotId]: res.job }));
           if (res.job.status === "succeeded") {
             const asset = (res.assets || []).find((a: any) => a.kind === "video") || (res.assets || [])[0];
-            if (asset) {
-              setAssetsById((prev) => ({ ...prev, [asset.id]: asset }));
-              await board.apply([{ op: "set", target: shotId, payload: { assetId: asset.id, jobId: null }, summary: "Shot rendered" }]);
-            }
+            if (asset) setAssetsById((prev) => ({ ...prev, [asset.id]: asset }));
+            // ⛔ The SERVER attached the clip to the shot when the render
+            // finished (jobs.ts attachToShot) — the same path the Coworker
+            // gets. Writing it again here would be a second implementation and
+            // would collide with that one on the revision.
+            await board.reload();
           }
           if (res.job.status === "failed") {
             await board.apply([{ op: "set", target: shotId, payload: { jobId: null }, summary: "Render failed" }]);
@@ -165,6 +167,7 @@ function StoryboardScreen() {
         seconds: Math.max(1, Math.min(15, Number(shot.seconds || 5))),
         ratio,
         quality: "low",
+        shotId: shot.id,
       });
       watch(shot.id, res.job.id);
       await setShot(shot.id, { jobId: res.job.id }, "Render started");

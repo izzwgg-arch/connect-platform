@@ -67,6 +67,7 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
       firstFrameAssetId: z.string().max(40).optional(),
       voiceId: z.string().max(80).optional(),
       durationMs: z.number().int().min(1000).max(120000).optional(),
+      shotId: z.string().max(60).optional(),
       turnId: z.string().max(80).optional(),
     }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "invalid_body", detail: body.error.flatten() });

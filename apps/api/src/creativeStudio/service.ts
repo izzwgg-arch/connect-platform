@@ -36,6 +36,8 @@ export interface GenerationRequest {
   engineId?: string | null;
   seed?: string;
   turnId?: string | null;
+  /** The storyboard shot this render belongs to, if any. */
+  shotId?: string | null;
 }
 
 export type GenerationOutcome =
@@ -98,6 +100,7 @@ export async function startGeneration(db: any, input: GenerationRequest): Promis
       voiceId: input.voiceId,
       durationMs: input.durationMs,
       seed: input.seed,
+      shotId: input.shotId || undefined,
       model: engine.model,
       appliedMemory: built.applied,
     },

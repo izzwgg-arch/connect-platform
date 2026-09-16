@@ -410,6 +410,24 @@ test("the renderer and the editor share one document shape", () => {
   assert.match(local, /normaliseTimeline\(req\.timeline\)/);
 });
 
+test("a finished clip attaches itself to its shot, with no second step to forget", () => {
+  const jobs = read("jobs.ts");
+  assert.match(jobs, /if \(request\.shotId && job\.projectId && assets\.length\)/, "the render must attach its own clip");
+  assert.match(jobs, /async function attachToShot/);
+  // It is a read-modify-write that bumps the revision like any other edit, so
+  // a browser holding the old revision is told to re-read rather than losing it.
+  const block = jobs.slice(jobs.indexOf("async function attachToShot"), jobs.indexOf("export async function cancelJob"));
+  assert.match(block, /revision: \{ increment: 1 \}/);
+  assert.match(block, /creativeOperation/, "the attach belongs in the project history");
+
+  // Both callers pass the shot, and neither writes the attach itself.
+  const tools = readFileSync(path.join(SRC, "..", "..", "..", "agent", "src", "tools", "creativeTools.ts"), "utf8");
+  assert.match(tools, /shotId: args\.shot_id/);
+  const page = readFileSync(path.join(SRC, "..", "..", "..", "portal", "app", "(platform)", "creative", "storyboard", "page.tsx"), "utf8");
+  assert.match(page, /shotId: shot\.id/);
+  assert.ok(!/payload: \{ assetId/.test(page), "the page must not attach the clip a second time");
+});
+
 test("the film pipeline has one implementation, used by both doors", () => {
   const internal = read("internalRoutes.ts");
   assert.match(internal, /assembleFilm\(db, \{[^}]*actorType: "coworker"/s, "the agent assembles through the shared function");

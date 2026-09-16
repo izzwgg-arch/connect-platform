@@ -721,6 +721,14 @@ export async function completeJob(
     await db.creativeProject.update({ where: { id: job.projectId }, data: { spentMicros: { increment: opts.costMicros || 0 }, updatedAt: new Date() } }).catch(() => undefined);
   }
 
+  // ⛔ A shot's clip attaches ITSELF. Leaving this to the caller means the
+  // Coworker has to remember a second step after every render, and the one
+  // time it forgets, the storyboard quietly says "not rendered" next to a clip
+  // the customer has already paid for.
+  if (request.shotId && job.projectId && assets.length) {
+    await attachToShot(db, job, String(request.shotId), assets[0].id).catch(() => undefined);
+  }
+
   const measure = kind === "video" ? "video_seconds" : kind === "image" ? "images" : "audio_seconds";
   const quantity = kind === "video"
     ? Math.round((assets.reduce((n, a) => Math.max(n, a.durationMs || 0), 0) || Number(request.seconds || 0) * 1000) / 1000)
@@ -730,6 +738,38 @@ export async function completeJob(
   await bumpEngineStat(db, job.engineId || "unknown", job.capability, { ms: opts.renderMs || 0, costMicros: opts.costMicros || 0 });
 
   return assets;
+}
+
+/**
+ * Put a finished clip on its storyboard shot.
+ *
+ * Read-modify-write on the document, so it is done from the freshest copy and
+ * bumps the revision like any other edit — a browser holding the old revision
+ * is told to re-read rather than silently overwriting this.
+ */
+async function attachToShot(db: any, job: any, shotId: string, assetId: string): Promise<void> {
+  const doc = await db.creativeDocument.findFirst({ where: { projectId: job.projectId, tenantId: job.tenantId, type: "storyboard" } });
+  if (!doc) return;
+  const current: any = doc.doc || {};
+  const objects: any[] = Array.isArray(current.objects) ? current.objects : [];
+  const index = objects.findIndex((o: any) => o?.id === shotId);
+  if (index < 0) return;
+
+  const next = { ...current, objects: objects.map((o, i) => (i === index ? { ...o, assetId, jobId: null } : o)) };
+  const saved = await db.creativeDocument.update({
+    where: { id: doc.id },
+    data: { doc: next, revision: { increment: 1 }, updatedByType: job.turnId ? "coworker" : "user", updatedByUserId: job.requestedByUserId || null },
+  });
+  await db.creativeOperation
+    .create({
+      data: {
+        tenantId: job.tenantId, documentId: doc.id, revision: saved.revision,
+        actorType: job.turnId ? "coworker" : "user", actorUserId: job.requestedByUserId || null,
+        op: "set", payload: { target: shotId, assetId } as any,
+        summary: `${objects[index]?.title || "Shot"} rendered`,
+      },
+    })
+    .catch(() => undefined);
 }
 
 export async function cancelJob(db: any, tenantId: string, jobId: string): Promise<{ ok: boolean; reason?: string }> {
