@@ -534,3 +534,18 @@ test("the Coworker's door is in the JWT bypass list, or it answers unauthorized"
   const bypass = apiFile("src/jwtPublicRouteBypass.ts");
   assert.match(bypass, /internal\/agent\/creative\//, "every /internal/agent/* door must be listed in the bypass");
 });
+
+test("navConfig's imports are still two separate statements", () => {
+  // A patch that anchored on `} from "lucide-react";` matched the FIRST
+  // occurrence — inside `import type { LucideIcon } from "lucide-react";` — and
+  // merged the type import with the icon list, so nothing in the portal
+  // typechecked. Caught by another session on 2026-09-16; pinned here.
+  const nav = repoFile("apps/portal/navigation/navConfig.ts");
+  const firstLine = nav.split("\n")[0].trim();
+  assert.equal(firstLine, 'import type { LucideIcon } from "lucide-react";', "line 1 must stay the type-only import");
+  // The icons must arrive in their OWN value import, not spliced into line 1.
+  assert.match(nav, /\nimport \{\n(?:\s+[A-Za-z]+(?: as [A-Za-z]+)?,\n)+\} from "lucide-react";/, "the icons must be their own value import");
+  for (const icon of ["FolderOpen", "Clapperboard", "LayoutTemplate", "Palette", "Brain"]) {
+    assert.ok(nav.includes(icon), `${icon} must be imported for the Creative Studio rows`);
+  }
+});
