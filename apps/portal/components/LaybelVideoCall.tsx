@@ -4,11 +4,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { AnamClient } from "@anam-ai/js-sdk";
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { LaybelTurns } from "../lib/laybelTurns";
+import type { SpeechOptions } from "../lib/laybelSpeech";
 import { LaybelSetup, type LaybelStatus } from "./LaybelSetup";
 import { useAppContext } from "../hooks/useAppContext";
 
 type Props = {
-  onTurn: (text: string) => Promise<{ reply: string; humanTakeover?: boolean } | undefined>;
+  onTurn: (text: string, speech?: SpeechOptions) => Promise<{ reply: string; humanTakeover?: boolean } | undefined>;
   onEnd: () => void;
   onVoiceOnly: () => void;
   onSpeaker: (speaker: ((text: string) => void) | null) => void;
@@ -41,6 +42,10 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [retry, setRetry] = useState(0);
   const [needsPlay, setNeedsPlay] = useState(false);
+  const [streamReplies, setStreamReplies] = useState(true);
+  const streamRepliesRef = useRef(true);
+  streamRepliesRef.current = streamReplies;
+  const [timing, setTiming] = useState("");
 
   useEffect(() => {
     if (!started) return;
@@ -50,6 +55,17 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
     let current: AnamClient | null = null;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let duration: ReturnType<typeof setTimeout> | undefined;
+    let speechEndedAt: number | null = null;
+    let turnStartedAt: number | null = null;
+    let firstQueued = false;
+    const markQueued = () => {
+      if (firstQueued || turnStartedAt === null || disposed || stopped) return;
+      firstQueued = true;
+      const now = performance.now();
+      const transcript = ((now - turnStartedAt) / 1000).toFixed(1);
+      const silence = speechEndedAt === null ? "" : ` · ${((now - speechEndedAt) / 1000).toFixed(1)}s since latest speech-end event`;
+      setTiming(`First speech queued: ${transcript}s after Assistant request${silence}. Playback starts after this.`);
+    };
     const stop = () => {
       stopped = true;
       clearTimeout(timeout); clearTimeout(duration);
@@ -81,13 +97,31 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
           if (disposed || stopped || !current) return;
           setState("speaking");
           await current.talk(text);
+          markQueued();
         };
-        const turnQueue = new LaybelTurns(async text => {
+        const turnQueue = new LaybelTurns(async (text, speech) => {
           if (disposed || stopped) return;
+          turnStartedAt = performance.now(); firstQueued = false; setTiming(""); setError("");
           setState("thinking");
-          return callbacks.current.onTurn(text);
+          return callbacks.current.onTurn(text, streamRepliesRef.current ? speech : undefined);
         }, talk, () => { if (!disposed && !stopped) { setError("That turn could not be completed. Your chat is still here; please try again."); setState("connected"); } },
-        () => { if (!disposed && !stopped) { stop(); setState("ended"); setError("A member of support has taken over this conversation. Continue in the chat below."); } });
+        () => { if (!disposed && !stopped) { stop(); setState("ended"); setError("A member of support has taken over this conversation. Continue in the chat below."); } },
+        () => {
+          if (disposed || stopped || !current) throw new Error("Call ended");
+          const speech = current.createTalkMessageStream();
+          let cancelled = false;
+          return {
+            write: async text => {
+              if (cancelled || disposed || stopped) return;
+              if (!speech.isActive()) throw new Error("Speech stream ended");
+              await speech.streamMessageChunk(text, false);
+              if (cancelled || disposed || stopped) return;
+              setState("speaking"); markQueued();
+            },
+            finish: async () => { if (!cancelled && !disposed && !stopped) await speech.endMessage(); },
+            cancel: () => { cancelled = true; try { current?.interruptPersona(); } catch { /* already disconnected */ } },
+          };
+        });
         turns.current = turnQueue;
         current.addListener(AnamEvent.MESSAGE_HISTORY_UPDATED, messages => {
           if (disposed || stopped) return;
@@ -98,8 +132,10 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
         current.addListener(AnamEvent.USER_SPEECH_STARTED, () => {
           if (disposed || stopped) return;
           turnQueue.interrupt(); setState("listening");
+          speechEndedAt = null;
           try { current?.interruptPersona(); } catch { /* stream not ready yet */ }
         });
+        current.addListener(AnamEvent.USER_SPEECH_ENDED, () => { if (!disposed && !stopped) speechEndedAt = performance.now(); });
         current.addListener(AnamEvent.CONNECTION_CLOSED, () => fail("The video call disconnected. Retry or continue in this chat."));
         current.addListener(AnamEvent.SESSION_READY, () => {
           if (disposed || stopped) return;
@@ -131,6 +167,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
       <b>Meet Laybel</b>
       <p>Laybel is your AI Assistant, not a person. This call sends your microphone audio and the Assistant’s replies to Anam to animate and voice him. Your camera stays off.</p>
       <button disabled={!status?.available} onClick={() => setStarted(true)}>Start video call</button>
+      {backendJwtRole === "SUPER_ADMIN" && <label><input type="checkbox" checked={streamReplies} onChange={event => setStreamReplies(event.target.checked)} /> Stream replies (off = baseline test)</label>}
       {status && !status.available && <p>Live video has not been enabled. Voice-only and chat are still available.</p>}
     </div>}
     <div className="laybel-stage" hidden={state === "ready"}>
@@ -141,6 +178,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
     </div>
     <p role="status">{state === "ready" ? "Microphone off" : state === "listening" ? "Listening…" : state === "thinking" ? "Checking with your Assistant…" : state === "speaking" ? "Laybel is speaking…" : state === "connected" ? "Connected · speak naturally" : state === "ended" ? "Call ended" : state === "error" ? "Unable to connect" : "Starting your call"}</p>
     {error && <p role="alert">{error}</p>}
+    {backendJwtRole === "SUPER_ADMIN" && timing && <small aria-label="Laybel response timing">{timing}</small>}
     <div className="laybel-controls">
       <button disabled={!live} aria-pressed={muted} onClick={() => {
         try { if (muted) client.current?.unmuteInputAudio(); else client.current?.muteInputAudio(); setMuted(!muted); }

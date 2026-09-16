@@ -1,6 +1,6 @@
 # Loopcom / Connect project memory
 
-Laybel latency update (2026-09-16): owner confirms the call works but reports excessive reply delay. Source-proven whole-answer buffering before avatar speech; streaming requires server/router plus avatar integration. No live timing or speedup deployed. This supersedes older lack-of-owner-audio-confirmation notes, not pending Yiddish wiring, restart/disconnect reliability, or rollout gates. See Laybel handoff.
+Laybel latency update (2026-09-16): owner confirms call works. Implemented final-answer-only streaming through the existing Assistant/tool gates; no commentary/tool arguments, no partially spoken replay. 76 agent + 23 portal tests pass. Owner approved Assistant-only release with rollback (queue lacks agent target); deployment/live speedup pending. Timing means speech queued, not audible playback. English output can precede YL chat translation; YL video microphone input remains unwired. See Laybel handoff.
 
 ## Fundamental task rule — owner instruction, 2026-09-14
 

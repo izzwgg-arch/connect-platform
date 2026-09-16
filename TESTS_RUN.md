@@ -1,5 +1,12 @@
 # Tests run
 
+## Laybel streaming latency implementation — 2026-09-16
+
+- PASS: 76 agent tests (auth/roles, engine/identity/workspace/bridge/tools, streaming router and real local HTTP streaming). Includes early final speech, no commentary/unphased/tool speech, no partial-answer failover/tool replay, verified tenant identity, and English speech before YL output translation.
+- PASS: 23 portal tests (Assistant/layout/consent/takeover, incremental UTF8 NDJSON, sentences, early speech, barge-in and failure no-retry).
+- PASS: portal typecheck. Agent default typecheck reports pre-existing packages/db shared-subpath module-resolution errors; new test schema type fixed. Agent typecheck with --moduleResolution bundler --module esnext passes. Default configuration is not claimed green.
+- Pending: deployment/build and live before/after audible latency evidence. No performance improvement claimed from synthetic tests.
+
 ## Laybel live screen proof and layout correction — 2026-09-16
 
 - Reproduced real production bug: connected call's video panel collapsed to 21.6 px. Initial call speech reached existing Assistant transcript and replies appeared; audible playback not confirmed.

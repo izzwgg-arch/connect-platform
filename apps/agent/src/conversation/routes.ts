@@ -18,6 +18,7 @@ import type { EscalationService } from "../escalation/escalations";
 import { verifyPortalJwt, type AgentIdentity } from "../auth";
 import { elevateForCustomOwnerRole, isPlatformStaff } from "../authRoles";
 import { TURN_ID_RE, type ActivityHub } from "../coworker/activity";
+import { PassThrough } from "node:stream";
 
 const Identity = z.object({
   tenantId: z.string().min(1),
@@ -66,6 +67,7 @@ export function registerChatRoutes(
       .object({
         text: z.string().min(1).max(8000),
         channel: z.string().optional(),
+        streamSpeech: z.boolean().optional(),
         /** Finished upload ids from /agent/chat/upload/finish (this session). */
         attachments: z.array(z.string().min(1).max(64)).max(20).optional(),
         /** Coworker workspace: the random id this page polls /agent/coworker/activity with. */
@@ -95,6 +97,7 @@ export function registerChatRoutes(
       })
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    if (body.data.streamSpeech && (body.data.channel !== "voice" || body.data.turnId)) return reply.code(400).send({ error: "speech_requires_voice_chat" });
     // ⛔ A workspace turn is opened BEFORE any work, for this verified identity only;
     // a turnId another person already owns, or one still running, is refused.
     let turnId: string | undefined;
@@ -126,11 +129,21 @@ export function registerChatRoutes(
     // link itself is keyed by the verified identity and the desktop re-checks
     // every call locally, so a forged header gains nothing without a linked app.
     const desktopApp = /\bLoopcom\/\d/.test(String(req.headers["user-agent"] ?? ""));
+    const stream = body.data.streamSpeech ? new PassThrough() : null;
+    let disconnected = false;
+    const emit = (event: object) => {
+      if (!stream || disconnected) return;
+      // A stalled reader must not accumulate an unbounded answer in memory.
+      if (stream.writableLength > 256_000) { disconnected = true; stream.destroy(); return; }
+      stream.write(`${JSON.stringify(event)}\n`);
+    };
+    const run = async () => {
     let result;
     try {
       result = await engine.handleMessage(
         {
           ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path, desktopApp,
+          ...(stream ? { onSpeechDelta: (text: string) => emit({ type: "speech", text }), onSpeechDone: () => emit({ type: "speech_end" }), speechStopped: () => disconnected } : {}),
           ...(turnId ? { turnId } : {}),
           ...(body.data.conversationId ? { conversationId: body.data.conversationId } : {}),
           ...(body.data.newTask ? { startNewConversation: true } : {}),
@@ -158,6 +171,20 @@ export function registerChatRoutes(
       isPlatformStaff: isPlatformStaff(identity.platformRole),
     });
     return result;
+    };
+    if (!stream) return run();
+    const close = () => { disconnected = true; };
+    reply.raw.once("close", close);
+    const heartbeat = setInterval(() => emit({ type: "heartbeat" }), 10_000);
+    heartbeat.unref();
+    reply.header("Content-Type", "application/x-ndjson; charset=utf-8").header("Cache-Control", "no-store").header("X-Accel-Buffering", "no");
+    // The same authenticated operation, never a second POST or a tool replay.
+    void run().then(result => emit({ type: "complete", result })).catch(() => emit({ type: "error", message: "The turn did not complete. It was not retried." })).finally(() => {
+      clearInterval(heartbeat);
+      reply.raw.off("close", close);
+      stream.end();
+    });
+    return reply.send(stream);
   });
 
   // ── Chunked file upload (chat widget). nginx caps /agent-api/* bodies at

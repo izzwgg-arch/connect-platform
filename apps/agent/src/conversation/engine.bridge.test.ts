@@ -137,3 +137,15 @@ test("bridge disabled → Yiddish path unchanged (no YL, model text used)", asyn
   assert.equal(translator.toEnglishCalls.length, 0);
   assert.equal(res.reply, router.reply);
 });
+
+test("voice emits the English answer before YL finishes translating the visible chat", async () => {
+  const spoken: string[] = []; let speechDone = false;
+  translator.toYiddish = async text => {
+    assert.deepEqual(spoken, [router.reply]);
+    assert.equal(speechDone, true, "close speech stream before waiting on translation");
+    return { text: `ייִדיש{${text}}`, creditsConsumed: 12 };
+  };
+  const engine = await makeEngine(true);
+  const answer = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer", channel: "voice", onSpeechDelta: text => spoken.push(text), onSpeechDone: () => { speechDone = true; } }, "העלף מיר");
+  assert.equal(answer.reply, `ייִדיש{${router.reply}}`);
+});

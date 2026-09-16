@@ -1,6 +1,6 @@
-# Talk to Laybel — owner confirms call works; latency needs improvement (2026-09-16)
+# Talk to Laybel — streaming latency implementation, live verification pending (2026-09-16)
 
-- Latest owner feedback: call works, but replies are too slow. Source trace shows whole-answer buffering before avatar speech. Streaming requires server/router and avatar integration, not just browser chunking. No live timing or speedup implemented. Prior unconfirmed-audio notes below are historical; Yiddish wiring and reliability remain open.
+- Owner confirms the call works but is slow. Implemented opt-in final-answer streaming through the same authenticated Assistant into Anam sentence streams, preserving tool authority, barge-in and no-retry behavior. Unphased/tool-bearing output stays buffered. English speech can precede YL chat translation; YL video microphone input is still NOT wired. Tests: 76 agent + 23 portal pass; portal and bundler-resolution agent typechecks pass (default agent resolver has unrelated shared-package errors). Owner approved Assistant-only release exception with rollback; deployment and measured live speedup remain pending. Baseline toggle/timing report speech queued, not audible playback. Customer rollout stays off.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`**.
 

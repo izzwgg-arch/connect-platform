@@ -43,6 +43,7 @@ import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiC
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 import { LaybelVideoCall } from "./LaybelVideoCall";
+import { readLaybelAnswer, type SpeechOptions } from "../lib/laybelSpeech";
 import { CoworkerTaskCard, CoworkerPermissionsView, usePendingCoworkerTasks, COWORKER_TASK_STYLES } from "./CoworkerTaskCard";
 
 type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; pending?: boolean };
@@ -480,7 +481,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, []);
 
   const send = useCallback(
-    async (raw?: string, channel: "chat" | "voice" = "chat", speakReply = true) => {
+    async (raw?: string, channel: "chat" | "voice" = "chat", speakReply = true, speech?: SpeechOptions) => {
       const ready = pendingFiles.filter((f) => f.status === "ready" && f.attachmentId);
       const stillUploading = pendingFiles.some((f) => f.status === "uploading");
       let text = (raw ?? input).trim();
@@ -499,12 +500,18 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
       const shownText = ready.length ? `${text}\n📎 ${ready.map((f) => f.name).join(", ")}` : text;
       setMessages((m) => [...m, { id: `u-${Date.now()}`, role: "user", content: shownText }, { id: ackId, role: "assistant", content: ack, pending: true }]);
       try {
-        const res = await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", {
+        const body = {
           text,
           channel,
           context: { page: label, path: pathname },
           ...(ready.length ? { attachments: ready.map((f) => f.attachmentId) } : {}),
-        });
+          ...(speech ? { streamSpeech: true } : {}),
+        };
+        const res = speech
+          ? await readLaybelAnswer(await fetch("/agent-api/chat/message", {
+              method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }, body: JSON.stringify(body), signal: speech.signal,
+            }), speech.onDelta, speech.onDone)
+          : await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", body);
         setConversationId(res.conversationId);
         if (res.humanTakeover) {
           // A person is handling this — no assistant reply is coming. Drop the
@@ -1006,7 +1013,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             ))}
             {!docked && laybelActive && laybelVideo && (
               <LaybelVideoCall
-                onTurn={text => send(text, "voice", false)}
+                  onTurn={(text, speech) => send(text, "voice", false, speech)}
                 onEnd={endLaybel}
                 onVoiceOnly={() => { laybelSpeakerRef.current = null; setLaybelVideo(false); setLaybelState("idle"); }}
                 onSpeaker={speaker => { laybelSpeakerRef.current = speaker; }}

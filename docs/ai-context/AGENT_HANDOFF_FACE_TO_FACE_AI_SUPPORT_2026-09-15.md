@@ -1,5 +1,14 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
+## Latency implementation — 2026-09-16 (release verification pending)
+
+- Owner requested implementation and explicitly approved an **Assistant-only deployment/restart with rollback image and health checks**, because routine release targets exclude agent. This is a scoped break-glass exception, not infrastructure/PBX/database authority. `scripts/release/deploy-laybel-agent-approved.sh` archives a pinned commit, keeps rollback image, builds only agent, uses no-deps replacement and health/source checks. Portal still uses routine scripted blue/green.
+- Opt-in voice NDJSON on the SAME authenticated `/agent/chat/message`: JWT/tenant/tool authority and existing text behavior unchanged. OpenAI Responses streams only assistant `phase=final_answer` output text, never commentary, reasoning or tool arguments. Tool-bearing/unphased responses and other providers stay buffered; no model/effort/token-budget downgrade. Buffered answers can still skip persistence and YL output-translation delay before speech.
+- Avatar uses one Anam talk stream per answer with complete-sentence chunks, a final flush before YL translation, and no duplicate whole-answer playback. Interruption/close suppress late speech; close aborts the browser request; server disconnect stops further tool calls between operations. Already-running actions are not rolled back/retried. Partial spoken failure is explicit and cannot silently fail over/replay.
+- Owner-only baseline checkbox (before Start) and timing label report first speech QUEUED after Assistant request / latest provider speech-end event, not actual audible playback. Live baseline/stream comparison still required; no speedup claimed from tests.
+- Yiddish output bridge now can speak original English before YL finishes visible Yiddish translation. This does NOT implement YL microphone STT for video; that input wiring, explicit language mode and live language acceptance remain pending. Customer rollout remains off.
+- Verification so far: 76 agent auth/conversation/tool/bridge/stream tests and 23 portal tests pass; portal typecheck passes. Agent default typecheck exposed existing shared-package subpath/module-resolution errors; after fixing the new test schema, bundler-resolution typecheck passes. Running agent source SHA256 for router/engine/routes matched the pre-change release baseline exactly. Deployment and live call evidence to be appended after release.
+
 ## Response-delay review and owner acceptance update (2026-09-16)
 
 - Owner now says **it is working**, but speech-to-spoken-response is too slow. Record that as owner-reported call success, superseding the earlier lack of owner audio confirmation; it is NOT acceptance of the still-unimplemented Yiddish path, quantified latency, repeat-start reliability or prior disconnect cause.
