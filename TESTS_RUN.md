@@ -15,7 +15,14 @@
 - api blue/green `done 287a32e6`, container commit verified, /health 200; migration `20260916170000_messaging_telnyx_fallback` read back FINISHED from the live DB; `fallbackProvider` column + TELNYX enum value present; `/webhooks/telnyx/sms` 401 fail-closed on local :3001 AND the public hostname, route file in the container.
 - ⛔ worker deploy first SELF-SKIPPED on a false baseline (api deploy had reset the server checkout to my commit; change-detect diffed against another session's newer push and saw "no worker paths"); container verified WITHOUT the new file, then force-rebuilt at the origin tip (`DEPLOY_FORCE_RESTART=1`, done 2ac9e9fc) and verified WITH messagingDispatch.ts + telnyxChatSend.ts + the registry call.
 - Live traffic through the NEW dispatch: the poll fetched real customer texts minutes after cutover; round-trip probe on Connect's own pair (+18455577768 ↔ +18457231213, shared thread, via /internal/chat/sms-system-reply): worker `voipms_sms_part_send` → **sent, VoIP.ms id 111471089 @16:15:10Z** → polled back INBOUND `voipms:111471092` @16:15:42. One message, one delivery, 32s.
-- Still not proven: no TELNYX-number live send, no real Telnyx webhook events (URL/public key not configured), backup route never fired in prod (tests only).
+- Still not proven then: no TELNYX-number live send — CLOSED the same evening, see below.
+
+### Telnyx acceptance + backup-route door + carrier-word sanitizer (same day, evening)
+
+- **Telnyx OUTBOUND LIVE through the chat door**: first probe failed honestly (no messaging profile); profile "Loopcom Chat" created via API with our webhook URL + US/CA whitelist, number attached; fresh probe → worker `telnyx_chat_sent`, id `telnyx:4031a0ab…`, arrived on the VoIP.ms side as `voipms:111472663` — 9s cross-carrier round trip. Telnyx INBOUND still blocked on the portal-only Ed25519 public key (`publicKeySet:false`) — Izzy pastes it into /apps/telnyx.
+- Backup-route admin door: 5 source guards (closed enum SIGNALWIRE|TELNYX, SUPER-only gate before the write, equals-primary refusal, super-only GET projection with zero unconditional mentions, worker reads the column); sms+leak suites 33/33.
+- ⛔ RULE-2 LEAK (pre-existing): raw deliveryError ("Telnyx refused…", "SIGNALWIRE_21610") shipped to every client. Fixed server-side via a fixed-phrase whitelist; 4 new tests incl. a real-production corpus — no carrier word can survive; SUPER keeps raw. sms suite 29/29. Portal tsc 0; portal suite 662/667 (5 pre-existing failures in untouched files: creative-studio native selects, campaign layout, coworkerHands, deskPhoneWizard, webrtcSdp). Mobile: type + one meta-row Text ("via backup route"); tsc clean in touched files; rides the next app build.
+- **Deploys verified by FILE, not by "done"**: another session's queue job deployed api+portal at 483930a9 (my commits are ancestors — checked with merge-base, the pinned-SHA lesson); containers grepped: sanitizer present in both api files, portal chunks carry "sent via backup route" (6523) and "Backup: off" (voip-ms page chunk).
 
 ## Laybel live screen proof and layout correction — 2026-09-16
 

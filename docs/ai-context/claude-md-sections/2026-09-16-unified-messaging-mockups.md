@@ -1,4 +1,61 @@
-# 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — BUILD APPROVED; PHASE 1 (Messaging Router + Telnyx) BUILT
+# 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — BUILD APPROVED; PHASE 1 (Messaging Router + Telnyx) BUILT + LIVE
+
+## ✅✅ PHASE 1 ACCEPTANCE CLOSED FOR OUTBOUND (same day, ~16:37Z): A REAL TEXT WENT THROUGH TELNYX ITSELF
+- Telnyx creds WERE saved by Izzy 09-15 11:19 (the handoff's "no API key yet"
+  is stale); bench status: configured, connection OK, **balance $126.31**.
+- First probe on the TELNYX number failed HONESTLY: *"'from' address … not
+  associated with the sending messaging profile"* — the number had no
+  messaging profile. Fixed via API from inside app-api-1 (script decrypts the
+  stored creds, never prints them): **messaging profile "Loopcom Chat"
+  (4001a0ab-1426-4d48-b5f6-1f1f80038c5b) created with webhook_url =
+  https://app.connectcomunications.com/api/webhooks/telnyx/sms +
+  whitelisted_destinations [US,CA] (Telnyx 40331 requires it), number
+  3049471998968202869 (+18453066825) attached (200).**
+- Probe rows: `TenantSmsNumber` **probe-telnyx-6825** (provider TELNYX, admin
+  tenant, unassigned so nobody's from-number changes) + thread
+  **probe-telnyx-thread-6825** (+18453066825 ↔ +18455577768, shared).
+- ✅ **Round trip: sent 16:37:14Z through the registry's TELNYX adapter
+  (`telnyx_chat_sent`, id `telnyx:4031a0ab-145f-49b4-bf2a-5715026f7dbf`) →
+  arrived at the VoIP.ms number and polled back as INBOUND
+  `voipms:111472663` at 16:37:23 — nine seconds, cross-carrier, both
+  directions of our stack.**
+- ⏳ **Telnyx INBOUND/DLR still blocked on ONE value only:** `publicKeySet:
+  false` — the account's Ed25519 public key is portal-only (portal.telnyx.com
+  → Account → Public Key) and the portal session is logged out (2FA; not
+  mine to log into). **Izzy: paste it into /apps/telnyx credentials.** Until
+  then our door 401s Telnyx's webhooks BY DESIGN (fail closed) — the profile
+  is already pointed at us, so events flow the moment the key is saved.
+- ✅ **The backup route is ARMABLE from the panel now** (`dcaa540a`): PATCH
+  numbers accepts `fallbackProvider` (SIGNALWIRE|TELNYX only, null clears),
+  SUPER_ADMIN-only (PLATFORM_ONLY for tenant admins), equals-primary refused;
+  the GET hands `provider`/`fallbackProvider` inside a super-only spread; the
+  /apps/voip-ms numbers table grew a super-only Carrier column (primary label
+  + Backup select). 5 source guards. ⏳ no number has a backup armed; the
+  route has never fired in prod (proven by its 8 behavior tests only).
+- ✅✅ **RULE-2 LEAK FOUND AND FIXED (`6025ba08`) — predates this project:**
+  `deliveryError` shipped RAW to every client since the SignalWire wiring, so
+  a customer's meta line could read "Telnyx refused the message…" or
+  "SIGNALWIRE_21610". The messages projection now routes non-platform viewers
+  through `sms/customerDeliveryCopy.ts` — a FIXED-PHRASE whitelist (output is
+  never a transformation of the raw string, so no carrier word can survive;
+  test corpus includes today's real Telnyx refusal). SUPER_ADMIN keeps raw.
+  Server-side on purpose: one fix covers portal + desktop + mobile. Also
+  ships `sentViaBackupRoute` as a BOOLEAN (never the carrier), and the portal
+  meta line (geometry untouched) gains the ✓✓ on a real "delivered" receipt
+  and the "sent via backup route" words.
+- ✅ **Stale-audit correction:** the WhatsApp SCHEMA DRIFT the 2026-08-16
+  audit recorded was FIXED the same day (migrations `20260816170000` +
+  `20260816180000`) — verified live: WHATSAPP enum value present, all 9
+  tables exist. The 08-16 summary file's "would crash on day one" is about
+  the PRE-migration state. What remains true: NO TRANSPORT sends anything,
+  and the real-integration proof is EXTERNALLY BLOCKED (Meta business
+  verification REJECTED 09-09).
+- ⛔ **Full prod↔schema drift measured while checking** (read-only prisma
+  migrate diff, saved at loopcom `/root/drift-20260916.sql`, 322 lines): the
+  live DB carries dozens of FKs/indexes schema.prisma doesn't declare (e.g.
+  Crm* FK constraints, a few extra indexes) plus a missing
+  `VoiceDiagEventType.MEDIA_TEST_RUN` enum value. ⛔ NEVER apply that diff
+  wholesale — reconciling it is its own careful task, not part of messaging.
 
 ## ✅ PHASE 1 BUILT (same day, after the approval): the Messaging Router + Telnyx chat wiring
 **What exists now (all tested; deploy state recorded below):**
