@@ -1,4 +1,4 @@
-/* ── Connect onboarding — dark + light design system ───────────────────────────
+/* ── Loopcom onboarding — dark + light design system ───────────────────────────
    Scoped to .ob-shell. Dark is the platform default; light follows the viewer's
    OS preference, and the in-wizard toggle (data-ob-theme on .ob-shell) wins over both.
    Tokens are defined once and every component is styled through them.
@@ -11,51 +11,51 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 
 /* ── Tokens: dark (default) ─────────────────────────────────────────────────── */
 .ob-shell {
-  --bg:#0e1621; --bg-glow1:rgba(59,130,246,.10); --bg-glow2:rgba(99,102,241,.07);
-  --surface:#16212e; --surface-2:#1b2735; --surface-3:#22303f;
-  --border:#27384a; --border-soft:#213042;
-  --text:#e7edf4; --text-2:#aebccc; --muted:#8093a6;
-  --accent:#3b82f6; --accent-strong:#2f6bff; --accent-soft:rgba(59,130,246,.14); --accent-ring:rgba(59,130,246,.28);
-  --good:#34d399; --good-soft:rgba(52,211,153,.14); --good-ink:#04120c;
-  --danger:#f87171; --danger-soft:rgba(248,113,113,.12); --danger-border:rgba(248,113,113,.4);
-  --shadow:0 1px 2px rgba(0,0,0,.35), 0 18px 46px -24px rgba(0,0,0,.75);
-  --radius:15px;
+  --bg:#0c1218; --bg-glow1:rgba(34,168,255,.12); --bg-glow2:rgba(79,123,255,.06);
+  --surface:#141f2b; --surface-2:#101923; --surface-3:#1f2c3b;
+  --border:#26374a; --border-soft:#1f2d3d;
+  --text:#e1e9f1; --text-2:#aebccc; --muted:#8ea0b2;
+  --accent:#22a8ff; --accent-2:#4f7bff; --accent-strong:#2f7bff; --accent-soft:rgba(34,168,255,.14); --accent-ring:rgba(34,168,255,.3);
+  --good:#34c27b; --good-soft:rgba(52,194,123,.14); --good-ink:#04120c;
+  --danger:#ea6068; --danger-soft:rgba(234,96,104,.12); --danger-border:rgba(234,96,104,.4);
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 22px 48px -26px rgba(0,0,0,.8);
+  --radius:18px;
 }
 
 /* Light follows OS preference when no explicit toggle is set */
 @media (prefers-color-scheme: light) {
   .ob-shell {
-    --bg:#eef1f6; --bg-glow1:rgba(47,107,255,.07); --bg-glow2:rgba(99,102,241,.05);
-    --surface:#ffffff; --surface-2:#f7f9fc; --surface-3:#eef2f8;
-    --border:#dce4ef; --border-soft:#e7edf5;
-    --text:#0f1b2d; --text-2:#3d5068; --muted:#64748b;
-    --accent:#2f6bff; --accent-strong:#2f6bff; --accent-soft:rgba(47,107,255,.08); --accent-ring:rgba(47,107,255,.16);
+    --bg:#f3f6fa; --bg-glow1:rgba(22,131,216,.08); --bg-glow2:rgba(79,111,255,.05);
+    --surface:#ffffff; --surface-2:#f6f8fb; --surface-3:#e9eef5;
+    --border:#dbe3ee; --border-soft:#e7edf5;
+    --text:#0f172a; --text-2:#3d5068; --muted:#64748b;
+    --accent:#1683d8; --accent-2:#4f6fff; --accent-strong:#2f6bff; --accent-soft:rgba(22,131,216,.08); --accent-ring:rgba(22,131,216,.18);
     --good:#0ea371; --good-soft:rgba(14,163,113,.10); --good-ink:#ffffff;
     --danger:#dc2626; --danger-soft:#fff1f2; --danger-border:#fecdd3;
-    --shadow:0 1px 2px rgba(15,23,42,.05), 0 18px 40px -26px rgba(15,23,42,.45);
+    --shadow:0 1px 2px rgba(15,23,42,.05), 0 20px 40px -26px rgba(15,23,42,.35);
   }
 }
 
 /* Explicit toggle overrides — win over the media query in both directions */
 .ob-shell[data-ob-theme="light"] {
-  --bg:#eef1f6; --bg-glow1:rgba(47,107,255,.07); --bg-glow2:rgba(99,102,241,.05);
-  --surface:#ffffff; --surface-2:#f7f9fc; --surface-3:#eef2f8;
-  --border:#dce4ef; --border-soft:#e7edf5;
-  --text:#0f1b2d; --text-2:#3d5068; --muted:#64748b;
-  --accent:#2f6bff; --accent-strong:#2f6bff; --accent-soft:rgba(47,107,255,.08); --accent-ring:rgba(47,107,255,.16);
+  --bg:#f3f6fa; --bg-glow1:rgba(22,131,216,.08); --bg-glow2:rgba(79,111,255,.05);
+  --surface:#ffffff; --surface-2:#f6f8fb; --surface-3:#e9eef5;
+  --border:#dbe3ee; --border-soft:#e7edf5;
+  --text:#0f172a; --text-2:#3d5068; --muted:#64748b;
+  --accent:#1683d8; --accent-2:#4f6fff; --accent-strong:#2f6bff; --accent-soft:rgba(22,131,216,.08); --accent-ring:rgba(22,131,216,.18);
   --good:#0ea371; --good-soft:rgba(14,163,113,.10); --good-ink:#ffffff;
   --danger:#dc2626; --danger-soft:#fff1f2; --danger-border:#fecdd3;
-  --shadow:0 1px 2px rgba(15,23,42,.05), 0 18px 40px -26px rgba(15,23,42,.45);
+  --shadow:0 1px 2px rgba(15,23,42,.05), 0 20px 40px -26px rgba(15,23,42,.35);
 }
 .ob-shell[data-ob-theme="dark"] {
-  --bg:#0e1621; --bg-glow1:rgba(59,130,246,.10); --bg-glow2:rgba(99,102,241,.07);
-  --surface:#16212e; --surface-2:#1b2735; --surface-3:#22303f;
-  --border:#27384a; --border-soft:#213042;
-  --text:#e7edf4; --text-2:#aebccc; --muted:#8093a6;
-  --accent:#3b82f6; --accent-strong:#2f6bff; --accent-soft:rgba(59,130,246,.14); --accent-ring:rgba(59,130,246,.28);
-  --good:#34d399; --good-soft:rgba(52,211,153,.14); --good-ink:#04120c;
-  --danger:#f87171; --danger-soft:rgba(248,113,113,.12); --danger-border:rgba(248,113,113,.4);
-  --shadow:0 1px 2px rgba(0,0,0,.35), 0 18px 46px -24px rgba(0,0,0,.75);
+  --bg:#0c1218; --bg-glow1:rgba(34,168,255,.12); --bg-glow2:rgba(79,123,255,.06);
+  --surface:#141f2b; --surface-2:#101923; --surface-3:#1f2c3b;
+  --border:#26374a; --border-soft:#1f2d3d;
+  --text:#e1e9f1; --text-2:#aebccc; --muted:#8ea0b2;
+  --accent:#22a8ff; --accent-2:#4f7bff; --accent-strong:#2f7bff; --accent-soft:rgba(34,168,255,.14); --accent-ring:rgba(34,168,255,.3);
+  --good:#34c27b; --good-soft:rgba(52,194,123,.14); --good-ink:#04120c;
+  --danger:#ea6068; --danger-soft:rgba(234,96,104,.12); --danger-border:rgba(234,96,104,.4);
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 22px 48px -26px rgba(0,0,0,.8);
 }
 
 /* ── Shell ──────────────────────────────────────────────────────────────────── */
@@ -64,7 +64,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
   color:var(--text);
   background:var(--bg);
   background-image:
-    radial-gradient(ellipse 70% 42% at 72% -8%, var(--bg-glow1), transparent 60%),
+    radial-gradient(ellipse 60% 38% at 50% -6%, var(--bg-glow1), transparent 70%),
     radial-gradient(ellipse 55% 34% at 3% 92%, var(--bg-glow2), transparent 58%);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   -webkit-font-smoothing:antialiased;
@@ -76,13 +76,16 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 /* ── Header ─────────────────────────────────────────────────────────────────── */
 .ob-header { width:100%; max-width:600px; display:flex; align-items:center; justify-content:space-between; padding:26px 0 22px; }
 .ob-logo { display:flex; align-items:center; gap:10px; text-decoration:none; }
-.ob-logo-mark {
-  width:32px; height:32px; border-radius:9px;
-  background:linear-gradient(135deg, var(--accent-strong) 0%, #6366f1 100%);
-  display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  box-shadow:0 6px 16px -6px var(--accent-ring);
+.ob-logo-img { display:block; height:22px; width:auto; }
+.ob-mark-light { display:none; }
+/* One wordmark file serves both themes (same rule as /login). The infinity
+   mark on the finish page swaps to the light-mode artwork in light mode. */
+@media (prefers-color-scheme: light) {
+  .ob-shell:not([data-ob-theme="dark"]) .ob-mark-dark { display:none; }
+  .ob-shell:not([data-ob-theme="dark"]) .ob-mark-light { display:block; }
 }
-.ob-logo-text { font-size:15px; font-weight:680; color:var(--text); letter-spacing:-.2px; }
+.ob-shell[data-ob-theme="light"] .ob-mark-dark { display:none; }
+.ob-shell[data-ob-theme="light"] .ob-mark-light { display:block; }
 
 .ob-header-tools { display:flex; align-items:center; gap:12px; }
 .ob-save-indicator { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; transition:opacity .3s ease; }
@@ -104,7 +107,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-progress-track { display:flex; align-items:center; gap:5px; margin-bottom:9px; }
 .ob-progress-step { flex:1; height:4px; background:var(--surface-3); border-radius:3px; transition:background .4s ease; }
 .ob-progress-step.done { background:var(--accent); }
-.ob-progress-step.active { background:linear-gradient(90deg, var(--accent) 0%, #818cf8 100%); }
+.ob-progress-step.active { background:linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%); box-shadow:0 0 10px var(--accent-ring); }
 .ob-progress-label { display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); }
 .ob-progress-label-current { color:var(--accent); font-weight:640; }
 
@@ -112,6 +115,12 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-card {
   width:100%; max-width:600px; background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius); box-shadow:var(--shadow); padding:34px 38px 30px; animation:ob-rise .24s ease;
+  position:relative;
+}
+/* The Loopcom sign-in card's hairline: a thin accent gradient along the top edge. */
+.ob-card::before {
+  content:""; position:absolute; inset:-1px -1px auto; height:2px; border-radius:var(--radius) var(--radius) 0 0;
+  background:linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent); pointer-events:none;
 }
 @keyframes ob-rise { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
 @media (max-width:600px) { .ob-card { padding:26px 20px 22px; border-radius:14px; } }
@@ -122,7 +131,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
   display:flex; align-items:center; justify-content:center; margin-bottom:18px; color:var(--accent);
 }
 .ob-illustration svg { stroke:var(--accent); }
-.ob-step-eyebrow { font-size:11px; font-weight:640; text-transform:uppercase; letter-spacing:.9px; color:var(--accent); margin-bottom:7px; }
+.ob-step-eyebrow { font-size:11px; font-weight:640; text-transform:uppercase; letter-spacing:.1em; color:var(--accent); margin-bottom:7px; }
 .ob-step-title { font-size:22px; font-weight:720; color:var(--text); letter-spacing:-.5px; line-height:1.22; margin:0 0 6px; text-wrap:balance; }
 .ob-step-subtitle { font-size:14px; color:var(--muted); margin:0 0 26px; line-height:1.55; max-width:52ch; }
 
@@ -278,7 +287,7 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-actions { display:flex; align-items:center; justify-content:space-between; margin-top:26px; }
 .ob-btn-back { background:none; border:1.5px solid var(--border); color:var(--text-2); font-size:14px; font-weight:560; border-radius:10px; padding:0 18px; height:43px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:border-color .15s, color .15s, background .15s; }
 .ob-btn-back:hover { border-color:var(--muted); color:var(--text); }
-.ob-btn-next { background:linear-gradient(135deg, var(--accent-strong) 0%, #5b6ef5 100%); color:#fff; border:none; font-size:14px; font-weight:620; border-radius:10px; padding:0 24px; height:43px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; box-shadow:0 8px 20px -8px var(--accent-ring); letter-spacing:-.1px; transition:filter .15s ease, transform .12s ease; }
+.ob-btn-next { background:linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); color:#fff; border:none; font-size:14px; font-weight:620; border-radius:10px; padding:0 24px; height:43px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; box-shadow:0 8px 20px -8px var(--accent-ring); letter-spacing:-.1px; transition:filter .15s ease, transform .12s ease; }
 .ob-btn-next:hover:not(:disabled) { filter:brightness(1.08); }
 .ob-btn-next:active:not(:disabled) { transform:scale(.98); }
 .ob-btn-next:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
@@ -305,9 +314,11 @@ body:has(.ob-shell) { overflow: auto !important; height: auto !important; }
 .ob-invalid-link:hover { text-decoration:underline; }
 
 /* ── Success ────────────────────────────────────────────────────────────────── */
-.ob-success-wrap { width:100%; max-width:520px; margin:0 auto; display:flex; flex-direction:column; align-items:center; text-align:center; padding-top:40px; }
+.ob-success-wrap { width:100%; max-width:520px; margin:0 auto; display:flex; flex-direction:column; align-items:center; text-align:center; padding-top:0; }
 .ob-success-icon { width:72px; height:72px; border-radius:20px; background:var(--good-soft); border:1px solid var(--good); display:flex; align-items:center; justify-content:center; margin-bottom:24px; color:var(--good); }
 .ob-success-icon svg { stroke:var(--good); }
+.ob-success-mark { width:132px; height:auto; margin:0 0 18px; filter:drop-shadow(0 0 22px var(--accent-ring)); }
+.ob-success-mark.ob-mark-light { width:124px; margin:14px 0 30px; filter:none; }
 .ob-success-title { font-size:26px; font-weight:730; color:var(--text); letter-spacing:-.5px; margin:0 0 10px; text-wrap:balance; }
 .ob-success-sub { font-size:15px; color:var(--muted); line-height:1.6; margin:0 0 32px; max-width:400px; }
 .ob-success-steps { width:100%; display:flex; flex-direction:column; gap:10px; margin-bottom:32px; }
