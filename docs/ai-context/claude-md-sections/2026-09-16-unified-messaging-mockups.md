@@ -1,5 +1,31 @@
 # 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — MOCKUPS ONLY, awaiting Izzy's approval; NOTHING BUILT
 
+## ⛔⛔ REVISION 2 (same day) — IZZY'S STANDING DESIGN RULE FOR THIS WHOLE PROJECT
+Izzy, verbatim: *"do not change any of the existing looks. Just add the new
+features and divide it the way the user sees it when they use RSC [RCS] or not.
+You can change the type color messages to green, that's okay… but the actual
+layout, the way it is right now, the message bubble, just don't change anything,
+any of that. I worked hard on that."*
+- ⛔ **The current chat layout, bubbles, composer pill, thread rows, plus-menu
+  and meta line are FROZEN.** Every upgrade is ADDITIVE: new chip colors in the
+  existing chip slot, new words in the existing meta line, new rows in the
+  existing plus-menu, one optional suggestion-chip row above the composer, and
+  channel color tints on own-bubbles/send button (color only — his explicit OK).
+- **The RCS divide** = the SAME plus-menu grows a "Rich messaging" group only on
+  RCS-capable conversations; WhatsApp gets a Templates row; Messenger neither.
+  Never a new toolbar, never per-channel screens.
+- ✅ Mockup v2 rebuilt as a FAITHFUL reproduction of the live chat (markup
+  mirrors apps/portal/components/chat/*, CSS values copied from globals.css —
+  compact crm-queue-workspace pass at 33854+/34766+, composer 35406+, attach
+  menu 35656+, bubbles/meta/voicenote 19053+, cc-state 37831), with every
+  addition wearing a toggleable dashed "NEW" marker. Same artifact URL
+  (4JJZYVHE9KKkQ1XpQm3eQe, Version 2).
+- ⛔ When BUILDING: do not restyle any `.cc-*` class; additions ride the
+  existing idioms (rich card = attachment-stack idiom inside the bubble,
+  states = words in `.cc-msg-meta`, `.cc-error` already exists). A guard test
+  reading the chat CSS/source for unchanged bubble/composer geometry is worth
+  writing on day one of the build.
+
 Izzy's brief (2026-09-16, in full in the session): upgrade Loopcom Chat into a
 provider-agnostic unified inbox — SMS, MMS, RCS, WhatsApp, Messenger over
 Telnyx (preferred), SignalWire, VoIP.ms — one canonical conversation model,

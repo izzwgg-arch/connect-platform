@@ -5,14 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loopcom Messaging</title>
 <!--
-  MOCKUP ONLY — nothing here is built. Example data throughout; no real customers, numbers or messages.
-  Loopcom unified messaging: one inbox, five channels (SMS / MMS / RCS / WhatsApp / Messenger),
-  three providers (Telnyx / SignalWire / VoIP.ms) behind a Messaging Router + capability registry.
-  Tokens copied from apps/portal/app/globals.css (dark :root at 3409, light data-theme block at 12223).
-  Chat class vocabulary mirrors apps/portal/components/chat/* (.cc-bubble mine/theirs, .cc-thread…).
+  MOCKUP ONLY, revision 2 — nothing here is built. Example data throughout; no real customers or numbers.
+
+  IZZY'S RULE FOR THIS REVISION (2026-09-16): "do not change any of the existing looks. Just add the
+  new features and divide it the way the user sees it when they use RCS or not… the actual layout,
+  the way it is right now, the message bubble, just don't change anything."
+
+  So: every base screen below is a faithful reproduction of the LIVE portal chat —
+  markup mirrors apps/portal/components/chat/{ChatInbox,ChatConversation,ChatComposer,MessageBubble}.tsx
+  and the CSS values are copied from apps/portal/app/globals.css (the compact .crm-queue-workspace pass:
+  workspace 33854+/34766+, composer bubble 35406+, attach menu 35656+, bubbles/meta/voicenote 19053+,
+  cc-state 37831). Everything ADDED for the messaging upgrade carries a dashed amber "NEW" marker —
+  use the toggle in the bar to hide the markers and see that the underlying page is today's page.
+  Channel-color changes (green/WhatsApp-green bubble tints, chip colors) are per Izzy's OK.
+  Tokens: dark :root at globals.css 3409, light data-theme block at 12223.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#0c1218; --bg-soft:#101923; --panel:#141f2b; --panel-2:#1a2635;
@@ -20,8 +29,8 @@
   --accent:#22a8ff; --accent-2:#4f7bff;
   --success:#34c27b; --warning:#f0b655; --danger:#ea6068; --info:#4ab2ff;
   --shadow:0 8px 30px rgba(0,0,0,.24);
-  --radius-lg:16px; --radius-md:12px;
-  --ch-rcs:#8b5cf6; --ch-wa:#25d366; --ch-fb:#0084ff; --ch-sms:var(--accent); --ch-mms:#38bdf8;
+  --radius-lg:1.25rem; --radius-sm:0.75rem;
+  --wa:#25d366; --wa-deep:#128c4a; --fb:#0084ff; --rcs:#8b5cf6;
 }
 :root[data-theme="light"]{
   --bg:#f6f8fb; --bg-soft:#eef2f7; --panel:#ffffff; --panel-2:#f8fafc;
@@ -29,192 +38,219 @@
   --accent:#3b82f6; --accent-2:#2563eb;
   --success:#16a34a; --warning:#d97706; --danger:#dc2626; --info:#0284c7;
   --shadow:0 8px 30px rgba(15,23,42,.10);
-  --ch-wa:#1da851; --ch-fb:#0073e6; --ch-rcs:#7c3aed;
+  --wa:#1da851; --fb:#0073e6; --rcs:#7c3aed;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,"Segoe UI",Roboto,Arial,sans-serif}
 .muted{color:var(--text-dim)} .small{font-size:12px} .tiny{font-size:11px} .mono{font-family:ui-monospace,Consolas,monospace}
-b,strong{font-weight:700}
-img{max-width:100%}
 svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-3px}
 
-/* ---------- mockup chrome ---------- */
+/* ============ mockup chrome (not part of the design) ============ */
 .mockbar{position:sticky;top:0;z-index:60;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
   padding:10px 16px;background:color-mix(in srgb,var(--warning) 14%,var(--bg));border-bottom:1px solid color-mix(in srgb,var(--warning) 45%,transparent)}
 .mockpill{background:var(--warning);color:#1a1206;font-weight:800;font-size:11px;letter-spacing:.08em;padding:3px 9px;border-radius:999px}
 .mockbar .jump{display:flex;flex-wrap:wrap;gap:6px}
 .mockbar a{color:var(--text);text-decoration:none;font-size:12px;font-weight:600;padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--panel)}
 .mockbar a:hover{border-color:var(--accent)}
-.tgl{margin-left:auto;display:flex;gap:0;border:1px solid var(--border);border-radius:999px;overflow:hidden}
+.tgl{display:flex;border:1px solid var(--border);border-radius:999px;overflow:hidden}
 .tgl button{border:0;background:var(--panel);color:var(--text-dim);font:600 12px Inter;padding:5px 12px;cursor:pointer}
 .tgl button.on{background:var(--accent);color:#fff}
-
-.wrap{max-width:1460px;margin:0 auto;padding:28px 22px 80px}
-.sect{margin:54px 0 12px}
+.wrap{max-width:1420px;margin:0 auto;padding:26px 22px 90px}
+.sect{margin:52px 0 10px}
 .sect h2{margin:0 0 4px;font-size:22px;font-weight:800}
-.sect .sub{color:var(--text-dim);max-width:1000px}
+.sect .sub{color:var(--text-dim);max-width:1020px}
 .screen{margin:26px 0 8px}
-.screen h3{margin:0 0 10px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+.screen h3{margin:0 0 10px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .screen h3 .no{background:var(--panel-2);border:1px solid var(--border);color:var(--text-dim);font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px}
 .why{margin:12px 0 0;max-width:1050px;color:var(--text-dim);font-size:13px;border-left:3px solid color-mix(in srgb,var(--accent) 55%,transparent);padding:2px 0 2px 12px}
-
-/* ---------- browser frame + app shell ---------- */
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start}
+.cols3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;align-items:start}
+@media(max-width:1100px){.cols2,.cols3{grid-template-columns:1fr}}
 .browser{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg-soft);box-shadow:var(--shadow)}
 .browser .bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
 .browser .dots{display:flex;gap:5px}.browser .dots i{width:10px;height:10px;border-radius:50%;background:var(--border)}
-.browser .url{flex:1;max-width:420px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:3px 12px;font-size:11px;color:var(--text-dim)}
-.shell{display:grid;grid-template-columns:218px minmax(0,1fr);min-height:620px}
-.sidebar{background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 92%,var(--bg)),color-mix(in srgb,var(--panel) 40%,var(--bg)));border-right:1px solid var(--border);padding:14px 10px;display:flex;flex-direction:column;gap:2px}
-.sb-brand{display:flex;align-items:center;gap:8px;font-weight:800;margin:2px 6px 14px}
-.sb-mark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;display:grid;place-items:center;font-size:13px}
-.sb-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:12px 8px 4px}
-.sb-link{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:9px;color:var(--text-dim);font-weight:600;font-size:13px}
-.sb-link.active{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--text)}
-.sb-link .b{margin-left:auto;background:var(--danger);color:#fff;font-size:10px;font-weight:800;border-radius:999px;padding:1px 6px}
-.main{display:grid;min-width:0}
+.browser .url{flex:1;max-width:430px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:3px 12px;font-size:11px;color:var(--text-dim)}
 
-/* ---------- chat workspace ---------- */
-.chatgrid{display:grid;grid-template-columns:312px minmax(0,1fr);min-height:620px}
-.chatgrid.withrail{grid-template-columns:312px minmax(0,1fr) 272px}
-.cc-list{border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;min-width:0}
-.cc-list-head{padding:12px 12px 8px;border-bottom:1px solid var(--border)}
-.cc-search{display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:6px 10px;color:var(--text-dim);font-size:12px}
-.filters{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
-.fchip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid var(--border);color:var(--text-dim);background:var(--panel-2)}
-.fchip.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--text)}
-.cc-thread{display:flex;gap:10px;padding:10px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);cursor:pointer}
-.cc-thread:hover{background:color-mix(in srgb,var(--panel-2) 76%,transparent)}
-.cc-thread.active{background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.ava{width:38px;height:38px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:800;font-size:13px;color:#fff;background:linear-gradient(135deg,#5b7fff,#22a8ff);position:relative}
-.ava.g2{background:linear-gradient(135deg,#f0932b,#eb4d4b)} .ava.g3{background:linear-gradient(135deg,#20bf6b,#0fb9b1)}
-.ava.g4{background:linear-gradient(135deg,#8b5cf6,#d946ef)} .ava.g5{background:linear-gradient(135deg,#64748b,#334155)}
-.chbadge{position:absolute;right:-3px;bottom:-3px;width:17px;height:17px;border-radius:50%;border:2px solid var(--panel);display:grid;place-items:center}
-.chbadge svg{width:9px;height:9px;stroke:#fff;stroke-width:2.6}
-.chbadge.sms{background:var(--ch-sms)} .chbadge.rcs{background:var(--ch-rcs)} .chbadge.wa{background:var(--ch-wa)} .chbadge.fb{background:var(--ch-fb)}
-.cc-t-main{min-width:0;flex:1}
-.cc-t-top{display:flex;align-items:baseline;gap:8px}
-.cc-t-top strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cc-t-time{margin-left:auto;font-size:11px;color:var(--text-dim);white-space:nowrap}
-.cc-prev{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.unread{margin-left:auto;background:var(--accent);color:#fff;font-size:10px;font-weight:800;border-radius:999px;padding:1px 6px;flex:none}
-.fail-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);flex:none}
-.tag{font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:1px 6px;border-radius:5px;text-transform:uppercase;flex:none}
-.tag.sms{color:var(--ch-sms);background:color-mix(in srgb,var(--ch-sms) 15%,transparent)}
-.tag.mms{color:var(--ch-mms);background:color-mix(in srgb,var(--ch-mms) 15%,transparent)}
-.tag.rcs{color:var(--ch-rcs);background:color-mix(in srgb,var(--ch-rcs) 16%,transparent)}
-.tag.wa{color:var(--ch-wa);background:color-mix(in srgb,var(--ch-wa) 15%,transparent)}
-.tag.fb{color:var(--ch-fb);background:color-mix(in srgb,var(--ch-fb) 14%,transparent)}
-.tag.gray{color:var(--text-dim);background:var(--panel-2)}
-.pv{font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--text-dim);flex:none}
-.pv.telnyx{border-color:color-mix(in srgb,#2dd36f 45%,transparent)} .pv.sw{border-color:color-mix(in srgb,#33b2ff 45%,transparent)} .pv.vms{border-color:color-mix(in srgb,#f0b655 45%,transparent)}
+/* NEW marker — dashed amber ring + tag; toggleable */
+.nu{position:relative;outline:1.5px dashed color-mix(in srgb,var(--warning) 75%,transparent);outline-offset:2px;border-radius:6px}
+.nu::after{content:"NEW";position:absolute;top:-9px;right:-6px;z-index:30;background:var(--warning);color:#1a1206;font-size:8px;font-weight:900;letter-spacing:.06em;padding:1px 5px;border-radius:6px;line-height:1.3}
+body.hidenew .nu{outline:none}
+body.hidenew .nu::after{display:none}
 
-/* conversation pane */
-.cc-conv{display:flex;flex-direction:column;min-width:0;background:var(--bg-soft)}
-.cc-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
-.cc-head .who strong{font-size:14px}
-.cc-head .who .line{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--text-dim)}
-.iconbtn{width:30px;height:30px;border-radius:9px;border:1px solid var(--border);background:var(--panel-2);color:var(--text-dim);display:grid;place-items:center;cursor:pointer}
-.spacer{flex:1}
-.cc-scroll{flex:1;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:4px}
-.daych{align-self:center;font-size:11px;font-weight:600;color:var(--text-dim);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:2px 12px;margin:10px 0}
-.sysline{align-self:center;font-size:11px;color:var(--text-dim);display:flex;gap:6px;align-items:center;margin:8px 0;background:color-mix(in srgb,var(--panel) 70%,transparent);border-radius:999px;padding:3px 12px}
-.row{display:flex;margin:2px 0}
-.row.mine{justify-content:flex-end}
-.wrapb{max-width:min(66%,520px);display:flex;flex-direction:column}
-.row.mine .wrapb{align-items:flex-end}
-.sender{font-size:11px;font-weight:700;color:var(--text-dim);margin:6px 2px 2px}
-.cc-bubble{padding:9px 12px;border-radius:18px;font-size:13px;box-shadow:0 10px 24px color-mix(in srgb,#000 12%,transparent)}
+/* ============ THE EXISTING CHAT LOOK — values copied from globals.css ============ */
+.cc-workspace{display:grid;grid-template-columns:minmax(300px,400px) minmax(0,1fr);min-height:600px;overflow:hidden;
+  border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--panel);box-shadow:0 12px 32px color-mix(in srgb,#000 18%,transparent)}
+.cc-inbox{min-width:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid color-mix(in srgb,var(--border) 82%,transparent);background:var(--panel)}
+.cc-inbox-head{display:flex;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid color-mix(in srgb,var(--border) 74%,transparent);background:color-mix(in srgb,var(--panel-2) 44%,transparent)}
+.cc-inbox-head h2{margin:0;font-size:15px;font-weight:750;letter-spacing:-.01em}
+.cc-inbox-head p{margin:4px 0 0;color:var(--text-dim);font-size:11px}
+.cc-new-btn{height:30px;padding:0 10px;border-radius:var(--radius-sm);font-size:11px;border:0;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-weight:850;cursor:pointer;align-self:center}
+.cc-search{display:flex;align-items:center;gap:8px;margin:12px;min-height:38px;padding:0 13px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:var(--radius-sm);background:var(--panel-2);color:var(--text-dim);font-size:13px}
+.cc-thread-list{flex:1;min-height:0;overflow-y:auto;padding:0 8px 10px}
+.cc-thread{position:relative;width:100%;display:flex;align-items:center;gap:11px;padding:10px;margin-bottom:6px;border:1px solid transparent;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--panel-2) 36%,transparent);color:var(--text);cursor:pointer;text-align:left}
+.cc-thread:hover{border-color:color-mix(in srgb,var(--border) 96%,transparent);background:color-mix(in srgb,var(--panel-2) 76%,transparent)}
+.cc-thread.active{border-color:color-mix(in srgb,var(--accent) 42%,var(--border));background:color-mix(in srgb,var(--accent) 10%,var(--panel-2));box-shadow:inset 0 1px 0 color-mix(in srgb,#fff 5%,transparent)}
+.cc-thread.pinned::before{content:"";position:absolute;left:4px;top:14px;bottom:14px;width:3px;border-radius:999px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+.cc-avatar{flex-shrink:0;width:34px;height:34px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:900;background:linear-gradient(135deg,#0ea5e9,var(--accent) 52%,var(--accent-2));box-shadow:inset 0 1px 0 color-mix(in srgb,#fff 18%,transparent)}
+.cc-avatar.large{width:44px;height:44px;border-radius:17px}
+.cc-avatar.t2{background:linear-gradient(135deg,#f0932b,#eb4d4b)} .cc-avatar.t3{background:linear-gradient(135deg,#20bf6b,#0fb9b1)}
+.cc-avatar.t4{background:linear-gradient(135deg,#8b5cf6,#d946ef)} .cc-avatar.t5{background:linear-gradient(135deg,#64748b,#334155)}
+.cc-thread-main{flex:1;min-width:0}
+.cc-thread-top,.cc-thread-bottom{display:flex;align-items:center;gap:8px;min-width:0}
+.cc-thread-top{justify-content:space-between;margin-bottom:5px}
+.cc-thread-name{display:inline-flex;align-items:center;min-width:0}
+.cc-thread-top strong{font-size:12px;font-weight:850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cc-thread-top small{flex-shrink:0;color:var(--text-dim);font-size:11px}
+.cc-thread-preview{color:var(--text-dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cc-channel-row{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
+.cc-channel,.cc-sms-inbox-badge{flex-shrink:0;border-radius:999px;font-weight:850;letter-spacing:.03em;text-transform:uppercase}
+.cc-channel{padding:3px 7px;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);font-size:9px}
+.cc-channel-sms{color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent)}
+.cc-channel-tenant_group,.cc-channel-group{color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent)}
+/* NEW channel chip variants — same shape, new colors only */
+.cc-channel-rcs{color:var(--rcs);background:color-mix(in srgb,var(--rcs) 14%,transparent)}
+.cc-channel-whatsapp{color:var(--wa);background:color-mix(in srgb,var(--wa) 13%,transparent)}
+.cc-channel-messenger{color:var(--fb);background:color-mix(in srgb,var(--fb) 13%,transparent)}
+.cc-sms-inbox-badge{padding:2px 6px;font-size:9px}
+.cc-sms-inbox-shared{color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.cc-sms-inbox-personal{color:var(--text-dim);background:color-mix(in srgb,var(--text-dim) 12%,transparent)}
+.cc-state{flex-shrink:0;font-size:9px;font-weight:800;padding:2px 6px;border-radius:999px;letter-spacing:.4px;text-transform:uppercase;line-height:1.2;margin-left:6px}
+.cc-state.new{background:rgba(34,197,94,.14);color:#16a34a;border:1px solid rgba(34,197,94,.35)}
+.cc-state.read{background:rgba(100,116,139,.10);color:#64748b;border:1px solid rgba(100,116,139,.22)}
+.cc-thread-alert{color:var(--danger);flex-shrink:0}
+.cc-unread{min-width:21px;height:21px;padding:0 7px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:var(--accent);color:#fff;font-size:11px;font-weight:900;flex:none}
+.cc-stage{min-width:0;display:grid;place-items:center;padding:18px;background:color-mix(in srgb,var(--panel-2) 32%,transparent)}
+.cc-stage-empty{display:flex;max-width:24rem;flex-direction:column;align-items:center;gap:8px;padding:28px;color:var(--text-dim);text-align:center}
+.cc-stage-empty strong{color:var(--text);font-size:16px;font-weight:650}
+.cc-stage-empty svg{color:var(--accent);width:34px;height:34px}
+
+/* conversation side panel (the real one is position:fixed; framed statically here) */
+.cc-side-panel{width:min(560px,100%);overflow:hidden;border:1px solid color-mix(in srgb,var(--border) 84%,transparent);border-radius:28px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%,transparent),color-mix(in srgb,var(--panel-2) 88%,transparent)),radial-gradient(circle at 50% 0%,color-mix(in srgb,var(--accent) 10%,transparent),transparent 34%);
+  box-shadow:-22px 0 70px color-mix(in srgb,#000 34%,transparent),inset 0 1px 0 color-mix(in srgb,#fff 10%,transparent)}
+.cc-conversation{height:100%;min-height:0;display:flex;flex-direction:column;background:radial-gradient(circle at 18% 0%,color-mix(in srgb,var(--accent) 9%,transparent),transparent 28%),color-mix(in srgb,var(--bg) 78%,transparent)}
+.cc-conv-head{flex-shrink:0;display:flex;align-items:center;gap:12px;min-height:72px;padding:13px 16px;border-bottom:1px solid color-mix(in srgb,var(--border) 76%,transparent);background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(18px)}
+.cc-conv-title{flex:1;min-width:0}
+.cc-conv-title h2{overflow:hidden;margin:0;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:850}
+.cc-conv-title p{margin:3px 0 0;color:var(--text-dim);font-size:12px}
+.cc-icon-btn{border:1px solid color-mix(in srgb,var(--border) 86%,transparent);border-radius:14px;width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--panel-2) 88%,transparent);color:var(--text-dim);cursor:pointer}
+.cc-call-btn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 13px;border:0;border-radius:999px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-weight:850;cursor:pointer;box-shadow:0 14px 30px color-mix(in srgb,var(--accent) 28%,transparent)}
+.cc-message-list{flex:1;min-height:0;overflow-y:auto;padding:18px 18px 12px}
+.cc-msg-row{display:flex;margin-bottom:13px}
+.cc-msg-row.mine{justify-content:flex-end}
+.cc-msg-wrap{max-width:min(78%,430px);position:relative}
+.cc-msg-sender{margin:0 0 4px 8px;color:var(--text-dim);font-size:11px}
+.cc-bubble{position:relative;padding:10px 12px;border-radius:18px;font-size:13px;line-height:1.45;word-break:break-word;box-shadow:0 10px 24px color-mix(in srgb,#000 12%,transparent)}
 .cc-bubble.mine{color:#fff;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 92%,#38bdf8),var(--accent));border-bottom-right-radius:7px}
-.cc-bubble.theirs{color:var(--text);background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid color-mix(in srgb,var(--border) 78%,transparent);border-bottom-left-radius:7px}
-.cc-bubble.wa.mine{background:linear-gradient(135deg,#128c4a,var(--ch-wa))}
-.cc-bubble.fb.mine{background:linear-gradient(135deg,#0062cc,var(--ch-fb))}
-.cc-bubble.rcsish.mine{background:linear-gradient(135deg,#6d28d9,var(--ch-rcs))}
-.meta{display:flex;gap:6px;align-items:center;font-size:10.5px;color:var(--text-dim);margin:3px 4px}
-.row.mine .meta{justify-content:flex-end}
-.ticks{display:inline-flex}
-.ticks svg{width:13px;height:13px}
-.ticks.read{color:var(--info)} .ticks.dlv{color:var(--text-dim)}
-.st-chip{font-size:10px;font-weight:700;border-radius:999px;padding:1px 8px;display:inline-flex;gap:5px;align-items:center}
-.st-chip.fb2{color:var(--warning);background:color-mix(in srgb,var(--warning) 14%,transparent)}
-.st-chip.err{color:var(--danger);background:color-mix(in srgb,var(--danger) 13%,transparent)}
-.st-chip.prog{color:var(--info);background:color-mix(in srgb,var(--info) 13%,transparent)}
-.mediab{border-radius:14px;overflow:hidden;border:1px solid var(--border);max-width:280px}
-.ph-img{aspect-ratio:4/3;display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px}
-.grad1{background:linear-gradient(135deg,#f6d365,#fda085)} .grad2{background:linear-gradient(135deg,#84fab0,#8fd3f4)}
-.grad3{background:linear-gradient(135deg,#a18cd1,#fbc2eb)} .grad4{background:linear-gradient(135deg,#30cfd0,#330867)}
-.grad5{background:linear-gradient(135deg,#243949,#517fa4)}
-.voice{display:flex;align-items:center;gap:9px;min-width:210px}
-.wavef{display:flex;align-items:center;gap:2px;height:20px}
-.wavef i{width:3px;border-radius:2px;background:currentColor;opacity:.75}
-.reacts{display:flex;gap:4px;margin-top:-6px;z-index:2}
-.reacts span{background:var(--panel);border:1px solid var(--border);border-radius:999px;font-size:11px;padding:1px 7px}
-.typing{display:inline-flex;gap:4px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:10px 14px}
-.typing i{width:6px;height:6px;border-radius:50%;background:var(--text-dim);animation:blink 1.2s infinite}
-.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+.cc-bubble.theirs{color:var(--text);border:1px solid color-mix(in srgb,var(--border) 78%,transparent);background:color-mix(in srgb,var(--panel) 92%,transparent);border-bottom-left-radius:7px}
+/* NEW: channel tint on MY bubble only (Izzy OK'd color changes) — geometry identical */
+.cc-bubble.mine.ch-wa{background:linear-gradient(135deg,var(--wa-deep),var(--wa))}
+.cc-bubble.mine.ch-fb{background:linear-gradient(135deg,#0062cc,var(--fb))}
+.cc-msg-body{white-space:pre-wrap}
+.cc-msg-link{color:inherit;font-weight:800;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}
+.cc-msg-more{position:absolute;top:3px;right:3px;width:24px;height:24px;border:none;border-radius:999px;background:transparent;color:currentColor;opacity:0;cursor:pointer}
+.cc-bubble:hover .cc-msg-more{opacity:.7}
+.cc-msg-menu{position:absolute;top:30px;right:0;z-index:50;min-width:190px;padding:6px;border-radius:14px;border:1px solid var(--border);background:var(--panel);color:var(--text);box-shadow:0 18px 40px color-mix(in srgb,#000 28%,transparent)}
+.cc-msg-menu button{width:100%;display:flex;align-items:center;gap:8px;border:none;border-radius:10px;padding:8px 10px;background:transparent;color:inherit;cursor:pointer;text-align:left;font:500 13px Inter}
+.cc-msg-menu button:hover{background:var(--panel-2)}
+.cc-reaction-row{display:flex;gap:3px;padding-bottom:5px;border-bottom:1px solid var(--border);margin-bottom:4px}
+.cc-reaction-row button{justify-content:center;padding:6px;font-size:16px}
+.cc-msg-meta,.cc-reactions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;color:var(--text-dim);font-size:11px}
+.cc-msg-meta.mine,.cc-reactions.mine{justify-content:flex-end}
+.cc-error{color:var(--danger)}
+.cc-reactions button{border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:999px;padding:2px 7px;cursor:pointer;font-size:11px}
+.cc-attach-stack{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.cc-attach-image-bubble{display:block;margin-top:6px;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.cc-attach-file,.cc-location-card{margin-top:8px;display:flex;gap:9px;align-items:center;padding:9px 10px;border-radius:12px;background:color-mix(in srgb,var(--panel-2) 82%,transparent);border:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.cc-location-card{flex-direction:column;align-items:flex-start;gap:2px}
+.cc-location-card small,.cc-attach-file small{color:var(--text-dim)}
+.cc-bubble.mine .cc-attach-file,.cc-bubble.mine .cc-location-card{background:color-mix(in srgb,#fff 16%,transparent);border-color:color-mix(in srgb,#fff 28%,transparent);color:#fff}
+.cc-bubble.mine .cc-attach-file small,.cc-bubble.mine .cc-location-card small{color:color-mix(in srgb,#fff 78%,transparent)}
+.cc-voicenote{margin-top:6px;display:flex;align-items:center;gap:8px;padding:7px 10px;min-width:190px;max-width:280px;border-radius:18px;background:color-mix(in srgb,var(--panel-2) 82%,transparent);border:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.cc-voicenote-play{width:30px;height:30px;border-radius:15px;border:none;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.cc-voicenote-track{flex:1;min-width:0;height:4px;border-radius:2px;background:color-mix(in srgb,var(--text-dim) 35%,transparent);overflow:hidden}
+.cc-voicenote-fill{height:100%;background:var(--accent);border-radius:2px}
+.cc-voicenote-duration{font-size:11px;font-weight:700;color:var(--text-dim);min-width:32px;text-align:right}
+.cc-bubble.mine .cc-voicenote{background:color-mix(in srgb,#fff 16%,transparent);border-color:color-mix(in srgb,#fff 28%,transparent)}
+.cc-bubble.mine .cc-voicenote-play{background:#fff;color:var(--accent)}
+.cc-bubble.mine .cc-voicenote-track{background:color-mix(in srgb,#fff 36%,transparent)}
+.cc-bubble.mine .cc-voicenote-fill{background:#fff}
+.cc-bubble.mine .cc-voicenote-duration{color:color-mix(in srgb,#fff 78%,transparent)}
+
+/* composer — the live pill */
+.cc-composer{flex-shrink:0;padding:12px 14px 14px;border-top:1px solid color-mix(in srgb,var(--border) 74%,transparent);background:color-mix(in srgb,var(--panel) 95%,transparent);backdrop-filter:blur(18px)}
+.cc-composer-reply{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;border-left:3px solid var(--accent);border-radius:14px;background:color-mix(in srgb,var(--panel-2) 88%,transparent);padding:8px 10px;color:var(--text-dim);font-size:12px}
+.cc-pending{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.cc-pending-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border-radius:999px;background:color-mix(in srgb,var(--panel-2) 88%,transparent);border:1px solid var(--border);font-size:12px}
+.cc-pending-chip small{color:var(--text-dim)}
+.cc-compose-row{display:flex;align-items:flex-end;gap:8px}
+.cc-compose-bubble{position:relative;display:flex;align-items:flex-end;gap:4px;width:100%;min-height:44px;padding:4px;border:1px solid color-mix(in srgb,var(--border) 76%,transparent);border-radius:999px;background:color-mix(in srgb,var(--panel-2) 84%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,#fff 7%,transparent),0 8px 22px color-mix(in srgb,#000 9%,transparent)}
+.cc-compose-bubble .ta{flex:1;min-width:0;min-height:34px;padding:8px 6px;color:var(--text);font-size:13px;line-height:1.35;display:flex;align-items:center}
+.cc-compose-bubble .ta .plc{color:color-mix(in srgb,var(--text-dim) 82%,transparent)}
+.cc-compose-icon,.cc-compose-action{width:34px;height:34px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:transparent;color:var(--text-dim);cursor:pointer}
+.cc-compose-icon:hover{color:var(--text);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.cc-compose-action{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 8px 18px color-mix(in srgb,var(--accent) 24%,transparent)}
+.cc-sms-counter{margin-top:6px;padding:0 2px;font-size:11px;line-height:1.35;color:var(--text-dim)}
+.cc-attach-menu-wrap{position:relative;flex:0 0 auto}
+.cc-attach-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:40;width:min(18rem,78vw);padding:8px;border:1px solid var(--border);border-radius:16px;background:var(--panel);box-shadow:0 18px 46px color-mix(in srgb,#000 30%,transparent)}
+.cc-attach-menu::after{content:"";position:absolute;left:18px;bottom:-6px;width:12px;height:12px;transform:rotate(45deg);border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--panel)}
+.cc-attach-menu button{width:100%;display:flex;align-items:center;gap:10px;padding:10px;border:0;border-radius:12px;background:transparent;color:var(--text);text-align:left;cursor:pointer;font:inherit}
+.cc-attach-menu button:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.cc-attach-menu button > svg{width:34px;height:34px;padding:8px;border-radius:12px;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2));flex:none}
+.cc-attach-menu button.rcsitem > svg{background:linear-gradient(135deg,#6d28d9,var(--rcs))}
+.cc-attach-menu span{display:flex;min-width:0;flex-direction:column;gap:2px}
+.cc-attach-menu strong{font-size:13px;font-weight:750}
+.cc-attach-menu small{color:var(--text-dim);font-size:11px}
+.cc-attach-menu .menudiv{margin:6px 4px;border-top:1px dashed color-mix(in srgb,var(--rcs) 40%,var(--border));position:relative}
+.cc-attach-menu .menudiv i{position:absolute;top:-8px;left:8px;background:var(--panel);color:var(--rcs);font-size:9px;font-weight:900;letter-spacing:.06em;padding:0 6px;font-style:normal;text-transform:uppercase}
+.cc-composer-disabled{padding:14px 16px;border-top:1px solid var(--border);background:color-mix(in srgb,var(--panel) 92%,transparent)}
+.cc-composer-disabled p{margin:0;color:var(--text-dim);font-size:12px;line-height:1.4}
+
+/* ============ NEW pieces (additive) ============ */
+/* suggested replies — sits ABOVE the composer, chip idiom borrowed from cc-pending-chip */
+.cc-suggest-row{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px}
+.cc-suggest{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid color-mix(in srgb,var(--rcs) 50%,transparent);background:color-mix(in srgb,var(--rcs) 8%,transparent);color:var(--text);font:600 12px Inter;cursor:pointer}
+.cc-suggest svg{color:var(--rcs)}
+/* rich card INSIDE a normal bubble — reuses cc-attach-image-bubble + cc-attach-file idioms */
+.cc-richcard{margin-top:6px;border-radius:14px;overflow:hidden;border:1px solid color-mix(in srgb,#fff 28%,transparent);background:color-mix(in srgb,#fff 10%,transparent)}
+.cc-bubble.theirs .cc-richcard{border-color:color-mix(in srgb,var(--border) 70%,transparent);background:color-mix(in srgb,var(--panel-2) 82%,transparent)}
+.cc-richcard .img{aspect-ratio:16/8;display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px}
+.cc-richcard .bd{padding:8px 11px}
+.cc-richcard .bd b{display:block;font-size:13px}
+.cc-richcard .bd small{color:color-mix(in srgb,#fff 78%,transparent)}
+.cc-bubble.theirs .cc-richcard .bd small{color:var(--text-dim)}
+.cc-richcard .btns{display:grid;border-top:1px solid color-mix(in srgb,#fff 24%,transparent)}
+.cc-bubble.theirs .cc-richcard .btns{border-color:color-mix(in srgb,var(--border) 70%,transparent)}
+.cc-richcard .btns button{display:flex;gap:8px;align-items:center;justify-content:center;border:0;background:transparent;color:#fff;font:700 12.5px Inter;padding:9px;cursor:pointer;border-bottom:1px solid color-mix(in srgb,#fff 24%,transparent)}
+.cc-bubble.theirs .cc-richcard .btns button{color:var(--accent);border-color:color-mix(in srgb,var(--border) 70%,transparent)}
+.cc-richcard .btns button:last-child{border-bottom:0}
+.cc-carousel{display:flex;gap:8px;overflow-x:auto;margin-top:6px;padding-bottom:4px}
+.cc-carousel .cc-richcard{margin-top:0;flex:none;width:200px}
+/* meta additions (inside the existing cc-msg-meta line) */
+.mticks{display:inline-flex}
+.mticks svg{width:13px;height:13px}
+.mticks.read{color:var(--info)}
+.mfall{display:inline-flex;gap:4px;align-items:center;color:var(--warning);font-weight:700}
+.mretry{display:inline-flex;gap:4px;align-items:center;color:var(--info);font-weight:700}
+.mretrybtn{border:0;background:transparent;color:var(--accent);font:700 11px Inter;cursor:pointer;text-decoration:underline;padding:0}
+/* window banner + system lines in the message list */
+.cc-sysline{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px;padding:9px 12px;border-radius:12px;font-size:12px;color:var(--text);background:color-mix(in srgb,var(--info) 10%,transparent);border:1px solid color-mix(in srgb,var(--info) 35%,transparent)}
+.cc-sysline.warn{background:color-mix(in srgb,var(--warning) 11%,transparent);border-color:color-mix(in srgb,var(--warning) 38%,transparent)}
+.cc-sysline.ok{background:color-mix(in srgb,var(--success) 9%,transparent);border-color:color-mix(in srgb,var(--success) 32%,transparent)}
+.cc-migline{align-self:center;text-align:center;margin:0 auto 12px;font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--panel) 70%,transparent);border:1px solid var(--border);border-radius:999px;padding:3px 14px;width:fit-content}
+/* typing dots */
+.cc-typing{display:inline-flex;gap:4px;align-items:center;border:1px solid color-mix(in srgb,var(--border) 78%,transparent);background:color-mix(in srgb,var(--panel) 92%,transparent);border-radius:18px;border-bottom-left-radius:7px;padding:12px 14px}
+.cc-typing i{width:6px;height:6px;border-radius:50%;background:var(--text-dim);animation:blink 1.2s infinite}
+.cc-typing i:nth-child(2){animation-delay:.2s}.cc-typing i:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+/* provider dot in conv-head p (plain text + tiny dot) */
+.pvdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);margin:0 3px 1px 2px}
 
-/* rich cards */
-.rcard{width:262px;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:var(--panel);box-shadow:var(--shadow)}
-.rcard .body{padding:10px 12px}
-.rcard h4{margin:0 0 3px;font-size:13.5px}
-.rcard p{margin:0;font-size:12px;color:var(--text-dim)}
-.rbtns{display:grid;border-top:1px solid var(--border)}
-.rbtns button{display:flex;gap:8px;align-items:center;justify-content:center;border:0;background:transparent;color:var(--accent);font:600 12.5px Inter;padding:9px;cursor:pointer;border-bottom:1px solid var(--border)}
-.rbtns button:last-child{border-bottom:0}
-.carousel{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 8px;max-width:560px}
-.carousel .rcard{flex:none;width:218px}
-.suggs{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 2px}
-.sugg{border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:999px;font:600 12px Inter;padding:5px 13px;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
-.loccard{width:238px;border-radius:14px;overflow:hidden;border:1px solid var(--border);background:var(--panel)}
-.locmap{height:110px;background:
-  linear-gradient(0deg,transparent 48%,color-mix(in srgb,var(--text-dim) 30%,transparent) 49%,transparent 51%),
-  linear-gradient(90deg,transparent 30%,color-mix(in srgb,var(--text-dim) 30%,transparent) 31%,transparent 33%),
-  linear-gradient(45deg,color-mix(in srgb,var(--success) 12%,var(--panel-2)),color-mix(in srgb,var(--info) 14%,var(--panel-2)));position:relative}
-.pin{position:absolute;left:50%;top:42%;transform:translate(-50%,-100%);color:var(--danger)}
-.pin svg{width:26px;height:26px;fill:currentColor;stroke:#fff;stroke-width:1}
-
-/* composer */
-.cc-composer{border-top:1px solid var(--border);background:color-mix(in srgb,var(--panel) 88%,transparent);backdrop-filter:blur(18px);padding:10px 14px}
-.caps{display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
-.cap{width:30px;height:30px;border-radius:9px;border:1px solid var(--border);background:var(--panel-2);display:grid;place-items:center;color:var(--text-dim);cursor:pointer}
-.cap:hover{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
-.cap.off{opacity:.32;pointer-events:none}
-.cap.rcsonly{border-color:color-mix(in srgb,var(--ch-rcs) 45%,transparent);color:var(--ch-rcs)}
-.compline{display:flex;gap:9px;align-items:flex-end}
-.ta{flex:1;background:var(--panel-2);border:1px solid var(--border);border-radius:20px;padding:9px 14px;color:var(--text);font:13px Inter;min-height:38px}
-.ta .plc{color:var(--text-dim)}
-.send{width:38px;height:38px;border-radius:50%;border:0;background:var(--accent);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
-.send.wa{background:var(--ch-wa)} .send.fb{background:var(--ch-fb)} .send.rcs{background:var(--ch-rcs)}
-.compnote{display:flex;gap:8px;align-items:center;margin-top:7px;font-size:11px;color:var(--text-dim)}
-.charc{margin-left:auto;font-size:11px;color:var(--text-dim)}
-.charc b{color:var(--text)}
-
-/* right rail */
-.rail{border-left:1px solid var(--border);background:var(--panel);padding:14px;display:flex;flex-direction:column;gap:12px;font-size:12px}
-.rail h5{margin:0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)}
-.railcard{border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--panel-2)}
-.kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0}
-.kv .k{color:var(--text-dim)} .kv .v{font-weight:600;text-align:right}
-
-/* drawers & modals */
-.modal{border:1px solid var(--border);border-radius:16px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden}
-.modal .mh{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:700}
-.modal .mb{padding:14px 16px}
-.modal .mf{display:flex;gap:9px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--border)}
-.btn{border:1px solid var(--border);background:var(--panel-2);color:var(--text);font:600 12.5px Inter;border-radius:9px;padding:7px 14px;cursor:pointer}
-.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn.ghost{background:transparent}
-.btn.dang{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,transparent)}
-.field{margin:0 0 11px}
-.field label{display:block;font-size:11px;font-weight:700;color:var(--text-dim);margin:0 0 4px}
-.inp{width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:7px 11px;color:var(--text);font:13px Inter}
-.cs{display:flex;align-items:center;justify-content:space-between;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:7px 11px;font:600 13px Inter;cursor:pointer}
-.cs .muted{font-weight:500}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-
-/* state timeline */
+/* message info drawer (NEW surface, styled like cc-side-panel) */
+.cc-info-panel{width:min(400px,100%);border:1px solid color-mix(in srgb,var(--border) 84%,transparent);border-radius:28px;overflow:hidden;background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%,transparent),color-mix(in srgb,var(--panel-2) 88%,transparent));box-shadow:-22px 0 70px color-mix(in srgb,#000 34%,transparent)}
+.cc-info-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid color-mix(in srgb,var(--border) 76%,transparent);font-weight:850}
+.cc-info-body{padding:14px 16px}
 .tl{position:relative;margin:6px 0 0;padding-left:20px}
 .tl::before{content:"";position:absolute;left:6px;top:6px;bottom:6px;width:2px;background:var(--border)}
 .tl .step{position:relative;padding:5px 0 5px 6px}
@@ -224,18 +260,41 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
 .tl .step.bad::before{background:var(--danger);border-color:var(--danger)}
 .tl .step .t{font-weight:700;font-size:12.5px}
 .tl .step .d{font-size:11px;color:var(--text-dim)}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:12px}
+.kv .k{color:var(--text-dim)} .kv .v{font-weight:600;text-align:right}
+.railcard{border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--panel-2) 60%,transparent);margin-top:10px}
 
-/* toggles */
+/* modals for builders / admin (new surfaces, portal style) */
+.modal{border:1px solid var(--border);border-radius:16px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden}
+.modal .mh{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:700}
+.modal .mb{padding:14px 16px}
+.modal .mf{display:flex;gap:9px;justify-content:flex-end;align-items:center;padding:12px 16px;border-top:1px solid var(--border)}
+.btn{border:1px solid var(--border);background:var(--panel-2);color:var(--text);font:600 12.5px Inter;border-radius:9px;padding:7px 14px;cursor:pointer}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.rcs{background:var(--rcs);border-color:var(--rcs);color:#fff}
+.btn.ghost{background:transparent}
+.btn.dang{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,transparent)}
+.field{margin:0 0 11px}
+.field label{display:block;font-size:11px;font-weight:700;color:var(--text-dim);margin:0 0 4px}
+.inp{width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:7px 11px;color:var(--text);font:13px Inter}
+.cs{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:7px 11px;font:600 13px Inter;cursor:pointer}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.fchip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid var(--border);color:var(--text-dim);background:var(--panel-2)}
+.fchip.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--text)}
+.ph-img{display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px}
+.grad1{background:linear-gradient(135deg,#f6d365,#fda085)} .grad2{background:linear-gradient(135deg,#84fab0,#8fd3f4)}
+.grad3{background:linear-gradient(135deg,#a18cd1,#fbc2eb)} .grad4{background:linear-gradient(135deg,#30cfd0,#330867)}
+.grad5{background:linear-gradient(135deg,#243949,#517fa4)}
+.banner{display:flex;gap:9px;align-items:flex-start;border-radius:11px;padding:9px 13px;font-size:12px;margin:0 0 10px}
+.banner.warn{background:color-mix(in srgb,var(--warning) 12%,transparent);border:1px solid color-mix(in srgb,var(--warning) 40%,transparent)}
+.banner.info{background:color-mix(in srgb,var(--info) 10%,transparent);border:1px solid color-mix(in srgb,var(--info) 35%,transparent)}
 .sw{width:34px;height:19px;border-radius:999px;background:var(--border);position:relative;flex:none;cursor:pointer}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:.15s}
-.sw.on{background:var(--success)} .sw.on::after{left:17px}
-.sw.acc.on{background:var(--accent)}
-
-/* admin routing */
+.sw.on{background:var(--accent)} .sw.on::after{left:17px}
 .routecard{border:1px solid var(--border);border-radius:14px;background:var(--panel);overflow:hidden}
 .routecard .rh{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
 .routecard .rb{padding:12px 16px}
-.rrow{display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px dashed color-mix(in srgb,var(--border) 60%,transparent)}
+.rrow{display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px dashed color-mix(in srgb,var(--border) 60%,transparent)}
 .rrow:last-child{border-bottom:0}
 .rrow .l{font-size:12px;font-weight:700;color:var(--text-dim);display:flex;gap:7px;align-items:center}
 .matrix{width:100%;border-collapse:collapse;font-size:12px}
@@ -243,32 +302,30 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
 .matrix th{background:var(--panel-2);font-size:11px}
 .matrix td:first-child,.matrix th:first-child{text-align:left;font-weight:700}
 .ok{color:var(--success);font-weight:800} .no{color:var(--text-dim)} .pt{color:var(--warning);font-weight:700}
-.hbar{display:flex;align-items:center;gap:8px}
-.hdot{width:9px;height:9px;border-radius:50%}
+.hdot{display:inline-block;width:9px;height:9px;border-radius:50%}
 .hdot.up{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 22%,transparent)}
-.hdot.deg{background:var(--warning)} .hdot.down{background:var(--danger)}
+.hdot.deg{background:var(--warning)}
 
 /* phones */
 .phones{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
 .phone{width:300px;border-radius:38px;border:1px solid var(--border);background:var(--bg-soft);box-shadow:var(--shadow);overflow:hidden;position:relative}
-.phone .screenin{display:flex;flex-direction:column;min-height:600px}
-.phone .capt{position:absolute;inset:auto 0 -26px;text-align:center;font-size:11px;color:var(--text-dim)}
+.phone.android{border-radius:26px}
+.phone .screenin{display:flex;flex-direction:column;min-height:590px}
 .ph-holder{padding-bottom:34px;position:relative}
+.ph-holder .capt{position:absolute;inset:auto 0 6px;text-align:center;font-size:11px;color:var(--text-dim)}
 .ios-status{display:flex;justify-content:space-between;align-items:center;padding:10px 22px 4px;font-size:12px;font-weight:700}
 .ios-notch{position:absolute;left:50%;top:8px;transform:translateX(-50%);width:110px;height:26px;border-radius:16px;background:#000;z-index:5}
 .and-status{display:flex;justify-content:space-between;align-items:center;padding:8px 18px 4px;font-size:11.5px;font-weight:600}
 .mhead{display:flex;align-items:center;gap:9px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--panel)}
 .mhead .tt{font-weight:800;font-size:16px}
-.mtabs{display:flex;border-top:1px solid var(--border);background:var(--panel);padding:6px 4px 14px}
-.mtab{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:9.5px;color:var(--text-dim);font-weight:600}
+.mtabs{display:flex;border-top:1px solid var(--border);background:var(--panel);padding:6px 2px 14px}
+.mtab{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:8.5px;color:var(--text-dim);font-weight:600;min-width:0}
 .mtab.on{color:var(--accent)}
-.mtab svg{width:19px;height:19px}
+.mtab svg{width:17px;height:17px}
 .mlist{flex:1;overflow:hidden}
-.mthread{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
-.mscroll{flex:1;padding:12px;display:flex;flex-direction:column;gap:4px;background:var(--bg-soft)}
+.mthread{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);align-items:center}
+.mscroll{flex:1;padding:12px;display:flex;flex-direction:column;background:var(--bg-soft);overflow:hidden}
 .mcomp{border-top:1px solid var(--border);background:var(--panel);padding:8px 10px}
-.fab{position:absolute;right:16px;bottom:86px;width:52px;height:52px;border-radius:16px;background:var(--accent);color:#fff;display:grid;place-items:center;box-shadow:0 10px 24px color-mix(in srgb,var(--accent) 45%,transparent)}
-.fab svg{width:22px;height:22px}
 .sheet{border-top-left-radius:20px;border-top-right-radius:20px;background:var(--panel);border:1px solid var(--border);border-bottom:0;padding:8px 16px 18px;margin-top:auto}
 .grab{width:38px;height:4px;border-radius:2px;background:var(--border);margin:4px auto 12px}
 .sheetgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;text-align:center;font-size:10.5px;color:var(--text-dim)}
@@ -276,19 +333,6 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
 .notif{background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--border);border-radius:16px;padding:10px 12px;margin:6px 10px;backdrop-filter:blur(10px);box-shadow:var(--shadow)}
 .notif .nh{display:flex;gap:7px;align-items:center;font-size:10.5px;color:var(--text-dim);margin-bottom:3px}
 .notif .napp{width:15px;height:15px;border-radius:4px;background:linear-gradient(135deg,var(--accent),var(--accent-2))}
-
-/* misc states */
-.skel{background:linear-gradient(90deg,var(--panel-2) 25%,color-mix(in srgb,var(--panel-2) 60%,var(--panel)) 37%,var(--panel-2) 63%);background-size:400% 100%;animation:sk 1.4s infinite;border-radius:8px}
-@keyframes sk{0%{background-position:100% 0}100%{background-position:0 0}}
-.empty{display:grid;place-items:center;text-align:center;padding:60px 20px;color:var(--text-dim)}
-.empty .big{width:64px;height:64px;border-radius:20px;background:var(--panel-2);display:grid;place-items:center;margin:0 auto 12px}
-.banner{display:flex;gap:9px;align-items:flex-start;border-radius:11px;padding:9px 13px;font-size:12px;margin:0 0 10px}
-.banner.warn{background:color-mix(in srgb,var(--warning) 12%,transparent);border:1px solid color-mix(in srgb,var(--warning) 40%,transparent);color:var(--text)}
-.banner.err{background:color-mix(in srgb,var(--danger) 11%,transparent);border:1px solid color-mix(in srgb,var(--danger) 38%,transparent)}
-.banner.info{background:color-mix(in srgb,var(--info) 10%,transparent);border:1px solid color-mix(in srgb,var(--info) 35%,transparent)}
-.cols2{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start}
-.cols3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;align-items:start}
-@media(max-width:1100px){.cols2,.cols3{grid-template-columns:1fr}.chatgrid.withrail{grid-template-columns:280px 1fr}.rail{display:none}}
 </style>
 </head>
 <body>
@@ -297,8 +341,7 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
 <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
 <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
 <symbol id="i-img" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
-<symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
-<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/></symbol>
 <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></symbol>
 <symbol id="i-card" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M2 10h20"/></symbol>
 <symbol id="i-car2" viewBox="0 0 24 24"><rect x="2" y="6" width="9" height="12" rx="2"/><rect x="14" y="6" width="9" height="12" rx="2"/></symbol>
@@ -307,617 +350,631 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
 <symbol id="i-dcheck" viewBox="0 0 24 24"><path d="M18 6 7 17l-4-4"/><path d="m22 10-7.5 7.5L13 16"/></symbol>
 <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
 <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
-<symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4M12 17h.01"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></symbol>
 <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
 <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
 <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"/></symbol>
 <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
 <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
-<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></symbol>
 <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
 <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
-<symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
-<symbol id="i-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+<symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4m0 14v4M4.2 4.2l2.8 2.8m10 10 2.8 2.8M1 12h4m14 0h4M4.2 19.8l2.8-2.8m10-10 2.8-2.8"/></symbol>
 <symbol id="i-cam" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
 <symbol id="i-play" viewBox="0 0 24 24"><path d="m6 4 14 8-14 8z"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></symbol>
+<symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
 <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
 <symbol id="i-swap" viewBox="0 0 24 24"><path d="M17 3 21 7l-4 4M21 7H8M7 21l-4-4 4-4M3 17h13"/></symbol>
-<symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
-<symbol id="i-vm" viewBox="0 0 24 24"><circle cx="6" cy="12" r="4"/><circle cx="18" cy="12" r="4"/><path d="M6 16h12"/></symbol>
 <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
-<symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></symbol>
+<symbol id="i-vm" viewBox="0 0 24 24"><circle cx="6" cy="12" r="4"/><circle cx="18" cy="12" r="4"/><path d="M6 16h12"/></symbol>
+<symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 17H4V7l7 5-7 5"/><path d="M4 12h9a7 7 0 0 1 7 7v1"/></symbol>
 <symbol id="i-pinfill" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/></symbol>
 </defs></svg>
 
 <div class="mockbar">
-  <span class="mockpill">MOCKUP</span>
-  <span class="small" style="font-weight:700">Loopcom Messaging — unified inbox · SMS · MMS · RCS · WhatsApp · Messenger · Telnyx / SignalWire / VoIP.ms</span>
+  <span class="mockpill">MOCKUP v2</span>
+  <span class="small" style="font-weight:700">Loopcom Messaging — existing look preserved; new features are additive and marked</span>
   <div class="jump">
-    <a href="#web">Web</a><a href="#composers">Composers</a><a href="#rich">RCS builder</a><a href="#info">Message info</a><a href="#admin">Admin routing</a><a href="#iphone">iPhone</a><a href="#android">Android</a><a href="#states">States</a>
+    <a href="#base">Today</a><a href="#divide">RCS divide</a><a href="#rcs">RCS thread</a><a href="#wafb">WhatsApp · Messenger</a><a href="#states">States</a><a href="#info">Message info</a><a href="#builders">Builders</a><a href="#admin">Admin</a><a href="#mobile">Mobile</a>
   </div>
-  <div class="tgl"><button id="tDark" class="on" onclick="setTheme('dark')">Dark</button><button id="tLight" onclick="setTheme('light')">Light</button></div>
+  <div style="margin-left:auto;display:flex;gap:10px">
+    <div class="tgl"><button id="mOn" class="on" onclick="setMarks(true)">NEW markers</button><button id="mOff" onclick="setMarks(false)">Hide markers</button></div>
+    <div class="tgl"><button id="tDark" class="on" onclick="setTheme('dark')">Dark</button><button id="tLight" onclick="setTheme('light')">Light</button></div>
+  </div>
 </div>
 
 <div class="wrap">
 
-<!-- ============================================================= WEB -->
-<div class="sect" id="web">
-  <h2>1 · Web — the unified inbox</h2>
-  <p class="sub">One conversation list for every channel. The channel lives on the <b>conversation</b> (badge on the avatar), the provider lives on the <b>number</b> (header chip) — neither creates a separate inbox. Everything that exists today (shared inboxes, reactions, voice notes, typing, read state, archive) stays.</p>
+<!-- =============================== 0 · BASE =============================== -->
+<div class="sect" id="base">
+  <h2>1 · Today's chat page — untouched</h2>
+  <p class="sub">This is the current <span class="mono">/chat</span> page reproduced from its real markup and CSS: the Messages workspace, the thread rows with the green <b>SMS</b> chip and New/Read state, and the conversation slide-in panel with your bubbles, the pill composer, and the plus attach menu. <b>Zero changes on this screen.</b> Everything the upgrade adds is shown on the later screens with an amber NEW marker — hit “Hide markers” up top and the page underneath is this one.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W1</span> Conversation list + RCS conversation + contact rail</h3>
+  <h3><span class="no">W1</span> The page as it is today (SMS conversation open)</h3>
   <div class="browser">
-    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.loopcom.net/chat</div></div>
-    <div class="shell">
-      <div class="sidebar">
-        <div class="sb-brand"><span class="sb-mark">L</span> Loopcom</div>
-        <div class="sb-label">Workspace</div>
-        <div class="sb-link"><svg class="ic"><use href="#i-home"/></svg> Overview</div>
-        <div class="sb-link active"><svg class="ic"><use href="#i-msg"/></svg> Chat <span class="b">5</span></div>
-        <div class="sb-link"><svg class="ic"><use href="#i-phone"/></svg> Calls</div>
-        <div class="sb-link"><svg class="ic"><use href="#i-vm"/></svg> Voicemail</div>
-        <div class="sb-link"><svg class="ic"><use href="#i-users"/></svg> Team</div>
-        <div class="sb-label">Admin</div>
-        <div class="sb-link"><svg class="ic"><use href="#i-swap"/></svg> Messaging routing</div>
-        <div class="sb-link"><svg class="ic"><use href="#i-set"/></svg> Settings</div>
-      </div>
-      <div class="main">
-        <div class="chatgrid withrail">
-          <!-- thread list -->
-          <div class="cc-list">
-            <div class="cc-list-head">
-              <div class="cc-search"><svg class="ic"><use href="#i-search"/></svg> Search people &amp; messages</div>
-              <div class="filters">
-                <span class="fchip on">All</span><span class="fchip">Unread</span><span class="fchip">Texts</span><span class="fchip">WhatsApp</span><span class="fchip">Messenger</span><span class="fchip">Team</span>
-              </div>
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.connectcomunications.com/chat</div></div>
+    <div style="display:flex;gap:14px;padding:14px;background:var(--bg-soft)">
+      <div class="cc-workspace" style="flex:1;min-width:0">
+        <div class="cc-inbox">
+          <div class="cc-inbox-head"><div><h2>Messages</h2><p>SMS, tenant groups, and internal chats</p></div><button class="cc-new-btn">New chat</button></div>
+          <div class="cc-search"><svg class="ic"><use href="#i-search"/></svg> Search chats...</div>
+          <div class="cc-thread-list">
+            <div class="cc-thread pinned">
+              <span class="cc-avatar"><svg class="ic"><use href="#i-users"/></svg></span>
+              <span class="cc-thread-main">
+                <span class="cc-thread-top"><span class="cc-thread-name"><strong>Company chat</strong><span class="cc-state read">Read</span></span><small>Mon</small></span>
+                <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-tenant_group">Group</span></span><span class="cc-thread-preview">Ari: posted the schedule</span></span>
+              </span>
             </div>
             <div class="cc-thread active">
-              <div class="ava">RA<span class="chbadge rcs"><svg><use href="#i-zap"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Riverside Auto Body</strong><span class="tag rcs">RCS</span><span class="cc-t-time">2:41 PM</span></div>
-                <div class="cc-prev">Tapped: “Book an appointment” <span class="unread">2</span></div>
-              </div>
+              <span class="cc-avatar t2">DK</span>
+              <span class="cc-thread-main">
+                <span class="cc-thread-top"><span class="cc-thread-name"><strong>Dovid Klein</strong><span class="cc-state new">New</span></span><small>1:58 PM</small></span>
+                <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-sms">SMS</span><span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span></span><span class="cc-thread-preview">Sounds good, see you at 4</span></span>
+              </span>
+              <span class="cc-unread">2</span>
             </div>
             <div class="cc-thread">
-              <div class="ava g3">MG<span class="chbadge wa"><svg><use href="#i-msg"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Malky Gross</strong><span class="tag wa">WhatsApp</span><span class="cc-t-time">2:12 PM</span></div>
-                <div class="cc-prev">Voice note · 0:19 <span class="unread">1</span></div>
-              </div>
+              <span class="cc-avatar t3">SG</span>
+              <span class="cc-thread-main">
+                <span class="cc-thread-top"><span class="cc-thread-name"><strong>Shaindy Gross</strong><span class="cc-state read">Read</span></span><small>11:03 AM</small></span>
+                <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel">DM</span></span><span class="cc-thread-preview">You: thanks!</span></span>
+              </span>
             </div>
             <div class="cc-thread">
-              <div class="ava g2">DK<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Dovid Klein</strong><span class="tag sms">SMS</span><span class="cc-t-time">1:58 PM</span></div>
-                <div class="cc-prev">You: Sounds good, see you at 4</div>
-              </div>
-            </div>
-            <div class="cc-thread">
-              <div class="ava g4">HW<span class="chbadge fb"><svg><use href="#i-msg"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Hudson Wholesale</strong><span class="tag fb">Messenger</span><span class="cc-t-time">1:20 PM</span></div>
-                <div class="cc-prev">Do you deliver to Monroe?</div>
-              </div>
-            </div>
-            <div class="cc-thread">
-              <div class="ava g5">FR<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Front desk · (845) 555-0164</strong><span class="tag gray">Shared</span><span class="cc-t-time">12:44 PM</span></div>
-                <div class="cc-prev"><span class="fail-dot"></span> 1 message failed — tap to retry</div>
-              </div>
-            </div>
-            <div class="cc-thread">
-              <div class="ava g3">ST<span class="chbadge sms"><svg><use href="#i-img"/></svg></span></div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Shaindy Teitel</strong><span class="tag mms">MMS</span><span class="cc-t-time">11:03 AM</span></div>
-                <div class="cc-prev">📷 Photo · “here’s the invoice”</div>
-              </div>
-            </div>
-            <div class="cc-thread">
-              <div class="ava">TE</div>
-              <div class="cc-t-main">
-                <div class="cc-t-top"><strong>Team · Estimates</strong><span class="tag gray">Group</span><span class="cc-t-time">Mon</span></div>
-                <div class="cc-prev">Ari: posted the schedule</div>
-              </div>
+              <span class="cc-avatar t5"><svg class="ic"><use href="#i-user"/></svg></span>
+              <span class="cc-thread-main">
+                <span class="cc-thread-top"><span class="cc-thread-name"><strong>(845) 555-0142</strong><span class="cc-state read">Read</span></span><small>Yesterday</small></span>
+                <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-sms">SMS</span><span class="cc-sms-inbox-badge cc-sms-inbox-personal">Personal</span></span><span class="cc-thread-preview">Photo</span></span>
+              </span>
+              <svg class="ic cc-thread-alert"><use href="#i-alert"/></svg>
             </div>
           </div>
-          <!-- conversation -->
-          <div class="cc-conv">
-            <div class="cc-head">
-              <div class="ava">RA<span class="chbadge rcs"><svg><use href="#i-zap"/></svg></span></div>
-              <div class="who">
-                <strong>Riverside Auto Body</strong>
-                <div class="line"><span class="tag rcs">RCS</span> +1 (845) 555-0198 · via <b>(845) 555-0164</b> <span class="pv telnyx">Telnyx</span></div>
-              </div>
-              <div class="spacer"></div>
-              <div class="iconbtn"><svg class="ic"><use href="#i-phone"/></svg></div>
-              <div class="iconbtn"><svg class="ic"><use href="#i-search"/></svg></div>
-              <div class="iconbtn"><svg class="ic"><use href="#i-info"/></svg></div>
-            </div>
-            <div class="cc-scroll">
-              <div class="daych">Today</div>
-              <div class="row"><div class="wrapb">
-                <div class="cc-bubble theirs">Hi — do you have any openings this week for a bumper repaint?</div>
-                <div class="meta">2:31 PM</div>
-              </div></div>
-              <div class="row mine"><div class="wrapb">
-                <div class="rcard">
-                  <div class="ph-img grad1">Bumper repaint — before/after</div>
-                  <div class="body"><h4>Bumper repaint special</h4><p>$249 this week · 1-day turnaround · free pickup in Monsey</p></div>
-                  <div class="rbtns">
-                    <button><svg class="ic"><use href="#i-clock"/></svg> Book an appointment</button>
-                    <button><svg class="ic"><use href="#i-phone"/></svg> Call us</button>
-                    <button><svg class="ic"><use href="#i-globe"/></svg> See all services</button>
-                  </div>
-                </div>
-                <div class="meta">Sent as rich card · 2:33 PM <span class="ticks read"><svg class="ic"><use href="#i-dcheck"/></svg></span> Read 2:35 PM</div>
-              </div></div>
-              <div class="row"><div class="wrapb">
-                <div class="cc-bubble theirs">Tapped: <b>Book an appointment</b></div>
-                <div class="meta">2:41 PM</div>
-              </div></div>
-              <div class="row"><div class="wrapb"><div class="typing"><i></i><i></i><i></i></div></div></div>
-            </div>
-            <div class="cc-composer">
-              <div class="suggs">
-                <span class="sugg">Tomorrow 9:00 AM</span><span class="sugg">Tomorrow 1:30 PM</span><span class="sugg">Thursday 10:00 AM</span><span class="sugg"><svg class="ic"><use href="#i-pin"/></svg> Send our address</span>
-              </div>
-              <div class="caps">
-                <span class="cap"><svg class="ic"><use href="#i-img"/></svg></span>
-                <span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span>
-                <span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span>
-                <span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span>
-                <span class="cap rcsonly" title="Rich card"><svg class="ic"><use href="#i-card"/></svg></span>
-                <span class="cap rcsonly" title="Carousel"><svg class="ic"><use href="#i-car2"/></svg></span>
-                <span class="cap rcsonly" title="Suggested replies"><svg class="ic"><use href="#i-zap"/></svg></span>
-              </div>
-              <div class="compline"><div class="ta"><span class="plc">Message Riverside Auto Body…</span></div><button class="send"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-              <div class="compnote"><svg class="ic" style="color:var(--ch-rcs)"><use href="#i-zap"/></svg> RCS active — typing, read receipts &amp; rich media on. Falls back to MMS/SMS automatically.</div>
-            </div>
-          </div>
-          <!-- rail -->
-          <div class="rail">
-            <h5>Contact</h5>
-            <div class="railcard">
-              <div style="display:flex;gap:10px;align-items:center"><div class="ava">RA</div><div><b>Riverside Auto Body</b><div class="tiny muted">CRM · Customer since 2024</div></div></div>
-              <div class="kv" style="margin-top:8px"><span class="k">Mobile</span><span class="v">+1 (845) 555-0198</span></div>
-              <div class="kv"><span class="k">RCS</span><span class="v" style="color:var(--success)">Capable ✓</span></div>
-              <div class="kv"><span class="k">WhatsApp</span><span class="v" style="color:var(--success)">Linked ✓</span></div>
-            </div>
-            <h5>This conversation</h5>
-            <div class="railcard">
-              <div class="kv"><span class="k">Our number</span><span class="v">(845) 555-0164</span></div>
-              <div class="kv"><span class="k">Provider</span><span class="v">Telnyx <span class="pv telnyx">primary</span></span></div>
-              <div class="kv"><span class="k">Fallback</span><span class="v">SignalWire</span></div>
-              <div class="kv"><span class="k">Inbox</span><span class="v">Shared · 6 people</span></div>
-            </div>
-            <h5>Other channels</h5>
-            <div class="railcard">
-              <div class="kv"><span class="k"><span class="tag wa">WhatsApp</span></span><span class="v muted">3 msgs · May</span></div>
-              <div class="kv"><span class="k"><span class="tag sms">SMS</span></span><span class="v muted">41 msgs</span></div>
-              <div class="tiny muted" style="margin-top:6px">One contact, one history — switch channel from the composer.</div>
-            </div>
-          </div>
+        </div>
+        <div class="cc-stage">
+          <div class="cc-stage-empty"><svg class="ic"><use href="#i-msg"/></svg><strong>Select a conversation</strong><span class="small">Choose a thread or start a new SMS / internal Connect chat.</span></div>
         </div>
       </div>
-    </div>
-  </div>
-  <p class="why"><b>Why:</b> this is today’s three-pane chat page, upgraded in place — thread list classes and bubbles are the live <span class="mono">.cc-*</span> vocabulary. The channel badge sits on the avatar (scannable at list speed), the provider chip sits in the header and the rail because the provider is a property of <i>our number</i>, not of the customer. Suggested replies render above the composer exactly where quick-reactions already appear, so nothing moves for SMS-only users — they simply never see the purple RCS tools.</p>
-</div>
-
-<div class="screen">
-  <h3><span class="no">W2</span> SMS/MMS conversation — everything today’s users have, plus honest states</h3>
-  <div class="cols2">
-    <div class="browser"><div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.loopcom.net/chat · SMS via VoIP.ms</div></div>
-      <div class="cc-conv" style="min-height:520px">
-        <div class="cc-head">
-          <div class="ava g2">DK<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div>
-          <div class="who"><strong>Dovid Klein</strong><div class="line"><span class="tag sms">SMS</span> +1 (845) 555-0142 · via (845) 555-0110 <span class="pv vms">VoIP.ms</span></div></div>
-          <div class="spacer"></div><div class="iconbtn"><svg class="ic"><use href="#i-info"/></svg></div>
+      <div class="cc-side-panel"><div class="cc-conversation">
+        <div class="cc-conv-head">
+          <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+          <span class="cc-avatar large t2">DK</span>
+          <div class="cc-conv-title"><h2>Dovid Klein</h2><p>Text message · <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span> · +18455550142</p></div>
+          <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          <button class="cc-call-btn"><svg class="ic"><use href="#i-phone"/></svg> <span>Call</span></button>
         </div>
-        <div class="cc-scroll">
-          <div class="daych">Today</div>
-          <div class="row"><div class="wrapb">
-            <div class="cc-bubble theirs">Can you send the estimate?</div><div class="meta">1:44 PM</div>
+        <div class="cc-message-list">
+          <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+            <div class="cc-msg-sender">Dovid Klein</div>
+            <div class="cc-bubble theirs"><div class="cc-msg-body">Can you send the estimate?</div></div>
+            <div class="cc-msg-meta"><span>1:44 PM</span></div>
           </div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="mediab"><div class="ph-img grad5">estimate-1042.pdf preview</div></div>
-            <div class="cc-bubble mine" style="margin-top:4px">Here you go — page 2 has the parts breakdown.</div>
-            <div class="reacts"><span>👍 1</span></div>
-            <div class="meta">Sent as MMS · 1:51 PM <span class="ticks dlv"><svg class="ic"><use href="#i-check"/></svg></span> Sent</div>
+          <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+            <div class="cc-bubble mine">
+              <div class="cc-msg-body">Here you go — page 2 has the parts breakdown.</div>
+              <div class="cc-attach-stack"><div class="cc-attach-file"><svg class="ic"><use href="#i-file"/></svg><span>estimate-1042.pdf <small>· 218 KB</small></span></div></div>
+              <button class="cc-msg-more"><svg class="ic"><use href="#i-dots"/></svg></button>
+            </div>
+            <div class="cc-msg-meta mine"><span>1:51 PM</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg></div>
+            <div class="cc-reactions mine"><button>👍 1</button></div>
           </div></div>
-          <div class="row"><div class="wrapb">
-            <div class="cc-bubble theirs voice"><svg class="ic"><use href="#i-play"/></svg><span class="wavef"><i style="height:6px"></i><i style="height:12px"></i><i style="height:18px"></i><i style="height:9px"></i><i style="height:15px"></i><i style="height:7px"></i><i style="height:13px"></i><i style="height:17px"></i><i style="height:8px"></i><i style="height:12px"></i></span><span class="tiny">0:12</span></div>
-            <div class="meta">1:56 PM</div>
+          <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+            <div class="cc-msg-sender">Dovid Klein</div>
+            <div class="cc-bubble theirs"><div class="cc-voicenote"><button class="cc-voicenote-play"><svg class="ic" style="width:13px;height:13px"><use href="#i-play"/></svg></button><span class="cc-voicenote-track"><span class="cc-voicenote-fill" style="width:35%"></span></span><span class="cc-voicenote-duration">0:12</span></div></div>
+            <div class="cc-msg-meta"><span>1:56 PM</span></div>
           </div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="cc-bubble mine">Sounds good, see you at 4</div>
-            <div class="meta">1:58 PM <span class="ticks dlv"><svg class="ic"><use href="#i-check"/></svg></span> Sent <span class="tiny muted">· delivery receipts not supported on this number</span></div>
+          <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+            <div class="cc-bubble mine"><div class="cc-msg-body">Sounds good, see you at 4</div></div>
+            <div class="cc-msg-meta mine"><span>1:58 PM</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg></div>
           </div></div>
         </div>
         <div class="cc-composer">
-          <div class="caps">
-            <span class="cap"><svg class="ic"><use href="#i-img"/></svg></span>
-            <span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span>
-            <span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span>
-            <span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span>
-            <span class="cap off" title="Rich cards need RCS"><svg class="ic"><use href="#i-card"/></svg></span>
-            <span class="cap off"><svg class="ic"><use href="#i-car2"/></svg></span>
-          </div>
-          <div class="compline"><div class="ta">Thanks Dovid, confirming Thursday|</div><button class="send"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-          <div class="compnote"><svg class="ic"><use href="#i-info"/></svg> SMS — photos &amp; files send as MMS. <span class="charc"><b>31</b> / 160 · 1 segment</span></div>
+          <div class="cc-compose-row"><div class="cc-compose-bubble">
+            <button class="cc-compose-icon"><svg class="ic" style="width:19px;height:19px"><use href="#i-smile"/></svg></button>
+            <button class="cc-compose-icon"><svg class="ic" style="width:20px;height:20px"><use href="#i-plus"/></svg></button>
+            <div class="ta"><span class="plc">Message Dovid Klein...</span></div>
+            <button class="cc-compose-action"><svg class="ic" style="width:19px;height:19px"><use href="#i-mic"/></svg></button>
+          </div></div>
+          <div class="cc-sms-counter">23 / 160 · 1 segment</div>
         </div>
-      </div>
-    </div>
-    <div>
-      <div class="modal">
-        <div class="mh"><svg class="ic"><use href="#i-shield"/></svg> State honesty rules (built into the capability registry)</div>
-        <div class="mb small">
-          <div class="kv"><span class="k">Telnyx / SignalWire SMS</span><span class="v">queued → sent → <b>delivered</b> (real DLR)</span></div>
-          <div class="kv"><span class="k">VoIP.ms SMS</span><span class="v">queued → <b>sent</b> — no delivery receipt exists, so none is shown</span></div>
-          <div class="kv"><span class="k">RCS / WhatsApp / Messenger</span><span class="v">… → delivered → <b>read</b></span></div>
-          <div class="kv"><span class="k">Team chat (internal)</span><span class="v">read receipts, as today</span></div>
-          <p class="muted" style="margin:10px 0 0">A checkmark is only ever rendered from a normalized provider event. If a provider can’t report a state, the UI says so in the meta line instead of pretending.</p>
-        </div>
-      </div>
-      <p class="why"><b>Why:</b> the SMS thread is deliberately boring — it is today’s screen. The one visible change is honesty: VoIP.ms sends no delivery receipts, so its messages cap at “Sent” with a plain-language note, while Telnyx/SignalWire numbers earn “Delivered.” Voice notes, reactions, the char counter and MMS previews all carry over untouched.</p>
+      </div></div>
     </div>
   </div>
+  <p class="why"><b>Why it's here:</b> this screen is the contract. Bubble geometry, the meta line ("1:51 PM · sent ✓"), reactions, the voice-note widget, the pill composer with emoji/plus/mic, the SMS counter, thread rows with New/Read — all reproduced from the live components so every later screen can be diffed against it by eye. Nothing on the following screens moves or restyles any of this.</p>
+</div>
+
+<!-- =============================== DIVIDE =============================== -->
+<div class="sect" id="divide">
+  <h2>2 · The divide: what the user sees with RCS vs without</h2>
+  <p class="sub">Same composer, same plus button, same menu. The only difference: on a conversation that is RCS-capable, the attach menu grows a marked <b>Rich messaging</b> group, and suggestion chips can appear above the composer. On a plain SMS conversation the menu is byte-identical to today's.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W3</span> WhatsApp conversation — the 24-hour window, made visible</h3>
+  <h3><span class="no">W2</span> The plus menu — SMS thread (left, unchanged) vs RCS thread (right, three added rows)</h3>
   <div class="cols2">
-    <div class="browser"><div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.loopcom.net/chat · WhatsApp Business</div></div>
-      <div class="cc-conv" style="min-height:500px">
-        <div class="cc-head">
-          <div class="ava g3">MG<span class="chbadge wa"><svg><use href="#i-msg"/></svg></span></div>
-          <div class="who"><strong>Malky Gross</strong><div class="line"><span class="tag wa">WhatsApp</span> +1 (347) 555-0177 · via Loopcom WA Business <span class="pv telnyx">Telnyx</span></div></div>
-          <div class="spacer"></div><div class="iconbtn"><svg class="ic"><use href="#i-info"/></svg></div>
-        </div>
-        <div class="cc-scroll">
-          <div class="banner info"><svg class="ic"><use href="#i-clock"/></svg><div><b>Reply window: 22h 14m left.</b> Customer messaged at 2:12 PM — free-form replies allowed until tomorrow 2:12 PM, then approved templates only.</div></div>
-          <div class="row"><div class="wrapb">
-            <div class="cc-bubble theirs voice"><svg class="ic"><use href="#i-play"/></svg><span class="wavef"><i style="height:8px"></i><i style="height:14px"></i><i style="height:10px"></i><i style="height:18px"></i><i style="height:12px"></i><i style="height:7px"></i><i style="height:16px"></i><i style="height:9px"></i></span><span class="tiny">0:19</span></div>
-            <div class="meta">2:12 PM</div>
-          </div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="cc-bubble wa mine">Got it! Your order is packed — want pickup or delivery?</div>
-            <div class="meta">2:15 PM <span class="ticks read"><svg class="ic"><use href="#i-dcheck"/></svg></span> Read</div>
-          </div></div>
-          <div class="row"><div class="wrapb">
-            <div class="cc-bubble theirs">Delivery please 🙏</div><div class="meta">2:16 PM</div>
-          </div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="loccard"><div class="locmap"><span class="pin"><svg><use href="#i-pinfill"/></svg></span></div><div style="padding:8px 11px"><b class="small">Driver location — live</b><div class="tiny muted">Arriving ~4:20 PM</div></div></div>
-            <div class="meta">3:48 PM <span class="ticks dlv"><svg class="ic"><use href="#i-dcheck"/></svg></span> Delivered</div>
-          </div></div>
-        </div>
-        <div class="cc-composer">
-          <div class="caps">
-            <span class="cap"><svg class="ic"><use href="#i-img"/></svg></span><span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span><span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span><span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span>
-            <span class="cap" title="Templates" style="border-color:color-mix(in srgb,var(--ch-wa) 45%,transparent);color:var(--ch-wa)"><svg class="ic"><use href="#i-file"/></svg></span>
-          </div>
-          <div class="compline"><div class="ta"><span class="plc">Message on WhatsApp…</span></div><button class="send wa"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
+    <div class="modal"><div class="mh"><span class="cc-channel cc-channel-sms">SMS</span> conversation — today's menu, unchanged</div>
+      <div class="mb" style="display:flex;justify-content:center;padding:26px 16px">
+        <div class="cc-attach-menu" style="position:static;width:min(18rem,100%)">
+          <button><svg class="ic"><use href="#i-img"/></svg><span><strong>Photos / videos</strong><small>Images, MP4, WebM</small></span></button>
+          <button><svg class="ic"><use href="#i-file"/></svg><span><strong>Files</strong><small>PDF, docs, sheets, audio</small></span></button>
+          <button><svg class="ic"><use href="#i-pin"/></svg><span><strong>Location</strong><small>Share current location</small></span></button>
         </div>
       </div>
     </div>
-    <div>
-      <div class="modal">
-        <div class="mh"><svg class="ic" style="color:var(--ch-wa)"><use href="#i-clock"/></svg> Window expired — template picker replaces the composer</div>
-        <div class="mb">
-          <div class="banner warn"><svg class="ic"><use href="#i-alert"/></svg><div><b>Reply window closed.</b> Meta only allows approved templates until Malky replies again. Free-form typing is disabled — never silently dropped.</div></div>
-          <div class="field"><label>Approved templates</label>
-            <div class="cs">order_ready — “Hi {{1}}, your order is ready for {{2}}.” <span class="tag wa" style="margin-left:8px">Utility</span></div>
-          </div>
-          <div class="cs" style="margin-bottom:8px">appointment_reminder — “Reminder: {{1}} at {{2}}.” <span class="tag wa" style="margin-left:8px">Utility</span></div>
-          <div class="cs">promo_weekly — “This week only: {{1}}.” <span class="tag gray" style="margin-left:8px">Marketing</span></div>
-        </div>
-        <div class="mf"><button class="btn ghost">Manage templates</button><button class="btn pri" style="background:var(--ch-wa);border-color:var(--ch-wa)">Use template</button></div>
-      </div>
-      <p class="why"><b>Why:</b> WhatsApp’s compliance rules become UI, not tribal knowledge. The countdown banner keeps agents inside the free-form window; when it lapses the composer swaps to the template picker instead of letting a send fail at Meta and hurt the number’s quality rating. Green send button and read ticks match user expectations from consumer WhatsApp.</p>
-    </div>
-  </div>
-</div>
-
-<div class="screen">
-  <h3><span class="no">W4</span> Messenger conversation &nbsp;+&nbsp; <span class="no">W5</span> mixed-channel contact history</h3>
-  <div class="cols2">
-    <div class="browser"><div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.loopcom.net/chat · Facebook Messenger</div></div>
-      <div class="cc-conv" style="min-height:460px">
-        <div class="cc-head">
-          <div class="ava g4">HW<span class="chbadge fb"><svg><use href="#i-msg"/></svg></span></div>
-          <div class="who"><strong>Hudson Wholesale</strong><div class="line"><span class="tag fb">Messenger</span> via Page: <b>Loopcom Supply Co.</b></div></div>
-          <div class="spacer"></div><div class="iconbtn"><svg class="ic"><use href="#i-info"/></svg></div>
-        </div>
-        <div class="cc-scroll">
-          <div class="row"><div class="wrapb"><div class="cc-bubble theirs">Do you deliver to Monroe?</div><div class="meta">1:20 PM</div></div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="cc-bubble fb mine">We do! Free over $150. Want the current price list?</div>
-            <div class="meta">1:24 PM <span class="ticks read"><svg class="ic"><use href="#i-dcheck"/></svg></span> Seen</div>
-          </div></div>
-          <div class="row"><div class="wrapb"><div class="cc-bubble theirs">Yes please</div><div class="meta">1:25 PM</div></div></div>
-          <div class="row mine"><div class="wrapb">
-            <div class="mediab"><div class="ph-img grad4">pricelist-sep.pdf</div></div>
-            <div class="meta">1:26 PM <span class="ticks dlv"><svg class="ic"><use href="#i-dcheck"/></svg></span> Delivered</div>
-          </div></div>
-        </div>
-        <div class="cc-composer">
-          <div class="caps"><span class="cap"><svg class="ic"><use href="#i-img"/></svg></span><span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span><span class="cap off" title="No voice notes on Messenger API"><svg class="ic"><use href="#i-mic"/></svg></span><span class="cap off"><svg class="ic"><use href="#i-pin"/></svg></span></div>
-          <div class="compline"><div class="ta"><span class="plc">Reply on Messenger…</span></div><button class="send fb"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-          <div class="compnote"><svg class="ic"><use href="#i-info"/></svg> Messenger — replies allowed within Meta’s messaging window.</div>
-        </div>
-      </div>
-    </div>
-    <div class="browser"><div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Contact · Riverside Auto Body — all channels</div></div>
-      <div class="cc-conv" style="min-height:460px">
-        <div class="cc-head">
-          <div class="ava">RA</div>
-          <div class="who"><strong>Riverside Auto Body</strong><div class="line">All channels · newest last</div></div>
-          <div class="spacer"></div>
-          <span class="fchip on">All</span><span class="fchip">SMS</span><span class="fchip">RCS</span><span class="fchip">WA</span>
-        </div>
-        <div class="cc-scroll">
-          <div class="sysline"><span class="tag sms">SMS</span> May – Aug · 41 messages · (845) 555-0110 <span class="pv vms">VoIP.ms</span></div>
-          <div class="row mine"><div class="wrapb"><div class="cc-bubble mine">Your car is ready for pickup 🚗</div><div class="meta">Aug 12 <span class="ticks dlv"><svg class="ic"><use href="#i-check"/></svg></span> Sent</div></div></div>
-          <div class="sysline"><svg class="ic" style="color:var(--success)"><use href="#i-swap"/></svg> Number moved to <b>Telnyx</b> · Sep 20 — same conversation, history preserved</div>
-          <div class="sysline"><span class="tag rcs">RCS</span> upgraded — device supports rich messaging</div>
-          <div class="row"><div class="wrapb"><div class="cc-bubble theirs">Hi — do you have any openings this week?</div><div class="meta">Today 2:31 PM</div></div></div>
-          <div class="row mine"><div class="wrapb"><div class="cc-bubble rcsish mine">Rich card: Bumper repaint special</div><div class="meta">Today 2:33 PM <span class="ticks read"><svg class="ic"><use href="#i-dcheck"/></svg></span> Read</div></div></div>
+    <div class="modal"><div class="mh"><span class="cc-channel cc-channel-rcs">RCS</span> conversation — same menu + rich group</div>
+      <div class="mb" style="display:flex;justify-content:center;padding:26px 16px">
+        <div class="cc-attach-menu" style="position:static;width:min(18rem,100%)">
+          <button><svg class="ic"><use href="#i-img"/></svg><span><strong>Photos / videos</strong><small>Full quality on RCS</small></span></button>
+          <button><svg class="ic"><use href="#i-file"/></svg><span><strong>Files</strong><small>PDF, docs, sheets, audio</small></span></button>
+          <button><svg class="ic"><use href="#i-pin"/></svg><span><strong>Location</strong><small>Map pin on RCS</small></span></button>
+          <div class="menudiv nu"><i>Rich messaging</i></div>
+          <button class="rcsitem nu"><svg class="ic"><use href="#i-card"/></svg><span><strong>Rich card</strong><small>Image, text &amp; tap buttons</small></span></button>
+          <button class="rcsitem nu"><svg class="ic"><use href="#i-car2"/></svg><span><strong>Carousel</strong><small>Up to 10 swipeable cards</small></span></button>
+          <button class="rcsitem nu"><svg class="ic"><use href="#i-zap"/></svg><span><strong>Suggested replies</strong><small>Tap-to-answer chips</small></span></button>
         </div>
       </div>
     </div>
   </div>
-  <p class="why"><b>Why:</b> the contact view proves the migration promise on screen — one thread survives a VoIP.ms→Telnyx move and an SMS→RCS upgrade, with quiet system lines marking each transition instead of a broken or duplicated conversation. Messenger shows capability degradation working in the other direction: the mic and location buttons grey out because that adapter doesn’t offer them.</p>
+  <p class="why"><b>Why:</b> the divide lives inside the menu the user already knows, not in a new toolbar. The capability registry decides whether the “Rich messaging” group renders for this conversation on this number — WhatsApp threads get a “Templates” row here instead, Messenger threads get neither. No greyed-out dead rows: what a channel can't do simply isn't offered.</p>
 </div>
 
-<!-- ============================================================= COMPOSERS -->
-<div class="sect" id="composers">
-  <h2>2 · The adaptive composer</h2>
-  <p class="sub">One composer, five channels. The capability registry decides which buttons exist for <i>this conversation on this number on this provider</i> — unsupported tools are hidden or greyed, never dead.</p>
+<!-- =============================== RCS THREAD =============================== -->
+<div class="sect" id="rcs">
+  <h2>3 · An RCS conversation</h2>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W6</span> Composer capability states, side by side</h3>
+  <h3><span class="no">W3</span> Same panel, same bubbles — rich card, read receipts, typing, suggestion chips added</h3>
+  <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start">
+  <div class="cc-side-panel" style="flex:1;min-width:340px;max-width:560px"><div class="cc-conversation">
+    <div class="cc-conv-head">
+      <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+      <span class="cc-avatar large">RA</span>
+      <div class="cc-conv-title"><h2>Riverside Auto Body</h2>
+        <p><span class="nu">Rich text (RCS)</span> · <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span> · +18455550198 <span class="nu">· via (845) 555-0164 <span class="pvdot"></span>Telnyx</span></p>
+      </div>
+      <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
+      <button class="cc-call-btn"><svg class="ic"><use href="#i-phone"/></svg> <span>Call</span></button>
+    </div>
+    <div class="cc-message-list">
+      <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+        <div class="cc-msg-sender">Riverside Auto Body</div>
+        <div class="cc-bubble theirs"><div class="cc-msg-body">Hi — do you have any openings this week for a bumper repaint?</div></div>
+        <div class="cc-msg-meta"><span>2:31 PM</span></div>
+      </div></div>
+      <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+        <div class="cc-bubble mine">
+          <div class="cc-richcard nu">
+            <div class="img grad1 ph-img">bumper-special.jpg</div>
+            <div class="bd"><b>Bumper repaint special</b><small>$249 this week · 1-day turnaround · free pickup</small></div>
+            <div class="btns"><button><svg class="ic"><use href="#i-clock"/></svg> Book an appointment</button><button><svg class="ic"><use href="#i-phone"/></svg> Call us</button><button><svg class="ic"><use href="#i-globe"/></svg> See all services</button></div>
+          </div>
+          <button class="cc-msg-more"><svg class="ic"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="cc-msg-meta mine"><span>2:33 PM</span><span class="nu">read 2:35 PM</span><span class="mticks read nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+      </div></div>
+      <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+        <div class="cc-msg-sender">Riverside Auto Body</div>
+        <div class="cc-bubble theirs"><div class="cc-msg-body">Tapped: <b>Book an appointment</b></div></div>
+        <div class="cc-msg-meta"><span>2:41 PM</span></div>
+      </div></div>
+      <div class="cc-msg-row theirs"><div class="cc-typing nu"><i></i><i></i><i></i></div></div>
+    </div>
+    <div class="cc-composer">
+      <div class="cc-suggest-row nu">
+        <span class="cc-suggest">Tomorrow 9:00 AM</span><span class="cc-suggest">Tomorrow 1:30 PM</span><span class="cc-suggest"><svg class="ic"><use href="#i-pin"/></svg> Send our address</span>
+      </div>
+      <div class="cc-compose-row"><div class="cc-compose-bubble">
+        <button class="cc-compose-icon"><svg class="ic" style="width:19px;height:19px"><use href="#i-smile"/></svg></button>
+        <button class="cc-compose-icon"><svg class="ic" style="width:20px;height:20px"><use href="#i-plus"/></svg></button>
+        <div class="ta"><span class="plc">Message Riverside Auto Body...</span></div>
+        <button class="cc-compose-action"><svg class="ic" style="width:19px;height:19px"><use href="#i-mic"/></svg></button>
+      </div></div>
+      <div class="cc-sms-counter nu">Rich text active — no segment limit. Falls back to MMS/SMS automatically.</div>
+    </div>
+  </div></div>
+  <div style="flex:1;min-width:300px;max-width:420px">
+    <div class="modal"><div class="mh">What changed on this screen — and only this</div><div class="mb small">
+      <div class="kv"><span class="k">Header p line</span><span class="v">gains “Rich text (RCS)” + “via number · provider”</span></div>
+      <div class="kv"><span class="k">Rich card</span><span class="v">renders INSIDE the normal bubble, like an attachment</span></div>
+      <div class="kv"><span class="k">Meta line</span><span class="v">gains “read” + double-check (same 11px row)</span></div>
+      <div class="kv"><span class="k">Typing dots</span><span class="v">a bubble-shaped indicator, theirs side</span></div>
+      <div class="kv"><span class="k">Suggestion chips</span><span class="v">one optional row above the composer</span></div>
+      <div class="kv"><span class="k">SMS counter line</span><span class="v">repurposed for the channel note (same slot)</span></div>
+      <p class="muted" style="margin:10px 0 0">Bubble geometry, colors, the composer pill, the menu, reactions — untouched. Delete the six additions and you are back at W1 exactly.</p>
+    </div></div>
+    <p class="why" style="margin-top:14px"><b>Why:</b> the card rides the bubble the way attachments already do (<span class="mono">.cc-attach-stack</span> idiom), so an RCS thread reads like your chat, not like a different product. The meta line was already “time · status · ✓” — “delivered/read + ✓✓” is the same grammar with one more word.</p>
+  </div>
+  </div>
+</div>
+
+<!-- =============================== WA / FB =============================== -->
+<div class="sect" id="wafb">
+  <h2>4 · WhatsApp and Messenger conversations</h2>
+  <p class="sub">Same panel again. WhatsApp gets the green send/bubble tint (your OK), the 24-hour-window banner, and a template picker when the window closes. Messenger gets the blue tint and Meta's reply-window rule. Chips in the thread list mark the channel.</p>
+</div>
+
+<div class="screen">
+  <h3><span class="no">W4</span> WhatsApp — open window · closed window &nbsp;·&nbsp; <span class="no">W5</span> Messenger</h3>
   <div class="cols3">
-    <div class="modal"><div class="mh"><span class="tag sms">SMS</span> VoIP.ms number</div><div class="mb">
-      <div class="caps"><span class="cap"><svg class="ic"><use href="#i-img"/></svg></span><span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span><span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span><span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span><span class="cap off"><svg class="ic"><use href="#i-card"/></svg></span><span class="cap off"><svg class="ic"><use href="#i-car2"/></svg></span><span class="cap off"><svg class="ic"><use href="#i-zap"/></svg></span></div>
-      <div class="compline"><div class="ta"><span class="plc">Text message…</span></div><button class="send"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-      <div class="compnote">Media → MMS. Long texts split into segments. <span class="charc"><b>0</b>/160</span></div>
-    </div></div>
-    <div class="modal"><div class="mh"><span class="tag rcs">RCS</span> Telnyx number, capable device</div><div class="mb">
-      <div class="caps"><span class="cap"><svg class="ic"><use href="#i-img"/></svg></span><span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span><span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span><span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span><span class="cap rcsonly"><svg class="ic"><use href="#i-card"/></svg></span><span class="cap rcsonly"><svg class="ic"><use href="#i-car2"/></svg></span><span class="cap rcsonly"><svg class="ic"><use href="#i-zap"/></svg></span></div>
-      <div class="compline"><div class="ta"><span class="plc">Message…</span></div><button class="send rcs"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-      <div class="compnote">High-res media, rich cards, carousels, suggestions. No segment limit.</div>
-    </div></div>
-    <div class="modal"><div class="mh"><span class="tag wa">WhatsApp</span> inside 24h window</div><div class="mb">
-      <div class="caps"><span class="cap"><svg class="ic"><use href="#i-img"/></svg></span><span class="cap"><svg class="ic"><use href="#i-clip"/></svg></span><span class="cap"><svg class="ic"><use href="#i-mic"/></svg></span><span class="cap"><svg class="ic"><use href="#i-pin"/></svg></span><span class="cap" style="border-color:color-mix(in srgb,var(--ch-wa) 45%,transparent);color:var(--ch-wa)"><svg class="ic"><use href="#i-file"/></svg></span></div>
-      <div class="compline"><div class="ta"><span class="plc">Message…</span></div><button class="send wa"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-      <div class="compnote">Free-form until window closes, then templates only.</div>
-    </div></div>
-  </div>
-  <p class="why"><b>Why:</b> the composer is generated from the capability registry, not hand-coded per channel — when Telnyx adds a feature, the adapter declares it and the button appears. Greyed (not hidden) buttons carry a tooltip saying why, which is how “no dead buttons” and “no silent feature loss” are both honored.</p>
-</div>
-
-<!-- ============================================================= RICH BUILDER -->
-<div class="sect" id="rich">
-  <h2>3 · RCS rich message builder</h2>
-  <p class="sub">Cards, carousels and suggestions are composed once, previewed live, and the fallback the customer would get on MMS/SMS is shown <i>before</i> sending — content is degraded by rule, never lost.</p>
-</div>
-
-<div class="screen">
-  <h3><span class="no">W7</span> Rich card composer with live fallback preview</h3>
-  <div class="modal" style="max-width:980px">
-    <div class="mh"><svg class="ic" style="color:var(--ch-rcs)"><use href="#i-card"/></svg> New rich card <span class="spacer"></span><svg class="ic"><use href="#i-x"/></svg></div>
-    <div class="mb">
-      <div class="cols2">
-        <div>
-          <div class="field"><label>Card image</label>
-            <div class="mediab" style="max-width:100%"><div class="ph-img grad1" style="aspect-ratio:16/7">bumper-special.jpg · 1.2 MB <span class="tiny" style="opacity:.8">(tap to replace)</span></div></div>
-          </div>
-          <div class="field"><label>Title</label><div class="inp">Bumper repaint special</div></div>
-          <div class="field"><label>Description</label><div class="inp" style="min-height:52px">$249 this week · 1-day turnaround · free pickup in Monsey</div></div>
-          <div class="field"><label>Buttons (max 4)</label>
-            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-clock"/></svg> Reply: “Book an appointment”</span><svg class="ic"><use href="#i-dots"/></svg></div>
-            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-phone"/></svg> Call: (845) 555-0164</span><svg class="ic"><use href="#i-dots"/></svg></div>
-            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-globe"/></svg> Open: loopcom.net/services</span><svg class="ic"><use href="#i-dots"/></svg></div>
-            <div class="cs muted"><span><svg class="ic"><use href="#i-plus"/></svg> Add button — reply · action · call · website · location</span></div>
-          </div>
-        </div>
-        <div>
-          <div class="filters" style="margin-bottom:10px"><span class="fchip on">RCS preview</span><span class="fchip">MMS fallback</span><span class="fchip">SMS fallback</span></div>
-          <div style="display:flex;justify-content:center;background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:20px">
-            <div class="rcard">
-              <div class="ph-img grad1">bumper-special.jpg</div>
-              <div class="body"><h4>Bumper repaint special</h4><p>$249 this week · 1-day turnaround · free pickup in Monsey</p></div>
-              <div class="rbtns"><button><svg class="ic"><use href="#i-clock"/></svg> Book an appointment</button><button><svg class="ic"><use href="#i-phone"/></svg> Call us</button><button><svg class="ic"><use href="#i-globe"/></svg> See all services</button></div>
-            </div>
-          </div>
-          <div class="banner info" style="margin-top:10px"><svg class="ic"><use href="#i-info"/></svg><div><b>If RCS is unavailable:</b> MMS = image + title + description + links as text. SMS = text + links only. Nothing is dropped silently.</div></div>
-        </div>
+    <div class="cc-side-panel" style="width:auto"><div class="cc-conversation">
+      <div class="cc-conv-head">
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+        <span class="cc-avatar large t3">MG</span>
+        <div class="cc-conv-title"><h2>Malky Gross</h2><p><span class="nu">WhatsApp</span> · +13475550177 <span class="nu">· via Loopcom Business <span class="pvdot"></span>Telnyx</span></p></div>
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
       </div>
-    </div>
-    <div class="mf"><button class="btn ghost">Save as template</button><button class="btn">Preview on my phone</button><button class="btn pri" style="background:var(--ch-rcs);border-color:var(--ch-rcs)">Send card</button></div>
+      <div class="cc-message-list">
+        <div class="cc-sysline nu"><svg class="ic"><use href="#i-clock"/></svg><span><b>Reply window: 22h 14m left.</b> Free-form replies until tomorrow 2:12 PM, then approved templates only.</span></div>
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+          <div class="cc-msg-sender">Malky Gross</div>
+          <div class="cc-bubble theirs"><div class="cc-voicenote"><button class="cc-voicenote-play"><svg class="ic" style="width:13px;height:13px"><use href="#i-play"/></svg></button><span class="cc-voicenote-track"><span class="cc-voicenote-fill" style="width:60%"></span></span><span class="cc-voicenote-duration">0:19</span></div></div>
+          <div class="cc-msg-meta"><span>2:12 PM</span></div>
+        </div></div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine ch-wa nu"><div class="cc-msg-body">Got it! Your order is packed — pickup or delivery?</div></div>
+          <div class="cc-msg-meta mine"><span>2:15 PM</span><span class="nu">read</span><span class="mticks read nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+          <div class="cc-bubble theirs"><div class="cc-msg-body">Delivery please 🙏</div></div>
+          <div class="cc-msg-meta"><span>2:16 PM</span></div>
+        </div></div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine ch-wa"><div class="cc-location-card"><strong style="font-size:12px">Driver location — live</strong><small>Arriving ~4:20 PM</small></div></div>
+          <div class="cc-msg-meta mine"><span>3:48 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+      </div>
+      <div class="cc-composer">
+        <div class="cc-compose-row"><div class="cc-compose-bubble">
+          <button class="cc-compose-icon"><svg class="ic" style="width:19px;height:19px"><use href="#i-smile"/></svg></button>
+          <button class="cc-compose-icon"><svg class="ic" style="width:20px;height:20px"><use href="#i-plus"/></svg></button>
+          <div class="ta"><span class="plc">Message on WhatsApp...</span></div>
+          <button class="cc-compose-action nu" style="background:linear-gradient(135deg,var(--wa-deep),var(--wa))"><svg class="ic" style="width:19px;height:19px"><use href="#i-send"/></svg></button>
+        </div></div>
+      </div>
+    </div></div>
+
+    <div class="cc-side-panel" style="width:auto"><div class="cc-conversation">
+      <div class="cc-conv-head">
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+        <span class="cc-avatar large t3">MG</span>
+        <div class="cc-conv-title"><h2>Malky Gross</h2><p>WhatsApp · +13475550177</p></div>
+      </div>
+      <div class="cc-message-list">
+        <div class="cc-sysline warn nu"><svg class="ic"><use href="#i-alert"/></svg><span><b>Reply window closed.</b> WhatsApp only allows approved templates until Malky replies again. Typing is disabled — never silently dropped.</span></div>
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap"><div class="cc-bubble theirs"><div class="cc-msg-body">Thanks!</div></div><div class="cc-msg-meta"><span>Yesterday 4:22 PM</span></div></div></div>
+      </div>
+      <div class="cc-composer nu">
+        <div class="field" style="margin-bottom:8px"><label>Send an approved template</label>
+          <div class="cs" style="margin-bottom:6px">order_ready — “Hi {{1}}, your order is ready.” <span class="cc-channel cc-channel-whatsapp">Utility</span></div>
+          <div class="cs" style="margin-bottom:6px">appointment_reminder — “Reminder: {{1}} at {{2}}.” <span class="cc-channel cc-channel-whatsapp">Utility</span></div>
+          <div class="cs">promo_weekly — “This week only: {{1}}.” <span class="cc-channel">Marketing</span></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost">Manage templates</button><button class="btn pri" style="background:var(--wa);border-color:var(--wa)">Use template</button></div>
+      </div>
+    </div></div>
+
+    <div class="cc-side-panel" style="width:auto"><div class="cc-conversation">
+      <div class="cc-conv-head">
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+        <span class="cc-avatar large t4">HW</span>
+        <div class="cc-conv-title"><h2>Hudson Wholesale</h2><p><span class="nu">Messenger</span> · <span class="nu">via Page: Loopcom Supply Co.</span></p></div>
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
+      </div>
+      <div class="cc-message-list">
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+          <div class="cc-msg-sender">Hudson Wholesale</div>
+          <div class="cc-bubble theirs"><div class="cc-msg-body">Do you deliver to Monroe?</div></div>
+          <div class="cc-msg-meta"><span>1:20 PM</span></div>
+        </div></div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine ch-fb nu"><div class="cc-msg-body">We do! Free over $150. Want the price list?</div></div>
+          <div class="cc-msg-meta mine"><span>1:24 PM</span><span class="nu">seen</span><span class="mticks read nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine ch-fb"><div class="cc-attach-file"><svg class="ic"><use href="#i-file"/></svg><span>pricelist-sep.pdf <small>· 1.1 MB</small></span></div></div>
+          <div class="cc-msg-meta mine"><span>1:26 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+      </div>
+      <div class="cc-composer">
+        <div class="cc-compose-row"><div class="cc-compose-bubble">
+          <button class="cc-compose-icon"><svg class="ic" style="width:19px;height:19px"><use href="#i-smile"/></svg></button>
+          <button class="cc-compose-icon"><svg class="ic" style="width:20px;height:20px"><use href="#i-plus"/></svg></button>
+          <div class="ta"><span class="plc">Reply on Messenger...</span></div>
+          <button class="cc-compose-action nu" style="background:linear-gradient(135deg,#0062cc,var(--fb))"><svg class="ic" style="width:19px;height:19px"><use href="#i-send"/></svg></button>
+        </div></div>
+        <div class="cc-sms-counter nu">Voice notes &amp; location aren't offered on Messenger — the plus menu simply doesn't list them.</div>
+      </div>
+    </div></div>
   </div>
-  <p class="why"><b>Why:</b> the fallback tabs are the heart of this modal. An agent can flip to “SMS fallback” and read exactly the message a non-RCS recipient gets — the degradation rules (image→MMS attachment→dropped-with-URL, buttons→text lines) are previewed, so “graceful degradation” is something the sender sees, not something they must trust.</p>
+  <p class="why"><b>Why:</b> your bubble is the constant; the channel shows up as a tint on <i>my</i> bubbles and the send button (color only — geometry identical) plus the channel word in the header line. WhatsApp's compliance rules become UI: the countdown banner keeps agents in the free-form window, and when it lapses the composer area swaps to the template picker instead of letting Meta reject the send and downgrade the number's quality rating.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W8</span> Carousel builder &nbsp;+&nbsp; <span class="no">W9</span> suggested replies &amp; actions editor</h3>
+  <h3><span class="no">W6</span> The thread list with the new channels &nbsp;+&nbsp; mixed-channel history in one thread</h3>
   <div class="cols2">
-    <div class="modal">
-      <div class="mh"><svg class="ic" style="color:var(--ch-rcs)"><use href="#i-car2"/></svg> Carousel — 3 of 10 cards</div>
-      <div class="mb">
-        <div class="carousel">
-          <div class="rcard"><div class="ph-img grad1" style="aspect-ratio:16/9">Bumper repaint</div><div class="body"><h4>Bumper repaint</h4><p>$249 · this week</p></div><div class="rbtns"><button>Book</button></div></div>
-          <div class="rcard"><div class="ph-img grad2" style="aspect-ratio:16/9">Full detail</div><div class="body"><h4>Full detail</h4><p>$179 · in &amp; out</p></div><div class="rbtns"><button>Book</button></div></div>
-          <div class="rcard"><div class="ph-img grad3" style="aspect-ratio:16/9">Windshield</div><div class="body"><h4>Windshield</h4><p>From $99</p></div><div class="rbtns"><button>Book</button></div></div>
-          <div class="rcard" style="display:grid;place-items:center;min-height:150px;border-style:dashed;color:var(--text-dim)"><div style="text-align:center"><svg class="ic"><use href="#i-plus"/></svg><div class="tiny">Add card</div></div></div>
+    <div class="cc-workspace" style="grid-template-columns:1fr;min-height:0">
+      <div class="cc-inbox" style="border-right:0">
+        <div class="cc-inbox-head"><div><h2>Messages</h2><p>SMS, WhatsApp, Messenger, tenant groups, and internal chats</p></div><button class="cc-new-btn">New chat</button></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px 0" class="nu">
+          <span class="fchip on">All</span><span class="fchip">Unread</span><span class="fchip">Texts</span><span class="fchip">WhatsApp</span><span class="fchip">Messenger</span><span class="fchip">Team</span>
         </div>
-        <div class="compnote"><svg class="ic"><use href="#i-info"/></svg> Fallback: MMS sends the first card’s image + all titles as a list · SMS sends titles + links.</div>
-      </div>
-      <div class="mf"><button class="btn">Reorder</button><button class="btn pri" style="background:var(--ch-rcs);border-color:var(--ch-rcs)">Send carousel</button></div>
-    </div>
-    <div class="modal">
-      <div class="mh"><svg class="ic" style="color:var(--ch-rcs)"><use href="#i-zap"/></svg> Suggested replies &amp; actions</div>
-      <div class="mb">
-        <div class="field"><label>Attached to</label><div class="cs">Next outgoing message <span class="muted">▾</span></div></div>
-        <div class="field"><label>Chips (max 11)</label>
-          <div class="suggs">
-            <span class="sugg">Tomorrow 9:00 AM <svg class="ic"><use href="#i-x"/></svg></span>
-            <span class="sugg">Tomorrow 1:30 PM <svg class="ic"><use href="#i-x"/></svg></span>
-            <span class="sugg"><svg class="ic"><use href="#i-phone"/></svg> Call us <svg class="ic"><use href="#i-x"/></svg></span>
-            <span class="sugg"><svg class="ic"><use href="#i-pin"/></svg> Send our address <svg class="ic"><use href="#i-x"/></svg></span>
-            <span class="sugg" style="border-style:dashed"><svg class="ic"><use href="#i-plus"/></svg> Add</span>
+        <div class="cc-search"><svg class="ic"><use href="#i-search"/></svg> Search chats...</div>
+        <div class="cc-thread-list">
+          <div class="cc-thread">
+            <span class="cc-avatar">RA</span>
+            <span class="cc-thread-main">
+              <span class="cc-thread-top"><span class="cc-thread-name"><strong>Riverside Auto Body</strong><span class="cc-state new">New</span></span><small>2:41 PM</small></span>
+              <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-rcs nu">RCS</span><span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span></span><span class="cc-thread-preview">Tapped: “Book an appointment”</span></span>
+            </span>
+            <span class="cc-unread">2</span>
+          </div>
+          <div class="cc-thread">
+            <span class="cc-avatar t3">MG</span>
+            <span class="cc-thread-main">
+              <span class="cc-thread-top"><span class="cc-thread-name"><strong>Malky Gross</strong><span class="cc-state new">New</span></span><small>2:12 PM</small></span>
+              <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-whatsapp nu">WhatsApp</span></span><span class="cc-thread-preview">Voice note · 0:19</span></span>
+            </span>
+            <span class="cc-unread">1</span>
+          </div>
+          <div class="cc-thread">
+            <span class="cc-avatar t2">DK</span>
+            <span class="cc-thread-main">
+              <span class="cc-thread-top"><span class="cc-thread-name"><strong>Dovid Klein</strong><span class="cc-state read">Read</span></span><small>1:58 PM</small></span>
+              <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-sms">SMS</span><span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span></span><span class="cc-thread-preview">You: Sounds good, see you at 4</span></span>
+            </span>
+          </div>
+          <div class="cc-thread">
+            <span class="cc-avatar t4">HW</span>
+            <span class="cc-thread-main">
+              <span class="cc-thread-top"><span class="cc-thread-name"><strong>Hudson Wholesale</strong><span class="cc-state read">Read</span></span><small>1:20 PM</small></span>
+              <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-messenger nu">Messenger</span></span><span class="cc-thread-preview">Do you deliver to Monroe?</span></span>
+            </span>
+          </div>
+          <div class="cc-thread">
+            <span class="cc-avatar t5"><svg class="ic"><use href="#i-user"/></svg></span>
+            <span class="cc-thread-main">
+              <span class="cc-thread-top"><span class="cc-thread-name"><strong>(845) 555-0142</strong><span class="cc-state read">Read</span></span><small>12:44</small></span>
+              <span class="cc-thread-bottom"><span class="cc-channel-row"><span class="cc-channel cc-channel-sms">SMS</span></span><span class="cc-thread-preview">1 message failed — tap to retry</span></span>
+            </span>
+            <svg class="ic cc-thread-alert"><use href="#i-alert"/></svg>
           </div>
         </div>
-        <div class="field"><label>Chip type</label>
-          <div class="grid2">
-            <div class="cs">Reply — sends the text back</div>
-            <div class="cs muted">Action — call · open URL · share location · calendar</div>
-          </div>
-        </div>
-        <div class="banner info"><svg class="ic"><use href="#i-info"/></svg><div>On SMS fallback, reply chips become a numbered list (“Reply 1 for…”); action chips become plain links.</div></div>
       </div>
-      <div class="mf"><button class="btn pri" style="background:var(--ch-rcs);border-color:var(--ch-rcs)">Attach</button></div>
     </div>
+    <div class="cc-side-panel" style="width:auto"><div class="cc-conversation">
+      <div class="cc-conv-head">
+        <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
+        <span class="cc-avatar large">RA</span>
+        <div class="cc-conv-title"><h2>Riverside Auto Body</h2><p>All messages with this contact — one thread, every channel</p></div>
+      </div>
+      <div class="cc-message-list">
+        <div class="cc-migline">May – Aug · SMS on (845) 555-0110 · VoIP.ms</div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine"><div class="cc-msg-body">Your car is ready for pickup 🚗</div></div>
+          <div class="cc-msg-meta mine"><span>Aug 12</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg></div>
+        </div></div>
+        <div class="cc-migline nu"><svg class="ic" style="width:11px;height:11px;color:var(--success)"><use href="#i-swap"/></svg> Number moved to <b>Telnyx</b> · Sep 20 — same conversation, history preserved</div>
+        <div class="cc-migline nu">Rich text (RCS) available — device supports it</div>
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
+          <div class="cc-bubble theirs"><div class="cc-msg-body">Hi — do you have any openings this week?</div></div>
+          <div class="cc-msg-meta"><span>Today 2:31 PM</span></div>
+        </div></div>
+        <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+          <div class="cc-bubble mine"><div class="cc-msg-body">Rich card: Bumper repaint special</div></div>
+          <div class="cc-msg-meta mine"><span>2:33 PM</span><span class="nu">read</span><span class="mticks read nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+      </div>
+    </div></div>
   </div>
-  <p class="why"><b>Why:</b> both builders enforce RCS’s real limits (10 carousel cards, 11 suggestion chips, 4 card buttons) in the editor so a send can’t fail at the provider for a shape reason. Every builder states its own fallback rule inline — the same rule engine the router uses, rendered as copy.</p>
+  <p class="why"><b>Why:</b> new channels appear as new chip colors in the exact slot the green SMS chip occupies today — the row layout doesn't move. The filter chips row is the one added element in the list pane. On the right, the migration promise is visible: a VoIP.ms→Telnyx move and an SMS→RCS upgrade are quiet centered lines in the SAME thread — no duplicate conversation, no broken history.</p>
+</div>
+
+<!-- =============================== STATES =============================== -->
+<div class="sect" id="states">
+  <h2>5 · Honest delivery states, fallback and failure — all in today's meta line</h2>
+  <p class="sub">The meta line already says <span class="mono">time · sent ✓</span>. New states are more words in that same 11px row: never a redesigned bubble, never a faked tick. VoIP.ms numbers cap at “sent” because VoIP.ms sends no delivery receipts; Telnyx/SignalWire earn “delivered”; RCS/WhatsApp/Messenger earn “read”.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W10</span> Media, file &amp; location pickers</h3>
-  <div class="cols3">
-    <div class="modal"><div class="mh"><svg class="ic"><use href="#i-img"/></svg> Photos &amp; videos</div><div class="mb">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-        <div class="ph-img grad1" style="border-radius:10px;aspect-ratio:1">IMG_2041</div>
-        <div class="ph-img grad2" style="border-radius:10px;aspect-ratio:1;outline:3px solid var(--accent)">IMG_2042 ✓</div>
-        <div class="ph-img grad3" style="border-radius:10px;aspect-ratio:1">IMG_2043</div>
-        <div class="ph-img grad4" style="border-radius:10px;aspect-ratio:1">VID 0:14</div>
-        <div class="ph-img grad5" style="border-radius:10px;aspect-ratio:1">IMG_2044</div>
-        <div style="border-radius:10px;aspect-ratio:1;border:1px dashed var(--border);display:grid;place-items:center;color:var(--text-dim)"><svg class="ic"><use href="#i-cam"/></svg></div>
-      </div>
-      <div class="compnote"><svg class="ic"><use href="#i-info"/></svg> MMS: auto-compressed to carrier limit · RCS/WA: full quality</div>
-    </div><div class="mf"><button class="btn pri">Add 1 photo</button></div></div>
-    <div class="modal"><div class="mh"><svg class="ic"><use href="#i-clip"/></svg> Files</div><div class="mb">
-      <div class="cs" style="margin-bottom:7px"><span><svg class="ic"><use href="#i-file"/></svg> estimate-1042.pdf</span><span class="tiny muted">218 KB</span></div>
-      <div class="cs" style="margin-bottom:7px"><span><svg class="ic"><use href="#i-file"/></svg> parts-list.xlsx</span><span class="tiny muted">64 KB</span></div>
-      <div class="banner warn" style="margin-top:10px"><svg class="ic"><use href="#i-alert"/></svg><div>This number can’t send files over MMS — the recipient will get a <b>secure download link</b> instead (exactly how it works today).</div></div>
-    </div><div class="mf"><button class="btn pri">Attach</button></div></div>
-    <div class="modal"><div class="mh"><svg class="ic"><use href="#i-pin"/></svg> Send location</div><div class="mb">
-      <div class="loccard" style="width:100%"><div class="locmap" style="height:140px"><span class="pin"><svg><use href="#i-pinfill"/></svg></span></div>
-        <div style="padding:9px 12px"><b class="small">Loopcom Supply Co.</b><div class="tiny muted">33 Main St, Monsey NY 10952</div></div></div>
-      <div class="grid2" style="margin-top:10px;gap:8px"><div class="cs">📍 Current location</div><div class="cs">🏢 Business address</div></div>
-      <div class="compnote"><svg class="ic"><use href="#i-info"/></svg> RCS/WA: map pin · SMS: address + maps link</div>
-    </div><div class="mf"><button class="btn pri">Send pin</button></div></div>
-  </div>
-  <p class="why"><b>Why:</b> the pickers are shared across channels; only the footnote changes, driven by the same capability registry. The file picker keeps today’s proven “secure link when MMS can’t carry it” behavior and says so out loud.</p>
+  <h3><span class="no">W7</span> The full state vocabulary on real bubbles</h3>
+  <div class="cc-side-panel" style="width:min(620px,100%)"><div class="cc-conversation"><div class="cc-message-list">
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">On our way now</div></div>
+      <div class="cc-msg-meta mine"><span>4:02 PM</span><span class="nu">sending…</span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a VoIP.ms number — receipts don't exist there</div></div>
+      <div class="cc-msg-meta mine"><span>4:03 PM</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg><span class="nu muted">· delivery receipts not supported on this number</span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a Telnyx number — real delivery receipt</div></div>
+      <div class="cc-msg-meta mine"><span>4:05 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">Your appointment is confirmed for Thursday 10 AM</div></div>
+      <div class="cc-msg-meta mine"><span>4:08 PM</span><span class="mretry nu"><svg class="ic" style="width:11px;height:11px"><use href="#i-retry"/></svg> provider busy — retrying in 12s (2 of 5)</span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">Reminder: your pickup window is 4–5 PM today</div></div>
+      <div class="cc-msg-meta mine"><span>4:18 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span><span class="mfall nu"><svg class="ic" style="width:11px;height:11px"><use href="#i-swap"/></svg> via SignalWire (fallback)</span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine"><div class="cc-msg-body">Your car is ready for pickup 🚗</div></div>
+      <div class="cc-msg-meta mine"><span>4:20 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span><span class="mfall nu"><svg class="ic" style="width:11px;height:11px"><use href="#i-swap"/></svg> sent as SMS (RCS unavailable)</span></div>
+    </div></div>
+    <div class="cc-msg-row mine"><div class="cc-msg-wrap">
+      <div class="cc-bubble mine" style="opacity:.8"><div class="cc-msg-body">Test to a landline number</div></div>
+      <div class="cc-msg-meta mine"><span>4:26 PM</span><span class="cc-error">not delivered — landline can't receive SMS</span><button class="mretrybtn nu">Retry</button><button class="mretrybtn nu">Details</button></div>
+    </div></div>
+  </div></div></div>
+  <p class="why"><b>Why:</b> the state machine (queued → sending → provider_accepted → sent → delivered → read, with temporary_failure / fallback_in_progress / fallback_sent / permanent_failure) surfaces entirely inside the existing meta row — the error color class (<span class="mono">.cc-error</span>) already exists in your CSS. Fallback lines say the provider in plain words on the message itself; a failed message keeps its bubble (dimmed) with Retry/Details, never disappears, never auto-resends without saying so.</p>
 </div>
 
-<!-- ============================================================= MESSAGE INFO -->
+<!-- =============================== MESSAGE INFO =============================== -->
 <div class="sect" id="info">
-  <h2>4 · Message info, failure &amp; fallback</h2>
-  <p class="sub">Every displayed state maps 1:1 to the message state machine (<span class="mono">queued → sending → provider_accepted → sent → delivered → read</span>, failures branch to <span class="mono">temporary_failure / fallback_in_progress / fallback_sent / permanent_failure</span>). Nothing is faked; everything is inspectable.</p>
+  <h2>6 · Message info — the drawer behind “Details”</h2>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W11</span> Message info drawer — the state machine, readable</h3>
-  <div class="cols2">
-    <div class="modal">
-      <div class="mh">Message info <span class="spacer"></span><svg class="ic"><use href="#i-x"/></svg></div>
-      <div class="mb">
-        <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px">Rich card: Bumper repaint special</div>
+  <h3><span class="no">W8</span> Right-click menu gains one item · the info drawer shows the whole journey</h3>
+  <div class="cols3">
+    <div class="modal"><div class="mh">Message menu — one added row</div><div class="mb" style="display:flex;justify-content:center;padding:22px">
+      <div class="cc-msg-menu" style="position:static;min-width:210px">
+        <div class="cc-reaction-row"><button>👍</button><button>❤️</button><button>😂</button><button>😮</button><button>😢</button><button>🙏</button></div>
+        <button><svg class="ic"><use href="#i-reply"/></svg> Reply</button>
+        <button>✏️ Edit</button>
+        <button class="nu"><svg class="ic"><use href="#i-info"/></svg> Message info</button>
+        <button>🗑 Delete for me</button>
+        <button>🗑 Delete for everyone</button>
+      </div>
+    </div></div>
+    <div class="cc-info-panel"><div>
+      <div class="cc-info-head"><svg class="ic"><use href="#i-info"/></svg> Message info <span style="flex:1"></span><svg class="ic"><use href="#i-x"/></svg></div>
+      <div class="cc-info-body">
+        <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px;font-size:12px">Rich card: Bumper repaint special</div>
         <div class="tl">
           <div class="step done"><div class="t">Queued</div><div class="d">2:33:02 PM · accepted by Loopcom</div></div>
           <div class="step done"><div class="t">Sending</div><div class="d">2:33:02 PM · router chose <b>Telnyx</b> (primary for this number)</div></div>
           <div class="step done"><div class="t">Provider accepted</div><div class="d">2:33:03 PM · id <span class="mono">telnyx:40318a…f2</span></div></div>
-          <div class="step done"><div class="t">Sent</div><div class="d">2:33:03 PM · as <b>RCS rich card</b></div></div>
+          <div class="step done"><div class="t">Sent as RCS rich card</div><div class="d">2:33:03 PM</div></div>
           <div class="step done"><div class="t">Delivered</div><div class="d">2:33:05 PM · handset confirmed</div></div>
           <div class="step done"><div class="t">Read</div><div class="d">2:35:11 PM</div></div>
         </div>
-        <div class="railcard" style="margin-top:12px">
-          <div class="kv"><span class="k">Channel</span><span class="v"><span class="tag rcs">RCS</span></span></div>
-          <div class="kv"><span class="k">Provider</span><span class="v">Telnyx <span class="pv telnyx">primary</span></span></div>
-          <div class="kv"><span class="k">From / To</span><span class="v mono">+18455550164 → +18455550198</span></div>
+        <div class="railcard">
+          <div class="kv"><span class="k">Channel</span><span class="v"><span class="cc-channel cc-channel-rcs">RCS</span></span></div>
+          <div class="kv"><span class="k">Provider</span><span class="v">Telnyx (primary)</span></div>
+          <div class="kv"><span class="k">From → To</span><span class="v mono">…550164 → …550198</span></div>
           <div class="kv"><span class="k">Attempts</span><span class="v">1</span></div>
           <div class="kv"><span class="k">Fallback</span><span class="v">not needed</span></div>
         </div>
         <div class="cs" style="margin-top:10px"><span class="mono tiny">Provider metadata (debug)</span><span class="muted">▸</span></div>
       </div>
+    </div></div>
+    <div class="cc-info-panel"><div>
+      <div class="cc-info-head" style="color:var(--warning)"><svg class="ic"><use href="#i-swap"/></svg> Message info — fallback path <span style="flex:1"></span><svg class="ic" style="color:var(--text-dim)"><use href="#i-x"/></svg></div>
+      <div class="cc-info-body">
+        <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px;font-size:12px">Reminder: your pickup window is 4–5 PM</div>
+        <div class="tl">
+          <div class="step done"><div class="t">Queued → Sending</div><div class="d">4:18:02 PM · router chose <b>Telnyx</b></div></div>
+          <div class="step bad"><div class="t">Telnyx unreachable</div><div class="d">4:18:04 PM · timeout after 2 attempts</div></div>
+          <div class="step done"><div class="t">Fallback → SignalWire</div><div class="d">4:18:05 PM · same number · <b>one</b> delivery, never both</div></div>
+          <div class="step done"><div class="t">Provider accepted</div><div class="d">4:18:05 PM · id <span class="mono">signalwire:SMa9…44</span></div></div>
+          <div class="step done"><div class="t">Delivered</div><div class="d">4:18:09 PM</div></div>
+        </div>
+        <div class="banner warn" style="margin-top:12px"><svg class="ic"><use href="#i-swap"/></svg><span class="small"><b>“via SignalWire (fallback)”</b> is what the bubble's meta line shows. The customer got exactly one message.</span></div>
+      </div>
+    </div></div>
+  </div>
+  <p class="why"><b>Why:</b> the menu is your existing context menu (quick reactions row, Reply, Edit, Delete) plus one row. The drawer is the observability requirement made visible: every step is a normalized provider event with its timestamp and raw provider id, the debug expander holds untouched provider metadata, and the fallback timeline proves the no-duplicate invariant on screen.</p>
+</div>
+
+<!-- =============================== BUILDERS =============================== -->
+<div class="sect" id="builders">
+  <h2>7 · The rich message builders (new modals — no existing screen touched)</h2>
+</div>
+
+<div class="screen">
+  <h3><span class="no">W9</span> Rich card builder with live MMS/SMS fallback preview</h3>
+  <div class="modal" style="max-width:960px">
+    <div class="mh"><svg class="ic" style="color:var(--rcs)"><use href="#i-card"/></svg> New rich card <span style="flex:1"></span><svg class="ic"><use href="#i-x"/></svg></div>
+    <div class="mb">
+      <div class="cols2">
+        <div>
+          <div class="field"><label>Card image</label><div class="ph-img grad1" style="aspect-ratio:16/7;border-radius:12px">bumper-special.jpg · 1.2 MB (tap to replace)</div></div>
+          <div class="field"><label>Title</label><div class="inp">Bumper repaint special</div></div>
+          <div class="field"><label>Description</label><div class="inp" style="min-height:50px">$249 this week · 1-day turnaround · free pickup in Monsey</div></div>
+          <div class="field"><label>Buttons (max 4)</label>
+            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-clock"/></svg> Reply: “Book an appointment”</span><svg class="ic"><use href="#i-dots"/></svg></div>
+            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-phone"/></svg> Call: (845) 555-0164</span><svg class="ic"><use href="#i-dots"/></svg></div>
+            <div class="cs" style="margin-bottom:6px"><span><svg class="ic"><use href="#i-globe"/></svg> Open: loopcom.net/services</span><svg class="ic"><use href="#i-dots"/></svg></div>
+            <div class="cs muted"><span><svg class="ic"><use href="#i-plus"/></svg> Add button — reply · call · website · location · calendar</span></div>
+          </div>
+        </div>
+        <div>
+          <div style="display:flex;gap:6px;margin-bottom:10px"><span class="fchip on">RCS preview</span><span class="fchip">MMS fallback</span><span class="fchip">SMS fallback</span></div>
+          <div style="display:flex;justify-content:center;background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:20px">
+            <div class="cc-msg-wrap" style="max-width:280px"><div class="cc-bubble mine"><div class="cc-richcard">
+              <div class="img grad1 ph-img">bumper-special.jpg</div>
+              <div class="bd"><b>Bumper repaint special</b><small>$249 this week · 1-day turnaround · free pickup</small></div>
+              <div class="btns"><button><svg class="ic"><use href="#i-clock"/></svg> Book an appointment</button><button><svg class="ic"><use href="#i-phone"/></svg> Call us</button><button><svg class="ic"><use href="#i-globe"/></svg> See all services</button></div>
+            </div></div></div>
+          </div>
+          <div class="banner info" style="margin-top:10px"><svg class="ic"><use href="#i-info"/></svg><span class="small"><b>If the recipient can't get RCS:</b> MMS = image + title + description + links as text · SMS = text + links only. Nothing is dropped silently — flip the tabs to read exactly what they'd get.</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="mf"><button class="btn ghost">Save as template</button><button class="btn">Preview on my phone</button><button class="btn rcs">Send card</button></div>
+  </div>
+</div>
+
+<div class="screen">
+  <h3><span class="no">W10</span> Carousel builder &nbsp;·&nbsp; <span class="no">W11</span> suggested replies &amp; actions editor</h3>
+  <div class="cols2">
+    <div class="modal">
+      <div class="mh"><svg class="ic" style="color:var(--rcs)"><use href="#i-car2"/></svg> Carousel — 3 of 10 cards</div>
+      <div class="mb">
+        <div class="cc-carousel" style="max-width:100%">
+          <div class="cc-richcard" style="border-color:var(--border);background:var(--panel-2)"><div class="img grad1 ph-img" style="aspect-ratio:16/9">Bumper repaint</div><div class="bd"><b style="color:var(--text)">Bumper repaint</b><small style="color:var(--text-dim)">$249 · this week</small></div><div class="btns" style="border-color:var(--border)"><button style="color:var(--accent)">Book</button></div></div>
+          <div class="cc-richcard" style="border-color:var(--border);background:var(--panel-2)"><div class="img grad2 ph-img" style="aspect-ratio:16/9">Full detail</div><div class="bd"><b style="color:var(--text)">Full detail</b><small style="color:var(--text-dim)">$179 · in &amp; out</small></div><div class="btns" style="border-color:var(--border)"><button style="color:var(--accent)">Book</button></div></div>
+          <div class="cc-richcard" style="border-color:var(--border);background:var(--panel-2)"><div class="img grad3 ph-img" style="aspect-ratio:16/9">Windshield</div><div class="bd"><b style="color:var(--text)">Windshield</b><small style="color:var(--text-dim)">From $99</small></div><div class="btns" style="border-color:var(--border)"><button style="color:var(--accent)">Book</button></div></div>
+          <div class="cc-richcard" style="border:1px dashed var(--border);background:transparent;display:grid;place-items:center;min-height:140px;color:var(--text-dim)"><div style="text-align:center"><svg class="ic"><use href="#i-plus"/></svg><div class="tiny">Add card</div></div></div>
+        </div>
+        <div class="cc-sms-counter">Fallback: MMS sends the first card's image + all titles as a list · SMS sends titles + links.</div>
+      </div>
+      <div class="mf"><button class="btn">Reorder</button><button class="btn rcs">Send carousel</button></div>
     </div>
     <div class="modal">
-      <div class="mh">Message info — <span style="color:var(--warning)">fallback path</span> <span class="spacer"></span><svg class="ic"><use href="#i-x"/></svg></div>
+      <div class="mh"><svg class="ic" style="color:var(--rcs)"><use href="#i-zap"/></svg> Suggested replies &amp; actions</div>
       <div class="mb">
-        <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px">Your car is ready for pickup 🚗</div>
-        <div class="tl">
-          <div class="step done"><div class="t">Queued → Sending</div><div class="d">4:02:10 PM · router chose <b>Telnyx</b> · attempt as RCS</div></div>
-          <div class="step bad"><div class="t">RCS unavailable</div><div class="d">4:02:12 PM · device offline for RCS · <span class="mono">rcs_capability_lost</span></div></div>
-          <div class="step done"><div class="t">Fallback → SMS</div><div class="d">4:02:12 PM · same provider, same number · <b>one</b> delivery, never both</div></div>
-          <div class="step done"><div class="t">Provider accepted</div><div class="d">4:02:13 PM · id <span class="mono">telnyx:88c14d…0a</span></div></div>
-          <div class="step done"><div class="t">Delivered (as SMS)</div><div class="d">4:02:16 PM</div></div>
+        <div class="field"><label>Attached to</label><div class="cs">Next outgoing message <span class="muted">▾</span></div></div>
+        <div class="field"><label>Chips (max 11)</label>
+          <div class="cc-suggest-row">
+            <span class="cc-suggest">Tomorrow 9:00 AM <svg class="ic"><use href="#i-x"/></svg></span>
+            <span class="cc-suggest">Tomorrow 1:30 PM <svg class="ic"><use href="#i-x"/></svg></span>
+            <span class="cc-suggest"><svg class="ic"><use href="#i-phone"/></svg> Call us <svg class="ic"><use href="#i-x"/></svg></span>
+            <span class="cc-suggest"><svg class="ic"><use href="#i-pin"/></svg> Send our address <svg class="ic"><use href="#i-x"/></svg></span>
+            <span class="cc-suggest" style="border-style:dashed"><svg class="ic"><use href="#i-plus"/></svg> Add</span>
+          </div>
         </div>
-        <div class="banner warn" style="margin-top:12px"><svg class="ic"><use href="#i-swap"/></svg><div><b>Sent as SMS (RCS unavailable).</b> The thread shows this chip on the bubble; the customer got exactly one message.</div></div>
+        <div class="field"><label>Chip type</label>
+          <div class="grid2"><div class="cs">Reply — sends the text back</div><div class="cs muted">Action — call · URL · location · calendar</div></div>
+        </div>
+        <div class="banner info"><svg class="ic"><use href="#i-info"/></svg><span class="small">On SMS fallback, reply chips become a numbered list (“Reply 1 for…”); action chips become plain links.</span></div>
       </div>
+      <div class="mf"><button class="btn rcs">Attach</button></div>
     </div>
   </div>
-  <p class="why"><b>Why:</b> this drawer is the observability requirement, aimed at the person answering “why did this message fail?” at 9 PM. Every row is a normalized provider event with its timestamp and the raw provider id; the debug expander holds untouched provider metadata. The fallback timeline demonstrates the no-duplicate invariant as a visible fact.</p>
+  <p class="why"><b>Why:</b> the builders enforce RCS's real limits (10 cards, 11 chips, 4 buttons) in the editor so a send can never fail at the provider for a shape reason, and each states its own fallback rule inline — the same rule engine the router runs, rendered as copy. These are new modals opened from the plus menu; no existing screen changes.</p>
 </div>
 
-<div class="screen">
-  <h3><span class="no">W12</span> Failure states in the thread</h3>
-  <div class="browser"><div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">app.loopcom.net/chat · failure &amp; retry states</div></div>
-    <div class="cc-conv" style="min-height:420px">
-      <div class="cc-scroll">
-        <div class="row mine"><div class="wrapb">
-          <div class="cc-bubble mine">On our way now</div>
-          <div class="meta"><span class="st-chip prog"><svg class="ic"><use href="#i-clock"/></svg> Sending…</span></div>
-        </div></div>
-        <div class="row mine"><div class="wrapb">
-          <div class="cc-bubble mine">Your appointment is confirmed for Thursday 10 AM</div>
-          <div class="meta"><span class="st-chip prog"><svg class="ic"><use href="#i-retry"/></svg> Provider busy — retrying in 12s (attempt 2 of 5)</span></div>
-        </div></div>
-        <div class="row mine"><div class="wrapb">
-          <div class="cc-bubble mine">Reminder: your pickup window is 4–5 PM today</div>
-          <div class="meta"><span class="st-chip fb2"><svg class="ic"><use href="#i-swap"/></svg> Telnyx unreachable — sending via SignalWire (fallback)</span></div>
-        </div></div>
-        <div class="row mine"><div class="wrapb">
-          <div class="cc-bubble mine">Here’s the updated quote</div>
-          <div class="meta"><span class="st-chip fb2"><svg class="ic"><use href="#i-check"/></svg> Sent via SignalWire (fallback)</span> <span class="tiny muted">4:18 PM</span></div>
-        </div></div>
-        <div class="row mine"><div class="wrapb">
-          <div class="cc-bubble mine" style="opacity:.75">Test to a landline number</div>
-          <div class="meta"><span class="st-chip err"><svg class="ic"><use href="#i-x"/></svg> Not delivered — landline can’t receive SMS</span> <button class="btn" style="padding:2px 10px;font-size:11px">Details</button></div>
-        </div></div>
-      </div>
-    </div>
-  </div>
-  <p class="why"><b>Why:</b> the five chips are the five failure-side states of the machine, in escalating severity. Retry countdowns and fallback provider are stated in plain words on the message itself; permanent failures keep the bubble (dimmed) with a Details button into W11 — a failed message never disappears and never silently re-sends.</p>
-</div>
-
-<!-- ============================================================= ADMIN -->
+<!-- =============================== ADMIN =============================== -->
 <div class="sect" id="admin">
-  <h2>5 · Admin — messaging routing &amp; migration</h2>
-  <p class="sub">Provider choice is configuration, not code: global default → tenant → number → channel, with primary/fallback per number. Moving a number between providers is one screen and preserves every conversation.</p>
+  <h2>8 · Admin — routing, capability matrix, migration (new pages)</h2>
+  <p class="sub">Provider choice is configuration: global default → tenant → number → channel, with a fallback per channel. Moving a number between providers is one screen, keeps every conversation, and has a rollback button.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W13</span> Per-number routing card</h3>
+  <h3><span class="no">W12</span> Per-number routing card &nbsp;·&nbsp; resolution order &nbsp;·&nbsp; provider health</h3>
   <div class="cols2">
     <div class="routecard">
-      <div class="rh"><b>(845) 555-0164</b> <span class="tag gray">Riverside Auto · shared inbox</span><span class="spacer"></span><span class="hbar"><span class="hdot up"></span><span class="tiny muted">All providers healthy</span></span></div>
+      <div class="rh"><b>(845) 555-0164</b> <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared inbox</span><span style="flex:1"></span><span class="tiny muted"><span class="hdot up"></span> all providers healthy</span></div>
       <div class="rb">
         <div class="rrow"><span class="l"><svg class="ic"><use href="#i-phone"/></svg> Voice</span><div class="cs">Telnyx <span class="muted">▾</span></div><span></span></div>
-        <div class="rrow"><span class="l"><span class="tag sms">SMS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">fallback: SignalWire</span></div>
-        <div class="rrow"><span class="l"><span class="tag mms">MMS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">fallback: SignalWire</span></div>
-        <div class="rrow"><span class="l"><span class="tag rcs">RCS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">no fallback provider — falls to MMS/SMS</span></div>
-        <div class="rrow"><span class="l"><span class="tag wa">WhatsApp</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">or Meta direct</span></div>
-        <div class="rrow"><span class="l">RCS preferred</span><span class="sw acc on"></span><span class="tiny muted">try RCS first when the device is capable</span></div>
-        <div class="rrow"><span class="l">Auto MMS fallback</span><span class="sw acc on"></span><span></span></div>
-        <div class="rrow"><span class="l">Auto SMS fallback</span><span class="sw acc on"></span><span></span></div>
+        <div class="rrow"><span class="l"><span class="cc-channel cc-channel-sms">SMS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">fallback: SignalWire</span></div>
+        <div class="rrow"><span class="l"><span class="cc-channel cc-channel-sms">MMS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">fallback: SignalWire</span></div>
+        <div class="rrow"><span class="l"><span class="cc-channel cc-channel-rcs">RCS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">no 2nd provider — falls to MMS/SMS</span></div>
+        <div class="rrow"><span class="l"><span class="cc-channel cc-channel-whatsapp">WhatsApp</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">or Meta direct</span></div>
+        <div class="rrow"><span class="l">RCS preferred</span><span class="sw on"></span><span class="tiny muted">try RCS first when the device is capable</span></div>
+        <div class="rrow"><span class="l">Auto MMS fallback</span><span class="sw on"></span><span></span></div>
+        <div class="rrow"><span class="l">Auto SMS fallback</span><span class="sw on"></span><span></span></div>
       </div>
-      <div class="mf" style="border-top:1px solid var(--border)"><button class="btn ghost">Routing history</button><button class="btn">Test send</button><button class="btn pri">Save routing</button></div>
+      <div class="mf" style="border-top:1px solid var(--border)"><button class="btn ghost">Routing history</button><button class="btn">Test send</button><span style="flex:1"></span><button class="btn pri">Save routing</button></div>
     </div>
     <div>
       <div class="routecard" style="margin-bottom:18px">
@@ -927,37 +984,36 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
           <div class="kv"><span class="k">2 · Tenant default</span><span class="v">Telnyx · fallback SignalWire</span></div>
           <div class="kv"><span class="k">3 · Global default</span><span class="v">Telnyx</span></div>
           <div class="kv"><span class="k">Manual override</span><span class="v">per-message, admin only</span></div>
-          <p class="muted" style="margin:8px 0 0">Fallback fires only on provider failure — one message, one delivery. Duplicate sends are impossible by design: a message is claimed by exactly one dispatch attempt at a time.</p>
+          <p class="muted" style="margin:8px 0 0">Fallback fires only on provider failure. One message = one delivery: a message is claimed by exactly one dispatch attempt at a time, so duplicates are impossible by design.</p>
         </div>
       </div>
       <div class="routecard">
-        <div class="rh"><b>Provider health</b><span class="tiny muted">live, feeds failover</span></div>
+        <div class="rh"><b>Provider health</b><span class="tiny muted">live · feeds failover</span></div>
         <div class="rb small">
-          <div class="kv"><span class="k"><span class="hdot up" style="display:inline-block"></span> Telnyx</span><span class="v">142 ms · 0 errors / 1h · webhooks ✓</span></div>
-          <div class="kv"><span class="k"><span class="hdot up" style="display:inline-block"></span> SignalWire</span><span class="v">201 ms · 0 errors / 1h · webhooks ✓</span></div>
-          <div class="kv"><span class="k"><span class="hdot deg" style="display:inline-block"></span> VoIP.ms</span><span class="v">poll-based · last sync 38s ago · no DLR</span></div>
+          <div class="kv"><span class="k"><span class="hdot up"></span> Telnyx</span><span class="v">142 ms · 0 errors / 1h · webhooks ✓</span></div>
+          <div class="kv"><span class="k"><span class="hdot up"></span> SignalWire</span><span class="v">201 ms · 0 errors / 1h · webhooks ✓</span></div>
+          <div class="kv"><span class="k"><span class="hdot deg"></span> VoIP.ms</span><span class="v">poll-based · last sync 38s ago · no receipts</span></div>
         </div>
       </div>
     </div>
   </div>
-  <p class="why"><b>Why:</b> this card is the prompt’s example config, verbatim, as a screen. Channel rows each pick a provider with a stated fallback; the three toggles are the RCS ladder. The right column makes the resolution order and the no-duplicate rule part of the admin’s mental model, and provider health is shown where failover is configured.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">W13b</span> Provider migration — move a number, keep everything</h3>
+  <h3><span class="no">W13</span> Move a number between providers — keep everything &nbsp;·&nbsp; capability matrix</h3>
   <div class="cols2">
     <div class="modal">
       <div class="mh"><svg class="ic"><use href="#i-swap"/></svg> Move (845) 555-0110 · VoIP.ms → Telnyx</div>
       <div class="mb">
         <div class="tl">
-          <div class="step done"><div class="t">Number ported / available on Telnyx</div><div class="d">verified on the Telnyx account ✓</div></div>
+          <div class="step done"><div class="t">Number available on Telnyx</div><div class="d">verified on the account ✓</div></div>
           <div class="step done"><div class="t">Inbound webhook confirmed</div><div class="d">test message received through Telnyx ✓</div></div>
-          <div class="step cur"><div class="t">Switch routing</div><div class="d">outbound flips to Telnyx · VoIP.ms poll keeps running 48h as a safety net</div></div>
+          <div class="step cur"><div class="t">Switch routing</div><div class="d">outbound flips to Telnyx · the VoIP.ms poll keeps running 48h as a safety net</div></div>
           <div class="step"><div class="t">Verify &amp; retire</div><div class="d">one real round-trip text, then VoIP.ms polling stops for this number</div></div>
         </div>
-        <div class="banner info" style="margin-top:12px"><svg class="ic"><use href="#i-shield"/></svg><div><b>Nothing else changes.</b> Conversations, history, attachments, contacts, CRM records, assignments and notes stay exactly as they are — the thread is keyed to the number, not the provider.</div></div>
+        <div class="banner info" style="margin-top:12px"><svg class="ic"><use href="#i-shield"/></svg><span class="small"><b>Nothing else changes.</b> Conversations, history, attachments, contacts, CRM records, assignments and notes stay exactly as they are — the thread is keyed to the number, not the provider.</span></div>
       </div>
-      <div class="mf"><button class="btn dang">Roll back to VoIP.ms</button><span class="spacer"></span><button class="btn pri">Switch to Telnyx</button></div>
+      <div class="mf"><button class="btn dang">Roll back to VoIP.ms</button><span style="flex:1"></span><button class="btn pri">Switch to Telnyx</button></div>
     </div>
     <div>
       <table class="matrix">
@@ -973,59 +1029,83 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
         <tr><td>Location</td><td class="pt">RCS pin</td><td class="pt">link</td><td class="pt">link</td><td class="ok">✓</td><td class="no">—</td></tr>
         <tr><td>Inbound</td><td class="ok">webhook</td><td class="ok">webhook</td><td class="pt">poll 60s</td><td class="ok">webhook</td><td class="ok">webhook</td></tr>
       </table>
-      <p class="why" style="margin-top:14px"><b>Why:</b> the capability matrix is a live screen, not a doc — it renders straight from each adapter’s declared registry, so the admin sees what the composer will and won’t offer before pointing a number somewhere. The migration flow is a checklist with an always-visible rollback, and the safety-net overlap window means a mid-cutover inbound text can’t be lost.</p>
+      <p class="why" style="margin-top:14px"><b>Why:</b> the matrix renders from each adapter's declared registry — the same data that decides what the plus menu offers — so the admin sees consequences before pointing a number anywhere. The routing card is the brief's example config verbatim; the migration flow has an always-visible rollback and a 48h poll-overlap so a mid-cutover inbound text can't be lost.</p>
     </div>
   </div>
 </div>
 
-<!-- ============================================================= IPHONE -->
-<div class="sect" id="iphone">
-  <h2>6 · iPhone</h2>
-  <p class="sub">Same canonical conversations, same states, iOS conventions. The existing app keeps its 7 tabs — Chat is upgraded in place; calling, CallKit and push are untouched.</p>
+<!-- =============================== MOBILE =============================== -->
+<div class="sect" id="mobile">
+  <h2>9 · iPhone &amp; Android — the existing app's Chat tab, upgraded in place</h2>
+  <p class="sub">The mobile app already has the full chat (threads, attachments, voice notes, reactions, typing, location). Same rule as web: layout and bubbles stay; channel chips, honest states, RCS sheet rows and suggestion chips are added. Calling, CallKit and push are untouched.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">M1–M3</span> Conversation list · RCS conversation · attachment sheet</h3>
+  <h3><span class="no">M1–M3</span> iPhone: list · RCS conversation · attachment sheet (capability-aware)</h3>
   <div class="phones">
     <div class="ph-holder"><div class="phone"><div class="ios-notch"></div><div class="screenin">
       <div class="ios-status"><span>2:41</span><span>􀙇 􀖀 􀋂</span></div>
-      <div class="mhead" style="border-top:0"><span class="tt">Chat</span><span class="spacer"></span><svg class="ic"><use href="#i-search"/></svg></div>
-      <div style="padding:8px 12px 0"><div class="filters"><span class="fchip on">All</span><span class="fchip">Unread</span><span class="fchip">Texts</span><span class="fchip">WhatsApp</span></div></div>
+      <div class="mhead" style="border-top:0"><span class="tt">Chat</span><span style="flex:1"></span><svg class="ic"><use href="#i-search"/></svg></div>
+      <div style="display:flex;gap:6px;padding:8px 12px 4px" class="nu"><span class="fchip on">All</span><span class="fchip">Unread</span><span class="fchip">Texts</span><span class="fchip">WhatsApp</span></div>
       <div class="mlist">
-        <div class="mthread"><div class="ava">RA<span class="chbadge rcs"><svg><use href="#i-zap"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Riverside Auto Body</strong><span class="cc-t-time">2:41 PM</span></div><div class="cc-prev">Tapped: “Book an appointment” <span class="unread">2</span></div></div></div>
-        <div class="mthread"><div class="ava g3">MG<span class="chbadge wa"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Malky Gross</strong><span class="cc-t-time">2:12 PM</span></div><div class="cc-prev">🎤 Voice note · 0:19 <span class="unread">1</span></div></div></div>
-        <div class="mthread"><div class="ava g2">DK<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Dovid Klein</strong><span class="cc-t-time">1:58 PM</span></div><div class="cc-prev">You: Sounds good, see you at 4</div></div></div>
-        <div class="mthread"><div class="ava g4">HW<span class="chbadge fb"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Hudson Wholesale</strong><span class="cc-t-time">1:20 PM</span></div><div class="cc-prev">Do you deliver to Monroe?</div></div></div>
-        <div class="mthread"><div class="ava g5">FR<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Front desk</strong><span class="cc-t-time">12:44</span></div><div class="cc-prev"><span class="fail-dot"></span> 1 failed — tap to retry</div></div></div>
+        <div class="mthread"><span class="cc-avatar">RA</span><span class="cc-thread-main">
+          <span class="cc-thread-top"><span class="cc-thread-name"><strong>Riverside Auto Body</strong></span><small>2:41 PM</small></span>
+          <span class="cc-thread-bottom"><span class="cc-channel cc-channel-rcs nu">RCS</span><span class="cc-thread-preview">Tapped: “Book an appointment”</span></span>
+        </span><span class="cc-unread">2</span></div>
+        <div class="mthread"><span class="cc-avatar t3">MG</span><span class="cc-thread-main">
+          <span class="cc-thread-top"><span class="cc-thread-name"><strong>Malky Gross</strong></span><small>2:12 PM</small></span>
+          <span class="cc-thread-bottom"><span class="cc-channel cc-channel-whatsapp nu">WhatsApp</span><span class="cc-thread-preview">🎤 Voice note · 0:19</span></span>
+        </span><span class="cc-unread">1</span></div>
+        <div class="mthread"><span class="cc-avatar t2">DK</span><span class="cc-thread-main">
+          <span class="cc-thread-top"><span class="cc-thread-name"><strong>Dovid Klein</strong></span><small>1:58 PM</small></span>
+          <span class="cc-thread-bottom"><span class="cc-channel cc-channel-sms">SMS</span><span class="cc-thread-preview">You: Sounds good, see you at 4</span></span>
+        </span></div>
+        <div class="mthread"><span class="cc-avatar t4">HW</span><span class="cc-thread-main">
+          <span class="cc-thread-top"><span class="cc-thread-name"><strong>Hudson Wholesale</strong></span><small>1:20 PM</small></span>
+          <span class="cc-thread-bottom"><span class="cc-channel cc-channel-messenger nu">Messenger</span><span class="cc-thread-preview">Do you deliver to Monroe?</span></span>
+        </span></div>
+        <div class="mthread"><span class="cc-avatar t5"><svg class="ic"><use href="#i-user"/></svg></span><span class="cc-thread-main">
+          <span class="cc-thread-top"><span class="cc-thread-name"><strong>(845) 555-0142</strong></span><small>12:44</small></span>
+          <span class="cc-thread-bottom"><span class="cc-channel cc-channel-sms">SMS</span><span class="cc-thread-preview" style="color:var(--danger)">1 failed — tap to retry</span></span>
+        </span><svg class="ic cc-thread-alert"><use href="#i-alert"/></svg></div>
       </div>
-      <div class="fab"><svg><use href="#i-plus"/></svg></div>
       <div class="mtabs">
         <div class="mtab"><svg class="ic"><use href="#i-users"/></svg>Team</div>
-        <div class="mtab"><svg class="ic"><use href="#i-phone"/></svg>Recent</div>
+        <div class="mtab"><svg class="ic"><use href="#i-user"/></svg>Contacts</div>
+        <div class="mtab"><svg class="ic"><use href="#i-clock"/></svg>Recent</div>
         <div class="mtab"><svg class="ic"><use href="#i-grid"/></svg>Keypad</div>
         <div class="mtab on"><svg class="ic"><use href="#i-msg"/></svg>Chat</div>
         <div class="mtab"><svg class="ic"><use href="#i-vm"/></svg>Voicemail</div>
+        <div class="mtab"><svg class="ic"><use href="#i-set"/></svg>Settings</div>
       </div>
-    </div><div class="capt">iPhone · conversation list</div></div></div>
+    </div><div class="capt">iPhone · list — existing 7-tab app, chips added</div></div></div>
 
     <div class="ph-holder"><div class="phone"><div class="ios-notch"></div><div class="screenin">
       <div class="ios-status"><span>2:42</span><span>􀙇 􀖀 􀋂</span></div>
-      <div class="mhead"><svg class="ic"><use href="#i-back"/></svg><div class="ava" style="width:30px;height:30px;font-size:11px">RA</div><div><b class="small">Riverside Auto</b><div class="tiny" style="color:var(--ch-rcs);font-weight:700">RCS · read receipts on</div></div><span class="spacer"></span><svg class="ic"><use href="#i-phone"/></svg></div>
+      <div class="mhead"><svg class="ic"><use href="#i-back"/></svg><span class="cc-avatar" style="width:30px;height:30px;font-size:11px">RA</span><div><b class="small">Riverside Auto</b><div class="tiny nu" style="color:var(--rcs);font-weight:700">RCS · read receipts on</div></div><span style="flex:1"></span><svg class="ic"><use href="#i-phone"/></svg></div>
       <div class="mscroll">
-        <div class="daych">Today</div>
-        <div class="row"><div class="wrapb" style="max-width:82%"><div class="cc-bubble theirs">Do you have openings this week for a bumper repaint?</div><div class="meta">2:31 PM</div></div></div>
-        <div class="row mine"><div class="wrapb" style="max-width:86%">
-          <div class="rcard" style="width:206px"><div class="ph-img grad1" style="aspect-ratio:16/8">Bumper special</div><div class="body"><h4 style="font-size:12.5px">Bumper repaint special</h4><p style="font-size:11px">$249 · 1-day turnaround</p></div><div class="rbtns"><button style="font-size:11.5px">Book an appointment</button><button style="font-size:11.5px">Call us</button></div></div>
-          <div class="meta">2:33 PM <span class="ticks read"><svg class="ic"><use href="#i-dcheck"/></svg></span> Read</div>
+        <div class="cc-msg-row theirs" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:86%">
+          <div class="cc-bubble theirs" style="font-size:12px">Do you have openings this week for a bumper repaint?</div>
+          <div class="cc-msg-meta"><span>2:31 PM</span></div>
         </div></div>
-        <div class="row"><div class="wrapb"><div class="cc-bubble theirs">Tapped: <b>Book an appointment</b></div><div class="meta">2:41 PM</div></div></div>
-        <div class="row"><div class="typing"><i></i><i></i><i></i></div></div>
-        <div class="suggs" style="justify-content:flex-end"><span class="sugg" style="font-size:11px">Tomorrow 9 AM</span><span class="sugg" style="font-size:11px">Thu 10 AM</span></div>
+        <div class="cc-msg-row mine" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:90%">
+          <div class="cc-bubble mine"><div class="cc-richcard nu" style="width:190px">
+            <div class="img grad1 ph-img" style="font-size:10px">Bumper special</div>
+            <div class="bd"><b style="font-size:11.5px">Bumper repaint special</b><small style="font-size:10px">$249 · 1-day turnaround</small></div>
+            <div class="btns"><button style="font-size:11px">Book an appointment</button><button style="font-size:11px">Call us</button></div>
+          </div></div>
+          <div class="cc-msg-meta mine"><span>2:33 PM</span><span class="nu">read</span><span class="mticks read nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
+        </div></div>
+        <div class="cc-msg-row theirs" style="margin-bottom:10px"><div class="cc-msg-wrap"><div class="cc-bubble theirs" style="font-size:12px">Tapped: <b>Book an appointment</b></div><div class="cc-msg-meta"><span>2:41 PM</span></div></div></div>
+        <div class="cc-msg-row theirs"><div class="cc-typing nu"><i></i><i></i><i></i></div></div>
+        <div class="cc-suggest-row nu" style="justify-content:flex-end;margin-top:auto"><span class="cc-suggest" style="font-size:11px">Tomorrow 9 AM</span><span class="cc-suggest" style="font-size:11px">Thu 10 AM</span></div>
       </div>
-      <div class="mcomp">
-        <div class="compline"><span class="cap" style="border:0"><svg class="ic"><use href="#i-plus"/></svg></span><div class="ta" style="min-height:34px"><span class="plc">Message…</span></div><button class="send rcs" style="width:34px;height:34px"><svg class="ic"><use href="#i-arrow"/></svg></button></div>
-      </div>
-    </div><div class="capt">iPhone · RCS conversation</div></div></div>
+      <div class="mcomp"><div class="cc-compose-row"><div class="cc-compose-bubble" style="min-height:40px">
+        <button class="cc-compose-icon" style="width:30px;height:30px"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <div class="ta" style="min-height:28px"><span class="plc">Message...</span></div>
+        <button class="cc-compose-action" style="width:30px;height:30px"><svg class="ic"><use href="#i-mic"/></svg></button>
+      </div></div></div>
+    </div><div class="capt">iPhone · RCS conversation — same bubbles</div></div></div>
 
     <div class="ph-holder"><div class="phone"><div class="ios-notch"></div><div class="screenin" style="background:color-mix(in srgb,#000 35%,var(--bg-soft))">
       <div class="ios-status"><span>2:42</span><span>􀙇 􀖀 􀋂</span></div>
@@ -1037,149 +1117,72 @@ svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;strok
           <div><span class="si" style="background:linear-gradient(135deg,#64748b,#334155)"><svg class="ic"><use href="#i-cam"/></svg></span>Camera</div>
           <div><span class="si" style="background:linear-gradient(135deg,#f0932b,#eb4d4b)"><svg class="ic"><use href="#i-file"/></svg></span>Files</div>
           <div><span class="si" style="background:linear-gradient(135deg,#20bf6b,#0fb9b1)"><svg class="ic"><use href="#i-pin"/></svg></span>Location</div>
-          <div><span class="si" style="background:linear-gradient(135deg,#8b5cf6,#d946ef)"><svg class="ic"><use href="#i-card"/></svg></span>Rich card</div>
-          <div><span class="si" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)"><svg class="ic"><use href="#i-car2"/></svg></span>Carousel</div>
-          <div><span class="si" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6)"><svg class="ic"><use href="#i-zap"/></svg></span>Suggestions</div>
+          <div class="nu"><span class="si" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6)"><svg class="ic"><use href="#i-card"/></svg></span>Rich card</div>
+          <div class="nu"><span class="si" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)"><svg class="ic"><use href="#i-car2"/></svg></span>Carousel</div>
+          <div class="nu"><span class="si" style="background:linear-gradient(135deg,#8b5cf6,#d946ef)"><svg class="ic"><use href="#i-zap"/></svg></span>Suggestions</div>
           <div><span class="si" style="background:linear-gradient(135deg,#0ea5e9,#22a8ff)"><svg class="ic"><use href="#i-mic"/></svg></span>Voice note</div>
         </div>
-        <div class="banner info" style="margin-top:14px"><svg class="ic"><use href="#i-info"/></svg><div class="tiny">Rich card, carousel &amp; suggestions show here because this conversation is RCS. On an SMS thread this row isn’t shown.</div></div>
+        <div class="banner info" style="margin-top:14px"><svg class="ic"><use href="#i-info"/></svg><span class="tiny">The three purple tiles appear only on RCS conversations — on an SMS thread this sheet is exactly today's.</span></div>
       </div>
-    </div><div class="capt">iPhone · attachment sheet (capability-aware)</div></div></div>
+    </div><div class="capt">iPhone · attachment sheet — the mobile divide</div></div></div>
   </div>
-  <p class="why"><b>Why:</b> the list reuses the exact web hierarchy (channel badge on avatar, honest previews, failure dot) so an agent switching devices re-learns nothing. The RCS builder tools live in the attachment sheet — the composer stays one thumb-reachable row — and the sheet is generated from the same capability registry as the web composer.</p>
 </div>
 
 <div class="screen">
-  <h3><span class="no">M4–M5</span> Message info sheet · notifications</h3>
+  <h3><span class="no">A1–A2</span> Android: SMS thread with fallback/failed states · notifications with inline actions</h3>
   <div class="phones">
-    <div class="ph-holder"><div class="phone"><div class="ios-notch"></div><div class="screenin" style="background:color-mix(in srgb,#000 35%,var(--bg-soft))">
-      <div class="ios-status"><span>4:19</span><span>􀙇 􀖀 􀋂</span></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <b class="small">Message info</b>
-        <div class="cc-bubble mine" style="display:inline-block;margin:10px 0;font-size:12px">Here’s the updated quote</div>
-        <div class="tl" style="font-size:12px">
-          <div class="step done"><div class="t">Queued · 4:18:02</div></div>
-          <div class="step bad"><div class="t">Telnyx unreachable · 4:18:04</div><div class="d">timeout after 2 attempts</div></div>
-          <div class="step done"><div class="t">Fallback → SignalWire · 4:18:05</div></div>
-          <div class="step done"><div class="t">Delivered · 4:18:09</div><div class="d">id <span class="mono">signalwire:SMa9…44</span></div></div>
-        </div>
-        <div class="grid2" style="margin-top:12px;gap:8px"><button class="btn">Copy details</button><button class="btn pri">Done</button></div>
+    <div class="ph-holder"><div class="phone android"><div class="screenin">
+      <div class="and-status"><span>4:18</span><span>▲ ●▂▄▆ ▮</span></div>
+      <div class="mhead"><svg class="ic"><use href="#i-back"/></svg><span class="cc-avatar t5" style="width:30px;height:30px;font-size:11px">FR</span><div><b class="small">Front desk</b><div class="tiny muted">SMS · (845) 555-0164 · shared</div></div><span style="flex:1"></span><svg class="ic"><use href="#i-dots"/></svg></div>
+      <div class="mscroll">
+        <div class="cc-msg-row theirs" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:86%"><div class="cc-bubble theirs" style="font-size:12px">Is my order ready?</div><div class="cc-msg-meta"><span>4:02 PM</span></div></div></div>
+        <div class="cc-msg-row mine" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:90%">
+          <div class="cc-bubble mine" style="font-size:12px">Reminder: your pickup window is 4–5 PM today</div>
+          <div class="cc-msg-meta mine"><span>4:18</span><span class="mfall nu" style="font-size:9.5px"><svg class="ic" style="width:10px;height:10px"><use href="#i-swap"/></svg> via SignalWire (fallback)</span></div>
+        </div></div>
+        <div class="cc-msg-row mine" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:90%">
+          <div class="cc-bubble mine" style="opacity:.8;font-size:12px">And here's the receipt</div>
+          <div class="cc-msg-meta mine"><span class="cc-error" style="font-size:9.5px">failed</span><button class="mretrybtn nu" style="font-size:9.5px">Retry</button></div>
+        </div></div>
+        <div class="cc-msg-row theirs"><div class="cc-msg-wrap"><div class="cc-bubble theirs" style="font-size:12px">👍</div><div class="cc-msg-meta"><span>4:20 PM</span></div></div></div>
       </div>
-    </div><div class="capt">iPhone · message info sheet</div></div></div>
+      <div class="mcomp"><div class="cc-compose-row"><div class="cc-compose-bubble" style="min-height:40px">
+        <button class="cc-compose-icon" style="width:30px;height:30px"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <div class="ta" style="min-height:28px"><span class="plc">Text message...</span></div>
+        <button class="cc-compose-action" style="width:30px;height:30px"><svg class="ic"><use href="#i-mic"/></svg></button>
+      </div></div></div>
+    </div><div class="capt">Android · fallback + failed in the meta line</div></div></div>
 
-    <div class="ph-holder"><div class="phone"><div class="ios-notch"></div><div class="screenin" style="background:linear-gradient(160deg,#1e2a3a,#0c1218);justify-content:flex-start">
-      <div class="ios-status" style="color:#e1e9f1"><span>2:41</span><span>􀙇 􀖀 􀋂</span></div>
-      <div style="text-align:center;color:#e1e9f1;margin:26px 0 18px"><div style="font-size:44px;font-weight:300">2:41</div><div class="small" style="opacity:.7">Tuesday, September 16</div></div>
-      <div class="notif"><div class="nh"><span class="napp"></span> LOOPCOM · now</div><b class="small">Riverside Auto Body</b><div class="small muted">Tapped: “Book an appointment”</div><div class="tiny" style="color:var(--ch-rcs);font-weight:700;margin-top:2px">RCS</div></div>
-      <div class="notif"><div class="nh"><span class="napp" style="background:var(--ch-wa)"></span> LOOPCOM · 29m ago</div><b class="small">Malky Gross (WhatsApp)</b><div class="small muted">🎤 Voice note (0:19)</div></div>
-      <div class="notif"><div class="nh"><span class="napp" style="background:var(--danger)"></span> LOOPCOM · 1h ago</div><b class="small">Message not delivered</b><div class="small muted">To Front desk thread — tap to retry</div></div>
-    </div><div class="capt">iPhone · lock-screen notifications</div></div></div>
+    <div class="ph-holder"><div class="phone android"><div class="screenin" style="background:linear-gradient(160deg,#16202e,#0c1218);justify-content:flex-start">
+      <div class="and-status" style="color:#e1e9f1"><span>2:41</span><span>▲ ●▂▄▆ ▮</span></div>
+      <div style="text-align:center;color:#e1e9f1;margin:20px 0 14px"><div style="font-size:40px;font-weight:300">2:41</div><div class="small" style="opacity:.7">Tue, Sep 16</div></div>
+      <div class="notif"><div class="nh"><span class="napp"></span> Loopcom · Messages · now</div><b class="small">Riverside Auto Body</b><div class="small muted">Tapped: “Book an appointment”</div><div class="tiny nu" style="color:var(--rcs);font-weight:700;margin-top:2px">RCS</div><div style="display:flex;gap:14px;margin-top:7px"><span class="tiny" style="color:var(--accent);font-weight:800">REPLY</span><span class="tiny" style="color:var(--accent);font-weight:800">MARK READ</span></div></div>
+      <div class="notif"><div class="nh"><span class="napp" style="background:var(--wa)"></span> Loopcom · Messages · 29m</div><b class="small">Malky Gross <span class="nu">(WhatsApp)</span></b><div class="small muted">🎤 Voice note (0:19)</div><div style="display:flex;gap:14px;margin-top:7px"><span class="tiny" style="color:var(--accent);font-weight:800">REPLY</span><span class="tiny" style="color:var(--accent);font-weight:800">MARK READ</span></div></div>
+      <div class="notif nu"><div class="nh"><span class="napp" style="background:var(--danger)"></span> Loopcom · Messages · 1h</div><b class="small">Message not delivered</b><div class="small muted">To Front desk — tap to retry</div></div>
+    </div><div class="capt">Android · channel named, failures first-class</div></div></div>
 
     <div class="ph-holder" style="max-width:330px">
-      <p class="why" style="margin-top:0"><b>Why:</b> notifications name the channel (and only the channel — never the provider; customers don’t care that it went through SignalWire). Failure notifications are first-class and deep-link to the failed message with retry. One inbound message produces exactly one notification per device, deduped by the same claim mechanism the platform already uses for SMS push.</p>
-      <div class="modal"><div class="mh small">iOS specifics honored</div><div class="mb small muted">
-        · Push via existing APNs path — no new pipeline<br>
-        · Badge = unread conversations, cleared on read-sync from any device<br>
-        · Tapping opens the exact thread (existing deep-link routing)<br>
-        · Offline queue: composed messages persist and send on reconnect, shown as “Waiting to send”<br>
-        · CallKit, dialer, voicemail tabs untouched by this project
+      <div class="modal"><div class="mh small">Mobile ground rules</div><div class="mb small muted">
+        · The existing ChatTab keeps its layout, bubbles, reactions, voice notes, emoji picker — the additions mirror web exactly (chips, meta words, sheet rows, suggestion chips)<br><br>
+        · Notifications name the <b>channel</b>, never the provider — customers don't care it went via SignalWire<br><br>
+        · Notification inline-reply posts through the same send API as the composer — every rule applies<br><br>
+        · Offline: composed messages queue and show “waiting for network” in the meta line; send on reconnect; never lost, never duplicated<br><br>
+        · Calling, CallKit, VoIP push, the other six tabs: not touched by this project
       </div></div>
     </div>
   </div>
-</div>
-
-<!-- ============================================================= ANDROID -->
-<div class="sect" id="android">
-  <h2>7 · Android</h2>
-  <p class="sub">Functionally identical to iOS; differences are OS conventions only — Material ripples, back gestures, notification channels, FAB placement.</p>
-</div>
-
-<div class="screen">
-  <h3><span class="no">A1–A3</span> Conversation list · SMS conversation with fallback chip · notifications</h3>
-  <div class="phones">
-    <div class="ph-holder"><div class="phone" style="border-radius:26px"><div class="screenin">
-      <div class="and-status"><span>2:41</span><span>▲ ●▂▄▆ ▮</span></div>
-      <div class="mhead" style="border-top:0"><span class="tt">Chat</span><span class="spacer"></span><svg class="ic"><use href="#i-search"/></svg><svg class="ic"><use href="#i-dots"/></svg></div>
-      <div style="padding:8px 12px 0"><div class="filters"><span class="fchip on">All</span><span class="fchip">Unread</span><span class="fchip">Texts</span><span class="fchip">WhatsApp</span></div></div>
-      <div class="mlist">
-        <div class="mthread"><div class="ava">RA<span class="chbadge rcs"><svg><use href="#i-zap"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Riverside Auto Body</strong><span class="cc-t-time">2:41</span></div><div class="cc-prev">Tapped: “Book an appointment” <span class="unread">2</span></div></div></div>
-        <div class="mthread"><div class="ava g3">MG<span class="chbadge wa"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Malky Gross</strong><span class="cc-t-time">2:12</span></div><div class="cc-prev">🎤 Voice note · 0:19 <span class="unread">1</span></div></div></div>
-        <div class="mthread"><div class="ava g2">DK<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Dovid Klein</strong><span class="cc-t-time">1:58</span></div><div class="cc-prev">You: Sounds good, see you at 4</div></div></div>
-        <div class="mthread"><div class="ava g5">FR<span class="chbadge sms"><svg><use href="#i-msg"/></svg></span></div><div class="cc-t-main"><div class="cc-t-top"><strong>Front desk</strong><span class="cc-t-time">12:44</span></div><div class="cc-prev"><span class="fail-dot"></span> 1 failed — tap to retry</div></div></div>
-      </div>
-      <div class="fab" style="border-radius:50%"><svg><use href="#i-msg"/></svg></div>
-      <div class="mtabs">
-        <div class="mtab"><svg class="ic"><use href="#i-users"/></svg>Team</div>
-        <div class="mtab"><svg class="ic"><use href="#i-phone"/></svg>Recent</div>
-        <div class="mtab"><svg class="ic"><use href="#i-grid"/></svg>Keypad</div>
-        <div class="mtab on"><svg class="ic"><use href="#i-msg"/></svg>Chat</div>
-        <div class="mtab"><svg class="ic"><use href="#i-vm"/></svg>Voicemail</div>
-      </div>
-    </div><div class="capt">Android · conversation list</div></div></div>
-
-    <div class="ph-holder"><div class="phone" style="border-radius:26px"><div class="screenin">
-      <div class="and-status"><span>4:18</span><span>▲ ●▂▄▆ ▮</span></div>
-      <div class="mhead"><svg class="ic"><use href="#i-back"/></svg><div class="ava g5" style="width:30px;height:30px;font-size:11px">FR</div><div><b class="small">Front desk</b><div class="tiny muted">SMS · (845) 555-0164 · shared</div></div><span class="spacer"></span><svg class="ic"><use href="#i-dots"/></svg></div>
-      <div class="mscroll">
-        <div class="row"><div class="wrapb" style="max-width:84%"><div class="cc-bubble theirs">Is my order ready?</div><div class="meta">4:02 PM</div></div></div>
-        <div class="row mine"><div class="wrapb" style="max-width:86%">
-          <div class="cc-bubble mine">Reminder: your pickup window is 4–5 PM today</div>
-          <div class="meta"><span class="st-chip fb2" style="font-size:9.5px"><svg class="ic"><use href="#i-swap"/></svg> via SignalWire (fallback)</span></div>
-        </div></div>
-        <div class="row mine"><div class="wrapb" style="max-width:86%">
-          <div class="cc-bubble mine" style="opacity:.75">And here’s the receipt</div>
-          <div class="meta"><span class="st-chip err" style="font-size:9.5px"><svg class="ic"><use href="#i-x"/></svg> Failed — tap to retry</span></div>
-        </div></div>
-        <div class="row"><div class="wrapb"><div class="cc-bubble theirs">👍</div><div class="meta">4:20 PM</div></div></div>
-      </div>
-      <div class="mcomp"><div class="compline"><span class="cap" style="border:0"><svg class="ic"><use href="#i-plus"/></svg></span><div class="ta" style="min-height:34px"><span class="plc">Text message…</span></div><span class="cap" style="border:0"><svg class="ic"><use href="#i-mic"/></svg></span><button class="send" style="width:34px;height:34px"><svg class="ic"><use href="#i-arrow"/></svg></button></div></div>
-    </div><div class="capt">Android · SMS with fallback + failed states</div></div></div>
-
-    <div class="ph-holder"><div class="phone" style="border-radius:26px"><div class="screenin" style="background:linear-gradient(160deg,#16202e,#0c1218);justify-content:flex-start">
-      <div class="and-status" style="color:#e1e9f1"><span>2:41</span><span>▲ ●▂▄▆ ▮</span></div>
-      <div style="text-align:center;color:#e1e9f1;margin:20px 0 14px"><div style="font-size:40px;font-weight:300">2:41</div><div class="small" style="opacity:.7">Tue, Sep 16</div></div>
-      <div class="notif"><div class="nh"><span class="napp"></span> Loopcom · Messages · now</div><b class="small">Riverside Auto Body</b><div class="small muted">Tapped: “Book an appointment”</div><div style="display:flex;gap:14px;margin-top:7px"><span class="tiny" style="color:var(--accent);font-weight:800">REPLY</span><span class="tiny" style="color:var(--accent);font-weight:800">MARK READ</span></div></div>
-      <div class="notif"><div class="nh"><span class="napp" style="background:var(--ch-wa)"></span> Loopcom · Messages · 29m</div><b class="small">Malky Gross (WhatsApp)</b><div class="small muted">🎤 Voice note (0:19)</div><div style="display:flex;gap:14px;margin-top:7px"><span class="tiny" style="color:var(--accent);font-weight:800">REPLY</span><span class="tiny" style="color:var(--accent);font-weight:800">MARK READ</span></div></div>
-    </div><div class="capt">Android · notifications with inline actions</div></div></div>
-  </div>
-  <p class="why"><b>Why:</b> Android gets inline Reply/Mark-read actions (posting through the same send API, so a notification reply obeys every rule a composer send does) on the existing <span class="mono">connect-messages</span> channel. The failure chip lives on the bubble exactly as on web/iOS — one design, three renderers.</p>
-</div>
-
-<!-- ============================================================= STATES -->
-<div class="sect" id="states">
-  <h2>8 · Empty, loading &amp; error states</h2>
-</div>
-
-<div class="screen">
-  <h3><span class="no">W14</span> The unhappy paths, designed on purpose</h3>
-  <div class="cols3">
-    <div class="modal"><div class="mh small">Loading</div><div class="mb">
-      <div style="display:flex;gap:10px;margin-bottom:12px"><div class="skel" style="width:38px;height:38px;border-radius:50%"></div><div style="flex:1"><div class="skel" style="height:12px;width:60%;margin-bottom:6px"></div><div class="skel" style="height:10px;width:85%"></div></div></div>
-      <div style="display:flex;gap:10px;margin-bottom:12px"><div class="skel" style="width:38px;height:38px;border-radius:50%"></div><div style="flex:1"><div class="skel" style="height:12px;width:45%;margin-bottom:6px"></div><div class="skel" style="height:10px;width:70%"></div></div></div>
-      <div style="display:flex;gap:10px"><div class="skel" style="width:38px;height:38px;border-radius:50%"></div><div style="flex:1"><div class="skel" style="height:12px;width:55%;margin-bottom:6px"></div><div class="skel" style="height:10px;width:78%"></div></div></div>
-    </div></div>
-    <div class="modal"><div class="mh small">Empty inbox</div><div class="mb">
-      <div class="empty" style="padding:34px 12px"><div><div class="big"><svg class="ic" style="width:26px;height:26px"><use href="#i-msg"/></svg></div><b>No conversations yet</b><div class="small" style="margin:4px 0 12px">Texts to your numbers land here automatically.</div><button class="btn pri">Start a conversation</button></div></div>
-    </div></div>
-    <div class="modal"><div class="mh small">Offline / reconnecting</div><div class="mb">
-      <div class="banner warn"><svg class="ic"><use href="#i-alert"/></svg><div><b>You’re offline.</b> Showing saved messages. Anything you send will queue and go out when you reconnect.</div></div>
-      <div class="row mine" style="margin-top:10px"><div class="wrapb"><div class="cc-bubble mine" style="opacity:.8">Be there in 10</div><div class="meta"><span class="st-chip prog"><svg class="ic"><use href="#i-clock"/></svg> Waiting for network</span></div></div></div>
-      <div class="banner err" style="margin-top:10px"><svg class="ic"><use href="#i-x"/></svg><div><b>Couldn’t load this conversation.</b> <u>Try again</u> · error id <span class="mono">req_8f31c</span></div></div>
-    </div></div>
-  </div>
-  <p class="why"><b>Why:</b> the offline banner states the queue contract in one sentence (“will queue and go out”) so users trust it and stop double-sending — the root cause of most duplicate texts. Error surfaces always carry a request id, matching the observability requirement end to end.</p>
+  <p class="why"><b>Why:</b> the phone screens are the existing app with the same six additions as web, in the same places. The one mobile-specific decision: RCS builder tiles live in the attachment sheet (purple, only on RCS threads) so the composer stays one thumb-reachable row.</p>
 </div>
 
 <div class="sect">
   <h2>Coverage checklist</h2>
   <p class="sub small">
-    Conversation list ✓ (W1, M1, A1) · Chat screen ✓ (W1–W5, M2, A2) · Composer ✓ (W6) · RCS rich composer ✓ (W7) ·
-    Media picker ✓ (W10) · File picker ✓ (W10) · Location ✓ (W10, W3) · Rich cards ✓ (W1, W7) · Carousel ✓ (W8) ·
-    Suggested replies/actions ✓ (W9, W1) · Message info ✓ (W11, M4) · Delivery/read status ✓ (W2, W11) · Typing ✓ (W1) ·
-    Provider/channel indicators ✓ (W1, W2) · Admin routing ✓ (W13) · Failure/fallback ✓ (W12, A2) · WhatsApp ✓ (W3) ·
-    Messenger ✓ (W4) · SMS/MMS ✓ (W2) · RCS ✓ (W1) · Mixed-channel history ✓ (W5) · Migration ✓ (W13b) ·
-    Capability matrix ✓ (W13b) · Empty/loading/error ✓ (W14) · Notifications ✓ (M5, A3).
+    Existing look reproduced &amp; frozen ✓ (W1) · RCS/non-RCS divide ✓ (W2, M3) · Conversation list ✓ (W6, M1) · RCS chat ✓ (W3, M2) ·
+    WhatsApp ✓ (W4) · Messenger ✓ (W5) · SMS/MMS ✓ (W1) · Mixed-channel history + provider migration in-thread ✓ (W6) ·
+    Composer ✓ (unchanged; W2/W3) · RCS rich composer ✓ (W9) · Carousel ✓ (W10) · Suggested replies/actions ✓ (W11, W3) ·
+    Media/file/location ✓ (existing menu, W2) · Delivery/read/typing ✓ (W3, W7) · Failure/fallback ✓ (W7, A1) ·
+    Message info ✓ (W8) · Admin routing ✓ (W12) · Capability matrix + migration ✓ (W13) · Notifications ✓ (A2) ·
+    Provider/channel indicators ✓ (chips + header line, W3/W6).
   </p>
 </div>
 
@@ -1189,6 +1192,11 @@ function setTheme(t){
   document.documentElement.dataset.theme = t;
   document.getElementById('tDark').classList.toggle('on', t==='dark');
   document.getElementById('tLight').classList.toggle('on', t==='light');
+}
+function setMarks(on){
+  document.body.classList.toggle('hidenew', !on);
+  document.getElementById('mOn').classList.toggle('on', on);
+  document.getElementById('mOff').classList.toggle('on', !on);
 }
 </script>
 </body>
