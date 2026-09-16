@@ -2363,6 +2363,9 @@ const MessageBubble = memo(function MessageBubble({
           <Text style={[styles.timeText, { color: colors.textTertiary }]}>{formatMessageTime(message.sentAt)}</Text>
           {message.mine ? <Ionicons name={statusIcon(message.deliveryStatus, message.clientStatus)} size={11} color={message.clientStatus === 'failed' ? colors.danger : colors.textTertiary} /> : null}
           {message.mine ? <Text style={[styles.statusTiny, { color: colors.textTertiary }]}>{statusLabel(message.deliveryStatus, message.clientStatus)}</Text> : null}
+          {message.mine && message.sentViaBackupRoute ? (
+            <Text style={[styles.statusTiny, { color: colors.warning ?? colors.textTertiary, fontWeight: '700' }]}>via backup route</Text>
+          ) : null}
           {message.clientStatus === 'failed' ? (
             <TouchableOpacity onPress={onRetry}>
               <Text style={[styles.retryText, { color: colors.danger }]}>Retry</Text>
