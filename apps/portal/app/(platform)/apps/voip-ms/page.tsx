@@ -40,6 +40,10 @@ type SmsRow = {
   id: string;
   phoneE164: string;
   phoneRaw: string | null;
+  /** Carrier identity — the api returns these to SUPER_ADMIN ONLY (carrier
+   *  names never reach customers; Izzy 2026-09-16). */
+  provider?: string;
+  fallbackProvider?: string | null;
   voipmsAccountId?: string;
   voipmsAccountLabel?: string | null;
   tenantId: string | null;
@@ -688,6 +692,7 @@ export default function VoipMsIntegrationPage() {
                       <th>Tenant</th>
                       <th>Default</th>
                       <th>Active</th>
+                      {superOnly ? <th style={{ minWidth: 150 }}>Carrier</th> : null}
                       <th>Extension</th>
                       {can("can_assign_sms_numbers") ? <th style={{ minWidth: 180 }}>Assign</th> : null}
                     </tr>
@@ -709,6 +714,11 @@ export default function VoipMsIntegrationPage() {
                         </td>
                         <td>{r.isTenantDefault ? <span style={{ color: "var(--brand)" }}>✓</span> : "—"}</td>
                         <td>{r.active ? <span style={{ color: "var(--success, green)" }}>yes</span> : <span style={{ opacity: 0.5 }}>no</span>}</td>
+                        {superOnly ? (
+                          <td>
+                            <CarrierRouteCell row={r} onSaved={load} />
+                          </td>
+                        ) : null}
                         <td style={{ fontSize: 12 }}>
                           {r.assignedExtensionNumber
                             ? `Ext ${r.assignedExtensionNumber}`
@@ -785,6 +795,45 @@ export default function VoipMsIntegrationPage() {
         ) : null}
       </div>
     </PermissionGate>
+  );
+}
+
+/**
+ * Per-number carrier routing — PLATFORM STAFF ONLY (the api omits `provider`/
+ * `fallbackProvider` for anyone else, and refuses the PATCH with PLATFORM_ONLY).
+ * The backup route fires only when the primary provably accepted nothing —
+ * see apps/worker/src/connectChatSmsJob.ts `attemptProviderFallback`.
+ */
+function CarrierRouteCell({ row, onSaved }: { row: SmsRow; onSaved: () => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const primary = String(row.provider || "VOIPMS");
+  const primaryLabel = primary === "VOIPMS" ? "VoIP.ms" : primary === "SIGNALWIRE" ? "SignalWire" : primary === "TELNYX" ? "Telnyx" : primary;
+  const backupOptions = [
+    { value: "", label: "Backup: off" },
+    ...(["SIGNALWIRE", "TELNYX"] as const)
+      .filter((p) => p !== primary)
+      .map((p) => ({ value: p, label: `Backup: ${p === "SIGNALWIRE" ? "SignalWire" : "Telnyx"}` })),
+  ];
+  async function saveBackup(v: string) {
+    setSaving(true);
+    try {
+      await apiPatch(`/admin/apps/voip-ms/numbers/${row.id}`, { fallbackProvider: v || null });
+      await onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="stack" style={{ gap: 4, minWidth: 140 }}>
+      <span style={{ fontSize: 12, fontWeight: 600 }}>{primaryLabel}</span>
+      <ConnectSelect
+        value={row.fallbackProvider || ""}
+        onChange={(v) => void saveBackup(v)}
+        disabled={saving}
+        style={{ width: "100%", fontSize: 12 }}
+        options={backupOptions}
+      />
+    </div>
   );
 }
 

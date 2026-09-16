@@ -2221,6 +2221,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         id: r.id,
         phoneE164: r.phoneE164,
         phoneRaw: r.phoneRaw,
+        // ⛔ Carrier identity is PLATFORM-ONLY (Izzy, 2026-09-16: a customer
+        // never sees Telnyx/SignalWire/VoIP.ms). Tenant admins get neither
+        // the primary carrier nor the backup route.
+        ...(isSuper(user) ? { provider: String(r.provider || "VOIPMS"), fallbackProvider: r.fallbackProvider ? String(r.fallbackProvider) : null } : {}),
         voipmsAccountId: r.voipmsAccountId || VOIPMS_PRIMARY_ACCOUNT_ID,
         voipmsAccountLabel:
           (r.voipmsAccountId || VOIPMS_PRIMARY_ACCOUNT_ID) === VOIPMS_PRIMARY_ACCOUNT_ID
@@ -2262,11 +2266,28 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         assignedUserInboxMode: z.enum(["SHARED", "PERSONAL"]).optional(),
         isTenantDefault: z.boolean().optional(),
         active: z.boolean().optional(),
+        /**
+         * Backup carrier for outbound chat on this number (unified messaging
+         * Phase 1). ⛔ Only registry-backed adapters are legal targets —
+         * VOIPMS is deliberately absent until the VoIP.ms send path is
+         * extracted into an adapter. Null clears the backup route.
+         */
+        fallbackProvider: z.enum(["SIGNALWIRE", "TELNYX"]).nullable().optional(),
       })
       .parse(req.body || {});
 
     const row = await db.tenantSmsNumber.findUnique({ where: { id } });
     if (!row) return reply.status(404).send({ error: "NOT_FOUND" });
+
+    // ⛔ Carrier routing is a PLATFORM decision, and carrier names must never
+    // surface to customers (Izzy, 2026-09-16) — a tenant admin can neither
+    // read nor set which carrier backs their number. SUPER_ADMIN only.
+    if (body.fallbackProvider !== undefined && !isSuper(user)) {
+      return reply.status(403).send({ error: "PLATFORM_ONLY", message: "Carrier routing is managed by the platform." });
+    }
+    if (body.fallbackProvider != null && body.fallbackProvider === String(row.provider)) {
+      return reply.status(400).send({ error: "FALLBACK_EQUALS_PRIMARY", message: "The backup route must differ from the number's primary carrier." });
+    }
 
     if (!isSuper(user)) {
       if (body.tenantId !== undefined && body.tenantId !== effTenant) {
@@ -2340,6 +2361,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
             }),
         ...(body.isTenantDefault !== undefined ? { isTenantDefault: body.isTenantDefault } : {}),
         ...(body.active !== undefined ? { active: body.active } : {}),
+        ...(body.fallbackProvider !== undefined ? { fallbackProvider: body.fallbackProvider } : {}),
         updatedAt: new Date(),
       },
     } as any);
