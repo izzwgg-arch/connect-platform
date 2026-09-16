@@ -146,28 +146,63 @@ test("search: modes map to ONE Telnyx pattern filter; area code; letters T9; loc
   assert.deepEqual(buildTelnyxSearch({ query: "12", mode: "ends", type: "local" }), { refuse: "pattern_too_short" });
   const geo = buildTelnyxSearch({ query: "", type: "local", region: "ny", city: "Monsey" });
   assert.equal(geo.params.state, "NY");
-  assert.equal(geo.params.locality, "MONSEY");
+  assert.equal(geo.params.locality, "SPRING VALLEY", "Monsey is aliased to its rate center");
   const tf = buildTelnyxSearch({ query: "", type: "tollfree", region: "NY" });
   assert.equal(tf.params.numberType, "toll_free");
   assert.equal(tf.params.state, undefined, "no state filter on toll-free");
 });
 
-test("search: a city with no match RETRIES without the city (same state); failure ≠ empty; unconfigured is its own outcome", async () => {
+test("search: a missing town retries without it ONLY when an area code/pattern still narrows it; bare state+town never goes statewide", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./telnyxNumbers").clearTelnyxSearchCache();
   const seen: any[] = [];
-  const out = await searchTelnyxOnboardingNumbers({}, { query: "", type: "local", region: "NY", city: "Monsey" }, {
-    resolveCreds: async () => CREDS,
-    search: async (_c: any, p: any) => { seen.push(p); return p.locality ? [] : [{ phoneNumber: "+18455520019", state: "NY", locality: "MILTON", features: ["voice", "sms", "mms"], numberType: "local" }]; },
-  });
-  assert.equal(out.ok, true);
+  const search = async (_c: any, p: any) => { seen.push(p); return p.locality ? [] : [{ phoneNumber: "+18455520019", state: "NY", locality: "MILTON", features: ["voice", "sms", "mms"], numberType: "local" }]; };
+  const narrowed = await searchTelnyxOnboardingNumbers({}, { query: "845", mode: "areacode", type: "local", region: "NY", city: "Nowhereville" }, { resolveCreds: async () => CREDS, search });
+  assert.equal(narrowed.ok, true);
   assert.equal(seen.length, 2);
   assert.equal(seen[1].locality, undefined);
-  assert.equal(seen[1].state, "NY");
-  assert.deepEqual(out.numbers[0], { number: "(845) 552-0019", e164: "+18455520019", location: "Milton, NY", sms: true, voice: true, mms: true, fax: false, inStock: false, kind: "local" });
+  assert.equal(seen[1].areaCode, "845");
+  assert.deepEqual(narrowed.numbers[0], { number: "(845) 552-0019", e164: "+18455520019", location: "Milton, NY", sms: true, voice: true, mms: true, fax: false, inStock: false, kind: "local" });
 
-  const failed = await searchTelnyxOnboardingNumbers({}, { query: "845", type: "local" }, { resolveCreds: async () => CREDS, search: async () => { throw new Error("boom"); } });
+  seen.length = 0;
+  const bare = await searchTelnyxOnboardingNumbers({}, { query: "", type: "local", region: "NY", city: "Nowhereville" }, { resolveCreds: async () => CREDS, search });
+  assert.equal(bare.ok, true);
+  assert.equal(bare.numbers.length, 0, "no statewide fallback — Niagara Falls is not an answer to a town");
+  assert.equal(seen.length, 1);
+
+  const failed = await searchTelnyxOnboardingNumbers({}, { query: "846", type: "local" }, { resolveCreds: async () => CREDS, search: async () => { throw new Error("boom"); } });
   assert.deepEqual(failed, { ok: false, reason: "search_failed" });
   const unconf = await searchTelnyxOnboardingNumbers({}, { query: "845", type: "local" }, { resolveCreds: async () => null });
   assert.deepEqual(unconf, { ok: false, reason: "unconfigured" });
+});
+
+test("search: Monsey resolves to its real rate center (SPRING VALLEY)", () => {
+  const b = buildTelnyxSearch({ query: "", type: "local", region: "NY", city: "monsey" });
+  assert.equal(b.params.locality, "SPRING VALLEY");
+});
+
+test("⛔ search: a 429 burst is WAITED OUT and retried (read-only), never shown as 'search failed'; concurrency capped; repeats cached", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./telnyxNumbers").clearTelnyxSearchCache();
+  let calls = 0;
+  let inflight = 0;
+  let peak = 0;
+  const search = async () => {
+    calls++;
+    inflight++;
+    peak = Math.max(peak, inflight);
+    await new Promise((r) => setTimeout(r, 5));
+    inflight--;
+    if (calls % 3 === 0) throw new TelnyxError(429, "rate_limited", "slow down");
+    return [{ phoneNumber: "+18455550100", state: "NY", locality: "X", features: ["voice"], numberType: "local" }];
+  };
+  const outs = await Promise.all(Array.from({ length: 30 }, (_, i) =>
+    searchTelnyxOnboardingNumbers({}, { query: String(800 + i), mode: "areacode", type: "local" }, { resolveCreds: async () => CREDS, search, sleep: async () => {} })));
+  assert.equal(outs.filter((o: any) => !o.ok).length, 0, "every 429 was retried through");
+  assert.ok(peak <= 4, `concurrency capped (peak ${peak})`);
+  const before = calls;
+  await searchTelnyxOnboardingNumbers({}, { query: "800", mode: "areacode", type: "local" }, { resolveCreds: async () => CREDS, search, sleep: async () => {} });
+  assert.equal(calls, before, "a repeat within the minute is served from cache");
 });
 
 test("client: Telnyx 10031 'no numbers found' is an EMPTY result, not an outage", async () => {
