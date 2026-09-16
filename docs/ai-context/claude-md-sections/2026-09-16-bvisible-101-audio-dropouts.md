@@ -127,3 +127,19 @@ offices and evict live mappings — the remedy is a business-grade router, never
 3. SIP ALG off on whatever router they keep;
 4. powerline-ethernet or a small switch for ext 101 if any desk is near the router;
 5. 101 signs into the Loopcom app as fallback (T9_101_1 has never registered).
+
+## Round 5 — a diagnostic prompt was handed to the CUSTOMER'S own office agent; output pending
+
+B Visible has an agent on an office computer. Izzy was given a READ-ONLY prompt for it
+(in the 2026-09-16 chat): (1) is the computer wired or Wi-Fi + its own link stats,
+(2) `netsh wlan show networks mode=bssid` channel/band survey, (3) **the split test** —
+100 pings each to the default gateway, to 209.145.60.79, and to 8.8.8.8
+(gateway lossy = Wi-Fi/LAN sick; gateway clean + others lossy = router/uplink sick),
+(4) pathping to the PBX, (5) `arp -a` device count + IF the office grants router admin
+access: make/model, uptime, connected-device count, SIP ALG on/off — read-only, change
+nothing, no password guessing, (6) router identity from the gateway page title.
+⛔ Told Izzy: run it during a busy hour / right after a bad call; a quiet-hour clean run
+proves nothing ([[quiet-log-is-not-a-fixed-bug]] shape). ⛔ A wired computer's clean
+gateway ping does NOT clear the Wi-Fi — it only isolates the router/uplink half; the
+phones' own radio stats are unmeasurable from a PC. ⏳ AWAITING the report; interpret it
+against the split-test key above and the server-side baseline in rounds 1–4.
