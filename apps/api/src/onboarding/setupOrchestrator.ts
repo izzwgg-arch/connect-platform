@@ -906,6 +906,17 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       submissionId,
       log: (message: string) => logEvent(submissionId, message),
     });
+    // ⛔ And when 911 is NOT registered, TEXT the owner (the sign-up report
+    // below is ADMIN_ALERT — muted — so it reaches nobody). Never fatal.
+    try {
+      const { raiseE911EscalationIfNeeded } = await import("./e911Escalation");
+      const latest = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId } });
+      if (await raiseE911EscalationIfNeeded(db, latest)) {
+        await logEvent(submissionId, "911 is not registered — the owner was texted.");
+      }
+    } catch {
+      /* the alert must never fail a finished build */
+    }
     // The owner's plain-English sign-up report — one per finished sign-up.
     await queueOnboardingSignupReport(submissionId, "success");
   } catch (e: any) {

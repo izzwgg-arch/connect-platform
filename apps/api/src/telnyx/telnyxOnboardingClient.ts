@@ -243,6 +243,54 @@ export interface TxAddress {
   postalCode: string | null;
 }
 
+export interface TxAddressValidation {
+  /** "valid" only when Telnyx says so; anything else is not registrable. */
+  result: "valid" | "invalid";
+  /** Telnyx error codes, e.g. 85009 (needs manual validation — NO suggestion), 20207/20209. */
+  codes: string[];
+  detail: string;
+  suggested: { streetAddress: string; extendedAddress: string; locality: string; administrativeArea: string; postalCode: string } | null;
+}
+
+/**
+ * Free, side-effect-free address check (`POST /addresses/actions/validate`).
+ * ⛔ Telnyx puts its SUGGESTION in the body of the 422 — a client that turns a
+ * non-2xx into a bare error throws the correction away (the VoIP.ms E911
+ * lesson), so this reads the raw response.
+ */
+export async function validateAddress(
+  creds: StoredTelnyxCredentials,
+  input: { streetAddress: string; extendedAddress?: string | null; locality: string; administrativeArea: string; postalCode: string },
+): Promise<TxAddressValidation> {
+  const json: any = {
+    street_address: input.streetAddress,
+    locality: input.locality,
+    administrative_area: input.administrativeArea,
+    postal_code: input.postalCode,
+    country_code: "US",
+  };
+  if (input.extendedAddress) json.extended_address = input.extendedAddress;
+  const res = await txRequest<any>(creds, { path: "/addresses/actions/validate", method: "POST", json, timeoutMs: 30_000 });
+  const d: any = res.data || {};
+  if (res.status >= 500 || res.status === 401 || res.status === 403 || res.status === 429) throw classifyError(res);
+  const errors: any[] = Array.isArray(d.errors) ? d.errors : [];
+  const s = d?.data?.suggested;
+  return {
+    result: res.ok && String(d?.data?.result || "").toLowerCase() === "valid" ? "valid" : "invalid",
+    codes: errors.map((e) => String(e?.code ?? "")).filter(Boolean),
+    detail: errors.map((e) => [e?.code, e?.title].filter(Boolean).join(" ")).join("; "),
+    suggested: s && s.street_address
+      ? {
+          streetAddress: String(s.street_address || ""),
+          extendedAddress: String(s.extended_address || ""),
+          locality: String(s.locality || ""),
+          administrativeArea: String(s.administrative_area || ""),
+          postalCode: String(s.postal_code || ""),
+        }
+      : null,
+  };
+}
+
 /** Create a validated address (Telnyx refuses an undeliverable one with suggestions). */
 export async function createAddress(creds: StoredTelnyxCredentials, input: TxAddressInput): Promise<TxAddress> {
   const json: any = {

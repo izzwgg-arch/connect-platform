@@ -39,6 +39,7 @@ import { listConnections } from "../telnyx/telnyxClient";
 import {
   configureOwnedNumber,
   createAddress,
+  validateAddress,
   createMessagingProfileWithWebhook,
   enableEmergency,
   findOwnedNumber,
@@ -52,6 +53,7 @@ import {
 import { TELNYX_INBOUND_SMS_PATH } from "../telnyx/telnyxWebhooks";
 import { resolvePublicApiBase } from "../signalwire/signalWireRoutes";
 import { buildE911Address } from "./e911Address";
+import { normalizeE911ForCarrier } from "./e911Normalize";
 import { ensureProvisioningIdentity } from "./provisioningIdentity";
 import {
   onboardingTenDigits as tenDigits,
@@ -82,6 +84,7 @@ export type TxDeps = {
   setNumberCnam: typeof setNumberCnam;
   searchAvailable: typeof searchAvailable;
   createAddress: typeof createAddress;
+  validateAddress: typeof validateAddress;
   enableEmergency: typeof enableEmergency;
   fileTelnyxPort: (row: any, portedDid: string, ctx: { connectionId: string; messagingProfileId: string | null; customerReference: string }) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
@@ -100,6 +103,7 @@ export function realTelnyxDeps(): TxDeps {
     setNumberCnam,
     searchAvailable,
     createAddress,
+    validateAddress,
     enableEmergency,
     fileTelnyxPort: async (row, portedDid, ctx) => {
       const { fileTelnyxPortForSubmission } = await import("./telnyxPortFiling");
@@ -242,6 +246,7 @@ export async function applyTelnyxE911(
   }
   const a = build.address;
   const prior = (row?.answers?.provisioning?.e911 || {}) as any;
+  const attempts = Number(prior.attempts || 0) + 1;
   try {
     let addressId = String(row?.answers?.provisioning?.telnyxE911AddressId || "");
     let registered = {
@@ -258,22 +263,30 @@ export async function applyTelnyxE911(
       otherInfo: a.otherInfo,
     };
     if (!addressId) {
+      // ⛔ VALIDATE → apply the carrier's correction ONCE → validate again →
+      // only then register. Never register an address that did not validate
+      // (a wrong one sends an ambulance to the wrong door).
+      const chosen = await chooseRegistrableAddress(creds, deps, a);
+      registered = { ...registered, ...chosen.asE911 };
       const names = nameParts(row);
       const created = await deps.createAddress(creds, {
         firstName: names.first,
         lastName: names.last,
         businessName: String(row.companyName || a.fullName || "Office"),
-        streetAddress: [a.streetNumber, a.streetName].filter(Boolean).join(" "),
-        extendedAddress: [a.addressType, a.addressNumber].filter(Boolean).join(" ") || null,
-        locality: a.city,
-        administrativeArea: a.state,
-        postalCode: a.zip.slice(0, 5),
+        streetAddress: chosen.streetAddress,
+        extendedAddress: chosen.extendedAddress,
+        locality: chosen.locality,
+        administrativeArea: chosen.administrativeArea,
+        postalCode: chosen.postalCode,
         phoneNumber: e164Of(did),
         customerReference: String(row?.answers?.provisioning?.tenantSlug || submissionId),
       });
       addressId = created.id;
       if (!addressId) throw new Error("telnyx_address_create_returned_no_id");
       if (created.locality) registered = { ...registered, city: created.locality };
+      if (chosen.changed) {
+        await logEvent(submissionId, `911 address written the way the emergency database knows it: ${chosen.streetAddress}${chosen.extendedAddress ? `, ${chosen.extendedAddress}` : ""}, ${chosen.locality} ${chosen.administrativeArea} ${chosen.postalCode}.`);
+      }
       await mergeProvisioningState(row, { telnyxE911AddressId: addressId });
     }
     const enabled = await deps.enableEmergency(creds, numberId, addressId);
@@ -297,6 +310,8 @@ export async function applyTelnyxE911(
         provider: "telnyx",
         telnyxNumberId: numberId,
         telnyxAddressId: addressId,
+        attempts,
+        lastTriedAt: new Date().toISOString(),
       },
     });
     await logEvent(
@@ -308,11 +323,98 @@ export async function applyTelnyxE911(
   } catch (e) {
     // ⛔ Never registered on trust, never fatal to a paid sign-up.
     const detail = telnyxErrorDetail(e);
-    await logEvent(submissionId, `⛔ 911 registration for ${did} FAILED (${detail}) — the number works, 911 does not. Needs a person.`);
+    const manual = /85009/.test(detail);
+    await logEvent(
+      submissionId,
+      `⛔ 911 registration for ${did} FAILED (${detail}) — the number works, 911 does not.${manual ? " The carrier wants this address validated by hand — ask Telnyx support; the retry picks it up once they do." : " Retried automatically."}`,
+    );
     await mergeProvisioningState(row, {
-      e911: { did, status: "failed", detail, needsAttention: true, at: new Date().toISOString(), address: null, emailedAt: null, provider: "telnyx" },
+      e911: {
+        did,
+        status: "failed",
+        detail,
+        needsAttention: true,
+        at: new Date().toISOString(),
+        address: null,
+        emailedAt: null,
+        provider: "telnyx",
+        telnyxNumberId: numberId,
+        attempts,
+        lastTriedAt: new Date().toISOString(),
+        firstFailedAt: prior.firstFailedAt || new Date().toISOString(),
+      },
     });
   }
+}
+
+/**
+ * Pick the address to register: the typed address rewritten to its postal form
+ * (e911Normalize.ts), validated; if Telnyx offers a correction, that ONCE,
+ * validated again. ⛔ A correction is only taken when it keeps the house number
+ * and the state — "1 MAIN ST" → "1 N MAIN ST" may be the wrong street, but a
+ * changed house number or state is never the same door. 85009 carries no
+ * correction; it throws with that code so the timeline says "manual".
+ */
+export async function chooseRegistrableAddress(
+  creds: StoredTelnyxCredentials,
+  deps: Pick<TxDeps, "validateAddress">,
+  a: { streetNumber: string; streetName: string; addressType?: string; addressNumber?: string; city: string; state: string; zip: string },
+): Promise<{
+  streetAddress: string;
+  extendedAddress: string | null;
+  locality: string;
+  administrativeArea: string;
+  postalCode: string;
+  changed: boolean;
+  asE911: { streetNumber: string; streetName: string; addressType: string; addressNumber: string; city: string; state: string; zip: string };
+}> {
+  const norm = normalizeE911ForCarrier(a);
+  let cand = {
+    streetAddress: norm.streetAddress,
+    extendedAddress: norm.extendedAddress,
+    locality: a.city,
+    administrativeArea: a.state,
+    postalCode: a.zip.slice(0, 5),
+  };
+  let v = await deps.validateAddress(creds, cand);
+  if (v.result !== "valid" && v.suggested && !v.codes.includes("85009")) {
+    const s = v.suggested;
+    const houseOf = (x: string) => (String(x).trim().match(/^\d+[A-Za-z]?/) || [""])[0].toUpperCase();
+    if (houseOf(s.streetAddress) === String(a.streetNumber).trim().toUpperCase() && s.administrativeArea.toUpperCase() === a.state.toUpperCase()) {
+      cand = {
+        streetAddress: s.streetAddress,
+        extendedAddress: s.extendedAddress || null,
+        locality: s.locality || a.city,
+        administrativeArea: s.administrativeArea,
+        postalCode: (s.postalCode || a.zip).slice(0, 5),
+      };
+      v = await deps.validateAddress(creds, cand);
+    }
+  }
+  if (v.result !== "valid") {
+    throw new Error(`e911_address_not_valid (${v.detail || "invalid"}${v.codes.includes("85009") ? " — 85009 manual validation" : ""})`);
+  }
+  const houseMatch = cand.streetAddress.match(/^(\d+[A-Za-z]?)\s+(.*)$/);
+  const ext = String(cand.extendedAddress || "").trim();
+  const extMatch = ext.match(/^(\S+)\s+(.*)$/);
+  const typedStreet = [a.streetNumber, a.streetName].filter(Boolean).join(" ");
+  const typedExt = [a.addressType, a.addressNumber].filter(Boolean).join(" ");
+  return {
+    ...cand,
+    changed:
+      cand.streetAddress.toUpperCase() !== typedStreet.toUpperCase() ||
+      ext.toUpperCase() !== typedExt.toUpperCase() ||
+      cand.locality.toUpperCase() !== a.city.toUpperCase(),
+    asE911: {
+      streetNumber: houseMatch ? houseMatch[1] : a.streetNumber,
+      streetName: houseMatch ? houseMatch[2] : cand.streetAddress,
+      addressType: extMatch ? extMatch[1] : ext,
+      addressNumber: extMatch ? extMatch[2] : "",
+      city: cand.locality,
+      state: cand.administrativeArea,
+      zip: cand.postalCode,
+    },
+  };
 }
 
 async function configureNumber(creds: StoredTelnyxCredentials, deps: TxDeps, row: any, n: { id: string; phoneNumber: string }, ctx: { connectionId: string; messagingProfileId: string | null; customerReference: string }, company: string): Promise<void> {

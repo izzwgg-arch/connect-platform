@@ -52,6 +52,9 @@ export type TelnyxSweepDeps = {
   switchOutboundCallerId?: (row: any, portedDid: string) => Promise<{ switched: boolean; detail: string }>;
   publishTenant?: (tenantId: string) => Promise<void>;
   queueE911Email?: (submissionId: string) => Promise<void>;
+  /** Re-run the Telnyx 911 registration for a submission (telnyxProvisioning.applyTelnyxE911). */
+  retryE911?: (row: any) => Promise<void>;
+  raiseE911Alert?: (row: any) => Promise<void>;
 };
 
 async function logEvent(db: any, submissionId: string, message: string): Promise<void> {
@@ -113,6 +116,13 @@ export function defaultTelnyxSweepDeps(): TelnyxSweepDeps {
       return defaultCopyPbxDestination(db, tenantId, tempDid, portedDid);
     },
     switchOutboundCallerId: defaultSwitchOutboundCallerId,
+    retryE911: async (row) => {
+      await retryTelnyxE911ForSubmission(row.id);
+    },
+    raiseE911Alert: async (row) => {
+      const { raiseE911EscalationIfNeeded } = await import("./e911Escalation");
+      await raiseE911EscalationIfNeeded(realDb, row);
+    },
     queueE911Email: async (submissionId) => {
       const { queueE911ActivatedEmail } = await import("./e911ActivatedEmail");
       await queueE911ActivatedEmail({ db: realDb, submissionId, log: (m: string) => logEvent(realDb, submissionId, m) });
@@ -120,7 +130,55 @@ export function defaultTelnyxSweepDeps(): TelnyxSweepDeps {
   };
 }
 
-export type TelnyxSweepSummary = { ports: number; landed: number; e911Confirmed: number; errors: number };
+/**
+ * Retry 911 for one Telnyx sign-up NOW — the sweep's retry and the admin
+ * "retry 911" route share this one implementation.
+ */
+export async function retryTelnyxE911ForSubmission(submissionId: string): Promise<{ ok: boolean; status: string; detail: string }> {
+  const row: any = await realDb.onboardingSubmission.findUnique({ where: { id: submissionId } });
+  if (!row) return { ok: false, status: "not_found", detail: "no such sign-up" };
+  if (String(row?.answers?.phone?.provider || "") !== "telnyx") return { ok: false, status: "unsupported", detail: "911 retry is built for Telnyx sign-ups only" };
+  const did = tenDigits(row?.answers?.provisioning?.e911?.did || row.provisionedDid);
+  if (did.length !== 10) return { ok: false, status: "no_number", detail: "the sign-up has no number yet" };
+  const { realTelnyxDeps, applyTelnyxE911 } = await import("./telnyxProvisioning");
+  const deps = realTelnyxDeps();
+  const creds = await deps.resolveCreds(realDb as never).catch(() => null);
+  if (!creds) return { ok: false, status: "unconfigured", detail: "Telnyx credentials missing" };
+  const n = await deps.findOwnedNumber(creds, `+1${did}`);
+  if (!n) return { ok: false, status: "number_not_on_account", detail: `+1${did} is not on the Telnyx account` };
+  await applyTelnyxE911(creds, deps, row, did, n.id);
+  const e911: any = row?.answers?.provisioning?.e911 || {};
+  return { ok: e911.status === "provisioned" || e911.status === "pending_activation", status: String(e911.status || "unknown"), detail: String(e911.detail || "") };
+}
+
+export type TelnyxSweepSummary = { ports: number; landed: number; e911Confirmed: number; errors: number; e911Retried?: number };
+
+/** Hourly for the first 6 tries, then every 6 hours — a manual validation at the carrier can take a day. */
+export function e911RetryDue(e911: any, now = Date.now()): boolean {
+  if (e911?.provider !== "telnyx" || e911?.status !== "failed") return false;
+  const attempts = Number(e911.attempts || 1);
+  const last = new Date(e911.lastTriedAt || e911.at || 0).getTime();
+  const waitMs = attempts < 6 ? 60 * 60_000 : 6 * 60 * 60_000;
+  return now - last >= waitMs;
+}
+
+async function retryFailedE911(deps: TelnyxSweepDeps, row: any, summary: TelnyxSweepSummary): Promise<void> {
+  const e911: any = row?.answers?.provisioning?.e911;
+  if (!deps.retryE911 || !e911RetryDue(e911)) return;
+  await deps.retryE911(row);
+  summary.e911Retried = (summary.e911Retried || 0) + 1;
+  const fresh = await deps.db.onboardingSubmission.findUnique({ where: { id: row.id } });
+  const now: any = fresh?.answers?.provisioning?.e911;
+  if (now?.status === "provisioned") {
+    await logEvent(deps.db, row.id, `911 is now registered on ${now.did} (automatic retry).`);
+    if (fresh.pbxSetupStatus === "done" && deps.queueE911Email) await deps.queueE911Email(row.id);
+  } else if (now?.status === "pending_activation") {
+    await logEvent(deps.db, row.id, `911 accepted on ${now.did} (automatic retry) — waiting for the carrier to activate it.`);
+  } else if (deps.raiseE911Alert && fresh?.pbxSetupStatus === "done") {
+    await deps.raiseE911Alert(fresh);
+  }
+  if (fresh) row.answers = fresh.answers;
+}
 
 let running = false;
 
@@ -138,7 +196,7 @@ export async function sweepTelnyxSignups(deps: TelnyxSweepDeps = defaultTelnyxSw
     const open = rows.filter((r) => {
       const p: any = r?.answers?.provisioning || {};
       const portOpen = p.portFiling?.provider === "telnyx" && !p.portLanding?.completedAt;
-      const e911Pending = p.e911?.provider === "telnyx" && p.e911?.status === "pending_activation";
+      const e911Pending = p.e911?.provider === "telnyx" && (p.e911?.status === "pending_activation" || p.e911?.status === "failed");
       return portOpen || e911Pending;
     });
     if (!open.length) return summary;
@@ -148,6 +206,7 @@ export async function sweepTelnyxSignups(deps: TelnyxSweepDeps = defaultTelnyxSw
     for (const row of open) {
       try {
         await confirmPendingE911(deps, creds, row, summary);
+        await retryFailedE911(deps, row, summary);
         const filing: any = row?.answers?.provisioning?.portFiling;
         if (filing?.provider !== "telnyx" || row?.answers?.provisioning?.portLanding?.completedAt) continue;
         summary.ports++;

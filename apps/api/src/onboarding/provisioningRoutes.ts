@@ -116,6 +116,27 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
   // Safe to call after a failure or an interrupted run: every stage
   // (VoIP.ms number, SMS, PBX build, sync, invites) is idempotent and
   // resumes where it left off. Refuses while a run is genuinely in flight.
+  // Retry 911 NOW for a sign-up whose registration failed (e.g. after the
+  // carrier validated the address by hand). Telnyx sign-ups only — the same
+  // implementation the automatic sweep runs. Sends the customer's "E911 is
+  // set" email when it lands and the build is finished.
+  app.post("/admin/onboarding/submissions/:id/retry-e911", async (req, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const { retryTelnyxE911ForSubmission } = await import("./telnyxPortWatchdog");
+    const out = await retryTelnyxE911ForSubmission(id);
+    if (out.status === "not_found") return reply.code(404).send({ error: "not_found" });
+    if (out.status === "unsupported") return reply.code(409).send({ error: "unsupported_carrier", detail: out.detail });
+    if (out.status === "provisioned") {
+      const row = await (db as any).onboardingSubmission.findUnique({ where: { id }, select: { pbxSetupStatus: true } });
+      if (row?.pbxSetupStatus === "done") {
+        const { queueE911ActivatedEmail } = await import("./e911ActivatedEmail");
+        await queueE911ActivatedEmail({ db, submissionId: id, log: () => {} });
+      }
+    }
+    return out;
+  });
+
   app.post("/admin/onboarding/submissions/:id/retry-setup", async (req, reply) => {
     const admin = await requireSuperAdmin(req, reply); if (!admin) return;
     const { id } = (req.params as any) as { id: string };

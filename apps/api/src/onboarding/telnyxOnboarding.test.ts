@@ -112,6 +112,7 @@ function fakeTelnyx(opts: { owned?: Record<string, any>; orderStatuses?: string[
     setNumberCnam: async (_c: any, id: string, name: string) => { calls.push(`cnam:${id}:${cnamFor(name)}`); },
     searchAvailable: async (_c: any, p: any) => { calls.push(`search:${p.areaCode}`); return [{ phoneNumber: "+13475550999", state: "NY", locality: "BROOKLYN", features: ["voice", "sms"], numberType: "local" }]; },
     createAddress: async (_c: any, input: any) => { calls.push(`address:${input.streetAddress}|${input.locality}`); return { id: "addr-1", locality: "SPRING VALLEY" }; },
+    validateAddress: async () => ({ result: "valid", codes: [], detail: "", suggested: null }),
     enableEmergency: async (_c: any, numberId: string, addressId: string) => {
       calls.push(`e911:${numberId}:${addressId}`);
       for (const k of Object.keys(owned)) if (owned[k].id === numberId) owned[k].emergencyStatus = opts.emergencyStatus ?? "active";
@@ -717,4 +718,128 @@ test("port requirements map the LIVE Telnyx names onto the uploaded documents; u
     { requirement_type_id: "loa", field_value: "L" },
   ]);
   assert.deepEqual(mapPortRequirements(reqs, { loa: "L", invoice: null }), [{ requirement_type_id: "loa", field_value: "L" }]);
+});
+
+
+// ── 911 address form, validation, alert, retry (2026-09-16 follow-up) ──────
+
+test("e911 normalizer: NY route forms → 'State Route N', Suite → Ste; other states and plain streets untouched", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { normalizeE911ForCarrier, normalizeStreetName, normalizeUnitType } = require("./e911Normalize");
+  for (const typed of ["NY-17M", "NY 17M", "N.Y. 17M", "NYS 17M", "Route 17M", "Rte 17M", "Rt. 17M", "SR 17M", "State Rte 17M", "state route 17m"]) {
+    assert.equal(normalizeStreetName(typed, "NY"), "State Route 17M", typed);
+  }
+  assert.equal(normalizeStreetName("NY-17M", "NJ"), "NY-17M", "only proven inside NY");
+  assert.equal(normalizeStreetName("Robert Pitt Dr", "NY"), "Robert Pitt Dr");
+  assert.equal(normalizeUnitType("Suite"), "Ste");
+  assert.equal(normalizeUnitType("Apartment"), "Apt");
+  assert.deepEqual(
+    normalizeE911ForCarrier({ streetNumber: "33", streetName: "NY-17M", addressType: "Suite", addressNumber: "C", state: "NY" }),
+    { streetAddress: "33 State Route 17M", extendedAddress: "Ste C" },
+  );
+});
+
+test("⛔ 911 address: validate → take the carrier's correction ONCE (same house + state) → validate again; never register an unvalidated address", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { chooseRegistrableAddress } = require("./telnyxProvisioning");
+  const base = { streetNumber: "1", streetName: "Main St", city: "Monroe", state: "NY", zip: "10950" };
+  const seen: any[] = [];
+  const out = await chooseRegistrableAddress(CREDS, {
+    validateAddress: async (_c: any, input: any) => {
+      seen.push(input.streetAddress);
+      return input.streetAddress === "1 N MAIN ST"
+        ? { result: "valid", codes: [], detail: "", suggested: null }
+        : { result: "invalid", codes: ["20207"], detail: "20207 Invalid street address", suggested: { streetAddress: "1 N MAIN ST", extendedAddress: "", locality: "MONROE", administrativeArea: "NY", postalCode: "10950" } };
+    },
+  }, base);
+  assert.deepEqual(seen, ["1 Main St", "1 N MAIN ST"]);
+  assert.equal(out.streetAddress, "1 N MAIN ST");
+  assert.equal(out.changed, true);
+
+  // A correction that changes the HOUSE NUMBER is refused — not the same door.
+  await assert.rejects(() => chooseRegistrableAddress(CREDS, {
+    validateAddress: async () => ({ result: "invalid", codes: ["20207"], detail: "20207", suggested: { streetAddress: "7 MAIN ST", extendedAddress: "", locality: "MONROE", administrativeArea: "NY", postalCode: "10950" } }),
+  }, base), /e911_address_not_valid/);
+
+  // 85009 has no correction → a clear "manual validation" failure.
+  await assert.rejects(() => chooseRegistrableAddress(CREDS, {
+    validateAddress: async () => ({ result: "invalid", codes: ["85009"], detail: "85009 Address cannot be validated for emergency use.", suggested: null }),
+  }, base), /85009 manual validation/);
+
+  // The office: typed "NY-17M, Suite C" is SENT as the proven postal form.
+  const office: any[] = [];
+  const o = await chooseRegistrableAddress(CREDS, { validateAddress: async (_c: any, i: any) => { office.push(i); return { result: "valid", codes: [], detail: "", suggested: null }; } },
+    { streetNumber: "33", streetName: "NY-17M", addressType: "Suite", addressNumber: "C", city: "Harriman", state: "NY", zip: "10926" });
+  assert.equal(office[0].streetAddress, "33 State Route 17M");
+  assert.equal(office[0].extendedAddress, "Ste C");
+  assert.deepEqual(o.asE911, { streetNumber: "33", streetName: "State Route 17M", addressType: "Ste", addressNumber: "C", city: "Harriman", state: "NY", zip: "10926" });
+});
+
+test("⛔ 911 alert TEXTS the owner through AgentEscalation (never muted ADMIN_ALERT), once per number while open", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { raiseE911EscalationIfNeeded, buildE911AlertSms } = require("./e911Escalation");
+  const created: any[] = [];
+  let open = false;
+  const fdb = {
+    agentEscalation: {
+      findFirst: async () => (open ? { id: "x" } : null),
+      create: async (args: any) => { created.push(args.data); open = true; return {}; },
+    },
+  };
+  const row = { id: "s1", companyName: "Weiss Plumbing", provisionedDid: "8457774807", answers: { provisioning: { e911: { status: "failed", did: "8457774807", detail: "85009 manual validation" } } } };
+  assert.equal(await raiseE911EscalationIfNeeded(fdb, row), true);
+  assert.equal(await raiseE911EscalationIfNeeded(fdb, row), false, "de-duped while open");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].status, "QUEUED");
+  assert.equal(created[0].tenantId, "connect-admin-tenant-v1");
+  assert.match(created[0].smsBody, /911 is NOT set on Weiss Plumbing's new number \(845\) 777-4807/);
+  assert.match(created[0].smsBody, /validated by hand/);
+  assert.equal(await raiseE911EscalationIfNeeded(fdb, { answers: { provisioning: { e911: { status: "provisioned" } } } }), false);
+  assert.ok(buildE911AlertSms({ company: "A", did: "8450000000", status: "failed", detail: "x" }).length <= 300);
+  const src = read("e911Escalation.ts");
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, ""), /type:\s*"ADMIN_ALERT"/);
+});
+
+test("911 retry schedule: hourly for the first tries, then every 6 hours; only Telnyx 'failed'", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { e911RetryDue } = require("./telnyxPortWatchdog");
+  const now = Date.parse("2026-09-16T20:00:00Z");
+  const ago = (min: number) => new Date(now - min * 60_000).toISOString();
+  assert.equal(e911RetryDue({ provider: "telnyx", status: "failed", attempts: 1, lastTriedAt: ago(59) }, now), false);
+  assert.equal(e911RetryDue({ provider: "telnyx", status: "failed", attempts: 1, lastTriedAt: ago(61) }, now), true);
+  assert.equal(e911RetryDue({ provider: "telnyx", status: "failed", attempts: 7, lastTriedAt: ago(120) }, now), false);
+  assert.equal(e911RetryDue({ provider: "telnyx", status: "failed", attempts: 7, lastTriedAt: ago(361) }, now), true);
+  assert.equal(e911RetryDue({ provider: "telnyx", status: "address_incomplete", attempts: 1, lastTriedAt: ago(999) }, now), false, "an incomplete address cannot fix itself");
+  assert.equal(e911RetryDue({ provider: "voipms", status: "failed", attempts: 1, lastTriedAt: ago(999) }, now), false);
+});
+
+test("sweep: a due failed 911 is retried; success tells the customer; still-failed re-alerts (de-duped inside)", async () => {
+  const row = freshSubmission({ numberStatus: "ready", pbxSetupStatus: "done" });
+  row.answers.provisioning = { e911: { provider: "telnyx", status: "failed", did: "8457774807", attempts: 1, lastTriedAt: "2026-01-01T00:00:00Z" } };
+  reset(row);
+  const told: string[] = [];
+  const { deps } = sweepDeps({
+    retryE911: async () => { (state.submission as any).answers = { ...state.submission!.answers, provisioning: { e911: { provider: "telnyx", status: "provisioned", did: "8457774807" } } }; },
+    queueE911Email: async (id: string) => { told.push(id); },
+  });
+  const s = await sweepTelnyxSignups(deps);
+  assert.equal(s.e911Retried, 1);
+  assert.deepEqual(told, ["sub1"]);
+
+  const row2 = freshSubmission({ numberStatus: "ready", pbxSetupStatus: "done" });
+  row2.answers.provisioning = { e911: { provider: "telnyx", status: "failed", did: "8457774807", attempts: 1, lastTriedAt: "2026-01-01T00:00:00Z" } };
+  reset(row2);
+  const alerted: string[] = [];
+  const b = sweepDeps({ retryE911: async () => {}, raiseE911Alert: async (r: any) => { alerted.push(r.id); } });
+  await sweepTelnyxSignups(b.deps);
+  assert.deepEqual(alerted, ["sub1"]);
+});
+
+test("wiring: orchestrator texts on a failed 911; the admin retry route exists and is SUPER_ADMIN-gated", () => {
+  const orch = read("setupOrchestrator.ts");
+  assert.match(orch, /raiseE911EscalationIfNeeded\(db, latest\)/);
+  const routes = read("provisioningRoutes.ts");
+  const i = routes.indexOf('app.post("/admin/onboarding/submissions/:id/retry-e911"');
+  assert.ok(i > 0);
+  assert.match(routes.slice(i, i + 300), /const admin = await requireSuperAdmin\(req, reply\); if \(!admin\) return;/);
 });
