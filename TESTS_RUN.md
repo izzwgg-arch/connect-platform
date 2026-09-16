@@ -1,5 +1,12 @@
 # Tests run
 
+## Laybel key/avatar activation — 2026-09-16
+
+- Anam UI confirmed no existing keys; explicitly approved session-token-only key created (all resource scopes None). Approved portrait upload and completed custom Laybel avatar verified visually/in UI.
+- Loopcom owner settings Saved; reload/reopen showed enabled Start video call. Live API status 200: configured/available/apiKeySet true, enabled false. Session endpoint 200 with a token; token/secret not logged. Persisted avatar and voice IDs matched the UI.
+- No microphone/WebRTC/animated call or audible/Yiddish evaluation performed. No customer rollout, paid upgrade, code change, unit-test rerun or redeploy in this activation turn.
+
+
 ## Laybel production release verification — 2026-09-16 UTC
 
 - API/PBX 14/14 + Assistant/consent/turns 16/16 passed on isolated release. Frozen/offline pnpm 10.30.2 lock validation and full portal typecheck passed. Production portal build passed, generating 217 pages.

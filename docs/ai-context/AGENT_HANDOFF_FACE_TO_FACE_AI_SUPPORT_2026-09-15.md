@@ -1,5 +1,17 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
+## Provider configuration completed — 2026-09-16
+
+- Owner asked to insert the API key and then explicitly approved creating a restricted key. Anam account had **no keys**, confirmed in its signed-in API Keys UI. Created `Loopcom Laybel` with **Create session tokens only**; Full access OFF, all ten resource read/write permissions None. No existing key was rotated or deleted.
+- Captured the one-time secret in browser-session memory, transferred directly to the Loopcom password field, and saved through the owner-only encrypted settings route. Key was never printed, committed, written to a local file, or placed in command arguments. Temporary secret variables cleared after successful save.
+- Uploaded approved `concept-a.png` (no tie, infinity lapel pin) and completed Anam custom-avatar creation as **Laybel**, model cara-4. Uses the account's one included avatar slot; UI showed 0/30 minutes. No paid upgrade or subscription purchase performed.
+- Verified custom avatar ID `dab6a872-ecf4-4e5b-9488-24f182d6e8d4`; owner-preview voice **Cooper - Friendly Mate**, ID `90c1fb05-4fc0-11f1-84b0-52bacf74fa75`. This voice is a provisional warm male voice, not user-auditioned or Yiddish-proven. The old build URL is an Olivia persona, NOT an avatar ID. Its draft now uses the custom avatar; it was not publicly published, and Loopcom still overrides the brain with CUSTOMER_CLIENT_V1.
+- Live verification through production API: status 200, configured=true, available=true, apiKeySet=true, enabled=false; session POST **200 with session token issued**. No secret/token printed. maxSessionSeconds currently 300; token mint acceptance does not prove the plan permits a full 300-second call.
+- Browser confirmed Saved, then reload + reopen confirmed Start video call enabled. Left owner preview open in Chrome (`https://app.loopcom.net/dashboard`, tab 1520626758). No microphone capture, WebRTC call, rendered live animation, audible reply or real conversation was tested in this activation turn. Customer rollout remains disabled; retention, actual plan duration, Yiddish quality, and SignalWire comparison remain unresolved.
+- Browser recovery: inventory timed out, but direct `cua.createBrowserTab("chrome", "https://lab.anam.ai", ...)` succeeded. Upload image opens a rights-confirmation dialog before the file chooser; bind the chooser to Agree and continue. `clipboard.readText()` returned empty despite copy working; browser ControlOrMeta+V into the actual ID input worked. Password manager autofilled email into the avatar field; explicitly filled the verified UUID and API key immediately before saving. Never treat clipboard length alone as evidence that Copy failed.
+
+The older missing-key/avatar statements below describe the pre-activation state and are superseded by this section. This is key/configuration/token proof, not live conversation proof.
+
 ## Verified production rollout — 2026-09-16 UTC
 
 - Owner approved the lockfile repair and Windows SSH exception. Repaired lockfile has only 18 additive Anam/buffer lines; frozen/offline pnpm 10.30.2 validation passed. No unrelated shared-worktree edits shipped.

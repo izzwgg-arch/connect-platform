@@ -10,7 +10,7 @@ Every time Izzy gives an agent a task:
 
 The agent entry point `AGENTS.md` and `CLAUDE.md` both carry this rule so future sessions can recover it from disk.
 
-Talk to Laybel (2026-09-16): approved lock repair (18 additive lines, frozen pnpm 10.30.2 passes) and scoped Windows SSH exception used. API/portal blue-green deployed b6d3310e with matching container SHA/code, 30 focused tests, production build and live auth guards verified. Anam key/approved avatar/voice IDs absent; no live animated call proven. Owner setup deployed; customer rollout remains disabled. SignalWire comparison/retention/Yiddish proof pending. Preserve same Assistant brain; do not stall on Desktop Commander. See `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`.
+Talk to Laybel (2026-09-16): API/portal deployed b6d3310e. Owner-approved session-token-only Anam key now saved encrypted; approved portrait uploaded and custom Laybel avatar created, Cooper male voice provisional. Production token endpoint 200; saved config and enabled owner Start video call verified after reload. Customer enabled=false. Actual microphone/video/conversation, retention, duration and Yiddish quality NOT proven; SignalWire comparison unfinished. Browser direct Chrome tab works; clipboard copy/paste works despite empty readText. See `docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`.
 
 Profile menu review (2026-09-14): mockup only, not implementation approval. Preserve browser mute versus extension DND scope and the exact label “Include transcription in email.” Explain unassigned-extension greeting controls and avoid treating default Available presence as proven call readiness. See profile-menu design handoff.
 
