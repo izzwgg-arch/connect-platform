@@ -78,11 +78,25 @@ if [[ "$PRE_SYNC_HEAD" != "$NEW_HEAD" ]]; then
 fi
 
 deploy_common_emit_stage "change-detect"
+# ⛔⛔ A "no_changes" SKIP IS ONLY HONEST WHEN WE KNOW WHAT IS DEPLOYED.
+# Proven on production 2026-09-16: DEPLOY_QUEUE_STATE_DIR was unset (no marker)
+# AND app-portal-1:/app/.build-commit was 1 byte (a bare newline), so
+# PERSISTED_OLD_HEAD came back empty and OLD_HEAD fell back to PRE_SYNC_HEAD --
+# which the re-exec above had ALREADY advanced to the new commit. The script
+# then compared the new commit against itself, reported
+# "deployed commit already at <new sha> -- skipping", exited 0, and shipped
+# NOTHING. The deploy said success; the container kept running the old code.
+# An unknown baseline must mean BUILD, never SKIP: a wasted rebuild costs
+# minutes, a false skip costs a person believing a fix is live when it is not.
 if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
-  deploy_common_emit_stage "done"
-  deploy_common_emit_skip "no_changes"
-  log "deployed commit already at ${NEW_HEAD:0:12} — skipping install/build/restart"
-  exit 0
+  if [[ -z "$PERSISTED_OLD_HEAD" ]]; then
+    log "⛔ no record of what is deployed (no state marker, no /app/.build-commit) - refusing to skip; rebuilding to be certain"
+  else
+    deploy_common_emit_stage "done"
+    deploy_common_emit_skip "no_changes"
+    log "deployed commit already at ${NEW_HEAD:0:12} — skipping install/build/restart"
+    exit 0
+  fi
 fi
 
 if ! deploy_common_needs_rebuild "$SERVICE" "$OLD_HEAD"; then
