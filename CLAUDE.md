@@ -718,4 +718,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-16 · Laybel: approved lock repair + Windows SSH; isolated Anam media release, 30 tests; provider config/live proof and SignalWire comparison pending → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-16 · Laybel API/portal deployed b6d3310e; 30 tests + live auth guards verified; Anam configuration/live call and SignalWire comparison pending → `2026-09-15-face-to-face-ai-support-mockup.md`

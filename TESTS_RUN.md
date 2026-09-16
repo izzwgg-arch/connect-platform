@@ -1,5 +1,13 @@
 # Tests run
 
+## Laybel production release verification — 2026-09-16 UTC
+
+- API/PBX 14/14 + Assistant/consent/turns 16/16 passed on isolated release. Frozen/offline pnpm 10.30.2 lock validation and full portal typecheck passed. Production portal build passed, generating 217 pages.
+- API + portal blue/green deploy logs ended `done b6d3310e`; both `/app/.build-commit` values equal `b6d3310ec3177ddb02de3d16c1853c6a66afe4d6`. API custom-LLM source and portal session/setup/streaming bundles verified inside running containers.
+- Stable upstreams API :3001 / portal :3000; public /ready 200; external internal tenant-map 403.
+- Live endpoint checks: anonymous 401, owner status 200/no-store/no returned key, unconfigured session 503, override 400, customer settings 403. Read-only configuration check: Anam absent. No real provider call or media proof; customer rollout disabled.
+
+
 ## Laybel isolated release — 2026-09-16
 
 - Frozen/offline lockfile validation: pnpm 10.30.2, all 15 workspaces, passed; 18 additive lock lines only.

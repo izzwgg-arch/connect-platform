@@ -1,6 +1,18 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
-## Current status — live video explicitly requested, not yet proven
+## Verified production rollout — 2026-09-16 UTC
+
+- Owner approved the lockfile repair and Windows SSH exception. Repaired lockfile has only 18 additive Anam/buffer lines; frozen/offline pnpm 10.30.2 validation passed. No unrelated shared-worktree edits shipped.
+- API and portal deployed through scripted blue/green direct releases at **b6d3310ec3177ddb02de3d16c1853c6a66afe4d6**, after dry runs and idle queue checks. Release branch: `codex/laybel-live-video-20260916`; rebased onto current remote before atomic non-force push.
+- Logs: `/var/log/connect-deploys/direct-api-20260916T021501Z.log` and `/var/log/connect-deploys/direct-portal-20260916T022210Z.log` both ended `done b6d3310e`. Both running containers' `/app/.build-commit` matched the full SHA. API contains `CUSTOMER_CLIENT_V1`; portal built chunks contain `/support/laybel/session`, `Owner video setup`, and `streamToVideoElement`.
+- Stable nginx upstreams verified at API `127.0.0.1:3001` and portal `127.0.0.1:3000`. Public `https://app.loopcom.net/ready` returned 200. External internal-route tenant-map probe returned 403. No infrastructure/env/PBX changes or direct migrations.
+- Focused tests: API/PBX 14/14, Assistant/consent/turns 16/16. Full isolated portal typecheck and production build passed; 217 static pages generated.
+- Live API negative checks: anonymous status 401; owner status 200 with no-store and no API key; configured/available both false; unconfigured session 503; client config override 400; customer settings write 403. No configuration writes or paid provider sessions performed by these probes.
+- **Not activated/live-proven:** production has existing SignalWire credentials but no Anam/Laybel secret or environment settings. Need Anam key plus verified approved avatar ID and voice ID; Anam Lab build ID is not assumed to be avatar ID. Owner setup is deployed under Assistant > Talk to Laybel > Owner video setup. Customer rollout stays disabled. Browser control timed out; no portrait upload, microphone/playback/animation or real conversation proof. SignalWire comparison adapter remains unimplemented. Verify plan duration, recording/retention and Yiddish quality before customer activation.
+
+The earlier local-only deployment/lockfile blockers below are historical and superseded by this verified rollout. Provider configuration and end-to-end call proof remain unresolved.
+
+## Earlier implementation notes — live video explicitly requested
 
 ### Approved continuation — 2026-09-16, release preparation
 
