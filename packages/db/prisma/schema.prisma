@@ -9807,3 +9807,455 @@ model CreativeAuditEvent {
   @@index([tenantId, createdAt])
   @@index([action, createdAt])
 }
+
+// ============================================================================
+// LOOPCOM YIDDISH CORPUS + LEARNING ENGINE  (prefix Yc)
+// Provider-neutral. Originals are REFERENCED, never copied-and-overwritten.
+// Governance is a column, never a convention: every record carries its source,
+// its governance class and its training-export eligibility.
+// ============================================================================
+
+/// A registered source of Yiddish material. Governance lives here and is
+/// inherited by every item, asset, transcript and observation beneath it.
+model YcSource {
+  id                        String    @id @default(cuid())
+  key                       String    @unique
+  name                      String
+  /// INTERNAL_TABLE | VOICE_LAB | EXTERNAL_ADAPTER
+  kind                      String
+  adapterKey                String?
+  /// PLATFORM | CUSTOMER_PRIVATE | EXTERNAL
+  governanceClass           String
+  /// UNKNOWN | ALLOWED | RESTRICTED | EXCLUDED
+  trainingExportEligibility String    @default("UNKNOWN")
+  /// Content may be read into the corpus at all (customer wall = false).
+  contentAllowed            Boolean   @default(false)
+  /// DISABLED | OWNER_AUTHORIZED -- audio bytes may only be fetched when this
+  /// is OWNER_AUTHORIZED and a rights record allows it. Default refuses.
+  audioFetchMode            String    @default("DISABLED")
+  enabled                   Boolean   @default(false)
+  termsUrl                  String?
+  termsCheckedAt            DateTime?
+  rightsNote                String?
+  config                    Json?
+  discoveryCursor           String?
+  lastDiscoveryAt           DateTime?
+  lastRunAt                 DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  items                     YcSourceItem[]
+  rights                    YcRightsRecord[]
+  budget                    YcBudget?
+  health                    YcSourceHealth[]
+}
+
+/// The owner's recorded decision about what a source may be used for.
+/// Written by a human, never by the engine.
+model YcRightsRecord {
+  id         String   @id @default(cuid())
+  sourceId   String
+  source     YcSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// analysis | store_audio | training_export | metadata_only
+  allowedUse String
+  /// GRANTED | DENIED | UNKNOWN
+  state      String   @default("UNKNOWN")
+  evidence   String?
+  decidedBy  String?
+  decidedAt  DateTime @default(now())
+
+  @@unique([sourceId, allowedUse])
+}
+
+/// One discovered thing: an episode, an internal row, a lab generation.
+model YcSourceItem {
+  id                String    @id @default(cuid())
+  sourceId          String
+  source            YcSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalId        String
+  canonicalUrl      String?
+  title             String?
+  seriesName        String?
+  category          String?
+  host              String?
+  /// Published exactly as the source states it (e.g. a Hebrew-calendar date).
+  publishedLabel    String?
+  publishedAt       DateTime?
+  durationSec       Int?
+  mediaUrl          String?
+  imageUrl          String?
+  metadata          Json?
+  fingerprint       String
+  duplicateOfId     String?
+  /// DISCOVERED QUEUED PROCESSING AUDIO_ANALYZED NEEDS_TRANSCRIPTION
+  /// TRANSCRIBED ALIGNED INDEXED LEARNED NEEDS_REVIEW FAILED SKIPPED DUPLICATE
+  state             String    @default("DISCOVERED")
+  priority          Int       @default(50)
+  noveltyScore      Float?
+  speechRatio       Float?
+  processingVersion Int       @default(1)
+  error             String?
+  discoveredAt      DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  assets            YcAudioAsset[]
+  transcripts       YcTranscript[]
+  jobs              YcProcessingJob[]
+
+  @@unique([sourceId, externalId])
+  @@index([sourceId, state])
+  @@index([fingerprint])
+  @@index([state, priority])
+}
+
+model YcAudioAsset {
+  id             String       @id @default(cuid())
+  itemId         String
+  item           YcSourceItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// REFERENCE_ONLY | STORED
+  storage        String       @default("REFERENCE_ONLY")
+  uri            String?
+  storageKey     String?
+  sha256         String?
+  bytes          Int?
+  durationMs     Int?
+  sampleRate     Int?
+  channels       Int?
+  codec          String?
+  qualityScore   Float?
+  /// GENERATED | HUMAN_REFERENCE | EXTERNAL
+  kind           String       @default("EXTERNAL")
+  retentionClass String       @default("ORDINARY")
+  expiresAt      DateTime?
+  deletedAt      DateTime?
+  deleteReason   String?
+  createdAt      DateTime     @default(now())
+
+  segments       YcSegment[]
+
+  @@index([itemId])
+  @@index([retentionClass, expiresAt])
+}
+
+model YcSegment {
+  id               String            @id @default(cuid())
+  assetId          String
+  asset            YcAudioAsset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  startMs          Int
+  endMs            Int
+  /// SPEECH MUSIC AD INTRO SILENCE MIXED UNKNOWN
+  klass            String            @default("UNKNOWN")
+  klassConfidence  Float?
+  speakerClusterId String?
+  speakerCluster   YcSpeakerCluster? @relation(fields: [speakerClusterId], references: [id])
+  rmsDb            Float?
+  speechRate       Float?
+  pitchMeanHz      Float?
+  features         Json?
+  createdAt        DateTime          @default(now())
+
+  @@index([assetId, startMs])
+  @@index([klass])
+}
+
+model YcSpeakerCluster {
+  id         String   @id @default(cuid())
+  label      String   @unique
+  sourceKey  String?
+  statedName String?
+  minutes    Float    @default(0)
+  itemCount  Int      @default(0)
+  centroid   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  segments     YcSegment[]
+  observations YcPronunciationObservation[]
+}
+
+/// Text for an item or segment. SEVERAL may exist for the same audio; all kept.
+model YcTranscript {
+  id          String       @id @default(cuid())
+  itemId      String
+  item        YcSourceItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  segmentId   String?
+  /// yiddishlabs | ivrit | openai | human | unknown
+  engine      String
+  sttProvider String?
+  text        String
+  language    String?
+  confidence  Float?
+  isConsensus Boolean      @default(false)
+  originRef   String?
+  createdAt   DateTime     @default(now())
+
+  @@index([itemId])
+  @@index([engine])
+}
+
+/// A written form. The node of the pronunciation knowledge graph.
+model YcLexeme {
+  id          String   @id @default(cuid())
+  writtenForm String   @unique
+  normalized  String
+  /// YI HE EN NAME PLACE BUSINESS TECH PHONE ACRONYM NUMBER
+  origin      String   @default("YI")
+  category    String?
+  frequency   Int      @default(0)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  observations YcPronunciationObservation[]
+  rules        YcPronunciationRule[]
+  reviews      YcReviewItem[]
+
+  @@index([normalized])
+  @@index([frequency])
+}
+
+/// "We heard this." Never a rule.
+model YcPronunciationObservation {
+  id               String            @id @default(cuid())
+  lexemeId         String
+  lexeme           YcLexeme          @relation(fields: [lexemeId], references: [id], onDelete: Cascade)
+  variantKey       String
+  realization      String?
+  sourceId         String
+  sourceKey        String
+  itemId           String?
+  segmentId        String?
+  speakerClusterId String?
+  speakerCluster   YcSpeakerCluster? @relation(fields: [speakerClusterId], references: [id])
+  context          String?
+  confidence       Float             @default(0.5)
+  /// ACOUSTIC_ALIGNED | HUMAN | TTS_CORRECTION | LEXICAL_ONLY
+  evidenceKind     String
+  createdAt        DateTime          @default(now())
+
+  @@index([lexemeId, variantKey])
+  @@index([sourceKey])
+}
+
+/// "We apply this." Versioned, human-gated for high impact.
+model YcPronunciationRule {
+  id                String   @id @default(cuid())
+  lexemeId          String
+  lexeme            YcLexeme @relation(fields: [lexemeId], references: [id], onDelete: Cascade)
+  variantKey        String
+  realization       String?
+  ipa               String?
+  method            String   @default("INSTRUCTION_HINT")
+  contextPattern    String?
+  /// CANDIDATE TESTING APPROVED PRODUCTION RETIRED
+  status            String   @default("CANDIDATE")
+  evidenceScore     Float    @default(0)
+  supportSummary    Json?
+  dictionaryVersion Int      @default(1)
+  approvedBy        String?
+  approvedAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([lexemeId, variantKey, dictionaryVersion])
+  @@index([status])
+}
+
+model YcProsodyObservation {
+  id         String   @id @default(cuid())
+  itemId     String?
+  segmentId  String?
+  sourceKey  String
+  /// SPEECH_RATE PAUSE_LENGTH STRESS INTONATION ENERGY
+  feature    String
+  value      Float
+  unit       String?
+  confidence Float    @default(0.5)
+  createdAt  DateTime @default(now())
+
+  @@index([feature])
+}
+
+/// Proposed knowledge the engine found. Never self-promotes.
+model YcFinding {
+  id           String    @id @default(cuid())
+  kind         String
+  statement    String
+  evidence     Json?
+  sampleCount  Int       @default(0)
+  speakerCount Int       @default(0)
+  /// PROPOSED TESTING ACCEPTED REJECTED
+  status       String    @default("PROPOSED")
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([status, createdAt])
+}
+
+/// The human queue. Active learning: highest resolves-count first.
+model YcReviewItem {
+  id            String    @id @default(cuid())
+  subjectType   String
+  subjectId     String
+  lexemeId      String?
+  lexeme        YcLexeme? @relation(fields: [lexemeId], references: [id])
+  reason        String
+  detail        Json?
+  resolvesCount Int       @default(1)
+  impactScore   Int       @default(0)
+  /// OPEN APPROVED REJECTED EDITED VARIANT DEFERRED
+  state         String    @default("OPEN")
+  decision      String?
+  decidedBy     String?
+  decidedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([subjectType, subjectId])
+  @@index([state, impactScore])
+}
+
+/// Durable work. DB-row leases, so a restart never loses or doubles a job.
+model YcProcessingJob {
+  id          String        @id @default(cuid())
+  itemId      String?
+  item        YcSourceItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sourceKey   String
+  stage       String
+  /// PENDING RUNNING DONE FAILED SKIPPED
+  state       String        @default("PENDING")
+  priority    Int           @default(50)
+  attempts    Int           @default(0)
+  maxAttempts Int           @default(5)
+  nextRunAt   DateTime      @default(now())
+  leaseUntil  DateTime?
+  leaseOwner  String?
+  costCents   Int           @default(0)
+  payload     Json?
+  error       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([state, nextRunAt, priority])
+  @@index([sourceKey, stage])
+}
+
+/// Spend and rate limits, per source or global (sourceId null = global).
+model YcBudget {
+  id                         String    @id @default(cuid())
+  sourceId                   String?   @unique
+  source                     YcSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  scope                      String    @unique
+  apiCentsPerDay             Int       @default(0)
+  transcriptionMinutesPerDay Int       @default(0)
+  storageBytesMax            BigInt    @default(0)
+  concurrency                Int       @default(2)
+  requestsPerMinute          Int       @default(30)
+  /// METADATA_ONLY AUDIO_ONLY SELECTIVE FULL
+  mode                       String    @default("METADATA_ONLY")
+  paused                     Boolean   @default(true)
+  spentCentsToday            Int       @default(0)
+  transcribedMinutesToday    Int       @default(0)
+  spendDate                  String?
+  updatedAt                  DateTime  @updatedAt
+}
+
+/// Parser assumptions with a health state, so a broken adapter alerts
+/// instead of silently reporting "nothing new".
+model YcSourceHealth {
+  id          String    @id @default(cuid())
+  sourceId    String
+  source      YcSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  probeKey    String
+  /// OK | DEGRADED | BROKEN | BLOCKED | ABSENT
+  state       String    @default("OK")
+  detail      String?
+  checkedAt   DateTime  @default(now())
+  brokenSince DateTime?
+
+  @@unique([sourceId, probeKey])
+}
+
+/// Daily counters for the progress screens. Cheap, incremental, append-only.
+model YcMetricSnapshot {
+  id        String   @id @default(cuid())
+  day       String
+  sourceKey String   @default("__all__")
+  metric    String
+  value     Float
+  createdAt DateTime @default(now())
+
+  @@unique([day, sourceKey, metric])
+  @@index([metric, day])
+}
+
+/// The permanent regression suite: fixed phrases re-spoken on every change.
+model YcBenchmarkCase {
+  id          String   @id @default(cuid())
+  text        String
+  sourceRef   String?
+  category    String
+  tags        String[]
+  active      Boolean  @default(true)
+  trainingUse String   @default("SERVING_ONLY")
+  createdAt   DateTime @default(now())
+
+  @@index([category, active])
+}
+
+/// A frozen voice configuration. Baseline v1 is the first one.
+model YcVoiceProfileVersion {
+  id                String    @id @default(cuid())
+  profileKey        String
+  version           Int
+  /// BASELINE CANDIDATE TESTING APPROVED PRODUCTION RETIRED
+  status            String    @default("CANDIDATE")
+  provider          String    @default("openai")
+  model             String
+  voice             String
+  instructions      String?
+  speed             Float?
+  responseFormat    String    @default("mp3")
+  dictionaryVersion Int       @default(1)
+  internalMeta      Json?
+  approvedBy        String?
+  approvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  runs              YcBenchmarkRun[]
+
+  @@unique([profileKey, version])
+}
+
+model YcBenchmarkRun {
+  id               String                @id @default(cuid())
+  profileVersionId String
+  profileVersion   YcVoiceProfileVersion @relation(fields: [profileVersionId], references: [id], onDelete: Cascade)
+  baselineRunId    String?
+  /// QUEUED RUNNING RATING DONE FAILED
+  state            String                @default("QUEUED")
+  caseCount        Int                   @default(0)
+  ratedCount       Int                   @default(0)
+  meanRating       Float?
+  costCents        Int                   @default(0)
+  startedAt        DateTime              @default(now())
+  finishedAt       DateTime?
+
+  results          YcBenchmarkResult[]
+}
+
+model YcBenchmarkResult {
+  id        String         @id @default(cuid())
+  runId     String
+  run       YcBenchmarkRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  caseId    String
+  audioKey  String?
+  latencyMs Int?
+  bytes     Int?
+  rating    Int?
+  ratedBy   String?
+  notes     String?
+  error     String?
+  createdAt DateTime       @default(now())
+
+  @@unique([runId, caseId])
+}

@@ -211,6 +211,22 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.creative_console", section: "admin", label: "Creative Console", href: "/admin/creative-console", permission: "can_view_admin_creative_console" },
   { id: "admin.mobile_console", section: "admin", label: "Mobile Console", href: "/admin/mobile-console", permission: "can_view_admin_mobile_console" },
   { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
+  // Yiddish Learning Engine (2026-09-15) — the corpus + learning engine and
+  // its first external source. Ten pages, one key each (the per-page rule),
+  // none in any default bucket. Every one is SUPER_ADMIN-forced in navConfig
+  // and sits in OWNER_ONLY_FIXED_NAV_ITEMS, so both permission editors render
+  // them Locked: these screens count across every tenant's material and the
+  // Governance page carries the third-party-audio authorization switch.
+  { id: "admin.yiddish_learning", section: "admin", label: "Yiddish Learning", href: "/admin/yiddish-learning", permission: "can_view_admin_yiddish_learning" },
+  { id: "admin.yiddish_corpus", section: "admin", label: "Yiddish Corpus", href: "/admin/yiddish-learning/corpus", permission: "can_view_admin_yiddish_corpus" },
+  { id: "admin.yiddish_alignment", section: "admin", label: "Yiddish Alignment", href: "/admin/yiddish-learning/alignment", permission: "can_view_admin_yiddish_alignment" },
+  { id: "admin.yiddish_review", section: "admin", label: "Yiddish Review", href: "/admin/yiddish-learning/review", permission: "can_view_admin_yiddish_review" },
+  { id: "admin.yiddish_benchmark", section: "admin", label: "Yiddish Benchmark", href: "/admin/yiddish-learning/benchmark", permission: "can_view_admin_yiddish_benchmark" },
+  { id: "admin.yiddish_progress", section: "admin", label: "Yiddish Progress", href: "/admin/yiddish-learning/progress", permission: "can_view_admin_yiddish_progress" },
+  { id: "admin.yiddish_sources", section: "admin", label: "Yiddish Sources", href: "/admin/yiddish-learning/sources", permission: "can_view_admin_yiddish_sources" },
+  { id: "admin.yiddish_export", section: "admin", label: "Yiddish Export", href: "/admin/yiddish-learning/export", permission: "can_view_admin_yiddish_export" },
+  { id: "admin.yiddish_governance", section: "admin", label: "Yiddish Governance", href: "/admin/yiddish-learning/governance", permission: "can_view_admin_yiddish_governance" },
+  { id: "admin.yiddish24", section: "admin", label: "Yiddish24 Source", href: "/admin/yiddish-learning/yiddish24", permission: "can_view_admin_yiddish24" },
   { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
   { id: "admin.pbx_routing", section: "admin", label: "Trunks & Routing", href: "/admin/pbx-console?mod=routing", permission: "can_view_admin_pbx_routing" },
   { id: "admin.pbx_teams", section: "admin", label: "Ring Groups & Queues", href: "/admin/pbx-console?mod=teams", permission: "can_view_admin_pbx_teams" },

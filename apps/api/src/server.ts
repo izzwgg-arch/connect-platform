@@ -397,6 +397,9 @@ import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes"
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
 import { registerCreativeStudioRoutes } from "./creativeStudio/routes";
+import { registerYiddishCorpusRoutes } from "./yiddishCorpus/routes";
+import { seedYiddishSources } from "./yiddishCorpus/seed";
+import { startYiddishWorker } from "./yiddishCorpus/jobs";
 import { registerCreativeAdminRoutes } from "./creativeStudio/adminRoutes";
 import { registerCreativeInternalRoutes } from "./creativeStudio/internalRoutes";
 import { seedEngines } from "./creativeStudio/engines";
@@ -3055,6 +3058,12 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/mobile-service/settings", permission: "can_view_mobile_settings" },
   { prefix: "/admin/mobile-service", permission: "can_manage_global_settings" },
   { prefix: "/creative", permission: "can_view_creative_home" },
+  // Yiddish Corpus + Learning Engine (2026-09-15) — platform data, never
+  // tenant-scoped. Every handler ALSO calls requireSuperAdmin; this rule
+  // exists so the prefix is not silently outside the global permission gate
+  // (the /admin/wake-health class, where a missing rule meant no permission
+  // check ran at all).
+  { prefix: "/admin/yiddish", permission: "can_manage_global_settings" },
   { prefix: "/creative/download", permission: null },
   { prefix: "/creative/projects", permission: "can_view_creative_projects" },
   { prefix: "/creative/assets", permission: "can_view_creative_assets" },
@@ -24275,6 +24284,47 @@ registerCreativeAdminRoutes({ app, db, requireOwner: (req: any, reply: any) => r
 registerCreativeInternalRoutes({ app, db });
 
 // ── Carrier migration (2026-09-10) ─────────────────────────────────────────
+// ── Yiddish Corpus + Learning Engine (2026-09-15) ───────────────────────────
+// Platform data, never tenant-scoped: sources, rights records, lexemes,
+// pronunciation observations and the voice benchmark. SUPER_ADMIN only on
+// every route (requireSuperAdmin, NOT the agent app's requireOwner, which also
+// admits TENANT_ADMIN).
+// ⛔⛔ Two walls are enforced in code, not by convention: customer voicemails
+// and chats are COUNTED, NEVER READ, and Yiddish Labs text is SERVING-ONLY and
+// excluded from every training export. External audio is only fetched when a
+// PERSON has recorded a rights grant on /admin/yiddish/sources/:key/rights and
+// set the audio mode — the engine has no route to either.
+registerYiddishCorpusRoutes({
+  app,
+  db,
+  requireOwner: (req, reply) => requireSuperAdmin(req, reply),
+});
+// Best-effort at boot: registers the sources and the (paused, metadata-only)
+// budgets. Idempotent, and it NEVER overwrites a rights decision a human made.
+// A seed failure must not stop the api from starting.
+void seedYiddishSources(db)
+  .then((r) => {
+    if (r.created.length || r.errors.length) app.log.info({ yiddishSeed: r }, "yiddish corpus sources seeded");
+  })
+  .catch((e) => app.log.warn({ err: e }, "yiddish corpus seed failed (non-fatal)"));
+
+// The engine's worker. ⛔ The REAL control is the budget row's `paused` flag
+// (global starts paused, so nothing is fetched or spent until a person turns
+// it on); YIDDISH_ENGINE_ENABLED=0 is the blunt off switch, and the interval
+// is env-tunable. A boot run as well as the interval, because setInterval
+// restarts from zero on every deploy and a deploy-heavy day can starve a
+// long-interval sweep entirely.
+const yiddishEngineEnabled = String(process.env.YIDDISH_ENGINE_ENABLED ?? "1").trim() !== "0";
+if (yiddishEngineEnabled) {
+  // startYiddishWorker does its own boot run and then its own interval (it
+  // unrefs the timer and guards re-entrancy). With a paused budget every tick
+  // is one cheap DB read that claims nothing.
+  startYiddishWorker(db, {
+    intervalMs: Number(process.env.YIDDISH_WORKER_INTERVAL_MS || 60_000),
+    onError: (err) => app.log.warn({ err }, "yiddish worker tick failed"),
+  });
+}
+
 // Moving all 52 live numbers off VoIP.ms and onto SignalWire, a few at a time.
 // Incoming calls move by themselves (Main's default-trunk routes on the
 // dialled number and both carriers converge there); the ONLY gap is between a

@@ -1,4 +1,6 @@
-import type { LucideIcon   FolderOpen,
+import type { LucideIcon } from "lucide-react";
+import {
+  FolderOpen,
   Image as ImageIcon,
   Clapperboard,
   LayoutTemplate,
@@ -228,6 +230,25 @@ export const navItems: NavItem[] = [
   // OWNER_ONLY_FIXED_NAV_ITEMS so the role editor is honest.
   { id: "admin.mobile_console", href: "/admin/mobile-console", label: "Mobile Console", icon: "MC", lucide: Smartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_mobile_console" },
   { id: "admin.creative_console", href: "/admin/creative-console", label: "Creative Console", icon: "CC", lucide: Clapperboard, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_creative_console" },
+  // ── Yiddish Learning Engine (2026-09-15) — the corpus + learning engine and
+  // its first external source. Ten pages, ONE KEY EACH (the per-page rule), in
+  // no default bucket, every one SUPER_ADMIN-forced below and listed in
+  // OWNER_ONLY_FIXED_NAV_ITEMS so the custom-role editor renders them Locked
+  // instead of offering a toggle that cannot take effect.
+  // ⛔ WHY PLATFORM-ONLY, not "not launched yet": these screens read across
+  // every tenant's material (the customer data wall counts it) and the
+  // Governance screen carries the switch that authorizes fetching third-party
+  // audio. Neither is a customer-grantable capability.
+  { id: "admin.yiddish_learning", href: "/admin/yiddish-learning", label: "Yiddish Learning", icon: "YL", lucide: GraduationCap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_learning" },
+  { id: "admin.yiddish_corpus", href: "/admin/yiddish-learning/corpus", label: "Yiddish Corpus", icon: "YC", lucide: FileText, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_corpus" },
+  { id: "admin.yiddish_alignment", href: "/admin/yiddish-learning/alignment", label: "Yiddish Alignment", icon: "YA", lucide: AudioLines, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_alignment" },
+  { id: "admin.yiddish_review", href: "/admin/yiddish-learning/review", label: "Yiddish Review", icon: "YR", lucide: CheckSquare, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_review" },
+  { id: "admin.yiddish_benchmark", href: "/admin/yiddish-learning/benchmark", label: "Yiddish Benchmark", icon: "YB", lucide: BarChart3, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_benchmark" },
+  { id: "admin.yiddish_progress", href: "/admin/yiddish-learning/progress", label: "Yiddish Progress", icon: "YP", lucide: Activity, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_progress" },
+  { id: "admin.yiddish_sources", href: "/admin/yiddish-learning/sources", label: "Yiddish Sources", icon: "YS", lucide: Network, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_sources" },
+  { id: "admin.yiddish_export", href: "/admin/yiddish-learning/export", label: "Yiddish Export", icon: "YE", lucide: Download, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_export" },
+  { id: "admin.yiddish_governance", href: "/admin/yiddish-learning/governance", label: "Yiddish Governance", icon: "YG", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_governance" },
+  { id: "admin.yiddish24", href: "/admin/yiddish-learning/yiddish24", label: "Yiddish24 Source", icon: "Y24", lucide: Radio, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish24" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
@@ -383,6 +404,19 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.support",
   "admin.mobile_console",
   "admin.creative_console",
+  // The Yiddish Learning Engine's ten pages. Every one is SUPER_ADMIN-forced
+  // in isNavItemVisibleForUser and requireSuperAdmin at the api, so a granted
+  // key could only ever draw a door that refuses — they render Locked.
+  "admin.yiddish_learning",
+  "admin.yiddish_corpus",
+  "admin.yiddish_alignment",
+  "admin.yiddish_review",
+  "admin.yiddish_benchmark",
+  "admin.yiddish_progress",
+  "admin.yiddish_sources",
+  "admin.yiddish_export",
+  "admin.yiddish_governance",
+  "admin.yiddish24",
   "admin.compliance",
   "admin.billing",
   // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every
@@ -451,5 +485,11 @@ export function isNavItemVisibleForUser(
   // has NO force line on purpose: granting its key is the launch.)
   if (item.id === "admin.mobile_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   if (item.id === "admin.creative_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  // The Yiddish Learning Engine reads across every tenant's material (the
+  // customer data wall counts it) and its Governance screen carries the switch
+  // that authorizes fetching third-party audio. Platform staff only, always —
+  // the same contract as the console family above, and the reason all ten ids
+  // sit in OWNER_ONLY_FIXED_NAV_ITEMS.
+  if (item.id.startsWith("admin.yiddish") && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }
