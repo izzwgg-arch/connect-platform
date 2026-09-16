@@ -24,12 +24,21 @@ deploy_portal_rollout_read_active_port() {
   echo "$p"
 }
 
+# The OTHER blue/green port as a `backup` server — see deploy_api_rollout_backup_port_for in
+# deploy-api-rollout.sh for the 2026-09-16 incident (old nginx workers still routing to a
+# removed candidate → 502 on every page of a long-lived browser connection).
+deploy_portal_rollout_backup_port_for() {
+  if [[ "$1" == "3000" ]]; then echo "3005"; else echo "3000"; fi
+}
+
 deploy_portal_rollout_write_upstream_port() {
   local port="$1"
   local file="$2"
+  local backup
+  backup="$(deploy_portal_rollout_backup_port_for "$port")"
   mkdir -p "$(dirname "$file")"
   umask 022
-  printf 'server 127.0.0.1:%s;\n' "$port" >"${file}.tmp.$$"
+  printf 'server 127.0.0.1:%s max_fails=0;\nserver 127.0.0.1:%s backup max_fails=0;\n' "$port" "$backup" >"${file}.tmp.$$"
   mv -f "${file}.tmp.$$" "$file"
 }
 

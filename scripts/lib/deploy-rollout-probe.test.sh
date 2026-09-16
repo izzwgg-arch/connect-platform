@@ -161,6 +161,26 @@ deploy_portal_rollout_wait_ready "$URL_PORTAL" 3 0
 assert_rc "portal: resolve_local=0 -> success via dns" 0 "$?"
 assert_not_contains "portal: resolve_local=0 -> no loopback" "$CURL_CALLS" "127.0.0.1"
 
+echo "upstream file: the other blue/green port is always a backup (2026-09-16)"
+
+# 9. Old nginx workers keep routing to the port active at THEIR reload. Every generation a
+#    rollout creates must name BOTH ports, so removing either container never 502s a worker.
+TMPD="$(mktemp -d)"
+UF="$TMPD/active.conf"
+for svc_ports in "api 3001 3004" "portal 3000 3005"; do
+  read -r svc stable cand <<<"$svc_ports"
+  for active in "$stable" "$cand"; do
+    other="$stable"; [[ "$active" == "$stable" ]] && other="$cand"
+    "deploy_${svc}_rollout_write_upstream_port" "$active" "$UF"
+    body="$(cat "$UF")"
+    assert_contains "$svc active=$active -> primary line" "$body" "server 127.0.0.1:${active} max_fails=0;"
+    assert_contains "$svc active=$active -> other port is backup" "$body" "server 127.0.0.1:${other} backup max_fails=0;"
+    got="$("deploy_${svc}_rollout_read_active_port" "$UF")"
+    assert_rc "$svc active=$active -> read_active_port returns the PRIMARY (rollback target)" "$active" "$got"
+  done
+done
+rm -rf "$TMPD"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]] || exit 1

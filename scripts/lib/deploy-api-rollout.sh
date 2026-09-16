@@ -25,12 +25,29 @@ deploy_api_rollout_read_active_port() {
   echo "$p"
 }
 
+# The OTHER blue/green port, written as a `backup` server behind the active one.
+# ⛔ 2026-09-16: every `nginx -s reload` leaves the previous generation's workers alive
+# ("worker process is shutting down") for as long as a client keeps a connection open —
+# hours, because of the WebSocket/SIP locations. Those workers still route to the port that
+# was active at THEIR reload. With a single `server` line, removing the candidate turned
+# every request on such a connection into a 502 (935 refused to :3004 in two api deploys
+# that day; a Chrome tab got 502 on every portal page for 16 min). With the other port as
+# `backup`, a refused connect is retried on the port that IS alive — no connection is cut.
+# `max_fails=0` on both: a two-server upstream starts failure accounting (a one-server
+# upstream ignores it), so one slow request would otherwise park the live port for 10s and
+# send that worker's traffic to a port nobody listens on.
+deploy_api_rollout_backup_port_for() {
+  if [[ "$1" == "3001" ]]; then echo "3004"; else echo "3001"; fi
+}
+
 deploy_api_rollout_write_upstream_port() {
   local port="$1"
   local file="$2"
+  local backup
+  backup="$(deploy_api_rollout_backup_port_for "$port")"
   mkdir -p "$(dirname "$file")"
   umask 022
-  printf 'server 127.0.0.1:%s;\n' "$port" >"${file}.tmp.$$"
+  printf 'server 127.0.0.1:%s max_fails=0;\nserver 127.0.0.1:%s backup max_fails=0;\n' "$port" "$backup" >"${file}.tmp.$$"
   mv -f "${file}.tmp.$$" "$file"
 }
 

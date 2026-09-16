@@ -2,6 +2,14 @@
 
 Operators install these files on the **application host**, not inside git-tracked `/etc/nginx` in this repo. Agents do not edit production nginx per `AGENTS.md`; humans merge snippets into the server config.
 
+> ⛔ **Two lines, not one (2026-09-16).** The rollout scripts write the active port AND the
+> other blue/green port as `backup`, both `max_fails=0`
+> (`server 127.0.0.1:3000 max_fails=0;` / `server 127.0.0.1:3005 backup max_fails=0;`).
+> `nginx -s reload` leaves old workers alive for hours on WebSocket/SIP connections, and they
+> keep routing to the port active at THEIR reload — with one line, removing a candidate made
+> them 502 every request. Never hand-write a single-line file. See
+> `docs/ai-context/claude-md-sections/2026-09-16-old-nginx-workers-502-after-blue-green.md`.
+
 ## API blue/green (`connect_api_active`)
 
 Purpose: **`scripts/deploy-api.sh`** switches the upstream between **`127.0.0.1:3001`** (stable service `api`) and **`127.0.0.1:3004`** (candidate **`api_candidate`**) **without** `docker compose rm -sf` on the live container before the replacement is ready.
