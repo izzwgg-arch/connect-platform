@@ -6,11 +6,30 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_DISPLAYDX_NEXUS_SPLIT_2026-09-15.
 Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
 
 - ✅ **Old tenant `cmnlgryom001fp9paw7le6582` renamed "Nexus Realty"**, Michael
-  (`michael@nexusrealtyad.com`) → TENANT_ADMIN, default card → his Amex ····1005, **autopay
-  OFF** — Michael pays $65/mo via his LIVE Sola schedule `c112585121_s11766473` (ran Aug 26,
-  next **Sep 26**). The rename HEALED the §5 Secro-handoff mis-map: the "Nexus Realty" link's
-  companyName now matches its tenant. Cutover to Connect billing = later decision (dormant
-  TenantBillingProfile "Nexus Realty" = 2 ext @ $30 + DID 8453647474 documents his side).
+  (`michael@nexusrealtyad.com`) → TENANT_ADMIN, default card → his Amex ····1005. The rename
+  HEALED the §5 Secro-handoff mis-map: the "Nexus Realty" link's companyName now matches its
+  tenant.
+- ✅✅ **2026-09-16 — NEXUS IS OFF SOLA AND ON CONNECT AUTOPAY (Izzy: "stop it there, switch it
+  over to Connect, same payment date").** Sola schedule `c112585121_s11766473` **disabled at
+  Sola** (live read-back: `IsActive:false`, Revision 24→25, ModifiedDate 2026-09-15 22:10:37),
+  Connect autopay ON, **day 28 → 26**, flat rate **$6500** ("Monthly service"), first Connect
+  charge **Sep 26** on the same Amex ····1005. ⛔⛔ THE TRAP, and it cost a month if unseen:
+  `takeOverBillingFromSola` assumes Sola ALREADY charged the current period, so it set
+  `nextConnectChargeAt` = **Oct 26** — but Sola was stopped BEFORE its Sep 26 run, so Sep would
+  have gone uncollected ($65, free month). **BOTH guards had to be moved to Sep 26**: the link's
+  `nextConnectChargeAt` AND `metadata.billingScheduleOverride.nextPaymentDate` (event
+  `billing.sola_cutover_next_charge_adjusted`). ⛔ The dormant profile "Nexus Realty" ($60,
+  `autoBillingEnabled:true`) was turned **OFF first** — `runBillingProfilesForTenant` runs for
+  every autopay tenant, so flipping tenant autopay on would have added a SECOND $60 invoice and
+  charged it. ⛔ Pricing was Izzy's call: the engine computed **$30** (extensions pinned to a
+  manual quantity of 1 while 4 are active) vs Sola's **$65** — he chose $65, so a flat rate is
+  used and the manual-1 override is now irrelevant. Proven by replaying the deployed worker
+  decisions at Sep 23 / Sep 26 / Oct 26: T-3 invoice Sep 26→Oct 26, `due` true, no
+  activeSola / cutover / override / paid-coverage block. Backup
+  `loopcom:/root/nexus-cutover-backup-20260916.json`. **Nothing charged, invoiced or emailed at
+  cutover time** (0 tx, 0 EmailJobs, invoice list unchanged). ⛔ Michael now receives Connect
+  invoice + T-3 reminder + receipt emails at `Michael@nexusrealtyad.com` — he got none of that
+  from Sola; the first reaches him **Sep 23**.
 - ✅ **New tenant DisplayDX `cmu31fp430000pfje5qh86dja`** (billing-only, YS-Plumbing pattern):
   Ellie's Visa ····0213 default, $30/mo (manual qty 1 extension, same as always), day 28,
   terms 15, **autopay ON**, billingEmail eli@displaydex.com. The inert CUTOVER_COMPLETE
@@ -23,6 +42,9 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   $90 total, all PAID, 3 receipts SENT. Script `loopcom:/root/displaydx-collect.ts`.
 - ✅ **Worker resumes Ellie's normal billing by itself: T-3 invoice Sep 25, charge Sep 28** on
   the Visa. ⛔ Don't hand-create the Sep 28 invoice; the worker never charges the 3 late ones.
+- ⛔ **The $65 flat rate is a BILLING fact, not a phone fact** — when the phones finally split,
+  Nexus keeps billing $65 until someone changes it (a flat rate ignores extension count, which
+  is exactly why it was chosen).
 - ⛔⛔ **PHONES/EXTENSIONS/NUMBERS/USERS NOT MOVED — Izzy's explicit "don't move any phones
   yet."** Later: DisplayDX gets ext 101 (Eli) + 104 (Yehuda, ⚠️ his email is
   @nexusrealtyad.com — confirm side) + numbers 212-888-0885 / 845-200-3535 / 845-414-3736;

@@ -15,11 +15,16 @@ Izzy asked what we project to charge next month across every card on file.
 - Cross-checked against each tenant's last 3 cycle invoices — every preview
   matches what was actually charged, except the four flagged below.
 
-## The answer
-**$1,836.04 auto-charged in October** across **17 autopay tenants** (all 17 have an
-ACTIVE default card; none expires before November). **$1,781.04** is the realistic
-figure — Secro is blocked (below). With the two Sola-rail recurrings and Yossis'
-manual invoice the month is **~$2,153**.
+## The answer (updated 2026-09-16 after the Nexus cutover)
+**$1,901.04 auto-charged in October** across **18 autopay tenants** (all 18 have an
+ACTIVE default card; none expires before November). **$1,846.04** is the realistic
+figure — Secro is blocked (below). With Fixup's Sola schedule and Yossis' manual
+invoice the month is **~$2,153**.
+
+⛔ **Nexus Realty moved onto Connect autopay on 2026-09-16** ($65, day 26, Sola
+schedule disabled — `2026-09-15-displaydx-nexus-realty-split.md` §3c of the handoff).
+It was $65 on Sola's rail in the first version of this file; the money did not change,
+the rail did. The pre-cutover figure was $1,836.04 / 17 tenants.
 
 | Day | Tenant | Oct amount |
 |----|--------|-----------|
@@ -36,18 +41,18 @@ manual invoice the month is **~$2,153**.
 | 21 | Luxure Management | 75.00 |
 | 23 | Trust Bookkeepings | 155.00 |
 | 24 | Smooth Leasing | 35.00 |
+| 26 | Nexus Realty | 65.00 ← moved off Sola 09-16 |
 | 26 | Relax Tires | 105.00 (3 extensions now) |
 | 26 | Solidify Concrete | 87.28 |
 | 27 | Create A Box | 130.00 |
 | 28 | DisplayDX | 30.00 |
-| | **Connect autopay total** | **1,836.04** |
+| | **Connect autopay total** | **1,901.04** |
 
 Not Connect autopay, same month: **Yossis Wood Works $206.96** (Oct 4, autopay OFF
-on purpose, pays manually), **Nexus Realty $65** (Oct 26, Michael's own LIVE Sola
-schedule), **Fixup Group $45** (Oct 9, Sola schedule, probed live 2026-09-09).
-Rest of September still to charge: **$631.19** Connect (RSBK 20th, Luxure 21st,
-Trust 23rd, Smooth 24th, Relax 26th, Solidify 26th, Create A Box 27th, DisplayDX
-28th) + Nexus $65 on Sola.
+on purpose, pays manually) and **Fixup Group $45** (Oct 9, Sola schedule, probed live
+2026-09-09). Rest of September still to charge: **$696.19** on Connect (RSBK 20th,
+Luxure 21st, Trust 23rd, Smooth 24th, **Nexus 26th**, Relax 26th, Solidify 26th,
+Create A Box 27th, DisplayDX 28th) — Nexus' $65 is now a Connect charge, not Sola's.
 
 ## ⛔ Four things the projection exposed — all real, none fixed by this task
 1. **Secro Selutions will be skipped AGAIN on Oct 6.** The mis-mapped

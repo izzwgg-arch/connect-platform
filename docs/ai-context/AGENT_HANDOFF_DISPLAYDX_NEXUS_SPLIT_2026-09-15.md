@@ -60,8 +60,8 @@ role, line items "Billable extensions 1 × $30", zero EmailJobs).
   cycle on. ⛔ Do not hand-create the Sep 28 invoice.
 - The 3 back invoices stay OPEN — the worker never charges late by design
   (`autopay_charge_window_missed`); they are collected by hand or payment link only.
-- **Nexus Realty: Sola charges Michael's Amex $65 on Sep 26** as it has every month. Connect
-  autopay is off there, so nothing else fires.
+- ~~**Nexus Realty: Sola charges Michael's Amex $65 on Sep 26**~~ — **NO LONGER TRUE as of
+  2026-09-16, see §3c.** Sola is disabled; **Connect** charges the $65 on Sep 26.
 
 ## 3b. ✅ COLLECTED 2026-09-15 19:19Z (Izzy: "Charge his card for all those invoices. Send it out to him by email before you charge the card, then charge it.")
 
@@ -94,12 +94,62 @@ BILLING_RECEIPT emails SENT. Container-verified by SQL afterwards.
    effective tenant, so claim-override + moved rows stay consistent), or (b) accept a
    ~1-minute sign-out/sign-in (needs his password; SIP keeps ringing through the move since
    PBX tenant 6 registration is untouched by the Connect-side split).
-4. **Nexus Realty's move onto Connect billing** (takeOverBillingFromSola of the $65 schedule,
-   pricing per the dormant billing profile: 2 ext + DID) is a separate decision, same as the
-   admin tenant's "coat one" link. Until then autopay stays OFF there.
+4. ~~**Nexus Realty's move onto Connect billing**~~ — ✅ **DONE 2026-09-16, see §3c** ($65 flat,
+   day 26, Sola disabled). The admin tenant's "coat one" link is still open, same shape.
 5. When phones move, extension quantity overrides on BOTH tenants need Izzy's pricing call
    (today: DisplayDX bills a manual quantity of 1 @ $30; 4 real extensions exist on the old
    tenant and 3000-series manual counts were never per-extension-accurate).
+
+## 3c. ✅✅ NEXUS CUT OVER TO CONNECT BILLING — 2026-09-16 02:10–02:11Z (Izzy: "stop it there, switch it over to Connect (same payment date as it is in Sola)")
+
+Backup of every touched row first: `loopcom:/root/nexus-cutover-backup-20260916.json` (600).
+
+| # | Step | Proof |
+|---|---|---|
+| 1 | **Dormant billing profile "Nexus Realty" `autoBillingEnabled` → false** (route `PUT …/billing-profiles/:id`) | 200; `billing.profile_updated`; profiles-with-autopay count = 0 |
+| 2 | **`billingDayOfMonth` 28 → 26 + flat rate $65.00** ("Monthly service", `appliesTo:extensions`), one `PUT /admin/billing/tenants/:id/settings` | 200; Oct preview = **6500**, single line + 4 numbers at $0 |
+| 3 | **Cutover** `POST …/billing-cutover/take-over` (3 confirm flags) | 200 `{nextConnectChargeAt:"2026-10-26T04:00:00.000Z"}`; events started → disabled → autopay_enabled → completed |
+| 4 | **Both charge guards moved Oct 26 → Sep 26** | link `nextConnectChargeAt` = 2026-09-26 04:00; `billingScheduleOverride.nextPaymentDate` = "2026-09-26"; event `billing.sola_cutover_next_charge_adjusted` |
+| 5 | **Live Sola read-back** (read-only `GetSchedule`) | `IsActive:false`, Revision 24→**25**, ModifiedDate `2026-09-15 22:10:37.144`, Amount still 65, LastRunTime Aug 26 |
+| 6 | **Nothing fired** | 0 PaymentTransactions, 0 EmailJobs, invoice list unchanged (still only the old `CC-202605-00035`) |
+
+**⛔⛔ THE TRAP — `takeOverBillingFromSola` assumes Sola ALREADY charged the current period.**
+It computes `nextConnectChargeAt` as the start of the *next* period from `buildBillingSchedule`.
+Nexus was stopped at Sola **before** its Sep 26 run, so the helper handed back **Oct 26** and
+September would simply have gone uncollected — no invoice, no charge, no alarm, a free month for
+the customer and $65 gone. Anyone cutting a tenant over BEFORE its next Sola run must move **two**
+guards, not one: the link's `nextConnectChargeAt` **and**
+`TenantBillingSettings.metadata.billingScheduleOverride.nextPaymentDate`. Both are "do not charge
+before this date" gates and either one alone still skips.
+
+**⛔ The second landmine: `TenantBillingProfile`.** Nexus carried a dormant profile
+(2 ext @ $30 = $60, `autoBillingEnabled:true`) that had never fired *because the tenant's own
+autopay was off* — `runBillingProfilesForTenant` is called only inside the autopay-tenant loop.
+Enabling tenant autopay would have armed it, producing a second invoice and a second charge on
+the same Amex on the same day. The cutover route does **not** check for this. It was turned off
+in step 1, before autopay existed on the tenant.
+
+**⛔ Pricing was a real fork, and it was Izzy's call.** Connect's engine computed **$30** for
+Nexus (extensions pinned to `billingQuantityOverrides.extensions = manual 1` while **4** are
+ACTIVE), the dormant profile said **$60**, and Sola actually billed **$65**. Izzy chose "$65 —
+same as Sola", implemented as `metadata.billingFlatRate` so the price is immune to the manual-1
+override and to the coming phone split. ⛔ Do not "fix" the manual-1 override expecting the bill
+to change — with a flat rate enabled it no longer feeds the total.
+
+**Replayed against the DEPLOYED code before calling it done** (read-only, real settings row):
+
+| Worker run | Result |
+|---|---|
+| Sep 23 07:15Z | `reminderDue:true` → creates invoice **Sep 26 → Oct 26**, reminder email to Michael; charge correctly blocked |
+| Sep 26 07:15Z | `due:true`, activeSola **none**, cutover block **none**, override **charge**, paid-coverage **none** → **$65 charged on Amex ····1005** |
+| Oct 26 07:15Z | `due:true`, all clear → next $65 |
+
+⏳ **NOT PROVEN: no charge has actually run on this rail yet** — the first one is **Sep 26**.
+Sola is already off, so if that charge fails there is no fallback; it needs eyes on the 26th.
+⛔ Michael starts receiving Connect emails (invoice, T-3 reminder, receipt) at
+`Michael@nexusrealtyad.com`, first one **Sep 23** — Sola never emailed him anything.
+Rollback if ever needed: re-enable schedule `c112585121_s11766473` at Sola, set
+`autoBillingEnabled=false`, restore the settings row from the backup JSON.
 
 ## 4b. ⛔⛔ THE PHONE/IVR MOVE WAS STOPPED BEFORE ANY LIVE WRITE (2026-09-15 evening)
 
