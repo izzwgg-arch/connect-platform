@@ -228,7 +228,7 @@ export function registerCreativeStudioRoutes({ app, db, requireOwner, hasPermiss
       where: { id: String(req.params.id), tenantId: u.tenantId, deletedAt: null },
       include: {
         documents: true,
-        assets: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, take: 60 },
+        assets: { where: { deletedAt: null, source: { not: "segment" } }, orderBy: { createdAt: "desc" }, take: 60 },
         jobs: { orderBy: { createdAt: "desc" }, take: 20 },
         versions: { orderBy: { number: "desc" }, take: 30 },
         generations: { orderBy: { createdAt: "desc" }, take: 30 },
@@ -661,7 +661,11 @@ export function registerCreativeStudioRoutes({ app, db, requireOwner, hasPermiss
     const q = (req.query || {}) as any;
     const where: any = { tenantId: u.tenantId, deletedAt: null };
     if (q.kind) where.kind = String(q.kind);
+    // ⛔ Intermediates ("segment": the raw pieces of a composed shot and the
+    // frames one continues from) are not the customer's work and would just
+    // clutter their library with near-duplicates. Ask for them by name.
     if (q.source) where.source = String(q.source);
+    else where.source = { not: "segment" };
     if (q.projectId) where.projectId = String(q.projectId);
     if (q.favourite === "1") where.favourite = true;
     const rows = await db.creativeAsset.findMany({ where, orderBy: { createdAt: "desc" }, take: Math.min(200, Number(q.limit || 60)) });

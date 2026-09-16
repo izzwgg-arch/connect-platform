@@ -430,15 +430,19 @@ async function absorbVideoSegment(deps: RunnerDeps, job: any, outputs: EngineOut
     return;
   }
 
-  // Segments are intermediates: kept a week, not forever.
+  // ⛔ Segments are INTERMEDIATES and are marked as such. They used to be saved
+  // as ordinary generated work, so every 4-second shot put TWO near-identical
+  // files in the customer's library — the raw piece and the finished shot —
+  // and doubled what we store. They are hidden from the library and swept
+  // after a week; the one that becomes the finished shot is promoted below.
   const asset = await saveOutputAsset(db, {
     tenantId: job.tenantId,
     projectId: job.projectId,
     kind: "video",
-    source: "generated",
+    source: "segment",
     output,
     createdByUserId: job.requestedByUserId,
-    expiresAt: plan.segments.length > 1 ? new Date(Date.now() + 7 * 24 * 3600_000) : null,
+    expiresAt: new Date(Date.now() + 7 * 24 * 3600_000),
   });
   seg.status = "done";
   seg.assetId = asset.id;
@@ -457,7 +461,7 @@ async function absorbVideoSegment(deps: RunnerDeps, job: any, outputs: EngineOut
           tenantId: job.tenantId,
           projectId: job.projectId,
           kind: "image",
-          source: "generated",
+          source: "segment",
           output: { buffer: bytes, mime: "image/png", name: "continuation-frame.png" },
           createdByUserId: job.requestedByUserId,
           expiresAt: new Date(Date.now() + 2 * 24 * 3600_000),
@@ -493,8 +497,17 @@ async function finishVideoJob(deps: RunnerDeps, job: any, plan: any): Promise<vo
     return;
   }
 
-  if (segmentAssets.length === 1 && Number(plan.wanted || 0) >= (segmentAssets[0].durationMs || 0) / 1000) {
-    const only = segmentAssets[0];
+  // One segment that is already about the right length IS the shot. The old
+  // comparison was exact, so a 4.1-second clip for a 4-second ask fell through
+  // to the join path and was re-encoded into a second, near-identical file —
+  // double the storage and a pointless minute of CPU to shave 100ms nobody
+  // asked about. Half a second of tolerance, and the piece is promoted in place.
+  const only = segmentAssets[0];
+  const wantedMs = Number(plan.wanted || 0) * 1000;
+  if (segmentAssets.length === 1 && (!wantedMs || Number(only.durationMs || 0) <= wantedMs + 500)) {
+    await db.creativeAsset
+      .update({ where: { id: only.id }, data: { source: "generated", expiresAt: null, name: "shot.mp4" } })
+      .catch(() => undefined);
     await completeJob(deps, job, [], { renderMs: 0, costMicros: job.costMicros, existingAssetIds: [only.id] });
     return;
   }

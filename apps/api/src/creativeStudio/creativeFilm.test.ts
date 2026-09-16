@@ -452,6 +452,26 @@ test("a finished clip attaches itself to its shot, with no second step to forget
   assert.ok(!/payload: \{ assetId/.test(page), "the page must not attach the clip a second time");
 });
 
+test("a shot does not land in the library twice", () => {
+  // Proven on production 2026-09-16: every 4-second shot produced BOTH a
+  // clip.mp4 (the raw segment) and a shot.mp4 (a re-encoded copy 20 KB
+  // bigger), because the single-segment shortcut compared exactly — a 4.1s
+  // clip for a 4s ask fell through to the join path. Double the storage, a
+  // pointless re-encode, and two near-identical files in the customer's
+  // library for one shot.
+  const jobs = read("jobs.ts");
+  assert.match(jobs, /source: "segment"/, "intermediates must be marked as intermediates");
+  assert.match(jobs, /<= wantedMs \+ 500/, "half a second of tolerance, or the copy comes back");
+  assert.match(jobs, /source: "generated", expiresAt: null, name: "shot\.mp4"/, "the kept piece is promoted in place");
+
+  // And neither library shows them.
+  const routes = read("routes.ts");
+  assert.match(routes, /else where\.source = \{ not: "segment" \}/);
+  assert.match(routes, /deletedAt: null, source: \{ not: "segment" \} \}, orderBy/);
+  const internal = read("internalRoutes.ts");
+  assert.match(internal, /source: \{ not: "segment" \}/);
+});
+
 test("the film pipeline has one implementation, used by both doors", () => {
   const internal = read("internalRoutes.ts");
   assert.match(internal, /assembleFilm\(db, \{[^}]*actorType: "coworker"/s, "the agent assembles through the shared function");

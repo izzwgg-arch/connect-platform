@@ -146,7 +146,7 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     const id = String((req.query as any)?.projectId || "");
     const project = await db.creativeProject.findFirst({
       where: { id, tenantId: who.tenantId, deletedAt: null },
-      include: { documents: true, assets: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, take: 30 }, jobs: { orderBy: { createdAt: "desc" }, take: 10 } },
+      include: { documents: true, assets: { where: { deletedAt: null, source: { not: "segment" } }, orderBy: { createdAt: "desc" }, take: 30 }, jobs: { orderBy: { createdAt: "desc" }, take: 10 } },
     });
     if (!project) return reply.code(404).send({ error: "not_found" });
     return reply.send({
@@ -344,7 +344,9 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     const who = await tenantOf(req, reply);
     if (!who) return;
     const q = (req.query || {}) as any;
-    const where: any = { tenantId: who.tenantId, deletedAt: null };
+    // The Coworker sees the same library the person does — intermediates are
+    // not in it, so the model cannot offer somebody a raw segment as "your video".
+    const where: any = { tenantId: who.tenantId, deletedAt: null, source: { not: "segment" } };
     if (q.kind) where.kind = String(q.kind);
     if (q.projectId) where.projectId = String(q.projectId);
     const rows = await db.creativeAsset.findMany({ where, orderBy: { createdAt: "desc" }, take: Math.min(40, Number(q.limit || 12)) });
