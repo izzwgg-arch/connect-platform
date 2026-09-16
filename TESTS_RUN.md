@@ -29,6 +29,16 @@
 - Shared-worktree portal typecheck is presently blocked by an unrelated concurrent error in `apps/portal/components/deskPhones/DeskPhoneWizard.tsx` (`runId` used before declaration). A clean temporary worktree cannot resolve the local non-checked-in dependency tree, so it is not a substitute for a full typecheck.
 - Not run: production deployment or production browser acceptance. No provider integration, LiveKit/avatar session, customer/PBX/remote-support operation, or new recording/storage path is involved.
 
+## Browser Companion hybrid extension candidate — 2026-09-16
+
+- `node --import tsx --test apps/desktop/src/coworker/browserCompanion.test.ts apps/desktop/src/coworker/playwrightRuntime.test.ts` — **5/5 pass**.
+- `node --import tsx --test apps/desktop/src/coworker/browserCompanion/hybridRuntime.test.ts` — **2/2 pass**.
+- `node --test apps/desktop/scripts/browser-companion/security.test.mjs` — **3/3 pass**.
+- `pnpm --filter @connect/desktop build` — **pass** (schema generation and TypeScript build).
+- Packaged candidate `scratchpad/browser-companion-package-20260916002842347/release3/Connect-Setup-0.1.17-rc.18.exe` — ASAR contents and all seven Loopcom icon frames verified.
+
+Not run / not proven: installer execution, manual unpacked Chrome extension load, bridge pairing, live Coworker/provider flow, restart/stress and production distribution. The supported Windows computer-control service first reset, then exposed no native-app launcher and refused the existing `chrome://extensions` tab before those authorized UI actions could occur.
+
 ## Browser Companion Playwright engine — 2026-09-15
 
 - `pnpm --filter @connect/desktop build` — passed (schema generation and TS 6 build).
@@ -126,3 +136,9 @@ Not run: installed-app live chat/provider acceptance, ordinary-profile Chrome ac
   opened in a real client and **Outlook's Word engine has never rendered the badge**. The honest
   test is the 2026-08-09 one: invite a spare address, then read the last `USER_INVITE` `EmailJob`
   bodies and confirm **both** paths (admin invite AND self-service sign-up) carry the Play URL.
+- **SUBMITTED TO PLAY 2026-09-15** (owner said "go"): `loopcom-play-vc103.aab` uploaded by Izzy by hand (the
+  page-JS upload trick that put vc101/vc102 in is now blocked — see the handoff §7), then driven from the
+  extension: Play parsed **ONE** bundle row `103 (1.0.0)` / API 24+ (no duplicate), release name auto-filled
+  `103 (1.0.0)`, notes set, only the benign no-deobfuscation warning, Save → Submit → confirm. Publishing
+  overview now reads **"Changes in review"**, one row: **Production · 103 (1.0.0) · Start full rollout**.
+  Managed publishing OFF, so approval puts it live by itself. ⏳ Approval and real-tablet install still pending.
