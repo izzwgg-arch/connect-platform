@@ -58,6 +58,26 @@ at a time from their extensions is ordinary business use. What is NOT doable on 
 - **Watch it**: spam-label checks on their DIDs (Free Caller Registry registration helps),
   SDC% of their traffic, any Telnyx complaint notice → kill switch first, investigate after.
 
+## Evidence of human dialing (Izzy's follow-up, same day) — what the system can prove
+Verified in code 2026-09-16:
+- **Web/desktop softphone: YES, press-level evidence.** `CLIENT_TRACE` (`press` in the
+  allowlist `apps/api/src/voice/clientTraceBatch.ts`, stored as `VoiceDiagEvent` rows)
+  records every press with timestamps — a dial is a human tapping digits (digit COUNT,
+  no numbers, by design). Server-stamped identity + session; forged rows dropped.
+- **Mobile: Call Flight Recorder** (`CallFlightSession`, one session per call attempt).
+- **CDRs both sides** (`ConnectCdr`/`CallRecord` + the PBX's own CDRs): timestamps,
+  durations, pacing — one-call-at-a-time human cadence is visible.
+- **No autodialer exists in the product** — in a TCPA fight the question is the
+  equipment's capacity; Connect exposes no bulk/predictive dial capability to a tenant.
+- **Retention: nothing prunes any of these tables today** (grepped: no `deleteMany` on
+  voiceDiagEvent/connectCdr/callRecord in prod code) — but that is an accident, not a
+  policy. TCPA SOL = 4 years; write a retention policy before selling this as evidence.
+- ⛔ **The gaps, stated honestly:** DESK-PHONE calls leave CDRs only, no press trace
+  (a Yealink keypad is invisible to us) — cold callers should work from the
+  softphone/app if evidence matters; CLIENT_TRACE is best-effort telemetry (300-row
+  ring buffer, batches lost if a window dies; old bundles record nothing), it was
+  built for support, not as a compliance audit log. A gap proves nothing either way.
+
 ## Not proven / not built
 ⏳ No cap enforcement, hours enforcement, or per-tenant outbound throttle exists in Connect
 today — those are build items if Izzy signs this customer. No rider template written.
