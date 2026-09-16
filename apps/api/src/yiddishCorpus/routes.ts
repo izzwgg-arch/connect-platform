@@ -36,6 +36,7 @@ import { z } from "zod";
 import {
   YC_API_PREFIX,
   YC_AUDIO_BLOCKED_MESSAGE,
+  YC_AUDIO_STAGES,
   YC_CUSTOMER_WALL_MESSAGE,
   YC_MIN_SAMPLES_FOR_CONCLUSION,
   YC_STAGES,
@@ -458,6 +459,33 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     evidence: z.string().trim().min(1).max(4000).nullish(),
     acknowledgement: z.string().trim().min(1).max(500),
   });
+
+  /**
+   * Put a source's SKIPPED audio work back in the queue.
+   *
+   * WHY THIS HAS TO EXIST: while the gate is shut, every audio stage is
+   * finished as SKIPPED with a reason - deliberately, so the queue screen is
+   * honest instead of silently empty. But SKIPPED is terminal. Without this,
+   * the day the owner records a grant, the thousands of episodes already in
+   * the catalog stay skipped for ever and only NEW items would ever get
+   * audio. "We have permission now" has to mean the backlog moves.
+   *
+   * Requeuing is safe on its own: every job re-checks the gate when it runs
+   * (runDueJobs asks again immediately before an audio stage), so if the
+   * grant is partial or later withdrawn these jobs simply skip again, with
+   * the current reason. This function opens nothing; it only re-asks.
+   */
+  async function requeueSkippedAudio(sourceKey: string): Promise<number> {
+    const out = await safe<any>(
+      db.ycProcessingJob.updateMany({
+        where: { sourceKey, state: "SKIPPED", stage: { in: [...YC_AUDIO_STAGES] } },
+        data: { state: "PENDING", attempts: 0, nextRunAt: new Date(), error: null, leaseUntil: null, leaseOwner: null },
+      }),
+      { count: 0 },
+    );
+    return num(out?.count);
+  }
+
   app.post(`${P}/sources/:key/rights`, async (req: any, reply: any) => {
     const user = await requireOwner(req, reply);
     if (!user) return;
@@ -546,11 +574,20 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
       data: { audioFetchMode: parsed.data.mode, rightsNote: `${source.rightsNote ?? ""}\n[${new Date().toISOString()}] ${decidedBy}: ${parsed.data.acknowledgement}`.trim() },
     });
     await recordYiddishEvent(db, "audio_mode.set", { key: source.key, mode: parsed.data.mode, acknowledgement: parsed.data.acknowledgement, decidedBy });
+    // Opening the gate has to reach the work that was refused while it was
+    // shut, or the existing catalog stays frozen and only new items benefit.
+    const requeued = parsed.data.mode === "OWNER_AUTHORIZED" ? await requeueSkippedAudio(source.key) : 0;
+    if (requeued > 0) await recordYiddishEvent(db, "queue.requeued_audio", { key: source.key, requeued, by: decidedBy });
     const rights = await safe<any[]>(db.ycRightsRecord.findMany({ where: { sourceId: source.id } }), []);
     return reply.send({
       source: await sourceSummary(row),
       badge: badgeForSource(row),
       audioBlockedReason: audioBlockedReason(row, rights),
+      requeuedAudioJobs: requeued,
+      requeueNote:
+        requeued > 0
+          ? `${requeued} audio jobs that were refused while the gate was shut are queued again. Each one re-checks the gate when it runs.`
+          : null,
     });
   });
 
@@ -971,15 +1008,23 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     });
   });
 
-  const retryBody = z.object({ jobId: z.string().trim().max(64).optional(), stage: z.string().trim().max(40).optional() }).refine((v) => v.jobId || v.stage, {
-    message: "Send either a jobId or a stage.",
-  });
+  const retryBody = z
+    .object({
+      jobId: z.string().trim().max(64).optional(),
+      stage: z.string().trim().max(40).optional(),
+      // FAILED is the default because that is the ordinary "try again" case.
+      // SKIPPED is deliberate and separate: a skip was a LAWFUL refusal with a
+      // reason, so re-running it is only sensible once the reason has changed
+      // (a grant recorded, a budget unpaused, a handler that now exists).
+      state: z.enum(["FAILED", "SKIPPED"]).default("FAILED"),
+    })
+    .refine((v) => v.jobId || v.stage, { message: "Send either a jobId or a stage." });
   app.post(`${P}/queue/retry`, async (req: any, reply: any) => {
     const user = await requireOwner(req, reply);
     if (!user) return;
     const parsed = retryBody.safeParse(req.body ?? {});
     if (!parsed.success) return bad(reply, parsed);
-    const where: any = { state: "FAILED" };
+    const where: any = { state: parsed.data.state };
     if (parsed.data.jobId) where.id = parsed.data.jobId;
     if (parsed.data.stage) where.stage = parsed.data.stage;
     const out = await safe<any>(

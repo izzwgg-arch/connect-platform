@@ -17,6 +17,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { registerYiddishCorpusRoutes, YC_REGISTERED_ROUTES, badgeForSource, buildExportPreview, audioBlockedReason } from "./routes";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { YC_API_PREFIX, YC_CUSTOMER_WALL_MESSAGE } from "./contracts";
 
 // ── fakes ───────────────────────────────────────────────────────────────────
@@ -532,4 +534,45 @@ test("the dashboard counts pairs as audio+transcript, and the wall as counted in
   assert.ok(row, "the customer wall must list voicemail");
   assert.equal(row.count, 3510, `the wall showed ${row.count} instead of the counted 3,510`);
   assert.equal(row.hours, 35.8);
+});
+
+// ── opening the gate has to reach the backlog ───────────────────────────────
+//
+// Every audio stage is finished as SKIPPED while the rights gate is shut, so
+// the queue screen stays honest. But SKIPPED is terminal. Without a requeue,
+// the day the owner records a grant the thousands of already-catalogued
+// episodes stay skipped for ever and only NEW items would ever get audio --
+// "we have permission now" would quietly mean "from here on".
+
+test("the audio-mode route is the one place that requeues refused audio work", () => {
+  const src = readFileSync(path.join(__dirname, "routes.ts"), "utf8");
+  const helper = src.indexOf("async function requeueSkippedAudio");
+  assert.ok(helper > 0, "the requeue helper must exist");
+
+  // It only ever moves SKIPPED audio stages back to PENDING.
+  const body = src.slice(helper, src.indexOf("\n  }\n", helper));
+  assert.match(body, /state:\s*"SKIPPED"/, "it must select skipped work");
+  assert.match(body, /stage:\s*\{\s*in:\s*\[\.\.\.YC_AUDIO_STAGES\]/, "and only the audio stages");
+  assert.match(body, /state:\s*"PENDING"/, "putting them back as pending");
+
+  // ⛔ And it must not be able to open the gate itself.
+  assert.doesNotMatch(body, /audioFetchMode/, "the requeue must never set the audio mode");
+  assert.doesNotMatch(body, /ycRightsRecord/, "the requeue must never write a rights record");
+  assert.doesNotMatch(body, /contentAllowed/, "the requeue must never touch the customer wall");
+});
+
+test("requeueing only happens when the mode actually becomes OWNER_AUTHORIZED", () => {
+  const src = readFileSync(path.join(__dirname, "routes.ts"), "utf8");
+  assert.match(
+    src,
+    /parsed\.data\.mode === "OWNER_AUTHORIZED" \? await requeueSkippedAudio\(source\.key\) : 0/,
+    "turning audio OFF must not requeue anything",
+  );
+});
+
+test("queue/retry defaults to FAILED and treats SKIPPED as a separate, deliberate ask", () => {
+  const src = readFileSync(path.join(__dirname, "routes.ts"), "utf8");
+  assert.match(src, /state:\s*z\.enum\(\["FAILED",\s*"SKIPPED"\]\)\.default\("FAILED"\)/);
+  // The handler must honour the field rather than hardcoding FAILED.
+  assert.match(src, /const where: any = \{ state: parsed\.data\.state \}/);
 });
