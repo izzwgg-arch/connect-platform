@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { Card, EmptyState, JobProgress, LoadingCard, Note, PageHead, Pill, errText, fmtDuration } from "../CreativeUi";
@@ -251,12 +252,15 @@ function AudioScreen() {
             </label>
             <label className="cse-fld">
               Voice
-              <select className="cse-input" value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
-                <option value="">Loopcom's usual voice</option>
-                {voices.map((v) => (
-                  <option key={v.voiceId} value={v.voiceId}>{v.name}{v.labels?.accent ? ` · ${v.labels.accent}` : ""}</option>
-                ))}
-              </select>
+              <ConnectSelect
+                ariaLabel="Voice"
+                value={voiceId}
+                onChange={setVoiceId}
+                options={[
+                  { value: "", label: "Loopcom's usual voice" },
+                  ...voices.map((v) => ({ value: v.voiceId, label: `${v.name}${v.labels?.accent ? ` · ${v.labels.accent}` : ""}` })),
+                ]}
+              />
               {!voices.length ? <span className="cse-help">The voice list could not be loaded, so the usual voice will be used.</span> : null}
             </label>
             <div className="cse-row">
@@ -299,9 +303,13 @@ function AudioScreen() {
             </label>
             <label className="cse-fld">
               How long
-              <select className="cse-input" value={musicSeconds} onChange={(e) => setMusicSeconds(Number(e.target.value))}>
-                {[10, 15, 20, 30, 45, 60].map((n) => <option key={n} value={n}>{n} seconds</option>)}
-              </select>
+              <ConnectSelect
+                ariaLabel="How long"
+                value={String(musicSeconds)}
+                onChange={(v) => setMusicSeconds(Number(v))}
+                options={[10, 15, 20, 30, 45, 60].map((n) => ({ value: String(n), label: `${n} seconds` }))}
+                placeholder={`${musicSeconds} seconds`}
+              />
             </label>
             <div className="cse-row">
               <span className="cse-help">Made for this film — nothing to license.</span>

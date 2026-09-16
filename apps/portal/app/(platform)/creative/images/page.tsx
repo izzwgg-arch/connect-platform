@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { AssetThumb, Card, EmptyState, JobProgress, Note, PageHead, Pill, errText, money } from "../CreativeUi";
@@ -202,11 +203,16 @@ export default function CreativeImagesPage() {
               <div className="body">
                 <label className="cse-fld">
                   Quality
-                  <select className="cse-input" value={quality} onChange={(e) => setQuality(e.target.value as any)}>
-                    <option value="low">Quick and cheap</option>
-                    <option value="medium">Better</option>
-                    <option value="high">Best — slowest and dearest</option>
-                  </select>
+                  <ConnectSelect
+                    ariaLabel="Quality"
+                    value={quality}
+                    onChange={(v) => setQuality(v as any)}
+                    options={[
+                      { value: "low", label: "Quick and cheap" },
+                      { value: "medium", label: "Better" },
+                      { value: "high", label: "Best — slowest and dearest" },
+                    ]}
+                  />
                 </label>
                 <span className="cse-help">
                   The studio never asks an engine for another company&apos;s logo or a real named person, whatever is typed here.
