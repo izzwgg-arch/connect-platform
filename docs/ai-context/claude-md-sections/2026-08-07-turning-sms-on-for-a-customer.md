@@ -119,3 +119,5 @@ Changes.
   PBX inbound route on tenant 105 is the one leftover (+$3/mo E911 until
   deleted in the panel). See the port-automation handoff at the top of this
   file and [[voipms-sms-per-did-webhook-is-a-red-herring]].
+
+- **2026-09-16 · WHO IS ACTUALLY SENDING TEXTS (read-only census).** Query = `ConnectChatMessage` direction `OUTBOUND` joined to `ConnectChatThread` type `SMS`, grouped by tenant (DB container `connectcomms-postgres`, user/db `connectcomms`). Sent in the last 30 days: Relax Tires 54, Fixup Group 19, Hanna 16, Trust Bookkeepings 11, Luxure Management 9, B Visible 6, Displaydex 6, Create A Box 2, Gesheft 2 (+ internal Connect Communications 20). Every one = a SINGLE sending user; 0 failures recorded. Last 7 days only: Relax Tires, Fixup, Hanna, B Visible, Create A Box. Quiet 30+ days: Loopcom Demo, inii mini, Landau Home, Ribit Capital. ⛔ Secro (assigned today) has sent nothing yet. ⛔ VoIP.ms has no delivery receipts, so "0 failed" means "nothing refused at send", not "delivered".
