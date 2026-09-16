@@ -377,7 +377,10 @@ export function parseListingHtml(html: string, opts: { category?: string | null 
       canonicalUrl,
       title,
       seriesName,
-      category: opts.category ?? attrs["data-cat-color"] ?? null,
+      // ⛔ NOT data-cat-color. That attribute is a CSS colour ("darkred"), and
+      // using it as a fallback filed all 270 catalogued items under a colour.
+      // The real main category comes from the series catalog; unknown is null.
+      category: opts.category ?? null,
       // The site does not publish a host field. The series name IS the host on
       // personality shows; we do not invent one by splitting the title.
       host: null,
@@ -546,6 +549,8 @@ interface DiscoveryCursor {
   totalPages?: number | null;
   /** Series finished at least once — a later run only checks their page 1. */
   completed?: string[];
+  /** catId -> main category label, from the series catalog. */
+  categories?: Record<string, string>;
   /** Series catalog refreshed at this ISO time. */
   catalogAt?: string | null;
   /** How many consecutive runs found nothing (siteHealth reads this). */
@@ -663,6 +668,11 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
         ...series.filter((s) => !completed.has(s.catId)).map((s) => s.catId),
         ...series.filter((s) => completed.has(s.catId)).map((s) => s.catId),
       ];
+      // Keep the main-category label per series: the listing rows do not carry
+      // it, and it is the only honest source for an item's category.
+      cursor.categories = Object.fromEntries(
+        series.filter((x) => x.mainCategoryLabel).map((x) => [x.catId, x.mainCategoryLabel as string]),
+      );
       cursor.catalogAt = new Date().toISOString();
       await saveCursor(cursor);
     }
@@ -720,7 +730,7 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
       }
       pages += 1;
 
-      const parsedItems = parseListingHtml(html);
+      const parsedItems = parseListingHtml(html, { category: cursor.categories?.[catId] ?? null });
       if (probes.every((x) => x.probeKey !== "listing_item_attributes")) {
         const withMedia = parsedItems.filter((i) => i.mediaUrl).length;
         probes.push({

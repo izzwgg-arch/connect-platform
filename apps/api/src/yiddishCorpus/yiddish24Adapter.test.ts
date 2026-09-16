@@ -469,3 +469,20 @@ test("SOURCE GUARD: the media-host Referer appears in exactly one gated place", 
   // And no constant hoisting it out of the gate.
   assert.equal(/const\s+\w*REFERER\w*\s*=/.test(body), false, "do not hoist the Referer to a constant");
 });
+
+test("an item's category is never a CSS colour", () => {
+  // Real defect: the fallback was attrs["data-cat-color"], so every catalogued
+  // item was filed under "darkred".
+  const html = readFileSync(path.join(__dirname, "fixtures", "yiddish24-listing-cat11.html"), "utf8");
+  const items = parseListingHtml(html);
+  assert.ok(items.length > 0, "fixture should parse items");
+  for (const item of items) {
+    assert.ok(
+      item.category === null || !/^(dark|light)?(red|blue|green|orange|purple|grey|gray|black|white)$/i.test(item.category),
+      `category was a colour: ${item.category}`,
+    );
+  }
+  // and when the caller knows the real one, it is used
+  const withCat = parseListingHtml(html, { category: "Interviews" });
+  assert.equal(withCat[0].category, "Interviews");
+});
