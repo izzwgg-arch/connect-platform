@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-import { brandLogoUrl, welcomeCreatePasswordEmail } from "./userEmailTemplates";
+import { GOOGLE_PLAY_LISTING_URL, brandLogoUrl, welcomeCreatePasswordEmail } from "./userEmailTemplates";
 
 const BASE = {
   userName: "Izzy Weiss",
@@ -12,7 +12,7 @@ const BASE = {
   expiresHours: 48,
 };
 
-function build(extra: Partial<typeof BASE> & { androidApkUrl?: string | null } = {}) {
+function build(extra: Partial<typeof BASE> = {}) {
   return welcomeCreatePasswordEmail({ ...BASE, ...extra } as never);
 }
 
@@ -52,7 +52,7 @@ test("Outlook gets a fixed-width table, since it does not support max-width", ()
 });
 
 test("every gradient sits on a solid bgcolor, so Outlook degrades to flat colour", () => {
-  const { html } = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" });
+  const { html } = build();
   const gradientTags = html.match(/<[^>]*linear-gradient[^>]*>/g) || [];
   assert.ok(gradientTags.length > 0, "expected at least one gradient");
   for (const tag of gradientTags) {
@@ -99,17 +99,19 @@ test("every line of the original copy survives the redesign", () => {
   }
 });
 
-test("the Android block is present when there is an APK, and absent when there is not", () => {
-  const withApk = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" }).html;
-  assert.ok(withApk.includes("Loopcom Mobile (Android)"), "Android heading missing");
-  assert.ok(withApk.includes("Download Loopcom for Android"), "Android button missing");
+test("the Android block is ALWAYS present and carries the Google Play badge", () => {
+  // 2026-09-15: this block used to be conditional on a caller-supplied APK URL,
+  // and a caller passing null is how it vanished from every self-service
+  // sign-up. The Play listing is always live, so there is nothing to gate on.
+  const { html } = build();
+  assert.ok(html.includes("Loopcom Mobile (Android)"), "Android heading missing");
+  assert.ok(html.includes(`href="${GOOGLE_PLAY_LISTING_URL}"`), "badge is not linked to the Play listing");
+  assert.ok(html.includes('alt="Get it on Google Play"'), "badge alt text missing");
+  assert.ok(!html.includes("Download Loopcom for Android"), "the old APK button is still here");
   assert.ok(
-    withApk.includes("Android may ask you to allow installs from this source the first time"),
-    "Android install note missing",
+    !html.includes("Android may ask you to allow installs from this source the first time"),
+    "the sideload warning is wrong next to a Play badge",
   );
-
-  const withoutApk = build({ androidApkUrl: null }).html;
-  assert.ok(!withoutApk.includes("Download Loopcom for Android"));
 });
 
 test("copyright reads Loopcom — lowercase c, matching the iOS app name", () => {
@@ -120,14 +122,14 @@ test("copyright reads Loopcom — lowercase c, matching the iOS app name", () =>
 });
 
 test("the invite email no longer says Connect Communications anywhere", () => {
-  const built = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" });
+  const built = build();
   for (const part of [built.html, built.text, built.subject]) {
     assert.ok(!part.includes("Connect Communications"), "Connect Communications still present");
   }
 });
 
 test("the plain-text part is untouched — text-only clients see exactly what they did before", () => {
-  const { text } = build({ androidApkUrl: "https://app.connectcomunications.com/api/mobile/android/download" });
+  const { text } = build();
   assert.ok(text.startsWith("Welcome to Loopcom"));
   assert.ok(text.includes("Hi Izzy,"));
   assert.ok(text.includes(BASE.setupUrl));
