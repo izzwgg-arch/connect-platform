@@ -57,3 +57,17 @@ pages appear; spending still gates on the action keys.
 the launch); MinIO is still on root credentials; the reject-and-re-render path is proven by test, not yet by
 a real generator producing a real six-fingered hand; and the agent-design-mode screen from the mockup is
 still unbuilt. **104 api tests + 11 portal tests pass.**
+
+✅ **Dropdowns follow the platform rule (2026-09-16, `a3768b14`).** The build shipped five native `<select>`s,
+which broke `apps/portal/lib/nativeSelectSweep.test.ts`: Voice and How long (`/creative/audio`), Quality
+(`/creative/images`), Shape and the per-shot length (`/creative/storyboard`). All five are `ConnectSelect` now
+(rule + conversion contract: `2026-08-23-every-dropdown-platform-wide-is-connectselect-no.md`). Behaviour kept:
+music seconds and shot seconds bridge `String()`/`Number()`; "Loopcom's usual voice" (`""`) is still a real,
+selectable option; a stored value that is not in the list (a shot the Coworker wrote as 7 s, a 3:2 ratio) shows
+itself as the placeholder instead of silently reading as the first option. None of the three pages closes
+anything on a document outside-click, so the portal-to-body trap does not apply. ⛔ A click on a shot-length
+option still bubbles (React portal) to the shot card and selects that shot — the native select did the same.
+**Container-verified:** portal `.build-commit` = `dcef71a9` (another session's merge that CONTAINS `a3768b14` —
+it deployed seconds after mine), 0 restarts; the three shipped page chunks have zero `("select",` and carry
+`ariaLabel` Voice / How long / Quality / Shape / Shot length; `/creative/audio|images|storyboard` 200.
+⏳ **NOT PROVEN:** nobody has opened one of the new dropdowns in a browser.

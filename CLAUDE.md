@@ -422,7 +422,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 - 2026-09-16 · Extension mirror: c892d4b9 verified; licence/silent-downgrade guards; deploy no-op fix; owner SQL grants required → `2026-09-16-relax-tires-two-new-extensions.md`
 
-- 2026-09-16 · CREATIVE STUDIO **LIVE END TO END** (storyboard → cut → export; 12 pages, 16 keys, none in a default bucket — ⛔ grant them as a SET). Proven on prod incl. the Coworker making a whole film itself. ⛔⛔ SIX bugs only RUNNING it found — the quality check was checking NOTHING, and the queue LIED to the customer. ⛔⛔ **ElevenLabs subscription PAYMENT FAILED: every TTS call 401 platform-wide — Izzy must pay it.** ⏳ nobody has clicked the screens; no key granted → `2026-09-16-creative-studio-built.md`
+- 2026-09-16 · CREATIVE STUDIO **LIVE END TO END** (storyboard → cut → export; 12 pages, 16 keys, none in a default bucket — ⛔ grant them as a SET). Proven on prod incl. the Coworker making a whole film itself. ⛔⛔ SIX bugs only RUNNING it found — the quality check was checking NOTHING, and the queue LIED to the customer. ⛔⛔ **ElevenLabs subscription PAYMENT FAILED: every TTS call 401 platform-wide — Izzy must pay it.** Its 5 native selects → ConnectSelect (`a3768b14`, live in portal `dcef71a9`; sweep guard green). ⏳ nobody has clicked the screens; no key granted → `2026-09-16-creative-studio-built.md`
 
 - 2026-09-15 · Coworker workspace deployed; four live-only defects and desktop boundary; real hands task/rc.17 install unproven → `2026-09-15-coworker-workspace-built.md`
 

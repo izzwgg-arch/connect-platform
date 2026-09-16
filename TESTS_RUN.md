@@ -1,5 +1,12 @@
 # Tests run
 
+## Creative Studio native selects → ConnectSelect — 2026-09-16 (night)
+
+- portal `lib/nativeSelectSweep.test.ts` + `lib/dropdownOutsideClose.test.ts` **5/5** (sweep was failing on audio:254/302, images:205, storyboard:251/289 before `a3768b14`).
+- portal `npx tsc --noEmit -p tsconfig.json` **exit 0** (the first run errored only on `LaybelVideoCall.tsx` → `@anam-ai/js-sdk` missing from the worktree's node_modules; `pnpm install --frozen-lockfile --filter ./apps/portal` fixed it, not a code error).
+- DEPLOYED: `deploy-direct.sh portal --commit a3768b14` success; live `.build-commit` = `dcef71a9` (a later session deploy that contains `a3768b14`), 0 restarts; shipped chunks for creative audio/images/storyboard have 0 native `select` and all five ConnectSelect `ariaLabel`s; the three routes 200.
+- NOT proven: a human picking a value in any of the five dropdowns.
+
 ## Texting switcher (VoIP.ms → Telnyx on landing) — 2026-09-16 (night)
 
 - apps/api `src/textingRegistration/switcher.test.ts` **13/13** (new): not-on-Telnyx and port-pending left alone; landed+live → profile set, flipped, History event without a carrier name, registration kicked, engine attach list includes it; chosen profile never overwritten; only VOIPMS rows with a tenant (0 Telnyx reads otherwise); concurrent sweeps flip/record/kick once; draft / no registration; one error isolated; no creds = no reads; guards: VoIP.ms DID sync never writes provider, VoIP.ms poll selects VOIPMS, switcher's only write.
