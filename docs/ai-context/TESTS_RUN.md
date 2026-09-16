@@ -2,6 +2,14 @@
 
 Newest entries first.
 
+## VoIP.ms trunk guardrail — mute the known 877-220-5058 orphan (2026-09-16)
+
+- `apps/api`: `npx tsx --test src/onboarding/voipMsTrunkGuardrail.test.ts` → **15/15 pass** (1 new: fox muted
+  across 3 sweeps with 0 escalations; a second number on the same dead subaccount still alarms; a real
+  customer trunk still alarms under the mute). The existing "invalid_account counts as down" test is unchanged
+  and still passes, because the pure decision mutes nothing unless given the list.
+- Deployed api `737331c3`, container `.build-commit` = `737331c3`, change grep-present, 0 restarts, health 200.
+
 ## Creative Studio — the film pipeline, and six real bugs it found (2026-09-16)
 
 - `apps/api` Creative Studio suite: **104 tests, all pass**

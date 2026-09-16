@@ -174,3 +174,32 @@ level.** The durable stops are Izzy's, and all three are still untaken since
 2026-09-09: **release the number**, **route it**, or **add an ignore list to the
 guardrail** so a known orphan stops filing tickets. Nothing here touched VoIP.ms
 or the PBX.
+
+## 7. ✅ 2026-09-16 — muted at the source, all its tickets stopped
+
+Izzy: *"stop that ticket and stop it from telling me this. I know it already."*
+
+**Code (api `737331c3`, deployed + container-verified).** `IGNORED_TRUNK_ORPHANS: Map<subaccount,
+exact numbers>` = `344022_fox → ["8772205058"]`. `decideTrunkVerdict` takes an optional
+`ignoredOrphans` (default empty, so the pure decision and its existing fox test are unchanged) and drops
+a subaccount from `unregisteredNow` only when its DID set matches exactly. `runVoipmsTrunkSweep` passes
+the constant (overridable via `opts.ignoredOrphans`). Consequences traced: the audit row's
+`unregisteredNow` no longer carries fox, so it is never a "previous" either; offenders/SMS/report derive
+from that list; the de-dupe key is unchanged; the support-loop guardrail stops counting fresh fox
+escalations as unworked because none are filed. New test proves: fox muted across 3 sweeps (0
+escalations); a second number on the same dead subaccount still alarms; a real trunk (inii mini shape)
+still alarms under the mute. 15/15.
+
+**Watcher.** The 9 queued never-run fox tickets + 44B6TB are `stopped_by_owner`, `at:
+2000-01-01` (never counted against the cap). Done by a script that only killed the watcher when
+provably idle and re-checked immediately before the kill; the restarted watcher kept all 10.
+⛔ First version of that script never proceeded: its `*Work LoopCom support ticket*` process search
+matched its OWN PowerShell probe. Filter by `Name -eq 'claude.exe'`.
+
+**Deploy race (the trap).** Two direct api deploys started 25 s apart share `/opt/connectcomms/app`.
+Mine checked out `737331c3`, the other checked out `fb563e27` mid-build; my log still said
+`verify: container commit 737331c3 matches target` / `success`, the container ended on `fb563e27`
+with no fix. Caught only by `/app/.build-commit` + grepping for `IGNORED_TRUNK_ORPHANS`. Redeployed
+after confirming no deploy process was running and that the tip added no other api change.
+
+**Live proof.** See the line appended below by the sweep check (first sweep after the 10:52Z boot).
