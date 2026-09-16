@@ -1,5 +1,25 @@
 # 2026-09-16 · UNIFIED MESSAGING (SMS/MMS/RCS/WhatsApp/Messenger over Telnyx/SignalWire/VoIP.ms) — MOCKUPS ONLY, awaiting Izzy's approval; NOTHING BUILT
 
+## ⛔⛔ REVISION 3 (same day) — SECOND STANDING RULE: NO CARRIER NAMES FOR CUSTOMERS, and THE BUILD IS APPROVED
+Izzy: *"The customer should never see the word Telnyx or wire, signal wire, or
+web.mx [VoIP.ms], nothing."* Then: *"for all the features you just added, I'm
+going to add working toggle permission inside the custom role on everything,
+and I want proof that they're all working: rock solid… stress-tested. Go
+ahead, build the whole thing end-to-end."*
+- ⛔⛔ **No customer surface ever names a carrier** — not in the chat header
+  ("via (845) 555-0164", no provider), not in the meta line (failover says
+  **"sent via backup route"**), not in message info (customer tier shows
+  Route: Primary/Backup; carrier names + provider message ids live ONLY behind
+  a locked "Carrier details — platform staff only" expander), not in
+  notifications, not in system lines (a carrier switch is INVISIBLE in the
+  thread; it's recorded in admin Routing history). The ONLY screens that name
+  Telnyx/SignalWire/VoIP.ms are the platform-staff routing/matrix/migration
+  pages. Mockup v3 (same artifact, Version 3) reflects all of this.
+- ✅ **BUILD APPROVED 2026-09-16** with two more requirements: permission
+  toggles in custom roles for every new page/feature (the FOURTH RULE applies
+  to all of it), and evidence-backed stress-tested proof before anything is
+  called done.
+
 ## ⛔⛔ REVISION 2 (same day) — IZZY'S STANDING DESIGN RULE FOR THIS WHOLE PROJECT
 Izzy, verbatim: *"do not change any of the existing looks. Just add the new
 features and divide it the way the user sees it when they use RSC [RCS] or not.

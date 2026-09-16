@@ -536,7 +536,7 @@ body.hidenew .nu::after{display:none}
       <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
       <span class="cc-avatar large">RA</span>
       <div class="cc-conv-title"><h2>Riverside Auto Body</h2>
-        <p><span class="nu">Rich text (RCS)</span> · <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span> · +18455550198 <span class="nu">· via (845) 555-0164 <span class="pvdot"></span>Telnyx</span></p>
+        <p><span class="nu">Rich text (RCS)</span> · <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared</span> · +18455550198 <span class="nu">· via (845) 555-0164</span></p>
       </div>
       <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
       <button class="cc-call-btn"><svg class="ic"><use href="#i-phone"/></svg> <span>Call</span></button>
@@ -580,7 +580,7 @@ body.hidenew .nu::after{display:none}
   </div></div>
   <div style="flex:1;min-width:300px;max-width:420px">
     <div class="modal"><div class="mh">What changed on this screen — and only this</div><div class="mb small">
-      <div class="kv"><span class="k">Header p line</span><span class="v">gains “Rich text (RCS)” + “via number · provider”</span></div>
+      <div class="kv"><span class="k">Header p line</span><span class="v">gains “Rich text (RCS)” + “via (845) 555-0164” — never a carrier name</span></div>
       <div class="kv"><span class="k">Rich card</span><span class="v">renders INSIDE the normal bubble, like an attachment</span></div>
       <div class="kv"><span class="k">Meta line</span><span class="v">gains “read” + double-check (same 11px row)</span></div>
       <div class="kv"><span class="k">Typing dots</span><span class="v">a bubble-shaped indicator, theirs side</span></div>
@@ -606,7 +606,7 @@ body.hidenew .nu::after{display:none}
       <div class="cc-conv-head">
         <button class="cc-icon-btn"><svg class="ic"><use href="#i-x"/></svg></button>
         <span class="cc-avatar large t3">MG</span>
-        <div class="cc-conv-title"><h2>Malky Gross</h2><p><span class="nu">WhatsApp</span> · +13475550177 <span class="nu">· via Loopcom Business <span class="pvdot"></span>Telnyx</span></p></div>
+        <div class="cc-conv-title"><h2>Malky Gross</h2><p><span class="nu">WhatsApp</span> · +13475550177 <span class="nu">· via Loopcom Business</span></p></div>
         <button class="cc-icon-btn"><svg class="ic"><use href="#i-refresh"/></svg></button>
       </div>
       <div class="cc-message-list">
@@ -754,12 +754,12 @@ body.hidenew .nu::after{display:none}
         <div class="cc-conv-title"><h2>Riverside Auto Body</h2><p>All messages with this contact — one thread, every channel</p></div>
       </div>
       <div class="cc-message-list">
-        <div class="cc-migline">May – Aug · SMS on (845) 555-0110 · VoIP.ms</div>
+        <div class="cc-migline">May – Aug · SMS on (845) 555-0110</div>
         <div class="cc-msg-row mine"><div class="cc-msg-wrap">
           <div class="cc-bubble mine"><div class="cc-msg-body">Your car is ready for pickup 🚗</div></div>
           <div class="cc-msg-meta mine"><span>Aug 12</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg></div>
         </div></div>
-        <div class="cc-migline nu"><svg class="ic" style="width:11px;height:11px;color:var(--success)"><use href="#i-swap"/></svg> Number moved to <b>Telnyx</b> · Sep 20 — same conversation, history preserved</div>
+        <div class="cc-migline nu" style="border-style:dashed;font-style:italic;color:var(--warning)">← the carrier switch happened right here, Sep 20 — the customer sees NOTHING; it's recorded only in admin “Routing history”</div>
         <div class="cc-migline nu">Rich text (RCS) available — device supports it</div>
         <div class="cc-msg-row theirs"><div class="cc-msg-wrap">
           <div class="cc-bubble theirs"><div class="cc-msg-body">Hi — do you have any openings this week?</div></div>
@@ -772,13 +772,13 @@ body.hidenew .nu::after{display:none}
       </div>
     </div></div>
   </div>
-  <p class="why"><b>Why:</b> new channels appear as new chip colors in the exact slot the green SMS chip occupies today — the row layout doesn't move. The filter chips row is the one added element in the list pane. On the right, the migration promise is visible: a VoIP.ms→Telnyx move and an SMS→RCS upgrade are quiet centered lines in the SAME thread — no duplicate conversation, no broken history.</p>
+  <p class="why"><b>Why:</b> new channels appear as new chip colors in the exact slot the green SMS chip occupies today — the row layout doesn't move. The filter chips row is the one added element in the list pane. On the right, the migration promise: a carrier move and an SMS→RCS upgrade happen inside the SAME thread — no duplicate conversation, no broken history — and the carrier switch itself is completely invisible to the customer (the dashed line is mockup annotation, not UI; the record lives in admin Routing history).</p>
 </div>
 
 <!-- =============================== STATES =============================== -->
 <div class="sect" id="states">
   <h2>5 · Honest delivery states, fallback and failure — all in today's meta line</h2>
-  <p class="sub">The meta line already says <span class="mono">time · sent ✓</span>. New states are more words in that same 11px row: never a redesigned bubble, never a faked tick. VoIP.ms numbers cap at “sent” because VoIP.ms sends no delivery receipts; Telnyx/SignalWire earn “delivered”; RCS/WhatsApp/Messenger earn “read”.</p>
+  <p class="sub">The meta line already says <span class="mono">time · sent ✓</span>. New states are more words in that same 11px row: never a redesigned bubble, never a faked tick. Numbers whose carrier sends no delivery receipts (VoIP.ms today) cap at “sent”; carriers with receipts earn “delivered”; RCS/WhatsApp/Messenger earn “read”. <b>⛔ Carrier names NEVER appear in the customer UI</b> — the customer-facing word for failover is “backup route”; the real carrier shows only on platform-staff screens.</p>
 </div>
 
 <div class="screen">
@@ -789,11 +789,11 @@ body.hidenew .nu::after{display:none}
       <div class="cc-msg-meta mine"><span>4:02 PM</span><span class="nu">sending…</span></div>
     </div></div>
     <div class="cc-msg-row mine"><div class="cc-msg-wrap">
-      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a VoIP.ms number — receipts don't exist there</div></div>
+      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a number whose carrier has no receipts</div></div>
       <div class="cc-msg-meta mine"><span>4:03 PM</span><span>sent</span><svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg><span class="nu muted">· delivery receipts not supported on this number</span></div>
     </div></div>
     <div class="cc-msg-row mine"><div class="cc-msg-wrap">
-      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a Telnyx number — real delivery receipt</div></div>
+      <div class="cc-bubble mine"><div class="cc-msg-body">Sent on a number with real delivery receipts</div></div>
       <div class="cc-msg-meta mine"><span>4:05 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span></div>
     </div></div>
     <div class="cc-msg-row mine"><div class="cc-msg-wrap">
@@ -802,7 +802,7 @@ body.hidenew .nu::after{display:none}
     </div></div>
     <div class="cc-msg-row mine"><div class="cc-msg-wrap">
       <div class="cc-bubble mine"><div class="cc-msg-body">Reminder: your pickup window is 4–5 PM today</div></div>
-      <div class="cc-msg-meta mine"><span>4:18 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span><span class="mfall nu"><svg class="ic" style="width:11px;height:11px"><use href="#i-swap"/></svg> via SignalWire (fallback)</span></div>
+      <div class="cc-msg-meta mine"><span>4:18 PM</span><span class="nu">delivered</span><span class="mticks nu"><svg class="ic"><use href="#i-dcheck"/></svg></span><span class="mfall nu"><svg class="ic" style="width:11px;height:11px"><use href="#i-swap"/></svg> sent via backup route</span></div>
     </div></div>
     <div class="cc-msg-row mine"><div class="cc-msg-wrap">
       <div class="cc-bubble mine"><div class="cc-msg-body">Your car is ready for pickup 🚗</div></div>
@@ -840,20 +840,20 @@ body.hidenew .nu::after{display:none}
         <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px;font-size:12px">Rich card: Bumper repaint special</div>
         <div class="tl">
           <div class="step done"><div class="t">Queued</div><div class="d">2:33:02 PM · accepted by Loopcom</div></div>
-          <div class="step done"><div class="t">Sending</div><div class="d">2:33:02 PM · router chose <b>Telnyx</b> (primary for this number)</div></div>
-          <div class="step done"><div class="t">Provider accepted</div><div class="d">2:33:03 PM · id <span class="mono">telnyx:40318a…f2</span></div></div>
+          <div class="step done"><div class="t">Sending</div><div class="d">2:33:02 PM · primary route</div></div>
+          <div class="step done"><div class="t">Accepted by the network</div><div class="d">2:33:03 PM</div></div>
           <div class="step done"><div class="t">Sent as RCS rich card</div><div class="d">2:33:03 PM</div></div>
           <div class="step done"><div class="t">Delivered</div><div class="d">2:33:05 PM · handset confirmed</div></div>
           <div class="step done"><div class="t">Read</div><div class="d">2:35:11 PM</div></div>
         </div>
         <div class="railcard">
           <div class="kv"><span class="k">Channel</span><span class="v"><span class="cc-channel cc-channel-rcs">RCS</span></span></div>
-          <div class="kv"><span class="k">Provider</span><span class="v">Telnyx (primary)</span></div>
+          <div class="kv"><span class="k">Route</span><span class="v">Primary</span></div>
           <div class="kv"><span class="k">From → To</span><span class="v mono">…550164 → …550198</span></div>
           <div class="kv"><span class="k">Attempts</span><span class="v">1</span></div>
-          <div class="kv"><span class="k">Fallback</span><span class="v">not needed</span></div>
+          <div class="kv"><span class="k">Backup route</span><span class="v">not needed</span></div>
         </div>
-        <div class="cs" style="margin-top:10px"><span class="mono tiny">Provider metadata (debug)</span><span class="muted">▸</span></div>
+        <div class="cs" style="margin-top:10px"><span class="mono tiny">🔒 Carrier details — platform staff only</span><span class="muted">▸</span></div>
       </div>
     </div></div>
     <div class="cc-info-panel"><div>
@@ -861,17 +861,18 @@ body.hidenew .nu::after{display:none}
       <div class="cc-info-body">
         <div class="cc-bubble mine" style="display:inline-block;margin-bottom:12px;font-size:12px">Reminder: your pickup window is 4–5 PM</div>
         <div class="tl">
-          <div class="step done"><div class="t">Queued → Sending</div><div class="d">4:18:02 PM · router chose <b>Telnyx</b></div></div>
-          <div class="step bad"><div class="t">Telnyx unreachable</div><div class="d">4:18:04 PM · timeout after 2 attempts</div></div>
-          <div class="step done"><div class="t">Fallback → SignalWire</div><div class="d">4:18:05 PM · same number · <b>one</b> delivery, never both</div></div>
-          <div class="step done"><div class="t">Provider accepted</div><div class="d">4:18:05 PM · id <span class="mono">signalwire:SMa9…44</span></div></div>
+          <div class="step done"><div class="t">Queued → Sending</div><div class="d">4:18:02 PM · primary route</div></div>
+          <div class="step bad"><div class="t">Primary route unreachable</div><div class="d">4:18:04 PM · timeout after 2 attempts</div></div>
+          <div class="step done"><div class="t">Switched to backup route</div><div class="d">4:18:05 PM · same number · <b>one</b> delivery, never both</div></div>
+          <div class="step done"><div class="t">Accepted by the network</div><div class="d">4:18:05 PM</div></div>
           <div class="step done"><div class="t">Delivered</div><div class="d">4:18:09 PM</div></div>
         </div>
-        <div class="banner warn" style="margin-top:12px"><svg class="ic"><use href="#i-swap"/></svg><span class="small"><b>“via SignalWire (fallback)”</b> is what the bubble's meta line shows. The customer got exactly one message.</span></div>
+        <div class="cs" style="margin-top:10px"><span class="mono tiny">🔒 Carrier details — platform staff only</span><span class="muted">▸</span></div>
+        <div class="banner warn" style="margin-top:12px"><svg class="ic"><use href="#i-swap"/></svg><span class="small"><b>“sent via backup route”</b> is what the bubble's meta line shows — never a carrier name. The customer got exactly one message.</span></div>
       </div>
     </div></div>
   </div>
-  <p class="why"><b>Why:</b> the menu is your existing context menu (quick reactions row, Reply, Edit, Delete) plus one row. The drawer is the observability requirement made visible: every step is a normalized provider event with its timestamp and raw provider id, the debug expander holds untouched provider metadata, and the fallback timeline proves the no-duplicate invariant on screen.</p>
+  <p class="why"><b>Why:</b> the menu is your existing context menu (quick reactions row, Reply, Edit, Delete) plus one row. The drawer is the observability requirement made visible — but split in two tiers: the customer sees routes (“primary” / “backup”) and honest timestamps; carrier names and raw provider message ids exist ONLY behind the locked platform-staff expander, which regular users never see. The fallback timeline still proves the no-duplicate invariant on screen.</p>
 </div>
 
 <!-- =============================== BUILDERS =============================== -->
@@ -956,14 +957,14 @@ body.hidenew .nu::after{display:none}
 <!-- =============================== ADMIN =============================== -->
 <div class="sect" id="admin">
   <h2>8 · Admin — routing, capability matrix, migration (new pages)</h2>
-  <p class="sub">Provider choice is configuration: global default → tenant → number → channel, with a fallback per channel. Moving a number between providers is one screen, keeps every conversation, and has a rollback button.</p>
+  <p class="sub">Provider choice is configuration: global default → tenant → number → channel, with a fallback per channel. Moving a number between providers is one screen, keeps every conversation, and has a rollback button. <b>⛔ These screens are PLATFORM STAFF ONLY — they are the only place in the product where carrier names (Telnyx / SignalWire / VoIP.ms) ever appear.</b></p>
 </div>
 
 <div class="screen">
   <h3><span class="no">W12</span> Per-number routing card &nbsp;·&nbsp; resolution order &nbsp;·&nbsp; provider health</h3>
   <div class="cols2">
     <div class="routecard">
-      <div class="rh"><b>(845) 555-0164</b> <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared inbox</span><span style="flex:1"></span><span class="tiny muted"><span class="hdot up"></span> all providers healthy</span></div>
+      <div class="rh"><b>(845) 555-0164</b> <span class="cc-sms-inbox-badge cc-sms-inbox-shared">Shared inbox</span><span class="cc-sms-inbox-badge cc-sms-inbox-personal">🔒 Platform staff only</span><span style="flex:1"></span><span class="tiny muted"><span class="hdot up"></span> all providers healthy</span></div>
       <div class="rb">
         <div class="rrow"><span class="l"><svg class="ic"><use href="#i-phone"/></svg> Voice</span><div class="cs">Telnyx <span class="muted">▾</span></div><span></span></div>
         <div class="rrow"><span class="l"><span class="cc-channel cc-channel-sms">SMS</span></span><div class="cs">Telnyx <span class="muted">▾</span></div><span class="tiny muted">fallback: SignalWire</span></div>
@@ -1003,7 +1004,7 @@ body.hidenew .nu::after{display:none}
   <h3><span class="no">W13</span> Move a number between providers — keep everything &nbsp;·&nbsp; capability matrix</h3>
   <div class="cols2">
     <div class="modal">
-      <div class="mh"><svg class="ic"><use href="#i-swap"/></svg> Move (845) 555-0110 · VoIP.ms → Telnyx</div>
+      <div class="mh"><svg class="ic"><use href="#i-swap"/></svg> Move (845) 555-0110 · VoIP.ms → Telnyx <span class="cc-sms-inbox-badge cc-sms-inbox-personal">🔒 Platform staff only</span></div>
       <div class="mb">
         <div class="tl">
           <div class="step done"><div class="t">Number available on Telnyx</div><div class="d">verified on the account ✓</div></div>
@@ -1138,7 +1139,7 @@ body.hidenew .nu::after{display:none}
         <div class="cc-msg-row theirs" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:86%"><div class="cc-bubble theirs" style="font-size:12px">Is my order ready?</div><div class="cc-msg-meta"><span>4:02 PM</span></div></div></div>
         <div class="cc-msg-row mine" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:90%">
           <div class="cc-bubble mine" style="font-size:12px">Reminder: your pickup window is 4–5 PM today</div>
-          <div class="cc-msg-meta mine"><span>4:18</span><span class="mfall nu" style="font-size:9.5px"><svg class="ic" style="width:10px;height:10px"><use href="#i-swap"/></svg> via SignalWire (fallback)</span></div>
+          <div class="cc-msg-meta mine"><span>4:18</span><span class="mfall nu" style="font-size:9.5px"><svg class="ic" style="width:10px;height:10px"><use href="#i-swap"/></svg> sent via backup route</span></div>
         </div></div>
         <div class="cc-msg-row mine" style="margin-bottom:10px"><div class="cc-msg-wrap" style="max-width:90%">
           <div class="cc-bubble mine" style="opacity:.8;font-size:12px">And here's the receipt</div>
@@ -1164,7 +1165,7 @@ body.hidenew .nu::after{display:none}
     <div class="ph-holder" style="max-width:330px">
       <div class="modal"><div class="mh small">Mobile ground rules</div><div class="mb small muted">
         · The existing ChatTab keeps its layout, bubbles, reactions, voice notes, emoji picker — the additions mirror web exactly (chips, meta words, sheet rows, suggestion chips)<br><br>
-        · Notifications name the <b>channel</b>, never the provider — customers don't care it went via SignalWire<br><br>
+        · ⛔ No customer surface EVER names a carrier — not Telnyx, not SignalWire, not VoIP.ms. Notifications name the <b>channel</b>; failover says “backup route”; carrier detail is platform-staff only<br><br>
         · Notification inline-reply posts through the same send API as the composer — every rule applies<br><br>
         · Offline: composed messages queue and show “waiting for network” in the meta line; send on reconnect; never lost, never duplicated<br><br>
         · Calling, CallKit, VoIP push, the other six tabs: not touched by this project
