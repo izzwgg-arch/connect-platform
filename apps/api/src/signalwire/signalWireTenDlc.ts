@@ -441,7 +441,14 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
         await db.tenant.update({ where: { id: fin.tenantId }, data: { dailySmsCap: cap } }).catch(() => {});
       }
       await logSubmissionEvent(db, fin.submissionId, `Texting is ON — registration approved (up to ${cap} messages/day for this class).`);
-      await queueActivationEmail(db, fin).catch(() => {});
+      // ⛔ Never a silent catch here: this is the ONLY place the customer is
+      // told texting is on, and a swallowed insert failure hid a Prisma
+      // rejection (status "PENDING", tenantId null) for the life of the chain.
+      await queueActivationEmail(db, fin).catch((e: any) => {
+        console.warn(
+          `[tendlc] SMS_REGISTRATION_ACTIVE_EMAIL_QUEUE_FAILED registration=${fin.id} tenant=${fin.tenantId ?? "none"}: ${String(e?.message || e).slice(0, 300)}`,
+        );
+      });
     }
   } catch (e: any) {
     // A transient registry failure must never kill the row — record and let
@@ -474,17 +481,36 @@ async function queueActivationEmail(db: any, reg: any): Promise<void> {
     footerNote: "Sent by Loopcom.",
     includeSupportBlock: false,
   });
-  await db.emailJob.create({
-    data: {
-      type: SMS_REGISTRATION_ACTIVE_EMAIL_TYPE,
-      toEmail: to,
-      subject: "Texting is on for your business number",
-      htmlBody: html,
-      textBody: `Carriers approved the texting registration for ${String(reg.legalName || "your business")} — business texting on your Loopcom number is on.`,
-      tenantId: reg.tenantId || null,
-      status: "PENDING",
-    },
-  });
+  const data = buildActivationEmailJobData(reg, to, html);
+  if (!data) {
+    console.warn(`[tendlc] SMS_REGISTRATION_ACTIVE_EMAIL_SKIPPED_NO_TENANT registration=${reg.id} submission=${reg.submissionId}`);
+    return;
+  }
+  await db.emailJob.create({ data });
+}
+
+/**
+ * The EmailJob create payload for the "texting is on" email, or null when the
+ * registration has no tenant. ⛔ `EmailJob.tenantId` is REQUIRED and `status`
+ * is the EmailJobStatus enum (QUEUED|RUNNING|SENT|FAILED|SKIPPED) — omit it so
+ * it defaults to QUEUED. Both were wrong until 2026-09-16 ("PENDING", null) and
+ * the insert failure was swallowed, so the email could never queue.
+ */
+export function buildActivationEmailJobData(
+  reg: { tenantId?: string | null; legalName?: string | null },
+  toEmail: string,
+  htmlBody: string,
+): { tenantId: string; type: string; toEmail: string; subject: string; htmlBody: string; textBody: string } | null {
+  const tenantId = String(reg.tenantId || "").trim();
+  if (!tenantId) return null;
+  return {
+    tenantId,
+    type: SMS_REGISTRATION_ACTIVE_EMAIL_TYPE,
+    toEmail,
+    subject: "Texting is on for your business number",
+    htmlBody,
+    textBody: `Carriers approved the texting registration for ${String(reg.legalName || "your business")} — business texting on your Loopcom number is on.`,
+  };
 }
 
 // ── The sweep ──────────────────────────────────────────────────────────────
