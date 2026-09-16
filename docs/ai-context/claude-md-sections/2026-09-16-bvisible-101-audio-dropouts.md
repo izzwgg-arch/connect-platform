@@ -143,3 +143,15 @@ proves nothing ([[quiet-log-is-not-a-fixed-bug]] shape). ⛔ A wired computer's 
 gateway ping does NOT clear the Wi-Fi — it only isolates the router/uplink half; the
 phones' own radio stats are unmeasurable from a PC. ⏳ AWAITING the report; interpret it
 against the split-test key above and the server-side baseline in rounds 1–4.
+
+## Round 6 — ⛔ "run diagnostics through our Windows app on their network" is NOT possible: B Visible has never run the Windows app
+
+Checked, not assumed: `VoiceClientSession` for the tenant holds ONLY platform WEB (46)
+and IOS (66) rows — zero WINDOWS, ever. `RemoteDesktopMachine` = 0, `RemoteSupportSession`
+= 0 for the tenant. Ext 101's user `sales@bvisible.us` DID log in 2026-09-16 15:44 UTC
+(11:44 ET, ~40 min after the bad call) but via the WEB portal; his web voice client sat
+IDLE/unregistered. ⛔ Even with the app installed, remote support is consent-gated and
+OFF by default (by design) — no silent diagnostics exist. Paths forward: (a) the round-5
+prompt to the CUSTOMER'S own office agent, (b) install the Loopcom Windows app on one
+office PC + sign 101 in — fallback softphone (T9_101_1 finally registers, log noise
+stops) plus a consent-based diagnostic foothold for next time.
