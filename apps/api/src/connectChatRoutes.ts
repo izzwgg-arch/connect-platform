@@ -12,6 +12,7 @@ import { db, claimNotification } from "@connect/db";
 import { Prisma } from "@prisma/client";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { hasEffectivePortalPermission } from "./platformRolePermissions";
+import { sanitizeCustomerDeliveryError } from "./sms/customerDeliveryCopy";
 import {
   buildVoipMsSmsWebhookCallbackUrl,
   canonicalSmsPhone,
@@ -1464,7 +1465,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         editedAt: m.editedAt?.toISOString() || null,
         deletedForEveryoneAt: m.deletedForEveryoneAt?.toISOString() || null,
         deliveryStatus: m.deliveryStatus,
-        deliveryError: m.deliveryError,
+        // ⛔ The raw error is CARRIER-FACING text ("Telnyx refused…",
+        // "SIGNALWIRE_21610") and carrier names never reach customers
+        // (Izzy, 2026-09-16). Platform staff keep the raw string for triage;
+        // everyone else gets a fixed customer-safe phrase.
+        deliveryError: isSuper(user) ? m.deliveryError : sanitizeCustomerDeliveryError(m.deliveryError),
+        // The customer-facing fact is the BOOLEAN — the meta line renders
+        // "sent via backup route". The carrier behind it stays server-side.
+        sentViaBackupRoute: Boolean((meta as any)?.sentViaBackupRoute),
         reactions: m.reactions,
         mmsUrls,
         location: meta.location || null,

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, MoreHorizontal, Pencil, Reply, Smile, Trash2 } from "lucide-react";
+import { Check, CheckCheck, MoreHorizontal, Pencil, Reply, Smile, Trash2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { dropVoiceTransportDuplicates, messageBubbleClass, messageRowClass, splitMessageBody } from "./chatPresentation";
@@ -185,6 +185,12 @@ export const MessageBubble = memo(function MessageBubble({
           {message.editedAt ? <span>edited</span> : null}
           {message.deliveryStatus ? <span>{message.deliveryStatus}</span> : null}
           {message.mine && message.deliveryStatus === "sent" ? <Check size={12} /> : null}
+          {/* Honest states (unified messaging): "delivered" is only ever set
+              from a real carrier receipt, and earns the double check. */}
+          {message.mine && message.deliveryStatus === "delivered" ? <CheckCheck size={12} /> : null}
+          {message.sentViaBackupRoute ? (
+            <span style={{ color: "var(--warning)", fontWeight: 700 }}>sent via backup route</span>
+          ) : null}
           {message.deliveryError ? <span className="cc-error">{message.deliveryError}</span> : null}
         </div>
 
