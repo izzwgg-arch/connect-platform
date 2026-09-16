@@ -2059,3 +2059,12 @@ production, because the mirror's grants are still not installed.
   2026-08-12 source). Not ours; the server builds fresh.
 - The stage-coverage guard's "fails before the fix" proof is production itself:
   `no handler for stage "observe"` × 214 rows in `YcProcessingJob`.
+
+## 2026-09-16 (later) — Yiddish engine: quiet re-checks must not pause the crawl
+
+- `src/yiddishCorpus/*.test.ts`: **161 / 161 pass** (+4: quiet re-check never
+  pauses; a run recognising nothing still pauses — the original two-empty-runs
+  test is unchanged and passes; caught-up catalog waits the hourly window; a
+  walk in progress keeps the fast clock). tsc: 0 yiddishCorpus errors.
+- Production proof: api `fb563e27` container-verified; 11:03 re-check probe OK
+  "581 known episode(s) re-read correctly", budget unpaused, 0 broken probes.
