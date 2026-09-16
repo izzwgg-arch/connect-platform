@@ -17,10 +17,10 @@
   box-sizing: border-box;
 }
 
-/* ConnectSelect sets its width INLINE (160px), so filling the column needs
-   !important — otherwise State runs into the ZIP box. */
+/* ConnectSelect's own .cs-wrap rule sets min-width:160px, wider than a half
+   column — both width AND min-width need !important or State runs into ZIP. */
 .tr-field .cs-wrap,
-.tr-field .cs-trigger { width: 100% !important; min-width: 0; box-sizing: border-box; }
+.tr-field .cs-trigger { width: 100% !important; min-width: 0 !important; box-sizing: border-box; }
 .tr-field .cs-trigger { min-height: 40px; }
 
 .tr-card {
