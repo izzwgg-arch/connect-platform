@@ -113,6 +113,39 @@ export function brandLogoUrl(): string {
 }
 
 /**
+ * The Google Play listing the invite email's badge links to.
+ *
+ * ⛔ Resolved HERE, at CALL time, for the same reason `brandLogoUrl()` is — TWO
+ * paths queue this email and a value the CALLER supplies is exactly how the
+ * Android link went missing from every self-service sign-up once already.
+ *
+ * `ANDROID_PLAY_STORE_URL` exists as a swing lever for the day the listing has
+ * to point somewhere else (a pulled build, a relisted package). Unset — which is
+ * the normal state — it is the live listing and nothing needs configuring.
+ */
+export const GOOGLE_PLAY_LISTING_URL =
+  "https://play.google.com/store/apps/details?id=com.connectcommunications.mobile";
+
+export function googlePlayListingUrl(): string {
+  const override = String(process.env.ANDROID_PLAY_STORE_URL || "").trim();
+  return override.length > 0 ? override : GOOGLE_PLAY_LISTING_URL;
+}
+
+/**
+ * Absolute URL of Google's official "Get it on Google Play" badge.
+ *
+ * ⛔ Served by US, from the portal's public dir, because a mail client cannot
+ * read a relative path or a `data:` URI and Google's own CDN is not a
+ * supportable hotlink target. The file is
+ * `apps/portal/public/brand/google-play/get-it-on-google-play.png` — Google's
+ * unmodified 646×250 asset, whose transparent margin IS the clear space their
+ * brand guidelines require. ⛔ Never crop, recolour or redraw it.
+ */
+export function googlePlayBadgeUrl(): string {
+  return `${canonicalPortalOrigin()}/brand/google-play/get-it-on-google-play.png`;
+}
+
+/**
  * Light-only email shell in the LoopCom theme.
  *
  * Built to render on phones, desktop webmail AND Outlook's Word engine, which
@@ -157,12 +190,25 @@ function lcCtaButton(label: string, url: string): string {
 </table>`;
 }
 
-/** Outlined secondary CTA (the Android download). */
-function lcSecondaryButton(label: string, url: string): string {
-  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" class="lc-btn" style="margin:14px 0 4px;">
+/**
+ * Google's official "Get it on Google Play" badge, as a linked image.
+ *
+ * ⛔ `width`/`height` are ATTRIBUTES as well as CSS — Outlook's Word engine
+ * ignores the style and would otherwise draw the image at its natural 646px,
+ * blowing the 600px card apart. 180×70 keeps the asset's 646:250 ratio exactly.
+ * ⛔ `line-height:0;font-size:0` on the cell kills the phantom descender gap
+ * Outlook and Gmail add under an image in a table cell.
+ * ⛔ The alt text is the image-blocked fallback and stays inside the link, so a
+ * reader whose client hides images still has something that says where it goes
+ * and is still clickable.
+ */
+function lcPlayStoreBadge(url: string, badgeSrc: string): string {
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:14px 0 4px;">
   <tr>
-    <td align="center" bgcolor="#ffffff" style="border:1.5px solid #22a8ff;border-radius:10px;background:#ffffff;">
-      <a href="${esc(url)}" target="_blank" style="display:inline-block;color:#0b6fc4;text-decoration:none;font-weight:700;font-size:14px;padding:13px 26px;border-radius:10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:.01em;">${esc(label)}</a>
+    <td align="left" style="line-height:0;font-size:0;">
+      <a href="${esc(url)}" target="_blank" style="text-decoration:none;">
+        <img src="${esc(badgeSrc)}" alt="Get it on Google Play" width="180" height="70" style="display:block;border:0;outline:none;text-decoration:none;width:180px;height:70px;">
+      </a>
     </td>
   </tr>
 </table>`;
@@ -245,24 +291,25 @@ export function welcomeCreatePasswordEmail(input: {
   extensionNumber?: string | null;
   setupUrl: string;
   expiresHours: number;
-  androidApkUrl?: string | null;
 }): { subject: string; html: string; text: string } {
   const firstName = (input.userFirstName || input.userName.split(" ")[0] || "there").trim();
   const badges: Array<{ label: string; value: string }> = [{ label: "Organization", value: input.tenantName }];
   if (input.extensionNumber) badges.push({ label: "Extension", value: input.extensionNumber });
 
-  const androidSection = input.androidApkUrl
-    ? `
+  // ⛔ ALWAYS rendered, and both URLs are resolved here rather than passed in.
+  // The block used to be conditional on an `androidApkUrl` the CALLER supplied,
+  // and one caller supplying null is precisely how it vanished from every
+  // self-service sign-up. The Play listing is always live, so there is nothing
+  // left to be conditional about.
+  const playUrl = googlePlayListingUrl();
+  const androidSection = `
 ${divider()}
 
 <p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1e293b;">Loopcom Mobile (Android)</p>
-<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Loopcom app to receive calls, voicemail, and mobile features. Use the button below — it opens our secure download page with the latest APK.</p>
+<p style="margin:0 0 4px;color:#64748b;font-size:14px;">After you create your password, install the Loopcom app to receive calls, voicemail, and mobile features. Get it free from Google Play.</p>
 
-${lcSecondaryButton("Download Loopcom for Android", input.androidApkUrl)}
-
-<p style="margin:8px 0 0;font-size:12px;color:#94a3b8;">Android may ask you to allow installs from this source the first time.</p>
-`
-    : "";
+${lcPlayStoreBadge(playUrl, googlePlayBadgeUrl())}
+`;
 
   const body = `
 <p style="margin:0 0 18px;font-size:17px;font-weight:600;color:#1e293b;">Hi ${esc(firstName)},</p>
@@ -293,15 +340,10 @@ ${divider()}
     ``,
     `This one-time link expires in ${input.expiresHours} hours.`,
     ``,
-    ...(input.androidApkUrl
-      ? [
-          `Loopcom Mobile (Android):`,
-          `After creating your password, install the app from:`,
-          input.androidApkUrl,
-          `(Opens the Loopcom download page with the latest APK. Android may ask you to allow installs from this source the first time.)`,
-          ``,
-        ]
-      : []),
+    `Loopcom Mobile (Android):`,
+    `After creating your password, install the Loopcom app from Google Play:`,
+    playUrl,
+    ``,
     `If you were not expecting this invite, you can safely ignore this email.`,
   ].join("\n");
 

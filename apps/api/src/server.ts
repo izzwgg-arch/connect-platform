@@ -56,7 +56,6 @@ import {
   androidApkDownloadPageUrl,
   apkDownloadDir,
   apkPublicBaseUrl,
-  getAndroidApkUrlForInviteEmail,
 } from "./androidApkInviteUrl";
 import { installApiRequestProfiler } from "./apiRequestProfiler";
 import { HostMetricsCollector } from "./ops/hostMetrics";
@@ -2736,8 +2735,10 @@ async function createUserPasswordToken(params: {
 }
 
 async function queueUserWelcomeEmail(input: { user: any; tenantName: string; extensionNumber?: string | null; token: string }) {
-  // Android block uses getAndroidApkUrlForInviteEmail() (defined with APK routes).
-  const androidApkUrl = await getAndroidApkUrlForInviteEmail();
+  // ⛔ The Android block takes NO input from here any more. Its Play listing and
+  // badge image are resolved inside the template (googlePlayListingUrl() /
+  // googlePlayBadgeUrl()), so this path and the sign-up path cannot diverge —
+  // one of them passing null is how the link vanished from every sign-up before.
   // PBX name, resolved once and used for BOTH fields. Passing the raw firstName
   // column here is what sent real invitations reading "Hi s," / "Hi e,".
   const personName = await resolveUserNameForEmail(input.user);
@@ -2748,7 +2749,6 @@ async function queueUserWelcomeEmail(input: { user: any; tenantName: string; ext
     extensionNumber: input.extensionNumber || null,
     setupUrl: portalPublicUrl(`/auth/invite/accept?token=${encodeURIComponent(input.token)}`),
     expiresHours: INVITE_TOKEN_HOURS,
-    androidApkUrl,
   });
   await queueEmailJob({ tenantId: input.user.tenantId, type: "USER_INVITE", toEmail: input.user.email, subject: template.subject, htmlBody: template.html, textBody: template.text });
 }
