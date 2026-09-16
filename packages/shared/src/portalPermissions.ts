@@ -4,6 +4,7 @@ export type PortalRoleBucket = (typeof PORTAL_ROLE_BUCKETS)[number];
 export type PortalSidebarSectionKey =
   | "workspace"
   | "mobile"
+  | "creative"
   | "pbx"
   | "crm"
   | "apps"
@@ -20,6 +21,10 @@ export const SIDEBAR_SECTIONS = [
   // the whole section appears only for roles it is granted to (SUPER_ADMIN
   // holds every key via the force-add bucket). Granting is the launch.
   { id: "mobile", label: "LoopCom Mobile", permission: "can_view_section_mobile" },
+  // Creative Studio (2026-09-16): its own section, like LoopCom Mobile.
+  // can_view_section_creative is in NO default bucket - granting it IS the
+  // launch, so nothing appears for anybody until it is deliberately turned on.
+  { id: "creative", label: "Creative Studio", permission: "can_view_section_creative" },
   { id: "pbx", label: "PBX", permission: "can_view_section_pbx" },
   { id: "crm", label: "CRM", permission: "can_view_section_crm" },
   { id: "apps", label: "Apps", permission: "can_view_section_apps" },
@@ -70,6 +75,14 @@ export const SIDEBAR_ITEMS = [
   // to. ⛔ The Dashboard deliberately KEEPS the original launch key
   // can_view_workspace_mobile so nobody already granted the page loses it
   // (renaming a key silently strips existing grants — the IVR-routing lesson).
+  { id: "creative.home", section: "creative", label: "Creative Studio", href: "/creative", permission: "can_view_creative_home" },
+  { id: "creative.projects", section: "creative", label: "Projects", href: "/creative/projects", permission: "can_view_creative_projects" },
+  { id: "creative.images", section: "creative", label: "Images", href: "/creative/images", permission: "can_view_creative_images" },
+  { id: "creative.video", section: "creative", label: "Video", href: "/creative/video", permission: "can_view_creative_video" },
+  { id: "creative.design", section: "creative", label: "Design editor", href: "/creative/design", permission: "can_view_creative_design" },
+  { id: "creative.assets", section: "creative", label: "Assets", href: "/creative/assets", permission: "can_view_creative_assets" },
+  { id: "creative.brand", section: "creative", label: "Brand kit", href: "/creative/brand", permission: "can_view_creative_brand_kit" },
+  { id: "creative.memory", section: "creative", label: "Creative memory", href: "/creative/memory", permission: "can_view_creative_memory" },
   { id: "mobile.dashboard", section: "mobile", label: "Mobile Dashboard", href: "/mobile", permission: "can_view_workspace_mobile" },
   { id: "mobile.users", section: "mobile", label: "Users", href: "/mobile/users", permission: "can_view_mobile_users" },
   { id: "mobile.lines", section: "mobile", label: "Lines", href: "/mobile/lines", permission: "can_view_mobile_lines" },
@@ -195,6 +208,7 @@ export const SIDEBAR_ITEMS = [
   // LoopCom Mobile provider console (2026-09-15) — plans, fleet, provisioning
   // (the only place an eSIM purchase can be triggered). SUPER_ADMIN-forced in
   // navConfig + requireSuperAdmin at the api; it spends the platform's money.
+  { id: "admin.creative_console", section: "admin", label: "Creative Console", href: "/admin/creative-console", permission: "can_view_admin_creative_console" },
   { id: "admin.mobile_console", section: "admin", label: "Mobile Console", href: "/admin/mobile-console", permission: "can_view_admin_mobile_console" },
   { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
   { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
@@ -235,6 +249,15 @@ export function customRoleGrantsAccountOwner(perms: readonly string[]): boolean 
 
 export const ACTION_PERMISSION_KEYS = [
   "can_act_as_account_owner",
+  // Creative Studio verbs. None is in a default bucket: a person who can see
+  // the studio still cannot spend money on video until it is granted.
+  "can_creative_generate_image",
+  "can_creative_generate_video",
+  "can_creative_use_premium",
+  "can_manage_creative_brand_kit",
+  "can_creative_export",
+  "can_view_company_creative_projects",
+  "can_delete_creative_projects",
   "can_view_dashboard",
   "can_view_team",
   "can_edit_team",

@@ -64,7 +64,8 @@ export type UrlSigningScheme =
   | "moh"
   | "crm-doc"
   | "crm-voicemail-drop"
-  | "marketing-unsubscribe";
+  | "marketing-unsubscribe"
+  | "creative";
 
 /** The dedicated env var each scheme may be pinned with. */
 const EXPLICIT_ENV_VAR: Record<UrlSigningScheme, string> = {
@@ -73,6 +74,7 @@ const EXPLICIT_ENV_VAR: Record<UrlSigningScheme, string> = {
   "crm-doc": "CRM_DOC_URL_SIGNING_SECRET",
   "crm-voicemail-drop": "CRM_VOICEMAIL_DROP_URL_SIGNING_SECRET",
   "marketing-unsubscribe": "MARKETING_UNSUBSCRIBE_URL_SIGNING_SECRET",
+  creative: "CREATIVE_URL_SIGNING_SECRET",
 };
 
 /**
@@ -85,6 +87,7 @@ const DERIVATION_LABEL: Record<UrlSigningScheme, string> = {
   "crm-doc": "connect:crm-doc-url-signing:v1",
   "crm-voicemail-drop": "connect:crm-voicemail-drop-url-signing:v1",
   "marketing-unsubscribe": "connect:marketing-unsubscribe-url-signing:v1",
+  creative: "connect:creative-url-signing:v1",
 };
 
 /** The literal that must never come back. Exported so tests can assert its absence. */

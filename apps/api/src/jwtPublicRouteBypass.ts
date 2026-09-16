@@ -6,6 +6,10 @@
  */
 export function shouldSkipJwtVerification(path: string): boolean {
   const pathWithoutApiPrefix = path.startsWith("/api/") ? path.slice(4) : path;
+  // Creative Studio media: the HMAC signature in the URL is the only
+  // authentication, exactly like hold-music audio. The key never leaves the
+  // server and the link expires in minutes.
+  if (pathWithoutApiPrefix.startsWith("/creative/download/")) return true;
   // Handsets authenticate with per-device HTTP Basic in the handler. Anchored
   // filename grammar; no management API is included in this exception.
   if (/^\/phone-provisioning\/[0-9a-f]{12}\/(?:[0-9a-f]{12}\.(?:cfg|boot)|y[0-9]{12}\.(?:cfg|boot))$/i.test(pathWithoutApiPrefix)) return true;

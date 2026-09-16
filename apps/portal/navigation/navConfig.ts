@@ -1,4 +1,11 @@
-import type { LucideIcon } from "lucide-react";
+import type { LucideIcon   FolderOpen,
+  Image as ImageIcon,
+  Clapperboard,
+  LayoutTemplate,
+  Layers,
+  Palette,
+  Brain,
+} from "lucide-react";
 import {
   isNavItemHiddenBySetting,
   type PortalNavVisibility,
@@ -116,6 +123,16 @@ export const navItems: NavItem[] = [
   // lines — a granted key really shows its page (the honesty invariant).
   // ⛔ The Dashboard keeps the original can_view_workspace_mobile key so any
   // existing grant survives the move from workspace.mobile → mobile.dashboard.
+  // Creative Studio (2026-09-16). One key per page, none in a default
+  // bucket: granting the keys is the launch.
+  { id: "creative.home", href: "/creative", label: "Creative Studio", icon: "CS", lucide: Sparkles, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_home" },
+  { id: "creative.projects", href: "/creative/projects", label: "Projects", icon: "CP", lucide: FolderOpen, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_projects" },
+  { id: "creative.images", href: "/creative/images", label: "Images", icon: "CI", lucide: ImageIcon, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_images" },
+  { id: "creative.video", href: "/creative/video", label: "Video", icon: "CV", lucide: Clapperboard, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_video" },
+  { id: "creative.design", href: "/creative/design", label: "Design editor", icon: "CD", lucide: LayoutTemplate, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_design" },
+  { id: "creative.assets", href: "/creative/assets", label: "Assets", icon: "CA", lucide: Layers, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_assets" },
+  { id: "creative.brand", href: "/creative/brand", label: "Brand kit", icon: "CB", lucide: Palette, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_brand_kit" },
+  { id: "creative.memory", href: "/creative/memory", label: "Creative memory", icon: "CM", lucide: Brain, section: "creative", sectionPermission: "can_view_section_creative", permission: "can_view_creative_memory" },
   { id: "mobile.dashboard", href: "/mobile", label: "Mobile Dashboard", icon: "MD", lucide: LayoutDashboard, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_workspace_mobile" },
   { id: "mobile.users", href: "/mobile/users", label: "Users", icon: "MU", lucide: Users, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_users" },
   { id: "mobile.lines", href: "/mobile/lines", label: "Lines", icon: "ML", lucide: Smartphone, section: "mobile", sectionPermission: "can_view_section_mobile", permission: "can_view_mobile_lines" },
@@ -210,6 +227,7 @@ export const navItems: NavItem[] = [
   // provisioning routes spend the platform's own money), own key, listed in
   // OWNER_ONLY_FIXED_NAV_ITEMS so the role editor is honest.
   { id: "admin.mobile_console", href: "/admin/mobile-console", label: "Mobile Console", icon: "MC", lucide: Smartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_mobile_console" },
+  { id: "admin.creative_console", href: "/admin/creative-console", label: "Creative Console", icon: "CC", lucide: Clapperboard, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_creative_console" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
@@ -314,10 +332,11 @@ export const navItems: NavItem[] = [
 ];
 
 /** Sidebar section order: Workspace → PBX → CRM → Apps → Billing → Admin → Settings */
-export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "mobile", "store", "pbx", "crm", "apps", "billing", "admin", "settings"];
+export const NAV_SECTION_ORDER: NavItem["section"][] = ["workspace", "creative", "mobile", "store", "pbx", "crm", "apps", "billing", "admin", "settings"];
 
 export const navSectionMeta: Record<NavItem["section"], { label: string; railIcon: string }> = {
   workspace: { label: "Workspace", railIcon: "WS" },
+  creative: { label: "Creative Studio", railIcon: "CS" },
   mobile: { label: "LoopCom Mobile", railIcon: "LM" },
   store: { label: "Store", railIcon: "SO" },
   pbx: { label: "PBX", railIcon: "PB" },
@@ -363,6 +382,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.pbx_teams",
   "admin.support",
   "admin.mobile_console",
+  "admin.creative_console",
   "admin.compliance",
   "admin.billing",
   // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every
@@ -430,5 +450,6 @@ export function isNavItemVisibleForUser(
   // own Telnyx account; owner only. (workspace.mobile — the customer page —
   // has NO force line on purpose: granting its key is the launch.)
   if (item.id === "admin.mobile_console" && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.creative_console" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

@@ -1025,6 +1025,17 @@ model Tenant {
   mobileSubscribers               MobileSubscriber[]
   mobileTenantSettings            MobileTenantSettings?
   mobileInvoices                  MobileInvoice[]
+  creativeProjects                CreativeProject[]
+  creativeAssets                  CreativeAsset[]
+  creativeBrandKits               CreativeBrandKit[]
+  creativeReferences              CreativeReference[]
+  creativeJobs                    CreativeJob[]
+  creativeGenerations             CreativeGeneration[]
+  creativeFeedback                CreativeFeedback[]
+  creativeMemoryItems             CreativeMemoryItem[]
+  creativeUsage                   CreativeUsage[]
+  creativeQuota                   CreativeQuota?
+  creativeAuditEvents             CreativeAuditEvent[]
 }
 
 model User {
@@ -9331,4 +9342,468 @@ model MobileWebhookEvent {
 
   @@index([eventType, receivedAt])
   @@index([status, receivedAt])
+}
+
+// ---------------------------------------------------------------------------
+// CREATIVE STUDIO — images, AI video, designs, and the memory that learns from
+// how people use them. Additive: nothing here is read or written by any
+// feature that existed before 2026-09-16. See
+// docs/ai-context/AGENT_HANDOFF_CREATIVE_STUDIO_2026-09-15.md
+// ---------------------------------------------------------------------------
+
+/// One piece of work: a commercial, a flyer, a set of product shots.
+model CreativeProject {
+  id              String               @id @default(cuid())
+  tenantId        String
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title           String
+  /// "image" | "video" | "design" | "social" | "ad" | "flyer" | "poster" | "presentation" | "product" | "logo" | "custom"
+  kind            String               @default("image")
+  /// "draft" | "working" | "review" | "done" | "archived"
+  status          String               @default("draft")
+  brief           String?
+  brandKitId      String?
+  brandKit        CreativeBrandKit?    @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
+  /// "private" (owner only) | "company" (anyone holding the company-projects key)
+  visibility      String               @default("company")
+  ownerUserId     String?
+  /// Denormalised so the list screen never joins: total micros spent.
+  spentMicros     Int                  @default(0)
+  lastOpenedAt    DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  deletedAt       DateTime?
+  documents       CreativeDocument[]
+  versions        CreativeVersion[]
+  assets          CreativeAsset[]
+  jobs            CreativeJob[]
+  generations     CreativeGeneration[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, ownerUserId])
+}
+
+/// The live canvas / timeline / storyboard. `revision` is the whole answer to
+/// "the agent must understand the current state": every write carries the
+/// revision it was based on and is refused if the document has moved on.
+model CreativeDocument {
+  id              String              @id @default(cuid())
+  tenantId        String
+  projectId       String
+  project         CreativeProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// "canvas" | "timeline" | "storyboard"
+  type            String
+  revision        Int                 @default(0)
+  doc             Json
+  /// "user" | "coworker" | "system"
+  updatedByType   String              @default("user")
+  updatedByUserId String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  operations      CreativeOperation[]
+
+  @@unique([projectId, type])
+  @@index([tenantId])
+}
+
+/// Append-only log of every change, whoever made it. Human edits and agent
+/// edits are deliberately the same shape.
+model CreativeOperation {
+  id          String           @id @default(cuid())
+  tenantId    String
+  documentId  String
+  document    CreativeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  revision    Int
+  /// "user" | "coworker" | "system"
+  actorType   String
+  actorUserId String?
+  /// "add" | "set" | "move" | "resize" | "replace" | "reorder" | "delete" | "split" | "trim"
+  op          String
+  payload     Json
+  summary     String?
+  createdAt   DateTime         @default(now())
+
+  @@index([documentId, revision])
+  @@index([tenantId, createdAt])
+}
+
+/// A point you can return to, compare against, or branch from.
+model CreativeVersion {
+  id              String          @id @default(cuid())
+  tenantId        String
+  projectId       String
+  project         CreativeProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  label           String
+  number          Int
+  parentVersionId String?
+  branch          String?
+  /// "user" | "coworker" | "system"
+  actorType       String          @default("user")
+  actorUserId     String?
+  summary         String?
+  snapshot        Json
+  createdAt       DateTime        @default(now())
+
+  @@unique([projectId, number])
+  @@index([tenantId, createdAt])
+}
+
+/// Every file: uploaded, generated, rendered or exported. Bytes live in object
+/// storage; this row carries only the key and what we know about it.
+model CreativeAsset {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectId       String?
+  project         CreativeProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  /// "image" | "video" | "audio" | "font" | "logo" | "doc"
+  kind            String
+  /// "uploaded" | "generated" | "rendered" | "exported" | "stock"
+  source          String
+  name            String
+  storageKey      String           @unique
+  thumbKey        String?
+  mime            String
+  bytes           Int              @default(0)
+  width           Int?
+  height          Int?
+  durationMs      Int?
+  sha256          String?
+  /// "pending" | "clean" | "rejected"
+  scanStatus      String           @default("pending")
+  scanDetail      String?
+  /// Where it came from and what we may do with it.
+  license         Json?
+  meta            Json?
+  favourite       Boolean          @default(false)
+  createdByUserId String?
+  createdAt       DateTime         @default(now())
+  /// Lifecycle: rejected takes and intermediates are swept after this.
+  expiresAt       DateTime?
+  deletedAt       DateTime?
+
+  @@index([tenantId, kind, createdAt])
+  @@index([tenantId, projectId])
+  @@index([expiresAt])
+  @@index([sha256])
+}
+
+/// Things that must look the same every time: a spokesperson, a product, the
+/// office, the mark. A real person needs a consent record before use.
+model CreativeReference {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// "person" | "product" | "place" | "logo" | "style"
+  kind            String
+  name            String
+  assetIds        String[]
+  notes           String?
+  /// Required when kind = "person": who confirmed permission, and when.
+  consent         Json?
+  locked          Boolean  @default(false)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, kind])
+}
+
+/// The look everything is made in. One company can never see another's.
+model CreativeBrandKit {
+  id        String                 @id @default(cuid())
+  tenantId  String
+  tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  isDefault Boolean                @default(false)
+  /// Plain-English rules the prompt builder obeys: voice, prohibitions, claims.
+  guidance  Json?
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+  items     CreativeBrandKitItem[]
+  projects  CreativeProject[]
+
+  @@index([tenantId])
+}
+
+model CreativeBrandKitItem {
+  id         String           @id @default(cuid())
+  tenantId   String
+  brandKitId String
+  brandKit   CreativeBrandKit @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
+  /// "color" | "font" | "logo" | "image" | "template" | "claim" | "cta" | "disclaimer" | "prohibition"
+  type       String
+  label      String
+  value      Json
+  assetId    String?
+  sortOrder  Int              @default(0)
+  createdAt  DateTime         @default(now())
+
+  @@index([brandKitId, type])
+  @@index([tenantId])
+}
+
+/// A unit of work handed to an engine. This row is the truth; the queue is
+/// only how a worker gets woken up.
+model CreativeJob {
+  id                String               @id @default(cuid())
+  tenantId          String
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectId         String?
+  project           CreativeProject?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  /// "image.generate" | "image.edit" | "video.generate" | "audio.speech" |
+  /// "audio.music" | "timeline.render" | "export" | "evaluate"
+  capability        String
+  /// "queued" | "claimed" | "running" | "evaluating" | "retrying" | "succeeded" | "failed" | "cancelled"
+  status            String               @default("queued")
+  /// The same key twice is the same job, never a second charge.
+  idempotencyKey    String
+  request           Json
+  engineId          String?
+  priority          Int                  @default(100)
+  attempts          Int                  @default(0)
+  maxAttempts       Int                  @default(3)
+  progress          Int                  @default(0)
+  progressNote      String?
+  workerId          String?
+  leaseExpiresAt    DateTime?
+  heartbeatAt       DateTime?
+  /// Provider-side id, so a cancel reaches them too.
+  providerJobId     String?
+  error             String?
+  errorCode         String?
+  costMicros        Int                  @default(0)
+  requestedByUserId String?
+  /// The agent turn that asked, when it came from the Coworker.
+  turnId            String?
+  createdAt         DateTime             @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  cancelledAt       DateTime?
+  generations       CreativeGeneration[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([status, priority, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([leaseExpiresAt])
+}
+
+/// Enough to reproduce a result exactly, and to learn from it.
+model CreativeGeneration {
+  id             String           @id @default(cuid())
+  tenantId       String
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        CreativeProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  jobId          String?
+  job            CreativeJob?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  capability     String
+  /// What the person actually asked for, in their words.
+  request        String
+  /// What we sent, after the brand kit and learned preferences were applied.
+  builtPrompt    String?
+  negative       String?
+  engineId       String
+  engineVersion  String?
+  params         Json?
+  seed           String?
+  referenceIds   String[]
+  outputAssetIds String[]
+  workerId       String?
+  renderMs       Int?
+  costMicros     Int              @default(0)
+  /// What the automatic check found before anyone saw it.
+  evaluation     Json?
+  /// "kept" | "rejected" | "replaced" | null
+  outcome        String?
+  supersededById String?
+  createdAt      DateTime         @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([engineId, createdAt])
+}
+
+/// Accepted, rejected, regenerated, hand-edited — the raw signal that memory
+/// is built from.
+model CreativeFeedback {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId      String?
+  projectId   String?
+  subjectType String
+  subjectId   String?
+  /// "accept" | "reject" | "regenerate" | "edit" | "export" | "favourite"
+  signal      String
+  reasonCodes String[]
+  detail      Json?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId, createdAt])
+}
+
+/// What the studio has learned. Every item can show its working.
+model CreativeMemoryItem {
+  id             String                   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// "user" | "company" | "workflow" | "engine" | "project"
+  scope          String
+  userId         String?
+  projectId      String?
+  /// Machine-usable: dimension "camera_movement", value "slow", weight 0.8.
+  dimension      String
+  value          Json
+  /// The same thing in the person's language, shown on the memory screen.
+  statement      String
+  evidenceCount  Int                      @default(1)
+  confidence     Float                    @default(0.34)
+  /// "suggested" | "active" | "pinned" | "disabled"
+  status         String                   @default("suggested")
+  /// "auto" | "manual"
+  origin         String                   @default("auto")
+  lastEvidenceAt DateTime                 @default(now())
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  evidence       CreativeMemoryEvidence[]
+
+  @@unique([tenantId, scope, userId, dimension])
+  @@index([tenantId, status])
+}
+
+model CreativeMemoryEvidence {
+  id           String             @id @default(cuid())
+  tenantId     String
+  memoryItemId String
+  memoryItem   CreativeMemoryItem @relation(fields: [memoryItemId], references: [id], onDelete: Cascade)
+  feedbackId   String?
+  operationId  String?
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  @@index([memoryItemId, createdAt])
+}
+
+/// Platform-level, not per company: which engines exist and may be used.
+model CreativeEngine {
+  id           String   @id
+  label        String
+  provider     String
+  /// "hosted" | "loopcom_gpu" | "local"
+  placement    String   @default("hosted")
+  capabilities String[]
+  model        String
+  license      String
+  /// An engine whose licence forbids commercial use can never be enabled.
+  commercialOk Boolean  @default(false)
+  enabled      Boolean  @default(false)
+  isDefault    Boolean  @default(false)
+  /// maxSeconds, sizes, supportsLastFrame, supportsExtend, quality levels.
+  limits       Json?
+  /// unit "image" or "second", and micros per unit.
+  costModel    Json?
+  secretKey    String?
+  notes        String?
+  sortOrder    Int      @default(100)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// How each engine actually performs. Latency, success and cost only — never
+/// prompts or customer content, because this is the one thing shared across
+/// companies.
+model CreativeEngineStat {
+  id                String   @id @default(cuid())
+  engineId          String
+  capability        String
+  /// yyyy-mm-dd
+  day               String
+  runs              Int      @default(0)
+  failures          Int      @default(0)
+  acceptedFirstTime Int      @default(0)
+  totalMs           Int      @default(0)
+  p95Ms             Int      @default(0)
+  totalCostMicros   Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([engineId, capability, day])
+  @@index([day])
+}
+
+/// A render machine. Workers pull work; nothing is ever pushed into them.
+model CreativeWorker {
+  id              String    @id
+  pool            String
+  kind            String
+  gpuModel        String?
+  vramGb          Int?
+  /// "idle" | "busy" | "draining" | "lost"
+  status          String    @default("idle")
+  currentJobId    String?
+  version         String?
+  capabilities    String[]
+  lastHeartbeatAt DateTime?
+  stats           Json?
+  createdAt       DateTime  @default(now())
+
+  @@index([status, lastHeartbeatAt])
+}
+
+/// What a job cost us, so the admin screens are arithmetic, not guesswork.
+model CreativeUsage {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobId      String?
+  capability String
+  engineId   String?
+  /// "images" | "video_seconds" | "gpu_seconds" | "storage_bytes" | "audio_seconds" | "retry"
+  measure    String
+  quantity   Float    @default(0)
+  costMicros Int      @default(0)
+  wasted     Boolean  @default(false)
+  /// yyyy-mm, the monthly rollup the quota screen reads.
+  period     String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, period])
+  @@index([period, capability])
+}
+
+/// What a company may use each month. No row = the platform default.
+model CreativeQuota {
+  tenantId       String   @id
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  videoSeconds   Int      @default(120)
+  images         Int      @default(1000)
+  storageGb      Int      @default(20)
+  maxConcurrent  Int      @default(2)
+  premiumEngines Boolean  @default(false)
+  /// Warned-at stamp, so the 80% notice is sent once per period.
+  warnedPeriod   String?
+  updatedAt      DateTime @updatedAt
+}
+
+/// Who did what — people and the Coworker alike, successes and refusals.
+model CreativeAuditEvent {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// "user" | "coworker" | "system"
+  actorType  String
+  actorId    String?
+  action     String
+  targetType String?
+  targetId   String?
+  /// "ok" | "denied" | "failed"
+  result     String   @default("ok")
+  detail     Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([action, createdAt])
 }

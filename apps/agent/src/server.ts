@@ -30,6 +30,7 @@ import { registerCoworkerLinkRoutes } from "./coworker/routes";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
 import { buildWorkbenchTools } from "./tools/workbenchTools";
+import { buildCreativeTools, creativeToolsPrompt } from "./tools/creativeTools";
 import { makeWorkbenchClient } from "./pbx/workbenchClient";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
@@ -275,6 +276,11 @@ async function main() {
       // "Who is in my contacts?" — read-only, tenant-locked. The write side
       // deliberately does not exist (see contactsTools.ts).
       ...buildContactsTools({ loadContactsInfo: makeContactsInfoClient() }),
+      // Creative Studio: make pictures, video and voiceovers for this company.
+      // Every call goes through the api's internal door, which runs the same
+      // safety, quota and brand-kit path the browser does — there is no cheaper
+      // route just because the agent asked.
+      ...buildCreativeTools(),
       // "Mark my chats read" / "cancel my requests" — the only self-scoped
       // writes in the tool surface; see the file's header for the fence.
       ...buildSelfServiceTools({ prisma }),

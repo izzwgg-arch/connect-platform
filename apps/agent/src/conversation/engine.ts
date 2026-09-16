@@ -23,6 +23,7 @@ import { buildTurnTools, coworkerWorkspacePrompt, ASK_PERSON_TOOL, SHOW_PLAN_TOO
 import { describeStep, summarizeResult, type StepOutcome } from "../coworker/stepDescriber";
 import { DEFAULT_PREFS, type CoworkerPrefs } from "../coworker/prefs";
 import { extractText, frameFileText, MAX_TEXT_CHARS } from "../attachments/extractText";
+import { creativeToolsPrompt } from "../tools/creativeTools";
 
 export const AUTO_CLOSE_HOURS = 12;
 
@@ -880,6 +881,10 @@ export class ConversationEngine {
       // it describes the hands that are on the table this turn, and a trainer's
       // correction must still be able to override how they are used.
       ...(dyn?.prompt ? [{ role: "system" as const, content: dyn.prompt }] : []),
+      // Creative Studio: described only when its tools are actually on the
+      // table this turn, so the model is never told about a capability it
+      // does not have.
+      ...(this.tools.some((t) => t.name.startsWith("creative_")) ? [{ role: "system" as const, content: creativeToolsPrompt }] : []),
       ...(ws
         ? [{ role: "system" as const, content: coworkerWorkspacePrompt({ folders: ctx.coworkerFolders ?? [], memory: wsPrefs.memory, detail: wsPrefs.detail, phoneTools: wsPrefs.phone, handsOn, email: wsPrefs.email }) }]
         : []),

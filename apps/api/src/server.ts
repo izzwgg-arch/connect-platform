@@ -396,6 +396,11 @@ import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
+import { registerCreativeStudioRoutes } from "./creativeStudio/routes";
+import { registerCreativeAdminRoutes } from "./creativeStudio/adminRoutes";
+import { registerCreativeInternalRoutes } from "./creativeStudio/internalRoutes";
+import { seedEngines } from "./creativeStudio/engines";
+import { runCreativeCycle, sweepExpiredAssets } from "./creativeStudio/jobs";
 import { registerMobileWebhookRoutes } from "./loopcomMobile/mobileWebhookRoutes";
 import { runMobileStateReconcileCycle, runMobileUsageSyncCycle, runMobileAnomalySweep } from "./loopcomMobile/mobileSyncJobs";
 import {
@@ -3049,6 +3054,14 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/mobile-service/support", permission: "can_view_mobile_support" },
   { prefix: "/mobile-service/settings", permission: "can_view_mobile_settings" },
   { prefix: "/admin/mobile-service", permission: "can_manage_global_settings" },
+  { prefix: "/creative", permission: "can_view_creative_home" },
+  { prefix: "/creative/download", permission: null },
+  { prefix: "/creative/projects", permission: "can_view_creative_projects" },
+  { prefix: "/creative/assets", permission: "can_view_creative_assets" },
+  { prefix: "/creative/uploads", permission: "can_view_creative_assets" },
+  { prefix: "/creative/brand-kit", permission: "can_view_creative_brand_kit" },
+  { prefix: "/creative/memory", permission: "can_view_creative_memory" },
+  { prefix: "/admin/creative", permission: "can_manage_global_settings" },
   // Carrier migration is SUPER_ADMIN-only in every handler; the rule exists so
   // the prefix is not silently outside the global gate (the /admin/wake-health
   // class, where a missing rule meant no permission check ran at all).
@@ -24249,6 +24262,18 @@ registerMobileProductRoutes({
 });
 registerMobileWebhookRoutes({ app, db });
 
+// Creative Studio (2026-09-16): images, AI video, designs. The customer
+// surface takes its company from the JWT; the console is platform staff only.
+registerCreativeStudioRoutes({
+  app,
+  db,
+  requireOwner: (req: any, reply: any) => requireSuperAdmin(req, reply),
+  hasPermission: (user: any, key: string) => userHasActionPermission(user, key),
+});
+registerCreativeAdminRoutes({ app, db, requireOwner: (req: any, reply: any) => requireSuperAdmin(req, reply) });
+// The Coworker's door: shared-secret, server-to-server, same service layer.
+registerCreativeInternalRoutes({ app, db });
+
 // ── Carrier migration (2026-09-10) ─────────────────────────────────────────
 // Moving all 52 live numbers off VoIP.ms and onto SignalWire, a few at a time.
 // Incoming calls move by themselves (Main's default-trunk routes on the
@@ -40047,6 +40072,44 @@ receiptReconciliationTimer.unref();
 // Idempotent by construction (usage rows dedupe on provider record id, SIM
 // mirroring is an upsert). With zero mobile rows and/or no Telnyx credential
 // each cycle is one cheap DB count and exits. Interval env-tunable; 0 disables.
+// Creative Studio: seed the engine catalogue, then move jobs along. The job
+// ROW is the truth, so a restart mid-render is recovered by the lease sweep in
+// runCreativeCycle rather than by losing the work.
+const creativeCycleMs = Number(process.env.CREATIVE_CYCLE_INTERVAL_MS || 5_000);
+if (creativeCycleMs > 0) {
+  const creativeWorkerId = `api-${process.env.HOSTNAME || "local"}`;
+  let creativeBusy = false;
+  const runCreative = async () => {
+    if (creativeBusy) return;
+    creativeBusy = true;
+    try {
+      await runCreativeCycle({ db, workerId: creativeWorkerId });
+    } catch (e) {
+      app.log.error({ err: e }, "creative studio cycle failed");
+    } finally {
+      creativeBusy = false;
+    }
+  };
+  registerShutdownTimer(setTimeout(() => {
+    seedEngines(db)
+      .then(() => db.creativeWorker.upsert({
+        where: { id: creativeWorkerId },
+        create: { id: creativeWorkerId, pool: "inline", kind: "cpu", status: "idle", capabilities: ["image", "video", "audio", "render", "export"], version: process.env.BUILD_COMMIT || "dev", lastHeartbeatAt: new Date() },
+        update: { status: "idle", lastHeartbeatAt: new Date(), version: process.env.BUILD_COMMIT || "dev" },
+      }))
+      .catch((e: any) => app.log.error({ err: e }, "creative studio seed failed"));
+  }, 15_000));
+  const creativeTimer = registerShutdownTimer(setInterval(runCreative, creativeCycleMs));
+  creativeTimer.unref();
+
+  // Housekeeping: rejected takes and intermediates are swept once an hour.
+  const creativeSweep = registerShutdownTimer(setInterval(() => {
+    sweepExpiredAssets(db).catch((e: any) => app.log.error({ err: e }, "creative studio asset sweep failed"));
+    db.creativeWorker.update({ where: { id: creativeWorkerId }, data: { lastHeartbeatAt: new Date() } }).catch(() => undefined);
+  }, 3600_000));
+  creativeSweep.unref();
+}
+
 const mobileUsageSyncMs = Number(process.env.MOBILE_USAGE_SYNC_INTERVAL_MS || 15 * 60_000);
 if (mobileUsageSyncMs > 0) {
   const runMobileSweeps = () => {
