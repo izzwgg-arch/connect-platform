@@ -470,3 +470,41 @@ doing it. We had the same problem with Facebook"*, *"submit a real port through 
   account (as on the bill), the TYPED SIGNATURE (a legal authorization — never typed by the agent), the
   VoIP.ms bill upload, extensions, and payment.** Nothing is filed until payment; then the number stage buys a
   temporary Telnyx number and files the FastPort.
+
+## 16. THE 723-1213 PORT IS SUBMITTED (FastPort, Fri 2026-09-18 07:00 ET) — and the guard it needed first
+
+- **VoIP.ms bill via API:** an UNDOCUMENTED `getInvoice {from, to}` (not in the WSDL) returns
+  `{pdf: "https://www.voip.ms/invoice.php?data=…"}` → a real PDF (4 pages). Invoice #202609163037, date
+  09-16-2026, "VoIP.ms - Swiftvox INC", **Bill to: ezify / Israel WEINSTOCK, 13 Kosnitz Dr, "Los Angeles", NY
+  10950** (the VoIP.ms profile city is wrong), lists "DID Monthly Fee: 8457231213". ⛔ The account number 344022
+  is NOT printed on it. `getDIDsInfo` shows `port_out_pin` empty (no PIN). `getTransactionHistory` also works.
+  pdf-parse is v2 in apps/api: `new PDFParse({data}).getText()`, not the v1 function.
+- **Izzy's decision:** use ALL the bill's details. Form: carrier "VoIP.ms (Swiftvox Inc)", account 344022, name
+  on account "ezify", 13 Kosnitz Dr, Los Angeles, NY 10950, not wireless, no PIN, signature typed by Izzy
+  ("izzy wein"). Invoice attached through the wizard's own `/upload-bill` (PORTING_BILL).
+- ⛔⛔ **GUARD SHIPPED BEFORE SUBMITTING (`e0e1ef28`, deployed in tip `6c2ef93e`, container-verified):**
+  `ombu_tenant_dids` has NO uniqueness on `did`. The standard port build would have added 8457231213 (owned by
+  T35 "Connect Communications") to the NEW tenant and re-rendered Main — Loopcom's main line could have started
+  ringing the test tenant immediately. `findExistingPbxDidOwner` (MySQL, read failure = build fails) leaves such
+  a number in its tenant and stamps `portedDidExistingPbxTenant`; the landing then skips PBX destination,
+  caller-ID and texting moves. Inbound is routed by DID, so on port day 723-1213 arrives on trunk 183 and keeps
+  ringing T35 with no PBX change. **LIVE: "The number being transferred (8457231213) already rings PBX tenant 35 —
+  it stays there"; after the build `ombu_tenant_dids` still has exactly (35, 8457231213) and default-trunk
+  `_8457231213 → Loopcom tenant`.**
+  ⛔ Deploy notes: other sessions' heavy jobs (worker build, `manual:agent-rebuild-contacts`) failed two queue
+  runs with HEAVY JOB ALREADY RUNNING; my push was non-fast-forward in the dirty shared tree → pushed via a
+  temporary detached worktree + cherry-pick (never merge in the shared tree).
+- **Submission `cmu4gjgu30000r17t3dczbxxx`** (link `CQ4nspf33rQgh4JGtlmIXBgHe9gkRfnC`, company Loopcom LLC,
+  owner izzy@loopcom.net). Invoice CC-202609-00013 marked PAID in the DB by Claude (no card, timeline says so).
+  Temp number **(845) 460-9054** bought (order 634ed475-…), new PBX tenant path `fbfe06ffa76a84ef` (route 181,
+  ext 101 id 673), invite sent, ACTIVE. 911 on the temp number failed on the Emergency ToS (owner texted).
+- **THE PORT:** Telnyx order **58969290-fbda-4842-bd13-399472c1fe5f**, status `in-process`, **FastPort,
+  foc requested 2026-09-18T11:00:00Z (Fri 7:00 AM ET)**, LOA doc e250f1ab-…, invoice doc 94311d87-….
+- ⛔⛔ **WHAT HAPPENS AT SWITCH-OVER (Izzy chose this knowingly):** `billingSmsSender.ts` sends from 723-1213 via
+  VoIP.ms → every pay link, receipt and sign-in code stops sending until the platform sender moves (e.g.
+  `BILLING_SMS_FROM_NUMBER` to another VoIP.ms number) or Loopcom's own Telnyx texting registration is approved.
+  Outbound calls from T35 presenting 723-1213 still go out 0001/VoIP.ms. The landing sweep will configure the
+  number at Telnyx, request 911 (blocked until the Emergency ToS is accepted), skip PBX/texting, and email
+  izzy@loopcom.net "your number is live".
+- ⏳ Watch: Telnyx may still reject on document review (no account number on the invoice; LOA signer "izzy wein"
+  vs bill "Israel WEINSTOCK"; city "Los Angeles" for 10950). The sweep logs every status change on the timeline.

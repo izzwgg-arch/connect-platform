@@ -1,5 +1,12 @@
 # Tests run
 
+## Telnyx port of 845-723-1213 + ported-number owner guard — 2026-09-16 (night)
+
+- apps/api `telnyxOnboarding.test.ts` **50/50** (new: owner-guard source checks incl. read-failure = build fails and check-before-job ordering; landing with `portedDidExistingPbxTenant` makes no PBX/caller-ID/publish/texting change). setupOrchestrator 7/24 unchanged. tsc 0 in touched files.
+- Deploy: `e0e1ef28` shipped in api tip `6c2ef93e` (2 queue runs failed on other sessions' heavy-job locks, 3rd succeeded; `.build-commit` + grep verified, 0 restarts, health 200).
+- LIVE: VoIP.ms `getInvoice` → PDF text verified (number present, account number absent); bill uploaded via wizard (200); submission paid (DB, no card) → temp +18454609054 bought, Telnyx FastPort order 58969290-… SUBMITTED (foc 2026-09-18T11:00Z), guard fired, PBX build done; PBX read-back: `ombu_tenant_dids` (35, 8457231213) only, default-trunk `_8457231213 → Loopcom tenant`.
+- NOT proven: Telnyx document acceptance, the actual switch-over, calls on 723-1213 via Telnyx, the landing on a real port.
+
 ## Private contacts per user — 2026-09-16
 
 - apps/api `src/contactVisibility.test.ts` **7/7** (new): rule unit tests (shared+mine, no viewer = shared only) + source guards for /contacts list, every :id route, dup check + import merge, ring/missed-call caller name (required viewer), search, assistant, chat decoration, SMS→email, CRM gate/import/SMS hooks, blasts, migration backfill, no-FK schema.
