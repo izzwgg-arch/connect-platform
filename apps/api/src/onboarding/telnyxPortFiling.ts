@@ -94,7 +94,7 @@ export function mapPortRequirements(
   const out: Array<{ requirement_type_id: string; field_value: string }> = [];
   for (const r of reqs) {
     if (!r.typeId || String(r.fieldType || "").toLowerCase() !== "document") continue;
-    const value = /letter of authori|loa/i.test(r.name) ? docs.loa : /invoice|bill/i.test(r.name) ? docs.invoice : null;
+    const value = /letter of authori|\bloa\b/i.test(r.name) ? docs.loa : /invoice|bill/i.test(r.name) ? docs.invoice : null;
     if (value) out.push({ requirement_type_id: r.typeId, field_value: value });
   }
   return out;
