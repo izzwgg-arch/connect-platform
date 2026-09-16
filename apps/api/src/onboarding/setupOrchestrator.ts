@@ -587,7 +587,29 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     const portedDigits = String(freshAnswers?.phone?.details?.numbers ?? "")
       .replace(/\D/g, "")
       .replace(/^1(?=\d{10}$)/, "");
-    const portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
+    let portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
+    // ⛔⛔ A ported number that ALREADY lives on this PBX (another tenant owns it)
+    // must NOT be added to the new tenant. ombu_tenant_dids has no uniqueness
+    // rule, so the build would make it a second owner and the Main re-render
+    // could send that number's live calls to the new tenant TODAY — days before
+    // the port (found 2026-09-16 on Loopcom's own 845-723-1213, owned by T35).
+    // Inbound routing is by DID, not carrier: when the port lands on the Telnyx
+    // trunk the number keeps ringing its existing tenant with no PBX change.
+    if (portedDid) {
+      const owner = await findExistingPbxDidOwner(portedDid, fresh);
+      if (owner) {
+        await logEvent(
+          submissionId,
+          `The number being transferred (${portedDid}) already rings PBX tenant ${owner} — it stays there. The port only changes its carrier; this build does not touch it.`,
+        );
+        const latestA = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, select: { answers: true } });
+        const a2: any = { ...((latestA?.answers as any) || {}) };
+        a2.provisioning = { ...(a2.provisioning || {}), portedDidExistingPbxTenant: String(owner) };
+        fresh.answers = a2;
+        await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { answers: a2 } });
+        portedDid = null;
+      }
+    }
     // Emergency calling for the new tenant: the address the customer typed,
     // through the same builder the E911 registration uses, with the state
     // resolved to ombutel.states.id from the PBX itself. ⛔ Best-effort: any
@@ -926,5 +948,29 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // Failures get reported too — a paid customer without a working system is
     // exactly what the owner wants to hear about immediately.
     await queueOnboardingSignupReport(submissionId, "failed");
+  }
+}
+
+/**
+ * Which PBX tenant (numeric id) already owns this DID, or null. Reads
+ * ombutel.ombu_tenant_dids directly (the REST list is a stale cache).
+ * ⛔ A read FAILURE throws — answering "nobody owns it" when we could not look
+ * would risk claiming a live number, so the build fails loudly instead.
+ */
+async function findExistingPbxDidOwner(did: string, row: any): Promise<string | null> {
+  const inst = await (db as any).pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" }, select: { ombuMysqlUrlEncrypted: true } });
+  const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+  const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+  if (!c.ok) throw new Error(`ported_number_owner_check_unavailable (${c.skipReason})`);
+  try {
+    const slug = String((row?.answers as any)?.provisioning?.tenantSlug || "");
+    const [rows] = await c.conn.query(
+      "SELECT d.tenant_id, t.name FROM ombutel.ombu_tenant_dids d JOIN ombutel.ombu_tenants t ON t.tenant_id = d.tenant_id WHERE d.did = ?",
+      [did],
+    );
+    const other = (rows as any[]).find((r) => !slug || String(r?.name || "") !== slug);
+    return other ? String(other.tenant_id) : null;
+  } finally {
+    await c.conn.end().catch(() => {});
   }
 }
