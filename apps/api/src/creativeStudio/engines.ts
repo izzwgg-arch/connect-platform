@@ -130,16 +130,24 @@ export const SORA_SECONDS = [4, 8, 12];
  */
 export function planVideoSegments(seconds: number, maxNative = 12): number[] {
   const want = Math.max(1, Math.min(15, Math.round(seconds)));
+  const allowed = SORA_SECONDS.filter((s) => s <= maxNative);
+  if (!allowed.length) return [Math.min(...SORA_SECONDS)];
+
+  // ⛔ ONE call whenever one call will do. A 5-second shot used to be planned
+  // as 4+4: two provider jobs, a continuation and a join, to produce something
+  // a single 8-second render covers. Same seconds billed, half the requests,
+  // half the things that can fail, and no seam in the middle of a 5s shot.
+  const single = allowed.find((s) => s >= want);
+  if (single) return [single];
+
   const segs: number[] = [];
   let left = want;
   while (left > 0) {
-    // Largest allowed value that does not overshoot what is left, except the
-    // last piece, which rounds UP to the smallest allowed value and is trimmed
-    // during the join (asking for less than 4s is not possible).
-    const fit = SORA_SECONDS.filter((s) => s <= Math.min(left, maxNative));
-    const pick = fit.length ? Math.max(...fit) : Math.min(...SORA_SECONDS);
-    segs.push(pick);
-    left -= pick;
+    const fit = allowed.filter((s) => s <= left);
+    // The last piece rounds UP to the smallest size the engine accepts and is
+    // trimmed during the join — asking for less than 4s is not possible.
+    segs.push(fit.length ? Math.max(...fit) : Math.min(...allowed));
+    left -= segs[segs.length - 1];
   }
   return segs;
 }

@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_SHOT_SECONDS, assembleFilm, mergeTimeline, planShots, storyboardDoc, timelineFromStoryboard } from "./film";
 import { EXPORT_PRESETS, normaliseTimeline } from "./localJobs";
+import { planVideoSegments } from "./engines";
 import { describeRetry, retryHint } from "./evaluate";
 
 const SRC = path.join(__dirname);
@@ -34,8 +35,24 @@ test("a film is split into shots that no engine has to refuse", () => {
   }
 });
 
-test("a 15-second commercial is three shots, not one impossible one", () => {
-  assert.deepEqual(planShots(15), [5, 5, 5]);
+test("a 15-second commercial is shots the engine bills honestly", () => {
+  // ⛔ Four-second beats, not five. The engine renders 4, 8 or 12 seconds only,
+  // so a five-second shot is BILLED as eight: three 5s beats cost 24 seconds of
+  // engine time for a 15-second film. These four cost 16.
+  assert.deepEqual(planShots(15), [4, 4, 4, 3]);
+});
+
+test("one render is used wherever one render will do", () => {
+  // The waste this pins: a 5-second shot used to be planned as 4+4 — two
+  // provider jobs, a continuation and a join — for something a single
+  // 8-second render covers and is trimmed from.
+  assert.deepEqual(planVideoSegments(5), [8]);
+  assert.deepEqual(planVideoSegments(4), [4]);
+  assert.deepEqual(planVideoSegments(9), [12]);
+  assert.deepEqual(planVideoSegments(12), [12]);
+  // Past the engine's longest clip it really does take two.
+  assert.deepEqual(planVideoSegments(15), [12, 4]);
+  assert.deepEqual(planVideoSegments(13), [12, 4]);
 });
 
 test("a short film stays one shot", () => {
@@ -45,8 +62,17 @@ test("a short film stays one shot", () => {
 
 test("a minute is planned in beats a person would actually cut", () => {
   const shots = planShots(60);
-  assert.equal(shots.length, 12);
-  assert.ok(shots.every((s) => s === 5));
+  assert.equal(shots.length, 15);
+  assert.ok(shots.every((s) => s === 4));
+});
+
+test("a shot is never billed for seconds nobody sees, beyond the engine's own step", () => {
+  // What the engine charges for a plan: every shot rounds UP to 4, 8 or 12.
+  const billed = (shots: number[]) => shots.reduce((n, s) => n + (s <= 4 ? 4 : s <= 8 ? 8 : 12), 0);
+  for (const total of [15, 30, 60]) {
+    const waste = billed(planShots(total)) - total;
+    assert.ok(waste <= 3, `a ${total}s film wastes ${waste}s of engine time`);
+  }
 });
 
 /* ------------------------------------------------------------------ */

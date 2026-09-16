@@ -19,11 +19,13 @@ export const MAX_SHOT_SECONDS = 15;
 /**
  * Split a film into shots a person would actually cut.
  *
- * Five seconds is the default beat: long enough to read, short enough that a
- * bad one is cheap to redo. Nothing comes back shorter than three seconds,
- * because a two-second shot reads as a mistake.
+ * ⛔ FOUR seconds is the default beat because it is the engine's own smallest
+ * clip. A five-second beat looks nicer on paper and costs a THIRD more: the
+ * engine only renders 4, 8 or 12, so every 5-second shot is billed as 8. Four
+ * is long enough to read, short enough that a bad one is cheap to redo, and
+ * the customer pays for exactly what they see.
  */
-export function planShots(totalSeconds: number, preferred = 5): number[] {
+export function planShots(totalSeconds: number, preferred = 4): number[] {
   const total = Math.max(1, Math.round(Number(totalSeconds) || 0));
   const beat = Math.max(3, Math.min(MAX_SHOT_SECONDS, Math.round(preferred)));
   if (total <= MAX_SHOT_SECONDS && total <= beat) return [total];
