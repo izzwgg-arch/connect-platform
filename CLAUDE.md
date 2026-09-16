@@ -396,6 +396,8 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
+- 2026-09-16 · ONBOARDING LINK PRICING — COLD CALLING $65/ext + CRM $20/ext (api+portal `014c0399` DEPLOYED): admin ticks both on /admin/onboarding (count or all); ⛔ answers.pricing is server-owned (autosave can't set/clear it); review /quote + first invoice + month 2 (price 6500 / recurring lines) all priced; Swift Mechanics stamped all+all, live quote 1 ext = $90; + phone wizard step-1 dead end fixed (desktop→phone switch demanded a cell with no field); ⏳ real invoice + month 2 unproven → `2026-09-16-onboarding-cold-calling-crm-pricing.md`
+
 - 2026-09-16 · SIGN-UP WIZARD IN THE LOOPCOM LOOK — DEPLOYED portal f77a2468, seen in Chrome: wordmark header, Loopcom palette (light accent #1683d8), card hairline; finish page = glowing infinity on dark / light-mode infinity on light; Connect copy → Loopcom; ⛔ token names unchanged (success page reads them); labels NOT uppercased (they're questions); ⏳ steps 2–7 + phone not eyeballed → `2026-09-16-signup-wizard-loopcom-rebrand-mockups.md`
 
 - 2026-09-16 · CONTACTS ARE PRIVATE PER USER (Relax Tires 101's 4,250 phone-book contacts showed on 102/103): `Contact.ownerUserId` + backfill, one rule in `contactVisibility.ts` (shared + mine, no admin bypass, CRM = shared only), caller-name/dup-check/merge/search/assistant/SMS-email all scoped; ✅ LIVE: 101 sees 4,250, 102/103 see 0; ⛔⛔ first deploy swept another session's uncommitted server.ts lines → MODULE_NOT_FOUND, fixed `5f279499`; ⏳ no human app/call check → `2026-09-16-contacts-are-private-per-user.md`

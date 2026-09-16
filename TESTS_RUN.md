@@ -1,5 +1,13 @@
 # Tests run
 
+## Onboarding cold-calling / CRM pricing + phone-wizard step-1 fix — 2026-09-16 (night)
+
+- apps/api `src/onboarding/*.test.ts` **475/500**; the 25 failures (24 setupOrchestrator + 1 pbxTenantBuild) are identical on HEAD (all 11 touched files swapped to HEAD and re-run: 7/24). New `onboardingAddOnPricing.test.ts` 8/8 (quote math all/partial/clamp/plain $35, autosave cannot set/change/clear pricing, admin shape, month-2 lines, /quote route prices add-ons). `inviteEmail.test.ts` gate guard widened to put/patch, passes.
+- packages/shared `onboardingPricing.test.ts` 16/16. portal `lib/onboardingSignalWireWizard.test.ts` 9/9 (new guard for the step-1 re-route). tsc 0 errors in touched api/portal files.
+- DEPLOYED `014c0399` api + portal (`.build-commit` both; grep `onboarding_addon` in api; phone-fix + admin checkbox strings in shipped `.next/static` chunks; /admin/onboarding 200).
+- LIVE: Swift Mechanics stamped cold calling all + CRM all; public `/onboarding/<token>/quote?extensions=1|2|3` → **$90 / $175 / $260**.
+- NOT proven: an autosave after the stamp keeping pricing; the real checkout invoice; month-2 lines; admin checkboxes in a browser; phone fix on a real phone.
+
 ## Telnyx port of 845-723-1213 + ported-number owner guard — 2026-09-16 (night)
 
 - apps/api `telnyxOnboarding.test.ts` **50/50** (new: owner-guard source checks incl. read-failure = build fails and check-before-job ordering; landing with `portedDidExistingPbxTenant` makes no PBX/caller-ID/publish/texting change). setupOrchestrator 7/24 unchanged. tsc 0 in touched files.
