@@ -1,3 +1,32 @@
+# ⛔ REVERTED SAME DAY (2026-09-16, later): both ring groups are back on 101 — the Alex move below is UNDONE
+
+Izzy: *"Put Relax Tires phone calls back to the way it was this morning, away from
+Alex, back to 101."*
+
+Exact inverse through the same door, `PATCH /admin/pbx-console/ring-groups/:id`
+body `{rgMembers:[154], set:{destination:"154"}}` for RG 89 and RG 90 (154 = ext
+101 S M Weiss, re-checked in `ombu_extensions` first). Both 200,
+`applied:true, rebaked 4/4, failed 0`.
+
+✅ Verified on the PBX after the write: `ombu_ring_group_members` 89→154, 90→154;
+`dialplan show 800|801@T25_ext-ringgroups` (IN MEMORY) both
+`Dial(Local/101@…)` + `Goto(sub-extensions-vm,VM-101,1)`. 102 appears in
+neither. The five IVR vm_direct pointers were never moved, so they already
+match this morning (101's box). **T25 routing now equals the morning state.**
+⏳ No real call placed.
+
+⛔ **Trap hit:** another session's blue/green api deploy swapped `app-api-1`
+mid-script — RG 89 applied, then the `docker exec` died with exit **137**
+before RG 90 ran (a half-applied state: 800→101, 801→102). Re-read the PBX,
+waited for the new container to be healthy, re-ran RG 90 alone. **After any
+exit 137 from `docker exec app-api-1`, read the PBX state per object — never
+assume all-or-nothing, and never blindly re-run the whole batch.**
+
+Alex (102) still exists with his own extension, devices and billing — only the
+ring-group routing was reverted.
+
+---
+
 # Relax Tires: both ring groups moved off 101 → Alex (102), and the IVR-level voicemail drops still point at 101 because NO DOOR EXISTS to change them (2026-09-16)
 
 Izzy: *"Make all ring groups on relaxed tires. Remove 101 from it and put Alex in
