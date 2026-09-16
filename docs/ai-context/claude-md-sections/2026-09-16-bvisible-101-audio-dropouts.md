@@ -109,3 +109,21 @@ SIP/RTP ports attract scanner traffic/ghost calls). Server RTP range was already
 widened 2026-08-23 and every other tenant on this server is clean. The real router-side
 fix candidates remain: disable SIP ALG (proven meddling — one registration passed
 unrewritten :5060), stop/explain the overnight resets, wire the Wi-Fi-capable Yealinks.
+
+## Round 4 — ✅ WI-FI CONFIRMED BY IZZY: all five phones are on Wi-Fi, the office has NO Cat5 drops, and it is a big office with a lot of equipment
+
+The ⏳ from round 1 is closed: Izzy confirms every Yealink is on Wi-Fi. Root cause is
+now settled as **airtime contention on a crowded office Wi-Fi + an undersized router**,
+which together produce every measured symptom (dead-mic legs, 41→355 ms RTT spread
+across one LAN, Unreachable flaps, overnight NAT-table resets). ⛔ Izzy's "ports on
+their router" instinct maps to a real thing but the wrong noun: consumer/ISP routers
+exhaust their NAT **session table** (a few thousand entries) in equipment-heavy
+offices and evict live mappings — the remedy is a business-grade router, never
+"opening" ports. Proposed to Izzy (customer-side, nothing done):
+1. business-grade router/AP (ask what model they run today — ISP combo box = prime
+   suspect for both table exhaustion and the flaky ALG);
+2. dedicated 5 GHz SSID that ONLY the five phones join (W-series support 5 GHz) —
+   cheapest meaningful fix, zero wiring;
+3. SIP ALG off on whatever router they keep;
+4. powerline-ethernet or a small switch for ext 101 if any desk is near the router;
+5. 101 signs into the Loopcom app as fallback (T9_101_1 has never registered).
