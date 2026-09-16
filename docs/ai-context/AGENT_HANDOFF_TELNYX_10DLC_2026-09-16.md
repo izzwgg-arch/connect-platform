@@ -9,7 +9,57 @@ mockups before you build it."*
 deploy exists. Do not start implementation until he approves and answers §4.
 
 - Mockup file: `docs/mockups/telnyx-10dlc/index.html`
-- Artifact: https://claude.ai/artifact/UjnMidL2iSzitYgutQCvbk (Version 1)
+- Artifact: https://claude.ai/artifact/UjnMidL2iSzitYgutQCvbk (Version 2 is current — the customer-link flow)
+
+## 0. ⛔⛔ REVISION 2 (same day) — THE CUSTOMER FILLS IT IN; IZZY PRESSES "FILE WITH TELNYX"
+
+Izzy, verbatim: *"for each customer, it should create a link that I'll be able to copy and then
+send it to them, or just send out an email to them … just like all the other Loopcom emails with
+the real Loopcom logo in it. … wherever the system could fill in, the system should already have
+filled it in. Only the EIN address and all that stuff they have to fill in. The legal stuff, the
+opt-in, opt-out, all that, the system should already fill that in automatically. … dark and light
+mode … Once they fill it in, it uploads … then I have to press a button to upload it to Telnyx for
+now, but maybe later we'll make it automated."* Then: *"I don't want to confuse them either, so
+they could see it, just not edit it, only the information that we need from them."*
+
+Mockup **V2** (same artifact URL, Version 2) replaces the v1 staff-typed wizard with:
+- **Admin board** per customer: No link → Link sent → Opened → **Ready to file** → Filed →
+  Carriers reviewing → Live; actions Create link / Copy link / Remind / Review & file.
+- **Create-link dialog**: private link (30-day expiry, replaced when regenerated, dead once sent
+  back), recipient prefilled from account owner, Send email, "Fill it in myself".
+- **The email** = the `loopcomEmailShell` look (packages/shared/src/loopcomEmailShell.ts), real
+  `loopcom-wordmark-email-336.png`, footer names the tenant, its own EmailJob type (⛔ never
+  ADMIN_ALERT — muted at the send door), links from `canonicalPortalOrigin()`. Lists what they'll
+  need before they click. ⛔ NO carrier name anywhere on customer surfaces.
+- **Public customer page** `/texting-registration/<token>` (login-card idiom `.lc-login-*`,
+  `loopcom-wordmark-560.png`, follows light/dark): **ONLY editable inputs = legal name, EIN,
+  business type, IRS address, website, typed signature, consent.** Everything else is SHOWN
+  READ-ONLY: account facts (display name, phone, email, contact, numbers) and the generated
+  carrier wording (use description, samples, STOP/HELP/START replies, opt-in flow, keywords,
+  privacy link) — three shown, the rest behind "Show". Autosave excludes the EIN. A sent link
+  becomes a read-only receipt; expired/replaced links show a calm page with the phone number.
+- **Admin review & file**: every value tagged customer / system / account; admin CAN edit the
+  generated wording (the customer couldn't); pre-filing checks; itemised charges; one button
+  "File with Telnyx · $24.00" which then runs brand → verify → campaign → assign unattended.
+- **Needs a fix**: brand refusal → the same link reopens with ONLY the refused field(s) unlocked
+  plus admin's note; EIN re-entered; brand updated in place (no new fee). Campaign-wording
+  rejections are admin-side (the customer never wrote them).
+- **Settings**: "File automatically when a customer sends the form" designed in, ships OFF; when
+  on, files only all-green cases with sufficient balance.
+- **Six keys**: view / send link / view EIN (audited) / file / fix / deactivate.
+- Sole-prop PIN goes on the customer's link (resolves v1 decision 5).
+
+⛔ **EIN storage CHANGES vs v1**: filing happens later, so the EIN must be held. Proposed:
+encrypted (`encryptJson`) in its own column, masked last-4, reveal needs a key + audit row,
+**purged when the registry verifies the brand**, or after 14 days unfiled. Awaiting Izzy.
+
+**V2 open decisions**: (1) EIN hold-then-purge as above; (2) customers with no privacy policy —
+a Loopcom-hosted page in their name (carrier acceptance UNCONFIRMED) vs requiring their own;
+(3) who pays $24 + monthly; (4) marketing program chosen by admin on review (recommended) vs by
+the customer; (5) auto-move approved numbers' texting to Telnyx with backup; (6) fix the two
+broken legacy 10DLC gates.
+
+(The v1 design record below is superseded where it conflicts.)
 
 ## 1. What exists today (verified 2026-09-16, Explore inventory)
 

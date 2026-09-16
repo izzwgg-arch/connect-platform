@@ -396,7 +396,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 
 ## HANDOFF INDEX — one line per area (newest first as moved on 2026-09-14; add new ones at the top)
 
-- 2026-09-16 · TELNYX 10DLC REGISTRATION ADMIN PAGE — MOCKUPS AWAITING IZZY, NOTHING BUILT (artifact UjnMidL2iSzitYgutQCvbk, 12 screens, /admin/texting-registration); no Telnyx brand/campaign code exists today; ⛔ Telnyx docs contradict its OpenAPI spec on paths/appeal/webhook shape — build to the spec; ⛔⛔ legacy TenDlcSubmission.einEncrypted is plain base64 + SMS Campaigns gate can never open; blocked on 6 decisions → `2026-09-16-telnyx-10dlc-registration-page.md`
+- 2026-09-16 · TELNYX 10DLC REGISTRATION — MOCKUPS V2 AWAITING IZZY, NOTHING BUILT (artifact UjnMidL2iSzitYgutQCvbk V2): per-customer private link → copy or Loopcom email → public pre-filled form (⛔⛔ customer SEES system-filled wording but EDITS only legal name/EIN/type/IRS address/website/signature) → admin presses File with Telnyx (auto later, OFF); ⛔ no carrier names to customers; EIN held encrypted then purged (awaiting OK); Telnyx docs contradict its OpenAPI spec — build to spec; ⛔⛔ legacy einEncrypted is plain base64 + SMS Campaigns gate never opens → `2026-09-16-telnyx-10dlc-registration-page.md`
 
 - 2026-09-16 · COLD CALLING (customer ask) — ADVISORY ONLY, nothing built: doable HUMAN-DIALED only (⛔ Telnyx AUP bans predictive/auto-dialing + prerecorded drops; SDC ≤15%); lawful shape = B2B-leaning + customer's own DNC SAN + 8am–8pm called-party hours + real CID + per-ext/per-DID caps + rider indemnifying Loopcom before dial tone; own DIDs + own outbound voice profile isolate blast radius; ⏳ no cap/hours enforcement exists in Connect → `2026-09-16-cold-calling-compliance-rules.md`
 
