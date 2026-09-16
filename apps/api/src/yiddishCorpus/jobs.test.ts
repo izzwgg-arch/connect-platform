@@ -635,3 +635,51 @@ test("a run that recognised NOTHING at all still pauses — the real alarm is in
   assert.equal(alerts.length, 1);
   assert.equal(db.ycBudget.rows[0].paused, true);
 });
+
+// ── 8. music never enters the pipeline ──────────────────────────────────────
+
+import { YC_MUSIC_EXCLUDED_MESSAGE } from "./contracts";
+
+const MUSIC_CURSOR = JSON.stringify({ musicCatIds: ["900"], seriesNames: { "900": "ניגונים" } });
+
+test("the first stage skips a music episode, marks it, and queues nothing after it", async () => {
+  const db = makeDb({ source: { discoveryCursor: MUSIC_CURSOR } });
+  const item = await db.ycSourceItem.create({
+    data: { sourceId: "src1", seriesName: "ניגונים", fingerprint: "fp-music", state: "DISCOVERED" },
+  });
+  await seedJob(db, { stage: "fingerprint", itemId: item.id });
+  const res = await runDueJobs(db, { leaseOwner: "w", now: NOW });
+  assert.equal(res.skipped, 1);
+  const row = db.ycSourceItem.rows.find((r: any) => r.id === item.id);
+  assert.equal(row.state, "SKIPPED");
+  assert.equal(row.error, YC_MUSIC_EXCLUDED_MESSAGE);
+  const others = db.ycProcessingJob.rows.filter((j: any) => j.itemId === item.id && j.stage !== "fingerprint");
+  assert.equal(others.length, 0, "a music episode must not queue a single further stage");
+});
+
+test("a talk episode is NOT skipped by the music check", async () => {
+  const db = makeDb({ source: { discoveryCursor: MUSIC_CURSOR } });
+  const item = await db.ycSourceItem.create({
+    data: { sourceId: "src1", seriesName: "בולעטין", fingerprint: "fp-talk", state: "DISCOVERED" },
+  });
+  await seedJob(db, { stage: "fingerprint", itemId: item.id });
+  await runDueJobs(db, { leaseOwner: "w", now: NOW });
+  const row = db.ycSourceItem.rows.find((r: any) => r.id === item.id);
+  assert.notEqual(row.state, "SKIPPED");
+});
+
+test("any stage already queued for a music-marked episode is skipped without running", async () => {
+  const db = makeDb();
+  const item = await db.ycSourceItem.create({ data: { sourceId: "src1", state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE } });
+  await seedJob(db, { stage: "novelty", itemId: item.id });
+  let ran = false;
+  const novelty = async () => {
+    ran = true;
+    return { ok: true };
+  };
+  const res = await runDueJobs(db, { leaseOwner: "w", now: NOW, handlers: { novelty } as any });
+  assert.equal(ran, false, "the handler must never run for excluded music");
+  assert.equal(res.skipped, 1);
+  const job = db.ycProcessingJob.rows.find((j: any) => j.itemId === item.id);
+  assert.equal(job.error, YC_MUSIC_EXCLUDED_MESSAGE);
+});
