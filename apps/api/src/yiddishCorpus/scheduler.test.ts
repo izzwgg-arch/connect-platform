@@ -125,3 +125,89 @@ test("a disabled source is not walked even with a running budget", async () => {
   const res = await ensureDiscoveryScheduled(db, { now: new Date() });
   assert.deepEqual(res.scheduled, []);
 });
+
+// ── the two lanes ───────────────────────────────────────────────────────────
+//
+// A discover job walks listing pages at a ≥2 s politeness gap, so it runs for
+// minutes. It used to share one in-flight guard with everything else, which
+// meant the cheap local stages (fingerprint, novelty, observe) stood still
+// behind it: the queue looked busy while the corpus barely moved. These tests
+// pin the separation.
+
+import { claimJobs, YC_WORK_BATCH, YC_DISCOVER_MAX_PAGES } from "./jobs";
+
+function queueDb(rows: Row[]) {
+  const store = rows.map((r, i) => ({
+    id: r.id ?? `j${i}`,
+    state: "PENDING",
+    nextRunAt: new Date(0),
+    leaseUntil: null,
+    attempts: 0,
+    priority: 10,
+    itemId: null,
+    ...r,
+  }));
+  return {
+    store,
+    ycProcessingJob: {
+      findMany: async ({ where, take }: any) => {
+        let out = store.filter((j) => j.state === "PENDING");
+        if (where?.stage?.in) out = out.filter((j) => where.stage.in.includes(j.stage));
+        if (where?.stage?.notIn) out = out.filter((j) => !where.stage.notIn.includes(j.stage));
+        return out.slice(0, take ?? out.length);
+      },
+      updateMany: async ({ where, data }: any) => {
+        const row = store.find((j) => j.id === where.id && j.state === where.state);
+        if (!row) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
+      },
+    },
+  } as any;
+}
+
+test("the work lane never claims a discover job", async () => {
+  const db = queueDb([
+    { id: "d1", stage: "discover", priority: 5 },
+    { id: "f1", stage: "fingerprint" },
+    { id: "n1", stage: "novelty" },
+  ]);
+  const claimed = await claimJobs(db, { leaseOwner: "work", limit: 10, excludeStages: ["discover"] });
+  assert.deepEqual(
+    claimed.map((j: any) => j.id).sort(),
+    ["f1", "n1"],
+    "discover must be left for its own lane",
+  );
+  // and it is still PENDING, not burnt by a claim-then-drop
+  assert.equal(db.store.find((j: any) => j.id === "d1").state, "PENDING");
+  assert.equal(db.store.find((j: any) => j.id === "d1").attempts, 0);
+});
+
+test("the discovery lane claims discover and nothing else, one at a time", async () => {
+  const db = queueDb([
+    { id: "d1", stage: "discover", priority: 5 },
+    { id: "d2", stage: "discover", priority: 5 },
+    { id: "f1", stage: "fingerprint" },
+  ]);
+  const claimed = await claimJobs(db, { leaseOwner: "disc", limit: 1, stages: ["discover"] });
+  assert.equal(claimed.length, 1);
+  assert.equal(claimed[0].stage, "discover");
+  assert.equal(db.store.find((j: any) => j.id === "f1").state, "PENDING", "cheap work is left alone");
+});
+
+test("the two lanes cannot both claim the same row", async () => {
+  const db = queueDb([{ id: "d1", stage: "discover", priority: 5 }]);
+  const [a, b] = await Promise.all([
+    claimJobs(db, { leaseOwner: "disc", limit: 1, stages: ["discover"] }),
+    claimJobs(db, { leaseOwner: "work", limit: 10, excludeStages: ["discover"] }),
+  ]);
+  assert.equal(a.length + b.length, 1, "exactly one lane may hold the job");
+  assert.equal(a.length, 1, "and it is the discovery lane's");
+});
+
+test("throughput knobs are sane and bounded", () => {
+  // claimJobs hard-caps at 50; a batch above that would silently do less than
+  // it says, which is the kind of number that makes a dashboard lie.
+  assert.ok(YC_WORK_BATCH >= 1 && YC_WORK_BATCH <= 50, `batch out of range: ${YC_WORK_BATCH}`);
+  assert.ok(YC_DISCOVER_MAX_PAGES >= 1, `pages out of range: ${YC_DISCOVER_MAX_PAGES}`);
+});

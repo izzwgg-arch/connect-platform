@@ -41,6 +41,21 @@ export const YC_DEFAULT_INTERVAL_MS = 60_000;
  * ever while looking healthy.
  */
 export const YC_DISCOVERY_EVERY_MS = Number(process.env.YIDDISH_DISCOVERY_EVERY_MS || 30 * 60 * 1000);
+/**
+ * Jobs claimed per work tick. The metadata stages are local DB work, so the
+ * old default of 5 per minute meant the 35k-item catalog would take weeks.
+ * Capped at 50 by `claimJobs`; tunable down if the database ever feels it.
+ */
+export const YC_WORK_BATCH = Math.max(1, Number(process.env.YIDDISH_WORK_BATCH || 25));
+
+/**
+ * Listing pages one discover job walks. Each page still waits the ≥2 s
+ * politeness gap, so this changes how MUCH we walk per run, never how FAST we
+ * ask. Safe to raise only because discovery has its own lane (see
+ * `startYiddishWorker`) and no longer blocks the cheap stages.
+ */
+export const YC_DISCOVER_MAX_PAGES = Math.max(1, Number(process.env.YIDDISH_DISCOVER_MAX_PAGES || 60));
+
 export const YC_BACKOFF_BASE_MS = 30_000;
 export const YC_BACKOFF_MAX_MS = 6 * 60 * 60_000;
 export const YC_WORKER_HEARTBEAT_METRIC = "worker_heartbeat_ms";
@@ -294,6 +309,10 @@ export interface ClaimOptions {
   limit?: number;
   now?: Date;
   leaseMs?: number;
+  /** Claim only these stages. Used by the discovery lane. */
+  stages?: string[];
+  /** Claim anything BUT these stages. Used by the work lane. */
+  excludeStages?: string[];
 }
 
 /**
@@ -310,8 +329,16 @@ export async function claimJobs(db: any, opts: ClaimOptions): Promise<YcJobRow[]
   const limit = Math.max(1, Math.min(opts.limit ?? 5, 50));
   const leaseUntil = new Date(now.getTime() + leaseMs);
 
+  // ⛔ The stage filter is part of the QUERY, not a post-filter. Post-filtering
+  // would claim a job (a conditional write that burns an attempt) and then drop
+  // it, so a long discover job would still eat the whole batch every tick.
+  const stageWhere: Record<string, any> = {};
+  if (opts.stages?.length) stageWhere.stage = { in: opts.stages };
+  else if (opts.excludeStages?.length) stageWhere.stage = { notIn: opts.excludeStages };
+
   const candidates = await db.ycProcessingJob.findMany({
     where: {
+      ...stageWhere,
       OR: [
         { state: "PENDING", nextRunAt: { lte: now } },
         // An expired lease means the owner died. Reclaimable, by design.
@@ -361,7 +388,7 @@ export async function releaseJob(db: any, job: YcJobRow, nextRunAt: Date, reason
 export const defaultStageHandlers: Partial<Record<YcStage, StageHandler>> = {
   async discover({ db, job }) {
     const result = await discoverYiddish24(db, {
-      maxPages: Number(job.payload?.maxPages) || 25,
+      maxPages: Number(job.payload?.maxPages) || YC_DISCOVER_MAX_PAGES,
       catIds: Array.isArray(job.payload?.catIds) ? job.payload.catIds : undefined,
       full: job.payload?.full === true,
     });
@@ -480,6 +507,8 @@ export interface RunDueJobsDeps {
   limit?: number;
   now?: Date;
   leaseMs?: number;
+  stages?: string[];
+  excludeStages?: string[];
   handlers?: Partial<Record<YcStage, StageHandler>>;
 }
 
@@ -499,7 +528,14 @@ export async function runDueJobs(db: any, deps: RunDueJobsDeps = {}): Promise<Ru
   const handlers = { ...defaultStageHandlers, ...(deps.handlers || {}) };
   const out: RunDueJobsResult = { claimed: 0, done: 0, skipped: 0, failed: 0, retried: 0, released: 0, errors: [] };
 
-  const jobs = await claimJobs(db, { leaseOwner, limit: deps.limit ?? 5, now, leaseMs: deps.leaseMs });
+  const jobs = await claimJobs(db, {
+    leaseOwner,
+    limit: deps.limit ?? 5,
+    now,
+    leaseMs: deps.leaseMs,
+    stages: deps.stages,
+    excludeStages: deps.excludeStages,
+  });
   out.claimed = jobs.length;
 
   for (const job of jobs) {
@@ -635,7 +671,10 @@ export interface YiddishWorkerOptions extends RunDueJobsDeps {
 }
 
 export interface YiddishWorkerHandle {
+  /** The fast lane: every stage except `discover`. */
   tick: () => Promise<RunDueJobsResult | null>;
+  /** The slow lane: one `discover` job at a time. Tests drive it directly. */
+  discoveryTick: () => Promise<RunDueJobsResult | null>;
   stop: () => Promise<void>;
   readonly running: boolean;
 }
@@ -709,30 +748,63 @@ export async function ensureDiscoveryScheduled(
 export function startYiddishWorker(db: any, opts: YiddishWorkerOptions = {}): YiddishWorkerHandle {
   const intervalMs = Math.max(5_000, opts.intervalMs ?? YC_DEFAULT_INTERVAL_MS);
   const leaseOwner = opts.leaseOwner || `yc-worker-${process.pid}`;
-  let inFlight: Promise<RunDueJobsResult | null> | null = null;
+  let workInFlight: Promise<RunDueJobsResult | null> | null = null;
+  // ⛔ DISCOVERY HAS ITS OWN IN-FLIGHT GUARD, and that is the whole point of
+  // this pair. A discover job walks many listing pages at a ≥2 s politeness
+  // gap, so it runs for MINUTES. Under a single guard it held the only lane
+  // and every cheap local stage (fingerprint, novelty, observe) sat still
+  // behind it — the queue looked busy and the corpus barely moved. The two
+  // lanes never claim the same row: one asks for `discover`, the other
+  // excludes it, and the filter is applied in the claim query itself.
+  let discoveryInFlight: Promise<RunDueJobsResult | null> | null = null;
   let stopped = false;
 
-  const tick = async (): Promise<RunDueJobsResult | null> => {
-    if (stopped) return null;
-    if (inFlight) return inFlight; // never two ticks at once
-    inFlight = (async () => {
+  const onErr = (err: unknown) => {
+    if (opts.onError) opts.onError(err);
+    else console.error("yiddish worker tick failed", String((err as any)?.message || err).slice(0, 200));
+  };
+
+  /** The slow lane: at most one discover job at a time, never awaited by the fast lane. */
+  const discoveryTick = (): Promise<RunDueJobsResult | null> => {
+    if (stopped) return Promise.resolve(null);
+    if (discoveryInFlight) return discoveryInFlight;
+    discoveryInFlight = (async () => {
       try {
-        await writeHeartbeat(db);
-        // Schedule before running, so a fresh install starts walking on its
-        // first tick instead of waiting for someone to queue a job by hand.
-        await ensureDiscoveryScheduled(db, { discoveryIntervalMs: opts.discoveryIntervalMs }).catch((err) => {
-          if (opts.onError) opts.onError(err);
-        });
-        return await runDueJobs(db, { ...opts, leaseOwner });
+        await ensureDiscoveryScheduled(db, { discoveryIntervalMs: opts.discoveryIntervalMs }).catch(onErr);
+        return await runDueJobs(db, { ...opts, leaseOwner: `${leaseOwner}-discovery`, limit: 1, stages: ["discover"] });
       } catch (err) {
-        if (opts.onError) opts.onError(err);
-        else console.error("yiddish worker tick failed", String((err as any)?.message || err).slice(0, 200));
+        onErr(err);
         return null;
       } finally {
-        inFlight = null;
+        discoveryInFlight = null;
       }
     })();
-    return inFlight;
+    return discoveryInFlight;
+  };
+
+  /** The fast lane: everything that is local work. */
+  const tick = async (): Promise<RunDueJobsResult | null> => {
+    if (stopped) return null;
+    if (workInFlight) return workInFlight;
+    workInFlight = (async () => {
+      try {
+        await writeHeartbeat(db);
+        // Kick discovery, never wait for it.
+        void discoveryTick();
+        return await runDueJobs(db, {
+          ...opts,
+          leaseOwner,
+          limit: opts.limit ?? YC_WORK_BATCH,
+          excludeStages: ["discover"],
+        });
+      } catch (err) {
+        onErr(err);
+        return null;
+      } finally {
+        workInFlight = null;
+      }
+    })();
+    return workInFlight;
   };
 
   // ⛔ BOOT RUN FIRST, then the interval.
@@ -743,10 +815,12 @@ export function startYiddishWorker(db: any, opts: YiddishWorkerOptions = {}): Yi
 
   return {
     tick,
+    discoveryTick,
     async stop() {
       stopped = true;
       clearInterval(timer);
-      if (inFlight) await inFlight.catch(() => null);
+      if (workInFlight) await workInFlight.catch(() => null);
+      if (discoveryInFlight) await discoveryInFlight.catch(() => null);
     },
     get running() {
       return !stopped;
