@@ -65,6 +65,18 @@ test("the EIN input never autofills or persists (autoComplete off, disabled on t
   assert.ok(einInput.includes("disabled={t.noEin}"));
 });
 
+test("phone layout never dead-ends on step 1 asking for email/cell it does not show (2026-09-16 live customer)", () => {
+  // Desktop step 1 validates mainPhone/mainEmail; the phone "address" screen has
+  // no such inputs, so a desktop→phone switch must route back to "you".
+  assert.ok(page.includes('f.mainPhone.trim().length < 7'), "step 1 gate still demands the cell");
+  assert.ok(/if \(step === 1\) return \["address"\]/.test(mobile), "phone step 1 is the address screen only");
+  const guard = mobile.indexOf("if (step === 1) {", mobile.indexOf("async function continueFrom"));
+  const gate = mobile.indexOf("wiz.validateStep(step)", mobile.indexOf("async function continueFrom"));
+  assert.ok(guard > 0 && guard < gate, "the contact re-route runs BEFORE the step gate");
+  const body = mobile.slice(guard, gate);
+  assert.ok(body.includes("form.mainEmail") && body.includes("form.mainPhone") && body.includes("back()"), "missing contact → back to the you screen");
+});
+
 test("desktop and mobile share ONE side-effect implementation (no forked apply-number / registration)", () => {
   // The mobile wizard must call the page's closures, never apiPost itself.
   assert.ok(!stripComments(mobile).includes("apiPost"), "mobile has no direct API writes");

@@ -908,6 +908,10 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
     const { applySignalWireOnboardingNumber } = await import("./signalWireProvisioning");
     return applySignalWireOnboardingNumber(submissionId);
   }
+  if (numberProvider === "telnyx") {
+    const { applyTelnyxOnboardingNumber } = await import("./telnyxProvisioning");
+    return applyTelnyxOnboardingNumber(submissionId);
+  }
 
   const creds = await loadMasterCreds();
   if (!creds) {
@@ -1074,6 +1078,11 @@ export async function applyOnboardingNumber(submissionId: string): Promise<Provi
 export async function syncOnboardingSms(submissionId: string): Promise<void> {
   const row = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId } });
   if (!row?.smsEnabled || !row?.provisionedDid) return;
+  // ⛔ VoIP.ms-only: `setSMS` on a SignalWire/Telnyx number is a VoIP.ms call
+  // about a number VoIP.ms does not own. Those carriers turn texting on through
+  // their 10DLC registration chain instead (signalWireTenDlc.ts registryFor).
+  const provider = String((row.answers as any)?.phone?.provider || "voipms");
+  if (provider !== "voipms") return;
   const creds = await loadMasterCreds();
   if (!creds) return;
   await enableSms(creds, submissionId, row.provisionedDid, liveEnabled());

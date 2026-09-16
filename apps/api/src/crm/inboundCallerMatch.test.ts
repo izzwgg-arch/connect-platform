@@ -96,5 +96,5 @@ test("missed-call invite push reads invite.fromDisplay — invite.callerName doe
 
 test("ring path resolves the caller through matchTenantContactByPhone, not an inline endsWith scan", () => {
   const src = serverSourceNoComments();
-  assert.ok(src.includes("await matchTenantContactByPhone(target.tenantId, String(input.fromNumber || \"\"))"));
+  assert.ok(src.includes("await matchTenantContactByPhone(target.tenantId, String(input.fromNumber || \"\"), target.userId ?? null)"));
 });

@@ -464,6 +464,23 @@ probe for the PBX leg. ⛔ A deploy recreated `app-api-1` THREE times during the
   `saveTenant` the two numbers back onto T6 **and apply in BOTH the T6 and Main contexts** +
   `displaydx-ivr-golive.ts unswitch <did>`; Connect from `displaydx-premove-snapshot-20260916.json`.
 
+### 8d. ✅ Welcome email re-sent + account renamed "Displaydex" (2026-09-16 11:47–11:49Z)
+
+Izzy: *"Send him out a new welcome email, and I will send him a message to create a new password"*,
+then *"spell his company name right. There is an E in between the D and the X."* Read Eli's row first
+(lastLoginAt 2026-08-26 → he HAS used the account, so resend-invite takes his old password away — what
+Izzy asked for). `POST /admin/users/:id/resend-invite` → EmailJob SENT 11:47:47Z, but it read
+"DisplayDX". Tenant `name` renamed **DisplayDX → Displaydex** (audit `TENANT_RENAMED`; Eli's own
+branding: displaydex.com, the old PBX description, the IVR menu name). Traced first: nothing in api/worker
+writes `Tenant.name` from PBX data; the IVR/AstDB slug comes from `PbxTenantDirectory.tenantSlug`
+(`displaydx`, unchanged); the only Sola link on the tenant is CUTOVER_COMPLETE (no block). Resent →
+EmailJob `cmu41fuob05esph13z59b7lbq` **SENT 11:49:32Z** to eli@displaydex.com; body checked:
+"Displaydex", no "DisplayDX", no "Nexus", ext 101, create-password link, Play badge. Eli is now
+`INVITED` + `forcePasswordReset` — his old password no longer signs in. ⚠️ Both invite links work
+(resend does not revoke earlier tokens; each expires 2026-09-19). ⛔ Left as-is on purpose: PBX tenant
+142's label "DisplayDX" and slug `displaydx` (internal; changing them is a PBX write + apply, never
+customer-facing). Scripts `loopcom:/root/displaydx-welcome-resend.ts`, `displaydx-rename.ts`.
+
 ## 5. Rules this earned / reaffirmed
 
 - ⛔ A tenant rename is a one-column Connect write; the PBX tenant name, doorway routing and

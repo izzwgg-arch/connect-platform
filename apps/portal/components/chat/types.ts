@@ -64,6 +64,10 @@ export interface ChatMessage {
   deletedForEveryoneAt?: string | null;
   deliveryStatus?: string | null;
   deliveryError?: string | null;
+  /** True when the message went out via the number's backup route (unified
+   *  messaging). The meta line says exactly that — the api never sends which
+   *  carrier backed it (customers never see carrier names). */
+  sentViaBackupRoute?: boolean;
   reactions?: Array<{ emoji: string; userId: string }>;
   mmsUrls?: string[];
   location?: ChatLocation | null;

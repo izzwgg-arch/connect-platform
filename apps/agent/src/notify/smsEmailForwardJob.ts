@@ -150,12 +150,21 @@ export class SmsEmailForwardJob {
     return mintSmsReplyAddress(threadId, secret, domain);
   }
 
-  private async resolveContactName(tenantId: string, phoneE164: string | null): Promise<string | null> {
+  /**
+   * ⛔ Private contacts (Contact.ownerUserId, 2026-09-16) name the texter ONLY when
+   * every person receiving this email owns that contact — one email goes to all
+   * recipients, so a colleague's private phone-book name must never ride on it.
+   */
+  private async resolveContactName(tenantId: string, phoneE164: string | null, recipientUserIds: string[] = []): Promise<string | null> {
     if (!phoneE164) return null;
     const last10 = phoneE164.replace(/\D/g, "").slice(-10);
     if (last10.length < 7) return null;
+    const owners = Array.from(new Set(recipientUserIds.filter(Boolean)));
+    const visible = owners.length === 1
+      ? { OR: [{ ownerUserId: null }, { ownerUserId: owners[0] }] }
+      : { ownerUserId: null };
     const match = await this.deps.prisma.contactPhone.findFirst({
-      where: { contact: { tenantId }, numberNormalized: { endsWith: last10 } },
+      where: { contact: { tenantId, ...visible }, numberNormalized: { endsWith: last10 } },
       select: { contact: { select: { displayName: true } } },
       orderBy: { isPrimary: "desc" },
     }).catch(() => null);
@@ -226,7 +235,7 @@ export class SmsEmailForwardJob {
     }
     const users = await this.deps.prisma.user.findMany({
       where: { id: { in: userIds }, smsEmailForwardEnabled: true, status: "ACTIVE" },
-      select: { email: true },
+      select: { id: true, email: true },
     });
     const recipients = Array.from(
       new Set(users.map((u: any) => (u.email || "").trim().toLowerCase()).filter((e: string) => e.includes("@"))),
@@ -251,7 +260,11 @@ export class SmsEmailForwardJob {
         at: new Date(r.createdAt),
       }));
 
-    const contactName = await this.resolveContactName(m.tenantId, thread.externalSmsE164);
+    const contactName = await this.resolveContactName(
+      m.tenantId,
+      thread.externalSmsE164,
+      users.filter((u: any) => String(u.email || "").includes("@")).map((u: any) => String(u.id)),
+    );
     const replyTo = this.replyTo(thread.id);
     const domain = this.deps.messageIdDomain();
 

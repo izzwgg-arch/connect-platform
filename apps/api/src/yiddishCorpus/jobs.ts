@@ -25,6 +25,7 @@ import {
   YC_AUDIO_STAGES,
   YC_AUDIO_BLOCKED_MESSAGE,
   YC_CUSTOMER_WALL_MESSAGE,
+  YC_MUSIC_EXCLUDED_MESSAGE,
   YC_MIN_SAMPLES_FOR_CONCLUSION,
   YC_RULE_SCORE_THRESHOLD,
   type YcStage,
@@ -33,6 +34,7 @@ import { upsertLexemesFromText } from "./lexicon";
 import { scoreVariants, conflictsFor } from "./evidence";
 import {
   discover as discoverYiddish24,
+  isMusicItem,
   fetchAudio as fetchYiddish24Audio,
   resolveAudioGate,
 } from "./yiddish24Adapter";
@@ -427,6 +429,16 @@ export const defaultStageHandlers: Partial<Record<YcStage, StageHandler>> = {
 
   async fingerprint({ db, item }) {
     if (!item) return { ok: false, reason: "no item on this job" };
+    // ⛔ Music never enters the pipeline. This is the FIRST stage, so a music
+    // episode is stopped before anything is spent on it, and the item carries
+    // the marker the worker's guard reads for any stage already queued.
+    const src = await db.ycSource.findUnique({ where: { id: item.sourceId } }).catch(() => null);
+    if (src && isMusicItem(item, src.discoveryCursor)) {
+      await db.ycSourceItem
+        .update({ where: { id: item.id }, data: { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE } })
+        .catch(() => {});
+      return { ok: true, skipped: true, reason: YC_MUSIC_EXCLUDED_MESSAGE, advance: false };
+    }
     const twin = await db.ycSourceItem.findFirst({
       where: { sourceId: item.sourceId, fingerprint: item.fingerprint, NOT: { id: item.id } },
       select: { id: true },
@@ -762,6 +774,14 @@ export async function runDueJobs(db: any, deps: RunDueJobsDeps = {}): Promise<Ru
   for (const job of jobs) {
     const budget = await loadBudget(db, job.sourceKey);
     const item = job.itemId ? await db.ycSourceItem.findUnique({ where: { id: job.itemId } }).catch(() => null) : null;
+
+    // ⛔ An item excluded as music runs NO further stage, and queues none.
+    // Matched on the exact marker, so no other kind of skip is affected.
+    if (item && item.state === "SKIPPED" && item.error === YC_MUSIC_EXCLUDED_MESSAGE) {
+      await finishJob(db, job, { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE }, now);
+      out.skipped += 1;
+      continue;
+    }
 
     const verdict = budgetVerdict(budget, job.stage, now);
     if (verdict.action === "PAUSE") {

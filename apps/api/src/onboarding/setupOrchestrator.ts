@@ -250,6 +250,37 @@ async function findPbxDirectoryEntry(
         String(d.displayName || "").trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (hit) return hit;
+    // ⛔ The REST list is a 40+ minute stale cache — a brand-new tenant is
+    // routinely missing from it (proven live 2026-09-16: the Telnyx end-to-end
+    // tenant 143 failed `pbx_tenant_not_in_directory` long after it existed).
+    // Fall back to the PBX DATABASE. ⛔⛔ The directory sync DELETES every entry
+    // not in the rows it is handed, so it gets the FULL ombu_tenants table,
+    // never one row — and only when that table looks whole (≥ half of what we
+    // already know), so a bad read can never wipe the directory.
+    try {
+      const inst = await (db as any).pbxInstance.findUnique({ where: { id: instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+      const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+      const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+      if (c.ok) {
+        let rows: any[] = [];
+        try {
+          const [r] = await c.conn.query("SELECT tenant_id, name, description FROM ombutel.ombu_tenants");
+          rows = r as any[];
+        } finally {
+          await c.conn.end().catch(() => {});
+        }
+        const known = dirs.length;
+        const inDb = rows.some((t) => String(t?.name || "").toLowerCase() === slug.toLowerCase());
+        if (inDb && rows.length >= Math.ceil(known / 2)) {
+          await syncPbxTenantDirectoryFromRows(db as any, instanceId, rows);
+          const again = await (db as any).pbxTenantDirectory.findMany({ where: { pbxInstanceId: instanceId } });
+          const dbHit = again.find((d: any) => String(d.tenantSlug || "").toLowerCase() === slug.toLowerCase());
+          if (dbHit) return dbHit;
+        }
+      }
+    } catch {
+      /* fall through to the next REST attempt */
+    }
     await sleep(Math.min(retryBaseMs() * 5, retryBaseMs() * (i + 1)));
   }
   return null;
@@ -534,10 +565,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // subaccount: inbound rides the shared trunk 132 and is routed by DID.
     const providerStamp = String((fresh.answers as any)?.phone?.provider || "voipms");
     const isSignalWire = providerStamp === "signalwire";
-    const sub = isSignalWire ? null : readSubaccount(fresh);
+    // Telnyx (2026-09-16) is shaped like SignalWire here: no subaccount, one
+    // shared trunk (183 "Telnyx Loopcom-Primary"), inbound routed by DID.
+    const isTelnyx = providerStamp === "telnyx";
+    const sharedTrunkCarrier = isSignalWire || isTelnyx;
+    const sub = sharedTrunkCarrier ? null : readSubaccount(fresh);
     const did = String(fresh.provisionedDid || "");
     if (did.length !== 10) throw new Error("number_stage_missing_did");
-    if (!isSignalWire && !sub) throw new Error("number_stage_missing_subaccount_or_did");
+    if (!sharedTrunkCarrier && !sub) throw new Error("number_stage_missing_subaccount_or_did");
     if (!company) throw new Error("company_name_missing");
     if (!people.length) throw new Error("no_extensions_requested");
 
@@ -552,7 +587,29 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     const portedDigits = String(freshAnswers?.phone?.details?.numbers ?? "")
       .replace(/\D/g, "")
       .replace(/^1(?=\d{10}$)/, "");
-    const portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
+    let portedDid = numberChoice === "port" && portedDigits.length === 10 ? portedDigits : null;
+    // ⛔⛔ A ported number that ALREADY lives on this PBX (another tenant owns it)
+    // must NOT be added to the new tenant. ombu_tenant_dids has no uniqueness
+    // rule, so the build would make it a second owner and the Main re-render
+    // could send that number's live calls to the new tenant TODAY — days before
+    // the port (found 2026-09-16 on Loopcom's own 845-723-1213, owned by T35).
+    // Inbound routing is by DID, not carrier: when the port lands on the Telnyx
+    // trunk the number keeps ringing its existing tenant with no PBX change.
+    if (portedDid) {
+      const owner = await findExistingPbxDidOwner(portedDid, fresh);
+      if (owner) {
+        await logEvent(
+          submissionId,
+          `The number being transferred (${portedDid}) already rings PBX tenant ${owner} — it stays there. The port only changes its carrier; this build does not touch it.`,
+        );
+        const latestA = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, select: { answers: true } });
+        const a2: any = { ...((latestA?.answers as any) || {}) };
+        a2.provisioning = { ...(a2.provisioning || {}), portedDidExistingPbxTenant: String(owner) };
+        fresh.answers = a2;
+        await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { answers: a2 } });
+        portedDid = null;
+      }
+    }
     // Emergency calling for the new tenant: the address the customer typed,
     // through the same builder the E911 registration uses, with the state
     // resolved to ombutel.states.id from the PBX itself. ⛔ Best-effort: any
@@ -582,7 +639,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       label: identity.pbxLabel,
       did,
       portedDid,
-      numberProvider: isSignalWire ? "signalwire" : "voipms",
+      numberProvider: isTelnyx ? "telnyx" : isSignalWire ? "signalwire" : "voipms",
       voipms: sub ? { user: sub.username, pass: sub.password, server: sub.server } : undefined,
       people,
       emergency,
@@ -591,7 +648,7 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     if (!live) {
       await logEvent(
         submissionId,
-        `[dry-run] Build VitalPBX tenant "${company}": ${isSignalWire ? "shared SignalWire trunk" : `trunk ${sub!.username}@${sub!.server}`}, DID ${did}, ${people.length} extension(s)` +
+        `[dry-run] Build VitalPBX tenant "${company}": ${isTelnyx ? "shared Telnyx trunk" : isSignalWire ? "shared SignalWire trunk" : `trunk ${sub!.username}@${sub!.server}`}, DID ${did}, ${people.length} extension(s)` +
           `${people.some((p) => p.cellNumber) ? ` (incl. ${people.filter((p) => p.cellNumber).length} with cell routing)` : ""}, inbound route → ext ${people[0].ext}.`,
       );
       await logEvent(submissionId, "[dry-run] Would sync extensions into Connect, verify users + SIP, and email every extension its invitation.");
@@ -610,6 +667,32 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     const resolveTenantPath = async (slug: string, label: string): Promise<string | null> => {
       // slug/label are the unique per-submission identity (buildPbxTenant
       // passes them through) — never match on the bare company name here.
+      //
+      // ⛔ The PBX DATABASE first. VitalPBX's REST tenant list is a cache that
+      // runs 40+ minutes stale (vitalpbx-rest-tenant-list-is-a-stale-cache).
+      // Proven on the live Telnyx end-to-end sign-up 2026-09-16: a build
+      // interrupted AFTER its tenant was created could never resume — REST
+      // did not list the tenant, the mirror refused "already exists", the panel
+      // fallback failed, and every watchdog retry failed the same way.
+      try {
+        const inst = await (db as any).pbxInstance.findUnique({ where: { id: pbx.instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+        const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+        const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+        if (c.ok) {
+          try {
+            const [rows] = await c.conn.query(
+              `SELECT path FROM \`${c.schema}\`.ombu_tenants WHERE name = ? OR TRIM(description) = ? LIMIT 2`,
+              [slug, label.trim()],
+            );
+            const list = rows as Array<{ path?: string }>;
+            if (list.length === 1 && list[0]?.path) return String(list[0].path);
+          } finally {
+            await c.conn.end().catch(() => {});
+          }
+        }
+      } catch {
+        /* fall through to the REST list */
+      }
       try {
         const tenants = (await pbx.client.listTenants()) as any[];
         const hit = tenants.find(
@@ -638,6 +721,60 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
         { tenantCreator: resolveMirrorTenantCreator(pbx.instanceId), tenantRenderer: resolveMirrorTenantRenderer(pbx.instanceId) },
       );
       tenantPath = result.tenantPath;
+      // ⛔ SHARED-TRUNK carriers (Telnyx trunk 183, SignalWire trunk 132) live in
+      // MAIN, so an inbound call is dispatched by Main's default-trunk
+      // `_<DID> → T<n>_default-trunk` entry. The tenant-context applies above
+      // never regenerate Main's dialplan — proven on the first live Telnyx
+      // sign-up 2026-09-16: 845-777-4807 hit only the catch-all, i.e. calls
+      // to the customer's number went nowhere (same mechanism as the DisplayDX
+      // move, see pbx-number-move-needs-main-apply). VoIP.ms builds don't need
+      // it: their per-tenant trunk routes straight into the tenant.
+      // applyAndRebake (not a bare apply) so the Connect doorways a Main
+      // regen disturbs are re-baked immediately. Not caught: a customer whose
+      // inbound calls go nowhere must be a failed build, not a green one.
+      if (sharedTrunkCarrier) {
+        const { applyAndRebake, saveTenant } = await import("../pbxConsole/pbxConsoleWrites");
+        const quiet = { info: () => {}, warn: () => {}, error: () => {} };
+        // ⛔ A bare Main apply is NOT enough when the tenant came from the
+        // MIRROR: the mirror writes rows directly and queues nothing for Main,
+        // so Main's `tenants` module (99) is never regenerated — proven live
+        // 2026-09-16 (Main applied, dispatch still missing). Re-saving the
+        // tenant through the panel with its OWN unchanged number list makes
+        // VitalPBX queue Main itself; then the apply renders the dispatch
+        // (proven the same hour: `_8457774807 → T143_default-trunk`).
+        const inst = await (db as any).pbxInstance.findUnique({ where: { id: pbx.instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+        const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+        const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+        if (!c.ok) throw new Error(`main_dispatch_tenant_lookup_unavailable (${c.skipReason})`);
+        let pbxTenantNumericId = "";
+        try {
+          const [rows] = await c.conn.query("SELECT tenant_id FROM ombutel.ombu_tenants WHERE path = ? LIMIT 1", [tenantPath]);
+          pbxTenantNumericId = String((rows as any[])[0]?.tenant_id ?? "");
+        } finally {
+          await c.conn.end().catch(() => {});
+        }
+        if (!pbxTenantNumericId) throw new Error(`main_dispatch_tenant_not_found (path ${tenantPath})`);
+        const tenantDids = [did, ...(portedDid ? [portedDid] : [])];
+        await saveTenant(session, panelCfg.mainTenant, pbxTenantNumericId, {
+          inboundNumbers: tenantDids.map((d) => ({ did: d, description: "" })),
+        });
+        await applyAndRebake(session, panelCfg.mainTenant, { db, log: quiet, pbxInstanceId: pbx.instanceId }, "onboarding-main-did-dispatch");
+        session.setTenant(tenantPath);
+        await logEvent(submissionId, `PBX build: Main applied — ${did}${portedDid ? ` and ${portedDid}` : ""} dispatch to the new tenant.`);
+      }
+      // The Telnyx port landing switches THIS route's caller ID to the real
+      // number when it arrives (telnyxPortWatchdog.ts) — so keep its id.
+      try {
+        // Re-read first: the Telnyx sweep may have written answers during the
+        // build, and a stale copy here would silently revert it.
+        const latest = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId }, select: { answers: true } });
+        const answersNow: any = { ...((latest?.answers as any) || (fresh.answers as any) || {}) };
+        answersNow.provisioning = { ...(answersNow.provisioning || {}), pbxOutboundRouteId: String(result.routeId || "") };
+        fresh.answers = answersNow;
+        await (db as any).onboardingSubmission.update({ where: { id: submissionId }, data: { answers: answersNow } });
+      } catch {
+        /* best-effort — the landing says so if it is missing */
+      }
     } finally {
       releaseAccount(account);
     }
@@ -702,6 +839,14 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       });
       if (stamp.stamped) {
         await logEvent(submissionId, "Monthly billing set up to match the sign-up quote (E911 per number + telecom & regulatory fees).");
+      }
+      // Cold calling / CRM, re-counted against the extensions actually built.
+      const { applyOnboardingAddOnBilling } = await import("./onboardingBillingDefaults");
+      const { onboardingAddOnsForSubmission } = await import("./onboardingPayment");
+      const addOns = onboardingAddOnsForSubmission(fresh);
+      const addOnResult = await applyOnboardingAddOnBilling(db as any, tenantId, addOns);
+      if (addOnResult.changed) {
+        await logEvent(submissionId, `Monthly billing add-ons set: cold calling ${addOns.coldCallingAll ? "on every extension ($65 each)" : `${addOns.coldCallingExtensions} extension(s)`}, CRM ${addOns.crmExtensions} extension(s).`);
       }
     }
 
@@ -791,6 +936,17 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       submissionId,
       log: (message: string) => logEvent(submissionId, message),
     });
+    // ⛔ And when 911 is NOT registered, TEXT the owner (the sign-up report
+    // below is ADMIN_ALERT — muted — so it reaches nobody). Never fatal.
+    try {
+      const { raiseE911EscalationIfNeeded } = await import("./e911Escalation");
+      const latest = await (db as any).onboardingSubmission.findUnique({ where: { id: submissionId } });
+      if (await raiseE911EscalationIfNeeded(db, latest)) {
+        await logEvent(submissionId, "911 is not registered — the owner was texted.");
+      }
+    } catch {
+      /* the alert must never fail a finished build */
+    }
     // The owner's plain-English sign-up report — one per finished sign-up.
     await queueOnboardingSignupReport(submissionId, "success");
   } catch (e: any) {
@@ -800,5 +956,29 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
     // Failures get reported too — a paid customer without a working system is
     // exactly what the owner wants to hear about immediately.
     await queueOnboardingSignupReport(submissionId, "failed");
+  }
+}
+
+/**
+ * Which PBX tenant (numeric id) already owns this DID, or null. Reads
+ * ombutel.ombu_tenant_dids directly (the REST list is a stale cache).
+ * ⛔ A read FAILURE throws — answering "nobody owns it" when we could not look
+ * would risk claiming a live number, so the build fails loudly instead.
+ */
+async function findExistingPbxDidOwner(did: string, row: any): Promise<string | null> {
+  const inst = await (db as any).pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" }, select: { ombuMysqlUrlEncrypted: true } });
+  const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+  const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+  if (!c.ok) throw new Error(`ported_number_owner_check_unavailable (${c.skipReason})`);
+  try {
+    const slug = String((row?.answers as any)?.provisioning?.tenantSlug || "");
+    const [rows] = await c.conn.query(
+      "SELECT d.tenant_id, t.name FROM ombutel.ombu_tenant_dids d JOIN ombutel.ombu_tenants t ON t.tenant_id = d.tenant_id WHERE d.did = ?",
+      [did],
+    );
+    const other = (rows as any[]).find((r) => !slug || String(r?.name || "") !== slug);
+    return other ? String(other.tenant_id) : null;
+  } finally {
+    await c.conn.end().catch(() => {});
   }
 }

@@ -72,7 +72,30 @@ const {
   fileBrandForRegistration,
   advanceSmsRegistration,
   SMS_REGISTRATION_ACTIVE_EMAIL_TYPE,
+  buildActivationEmailJobData,
 } = tenDlc;
+
+// ── EmailJob schema, read from schema.prisma (not restated by hand) ───────
+const prismaSchema = read("../../../../packages/db/prisma/schema.prisma");
+const emailJobStatuses = (() => {
+  const start = prismaSchema.indexOf("enum EmailJobStatus {");
+  const block = prismaSchema.slice(start, prismaSchema.indexOf("}", start));
+  return block.split("\n").slice(1).map((l) => l.trim()).filter((l) => /^[A-Z_]+$/.test(l));
+})();
+const emailJobTenantRequired = (() => {
+  const start = prismaSchema.indexOf("model EmailJob {");
+  const block = prismaSchema.slice(start, prismaSchema.indexOf("\n}", start));
+  return /^\s*tenantId\s+String\s*$/m.test(block);
+})();
+function assertValidEmailJobCreate(data: any) {
+  if (data.status !== undefined) {
+    assert.ok(emailJobStatuses.includes(data.status), `EmailJob.status "${data.status}" is not in ${emailJobStatuses.join("|")}`);
+  }
+  if (emailJobTenantRequired) {
+    assert.ok(typeof data.tenantId === "string" && data.tenantId.length > 0, "EmailJob.tenantId is required");
+  }
+  assert.notEqual(data.type, "ADMIN_ALERT", "customer email must never ride the muted ADMIN_ALERT type");
+}
 
 // ── fake db (passed as an argument — the module takes db explicitly) ───────
 function makeDb() {
@@ -123,7 +146,11 @@ function makeDb() {
       },
     },
     emailJob: {
+      // Enforces the REAL EmailJob schema — a fake that accepts anything is
+      // how status "PENDING" + tenantId null passed this suite while Prisma
+      // would have rejected every insert.
       create: async ({ data }: any) => {
+        assertValidEmailJobCreate(data);
         state.emailJobs.push(data);
         return data;
       },
@@ -289,6 +316,30 @@ test("advance: brand approved → campaign filed; campaign approved → number o
     clientState.campaignState = "pending";
     delete process.env.SIGNALWIRE_AUTO_PROVISION;
   }
+});
+
+test("activation email payload: valid EmailJob status + tenant, own type; no tenant → not queued", async () => {
+  assert.ok(emailJobStatuses.includes("QUEUED") && !emailJobStatuses.includes("PENDING"), "schema enum parsed");
+  assert.equal(emailJobTenantRequired, true, "schema says EmailJob.tenantId is required");
+
+  const data = buildActivationEmailJobData({ tenantId: "ten-1", legalName: "Weiss Plumbing LLC" }, "a@b.com", "<p>x</p>");
+  assertValidEmailJobCreate(data);
+  assert.equal(data.status, undefined, "status omitted so the column defaults to QUEUED (what the send door picks up)");
+  assert.equal(data.tenantId, "ten-1");
+  assert.equal(data.type, SMS_REGISTRATION_ACTIVE_EMAIL_TYPE);
+  assert.notEqual(data.type, "ADMIN_ALERT");
+  // Customer email never names a carrier.
+  assert.doesNotMatch(`${data.subject} ${data.textBody}`, /telnyx|signalwire|voip\.?ms/i);
+
+  assert.equal(buildActivationEmailJobData({ tenantId: null, legalName: "X" }, "a@b.com", "<p>x</p>"), null);
+  assert.equal(buildActivationEmailJobData({ tenantId: "  " }, "a@b.com", "<p>x</p>"), null);
+
+  // End to end through the queue path: a tenantless activation queues nothing
+  // and does not throw; a failing insert is LOGGED, not swallowed silently.
+  const src = read("./signalWireTenDlc.ts");
+  assert.doesNotMatch(src, /queueActivationEmail\(db, fin\)\.catch\(\(\) => \{\}\)/, "no silent catch on the activation email");
+  assert.match(src, /SMS_REGISTRATION_ACTIVE_EMAIL_QUEUE_FAILED/);
+  assert.doesNotMatch(src, /status: "PENDING"/);
 });
 
 test("advance: a registry REJECTION fails the row loudly; a transient error records and retries", async () => {

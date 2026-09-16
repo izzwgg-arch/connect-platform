@@ -34,13 +34,24 @@ import {
 import { createBillingInvoiceRowWithUniqueNumber } from "../billing/invoiceEngine";
 import { createBillingInvoicePayToken } from "../billing/billingPayToken";
 import { billingLiveChargesDisabled } from "../billing/solaBillingPayments";
-import { ensureOnboardingBillingDefaults } from "./onboardingBillingDefaults";
-import { quoteInputForSubmission } from "./quoteInput";
+import { ensureOnboardingBillingDefaults, applyOnboardingAddOnBilling, type OnboardingAddOnBilling } from "./onboardingBillingDefaults";
+import { quoteInputForSubmission, readOnboardingPricing } from "./quoteInput";
 import { uniqueTenantName } from "./uniqueTenantName";
 
 /** Long enough to sleep on the decision; short enough that a stale link from a
  *  half-finished sign-up doesn't survive for a month. */
 const CHECKOUT_LINK_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** The month-2 add-on picture for a submission (admin-set cold calling / CRM). */
+export function onboardingAddOnsForSubmission(sub: any): OnboardingAddOnBilling {
+  const q = quoteInputForSubmission(sub);
+  const pricing = readOnboardingPricing(sub?.answers);
+  return {
+    coldCallingAll: pricing.coldCalling?.extensions === "all",
+    coldCallingExtensions: q.coldCallingExtensions,
+    crmExtensions: q.crmExtensions,
+  };
+}
 
 export type OnboardingCheckout =
   | {
@@ -77,12 +88,16 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
   // A toll-free/vanity pick must recur at $15/month — same stamp pattern as
   // E911 and the $2 fee.
   const tollFreeNumber = quoteInputForSubmission(sub).tollFreeNumber;
+  // Admin-set cold calling / CRM must recur exactly as quoted — see
+  // applyOnboardingAddOnBilling. Runs after the fee stamp (which merges metadata).
+  const addOns = onboardingAddOnsForSubmission(sub);
   if (sub.createdTenantId) {
     const existing = await (db as any).tenant.findUnique({ where: { id: sub.createdTenantId }, select: { id: true } });
     if (existing) {
       // Self-heal: tenants created before fee-stamping shipped get the stamp on
       // their next checkout visit (the guards inside make this a no-op after).
       await ensureOnboardingBillingDefaults(db as any, existing.id, { smsEnabled: !!sub.smsEnabled, tollFreeNumber });
+      await applyOnboardingAddOnBilling(db as any, existing.id, addOns);
       return existing.id;
     }
   }
@@ -104,6 +119,7 @@ async function ensureTenantForSubmission(sub: { id: string; companyName?: string
   // no E911, no $2 fee line — breaking the "$35 a month, including tax" promise
   // the checkout and report email make.
   await ensureOnboardingBillingDefaults(db as any, tenant.id, { smsEnabled: !!sub.smsEnabled, tollFreeNumber });
+  await applyOnboardingAddOnBilling(db as any, tenant.id, addOns);
   await (db as any).onboardingSubmission.update({
     where: { id: sub.id },
     data: { createdTenantId: tenant.id },
@@ -157,6 +173,8 @@ export async function prepareOnboardingCheckout(submissionId: string): Promise<O
   // requires both — the enum powers billing reports).
   const LINE_TYPE: Record<string, string> = {
     extensions: "EXTENSION",
+    cold_calling_extensions: "EXTENSION",
+    crm: "CUSTOM",
     e911: "E911_FEE",
     sms: "SMS_PACKAGE",
     additional_numbers: "PHONE_NUMBER",

@@ -247,6 +247,9 @@ export type ChatMessage = {
   deletedForEveryoneAt?: string | null;
   deliveryStatus?: string | null;
   deliveryError?: string | null;
+  /** True when the message went out via the number's backup route (unified
+   *  messaging). The api never sends WHICH carrier backed it. */
+  sentViaBackupRoute?: boolean;
   clientStatus?: "sending" | "sent" | "failed";
   reactions?: Array<{ emoji: string; userId: string }>;
   mmsUrls?: string[];

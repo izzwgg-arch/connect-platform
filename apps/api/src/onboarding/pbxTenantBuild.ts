@@ -75,8 +75,8 @@ export type PbxBuildJob = {
    * there via [trk-132-in]'s exten-s lift into default-trunk, which routes by
    * the tenant's DID list, so no per-customer trunk or subaccount exists).
    */
-  numberProvider?: "voipms" | "signalwire";
-  /** Required for numberProvider "voipms" (the default); unused for SignalWire. */
+  numberProvider?: "voipms" | "signalwire" | "telnyx";
+  /** Required for numberProvider "voipms" (the default); unused for SignalWire and Telnyx. */
   voipms?: { user: string; pass: string; server: string };
   did: string;
   /**
@@ -219,6 +219,21 @@ export const SIGNALWIRE_SHARED_TRUNK_NAME = "SignalWire loopcom-pbx";
 async function findSignalWireSharedTrunkId(s: PanelSession): Promise<string | null> {
   const h = await s.loadForm("trunk_group", "add");
   return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === SIGNALWIRE_SHARED_TRUNK_NAME);
+}
+
+/**
+ * The ONE shared Telnyx trunk (2026-09-16, the Telnyx onboarding switch).
+ * Verified on the live PBX: trunk 183 "Telnyx Loopcom-Primary", tenant 1
+ * (Main), registered to sip.telnyx.com as the Loopcom-Primary-SIP credential
+ * connection; the connection's dnis_number_format=national delivers the DID
+ * as 10 digits, so the generated trk-183-in routes by the tenant's DID list
+ * with no custom dialplan. Matched by NAME, like the SignalWire trunk.
+ */
+export const TELNYX_SHARED_TRUNK_NAME = "Telnyx Loopcom-Primary";
+
+async function findTelnyxSharedTrunkId(s: PanelSession): Promise<string | null> {
+  const h = await s.loadForm("trunk_group", "add");
+  return findOptionInSelect(h, TRUNK_SELECT, (t) => t.trim() === TELNYX_SHARED_TRUNK_NAME);
 }
 
 export async function createOutboundRoute(s: PanelSession, label: string, cidName: string, did: string, trunkIds: string[]): Promise<string> {
@@ -721,7 +736,7 @@ export async function buildPbxTenant(
   // company-derived names so they keep matching their existing objects).
   const slug = job.slug || slugify(co);
   const label = String(job.label || co).trim();
-  const numberProvider = job.numberProvider === "signalwire" ? "signalwire" : "voipms";
+  const numberProvider = job.numberProvider === "signalwire" || job.numberProvider === "telnyx" ? job.numberProvider : "voipms";
   if (!co || !job.did) {
     throw new PanelStepError("input", "job needs company and did");
   }
@@ -736,13 +751,29 @@ export async function buildPbxTenant(
   // temporary one. Callers must see the real number from day one, and both
   // numbers are prepared in the tenant so port day needs zero panel work.
   const portedDid = tenDigitsOrNull(job.portedDid);
-  const outboundCid = portedDid || job.did;
+  // ⛔ Telnyx REFUSES an unowned caller ID (403 D51 — proven 2026-09-15), and a
+  // ported number is not on the account until the port lands. So a Telnyx
+  // porting build presents the temporary number; the Telnyx port landing
+  // switches this route to the real number the day it arrives.
+  const outboundCid = numberProvider === "telnyx" ? job.did : portedDid || job.did;
   const tenantDids = portedDid ? [job.did, portedDid] : [job.did];
 
   s.setTenant(mainTenant);
   let trunkId: string;
   let routeTrunkIds: string[];
-  if (numberProvider === "signalwire") {
+  if (numberProvider === "telnyx") {
+    // ⛔ NO per-tenant trunk on Telnyx — every tenant shares trunk 183. Telnyx
+    // first (the number lives there → attestation A, proven on a real call
+    // 2026-09-15); the shared "0001" trunk is the backup, as on SignalWire.
+    const txTrunkId = await findTelnyxSharedTrunkId(s);
+    if (!txTrunkId) {
+      throw new PanelStepError("trunk", `shared Telnyx trunk "${TELNYX_SHARED_TRUNK_NAME}" not found on the PBX`);
+    }
+    trunkId = txTrunkId;
+    const backupId = await findSharedPrimaryTrunkId(s);
+    routeTrunkIds = backupId && backupId !== trunkId ? [trunkId, backupId] : [trunkId];
+    log(`using shared Telnyx trunk (id ${trunkId})${backupId ? ` with "${SHARED_PRIMARY_TRUNK_NAME}" backup` : ""} — no per-tenant trunk`);
+  } else if (numberProvider === "signalwire") {
     // ⛔ NO per-tenant trunk on SignalWire — every tenant shares trunk 132.
     // Outbound dials SignalWire FIRST (the customer's number lives there, so
     // their caller ID passes and — once the account's attestation-A grant
@@ -770,7 +801,7 @@ export async function buildPbxTenant(
     routeTrunkIds = primaryTrunkId && primaryTrunkId !== trunkId ? [primaryTrunkId, trunkId] : [trunkId];
   }
   const routeId = await createOutboundRoute(s, label, co, outboundCid, routeTrunkIds);
-  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid ? " — the ported number" : ""}, trunks [${routeTrunkIds.join(", ")}])`);
+  log(`outbound route ok (id ${routeId}, caller ID ${outboundCid}${portedDid && outboundCid === portedDid ? " — the ported number" : portedDid ? " — the temporary number until the port lands" : ""}, trunks [${routeTrunkIds.join(", ")}])`);
   const arsId = await createRouteSelection(s, label, routeId);
   log(`route selection ok (id ${arsId})`);
   let mirrorTenantId = 0;
@@ -802,7 +833,15 @@ export async function buildPbxTenant(
         log,
       );
     } catch (e: any) {
-      log(`⛔ emergency calling NOT set up: ${e?.message || e} — 911 still works via the carrier, but this tenant cannot be interrupted for non-payment until it is fixed`);
+      // A RESUMED build re-runs this step after the first run already created
+      // the location — "already in use" then means it IS set up (seen live on
+      // the Telnyx end-to-end resume, 2026-09-16), not that 911 is broken.
+      if (/location name is already in use/i.test(String(e?.message || e))) {
+        log(`emergency location already set up by the earlier run — kept`);
+        s.setTenant(tenantPath);
+      } else {
+        log(`⛔ emergency calling NOT set up: ${e?.message || e} — 911 still works via the carrier, but this tenant cannot be interrupted for non-payment until it is fixed`);
+      }
     }
     s.setTenant(tenantPath);
   } else {

@@ -62,9 +62,9 @@ export async function registerCrmLiveCallContextRoutes(app: FastifyInstance) {
 
     const resolvedContactId =
       contactId ??
-      (phone ? (await matchTenantContactByPhone(tenantId, phone))?.contactId : null) ??
-      (cdr?.fromNumber ? (await matchTenantContactByPhone(tenantId, cdr.fromNumber))?.contactId : null) ??
-      (cdr?.toNumber ? (await matchTenantContactByPhone(tenantId, cdr.toNumber))?.contactId : null) ??
+      (phone ? (await matchTenantContactByPhone(tenantId, phone, null))?.contactId : null) ??
+      (cdr?.fromNumber ? (await matchTenantContactByPhone(tenantId, cdr.fromNumber, null))?.contactId : null) ??
+      (cdr?.toNumber ? (await matchTenantContactByPhone(tenantId, cdr.toNumber, null))?.contactId : null) ??
       null;
 
     if (!resolvedContactId) {

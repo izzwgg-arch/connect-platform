@@ -21,7 +21,8 @@ export type AgentContactsInfo = {
 };
 
 export interface ContactsToolDeps {
-  loadContactsInfo(tenantId: string, search?: string): Promise<AgentContactsInfo>;
+  /** userId = the person asking; their private contacts plus shared ones. No userId → shared only. */
+  loadContactsInfo(tenantId: string, search?: string, userId?: string | null): Promise<AgentContactsInfo>;
 }
 
 export function buildContactsTools(deps: ContactsToolDeps): ToolSpec[] {
@@ -43,7 +44,8 @@ export function buildContactsTools(deps: ContactsToolDeps): ToolSpec[] {
         additionalProperties: false,
       },
       run: (args: any, ctx: ToolContext) =>
-        deps.loadContactsInfo(ctx.tenantId, typeof args?.search === "string" ? args.search : undefined),
+        // ⛔ The asker comes from the server-verified context, never from the model.
+        deps.loadContactsInfo(ctx.tenantId, typeof args?.search === "string" ? args.search : undefined, ctx.clientUserId ?? null),
     },
   ];
 }

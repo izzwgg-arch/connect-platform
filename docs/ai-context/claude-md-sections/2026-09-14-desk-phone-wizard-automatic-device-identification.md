@@ -167,3 +167,33 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   my manual deploy was correctly refused with `runningCount=1`; never `--skip-queue-check` past that
   without reading `/ops/deploy/status`, because it means a real job is running.
   ⏳ **NOT PROVEN: nobody has opened the link on a real phone; no camera frame decoded in production.**
+- ⛔⛔ **ROUND 19 (2026-09-16, Izzy ran it himself — handoff §10r): three "done" things were NOT.**
+  (1) his T42S hit a PASSWORD screen → new `known-credential` route: a password OUR provisioning
+  wrote is read back from the phone's own cfg and auto-stored in the DESKTOP vault via
+  `rememberCredential` — never in React state/logs/audit; proven live (200 for his real phone,
+  wizard called it twice). ⛔ HONEST LIMIT: his unit holds the PREVIOUS provider's password
+  (same unit RPS-claimed by another org), so ONE hand reset (OK ~10s) is physics, then never
+  again. (2) the scan link only lived on the DONE screen → one shared offer on found/match/
+  live/password/done, proven on his screen mid-run. (3) his own link answered **"All your phones
+  are ready" with NO camera** (serial already on file → remaining=0 hid the button — the
+  unconditional-tick lie rebuilt): camera is NEVER hidden now ("Scan another phone") and the
+  all-scanned heading talks about STICKERS, not readiness; "All your phones are ready" greps 0
+  in the shipped bundle. Deployed+container-verified: api `3ace3d4e` (has the route), portal tip
+  `47584ef6`. ⛔⛔ deploy at the ORIGIN TIP, never your own sha — deploying `9c0fefde` rolled
+  back a peer's live work (they caught it, redeployed tip). ⏳ app crashed once mid-scan; one
+  scan took ~2 min vs the promised ~30s (slow probing, not frozen — /discovered landed);
+  physical leg still open: his T42S needs its one hand reset; no phone yet registered
+  end-to-end from a customer scan.
+- ⛔⛔ **ROUND 20 (2026-09-16, handoff §10s — `020298b1`, tip `6c2ef93e`): THE SCAN PAGE IS A REAL
+  SCANNER NOW.** Izzy: *"It doesn't really go into focus to actually scan. It needs to scan very
+  efficiently right away."* Round 18 was a PHOTOGRAPHER — one JPEG POSTed to the server every 1.5s,
+  camera asked for nothing → blurry at reading distance, almost never decodes. Now the browser runs
+  the SAME `zxing-wasm/reader` ON-DEVICE (~7×/s on a centre crop), asks `getUserMedia` for 1080p +
+  `focusMode:"continuous"`, shows a torch button where the phone has `torch`, and sends only the
+  decoded TEXT to NEW `POST /phone-setup/:token/scan-text`. ⛔ THE SERVER STAYS THE ONLY JUDGE:
+  shared `labelTextsFromSymbols` (extracted from `labelBarcodes.ts`) → `parseDeviceLabel` →
+  match-by-MAC → the one gate, same refusals (maker-named 409, `nothing_matched_yet`, dies-with-link).
+  Old browser with no wasm → the original photo-POST path still runs. ⛔ reader wasm served from OUR
+  origin (`public/zxing/zxing_reader.wasm`; CSP blocks the CDN) — live `200 application/wasm`. Tests:
+  deviceCloudRoutes 66 (+4 scan-text); both apps tsc clean on touched files. ⏳ nobody has scanned a
+  real sticker through the on-device path — next, on Izzy's phone.

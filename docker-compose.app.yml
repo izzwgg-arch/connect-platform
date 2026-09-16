@@ -21,6 +21,10 @@ services:
       # fully-logged dry runs.
       VOIPMS_AUTO_PROVISION: ${VOIPMS_AUTO_PROVISION:-on}
       ONBOARDING_PBX_AUTO_SETUP: ${ONBOARDING_PBX_AUTO_SETUP:-on}
+      # Telnyx sign-ups (2026-09-16): "on" = a submission whose number was picked
+      # on Telnyx really buys it, registers 911 and files its port. Inert unless
+      # the wizard carrier switch (/apps/telnyx) says Telnyx.
+      TELNYX_AUTO_PROVISION: ${TELNYX_AUTO_PROVISION:-on}
       # Production must send real provider traffic. The platform env historically
       # carried SMS_PROVIDER_TEST_MODE=true for early smoke tests; override it here
       # unless the host shell explicitly opts back into test mode for a dry run.
@@ -253,6 +257,7 @@ services:
       # Same automated-onboarding gates as the stable api service.
       VOIPMS_AUTO_PROVISION: ${VOIPMS_AUTO_PROVISION:-on}
       ONBOARDING_PBX_AUTO_SETUP: ${ONBOARDING_PBX_AUTO_SETUP:-on}
+      TELNYX_AUTO_PROVISION: ${TELNYX_AUTO_PROVISION:-on}
       SMS_PROVIDER_TEST_MODE: ${SMS_PROVIDER_TEST_MODE:-false}
       SIMULATE_NUMBER_PROVIDER: ${SIMULATE_NUMBER_PROVIDER:-false}
       SOLA_CARDKNOX_SIMULATE: ${SOLA_CARDKNOX_SIMULATE:-false}

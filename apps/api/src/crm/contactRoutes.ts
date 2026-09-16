@@ -197,7 +197,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const scopeCtx = await resolveCrmContactScopeContext(user);
     const scopeWhere = buildCrmContactListScopeWhere(tenantId, scopeCtx);
     const contactWhere = mergeAndWhereClauses(
-      { tenantId, active: true, archivedAt: null },
+      { tenantId, active: true, archivedAt: null, ownerUserId: null },
       scopeWhere,
     );
 
@@ -523,9 +523,10 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const { tenantId, role } = user;
     const { id } = req.params as { id: string };
 
+    // ownerUserId: null — CRM never opens a private phone-book contact (2026-09-16).
     const where = isAdminRole(role)
-      ? { id, tenantId }
-      : { id, tenantId, active: true, archivedAt: null };
+      ? { id, tenantId, ownerUserId: null }
+      : { id, tenantId, active: true, archivedAt: null, ownerUserId: null };
 
     const contact = await (db as any).contact.findFirst({
       where,
@@ -613,7 +614,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     // Ensure contact exists and belongs to tenant; load current stage + assignedToUserId for timeline diff
     const existing = await (db as any).contact.findFirst({
-      where: { id, tenantId, active: true },
+      // ownerUserId: null — a PATCH here would otherwise enroll a private phone-book contact into CRM.
+      where: { id, tenantId, active: true, ownerUserId: null },
       select: {
         id: true,
         crmMeta: { select: { stage: true, assignedToUserId: true } },
@@ -1538,7 +1540,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     // Load both contacts with phones + emails + crmMeta
     const [keepContact, mergeContact] = await Promise.all([
       (db as any).contact.findFirst({
-        where: { id: keepContactId, tenantId, active: true },
+        where: { id: keepContactId, tenantId, active: true, ownerUserId: null },
         include: {
           phones: { select: { id: true, numberNormalized: true, numberRaw: true, type: true, isPrimary: true } },
           emails: { select: { id: true, email: true, type: true, isPrimary: true } },
@@ -1546,7 +1548,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
         },
       }),
       (db as any).contact.findFirst({
-        where: { id: mergeContactId, tenantId, active: true },
+        where: { id: mergeContactId, tenantId, active: true, ownerUserId: null },
         include: {
           phones: { select: { id: true, numberNormalized: true, numberRaw: true, type: true, isPrimary: true } },
           emails: { select: { id: true, email: true, type: true, isPrimary: true } },

@@ -68,6 +68,10 @@ export default function AdminOnboardingPage() {
   // port" / "just add extensions" (Izzy, 2026-08-30). Scoped links open a
   // single short flow with no payment step.
   const [kind, setKind] = useState<"full" | "port" | "extension">("full");
+  // Admin-set pricing, ticked BEFORE the link goes out (Izzy 2026-09-16).
+  // count "" = every extension they set up; a number = that many of them.
+  const [coldCalling, setColdCalling] = useState<{ on: boolean; count: string }>({ on: false, count: "" });
+  const [crm, setCrm] = useState<{ on: boolean; count: string }>({ on: false, count: "" });
   const [busy, setBusy] = useState<"send" | "link" | null>(null);
   const [taken, setTaken] = useState<{ tenantName: string | null } | null>(null);
   const [sent, setSent] = useState<{ email: string | null; link: string } | null>(null);
@@ -124,7 +128,18 @@ export default function AdminOnboardingPage() {
     try {
       const res = await apiPost<{ link: string; sent: boolean; emailError: string | null }>(
         "/admin/onboarding/invitations",
-        { email: email.trim() || undefined, companyName: company.trim() || undefined, send, kind },
+        {
+          email: email.trim() || undefined,
+          companyName: company.trim() || undefined,
+          send,
+          kind,
+          ...(kind === "full"
+            ? {
+                coldCalling: { enabled: coldCalling.on, extensions: Number(coldCalling.count) > 0 ? Math.floor(Number(coldCalling.count)) : "all" },
+                crm: { enabled: crm.on, extensions: Number(crm.count) > 0 ? Math.floor(Number(crm.count)) : "all" },
+              }
+            : {}),
+        },
       );
       setSent({ email: send && res.sent ? email.trim() : null, link: res.link });
       if (send && !res.sent) {
@@ -133,6 +148,8 @@ export default function AdminOnboardingPage() {
       setEmail("");
       setCompany("");
       setKind("full");
+      setColdCalling({ on: false, count: "" });
+      setCrm({ on: false, count: "" });
       setTaken(null);
       await refresh();
     } catch (e: any) {
@@ -289,6 +306,35 @@ export default function AdminOnboardingPage() {
               />
             </div>
           </div>
+
+          {kind === "full" ? (
+            <div className="oi-fields" style={{ marginTop: 4 }}>
+              {(
+                [
+                  ["cc", "Cold-calling company", "$65 per cold-calling extension instead of $30.", coldCalling, setColdCalling],
+                  ["crm", "Add CRM", "$20 a month per extension on top.", crm, setCrm],
+                ] as [string, string, string, { on: boolean; count: string }, (v: { on: boolean; count: string }) => void][]
+              ).map(([key, label, hint, val, set]) => (
+                <div className="oi-field" key={key}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                    <input type="checkbox" checked={val.on} onChange={(e) => set({ ...val, on: e.target.checked })} />
+                    {label}
+                  </label>
+                  <span style={{ fontSize: 12, opacity: 0.7 }}>{hint}</span>
+                  {val.on ? (
+                    <input
+                      className={`oi-input${val.count.trim() ? " oi-filled" : ""}`}
+                      inputMode="numeric"
+                      aria-label={`${label} — how many extensions`}
+                      placeholder="How many extensions? Blank = all of them"
+                      value={val.count}
+                      onChange={(e) => set({ ...val, count: e.target.value.replace(/\D/g, "").slice(0, 3) })}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div className="oi-foot">
             <button

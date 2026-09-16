@@ -41,6 +41,14 @@ export const ONBOARDING_PRICES = {
    * covering taxes and carrier/regulatory fees.
    */
   telecomFeesMonthlyCents: 200,
+  /**
+   * A COLD-CALLING extension, per month, tax included. Izzy 2026-09-16: "cold
+   * calling is always double, so $65 an extension." It REPLACES the $30 line
+   * for that extension — never added on top of it.
+   */
+  coldCallingExtensionMonthlyCents: 6500,
+  /** CRM, per extension, per month, on top of the line. Izzy 2026-09-16: "$20 a month extra per extension for CRM." */
+  crmPerExtensionMonthlyCents: 2000,
 } as const;
 
 export interface OnboardingQuoteInput {
@@ -55,10 +63,17 @@ export interface OnboardingQuoteInput {
    * to the first LOCAL number instead.
    */
   tollFreeNumber?: boolean;
+  /**
+   * How many of `extensions` are cold-calling lines ($65 instead of $30). Set
+   * by an admin on the link, never by the customer; clamped to `extensions`.
+   */
+  coldCallingExtensions?: number;
+  /** How many extensions carry CRM ($20 each on top). Admin-set; clamped to `extensions`. */
+  crmExtensions?: number;
 }
 
 export interface QuoteLine {
-  key: "extensions" | "e911" | "sms" | "additional_numbers" | "tollfree_number" | "telecom_fees";
+  key: "extensions" | "cold_calling_extensions" | "crm" | "e911" | "sms" | "additional_numbers" | "tollfree_number" | "telecom_fees";
   /** Plain-English, customer-facing. */
   label: string;
   quantity: number;
@@ -97,15 +112,39 @@ export function quoteOnboarding(input: OnboardingQuoteInput): OnboardingQuote {
   const localNumbers = numbers - (tollFree ? 1 : 0);
   const extraNumbers = Math.max(0, localNumbers - 1); // the first LOCAL number is included
   const lines: QuoteLine[] = [];
+  const clamp = (n: unknown) => Math.min(extensions, Math.max(0, Math.floor(Number(n) || 0)));
+  const coldCalling = clamp(input.coldCallingExtensions);
+  const regular = extensions - coldCalling;
+  const crm = clamp(input.crmExtensions);
 
-  if (extensions > 0) {
+  if (regular > 0) {
     lines.push({
       key: "extensions",
-      label: extensions === 1 ? "Phone line" : "Phone lines",
-      quantity: extensions,
+      label: regular === 1 ? "Phone line" : "Phone lines",
+      quantity: regular,
       unitCents: ONBOARDING_PRICES.extensionMonthlyWithTaxCents,
-      totalCents: extensions * ONBOARDING_PRICES.extensionMonthlyWithTaxCents,
+      totalCents: regular * ONBOARDING_PRICES.extensionMonthlyWithTaxCents,
       note: "One for each person. Tax is already included.",
+    });
+  }
+  if (coldCalling > 0) {
+    lines.push({
+      key: "cold_calling_extensions",
+      label: coldCalling === 1 ? "Cold-calling phone line" : "Cold-calling phone lines",
+      quantity: coldCalling,
+      unitCents: ONBOARDING_PRICES.coldCallingExtensionMonthlyCents,
+      totalCents: coldCalling * ONBOARDING_PRICES.coldCallingExtensionMonthlyCents,
+      note: "Phone lines used for outbound cold calling. Tax is already included.",
+    });
+  }
+  if (crm > 0) {
+    lines.push({
+      key: "crm",
+      label: "CRM",
+      quantity: crm,
+      unitCents: ONBOARDING_PRICES.crmPerExtensionMonthlyCents,
+      totalCents: crm * ONBOARDING_PRICES.crmPerExtensionMonthlyCents,
+      note: crm === 1 ? "CRM for one extension." : `CRM for ${crm} extensions.`,
     });
   }
   if (numbers > 0) {

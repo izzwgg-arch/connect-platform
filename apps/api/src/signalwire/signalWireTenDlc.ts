@@ -36,6 +36,133 @@ import {
 import { resolveSignalWireCredentials } from "./signalWireCredentials";
 import { signalWireAutoProvisionEnabled } from "../onboarding/signalWireProvisioning";
 
+// ── The registry adapter — ONE state machine, two carriers ─────────────────
+//
+// 2026-09-16 (the Telnyx onboarding switch): a Telnyx number can only be
+// attached to a campaign filed AT Telnyx, so the chain below talks to the
+// registry of the carrier the registration row names (`provider`). The state
+// machine, caps, email and EIN rule are shared — ⛔ never fork a second copy.
+// Telnyx normalises its brand/campaign states to "approved"/"failed" in its
+// client (identityStatus / campaignStatus), so classifyRegistryState reads
+// both carriers the same way.
+
+type RegistryRecord = { id: string; state: string | null };
+type RegistryAdapter = {
+  name: "signalwire" | "telnyx";
+  smsProvider: "SIGNALWIRE" | "TELNYX";
+  live: () => boolean;
+  resolveCreds: (db: any) => Promise<any | null>;
+  createBrand: (creds: any, reg: any, input: FileBrandInput) => Promise<RegistryRecord>;
+  getBrand: (creds: any, id: string) => Promise<RegistryRecord>;
+  createCampaign: (creds: any, brandId: string, reg: any) => Promise<RegistryRecord>;
+  getCampaign: (creds: any, id: string) => Promise<RegistryRecord>;
+  assignNumber: (creds: any, campaignId: string, e164: string) => Promise<void>;
+  errorDetail: (e: unknown) => string;
+};
+
+const signalWireRegistry: RegistryAdapter = {
+  name: "signalwire",
+  smsProvider: "SIGNALWIRE",
+  live: signalWireAutoProvisionEnabled,
+  resolveCreds: (db) => resolveSignalWireCredentials(db).catch(() => null),
+  createBrand: async (creds, reg, input) => {
+    const brand = await createBrand(creds, {
+      name: String(reg.legalName || "").slice(0, 100),
+      companyName: String(reg.legalName || "").slice(0, 200),
+      contactEmail: input.contactEmail,
+      contactPhone: input.contactPhone,
+      einIssuingCountry: "US",
+      legalEntityType: (LEGAL_ENTITY_TYPES as readonly string[]).includes(String(reg.entityType))
+        ? (reg.entityType as (typeof LEGAL_ENTITY_TYPES)[number])
+        : "PRIVATE_PROFIT",
+      ein: input.ein,
+      companyAddress: input.companyAddress,
+      companyWebsite: String(reg.website || ""),
+      companyVertical: reg.vertical || undefined,
+    });
+    return { id: brand.id, state: brand.state };
+  },
+  getBrand: async (creds, id) => {
+    const b = await getBrand(creds, id);
+    return { id, state: b.state };
+  },
+  createCampaign: async (creds, brandId, reg) => {
+    const c = await createCampaign(creds, brandId, buildCampaignInput(reg));
+    return { id: c.id, state: c.state };
+  },
+  getCampaign: async (creds, id) => {
+    const c = await getCampaign(creds, id);
+    return { id, state: c.state };
+  },
+  assignNumber: async (creds, campaignId, e164) => {
+    await createCampaignNumberOrder(creds, campaignId, [e164]);
+  },
+  errorDetail: (e: any) =>
+    e instanceof SignalWireError ? `${e.code}: ${String(e.detail ? JSON.stringify(e.detail) : e.userMessage).slice(0, 250)}` : String(e?.message || e).slice(0, 250),
+};
+
+const telnyxRegistry: RegistryAdapter = {
+  name: "telnyx",
+  smsProvider: "TELNYX",
+  live: () => {
+    const raw = String(process.env.TELNYX_AUTO_PROVISION || "").trim().toLowerCase();
+    return raw === "on" || raw === "1" || raw === "true" || raw === "yes";
+  },
+  resolveCreds: async (db) => {
+    const { resolveTelnyxCredentials } = await import("../telnyx/telnyxCredentials");
+    return resolveTelnyxCredentials(db).catch(() => null);
+  },
+  createBrand: async (creds, reg, input) => {
+    const tx = await import("../telnyx/telnyxOnboardingClient");
+    const a = input.address;
+    if (!a?.street || !a?.city || !a?.state || !a?.zip) throw new Error("business_address_incomplete_for_registry");
+    const phone = input.contactPhone.replace(/\D/g, "").slice(-10);
+    return tx.createTenDlcBrand(creds, {
+      entityType: (LEGAL_ENTITY_TYPES as readonly string[]).includes(String(reg.entityType)) ? String(reg.entityType) : "PRIVATE_PROFIT",
+      displayName: String(reg.legalName || ""),
+      companyName: String(reg.legalName || ""),
+      ein: input.ein,
+      phone: `+1${phone}`,
+      email: input.contactEmail,
+      street: a.street,
+      city: a.city,
+      state: a.state,
+      postalCode: a.zip.slice(0, 5),
+      website: reg.website || null,
+      vertical: reg.vertical || null,
+    });
+  },
+  getBrand: async (creds, id) => (await import("../telnyx/telnyxOnboardingClient")).getTenDlcBrand(creds, id),
+  createCampaign: async (creds, brandId, reg) => {
+    const c = buildCampaignInput(reg);
+    return (await import("../telnyx/telnyxOnboardingClient")).createTenDlcCampaign(creds, brandId, {
+      // Telnyx's names for the same TCR classes.
+      usecase: c.smsUseCase === "LOW_VOLUME_MIXED" ? "LOW_VOLUME" : c.smsUseCase,
+      subUsecases: c.subUseCases,
+      description: c.description,
+      sample1: c.sample1,
+      sample2: c.sample2,
+      messageFlow: c.messageFlow,
+      helpMessage: c.helpMessage,
+      optoutMessage: c.optOutMessage,
+    });
+  },
+  getCampaign: async (creds, id) => (await import("../telnyx/telnyxOnboardingClient")).getTenDlcCampaign(creds, id),
+  assignNumber: async (creds, campaignId, e164) => (await import("../telnyx/telnyxOnboardingClient")).assignNumberToCampaign(creds, campaignId, e164),
+  errorDetail: (e: any) => {
+    const d: any = e?.detail;
+    const inner = Array.isArray(d?.errors)
+      ? d.errors.map((x: any) => [x?.code, x?.title, x?.detail].filter(Boolean).join(" ")).join("; ")
+      : e?.userMessage || e?.message || e;
+    return `${e?.code || "error"}: ${String(inner).slice(0, 250)}`;
+  },
+};
+
+/** The registry a registration row belongs to. Unknown/absent → SignalWire (every pre-Telnyx row). */
+export function registryFor(reg: { provider?: string | null } | null | undefined): RegistryAdapter {
+  return String(reg?.provider || "").toLowerCase() === "telnyx" ? telnyxRegistry : signalWireRegistry;
+}
+
 // ── Classification → registry class, caps, and templated content ───────────
 
 export type SmsClassification = "conversational" | "marketing" | "sole_prop";
@@ -148,6 +275,8 @@ export type FileBrandInput = {
   contactEmail: string;
   contactPhone: string;
   companyAddress: string;
+  /** Structured business address — Telnyx's brand API takes the parts, not a line. */
+  address?: { street: string; city: string; state: string; zip: string };
 };
 
 export type FileBrandOutcome =
@@ -165,25 +294,14 @@ export async function fileBrandForRegistration(db: any, input: FileBrandInput): 
   if (!reg) return { filed: false, reason: "registration_not_found" };
   if (reg.classification === "sole_prop") return { filed: false, reason: "manual_class" };
   if (reg.brandId) return { filed: false, reason: "already_filed" };
-  if (!signalWireAutoProvisionEnabled()) return { filed: false, reason: "not_live" };
-  const creds = await resolveSignalWireCredentials(db).catch(() => null);
+  const registry = registryFor(reg);
+  if (!registry.live()) return { filed: false, reason: "not_live" };
+  const creds = await registry.resolveCreds(db);
   if (!creds) return { filed: false, reason: "unconfigured" };
 
   try {
-    const brand = await createBrand(creds, {
-      name: String(reg.legalName || "").slice(0, 100),
-      companyName: String(reg.legalName || "").slice(0, 200),
-      contactEmail: input.contactEmail,
-      contactPhone: input.contactPhone,
-      einIssuingCountry: "US",
-      legalEntityType: (LEGAL_ENTITY_TYPES as readonly string[]).includes(String(reg.entityType))
-        ? (reg.entityType as (typeof LEGAL_ENTITY_TYPES)[number])
-        : "PRIVATE_PROFIT",
-      ein: input.ein,
-      companyAddress: input.companyAddress,
-      companyWebsite: String(reg.website || ""),
-      companyVertical: reg.vertical || undefined,
-    });
+    const brand = await registry.createBrand(creds, reg, input);
+    if (!brand.id) throw new Error("registry_returned_no_brand_id");
     await db.tenantSmsRegistration.update({
       where: { id: reg.id },
       data: { brandId: brand.id, brandState: brand.state || "pending", status: "brand_filed", error: null },
@@ -191,7 +309,7 @@ export async function fileBrandForRegistration(db: any, input: FileBrandInput): 
     await logSubmissionEvent(db, reg.submissionId, `Texting registration filed with the carrier registry (brand ${brand.id}).`);
     return { filed: true, brandId: brand.id, state: brand.state || "pending" };
   } catch (e: any) {
-    const detail = e instanceof SignalWireError ? `${e.code}: ${String(e.detail ? JSON.stringify(e.detail) : e.userMessage).slice(0, 250)}` : String(e?.message || e).slice(0, 250);
+    const detail = registry.errorDetail(e);
     await db.tenantSmsRegistration.update({ where: { id: reg.id }, data: { error: detail } });
     await logSubmissionEvent(db, reg.submissionId, `Texting registration filing was refused by the registry: ${detail}. Needs a person.`);
     return { filed: false, reason: "provider_refused", detail };
@@ -208,7 +326,8 @@ export async function fileBrandForRegistration(db: any, input: FileBrandInput): 
 export async function advanceSmsRegistration(db: any, registrationId: string): Promise<void> {
   const reg = await db.tenantSmsRegistration.findUnique({ where: { id: registrationId } });
   if (!reg || TERMINAL.has(reg.status) || reg.status === "awaiting_manual_filing" || reg.status === "collected") return;
-  if (!signalWireAutoProvisionEnabled()) return;
+  const registry = registryFor(reg);
+  if (!registry.live()) return;
   // The customer can toggle texting OFF after filing the step (go back on the
   // wizard, untick, submit). The brand is already filed (harmless — identity
   // only), but the CAMPAIGN carries recurring carrier fees, so the chain must
@@ -228,13 +347,13 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
       return;
     }
   }
-  const creds = await resolveSignalWireCredentials(db).catch(() => null);
+  const creds = await registry.resolveCreds(db);
   if (!creds) return;
 
   try {
     // Brand filed → is it approved yet?
     if ((reg.status === "brand_filed" || reg.status === "brand_approved") && reg.brandId && !reg.campaignId) {
-      const brand = await getBrand(creds, reg.brandId);
+      const brand = await registry.getBrand(creds, reg.brandId);
       const verdict = classifyRegistryState(brand.state);
       if (verdict === "failed") {
         await db.tenantSmsRegistration.update({ where: { id: reg.id }, data: { brandState: brand.state, status: "failed", error: `brand_${brand.state}` } });
@@ -243,7 +362,7 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
       }
       await db.tenantSmsRegistration.update({ where: { id: reg.id }, data: { brandState: brand.state, ...(verdict === "approved" ? { status: "brand_approved" } : {}) } });
       if (verdict !== "approved") return;
-      const campaign = await createCampaign(creds, reg.brandId, buildCampaignInput(reg));
+      const campaign = await registry.createCampaign(creds, reg.brandId, reg);
       await db.tenantSmsRegistration.update({
         where: { id: reg.id },
         data: { campaignId: campaign.id, campaignState: campaign.state || "pending", status: "campaign_filed" },
@@ -254,7 +373,7 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
 
     // Campaign filed → approved? → assign the number.
     if (reg.status === "campaign_filed" && reg.campaignId) {
-      const campaign = await getCampaign(creds, reg.campaignId);
+      const campaign = await registry.getCampaign(creds, reg.campaignId);
       const verdict = classifyRegistryState(campaign.state);
       if (verdict === "failed") {
         await db.tenantSmsRegistration.update({ where: { id: reg.id }, data: { campaignState: campaign.state, status: "failed", error: `campaign_${campaign.state}` } });
@@ -276,7 +395,7 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
         if (did.length === 10) e164 = `+1${did}`;
       }
       if (!e164) return; // number not purchased yet — the sweep retries
-      await createCampaignNumberOrder(creds, now.campaignId, [e164]);
+      await registry.assignNumber(creds, now.campaignId, e164);
       await db.tenantSmsRegistration.update({
         where: { id: now.id },
         data: { phoneE164: e164, numberAssignedAt: new Date(), status: "number_assigned" },
@@ -300,7 +419,7 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
           where: { phoneE164: fin.phoneE164 },
           create: {
             tenantId: fin.tenantId,
-            provider: "SIGNALWIRE",
+            provider: registry.smsProvider,
             phoneE164: fin.phoneE164,
             phoneRaw: fin.phoneE164,
             smsCapable: true,
@@ -311,7 +430,7 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
           },
           // An existing row keeps its assignment and default flag — only the
           // ownership, provider and capabilities are corrected.
-          update: { tenantId: fin.tenantId, provider: "SIGNALWIRE", smsCapable: true, mmsCapable: true, active: true, lastSyncedAt: new Date() },
+          update: { tenantId: fin.tenantId, provider: registry.smsProvider, smsCapable: true, mmsCapable: true, active: true, lastSyncedAt: new Date() },
         });
       }
       await db.tenantSmsRegistration.update({ where: { id: fin.id }, data: { status: "active", activatedAt: new Date() } });
@@ -322,12 +441,19 @@ export async function advanceSmsRegistration(db: any, registrationId: string): P
         await db.tenant.update({ where: { id: fin.tenantId }, data: { dailySmsCap: cap } }).catch(() => {});
       }
       await logSubmissionEvent(db, fin.submissionId, `Texting is ON — registration approved (up to ${cap} messages/day for this class).`);
-      await queueActivationEmail(db, fin).catch(() => {});
+      // ⛔ Never a silent catch here: this is the ONLY place the customer is
+      // told texting is on, and a swallowed insert failure hid a Prisma
+      // rejection (status "PENDING", tenantId null) for the life of the chain.
+      await queueActivationEmail(db, fin).catch((e: any) => {
+        console.warn(
+          `[tendlc] SMS_REGISTRATION_ACTIVE_EMAIL_QUEUE_FAILED registration=${fin.id} tenant=${fin.tenantId ?? "none"}: ${String(e?.message || e).slice(0, 300)}`,
+        );
+      });
     }
   } catch (e: any) {
     // A transient registry failure must never kill the row — record and let
     // the sweep retry. Only an explicit registry refusal marks `failed`.
-    const detail = e instanceof SignalWireError ? `${e.code}` : String(e?.message || e).slice(0, 200);
+    const detail = e instanceof SignalWireError ? `${e.code}` : registry.errorDetail(e).slice(0, 200);
     await db.tenantSmsRegistration.update({ where: { id: registrationId }, data: { error: detail } }).catch(() => {});
   }
 }
@@ -355,17 +481,36 @@ async function queueActivationEmail(db: any, reg: any): Promise<void> {
     footerNote: "Sent by Loopcom.",
     includeSupportBlock: false,
   });
-  await db.emailJob.create({
-    data: {
-      type: SMS_REGISTRATION_ACTIVE_EMAIL_TYPE,
-      toEmail: to,
-      subject: "Texting is on for your business number",
-      htmlBody: html,
-      textBody: `Carriers approved the texting registration for ${String(reg.legalName || "your business")} — business texting on your Loopcom number is on.`,
-      tenantId: reg.tenantId || null,
-      status: "PENDING",
-    },
-  });
+  const data = buildActivationEmailJobData(reg, to, html);
+  if (!data) {
+    console.warn(`[tendlc] SMS_REGISTRATION_ACTIVE_EMAIL_SKIPPED_NO_TENANT registration=${reg.id} submission=${reg.submissionId}`);
+    return;
+  }
+  await db.emailJob.create({ data });
+}
+
+/**
+ * The EmailJob create payload for the "texting is on" email, or null when the
+ * registration has no tenant. ⛔ `EmailJob.tenantId` is REQUIRED and `status`
+ * is the EmailJobStatus enum (QUEUED|RUNNING|SENT|FAILED|SKIPPED) — omit it so
+ * it defaults to QUEUED. Both were wrong until 2026-09-16 ("PENDING", null) and
+ * the insert failure was swallowed, so the email could never queue.
+ */
+export function buildActivationEmailJobData(
+  reg: { tenantId?: string | null; legalName?: string | null },
+  toEmail: string,
+  htmlBody: string,
+): { tenantId: string; type: string; toEmail: string; subject: string; htmlBody: string; textBody: string } | null {
+  const tenantId = String(reg.tenantId || "").trim();
+  if (!tenantId) return null;
+  return {
+    tenantId,
+    type: SMS_REGISTRATION_ACTIVE_EMAIL_TYPE,
+    toEmail,
+    subject: "Texting is on for your business number",
+    htmlBody,
+    textBody: `Carriers approved the texting registration for ${String(reg.legalName || "your business")} — business texting on your Loopcom number is on.`,
+  };
 }
 
 // ── The sweep ──────────────────────────────────────────────────────────────

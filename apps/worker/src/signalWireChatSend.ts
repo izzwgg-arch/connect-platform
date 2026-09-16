@@ -85,6 +85,11 @@ export async function sendConnectChatMessageViaSignalWire(input: {
   const publicBase = resolveSmsPublicApiBase(process.env);
   const metadata = msg.metadata && typeof msg.metadata === "object" && !Array.isArray(msg.metadata) ? (msg.metadata as Record<string, any>) : {};
 
+  // Fallback contract (unified messaging Phase 1): flips true on the FIRST
+  // provider acceptance; attached to every error that leaves this function so
+  // the job's provider-level backup route can never duplicate a partial send.
+  let anySent = false;
+
   try {
     let r: { providerMessageId?: string } = {};
     const attachments = msg.attachments ?? [];
@@ -110,6 +115,7 @@ export async function sendConnectChatMessageViaSignalWire(input: {
             body: i === 0 ? body : "",
             mediaUrls: mediaUrls.slice(i, i + SIGNALWIRE_MMS_MEDIA_PER_MESSAGE),
           });
+          anySent = true;
         }
         r = last ?? {};
       } catch (mmsErr: any) {
@@ -130,6 +136,7 @@ export async function sendConnectChatMessageViaSignalWire(input: {
         const fallbackBodies = [...signalWireBodyChunks(String(msg.body || "")).filter(Boolean), ...links];
         for (const fb of fallbackBodies) {
           lastFallback = await provider.sendMessage({ tenantId, to, from, body: fb });
+          anySent = true;
         }
         if (!lastFallback) throw mmsErr;
         r = lastFallback;
@@ -138,6 +145,7 @@ export async function sendConnectChatMessageViaSignalWire(input: {
       let last: { providerMessageId?: string } | null = null;
       for (const chunk of signalWireBodyChunks(String(msg.body || ""))) {
         last = await provider.sendMessage({ tenantId, to, from, body: chunk });
+        anySent = true;
       }
       r = last ?? {};
     }
@@ -147,6 +155,7 @@ export async function sendConnectChatMessageViaSignalWire(input: {
     });
     console.info(JSON.stringify({ event: "signalwire_chat_sent", tenantId, threadId: msg.threadId, messageId: msg.id, providerMessageId: r.providerMessageId ?? null }));
   } catch (e: any) {
+    if (e && typeof e === "object" && e.__anySent === undefined) e.__anySent = anySent;
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: { deliveryStatus: "failed", deliveryError: String(e?.message || e).slice(0, 2000) },

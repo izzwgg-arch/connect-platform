@@ -412,3 +412,67 @@ that mailbox. Left untouched; switching it off is Izzy's call.
 texting on a toll-free needs its own carrier-side verification story) and
 **845-776-1311** — both still `tenantId: null` in `TenantSmsNumber`. Only the
 main number was activated, per the request.
+
+## 9. Worked example — Secro Selutions, 2026-09-16: "our SMS is not working" = texting was NEVER wired into Connect
+
+Izzy relayed *"Secro Solutions is saying their SMS is not working"* (no support
+ticket existed). Fourth customer through this runbook, and the first where the
+complaint looked like an outage but was a never-done activation.
+
+| | |
+|---|---|
+| Tenant | `cmnlgrynn0016p9pakbscpvfs` ("Secro Selutions", PBX **T3** `secro_selution`; exts 301 Gitty, 302 Hendy) |
+| Number | **+1 845-751-8493** — the only number Connect lists for them (routing `account:344022_secro2`) |
+| SMS number row | `cmogdrtjv0082pk5ejitznup6` — was `tenantId: null` (unclaimed since the 2026-07-10 sync) |
+| Pointed at | nobody — **shared company inbox** (B Visible shape) |
+| Billing | `smsBillingEnabled` left **false** (`smsPriceCents` 1000) — ⏳ Izzy's call |
+
+### 9.1 What was actually wrong — measured, not assumed
+
+- **Carrier was fine:** `getSMS` showed inbound texts arriving TODAY (12:35, 12:59,
+  13:03 ET); `sms_enabled: "1"`.
+- **Connect had no number for them:** zero `TenantSmsNumber` rows, zero SMS threads
+  ever. Their app users could not see or send a single text.
+- ⛔ **The texts WERE going three other places, none of them Secro's app:**
+  1. `sms_email` → **myworksecro@gmail.com** (enabled);
+  2. `sms_sipaccount` → `344022_secro2` (enabled);
+  3. `sms_url_callback` → **`https://m.connectcomunications.com/sms/b10ae207-…`** —
+     that host IS THE PBX (209.145.60.79): VitalPBX's own SMS add-on, connection
+     "main" (uuid `b10ae207…`, owned by **tenant 1**). nginx shows VoIP.ms hitting it
+     with 200 for Gesheft, Create A Box, Secro and more all day.
+     `ombutel.ombu_sms_messages` stores Secro's texts under **tenant_id 1 (main)**
+     because 8457518493 (`conn_number_id` 28) is NOT in `ombu_tenant_sms_numbers`
+     for T3. Last OUTBOUND from this number anywhere: 2025-12-10.
+  ⛔ So the 2026-08-18 VitalPBX exit note's *"SMS add-on verified unused"* is
+  **WRONG** — the callback is live on ≥11 DIDs and holds 8,153 messages. Nothing
+  was cancelled-and-broken today (callbacks still 200), but it is a dependency.
+
+### 9.2 The one write
+
+```
+PATCH /admin/apps/voip-ms/numbers/cmogdrtjv0082pk5ejitznup6
+{ "tenantId": "cmnlgrynn0016p9pakbscpvfs", "assignedExtensionId": null,
+  "assignedUserId": null, "isTenantDefault": true, "active": true }
+→ 200 {"ok":true}
+```
+
+Real route, inside `app-api-1` on `127.0.0.1:3001`, 60-second HS256 SUPER_ADMIN
+token hand-rolled with node `crypto` (no `jsonwebtoken` in the container). Route
+blast radius read first: it only updates the row + clears other defaults on the
+same tenant (Secro had none). No carrier write, no PBX write, no deploy.
+
+### 9.3 Proof
+
+Next poll: `[voipms-inbound] +18457518493: fetched=3` → **three threads on Secro's
+tenant** (+18454671387 "Hi", shortcode 242733, +13475966290), all
+`smsInboxOwnerUserId` empty = shared scope.
+⏳ **NOT PROVEN: no text sent OUT from 845-751-8493 through Connect, and no Secro
+human has opened the inbox** — a probe would have put a fake thread in a
+customer's inbox, so it was left for a real send.
+
+### 9.4 Left alone — Izzy's call
+- Billing ($10 `SMS_PACKAGE`) off.
+- The three carrier-side copies above (Gmail, SIP account, PBX add-on) untouched —
+  texts now land in Connect AND those. PBX is read-only anyway.
+- **845-637-2329** (routing `344022_giti`, zero SMS ever) left unclaimed — Connect
+  does not list it as a Secro number.

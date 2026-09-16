@@ -164,6 +164,23 @@ export function MobileWizard({ wiz }: { wiz: MobileWiz }) {
       return;
     }
 
+    // ⛔ The desktop layout asks for email + cell on step 1, the phone layout on
+    // step 0 ("you"). Someone who did step 0 on the wider layout and then
+    // narrowed (rotation, "desktop site", a split view) reaches "address" with
+    // neither — and the gate below would demand fields this screen does not
+    // have. A live customer sat on that dead end 2026-09-16. Send them to the
+    // screen that has the fields, with the message there.
+    if (step === 1) {
+      const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(form.mainEmail || "").trim());
+      const phoneOk = String(form.mainPhone || "").trim().length >= 7;
+      if (!emailOk || !phoneOk) {
+        const msg = !emailOk ? "Add your email to continue." : "Add your cell number to continue.";
+        back();
+        setTimeout(() => setStepError(msg), 0);
+        return;
+      }
+    }
+
     // Leaving the step — the page's own gate + side effects, never a copy.
     const err = wiz.validateStep(step);
     if (err) return fail(err);

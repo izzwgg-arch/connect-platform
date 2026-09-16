@@ -7,12 +7,14 @@ import { z } from "zod";
 import type { OnboardingStatus } from "@prisma/client";
 import { friendlySubmitError, isReusableTemplate, isSubmissionWriteBlocked, publicApplyNumberSchema, publicSaveSchema, publicSubmitSchema } from "./validation";
 import { prepareOnboardingCheckout, quoteForSubmission } from "./onboardingPayment";
-import { quoteInputForSubmission, isTollFreeNumberKind } from "./quoteInput";
+import { quoteInputForSubmission, isTollFreeNumberKind, readOnboardingPricing, resolvePricingCount } from "./quoteInput";
 import { describeQuote, quoteOnboarding } from "@connect/shared";
 import { decryptJson } from "@connect/security";
 import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrations";
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { resolveOnboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
+import { searchTelnyxOnboardingNumbers } from "./telnyxNumbers";
+import { carryServerOwnedAnswers } from "./serverOwnedAnswers";
 import { fileBrandForRegistration, LEGAL_ENTITY_TYPES } from "../signalwire/signalWireTenDlc";
 import { buildE911Address } from "./e911Address";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
@@ -252,7 +254,24 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // are SignalWire-only filters the upgraded wizard sends. No spare pool —
     // that is a VoIP.ms master-account concept. The error contract is
     // preserved: a provider failure is NEVER collapsed into an empty list.
-    if ((await resolveOnboardingNumberProvider(db)) === "signalwire") {
+    const searchProvider = await resolveOnboardingNumberProvider(db);
+    // ── Telnyx branch (2026-09-16) — the same contract as SignalWire below.
+    // `provider: "telnyx"` draws the same modern search surface in the wizard.
+    if (searchProvider === "telnyx") {
+      const out = await searchTelnyxOnboardingNumbers(db, {
+        query: wantVanity ? vanityWord : q,
+        mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
+        type: wantTollFree ? "tollfree" : "local",
+        region: String((req.query as any)?.region || "").trim() || undefined,
+        city: String((req.query as any)?.city || "").trim() || undefined,
+        limit: 12,
+      });
+      if (out.ok) return { numbers: out.numbers.slice(0, 12), provider: "telnyx" };
+      if (out.reason === "unconfigured") return { numbers: [], provider: "telnyx", note: "number_provider_unconfigured" };
+      if (out.reason === "pattern_too_short") return { numbers: [], provider: "telnyx", note: "pattern_too_short" };
+      return { numbers: [], provider: "telnyx", error: "number_search_failed" };
+    }
+    if (searchProvider === "signalwire") {
       const out = await searchSignalWireOnboardingNumbers(db, {
         query: wantVanity ? vanityWord : q,
         mode: wantVanity ? (modeAny === "areacode" ? "contains" : modeAny ?? "contains") : modeAny,
@@ -395,6 +414,21 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     if (number.length === 11 && number.startsWith("1")) number = number.slice(1);
     if (number.length !== 10) return { portable: null, note: "need_full_number" };
 
+    // Telnyx sign-ups ask Telnyx — the carrier that will actually file the port.
+    if ((await resolveOnboardingNumberProvider(db)) === "telnyx") {
+      try {
+        const { resolveTelnyxCredentials } = await import("../telnyx/telnyxCredentials");
+        const { checkPortability } = await import("../telnyx/telnyxClient");
+        const txCreds = await resolveTelnyxCredentials(db);
+        if (!txCreds) return { portable: null, note: "provider_unconfigured" };
+        const rows = await checkPortability(txCreds, [`+1${number}`]);
+        const hit = rows[0];
+        return { portable: hit ? hit.portable : null };
+      } catch {
+        return { portable: null };
+      }
+    }
+
     const creds = await loadGlobalVoipMsCreds();
     if (!creds) return { portable: null, note: "provider_unconfigured" };
 
@@ -436,7 +470,9 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
           publicToken: token,
           status: "IN_PROGRESS" as OnboardingStatus,
           currentStep: body.currentStep || null,
-          answers: body.answers ?? null,
+          // Nothing stored yet — the carry still strips server-owned keys
+          // (admin pricing) a client may have sent.
+          answers: (carryServerOwnedAnswers(null, body.answers ?? null) as any) ?? null,
           events: { create: { type: "CREATED", message: "Submission created (lazy)" } },
         },
       });
@@ -446,10 +482,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       // through it, or the first autosave on a scoped link would silently turn
       // it back into a full sign-up link.
       const kind = linkKindOf(row);
+      // ⛔ …and carry every SERVER-written key (the carrier stamp, the
+      // provisioning state) — see serverOwnedAnswers.ts.
+      const carried = carryServerOwnedAnswers(row.answers, body.answers ?? null) as any;
       const savedAnswers =
-        kind !== "full" && body.answers && typeof body.answers === "object"
-          ? { ...(body.answers as any), linkKind: kind }
-          : body.answers ?? null;
+        kind !== "full" && carried && typeof carried === "object"
+          ? { ...carried, linkKind: kind }
+          : carried ?? null;
       await (db as any).onboardingSubmission.update({
         where: { id: row.id },
         data: {
@@ -635,9 +674,15 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     // The wizard passes its live pick too — apply-number is fire-and-forget
     // and autosave is debounced, so the stored numberKind can lag the screen.
     const kindParam = String(q.numberKind ?? "").toLowerCase();
+    const liveExtensions =
+      Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions;
+    // ⛔ Admin pricing (cold calling / CRM) re-resolved against the LIVE count —
+    // dropping it here would show $30 on review and charge $65 at checkout.
+    const pricing = readOnboardingPricing((full || row)?.answers);
     const input = {
-      extensions:
-        Number.isFinite(extParam) && extParam >= 0 ? Math.min(500, Math.floor(extParam)) : derived.extensions,
+      coldCallingExtensions: resolvePricingCount(pricing.coldCalling?.extensions, liveExtensions),
+      crmExtensions: resolvePricingCount(pricing.crm?.extensions, liveExtensions),
+      extensions: liveExtensions,
       phoneNumbers: derived.phoneNumbers,
       smsEnabled: smsParam === "1" ? true : smsParam === "0" ? false : derived.smsEnabled,
       tollFreeNumber: ["local", "tollfree", "vanity"].includes(kindParam)
@@ -756,17 +801,20 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     }
     const portedDigits = d.numbers.replace(/\D/g, "").replace(/^1/, "");
     const answers: any = { ...((row.answers as any) || {}) };
+    const scopedProvider = answers.phone?.provider || (await resolveOnboardingNumberProvider(db));
     answers.phone = {
       ...(answers.phone || {}),
       choice: "port",
       details: d,
       // Pin the carrier exactly as apply-number does — a stamped draft keeps it.
-      provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
+      provider: scopedProvider,
     };
     answers.provisioning = {
       ...(answers.provisioning || {}),
       portFiling: {
-        provider: "signalwire",
+        // A scoped port has no paid build behind it, so it is always a
+        // Port-queue package for a person — labelled with the carrier it is for.
+        provider: scopedProvider === "telnyx" ? "telnyx" : "signalwire",
         status: "awaiting_manual_filing",
         portedDid: portedDigits,
         requestedAt: new Date().toISOString(),
@@ -892,9 +940,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       sample2: body.sample2 || null,
       status: body.classification === "sole_prop" ? "awaiting_manual_filing" : "collected",
     };
+    // The registry follows the carrier the number lives on — a Telnyx number
+    // can only be attached to a campaign filed at Telnyx.
+    const registryProvider =
+      ((row.answers as any)?.phone?.provider || (await resolveOnboardingNumberProvider(db))) === "telnyx" ? "telnyx" : "signalwire";
     const reg = await (db as any).tenantSmsRegistration.upsert({
       where: { submissionId: row.id },
-      create: { submissionId: row.id, provider: "signalwire", ...regData },
+      create: { submissionId: row.id, provider: registryProvider, ...regData },
       update: regData,
     });
 
@@ -935,6 +987,12 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       contactEmail: String(row.mainEmail || row.billingEmail || answers?.contact?.email || "").trim(),
       contactPhone: String(answers?.contact?.phone || row.mainPhone || "").replace(/\D/g, "").slice(-10) || "8457231213",
       companyAddress: companyAddress || "33 NY-17M Suite C, Harriman, NY 10926",
+      address: {
+        street: [addr.address.streetNumber, addr.address.streetName].filter(Boolean).join(" "),
+        city: addr.address.city,
+        state: addr.address.state,
+        zip: addr.address.zip,
+      },
     });
     return {
       ok: true,
@@ -1099,6 +1157,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             ? undefined
             : body.numberKind || answers.phone?.numberKind || "local",
         details: body.porting ?? answers.phone?.details ?? {},
+        // ⛔ Submit LOCKS the form, so this is the last point the carrier can be
+        // pinned. An earlier stamp wins; a missing one (autosave used to wipe
+        // it) is stamped from the switch now — never left for payment to
+        // default to VoIP.ms.
+        provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
       };
       // Which extension is the account owner (becomes the tenant admin when
       // the system is built). Defaults to the first extension when the wizard

@@ -21,6 +21,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agentMohSecretOk } from "../agentMohOverride";
 import { db } from "@connect/db";
+import { contactVisibleToUserWhere } from "../contactVisibility";
 
 export type AgentContactsInfo = {
   total: number;
@@ -42,9 +43,11 @@ function fmtPhone(raw: string): string {
 
 const MAX_RESULTS = 25;
 
-export async function loadAgentContactsInfo(tenantId: string, search?: string): Promise<AgentContactsInfo> {
+export async function loadAgentContactsInfo(tenantId: string, search?: string, viewerUserId?: string | null): Promise<AgentContactsInfo> {
   const q = String(search ?? "").trim().slice(0, 80);
-  const where: any = { tenantId, active: true, archivedAt: null };
+  // ⛔ The assistant sees exactly what the person asking could see: shared contacts
+  // plus THEIR OWN private ones. No asker known → shared only (contactVisibility.ts).
+  const where: any = { tenantId, active: true, archivedAt: null, AND: [contactVisibleToUserWhere(viewerUserId)] };
   if (q) {
     where.OR = [
       { displayName: { contains: q, mode: "insensitive" } },
@@ -84,11 +87,11 @@ export function registerAgentContactsInfoRoute(app: FastifyInstance) {
       return reply.code(403).send({ ok: false, error: "forbidden" });
     }
     const body = z
-      .object({ tenantId: z.string().min(1), search: z.string().max(80).optional() })
+      .object({ tenantId: z.string().min(1), search: z.string().max(80).optional(), userId: z.string().max(64).nullish() })
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ ok: false, error: "bad_request" });
     try {
-      return { ok: true, info: await loadAgentContactsInfo(body.data.tenantId, body.data.search) };
+      return { ok: true, info: await loadAgentContactsInfo(body.data.tenantId, body.data.search, body.data.userId ?? null) };
     } catch (err) {
       req.log?.error({ err, tenantId: body.data.tenantId }, "agent_contacts_info_failed");
       return reply.code(500).send({ ok: false, error: "lookup_failed" });

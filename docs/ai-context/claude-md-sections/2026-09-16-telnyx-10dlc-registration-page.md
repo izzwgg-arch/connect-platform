@@ -1,0 +1,30 @@
+# 2026-09-16 · TELNYX 10DLC REGISTRATION — BUILT + DEPLOYED, LIVE-PROVEN TO "READY TO FILE", NO REAL FILING YET
+
+Full handoff: **`docs/ai-context/AGENT_HANDOFF_TELNYX_10DLC_2026-09-16.md`** (§000 = the build; §00/§0 = design revisions; §2 = Telnyx API facts)
+
+- ✅ **Built end to end** (`85dee5bc` + wiring `34ff3aae`): admin page `/admin/texting-registration`
+  (board + per-customer review/file/tracking), customer link `/texting-registration/<token>`
+  (Loopcom logo, light/dark, customer EDITS ONLY legal name/type/EIN/IRS address/website + signs;
+  carrier wording + account facts LOCKED), server-rendered `/texting-policy/<slug>` (the business's
+  own privacy policy + SMS terms), invite email on the Loopcom shell with Izzy's copy
+  (regulation → continue using SMS → fill out the 10DLC form → link), "File with Telnyx" that then
+  runs brand → verify → campaign → carrier review → attach numbers → live unattended.
+- ⛔ EIN = AES-GCM token bound to the registration, destroyed on verification / 14 days. Six keys,
+  none default, page SUPER_ADMIN-forced. Separate tables from the wizard's TenantSmsRegistration.
+- ⛔ **Charge = a SEPARATE uncharged $24 one-time invoice** (traced: never autopaid, never counts for
+  the service cutoff, no email) — NOT a line on the next cycle invoice. Monthly fee/marketing shown nowhere.
+- ✅ **Deployed** api `34ff3aae` (migration applied, `TEXTING_REGISTRATION_SWEEP_ARMED`) + portal
+  (`9a04bb2c` — after two CSS-fix redeploys, verified in the shipped stylesheet). ✅ 41 tests incl. 300-customer stress (found+fixed a double-assign race).
+  ✅ **Live in the container**: 25 concurrent submits → 1; EIN token has no digits; audited reveal;
+  real invite email SENT; token flood 404 + per-IP 429; forged webhooks 401; TENANT_ADMIN 403.
+- ⛔⛔ **The real browser found TWO bugs every test missed**: the public form couldn't scroll (portal locks html/body — `.tr-page` is its own scroller now) and ConnectSelect's inline 160px width pushed State into ZIP. Proven in Chrome: light/dark + logo, 10 errors, typed submit → thank-you, board, review page, audited EIN Show, Close.
+- ⛔⛔ Worktree hazard: `2acf52b8` swept this module's uncommitted server.ts wiring (origin couldn't
+  boot) → `5f279499` took it back → module committed on a private index, re-wired by pathspec,
+  shared index re-synced (it showed the new files as deleted).
+- ⏳ **NOT PROVEN: no real Telnyx filing** (needs a real EIN, $24) — brand/campaign/assign/charge/
+  ready email only ran against the simulated registry; sole-prop PIN on a real phone; a human
+  filling the form in a browser. Customer links are on **app.connectcomunications.com**
+  (platform canonical origin) — Izzy may want loopcom.net.
+- ⚠️ Platform issue seen during proof (NOT this feature, task chip spawned): after a portal deploy a browser on a long-lived HTTP/2 connection got 502s for minutes — old nginx workers "shutting down" for up to 7h still route to removed blue/green ports.
+- ✅ **2026-09-16 late · NINE REAL CUSTOMER DRAFTS PREPARED for Izzy to send** (every tenant that sent SMS in the last 30 days): B Visible, Create A Box, Displaydex, Fixup Group, Gesheft, Hanna, Luxure Management, Relax Tires, Trust Bookkeepings — created through the live `POST /admin/texting-registration` (status `draft`, **0 links, 0 emails**; board counts `draft: 9`). Prefill = display name, business phone, email, numbers (+ owner name where the user row has one). Staff PATCH added websites that load (bvisible.us, displaydex.com, gesheftkosher.com — 403 to curl, bot wall) and fixed Gesheft's email (was TWO addresses comma-joined → `Contact@Gesheftkosher.com`). Legal name / type / EIN / IRS address left EMPTY — **no tenant has any of them stored anywhere** (TenantBillingSettings address columns and OnboardingSubmission are empty for all nine). ⛔ Gaps: 6 have no contact name (owner user rows carry none; staff route cannot set contact names), Fixup's reads "fix up"; trustbookkeepingny.com does not resolve (website left empty). ⛔⛔ **Every number is VoIP.ms** — the engine attaches only TELNYX `TenantSmsNumber` rows, so approval covers nothing until the numbers move to Telnyx. Filing = $24 each (Hanna is FREE — decide before filing). ⏳ No link sent yet — Izzy presses Create/Send per customer (a link can't be re-shown later: only its hash is stored).
+- 2026-09-16 · **Izzy: "how do we move texting to Telnyx with no interruption?"** Answer given (advisory, nothing built): ORDER is the whole trick — file brand+campaign at Telnyx FIRST while the numbers keep texting on VoIP.ms (a campaign does not need its numbers to be approved), move a number ONLY after the campaign is live on every carrier, and attach it to the campaign the moment it lands. Inbound texts never break (ingest has no provider filter). The one unavoidable outbound gap = number lands at Telnyx → campaign assignment ASSIGNED (Telnyx: ~2h typical, up to 72h) — do it after hours. ⛔ Not wired today: nothing flips an existing customer's `TenantSmsNumber.provider` VOIPMS→TELNYX at landing (the carrier-migration watcher is source-guarded never to move texting), and this engine only re-checks moved numbers hourly — both need tracing before building. ⏳ UNVERIFIED: whether Telnyx lets a number be attached to a campaign before the port completes.

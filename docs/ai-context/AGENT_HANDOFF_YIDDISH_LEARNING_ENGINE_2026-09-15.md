@@ -529,3 +529,63 @@ with a written voice-rights contract, or Yiddish24 permission).
 Yiddish Labs — whose credits were OUT at the time of this note
 (`[YIDDISH_CREDITS] still out` in the api log). That degrades grammar before
 any voice work can help.
+
+# §14 2026-09-16 (afternoon) — Now listening, no music, and a rollback by another session
+
+Izzy: *"I want to be able to hear and see at all times what the agent is
+listening to. It shouldn't be just listening to music. There are also music
+spots there, so no music, just audio of people talking."*
+
+**DEPLOYED and container-verified: api + portal `3ace3d4e`** (the branch tip).
+The shipped page chunk carries "Now listening" and "Listen on Yiddish24";
+`/now` answers worker alive, crawl WAITING (hourly re-check), 0 bytes fetched.
+
+**Now listening.** `GET /admin/yiddish/now` + a panel ABOVE every tab of the
+Yiddish24 page, refreshed every 5 s (not while the tab is hidden). It shows the
+crawl state (walking / waiting + next check / paused / stopped), the series and
+page in hand, the last episode the worker touched with its stage, a 25-row
+recent trail (music hidden unless "Show excluded music" is ticked), and
+speech-vs-music totals.
+⛔ **"Hear" is a link to the episode's own page on yiddish24.com**, where the
+site's player plays it. The raw MP3 URL is never put in the payload (test
+asserts no `cloudfront` in it): the CDN refuses any page but its own, and
+embedding it in our portal would be working around that.
+
+**No music, decided by the site, never by a title guess.**
+- Series under the site's Music main category (id 7, נגינה, 11 series) plus
+  `YIDDISH24_EXTRA_MUSIC_SERIES` = #233 נגינה ווידעאס (music videos, filed under
+  Video) are never walked.
+- An item from one is skipped at the FIRST stage (`fingerprint`), marked
+  `state SKIPPED` + `error = YC_MUSIC_EXCLUDED_MESSAGE`. A guard in `runDueJobs`
+  refuses any stage already queued for a marked item. No other code sets an item
+  to SKIPPED, so the marker cannot collide.
+- Production: 4,182 items / ~1,049 h excluded, 4,180 queued jobs skipped;
+  28,029 speech episodes / ~10,036 h remain.
+- ⏳ **Open for Izzy:** two series inside Music are people talking about music
+  (נגינה אינטערוויוס, מוזיקאלישע שמועסן). They are excluded by default.
+- ⛔ **Music INSIDE a talk episode** (jingles, song breaks) cannot be seen from
+  metadata. Only the audio pipeline's SPEECH/MUSIC segment classifier can, and
+  it only runs once audio is permitted.
+
+**The category parser was wrong.** The live page carries the nav more than once
+and the old parser let the LAST sighting of a series decide its category, so
+news bulletins were filed as Torah and NO series as news. It now reads the
+category block a link sits in (first block wins; a block stops at the next
+heading — an unclosed list in the saved fixture had swallowed the next category,
+caught by the new test). Proven on the live page: 136 series, 9 categories,
+News 12 (was 0), Music 11. `catalogVersion` makes an old cursor re-read the nav
+once. `scripts/yc-backfill-categories.ts --relabel --apply` relabelled 7,469
+items to נייעס (Torah 9,517 → 2,048).
+
+**Heartbeat.** The worker's heartbeat row is UPSERTED per day: tick time is
+`value`, not `createdAt`. `/now` first read `createdAt` and showed a working
+worker as dead; fixed in `3ace3d4e`, and the test fails replayed on `4266093d`.
+
+⛔⛔ **Another session's deploy rolled this back.** api was deployed at
+`9c0fefde` (desk-phones, an older base) at 11:51 UTC and portal at 11:54. That
+reverted the music exclusion, the live view and the quiet-re-check fix, and the
+crawler paused itself at 12:03 on the exact false alarm `fb563e27` fixes. The
+deploy log said `success`. Recovered by deploying the branch tip (contains their
+commits too) and unpausing through the budget route; all three peer sessions
+were messaged. **Deploy the origin tip, and after any deploy check your fixes
+are ancestors of the live `/app/.build-commit`.**

@@ -127,7 +127,9 @@ export async function sendSpecialBlast(deps: BlastDeps, input: { tenantId: strin
 
   try {
     const contacts = await db.contact.findMany({
-      where: { tenantId: input.tenantId, active: true },
+      // Shared contacts only: a staffer's private phone book is never a marketing
+      // list (Contact.ownerUserId, 2026-09-16).
+      where: { tenantId: input.tenantId, active: true, ownerUserId: null },
       select: { displayName: true, emails: { select: { email: true, isPrimary: true } } },
       take: MAX_BLAST_RECIPIENTS * 2,
     });

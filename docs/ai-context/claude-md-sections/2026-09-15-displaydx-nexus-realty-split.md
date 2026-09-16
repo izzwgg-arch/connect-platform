@@ -97,5 +97,9 @@ Sola write, no PBX write, no email). Memory: [[displaydx-nexus-realty-split]].
   baseline sent Eli's iPhone one wake push; `--remove-originals` must SOFT-delete voicemails while the
   T6 spool exists. ⏳ **Eli must sign out + back in once**; a real answered call / text / voicemail
   email is still a human step; T6 cleanup is a later task.
+- ✅ **09-16 11:49Z: account renamed "Displaydex" (Izzy: "there is an E") and a fresh welcome /
+  create-password email SENT to eli@displaydex.com** (verified body: Displaydex, ext 101, Play badge, no
+  Nexus). Eli is INVITED + forcePasswordReset — old password gone. PBX label/slug `displaydx` left
+  internal on purpose (handoff §8d).
 - No Quicksat Rental exists at Sola or in Connect — Ellie's whole billing footprint was the
   one $30 schedule.

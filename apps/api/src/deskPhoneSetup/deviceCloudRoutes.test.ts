@@ -1383,6 +1383,71 @@ test("a phone that is not on this order is refused BY MAKER, never attached to w
   assert.equal(state.scanTokens[0].scanCount, 0, "a refusal is not a scan");
 });
 
+test("scan-text: decoded barcode values match by MAC and go through the one gate", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  // The browser decoded the sticker on-device and sends the RAW symbol values; the server
+  // shapes + parses + matches them, exactly as it does a photo.
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/scan-text`,
+    payload: { texts: [MAC12.toUpperCase(), SN] },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  const out = body(r);
+  assert.equal(out.matched, true);
+  assert.equal(out.makerLabel, "Grandstream");
+  assert.equal(row.serialNumber, SN, "the serial reached the record through the one gate");
+  noLeak(out, [SN]);
+  assert.equal(state.scanTokens[0].scanCount, 1);
+});
+
+test("scan-text: a value not on this order is refused BY MAKER, nothing attached", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/scan-text`,
+    payload: { texts: ["805EC0C89B86", "2142019121401463"] },
+  });
+  assert.equal(r.statusCode, 409, r.body);
+  assert.equal(body(r).error, "phone_not_in_order");
+  assert.match(body(r).message, /Yealink/);
+  assert.equal(row.serialNumber, null);
+  assert.equal(state.scanTokens[0].scanCount, 0, "a refusal is not a scan");
+});
+
+test("scan-text: symbols carrying no hardware address yet answer quietly, never an error", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  // A serial-only frame before the MAC symbol is read: the page treats this as "keep looking".
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/scan-text`,
+    payload: { texts: [SN] },
+  });
+  assert.equal(r.statusCode, 400, r.body);
+  assert.equal(body(r).error, "nothing_matched_yet");
+});
+
+test("scan-text is public by the token and dies with the link", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+  await app.inject({ method: "POST", url: `/desk-phones/runs/${runId}/scan-link/revoke`, payload: {} });
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/scan-text`, payload: { texts: [MAC12.toUpperCase()] },
+  });
+  assert.equal(r.statusCode, 404, r.body);
+  assert.equal(body(r).error, "link_not_found");
+});
 test("no camera: typing what the sticker says goes through the same one gate", async () => {
   reset();
   const app = await makeApp(CUSTOMER);

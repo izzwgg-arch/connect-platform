@@ -9,16 +9,17 @@ import type { AgentContactsInfo } from "../tools/contactsTools";
 
 export function makeContactsInfoClient(
   opts: { baseUrl?: string; secret?: string; timeoutMs?: number } = {},
-): (tenantId: string, search?: string) => Promise<AgentContactsInfo> {
+): (tenantId: string, search?: string, userId?: string | null) => Promise<AgentContactsInfo> {
   const baseUrl = (opts.baseUrl ?? process.env.AGENT_API_BASE_URL ?? "http://api:3001").replace(/\/$/, "");
   const timeoutMs = opts.timeoutMs ?? 15_000;
-  return async (tenantId: string, search?: string): Promise<AgentContactsInfo> => {
+  return async (tenantId: string, search?: string, userId?: string | null): Promise<AgentContactsInfo> => {
     const secret = (opts.secret ?? process.env.AGENT_INTERNAL_SECRET ?? "").trim();
     if (!secret) throw new Error("contacts_info_secret_unset (AGENT_INTERNAL_SECRET) — fail-closed");
     const resp = await postInternalApi({
       url: `${baseUrl}/internal/agent/contacts-info`,
       secret,
-      body: search ? { tenantId, search } : { tenantId },
+      // userId scopes the answer to what THAT person may see (private contacts are per user).
+      body: { tenantId, ...(search ? { search } : {}), ...(userId ? { userId } : {}) },
       timeoutMs,
     });
     const json: any = await resp.json().catch(() => ({}));

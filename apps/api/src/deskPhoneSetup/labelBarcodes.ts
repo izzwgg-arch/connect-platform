@@ -27,6 +27,23 @@ const SERIAL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{4,39}$/;
  * engine failure — the caller's OCR passes are the fallback, so a barcode problem
  * must never make a photo read WORSE than it did before this module existed.
  */
+/**
+ * Render decoded symbol VALUES as label text lines — one rule for every reader.
+ * ⛔ Shared on purpose (2026-09-16): the customer scan page decodes in the browser for
+ * speed, and its symbols must be shaped EXACTLY like the server photo path's, or the
+ * one gate would be judging two different languages. Pure; never judges acceptance.
+ */
+export function labelTextsFromSymbols(decoded: readonly string[]): string[] {
+  const texts: string[] = [];
+  for (const raw of decoded) {
+    const value = String(raw ?? "").trim();
+    if (!value || value.length > 64) continue;
+    if (MAC_SHAPE.test(value)) texts.push(value.toUpperCase());
+    else if (SERIAL_SHAPE.test(value)) texts.push(`SN ${value}`);
+  }
+  return texts;
+}
+
 export async function readLabelBarcodes(image: Buffer): Promise<LabelBarcodeRead> {
   try {
     const { readBarcodes } = await import("zxing-wasm/reader");
@@ -36,13 +53,7 @@ export async function readLabelBarcodes(image: Buffer): Promise<LabelBarcodeRead
     // ⛔ zxing answers junk input with a single empty error entry, not a throw — only an
     // entry that actually carries text counts as a symbol.
     const decoded = (results ?? []).map(r => String(r?.text ?? "").trim()).filter(v => v.length > 0);
-    const texts: string[] = [];
-    for (const value of decoded) {
-      if (value.length > 64) continue;
-      if (MAC_SHAPE.test(value)) texts.push(value.toUpperCase());
-      else if (SERIAL_SHAPE.test(value)) texts.push(`SN ${value}`);
-    }
-    return { texts, symbols: decoded.length };
+    return { texts: labelTextsFromSymbols(decoded), symbols: decoded.length };
   } catch {
     return { texts: [], symbols: 0 };
   }

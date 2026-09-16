@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { db as database } from "@connect/db";
 import { isNavItemHiddenBySetting, type PortalNavVisibility } from "@connect/shared";
+import { contactVisibleToUserWhere } from "./contactVisibility.js";
 
 type Viewer = { sub: string; role: string; tenantId?: string | null };
 type Result = { id: string; title: string; description: string; kind: "record"; href: string; navId: string };
@@ -48,7 +49,8 @@ export function registerGlobalSearchRoutes(app: FastifyInstance, deps: Dependenc
     const canView = viewRoles.has(user.role);
     const contacts = !global && Boolean(tenantId) && allowed("workspace.contacts", "can_view_workspace_contacts") && canView;
     add("Contacts", contacts, async () => (await db.contact.findMany({
-      where: { ...scope, active: true, archivedAt: null, OR: [{ displayName: contains(q) }, { firstName: contains(q) }, { lastName: contains(q) }, { company: contains(q) }, { phones: { some: { OR: [{ numberRaw: contains(q) }, { numberNormalized: contains(q.replace(/[^+\d]/g, "") || q) }] } } }, { emails: { some: { email: contains(q) } } }] },
+      // ⛔ A colleague's private phone book never shows in search (contactVisibility.ts).
+      where: { ...scope, active: true, archivedAt: null, AND: [contactVisibleToUserWhere(user.sub)], OR: [{ displayName: contains(q) }, { firstName: contains(q) }, { lastName: contains(q) }, { company: contains(q) }, { phones: { some: { OR: [{ numberRaw: contains(q) }, { numberNormalized: contains(q.replace(/[^+\d]/g, "") || q) }] } } }, { emails: { some: { email: contains(q) } } }] },
       select: { id: true, displayName: true, company: true, phones: { take: 1, orderBy: { isPrimary: "desc" }, select: { numberRaw: true } }, emails: { take: 1, orderBy: { isPrimary: "desc" }, select: { email: true } } }, take: 8, orderBy: { displayName: "asc" },
     })).map(r => record("workspace.contacts", r.id, r.displayName || r.phones[0]?.numberRaw || "Contact", ["Contact", r.company, r.phones[0]?.numberRaw, r.emails[0]?.email].filter(Boolean).join(" · "), linkQuery("/contacts", r.displayName || q))));
     const team = !global && Boolean(tenantId) && allowed("workspace.team", "can_view_workspace_team_directory") && canView;

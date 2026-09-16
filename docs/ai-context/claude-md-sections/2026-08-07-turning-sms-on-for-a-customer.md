@@ -61,6 +61,14 @@ Changes.
   message — is the ONLY remaining reason they still get texts by email. Neither
   was touched; both need Izzy.** Their other two numbers (866-579-7575 toll-free,
   845-776-1311) stay unclaimed on purpose. ⏳ Not proven: no outbound text yet.
+- ✅ **DONE for Secro Selutions 2026-09-16 — "SMS not working" was texting NEVER wired
+  into Connect** (runbook §9). 845-751-8493's row `cmogdrtjv0082pk5ejitznup6` was
+  unclaimed; one PATCH made it Secro's shared inbox + default; next poll
+  `fetched=3` → 3 threads on their tenant. Carrier was fine all along.
+  ⛔⛔ Their texts were going to Gmail (`sms_email`), a SIP account, and the **PBX's
+  VitalPBX SMS add-on** (`sms_url_callback` → `m.connectcomunications.com/sms/b10ae207…`,
+  = 209.145.60.79, stored under tenant 1) — so the VitalPBX-exit note's "SMS add-on
+  unused" is WRONG. ⏳ No outbound text proven; billing off pending Izzy.
 - ⛔⛔ **CREATE A BOX TEXTS FOR FREE, BY IZZY'S DECISION (2026-08-18) —
   `smsBillingEnabled` is `false` ON PURPOSE and must not be "fixed".** Asked
   whether to bill the $10, his answer was *"turn it on without charging"*: they
@@ -111,3 +119,5 @@ Changes.
   PBX inbound route on tenant 105 is the one leftover (+$3/mo E911 until
   deleted in the panel). See the port-automation handoff at the top of this
   file and [[voipms-sms-per-did-webhook-is-a-red-herring]].
+
+- **2026-09-16 · WHO IS ACTUALLY SENDING TEXTS (read-only census).** Query = `ConnectChatMessage` direction `OUTBOUND` joined to `ConnectChatThread` type `SMS`, grouped by tenant (DB container `connectcomms-postgres`, user/db `connectcomms`). Sent in the last 30 days: Relax Tires 54, Fixup Group 19, Hanna 16, Trust Bookkeepings 11, Luxure Management 9, B Visible 6, Displaydex 6, Create A Box 2, Gesheft 2 (+ internal Connect Communications 20). Every one = a SINGLE sending user; 0 failures recorded. Last 7 days only: Relax Tires, Fixup, Hanna, B Visible, Create A Box. Quiet 30+ days: Loopcom Demo, inii mini, Landau Home, Ribit Capital. ⛔ Secro (assigned today) has sent nothing yet. ⛔ VoIP.ms has no delivery receipts, so "0 failed" means "nothing refused at send", not "delivered".

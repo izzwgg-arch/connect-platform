@@ -54,13 +54,26 @@ export default function OnboardingSuccessPage() {
 
   return (
     <div className="ob-success-wrap">
-      <div className="ob-success-icon" aria-hidden>
-        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor">
-          <circle cx="18" cy="18" r="10" strokeWidth="1.5" strokeDasharray="2 3" opacity="0.4" />
-          <circle cx="18" cy="18" r="6" fill="currentColor" fillOpacity="0.12" strokeWidth="1.5" />
-          <circle cx="18" cy="18" r="2.5" fill="currentColor" stroke="none" />
-        </svg>
+      <div className="ob-header">
+        <div className="ob-logo">
+          <img className="ob-logo-img" src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} />
+        </div>
       </div>
+      {p?.failed ? (
+        <div className="ob-success-icon" aria-hidden>
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor">
+            <circle cx="18" cy="18" r="10" strokeWidth="1.5" strokeDasharray="2 3" opacity="0.4" />
+            <circle cx="18" cy="18" r="6" fill="currentColor" fillOpacity="0.12" strokeWidth="1.5" />
+            <circle cx="18" cy="18" r="2.5" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+      ) : (
+        <>
+          {/* The Loopcom infinity: glowing artwork on dark, the light-mode artwork on light. */}
+          <img className="ob-success-mark ob-mark-dark" src="/brand/loopcom/loopcom-icon-256.png" alt="" width={256} height={256} aria-hidden />
+          <img className="ob-success-mark ob-mark-light" src="/brand/loopcom/loopcom-mark-light-248.png" alt="" width={248} height={124} aria-hidden />
+        </>
+      )}
 
       {p?.failed ? (
         <>

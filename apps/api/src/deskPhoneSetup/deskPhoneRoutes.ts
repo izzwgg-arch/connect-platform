@@ -1076,6 +1076,71 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
    * record of hardware we have actually wiped; they are absent from what this writes.
    * Losing our place must never turn into wiping somebody's phone a second time.
    */
+  /**
+   * ⛔⛔ THE PASSWORD ON A PHONE WE PROVISIONED IS OURS, AND THE WIZARD MUST NEVER ASK A
+   * CUSTOMER FOR IT (Izzy, 2026-09-16, watching his own T42S stop on a password screen:
+   * "We should not need the fucking password").
+   *
+   * Our own Yealink provisioning writes `static.security.user_password = admin:<password>`
+   * into the config the phone downloads. So a Loopcom-provisioned phone that answers
+   * "locked" is locked with a password THIS SYSTEM GENERATED and still serves. Asking the
+   * person for it is asking them for something we already have.
+   *
+   * This reads that value back out of the phone's own rendered config, exactly the way the
+   * phone itself fetches it, and hands it to the wizard so it can be put into the DESKTOP's
+   * credential store. ⛔ The password is never stored here, never audited and never logged —
+   * the audit records only that a known credential was served.
+   */
+  app.post("/desk-phones/runs/:id/phones/:phoneId/known-credential", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    if (!(await allowedToSetUp(user, reply))) return;
+
+    const phone = await db.deskPhoneSetupPhone.findFirst({
+      where: { id: String(req.params.phoneId), runId: run.id, tenantId: user.tenantId },
+    });
+    if (!phone) return reply.status(404).send({ error: "not_found" });
+    const mac = String(phone.macAddress ?? "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (mac.length !== 12) return reply.send({ ok: false, reason: "no_hardware_address" });
+
+    // ⛔ ONLY folders that are OURS. The tenant's own provisioning folder, plus the folder this
+    // phone is already pointed at when that is a Loopcom one — a phone moved between our tenants
+    // can still be holding the previous folder's password. Never an arbitrary URL from the row.
+    const bases: string[] = [];
+    try {
+      const own = await (deps.provisioningUrlFor ?? defaultProvisioningUrlFor)(user.tenantId);
+      if (own) bases.push(String(own));
+    } catch { /* fall through to the recorded folder */ }
+    const recorded = String(phone.provisioningUrl ?? "");
+    if (recorded && classifyOurs(recorded, deps.ourProvisioningHosts())) {
+      bases.push(recorded.replace(/\/?(cfg)?[0-9a-fA-F]{12}\.(cfg|xml)$/, ""));
+    }
+
+    for (const base of bases) {
+      const root = (/^https?:\/\//.test(base) ? base : `https://${base}`).replace(/\/+$/, "");
+      try {
+        const res = await fetch(`${root}/${mac}.cfg`, { signal: AbortSignal.timeout(15_000) });
+        if (!res.ok) continue;
+        const text = await res.text();
+        // `static.security.user_password = admin:<password>` — the admin line only.
+        const m = /(?:static\.)?security\.user_password\s*=\s*admin:([^\r\n]+)/i.exec(text);
+        const password = m?.[1]?.trim();
+        if (!password) continue;
+        await deps.audit({
+          tenantId: user.tenantId,
+          action: "DESK_PHONE_KNOWN_CREDENTIAL_SERVED",
+          entityType: "DeskPhoneSetupPhone",
+          entityId: phone.id,
+          actorUserId: user.sub,
+          // ⛔ The password itself is deliberately absent.
+          metadata: { mac, source: "loopcom_provisioning_config" },
+        });
+        return reply.send({ ok: true, username: "admin", password });
+      } catch { /* try the next folder */ }
+    }
+    return reply.send({ ok: false, reason: "not_known" });
+  });
+
   app.post("/desk-phones/runs/:id/phones/:phoneId/retry", async (req: any, reply: any) => {
     const owned = await ownRun(req, reply); if (!owned) return;
     const { user, run } = owned;

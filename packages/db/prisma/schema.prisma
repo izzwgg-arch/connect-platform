@@ -417,6 +417,11 @@ enum IntegrationProvider {
   /// switch). Numbers ride the master Space; chat send/receive dispatches on
   /// this per-number value, VoIP.ms rows untouched.
   SIGNALWIRE
+  /// Telnyx — third messaging carrier (2026-09-16 unified messaging Phase 1).
+  /// Outbound chat dispatches through the worker's messagingDispatch registry;
+  /// inbound + delivery receipts arrive on /webhooks/telnyx/sms
+  /// (Ed25519-verified, fail-closed).
+  TELNYX
 }
 
 enum SmsSendMode {
@@ -948,6 +953,7 @@ model Tenant {
   defaultSmsFromNumber            PhoneNumber?                      @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
   tenantSmsNumbers                TenantSmsNumber[]
   smsRegistrations                TenantSmsRegistration[]
+  textingRegistrations            TextingRegistration[]
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
   voicemailIngestIncidents        VoicemailIngestIncident[]
@@ -2373,6 +2379,11 @@ model Contact {
   active                Boolean                      @default(true)
   archivedAt            DateTime?
   createdBy             String?
+  /// PRIVATE to this one user when set; null = shared company contact (CRM, website, admin-seeded).
+  /// ⛔ Deliberately NOT a foreign key: a SetNull on user delete would turn someone's
+  /// private phone book into a company-wide one. A dead owner id stays invisible to all.
+  /// (2026-09-16, Relax Tires: ext 101's 4,250 phone-book contacts showed on 102/103.)
+  ownerUserId           String?
   createdAt             DateTime                     @default(now())
   updatedAt             DateTime                     @updatedAt
   tenant                Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2404,6 +2415,7 @@ model Contact {
   intelligenceReport    CrmLeadIntelligenceReport?
 
   @@unique([tenantId, extensionId])
+  @@index([tenantId, ownerUserId])
   @@index([tenantId, type, active])
   @@index([tenantId, displayName])
   @@index([tenantId, favorite])
@@ -4692,6 +4704,129 @@ model TenantSmsRegistration {
   @@index([tenantId])
 }
 
+/// 10DLC texting registration filed by platform staff from a customer's
+/// private link (2026-09-16, /admin/texting-registration). Separate from
+/// TenantSmsRegistration ON PURPOSE: that table belongs to the sign-up
+/// wizard's automatic chain and its sweep — rows here must never be advanced
+/// by it. ⛔ No EIN column: the EIN lives only as a token in
+/// TextingRegistrationEin and is destroyed once the business is verified.
+model TextingRegistration {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  /// See apps/api/src/textingRegistration/phases.ts RegistrationStatus.
+  status                 String    @default("draft")
+  /// Public policy page slug: /sms/<slug>. Unique across all registrations.
+  publicSlug             String    @unique
+  /// Idempotency key sent to the registry as the campaign referenceId.
+  referenceKey           String    @unique
+  // What the account already knows (shown read-only to the customer)
+  displayName            String
+  businessPhone          String
+  businessEmail          String
+  contactFirstName       String?
+  contactLastName        String?
+  vertical               String    @default("PROFESSIONAL")
+  /// E.164 numbers the customer's texting uses (snapshot at link time).
+  numbers                Json      @default("[]")
+  // What the customer types
+  legalName              String?
+  entityType             String?
+  street                 String?
+  city                   String?
+  state                  String?
+  postalCode             String?
+  website                String?
+  mobilePhone            String?
+  signatureName          String?
+  consentAt              DateTime?
+  submittedAt            DateTime?
+  submittedIp            String?
+  /// Generated carrier wording; staff may edit before filing.
+  content                Json      @default("{}")
+  /// Fields unlocked on the customer's link when sent back; null = full form.
+  fixFields              Json?
+  fixNote                String?
+  // Registry state (re-read from Telnyx, never copied from a webhook body)
+  telnyxBrandId          String?   @unique
+  tcrBrandId             String?
+  brandIdentityStatus    String?
+  brandStatus            String?
+  brandFeedback          Json?
+  brandCreateStartedAt   DateTime?
+  brandVerifiedAt        DateTime?
+  pinSentAt              DateTime?
+  telnyxCampaignId       String?   @unique
+  tcrCampaignId          String?
+  campaignStatus         String?
+  campaignCreateStartedAt DateTime?
+  carrierReviews         Json?
+  failureReasons         Json?
+  numberAssignments      Json?
+  renewsAt               DateTime?
+  filedAt                DateTime?
+  filedByUserId          String?
+  liveAt                 DateTime?
+  readyEmailSentAt       DateTime?
+  /// Set when the one-time registration charge was added to the customer's invoice.
+  chargeAddedAt          DateTime?
+  chargeReference        String?
+  lastError              String?
+  lastCheckedAt          DateTime?
+  createdByUserId        String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  links                  TextingRegistrationLink[]
+  ein                    TextingRegistrationEin?
+  events                 TextingRegistrationEvent[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+/// A customer's private link. Only the SHA-256 of the token is stored.
+model TextingRegistrationLink {
+  id              String              @id @default(cuid())
+  registrationId  String
+  tokenHash       String              @unique
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  openedAt        DateTime?
+  usedAt          DateTime?
+  emailedTo       String?
+  emailedAt       DateTime?
+  createdByUserId String?
+  createdAt       DateTime            @default(now())
+  registration    TextingRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([registrationId])
+}
+
+/// The tokenized EIN (AES-256-GCM via @connect/security, bound to the
+/// registration id). Row is DELETED once the registry verifies the business
+/// or when it goes unfiled past its TTL. ⛔ Never select `token` into a response.
+model TextingRegistrationEin {
+  registrationId String              @id
+  token          String
+  last4          String
+  createdAt      DateTime            @default(now())
+  registration   TextingRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+}
+
+/// The registration's history, shown on its admin page.
+model TextingRegistrationEvent {
+  id             String              @id @default(cuid())
+  registrationId String
+  kind           String
+  message        String
+  actorUserId    String?
+  detail         Json?
+  createdAt      DateTime            @default(now())
+  registration   TextingRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([registrationId, createdAt])
+}
+
 model TenantSmsNumber {
   id                  String                @id @default(cuid())
   /// Null until assigned to a Connect tenant (synced inventory row).
@@ -4702,6 +4837,12 @@ model TenantSmsNumber {
   /// exists. Stamped by sync-numbers; read by the inbound poller and every
   /// outbound send so the right account's credentials are used per number.
   voipmsAccountId     String                @default("default")
+  /// Backup carrier for OUTBOUND chat messages on this number (unified
+  /// messaging Phase 1). Fired only when the primary provably accepted
+  /// NOTHING (`__anySent !== true` on the thrown error) — one message, one
+  /// delivery, never both. Null = no backup route (the default for every
+  /// existing row, i.e. exactly the pre-Phase-1 behaviour).
+  fallbackProvider    IntegrationProvider?
   voipmsDid           String?
   phoneRaw            String?
   phoneE164           String                @unique

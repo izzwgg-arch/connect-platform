@@ -12,7 +12,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
   if (pathWithoutApiPrefix.startsWith("/creative/download/")) return true;
   // The Coworker's Creative Studio door: server-to-server, authenticated by
   // the shared secret inside each handler (same contract as the MOH upload
-  // door above). Every new /internal/agent/* path must be listed here or it
+  // door above). ⛔ Every new /internal/agent/* path must be listed here or it
   // answers "unauthorized" no matter what the handler does.
   if (pathWithoutApiPrefix.startsWith("/internal/agent/creative/")) return true;
   // Handsets authenticate with per-device HTTP Basic in the handler. Anchored
@@ -154,6 +154,13 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // /desk-phones/runs/* and stay JWT-gated behind can_setup_desk_phones.
   // ⛔ Anchored to the path start, never a substring match.
   const isPublicPhoneSetupPath = pathWithoutApiPrefix.startsWith("/phone-setup/");
+  // 10DLC texting registration (2026-09-16): the customer's private link
+  // /texting-registration/<token>/* and the business's public policy page
+  // /texting-registration/policy/<slug>. The token is the whole credential,
+  // stored hashed and re-checked in the handler on every request.
+  // ⛔ Anchored. Staff routes live under /admin/texting-registration and stay
+  // JWT-gated (platform staff + action keys).
+  const isPublicTextingRegistrationPath = pathWithoutApiPrefix.startsWith("/texting-registration/");
   // CRM Email OAuth callback: Google redirects the user's browser here with code+state.
   // The browser cannot carry our Bearer token. Auth is performed inside the handler via
   // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
@@ -211,6 +218,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isPublicCrmFormPath
     || isPublicTrackingPath
     || isPublicPhoneSetupPath
+    || isPublicTextingRegistrationPath
     || isCrmEmailOauthCallbackPath
     || isInternalSupermarketPayIvrPath
     || isMarketingUnsubscribePath
@@ -268,11 +276,21 @@ export function shouldSkipJwtVerification(path: string): boolean {
       // FAILS CLOSED when no public key is stored
       // (loopcomMobile/mobileWebhookRoutes.ts).
       "/webhooks/telnyx/mobile",
+      // Unified messaging Phase 1 (2026-09-16): Telnyx MESSAGING webhooks
+      // (inbound SMS/MMS + delivery receipts) → the shared chat ingest. Same
+      // Ed25519 fail-closed contract as /webhooks/telnyx/mobile
+      // (telnyx/telnyxWebhooks.ts).
+      "/webhooks/telnyx/sms",
+      // 10DLC registry status updates (2026-09-16): Ed25519 fail-closed, and a
+      // trigger to re-read the registry only (textingRegistration/routes.ts).
+      "/webhooks/telnyx/10dlc",
     ].includes(path) || path.endsWith("/webhooks/voipms/sms")
     || path.endsWith("/auth/google/start") || path.endsWith("/auth/google/callback") || path.endsWith("/auth/google/complete")
     || path.endsWith("/webhooks/signalwire/sms") || path.endsWith("/webhooks/signalwire/sms-status")
     || path.endsWith("/webhooks/signalwire/registry")
     || path.endsWith("/webhooks/telnyx/mobile")
+    || path.endsWith("/webhooks/telnyx/sms")
+    || path.endsWith("/webhooks/telnyx/10dlc")
     || path === "/metrics"
     || path.endsWith("/metrics")
     || path.includes("/chat/attachments/download")

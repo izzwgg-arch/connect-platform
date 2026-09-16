@@ -927,7 +927,7 @@ test("STRESS 19 — the blast: 2,600 messy contacts dedupe to the correct recipi
     const db = makeSupermarketDb();
     db.seed("tenant", { id: "t-blast", crmMode: "supermarket" });
     for (let i = 0; i < 2600; i++) {
-      const c = db.seed("contact", { id: `ct-${i}`, tenantId: "t-blast", displayName: `Person ${i}`, active: i % 50 !== 0 });
+      const c = db.seed("contact", { id: `ct-${i}`, tenantId: "t-blast", displayName: `Person ${i}`, active: i % 50 !== 0, ownerUserId: null });
       if (i % 7 === 0) continue; // no email at all
       const email = i % 13 === 0 ? `DUP@example.com` : `p${i}@example.com`;
       db.seed("contactEmail", { contactId: c.id, email, isPrimary: true });

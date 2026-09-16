@@ -183,6 +183,40 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       setError("We could not make the customer's link just now. Try again.");
     }
   }, [runId]);
+  /**
+   * ⛔⛔ THE CUSTOMER'S SCAN LINK IS OFFERED ON EVERY SCREEN THAT HAS PHONES, NOT ONLY THE LAST
+   * ONE (Izzy, 2026-09-16, after pressing "I don't have the password" and finding nothing there:
+   * "it's still not asking me to send a link to scan"). It first shipped on the done screen alone —
+   * and a run that halts, or that a person leaves part-way, never reaches that screen, so the link
+   * was real, deployed, and unreachable. Same shape as the welcome screen a resumed run used to
+   * hide: anything a person may need mid-run must be reachable FROM where they are standing.
+   */
+  const scanLinkOffer = (
+    <div className="dps-scanlink">
+      {!scanLink ? (
+        <button className="dps-btn" onClick={() => void makeScanLink()}>
+          Send the customer a link to scan their phones
+        </button>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          <span className="dps-hint">
+            Text or email this to the customer. It opens the camera on their phone and expires in 30 days.
+          </span>
+          <input className="dps-managed-input" readOnly value={scanLink} onFocus={(e) => e.currentTarget.select()} />
+          <button
+            className="dps-btn"
+            onClick={() => {
+              navigator.clipboard?.writeText(scanLink).then(
+                () => setScanLinkCopied(true),
+                () => setScanLinkCopied(false),
+              );
+            }}
+          >{scanLinkCopied ? "Copied" : "Copy the link"}</button>
+        </div>
+      )}
+    </div>
+  );
+
   const [busy, setBusy] = useState(false);
   const [knowsPhone, setKnowsPhone] = useState<"yes" | "no" | null>(null);
   const [phoneBrand, setPhoneBrand] = useState("");
@@ -647,6 +681,45 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
   }, [runId, loadRun]);
 
   /** "I don't know the password" — a complete answer, never a wall. */
+  /**
+   * ⛔⛔ A PHONE WE PROVISIONED IS NEVER A PASSWORD QUESTION (Izzy, 2026-09-16, watching his
+   * own Yealink stop dead on a password screen: "We should not need the fucking password").
+   *
+   * Our provisioning writes the admin password onto the phone, so when the ladder reports
+   * "locked" the answer is already ours: the server reads it back out of that phone's own
+   * config and this puts it straight into the DESKTOP's credential store — the same store a
+   * typed password goes into, so nothing downstream changes and the password still never
+   * lands in React state, a log, or the api.
+   *
+   * ⛔ Tried ONCE per phone. If our config does not carry one (a phone somebody else
+   * provisioned) the password screen appears exactly as before — this only removes the
+   * question we could already answer ourselves.
+   */
+  const knownCredentialTriedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!runId) return;
+    const locked = needs
+      .filter((n): n is Extract<NeedsPerson, { kind: "password" }> => n.kind === "password")
+      .filter((n) => !knownCredentialTriedRef.current.has(n.phoneId));
+    if (!locked.length) return;
+    for (const n of locked) knownCredentialTriedRef.current.add(n.phoneId);
+    void (async () => {
+      for (const n of locked) {
+        const bridge = desktop()?.phoneSetup;
+        if (!bridge?.rememberCredential) return;
+        const known = await apiPost<{ ok: boolean; username?: string; password?: string }>(
+          `/desk-phones/runs/${runId}/phones/${n.phoneId}/known-credential`, {},
+        ).catch(() => null);
+        if (!known?.ok || !known.password) continue;
+        const ref = `phone:${n.phoneId}`;
+        const stored = await bridge.rememberCredential(ref, known.username || "admin", known.password).catch(() => null);
+        if (!stored?.ok) continue;
+        driverRef.current?.credentialStored(n.phoneId, ref);
+        setNeeds((cur) => cur.filter((x) => !(x.kind === "password" && x.phoneId === n.phoneId)));
+      }
+    })();
+  }, [needs, runId]);
+
   const dontKnowPassword = useCallback((phoneId: string) => {
     driverRef.current?.passwordUnknown(phoneId);
     setNeeds((n) => n.filter((x) => !(x.kind === "password" && x.phoneId === phoneId)));
@@ -1236,6 +1309,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 )}
               </div>
             </div>
+            {/* Offered from the found and match screens too: the customer can scan while
+                the person setting up is still choosing who sits where. */}
+            <div className="dps-wz-body" style={{ paddingTop: 0 }}>{scanLinkOffer}</div>
             <div className="dps-wz-foot">
               <button className="dps-btn dps-btn-g" onClick={step === "found" ? search : () => setStep("found")}>
                 {step === "found" ? "Search again" : "Back"}
@@ -1373,6 +1449,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                     <button className="dps-btn dps-btn-p" onClick={() => supplyPassword(n.phoneId, n.label)}>Use it</button>
                   </div>
                   <span className="dps-hint">The password stays on this computer. It is never sent to Loopcom.</span>
+                  {/* ⛔ The way OUT of this screen without a password: the customer scans the
+                      sticker themselves. This is the screen that needed it most and had it least. */}
+                  <div style={{ marginTop: 14 }}>{scanLinkOffer}</div>
                 </div>
                 {error && <p className="dps-hint" style={{ color: "var(--dps-warn)", marginTop: 10 }}>{error}</p>}
               </div>
@@ -1487,6 +1566,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 Keep this window open while we work &mdash; you can carry on using your computer.
               </p>
             )}
+            <div style={{ marginTop: 16 }}>{scanLinkOffer}</div>
           </div>
           <div className="dps-wz-foot">
             <button className="dps-btn dps-btn-g" onClick={() => void cancelSetup()}>Cancel setup</button>
@@ -1542,33 +1622,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                 ))}
               </div>
             </div>
-            {/* The customer's own scan link: they open it on their phone and scan the
-                sticker under each handset. Offered here because this is the moment the
-                order is settled — and it is the honest answer for any phone this run
-                could not finish by itself. */}
-            <div className="dps-wz-body" style={{ paddingTop: 0 }}>
-              {!scanLink ? (
-                <button className="dps-btn" onClick={() => void makeScanLink()}>
-                  Send the customer a link to scan their phones
-                </button>
-              ) : (
-                <div style={{ display: "grid", gap: 8 }}>
-                  <span className="dps-hint">
-                    Text or email this to the customer. It opens the camera on their phone and expires in 30 days.
-                  </span>
-                  <input className="dps-managed-input" readOnly value={scanLink} onFocus={(e) => e.currentTarget.select()} />
-                  <button
-                    className="dps-btn"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(scanLink).then(
-                        () => setScanLinkCopied(true),
-                        () => setScanLinkCopied(false),
-                      );
-                    }}
-                  >{scanLinkCopied ? "Copied" : "Copy the link"}</button>
-                </div>
-              )}
-            </div>
+            <div className="dps-wz-body" style={{ paddingTop: 0 }}>{scanLinkOffer}</div>
             <div className="dps-wz-foot">
               <span className="dps-hint">Everything is saved.</span>
               <span className="dps-sp" />

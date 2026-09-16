@@ -2068,3 +2068,15 @@ production, because the mirror's grants are still not installed.
   walk in progress keeps the fast clock). tsc: 0 yiddishCorpus errors.
 - Production proof: api `fb563e27` container-verified; 11:03 re-check probe OK
   "581 known episode(s) re-read correctly", budget unpaused, 0 broken probes.
+
+## 2026-09-16 (afternoon) — Yiddish engine: Now listening + no music
+
+- `src/yiddishCorpus/*.test.ts`: **169 / 169 pass** (+13: nav first-block
+  attribution, music by category id and named catId, discovery never requests a
+  music series and re-reads a stale catalog, first-stage music skip, talk not
+  skipped, worker guard never runs a stage for marked music, `/now` shape + no
+  MP3 url leaked + heartbeat read from `value`). The heartbeat assertion FAILS
+  replayed on `4266093d`. api + portal tsc: 0 errors in this area.
+- Parser proven on the LIVE nav page (136 series, 9 categories, news 12, music 11).
+- Production: api + portal `3ace3d4e`; shipped chunk contains the panel; `/now`
+  worker alive, 4,182 music excluded, no `cloudfront` in the payload.

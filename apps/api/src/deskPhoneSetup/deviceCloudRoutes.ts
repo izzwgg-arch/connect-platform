@@ -66,7 +66,7 @@ import {
   vendorCloudStateFor,
 } from "./deviceIdentityStore";
 import { assertGdmsRuntimeMode, GdmsClient } from "./gdmsClient";
-import { readLabelBarcodes } from "./labelBarcodes";
+import { labelTextsFromSymbols, readLabelBarcodes } from "./labelBarcodes";
 import {
   describeGdmsCredentials,
   resolveGdmsCredentials,
@@ -1489,6 +1489,64 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     await db.deskPhoneScanToken.update({
       where: { id: link.row.id },
       data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },
+    }).catch(() => null);
+
+    const after = await db.deskPhoneSetupPhone.findMany({ where: { runId: link.run.id, tenantId: link.row.tenantId } });
+    const wanted = after.filter((p: any) => !p.skippedAt);
+    const updated = wanted.find((p: any) => p.id === phone.id) ?? phone;
+    const maker = manufacturerFromOui(seen.mac).manufacturer;
+    return reply.send({
+      ok: true, matched: true,
+      phone: scanPhoneView(updated),
+      maker, makerLabel: MAKER_NAMES[maker] ?? null,
+      total: wanted.length,
+      scanned: wanted.filter((p: any) => p.serialNumber).length,
+    });
+  });
+
+  /**
+   * Decoded barcode VALUES from the customer's browser — the fast path (Izzy, 2026-09-16:
+   * "It needs to scan very efficiently right away"). The page runs the SAME zxing engine
+   * on-device at several attempts per second, so a decode lands in one round trip instead
+   * of a JPEG upload every 1.5s. ⛔ THE BROWSER IS A READER, NEVER A JUDGE: the values are
+   * re-shaped by the same rule as the photo path (labelTextsFromSymbols), re-parsed, matched
+   * by hardware address against THIS order, and pushed through the one gate exactly like
+   * every other door. A forged or garbled value ends at the same refusals.
+   */
+  app.post("/phone-setup/:token/scan-text", async (req: any, reply: any) => {
+    const link = await scanLink(req.params.token);
+    if (!link) return reply.status(404).send({ ok: false, error: "link_not_found", message: "This link is no longer active. Ask Loopcom for a new one." });
+    const body = z.object({ texts: z.array(z.string().trim().min(1).max(64)).min(1).max(8) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_request" });
+
+    const lines = labelTextsFromSymbols(body.data.texts);
+    const text = labelTextFromPhoto(lines.join("\n"));
+    const seen = parseDeviceLabel(text);
+    // No hardware address yet — the normal state while symbols arrive one at a time.
+    // Silent on the page, exactly like a not-yet-readable photo.
+    if (!seen.mac) return reply.status(400).send({ ok: false, error: "nothing_matched_yet" });
+
+    const phones = await db.deskPhoneSetupPhone.findMany({
+      where: { runId: link.run.id, tenantId: link.row.tenantId },
+    });
+    const inOrder = new Map<string, any>(phones.filter((p: any) => !p.skippedAt).map((p: any) => [String(p.macAddress), p]));
+    const phone = inOrder.get(seen.mac);
+    if (!phone) {
+      const maker = manufacturerFromOui(seen.mac).manufacturer;
+      const makerWord = MAKER_NAMES[maker] ?? null;
+      return reply.status(409).send({
+        ok: false, error: "phone_not_in_order",
+        message: makerWord
+          ? `That ${makerWord} isn't one of the phones on this order. Scan one of the phones we sent you.`
+          : "That phone isn't one of the phones on this order. Scan one of the phones we sent you.",
+      });
+    }
+
+    // ⛔ via "typed_or_scanned": a barcode scanner's output, which is literally what this is.
+    const outcome = await recordLabel(scanActor(link.row), phone, text, "typed_or_scanned", null);
+    if (!outcome.ok) return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
+    await db.deskPhoneScanToken.update({
+      where: { id: link.row.id }, data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },
     }).catch(() => null);
 
     const after = await db.deskPhoneSetupPhone.findMany({ where: { runId: link.run.id, tenantId: link.row.tenantId } });
