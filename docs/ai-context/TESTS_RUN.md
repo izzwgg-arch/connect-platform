@@ -2,6 +2,14 @@
 
 Newest entries first.
 
+## VoIP.ms trunk guardrail — mute the known 877-220-5058 orphan (2026-09-16)
+
+- `apps/api`: `npx tsx --test src/onboarding/voipMsTrunkGuardrail.test.ts` → **15/15 pass** (1 new: fox muted
+  across 3 sweeps with 0 escalations; a second number on the same dead subaccount still alarms; a real
+  customer trunk still alarms under the mute). The existing "invalid_account counts as down" test is unchanged
+  and still passes, because the pure decision mutes nothing unless given the list.
+- Deployed api `737331c3`, container `.build-commit` = `737331c3`, change grep-present, 0 restarts, health 200.
+
 ## Creative Studio — the film pipeline, and six real bugs it found (2026-09-16)
 
 - `apps/api` Creative Studio suite: **104 tests, all pass**
@@ -2051,3 +2059,12 @@ production, because the mirror's grants are still not installed.
   2026-08-12 source). Not ours; the server builds fresh.
 - The stage-coverage guard's "fails before the fix" proof is production itself:
   `no handler for stage "observe"` × 214 rows in `YcProcessingJob`.
+
+## 2026-09-16 (later) — Yiddish engine: quiet re-checks must not pause the crawl
+
+- `src/yiddishCorpus/*.test.ts`: **161 / 161 pass** (+4: quiet re-check never
+  pauses; a run recognising nothing still pauses — the original two-empty-runs
+  test is unchanged and passes; caught-up catalog waits the hourly window; a
+  walk in progress keeps the fast clock). tsc: 0 yiddishCorpus errors.
+- Production proof: api `fb563e27` container-verified; 11:03 re-check probe OK
+  "581 known episode(s) re-read correctly", budget unpaused, 0 broken probes.

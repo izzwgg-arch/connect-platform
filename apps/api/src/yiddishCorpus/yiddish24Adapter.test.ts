@@ -537,3 +537,91 @@ test("a walk already in progress still learns the category map, without losing i
     setYiddish24Fetch(null);
   }
 });
+
+// ── music: decided by the site's own grouping, never walked ─────────────────
+
+import { isMusicItem, isMusicSeries, YIDDISH24_CATALOG_PARSER_VERSION } from "./yiddish24Adapter";
+
+test("a series seen again later under another heading keeps its FIRST category", () => {
+  // The live page carries the nav more than once. The old parser let the last
+  // sighting win, which filed news bulletins as Torah and no series as news.
+  const tail =
+    '<div class="footer"><a href="/mainCategory/6">תורה רובריק</a>' +
+    '<a class="item_inner" href="/cat/57/"><span class="item_subtitle subname_57">בולעטין</span></a></div>';
+  const series = parseSeriesLinks(NAV + tail);
+  const bulletin = series.find((x) => x.catId === "57");
+  assert.ok(bulletin);
+  assert.equal(bulletin!.mainCategoryId, "1", "57 lives in the News block and must stay there");
+});
+
+test("music is the site's category 7, and an item is music only by its series", () => {
+  assert.equal(isMusicSeries("7"), true);
+  assert.equal(isMusicSeries("1"), false);
+  assert.equal(isMusicSeries(null), false);
+  const cursor = JSON.stringify({ musicCatIds: ["90"], seriesNames: { "90": "ניגונים", "57": "בולעטין" } });
+  assert.equal(isMusicItem({ seriesName: "ניגונים" }, cursor), true);
+  assert.equal(isMusicItem({ seriesName: "בולעטין" }, cursor), false);
+  // No catalog yet: never skip an episode on a guess.
+  assert.equal(isMusicItem({ seriesName: "ניגונים" }, null), false);
+  assert.equal(isMusicItem({ seriesName: "ניגונים" }, "not json"), false);
+});
+
+test("discovery never walks a music series, even one already queued, and re-reads a stale catalog", async () => {
+  const musicNav =
+    NAV +
+    '<ul><li class="submenu_item"><a class="request-page" href="/mainCategory/7" data-id="7">נגינה</a>' +
+    '<ul class="submenu_list"><li class="sub-item"><a class="item_inner request-page" href="/cat/900/">' +
+    '<span class="item_subtitle subname_900">ניגונים</span></a></li></ul></li></ul>';
+  const calls: string[] = [];
+  setYiddish24Fetch(async (url: any) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("/mainCategory/1")) return { ok: true, status: 200, text: async () => musicNav };
+    return { ok: true, status: 200, text: async () => LISTING };
+  });
+  try {
+    const saved: any[] = [];
+    const source: any = {
+      id: "src-1",
+      key: "yiddish24",
+      // Built by the OLD parser (no catalogVersion), with the music series queued first.
+      discoveryCursor: JSON.stringify({ catId: null, pending: ["900", "57"], completed: [], categories: { "57": "x" } }),
+    };
+    const db: any = {
+      ycSource: {
+        findUnique: async () => source,
+        findFirst: async () => source,
+        update: async ({ data }: any) => {
+          if (data.discoveryCursor) {
+            saved.push(JSON.parse(data.discoveryCursor));
+            source.discoveryCursor = data.discoveryCursor;
+          }
+          return source;
+        },
+      },
+      ycBudget: { findFirst: async () => ({ paused: false, mode: "METADATA_ONLY", requestsPerMinute: 30 }) },
+      ycSourceItem: {
+        findUnique: async () => null,
+        findFirst: async () => null,
+        create: async ({ data }: any) => ({ id: "i1", ...data }),
+        update: async ({ data }: any) => ({ id: "i1", ...data }),
+      },
+      ycRightsRecord: { findMany: async () => [] },
+    };
+    await discover(db, { maxPages: 3, sleep: async () => {} } as any);
+
+    assert.ok(calls.some((u) => u.includes("/mainCategory/1")), "a catalog built by the old parser must be re-read");
+    assert.equal(calls.some((u) => u.includes("/cat/900")), false, "the music series must never be requested");
+    const last = saved[saved.length - 1];
+    assert.equal(last.catalogVersion, YIDDISH24_CATALOG_PARSER_VERSION);
+    assert.deepEqual(last.musicCatIds, ["900"]);
+    assert.equal((last.pending ?? []).includes("900"), false);
+  } finally {
+    setYiddish24Fetch(null);
+  }
+});
+
+test("music videos filed under Video are excluded by their named catId", () => {
+  assert.equal(isMusicSeries("8", "233"), true, "233 is the music-videos series, filed under Video");
+  assert.equal(isMusicSeries("8", "247"), false, "other Video series are not music");
+});

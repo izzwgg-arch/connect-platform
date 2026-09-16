@@ -231,3 +231,33 @@ answer "is that ticket still running".
   spends the 3/day platform lane at midnight. ⛔ **The durable stop is Izzy's and
   all three options are still untaken since 2026-09-09: release the number, route
   it, or give the guardrail an ignore list.**
+
+---
+
+## ✅ 2026-09-16 — THE 877-220-5058 ALARM IS MUTED AT THE SOURCE, and every ticket for it is stopped
+
+Izzy: *"Fucking stop that ticket and stop it from telling me this. I know it already."*
+
+- ✅ **DEPLOYED + CONTAINER-VERIFIED: api `737331c3`** — `IGNORED_TRUNK_ORPHANS` in
+  `apps/api/src/onboarding/voipMsTrunkGuardrail.ts` mutes `344022_fox` **only while its numbers are
+  exactly `8772205058`**; any other number landing on that dead subaccount alarms, every real trunk
+  is watched as before. The pure `decideTrunkVerdict` mutes nothing unless passed the list (the
+  invalid_account-counts-as-down test is untouched); only the running sweep passes it. 15/15 tests.
+  `.build-commit` = `737331c3`, source present in the container, 0 restarts, healthy, 200 on
+  `app.loopcom.net`. See the handoff §7 for the live sweep proof.
+- ✅ **All 10 queued tickets for it are `stopped_by_owner`** in `.watch-state.json` (2FWH7V DBVVBW
+  3DJAHT TXTHX8 9QQTNE UWZYQZ F7MJHF WZRBAA 4HZKB6 + 44B6TB), with `at` set to 2000-01-01 so the
+  stops never eat today's platform cap. Watcher restarted (new pid) and kept them.
+  ✅ This time the kill waited for a provably idle watcher (heartbeat not working/ship, no claim
+  `running`, no ticket agent alive, re-checked in the same breath as the kill).
+- ⛔⛔ **An idle check that searches process command lines for `*Work LoopCom support ticket*`
+  MATCHES ITS OWN POWERSHELL PROBE** (the pattern is in the probe's command line) — it reads "agent
+  alive" forever. Filter `Name -eq 'claude.exe'`.
+- ⛔⛔ **TWO `deploy-direct.sh api` RUNS AT THE SAME SECOND SHARE ONE SERVER CHECKOUT, AND THE LAST
+  BUILD WINS.** Another session deployed `fb563e27` 25 s after this one started `737331c3`; its
+  `git checkout` switched the shared tree mid-build, my job still printed *"verify: container commit
+  737331c3 matches target"* + `success`, and the container ended on `fb563e27` **without the fix**.
+  Only reading `/app/.build-commit` AND grepping for the change caught it. Redeployed (the tip
+  contained theirs, so nothing of theirs was lost). ⛔ Before a direct deploy: `ps -eo args | grep
+  deploy`; after: `.build-commit` + grep the change — never the word success.
+- ⏳ The number itself is untouched (not released, not routed). Muting was the ask.

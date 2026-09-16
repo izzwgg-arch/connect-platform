@@ -25,6 +25,7 @@ import {
   YC_AUDIO_STAGES,
   YC_AUDIO_BLOCKED_MESSAGE,
   YC_CUSTOMER_WALL_MESSAGE,
+  YC_MUSIC_EXCLUDED_MESSAGE,
   YC_MIN_SAMPLES_FOR_CONCLUSION,
   YC_RULE_SCORE_THRESHOLD,
   type YcStage,
@@ -33,6 +34,7 @@ import { upsertLexemesFromText } from "./lexicon";
 import { scoreVariants, conflictsFor } from "./evidence";
 import {
   discover as discoverYiddish24,
+  isMusicItem,
   fetchAudio as fetchYiddish24Audio,
   resolveAudioGate,
 } from "./yiddish24Adapter";
@@ -65,6 +67,15 @@ export const YC_WORK_BATCH = Math.max(1, Number(process.env.YIDDISH_WORK_BATCH |
  * `startYiddishWorker`) and no longer blocks the cheap stages.
  */
 export const YC_DISCOVER_MAX_PAGES = Math.max(1, Number(process.env.YIDDISH_DISCOVER_MAX_PAGES || 60));
+
+/**
+ * Re-check cadence once the whole catalog has been walked. A full re-check is
+ * one listing page per series (~136 requests), so running it every
+ * YC_DISCOVERY_EVERY_MS would mean ~27 requests a minute, for ever, just to
+ * look for new episodes. Hourly still catches a new episode the same hour it
+ * is published. A walk still in progress keeps the fast clock.
+ */
+export const YC_RECHECK_EVERY_MS = Number(process.env.YIDDISH_RECHECK_EVERY_MS || 60 * 60 * 1000);
 
 export const YC_BACKOFF_BASE_MS = 30_000;
 export const YC_BACKOFF_MAX_MS = 6 * 60 * 60_000;
@@ -418,6 +429,16 @@ export const defaultStageHandlers: Partial<Record<YcStage, StageHandler>> = {
 
   async fingerprint({ db, item }) {
     if (!item) return { ok: false, reason: "no item on this job" };
+    // ⛔ Music never enters the pipeline. This is the FIRST stage, so a music
+    // episode is stopped before anything is spent on it, and the item carries
+    // the marker the worker's guard reads for any stage already queued.
+    const src = await db.ycSource.findUnique({ where: { id: item.sourceId } }).catch(() => null);
+    if (src && isMusicItem(item, src.discoveryCursor)) {
+      await db.ycSourceItem
+        .update({ where: { id: item.id }, data: { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE } })
+        .catch(() => {});
+      return { ok: true, skipped: true, reason: YC_MUSIC_EXCLUDED_MESSAGE, advance: false };
+    }
     const twin = await db.ycSourceItem.findFirst({
       where: { sourceId: item.sourceId, fingerprint: item.fingerprint, NOT: { id: item.id } },
       select: { id: true },
@@ -754,6 +775,14 @@ export async function runDueJobs(db: any, deps: RunDueJobsDeps = {}): Promise<Ru
     const budget = await loadBudget(db, job.sourceKey);
     const item = job.itemId ? await db.ycSourceItem.findUnique({ where: { id: job.itemId } }).catch(() => null) : null;
 
+    // ⛔ An item excluded as music runs NO further stage, and queues none.
+    // Matched on the exact marker, so no other kind of skip is affected.
+    if (item && item.state === "SKIPPED" && item.error === YC_MUSIC_EXCLUDED_MESSAGE) {
+      await finishJob(db, job, { state: "SKIPPED", error: YC_MUSIC_EXCLUDED_MESSAGE }, now);
+      out.skipped += 1;
+      continue;
+    }
+
     const verdict = budgetVerdict(budget, job.stage, now);
     if (verdict.action === "PAUSE") {
       await releaseJob(db, job, new Date(now.getTime() + YC_DEFAULT_INTERVAL_MS), verdict.reason);
@@ -944,8 +973,22 @@ export async function ensureDiscoveryScheduled(
 
     const lastAt = source.lastDiscoveryAt ?? source.lastRunAt;
     const age = lastAt ? now.getTime() - new Date(lastAt).getTime() : Number.POSITIVE_INFINITY;
-    if (age < every) {
-      skipped.push({ key, why: `walked ${Math.round(age / 60000)} min ago` });
+    let cursor: any = {};
+    try {
+      cursor = source.discoveryCursor ? JSON.parse(String(source.discoveryCursor)) : {};
+    } catch {
+      cursor = {};
+    }
+    const caughtUp =
+      cursor?.lastRunStoppedReason === "catalog walked" && !cursor?.catId && !(cursor?.pending?.length > 0);
+    const window = caughtUp && opts.discoveryIntervalMs == null ? Math.max(every, YC_RECHECK_EVERY_MS) : every;
+    if (age < window) {
+      skipped.push({
+        key,
+        why: caughtUp
+          ? `catalog fully walked; next check for new episodes in ${Math.round((window - age) / 60000)} min`
+          : `walked ${Math.round(age / 60000)} min ago`,
+      });
       continue;
     }
 

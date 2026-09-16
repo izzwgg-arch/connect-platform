@@ -480,3 +480,52 @@ text again. ⛔ Watch for this when generating source through a heredoc.
 aggregate-only / per-tenant opt-in with consent); whether to email
 Info@yiddish24.com for permission (draft in §2b); a separate worker box for
 bulk audio; pgvector for semantic search.
+
+# §13 2026-09-16 (later) — "listen until I say stop", and the R / CH accent
+
+Izzy: *"Make it start listening to Yiddish24 right now, and until I say 'stop
+listening Yiddish24,' do not stop."* Then: *"major focus on improving its
+accent, grammar, and dialogue. What mainly, it's accents the R and the CH."*
+
+**⛔⛔ What "listening" can and cannot mean today.** The engine walks and
+catalogues Yiddish24 continuously. It does NOT download or hear the audio: the
+CDN refuses requests without the site's own Referer (a hotlink restriction)
+and the site says "All Rights Reserved". Working around that is bypassing an
+access control, which Izzy's own brief forbids and which no agent may do on a
+"just start" instruction. Audio starts only through the gate: OWNER_AUTHORIZED
+**and** a GRANTED rights record, i.e. real permission from Yiddish24 (draft
+email in handoff §2b). Until then the stop phrase stops the METADATA crawl:
+pause the `source:yiddish24` budget.
+
+**The crawler paused itself the day it finished (fixed, `fb563e27`).** 09:46 —
+all 136 series walked (32,210 items, ~11,084 h catalogued). The next two
+re-checks correctly found no new episodes, and site health's "two empty runs =
+the site or parser changed" rule paused the source at 10:01. A run now counts
+empty only when it recognised NOTHING (no new item AND no known one). Once the
+catalog is caught up, re-checks run hourly (`YIDDISH_RECHECK_EVERY_MS`) — a
+full re-check is one page per series, so the 5-minute clock would have been
+~27 requests/min for ever. Unpaused through the real budget route; the 11:03
+re-check re-read 581 known episodes, probe OK, 0 broken probes, still running.
+
+**R and CH.** What actually speaks Yiddish is OpenAI: `gpt-realtime` (voice
+`cedar`) on the voice agent, `gpt-4o-mini-tts` in the benchmark. Neither can be
+trained on accent. The one real lever is the spoken-delivery `instructions`
+field. ⛔ That is STEERING, not learning, and only a native ear can say whether
+it moved anything.
+
+A/B ear test sent 2026-09-16: 6 sentences taken VERBATIM from
+`AgentTranslation` (densest in ר and ח/כ/ך — `יישר כח`, `רופט מיך צוריק`,
+`דערנאך`), `gpt-4o-mini-tts`/`cedar`, A = no instructions, B = instructions
+asking for a uvular R (never American, never rolled) and a guttural "kh" for
+ח / final ך / undotted כ (never English "ch", never "k", never "h"). ~1¢.
+Script ran once inside the container and was removed; nothing written to the
+corpus. ⏳ **Izzy's per-pair verdict decides the next step:** if B is better,
+make it a versioned profile in the benchmark and carry the same instruction to
+the realtime voice agent; if not, the honest answer is that prompting cannot
+fix R/CH and real improvement needs recorded native audio (a hired speaker
+with a written voice-rights contract, or Yiddish24 permission).
+
+⛔ **Grammar and dialogue are the TEXT side**, and Yiddish text comes from
+Yiddish Labs — whose credits were OUT at the time of this note
+(`[YIDDISH_CREDITS] still out` in the api log). That degrades grammar before
+any voice work can help.
