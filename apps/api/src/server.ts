@@ -321,6 +321,7 @@ import { decideLoginMfa } from "./mfa/mfaService";
 import { enableSmsOnDid } from "./onboarding/voipMsProvisioning";
 import { registerAccountSetupInfoRoute } from "./agentProvisioning/accountSetupInfoRoute";
 import { registerAgentContactsInfoRoute } from "./agentProvisioning/contactsInfoRoute";
+import { contactVisibleToUserWhere } from "./contactVisibility";
 import { registerAgentInvestigationRoute } from "./agentInvestigation/investigationRoute";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
@@ -395,6 +396,7 @@ import { registerPollyRoutes } from "./voice/pollyRoutes";
 import { registerSignalWireRoutes } from "./signalwire/signalWireRoutes";
 import { registerTelnyxRoutes } from "./telnyx/telnyxRoutes";
 import { registerTelnyxWebhookRoutes } from "./telnyx/telnyxWebhooks";
+import { wireTextingRegistration } from "./textingRegistration/wire";
 import { registerProviderSwitchRoutes } from "./onboarding/providerSwitchRoutes";
 import { registerLoopcomMobileRoutes } from "./loopcomMobile/mobileRoutes";
 import { registerMobileProductRoutes } from "./loopcomMobile/mobileProductRoutes";
@@ -3097,6 +3099,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/sms/provider-health", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/sms", permission: "can_view_apps_sms_campaigns" },
   { prefix: "/admin/ten-dlc", permission: "can_view_admin_ops_center" },
+  { prefix: "/admin/texting-registration", permission: "can_view_admin_texting_registration" },
   { prefix: "/admin/sbc", permission: "can_view_settings_system_health" },
 
   { prefix: "/dashboard", permission: "can_view_workspace_overview" },
@@ -24249,6 +24252,10 @@ registerTelnyxRoutes({
 // Phase 1, 2026-09-16). Ed25519-verified, fail-closed; path listed in
 // jwtPublicRouteBypass.ts. See telnyx/telnyxWebhooks.ts.
 registerTelnyxWebhookRoutes({ app, db });
+// 10DLC texting registration (2026-09-16): /admin/texting-registration, the
+// customer's private link, the public policy page and the registry webhook.
+// See textingRegistration/wire.ts.
+wireTextingRegistration({ app, db, requireSuperAdmin, userHasActionPermission });
 
 // ── Wizard carrier switch (2026-09-15) ─────────────────────────────────────
 // Which carrier NEW sign-ups search and buy from (stored override over the
@@ -33189,13 +33196,24 @@ async function ensureContactTags(tenantId: string, names: string[]) {
  * collided with was one he could not see or search for. Naming it turns a dead
  * end into an answer.
  */
-async function assertNoDuplicateContactPhones(tenantId: string, phones: Array<{ numberRaw: string }>, excludeContactId?: string) {
+async function assertNoDuplicateContactPhones(
+  tenantId: string,
+  viewerUserId: string,
+  phones: Array<{ numberRaw: string }>,
+  excludeContactId?: string,
+) {
   const numbers = [...new Set(phones.map((p) => normalizeContactPhone(p.numberRaw)).filter(Boolean))];
   if (numbers.length === 0) return;
   const existing = await (db as any).contactPhone.findFirst({
     where: {
       numberNormalized: { in: numbers },
-      contact: { tenantId, active: true, archivedAt: null, ...(excludeContactId ? { id: { not: excludeContactId } } : {}) },
+      // ⛔ Only contacts THIS user can see (2026-09-16). A tenant-wide check would
+      // answer "already saved under «Name»" with a colleague's private contact.
+      contact: {
+        tenantId, active: true, archivedAt: null,
+        ...(excludeContactId ? { id: { not: excludeContactId } } : {}),
+        ...contactVisibleToUserWhere(viewerUserId),
+      },
     },
     include: { contact: { select: { id: true, displayName: true } } },
   });
@@ -33320,7 +33338,10 @@ app.get("/contacts", async (req, reply) => {
   // entirely (it was fetched and then thrown away before).
   const extensionsOnly = query.type === "extensions";
 
+  // ⛔ Private contacts belong to the person who saved them (2026-09-16). The
+  // visibility fragment is ANDed so the search `OR` below cannot widen it.
   const manualWhere = {
+    AND: [contactVisibleToUserWhere(user.sub)],
     tenantId, archivedAt: null, active: true,
     ...(query.type === "external" ? { type: "EXTERNAL" } : {}),
     ...(query.type === "companies" ? { type: "COMPANY" } : {}),
@@ -33436,6 +33457,7 @@ type CreateContactOutcome =
  */
 async function mergeIntoExistingContactByPhone(
   tenantId: string,
+  viewerUserId: string,
   input: z.infer<typeof contactWriteInput>,
 ): Promise<CreateContactOutcome | null> {
   const incoming = input.phones
@@ -33446,7 +33468,8 @@ async function mergeIntoExistingContactByPhone(
   const existingPhones = await (db as any).contactPhone.findMany({
     where: {
       numberNormalized: { in: [...new Set(incoming.map((p) => p.norm))] },
-      contact: { tenantId, active: true, archivedAt: null },
+      // ⛔ Never merge a phone-book import into a colleague's private contact.
+      contact: { tenantId, active: true, archivedAt: null, ...contactVisibleToUserWhere(viewerUserId) },
     },
     select: { contactId: true, numberNormalized: true },
   });
@@ -33540,10 +33563,10 @@ async function createOneContact(
     return { status: "invalid", error: "name_phone_or_email_required" };
   }
   try {
-    await assertNoDuplicateContactPhones(tenantId, input.phones);
+    await assertNoDuplicateContactPhones(tenantId, createdBy, input.phones);
   } catch (err: any) {
     if (mergeOnPhoneOverlap) {
-      const merged = await mergeIntoExistingContactByPhone(tenantId, input);
+      const merged = await mergeIntoExistingContactByPhone(tenantId, createdBy, input);
       if (merged) return merged;
     }
     return { status: "duplicate", existingContact: err?.existingContact };
@@ -33554,6 +33577,8 @@ async function createOneContact(
       firstName: input.firstName || null, lastName: input.lastName || null, displayName,
       company: input.company || null, title: input.title || null, notes: input.notes || null,
       favorite: input.favorite ?? false, active: input.active ?? true, source: "MANUAL", createdBy,
+      // PRIVATE to the person who saved it — see contactVisibility.ts.
+      ownerUserId: createdBy,
     },
   });
   try {
@@ -33645,7 +33670,7 @@ app.get("/contacts/:id", async (req, reply) => {
     if (!ext || !isValidContactExtension(ext.extNumber) || isSystemContactExtensionName(ext.displayName || ext.extNumber)) return reply.code(404).send({ error: "not_found" });
     return reply.send({ contact: formatExtensionContact(ext) });
   }
-  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null }, include: CONTACT_INCLUDE });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null, ...contactVisibleToUserWhere(user.sub) }, include: CONTACT_INCLUDE });
   if (!row) return reply.code(404).send({ error: "not_found" });
   return reply.send({ contact: formatContact(row) });
 });
@@ -33657,10 +33682,10 @@ app.patch("/contacts/:id", async (req, reply) => {
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const { id } = req.params as { id: string };
   if (id.startsWith("ext:")) return reply.code(400).send({ error: "extension_contacts_are_read_only" });
-  const existing = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null } });
+  const existing = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null, ...contactVisibleToUserWhere(user.sub) } });
   if (!existing) return reply.code(404).send({ error: "not_found" });
   const input = contactWriteInput.parse(req.body || {});
-  try { await assertNoDuplicateContactPhones(tenantId, input.phones, id); } catch { return reply.code(409).send({ error: "duplicate_phone" }); }
+  try { await assertNoDuplicateContactPhones(tenantId, user.sub, input.phones, id); } catch { return reply.code(409).send({ error: "duplicate_phone" }); }
   await (db as any).contact.update({
     where: { id },
     data: {
@@ -33683,7 +33708,7 @@ app.delete("/contacts/:id", async (req, reply) => {
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const { id } = req.params as { id: string };
   if (id.startsWith("ext:")) return reply.code(400).send({ error: "extension_contacts_are_read_only" });
-  const row = await (db as any).contact.findFirst({ where: { id, tenantId } });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, ...contactVisibleToUserWhere(user.sub) } });
   if (!row) return reply.code(404).send({ error: "not_found" });
   await (db as any).contact.update({ where: { id }, data: { active: false, archivedAt: new Date() } });
   return reply.send({ ok: true });
@@ -33699,7 +33724,7 @@ app.get("/contacts/:id/avatar", async (req, reply) => {
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const { id } = req.params as { id: string };
-  const row = await (db as any).contact.findFirst({ where: { id, tenantId }, select: { storageKey: true } });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, ...contactVisibleToUserWhere(user.sub) }, select: { storageKey: true } });
   if (!row?.storageKey) return reply.code(404).send({ error: "not_found" });
   try {
     const filePath = path.join(contactAvatarRoot(), row.storageKey);
@@ -33719,7 +33744,7 @@ app.post("/contacts/:id/avatar", async (req, reply) => {
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const { id } = req.params as { id: string };
-  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null } });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, archivedAt: null, ...contactVisibleToUserWhere(user.sub) } });
   if (!row) return reply.code(404).send({ error: "not_found" });
   if (!(req as any).isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
   const part = await (req as any).file();
@@ -33748,7 +33773,7 @@ app.delete("/contacts/:id/avatar", async (req, reply) => {
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
   const { id } = req.params as { id: string };
-  const row = await (db as any).contact.findFirst({ where: { id, tenantId } });
+  const row = await (db as any).contact.findFirst({ where: { id, tenantId, ...contactVisibleToUserWhere(user.sub) } });
   if (!row) return reply.code(404).send({ error: "not_found" });
   if (row.storageKey) await fsp.unlink(path.join(contactAvatarRoot(), row.storageKey)).catch(() => {});
   await (db as any).contact.update({ where: { id }, data: { storageKey: null, avatarUrl: null } });
@@ -35511,7 +35536,8 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         // (same rule as the ring path). Indexed lookup, non-fatal on failure.
         let missedCallerName: string | null = null;
         try {
-          const m = await matchTenantContactByPhone(tenantPack.tenantId, String(d.fromNumber || ""));
+          // Named only from contacts THIS extension owner can see (contactVisibility.ts).
+          const m = await matchTenantContactByPhone(tenantPack.tenantId, String(d.fromNumber || ""), ext.ownerUserId);
           missedCallerName = (m?.displayName || "").trim() || null;
         } catch {
           /* non-fatal */
@@ -36032,7 +36058,8 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   let resolvedFromDisplay = cleanedFromDisplay;
   let ringContactResolved = false;
   try {
-    const match = await matchTenantContactByPhone(target.tenantId, String(input.fromNumber || ""));
+    // ⛔ The rung user's own contacts + shared ones — never a colleague's phone book.
+    const match = await matchTenantContactByPhone(target.tenantId, String(input.fromNumber || ""), target.userId ?? null);
     const contactName = (match?.displayName || "").trim() || (match?.company || "").trim();
     if (contactName) {
       resolvedFromDisplay = contactName;

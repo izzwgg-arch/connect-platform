@@ -43,7 +43,9 @@ export async function crmInboundSmsHook(input: InboundSmsHookInput): Promise<voi
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const phoneMatch = await (db as any).contactPhone.findFirst({
     where: {
-      contact: { tenantId },
+      // Shared (CRM) contacts only — a staffer's private phone-book contact must
+      // never collect CRM timeline events (Contact.ownerUserId, 2026-09-16).
+      contact: { tenantId, ownerUserId: null },
       numberNormalized: { endsWith: last10 },
     },
     select: { contactId: true },

@@ -396,7 +396,8 @@ async function findLiveContactIdByPhonesOrEmails(
     const phoneMatch = await db.contactPhone.findFirst({
       where: {
         numberNormalized: phoneNorm,
-        contact: { tenantId, active: true },
+        // ownerUserId: null — a CRM import must never adopt (and so expose) a private phone-book contact.
+        contact: { tenantId, active: true, ownerUserId: null },
       },
       select: { contactId: true },
     });
@@ -407,7 +408,7 @@ async function findLiveContactIdByPhonesOrEmails(
     const emailMatch = await db.contactEmail.findFirst({
       where: {
         email: emailRaw,
-        contact: { tenantId, active: true },
+        contact: { tenantId, active: true, ownerUserId: null },
       },
       select: { contactId: true },
     });

@@ -53,6 +53,7 @@ import { denoiseVoiceNote, isVoiceNoteUpload, isVoiceNoteFilename } from "./chat
 import { isConnectChatMessageMine } from "./connectChatMessageMine";
 import { isVoipMsWebhookAuthorized } from "./voipMsWebhookAuth";
 import { parseVoipMsWebhookEnvelope } from "./voipMsWebhookPayload";
+import { contactVisibleToUserWhere } from "./contactVisibility";
 import {
   VOIPMS_PRIMARY_ACCOUNT_ID,
   canDeleteVoipMsAccount,
@@ -839,7 +840,8 @@ async function resolveCrmSmsThreadDecoration(
   const matches = await db.contactPhone.findMany({
     where: {
       numberNormalized: { endsWith: last10 },
-      contact: { tenantId: thread.tenantId, active: true, archivedAt: null },
+      // ⛔ Never name a colleague's private contact on this user's thread.
+      contact: { tenantId: thread.tenantId, active: true, archivedAt: null, ...contactVisibleToUserWhere(user.sub) },
     },
     select: {
       contactId: true,

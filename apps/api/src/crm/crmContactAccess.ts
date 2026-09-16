@@ -175,7 +175,9 @@ export async function assertCrmContactAllowed(
   reply: ContactAccessReply,
 ): Promise<boolean> {
   const contact = await db.contact.findFirst({
-    where: { id: contactId, tenantId: user.tenantId },
+    // ⛔ CRM only ever reaches SHARED contacts — a private phone-book contact
+    // (Contact.ownerUserId, 2026-09-16) answers 404 here, for admins too.
+    where: { id: contactId, tenantId: user.tenantId, ownerUserId: null },
     select: { id: true },
   });
   if (!contact) {

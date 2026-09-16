@@ -2378,6 +2378,11 @@ model Contact {
   active                Boolean                      @default(true)
   archivedAt            DateTime?
   createdBy             String?
+  /// PRIVATE to this one user when set; null = shared company contact (CRM, website, admin-seeded).
+  /// ⛔ Deliberately NOT a foreign key: a SetNull on user delete would turn someone's
+  /// private phone book into a company-wide one. A dead owner id stays invisible to all.
+  /// (2026-09-16, Relax Tires: ext 101's 4,250 phone-book contacts showed on 102/103.)
+  ownerUserId           String?
   createdAt             DateTime                     @default(now())
   updatedAt             DateTime                     @updatedAt
   tenant                Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2409,6 +2414,7 @@ model Contact {
   intelligenceReport    CrmLeadIntelligenceReport?
 
   @@unique([tenantId, extensionId])
+  @@index([tenantId, ownerUserId])
   @@index([tenantId, type, active])
   @@index([tenantId, displayName])
   @@index([tenantId, favorite])

@@ -2,6 +2,7 @@ import { db } from "@connect/db";
 import { normalizeUsCanadaToE164 } from "@connect/shared";
 import { isAdminRole } from "./guard";
 import { userCanAccessCrmContact } from "./crmContactAccess";
+import { contactVisibleToUserWhere } from "../contactVisibility";
 
 /** Optional CRM fields attached to inbound telephony call payloads (WS / snapshots). */
 export type CrmInboundCallFields = {
@@ -77,6 +78,13 @@ function profileUrlForContact(contactId: string): string {
 export async function matchTenantContactByPhone(
   tenantId: string,
   phone: string,
+  /**
+   * ⛔ REQUIRED on purpose (2026-09-16): the person this name will be shown to.
+   * Their private contacts + shared ones. `null` = SHARED contacts only (CRM
+   * surfaces). Relax Tires ext 102's incoming calls were being named from ext
+   * 101's private phone book through this function.
+   */
+  viewerUserId: string | null,
 ): Promise<TenantContactMatch | null> {
   if (!tenantId || !phone?.trim()) return null;
 
@@ -92,6 +100,7 @@ export async function matchTenantContactByPhone(
             tenantId,
             active: true,
             archivedAt: null,
+            ...contactVisibleToUserWhere(viewerUserId),
           },
         },
         include: {
@@ -123,6 +132,7 @@ export async function matchTenantContactByPhone(
             tenantId,
             active: true,
             archivedAt: null,
+            ...contactVisibleToUserWhere(viewerUserId),
           },
         },
         include: {
@@ -262,7 +272,8 @@ export async function resolveInboundCrmCallerForViewer(
   });
   if (!settings?.enabled) return null;
 
-  const base = await matchTenantContactByPhone(tenantId, phone);
+  // CRM card → shared contacts only; a private phone-book contact has no CRM profile.
+  const base = await matchTenantContactByPhone(tenantId, phone, null);
   if (!base) return null;
 
   if (!(await userHasCrmAccess(tenantId, viewer.userId, trustedRole))) return null;

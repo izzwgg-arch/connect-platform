@@ -338,6 +338,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
             id: { in: explicitIds },
             tenantId: user.tenantId,
             active: true,
+            ownerUserId: null, // never email a private phone-book contact (2026-09-16)
             ...(tagId ? { tagLinks: { some: { tagId } } } : {}),
           },
           select: {
