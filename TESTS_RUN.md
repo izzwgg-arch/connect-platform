@@ -10,6 +10,13 @@
 - Prisma client regenerated against the schema + migration 20260916170000 (TELNYX enum value, TenantSmsNumber.fallbackProvider).
 - NOT proven yet: no deploy at test time (deploy follows in the same task), no real Telnyx inbound/DLR (needs webhook URL configured on the messaging profile + the account public key saved), no live send on a TELNYX-provider number (none exists yet).
 
+### Deployed and live-proven (same task, ~16:15Z)
+
+- api blue/green `done 287a32e6`, container commit verified, /health 200; migration `20260916170000_messaging_telnyx_fallback` read back FINISHED from the live DB; `fallbackProvider` column + TELNYX enum value present; `/webhooks/telnyx/sms` 401 fail-closed on local :3001 AND the public hostname, route file in the container.
+- ⛔ worker deploy first SELF-SKIPPED on a false baseline (api deploy had reset the server checkout to my commit; change-detect diffed against another session's newer push and saw "no worker paths"); container verified WITHOUT the new file, then force-rebuilt at the origin tip (`DEPLOY_FORCE_RESTART=1`, done 2ac9e9fc) and verified WITH messagingDispatch.ts + telnyxChatSend.ts + the registry call.
+- Live traffic through the NEW dispatch: the poll fetched real customer texts minutes after cutover; round-trip probe on Connect's own pair (+18455577768 ↔ +18457231213, shared thread, via /internal/chat/sms-system-reply): worker `voipms_sms_part_send` → **sent, VoIP.ms id 111471089 @16:15:10Z** → polled back INBOUND `voipms:111471092` @16:15:42. One message, one delivery, 32s.
+- Still not proven: no TELNYX-number live send, no real Telnyx webhook events (URL/public key not configured), backup route never fired in prod (tests only).
+
 ## Laybel live screen proof and layout correction — 2026-09-16
 
 - Reproduced real production bug: connected call's video panel collapsed to 21.6 px. Initial call speech reached existing Assistant transcript and replies appeared; audible playback not confirmed.

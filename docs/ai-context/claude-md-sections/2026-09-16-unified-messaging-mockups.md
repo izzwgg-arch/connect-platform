@@ -50,11 +50,35 @@
   stays +11 lines. TESTS_RUN.md's worktree copy was STALE vs HEAD with two
   in-flight entries mixed in — rebuilt from HEAD + their entries + mine
   (backups of both in the session scratchpad).
-- ⏳ **NOT PROVEN:** no TELNYX-provider TenantSmsNumber row exists yet, so no
-  live send; the Telnyx messaging profile has no webhook URL configured and
-  the account's Ed25519 public key isn't saved in the bench credentials, so no
-  real inbound/DLR has flowed. Wiring those + a real round-trip text on
-  (845) 306-6825 is the Phase-1 acceptance test.
+- ✅✅ **DEPLOYED AND LIVE-PROVEN 2026-09-16 (~16:15Z).** api blue/green `done
+  287a32e6`, container commit verified, health 200; migration
+  `20260916170000` read back from the LIVE DB (row finished, `fallbackProvider`
+  column present, TELNYX in the enum); `/webhooks/telnyx/sms` answers **401
+  fail-closed on BOTH local :3001 and the public hostname** and the route file
+  is in the container. ⛔⛔ **The worker deploy self-skipped on a FALSE
+  BASELINE** — the api deploy had already reset the server checkout to my
+  commit, so deploy-worker diffed `287a32e6..2ac9e9fc` (another session's
+  push) and said "no worker-relevant paths changed" while the CONTAINER still
+  ran the old code (verified: no messagingDispatch.ts inside). This is the
+  deploy-said-success family with a new face: **after ANY worker deploy, check
+  the file in the container, never the word "done".** Fixed with
+  `DEPLOY_FORCE_RESTART=1` at the origin TIP (2ac9e9fc, my commit an
+  ancestor); container then verified to carry messagingDispatch.ts,
+  telnyxChatSend.ts and the registry call.
+  **Live proof on real traffic:** the new worker's VoIP.ms poll fetched real
+  customer texts minutes after cutover (fetched=3 on one DID), and a REAL
+  round-trip probe ran through the NEW dispatch: `/internal/chat/sms-system-reply`
+  → shared thread `cmspgyxhswgz8n0214ga2aq52` (+18455577768 ↔ +18457231213,
+  Connect's own numbers) → worker `voipms_sms_part_send` → **sent, VoIP.ms id
+  111471089, 16:15:10Z** → carrier delivered → polled back as INBOUND
+  `voipms:111471092` at **16:15:42** — 32 seconds, no duplicates.
+- ⏳ **STILL NOT PROVEN:** no TELNYX-provider TenantSmsNumber row exists yet,
+  so no live send THROUGH TELNYX; the Telnyx messaging profile has no webhook
+  URL configured and the account's Ed25519 public key isn't saved in the bench
+  credentials, so no real Telnyx inbound/DLR has flowed; no number has a
+  `fallbackProvider` set, so the backup route has never fired in production
+  (it is proven by its 8 behavior tests only). Wiring those + a round-trip on
+  (845) 306-6825 is the next acceptance test.
 - **Next phases:** RCS (bench send exists; chat wiring + composer), portal UI
   additions (frozen-look rule) + permission toggles for every new page/feature
   (his 2026-09-16 requirement: toggles in custom roles on EVERYTHING),
