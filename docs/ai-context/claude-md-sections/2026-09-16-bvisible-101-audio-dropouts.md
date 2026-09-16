@@ -68,3 +68,31 @@ says lately, daily, "the caller cannot hear him and he cannot hear them." Last b
    kill the log noise.
 
 No writes were made anywhere (PBX read-only respected; Connect DB read-only queries).
+
+## Round 2 (same day) — Izzy asked: port-related? did they always have this?
+
+**Ports: the router IS misbehaving, but it did not cause the morning call.** Proven from
+registration logs: overnight Sep 15 **all five phones' public NAT ports changed twice
+within 50 minutes** (01:17 ET → ports 14213-16, then 02:07 ET → 14237-41, every phone
+simultaneously = the router rebuilt its NAT table twice, reboot/flush/ISP reconnect),
+and 103's 01:17 registration arrived with an **unrewritten :5060** — inconsistent SIP
+ALG treatment. Stale pinholes after such a reset are exactly what the Unreachable flaps
+look like (PBX sends to a dead port until re-registration). ⛔ **But the dead-mic calls
+are NOT a port failure:** the full log has **zero strict-RTP discard events** (so
+Asterisk never rejected a re-mapped stream) and NAT never blocks *outbound* — during the
+11:02 call his audio never left the office at all. Port trouble explains some of the
+"different problem every day" variants; the measured one is upstream of ports
+(phone/Wi-Fi/LAN/uplink).
+
+**History: they did NOT just start having this — it is chronic, flat, at least 7 weeks
+old.** Weekly since RTP sampling began (Aug 23): dead-mic legs 4/1/0/2-3 and
+phone-missed-audio (txLossPct≥1) legs 1/6/7/3/2 — every week, no trend; avg RTT steady
+~50 ms. Redial proxy (answered call 5-35 s then same pair reconnects <5 min) back to
+Jul 27: 5-9% of answered calls every week, no worsening. "Lately" is perception —
+possibly because 101 carries by far the most traffic (643 sampled legs vs 148-347 for
+the other extensions), so he eats the most incidents. ⛔ The census undercounts: the
+sampler needs ~10 s of call, so short dead calls leave no rtpStats row.
+
+**One actionable detail for the customer conversation:** the double NAT reset happened
+at 1:17 AM and 2:07 AM — ask whether the router auto-reboots nightly / ISP renews; a
+router that flushes NAT twice in an hour overnight can do the same midday under load.
