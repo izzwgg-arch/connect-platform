@@ -433,3 +433,70 @@ test("GET /governance names every wall and every gap", async () => {
   assert.ok(reply.payload.gaps.some((g: any) => g.key === "yiddish24" && /terms/i.test(g.gap)));
   for (const s of reply.payload.sources) assert.ok(s.badge, `${s.key} came back without a badge`);
 });
+
+// ── the Governance screen's own payload ─────────────────────────────────────
+// Both of these were REAL defects found by opening the deployed page: the
+// refusal quoted Yiddish24's hotlink block on customer voicemail rows, and the
+// screen said "no budget configured" and "no worker heartbeat" while both
+// existed, because the route never sent them.
+
+test("the audio refusal describes the source it is actually about", () => {
+  const customer = audioBlockedReason({ governanceClass: "CUSTOMER_PRIVATE", audioFetchMode: "DISABLED" }, []);
+  assert.ok(customer && /customer audio/i.test(customer), `customer reason was: ${customer}`);
+  assert.ok(
+    customer && !/its own pages/i.test(customer),
+    "a voicemail row must never quote a third-party site's hotlink block",
+  );
+
+  const external = audioBlockedReason({ governanceClass: "EXTERNAL", audioFetchMode: "DISABLED" }, []);
+  assert.ok(external && /its own pages/i.test(external), `external reason was: ${external}`);
+
+  const platform = audioBlockedReason({ governanceClass: "PLATFORM", audioFetchMode: "DISABLED" }, []);
+  assert.ok(platform && /our own material/i.test(platform), `platform reason was: ${platform}`);
+});
+
+test("GET /governance carries the wall counts, the budget and the worker heartbeat", async () => {
+  const now = Date.now();
+  const db = fakeDb({
+    "ycSource.findMany": [
+      {
+        id: "s1",
+        key: "voicemail",
+        name: "Voicemail transcripts",
+        governanceClass: "CUSTOMER_PRIVATE",
+        audioFetchMode: "DISABLED",
+        contentAllowed: false,
+        config: { inventory: { items: 3510, audioHours: 35.8 } },
+      },
+    ],
+    "ycBudget.findFirst": {
+      scope: "global",
+      mode: "METADATA_ONLY",
+      paused: true,
+      apiCentsPerDay: 0,
+      transcriptionMinutesPerDay: 0,
+      concurrency: 2,
+      requestsPerMinute: 30,
+      spentCentsToday: 0,
+      transcribedMinutesToday: 0,
+    },
+    "ycMetricSnapshot.findFirst": { metric: "worker_heartbeat_ms", value: now, createdAt: new Date(now) },
+  });
+  const routes = register(db, allowingGate);
+  const reply = fakeReply();
+  await routes.get(`GET ${YC_API_PREFIX}/governance`)!({ query: {}, user: SUPER_ADMIN }, reply);
+  assert.equal(reply.statusCode, 200);
+  const v = reply.payload;
+
+  assert.equal(v.walled.length, 1, "the customer wall must list its sources");
+  assert.equal(v.walled[0].rows, 3510, "the wall must show the real counted rows");
+  assert.equal(v.walled[0].audioHours, 35.8);
+
+  assert.ok(v.budget, "the budget must be sent, or the screen reports none exists");
+  assert.equal(v.budget.paused, true);
+  assert.equal(v.budget.mode, "METADATA_ONLY");
+
+  assert.equal(v.worker.alive, true, "a heartbeat from just now means alive");
+  assert.ok(v.worker.lastTickAt, "the screen shows when the worker last ticked");
+  assert.ok(v.promotionStates, "promotion states are part of this screen");
+});

@@ -81,7 +81,24 @@ export function badgeForSource(source: any, rights?: any[] | null): YcGovernance
 
 /** Plain-English reason the audio stages cannot run, or null when they can. */
 export function audioBlockedReason(source: any, rights: any[]): string | null {
-  if (String(source?.audioFetchMode ?? "DISABLED") !== "OWNER_AUTHORIZED") return YC_AUDIO_BLOCKED_MESSAGE;
+  if (String(source?.audioFetchMode ?? "DISABLED") !== "OWNER_AUTHORIZED") {
+    // The refusal has to describe THIS source. Quoting Yiddish24's hotlink
+    // block on a voicemail row would be plainly untrue, and a wall nobody
+    // believes is a wall nobody keeps.
+    const klass = String(source?.governanceClass ?? "");
+    if (klass === "CUSTOMER_PRIVATE") {
+      return (
+        "This is customer audio. It is counted, never read: no voicemail, call or chat is " +
+        "fetched into the corpus until the owner records a basis (excluded, aggregate-only, " +
+        "or per-tenant opt-in with consent). There is no consent field on these recordings today."
+      );
+    }
+    if (klass === "EXTERNAL") return YC_AUDIO_BLOCKED_MESSAGE;
+    return (
+      "Audio fetching is off for this source. It is our own material, so turning it on is " +
+      "a decision rather than a rights question — record it on this screen."
+    );
+  }
   const grant = (rights ?? []).find((r) => r.allowedUse === "store_audio" || r.allowedUse === "analysis");
   if (!grant || String(grant.state) !== "GRANTED") {
     return (
@@ -1159,10 +1176,67 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
       if (String(s.key) === YIDDISH24_SOURCE_KEY && !s.termsUrl)
         gaps.push({ key: String(s.key), gap: "No terms-of-use page exists on the site, so there is nothing to point at. Permission has to be asked for in writing." });
     }
+    // What the Governance screen shows beside the walls: the inventory behind the
+    // customer wall (counts only), the spend ceiling, the worker's own heartbeat
+    // and where anything sits in the promotion pipeline.
+    const walledSources = sources.filter((s: any) => String(s.governanceClass) === "CUSTOMER_PRIVATE");
+    const walled = walledSources.map((s: any) => {
+      const inv = (s.config as any)?.inventory ?? {};
+      return {
+        key: String(s.key),
+        name: String(s.name),
+        rows: Number(inv.items ?? 0),
+        audioHours: inv.audioHours == null ? null : Number(inv.audioHours),
+        note: String(inv.note ?? "Counted, never read."),
+      };
+    });
+    const budget = await safe(db.ycBudget.findFirst({ where: { scope: "global" } }), null);
+    const sourceBudgets = await safe(db.ycBudget.findMany({ where: { NOT: { scope: "global" } } }), []);
+    const beat = await safe(
+      db.ycMetricSnapshot.findFirst({ where: { metric: "worker_heartbeat_ms" }, orderBy: { createdAt: "desc" } }),
+      null as any,
+    );
+    const beatAt = beat?.value ? new Date(Number(beat.value)) : null;
+    const leased = await safe(db.ycProcessingJob.count({ where: { state: "RUNNING" } }), 0);
+    const ruleStates = await safe(db.ycPronunciationRule.groupBy({ by: ["status"], _count: { _all: true } }), [] as any[]);
+    const profileStates = await safe(db.ycVoiceProfileVersion.groupBy({ by: ["status"], _count: { _all: true } }), [] as any[]);
+
     return reply.send({
       // The phrase the portal asks a person to type before audio can be enabled.
       // Published here so the UI and the API can never drift apart on it.
       audioModeAcknowledgementPhrase: "I AUTHORIZE AUDIO FETCHING",
+      walled,
+      budget: budget
+        ? {
+            scope: String(budget.scope),
+            mode: String(budget.mode),
+            paused: Boolean(budget.paused),
+            apiCentsPerDay: Number(budget.apiCentsPerDay ?? 0),
+            transcriptionMinutesPerDay: Number(budget.transcriptionMinutesPerDay ?? 0),
+            concurrency: Number(budget.concurrency ?? 0),
+            requestsPerMinute: Number(budget.requestsPerMinute ?? 0),
+            spentCentsToday: Number(budget.spentCentsToday ?? 0),
+            transcribedMinutesToday: Number(budget.transcribedMinutesToday ?? 0),
+            perSource: (sourceBudgets as any[]).map((b) => ({
+              scope: String(b.scope),
+              mode: String(b.mode),
+              paused: Boolean(b.paused),
+              requestsPerMinute: Number(b.requestsPerMinute ?? 0),
+            })),
+          }
+        : null,
+      worker: {
+        alive: !!beatAt && Date.now() - beatAt.getTime() < 5 * 60_000,
+        lastTickAt: beatAt ? beatAt.toISOString() : null,
+        leasedJobs: Number(leased ?? 0),
+        note: beatAt
+          ? "The worker writes a heartbeat on every tick. Discovery is scheduled from the same tick."
+          : "No heartbeat recorded yet — the worker has not ticked since this database was created.",
+      },
+      promotionStates: {
+        rules: (ruleStates as any[]).map((r) => ({ status: String(r.status), count: Number(r._count?._all ?? 0) })),
+        profiles: (profileStates as any[]).map((r) => ({ status: String(r.status), count: Number(r._count?._all ?? 0) })),
+      },
       walls: [
         { key: "customer", message: YC_CUSTOMER_WALL_MESSAGE },
         { key: "yiddish_labs", message: YC_YL_SERVING_ONLY_MESSAGE },
