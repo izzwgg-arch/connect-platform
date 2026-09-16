@@ -1,5 +1,12 @@
 # Tests run
 
+## Laybel live screen proof and layout correction — 2026-09-16
+
+- Reproduced real production bug: connected call's video panel collapsed to 21.6 px. Initial call speech reached existing Assistant transcript and replies appeared; audible playback not confirmed.
+- Portal fix 40c3ba2a: 17/17 Assistant tests, full isolated typecheck passed. Production build generated 221 pages; scripted blue/green rollout completed.
+- Running container build SHA equals 40c3ba2a; built chunk contains flex:0 0 auto, aspect-ratio:16/9 and object-fit:contain. Stable upstream :3000, public /ready 200. Final log said fb563e27 due concurrent shared-clone advancement; this mismatch was investigated, not treated as matching proof.
+- Post-fix browser: actual approved portrait, Connected, panel 287.8 px/video 310.4 x 174.6 px. Call later disconnected, reason unknown. Owner reported repeat-start trouble; End > Talk to Laybel > Start connected a second session in controlled Chrome. Screenshot shown. No post-fix spoken question/reply or audible output confirmed. Ended test; microphone off and start screen left open. Customer rollout disabled; end-to-end acceptance remains open.
+
 ## Laybel key/avatar activation — 2026-09-16
 
 - Anam UI confirmed no existing keys; explicitly approved session-token-only key created (all resource scopes None). Approved portrait upload and completed custom Laybel avatar verified visually/in UI.

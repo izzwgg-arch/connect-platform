@@ -291,6 +291,7 @@ fixes, and patches without even fucking checking what it's gonna break."*
   traced who else read that variable. See
   `docs/ai-context/AGENT_HANDOFF_WARM_ANSWER_DEADLINE_2026-08-23.md` and
   [[never-propose-a-fix-without-checking-blast-radius]].
+- **Owner reaffirmed 2026-09-16: show concrete user-visible proof before claiming something works.** For Laybel, show the real animated call and verify heard speech plus a reply; API tokens, tests and deployment success alone are not that proof. State any unverified leg explicitly.
 - ⛔ **And "fixed" still means a human did the thing and it worked** — for the call
   path that means a real call, answered, with audio. Green tests, clean typechecks and
   container greps are not proof and must never be reported as one.
@@ -716,4 +717,4 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - Mobile Android call-reliability engagement → `2026-07-27-mobile-android-call-reliability-engagement.md`
 
 - 2026-09-14 · Universal search: permitted pages, settings and records → `2026-09-14-universal-search.md`
-- 2026-09-16 · Laybel key + approved avatar configured; production session token 200, owner preview ready; live call and SignalWire proof pending → `2026-09-15-face-to-face-ai-support-mockup.md`
+- 2026-09-16 · Laybel live video layout fixed/deployed 40c3ba2a; portrait and controlled restart shown; disconnect/audio acceptance unresolved, customer rollout off → `2026-09-15-face-to-face-ai-support-mockup.md`
