@@ -1,5 +1,12 @@
 # Tests run
 
+## Telnyx 911 postal form + owner alert + retry + FastPort — 2026-09-16 (evening)
+
+- apps/api `telnyxOnboarding.test.ts` **49/49** (7 new: NY route/unit normalizer, validate→correct-once→validate incl. house-number guard and 85009, AgentEscalation alert de-dupe + never ADMIN_ALERT, retry schedule, sweep retry success/alert, route wiring + SUPER_ADMIN gate, FastPort earliest window / non-eligible untouched). pbxTenantBuild 39/1, setupOrchestrator 7/24, signalWireOnboarding 19/19 — unchanged. api tsc: 0 in touched files.
+- LIVE: Telnyx validator probes (NY 17M → 85009; State Route 17M + Ste C → valid); retry on test number created the corrected address, then hit 10015 Emergency Terms of Service (account acceptance pending); sweep boot retry fired by itself; FastPort draft probe on +18457231213 (eligible, windows, requirements) deleted 204.
+- Deploys: api `826f181c`, `42cccd3a` (queue, `.build-commit` + grep verified, 0 restarts, health 200).
+- NOT proven: an actual 911 activation on Telnyx (blocked on ToS), the owner SMS content on a phone, a filed FastPort.
+
 ## Telnyx onboarding wizard switch — 2026-09-16
 
 - apps/api `src/onboarding/telnyxOnboarding.test.ts` **42/42** (new): search mapping/refusals, 10031=empty, 429 burst retried + concurrency ≤4 + cache, Monsey alias, no statewide fallback, locality cleanup; provisioning dry-run (zero provider calls), live new number (one order → configure → CNAM → address → E911 active), resume-stored-order (no second order), adopt-if-owned, order timeout re-read (sent once), failed order clears stored id, pending_activation never "provisioned", connection by name/env/refuse, port = temp first + filing last + filing throw never fails the stage; filing draft→docs→PATCH→confirm, retry reuses order/doc ids, in-process never re-confirmed, refusal → needs_attention, PATCH body fields, requirements mapping; sweep landing order, caller-ID failure stops landing (no email), in-process recorded, refile only after number stage ready, pending 911 confirmed then email; autosave carry (provider/provisioning carried, texting NOT); source guards for every wiring point (dispatch, SMS gate, public routes, PBX shared trunk + temp CID, orchestrator Main re-save+apply, DB tenant lookup, full-table directory fallback, server sweep, registryFor, portal mapping, switch).
