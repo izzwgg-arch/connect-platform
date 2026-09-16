@@ -17,7 +17,7 @@ import { z } from "zod";
 import { startGeneration } from "./service";
 import { cancelJob, checkQuota, createJob, quotaFor, usedThisPeriod } from "./jobs";
 import { EXPORT_PRESETS, normaliseTimeline } from "./localJobs";
-import { assembleFilm, storyboardDoc } from "./film";
+import { assembleFilm, mergeStoryboard, storyboardDoc } from "./film";
 import { assetSummary, jobSummary, projectSummary } from "./routes";
 import { applyOps, loadBrandKit } from "./helpers";
 import { activeMemoryFor, recordFeedback } from "./memory";
@@ -225,8 +225,11 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     const project = await db.creativeProject.findFirst({ where: { id: body.data.projectId, tenantId: who.tenantId, deletedAt: null } });
     if (!project) return reply.code(404).send({ error: "not_found" });
 
-    const doc = storyboardDoc(body.data.shots, body.data.totalSeconds || 0, body.data.ratio || "16:9");
+    const rebuilt = storyboardDoc(body.data.shots, body.data.totalSeconds || 0, body.data.ratio || "16:9");
     const existing = await db.creativeDocument.findFirst({ where: { projectId: project.id, tenantId: who.tenantId, type: "storyboard" } });
+    // ⛔ Re-writing must not orphan clips that have already been paid for.
+    const merged = mergeStoryboard(existing?.doc, rebuilt);
+    const doc = merged.doc;
     const saved = existing
       ? await db.creativeDocument.update({ where: { id: existing.id }, data: { doc, revision: { increment: 1 }, updatedByType: "coworker", updatedByUserId: who.userId } })
       : await db.creativeDocument.create({ data: { tenantId: who.tenantId, projectId: project.id, type: "storyboard", doc, revision: 1, updatedByType: "coworker", updatedByUserId: who.userId } });
@@ -234,8 +237,10 @@ export function registerCreativeInternalRoutes({ app, db }: Deps): void {
     return reply.send({
       documentId: saved.id,
       revision: saved.revision,
-      shots: doc.objects.map((o: any) => ({ id: o.id, title: o.title, seconds: o.seconds, prompt: o.prompt })),
+      shots: doc.objects.map((o: any) => ({ id: o.id, title: o.title, seconds: o.seconds, prompt: o.prompt, rendered: !!o.assetId })),
       totalSeconds: doc.objects.reduce((n: number, o: any) => n + Number(o.seconds || 0), 0),
+      keptClips: merged.kept,
+      droppedClips: merged.dropped,
     });
   });
 

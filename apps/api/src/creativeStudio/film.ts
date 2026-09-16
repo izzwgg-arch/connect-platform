@@ -105,6 +105,43 @@ export function storyboardDoc(shots: ShotInput[], totalSeconds: number, ratio = 
 }
 
 /**
+ * Re-writing a storyboard must not throw away clips that are already paid for.
+ *
+ * ⛔ THE REAL CASE, on production 2026-09-16: a person approved four shots, two
+ * rendered, and the Coworker then called the storyboard tool again — which
+ * REPLACED the document with fresh ids. Both rendered clips were orphaned and
+ * the project read "0 of 4 rendered" with $0.60 of finished work stranded.
+ *
+ * So a shot whose description has not changed keeps its id AND its clip. A
+ * shot whose description HAS changed is genuinely a different shot and starts
+ * without one — which is right: the old clip no longer shows what it says.
+ */
+export function mergeStoryboard(existing: any, rebuilt: any): { doc: any; kept: number; dropped: number } {
+  const old: any[] = Array.isArray(existing?.objects) ? existing.objects.filter((o: any) => o?.type === "shot") : [];
+  if (!old.length) return { doc: rebuilt, kept: 0, dropped: 0 };
+
+  const norm = (v: any) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const taken = new Set<number>();
+  let kept = 0;
+
+  const objects = (rebuilt.objects || []).map((shot: any, i: number) => {
+    // Same position first — that is what a person means by "shot 2" — then
+    // anywhere else with the same words.
+    let at = old[i] && !taken.has(i) && norm(old[i].prompt) === norm(shot.prompt) ? i : -1;
+    if (at < 0) at = old.findIndex((o, j) => !taken.has(j) && norm(o.prompt) === norm(shot.prompt));
+    if (at < 0) return shot;
+    taken.add(at);
+    const was = old[at];
+    if (!was.assetId) return { ...shot, id: was.id };
+    kept += 1;
+    return { ...shot, id: was.id, assetId: was.assetId };
+  });
+
+  const dropped = old.filter((o, j) => o.assetId && !taken.has(j)).length;
+  return { doc: { ...rebuilt, objects }, kept, dropped };
+}
+
+/**
  * Lay every rendered shot end to end on the video track, in storyboard order.
  *
  * ⛔ Shots with no clip yet are SKIPPED rather than left as gaps: a gap in the

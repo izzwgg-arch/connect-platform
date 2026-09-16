@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { MAX_SHOT_SECONDS, assembleFilm, mergeTimeline, planShots, storyboardDoc, timelineFromStoryboard } from "./film";
+import { MAX_SHOT_SECONDS, assembleFilm, mergeStoryboard, mergeTimeline, planShots, storyboardDoc, timelineFromStoryboard } from "./film";
 import { EXPORT_PRESETS, normaliseTimeline } from "./localJobs";
 import { planVideoSegments } from "./engines";
 import { describeRetry, retryHint } from "./evaluate";
@@ -127,6 +127,63 @@ test("a storyboard with no total asked for still gives every shot a usable lengt
 test("ids are unique, so re-ordering one shot cannot move another", () => {
   const doc = storyboardDoc(Array.from({ length: 8 }, (_, i) => ({ prompt: `shot ${i}` })), 40);
   assert.equal(new Set(doc.objects.map((o: any) => o.id)).size, 8);
+});
+
+test("re-writing a storyboard keeps the clips already paid for", () => {
+  // ⛔ The real case, production 2026-09-16: four shots approved, two rendered,
+  // and the Coworker called the storyboard tool again. The document was
+  // REPLACED with fresh ids, both clips were orphaned, and the project read
+  // "0 of 4 rendered" with $0.60 of finished work stranded.
+  const existing = {
+    objects: [
+      { id: "s1", type: "shot", title: "One", prompt: "a van at dusk", seconds: 4, assetId: "a1" },
+      { id: "s2", type: "shot", title: "Two", prompt: "the phone is answered", seconds: 4, assetId: "a2" },
+      { id: "s3", type: "shot", title: "Three", prompt: "the logo", seconds: 4 },
+    ],
+  };
+  const rebuilt = storyboardDoc(
+    [{ prompt: "a van at dusk" }, { prompt: "the phone is answered" }, { prompt: "a completely different closing shot" }],
+    12,
+  );
+  const { doc, kept, dropped } = mergeStoryboard(existing, rebuilt);
+  assert.equal(kept, 2, "both rendered clips survive the rewrite");
+  assert.equal(dropped, 0);
+  assert.equal(doc.objects[0].assetId, "a1");
+  assert.equal(doc.objects[0].id, "s1", "the id survives too, so anything pointing at it still points at it");
+  assert.equal(doc.objects[1].assetId, "a2");
+  assert.equal(doc.objects[2].assetId, undefined, "a shot that now says something else does not keep the old clip");
+});
+
+test("spacing and capitalisation do not count as a different shot", () => {
+  const existing = { objects: [{ id: "s1", type: "shot", prompt: "A van   at Dusk", seconds: 4, assetId: "a1" }] };
+  const { kept } = mergeStoryboard(existing, storyboardDoc([{ prompt: "a van at dusk" }], 4));
+  assert.equal(kept, 1);
+});
+
+test("a shot that is dropped from the film is reported, not silently binned", () => {
+  const existing = {
+    objects: [
+      { id: "s1", type: "shot", prompt: "keep me", seconds: 4, assetId: "a1" },
+      { id: "s2", type: "shot", prompt: "cut me", seconds: 4, assetId: "a2" },
+    ],
+  };
+  const { kept, dropped } = mergeStoryboard(existing, storyboardDoc([{ prompt: "keep me" }], 4));
+  assert.equal(kept, 1);
+  assert.equal(dropped, 1, "the caller must be able to tell the person what was thrown away");
+});
+
+test("the same description twice does not claim the same clip twice", () => {
+  const existing = { objects: [{ id: "s1", type: "shot", prompt: "same", seconds: 4, assetId: "a1" }] };
+  const { doc, kept } = mergeStoryboard(existing, storyboardDoc([{ prompt: "same" }, { prompt: "same" }], 8));
+  assert.equal(kept, 1);
+  assert.equal(doc.objects[0].assetId, "a1");
+  assert.equal(doc.objects[1].assetId, undefined);
+});
+
+test("a first storyboard merges with nothing and loses nothing", () => {
+  const rebuilt = storyboardDoc([{ prompt: "a" }], 4);
+  assert.equal(mergeStoryboard(null, rebuilt).doc, rebuilt);
+  assert.equal(mergeStoryboard({ objects: [] }, rebuilt).kept, 0);
 });
 
 /* ------------------------------------------------------------------ */

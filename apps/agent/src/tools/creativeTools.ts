@@ -242,7 +242,7 @@ export function buildCreativeTools(deps: CreativeToolDeps = {}): ToolSpec[] {
     {
       name: "creative_write_storyboard",
       description:
-        "Plan a film as shots and save it as the project's storyboard. Write one shot per beat, each with what the camera sees. ⛔ You do NOT work out the seconds — hand over the shots and the total length you are aiming for, and the studio splits it so no shot passes the 15-second engine ceiling. Nothing is rendered and nothing is charged by this; it gives the person something to change before a penny is spent.",
+        "Plan a film as shots and save it as the project's storyboard. Write one shot per beat, each with what the camera sees. ⛔ You do NOT work out the seconds — hand over the shots and the total length you are aiming for, and the studio splits it so no shot passes the 15-second engine ceiling. Nothing is rendered and nothing is charged by this; it gives the person something to change before a penny is spent. Calling it again REPLACES the storyboard: a shot whose description is unchanged keeps the clip already rendered for it, a changed one loses it — the answer says how many were kept and dropped, so tell the person if anything was thrown away.",
       parameters: {
         type: "object",
         properties: {
