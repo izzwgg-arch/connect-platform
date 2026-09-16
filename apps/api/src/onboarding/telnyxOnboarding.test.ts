@@ -676,10 +676,13 @@ test("⛔ client: the messaging profile goes to /phone_numbers/{id}/messaging, N
 test("⛔ a shared-trunk build applies MAIN so the DID dispatch exists (live: 845-777-4807 hit only the catch-all)", () => {
   const src = read("setupOrchestrator.ts");
   const i = src.indexOf("tenantPath = result.tenantPath;");
-  const block = src.slice(i, i + 2200);
+  const block = src.slice(i, i + 4200);
   assert.match(block, /if \(sharedTrunkCarrier\) \{/);
   assert.match(block, /await applyAndRebake\(session, panelCfg\.mainTenant,/);
-  assert.doesNotMatch(block.slice(0, block.indexOf("applyAndRebake(session")), /try \{/, "a failed Main apply must fail the build, not be swallowed");
+  // The panel re-save (queues Main's module 99) must come BEFORE the apply.
+  const save = block.indexOf("await saveTenant(session, panelCfg.mainTenant, pbxTenantNumericId");
+  assert.ok(save > 0 && save < block.indexOf("await applyAndRebake(session"), "re-save the tenant before applying Main");
+  assert.match(block, /await applyAndRebake\(session, panelCfg\.mainTenant, \{ db, log: quiet, pbxInstanceId: pbx\.instanceId \}, "onboarding-main-did-dispatch"\);/, "a failed Main apply must fail the build — no .catch swallowing it");
 });
 
 test("⛔ the orchestrator finds an existing tenant in the PBX DATABASE before the stale REST list (live: interrupted builds could never resume)", () => {

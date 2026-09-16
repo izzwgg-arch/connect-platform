@@ -680,8 +680,31 @@ async function runOnboardingSetupInner(submissionId: string): Promise<void> {
       // regen disturbs are re-baked immediately. Not caught: a customer whose
       // inbound calls go nowhere must be a failed build, not a green one.
       if (sharedTrunkCarrier) {
-        const { applyAndRebake } = await import("../pbxConsole/pbxConsoleWrites");
+        const { applyAndRebake, saveTenant } = await import("../pbxConsole/pbxConsoleWrites");
         const quiet = { info: () => {}, warn: () => {}, error: () => {} };
+        // ⛔ A bare Main apply is NOT enough when the tenant came from the
+        // MIRROR: the mirror writes rows directly and queues nothing for Main,
+        // so Main's `tenants` module (99) is never regenerated — proven live
+        // 2026-09-16 (Main applied, dispatch still missing). Re-saving the
+        // tenant through the panel with its OWN unchanged number list makes
+        // VitalPBX queue Main itself; then the apply renders the dispatch
+        // (proven the same hour: `_8457774807 → T143_default-trunk`).
+        const inst = await (db as any).pbxInstance.findUnique({ where: { id: pbx.instanceId }, select: { ombuMysqlUrlEncrypted: true } });
+        const { connectOmbutelMysql } = await import("../pbxQueueDirectory");
+        const c = await connectOmbutelMysql(inst?.ombuMysqlUrlEncrypted);
+        if (!c.ok) throw new Error(`main_dispatch_tenant_lookup_unavailable (${c.skipReason})`);
+        let pbxTenantNumericId = "";
+        try {
+          const [rows] = await c.conn.query("SELECT tenant_id FROM ombutel.ombu_tenants WHERE path = ? LIMIT 1", [tenantPath]);
+          pbxTenantNumericId = String((rows as any[])[0]?.tenant_id ?? "");
+        } finally {
+          await c.conn.end().catch(() => {});
+        }
+        if (!pbxTenantNumericId) throw new Error(`main_dispatch_tenant_not_found (path ${tenantPath})`);
+        const tenantDids = [did, ...(portedDid ? [portedDid] : [])];
+        await saveTenant(session, panelCfg.mainTenant, pbxTenantNumericId, {
+          inboundNumbers: tenantDids.map((d) => ({ did: d, description: "" })),
+        });
         await applyAndRebake(session, panelCfg.mainTenant, { db, log: quiet, pbxInstanceId: pbx.instanceId }, "onboarding-main-did-dispatch");
         session.setTenant(tenantPath);
         await logEvent(submissionId, `PBX build: Main applied — ${did}${portedDid ? ` and ${portedDid}` : ""} dispatch to the new tenant.`);
