@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  mapExtensionSaveToMirrorEdit, isExtensionCapRefusal,
+  mapExtensionSaveToMirrorEdit, isExtensionWriteLicenceRefusal,
   type MirrorEditDeviceContext, type ExtensionSaveInput,
 } from "./pbxConsoleWrites";
 
@@ -84,10 +84,20 @@ test("a save that changes nothing is an honest no-op refusal, not a helper call"
   }, DEVICES), /Nothing in this save differs/);
 });
 
-test("isExtensionCapRefusal matches ONLY the panel's own cap sentence", () => {
-  assert.ok(isExtensionCapRefusal(new Error("device-new: You've reached the maximum number of allowed extensions")));
-  assert.ok(!isExtensionCapRefusal(new Error("the phone system rejected the change")));
-  assert.ok(!isExtensionCapRefusal(new Error("maximum number of free tenants")));
+/* ⛔⛔ THIS TEST USED TO SAY "matches ONLY the panel's own cap sentence", and
+   that belief was the 2026-09-16 defect: the gate was one substring,
+   "maximum number of al", so the app-client cap
+   (extensions.vitxi_clients.max_reached) sailed straight past it and no
+   fallback ran on a live customer. The detector is shared now — the full
+   catalogue and its replay live in ../pbx/licenceRefusal.test.ts. */
+test("the extension-write gate covers EVERY licence refusal that blocks an extension or device", () => {
+  assert.ok(isExtensionWriteLicenceRefusal(new Error("device-new: You've reached the maximum number of allowed extensions")));
+  assert.ok(
+    isExtensionWriteLicenceRefusal(new Error("device-new: You've reached the maximum number of Mobile/WebRTC clients allowed for your current license.")),
+    "the app-client cap is the one that was missed",
+  );
+  assert.ok(!isExtensionWriteLicenceRefusal(new Error("the phone system rejected the change")));
+  assert.ok(!isExtensionWriteLicenceRefusal(new Error("maximum number of free tenants")), "a tenant refusal is not an extension refusal");
 });
 
 /* ── source guards: the wiring, replayed-failing against pre-fix HEAD ────── */
@@ -102,14 +112,14 @@ test("guard: BOTH extension-save call sites go through saveExtensionOrMirror", (
   assert.equal(bareCalls, 1, "exactly ONE bare saveExtension( call — inside saveExtensionOrMirror itself");
 });
 
-test("guard: the panel is tried FIRST and the mirror only on the cap refusal", () => {
+test("guard: for an EDIT the panel is tried FIRST, the mirror only on a licence refusal (a CREATE is the other way round now)", () => {
   const body = routesSrc.slice(routesSrc.indexOf("const saveExtensionOrMirror"));
   const panelAt = body.indexOf("saveExtension(");
-  const gateAt = body.indexOf("isExtensionCapRefusal");
+  const gateAt = body.indexOf("isExtensionWriteLicenceRefusal");
   const mirrorAt = body.indexOf("mirrorEditPbxExtension(");
   assert.ok(panelAt > 0 && gateAt > panelAt && mirrorAt > gateAt,
-    "order must be: panel save → cap-refusal gate → mirror edit");
-  assert.ok(body.includes("if (!isExtensionCapRefusal(e)) throw e"), "every other failure must rethrow untouched");
+    "order must be: panel save → licence-refusal gate → mirror edit");
+  assert.ok(body.includes("if (!isExtensionWriteLicenceRefusal(e)) throw e"), "every other failure must rethrow untouched");
 });
 
 test("guard: a failed live-apply after a row edit is LOUD, never reported as saved", () => {
@@ -163,14 +173,22 @@ test("guard: createExtension refuses to trust a 'successful' import the extensio
   assert.ok(capAt > 0 && loadAt > capAt, "the existence check must gate the rest of the create");
 });
 
-test("guard: the create fallback fires ONLY at the cap and only for the standard desk+app shape", () => {
+/* ⛔⛔ REWRITTEN 2026-09-16, and the change of invariant IS the point: the
+   mirror used to be the over-cap FALLBACK, so the cap gate had to run before
+   it. The subscription is cancelled and the licence now refuses every new app
+   device at any extension count, so the mirror LEADS and the panel is the
+   fallback. What must survive the inversion is the one protection that gate
+   carried: a silent no-op import on an UNDER-CAP tenant is some other fault
+   and must stay loud, never be papered over by the mirror. */
+test("guard: the mirror leads the create, and an under-cap silent no-op still stays loud", () => {
   const body = routesSrc.slice(routesSrc.indexOf('app.post("/admin/pbx-console/extensions"'));
   assert.ok(body.includes("extension-import-capped"), "the route must recognise the silent-cap step");
-  assert.ok(/count < 12\) throw e/.test(body), "an under-cap no-op import is some OTHER fault and must stay loud");
-  assert.ok(body.includes("mirrorAddPbxExtension("), "the over-cap create goes through the mirror add");
-  const capAt = body.indexOf("count < 12");
+  assert.ok(body.includes("mirrorAddPbxExtension("), "the create goes through the mirror add");
   const mirrorAt = body.indexOf("mirrorAddPbxExtension(");
-  assert.ok(capAt > 0 && mirrorAt > capAt, "the cap gate must run before the mirror is called");
+  const panelAt = body.indexOf("createExtension(s,");
+  assert.ok(mirrorAt > 0 && panelAt > mirrorAt, "⛔ the mirror must be attempted BEFORE the panel");
+  assert.ok(/count < 12\) return fail\(reply, e\)/.test(body),
+    "an under-cap no-op import is some OTHER fault and must stay loud");
 });
 
 test("guard: the helper registers /mirror/extension-add and serialises BOTH mirror appliers under one lock", () => {

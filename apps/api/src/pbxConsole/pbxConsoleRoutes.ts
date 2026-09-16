@@ -33,10 +33,14 @@ import {
 import {
   applyAndRebake, createExtension, deleteExtension, deleteTenant, editOutboundRoute, editQueue, editRingGroup, panelDelete, rebootPhone,
   saveExtension, savePhone, saveTenant, unlinkDevice, MAIN_TENANT_PATH_DEFAULT,
-  isExtensionCapRefusal, mapExtensionSaveToMirrorEdit,
+  mapExtensionSaveToMirrorEdit,
   type TeamEditInput,
   type DeviceSpec, type ExtensionCreateInput, type ExtensionSaveInput,
 } from "./pbxConsoleWrites";
+import {
+  halfBuiltExtensionMessage, isExtensionWriteLicenceRefusal, isMirrorGrantMissing,
+  mirrorGrantMissingMessage, MIRROR_EXTENSION_GRANTS_FILE,
+} from "../pbx/licenceRefusal";
 
 export interface PbxConsoleDeps {
   app: any;
@@ -119,6 +123,30 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
         "The phone system's free edition will not save an extension while it is over its own 12-extension limit, and the Connect helper that edits around that limit is not reachable on this phone system. Nothing was changed.",
     },
     {
+      /* ⛔⛔ 2026-09-16, live: `extensions.vitxi_clients.max_reached`. The
+         licence refuses EVERY new app (mobile / browser softphone) device now,
+         and freeing one does NOT reopen it — the figure it checks is not a live
+         count (measured twice, 20 minutes apart). Reaching a person here means
+         the mirror could not answer either, which in practice means its grants
+         are not installed. */
+      match: "maximum number of Mobile/WebRTC clients",
+      message:
+        "The phone system's licence refuses to create any more app (mobile / browser softphone) devices, and Connect's mirror — the road that replaces it — could not do it either. Nothing was changed. The desk phone side is unaffected; install the mirror's extension grants on the PBX to reopen this.",
+    },
+    {
+      /* The importer's "success" that is really a refusal — see
+         isLicenceSilentDowngrade. Worth its own sentence because the extension
+         DOES exist afterwards. */
+      match: "quietly turned the app",
+      message:
+        "The phone system imported the extension but its licence quietly turned the app (WebRTC/Mobile) flag off, so it would have been a desk phone only. Connect stopped rather than report that as done. The extension may exist on the phone system without being live — check it in the console before retrying.",
+    },
+    {
+      match: "command denied to user",
+      message:
+        "Connect's mirror is not allowed to write to the extension tables on this phone system yet, so the extension could not be created. Nothing was changed. Install scripts/pbx/mirror/mirror-extension-grants-20260916.sql once, as root on the PBX.",
+    },
+    {
       match: "geo_build_not_permitted",
       message:
         "Blocking a country needs one more setup step on the phone system: rebuilding the firewall runs as root, which the Connect helper is not allowed to do yet. Nothing was changed — the countries you had blocked are still exactly as they were.",
@@ -161,9 +189,11 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
    * refuses — clone-proven 2026-08-21), hand the SAME save to the helper's
    * /mirror/extension-edit, which UPDATEs the rows the panel would and splices
    * only that extension's pjsip blocks + voicemail line into the live files.
-   * ⛔ The panel goes FIRST, always — while the licence is live nothing here
-   * behaves differently, and a test pins that order. A field the mirror cannot
-   * honour is refused by name (mapExtensionSaveToMirrorEdit), never dropped.
+   * ⛔ The panel goes FIRST for an EDIT — an edit of an existing extension is
+   * not licence-gated until the cap, and the mirror refuses fields the panel
+   * handles fine. (A CREATE is the other way round now: see the create route.)
+   * A field the mirror cannot honour is refused by name
+   * (mapExtensionSaveToMirrorEdit), never dropped.
    */
   const saveExtensionOrMirror = async (
     s: PanelSession, instance: Instance, ext: ConsoleExtensionRow, extId: number, input: ExtensionSaveInput,
@@ -171,7 +201,11 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     try {
       return { ...(await saveExtension(s, ext.tenantPath, extId, input)), viaMirror: false };
     } catch (e) {
-      if (!isExtensionCapRefusal(e)) throw e;
+      /* ⛔⛔ Was `isExtensionCapRefusal`, ONE substring, which matched the
+         extension-count cap and missed the app-client cap entirely — the
+         2026-09-16 defect. Every licence sentence now lives in
+         ../pbx/licenceRefusal.ts. */
+      if (!isExtensionWriteLicenceRefusal(e)) throw e;
       const cfg = resolvePbxRouteHelperConfig(instance.id);
       if (!cfg) throw e; // no helper on this PBX — the honest cap refusal stands
       const mapped = mapExtensionSaveToMirrorEdit(input, ext.devices);
@@ -504,6 +538,70 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
     const info = await withRead(instance, (c) => findConsoleTenant(c, Number(input.pbxTenantId)));
     const t = info.ok ? info.data : null;
     if (!t) return reply.status(404).send({ error: "tenant_not_found" });
+
+    /* ⛔⛔ THE MIRROR GOES FIRST FOR A CREATE (2026-09-16). The VitalPBX
+       subscription is CANCELLED, and the licence now refuses every new app
+       (mobile / browser softphone) device outright — so the panel can no longer
+       build the standard desk + app pair for ANY customer, at any extension
+       count. The mirror is the main road; the panel is the fallback that is
+       allowed to fail.
+
+       ⛔ SAFETY, deliberately: if the mirror cannot do it for ANY reason we fall
+       through to the panel LOUDLY, so this is never worse than the old order —
+       today, with the mirror's grants not yet installed, the mirror refuses in
+       milliseconds on a permission error and the panel runs exactly as before.
+       ⛔ The ONE case that must NOT fall through is a mirror run whose ROWS
+       landed and whose apply failed: the extension then exists, and a panel
+       retry would answer "already exists". That surfaces as its own error.
+       `PBX_EXTENSION_CREATE_MODE=panel` forces the old order. */
+    /** Set when the mirror was tried and could not do it — so the panel's own
+     *  refusal can name BOTH roads instead of pretending only one exists. */
+    let mirrorFallbackReason = "";
+    const createMode = String(process.env.PBX_EXTENSION_CREATE_MODE || "auto").toLowerCase();
+    const specs = input.devices && input.devices.length ? input.devices : [{ kind: "pjsip" as const }, { kind: "webrtc" as const }];
+    const deskSpecs = specs.filter((d) => d.kind === "pjsip");
+    const webrtcSpecs = specs.filter((d) => d.kind === "webrtc");
+    const isStandardPair = deskSpecs.length === 1 && webrtcSpecs.length === 1 && specs.length === 2;
+    const helperForMirror = createMode === "panel" ? null : resolvePbxRouteHelperConfig(instance.id);
+
+    if (helperForMirror && isStandardPair) {
+      try {
+        const r = await mirrorAddPbxExtension(helperForMirror, {
+          tenantId: t.tenantId, extension: input.extension, name: input.name, email: input.email,
+          deskPassword: deskSpecs[0].secret, webrtcPassword: webrtcSpecs[0].secret, vmPassword: input.vmPassword,
+        });
+        const applyErr = (r.applied as any)?.error;
+        if (applyErr) {
+          /* Rows landed; the files did not. A panel retry would collide, so stop. */
+          return fail(reply, new PanelStepError("mirror-add-apply", `the extension was recorded but making it live on the phone system failed (${applyErr}) — re-render the customer from the console, and do NOT create it again`));
+        }
+        /* ⛔ A helper 200 is not proof, the same way the panel's "Import
+           Completed Successfully" was not (2026-08-23). Read the extension back
+           and require BOTH devices before reporting success. */
+        const back = await withRead(instance, (c) => listConsoleExtensions(c, { tenantId: t.tenantId }));
+        const made = back.ok ? back.data.find((x: any) => String(x.extension) === String(input.extension)) : null;
+        const deviceCount = made ? (made.devices || []).length : 0;
+        if (!made || deviceCount < 2) {
+          return fail(reply, new PanelStepError("mirror-add-unverified", halfBuiltExtensionMessage(String(input.extension), `Connect's mirror reported success but the extension reads back with ${made ? deviceCount : 0} device(s) instead of 2`)));
+        }
+        log.info({ ext: input.extension, tenantId: t.tenantId }, "[PBX_CONSOLE] extension created through the mirror (the main road)");
+        await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_CREATED", entityType: "PbxExtension", entityId: `${t.tenantId}/${input.extension}`, metadata: { name: input.name, viaMirror: true, road: "mirror-first" } });
+        await syncConnectExtensions(instance, t.tenantId).catch(() => {});
+        return { extensionId: String(r.extensionId), viaMirror: true };
+      } catch (mirrorErr: any) {
+        if (mirrorErr instanceof PanelStepError) return fail(reply, mirrorErr); // already decided above
+        /* ⛔ LOUD. A silent fallback is how "the mirror is our main road" turns
+           back into "the panel is our main road" without anyone noticing. */
+        log.warn(
+          { ext: input.extension, tenantId: t.tenantId, err: mirrorErr?.message, grantsMissing: isMirrorGrantMissing(mirrorErr) },
+          isMirrorGrantMissing(mirrorErr)
+            ? `[PBX_CONSOLE] ⛔ the mirror cannot write the extension tables on this PBX — install ${MIRROR_EXTENSION_GRANTS_FILE}; falling back to the panel, which can no longer create app devices`
+            : "[PBX_CONSOLE] ⛔ the mirror refused the extension create — falling back to the panel",
+        );
+        mirrorFallbackReason = mirrorErr?.message || "the mirror was unavailable";
+      }
+    }
+
     try {
       const out = await withPanel(instance, async (s) => {
         const made = await createExtension(s, t.path, input, undefined, (m) => log.info({ ext: input.extension }, m));
@@ -513,39 +611,66 @@ export function registerPbxConsoleRoutes(deps: PbxConsoleDeps): void {
       await syncConnectExtensions(instance, t.tenantId).catch(() => {});
       return out;
     } catch (e) {
-      /* ⛔ THE SILENT CAP (clone-proven 2026-08-23): the free tier's
-         12-extension limit is PER TENANT, and at the cap the panel's CSV
-         import reports "Import Completed Successfully" while creating NOTHING.
-         createExtension detects that (the extension does not exist after a
-         "successful" import) and throws the distinct step below; the create
-         then goes through the mirror — but ONLY when the tenant really is at
-         the cap. A no-op import on an under-cap tenant is some OTHER fault
-         and must stay loud, not be papered over by the mirror. */
-      if (e instanceof PanelStepError && e.step === "extension-import-capped") {
-        try {
+      /* The panel is the FALLBACK now, so by the time we are here the mirror has
+         usually already been tried and said why it could not help. Three panel
+         failures mean "the licence, not us":
+           - a licence refusal, any module         (isExtensionWriteLicenceRefusal)
+           - `extension-import-capped`   — "Import Completed Successfully" that
+             created nothing (the per-tenant 12-extension cap, 2026-08-23)
+           - `extension-import-downgraded` — an import that succeeded with the
+             app flag quietly cleared (2026-09-16)
+         ⛔ All three are the SAME answer to the person: the licence will not do
+         it and the mirror has to. Saying which road already failed is the whole
+         difference between a fixable message and a mystery. */
+      const panelStep = e instanceof PanelStepError ? e.step : "";
+      const licenceSaidNo =
+        isExtensionWriteLicenceRefusal(e) ||
+        panelStep === "extension-import-capped" ||
+        panelStep === "extension-import-downgraded";
+
+      if (licenceSaidNo && mirrorFallbackReason) {
+        /* Both roads are shut — the only genuinely stuck case. Name both. */
+        log.error({ ext: input.extension, tenantId: t.tenantId, panel: (e as any)?.message, mirror: mirrorFallbackReason }, "[PBX_CONSOLE] ⛔ BOTH roads refused the extension create");
+        const detail = isMirrorGrantMissing(mirrorFallbackReason)
+          ? mirrorGrantMissingMessage()
+          : `The phone system's licence refused this, and Connect's mirror could not do it either (${mirrorFallbackReason}). Nothing was changed.`;
+        return reply.status(409).send({ error: "pbx_console_refused", detail, reason: "licence_and_mirror_both_refused" });
+      }
+
+      if (licenceSaidNo && !mirrorFallbackReason) {
+        /* The mirror was never tried: a non-standard device shape, no helper on
+           this PBX, or PBX_EXTENSION_CREATE_MODE=panel. Try it now when we can.
+           ⛔ EXCEPT for a silent no-op import on an UNDER-CAP tenant: that is
+           some OTHER fault, and quietly routing it to the mirror would paper
+           over a mystery instead of surfacing it (the rule the 2026-08-23
+           fallback was written with — kept). */
+        if (panelStep === "extension-import-capped") {
           const countR = await withRead(instance, (c) => listConsoleExtensions(c, { tenantId: t.tenantId }));
           const count = countR.ok ? countR.data.length : 0;
-          if (count < 12) throw e; // not the cap — surface the original mystery
-          const cfg = resolvePbxRouteHelperConfig(instance.id);
-          if (!cfg) throw e;
-          const specs = input.devices && input.devices.length ? input.devices : [{ kind: "pjsip" as const }, { kind: "webrtc" as const }];
-          const desk = specs.filter((d) => d.kind === "pjsip");
-          const webrtc = specs.filter((d) => d.kind === "webrtc");
-          if (desk.length !== 1 || webrtc.length !== 1 || specs.length !== 2) {
-            throw new PanelStepError("mirror-edit-unsupported",
-              "This customer is at the phone system's free-edition 12-extension limit, and Connect's fallback adds the standard desk + app pair only — pick that shape, or add the extension before the customer grows past 12.");
+          if (count < 12) return fail(reply, e);
+        }
+        const cfg = resolvePbxRouteHelperConfig(instance.id);
+        if (cfg && isStandardPair) {
+          try {
+            log.warn({ ext: input.extension, tenantId: t.tenantId }, "[PBX_CONSOLE] the panel's licence refused — creating through the mirror");
+            const r = await mirrorAddPbxExtension(cfg, {
+              tenantId: t.tenantId, extension: input.extension, name: input.name, email: input.email,
+              deskPassword: deskSpecs[0].secret, webrtcPassword: webrtcSpecs[0].secret, vmPassword: input.vmPassword,
+            });
+            const applyErr = (r.applied as any)?.error;
+            if (applyErr) throw new PanelStepError("mirror-add-apply", `the extension was recorded but making it live on the phone system failed (${applyErr}) — re-render the customer from the console, and do NOT create it again`);
+            await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_CREATED", entityType: "PbxExtension", entityId: `${t.tenantId}/${input.extension}`, metadata: { name: input.name, viaMirror: true, road: "panel-then-mirror" } });
+            await syncConnectExtensions(instance, t.tenantId).catch(() => {});
+            return { extensionId: String(r.extensionId), viaMirror: true };
+          } catch (e2: any) {
+            if (isMirrorGrantMissing(e2)) return reply.status(409).send({ error: "pbx_console_refused", detail: mirrorGrantMissingMessage(e2?.message), reason: "mirror_grants_missing" });
+            return fail(reply, e2);
           }
-          log.warn({ ext: input.extension, tenantId: t.tenantId, count }, "[PBX_CONSOLE] import silently capped — creating through the mirror");
-          const r = await mirrorAddPbxExtension(cfg, {
-            tenantId: t.tenantId, extension: input.extension, name: input.name, email: input.email,
-            deskPassword: desk[0].secret, webrtcPassword: webrtc[0].secret, vmPassword: input.vmPassword,
-          });
-          const applyErr = (r.applied as any)?.error;
-          if (applyErr) throw new PanelStepError("mirror-edit-apply", `the extension was recorded but making it live on the phone system failed (${applyErr}) — re-render the customer from the console`);
-          await audit({ actorUserId: admin.sub, action: "PBX_CONSOLE_EXTENSION_CREATED", entityType: "PbxExtension", entityId: `${t.tenantId}/${input.extension}`, metadata: { name: input.name, viaMirror: true } });
-          await syncConnectExtensions(instance, t.tenantId).catch(() => {});
-          return { extensionId: String(r.extensionId), viaMirror: true };
-        } catch (e2) { return fail(reply, e2); }
+        }
+        if (!isStandardPair) {
+          return fail(reply, new PanelStepError("mirror-add-unsupported",
+            "The phone system's licence refused this, and Connect's mirror builds the standard desk + app pair only — ask for that shape, then adjust the devices afterwards."));
+        }
       }
       return fail(reply, e);
     }

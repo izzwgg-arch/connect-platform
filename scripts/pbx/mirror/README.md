@@ -1,5 +1,44 @@
 # VitalPBX mirror generator (`scripts/pbx/mirror/`)
 
+> ## ⛔⛔ READ THIS FIRST — THE MIRROR IS THE MAIN ROAD NOW (2026-09-16)
+>
+> **The VitalPBX subscription is CANCELLED.** The panel is no longer the road for
+> extension work; it is the fallback that is allowed to fail. Its licence now
+> refuses **every new app (mobile / browser softphone) device**, for every
+> customer, at any extension count — `extensions.vitxi_clients.max_reached` —
+> and **freeing a slot does NOT reopen it** (measured twice, 20 minutes apart:
+> the figure it checks is not a live count). Do not plan around reclaiming
+> slots, and do not "just use the panel".
+>
+> **⛔ `/mirror/extension-add` needs grants that production did not have until
+> now.** It was proven on the CLONE **as MySQL root** — `add-extension-accept.py`
+> connects as `root` and refuses to run where a licence file exists — while the
+> production grant file `mirror-grants-20260819.sql` covers the **tenant-create**
+> tables only. So on prod the helper's own user got:
+>
+> ```
+> (1142, "INSERT command denied to user 'connect_route_helper'@'localhost'
+>         for table `ombutel`.`ombu_extensions`")
+> ```
+>
+> **Fix, run once as root on the PBX:** `mirror-extension-grants-20260916.sql`
+> (in this folder — idempotent, INSERT only, the seven tables
+> `mirror_writes.add_extension` writes).
+>
+> **⛔ A clone proof is not a production proof.** Anything in here proven with
+> `user="root"` says nothing about whether `connect_route_helper` can do it.
+> Before believing a mirror endpoint works on prod, check its grants.
+>
+> **⛔ Still missing: `/mirror/device-add`.** Adding a device to an EXISTING
+> extension has no mirror route — `extension-add` builds the desk+app pair for a
+> NEW extension only, and `mapExtensionSaveToMirrorEdit` refuses "adding a
+> device" by name. Today's workaround is delete + re-add.
+>
+> The API side is hardened to match: `apps/api/src/pbx/licenceRefusal.ts` holds
+> every licence sentence (read off the running PBX, with its i18n key), the
+> console create tries the **mirror first**, and
+> `apps/api/src/pbx/licenceRefusal.test.ts` fails if any of that regresses.
+
 Replicates VitalPBX 4.5.3's per-tenant output — the `ombutel` rows the panel
 writes, the 17 per-tenant conf files under `/etc/asterisk/vitalpbx/`, and the
 AstDB keys — with our own code, so the licence-gated panel save path never has

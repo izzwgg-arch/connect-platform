@@ -26,6 +26,7 @@ import {
 } from "../onboarding/panelClient";
 import { extensionId as lookupExtensionIdByNumber } from "../onboarding/pbxTenantBuild";
 import { rebakeConnectRoutesAfterRegen } from "../pbx/applyRegenRebake";
+import { isLicenceSilentDowngrade } from "../pbx/licenceRefusal";
 import { applyOverrides, loadParsedForm, parseForm, type FormOverrides, type ParsedForm } from "./panelForm";
 
 export const MAIN_TENANT_PATH_DEFAULT = "2dc3974017c1bc65";
@@ -394,10 +395,17 @@ export function mapExtensionSaveToMirrorEdit(
   return { set, vm, devices };
 }
 
-/** The panel's own over-cap refusal — the ONE failure the mirror fallback answers. */
-export function isExtensionCapRefusal(e: unknown): boolean {
-  return String((e as any)?.message || "").includes("maximum number of al");
-}
+/**
+ * The panel's own licence refusal — the failures the mirror answers.
+ *
+ * ⛔⛔ This used to be one substring, `"maximum number of al"`, which matches
+ * `extensions.max_reached` and nothing else. On 2026-09-16 a live customer's
+ * app device was refused with `extensions.vitxi_clients.max_reached` and this
+ * gate did not fire, so no fallback ran. Every string now lives in
+ * `../pbx/licenceRefusal.ts`, read off the running PBX. ⛔ Do not add a
+ * substring here — add it there, with its i18n key, or the two copies drift.
+ */
+export { isExtensionWriteLicenceRefusal } from "../pbx/licenceRefusal";
 
 /** Remove one device from an extension (the panel's "unlink device" button). */
 export async function unlinkDevice(s: PanelSession, extId: number | string, deviceId: number): Promise<void> {
@@ -489,6 +497,19 @@ export async function createExtension(
   const note = String(r.json?.notification?.text || "");
   if (!/completed successfully/i.test(note)) {
     throw new PanelStepError("extension-import", `ext ${ext}: ${note.replace(/<[^>]+>/g, " ").trim() || "import failed: " + r.text.slice(0, 200)}`);
+  }
+  /* ⛔⛔ A SUCCESS THAT IS A REFUSAL (i18n `import_extensions.vitxi_client.
+     max_reached` / `…mobile_client…`): over the app-client cap the importer does
+     NOT refuse — it imports the row, clears the WebRTC/Mobile flag, and still
+     says "Import Completed Successfully". The extension then exists, an endpoint
+     loads, and the person has a desk phone where a softphone was ordered. There
+     is no other signal anywhere. Treat it as a failed import so the caller falls
+     through to the mirror instead of reporting a success it did not get. */
+  if (isLicenceSilentDowngrade(note)) {
+    throw new PanelStepError(
+      "extension-import-downgraded",
+      `ext ${ext}: the phone system reported the import as successful but its licence quietly turned the app (WebRTC/Mobile) flag OFF — the phone system said: ${note.replace(/<[^>]+>/g, " ").trim()}`,
+    );
   }
   const extId = await lookupExtensionIdByNumber(s, ext);
   /* ⛔ THE SILENT CAP (clone-proven 2026-08-23, boundary-exact): the free

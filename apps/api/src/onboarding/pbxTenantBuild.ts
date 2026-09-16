@@ -22,6 +22,7 @@
  */
 
 import { provisionTenantEmergency } from "../billing/serviceInterruption/emergencyProvisioning";
+import { isExtensionWriteLicenceRefusal, isLicenceSilentDowngrade, MIRROR_EXTENSION_GRANTS_FILE } from "../pbx/licenceRefusal";
 import {
   PanelSession,
   PanelStepError,
@@ -433,6 +434,18 @@ async function importExtension(s: PanelSession, person: PbxPerson): Promise<void
   if (!/completed successfully/i.test(note)) {
     throw new PanelStepError("extension-import", `ext ${person.ext}: ${note || "import failed"}`);
   }
+  /* ⛔⛔ A SUCCESS THAT IS A REFUSAL. Over the licence's app-client cap the
+     importer does not refuse — it imports the row, clears the WebRTC/Mobile
+     flag, and still says "Import Completed Successfully"
+     (`import_extensions.vitxi_client.max_reached`). The customer would end up
+     with a desk phone where a softphone was sold, and nothing downstream would
+     ever notice. Stop instead of reporting a success we did not get. */
+  if (isLicenceSilentDowngrade(note)) {
+    throw new PanelStepError(
+      "extension-import-downgraded",
+      `ext ${person.ext}: the phone system reported the import as successful but its licence quietly turned the app (WebRTC/Mobile) flag OFF — the phone system said: ${String(note).replace(/<[^>]+>/g, " ").trim()}`,
+    );
+  }
 }
 
 /** Same lookup the panel makes for inbound-route destinations. */
@@ -548,7 +561,28 @@ async function addDevice(s: PanelSession, extId: string, person: PbxPerson, kind
     upsertPair(pairs, "user", person.ext + "_2");
     upsertPair(pairs, "dtmfmode", "rfc2833");
   }
-  assertSaved(`device-${kind}`, await s.post(pairs));
+  /* ⛔⛔ THE APP DEVICE IS THE ONE THE DEAD LICENCE REFUSES (2026-09-16).
+     `extensions.vitxi_clients.max_reached` — "You've reached the maximum number
+     of Mobile/WebRTC clients allowed for your current license." The VitalPBX
+     subscription is CANCELLED, so this now refuses for EVERY customer at ANY
+     extension count, and freeing a slot does not reopen it. Left as a bare
+     `assertSaved`, a sign-up dies here with "[device-webrtc] unexpected
+     response: {…" truncated mid-JSON — which is what sent a session hunting the
+     wrong bug for an hour. Say what it is and what closes it. ⛔ This is still
+     the PANEL road; the mirror cannot be made primary here until its extension
+     grants are installed and it has succeeded once on production (the acceptance
+     in AGENT_HANDOFF_VITALPBX_LICENSE_EXIT_ASSESSMENT §26). */
+  try {
+    assertSaved(`device-${kind}`, await s.post(pairs));
+  } catch (e) {
+    if (kind === "webrtc" && isExtensionWriteLicenceRefusal(e)) {
+      throw new PanelStepError(
+        "device-webrtc-licence",
+        `extension ${person.ext}: the phone system's licence refuses to create the app (mobile / browser softphone) device — the subscription is cancelled and this now refuses for every customer. The desk phone is built; this person has NO softphone. Connect's mirror is the road that replaces this, and it needs its grants installed once on the PBX: ${MIRROR_EXTENSION_GRANTS_FILE}. (the phone system said: ${String((e as any)?.message || e)})`,
+      );
+    }
+    throw e;
+  }
   // verify the device is now on the extension (same authoritative getDevice
   // check as the resume guard — the edit-form substring lies, see above)
   const h2 = await s.loadForm("extensions", "edit", extId);
