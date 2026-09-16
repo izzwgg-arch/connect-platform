@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readLaybelAnswer, SpeechSentences, type SpeechOptions } from "./laybelSpeech";
+import { readLaybelAnswer, laybelErrorMessage, SpeechSentences, type SpeechOptions } from "./laybelSpeech";
 import { LaybelTurns } from "./laybelTurns";
 
 test("sentence chunks retain text, decimals and abbreviations", () => {
@@ -29,6 +29,14 @@ test("JSON backend compatibility and truncated/error streams fail honestly", asy
   for (const body of ['{"type":"heartbeat"}\n', '{"type":"error"}\n']) {
     await assert.rejects(readLaybelAnswer(new Response(body, { headers: { "content-type": "application/x-ndjson" } }), () => {}));
   }
+});
+
+test("safe translation failures describe the failed stage, not a fake microphone problem", async () => {
+  const code = "yiddishlabs_reply_translation_unavailable";
+  await assert.rejects(readLaybelAnswer(new Response(JSON.stringify({ type: "error", code }) + "\n", { headers: { "content-type": "application/x-ndjson" } }), () => {}), new RegExp(code));
+  assert.match(laybelErrorMessage(new Error(code)), /English answer was generated/);
+  assert.doesNotMatch(laybelErrorMessage(new Error("private upstream details")), /private/);
+  assert.equal(typeof laybelErrorMessage(new Error("toString")), "string");
 });
 
 test("first sentence speaks before final chat; whole answer is never duplicated", async () => {

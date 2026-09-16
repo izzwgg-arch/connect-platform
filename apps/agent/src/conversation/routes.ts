@@ -19,6 +19,7 @@ import { verifyPortalJwt, type AgentIdentity } from "../auth";
 import { elevateForCustomOwnerRole, isPlatformStaff } from "../authRoles";
 import { TURN_ID_RE, type ActivityHub } from "../coworker/activity";
 import { PassThrough } from "node:stream";
+import { conversationChannel } from "./store";
 
 const Identity = z.object({
   tenantId: z.string().min(1),
@@ -66,8 +67,10 @@ export function registerChatRoutes(
     const body = z
       .object({
         text: z.string().min(1).max(8000),
-        channel: z.string().optional(),
+        channel: z.string().refine(value => conversationChannel(value) !== null).optional(),
         streamSpeech: z.boolean().optional(),
+        inputLanguage: z.enum(["yi", "yi-en", "en", "he", "lk"]).optional(),
+        requireYiddishLabs: z.boolean().optional(),
         /** Finished upload ids from /agent/chat/upload/finish (this session). */
         attachments: z.array(z.string().min(1).max(64)).max(20).optional(),
         /** Coworker workspace: the random id this page polls /agent/coworker/activity with. */
@@ -98,6 +101,7 @@ export function registerChatRoutes(
       .safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     if (body.data.streamSpeech && (body.data.channel !== "voice" || body.data.turnId)) return reply.code(400).send({ error: "speech_requires_voice_chat" });
+    if (body.data.requireYiddishLabs && (body.data.channel !== "voice" || body.data.turnId)) return reply.code(400).send({ error: "yiddishlabs_requires_voice_chat" });
     // ⛔ A workspace turn is opened BEFORE any work, for this verified identity only;
     // a turnId another person already owns, or one still running, is refused.
     let turnId: string | undefined;
@@ -143,6 +147,7 @@ export function registerChatRoutes(
       result = await engine.handleMessage(
         {
           ...identity, role, channel: body.data.channel, preferredLanguage, viewingPage: body.data.context?.page, viewingPath: body.data.context?.path, desktopApp,
+          ...(body.data.requireYiddishLabs ? { requireYiddishLabs: true, inputLanguage: body.data.inputLanguage } : {}),
           ...(stream ? { onSpeechDelta: (text: string) => emit({ type: "speech", text }), onSpeechDone: () => emit({ type: "speech_end" }), speechStopped: () => disconnected } : {}),
           ...(turnId ? { turnId } : {}),
           ...(body.data.conversationId ? { conversationId: body.data.conversationId } : {}),
@@ -179,7 +184,10 @@ export function registerChatRoutes(
     heartbeat.unref();
     reply.header("Content-Type", "application/x-ndjson; charset=utf-8").header("Cache-Control", "no-store").header("X-Accel-Buffering", "no");
     // The same authenticated operation, never a second POST or a tool replay.
-    void run().then(result => emit({ type: "complete", result })).catch(() => emit({ type: "error", message: "The turn did not complete. It was not retried." })).finally(() => {
+    void run().then(result => emit({ type: "complete", result })).catch(error => {
+      const safeCodes = ["yiddishlabs_translation_not_available", "yiddishlabs_input_translation_unavailable", "yiddishlabs_reply_translation_unavailable"];
+      emit({ type: "error", message: "The turn did not complete. It was not retried.", ...(error instanceof Error && safeCodes.includes(error.message) ? { code: error.message } : {}) });
+    }).finally(() => {
       clearInterval(heartbeat);
       reply.raw.off("close", close);
       stream.end();

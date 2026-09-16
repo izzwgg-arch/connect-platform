@@ -14,6 +14,7 @@ import { getPrisma } from "./db";
 import { ConversationEngine, isCoworkerPath } from "./conversation/engine";
 import { PrismaConversationStore } from "./conversation/store";
 import { registerChatRoutes } from "./conversation/routes";
+import { registerVoiceTranscribe } from "./conversation/voiceTranscribe";
 import { ReadTools } from "./tools/readTools";
 import { buildTools } from "./tools/toolRegistry";
 import { buildPermissionTools } from "./tools/permissionGrant";
@@ -1025,6 +1026,7 @@ async function main() {
     //    transcribed. Yiddish Labs first (king for American Yiddish; auto-detects
     //    English too), OpenAI as a fast fallback. Text lands in the chat box for
     //    the user to review before sending. ──
+    registerVoiceTranscribe(app, { keys: providerKeys, glossaryContext });
     app.post("/agent/chat/transcribe", async (req, reply) => {
       const auth = req.headers.authorization;
       const id = auth?.startsWith("Bearer ") ? verifyPortalJwt(auth.slice(7)) : null;

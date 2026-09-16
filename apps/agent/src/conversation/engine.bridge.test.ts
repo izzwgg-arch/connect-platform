@@ -148,4 +148,30 @@ test("voice emits the English answer before YL finishes translating the visible 
   const engine = await makeEngine(true);
   const answer = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer", channel: "voice", onSpeechDelta: text => spoken.push(text), onSpeechDone: () => { speechDone = true; } }, "העלף מיר");
   assert.equal(answer.reply, `ייִדיש{${router.reply}}`);
+  assert.equal(answer.spokenReply, router.reply);
+});
+
+test("YL voice uses detected language for Latin-script Yiddish and returns English speech separately", async () => {
+  const engine = await makeEngine(true);
+  const result = await engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer", channel: "voice", requireYiddishLabs: true, inputLanguage: "yi" }, "helft mir");
+  assert.deepEqual(translator.toEnglishCalls, ["helft mir"]);
+  assert.equal(result.spokenReply, router.reply); assert.equal(result.reply, `ייִדיש{${router.reply}}`);
+});
+
+test("required YL input never falls through to the model when translation is unavailable", async () => {
+  let engine = await makeEngine(false);
+  const ctx = { tenantId: "t1", clientUserId: "u1", role: "customer" as const, channel: "voice", requireYiddishLabs: true };
+  await assert.rejects(engine.handleMessage(ctx, "העלף מיר"), /translation_not_available/);
+  assert.equal(router.lastMessages.length, 0);
+  engine = await makeEngine(true); translator.toEnglish = async () => { throw new Error("provider down"); };
+  await assert.rejects(engine.handleMessage(ctx, "העלף מיר"), /input_translation_unavailable/);
+  assert.equal(router.lastMessages.length, 0);
+});
+
+test("required YL output failure is explicit after English speech and is not replaced by a canned translation", async () => {
+  const engine = await makeEngine(true); translator.failYiddish = true;
+  const spoken: string[] = [];
+  await assert.rejects(engine.handleMessage({ tenantId: "t1", clientUserId: "u1", role: "customer", channel: "voice", requireYiddishLabs: true, onSpeechDelta: text => spoken.push(text) }, "העלף מיר"), /reply_translation_unavailable/);
+  assert.deepEqual(spoken, [router.reply]); assert.equal(translator.toYiddishCalls.length, 1);
+  assert.equal(store.msgs.filter(m => m.role === "assistant").length, 0);
 });

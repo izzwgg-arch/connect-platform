@@ -5,6 +5,14 @@
  */
 export type Role = "owner" | "customer";
 
+/** Voice is a presentation mode of the portal chat, not a database channel. */
+export function conversationChannel(value: string): "CHAT" | "EMAIL" | "WHATSAPP" | "SMS" | "PHONE" | null {
+  const channel = value.trim().toUpperCase();
+  if (channel === "VOICE") return "CHAT";
+  if (channel === "CHAT" || channel === "EMAIL" || channel === "WHATSAPP" || channel === "SMS" || channel === "PHONE") return channel;
+  return null;
+}
+
 export interface ConversationRow {
   id: string;
   tenantId: string;
@@ -57,12 +65,14 @@ export class PrismaConversationStore implements ConversationStore {
   }
 
   create(input: { tenantId: string; clientUserId: string | null; role: Role; channel: string; language?: string | null }) {
+    const channel = conversationChannel(input.channel);
+    if (!channel) throw new Error("Unsupported conversation channel");
     return this.prisma.agentConversation.create({
       data: {
         tenantId: input.tenantId,
         clientUserId: input.clientUserId,
         role: input.role,
-        channel: input.channel.toUpperCase(),
+        channel,
         language: input.language ?? null,
       },
     });

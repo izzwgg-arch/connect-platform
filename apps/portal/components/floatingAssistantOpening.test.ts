@@ -101,7 +101,9 @@ test("Talk to Laybel adds video to the existing Assistant, not another agent", (
   assert.match(src, /<b>Talk to Laybel<\/b>/);
   assert.match(src, /A video call with your Assistant/);
   assert.match(src, /<LaybelVideoCall/);
-  assert.match(src, /onTurn=\{\(text, speech\) => send\(text, "voice", false, speech\)\}/);
+  assert.match(src, /onTurn=\{\(text, speech, language\) => send\(text, "voice", false, speech, \{ language \}\)\}/);
+  assert.match(src, /\/agent-api\/chat\/voice-transcribe/);
+  assert.match(src, /result\.engine !== "yiddishlabs"/);
   assert.match(src, /channel: "chat" \| "voice"/);
   assert.match(src, /void send\(r\.text, "voice"\)/, "the existing authenticated transcription feeds the existing send path");
   assert.match(src, /window\.speechSynthesis\.speak\(utterance\)/, "the visible Assistant reply is read through local browser speech");

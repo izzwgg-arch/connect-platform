@@ -43,7 +43,8 @@ import { apiGet, apiPost, ApiError, hasBrowserAuthToken } from "../services/apiC
 import { useAppContext } from "../hooks/useAppContext";
 import { AgentGrantConfirmDialog, usePendingGrant } from "./AgentGrantConfirmDialog";
 import { LaybelVideoCall } from "./LaybelVideoCall";
-import { readLaybelAnswer, type SpeechOptions } from "../lib/laybelSpeech";
+import { readLaybelAnswer, laybelErrorMessage, type SpeechOptions, type VoiceInput } from "../lib/laybelSpeech";
+import { wavBase64 } from "../lib/laybelMic";
 import { CoworkerTaskCard, CoworkerPermissionsView, usePendingCoworkerTasks, COWORKER_TASK_STYLES } from "./CoworkerTaskCard";
 
 type Msg = { id: string; role: "user" | "assistant" | "staff"; content: string; pending?: boolean };
@@ -481,7 +482,7 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
   }, []);
 
   const send = useCallback(
-    async (raw?: string, channel: "chat" | "voice" = "chat", speakReply = true, speech?: SpeechOptions) => {
+    async (raw?: string, channel: "chat" | "voice" = "chat", speakReply = true, speech?: SpeechOptions, voiceInput?: { language?: VoiceInput["language"] }) => {
       const ready = pendingFiles.filter((f) => f.status === "ready" && f.attachmentId);
       const stillUploading = pendingFiles.some((f) => f.status === "uploading");
       let text = (raw ?? input).trim();
@@ -505,13 +506,14 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
           channel,
           context: { page: label, path: pathname },
           ...(ready.length ? { attachments: ready.map((f) => f.attachmentId) } : {}),
-          ...(speech ? { streamSpeech: true } : {}),
+          ...(speech && speech.stream !== false ? { streamSpeech: true } : {}),
+          ...(voiceInput ? { requireYiddishLabs: true, inputLanguage: voiceInput.language } : {}),
         };
         const res = speech
           ? await readLaybelAnswer(await fetch("/agent-api/chat/message", {
               method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }, body: JSON.stringify(body), signal: speech.signal,
             }), speech.onDelta, speech.onDone)
-          : await agentPost<{ conversationId: string; reply: string; humanTakeover?: boolean }>("message", body);
+          : await agentPost<{ conversationId: string; reply: string; spokenReply?: string; humanTakeover?: boolean }>("message", body);
         setConversationId(res.conversationId);
         if (res.humanTakeover) {
           // A person is handling this — no assistant reply is coming. Drop the
@@ -530,9 +532,10 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
         // never from the assistant's reply.
         void refreshCoworkerTasks();
         return res;
-      } catch {
-        setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
+      } catch (error) {
+        setMessages((m) => m.map((msg) => (msg.id === ackId ? { ...msg, content: voiceInput ? laybelErrorMessage(error) : "Sorry — I couldn't reach the assistant just now. Please try again.", pending: false } : msg)));
         if (voiceTurn) setLaybelState("error");
+        if (speech) throw error;
       } finally {
         sendInFlightRef.current = false;
         setSending(false);
@@ -1013,7 +1016,17 @@ export function FloatingAssistant({ docked = false }: { docked?: boolean } = {})
             ))}
             {!docked && laybelActive && laybelVideo && (
               <LaybelVideoCall
-                  onTurn={(text, speech) => send(text, "voice", false, speech)}
+                  onTurn={(text, speech, language) => send(text, "voice", false, speech, { language })}
+                  onTranscribe={async (pcm, signal) => {
+                    const response = await fetch("/agent-api/chat/voice-transcribe", {
+                      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+                      body: JSON.stringify({ audioBase64: wavBase64(pcm) }), signal: AbortSignal.any([signal, AbortSignal.timeout(50_000)]),
+                    });
+                    if (!response.ok) throw new Error("yiddishlabs_transcription_unavailable");
+                    const result = await response.json();
+                    if (!result.ok || result.engine !== "yiddishlabs" || typeof result.text !== "string") throw new Error("yiddishlabs_transcription_unavailable");
+                    return result as VoiceInput & { ms: number };
+                  }}
                 onEnd={endLaybel}
                 onVoiceOnly={() => { laybelSpeakerRef.current = null; setLaybelVideo(false); setLaybelState("idle"); }}
                 onSpeaker={speaker => { laybelSpeakerRef.current = speaker; }}

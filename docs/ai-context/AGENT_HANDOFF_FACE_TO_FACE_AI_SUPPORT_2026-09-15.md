@@ -1,5 +1,45 @@
 # AGENT HANDOFF — Face-to-face AI Support: mockup and recommendation (2026-09-15)
 
+## Live reply failure + Yiddish microphone implementation — 2026-09-16 (LOCAL ONLY)
+
+This is the current state; older sections below are historical. Owner reported audible error/no reply and missing Yiddish Labs input. **Not fixed in production yet.** No push/deployment/live acceptance was performed in this turn. Pending explicit GitHub destination/scope approval remains the release blocker; Assistant-only restart permission is already recorded.
+
+### Confirmed live fault, not a guessed microphone problem
+
+- Real Chrome dashboard showed two user transcripts followed by `Sorry — I couldn't reach the assistant just now. Please try again.` The microphone/Anam leg did deliver words.
+- Read-only app-host logs at ~16:53 UTC showed `/agent/chat/message` requests `req-8ou` (16:49:06Z) and `req-8p1` (16:49:26Z) returning HTTP 500 within ~66/48ms, before the model ran.
+- Both fail in `PrismaConversationStore.create`, `/app/apps/agent/src/conversation/store.ts:60`: `channel: "VOICE"` is not an `AgentChannel`. Actual schema values: CHAT, EMAIL, WHATSAPP, SMS, PHONE. Existing open conversations masked the bug.
+- Local repair maps presentation-mode `voice` to database CHAT and rejects unknown channels at the route/store boundary. No schema migration, PBX mutation or credentials change.
+- Agent health returned 200, which does NOT validate chat. Portal build read-back was `47584ef643ec9a5f68867a9546824ee2fa9f18bd`: concurrent work has advanced production. Do not overwrite it with an old release branch.
+
+### New local Yiddish call path
+
+- `LaybelMic` + `/laybel-pcm-worklet.js`: shared owned microphone, 16kHz mono PCM WAV, half-second pre-roll, 30-second/960044-byte cap. In-memory only; idle samples stay in bounded ring and no local audio is played. Start/end correlation IDs are paired and deduplicated. Missing end events/overflow discard the incomplete turn with an error; mute/end/late initialization discard capture and close audio resources.
+- Anam remains avatar/English speech and provides VAD events; **Anam user transcripts are no longer submitted to the Assistant** in this new video implementation. Its microphone remains active for VAD/interrupts. This is not a SignalWire migration.
+- Dedicated JWT-authenticated `/agent/chat/voice-transcribe`: Yiddish Labs auto-language + glossary + rapid mode only; no OpenAI fallback. Validates WAV/size, one active job per verified caller, eight active globally, 45s provider deadline and disconnect cancellation; browser 50s bound. Metadata logs contain provider/language/bytes/duration, no transcript/audio/key. Existing manual microphone route is unchanged.
+- Clips enter the existing serial `LaybelTurns` queue (max three pending), then the same `FloatingAssistant.send` and existing ConversationEngine/JWT/tool/takeover authority. Failed STT never reaches the AI. No automatic replay of tool-bearing requests.
+- YL detected `yi`/`yi-en` drives the required translate-to-English leg, including Latin-script Yiddish; model remains English. YL translates the answer back to Yiddish for chat. Original English is returned separately as `spokenReply` for buffered/fast-path speech; streamed English can play before output translation finishes. Missing/failed translation is explicit, not silent alternate-provider/model Yiddish.
+- Updated consent discloses Anam + Yiddish Labs. Provider/elapsed STT label gives verification evidence, not an audible-latency claim. Stage-specific safe errors distinguish STT/input translation/output translation failures. Baseline streaming toggle still retains the call-end AbortSignal.
+- No new training/export/retention pipeline, keys, customer-rollout change, server config or database migration. Customer enabled=false remains untouched.
+
+### Verification and limitations
+
+- PASS: 74 relevant Assistant tests (JWT/roles, real-store schema enum regression, conversation/identity/workspace/tool safeguards, bridge, HTTP speech streaming, provider-only STT validation/concurrency) and 31 portal tests (Assistant, capture/worklet, PCM, correlation/dedup, mute/end/late cleanup, English-vs-Yiddish split, no retry and streaming).
+- The new concurrency test initially used a timing-based wait and hung; interrupted that test process and replaced it with explicit provider-entry synchronization plus a timeout. Final 74-test run passed. One existing static UI assertion needed updating for the new language argument; no assertion was removed.
+- Final portal typecheck and agent bundler-resolution typecheck both passed (exit 0). Default agent module-resolution limitations from prior section remain; do not call its default config green.
+- Required docs/index upkeep: CLAUDE.md was already 85,307 bytes. Shortened seven unrelated oversized index labels, preserving their original wording verbatim in `claude-md-sections/2026-09-16-index-detail-archive.md`; links/area summaries/standing rules unchanged. Result is 78,458 bytes, below the 80KB budget.
+- Worklet tests use the actual processor source in a JS harness, not real microphone/audio hardware. Provider/translation tests use fakes. No paid live YL speech probe or end-to-end audio acceptance performed this turn. No speed improvement claimed.
+- Reviewed official Anam event contract: https://anam.ai/docs/javascript-sdk/reference/events (VAD start/end carry correlation IDs, before transcription; dropped end events need recovery), and Web Audio sample-rate contract: https://developer.mozilla.org/en-US/docs/Web/API/BaseAudioContext/sampleRate.
+
+### Resume safely
+
+1. Resolve pending explicit approval to push code/tests/docs, no keys, to `izzwgg-arch/connect-platform` branches `codex/laybel-live-video-20260916` and `feat/ivr-migration-takeover`. Prior auto-review denial must NOT be bypassed using another remote, SCP or shell deploy. Re-read AGENTS.md before deployment actions.
+2. Work from isolated `scratchpad/laybel-release`; preserve dirty root tree. Fetch/reconcile current remote integration changes before any non-force push. Commit/source SHA must match deployment proof.
+3. Assistant first: approved scoped rollback/health script (review before use), dry-run, then owner-approved execution. Verify `VOICE` mapping and `registerVoiceTranscribe`/stream code in running container, exact BUILD_COMMIT and completion log. Portal second via existing blue/green script only; verify exact build and public worklet served. No migrations/infrastructure/PBX writes.
+4. Fresh owner conversation must answer English without the historical 500. Real Yiddish utterance must produce Yiddish Labs provider/language evidence, correct Yiddish chat and relevant audible English from the animated approved portrait. Test interruption, mute, end/start twice, then timed baseline versus streaming. Check failures/logs without exposing credentials. Keep customer rollout disabled until accepted.
+
+**Live status:** mic heard the failed attempts; server crash confirmed; repair and YL wiring tested locally only. Do not state end-to-end working until the owner sees/hears the evidence.
+
 ## Latency implementation — 2026-09-16 (release verification pending)
 
 - Release commit: `bb16c34bb042a5884c22a3703ac6691a617b6a10`, isolated `scratchpad/laybel-release`; final portal typecheck also completed successfully. **Not pushed/deployed**: auto-review rejected the atomic push to `izzwgg-arch/connect-platform` branches `codex/laybel-live-video-20260916` and `feat/ivr-migration-takeover`, requiring explicit destination/scope approval. Asked owner to approve both branch pushes; no bypass attempted. Assistant-only restart exception was separately approved. Resume from local commit, inspect remote advancement, then approved push/dry-run/release. No live speed measurement or customer rollout.

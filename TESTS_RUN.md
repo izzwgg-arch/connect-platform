@@ -1,5 +1,14 @@
 # Tests run
 
+## Laybel live reply failure and Yiddish Labs microphone wiring — 2026-09-16
+
+- CONFIRMED LIVE FAILURE: owner transcripts present; agent requests req-8ou/req-8p1 at 16:49Z return 500, Prisma invalid AgentChannel VOICE. Agent health 200 did not prove chat. Portal observed build 47584ef643ec9a5f68867a9546824ee2fa9f18bd.
+- PASS: 74 Assistant tests across auth/authRoles; conversation store, voiceTranscribe, speechRoutes, engine, engine.bridge, engineTools, engineIdentity, engineCoworkerWorkspace; llm speechStream. Includes actual Prisma store mapping checked against schema enum, YL-only STT JWT/audio validation/concurrency, strict translation failures, English speech/Yiddish chat and tool isolation/no replay.
+- PASS: 31 portal tests in lib/laybelMic.test.ts, lib/laybelSpeech.test.ts, components/floatingAssistantOpening.test.ts. Uses actual worklet source in VM for bounded capture/overflow/mute, canonical WAV, VAD ID pairing, late-end cleanup, serialized STT, duplicate protection and safe failures.
+- PASS: final portal tsc --noEmit --incremental false --types node,react,react-dom (exit 0), and Agent tsc with --moduleResolution bundler --module esnext (exit 0). Prior default agent resolver errors remain unrelated and are not claimed fixed.
+- Test maintenance: fixed timing race in new concurrency test (explicit entry signal + timeout); updated static onTurn assertion for added language metadata. Final suites green. No production build/deploy, live YL audio round-trip, hardware microphone test, audible reply proof or latency improvement claimed.
+- Release remains local while explicit GitHub push approval is pending. Full evidence/resume checklist: AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md.
+
 ## Laybel streaming latency implementation — 2026-09-16
 
 - Final repeat portal typecheck PASS. Release bb16c34b remains local: auto-review rejected the two-branch GitHub push; owner approval requested. No production build/deploy or live speed comparison occurred.

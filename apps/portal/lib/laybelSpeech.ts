@@ -1,9 +1,25 @@
-export type LaybelAnswer = { conversationId: string; reply: string; humanTakeover?: boolean };
-export type SpeechOptions = { onDelta: (text: string) => void; onDone: () => void; signal?: AbortSignal };
+export type LaybelAnswer = { conversationId: string; reply: string; spokenReply?: string; humanTakeover?: boolean };
+export type VoiceInput = { text: string; language?: "yi" | "yi-en" | "en" | "he" | "lk" };
+export type SpeechOptions = { onDelta: (text: string) => void; onDone: () => void; signal?: AbortSignal; stream?: boolean };
+const voiceFailures: Record<string, string> = {
+  yiddishlabs_transcription_unavailable: "Yiddish Labs could not transcribe that turn. Nothing was sent to the Assistant. Please try again or type in chat.",
+  yiddishlabs_translation_not_available: "Yiddish Labs translation is not available. The Assistant did not process that question.",
+  yiddishlabs_input_translation_unavailable: "Yiddish Labs could not translate your question. The Assistant did not process it.",
+  yiddishlabs_reply_translation_unavailable: "The English answer was generated, but Yiddish Labs could not translate it for the chat. The turn was not retried.",
+};
+function voiceFailure(code: unknown): string | undefined {
+  return typeof code === "string" && Object.prototype.hasOwnProperty.call(voiceFailures, code) ? voiceFailures[code] : undefined;
+}
+export function laybelErrorMessage(error: unknown): string {
+  return error instanceof Error && voiceFailure(error.message) || "That turn could not be completed. Check the chat before trying an action again.";
+}
 
 /** Single-request compatibility with older agents; never retry a tool-bearing POST. */
 export async function readLaybelAnswer(response: Response, onDelta: (text: string) => void, onDone: () => void = () => {}): Promise<LaybelAnswer> {
-  if (!response.ok) throw new Error(`Assistant request failed: ${response.status}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(voiceFailure(body?.message) ? body.message : `Assistant request failed: ${response.status}`);
+  }
   if (!response.headers.get("content-type")?.includes("application/x-ndjson")) return response.json();
   if (!response.body) throw new Error("Assistant stream missing");
   const reader = response.body.getReader();
@@ -12,7 +28,7 @@ export async function readLaybelAnswer(response: Response, onDelta: (text: strin
   const line = (value: string): LaybelAnswer | undefined => {
     if (!value.trim()) return;
     const event = JSON.parse(value);
-    if (event.type === "error") throw new Error("Assistant stream interrupted");
+    if (event.type === "error") throw new Error(voiceFailure(event.code) ? event.code : "Assistant stream interrupted");
     if (event.type === "speech" && typeof event.text === "string") onDelta(event.text);
     if (event.type === "speech_end") onDone();
     if (event.type === "complete") {

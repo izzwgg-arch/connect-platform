@@ -4,12 +4,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { AnamClient } from "@anam-ai/js-sdk";
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { LaybelTurns } from "../lib/laybelTurns";
-import type { SpeechOptions } from "../lib/laybelSpeech";
+import { laybelErrorMessage, type SpeechOptions, type VoiceInput } from "../lib/laybelSpeech";
+import { LaybelMic } from "../lib/laybelMic";
 import { LaybelSetup, type LaybelStatus } from "./LaybelSetup";
 import { useAppContext } from "../hooks/useAppContext";
 
 type Props = {
-  onTurn: (text: string, speech?: SpeechOptions) => Promise<{ reply: string; humanTakeover?: boolean } | undefined>;
+  onTurn: (text: string, speech?: SpeechOptions, language?: VoiceInput["language"]) => Promise<{ reply: string; spokenReply?: string; humanTakeover?: boolean } | undefined>;
+  onTranscribe: (pcm: Float32Array, signal: AbortSignal) => Promise<VoiceInput & { ms: number }>;
   onEnd: () => void;
   onVoiceOnly: () => void;
   onSpeaker: (speaker: ((text: string) => void) | null) => void;
@@ -19,7 +21,7 @@ type State = "ready" | "connecting" | "connected" | "listening" | "thinking" | "
 /** Anam owns media only. Every user turn goes back to FloatingAssistant.send,
  * with its existing authenticated conversation, permissions, tools and takeover.
  */
-export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props) {
+export function LaybelVideoCall({ onTurn, onTranscribe, onEnd, onVoiceOnly, onSpeaker }: Props) {
   const { backendJwtRole } = useAppContext();
   const [status, setStatus] = useState<LaybelStatus | null>(null);
   useEffect(() => {
@@ -33,8 +35,10 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   useEffect(() => { callPanel.current?.scrollIntoView({ block: "start" }); }, []);
   const client = useRef<AnamClient | null>(null);
   const turns = useRef<LaybelTurns | null>(null);
-  const callbacks = useRef({ onTurn, onSpeaker });
-  callbacks.current = { onTurn, onSpeaker };
+  const capture = useRef<LaybelMic | null>(null);
+  const inputStream = useRef<MediaStream | null>(null);
+  const callbacks = useRef({ onTurn, onSpeaker, onTranscribe });
+  callbacks.current = { onTurn, onSpeaker, onTranscribe };
   const [state, setState] = useState<State>("ready");
   const [started, setStarted] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +50,8 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   const streamRepliesRef = useRef(true);
   streamRepliesRef.current = streamReplies;
   const [timing, setTiming] = useState("");
+  const [transcription, setTranscription] = useState("");
+  const mutedRef = useRef(false);
 
   useEffect(() => {
     if (!started) return;
@@ -53,6 +59,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
     let stopped = false;
     let mic: MediaStream | null = null;
     let current: AnamClient | null = null;
+    let micCapture: LaybelMic | null = null;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let duration: ReturnType<typeof setTimeout> | undefined;
     let speechEndedAt: number | null = null;
@@ -71,6 +78,9 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
       clearTimeout(timeout); clearTimeout(duration);
       turns.current?.close(); turns.current = null;
       callbacks.current.onSpeaker(null);
+      micCapture?.close();
+      if (capture.current === micCapture) capture.current = null;
+      if (inputStream.current === mic) inputStream.current = null;
       mic?.getTracks().forEach(track => track.stop());
       void current?.stopStreaming().catch(() => {});
       if (client.current === current) client.current = null;
@@ -79,7 +89,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
       if (disposed || stopped) return;
       stop(); setError(message); setState("error");
     };
-    setState("connecting"); setError(""); setMuted(false); setNeedsPlay(false);
+    setState("connecting"); setError(""); setMuted(false); mutedRef.current = false; setNeedsPlay(false); setTranscription("");
     timeout = setTimeout(() => fail("The video connection took too long. Retry or continue by voice."), 35_000);
     void (async () => {
       try {
@@ -87,6 +97,26 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
         // SDK gives us explicit track ownership, including late-permission cleanup.
         mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
         if (disposed || stopped) { mic.getTracks().forEach(track => track.stop()); return; }
+        inputStream.current = mic;
+        // Start the local bounded capture before minting an Anam session. Only
+        // clips delimited by speech events leave this browser, via our JWT route.
+        micCapture = new LaybelMic(new AudioContext({ sampleRate: 16000 }), pcm => {
+          if (disposed || stopped || mutedRef.current) return;
+          const id = crypto.randomUUID();
+          void turns.current?.submit(id, async signal => {
+            if (disposed || stopped) throw new Error("Call ended");
+            setState("thinking"); setError(""); setTranscription("Transcribing with Yiddish Labs…");
+            const result = await callbacks.current.onTranscribe(pcm, signal);
+            if (disposed || stopped) throw new Error("Call ended");
+            setTranscription(`Yiddish Labs · ${result.language || "auto"} · ${(result.ms / 1000).toFixed(1)}s transcription`);
+            return result;
+          });
+        }, () => {
+          if (!disposed && !stopped) { setState("connected"); setError("Microphone capture could not complete. Keep each turn under 30 seconds, or reconnect if this repeats."); }
+        });
+        capture.current = micCapture;
+        await micCapture.connect(mic);
+        if (disposed || stopped) { micCapture.close(); return; }
         const { sessionToken, maxSessionSeconds } = await apiPost<{ sessionToken: string; maxSessionSeconds: number }>("/support/laybel/session", {});
         if (disposed || stopped) return;
         const { createClient, AnamEvent } = await import("@anam-ai/js-sdk");
@@ -99,12 +129,12 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
           await current.talk(text);
           markQueued();
         };
-        const turnQueue = new LaybelTurns(async (text, speech) => {
+        const turnQueue = new LaybelTurns(async (text, speech, language) => {
           if (disposed || stopped) return;
           turnStartedAt = performance.now(); firstQueued = false; setTiming(""); setError("");
           setState("thinking");
-          return callbacks.current.onTurn(text, streamRepliesRef.current ? speech : undefined);
-        }, talk, () => { if (!disposed && !stopped) { setError("That turn could not be completed. Your chat is still here; please try again."); setState("connected"); } },
+          return callbacks.current.onTurn(text, speech ? { ...speech, stream: streamRepliesRef.current } : undefined, language);
+        }, talk, error => { if (!disposed && !stopped) { setError(laybelErrorMessage(error)); setState("connected"); } },
         () => { if (!disposed && !stopped) { stop(); setState("ended"); setError("A member of support has taken over this conversation. Continue in the chat below."); } },
         () => {
           if (disposed || stopped || !current) throw new Error("Call ended");
@@ -126,16 +156,17 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
         current.addListener(AnamEvent.MESSAGE_HISTORY_UPDATED, messages => {
           if (disposed || stopped) return;
           const last = messages[messages.length - 1];
-          if (last?.role === "user") void turnQueue.submit(last.id, last.content);
-          else if (last?.role === "persona") setState("connected");
+          // Do not submit Anam's transcript: Yiddish Labs is the sole STT source.
+          if (last?.role === "persona") setState("connected");
         });
-        current.addListener(AnamEvent.USER_SPEECH_STARTED, () => {
-          if (disposed || stopped) return;
+        current.addListener(AnamEvent.USER_SPEECH_STARTED, id => {
+          if (disposed || stopped || mutedRef.current) return;
+          if (!micCapture?.start(id)) return;
           turnQueue.interrupt(); setState("listening");
           speechEndedAt = null;
           try { current?.interruptPersona(); } catch { /* stream not ready yet */ }
         });
-        current.addListener(AnamEvent.USER_SPEECH_ENDED, () => { if (!disposed && !stopped) speechEndedAt = performance.now(); });
+        current.addListener(AnamEvent.USER_SPEECH_ENDED, id => { if (!disposed && !stopped && !mutedRef.current) { speechEndedAt = performance.now(); micCapture?.finish(id); } });
         current.addListener(AnamEvent.CONNECTION_CLOSED, () => fail("The video call disconnected. Retry or continue in this chat."));
         current.addListener(AnamEvent.SESSION_READY, () => {
           if (disposed || stopped) return;
@@ -165,7 +196,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
   return <section ref={callPanel} aria-label="Video call with Laybel" className="laybel-call">
     {state === "ready" && <div className="laybel-consent">
       <b>Meet Laybel</b>
-      <p>Laybel is your AI Assistant, not a person. This call sends your microphone audio and the Assistant’s replies to Anam to animate and voice him. Your camera stays off.</p>
+      <p>Laybel is your AI Assistant, not a person. Anam handles video and English speech. Your microphone also goes to Yiddish Labs for transcription; Yiddish messages and replies are translated through Yiddish Labs. The chat stays in Yiddish when you speak Yiddish. Your camera stays off.</p>
       <button disabled={!status?.available} onClick={() => setStarted(true)}>Start video call</button>
       {backendJwtRole === "SUPER_ADMIN" && <label><input type="checkbox" checked={streamReplies} onChange={event => setStreamReplies(event.target.checked)} /> Stream replies (off = baseline test)</label>}
       {status && !status.available && <p>Live video has not been enabled. Voice-only and chat are still available.</p>}
@@ -178,10 +209,17 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
     </div>
     <p role="status">{state === "ready" ? "Microphone off" : state === "listening" ? "Listening…" : state === "thinking" ? "Checking with your Assistant…" : state === "speaking" ? "Laybel is speaking…" : state === "connected" ? "Connected · speak naturally" : state === "ended" ? "Call ended" : state === "error" ? "Unable to connect" : "Starting your call"}</p>
     {error && <p role="alert">{error}</p>}
+    {transcription && <small aria-label="Laybel transcription provider">{transcription}</small>}
     {backendJwtRole === "SUPER_ADMIN" && timing && <small aria-label="Laybel response timing">{timing}</small>}
     <div className="laybel-controls">
       <button disabled={!live} aria-pressed={muted} onClick={() => {
-        try { if (muted) client.current?.unmuteInputAudio(); else client.current?.muteInputAudio(); setMuted(!muted); }
+        try {
+          const nextMuted = !muted;
+          if (nextMuted) client.current?.muteInputAudio(); else client.current?.unmuteInputAudio();
+          mutedRef.current = nextMuted;
+          inputStream.current?.getAudioTracks().forEach(track => { track.enabled = !nextMuted; });
+          capture.current?.mute(nextMuted); setMuted(nextMuted);
+        }
         catch { setError("The microphone control failed. End the call to stop capture."); }
       }}>{muted ? "Unmute" : "Mute"}</button>
       <button disabled={!live} aria-pressed={speakerMuted} onClick={() => setSpeakerMuted(!speakerMuted)}>{speakerMuted ? "Sound on" : "Sound off"}</button>
@@ -189,7 +227,7 @@ export function LaybelVideoCall({ onTurn, onEnd, onVoiceOnly, onSpeaker }: Props
       <button onClick={onVoiceOnly}>Voice only</button>
       <button onClick={onEnd}>End call</button>
     </div>
-    <small>Your microphone audio and spoken replies are processed by Anam for this call. The conversation stays in your Loopcom chat.</small>
+    <small>Anam: video and English speech. Yiddish Labs: microphone transcription and Yiddish translation. Conversation history stays in your Loopcom chat.</small>
     {backendJwtRole === "SUPER_ADMIN" && status && state === "ready" && <LaybelSetup status={status} onSaved={setStatus} />}
     <style jsx>{`
       .laybel-call { flex:0 0 auto; border:1px solid var(--border); border-radius:12px; overflow:hidden; padding:10px; background:var(--panel); }

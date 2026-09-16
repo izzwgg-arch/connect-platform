@@ -1,4 +1,11 @@
-# Talk to Laybel — streaming latency implementation, live verification pending (2026-09-16)
+# Talk to Laybel — live VOICE crash diagnosed; YL microphone wiring LOCAL ONLY (2026-09-16)
+
+- Current: real live transcripts reached Loopcom but two `/agent/chat/message` requests at 16:49Z returned 500 because Prisma rejected channel VOICE. Fixed locally by mapping video voice to CHAT; no migration. New-conversation schema regression added.
+- Implemented local microphone PCM/VAD capture -> authenticated Yiddish Labs-only STT -> existing Assistant/YL English bridge -> English avatar speech + YL Yiddish chat. Bounded/correlated capture, mute/end cancellation, provider/time label, explicit failures and no tool-turn retries. Anam STT is no longer the video input source in this local version.
+- Verification: 74 agent + 31 portal tests PASS, typechecks recorded in TESTS_RUN. Mock/source tests are not a real microphone/live-provider proof. No deployment, audible acceptance or measured speedup. Live portal has advanced to 47584ef6; preserve concurrent changes.
+- Release still blocked by pending approval for the previously rejected GitHub push to the two recorded branches. Assistant-only restart approval already exists. Customer rollout remains off. Full current evidence and safe resume checklist are at the top of the full handoff.
+
+## Earlier state (superseded by current local implementation above)
 
 - Owner confirms the call works but is slow. Implemented opt-in final-answer streaming through the same authenticated Assistant into Anam sentence streams, preserving tool authority, barge-in and no-retry behavior. Unphased/tool-bearing output stays buffered. English speech can precede YL chat translation; YL video microphone input is still NOT wired. Tests: 76 agent + 23 portal pass; portal and bundler-resolution agent typechecks pass (default agent resolver has unrelated shared-package errors). Owner approved Assistant-only release exception with rollback; deployment and measured live speedup remain pending. Baseline toggle/timing report speech queued, not audible playback. Customer rollout stays off.
 

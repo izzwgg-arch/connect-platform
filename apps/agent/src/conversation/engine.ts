@@ -244,6 +244,8 @@ export interface ChatContext {
    */
   platformRole?: string;
   channel?: string;
+  requireYiddishLabs?: boolean;
+  inputLanguage?: string;
   /** Internal opt-in transport hook; never accepted as authority from the body. */
   onSpeechDelta?: SpeechDelta;
   onSpeechDone?: () => void;
@@ -297,6 +299,8 @@ export interface ChatAttachmentRef {
 export interface ChatResult {
   conversationId: string;
   reply: string;
+  /** Original English for avatar speech; reply remains Yiddish in the chat. */
+  spokenReply?: string;
   language: "en" | "yi";
   model?: string;
   degraded: boolean;
@@ -511,15 +515,17 @@ export class ConversationEngine {
     let degraded = inDegraded;
     try {
       const out = await this.translator!.toYiddish(englishReply);
+      if (ctx.requireYiddishLabs && !out.text?.trim()) throw new Error("yiddishlabs_translation_empty");
       userFacing = out.text?.trim() || fallbackReply("yi");
     } catch (err) {
+      if (ctx.requireYiddishLabs) throw new Error("yiddishlabs_reply_translation_unavailable");
       userFacing = fallbackReply("yi");
       degraded = true;
       await this.audit.record({ actor: "system", event: "chat.bridge_out_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
     }
     await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: userFacing, contentEn: englishReply, model });
     await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { model, degraded, bridged: true } });
-    return { conversationId: conv.id, reply: userFacing, language: "yi", model, degraded };
+    return { conversationId: conv.id, reply: userFacing, language: "yi", model, degraded, ...(ctx.channel === "voice" ? { spokenReply: englishReply } : {}) };
   }
 
   async getOrOpenConversation(ctx: ChatContext): Promise<ConversationRow> {
@@ -561,7 +567,7 @@ export class ConversationEngine {
     // A stored Yiddish preference wins; otherwise fall back to reading the
     // message. Never the reverse — an English-looking message from someone
     // whose account is Yiddish is still answered in Yiddish.
-    const language = ctx.preferredLanguage === "yi" ? "yi" : detectLanguage(text);
+    const language = ctx.preferredLanguage === "yi" || (ctx.requireYiddishLabs && (ctx.inputLanguage === "yi" || ctx.inputLanguage === "yi-en")) ? "yi" : detectLanguage(text);
     const bridging = this.bridging(language);
 
     // Per-tenant rate cap (Phase 7) — checked before any work. Owners exempt.
@@ -613,12 +619,15 @@ export class ConversationEngine {
     // English. The original Yiddish is stored as the user's message; the English
     // mirror (contentEn) drives triage + the LLM and feeds the tuning corpus.
     let englishText = text;
+    if (ctx.requireYiddishLabs && language === "yi" && !bridging) throw new Error("yiddishlabs_translation_not_available");
     let bridgeDegraded = false;
     if (bridging) {
       try {
         const inTx = await this.translator!.toEnglish(text);
+        if (ctx.requireYiddishLabs && !inTx.text?.trim()) throw new Error("yiddishlabs_translation_empty");
         englishText = inTx.text?.trim() || text;
       } catch (err) {
+        if (ctx.requireYiddishLabs) throw new Error("yiddishlabs_input_translation_unavailable");
         bridgeDegraded = true;
         await this.audit.record({ actor: "system", event: "chat.bridge_in_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
       }
