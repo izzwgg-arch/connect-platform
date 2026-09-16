@@ -1,0 +1,222 @@
+<title>DNC Dialing Gate</title>
+<style>
+:root{
+  --bg:#f4f6fa; --surface:#ffffff; --surface2:#eef1f7; --line:#d8deea;
+  --ink:#1a2333; --mut:#5a6780; --accent:#2458c5; --accent-ink:#ffffff;
+  --ok:#187a45; --ok-bg:#e2f4e9; --warn:#93610c; --warn-bg:#fbf0d7;
+  --bad:#b8322c; --bad-bg:#fbe6e4; --chip:#e6ecf8;
+  --note:#4a3f9c; --note-bg:#edeaf9;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10141c; --surface:#181e2a; --surface2:#1f2736; --line:#2c3648;
+    --ink:#e7ecf5; --mut:#93a0b6; --accent:#5b8bec; --accent-ink:#0d1420;
+    --ok:#4ecb84; --ok-bg:#15301f; --warn:#e3b04b; --warn-bg:#332810;
+    --bad:#ee7a70; --bad-bg:#3a1a17; --chip:#243049;
+    --note:#a99df0; --note-bg:#232040;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10141c; --surface:#181e2a; --surface2:#1f2736; --line:#2c3648;
+  --ink:#e7ecf5; --mut:#93a0b6; --accent:#5b8bec; --accent-ink:#0d1420;
+  --ok:#4ecb84; --ok-bg:#15301f; --warn:#e3b04b; --warn-bg:#332810;
+  --bad:#ee7a70; --bad-bg:#3a1a17; --chip:#243049;
+  --note:#a99df0; --note-bg:#232040;
+}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 "Public Sans",system-ui,sans-serif;
+  margin:0;padding-block:28px 60px;padding-inline:16px;}
+.wrap{max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:40px;}
+h1{font-size:26px;margin:0;text-wrap:balance}
+.sub{color:var(--mut);max-width:65ch;margin:6px 0 0}
+h2{font-size:15px;margin:0;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+.screen{border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
+.chrome{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface2);
+  border-bottom:1px solid var(--line);font-size:12px;color:var(--mut)}
+.dots{display:flex;gap:4px}.dots i{width:9px;height:9px;border-radius:50%;background:var(--line);display:block}
+.url{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px 10px;
+  font:12px "IBM Plex Mono",ui-monospace,monospace}
+.pad{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+.card{border:1px solid var(--line);border-radius:8px;padding:14px 16px;background:var(--surface)}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.grow{flex:1 1 200px}
+.pill{display:inline-block;border-radius:99px;padding:2px 10px;font-size:12px;font-weight:600}
+.p-ok{background:var(--ok-bg);color:var(--ok)} .p-bad{background:var(--bad-bg);color:var(--bad)}
+.p-warn{background:var(--warn-bg);color:var(--warn)} .p-off{background:var(--chip);color:var(--mut)}
+.tog{width:40px;height:22px;border-radius:11px;position:relative;flex:none}
+.tog i{position:absolute;top:2px;width:18px;height:18px;border-radius:50%;background:#fff;display:block;
+  box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.t-on{background:var(--accent)}.t-on i{right:2px}
+.t-off{background:var(--line)}.t-off i{left:2px}
+.lbl{font-weight:600}
+.hint{color:var(--mut);font-size:12.5px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{color:var(--mut);text-align:left;font-weight:600;font-size:12px;text-transform:uppercase;
+  letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:8px 10px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:none}
+.num{font:12.5px "IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.banner{border-radius:8px;padding:12px 14px;font-size:13.5px}
+.b-ok{background:var(--ok-bg);color:var(--ok)} .b-bad{background:var(--bad-bg);color:var(--bad)}
+.note{background:var(--note-bg);color:var(--note);border-radius:8px;padding:10px 14px;font-size:13px}
+.note b{text-transform:uppercase;font-size:11px;letter-spacing:.05em}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:var(--chip);border-radius:6px;padding:2px 8px;font:12.5px "IBM Plex Mono",monospace}
+.btn{background:var(--accent);color:var(--accent-ink);border-radius:7px;padding:7px 14px;
+  font-weight:600;font-size:13px;display:inline-block}
+.btn2{background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;
+  padding:6px 13px;font-weight:600;font-size:13px;display:inline-block}
+.field{border:1px solid var(--line);border-radius:7px;padding:7px 11px;background:var(--surface2);
+  font:13px "IBM Plex Mono",monospace;color:var(--ink)}
+.toast{max-width:420px;border-radius:10px;padding:14px 16px;background:var(--surface);
+  border:1px solid var(--line);border-left:4px solid var(--bad);box-shadow:0 6px 24px rgba(0,0,0,.12)}
+.toast .lbl{color:var(--bad)}
+.sec{display:flex;flex-direction:column;gap:10px}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>DNC Dialing Gate</h1>
+  <p class="sub">Four screens. The rule you asked for: <b>turning on CRM for a tenant arms the
+  gate by default</b> — their CRM extensions can't place calls until Do-Not-Call setup is
+  complete — and you get a per-tenant switch in the admin panel to turn it off for the ones
+  that aren't cold calling.</p>
+</header>
+
+<!-- 1 ─ THE SWITCH -->
+<section class="sec">
+  <h2>1 · Your switch — Admin → Customers → Relax Tires → CRM</h2>
+  <div class="screen">
+    <div class="chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/tenants/relax-tires</span></div>
+    <div class="pad">
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="lbl">CRM</div>
+            <div class="hint">Customer relationship screens, screen-pop, call logging</div>
+          </div>
+          <span class="pill p-ok">On</span>
+          <span class="tog t-on"><i></i></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="lbl">Cold-calling compliance gate (DNC)</div>
+            <div class="hint">Armed automatically when CRM is on. While armed, every CRM
+            extension is <b>blocked from placing calls</b> until this tenant's Do-Not-Call
+            setup is complete and fresh. Turn off for customers who don't cold call.</div>
+          </div>
+          <span class="pill p-bad">Armed — dialing blocked</span>
+          <span class="tog t-on"><i></i></span>
+        </div>
+        <div class="hint" style="margin-top:10px">Blocked because: no SAN on file · no DNC
+        list loaded. The customer sees the same reasons on their setup page.</div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Decision needed</b> — at rollout, tenants that <i>already</i> have CRM
+  today (Gesheft, etc.) get this switch seeded <b>Off</b>, so nobody's calling breaks the day
+  it deploys. Every CRM turn-on from that day forward defaults to <b>Armed</b>. Say the word
+  if you want existing tenants armed too.</div>
+</section>
+
+<!-- 2 ─ OVERVIEW -->
+<section class="sec">
+  <h2>2 · Your overview — Admin → Compliance → DNC gate</h2>
+  <div class="screen">
+    <div class="chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/admin/dnc-gate</span></div>
+    <div class="pad">
+      <table>
+        <tr><th>Tenant</th><th>CRM</th><th>Gate</th><th>DNC status</th><th>Last sync</th></tr>
+        <tr><td>Relax Tires</td><td>On</td><td><span class="pill p-bad">Armed — blocked</span></td><td>No SAN on file</td><td class="num">—</td></tr>
+        <tr><td>Fresh Leads LLC</td><td>On</td><td><span class="pill p-ok">Armed — dialing allowed</span></td><td class="num">SAN TM-4471932 · 5 area codes</td><td class="num">today 04:12</td></tr>
+        <tr><td>Gesheft</td><td>On</td><td><span class="pill p-off">Off (your call)</span></td><td>—</td><td class="num">—</td></tr>
+        <tr><td>B Visible</td><td>Off</td><td><span class="pill p-off">n/a</span></td><td>—</td><td class="num">—</td></tr>
+      </table>
+      <div class="hint">One page to see every CRM customer and where their gate stands.
+      Flipping a row's gate off is the same switch as screen 1.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 ─ TENANT SETUP -->
+<section class="sec">
+  <h2>3 · The customer's setup page — CRM → Compliance (DNC)</h2>
+  <div class="screen">
+    <div class="chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/crm/compliance</span></div>
+    <div class="pad">
+      <div class="banner b-bad"><b>Dialing is paused for your CRM extensions.</b>
+      Finish the two steps below to turn calling on. Your callers see the same message when
+      they try to dial.</div>
+      <div class="card">
+        <div class="lbl">Step 1 — your Do-Not-Call subscription (SAN)</div>
+        <div class="hint" style="margin:4px 0 10px">Register your company (15 min, free for up
+        to 5 area codes) at <span class="num">telemarketing.donotcall.gov</span>, then enter
+        the SAN number they give you.</div>
+        <div class="row">
+          <span class="field">SAN&nbsp;&nbsp;TM-_______</span>
+          <span class="field">Expires&nbsp;&nbsp;mm/dd/yyyy</span>
+          <span class="btn">Save</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="lbl">Step 2 — load the Do-Not-Call list</div>
+        <div class="hint" style="margin:4px 0 10px">Download your subscribed area codes from
+        the registry and drop the files here. After the first full load, only the small daily
+        change files are needed — Loopcom reminds you before the list goes stale.</div>
+        <div class="row">
+          <span class="btn2">Upload registry files…</span>
+          <span class="chips"><span class="chip">845</span><span class="chip">914</span>
+          <span class="chip">212</span><span class="chip">718</span><span class="chip">917</span></span>
+        </div>
+        <div class="hint" style="margin-top:10px">On file: <span class="num">0</span> numbers ·
+        Last update: never · <b>List older than 31 days = dialing pauses automatically</b>
+        (that's the legal scrub window).</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Extensions this gate covers</div>
+        <table style="margin-top:8px">
+          <tr><th>Ext</th><th>Name</th><th>CRM</th><th>Dialing</th></tr>
+          <tr><td class="num">101</td><td>Sarah K.</td><td>Yes</td><td><span class="pill p-bad">Paused</span></td></tr>
+          <tr><td class="num">102</td><td>Moshe B.</td><td>Yes</td><td><span class="pill p-bad">Paused</span></td></tr>
+          <tr><td class="num">103</td><td>Front desk</td><td>No</td><td><span class="pill p-ok">Normal</span></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>When both steps are green</b> — the banner flips to
+  <span class="pill p-ok" style="margin:0 3px">Dialing on · list fresh · 4,182,331 numbers</span>
+  and every dial is checked against the list before it goes out.</div>
+</section>
+
+<!-- 4 ─ BLOCKED DIAL + EVIDENCE -->
+<section class="sec">
+  <h2>4 · What a caller sees, and the paper trail</h2>
+  <div class="row" style="align-items:flex-start">
+    <div class="toast grow">
+      <div class="lbl">Call not placed</div>
+      <div style="margin-top:4px">Cold-calling compliance isn't set up yet, so outbound calls
+      are paused on this extension. Ask your administrator to finish DNC setup.</div>
+    </div>
+    <div class="toast grow">
+      <div class="lbl">Number is on the Do-Not-Call registry</div>
+      <div style="margin-top:4px">(914)&nbsp;555-0187 is on the National Do-Not-Call list and
+      can't be cold-called. The attempt was logged.</div>
+    </div>
+  </div>
+  <div class="screen">
+    <div class="chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url">app.loopcom.net/crm/compliance · Evidence log</span></div>
+    <div class="pad">
+      <table>
+        <tr><th>When</th><th>Ext</th><th>Number</th><th>Result</th><th>List age</th></tr>
+        <tr><td class="num">09/16 11:42:08</td><td class="num">101</td><td class="num">(845) 555-0134</td><td><span class="pill p-ok">Allowed</span></td><td class="num">7 h</td></tr>
+        <tr><td class="num">09/16 11:40:51</td><td class="num">101</td><td class="num">(914) 555-0187</td><td><span class="pill p-bad">Blocked — DNC</span></td><td class="num">7 h</td></tr>
+        <tr><td class="num">09/16 11:38:12</td><td class="num">102</td><td class="num">(212) 555-0022</td><td><span class="pill p-ok">Allowed</span></td><td class="num">7 h</td></tr>
+      </table>
+      <div class="hint">Every check is stored with a timestamp and the list's freshness at that
+      moment — the record that proves numbers were scrubbed, kept alongside the human-dialing
+      press logs and call records.</div>
+    </div>
+  </div>
+</section>
+</div>

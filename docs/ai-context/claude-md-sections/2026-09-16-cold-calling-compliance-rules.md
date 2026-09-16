@@ -101,6 +101,24 @@ Verified in code 2026-09-16:
   EXPIRED SAN is itself a violation — nag before expiry), and the dial-time block FAILS
   CLOSED if the sync goes staler than the 31-day scrub window.
 
+## BUILD ORDERED, THEN PIVOTED TO MOCKUPS (Izzy, same day) — awaiting approval
+Izzy: build it end-to-end into the CRM as a GATE — then mid-task: "make a switch for it…
+by default, if I turn on the CRM for somebody, that would be the gate unless I turn it
+off… in the admin panel… Show me mockups." So: **MOCKUPS ONLY, artifact
+`MWbMeajvf7USPXT2hKWRpa`** (source `docs/mockups/dnc-gate/dnc-gate-mockups.html`), build
+paused for his approval. The design shown:
+- **Rule: CRM ON ⇒ gate ARMED by default** (CRM extensions blocked from dialing until DNC
+  ready); per-tenant off-switch on the tenant's admin page + an Admin → DNC-gate overview.
+- ⛔⛔ **Rollout decision flagged IN the mockup: existing CRM tenants (Gesheft etc.) seed
+  OFF** or deploying this blocks their calling instantly (they have no SAN). New CRM
+  activations arm by default. Izzy has not yet confirmed.
+- Customer setup page (SAN + expiry + area codes + registry file upload + gated-extension
+  list), fail-closed past the 31-day scrub window, two blocked-dial toasts (setup
+  incomplete / number on DNC), evidence log of every dial check with list age.
+- Enforcement legs planned: softphone pre-dial check via api (Phase 1, in-repo) +
+  PBX outbound dialplan hook (Phase 2, ⛔ clone rehearsal — global dial path, must
+  fail open for non-armed tenants and bound the curl timeout). Nothing coded yet.
+
 ## Not proven / not built
 ⏳ No cap enforcement, hours enforcement, or per-tenant outbound throttle exists in Connect
 today — those are build items if Izzy signs this customer. No rider template written.
