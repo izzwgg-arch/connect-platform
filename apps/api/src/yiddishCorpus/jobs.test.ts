@@ -599,3 +599,39 @@ test("every stage in YC_STAGES is either audio-gated or metadata — no orphans"
     );
   }
 });
+
+// ── 5b. ⛔ "nothing NEW" is not "nothing" ─────────────────────────────────────
+//
+// 2026-09-16: the whole catalog finished walking, the next two re-checks
+// correctly found no new episodes, and the rule above paused the crawler — a
+// false alarm that stopped the engine on the healthiest possible day. A run
+// that re-read episodes we already hold proves the site answers and the parser
+// works; only a run that recognised NOTHING is suspicious.
+
+test("quiet re-checks that re-read known episodes never pause the source", async () => {
+  const db = makeDb();
+  for (let i = 0; i < 5; i++) {
+    const r = await noteDiscoveryRun(db, "yiddish24", {
+      discovered: 0,
+      duplicates: 136,
+      pages: 60,
+      healthy: true,
+      stoppedReason: "catalog walked",
+    });
+    assert.equal(r.emptyRuns, 0, "a quiet day is not an empty run");
+  }
+  assert.deepEqual(await alertIfBroken(db), []);
+  assert.equal(db.ycBudget.rows[0].paused, false, "the crawler must keep going");
+  const probe = db.ycSourceHealth.rows.find((h: any) => h.probeKey === YC_DISCOVERY_YIELD_PROBE);
+  assert.equal(probe.state, "OK");
+  assert.match(probe.detail, /no new episodes/i);
+});
+
+test("a run that recognised NOTHING at all still pauses — the real alarm is intact", async () => {
+  const db = makeDb();
+  await noteDiscoveryRun(db, "yiddish24", { discovered: 0, duplicates: 0, pages: 4, healthy: true });
+  await noteDiscoveryRun(db, "yiddish24", { discovered: 0, duplicates: 0, pages: 4, healthy: true });
+  const alerts = await alertIfBroken(db);
+  assert.equal(alerts.length, 1);
+  assert.equal(db.ycBudget.rows[0].paused, true);
+});

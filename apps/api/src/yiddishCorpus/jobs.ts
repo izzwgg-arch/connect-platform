@@ -66,6 +66,15 @@ export const YC_WORK_BATCH = Math.max(1, Number(process.env.YIDDISH_WORK_BATCH |
  */
 export const YC_DISCOVER_MAX_PAGES = Math.max(1, Number(process.env.YIDDISH_DISCOVER_MAX_PAGES || 60));
 
+/**
+ * Re-check cadence once the whole catalog has been walked. A full re-check is
+ * one listing page per series (~136 requests), so running it every
+ * YC_DISCOVERY_EVERY_MS would mean ~27 requests a minute, for ever, just to
+ * look for new episodes. Hourly still catches a new episode the same hour it
+ * is published. A walk still in progress keeps the fast clock.
+ */
+export const YC_RECHECK_EVERY_MS = Number(process.env.YIDDISH_RECHECK_EVERY_MS || 60 * 60 * 1000);
+
 export const YC_BACKOFF_BASE_MS = 30_000;
 export const YC_BACKOFF_MAX_MS = 6 * 60 * 60_000;
 export const YC_WORKER_HEARTBEAT_METRIC = "worker_heartbeat_ms";
@@ -944,8 +953,22 @@ export async function ensureDiscoveryScheduled(
 
     const lastAt = source.lastDiscoveryAt ?? source.lastRunAt;
     const age = lastAt ? now.getTime() - new Date(lastAt).getTime() : Number.POSITIVE_INFINITY;
-    if (age < every) {
-      skipped.push({ key, why: `walked ${Math.round(age / 60000)} min ago` });
+    let cursor: any = {};
+    try {
+      cursor = source.discoveryCursor ? JSON.parse(String(source.discoveryCursor)) : {};
+    } catch {
+      cursor = {};
+    }
+    const caughtUp =
+      cursor?.lastRunStoppedReason === "catalog walked" && !cursor?.catId && !(cursor?.pending?.length > 0);
+    const window = caughtUp && opts.discoveryIntervalMs == null ? Math.max(every, YC_RECHECK_EVERY_MS) : every;
+    if (age < window) {
+      skipped.push({
+        key,
+        why: caughtUp
+          ? `catalog fully walked; next check for new episodes in ${Math.round((window - age) / 60000)} min`
+          : `walked ${Math.round(age / 60000)} min ago`,
+      });
       continue;
     }
 

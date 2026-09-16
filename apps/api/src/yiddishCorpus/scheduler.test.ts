@@ -211,3 +211,35 @@ test("throughput knobs are sane and bounded", () => {
   assert.ok(YC_WORK_BATCH >= 1 && YC_WORK_BATCH <= 50, `batch out of range: ${YC_WORK_BATCH}`);
   assert.ok(YC_DISCOVER_MAX_PAGES >= 1, `pages out of range: ${YC_DISCOVER_MAX_PAGES}`);
 });
+
+// ── a finished catalog is re-checked hourly, a walk in progress is not slowed ─
+
+import { YC_RECHECK_EVERY_MS } from "./jobs";
+
+test("once the whole catalog is walked, re-checks wait the slower window", async () => {
+  const now = new Date("2026-09-16T12:00:00Z");
+  const cursor = JSON.stringify({ lastRunStoppedReason: "catalog walked", catId: null, pending: [], completed: ["1", "2"] });
+  const recent = new Date(now.getTime() - YC_DISCOVERY_EVERY_MS - 60_000); // past the fast window
+  const db = fakeDb({
+    sources: [adapterSource({ lastDiscoveryAt: recent, discoveryCursor: cursor })],
+    budgets: [RUNNING_BUDGET],
+  });
+  const res = await ensureDiscoveryScheduled(db, { now });
+  assert.deepEqual(res.scheduled, [], "a caught-up catalog must not be re-crawled every few minutes");
+  assert.match(res.skipped[0].why, /fully walked/);
+
+  const later = new Date(recent.getTime() + YC_RECHECK_EVERY_MS + 1000);
+  const res2 = await ensureDiscoveryScheduled(db, { now: later });
+  assert.deepEqual(res2.scheduled, ["yiddish24"], "but it never stops checking for new episodes");
+});
+
+test("a walk still in progress keeps the fast clock", async () => {
+  const now = new Date("2026-09-16T12:00:00Z");
+  const cursor = JSON.stringify({ lastRunStoppedReason: "page budget reached", catId: "57", pending: ["58"] });
+  const db = fakeDb({
+    sources: [adapterSource({ lastDiscoveryAt: new Date(now.getTime() - YC_DISCOVERY_EVERY_MS - 1000), discoveryCursor: cursor })],
+    budgets: [RUNNING_BUDGET],
+  });
+  const res = await ensureDiscoveryScheduled(db, { now });
+  assert.deepEqual(res.scheduled, ["yiddish24"]);
+});
