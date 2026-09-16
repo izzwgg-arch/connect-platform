@@ -617,3 +617,37 @@ test("the switch offers Telnyx as selectable", () => {
   const src = read("providerSwitchRoutes.ts");
   assert.match(src, /\{ value: "telnyx", label: "Telnyx", selectable: true \}/);
 });
+
+// ── the autosave wipe (found by the live end-to-end run, 2026-09-16) ────────
+
+test("⛔ autosave carries the carrier stamp + provisioning through the wholesale replace; wizard-owned keys stay the client's", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { carryServerOwnedAnswers } = require("./serverOwnedAnswers");
+  const stored = { phone: { choice: "new", selectedNumber: "8457774807", provider: "telnyx" }, provisioning: { tenantSlug: "x" }, texting: { classification: "marketing" } };
+  const incoming = { phone: { choice: "new", selectedNumber: "8452099533" }, texting: { classification: "conversational" }, company: { name: "A" } };
+  const out: any = carryServerOwnedAnswers(stored, incoming);
+  assert.equal(out.phone.provider, "telnyx", "the stamp survives");
+  assert.equal(out.phone.selectedNumber, "8452099533", "the customer's new pick wins");
+  assert.deepEqual(out.provisioning, { tenantSlug: "x" });
+  assert.deepEqual(out.texting, { classification: "conversational" }, "the wizard owns texting — never frozen");
+  assert.equal(carryServerOwnedAnswers(stored, null), null);
+  const noStamp: any = carryServerOwnedAnswers({}, { phone: { choice: "port" } });
+  assert.equal(noStamp.phone.provider, undefined);
+});
+
+test("⛔ the save route uses the carry, and SUBMIT pins the carrier (the form locks there)", () => {
+  const src = read("publicRoutes.ts");
+  assert.match(src, /const carried = carryServerOwnedAnswers\(row\.answers, body\.answers \?\? null\) as any;/);
+  const submit = src.slice(src.indexOf('app.post("/onboarding/:token/submit"'));
+  assert.match(submit.slice(0, 9000), /provider: answers\.phone\?\.provider \|\| \(await resolveOnboardingNumberProvider\(db\)\),/);
+});
+
+test("result towns: Telnyx's 'RATE CENTER:SUB-AREA' shows as the town only", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./telnyxNumbers").clearTelnyxSearchCache();
+  const out = await searchTelnyxOnboardingNumbers({}, { query: "562", mode: "areacode", type: "local" }, {
+    resolveCreds: async () => CREDS,
+    search: async () => [{ phoneNumber: "+15622328644", state: "CA", locality: "COMPTON:COMPTON DA", features: ["voice"], numberType: "local" }],
+  });
+  assert.equal(out.numbers[0].location, "Compton, CA");
+});

@@ -14,6 +14,7 @@ import { VoipMsNumberProvider, type VoipMsCredentials } from "@connect/integrati
 import { applyOnboardingNumber, syncOnboardingSms, listSpareDids } from "./voipMsProvisioning";
 import { resolveOnboardingNumberProvider, searchSignalWireOnboardingNumbers } from "./signalWireNumbers";
 import { searchTelnyxOnboardingNumbers } from "./telnyxNumbers";
+import { carryServerOwnedAnswers } from "./serverOwnedAnswers";
 import { fileBrandForRegistration, LEGAL_ENTITY_TYPES } from "../signalwire/signalWireTenDlc";
 import { buildE911Address } from "./e911Address";
 import { runOnboardingSetup, resumeSetupIfSubmitted } from "./setupOrchestrator";
@@ -479,10 +480,13 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       // through it, or the first autosave on a scoped link would silently turn
       // it back into a full sign-up link.
       const kind = linkKindOf(row);
+      // ⛔ …and carry every SERVER-written key (the carrier stamp, the
+      // provisioning state) — see serverOwnedAnswers.ts.
+      const carried = carryServerOwnedAnswers(row.answers, body.answers ?? null) as any;
       const savedAnswers =
-        kind !== "full" && body.answers && typeof body.answers === "object"
-          ? { ...(body.answers as any), linkKind: kind }
-          : body.answers ?? null;
+        kind !== "full" && carried && typeof carried === "object"
+          ? { ...carried, linkKind: kind }
+          : carried ?? null;
       await (db as any).onboardingSubmission.update({
         where: { id: row.id },
         data: {
@@ -1145,6 +1149,11 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             ? undefined
             : body.numberKind || answers.phone?.numberKind || "local",
         details: body.porting ?? answers.phone?.details ?? {},
+        // ⛔ Submit LOCKS the form, so this is the last point the carrier can be
+        // pinned. An earlier stamp wins; a missing one (autosave used to wipe
+        // it) is stamped from the switch now — never left for payment to
+        // default to VoIP.ms.
+        provider: answers.phone?.provider || (await resolveOnboardingNumberProvider(db)),
       };
       // Which extension is the account owner (becomes the tenant admin when
       // the system is built). Defaults to the first extension when the wizard
