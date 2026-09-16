@@ -684,7 +684,7 @@ Every file below is in `docs/ai-context/claude-md-sections/` (title starts with 
 - a reassigned desk phone never hears about it → `2026-08-06-a-reassigned-desk-phone-never-hears-about-it.md`
 - "he answered and got voicemail" → `2026-08-06-he-answered-and-got-voicemail.md`
 - billing: 4 live bugs fixed, screens rebuilt → `2026-08-07-billing-4-live-bugs-fixed-screens-rebuilt.md`
-- turning SMS on for a customer → `2026-08-07-turning-sms-on-for-a-customer.md`
+- 2026-09-16 · turning SMS on for a customer — SECRO "SMS not working" = number never assigned in Connect; 845-751-8493 now their shared inbox, inbound proven (fetched=3), ⏳ no outbound yet, billing off; ⛔ PBX VitalPBX SMS add-on IS in use (callback on ≥11 DIDs) → `2026-08-07-turning-sms-on-for-a-customer.md`
 - "I changed it in VitalPBX and the phone didn't change" → `2026-08-06-i-changed-it-in-vitalpbx-and-the-phone-didn-t-ch.md`
 - IVR Studio: forwards, direct dial, audible prompts → `2026-08-06-ivr-studio-forwards-direct-dial-audible-prompts.md`
 - the agent got TOOLS; audio adaptation is measured but not built → `2026-08-06-the-agent-got-tools-audio-adaptation-is-measured.md`
