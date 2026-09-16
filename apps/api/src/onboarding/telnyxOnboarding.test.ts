@@ -400,6 +400,7 @@ function fakePorting(opts: { confirmThrows?: boolean; existingStatus?: string } 
       return { id, status: "in-process" };
     },
     uploadDocument: async (_c: any, filename: string) => { calls.push(`upload:${filename}`); return `doc-${filename}`; },
+    getPortingRequirements: async () => [],
     buildLoa: async () => Buffer.from("%PDF-loa"),
     readUpload: () => Buffer.from("%PDF-bill"),
   };
@@ -700,4 +701,20 @@ test("⛔ directory fallback hands the sync the FULL tenant table with a sanity 
   const block = src.slice(i, i + 4000);
   assert.match(block, /SELECT tenant_id, name, description FROM ombutel\.ombu_tenants"\)/, "full table — no WHERE");
   assert.match(block, /if \(inDb && rows\.length >= Math\.ceil\(known \/ 2\)\) \{/);
+});
+
+test("port requirements map the LIVE Telnyx names onto the uploaded documents; unknown ones are never guessed", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mapPortRequirements } = require("./telnyxPortFiling");
+  const reqs = [
+    { typeId: "inv", name: "Latest Invoice from Current Carrier (Within 90 Days)", fieldType: "document" },
+    { typeId: "loa", name: "Letter of Authorization (LOA) for Porting", fieldType: "document" },
+    { typeId: "csr", name: "Customer Service Record", fieldType: "document" },
+    { typeId: "txt", name: "Account PIN", fieldType: "textual" },
+  ];
+  assert.deepEqual(mapPortRequirements(reqs, { loa: "L", invoice: "I" }), [
+    { requirement_type_id: "inv", field_value: "I" },
+    { requirement_type_id: "loa", field_value: "L" },
+  ]);
+  assert.deepEqual(mapPortRequirements(reqs, { loa: "L", invoice: null }), [{ requirement_type_id: "loa", field_value: "L" }]);
 });

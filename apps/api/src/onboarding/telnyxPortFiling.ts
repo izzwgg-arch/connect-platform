@@ -33,6 +33,7 @@ import {
   confirmPortingOrder,
   createPortingOrders,
   getPortingOrder,
+  getPortingRequirements,
   updatePortingOrder,
   uploadDocument,
   telnyxErrorDetail,
@@ -49,6 +50,7 @@ export type PortFilingDeps = {
   updatePortingOrder: typeof updatePortingOrder;
   confirmPortingOrder: typeof confirmPortingOrder;
   uploadDocument: typeof uploadDocument;
+  getPortingRequirements: typeof getPortingRequirements;
   buildLoa: (row: any) => Promise<Buffer>;
   readUpload: (storageKey: string) => Buffer | null;
 };
@@ -61,6 +63,7 @@ export function realPortFilingDeps(): PortFilingDeps {
     updatePortingOrder,
     confirmPortingOrder,
     uploadDocument,
+    getPortingRequirements,
     buildLoa: async (row) => {
       const q = buildPortQueueRow(row);
       if (!q) throw new Error("port_queue_row_unbuildable");
@@ -75,6 +78,26 @@ export function realPortFilingDeps(): PortFilingDeps {
       }
     },
   };
+}
+
+/**
+ * Telnyx tracks documents a SECOND way: per-order `requirements` (read live
+ * 2026-09-16 on a draft: "Letter of Authorization (LOA) for Porting" and
+ * "Latest Invoice from Current Carrier (Within 90 Days)", both document-type).
+ * Each must reference its uploaded document id. Pure; unknown requirements are
+ * left out (a person sees them in the refusal) rather than filled with a guess.
+ */
+export function mapPortRequirements(
+  reqs: Array<{ typeId: string; name: string; fieldType: string | null }>,
+  docs: { loa: string | null; invoice: string | null },
+): Array<{ requirement_type_id: string; field_value: string }> {
+  const out: Array<{ requirement_type_id: string; field_value: string }> = [];
+  for (const r of reqs) {
+    if (!r.typeId || String(r.fieldType || "").toLowerCase() !== "document") continue;
+    const value = /letter of authori|loa/i.test(r.name) ? docs.loa : /invoice|bill/i.test(r.name) ? docs.invoice : null;
+    if (value) out.push({ requirement_type_id: r.typeId, field_value: value });
+  }
+  return out;
 }
 
 /** Statuses after which an order must never be confirmed again. */
@@ -208,7 +231,13 @@ export async function fileTelnyxPortForSubmission(
         continue;
       }
       try {
-        await deps.updatePortingOrder(creds, orderId, buildTelnyxPortPatch(row, portedDid, ctx, { loa: filing.loaDocumentId || null, invoice: filing.invoiceDocumentId || null }));
+        const docs = { loa: filing.loaDocumentId || null, invoice: filing.invoiceDocumentId || null };
+        const reqs = await deps.getPortingRequirements(creds, orderId).catch(() => []);
+        const requirements = mapPortRequirements(reqs, docs);
+        await deps.updatePortingOrder(creds, orderId, {
+          ...buildTelnyxPortPatch(row, portedDid, ctx, docs),
+          ...(requirements.length ? { requirements } : {}),
+        });
         const confirmed = await deps.confirmPortingOrder(creds, orderId);
         statuses[orderId] = String(confirmed.status || "in-process").toLowerCase();
       } catch (e) {
