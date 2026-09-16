@@ -22,6 +22,8 @@ Swift Mechanics (a cold-calling company) was mid sign-up. Izzy: $65 per cold-cal
 - Swift Mechanics `cmu4kauj00hufli1ktnu7zt17`: `answers.pricing = {coldCalling:{extensions:"all"}, crm:{extensions:"all"}}` stamped by DB after the api deploy (timeline event written). Live `/quote?extensions=1|2|3` → $90 / $175 / $260.
 - ⛔ Stamp ONLY after an api that carries `pricing` is live — the old carry would wipe it on the next autosave.
 
+- Later 09-16: customer restarted on a second link `cmu4no5ms0epepb12sk6bvztk` (office@swiftmechanics.net) — reached step 5 with NO pricing; stamped by DB (jsonb_set, atomic). Izzy then dropped CRM: both rows now `{coldCalling:{extensions:"all"}}`, live `/quote` = $70 for 1 ext. No invoice existed at either change.
+
 ## 5. Tests
 - api `src/onboarding/*.test.ts`: 475/500; the 25 failures = 24 setupOrchestrator + 1 pbxTenantBuild, **identical on HEAD** (all 11 touched files swapped to HEAD and re-run: setupOrchestrator 7 pass / 24 fail).
 - New `onboardingAddOnPricing.test.ts` 8/8; `quoteInput.test.ts` expectations extended; shared `onboardingPricing.test.ts` 16/16; portal `onboardingSignalWireWizard.test.ts` 9/9 (the new guard cannot pass on HEAD — its anchor does not exist there). tsc: 0 errors in touched api/portal files.
