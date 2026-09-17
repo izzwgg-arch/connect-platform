@@ -694,7 +694,11 @@ passes on the LF server checkout), scripts **98/98**, portal nav **41/41**, shar
 tsc 0 new errors in every touched file (api + portal). `train.py --self-test` tier 0 passes (no torch on
 this PC, tiers 1–2 SKIPPED by design).
 
-## Deploy + live state — see the summary file for the container-verified line.
+## Deploy + live state (2026-09-17 ~17:45Z, container-verified)
+api `f3c818b0` healthy (migration applied, new files present, exclude list carries transcribe/align); portal
+`23c916b5` (gold page 200 on both hostnames); `/now` 200 with `spend` = 0/0; consent SQL applied (9 GRANTED
+rights); PC runner refreshed + Prisma regenerated + restarted with the five stages; call-recording dry run =
+22,427 items / 773 h, not registered yet (needs a running budget first — see the starvation note in §14).
 
 ## What still needs Izzy (each unblocks a leg)
 1. **A fresh RunPod API key** (Settings → API Keys, read/write) → I create the serverless Yiddish

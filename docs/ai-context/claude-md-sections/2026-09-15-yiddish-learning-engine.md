@@ -273,3 +273,14 @@ Full record: parent handoff §15 + `AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-
   Everett endpoint exists. ⏳ Izzy: fresh RunPod key (or laptop GPU), Kaggle account, ~1 h of gold review.
 - Waiting state by design: `transcribe` DEFERs daily until a backend is configured AND
   `integrator-budgets.sql` is applied; voicemail fetch jobs stay parked until then.
+- ✅ **DEPLOYED + CONTAINER-VERIFIED 2026-09-17 ~17:45Z:** api `f3c818b0` (healthy, 0 restarts; migration
+  `20260917150000` applied — six new `YcTranscript` columns read back; `transcribeBackend.ts`,
+  `everettClient.ts`, `gold.ts`, `local_whisper.py` in the image; `YIDDISH_WORKER_EXCLUDE_STAGES` =
+  `fetch_audio,segment,features,transcribe,align`), portal `23c916b5` (`/admin/yiddish-learning/gold` → 200 on
+  both hostnames; nav label in the shipped bundle). `GET /admin/yiddish/now` answers 200 with the new `spend`
+  block (0 min / 0¢ — nothing paid has run). Consent SQL applied: 9 GRANTED rights records (analysis,
+  store_audio, training_export × yiddish24/voicemail/call_recordings). PC runner refreshed to `f3c818b0`,
+  Prisma client regenerated (knows the new columns), restarted — logs "stages fetch_audio, segment,
+  features, transcribe, align". Dry-run registration: 22,427 call recordings / 773 h across Yiddish tenants
+  (NOT registered — needs a budget first or they starve the Yiddish24 download).
+
