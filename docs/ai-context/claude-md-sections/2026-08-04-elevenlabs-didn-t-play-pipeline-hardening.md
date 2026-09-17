@@ -98,6 +98,19 @@ Read this before touching ANY code for a "no sound in the app" report from Izzy.
   `PolicyConfig\PropertyStore` chrome entries are volume memory with GUID zero, not
   routing); two ACTIVE render endpoints (Realtek Speakers + UGA-4KDP dock audio);
   `Audiosrv` + `AudioEndpointBuilder` running; other apps play.
+- **Follow-up, same evening ("see for yourself, open it and play it"):** ⛔ the
+  extension's tab group is signed OUT of Loopcom on both hostnames while nginx shows
+  his Studio tab signed in — Chrome had TWO profile windows open (`Default` "Iz" =
+  where the extension lives; `Profile 2` "jacob" = last used, his Studio tab).
+  Profiles do not share `localStorage["token"]`, so the extension cannot reach his
+  tab, and I will not sign in as him. It does NOT matter for the diagnosis: both
+  profile windows live in ONE `chrome.exe` browser process (PID 2360 since Sep 15)
+  with one audio pipeline. ⛔ Also ruled out the desktop app by evidence, not
+  assumption: `apps/desktop/src/userAgent.ts` stamps `Loopcom/<version>` into every
+  request (`Loopcom/0.1.17-rc.18 Chrome/146` sat on /dashboard), and the Studio
+  traffic carries a bare `Chrome/152` UA → real Chrome. `AuthGate.tsx` only READS
+  the token on a fresh load and never clears it, so a probe navigation cannot sign
+  him out. ⏳ Chrome still NOT restarted at write time (same Sep-15 instance).
 - ⛔ **Recipe next time, in order:** nginx grep for his IP's audio routes (200 + big
   body → client) → the load()-only probe in his Chrome → tell him to fully quit Chrome
   (tray icon too; verify `Get-Process chrome` is empty) and reopen → re-run the probe.
