@@ -569,3 +569,10 @@ the docs line right after these). Summary `docs/ai-context/claude-md-sections/20
 - Deploy + live door proof (`/root/payline-live-proof4.sh`): in the docs follow-up commit and the summary
   file's "Round 3 — tested / deployed / proven" section.
 - NOT run: a human call; a real charge.
+- DEPLOYED: commit `25ef3d12` shipped as branch tip `64746df2` (direct; container-verified, `/ready` 200) after
+  TWO attempts failed at candidate start — `bind 127.0.0.1:3004 address already in use` was an nginx keepalive's
+  ephemeral SOURCE port (ip_local_port_range 1024–65000, nothing reserved); fixed with
+  `net.ipv4.ip_local_reserved_ports=3000-3010` (runtime + sysctl.d) and `ss -K`. LIVE-PROVEN
+  (`/root/payline-live-proof4.sh`, 5 scenarios: own #1 → PIN; own no-PIN → "visit the store" + person; own #2 +
+  number → PIN; unknown → number → no-PIN → store + person; bad choice replays, 7 digits get 845). Izzy's own three
+  calls reached accounts with the PIN accepted (two ended at 12_no_card). NOT proven: a real charge.

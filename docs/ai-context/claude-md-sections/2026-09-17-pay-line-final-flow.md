@@ -42,8 +42,29 @@ one."*
 
 ## Verification
 
-- ⏳ **Tests / deploy / live proof: "Round 3 — tested / deployed / proven" at the bottom (filled by the
-  docs follow-up commit).**
+- **Tests:** the whole `src/supermarket/*.test.ts` glob → **208/208** (`payLineStress` 8/8: a 2,000-account
+  matrix × {own #1, own #2 self-lookup, foreign} × {no PIN, right PIN, wrong ×3} — served ⇒ keyed the PIN,
+  no-PIN accounts hear exactly 36 then 20, vault touched 0×; `supermarketCore` 37/37; `supermarketStress`
+  28/28; `payIvrDialplan` 10/10 incl. the no-Originate/Dial guard). `tsc` 0 errors in supermarket/*.
+- **Deployed:** commit `25ef3d12` (code) — the direct deploy shipped the branch tip **`64746df2`**
+  (two other sessions' commits on top; 25ef3d12 is an ancestor, merge-base checked); container
+  `.build-commit` = 64746df2, healthy, `/ready` 200, `37_which_account` in the container's reducer,
+  `payLineSms.ts` gone. ⛔⛔ **Two deploy attempts before it FAILED at `candidate_start`:
+  `failed to bind host port 127.0.0.1:3004/tcp: address already in use`** — not a listener
+  (`ss -ltnp` shows nothing): an nginx keepalive to telephony (:3003) had been given the ephemeral
+  SOURCE port 3004, because the 08-23 perf tuning lowered `ip_local_port_range` to 1024 with no
+  reserved ports. The live api was never touched (upstream stayed on 3001). Fixed at the root:
+  `net.ipv4.ip_local_reserved_ports=3000-3010` (runtime + `/etc/sysctl.d/zz-connectcomms-reserved-ports.conf`),
+  the one socket killed with `ss -K "sport = :3004"`, third attempt clean. Memory
+  [[blue-green-deploy-ports-must-be-reserved]].
+- **Live door proof `/root/payline-live-proof4.sh`** (real register, probes only, no charge), all as
+  designed: (1) 845-782-3064 (3762, POS PIN) presses 1 → `02_pin`; wrong PIN → `03_pin_wrong, 02_pin`;
+  (2) Izzy's cell (1001021, no POS PIN) presses 1 → `36_no_pin_visit_store, 20_connect_person`, `status
+  no_pin`, no PIN asked; (3) his cell presses 2, keys 8457823064 → `02_pin`; (4) unknown 212-555-0100 →
+  `13_not_recognized` → keys a no-PIN account → 36 + person; (5) bad choice replays 37; 7 digits get 845.
+  Vault 0 rows. **Izzy's own real calls right after the deploy (21:26–21:31Z): three accounts reached with
+  the PIN accepted** (`pinVerified true`), two of them ending at `12_no_card` + a person — which is
+  what prompted his next ask (key a card by phone; see the POS-API and Sola-PhonePay handoffs).
 
 ## What the store must do
 
