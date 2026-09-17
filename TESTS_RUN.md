@@ -450,3 +450,23 @@ Not run: Chrome Developer Mode unpacked extension loading, pairing, and live Cow
 - ✅ Live, read-only, through the real api door on loopcom against the real POS register (`/root/payline-live-proof.sh`): matched no-PIN caller → person on the first step (`status no_pin`); foreign caller → PIN asked, no enrollment; matched PIN-having account → asked once. Vault unchanged.
 
 Not run: a human phone call keying a real POS PIN and a real card charge (no test account has a POS PIN and a card).
+
+## Yiddish Whisper fine-tune pipeline — 2026-09-17 (commit f3c818b0)
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test "src/yiddishCorpus/*.test.ts"` →
+  **265/266** (+79 new: transcribe 27, transcribeBackend 16, gold 34, governance +5, audioPipeline +6,
+  routes +2, ycRegisterCallRecordings 9). The 1 failure = `routes.test.ts` "the audio-mode route is the
+  one place that requeues refused audio work" — pre-existing Windows CRLF source-guard artifact
+  (`indexOf("\n  }\n")` against a CRLF working copy); passes on the LF server checkout; file untouched.
+- repo root: `node --import tsx --test "scripts/yiddish-finetune/*.test.ts" "scripts/yiddish-runner/*.test.ts"`
+  → **98/98** (build-dataset 26, runpod-pod 24, runpod-endpoint 5, smoke-transcribe 5, kaggle-run 16,
+  copyCallRecordings 14, languageProbe 8).
+- `apps/portal`: `node --import tsx --test navigation/*.test.ts` → **41/41**; `npx tsc --noEmit` clean.
+- `packages/shared`: `node --import tsx --test "src/portalPermissions*.test.ts"` → **70/70**.
+- `apps/api`: `npx tsc --noEmit -p .` → 0 errors in every touched file (pre-existing errors elsewhere).
+- `python scripts/yiddish-finetune/train.py --self-test` → tier 0 (pure Python) passes; tiers 1–2 SKIPPED
+  (no torch/jiwer on this PC, by design). `local_whisper.py --self-check` → faster_whisper imports, exit 0.
+- CPU benchmark (measurement, not a test): `ivrit-ai/yi-whisper-large-v3-turbo-ct2` int8, 8 threads, on a
+  44 s voicemail — NOT finished after 39 min / 2,084 CPU-s; killed. This PC cannot label audio.
+- NOT run: anything against a real RunPod pod/endpoint or Kaggle (no key/account), a real dataset build
+  (no transcripts exist yet), a real fine-tune, any before/after WER.

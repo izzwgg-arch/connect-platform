@@ -253,3 +253,23 @@ Full detail: handoff §14. In short:
 - **24/7 download had stalled** (13:30→15:28Z): the runner claims fetch across all sources (no per-source filter), and the 1,888 paused customer-voicemail fetch jobs kept getting claimed and re-deferred, starving Yiddish24. Fixed by parking those jobs (`nextRunAt`→2027, reversible); download resumed (31→34 DONE, log `done=65`). Data change only, no deploy.
 - **Customer-voicemail leg** authorized + registered (1,888 items) but PARKED on purpose — it can't learn until the handlers exist, its audio copy was interrupted, and it is the highest-regret leg. Grant left intact. Revive = reset `nextRunAt` + give it a running budget, after the starvation and handler issues are handled.
 - Budgets untouched; nothing crossed the customer wall this session.
+
+## 2026-09-17 (evening) — the loop that LEARNS is built: Whisper fine-tune pipeline (`f3c818b0`)
+
+Full record: parent handoff §15 + `AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-09-17.md`.
+- Izzy's target = the platform's Yiddish speech-to-text (ivrit.ai `yi-whisper-large-v3-turbo`, trained on
+  only ~97 h of read speech — why it is wrong on his callers). Sources: Yiddish24 + voicemails + call
+  recordings (owner-authorized). ⛔ Yiddish Labs text never a label. Money: $5/day, training up to
+  $10/day, "best free option". **Nothing paid has run.**
+- Built + committed: `transcribe`/`align` stages behind a backend interface (RunPod `everett` / `local`
+  CPU faster-whisper / `none` → lawful SKIP), additive migration on `YcTranscript` (timing, words,
+  logprobs), consent rung (CUSTOMER_PRIVATE eligible only with contentAllowed + GRANTED
+  `training_export`), cost ledger in `/now`, gold-set routes + `/admin/yiddish-learning/gold` page
+  (+ nav + key → both toggle editors), dataset builder, `train.py` (LoRA, 16 GB), RunPod launcher
+  (cheap GPUs, `--max-cost-usd 10`), Kaggle FREE path, call-recording register/copy (PBX read-only),
+  runner generalised + `refresh-code.ps1`. Server worker excludes `transcribe,align`; PC runner owns them.
+- Tests: yiddishCorpus 265/266 (1 = known CRLF artifact), scripts 98/98, portal nav 41/41, shared 70/70.
+- ⛔ Measured: this PC cannot label (44 s of audio > 39 min). ⛔ Stored RunPod key is DEAD (401), no
+  Everett endpoint exists. ⏳ Izzy: fresh RunPod key (or laptop GPU), Kaggle account, ~1 h of gold review.
+- Waiting state by design: `transcribe` DEFERs daily until a backend is configured AND
+  `integrator-budgets.sql` is applied; voicemail fetch jobs stay parked until then.

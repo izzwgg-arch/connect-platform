@@ -634,3 +634,76 @@ Izzy authorized it and it is registered (1,888 Yiddish voicemail items, `OWNER_A
 ## Nothing that costs money or crosses the customer wall was changed
 
 Budgets untouched (global still paused/METADATA_ONLY/0; `source:yiddish24` FULL). No transcription, no API spend, no customer audio ingested this session. The only live change was parking the voicemail fetch jobs to un-stall the owner-authorized Yiddish24 download.
+
+# §15 2026-09-17 (evening) — THE LOOP THAT LEARNS IS BUILT: Whisper fine-tune pipeline (`f3c818b0`)
+
+Full design + lane specs: **`AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-09-17.md`**. Read that before
+touching transcription, the dataset builder, training or the gold set.
+
+## What Izzy decided (in chat, 2026-09-17)
+- Target = the platform's own Yiddish speech-to-text, ivrit.ai `yi-whisper-large-v3-turbo` (the thing he
+  called "the Wispr Yiddish model"). Its model card says it was trained on only **~97 h of read/prompted
+  speech** (Wikipedia snippets, WhatsApp prompts) — which is exactly why it is wrong on his callers.
+- Sources: Yiddish24 (owner said yes) + customer voicemails + call recordings (Izzy as carrier/owner,
+  reaffirmed). ⛔ Yiddish Labs TEXT never a label or input.
+- Money: **$5/day total** at first, then **training up to $10/day**, and **"use the best free option
+  available"**. Nothing paid has run.
+
+## What was built (five lanes, one commit `f3c818b0`, all tests green)
+- **Engine** `apps/api/src/yiddishCorpus/`: `transcribe` (chunked on SPEECH boundaries, one `YcTranscript`
+  row per whisper segment with `startMs/endMs/words/avgLogprob/noSpeechProb/chunkIndex` — additive
+  migration `20260917150000_yiddish_transcript_timing`), `align` (pins rows to SPEECH `YcSegment`s so
+  `observe` yields `ACOUSTIC_ALIGNED` observations), a **backend interface** (`transcribeBackend.ts`:
+  `everett` = RunPod serverless faster-whisper, `local` = faster-whisper on the machine's CPU via
+  `local_whisper.py`, `none` → lawful SKIP "no transcription backend configured"), per-day per-source cost
+  ledger (`transcribe.minutes` / `transcribe.cents` metrics, surfaced in `GET /admin/yiddish/now` `spend`),
+  and the **consent rung** in `governance.ts`: a CUSTOMER_PRIVATE source is training-eligible ONLY with
+  `contentAllowed=true` AND a GRANTED `training_export` right; the Yiddish Labs rung is untouched and wins.
+  `cluster` stays unimplemented (audio-gated, not needed for STT).
+- **Gold set** (`gold.ts` + 8 routes under `/admin/yiddish/gold*`, `/finetune/report`; portal
+  `/admin/yiddish-learning/gold`, nav `admin.yiddish_gold`, key `can_view_admin_yiddish_gold` in
+  `SIDEBAR_ITEMS` → both permission editors get the toggle): stratified low-confidence sampling, human
+  corrections written as NEW `engine=human` rows (machine text never mutated), wav clips stored under
+  `$YIDDISH_CORPUS_STORAGE_DIR/gold/`, Range-streamed.
+- **`scripts/yiddish-finetune/`**: `build-dataset.ts` (runs `trainingEligibilityOf` per row — this is what
+  makes YL-exclusion and consent real; never splits an item across train/eval; gold always in eval),
+  `train.py` (LoRA default, fits 16 GB, WER/CER on eval + gold, CT2 convert, `--push-to-hub`), `baseline.py`,
+  `runpod-pod.ts` (cheap GPUs first, COMMUNITY, `--max-hours 2`, hard `--max-cost-usd 10`, refuses without
+  `--confirm`, terminates on cap/error), `kaggle-run.ts` + `kaggle_train.ipynb` (the FREE path, ~30 GPU-h/week),
+  `runpod-endpoint.ts` (never deletes), `smoke-transcribe.ts`.
+- **Ingest**: `apps/api/scripts/yc-register-call-recordings.ts` (Yiddish tenants, `talkSec ≥ 20`, idempotent),
+  `scripts/yiddish-runner/copy-call-recordings.ts` (⛔ PBX read-only: `ls`/`stat`/`tar -c` only, guard-tested),
+  generalised `internalAudioFetchHandler` (any `metadata.localAudioPath` source), `languageProbe.ts`,
+  `scripts/yiddish-ingest/*.sql` (consent records, budgets, un-park), `refresh-code.ps1`.
+- Server worker now excludes `transcribe,align` too (`docker-compose.app.yml`); the PC runner's analyse-first
+  lane carries `segment, features, transcribe, align`.
+
+## Measured, not guessed
+- ⛔ **This PC cannot label audio**: i7-3770 (2012, no AVX2), Intel HD 4000. The Yiddish model on a
+  44-second voicemail had not finished after **39 minutes** (2,084 CPU-s) — ~50x slower than real time.
+  Killed. The `local` backend stays for machines that have a GPU/fast CPU.
+- ⛔ **The stored RunPod key (`ivrit_api_key`) is DEAD** — 401 on GraphQL and REST — and
+  `EVERETT_ENDPOINT_ID` was never set anywhere, so the "existing" Everett endpoint does not exist.
+  Everett labelling costs ≈ 3–4¢ per audio hour once a key exists (all Yiddish-tenant calls ≈ $32 total).
+- Corpus: voicemails 1,888 files / 37 h (on the PC); Yiddish-tenant call recordings ≈ 810 h (Gesheft 355 h)
+  as 8 kHz PCM WAV on the PBX spool (187 GB total); Yiddish24 ≈ 10,000 h of talk.
+
+## Tests (2026-09-17)
+yiddishCorpus **265/266** (the 1 = pre-existing Windows CRLF source-guard artifact in `routes.test.ts`,
+passes on the LF server checkout), scripts **98/98**, portal nav **41/41**, shared permissions **70/70**;
+tsc 0 new errors in every touched file (api + portal). `train.py --self-test` tier 0 passes (no torch on
+this PC, tiers 1–2 SKIPPED by design).
+
+## Deploy + live state — see the summary file for the container-verified line.
+
+## What still needs Izzy (each unblocks a leg)
+1. **A fresh RunPod API key** (Settings → API Keys, read/write) → I create the serverless Yiddish
+   endpoint (`runpod-endpoint.ts create`), set `EVERETT_*` in the runner's `.env`, apply
+   `integrator-budgets.sql` ($3/day labelling split) and `unpark-voicemail-jobs.sql`; labelling starts.
+   OR the laptop's GPU (`nvidia-smi`) → `YC_TRANSCRIBE_BACKEND=local` on that machine, $0.
+2. **Kaggle account** (create, PHONE-VERIFY, API token → `~/.kaggle/kaggle.json`) → free training.
+3. **~1 hour of his ear** on `/admin/yiddish-learning/gold` once transcripts exist (300 clips) — the only
+   way to PROVE the fine-tune is better (gold WER before vs after), not just different.
+⛔ Until 1 or the laptop GPU exists, `transcribe` jobs sit DEFERRED daily ("no transcription minutes
+budgeted") — that is the designed waiting state; do not set minute caps before a backend is configured, or
+they would burn attempts SKIPPING "no backend". Voicemail fetch jobs stay parked for the same reason.
