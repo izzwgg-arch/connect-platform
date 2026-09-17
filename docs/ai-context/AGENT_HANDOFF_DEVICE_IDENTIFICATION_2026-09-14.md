@@ -935,6 +935,47 @@ of this. ⛔ Deploy note carried again: pin the ORIGIN TIP, never a stale `--bra
 ⏳ **NOT PROVEN: nobody has scanned a real sticker through the on-device path.** That is the next
 thing, on Izzy's own phone.
 
+## 10t. Round 21 (2026-09-17) — "NOTHING SCANS" ROOT CAUSE: the portal CSP blocked WASM ITSELF (live nginx fix, NOT in the repo)
+
+Izzy tried the deployed round-20 scanner and nothing scanned. The round-20 checklist verified the
+wasm FILE (`/zxing/zxing_reader.wasm` → 200 `application/wasm`) and called it done — **that check
+is blind to the real gate.** A `.wasm` that downloads fine still cannot be COMPILED unless the
+page's CSP `script-src` carries `'wasm-unsafe-eval'` (or `'unsafe-eval'`). Ours was
+`script-src 'self' 'unsafe-inline' https:` — so `WebAssembly.instantiate()` threw, PROVEN in
+Izzy's real Chrome on the live portal with the browser's own words: *"…violates the following
+Content Security Policy directive because 'unsafe-eval' is not an allowed source of script…"*.
+The page's decoder caught that, silently gave up, and fell back to the slow photo path — exactly
+the "camera never focuses / never scans" Izzy reported. **No console error surfaces on the scan
+page itself** because the dynamic import rejection is handled; the same silent-CSP-failure class
+is already documented inside the nginx file itself for `media-src`/blob.
+
+**THE FIX LIVES ON THE SERVER, NOT IN GIT:** `/etc/nginx/connectcomms/security-headers.conf`
+line 17 (loopcom, feeds BOTH hostnames) now reads
+`script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https:` — backup at
+`/root/security-headers.conf.bak-20260917-021803`, `nginx -t` passed, reloaded, and both
+`app.connectcomunications.com` and `app.loopcom.net` verified serving the new header.
+**Post-fix proof in the same real Chrome:** `WebAssembly.instantiate(new Uint8Array([0,97,115,
+109,1,0,0,0]))` now SUCCEEDS on the portal origin (it threw the CSP error before). Portal live at
+`dcef71a9` (contains `020298b1`).
+
+⛔ **LESSONS, in order of how much they cost:**
+- **"The wasm returns 200" is NOT "the wasm runs."** The only proof is instantiation succeeding
+  in a real browser on that origin. Check the CSP `script-src` for `'wasm-unsafe-eval'` FIRST
+  whenever wasm "silently does nothing".
+- **This nginx file is live-server-only state.** A redeploy of the portal cannot revert it, but a
+  server rebuild / nginx config restore CAN. If the scanner ever "stops scanning" again with no
+  code change, re-check `curl -sI https://app.loopcom.net | grep -i content-security` for
+  `wasm-unsafe-eval` before touching any code.
+- **nginx `add_header` is not inherited** into location blocks that set their own `add_header` —
+  the file documents this; edit the one shared file, not per-location copies.
+
+⏳ **STILL NOT PROVEN:** a real sticker decoded by a human through the on-device path (the CSP
+unblock is proven; the camera-to-decode leg still needs Izzy's phone, with the link RELOADED so
+the fresh CSP applies). ⛔ **Separately and finally: Izzy's own T42S cannot be fixed in software**
+— it holds the PREVIOUS provider's admin password (ours is refused) AND its Yealink RPS slot is
+claimed by another org (800004). One physical factory reset (hold OK ~10 s) is the only path; a
+fresh phone never hits either wall.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

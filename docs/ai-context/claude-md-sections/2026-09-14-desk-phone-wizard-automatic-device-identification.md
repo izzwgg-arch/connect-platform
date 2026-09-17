@@ -197,3 +197,15 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   origin (`public/zxing/zxing_reader.wasm`; CSP blocks the CDN) — live `200 application/wasm`. Tests:
   deviceCloudRoutes 66 (+4 scan-text); both apps tsc clean on touched files. ⏳ nobody has scanned a
   real sticker through the on-device path — next, on Izzy's phone.
+- ⛔⛔ **ROUND 21 (2026-09-17, handoff §10t): "NOTHING SCANS" ROOT CAUSE = the portal CSP blocked
+  WASM ITSELF.** `script-src 'self' 'unsafe-inline' https:` lacks `'wasm-unsafe-eval'`, so
+  `WebAssembly.instantiate()` threw (proven in real Chrome with the browser's own CSP error) and
+  the decoder silently fell back to the slow photo path — a wasm file that returns 200 still
+  cannot COMPILE. ✅ FIXED LIVE, NOT IN GIT: `/etc/nginx/connectcomms/security-headers.conf` line
+  17 now carries `'wasm-unsafe-eval'` (backup `/root/security-headers.conf.bak-20260917-021803`),
+  both hostnames verified serving it, and post-fix `WebAssembly.instantiate()` SUCCEEDS in the
+  same real Chrome. ⛔ if scanning ever silently dies again with no code change, check that header
+  FIRST — a server rebuild can revert it and no deploy can restore it. ⏳ real-sticker decode by a
+  human still unproven (link must be RELOADED to pick up the new CSP); ⛔ Izzy's own T42S is
+  unfixable in software (previous provider's password + RPS claimed by another org, 800004) — one
+  physical factory reset, hold OK ~10 s.
