@@ -24,7 +24,7 @@ import { Check, ExternalLink, Loader2, MessageCircle, Mic, Pause, Phone, Play, R
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useUiLanguage } from "../../../hooks/useUiLanguage";
-import { apiGet, apiPatch, apiPost, ApiError } from "../../../services/apiClient";
+import { apiGet, apiPatch, apiPost, apiPut, apiDelete, ApiError } from "../../../services/apiClient";
 import { browserTenantContext, getPortalApiBaseUrl } from "../../../services/apiClient";
 import { readAuthToken } from "../../../services/session";
 import { CardknoxIFieldsForm } from "../../../components/billing/CardknoxIFieldsForm";
@@ -40,6 +40,15 @@ type CardOnFile = {
   exp: string;
   cardholderName: string;
   chargeable: boolean;
+};
+
+/** Desk-set phone PIN vault status for one register account (2026-09-17):
+ *  lets a caller-ID match skip the pay-IVR's spoken-PIN step. */
+type PhonePinInfo = {
+  enrolled: boolean;
+  enrolledAt: string | null;
+  lastUsedAt: string | null;
+  phones: string[];
 };
 
 function brandChip(brand: string): { label: string; cls: string } {
@@ -101,6 +110,15 @@ export const SM_ORDERS_PHRASES = [
   "No orders match these filters. Try a wider range or All time.", "No orders here.",
   "sent", "failed to send", "dismissed", "card declined", "note",
   "Previous page", "Next page", "Rows per page",
+  // Desk-set phone PIN vault (2026-09-17)
+  "Checking phone PIN…", "Phone PIN: on file", "Phone PIN: not on file",
+  "Set phone PIN", "Remove", "Check register", "Checking register…",
+  "Phone PIN", "PIN", "Save", "Saving…", "Cancel",
+  "Saved — caller-ID calls from this account skip the PIN",
+  "The register has no PIN set for this account — set one in the POS first",
+  "That PIN is not the one in the POS",
+  "The register could not be reached — try again in a moment",
+  "POS has a PIN", "POS has NO PIN for this account", "Couldn't tell — try again in a moment",
 ] as string[];
 
 type DraftRow = {
@@ -1027,6 +1045,108 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
     [draft?.posCustomerId],
   );
 
+  // ── desk-set phone PIN vault (2026-09-17) ─────────────────────────────────
+  const [pinInfo, setPinInfo] = useState<PhonePinInfo | null>(null);
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinEditOpen, setPinEditOpen] = useState(false);
+  const [pinValue, setPinValue] = useState("");
+  const [pinSaving, setPinSaving] = useState(false);
+  const [pinMsg, setPinMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [pinChecking, setPinChecking] = useState(false);
+  const [pinCheckMsg, setPinCheckMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let dead = false;
+    const posCustomerId = draft?.posCustomerId;
+    setPinEditOpen(false);
+    setPinMsg(null);
+    setPinCheckMsg(null);
+    if (!posCustomerId) {
+      setPinInfo(null);
+      return;
+    }
+    setPinLoading(true);
+    (async () => {
+      try {
+        const res = await apiGet<PhonePinInfo>(`/supermarket/customers/${encodeURIComponent(posCustomerId)}/phone-pin`);
+        if (dead) return;
+        setPinInfo(res);
+      } catch {
+        if (!dead) setPinInfo(null);
+      } finally {
+        if (!dead) setPinLoading(false);
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [draft?.posCustomerId]);
+
+  const savePin = useCallback(async () => {
+    if (!draft?.posCustomerId || !pinValue) return;
+    setPinSaving(true);
+    setPinMsg(null);
+    try {
+      const res = await apiPut<{ ok: boolean; enrolled?: boolean; reason?: "pin_not_set" | "pin_invalid" | "register_unreachable" }>(
+        `/supermarket/customers/${encodeURIComponent(draft.posCustomerId)}/phone-pin`,
+        { pin: pinValue },
+      );
+      if (res.ok) {
+        setPinMsg({ kind: "ok", text: t("Saved — caller-ID calls from this account skip the PIN") });
+        setPinEditOpen(false);
+        setPinValue("");
+        const fresh = await apiGet<PhonePinInfo>(`/supermarket/customers/${encodeURIComponent(draft.posCustomerId)}/phone-pin`);
+        setPinInfo(fresh);
+      } else if (res.reason === "pin_not_set") {
+        setPinMsg({ kind: "error", text: t("The register has no PIN set for this account — set one in the POS first") });
+      } else if (res.reason === "pin_invalid") {
+        setPinMsg({ kind: "error", text: t("That PIN is not the one in the POS") });
+      } else {
+        setPinMsg({ kind: "error", text: t("The register could not be reached — try again in a moment") });
+      }
+    } catch (e) {
+      setPinMsg({ kind: "error", text: errText(e, "The PIN was not saved.") });
+    } finally {
+      setPinSaving(false);
+    }
+  }, [draft?.posCustomerId, pinValue, t]);
+
+  const removePin = useCallback(async () => {
+    if (!draft?.posCustomerId) return;
+    setPinSaving(true);
+    setPinMsg(null);
+    try {
+      await apiDelete<{ ok: boolean; removed: number }>(`/supermarket/customers/${encodeURIComponent(draft.posCustomerId)}/phone-pin`);
+      setPinInfo({ enrolled: false, enrolledAt: null, lastUsedAt: null, phones: [] });
+    } catch (e) {
+      setPinMsg({ kind: "error", text: errText(e, "The PIN was not removed.") });
+    } finally {
+      setPinSaving(false);
+    }
+  }, [draft?.posCustomerId]);
+
+  const checkRegisterPin = useCallback(async () => {
+    if (!draft?.posCustomerId) return;
+    setPinChecking(true);
+    setPinCheckMsg(null);
+    try {
+      const res = await apiPost<{ registerPin: "set" | "not_set" | "unknown" }>(
+        `/supermarket/customers/${encodeURIComponent(draft.posCustomerId)}/phone-pin/check`,
+      );
+      setPinCheckMsg(
+        res.registerPin === "set"
+          ? t("POS has a PIN")
+          : res.registerPin === "not_set"
+            ? t("POS has NO PIN for this account")
+            : t("Couldn't tell — try again in a moment"),
+      );
+    } catch (e) {
+      setPinCheckMsg(errText(e, "Couldn't reach the register."));
+    } finally {
+      setPinChecking(false);
+    }
+  }, [draft?.posCustomerId, t]);
+
   const lookupPhone = useCallback(async (override?: string) => {
     // the phone-confirmation banner passes the number to use explicitly —
     // setPhoneEdit is async, so reading state here would use the old value
@@ -1652,6 +1772,97 @@ export function DraftReview({ draftId, compact }: { draftId: string; compact?: b
                 </div>
               ) : !phoneBusy && phoneEdit && !draft.posCustomerId ? (
                 <div className="sm-sku">{t("No account with that number on the register.")}</div>
+              ) : null}
+              {draft.posCustomerId ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span
+                    className={`sm-pill ${pinInfo?.enrolled ? "sm-done" : "sm-info"}`}
+                    aria-live="polite"
+                  >
+                    <i aria-hidden />
+                    {pinLoading ? t("Checking phone PIN…") : pinInfo?.enrolled ? t("Phone PIN: on file") : t("Phone PIN: not on file")}
+                  </span>
+                  {canManage && !pinEditOpen ? (
+                    <button
+                      type="button"
+                      className="sm-btn sm-quiet sm-btn-sm"
+                      onClick={() => {
+                        setPinEditOpen(true);
+                        setPinValue("");
+                        setPinMsg(null);
+                      }}
+                    >
+                      {t("Set phone PIN")}
+                    </button>
+                  ) : null}
+                  {canManage && pinInfo?.enrolled && !pinEditOpen ? (
+                    <button
+                      type="button"
+                      className="sm-btn sm-danger sm-btn-sm"
+                      disabled={pinSaving}
+                      onClick={() => void removePin()}
+                    >
+                      {t("Remove")}
+                    </button>
+                  ) : null}
+                  {canManage && !pinEditOpen ? (
+                    <button
+                      type="button"
+                      className="sm-btn sm-quiet sm-btn-sm"
+                      disabled={pinChecking}
+                      onClick={() => void checkRegisterPin()}
+                    >
+                      {pinChecking ? t("Checking register…") : t("Check register")}
+                    </button>
+                  ) : null}
+                  {pinCheckMsg ? <span className="sm-sku">{pinCheckMsg}</span> : null}
+                  {canManage && pinEditOpen ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <label htmlFor="sm-phone-pin-input" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>
+                        {t("Phone PIN")}
+                      </label>
+                      <input
+                        id="sm-phone-pin-input"
+                        type="password"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={8}
+                        value={pinValue}
+                        onChange={(e) => setPinValue(e.target.value.slice(0, 8))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void savePin();
+                          if (e.key === "Escape") {
+                            setPinEditOpen(false);
+                            setPinMsg(null);
+                          }
+                        }}
+                        disabled={pinSaving}
+                        aria-label={t("Phone PIN")}
+                        placeholder={t("PIN")}
+                        style={{ width: 84, background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 8, padding: ".3rem .5rem", color: "inherit", font: "inherit" }}
+                      />
+                      <button type="button" className="sm-btn sm-primary sm-btn-sm" disabled={pinSaving || !pinValue} onClick={() => void savePin()}>
+                        {pinSaving ? t("Saving…") : t("Save")}
+                      </button>
+                      <button
+                        type="button"
+                        className="sm-btn sm-quiet sm-btn-sm"
+                        disabled={pinSaving}
+                        onClick={() => {
+                          setPinEditOpen(false);
+                          setPinMsg(null);
+                        }}
+                      >
+                        {t("Cancel")}
+                      </button>
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+              {pinMsg ? (
+                <div className="sm-sku" role={pinMsg.kind === "error" ? "alert" : undefined} style={pinMsg.kind === "error" ? { color: "var(--danger)" } : undefined}>
+                  {pinMsg.text}
+                </div>
               ) : null}
             </div>
 

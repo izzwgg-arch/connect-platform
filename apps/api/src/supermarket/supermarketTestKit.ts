@@ -433,7 +433,8 @@ export class FakePos {
     if (m && init.method === "GET") {
       const c = this.customers.get(decodeURIComponent(m[1]));
       if (!c) return this.res(404, { error: "not found" });
-      if (!c.pin || pin !== c.pin) return this.res(401, { error: "bad pin" });
+      if (!c.pin) return this.res(401, { error: "Customer PIN required." });
+      if (pin !== c.pin) return this.res(401, { error: "Invalid customer PIN." });
       return this.res(200, { balance: c.balanceCents / 100 });
     }
     m = path.match(/^\/customers\/id\/([^/]+)\/cards$/);
@@ -446,7 +447,8 @@ export class FakePos {
     if (m && init.method === "POST") {
       const c = this.customers.get(decodeURIComponent(m[1]));
       if (!c) return this.res(404, { error: "not found" });
-      if (!c.pin || pin !== c.pin) return this.res(401, { error: "bad pin" });
+      if (!c.pin) return this.res(401, { error: "Customer PIN required." });
+      if (pin !== c.pin) return this.res(401, { error: "Invalid customer PIN." });
       const body = JSON.parse(init.body);
       if (this.charges.has(body.externalId)) return this.res(409, { error: "duplicate externalId" });
       if (this.opts.declineCards) return this.res(422, { error: "declined" });

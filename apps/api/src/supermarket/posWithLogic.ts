@@ -48,6 +48,27 @@ export type PosFetch = (url: string, init: {
   signal?: AbortSignal;
 }) => Promise<PosFetchResponse>;
 
+/**
+ * Why the register refused a PIN-gated call. PROVEN LIVE 2026-09-17 against
+ * Gesheft's real register (read-only balance probes):
+ *   401 {"error":"Customer PIN required."} — the account has NO PIN set in the
+ *       POS at all; every value, and no value, is refused the same way. No
+ *       amount of keying can ever satisfy it — only the store can set one.
+ *   401 {"error":"Invalid customer PIN."}  — the account HAS a PIN and ours
+ *       was wrong (4 of 25 randomly sampled accounts answered this).
+ * Anything else on 401/403 is "unknown" and is treated as "wrong PIN" by the
+ * callers — asking is always safer than silently giving up.
+ */
+export type PosPinRefusal = "not_set" | "invalid" | "unknown";
+
+export function classifyPinRefusal(status: number, body: string): PosPinRefusal | null {
+  if (status !== 401 && status !== 403) return null;
+  const text = String(body ?? "").toLowerCase();
+  if (/pin\s+required/.test(text) || /no\s+pin/.test(text) || /pin\s+not\s+set/.test(text)) return "not_set";
+  if (/invalid/.test(text) || /wrong/.test(text) || /incorrect/.test(text)) return "invalid";
+  return "unknown";
+}
+
 export class PosApiError extends Error {
   status: number;
   code: string;
@@ -55,6 +76,8 @@ export class PosApiError extends Error {
   retryAfterSec: number | null;
   /** Bounded slice of the response body — safe to log, never contains our headers. */
   bodyPreview: string;
+  /** On a 401/403: what the register said about the PIN (see classifyPinRefusal). */
+  pinReason: PosPinRefusal | null;
   constructor(message: string, status: number, code: string, bodyPreview = "", retryAfterSec: number | null = null) {
     super(message);
     this.name = "PosApiError";
@@ -62,6 +85,7 @@ export class PosApiError extends Error {
     this.code = code;
     this.bodyPreview = bodyPreview.slice(0, 300);
     this.retryAfterSec = retryAfterSec;
+    this.pinReason = classifyPinRefusal(status, this.bodyPreview);
   }
 }
 

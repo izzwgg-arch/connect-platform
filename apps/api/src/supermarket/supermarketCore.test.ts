@@ -24,8 +24,10 @@ import {
 import { amountToPromptRefs, formatCents, numberToPromptRefs, parseStarDecimalAmount } from "./payAmount";
 import {
   PAY_MAX_PIN_ATTEMPTS,
+  PAY_PROBE_PIN,
   countChargeEffects,
   initialPayIvrState,
+  normalizePayIvrState,
   reducePayIvr,
   type PayIvrOutput,
   type PayIvrState,
@@ -214,7 +216,12 @@ test("stored PIN gone stale: falls back to keying, and never enrolls a foreign n
 });
 
 test("wrong PIN caps at 3 and lands on a person, never a loop", () => {
-  const events: Parameters<typeof reducePayIvr>[1][] = [{ type: "call_start", callerKnown: true, hasStoredPin: false }];
+  // A matched caller with nothing enrolled is PROBED first (silent); the
+  // register's "invalid" means the store set a PIN → asked once, then keyed.
+  const events: Parameters<typeof reducePayIvr>[1][] = [
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "pin_result", ok: false, reason: "invalid" },
+  ];
   for (let i = 0; i < PAY_MAX_PIN_ATTEMPTS; i++) {
     events.push({ type: "digits", value: "9999" });
     events.push({ type: "pin_result", ok: false });
@@ -224,6 +231,62 @@ test("wrong PIN caps at 3 and lands on a person, never a loop", () => {
   const all = outputs.flatMap((o) => o.prompts);
   assert.ok(all.includes("15_too_many_tries"));
   assert.ok(all.includes("20_connect_person"));
+});
+
+test("THE CALLER-ID RULE: a matched caller keys nothing — probe silently; 'PIN required' = no PIN in the POS → a person at once, flagged", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "pin_result", ok: false, reason: "not_set" },
+  ]);
+  assert.deepEqual(outputs[0].prompts, ["01_welcome"]);
+  assert.equal(outputs[0].gather, null, "a matched caller must not be asked to key anything before the register answers");
+  assert.deepEqual(outputs[0].effects, [{ kind: "verify_pin", pin: PAY_PROBE_PIN }]);
+  assert.deepEqual(outputs[1].prompts, ["20_connect_person"]);
+  assert.equal(state.phase, "human");
+  assert.equal(state.blockedReason, "pin_not_set");
+  assert.equal(state.pinAttempts, 0, "a silent probe is not an attempt");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked");
+});
+
+test("THE CALLER-ID RULE: the store set a PIN Loopcom does not know → asked ONCE, enrolled, and digits during the silent probe are ignored", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "digits", value: "4321" }, // stray DTMF while the probe is in flight
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "4321" },
+    { type: "pin_result", ok: true, balanceCents: 1200 },
+  ]);
+  assert.deepEqual(outputs[1].effects, [], "digits during a silent probe must not fire a second verify");
+  assert.deepEqual(outputs[2].prompts, ["02_pin"]);
+  assert.equal(outputs[2].state.pinAttempts, 0, "the probe refusal is not the caller's attempt");
+  assert.ok(outputs[4].effects.some((e) => e.kind === "enroll_pin" && e.pin === "4321"));
+  assert.equal(state.phase, "main_menu");
+});
+
+test("THE CALLER-ID RULE: a foreign number keys the PIN every time; 'PIN required' there lands on a person without three futile tries", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: false, hasStoredPin: false },
+    { type: "digits", value: "8456624417" },
+    { type: "lookup_result", found: true, posCustomerId: "c9" },
+    { type: "digits", value: "1234" },
+    { type: "pin_result", ok: false, reason: "not_set" },
+  ]);
+  assert.ok(outputs[2].prompts.includes("02_pin"));
+  assert.equal(state.phase, "human");
+  assert.equal(state.blockedReason, "pin_not_set");
+  assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")));
+});
+
+test("normalizePayIvrState reads pre-2026-09-17 rows (no pinProbe / blockedReason) safely", () => {
+  const legacy: any = { ...initialPayIvrState(), phase: "main_menu", activePin: "1", pinVerified: true };
+  delete legacy.pinProbe;
+  delete legacy.blockedReason;
+  const s = normalizePayIvrState(legacy);
+  assert.equal(s.pinProbe, false);
+  assert.equal(s.blockedReason, null);
+  assert.equal(s.phase, "main_menu");
+  assert.equal(normalizePayIvrState(null).phase, "start");
+  assert.equal(normalizePayIvrState({ blockedReason: "garbage" }).blockedReason, null);
 });
 
 test("⛔ THE MONEY RULE: one confirmation = one charge effect, and a stray repeat event charges nothing", () => {

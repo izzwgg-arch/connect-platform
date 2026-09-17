@@ -41,7 +41,7 @@ import { applyRuleEdit, rollbackRule, MAX_RULE_CHARS } from "./agentRules";
 import { catalogCodePrefix, inStockFirst, isKnownOutOfStock, rankCatalogRows, searchCatalogPool } from "./catalogSearch";
 import { normalizePhrase } from "./phraseLessons";
 import { knownCustomerPhones, resolveCustomerPhone } from "./customerPhoneMatch";
-import { extractPosCustomer, PosApiError, posPhoneDigits } from "./posWithLogic";
+import { extractPosCustomer, isValidPosPin, PosApiError, posPhoneDigits } from "./posWithLogic";
 import { mirrorCustomerById, mirrorCustomerByPhone, searchMirrorCustomers } from "./customerSync";
 import { composeDraftContent, loadCatalogIndex } from "./draftBuilder";
 import { chargeCardForDraft, listCardsOnFile, saveCardFromSut, solaAdapterForTenant } from "./customerCards";
@@ -160,6 +160,10 @@ const driverCreateSchema = z.object({
     .refine((v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v), "not an email address"),
 });
 
+const phonePinSetSchema = z.object({
+  pin: z.string().min(1).max(8),
+});
+
 const payIvrStepSchema = z.object({
   tenantId: z.string().min(5).max(64),
   callId: z.string().min(1).max(128),
@@ -167,6 +171,34 @@ const payIvrStepSchema = z.object({
   digits: z.string().max(32).optional(),
   hangup: z.boolean().optional(),
 });
+
+/**
+ * Classify a failed `getCustomerBalance` probe of the desk-set PIN
+ * (`PUT .../phone-pin`). Their register answers 401/403 either way — the
+ * only signal is the message text (`bodyPreview`), never `err.code`, which
+ * `classifyStatus` in posWithLogic.ts collapses both cases to
+ * `pos_auth_failed`. Anything that is NOT a 401/403 PosApiError (timeout,
+ * 5xx, unparseable body, a stray 404 for a bogus account) is unreachable —
+ * we never guess "the PIN was wrong" from an ambiguous failure.
+ */
+function classifyPinFailure(err: unknown): "pin_not_set" | "pin_invalid" | "register_unreachable" {
+  if (err instanceof PosApiError && (err.status === 401 || err.status === 403)) {
+    if (/pin required/i.test(err.bodyPreview)) return "pin_not_set";
+    if (/invalid/i.test(err.bodyPreview)) return "pin_invalid";
+    return "pin_invalid";
+  }
+  return "register_unreachable";
+}
+
+/** Same 401/403-message read, for the `/phone-pin/check` sentinel probe. */
+function classifyRegisterPinCheck(err: unknown): "set" | "not_set" | "unknown" {
+  if (err instanceof PosApiError && (err.status === 401 || err.status === 403)) {
+    if (/invalid/i.test(err.bodyPreview)) return "set";
+    if (/pin required/i.test(err.bodyPreview)) return "not_set";
+    return "unknown";
+  }
+  return "unknown";
+}
 
 export const SUPERMARKET_VIEW_KEY = "can_view_supermarket_orders";
 export const SUPERMARKET_MANAGE_KEY = "can_manage_supermarket_orders";
@@ -935,6 +967,137 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
       metadata: { posCustomerId, last4: result.card.last4 },
     });
     return reply.send({ ok: true, card: result.card });
+  });
+
+  // ── Desk-set phone PIN vault (2026-09-17): lets a store rep enroll the
+  //    caller-ID PIN from the desk instead of waiting for the customer to
+  //    type it into the IVR once. Same encrypted vault (`SupermarketPhonePin`)
+  //    the pay-IVR's `enroll_pin` effect writes — `payIvrRuntime.ts`'s
+  //    `findStoredPin` reads rows from either source identically.
+  app.get("/supermarket/customers/:posCustomerId/phone-pin", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_VIEW_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    if (!posCustomerId) return reply.status(400).send({ error: "invalid_request" });
+    const rows: Array<{ phoneE164: string; createdAt: unknown; lastUsedAt: unknown }> = await db.supermarketPhonePin.findMany({
+      where: { tenantId, posCustomerId },
+      orderBy: { createdAt: "asc" },
+      select: { phoneE164: true, createdAt: true, lastUsedAt: true },
+    });
+    // ⛔ never select/return pinEnc here — this door reports enrollment
+    // status only, never the credential itself.
+    if (!rows.length) {
+      return reply.send({ enrolled: false, enrolledAt: null, lastUsedAt: null, phones: [] });
+    }
+    let lastUsedAt: Date | null = null;
+    for (const r of rows) {
+      if (r.lastUsedAt && (!lastUsedAt || new Date(r.lastUsedAt as any) > lastUsedAt)) lastUsedAt = new Date(r.lastUsedAt as any);
+    }
+    return reply.send({
+      enrolled: true,
+      enrolledAt: rows[0].createdAt ? new Date(rows[0].createdAt as any).toISOString() : null,
+      lastUsedAt: lastUsedAt ? lastUsedAt.toISOString() : null,
+      phones: rows.map((r) => r.phoneE164),
+    });
+  });
+
+  app.put("/supermarket/customers/:posCustomerId/phone-pin", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    if (!posCustomerId) return reply.status(400).send({ error: "invalid_request" });
+    const parsed = phonePinSetSchema.safeParse(req.body ?? {});
+    if (!parsed.success || !isValidPosPin(parsed.data.pin)) {
+      return reply.status(400).send({ error: "invalid_request", message: "PINs are 1–8 characters." });
+    }
+    const client = await clientFor(db, tenantId);
+    if (!client) {
+      return reply.status(503).send({ error: "pos_unavailable", message: "No register connection is configured for this company." });
+    }
+    // ⛔ verify against the register FIRST — nothing is stored on a guess.
+    try {
+      await client.getCustomerBalance(posCustomerId, parsed.data.pin);
+    } catch (err: any) {
+      return reply.send({ ok: false, reason: classifyPinFailure(err) });
+    }
+    // The account IS the phone number elsewhere in this file (posPhoneDigits)
+    // — reuse the mirror's primary phone so caller-ID matching on the next
+    // call lands on the same row the IVR itself would have written.
+    let phoneE164 = "desk";
+    try {
+      const mirror = await mirrorCustomerById(db, tenantId, posCustomerId);
+      const ten = mirror?.phone ? posPhoneDigits(mirror.phone) : null;
+      if (ten) phoneE164 = `+1${ten}`;
+    } catch {
+      /* best-effort — an unreachable mirror costs the phone label, never the enrollment */
+    }
+    try {
+      const sec = await import("@connect/security");
+      if (!sec.hasCredentialsMasterKey()) {
+        return reply.status(503).send({ error: "vault_unavailable", message: "The credential vault is not available on this server." });
+      }
+      await db.supermarketPhonePin.upsert({
+        where: { tenantId_posCustomerId_phoneE164: { tenantId, posCustomerId, phoneE164 } },
+        update: { pinEnc: sec.encryptJson({ pin: parsed.data.pin }), lastUsedAt: new Date() },
+        create: { tenantId, posCustomerId, phoneE164, pinEnc: sec.encryptJson({ pin: parsed.data.pin }), lastUsedAt: new Date() },
+      });
+    } catch {
+      return reply.status(503).send({ error: "vault_unavailable", message: "The credential vault is not available on this server." });
+    }
+    // ⛔ metadata is posCustomerId ONLY — the PIN is never logged or echoed.
+    await safeAudit({
+      tenantId,
+      action: "supermarket.phone_pin.set",
+      entityType: "SupermarketPhonePin",
+      entityId: posCustomerId,
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { posCustomerId },
+    });
+    return reply.send({ ok: true, enrolled: true });
+  });
+
+  app.delete("/supermarket/customers/:posCustomerId/phone-pin", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    if (!posCustomerId) return reply.status(400).send({ error: "invalid_request" });
+    const result = await db.supermarketPhonePin.deleteMany({ where: { tenantId, posCustomerId } });
+    await safeAudit({
+      tenantId,
+      action: "supermarket.phone_pin.clear",
+      entityType: "SupermarketPhonePin",
+      entityId: posCustomerId,
+      actorUserId: String(getUser(req).sub ?? ""),
+      metadata: { posCustomerId },
+    });
+    return reply.send({ ok: true, removed: result.count });
+  });
+
+  // Costs one register credit (a real balance read) — never call this
+  // automatically; it exists for a rep to answer "does the POS even have a
+  // PIN for this account" before bothering the customer.
+  app.post("/supermarket/customers/:posCustomerId/phone-pin/check", async (req: any, reply: any) => {
+    if (!(await requireSupermarketMode(db, req, reply))) return;
+    if (!(await allowed(req, SUPERMARKET_MANAGE_KEY))) return reply.status(403).send({ error: "forbidden" });
+    const tenantId = tenantOf(req);
+    const posCustomerId = String((req.params as any).posCustomerId ?? "").slice(0, 64);
+    if (!posCustomerId) return reply.status(400).send({ error: "invalid_request" });
+    const client = await clientFor(db, tenantId);
+    if (!client) {
+      return reply.status(503).send({ error: "pos_unavailable", message: "No register connection is configured for this company." });
+    }
+    let registerPin: "set" | "not_set" | "unknown";
+    try {
+      // sentinel PIN — never a real customer PIN, and never stored.
+      await client.getCustomerBalance(posCustomerId, "0");
+      registerPin = "set";
+    } catch (err: any) {
+      registerPin = classifyRegisterPinCheck(err);
+    }
+    return reply.send({ registerPin });
   });
 
   app.post("/supermarket/drafts/:id/charge", async (req: any, reply: any) => {

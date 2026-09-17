@@ -1,11 +1,25 @@
 /**
  * Pay-by-phone IVR core — the pure state machine behind the Gesheft payment line.
  *
- * The whole call flow Izzy specced lives here as a reducer:
- *   caller-ID match → no PIN keyed (the stored, enrolled PIN is supplied
- *   silently by the runtime); foreign/unknown number → account lookup by keyed
- *   phone number, then PIN required. Main menu: 1 = balance, 2 = payment —
- *   the SAME keys everywhere. Amounts are keyed with * as the decimal point.
+ * THE CALLER-ID RULE (Izzy, 2026-08-25, reaffirmed 2026-09-17 — "when somebody
+ * calls in, it should just match the phone caller ID to the account; if they
+ * want to enter a different account, they need to have a PIN"):
+ *   caller-ID match → the caller is NEVER asked for a PIN by this machine's
+ *   own choice. The register (POS with Logic) still demands X-Customer-Pin on
+ *   every balance read and charge, so the runtime supplies it SILENTLY: the
+ *   enrolled PIN if Loopcom has one, else a one-credit probe that asks the
+ *   register whether the account even has a PIN. Three register answers:
+ *     · served            → main menu, nothing keyed;
+ *     · "PIN required"    → the store never set a PIN on this account; NO value
+ *                            can ever work, so the line hands to a person at
+ *                            once and the account is flagged for the desk;
+ *     · "invalid PIN"     → the store set a PIN Loopcom does not know; the
+ *                            caller keys it ONCE, ever — it is enrolled and
+ *                            every later matching-caller-ID call is silent.
+ *   foreign/unknown number → account lookup by keyed phone number, then the
+ *   PIN is REQUIRED every time and NEVER enrolled — that is the PIN's job.
+ * Main menu: 1 = balance, 2 = payment — the SAME keys everywhere. Amounts are
+ * keyed with * as the decimal point.
  *
  * Safety rails (from the approved plan — non-negotiable):
  * - ⛔ Stored cards only. There is NO state in this machine that collects card
@@ -16,7 +30,7 @@
  *   without a fresh confirmation in between (stress-tested property).
  * - ⛔ Attempt caps everywhere (PIN 3, amount 3, lookup 3, confirm 3) — a
  *   stolen-card tester can't hammer the line; the cap lands on a human
- *   (20_connect_person), never a loop.
+ *   (20_connect_person), never a loop. A silent probe is not an attempt.
  * - ⛔ Refunds are impossible through their api; nothing here offers one.
  *
  * Prompts are the file names of the two shipped voice sets (Stephen/Kristen —
@@ -35,6 +49,14 @@ export const PAY_MAX_LOOKUP_ATTEMPTS = 3;
 export const PAY_MAX_CONFIRM_ROUNDS = 3;
 export const PAY_MAX_CHARGES_PER_CALL = 3;
 
+/**
+ * The sentinel the runtime sends when a matched caller has no enrolled PIN.
+ * It exists only to make the register say WHICH refusal applies ("required"
+ * = no PIN on the account, "invalid" = there is one). If it ever happens to be
+ * right, the account is simply served — the outcome a matched caller wants.
+ */
+export const PAY_PROBE_PIN = "0";
+
 export type PayIvrPhase =
   | "start"
   | "pin_entry"
@@ -47,18 +69,25 @@ export type PayIvrPhase =
   | "human"
   | "done";
 
+/** Why the register refused the PIN — mirrors posWithLogic.PosPinRefusal. */
+export type PayPinReason = "not_set" | "invalid" | "unknown";
+
 export type PayIvrState = {
   phase: PayIvrPhase;
   /** POS customer id once resolved; null until lookup succeeds. */
   posCustomerId: string | null;
-  /** True once a PIN (keyed or stored) has been accepted by the POS. */
+  /** True once a PIN (keyed, stored or probed) has been accepted by the POS. */
   pinVerified: boolean;
   /** The PIN currently in force for POS calls. Never appears in prompts. */
   activePin: string | null;
   /** Whether activePin came from the enrolled store (silent) vs keyed. */
   pinFromStore: boolean;
+  /** Whether activePin is the silent probe sentinel (a matched caller with nothing enrolled). */
+  pinProbe: boolean;
   /** True only when the caller's own caller-ID matched the account — the ONLY case a keyed PIN may be enrolled. */
   callerIdMatched: boolean;
+  /** Set when the register can never serve this account (no PIN set in the POS). Desk-visible. */
+  blockedReason: "pin_not_set" | null;
   pinAttempts: number;
   amountAttempts: number;
   lookupAttempts: number;
@@ -100,7 +129,7 @@ export type PayIvrEvent =
   | { type: "call_start"; callerKnown: boolean; hasStoredPin: boolean; storedPin?: string }
   | { type: "digits"; value: string }
   | { type: "lookup_result"; found: boolean; posCustomerId?: string }
-  | { type: "pin_result"; ok: boolean; balanceCents?: number }
+  | { type: "pin_result"; ok: boolean; balanceCents?: number; reason?: PayPinReason }
   | { type: "balance_result"; ok: boolean; balanceCents?: number }
   | {
       type: "charge_result";
@@ -116,7 +145,9 @@ export function initialPayIvrState(): PayIvrState {
     pinVerified: false,
     activePin: null,
     pinFromStore: false,
+    pinProbe: false,
     callerIdMatched: false,
+    blockedReason: null,
     pinAttempts: 0,
     amountAttempts: 0,
     lookupAttempts: 0,
@@ -125,6 +156,19 @@ export function initialPayIvrState(): PayIvrState {
     chargeSeq: 0,
     chargedCents: 0,
     lastBalanceCents: null,
+  };
+}
+
+/** Rows persisted before 2026-09-17 lack the two new fields; read them as false/null. */
+export function normalizePayIvrState(raw: unknown): PayIvrState {
+  const base = initialPayIvrState();
+  if (!raw || typeof raw !== "object") return base;
+  const s = raw as Partial<PayIvrState>;
+  return {
+    ...base,
+    ...s,
+    pinProbe: s.pinProbe === true,
+    blockedReason: s.blockedReason === "pin_not_set" ? "pin_not_set" : null,
   };
 }
 
@@ -152,6 +196,11 @@ function afterBalanceMenu(state: PayIvrState, lead: string[]): PayIvrOutput {
   return out({ ...state, phase: "after_balance_menu" }, [...lead, "21_menu_after_balance"], G.menu);
 }
 
+/** The register can never serve this account: no PIN exists in the POS. A person, at once. */
+function blockedNoPin(state: PayIvrState): PayIvrOutput {
+  return toHuman({ ...state, activePin: null, pinFromStore: false, pinProbe: false, blockedReason: "pin_not_set" }, []);
+}
+
 /**
  * The reducer. Given the current state and an event, returns the next state,
  * the prompt refs to play, what to gather next, and the effects the runtime
@@ -174,13 +223,20 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
       if (event.hasStoredPin && event.storedPin) {
         // Silent verification with the enrolled PIN — the caller keys nothing.
         return out(
-          { ...matched, phase: "pin_entry", activePin: event.storedPin, pinFromStore: true },
+          { ...matched, phase: "pin_entry", activePin: event.storedPin, pinFromStore: true, pinProbe: false },
           ["01_welcome"],
           null,
           [{ kind: "verify_pin", pin: event.storedPin }],
         );
       }
-      return out({ ...matched, phase: "pin_entry" }, ["01_welcome", "02_pin"], G.pin);
+      // Nothing enrolled: still nothing keyed. The probe makes the register say
+      // whether this account has a PIN at all (see PAY_PROBE_PIN).
+      return out(
+        { ...matched, phase: "pin_entry", activePin: PAY_PROBE_PIN, pinFromStore: false, pinProbe: true },
+        ["01_welcome"],
+        null,
+        [{ kind: "verify_pin", pin: PAY_PROBE_PIN }],
+      );
     }
 
     case "lookup_entry": {
@@ -200,9 +256,9 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           return out({ ...state, lookupAttempts: attempts }, ["19_lookup_not_found", "13_not_recognized"], G.phone);
         }
         // ⛔ A looked-up account is a FOREIGN number by definition: PIN always
-        // keyed, never enrolled, never read from the store.
+        // keyed, never enrolled, never read from the store, never probed.
         return out(
-          { ...state, phase: "pin_entry", posCustomerId: event.posCustomerId, callerIdMatched: false },
+          { ...state, phase: "pin_entry", posCustomerId: event.posCustomerId, callerIdMatched: false, pinProbe: false, pinFromStore: false },
           ["02_pin"],
           G.pin,
         );
@@ -212,24 +268,27 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
 
     case "pin_entry": {
       if (event.type === "digits") {
+        // A silent verification is in flight — digits cannot belong to it.
+        if (state.pinFromStore || state.pinProbe) return out(state, [], null);
         const pin = event.value.replace(/[^0-9]/g, "");
         if (pin.length < 1 || pin.length > 8) {
           const attempts = state.pinAttempts + 1;
           if (attempts >= PAY_MAX_PIN_ATTEMPTS) return toHuman({ ...state, pinAttempts: attempts }, ["15_too_many_tries"]);
           return out({ ...state, pinAttempts: attempts }, ["03_pin_wrong", "02_pin"], G.pin);
         }
-        return out({ ...state, activePin: pin, pinFromStore: false }, [], null, [{ kind: "verify_pin", pin }]);
+        return out({ ...state, activePin: pin, pinFromStore: false, pinProbe: false }, [], null, [{ kind: "verify_pin", pin }]);
       }
       if (event.type === "pin_result") {
         if (event.ok) {
           const next: PayIvrState = {
             ...state,
             pinVerified: true,
+            pinProbe: false,
             lastBalanceCents: typeof event.balanceCents === "number" ? event.balanceCents : state.lastBalanceCents,
           };
           const effects: PayIvrEffect[] = [];
-          // Enrollment: ONLY a keyed PIN, ONLY when this very call's caller-ID
-          // matched the account. A stored PIN is already enrolled; a looked-up
+          // Enrollment: ONLY when this very call's caller-ID matched the
+          // account, and ONLY a PIN that is not already enrolled. A looked-up
           // account (foreign number) must never be enrolled.
           if (!state.pinFromStore && state.callerIdMatched && state.activePin) {
             effects.push({ kind: "enroll_pin", pin: state.activePin });
@@ -237,13 +296,19 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           const res = mainMenu(next);
           return { ...res, effects: [...effects, ...res.effects] };
         }
-        // Stored PIN refused → the enrollment is stale; fall back to keying.
+        // ⛔ "PIN required" = the POS has NO PIN for this account. Nothing any
+        // caller keys can pass; asking would be theatre. A person, at once,
+        // and the desk learns why (blockedReason).
+        if (event.reason === "not_set") return blockedNoPin(state);
+        // Stored PIN refused → the enrollment is stale; ask once, re-enroll on success.
         if (state.pinFromStore) {
-          return out(
-            { ...state, activePin: null, pinFromStore: false },
-            ["02_pin"],
-            G.pin,
-          );
+          return out({ ...state, activePin: null, pinFromStore: false, pinProbe: false }, ["02_pin"], G.pin);
+        }
+        // The probe was refused as "invalid" → the store DID set a PIN and
+        // Loopcom does not know it yet. This is the ONE time a matched caller
+        // is asked; success enrolls it for every later call. Not an attempt.
+        if (state.pinProbe) {
+          return out({ ...state, activePin: null, pinProbe: false }, ["02_pin"], G.pin);
         }
         const attempts = state.pinAttempts + 1;
         if (attempts >= PAY_MAX_PIN_ATTEMPTS) return toHuman({ ...state, pinAttempts: attempts, activePin: null }, ["15_too_many_tries"]);
@@ -261,7 +326,7 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           return out({ ...state, phase: "amount_entry", amountAttempts: 0 }, ["05_amount_prompt"], G.amount);
         }
         // Anything else: repeat the menu of the phase we're in.
-        return state.phase === "main_menu" ? mainMenu(state, ["14_invalid_amount"].slice(0, 0)) : afterBalanceMenu(state, []);
+        return state.phase === "main_menu" ? mainMenu(state) : afterBalanceMenu(state, []);
       }
       if (event.type === "balance_result") {
         if (!event.ok || typeof event.balanceCents !== "number") {

@@ -1,7 +1,7 @@
 /**
  * Pay-by-phone runtime — binds the pure payIvrCore reducer to the database
  * (SupermarketPayCall = the durable per-call session) and the POS client
- * (the effects). Driven by the internal HTTP door the dialplan will call.
+ * (the effects). Driven by the internal HTTP door the dialplan calls.
  *
  * Money rules, in code not prose:
  * - a `charge` effect builds its externalId from the session ROW id + the
@@ -9,19 +9,32 @@
  *   their api answers 409 on a replay and we treat that as "already landed";
  * - the POS client never retries a write; a timeout surfaces as outcome
  *   "error", which the reducer routes to a HUMAN, never a retry loop;
- * - PINs: verified by attempting the balance read (their api validates);
- *   enrollment (encrypted, bound to account+caller-number) happens ONLY via
- *   the reducer's enroll_pin effect, whose own rules are pinned by tests.
+ * - PINs: verified by attempting the balance read (their api validates) and
+ *   the register's refusal is CLASSIFIED (posWithLogic.classifyPinRefusal):
+ *   "not_set" means the POS has no PIN for the account and nobody can be
+ *   served; "invalid" means there is one and it must be keyed. Enrollment
+ *   (encrypted, bound to the ACCOUNT, provenance = the caller's number)
+ *   happens ONLY via the reducer's enroll_pin effect, whose own rules are
+ *   pinned by tests.
+ *
+ * Caller-ID matching (2026-09-17): the register's phone lookup is an EXACT
+ * match on the record's phone; the mirror (PosCustomer) knows every number on
+ * the record, so a caller from an account's SECOND phone is still matched.
+ * The mirror also answers when the register is unreachable — a register
+ * outage must not turn every known caller into a stranger.
  */
 
 import {
   initialPayIvrState,
+  normalizePayIvrState,
   reducePayIvr,
   type PayIvrEvent,
   type PayIvrOutput,
   type PayIvrState,
+  type PayPinReason,
 } from "./payIvrCore";
 import { posClientForTenant } from "./integrationCredentials";
+import { mirrorCustomerByPhone } from "./customerSync";
 import { posAmountToCents, posPhoneDigits, toPosExternalId, PosApiError } from "./posWithLogic";
 
 export type PayIvrStepInput = {
@@ -47,15 +60,26 @@ export type PayIvrRuntimeDeps = {
   clientFor?: typeof posClientForTenant;
 };
 
+/** Session status values persisted on SupermarketPayCall.status. */
+export type PayCallStatus = "open" | "done" | "failed" | "no_pin";
+
 function parseBalance(body: any): number | null {
   const cents = posAmountToCents(body?.balance ?? body?.amount ?? body?.currentBalance);
   return cents === null ? null : cents;
 }
 
-async function findStoredPin(db: any, tenantId: string, posCustomerId: string, callerE164: string): Promise<string | null> {
+/**
+ * The enrolled PIN for an ACCOUNT. The vault row carries the number it was
+ * enrolled from as provenance, but the PIN belongs to the account: a caller
+ * from any of the account's own numbers (caller-ID matched) gets it silently.
+ * Only ever called after the caller-ID matched — a looked-up (foreign) account
+ * never reaches this function.
+ */
+export async function findStoredPin(db: any, tenantId: string, posCustomerId: string): Promise<string | null> {
   try {
     const row = await db.supermarketPhonePin.findFirst({
-      where: { tenantId, posCustomerId, phoneE164: callerE164 },
+      where: { tenantId, posCustomerId },
+      orderBy: { lastUsedAt: "desc" },
       select: { pinEnc: true },
     });
     if (!row) return null;
@@ -71,6 +95,51 @@ async function findStoredPin(db: any, tenantId: string, posCustomerId: string, c
 function toE164ish(raw: string): string {
   const ten = posPhoneDigits(raw);
   return ten ? `+1${ten}` : String(raw ?? "").slice(0, 20);
+}
+
+function pinReasonOf(err: unknown): PayPinReason {
+  if (err instanceof PosApiError && err.pinReason) return err.pinReason;
+  return "unknown";
+}
+
+function statusFor(state: PayIvrState): PayCallStatus {
+  if (state.blockedReason === "pin_not_set") return "no_pin";
+  if (state.phase === "done") return "done";
+  if (state.phase === "human") return "failed";
+  return "open";
+}
+
+/**
+ * Resolve the caller to a register account: the register's exact lookup
+ * first, then the mirror (second numbers on the record; register outages).
+ */
+export async function resolveCallerAccount(
+  db: any,
+  client: any,
+  tenantId: string,
+  callerNumber: string,
+  log: { warn: (o: any, m?: string) => void },
+): Promise<{ posCustomerId: string; via: "register" | "mirror" } | null> {
+  const phone10 = posPhoneDigits(callerNumber);
+  if (!phone10) return null;
+  let registerSaidNotFound = false;
+  try {
+    const body: any = await client.getCustomerIdByPhone(phone10);
+    const id = body?.id ?? body?.customerId ?? null;
+    if (id) return { posCustomerId: String(id), via: "register" };
+    registerSaidNotFound = true;
+  } catch (err: any) {
+    if (err instanceof PosApiError && err.code === "pos_not_found") registerSaidNotFound = true;
+    else log.warn({ err: String(err?.code ?? err) }, "pay-ivr caller lookup failed; trying the mirror");
+  }
+  try {
+    const m = await mirrorCustomerByPhone(db, tenantId, phone10);
+    if (m?.posCustomerId) return { posCustomerId: String(m.posCustomerId), via: "mirror" };
+  } catch {
+    /* the mirror is a convenience; its absence is "unknown caller" */
+  }
+  void registerSaidNotFound;
+  return null;
 }
 
 /**
@@ -100,7 +169,7 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
       },
     });
   }
-  let state: PayIvrState = (session.state as PayIvrState) ?? initialPayIvrState();
+  let state: PayIvrState = normalizePayIvrState(session.state);
 
   // Build the inbound event.
   let event: PayIvrEvent;
@@ -108,29 +177,13 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
     event = { type: "hangup" };
   } else if (state.phase === "start") {
     // First step: resolve the caller by caller-ID before the reducer runs.
-    const phone10 = posPhoneDigits(input.callerNumber);
-    let callerKnown = false;
-    let posCustomerId: string | null = null;
-    if (phone10) {
-      try {
-        const body: any = await client.getCustomerIdByPhone(phone10);
-        const id = body?.id ?? body?.customerId ?? null;
-        if (id) {
-          callerKnown = true;
-          posCustomerId = String(id);
-        }
-      } catch (err: any) {
-        if (!(err instanceof PosApiError && err.code === "pos_not_found")) {
-          log.warn({ err: String(err?.code ?? err) }, "pay-ivr caller lookup failed");
-        }
-      }
-    }
+    const account = await resolveCallerAccount(db, client, input.tenantId, input.callerNumber, log);
     let storedPin: string | null = null;
-    if (callerKnown && posCustomerId) {
-      state = { ...state, posCustomerId };
-      storedPin = await findStoredPin(db, input.tenantId, posCustomerId, toE164ish(input.callerNumber));
+    if (account) {
+      state = { ...state, posCustomerId: account.posCustomerId };
+      storedPin = await findStoredPin(db, input.tenantId, account.posCustomerId);
     }
-    event = { type: "call_start", callerKnown, hasStoredPin: storedPin !== null, storedPin: storedPin ?? undefined };
+    event = { type: "call_start", callerKnown: account !== null, hasStoredPin: storedPin !== null, storedPin: storedPin ?? undefined };
   } else {
     event = { type: "digits", value: String(input.digits ?? "") };
   }
@@ -196,27 +249,29 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
       }
       if (effect.kind === "verify_pin") {
         if (!state.posCustomerId) {
-          nextEvent = { type: "pin_result", ok: false };
+          nextEvent = { type: "pin_result", ok: false, reason: "unknown" };
           continue;
         }
+        const wasStored = state.pinFromStore;
         try {
           const body: any = await client.getCustomerBalance(state.posCustomerId, effect.pin);
           nextEvent = { type: "pin_result", ok: true, balanceCents: parseBalance(body) ?? undefined };
+          if (wasStored) {
+            await db.supermarketPhonePin
+              .updateMany({ where: { tenantId: input.tenantId, posCustomerId: state.posCustomerId }, data: { lastUsedAt: new Date() } })
+              .catch(() => {});
+          }
         } catch (err: any) {
           if (err instanceof PosApiError && (err.status === 401 || err.status === 403)) {
-            // A stale STORED pin gets purged so the next call keys fresh.
-            if (state.pinFromStore && state.posCustomerId) {
+            const reason = pinReasonOf(err);
+            // A refused STORED pin is stale (changed or removed at the store):
+            // purge the account's enrollment so the next call keys fresh.
+            if (wasStored && state.posCustomerId) {
               await db.supermarketPhonePin
-                .deleteMany({
-                  where: {
-                    tenantId: input.tenantId,
-                    posCustomerId: state.posCustomerId,
-                    phoneE164: toE164ish(input.callerNumber),
-                  },
-                })
+                .deleteMany({ where: { tenantId: input.tenantId, posCustomerId: state.posCustomerId } })
                 .catch(() => {});
             }
-            nextEvent = { type: "pin_result", ok: false };
+            nextEvent = { type: "pin_result", ok: false, reason };
           } else {
             // Provider outage ≠ wrong PIN — a person, not a lockout.
             nextEvent = { type: "charge_result", outcome: "error" };
@@ -254,12 +309,19 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
         posCustomerId: state.posCustomerId ?? undefined,
         chargeSeq: state.chargeSeq,
         chargedCents: state.chargedCents,
-        status: state.phase === "done" ? "done" : state.phase === "human" ? "failed" : "open",
+        status: statusFor(state),
       },
     });
 
     if (!nextEvent) break;
     event = nextEvent;
+  }
+
+  if (state.blockedReason === "pin_not_set" && transfer) {
+    log.warn(
+      { tenantId: input.tenantId, posCustomerId: state.posCustomerId, callerIdMatched: state.callerIdMatched },
+      "pay-ivr: register has no PIN for this account — caller handed to a person",
+    );
   }
 
   return {

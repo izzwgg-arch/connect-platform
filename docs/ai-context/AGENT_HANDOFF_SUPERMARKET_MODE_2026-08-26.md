@@ -1121,3 +1121,48 @@ me for a PIN. If the number is in the system, then it shouldn't ask."*
   enforcement configurable, or handing us the PIN — the open ask-Gesheft item from 08-25.
 - ⏳ Acceptance unchanged: key the PIN once from a recognised number, hang up, call again —
   the second call must go straight to `22_main_menu` (1 balance / 2 payment).
+
+### §16d — 2026-09-17: THE CALLER-ID RULE, built and stress-tested; the register's "PIN required" means the POS has NO PIN on the account
+
+Izzy, 2026-09-17 ~13:00 ET: *"Payment system is still not working properly the way we set
+it up … When somebody calls in, it should just match the phone caller ID to the account.
+If they want to enter a different account, they need to have a PIN. That wasn't working
+last time. Right now, it's kind of dummy … Stress test the fuck out of it."*
+Summary file: `docs/ai-context/claude-md-sections/2026-09-17-pay-line-caller-id-rule.md`.
+
+**Diagnosis (live, read-only, from inside `app-api-1` with the tenant's real key):**
+- The register distinguishes two refusals on `GET /customers/id/{id}/balance`:
+  `401 {"error":"Customer PIN required."}` for an account with **no PIN set in the POS**
+  (identical for no header, `0000`, `1234`, zip, last-4, the id …) and
+  `401 {"error":"Invalid customer PIN."}` for an account that **has** one. Random sample:
+  4/25 have a PIN; **on-account sample: 12/15 have a PIN.** `/customers/id/{id}/pin` → 404;
+  no docs endpoint exists on the host. There is no way for Loopcom to set a PIN.
+- 562-209-6644 → `1001021 IZZY WEIN` and 845-238-0884 → `4322 Y. HORWITZ` are BOTH
+  no-PIN accounts with **no card on file** (`customerCreditCards: []`). Today's 12:01 ET
+  call from 4322 (`SupermarketPayCall` 16:01:56Z: matched, `pinAttempts: 3`) keyed three
+  PINs into "Customer PIN required." and hit the cap. `SupermarketPhonePin`: 0 rows — every
+  PIN ever keyed on this line went to an account that cannot accept one.
+- Mirror coverage: 13,836 customers · 979 with a card (7%) · 326 on-account · 168
+  on-account with a card.
+- Two more findings on the way: the register's phone lookup is an EXACT match on the
+  record's phone, so a caller from an account's second number was a stranger; and a
+  register outage made every caller a stranger (no mirror fallback in the runtime).
+
+**Built (api only — no PBX change, no migration):**
+- `posWithLogic.ts`: `classifyPinRefusal(status, body)` → `not_set | invalid | unknown`
+  (unknown fails toward asking, never toward giving up); `PosApiError.pinReason`.
+- `payIvrCore.ts`: matched caller → silent `verify_pin` with the enrolled PIN, else the
+  silent probe `PAY_PROBE_PIN = "0"`; `pin_result.reason`: `not_set` → `20_connect_person`
+  at once + `blockedReason: "pin_not_set"` (no attempt counted, `02_pin` never played);
+  `invalid` after a probe → `02_pin` once (not an attempt), enrolled on success; stale
+  stored → ask once; digits arriving during a silent verify are ignored. Foreign lookup →
+  PIN keyed every time, never enrolled/probed; `not_set` there → person at once.
+  `normalizePayIvrState()` for pre-09-17 rows.
+- `payIvrRuntime.ts`: `resolveCallerAccount` (register, then `mirrorCustomerByPhone` for
+  second numbers and outages), `findStoredPin` per ACCOUNT (phone kept as provenance),
+  `lastUsedAt` touched on silent use, purge-by-account on a refused stored PIN, session
+  `status` gains `no_pin` (sticky), a `warn` log per no-PIN landing.
+- `supermarketTestKit.ts` `FakePos`: the two real refusal bodies.
+- Desk PIN management routes + Orders-desk "Phone PIN" control (see the summary file).
+
+**Verification:** see the summary file's Verification section and `TESTS_RUN.md` (2026-09-17).
