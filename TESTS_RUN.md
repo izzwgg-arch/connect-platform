@@ -8,7 +8,7 @@
 - apps/api `npx tsc --noEmit -p tsconfig.json`: **689 errors before, 689 after, 0 new** (sorted line-list diff; all pre-existing in packages/db + elsewhere). apps/portal `npx tsc -p tsconfig.json --noEmit` **exit 0**. `bash -n scripts/deploy-portal.sh` OK.
 - Desktop `pnpResident.test.ts` + `pnp.test.ts` **41/41** (baseline, untouched).
 - Live read-only proofs (no code): office PC resident heard a synthetic multicast SUBSCRIBE in 5 ms; YMCS RPS token + server list + 0 devices from inside `app-api-1`; PBX cfg for the T42S fetched and compared field-by-field to the working T53W (identical shape).
-- DEPLOYED: see the desk-phone summary file (filled in after container verification).
+- DEPLOYED 2026-09-17 ~16:07Z: api + portal `deploy-direct.sh --commit e6adad6b` (origin tip), both `.build-commit` = `e6adad6b`, 0 restarts, health 200 both hostnames; new source/strings grepped in both containers; CSP wasm-unsafe-eval live; the new portal verify stage passed.
 - NOT proven: any phone claimed through the new door against real RPS; a factory-fresh Yealink registering end to end.
 
 ## Yiddish24 outage no longer pauses the 24/7 listen — 2026-09-17
