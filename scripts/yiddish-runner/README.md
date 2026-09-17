@@ -99,3 +99,31 @@ downloads while it is `OWNER_AUTHORIZED` with a GRANTED `YcRightsRecord`
   engine's `transcribe` handler yet — see the `TODO` in `runner.ts` above
   `internalAudioFetchHandler`. Until it is, every `call_recordings` item pays
   for a full transcription, English calls included.
+
+## Moving the runner to a GPU machine (Izzy's Dell Precision 3630, 2026-09-17)
+
+Labelling on the 2012 office PC was measured at ~50x slower than real time, so the whole runner
+moves to the Dell (NVIDIA GPU + modern CPU) and the old PC stops. The database references audio by
+ABSOLUTE path (`YcAudioAsset.storageKey`, e.g. `C:\Users\izzyw\LoopcomYiddishRunner\audio\...`), so
+keep the SAME path on the new machine (same Windows username) — otherwise run the one-line SQL
+`UPDATE "YcAudioAsset" SET "storageKey" = replace("storageKey", '<old prefix>', '<new prefix>')`.
+
+1. On the Dell, elevated PowerShell: `Set-ExecutionPolicy -Scope Process Bypass; .\bootstrap-dell.ps1`
+   (installs Node LTS, Python 3.12, FFmpeg, faster-whisper + CUDA/cuDNN wheels; prints the GPU and a
+   realtime factor on a synthetic 30 s clip; writes `.env.example`).
+2. Stop the old runner (create `STOP`, wait for "STOP file found — exiting"), then copy from the old PC:
+   the runner folder WITHOUT `node_modules`/`.venv` (`runner.ts`, `start.cmd`, `tunnel.cmd`, `code\`,
+   `package.json`, `package-lock.json`, `.env`) and the whole `audio\` tree (voicemail + Yiddish24 +
+   call_recordings): `robocopy \OLDPC\Users\izzyw\LoopcomYiddishRunner C:\Users\izzyw\LoopcomYiddishRunner /E /XD node_modules .venv /Z /R:2 /W:5`
+   over the LAN, or a USB drive.
+3. `npm install` then `npm run generate` in the folder (the Prisma client is machine-specific).
+4. Copy the SSH key the tunnel uses (`%USERPROFILE%\.ssh\connect2_ed25519`) — a private key: move it by
+   USB or an encrypted channel, never chat/email — and run `tunnel.cmd` once by hand to accept the host key.
+5. Complete `.env` from `.env.example`: keep `DATABASE_URL`, add `YC_TRANSCRIBE_BACKEND=local`,
+   `YC_LOCAL_WHISPER_PYTHON=<venv python>`, `YC_LOCAL_WHISPER_DEVICE=cuda`,
+   `YC_LOCAL_WHISPER_COMPUTE=float16`, `YC_CUDA_BIN=<the two pip DLL folders>`.
+6. `start.cmd`. First log line must read `stages fetch_audio, segment, features, transcribe, align`.
+   Then the integrator applies `scripts/yiddish-ingest/integrator-budgets.sql` (minutes > 0) and
+   `unpark-voicemail-jobs.sql`; `transcribe` jobs start running on the GPU within a tick.
+7. Register the scheduled task on the Dell (`Loopcom Yiddish Runner`, at log-on, runs `start.cmd`) and
+   DELETE the one on the old PC so two runners never race.

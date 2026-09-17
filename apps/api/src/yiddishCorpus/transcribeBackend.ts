@@ -119,6 +119,8 @@ export class EverettBackend implements TranscribeBackend {
 const DEFAULT_LOCAL_MODEL = "ivrit-ai/yi-whisper-large-v3-turbo-ct2";
 const DEFAULT_LOCAL_COMPUTE = "int8";
 const DEFAULT_LOCAL_THREADS = 8;
+/** "cpu" or "cuda" (an NVIDIA GPU — Izzy's Dell). float16 on cuda, int8 on cpu are the sane pairs. */
+const DEFAULT_LOCAL_DEVICE = "cpu";
 const DEFAULT_LOCAL_TIMEOUT_MS = 45 * 60_000;
 
 export interface LocalFasterWhisperBackendOptions {
@@ -129,6 +131,8 @@ export interface LocalFasterWhisperBackendOptions {
   model?: string;
   compute?: string;
   threads?: number;
+  /** CTranslate2 device: "cpu" (default) or "cuda". Env: YC_LOCAL_WHISPER_DEVICE. */
+  device?: string;
   timeoutMs?: number;
 }
 
@@ -144,6 +148,7 @@ export class LocalFasterWhisperBackend implements TranscribeBackend {
   private readonly modelName: string;
   private readonly compute: string;
   private readonly threads: number;
+  private readonly device: string;
   private readonly timeoutMs: number;
 
   constructor(opts: LocalFasterWhisperBackendOptions = {}) {
@@ -152,6 +157,7 @@ export class LocalFasterWhisperBackend implements TranscribeBackend {
     this.modelName = opts.model ?? process.env.YC_LOCAL_WHISPER_MODEL ?? DEFAULT_LOCAL_MODEL;
     this.compute = opts.compute ?? process.env.YC_LOCAL_WHISPER_COMPUTE ?? DEFAULT_LOCAL_COMPUTE;
     this.threads = opts.threads ?? (Number(process.env.YC_LOCAL_WHISPER_THREADS) || DEFAULT_LOCAL_THREADS);
+    this.device = opts.device ?? process.env.YC_LOCAL_WHISPER_DEVICE ?? DEFAULT_LOCAL_DEVICE;
     this.timeoutMs = opts.timeoutMs ?? (Number(process.env.YC_LOCAL_WHISPER_TIMEOUT_MS) || DEFAULT_LOCAL_TIMEOUT_MS);
   }
 
@@ -194,6 +200,8 @@ export class LocalFasterWhisperBackend implements TranscribeBackend {
         this.compute,
         "--threads",
         String(this.threads),
+        "--device",
+        this.device,
         "--language",
         "yi",
         audioPath,

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Yiddish corpus — local faster-whisper transcription, run on the office PC's
-own CPU. $0 per minute; the only cost is wall time.
+own CPU — or its NVIDIA GPU with --device cuda (Izzy's Dell, 2026-09-17).
+$0 per minute; the only cost is wall time.
 
 Invoked by LocalFasterWhisperBackend (transcribeBackend.ts) as:
 
     <python> local_whisper.py --model <model> --compute <compute>
-             --threads <threads> --language yi <audioPath>
+             --threads <threads> --device <cpu|cuda> --language yi <audioPath>
 
 Contract with the Node caller:
   - Exactly ONE JSON object is printed on stdout, and nothing else. All
@@ -54,6 +55,7 @@ def main() -> int:
     parser.add_argument("--model", help="faster-whisper / CTranslate2 model id or local path")
     parser.add_argument("--compute", default="int8", help="CTranslate2 compute type (default int8)")
     parser.add_argument("--threads", type=int, default=8, help="CPU threads (default 8)")
+    parser.add_argument("--device", default="cpu", help="CTranslate2 device: cpu (default) or cuda (NVIDIA GPU)")
     parser.add_argument("--language", default="yi", help="forced language code (default yi — never he, never auto)")
     parser.add_argument(
         "--self-check",
@@ -63,6 +65,17 @@ def main() -> int:
     parser.add_argument("audio_path", nargs="?", help="path to the audio file to transcribe")
     args = parser.parse_args()
 
+    # On Windows, CUDA/cuDNN runtime DLLs installed through pip (nvidia-cublas-cu12,
+    # nvidia-cudnn-cu12) live inside site-packages and are NOT on PATH. The Node
+    # caller (or a person) puts their folders in YC_CUDA_BIN, ';'-separated.
+    import os
+    for d in (os.environ.get("YC_CUDA_BIN") or "").split(";"):
+        d = d.strip()
+        if d and os.path.isdir(d):
+            try:
+                os.add_dll_directory(d)  # type: ignore[attr-defined]
+            except (AttributeError, OSError):
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
     try:
         from faster_whisper import WhisperModel
     except ImportError as err:
@@ -78,8 +91,8 @@ def main() -> int:
         return 2
 
     try:
-        eprint(f"loading model={args.model} compute={args.compute} threads={args.threads}")
-        model = WhisperModel(args.model, device="cpu", compute_type=args.compute, cpu_threads=args.threads)
+        eprint(f"loading model={args.model} device={args.device} compute={args.compute} threads={args.threads}")
+        model = WhisperModel(args.model, device=args.device, compute_type=args.compute, cpu_threads=args.threads)
 
         eprint(f"transcribing {args.audio_path} language={args.language}")
         segments_iter, info = model.transcribe(
