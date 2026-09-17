@@ -5,7 +5,7 @@
 - apps/api `yealinkRedirectClaim.test.ts` + `deviceCloudRoutes.test.ts` + `deskPhoneRoutes.test.ts` **154/154** (+2: a halted row's note is never overwritten; somebody else's note is never overwritten).
 - apps/portal `setupDriver.test.ts` + wizard tests + `lib/deskPhoneWizard.test.ts` **97: 96 pass, 1 fail** (+2: retried() forgets locked/passwordUnavailable/defaultCredentialsTried; keeps a typed credentialRef; the 1 fail = the documented pre-existing standing-listener test). Portal `tsc` **0**; api tsc: 0 errors in touched files (pre-existing elsewhere).
 - Live evidence that motivated it: desktop log 21:26:40/52Z `factory_reset … refused:locked` then nothing; 14 `DESK_PHONE_RETRY` audits 21:27–21:33Z each followed by a halt in <1 s; the phone pinged continuously (never rebooted).
-- DEPLOYED: see the desk-phone summary file.
+- DEPLOYED 2026-09-17 ~21:55Z: api + portal `deploy-direct.sh --commit 64746df2` (origin tip), both `.build-commit` = `64746df2`, 0 restarts, health 200 both hostnames; guard + `.retried(` grepped in the containers.
 
 ## Desk-phone wizard round 22 — office-wizard Yealink RPS claim + scan-page canary — 2026-09-17
 
