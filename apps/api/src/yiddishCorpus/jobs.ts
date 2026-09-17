@@ -1050,7 +1050,9 @@ export function startYiddishWorker(db: any, opts: YiddishWorkerOptions = {}): Yi
           ...opts,
           leaseOwner,
           limit: opts.limit ?? YC_WORK_BATCH,
-          excludeStages: ["discover"],
+          // Stages another machine owns (e.g. audio on Izzy's PC) stay out of
+          // this lane; discovery always has its own.
+          excludeStages: ["discover", ...(opts.excludeStages ?? [])],
         });
       } catch (err) {
         onErr(err);

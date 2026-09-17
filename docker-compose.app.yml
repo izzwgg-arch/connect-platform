@@ -142,6 +142,7 @@ services:
       # These change how much LOCAL work we do per tick - never how fast we
       # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
       YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
+      YIDDISH_WORKER_EXCLUDE_STAGES: ${YIDDISH_WORKER_EXCLUDE_STAGES:-fetch_audio,segment,features}
       YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
       # How often a source is re-walked. Discovery has its own worker lane, so
       # this paces the CRAWL, not the pipeline: 60 pages every 5 minutes is
@@ -343,6 +344,7 @@ services:
       # These change how much LOCAL work we do per tick - never how fast we
       # ask Yiddish24 for a page, which stays behind the adapter's >=2s gap.
       YIDDISH_WORKER_INTERVAL_MS: ${YIDDISH_WORKER_INTERVAL_MS:-20000}
+      YIDDISH_WORKER_EXCLUDE_STAGES: ${YIDDISH_WORKER_EXCLUDE_STAGES:-fetch_audio,segment,features}
       YIDDISH_WORK_BATCH: ${YIDDISH_WORK_BATCH:-50}
       # How often a source is re-walked. Discovery has its own worker lane, so
       # this paces the CRAWL, not the pipeline: 60 pages every 5 minutes is

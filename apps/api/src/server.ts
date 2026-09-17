@@ -24341,6 +24341,12 @@ if (yiddishEngineEnabled) {
   // is one cheap DB read that claims nothing.
   startYiddishWorker(db, {
     intervalMs: Number(process.env.YIDDISH_WORKER_INTERVAL_MS || 60_000),
+    // Stages run by an off-box runner instead (2026-09-17: audio on Izzy's PC,
+    // "fetch_audio,segment,features"). Unset = the server runs everything.
+    excludeStages: String(process.env.YIDDISH_WORKER_EXCLUDE_STAGES ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
     onError: (err) => app.log.warn({ err }, "yiddish worker tick failed"),
   });
 }
