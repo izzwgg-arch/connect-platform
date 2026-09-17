@@ -32,7 +32,7 @@ import {
 import { clearCrmModeCache, requireSupermarketMode, CRM_MODES } from "./crmMode";
 import { parseDraftListQuery, draftSearchWhere } from "./draftListQuery";
 import { approveAndSubmitDraft, sanitizeDraftItems } from "./orderSubmit";
-import { runPayIvrStep } from "./payIvrRuntime";
+import { runPayIvrCardEntry, runPayIvrStep } from "./payIvrRuntime";
 import { payIvrDialplanView } from "./payIvrDialplan";
 import { marketingLaneEnabled, sendSpecialBlast, verifyUnsubscribeToken } from "./specials";
 import { decideAutoSubmit, weeklyCorrectionStats } from "./learning";
@@ -170,6 +170,24 @@ const payIvrStepSchema = z.object({
   callerNumber: z.string().max(32).optional().default(""),
   digits: z.string().max(32).optional(),
   hangup: z.boolean().optional(),
+});
+
+/** The AGI card collector's body. ⛔ Never logged, never echoed. */
+const payIvrCardSchema = z.object({
+  tenantId: z.string().min(5).max(64),
+  callId: z.string().min(1).max(128),
+  callerNumber: z.string().max(32).optional().default(""),
+  card: z
+    .object({
+      number: z.string().min(13).max(19),
+      expMonth: z.number().int().min(1).max(12),
+      expYear: z.number().int().min(0).max(99),
+      cvv: z.string().min(3).max(4),
+      zipCode: z.string().max(10).optional(),
+      houseNumber: z.string().max(10).optional(),
+    })
+    .optional(),
+  cardFailed: z.boolean().optional(),
 });
 
 /**
@@ -1855,6 +1873,20 @@ export async function registerSupermarketRoutes(deps: SupermarketRouteDeps): Pro
     // the dialplan gets ONE playback string and one word — Asterisk cannot loop
     // a JSON array, and the PBX must hold no logic of its own
     return reply.send({ ...result, ...payIvrDialplanView(result) });
+  });
+
+  // The keyed-card door (2026-09-17): the AGI collector's one request. ⛔ The
+  // body carries a card number; it is validated, vaulted in process memory and
+  // never logged (no request logging of this body, no echo in the reply).
+  app.post("/internal/supermarket/pay-ivr/card", async (req: any, reply: any) => {
+    if (!internalGuard(req, reply, "/internal/supermarket/pay-ivr/card")) return;
+    const parsed = payIvrCardSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, reason: "invalid_payload" });
+    const settings = await db.supermarketSettings.findUnique({ where: { tenantId: parsed.data.tenantId } }).catch(() => null);
+    const tenant = await db.tenant.findUnique({ where: { id: parsed.data.tenantId }, select: { crmMode: true } }).catch(() => null);
+    if (tenant?.crmMode !== "supermarket" || !settings?.payIvrEnabled) return reply.status(404).send({ ok: false, reason: "line_off" });
+    const out = await runPayIvrCardEntry({ db, log: app.log, clientFor }, parsed.data);
+    return reply.send(out);
   });
 
   // ══════════════════════════ PUBLIC: unsubscribe ══════════════════════════

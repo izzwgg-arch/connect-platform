@@ -67,9 +67,17 @@ export type PayIvrPhase =
   | "after_balance_menu"
   | "amount_entry"
   | "confirm"
+  | "card_entry"
+  | "card_save_choice"
+  | "card_offer"
   | "charging"
   | "human"
   | "done";
+
+/** How a keyed card is used: this payment only, or stored on the account first. */
+export type PayCardMode = "once" | "save";
+/** Times the AGI collector may be (re)started per call before a person. */
+export const PAY_MAX_CARD_ENTRY_ATTEMPTS = 2;
 
 /** Why the register refused the PIN — mirrors posWithLogic.PosPinRefusal. */
 export type PayPinReason = "not_set" | "invalid" | "unknown";
@@ -97,6 +105,11 @@ export type PayIvrState = {
   amountAttempts: number;
   lookupAttempts: number;
   confirmRounds: number;
+  /** A keyed card is in play for the next charge (the card itself lives in payCardVault, never here). */
+  cardMode: PayCardMode | null;
+  /** Last four of the keyed card — the only card-derived value allowed in this state. */
+  cardLast4: string | null;
+  cardEntryAttempts: number;
   /** Amount pending confirmation, cents. */
   pendingCents: number | null;
   /** Count of confirmed charges this call — drives the externalId sequence. */
@@ -110,13 +123,13 @@ export type PayIvrEffect =
   | { kind: "lookup_by_phone"; phone10: string }
   | { kind: "verify_pin"; pin: string }
   | { kind: "read_balance" }
-  | { kind: "charge"; amountCents: number; chargeSeq: number }
+  | { kind: "charge"; amountCents: number; chargeSeq: number; cardMode: PayCardMode | null }
   | { kind: "transfer_to_person" }
   | { kind: "hangup" };
 
 export type PayIvrGather = {
-  /** What the runtime should collect next. */
-  what: "choice" | "pin" | "phone" | "menu" | "amount" | "confirm";
+  /** What the runtime should collect next. "card" = the dialplan runs the AGI collector (digits never pass through a step). */
+  what: "choice" | "pin" | "phone" | "menu" | "amount" | "confirm" | "card";
   maxDigits: number;
   /** '#' always terminates; '*' is data only in amount entry. */
   starIsData: boolean;
@@ -135,6 +148,8 @@ export type PayIvrEvent =
   | { type: "lookup_result"; found: boolean; posCustomerId?: string }
   | { type: "pin_result"; ok: boolean; balanceCents?: number; reason?: PayPinReason }
   | { type: "balance_result"; ok: boolean; balanceCents?: number }
+  /** The AGI collector finished: a valid card is in the vault (ok) or the caller gave up. */
+  | { type: "card_entered"; ok: boolean; last4?: string }
   | {
       type: "charge_result";
       outcome: "approved" | "declined" | "no_card" | "duplicate" | "error";
@@ -158,6 +173,9 @@ export function initialPayIvrState(): PayIvrState {
     amountAttempts: 0,
     lookupAttempts: 0,
     confirmRounds: 0,
+    cardMode: null,
+    cardLast4: null,
+    cardEntryAttempts: 0,
     pendingCents: null,
     chargeSeq: 0,
     chargedCents: 0,
@@ -174,6 +192,9 @@ const PHASES: PayIvrPhase[] = [
   "after_balance_menu",
   "amount_entry",
   "confirm",
+  "card_entry",
+  "card_save_choice",
+  "card_offer",
   "charging",
   "human",
   "done",
@@ -206,6 +227,9 @@ export function normalizePayIvrState(raw: unknown): PayIvrState {
     amountAttempts: num(s.amountAttempts),
     lookupAttempts: num(s.lookupAttempts),
     confirmRounds: num(s.confirmRounds),
+    cardMode: s.cardMode === "once" || s.cardMode === "save" ? s.cardMode : null,
+    cardLast4: typeof s.cardLast4 === "string" ? s.cardLast4.replace(/\D/g, "").slice(-4) : null,
+    cardEntryAttempts: num(s.cardEntryAttempts),
     pendingCents: Number.isInteger(s.pendingCents) ? (s.pendingCents as number) : null,
     chargeSeq: num(s.chargeSeq),
     chargedCents: num(s.chargedCents),
@@ -220,7 +244,20 @@ const G: Record<string, PayIvrGather> = {
   menu: { what: "menu", maxDigits: 1, starIsData: false },
   amount: { what: "amount", maxDigits: 9, starIsData: true },
   confirm: { what: "confirm", maxDigits: 1, starIsData: false },
+  card: { what: "card", maxDigits: 0, starIsData: false },
 };
+
+/**
+ * Hand the caller to the AGI card collector. The dialplan plays nothing of
+ * ours first (the AGI voices its own prompts) and the digits never come back
+ * through a step: the AGI posts them to the card door, which raises
+ * `card_entered`. Re-entered at most PAY_MAX_CARD_ENTRY_ATTEMPTS times.
+ */
+function cardEntry(state: PayIvrState, lead: string[] = []): PayIvrOutput {
+  const attempts = state.cardEntryAttempts + 1;
+  if (attempts > PAY_MAX_CARD_ENTRY_ATTEMPTS) return toHuman(state, []);
+  return out({ ...state, phase: "card_entry", cardEntryAttempts: attempts, cardMode: null, cardLast4: null }, lead, G.card);
+}
 
 function out(state: PayIvrState, prompts: string[], gather: PayIvrGather | null, effects: PayIvrEffect[] = []): PayIvrOutput {
   return { state, prompts, gather, effects };
@@ -389,7 +426,7 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
       }
       return out(
         { ...state, phase: "confirm", pendingCents: parsed.cents },
-        ["06_confirm_intro", ...amountToPromptRefs(parsed.cents), "07_confirm_choice"],
+        ["06_confirm_intro", ...amountToPromptRefs(parsed.cents), "39_confirm_choice_card"],
         G.confirm,
       );
     }
@@ -397,16 +434,7 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
     case "confirm": {
       if (event.type !== "digits") return out(state, [], G.confirm);
       const key = event.value.trim();
-      if (key === "1" && state.pendingCents !== null) {
-        const seq = state.chargeSeq + 1;
-        if (seq > PAY_MAX_CHARGES_PER_CALL) return toHuman(state, []);
-        return out(
-          { ...state, phase: "charging", chargeSeq: seq },
-          ["08_processing"],
-          null,
-          [{ kind: "charge", amountCents: state.pendingCents, chargeSeq: seq }],
-        );
-      }
+      if (key === "1" && state.pendingCents !== null) return startCharge(state, null);
       if (key === "2") {
         const rounds = state.confirmRounds + 1;
         if (rounds >= PAY_MAX_CONFIRM_ROUNDS) return toHuman({ ...state, confirmRounds: rounds }, []);
@@ -416,12 +444,45 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           G.amount,
         );
       }
-      return out(state, ["07_confirm_choice"], G.confirm);
+      // "pay with a different card" — Izzy, 2026-09-17 night.
+      if (key === "3" && state.pendingCents !== null) return cardEntry(state);
+      return out(state, ["39_confirm_choice_card"], G.confirm);
+    }
+
+    case "card_entry": {
+      if (event.type === "card_entered") {
+        if (!event.ok) return toHuman({ ...state, cardMode: null, cardLast4: null }, ["45_card_invalid"]);
+        return out(
+          { ...state, phase: "card_save_choice", cardLast4: String(event.last4 ?? "").replace(/\D/g, "").slice(-4) || null },
+          ["46_card_save_choice"],
+          G.menu,
+        );
+      }
+      // A step arrived while the collector was expected to run (it did not reach
+      // the card door, or the dialplan came back early): run it again, bounded.
+      if (event.type === "digits") return cardEntry(state);
+      return out(state, [], G.card);
+    }
+
+    case "card_save_choice": {
+      if (event.type !== "digits") return out(state, [], G.menu);
+      const key = event.value.trim();
+      if (key === "1" && state.pendingCents !== null) return startCharge(state, "once");
+      if (key === "2" && state.pendingCents !== null) return startCharge(state, "save");
+      return out(state, ["46_card_save_choice"], G.menu);
+    }
+
+    case "card_offer": {
+      if (event.type !== "digits") return out(state, [], G.menu);
+      const key = event.value.trim();
+      if (key === "1" && state.pendingCents !== null) return cardEntry(state);
+      return toHuman(state, []);
     }
 
     case "charging": {
       if (event.type !== "charge_result") return out(state, [], null);
-      const cleared: PayIvrState = { ...state, pendingCents: null };
+      const keyed = state.cardMode !== null;
+      const cleared: PayIvrState = { ...state, pendingCents: null, cardMode: null };
       if (event.outcome === "approved" || event.outcome === "duplicate") {
         // duplicate = our externalId already landed (a retried webhook or a
         // replayed step) — the money moved exactly once; report it as done.
@@ -436,9 +497,14 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
         );
       }
       if (event.outcome === "no_card") {
-        return toHuman(cleared, ["12_no_card"]);
+        // No card on file: offer to key one for THIS amount (the amount is kept).
+        return out({ ...state, cardMode: null, phase: "card_offer" }, ["12_no_card", "40_card_offer"], G.menu);
       }
       if (event.outcome === "declined") {
+        if (keyed) {
+          // The keyed card was refused: another card, or a person. Amount kept.
+          return out({ ...state, cardMode: null, phase: "card_offer" }, ["11_declined", "47_card_declined_offer"], G.menu);
+        }
         const attempts = cleared.amountAttempts + 1;
         if (attempts >= PAY_MAX_AMOUNT_ATTEMPTS) return toHuman({ ...cleared, amountAttempts: attempts }, ["11_declined"]);
         return out({ ...cleared, phase: "amount_entry", amountAttempts: attempts }, ["11_declined", "05_amount_prompt"], G.amount);
@@ -448,9 +514,25 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
     }
 
     case "human":
+      // A step after the hand-off (e.g. the dialplan returning from the AGI
+      // collector) must land on the person again, never sit in a silent loop.
+      return out(state, [], null, [{ kind: "transfer_to_person" }]);
     case "done":
       return out(state, [], null);
   }
+}
+
+/** One confirmed charge: card on file (cardMode null) or the keyed card, once or saved first. */
+function startCharge(state: PayIvrState, cardMode: PayCardMode | null): PayIvrOutput {
+  if (state.pendingCents === null) return toHuman(state, []);
+  const seq = state.chargeSeq + 1;
+  if (seq > PAY_MAX_CHARGES_PER_CALL) return toHuman(state, []);
+  return out(
+    { ...state, phase: "charging", chargeSeq: seq, cardMode },
+    ["08_processing"],
+    null,
+    [{ kind: "charge", amountCents: state.pendingCents, chargeSeq: seq, cardMode }],
+  );
 }
 
 /** Invariant helper for tests: how many charge effects a full event trace produced. */

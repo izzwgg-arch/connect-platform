@@ -1241,3 +1241,36 @@ balance AND charge on such accounts); the mirror fallback for lookups; the desk 
 instruction tonight is "ask for the PIN" — do not re-add silence without his word).
 
 **Verification:** the summary file's bottom section + `TESTS_RUN.md` (2026-09-17 late evening).
+
+### §16g — 2026-09-17 night: PAY WITH A KEYED CARD (one-time, or saved to the account) — the AGI collector, the card door, the memory vault
+
+Izzy's ask and his "Go, build it." (after the PCI statement) are quoted in the summary file
+(`2026-09-17-pay-line-final-flow.md`, "Round 4"). The register's keyed-card field names were read
+off its validator with empty/invalid bodies on Izzy's own card-less account (nothing storable):
+`CardNumber` (Luhn), `ExpMonth` 1–12, `ExpYear` 0–99, `CVV`, `ZipCode`, `HouseNumber`.
+
+**Built:** `posWithLogic.ts` — `PosKeyedCard`, `luhnValid`, `toPosCardBody`,
+`createChargeWithCard` (inline `card` on `/charges`), `addCustomerCard` (`POST /cards`).
+`payCardVault.ts` — process-memory Map by session row id, TTL 15 min, `cardLast4`.
+`payIvrCore.ts` — phases `card_entry` (gather what `card` → dialplan action `card`),
+`card_save_choice`, `card_offer`; `startCharge(state, cardMode)`; `39_confirm_choice_card` replaces
+`07`; `no_card` → offer instead of a person; keyed decline → `47` offer; `human` phase re-transfers on
+any later step (the dialplan returns from the AGI with an empty step). `payIvrRuntime.ts` —
+`validateKeyedCard`, `runPayIvrCardEntry` (the door: vault + `card_entered`), `performCharge` with
+`cardMode` (once = inline; save = add card then charge by id; vault cleared on every outcome; an
+empty vault = `declined`, never a charge). `supermarketRoutes.ts` — `POST /internal/supermarket/pay-ivr/card`
+behind `internalGuard`, body never logged/echoed. `payIvrDialplan.ts` — action `card`.
+`scripts/pbx/supermarket/connect-pay-card.py` — the AGI (GET DATA ×4 with 3 tries each, Luhn +
+expiry locally, one HTTPS POST, `PAY_CARD=ok|fail|error|hangup`), reads the secret from AstDB.
+Conf — the `card` label. Prompts 39–47.
+
+**Why an AGI:** `pbx.c` logs `Executing … Set("chan", "PAY_BODY={…digits…}")` with substituted
+values at verbose 3 — any dialplan path would put the PAN in `/var/log/asterisk/full`. The AGI
+pipe is not logged (agi debug off). Recording: the IVR leg has no MixMonitor (checked on a real
+call) — measure again if the line is ever recorded.
+
+**Not proven until a real call:** the inline `card` shape on `/charges` (inferred from the
+add-card validator), a real one-time charge, a real save-then-charge, and whether the register
+treats the saved card as the one our charge-by-id path picks first (`listCustomerCards()[0]`).
+
+**Verification:** the summary file's "Round 4" bottom section + `TESTS_RUN.md` (2026-09-17 night).

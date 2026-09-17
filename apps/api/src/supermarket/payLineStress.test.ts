@@ -311,6 +311,23 @@ class DialplanDriver {
     return { statusCode: res.statusCode, view };
   }
 
+  /** The AGI's one request to the card door (2026-09-17 night). */
+  async postCard(body: any): Promise<{ statusCode: number; result: any }> {
+    const res = await this.app.inject({
+      method: "POST",
+      url: "/internal/supermarket/pay-ivr/card",
+      payload: body,
+      headers: { "x-cdr-secret": this.secret },
+    });
+    let result: any = null;
+    try {
+      result = JSON.parse(res.body);
+    } catch {
+      /* leave null — caller asserts on it */
+    }
+    return { statusCode: res.statusCode, result };
+  }
+
   promptNames(playback: string): string[] {
     if (!playback) return [];
     return playback.split("&").map((p) => p.split("/").pop() || "");
@@ -319,7 +336,16 @@ class DialplanDriver {
   chooseDigits(
     names: string[],
     maxDigits: number,
-    opts: { choice?: string; pin?: string; targetPhone?: string; amount?: string; wantsPayment?: boolean; confirmAccept?: boolean },
+    opts: {
+      choice?: string;
+      pin?: string;
+      targetPhone?: string;
+      amount?: string;
+      wantsPayment?: boolean;
+      confirmAccept?: boolean;
+      wantsCard?: boolean;
+      cardChoice?: "1" | "2";
+    },
   ): string {
     if (names.includes("37_which_account")) return opts.choice ?? "1";
     if (names.includes("02_pin")) return (opts.pin ?? "0000").slice(0, maxDigits);
@@ -327,7 +353,11 @@ class DialplanDriver {
       return (opts.targetPhone ?? "8456624417").slice(0, maxDigits);
     }
     if (names.includes("05_amount_prompt") || names.includes("14_invalid_amount")) return opts.amount ?? "12*34";
-    if (names.includes("07_confirm_choice")) return opts.confirmAccept === false ? "2" : "1";
+    // 39_confirm_choice_card replaced 07_confirm_choice on 2026-09-17 night
+    // (it is the same slot with a third option added).
+    if (names.includes("39_confirm_choice_card")) return opts.wantsCard ? "3" : opts.confirmAccept === false ? "2" : "1";
+    if (names.includes("46_card_save_choice")) return opts.cardChoice ?? "1";
+    if (names.includes("40_card_offer") || names.includes("47_card_declined_offer")) return "1";
     if (names.includes("22_main_menu") || names.includes("21_menu_after_balance")) return opts.wantsPayment ? "2" : "1";
     return "0";
   }
@@ -396,20 +426,27 @@ test(
     let emptyReads = 0;
     let dupPosts = 0;
     let noPinSeen = 0;
+    let cardHandoffs = 0;
+    let cardValid = 0;
+    let cardGaveUp = 0;
 
     for (let i = 0; i < ACCOUNTS; i++) {
       calls++;
       const callId = `dl-call-${i}`;
       const isForeign = foreignAccounts.has(i);
       const callerNumber = isForeign ? foreignPhone(i) : primaryPhone(i);
+      const wantsCard = rnd() < 0.25;
       const opts = {
         choice: "1",
         pin: realPinFor(i),
         targetPhone: primaryPhone(i),
         amount: "12*34",
-        wantsPayment: rnd() < 0.5,
+        wantsPayment: wantsCard ? true : rnd() < 0.5,
         confirmAccept: rnd() < 0.85,
+        wantsCard,
+        cardChoice: (rnd() < 0.5 ? "1" : "2") as "1" | "2",
       };
+      const cardIsValid = rnd() < 0.8;
 
       let body: any = { tenantId, callId, callerNumber };
       let loops = 0;
@@ -417,7 +454,7 @@ test(
         const { statusCode, view } = await driver.postStep(body);
         assert.ok(statusCode < 500, `dialplan door 500d: ${JSON.stringify(body)} -> status ${statusCode}`);
         assert.ok(
-          view && typeof view.action === "string" && ["gather", "transfer", "hangup", "continue"].includes(view.action),
+          view && typeof view.action === "string" && ["gather", "card", "transfer", "hangup", "continue"].includes(view.action),
           `bad action word: ${JSON.stringify(view)}`,
         );
         httpOk++;
@@ -432,6 +469,25 @@ test(
         }
 
         if (view.action === "transfer" || view.action === "hangup") break;
+        if (view.action === "card") {
+          // The AGI's one request — never a digit gather, never a step.
+          cardHandoffs++;
+          assert.equal(view.maxDigits, 0, `a "card" action carried digits to collect for ${callId}`);
+          const cardBody: any = { tenantId, callId, callerNumber };
+          if (cardIsValid) {
+            cardValid++;
+            cardBody.card = { number: "4111111111111111", expMonth: 12, expYear: 30, cvv: "123", zipCode: "10001" };
+          } else {
+            cardGaveUp++;
+            cardBody.cardFailed = true;
+          }
+          const { statusCode: cardStatus } = await driver.postCard(cardBody);
+          assert.ok(cardStatus < 500, `card door 500d for ${callId}`);
+          // like the real dialplan: after the AGI returns, poll the step door
+          // again with no digits to see what the machine did with it.
+          body = { tenantId, callId };
+          continue;
+        }
         if (view.action === "gather") {
           if (rnd() < 0.08) {
             emptyReads++;
@@ -463,10 +519,11 @@ test(
     assert.equal(sessionTotal, ledgerTotal, "dialplan-driven session books disagree with the register ledger");
     assert.equal(new Set(pos.charges.keys()).size, pos.charges.size, "duplicate externalId from a duplicated POST");
     assert.equal(db.rows("supermarketPhonePin").length, 0, "the dialplan-driven line created a vault row");
+    assert.ok(cardHandoffs > 0, "the keyed-card path (39_confirm_choice_card -> 3) was never exercised");
 
     console.log(
       `[PAYLINE 2] calls=${calls} httpOk=${httpOk} chargesSeen=${chargesSeen} noPinSeen=${noPinSeen} midCallHangups=${midCallHangups} ` +
-        `emptyReads=${emptyReads} dupPosts=${dupPosts}`,
+        `emptyReads=${emptyReads} dupPosts=${dupPosts} cardHandoffs=${cardHandoffs} cardValid=${cardValid} cardGaveUp=${cardGaveUp}`,
     );
   },
 );

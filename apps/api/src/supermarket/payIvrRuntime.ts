@@ -36,7 +36,8 @@ import {
 } from "./payIvrCore";
 import { posClientForTenant } from "./integrationCredentials";
 import { mirrorCustomerByPhone } from "./customerSync";
-import { posAmountToCents, posPhoneDigits, toPosExternalId, PosApiError } from "./posWithLogic";
+import { luhnValid, posAmountToCents, posPhoneDigits, toPosExternalId, PosApiError, type PosKeyedCard } from "./posWithLogic";
+import { cardLast4, vaultDelete, vaultGet, vaultPut } from "./payCardVault";
 
 export type PayIvrStepInput = {
   tenantId: string;
@@ -46,7 +47,41 @@ export type PayIvrStepInput = {
   digits?: string;
   /** True when the PBX reports the caller hung up. */
   hangup?: boolean;
+  /**
+   * The AGI card collector's result (the card door only): ok = a valid card is
+   * in the vault for this session; false = the caller gave up. The card itself
+   * never rides a step input — see runPayIvrCardEntry.
+   */
+  cardEntered?: { ok: boolean; last4?: string };
 };
+
+/** What the AGI posts to the card door; validated + vaulted by runPayIvrCardEntry. */
+export type PayIvrCardInput = {
+  tenantId: string;
+  callId: string;
+  callerNumber: string;
+  card?: { number: string; expMonth: number; expYear: number; cvv: string; zipCode?: string; houseNumber?: string };
+  cardFailed?: boolean;
+};
+
+/** A keyed card the register would accept: Luhn, 1–12 / 0–99, 3–4 digit CVV, optional 5-digit zip. */
+export function validateKeyedCard(raw: PayIvrCardInput["card"]): PosKeyedCard | null {
+  if (!raw || typeof raw !== "object") return null;
+  const number = String(raw.number ?? "").replace(/\D/g, "");
+  if (!luhnValid(number)) return null;
+  const expMonth = Number(raw.expMonth);
+  const expYear = Number(raw.expYear);
+  if (!Number.isInteger(expMonth) || expMonth < 1 || expMonth > 12) return null;
+  if (!Number.isInteger(expYear) || expYear < 0 || expYear > 99) return null;
+  const cvv = String(raw.cvv ?? "").replace(/\D/g, "");
+  if (cvv.length < 3 || cvv.length > 4) return null;
+  const zip = String(raw.zipCode ?? "").replace(/\D/g, "");
+  const card: PosKeyedCard = { number, expMonth, expYear, cvv };
+  if (zip.length === 5) card.zipCode = zip;
+  const house = String(raw.houseNumber ?? "").trim();
+  if (house) card.houseNumber = house.slice(0, 10);
+  return card;
+}
 
 export type PayIvrStepResult = {
   prompts: string[];
@@ -152,6 +187,9 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
   let event: PayIvrEvent;
   if (input.hangup) {
     event = { type: "hangup" };
+    vaultDelete(String(session.id));
+  } else if (input.cardEntered) {
+    event = { type: "card_entered", ok: input.cardEntered.ok === true, last4: input.cardEntered.last4 };
   } else if (state.phase === "start") {
     // First step: is the caller's own number on an account? (Decides only
     // whether they are OFFERED that account — the PIN is asked either way.)
@@ -221,7 +259,7 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
         continue;
       }
       if (effect.kind === "charge") {
-        nextEvent = await performCharge(deps, client, session, state, input, effect.amountCents, effect.chargeSeq);
+        nextEvent = await performCharge(deps, client, session, state, input, effect.amountCents, effect.chargeSeq, effect.cardMode);
         continue;
       }
     }
@@ -266,30 +304,59 @@ async function performCharge(
   input: PayIvrStepInput,
   amountCents: number,
   chargeSeq: number,
+  cardMode: "once" | "save" | null,
 ): Promise<PayIvrEvent> {
   const { db } = deps;
+  const log = deps.log ?? { info: () => {}, warn: () => {} };
   if (!state.posCustomerId || !state.activePin) return { type: "charge_result", outcome: "error" };
-
-  // Card on file: the first stored card. No card = no phone payment, period.
-  let cardId: string | null = null;
-  try {
-    const cards: any = await client.listCustomerCards(state.posCustomerId);
-    const list = Array.isArray(cards) ? cards : cards?.items ?? cards?.cards ?? [];
-    const first = Array.isArray(list) && list.length > 0 ? list[0] : null;
-    cardId = first?.id ? String(first.id) : first?.cardId ? String(first.cardId) : null;
-  } catch {
-    return { type: "charge_result", outcome: "error" };
-  }
-  if (!cardId) return { type: "charge_result", outcome: "no_card" };
+  const sessionId = String(session.id);
 
   // Idempotency: session row id tail + seq, bounded to their 20-char cap.
-  const externalId = toPosExternalId(`pc${String(session.id).replace(/[^A-Za-z0-9]/g, "").slice(-14)}s${chargeSeq}`);
+  const externalId = toPosExternalId(`pc${sessionId.replace(/[^A-Za-z0-9]/g, "").slice(-14)}s${chargeSeq}`);
+
+  let cardId: string | null = null;
+  let keyed: PosKeyedCard | null = null;
+  if (cardMode) {
+    // The keyed card, from process memory only. Gone (restart, TTL, already
+    // used) = the caller keys it again; never a charge on a card we don't hold.
+    keyed = vaultGet(sessionId);
+    if (!keyed) return { type: "charge_result", outcome: "declined" };
+    if (cardMode === "save") {
+      // Store it on the account first (their gateway tokenizes it), then
+      // charge the stored card. A refused card never reaches the charge.
+      try {
+        const rec: any = await client.addCustomerCard(state.posCustomerId, keyed);
+        cardId = rec?.id ? String(rec.id) : rec?.cardId ? String(rec.cardId) : null;
+        if (!cardId) return { type: "charge_result", outcome: "error" };
+        log.info({ tenantId: input.tenantId, posCustomerId: state.posCustomerId, last4: cardLast4(keyed) }, "pay-ivr: keyed card stored on the account");
+      } catch (err: any) {
+        vaultDelete(sessionId);
+        if (err instanceof PosApiError && (err.status === 400 || err.status === 422 || err.status === 402)) {
+          log.warn({ tenantId: input.tenantId, posCustomerId: state.posCustomerId, register: err.bodyPreview.slice(0, 200) }, "pay-ivr: register refused the keyed card");
+          return { type: "charge_result", outcome: "declined" };
+        }
+        return { type: "charge_result", outcome: "error" };
+      }
+    }
+  } else {
+    // Card on file: the first stored card. None = offer to key one.
+    try {
+      const cards: any = await client.listCustomerCards(state.posCustomerId);
+      const list = Array.isArray(cards) ? cards : cards?.items ?? cards?.cards ?? [];
+      const first = Array.isArray(list) && list.length > 0 ? list[0] : null;
+      cardId = first?.id ? String(first.id) : first?.cardId ? String(first.cardId) : null;
+    } catch {
+      return { type: "charge_result", outcome: "error" };
+    }
+    if (!cardId) return { type: "charge_result", outcome: "no_card" };
+  }
+
   try {
-    const body: any = await client.createCharge(state.posCustomerId, state.activePin, {
-      externalId,
-      amountCents,
-      cardId,
-    });
+    const body: any =
+      cardMode === "once" && keyed
+        ? await client.createChargeWithCard(state.posCustomerId, state.activePin, { externalId, amountCents, card: keyed })
+        : await client.createCharge(state.posCustomerId, state.activePin, { externalId, amountCents, cardId: cardId as string });
+    if (cardMode) vaultDelete(sessionId);
     const newBalance = posAmountToCents(body?.newBalance);
     await db.supermarketPayCall.update({
       where: { id: session.id },
@@ -297,13 +364,52 @@ async function performCharge(
     }).catch(() => {});
     return { type: "charge_result", outcome: "approved", newBalanceCents: newBalance ?? undefined };
   } catch (err: any) {
+    if (cardMode) vaultDelete(sessionId);
     if (err instanceof PosApiError) {
       if (err.code === "pos_duplicate") return { type: "charge_result", outcome: "duplicate" };
-      if (err.status === 402 || /declin/i.test(err.bodyPreview)) return { type: "charge_result", outcome: "declined" };
-      if (err.status === 400 || err.status === 422) return { type: "charge_result", outcome: "declined" };
+      if (err.status === 400 || err.status === 422 || err.status === 402 || /declin/i.test(err.bodyPreview)) {
+        if (cardMode) {
+          // Their validator names the field it refused (never the number): keep that.
+          log.warn({ tenantId: input.tenantId, posCustomerId: state.posCustomerId, register: err.bodyPreview.slice(0, 200) }, "pay-ivr: keyed-card charge refused");
+        }
+        return { type: "charge_result", outcome: "declined" };
+      }
     }
     // ⛔ Timeout / 5xx: the charge MAY have landed. NEVER retried — their 409
     // on our externalId protects a later replay, and a person takes over now.
     return { type: "charge_result", outcome: "error" };
   }
+}
+
+/**
+ * The card door (POST /internal/supermarket/pay-ivr/card): the AGI collector's
+ * one request. Validates the card, puts it in the process-memory vault under
+ * the session row id, and advances the machine with `card_entered`. The card
+ * never enters the reducer, the session row, or a log; the response carries
+ * only ok/reason.
+ */
+export async function runPayIvrCardEntry(deps: PayIvrRuntimeDeps, input: PayIvrCardInput): Promise<{ ok: boolean; reason?: string }> {
+  const { db } = deps;
+  const session = await db.supermarketPayCall.findFirst({ where: { tenantId: input.tenantId, callId: input.callId } });
+  if (!session) return { ok: false, reason: "no_session" };
+  const sessionId = String(session.id);
+  if (input.cardFailed || !input.card) {
+    vaultDelete(sessionId);
+    await runPayIvrStep(deps, { tenantId: input.tenantId, callId: input.callId, callerNumber: input.callerNumber, cardEntered: { ok: false } });
+    return { ok: false, reason: "gave_up" };
+  }
+  const card = validateKeyedCard(input.card);
+  if (!card) {
+    // The AGI validates first, so this is a mismatch worth a warn (no digits).
+    (deps.log ?? { warn: () => {} }).warn({ tenantId: input.tenantId, callId: input.callId }, "pay-ivr: card door refused an invalid card shape");
+    return { ok: false, reason: "invalid" };
+  }
+  vaultPut(sessionId, card);
+  await runPayIvrStep(deps, {
+    tenantId: input.tenantId,
+    callId: input.callId,
+    callerNumber: input.callerNumber,
+    cardEntered: { ok: true, last4: cardLast4(card) },
+  });
+  return { ok: true };
 }

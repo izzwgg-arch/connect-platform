@@ -20,8 +20,12 @@ export const PAY_PROMPT_DIR = (process.env.SUPERMARKET_PAY_PROMPT_DIR || "/var/l
 export type PayIvrDialplanView = {
   /** `&`-joined absolute paths, ready for Playback()/Read() — "" when silent. */
   playback: string;
-  /** What the dialplan does after playing: gather | transfer | hangup | continue. */
-  action: "gather" | "transfer" | "hangup" | "continue";
+  /**
+   * What the dialplan does after playing: gather | card | transfer | hangup | continue.
+   * "card" (2026-09-17): run the AGI card collector (scripts/pbx/supermarket/connect-pay-card.py)
+   * — the card digits never travel through a step or a channel variable.
+   */
+  action: "gather" | "card" | "transfer" | "hangup" | "continue";
   /** Digits to collect when action is "gather"; 0 otherwise. */
   maxDigits: number;
 };
@@ -32,7 +36,7 @@ export function safePromptRef(ref: unknown): string | null {
 }
 
 export function payIvrDialplanView(
-  result: { prompts: string[]; gather: { maxDigits: number } | null; transfer: boolean; done: boolean },
+  result: { prompts: string[]; gather: { maxDigits: number; what?: string } | null; transfer: boolean; done: boolean },
   dir: string = PAY_PROMPT_DIR,
 ): PayIvrDialplanView {
   const root = String(dir || "").replace(/\/+$/, "");
@@ -47,7 +51,9 @@ export function payIvrDialplanView(
     : result.done
       ? "hangup"
       : result.gather
-        ? "gather"
+        ? result.gather.what === "card"
+          ? "card"
+          : "gather"
         : "continue";
   const maxDigits = action === "gather" ? Math.max(1, Math.min(32, Number(result.gather?.maxDigits ?? 1))) : 0;
   return { playback, action, maxDigits };

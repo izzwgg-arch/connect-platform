@@ -20,6 +20,8 @@
  * money invariants are audited against.
  */
 
+import { luhnValid } from "./posWithLogic";
+
 export type FakeRow = Record<string, any>;
 
 function clone<T>(v: T): T {
@@ -371,7 +373,7 @@ export type FakePosCustomer = {
   lastName?: string;
   pin: string | null;
   balanceCents: number;
-  cards: Array<{ id: string; masked: string }>;
+  cards: Array<{ id: string; masked: string; exp?: string; issuer?: string }>;
   address1?: string;
   city?: string;
   /** Other numbers on the account (10 digits each), for the one-time-code flow's list_numbers. */
@@ -385,6 +387,7 @@ export type FakePosOptions = {
   failStatus?: number;
   /** request indexes (1-based) that should time out (AbortError) */
   timeoutOn?: Set<number>;
+  /** mutable — flip it mid-call to change the verdict of the NEXT charge/add-card. */
   declineCards?: boolean;
 };
 
@@ -392,15 +395,33 @@ export class FakePos {
   apiKey: string;
   customers = new Map<string, FakePosCustomer>();
   products: Array<{ id: string; code: string; name: string; price: number; priceQty?: number; lastMod: string; inactive?: boolean }> = [];
-  charges = new Map<string, { customerId: string; amount: number; cardId: string }>();
+  charges = new Map<string, { customerId: string; amount: number; cardId: string | null; keyed: boolean }>();
   orders = new Map<string, { externalOrderId: string; body: any }>();
   requestLog: Array<{ method: string; path: string; pin: string | null }> = [];
   counter = 0;
+  cardSeq = 0;
   opts: FakePosOptions;
 
   constructor(opts: FakePosOptions = {}) {
     this.opts = opts;
     this.apiKey = opts.apiKey ?? "fake-pos-key-000001";
+  }
+
+  /**
+   * Their validator's shape, read off toPosCardBody's field names (2026-09-17).
+   * Returns the first bad field name, or null when the card is acceptable —
+   * never the digits themselves, so a 400 built from this never leaks them.
+   */
+  private validateCardBody(body: any): string | null {
+    const num = String(body?.CardNumber ?? "").replace(/\D/g, "");
+    if (!luhnValid(num)) return "CardNumber";
+    const em = Number(body?.ExpMonth);
+    if (!Number.isInteger(em) || em < 1 || em > 12) return "ExpMonth";
+    const ey = Number(body?.ExpYear);
+    if (!Number.isInteger(ey) || ey < 0 || ey > 99) return "ExpYear";
+    const cvv = String(body?.CVV ?? "").replace(/\D/g, "");
+    if (cvv.length < 3 || cvv.length > 4) return "CVV";
+    return null;
   }
 
   addCustomer(c: FakePosCustomer) {
@@ -445,6 +466,22 @@ export class FakePos {
       if (!c) return this.res(404, { error: "not found" });
       return this.res(200, c.cards);
     }
+    if (m && init.method === "POST") {
+      // Store a keyed card on the account (2026-09-17: "add it to the
+      // account"). Their gateway tokenizes it — the fake never keeps the raw
+      // number anywhere but this one row, mirroring "cards are counted, never
+      // copied" elsewhere in this client.
+      const c = this.customers.get(decodeURIComponent(m[1]));
+      if (!c) return this.res(404, { error: "not found" });
+      const body = JSON.parse(init.body);
+      const badField = this.validateCardBody(body);
+      if (badField) return this.res(400, { errors: [{ field: badField, message: `${badField} is invalid` }] });
+      if (this.opts.declineCards) return this.res(402, { error: "card refused" });
+      const last4 = String(body.CardNumber ?? "").replace(/\D/g, "").slice(-4);
+      const card = { id: `card-new-${++this.cardSeq}`, masked: `…${last4}`, exp: `${body.ExpMonth}/${body.ExpYear}`, issuer: "unknown" };
+      c.cards.push(card);
+      return this.res(201, card);
+    }
     m = path.match(/^\/customers\/id\/([^/]+)\/charges$/);
     if (m && init.method === "POST") {
       const c = this.customers.get(decodeURIComponent(m[1]));
@@ -453,9 +490,18 @@ export class FakePos {
       if (pin !== c.pin) return this.res(401, { error: "Invalid customer PIN." });
       const body = JSON.parse(init.body);
       if (this.charges.has(body.externalId)) return this.res(409, { error: "duplicate externalId" });
+      // A charge takes cardId XOR an inline card (the keyed-card shape,
+      // 2026-09-17) — never both, never neither.
+      if (body.card && body.cardId) return this.res(400, { errors: [{ field: "cardId", message: "cardId and card are mutually exclusive" }] });
+      if (body.card) {
+        const badField = this.validateCardBody(body.card);
+        if (badField) return this.res(400, { errors: [{ field: badField, message: `${badField} is invalid` }] });
+      } else if (!body.cardId) {
+        return this.res(400, { errors: [{ field: "cardId", message: "cardId or card is required" }] });
+      }
       if (this.opts.declineCards) return this.res(422, { error: "declined" });
       const cents = Math.round(body.amount * 100);
-      this.charges.set(body.externalId, { customerId: c.id, amount: cents, cardId: body.cardId });
+      this.charges.set(body.externalId, { customerId: c.id, amount: cents, cardId: body.cardId ?? null, keyed: !!body.card });
       c.balanceCents -= cents;
       return this.res(200, { amountCharged: body.amount, authCode: "A1", referenceNo: `R${this.counter}`, newBalance: c.balanceCents / 100 });
     }

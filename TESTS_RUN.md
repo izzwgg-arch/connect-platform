@@ -576,3 +576,34 @@ the docs line right after these). Summary `docs/ai-context/claude-md-sections/20
   (`/root/payline-live-proof4.sh`, 5 scenarios: own #1 → PIN; own no-PIN → "visit the store" + person; own #2 +
   number → PIN; unknown → number → no-PIN → store + person; bad choice replays, 7 digits get 845). Izzy's own three
   calls reached accounts with the PIN accepted (two ended at 12_no_card). NOT proven: a real charge.
+
+## 2026-09-17 (night, round 4) — pay line: pay with a KEYED card (one-time or saved), AGI collector + card door + memory vault
+
+Commit: the `feat(pay-line): pay with a keyed card` commit on `feat/ivr-migration-takeover` (deploy hash +
+proof in the docs line right after these). Summary `2026-09-17-pay-line-final-flow.md` "Round 4", handoff §16g.
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test "src/supermarket/*.test.ts"` → **229/229**:
+  `payLineCard` **19/19 NEW** (confirm 39 + hand-off to action "card"; the card door vaults under the session row
+  id and advances to 46; cardFailed → 45+20; invalid shapes refused at the door; empty-digit re-entry then cap;
+  once = inline card on /charges with no cardId; save = POST /cards then charge by id + GET /cards shows it; one
+  charge per confirmation; no card on file → 12+40 offer; keyed decline → 11+47 with the amount kept; card-on-file
+  decline → old 11+05; the secrecy sweep — door response, step results, persisted rows, every log call, the
+  register's own 400 body carry no card number; hangup clears the vault; TTL expiry; empty vault → declined never
+  a charge; route-level door with/without the secret; CARD STRESS 500 sessions × card-on-file {none/declined/ok}
+  × keyed {once/save} × {valid/declined/gave-up}), `supermarketCore` 37/37, `supermarketStress` 28/28 (fuzzer now
+  reaches the card phases; `human` re-transfers), `supermarketWiring` 11/11 (guard: the raw keyed card variable
+  in the runtime is used only at its four sanctioned call sites, never in a log or db write), `payLineStress`
+  8/8 (dialplan driver models the AGI hand-off), `payIvrDialplan` 10/10 (action "card"; the conf's card block
+  calls `AGI(connect-pay-card.py,` and never Read()s), `phonePinRoutes` 11/11, `customerSync` 11/11,
+  `customerPhoneMatch` 14/14, others unchanged.
+- `apps/api`: `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket/* (pre-existing elsewhere).
+- Register validator probe (inside `app-api-1`, Izzy's own card-less 1001021, invalid numbers only — nothing
+  storable): field names `CardNumber` (Luhn-checked), `ExpMonth` 1–12, `ExpYear` 0–99, `CVV`, `ZipCode`,
+  `HouseNumber`; unknown fields ignored.
+- Prompt cutter (Polly Stephen/neural, 8 kHz): 39–47 cut, installed on the PBX (`en-male` 67 → 76) + canonical
+  stash. AGI `connect-pay-card.py` → `pbx:/var/lib/asterisk/agi-bin/` (py_compile OK, asterisk 755); conf
+  spliced (`.bak.paycard.20260917T221133Z`), reload clean, `AGI(` present, 0 Originate/Dial, 2 CURL steps.
+- Deploy + live proof (`/root/payline-live-proof5.sh` on loopcom, `/root/agi-harness.py` on the PBX): in the
+  docs follow-up commit and the summary file's "Round 4" section.
+- NOT run: a real keyed charge (needs a caller with an account PIN and a real card) — the inline `card`
+  shape on `/charges` is inferred from the add-card validator until then.

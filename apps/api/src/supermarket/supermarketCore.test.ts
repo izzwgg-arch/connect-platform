@@ -368,7 +368,7 @@ test("⛔ THE MONEY RULE: one confirmation = one charge effect, and a stray repe
   ];
   const { outputs, state } = drive(base);
   assert.equal(countChargeEffects(outputs), 1);
-  assert.deepEqual(outputs.at(-1)!.effects, [{ kind: "charge", amountCents: 2537, chargeSeq: 1 }]);
+  assert.deepEqual(outputs.at(-1)!.effects, [{ kind: "charge", amountCents: 2537, chargeSeq: 1, cardMode: null }]);
   // A duplicated confirm (replayed webhook) in the charging phase is IGNORED.
   const replay = reducePayIvr(state, { type: "digits", value: "1" });
   assert.equal(countChargeEffects([replay]), 0, "a repeated digit in charging must never charge again");
@@ -393,7 +393,7 @@ test("declined → re-enter; three failed amounts → a person; approved reads t
   assert.ok(last.prompts.includes("16_dollars"));
 });
 
-test("no card on file lands on a person with the honest prompt", () => {
+test("no card on file offers to key one now (2026-09-17 night), keeping the pending amount", () => {
   const { outputs, state } = drive([
     { type: "call_start", callerKnown: true, callerAccountId: "c1" },
     { type: "digits", value: "1" },
@@ -405,8 +405,11 @@ test("no card on file lands on a person with the honest prompt", () => {
     { type: "digits", value: "1" },
     { type: "charge_result", outcome: "no_card" },
   ]);
-  assert.equal(state.phase, "human");
-  assert.ok(outputs.at(-1)!.prompts.includes("12_no_card"));
+  assert.equal(state.phase, "card_offer");
+  assert.equal(state.pendingCents, 1000, "the amount must be kept — the caller is about to key a card for it");
+  const last = outputs.at(-1)!;
+  assert.deepEqual(last.prompts, ["12_no_card", "40_card_offer"]);
+  assert.equal(last.gather?.what, "menu");
 });
 
 test("session bookkeeping: the served account is posCustomerId; when the caller pressed 2 before a lookup ever lands, the runtime falls back to their own account id (payIvrRuntime's `posCustomerId ?? callerAccountId`)", () => {

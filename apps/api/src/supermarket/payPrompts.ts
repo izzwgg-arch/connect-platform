@@ -75,6 +75,29 @@ export const PAY_PROMPTS: readonly PayPromptSpec[] = [
     text: "Please enter the phone number on the account, followed by the pound key.",
     addedOn: "2026-09-17",
   },
+  // ── 2026-09-17 night: pay with a keyed card (Izzy: "give them the option to pay with
+  // another card, even if there isn't a card on file … one-time or add it to the account") ──
+  {
+    ref: "39_confirm_choice_card",
+    text: "To confirm, press one. To enter a different amount, press two. To pay with a different card, press three.",
+    addedOn: "2026-09-17",
+  },
+  { ref: "40_card_offer", text: "To pay with a card now, press one. To speak with someone, press two.", addedOn: "2026-09-17" },
+  { ref: "41_card_number", text: "Please enter the card number, followed by the pound key.", addedOn: "2026-09-17" },
+  {
+    ref: "42_card_exp",
+    text: "Enter the expiration date as four digits, two for the month and two for the year, followed by the pound key.",
+    addedOn: "2026-09-17",
+  },
+  { ref: "43_card_cvv", text: "Enter the security code on the back of the card, followed by the pound key.", addedOn: "2026-09-17" },
+  { ref: "44_card_zip", text: "Enter the billing zip code, followed by the pound key.", addedOn: "2026-09-17" },
+  { ref: "45_card_invalid", text: "That does not look right. Let's try again.", addedOn: "2026-09-17" },
+  {
+    ref: "46_card_save_choice",
+    text: "To use this card for this payment only, press one. To save it to your account as the card on file, press two.",
+    addedOn: "2026-09-17",
+  },
+  { ref: "47_card_declined_offer", text: "To try a different card, press one. To speak with someone, press two.", addedOn: "2026-09-17" },
 ];
 
 export const PAY_PROMPTS_ADDED_2026_09_17: readonly PayPromptSpec[] = PAY_PROMPTS.filter((p) => p.addedOn === "2026-09-17");

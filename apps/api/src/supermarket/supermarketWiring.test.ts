@@ -111,16 +111,42 @@ test("⛔ the submit path is the ONLY register-order writer in apps/api", () => 
   assert.match(read("./orderSubmit.ts"), /\.createOrder\(/);
 });
 
-test("⛔ the pay runtime never captures a card number: no card-collection prompts, charges only against stored cards", () => {
-  const runtime = read("./payIvrRuntime.ts").replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+test("⛔ the reducer's own state still carries no card shape at all — a keyed card (2026-09-17 night) lives ONLY in payCardVault.ts, never in PayIvrState", () => {
   const core = read("./payIvrCore.ts").replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
   // ⛔ NOT bare "expir": the 2026-09-17 one-time code introduced legitimate
   // "codeExpiresAt"/"expiresAt"/"expired"/"expiry" — none of that is a card
   // field. The real PCI shapes (see billing/adminCardSave.ts) are these.
   for (const banned of ["card_number", "cardNumber", "collectCard", "cvv", "expMonth", "expYear", "cardExpir", "expirationDate"]) {
-    assert.ok(!runtime.includes(banned) && !core.includes(banned), `card-capture shape "${banned}" found — stored cards only, always`);
+    assert.ok(!core.includes(banned), `card-capture shape "${banned}" found in the reducer — stored cards only in persisted state, always`);
   }
-  assert.match(runtime, /listCustomerCards/, "charging must resolve the STORED card");
+  const runtimeRaw = read("./payIvrRuntime.ts");
+  assert.match(runtimeRaw, /listCustomerCards/, "charging a card on file must resolve the STORED card");
+
+  // The runtime MAY hold a keyed card (from payCardVault.ts) in its local
+  // `keyed` variable, ONLY to hand it to the POS client (addCustomerCard /
+  // createChargeWithCard) or to derive cardLast4(). Strip comments and string
+  // literals (the word "keyed" appears freely in prose and in log MESSAGES,
+  // neither of which is the raw card object) and check every remaining
+  // executable reference to `keyed` is one of those sanctioned call sites —
+  // a fresh reference anywhere else (a log object, a db write) fails this.
+  const code = runtimeRaw
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const keyedLines = code.split("\n").map((l) => l.trim()).filter((l) => /\bkeyed\b/.test(l));
+  const allowed = [
+    /^let keyed: PosKeyedCard \| null = null;$/,
+    /^keyed = vaultGet\(sessionId\);$/,
+    /^if \(!keyed\) return \{[^}]*\};$/,
+    /^const rec: any = await client\.addCustomerCard\(state\.posCustomerId, keyed\);$/,
+    /^log\.info\(\{ tenantId: input\.tenantId, posCustomerId: state\.posCustomerId, last4: cardLast4\(keyed\) \}, ""\);$/,
+    /^cardMode === "" && keyed$/,
+    /^\? await client\.createChargeWithCard\(state\.posCustomerId, state\.activePin, \{ externalId, amountCents, card: keyed \}\)$/,
+  ];
+  assert.ok(keyedLines.length >= 5, `expected the sanctioned keyed-card call sites to still be present, found ${keyedLines.length}`);
+  for (const line of keyedLines) {
+    assert.ok(allowed.some((re) => re.test(line)), `an un-sanctioned use of the raw keyed card slipped in: ${line}`);
+  }
 });
 
 test("⛔ the draft-audio door is tenant-scoped and reuses the ONE voicemail streamer", () => {

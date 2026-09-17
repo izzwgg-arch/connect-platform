@@ -66,6 +66,50 @@ one."*
   the PIN accepted** (`pinVerified true`), two of them ending at `12_no_card` + a person — which is
   what prompted his next ask (key a card by phone; see the POS-API and Sola-PhonePay handoffs).
 
+## Round 4 (same night, ~22:30Z) — PAY WITH A KEYED CARD, one-time or saved to the account
+
+Izzy, after his own calls ended at "no card on file": *"It should give me the option to pay with
+another card, even if there isn't a card on file, by typing in the card number … give them the
+option to make this payment method a one-time thing or add it to the account as well and make it
+the default payment."* Told once, plainly, that keyed digits put Loopcom in PCI scope
+(transmission/processing; [[dtmf-masking-cannot-be-self-administered]]) — he had chosen the DIY
+path on 08-16 and said **"Go, build it."** Sola is NOT involved: Gesheft's register takes the card
+directly (its charge body takes `cardId` XOR an inline `card`; `POST /customers/id/{id}/cards`
+stores one, tokenized by their gateway). Field names read off their validator on Izzy's own
+card-less account: **`CardNumber` (Luhn-checked), `ExpMonth` 1–12, `ExpYear` 0–99, `CVV`,
+`ZipCode`, `HouseNumber`**; unknown fields are ignored. Their docs are not published anywhere.
+
+- **Flow:** the confirm step now says `39_confirm_choice_card` ("1 confirm, 2 different amount,
+  **3 pay with a different card**"). No card on file → `12_no_card` + `40_card_offer` ("1 pay with a
+  card now, 2 someone"). Card entry → the AGI collects number / expiry MMYY / CVV / ZIP (3 tries
+  each, `45_card_invalid` between) → `46_card_save_choice` ("1 this payment only, 2 save it to your
+  account as the card on file") → charge: **once** = inline card on `/charges`; **save** =
+  `POST /cards` first, then charge by the new card id. Keyed card refused → `11_declined` +
+  `47_card_declined_offer`; amount kept. Caps: collector restarted at most 2× per call.
+- ⛔⛔ **Where the card number may exist and where it may NOT.** Asterisk writes every dialplan
+  step to the full log WITH substituted arguments, so a card in a channel variable would be
+  printed in clear. Therefore the digits are collected by an **AGI**
+  (`scripts/pbx/supermarket/connect-pay-card.py` → `pbx:/var/lib/asterisk/agi-bin/`, owner
+  asterisk 755) on its own pipe (`GET DATA`, not logged), Luhn/expiry-checked there, and POSTed
+  once over HTTPS to the api's **card door** `POST /internal/supermarket/pay-ivr/card` (same
+  shared secret as `/step`). The api validates again, keeps the card in a **process-memory vault**
+  (`payCardVault.ts`, keyed by session row id, TTL 15 min, deleted on charge/hangup/decline) and
+  advances the reducer with `card_entered {ok, last4}`. The reducer state, the session row and
+  every log line carry at most `cardLast4`. The dialplan's `card` label runs
+  `AGI(connect-pay-card.py,${PAY_URL_CARD},${PAY_TENANT},${PAY_CALL},${PAY_CID})` (the secret is
+  read from AstDB by the script; `PAY_URL_CARD` from `DB(connect/system/pay_api_card_url)` with
+  the app.loopcom.net default) and returns to the step loop with empty digits — the api already
+  knows the outcome. An api restart between the door and the charge loses the vault entry → the
+  caller keys the card again (never a charge on a card we don't hold). The pay-line leg is NOT
+  recorded (0 MixMonitor on a real call), so no DTMF lands in a recording.
+- Prompts `39–47` cut (Polly Stephen/neural) + installed (`en-male` 67 → **76**); conf spliced on
+  the PBX (`.bak.paycard.20260917T221133Z`, reload clean, `AGI(` present, still 0 Originate/Dial,
+  2 CURL steps). Inert until the api with the `card` action is deployed.
+- ⏳ **Round 4 tests / deploy / proof: bottom of this file.** ⛔ The inline-`card` shape on
+  `/charges` is inferred from the add-card validator (the two share field names) — a real
+  one-time charge is the first proof; if the register answers 400 naming a field, the api logs
+  that field name (never the number) as "keyed-card charge refused".
+
 ## What the store must do
 
 - Set a POS PIN for every customer who should pay by phone, and tell them the PIN — the line

@@ -200,6 +200,12 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
     },
     { type: "balance_result", ok: rnd() < 0.7, balanceCents: Math.floor(rnd() * 10000) },
     { type: "charge_result", outcome: (["approved", "declined", "no_card", "duplicate", "error"] as const)[Math.floor(rnd() * 5)], newBalanceCents: 100 },
+    // 2026-09-17 night: the AGI card collector's result — lets the fuzzer
+    // reach card_entry/card_save_choice/card_offer. The fuzzer never feeds a
+    // "card" gather raw digits itself (that is the AGI's own job, never a
+    // step) — it only ever supplies the outcome via this event, exactly the
+    // shape runPayIvrCardEntry hands the reducer.
+    { type: "card_entered", ok: rnd() < 0.5, last4: "4242" },
     { type: "hangup" },
   ];
   for (let call = 0; call < 3000; call++) {
@@ -209,7 +215,15 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
     for (let i = 0; i < 20; i++) {
       const pool = eventPool(state);
       const event = pool[Math.floor(rnd() * pool.length)];
-      const wasConfirmAccept = state.phase === "confirm" && event.type === "digits" && event.value === "1" && state.pendingCents !== null;
+      // A confirmed charge now starts from either "confirm" (card on file,
+      // key "1") or "card_save_choice" (a keyed card, once/save) — both are a
+      // fresh confirmation of the SAME pendingCents, never a second one.
+      const wasConfirmAccept =
+        (state.phase === "confirm" && event.type === "digits" && event.value === "1" && state.pendingCents !== null) ||
+        (state.phase === "card_save_choice" &&
+          event.type === "digits" &&
+          (event.value === "1" || event.value === "2") &&
+          state.pendingCents !== null);
       const out = reducePayIvr(state, event);
       // INVARIANT: prompts only ever come from the recorded set.
       for (const p of out.prompts) assert.ok(RECORDED_PROMPTS.has(p), `unknown prompt ${p} (seed ${seed}, call ${call})`);
@@ -229,9 +243,18 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
       assert.ok(out.state.lookupAttempts <= PAY_MAX_LOOKUP_ATTEMPTS);
       assert.ok(out.state.confirmRounds <= PAY_MAX_CONFIRM_ROUNDS);
       assert.ok(out.state.chargeSeq <= PAY_MAX_CHARGES_PER_CALL);
-      // INVARIANT: terminal states absorb.
-      if (state.phase === "done" || state.phase === "human") {
-        assert.equal(out.effects.length, 0, `terminal state produced effects (seed ${seed})`);
+      // INVARIANT: a truly terminal state ("done") absorbs every event.
+      if (state.phase === "done") {
+        assert.equal(out.effects.length, 0, `done state produced effects (seed ${seed})`);
+      }
+      // INVARIANT: "human" is a hand-off sink — a step that arrives after it
+      // (e.g. the dialplan returning from the AGI collector) may re-fire the
+      // transfer, but it may never look up, verify a PIN, or charge anything.
+      if (state.phase === "human") {
+        assert.ok(
+          out.effects.every((e) => e.kind === "transfer_to_person"),
+          `human state produced a non-transfer effect (seed ${seed}, call ${call}): ${JSON.stringify(out.effects)}`,
+        );
       }
       state = out.state;
     }

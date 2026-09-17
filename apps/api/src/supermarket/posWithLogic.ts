@@ -240,6 +240,54 @@ export function parseCustomersPage(body: unknown): { items: MirrorCustomer[]; cu
   return { items, cursor };
 }
 
+/**
+ * A card the caller keyed on the phone (2026-09-17, Izzy: "give them the option
+ * to pay with another card … by typing in the card number"). ⛔ Lives in one
+ * process's memory only: never persisted, never logged, never in the reducer
+ * state (payCardVault.ts). Digits are strings so a leading zero survives.
+ */
+export type PosKeyedCard = {
+  number: string;
+  /** 1–12 */
+  expMonth: number;
+  /** two digits, 0–99 */
+  expYear: number;
+  cvv: string;
+  zipCode?: string;
+  houseNumber?: string;
+};
+
+/** Luhn check — the register validates too, but a failed check costs a credit and a caller's time. */
+export function luhnValid(digits: string): boolean {
+  const s = String(digits ?? "").replace(/\D/g, "");
+  if (s.length < 13 || s.length > 19) return false;
+  let sum = 0;
+  let dbl = false;
+  for (let i = s.length - 1; i >= 0; i--) {
+    let d = s.charCodeAt(i) - 48;
+    if (dbl) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    dbl = !dbl;
+  }
+  return sum % 10 === 0;
+}
+
+/** Their field names, exactly as their validator spells them (probed 2026-09-17). */
+export function toPosCardBody(card: PosKeyedCard): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    CardNumber: String(card.number).replace(/\D/g, ""),
+    ExpMonth: Number(card.expMonth),
+    ExpYear: Number(card.expYear),
+    CVV: String(card.cvv).replace(/\D/g, ""),
+  };
+  if (card.zipCode) body.ZipCode = String(card.zipCode).replace(/\D/g, "").slice(0, 10);
+  if (card.houseNumber) body.HouseNumber = String(card.houseNumber).slice(0, 10);
+  return body;
+}
+
 /** A customer PIN their api accepts: 1–8 chars, no whitespace/control chars. */
 export function isValidPosPin(pin: string): boolean {
   if (typeof pin !== "string") return false;
@@ -421,6 +469,40 @@ export class PosWithLogicClient {
         amount: Number(centsToPosAmount(input.amountCents)),
         cardId: input.cardId,
       },
+      timeoutMs: 30_000,
+    });
+  }
+
+  /**
+   * A one-time charge on a card the caller KEYED (never stored anywhere by us).
+   * Their charge body takes `cardId` XOR an inline `card`; the inline shape is
+   * the add-card shape (field names read off their validator, 2026-09-17:
+   * CardNumber / ExpMonth 1–12 / ExpYear 0–99 / CVV / ZipCode / HouseNumber).
+   * ⛔ The card object exists only in this request's memory.
+   */
+  createChargeWithCard(customerId: string, pin: string, input: { externalId: string; amountCents: number; card: PosKeyedCard }) {
+    return this.request<Record<string, unknown>>({
+      method: "POST",
+      path: `/customers/id/${encodeURIComponent(customerId)}/charges`,
+      customerPin: pin,
+      body: {
+        externalId: toPosExternalId(input.externalId),
+        amount: Number(centsToPosAmount(input.amountCents)),
+        card: toPosCardBody(input.card),
+      },
+      timeoutMs: 30_000,
+    });
+  }
+
+  /**
+   * Store a keyed card on the account (their gateway tokenizes it; they never
+   * keep the raw number). 1 credit. Returns the new card record ({id, masked…}).
+   */
+  addCustomerCard(customerId: string, card: PosKeyedCard) {
+    return this.request<Record<string, unknown>>({
+      method: "POST",
+      path: `/customers/id/${encodeURIComponent(customerId)}/cards`,
+      body: toPosCardBody(card),
       timeoutMs: 30_000,
     });
   }
