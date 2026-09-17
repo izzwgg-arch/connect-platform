@@ -127,6 +127,37 @@ phone number."* (the code call and the text both come from Gesheft's own 845-244
   separate build and Izzy's explicit sign-off on the PCI trade-off (or a hosted-field
   equivalent from POS with Logic) is the gate.
 
+## Deployed + proven (2026-09-17 ~18:45Z)
+
+- **api `50f57f76` deployed direct** (`/root/deploy-api-payline-code.log`, `done 50f57f76`,
+  container `.build-commit` = 50f57f76, healthy, `/ready` 200, `payLineSms.ts` present,
+  `23_pin_or_star` ×2 in the container's `payIvrCore.ts`). Another session's `f3c818b0` (Yiddish)
+  had landed at 17:31Z between the morning's e6875027 and this — `50f57f76` is on top of it.
+- **Live door proof `/root/payline-live-proof2.sh`** (loopcom, real register, real api door;
+  read-only on the register except one credit per probe; NO charge; one REAL text):
+  1. matched 562-209-6644 → `01_welcome, 20_connect_person`, transfer, `status no_pin` — no PIN.
+  2. matched 845-782-3064 (3762, POS has a PIN) → `01_welcome, 20_connect_person`, transfer,
+     **`status pin_not_enrolled`, `02_pin` NEVER played** (the warn line names the account).
+  3. foreign 212-555-0100 keys 5622096644 (no-PIN account) → probed → `20_connect_person` at
+     once, no PIN prompt.
+  4. foreign keys 8457823064 → `23_pin_or_star` → `*` → `24_code_channel_menu` → `1` →
+     `31_code_call_sent` with **`dial=8457823064`** + `dialPlayback=…/28_code_call_intro&…`
+     (the say-list) → empty read → `30_enter_code` → `000000` → `33_code_wrong, 30_enter_code`;
+     session `codeChannel call`, `codeSentTo 8457823064`, hash present, sends 1, attempts 1.
+     (The door does not place calls — the PBX does — so no call rang here.)
+  5. same → `2` → **`32_code_text_sent`: a REAL text left 845-244-9666 for …3064** (api log
+     "one-time code sent", ~14 s for the VoIP.ms send), session `codeChannel text`, sends 1.
+  Across all five: **0 persisted states contain a 6-digit code (hash only); the PIN vault
+  stayed at 0 rows.**
+- ⏳ **NOT proven by a human:** hearing the new prompts; the outbound code CALL actually ringing
+  (the dialplan Originate has never fired on a real call — first real star+1 proves it; if it
+  does not ring, read the PBX log for `connect-pay-code-dial-gesheft` / `ORIGINATE_STATUS`);
+  keying a received code back; a real charge. Acceptance (Izzy): from a phone NOT on any
+  Gesheft account call 845-244-9666, press 0, hear "we do not recognize…", key 8457823064, hear
+  "enter your PIN… or press star", press star, press 1 → 845-782-3064 rings from 845-244-9666
+  and Stephen reads six digits twice; key them → because 3762's PIN is not enrolled, a person
+  (enroll 3762's POS PIN on the Orders desk first and the same call ends at the main menu).
+
 ## What the store must do (the part no code can do)
 
 - Enroll each phone-paying customer's POS PIN on the Orders desk ("Phone PIN") — until then a

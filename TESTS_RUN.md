@@ -509,3 +509,8 @@ Commit: the `feat(pay-line): matched caller never keys a PIN …` commit on `fea
 - NOT run: a human code call / code text / real charge (needs Izzy on a phone that is NOT on an
   account, keying an account that has a POS PIN Loopcom holds); `SUPERMARKET_PAY_MATCHED_PIN_POLICY=ask_once`
   in production (covered by tests only).
+- DEPLOYED api `50f57f76` (direct, container-verified, `/ready` 200) and LIVE-PROVEN through the real api
+  door (`/root/payline-live-proof2.sh`): matched no-PIN → person (no_pin); matched 3762 (POS PIN, not
+  enrolled) → person (pin_not_enrolled), NO 02_pin; foreign→no-PIN account → person at once; foreign→3762
+  star+1 → `dial=8457823064` + say-list, wrong code refused; star+2 → one REAL text from 845-244-9666;
+  0 persisted codes, vault 0 rows. NOT proven: the Originate ringing a real phone, a keyed-back code, a charge.
