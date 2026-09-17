@@ -91,6 +91,8 @@ export async function noteDiscoveryRun(
     pages?: number;
     healthy?: boolean;
     stoppedReason?: string | null;
+    /** The site's own server failed (e.g. a 524). Not evidence of a broken parser. */
+    unavailable?: boolean;
   },
 ): Promise<{ emptyRuns: number }> {
   const source = await db.ycSource.findUnique({ where: { key: sourceKey }, select: { id: true, discoveryCursor: true } });
@@ -106,7 +108,11 @@ export async function noteDiscoveryRun(
   // changed page or a broken parser actually looks like.
   const reSeen = Number(result?.duplicates) || 0;
   const alive = found || reSeen > 0;
-  const emptyRuns = alive ? 0 : (Number(cursor.emptyRuns) || 0) + 1;
+  // ⛔ A run cut short by the site's own outage proves nothing about the
+  // parser, so it neither counts as empty nor clears the count. Counting it
+  // let two outages hours apart pause the 24/7 listen.
+  const outage = !alive && result?.unavailable === true;
+  const emptyRuns = alive ? 0 : outage ? Number(cursor.emptyRuns) || 0 : (Number(cursor.emptyRuns) || 0) + 1;
   cursor.emptyRuns = emptyRuns;
   cursor.lastRunAt = new Date().toISOString();
   cursor.lastRunPages = Number(result?.pages) || 0;
@@ -116,7 +122,15 @@ export async function noteDiscoveryRun(
     data: { discoveryCursor: JSON.stringify(cursor), lastRunAt: new Date() },
   });
 
-  if (!found && reSeen > 0) {
+  if (outage) {
+    await recordProbes(db, sourceKey, [
+      {
+        probeKey: YC_DISCOVERY_YIELD_PROBE,
+        state: "DEGRADED",
+        detail: `Yiddish24 was unavailable this run; retrying (${result?.stoppedReason ?? "server error"})`,
+      },
+    ]);
+  } else if (!found && reSeen > 0) {
     await recordProbes(db, sourceKey, [
       {
         probeKey: YC_DISCOVERY_YIELD_PROBE,

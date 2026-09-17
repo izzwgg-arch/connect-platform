@@ -441,6 +441,57 @@ test("⛔ a Cloudflare challenge is BLOCKED too, not parsed as an empty catalog"
   }
 });
 
+test("⛔ a 524 from Yiddish24's OWN server is an outage, not a refusal — no BLOCKED probe, so nothing pauses", async () => {
+  const source = { ...sourceRow(), budget: { requestsPerMinute: 30 }, discoveryCursor: null };
+  const db = discoveryDb(source);
+  let calls = 0;
+  setYiddish24Fetch(async () => {
+    calls += 1;
+    return { ok: false, status: 524, text: async () => "<html>A timeout occurred</html>" };
+  });
+  try {
+    const res = await discover(db, { maxPages: 10, requestsPerMinute: 6000, sleep: async () => {} });
+    assert.equal(calls, 1, "the run ends; retry belongs to the job's backoff, not a loop here");
+    assert.equal(res.healthy, false);
+    assert.equal(res.unavailable, true);
+    assert.ok(!res.probes.some((p) => p.state === "BLOCKED" || p.state === "BROKEN"), "an outage must not pause the source");
+    assert.match(String(res.stoppedReason), /524/);
+  } finally {
+    setYiddish24Fetch(null);
+  }
+});
+
+test("⛔ a challenge page served WITH a 5xx is still BLOCKED — the outage lane never swallows a challenge", async () => {
+  const source = { ...sourceRow(), budget: { requestsPerMinute: 30 }, discoveryCursor: null };
+  const db = discoveryDb(source);
+  setYiddish24Fetch(async () => ({
+    ok: false,
+    status: 522,
+    text: async () => "<html><title>Just a moment...</title><div id=cf-challenge></div></html>",
+  }));
+  try {
+    const res = await discover(db, { maxPages: 5, requestsPerMinute: 6000, sleep: async () => {} });
+    assert.ok(res.probes.some((p) => p.state === "BLOCKED"));
+    assert.notEqual(res.unavailable, true);
+  } finally {
+    setYiddish24Fetch(null);
+  }
+});
+
+test("⛔ 403 and 503 stay hard stops (Cloudflare refuses with them)", async () => {
+  for (const status of [403, 503]) {
+    const source = { ...sourceRow(), budget: { requestsPerMinute: 30 }, discoveryCursor: null };
+    const db = discoveryDb(source);
+    setYiddish24Fetch(async () => ({ ok: false, status, text: async () => "no" }));
+    try {
+      const res = await discover(db, { maxPages: 5, requestsPerMinute: 6000, sleep: async () => {} });
+      assert.ok(res.probes.some((p) => p.state === "BLOCKED"), `status ${status} must be BLOCKED`);
+    } finally {
+      setYiddish24Fetch(null);
+    }
+  }
+});
+
 test("discover refuses to run at all when the source is disabled or its budget is paused", async () => {
   setYiddish24Fetch(async () => {
     throw new Error("discover must not touch the network when it is switched off");

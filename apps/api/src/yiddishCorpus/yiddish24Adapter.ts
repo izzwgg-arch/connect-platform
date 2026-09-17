@@ -580,6 +580,27 @@ export class Yiddish24Blocked extends Error {
   }
 }
 
+/**
+ * The site's OWN server is failing (origin timeout, bad gateway) — not a
+ * refusal of us. ⛔ On 2026-09-17 a single Cloudflare 524 on the hourly
+ * re-check was filed as "challenge or refusal", which PAUSED the source for
+ * good and silently ended the 24/7 listen Izzy asked for. A transient outage
+ * ends this run and the job's normal backoff retries it; it never pauses.
+ * 403 / 429 / 503 / a challenge page are still Yiddish24Blocked, a hard stop.
+ */
+export class Yiddish24Unavailable extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "Yiddish24Unavailable";
+  }
+}
+
+/** Origin-side failures only. 503 is deliberately absent: Cloudflare uses it for challenges. */
+const YIDDISH24_TRANSIENT_STATUSES = new Set([500, 502, 504, 520, 521, 522, 523, 524]);
+
 function looksLikeChallenge(status: number, body: string): boolean {
   if (status === 403 || status === 503) return true;
   const head = body.slice(0, 4000).toLowerCase();
@@ -614,6 +635,11 @@ async function getText(
   const text = typeof res?.text === "function" ? await res.text() : "";
   if (status === 429) {
     throw new Yiddish24Blocked("Yiddish24 answered 429 — rate limited. Discovery stopped.", 429);
+  }
+  // A challenge page wins over the status code, so a challenge served with a
+  // 5xx is still a hard stop.
+  if (!looksLikeChallenge(status, text) && YIDDISH24_TRANSIENT_STATUSES.has(status)) {
+    throw new Yiddish24Unavailable(`Yiddish24's server is having trouble (${status}); will retry.`, status);
   }
   if (!res?.ok || looksLikeChallenge(status, text)) {
     throw new Yiddish24Blocked(`Yiddish24 answered ${status || "no status"} (challenge or refusal).`, status || null);
@@ -679,6 +705,8 @@ export interface DiscoverResult {
   newItemIds: string[];
   probes: YcProbeResult[];
   stoppedReason: string | null;
+  /** The run ended because the SITE's server failed, not because it refused us. */
+  unavailable?: boolean;
 }
 
 /**
@@ -922,7 +950,8 @@ export async function discover(db: any, opts: DiscoverOptions = {}): Promise<Dis
     stoppedReason = String(err?.message || err).slice(0, 300);
     probes.push({ probeKey: "listing_item_attributes", state: "DEGRADED", detail: stoppedReason });
     await saveCursor(cursor).catch(() => {});
-    return { discovered, duplicates, pages, healthy: false, newItemIds, probes, stoppedReason };
+    const unavailable = err instanceof Yiddish24Unavailable;
+    return { discovered, duplicates, pages, healthy: false, newItemIds, probes, stoppedReason, unavailable };
   }
 
   await db.ycSource.update({ where: { id: source.id }, data: { lastRunAt: new Date() } }).catch(() => {});

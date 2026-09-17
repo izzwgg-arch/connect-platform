@@ -460,6 +460,29 @@ test("two consecutive empty discovery runs raise an alert and pause the source",
   );
 });
 
+test("⛔ outage runs (site 5xx) never count as empty and never pause the 24/7 listen", async () => {
+  const db = makeDb();
+  for (let i = 0; i < 5; i += 1) {
+    const r = await noteDiscoveryRun(db, "yiddish24", {
+      discovered: 0,
+      duplicates: 0,
+      pages: 0,
+      healthy: false,
+      stoppedReason: "Yiddish24's server is having trouble (524); will retry.",
+      unavailable: true,
+    });
+    assert.equal(r.emptyRuns, 0);
+  }
+  assert.deepEqual(await alertIfBroken(db), []);
+  assert.equal(db.ycBudget.rows[0].paused, false);
+  assert.equal(db.ycSourceHealth.rows.find((h: any) => h.probeKey === YC_DISCOVERY_YIELD_PROBE).state, "DEGRADED");
+
+  // An outage does not RESET a real empty streak either.
+  await noteDiscoveryRun(db, "yiddish24", { discovered: 0, duplicates: 0, pages: 4, healthy: true });
+  const mid = await noteDiscoveryRun(db, "yiddish24", { discovered: 0, duplicates: 0, pages: 0, healthy: false, unavailable: true });
+  assert.equal(mid.emptyRuns, 1);
+});
+
 test("any BROKEN probe pauses the source on its own, and brokenSince does not creep", async () => {
   const db = makeDb();
   await recordProbes(db, "yiddish24", [
