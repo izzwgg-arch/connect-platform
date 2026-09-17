@@ -238,3 +238,11 @@ Commit **`4fb512ed`** on `feat/ivr-migration-takeover`
 - ⛔ **Never env-gate safety behavior in apps/api.** If a protection matters,
   it runs unconditionally; NODE_ENV in this codebase is a trap that fails
   silently in the exact environment it was written for.
+
+## §8 — 2026-09-17 recurrence (Polly previews + existing IVR recordings silent in Izzy's Chrome)
+
+Same diagnosis as §1, second occurrence. Full write-up (probe code, what did not fix it, Windows-side checks) is in
+`docs/ai-context/claude-md-sections/2026-08-04-elevenlabs-didn-t-play-pipeline-hardening.md`, section "2026-09-17 — IT RECURRED".
+Key additions over §1: the `load()`-only fetch-vs-media-element probe is the definitive test (no user gesture
+needed; extension clicks grant none); killing Chrome's `audio.mojom.AudioService` helper does NOT clear it;
+full Chrome restart is the remedy. Nothing in apps/api or apps/portal was changed.
