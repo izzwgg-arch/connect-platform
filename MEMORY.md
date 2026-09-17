@@ -74,3 +74,5 @@ Coworker IDE redesign preview (2026-09-15): owner requested a mockup before any 
 ## Universal search — 2026-09-14
 
 Use the live navigation catalog and authoritative custom permissions. Every record provider must preserve its own tenant/ownership/role rules; search cannot widen access. See `docs/ai-context/AGENT_HANDOFF_UNIVERSAL_SEARCH_2026-09-14.md`. Core rule remains: read CLAUDE.md fresh at task start and update area docs, index and memory before finishing.
+
+Gesheft pay line (2026-09-17): the POS register's `"Customer PIN required."` means the account has NO PIN in the POS and cannot be served by anyone — hand to a person, never re-ask; `"Invalid customer PIN."` means a PIN exists. Izzy's test numbers (562-209-6644 → 1001021, 845-238-0884 → 4322) are no-PIN, no-card accounts. Caller-ID rule built + deployed e6875027: matched caller keys nothing (silent probe), asked once only when the POS has a PIN we lack, foreign number keys the PIN every time. Desk "Phone PIN" control enrolls PINs from the Orders desk. See `docs/ai-context/claude-md-sections/2026-09-17-pay-line-caller-id-rule.md`.

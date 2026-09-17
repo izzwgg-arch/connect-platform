@@ -73,4 +73,28 @@ Right now, it's kind of dummy … Stress test the fuck out of it to prove that i
 
 ## Verification
 
-- (filled in after the run — see §16d in the full handoff and TESTS_RUN.md)
+- **Deployed 2026-09-17 ~16:45Z, commit `e6875027` on `feat/ivr-migration-takeover`**, direct
+  blue/green: portal `direct-portal-20260917T163452Z.log` (`done e6875027`, `phone-pin/check`
+  present in `.next` chunks), api `direct-api-…` (`done e6875027`, container greps:
+  `resolveCallerAccount` ×2, `PAY_PROBE_PIN` ×4, `phone-pin/check` ×2, `/ready` 200).
+- **Tests (all on this commit):** `supermarketCore` + all 25 `supermarketStress` +
+  `supermarketWiring` + `payIvrDialplan` + `customerSync` + `customerPhoneMatch` →
+  **105/105**; `phonePinRoutes.test.ts` (new) → **11/11**; api typecheck 0 errors in
+  supermarket files (4 pre-existing elsewhere), portal typecheck 0. The new heavy pay-line
+  suite `payLineStress.test.ts` is recorded in `TESTS_RUN.md`.
+- ✅ **LIVE PROOF through the real door against the real register** (`/root/payline-live-proof.sh`
+  on loopcom, `127.0.0.1:3001/internal/supermarket/pay-ivr/step` with the real secret, the
+  route the PBX posts to; read-only on the register, nobody keyed "2"):
+  1. matched 562-209-6644 → `01_welcome, 20_connect_person`, `action: transfer` on the FIRST
+     step, session `status no_pin`, `blockedReason pin_not_set`, `pinAttempts 0`;
+  2. matched 845-238-0884 (this morning's 3-refusal caller) → identical: a person at once;
+  3. foreign 212-555-0100 keys 5622096644 → `02_pin` asked (maxDigits 8), keys a PIN →
+     `20_connect_person` (no-PIN account), `callerIdMatched false`, nothing enrolled;
+  4. matched 845-783-0728 → `3358`, an account the POS HAS a PIN for → `01_welcome, 02_pin`
+     (asked once; the next call after a correct PIN is silent) — not a person.
+  `SupermarketPhonePin` count 0 before and after.
+- ⏳ **NOT proven by a human yet:** a real call keying a CORRECT POS PIN once and the second
+  call going straight to `22_main_menu`, and a real charge — both need an account with a POS
+  PIN *and* a card on file (Izzy's test accounts have neither). Acceptance: from a phone on
+  a PIN-having on-account customer's record (e.g. 845-783-0728 → 3358, 2 cards), press 0,
+  hear Stephen, key the POS PIN once, hear the balance; hang up, call again → no PIN.

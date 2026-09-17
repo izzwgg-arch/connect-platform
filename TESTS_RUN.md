@@ -440,3 +440,13 @@ Not run: Chrome Developer Mode unpacked extension loading, pairing, and live Cow
   fetch jobs (`nextRunAt`→2027-01-01), the runner produced new Yiddish24 assets
   and its log advanced (`done=65` at 15:28:42Z).
 - Live api container `.build-commit` = `51072578`; `YIDDISH_WORKER_EXCLUDE_STAGES=fetch_audio,segment,features` present in the container env.
+
+## Gesheft pay line — the caller-ID rule — 2026-09-17
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/supermarket/supermarketCore.test.ts src/supermarket/supermarketStress.test.ts src/supermarket/supermarketWiring.test.ts src/supermarket/payIvrDialplan.test.ts src/supermarket/customerSync.test.ts src/supermarket/customerPhoneMatch.test.ts` — **105/105 pass** (includes all 25 heavy stress tests and 4 new caller-ID-rule reducer tests).
+- `apps/api`: `… --test src/supermarket/phonePinRoutes.test.ts` — **11/11 pass** (desk PIN routes: permission matrix, tenant isolation, verify-before-store, never echoes the PIN, classification pinned to the register's real bodies).
+- `apps/api`: `… --test src/supermarket/payLineStress.test.ts` (new, 8 heavy tests) — **8/8 pass**: PAYLINE 1 caller-ID matrix `accounts=2000 silentServed=70 askedOnce=148 noPinLandings=1129 foreignPinAsks=653 charges=8 posRequests=5782` (a matched caller never hears `02_pin` except once per account when the POS has a PIN we lack; a foreign caller always does and never enrolls; a stored PIN never rides a non-matching call); PAYLINE 2 dialplan emulator through the real door `calls=500 httpOk=1148 midCallHangups=19 emptyReads=57 dupPosts=18` (duplicated POSTs never double-charge/enroll); PAYLINE 3 refusal fuzz `mutations=5000` (unknown text never classifies as not_set); PAYLINE 4 `concurrentCalls=200 charges=100 ledgerCents=99900` reconciled; PAYLINE 5 same step ×10 concurrent `chargeDoubles=0 enrollDoubles=0`; PAYLINE 6 outage `calls=400 attemptsWronglyBumped=0 wronglyPurged=0`; PAYLINE 7 purge scoping 300 accounts; PAYLINE 8 legacy session shapes ×10 phases.
+- Typecheck: api `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket files (4 pre-existing in `deskPhoneSetup/deviceCloudRoutes.ts`); portal `npx tsc --noEmit` → 0.
+- ✅ Live, read-only, through the real api door on loopcom against the real POS register (`/root/payline-live-proof.sh`): matched no-PIN caller → person on the first step (`status no_pin`); foreign caller → PIN asked, no enrollment; matched PIN-having account → asked once. Vault unchanged.
+
+Not run: a human phone call keying a real POS PIN and a real card charge (no test account has a POS PIN and a card).
