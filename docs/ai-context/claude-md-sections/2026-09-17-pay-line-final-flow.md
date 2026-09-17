@@ -105,10 +105,27 @@ card-less account: **`CardNumber` (Luhn-checked), `ExpMonth` 1–12, `ExpYear` 0
 - Prompts `39–47` cut (Polly Stephen/neural) + installed (`en-male` 67 → **76**); conf spliced on
   the PBX (`.bak.paycard.20260917T221133Z`, reload clean, `AGI(` present, still 0 Originate/Dial,
   2 CURL steps). Inert until the api with the `card` action is deployed.
-- ⏳ **Round 4 tests / deploy / proof: bottom of this file.** ⛔ The inline-`card` shape on
-  `/charges` is inferred from the add-card validator (the two share field names) — a real
-  one-time charge is the first proof; if the register answers 400 naming a field, the api logs
-  that field name (never the number) as "keyed-card charge refused".
+- **Round 4 — tested / deployed / proven (~22:50Z).** Tests: the supermarket glob → **229/229**
+  (`payLineCard` 19 NEW incl. a 500-session stress and a secrecy sweep over door responses, step
+  results, persisted rows, every log call and the register's own 400 body; the wiring guard pins
+  that the raw keyed card is used only at its four sanctioned call sites). Deployed **`d2bf48ee`**,
+  then **`f238b0bf`** — ⛔ the first deploy proved a miss live: the card door was not on the JWT
+  public-route bypass (`jwtPublicRouteBypass.ts` allowlists `/step` by exact path), so the AGI's
+  POST answered **401 with the correct secret**; 401 = the handler was never reached, and the
+  route-level test registers routes without the JWT hook so it could not see it. Fixed + pinned by
+  `supermarketWiring.test.ts`. **Live proof after the fix** (`/root/payline-live-proof5.sh`): wrong
+  secret → 403; no session → `no_session`; bad Luhn → `invalid`, session unchanged; a valid test
+  card → `ok:true`, vaulted, ignored outside card entry, no digits in the session row, 0 occurrences
+  in the api log. `pbx:/root/agi-harness.py` drove the INSTALLED AGI through a fake AGI pipe: GET
+  DATA ×5 (one `45_card_invalid` replay for month 13), one HTTPS POST to the live door,
+  `PAY_CARD=fail` for the unknown call id, 0 occurrences of the test number in the PBX full log.
+  ⏳ **NOT proven: a real keyed charge.** The inline-`card` shape on `/charges` is inferred from
+  the add-card validator (the two share field names); the first real one-time payment proves it —
+  if the register answers 400 naming a field, the api logs that field name (never the number) as
+  "keyed-card charge refused". Acceptance (Izzy): call, reach an account with the PIN, press 2 to
+  pay, key an amount, press 3 at the confirm prompt (or press 1 at "no card on file"), key a real
+  card / MMYY / CVV / ZIP, press 1 (this payment only) — hear "approved" and the new balance; a
+  second call pressing 2 (save it) should then show the card in the account's cards list.
 
 ## What the store must do
 

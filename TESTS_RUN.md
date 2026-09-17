@@ -607,3 +607,15 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
   docs follow-up commit and the summary file's "Round 4" section.
 - NOT run: a real keyed charge (needs a caller with an account PIN and a real card) — the inline `card`
   shape on `/charges` is inferred from the add-card validator until then.
+- DEPLOYED api ``d2bf48ee`` then ``f238b0bf`` (direct, container-verified, ``/ready`` 200). ⛔ The FIRST deploy proved
+  a miss live: the card door was not on the JWT public-route bypass, so the AGI's POST answered **401 with the
+  correct secret** (401 = never reached the handler; the route-level test could not see it because it registers
+  the routes without the JWT hook) — fixed in ``f238b0bf`` + pinned by the wiring guard.
+  LIVE-PROVEN after the fix: ``/root/payline-live-proof5.sh`` — wrong secret → 403; no session → ``ok:false
+  no_session``; bad-Luhn card → ``ok:false invalid`` and the session unchanged; a valid test card → ``ok:true``,
+  vaulted, reducer ignores it outside card entry, session state carries no digits, the test number appears 0
+  times in the api log. ``pbx:/root/agi-harness.py`` drove the installed AGI through a fake AGI pipe: GET DATA
+  ×5 (one ``45_card_invalid`` replay for month 13), one HTTPS POST to the live door, ``PAY_CARD=fail`` for the
+  unknown call id, and 0 occurrences of the test number in ``/var/log/asterisk/full``.
+  NOT proven: a real keyed charge (inline ``card`` shape on ``/charges``) and a real save-then-charge — needs a
+  caller with an account PIN and a real card.
