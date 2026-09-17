@@ -1,6 +1,10 @@
 # Loopcom / Connect project memory
 
-Laybel latency update (2026-09-16): owner confirms the call works but reports excessive reply delay. Source-proven whole-answer buffering before avatar speech; streaming requires server/router plus avatar integration. No live timing or speedup deployed. This supersedes older lack-of-owner-audio-confirmation notes, not pending Yiddish wiring, restart/disconnect reliability, or rollout gates. See Laybel handoff.
+Current Laybel repair (2026-09-16, supersedes older local-state notes below): live words reached Loopcom; server 500 was Prisma rejecting channel VOICE in fresh conversations (16:49Z requests req-8ou/req-8p1). Local VOICE->CHAT mapping plus direct Yiddish Labs mic STT/translation and English-speech/Yiddish-chat wiring implemented in isolated scratchpad/laybel-release. 74 agent + 31 portal tests pass; no live proof/deployment. Pending two-branch GitHub push approval still blocks release; do not bypass prior auto-review denial. Production portal advanced to 47584ef6, so reconcile remote work before pushing. No PBX/config/schema changes or customer rollout. Read latest Laybel handoff for full evidence and acceptance steps.
+
+Laybel release gate (2026-09-16): bb16c34b committed in isolated scratchpad/laybel-release, not pushed/deployed. Auto-review blocked the two-branch GitHub push; explicit owner approval requested for codex/laybel-live-video-20260916 + feat/ivr-migration-takeover at izzwgg-arch/connect-platform. Do not bypass. Assistant-only restart approval is already granted. Final portal typecheck passed; no live latency claim.
+
+Laybel latency update (2026-09-16): owner confirms call works. Implemented final-answer-only streaming through the existing Assistant/tool gates; no commentary/tool arguments, no partially spoken replay. 76 agent + 23 portal tests pass. Owner approved Assistant-only release with rollback (queue lacks agent target); deployment/live speedup pending. Timing means speech queued, not audible playback. English output can precede YL chat translation; YL video microphone input remains unwired. See Laybel handoff.
 
 ## Fundamental task rule — owner instruction, 2026-09-14
 

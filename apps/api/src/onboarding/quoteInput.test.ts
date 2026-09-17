@@ -10,7 +10,7 @@ test("post-submit: requestedExtensions rows + smsEnabled column win", () => {
     // Stale draft answers must NOT override what was actually submitted.
     answers: { extensions: [{ displayName: "Old", extNumber: "101" }], addons: { smsEnabled: false } },
   });
-  assert.deepEqual(input, { extensions: 3, phoneNumbers: 1, smsEnabled: true, tollFreeNumber: false });
+  assert.deepEqual(input, { extensions: 3, phoneNumbers: 1, smsEnabled: true, tollFreeNumber: false, coldCallingExtensions: 0, crmExtensions: 0 });
 });
 
 test("pre-submit: falls back to autosaved answers, counting only rows submit would keep", () => {
@@ -27,7 +27,7 @@ test("pre-submit: falls back to autosaved answers, counting only rows submit wou
       addons: { smsEnabled: true },
     },
   });
-  assert.deepEqual(input, { extensions: 2, phoneNumbers: 1, smsEnabled: true, tollFreeNumber: false });
+  assert.deepEqual(input, { extensions: 2, phoneNumbers: 1, smsEnabled: true, tollFreeNumber: false, coldCallingExtensions: 0, crmExtensions: 0 });
 });
 
 test("pre-submit with no addons answer: smsEnabled column is the fallback", () => {
@@ -48,7 +48,7 @@ test("extra numbers from answers.phone.extraNumbers, garbage ignored", () => {
 
 test("empty submission quotes zero extensions rather than throwing", () => {
   const input = quoteInputForSubmission({ requestedExtensions: null, answers: null });
-  assert.deepEqual(input, { extensions: 0, phoneNumbers: 1, smsEnabled: false, tollFreeNumber: false });
+  assert.deepEqual(input, { extensions: 0, phoneNumbers: 1, smsEnabled: false, tollFreeNumber: false, coldCallingExtensions: 0, crmExtensions: 0 });
 });
 
 test("numberKind tollfree/vanity flags the toll-free surcharge; local or missing does not", () => {

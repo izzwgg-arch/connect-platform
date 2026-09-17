@@ -158,7 +158,7 @@ function stripComments(src: string): string {
 
 test("every invitation route is behind the SUPER_ADMIN gate", () => {
   const src = stripComments(routeSource());
-  const handlers = src.match(/app\.(get|post|delete)\(/g) || [];
+  const handlers = src.match(/app\.(get|post|put|patch|delete)\(/g) || [];
   const gates = src.match(/await requireOwner\(req, reply\)/g) || [];
   assert.ok(handlers.length >= 7, `expected the seven routes, found ${handlers.length}`);
   assert.equal(gates.length, handlers.length, "one gate per route, no exceptions");

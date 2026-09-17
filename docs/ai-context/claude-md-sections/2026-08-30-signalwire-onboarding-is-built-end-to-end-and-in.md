@@ -47,6 +47,9 @@ CSS, the texting-registration and Port-queue strings in the shipped chunks).
   `TenantSmsNumber` row (provider SIGNALWIRE, tenant default — what wires the
   number into chat), and emails the customer (`SMS_REGISTRATION_ACTIVE`, never
   ADMIN_ALERT).
+  ⛔ **That email could never queue until 2026-09-16 (`966c9110`)** — invalid
+  status "PENDING" + nullable tenantId, error swallowed, fake db accepted it.
+  Fixed for SignalWire AND Telnyx registrations; details in the handoff §2.
   ⛔⛔ **THE EIN IS PASS-THROUGH AND HAS NO COLUMN**: browser → ONE endpoint
   (`POST /onboarding/:token/texting-registration`) → create-brand in the same
   request; never in answers, never autosaved, never logged — schema-reading

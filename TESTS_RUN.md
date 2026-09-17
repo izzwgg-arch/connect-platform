@@ -1,5 +1,58 @@
 # Tests run
 
+## Creative Studio native selects → ConnectSelect — 2026-09-16 (night)
+
+- portal `lib/nativeSelectSweep.test.ts` + `lib/dropdownOutsideClose.test.ts` **5/5** (sweep was failing on audio:254/302, images:205, storyboard:251/289 before `a3768b14`).
+- portal `npx tsc --noEmit -p tsconfig.json` **exit 0** (the first run errored only on `LaybelVideoCall.tsx` → `@anam-ai/js-sdk` missing from the worktree's node_modules; `pnpm install --frozen-lockfile --filter ./apps/portal` fixed it, not a code error).
+- DEPLOYED: `deploy-direct.sh portal --commit a3768b14` success; live `.build-commit` = `dcef71a9` (a later session deploy that contains `a3768b14`), 0 restarts; shipped chunks for creative audio/images/storyboard have 0 native `select` and all five ConnectSelect `ariaLabel`s; the three routes 200.
+- NOT proven: a human picking a value in any of the five dropdowns.
+
+## Texting switcher (VoIP.ms → Telnyx on landing) — 2026-09-16 (night)
+
+- apps/api `src/textingRegistration/switcher.test.ts` **13/13** (new): not-on-Telnyx and port-pending left alone; landed+live → profile set, flipped, History event without a carrier name, registration kicked, engine attach list includes it; chosen profile never overwritten; only VOIPMS rows with a tenant (0 Telnyx reads otherwise); concurrent sweeps flip/record/kick once; draft / no registration; one error isolated; no creds = no reads; guards: VoIP.ms DID sync never writes provider, VoIP.ms poll selects VOIPMS, switcher's only write.
+- Mutation: removing `provider: "VOIPMS"` from the flip's where → 2 FAIL (exactly-once + write guard).
+- `src/textingRegistration/*.test.ts` **54/54**. tsc on switcher/wire/test: 0 errors (pre-existing elsewhere only; full api tsc blocked by another session's uncommitted `deviceCloudRoutes.ts:1523` syntax error).
+- Prod dry run before deploy: 18 VOIPMS rows, none active on Telnyx (Telnyx owns 723-1213 port-pending, 460-9054, 777-4807, 306-6825 active).
+- DEPLOYED: api `56879d0f` (`.build-commit`, 0 restarts, health 200, `TEXTING_SWITCHER_ARMED`); after first run 21:31Z: VOIPMS 18 / TELNYX 1 unchanged, 0 audit rows.
+- NOT proven: a real landing → flip → campaign attach → text sent/received.
+
+## 10DLC "texting is on" email could never queue — fixed (2026-09-16)
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/signalwire/*.test.ts` → **41/41 pass**
+  (1 new: activation EmailJob payload valid against `schema.prisma` — status omitted/QUEUED, tenantId required,
+  own type not ADMIN_ALERT, no carrier name; the fake db now validates every EmailJob create). Against the
+  pre-fix `signalWireTenDlc.ts` the same file fails **2** (the new test + the existing activation test).
+- `tsc --noEmit` (apps/api): 0 errors in touched files (51 pre-existing elsewhere: yiddishCorpus, webrtc*, packages/db).
+- Live DB read-only: 0 `SMS_REGISTRATION_ACTIVE` EmailJobs, 0 `TenantSmsRegistration` rows.
+- Deployed api at origin tip `56879d0f` (contains fix `966c9110`; waited out a peer portal build first). Container `.build-commit` = `56879d0f`, fix is an ancestor, `signalWireTenDlc.ts` in the container has the QUEUE_FAILED log and no `status: "PENDING"`, 0 restarts, health 200.
+
+## Laybel live reply failure and Yiddish Labs microphone wiring — 2026-09-16
+
+- CONFIRMED LIVE FAILURE: owner transcripts present; agent requests req-8ou/req-8p1 at 16:49Z return 500, Prisma invalid AgentChannel VOICE. Agent health 200 did not prove chat. Portal observed build 47584ef643ec9a5f68867a9546824ee2fa9f18bd.
+- PASS: 74 Assistant tests across auth/authRoles; conversation store, voiceTranscribe, speechRoutes, engine, engine.bridge, engineTools, engineIdentity, engineCoworkerWorkspace; llm speechStream. Includes actual Prisma store mapping checked against schema enum, YL-only STT JWT/audio validation/concurrency, strict translation failures, English speech/Yiddish chat and tool isolation/no replay.
+- PASS: 31 portal tests in lib/laybelMic.test.ts, lib/laybelSpeech.test.ts, components/floatingAssistantOpening.test.ts. Uses actual worklet source in VM for bounded capture/overflow/mute, canonical WAV, VAD ID pairing, late-end cleanup, serialized STT, duplicate protection and safe failures.
+- PASS: final portal tsc --noEmit --incremental false --types node,react,react-dom (exit 0), and Agent tsc with --moduleResolution bundler --module esnext (exit 0). Prior default agent resolver errors remain unrelated and are not claimed fixed.
+- Test maintenance: fixed timing race in new concurrency test (explicit entry signal + timeout); updated static onTurn assertion for added language metadata. Final suites green. No production build/deploy, live YL audio round-trip, hardware microphone test, audible reply proof or latency improvement claimed.
+- Release remains local while explicit GitHub push approval is pending. Full evidence/resume checklist: AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md.
+
+## Laybel streaming latency implementation — 2026-09-16
+
+- Final repeat portal typecheck PASS. Release bb16c34b remains local: auto-review rejected the two-branch GitHub push; owner approval requested. No production build/deploy or live speed comparison occurred.
+
+- PASS: 76 agent tests (auth/roles, engine/identity/workspace/bridge/tools, streaming router and real local HTTP streaming). Includes early final speech, no commentary/unphased/tool speech, no partial-answer failover/tool replay, verified tenant identity, and English speech before YL output translation.
+- PASS: 23 portal tests (Assistant/layout/consent/takeover, incremental UTF8 NDJSON, sentences, early speech, barge-in and failure no-retry).
+- PASS: portal typecheck. Agent default typecheck reports pre-existing packages/db shared-subpath module-resolution errors; new test schema type fixed. Agent typecheck with --moduleResolution bundler --module esnext passes. Default configuration is not claimed green.
+- Pending: deployment/build and live before/after audible latency evidence. No performance improvement claimed from synthetic tests.
+
+
+## Onboarding cold-calling / CRM pricing + phone-wizard step-1 fix — 2026-09-16 (night)
+
+- apps/api `src/onboarding/*.test.ts` **475/500**; the 25 failures (24 setupOrchestrator + 1 pbxTenantBuild) are identical on HEAD (all 11 touched files swapped to HEAD and re-run: 7/24). New `onboardingAddOnPricing.test.ts` 8/8 (quote math all/partial/clamp/plain $35, autosave cannot set/change/clear pricing, admin shape, month-2 lines, /quote route prices add-ons). `inviteEmail.test.ts` gate guard widened to put/patch, passes.
+- packages/shared `onboardingPricing.test.ts` 16/16. portal `lib/onboardingSignalWireWizard.test.ts` 9/9 (new guard for the step-1 re-route). tsc 0 errors in touched api/portal files.
+- DEPLOYED `014c0399` api + portal (`.build-commit` both; grep `onboarding_addon` in api; phone-fix + admin checkbox strings in shipped `.next/static` chunks; /admin/onboarding 200).
+- LIVE: Swift Mechanics stamped cold calling all + CRM all; public `/onboarding/<token>/quote?extensions=1|2|3` → **$90 / $175 / $260**.
+- NOT proven: an autosave after the stamp keeping pricing; the real checkout invoice; month-2 lines; admin checkboxes in a browser; phone fix on a real phone.
+
 ## Telnyx port of 845-723-1213 + ported-number owner guard — 2026-09-16 (night)
 
 - apps/api `telnyxOnboarding.test.ts` **50/50** (new: owner-guard source checks incl. read-failure = build fails and check-before-job ordering; landing with `portedDidExistingPbxTenant` makes no PBX/caller-ID/publish/texting change). setupOrchestrator 7/24 unchanged. tsc 0 in touched files.
@@ -28,6 +81,7 @@
 - LIVE PROOF inside app-api-1 on the "Loopcom Telnyx Test" tenant (never filed with Telnyx): board 200 / 401 without session / 403 for a TENANT_ADMIN (board + EIN reveal); create + prefill; link created; public view phase=form; draft stored no EIN; invalid submit → 422 with 6 field errors; **25 simultaneous valid submits → exactly 1 200** (others 409/410/429), one submitted event; EIN token row has no digits, registration row has no EIN, masked ••-•••6789, audited reveal matched; used link → 410 link_used; 30 checks pass, 0 fail, 1 warn (no Telnyx-hosted number); policy page 200 in the legal name; invite email built on the Loopcom shell and **actually SENT** to the test owner izzy+telnyx-e2e@loopcom.net (EmailJob SENT 19:14:27Z), no carrier name (the only "telnyx" string anywhere is that test address itself); **200 random tokens from 200 IPs → 200× 404 in 384ms; 90 from one IP → 60× 404 + 30× 429; 500 policy reads → 500× 200 in 722ms; 40 board reads → 200; 50 forged webhooks → 50× 401; junk bodies/unknown ids/path traversal → 400/404/401, never 500.**
 - ✅ **REAL BROWSER (Izzy's Chrome, app.loopcom.net)**: the public form on a Loopcom Demo link rendered with the logo in light AND dark; empty Send → all 10 plain-English errors + focus on the first field; filled by keystrokes (ConnectSelect business type + searchable State) → "Thanks, we've got it"; admin board showed both registrations under Needs you with health (Telnyx connected, balance $124.71, re-check ran); review page showed source tags + checks + $24 breakdown; EIN Show revealed and wrote "EIN shown to staff" to history; Close registration (type the name) worked. Both test registrations CLOSED afterwards, 0 EIN rows left.
 - ⛔⛔ **TWO BUGS ONLY THE BROWSER FOUND** (every test + typecheck + curl was green): (1) **the public form could not scroll** — the portal locks html/body overflow, so everything below the fold incl. Send was unreachable → `.tr-page` is now its own scroll container; (2) ConnectSelect sets width inline (160px) so State ran into ZIP → `!important` width. Plus a dead error-border selector. Fixed in the CSS redeploy below.
+- CSS redeploys: `6c2ef93e` (scroll container — verified live: page scrolls to the bottom, Send visible) then `9a04bb2c` (the State dropdown still ran 9px into ZIP because ConnectSelect's `.cs-wrap` has min-width:160px > the 141px column → `min-width:0 !important`; verified in the shipped stylesheet). api still contains the feature after another session's api deploy (`6c2ef93e`). All 3 test registrations closed, 0 EIN rows.
 - NOT PROVEN: a real filing with Telnyx (costs $24 + needs a real EIN) — brand verification, campaign review, number assignment, the ready email and the charge invoice have only run against the simulated registry; the live 10DLC enum spelling (read at first filing, cached); a real Telnyx 10DLC webhook delivery; the sole-proprietor PIN on a real phone; the customer form clicked by a human in a browser.
 
 ## Telnyx 911 postal form + owner alert + retry + FastPort — 2026-09-16 (evening)

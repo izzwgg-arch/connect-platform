@@ -21,5 +21,10 @@ export function carryServerOwnedAnswers(stored: unknown, incoming: unknown): unk
     next.phone = { ...(next.phone && typeof next.phone === "object" ? next.phone : {}), provider };
   }
   if (prev.provisioning !== undefined) next.provisioning = prev.provisioning;
+  // ⛔ Admin-set pricing (cold calling / CRM). ALWAYS the stored value — a
+  // client-sent `pricing` is dropped even when nothing is stored, so a customer
+  // can never set or clear their own price.
+  if (prev.pricing !== undefined) next.pricing = prev.pricing;
+  else delete next.pricing;
   return next;
 }

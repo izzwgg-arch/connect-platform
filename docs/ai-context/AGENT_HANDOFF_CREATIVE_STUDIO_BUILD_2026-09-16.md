@@ -119,6 +119,10 @@ Coworker tools ──────┘        (safety → engine choice → quota 
 
 ## 7. WHAT IS NOT DONE
 
+- ✅ **Native selects removed** (`a3768b14`, live in portal `dcef71a9`): the five `<select>`s on audio
+  (Voice, How long), images (Quality) and storyboard (Shape, Shot length) are `ConnectSelect`, so
+  `lib/nativeSelectSweep.test.ts` passes again. An off-list stored value shows as the placeholder. ⏳ Not
+  yet clicked in a browser. Details: `claude-md-sections/2026-09-16-creative-studio-built.md`.
 - ✅ **Portal deployed** (`6ff2f685`): `/creative`, `/creative/images|video|assets|brand|memory|projects|
   design` and `/admin/creative-console` all serve **200**, and the shipped chunks carry all eight
   `can_view_creative_*` keys. ⛔ The first attempt refused with `HEAVY JOB ALREADY RUNNING:

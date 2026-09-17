@@ -937,7 +937,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </div>
         <div className="ob-invalid-title">This onboarding link is not active</div>
-        <p className="ob-invalid-body">Please contact your Connect Communications contact for a new link.</p>
+        <p className="ob-invalid-body">Please contact Loopcom for a new link.</p>
         <p className="ob-invalid-support">Need help? <a href={`mailto:${SUPPORT_EMAIL}`} className="ob-invalid-link">{SUPPORT_EMAIL}</a></p>
       </div>
     );
@@ -969,14 +969,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       <>
         <div className="ob-header">
           <div className="ob-logo">
-            <div className="ob-logo-mark">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="3" fill="rgba(255,255,255,0.95)"/>
-                <circle cx="3" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/>
-                <circle cx="3" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/>
-              </svg>
-            </div>
-            <span className="ob-logo-text">Connect</span>
+            <img className="ob-logo-img" src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} />
           </div>
           <div className="ob-header-tools">
             <div className="ob-save-indicator" style={{ opacity: saveState !== "idle" ? 1 : 0 }}>
@@ -1073,16 +1066,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       {/* Header */}
       <div className="ob-header">
         <div className="ob-logo">
-          <div className="ob-logo-mark">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="3" fill="rgba(255,255,255,0.95)"/>
-              <circle cx="3" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="5" r="1.5" fill="rgba(255,255,255,0.6)"/>
-              <circle cx="3" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/><circle cx="13" cy="11" r="1.5" fill="rgba(255,255,255,0.6)"/>
-              <line x1="8" y1="8" x2="3" y2="5" stroke="rgba(255,255,255,0.5)" strokeWidth="0.8"/><line x1="8" y1="8" x2="13" y2="5" stroke="rgba(255,255,255,0.5)" strokeWidth="0.8"/>
-              <line x1="8" y1="8" x2="3" y2="11" stroke="rgba(255,255,255,0.5)" strokeWidth="0.8"/><line x1="8" y1="8" x2="13" y2="11" stroke="rgba(255,255,255,0.5)" strokeWidth="0.8"/>
-            </svg>
-          </div>
-          <span className="ob-logo-text">Connect</span>
+          <img className="ob-logo-img" src="/brand/loopcom/loopcom-wordmark-560.png" alt="Loopcom" width={560} height={99} />
         </div>
         <div className="ob-header-tools">
           <div className="ob-save-indicator" style={{ opacity: saveState !== "idle" ? 1 : 0 }}>
@@ -1562,7 +1546,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
               )}
             </div>
             <div className="ob-callout">
-              <span>On launch, Connect builds your tenant, creates every extension from your list, {form.numberChoice === "port" ? "ports" : "buys & wires"} your number, and sets your routing — <b className="ob-auto">all automatically</b>.</span>
+              <span>On launch, Loopcom builds your account, creates every extension from your list, {form.numberChoice === "port" ? "ports" : "buys & wires"} your number, and sets your routing — <b className="ob-auto">all automatically</b>.</span>
             </div>
             {submitError && <div className="ob-error">{submitError}</div>}
           </div>

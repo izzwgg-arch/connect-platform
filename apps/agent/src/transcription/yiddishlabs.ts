@@ -125,18 +125,18 @@ export class YiddishLabsClient {
   }
 
   /** Synchronous (waits) — best for calls ≤ 5 min. Longer → async response. */
-  async submitSync(input: YLSubmit): Promise<YLResult> {
+  async submitSync(input: YLSubmit, signal?: AbortSignal): Promise<YLResult> {
     if (!this.apiKey) throw new Error("yiddishlabs_not_configured");
     const url = `${BASE}/transcriptions/sync${input.timestamps ? "?timestamps=true" : ""}`;
-    const res = await fetch(url, { method: "POST", headers: this.headers(), body: this.form(input) });
+    const res = await fetch(url, { method: "POST", headers: this.headers(), body: this.form(input), signal });
     if (!res.ok) throw new Error(`yiddishlabs sync failed: ${res.status} ${await safeText(res)}`);
     return this.parse(await res.json());
   }
 
-  async get(id: string, timestamps = false): Promise<YLResult> {
+  async get(id: string, timestamps = false, signal?: AbortSignal): Promise<YLResult> {
     if (!this.apiKey) throw new Error("yiddishlabs_not_configured");
     const url = `${BASE}/transcriptions/${encodeURIComponent(id)}${timestamps ? "?timestamps=true" : ""}`;
-    const res = await fetch(url, { headers: this.headers() });
+    const res = await fetch(url, { headers: this.headers(), signal });
     if (!res.ok) throw new Error(`yiddishlabs get failed: ${res.status}`);
     return this.parse(await res.json());
   }

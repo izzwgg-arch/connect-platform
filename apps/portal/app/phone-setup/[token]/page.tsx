@@ -30,8 +30,22 @@ type Phone = {
 type Order = { company: string | null; total: number; scanned: number; phones: Phone[] };
 type Matched = { phone: Phone; makerLabel: string | null; total: number; scanned: number };
 
-/** How often we send a frame while the camera is open. Slow enough not to heat the phone. */
+/**
+ * A SCANNER, NOT A PHOTOGRAPHER (Izzy, 2026-09-16: "It needs to scan very efficiently
+ * right away"). The first build posted ONE JPEG every 1.5s to the server and asked the
+ * camera for nothing - on most phones that reads as "it doesn't scan". Now the SAME zxing
+ * engine the server uses runs on-device against a centre crop several times a second, the
+ * camera is asked for continuous focus + 1080p, and only the decoded TEXT crosses the wire.
+ * The server stays the ONLY judge: it re-shapes, re-parses and gates the values exactly
+ * like every other door - the browser just reads faster.
+ */
+const DECODE_EVERY_MS = 140;
+/** Never repeat an identical decode's post more often than this. */
+const POST_EVERY_MS = 700;
+/** Fallback cadence for a browser whose decode engine cannot load: photo -> server. */
 const SCAN_EVERY_MS = 1500;
+/** "Not readable yet" states - normal while someone lines the camera up; never shown. */
+const SILENT_SCAN_ERRORS = new Set(["photo_unreadable", "nothing_matched_yet"]);
 
 export default function PhoneSetupPage({ params }: { params: { token: string } }) {
   const token = String(params?.token ?? "");
@@ -50,6 +64,14 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlight = useRef(false);
+  const decodeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
+  /** On-device decoder once its wasm is up; null = fall back to photo posts. */
+  const decodeRef = useRef<((img: ImageData) => Promise<string[]>) | null>(null);
+  const decodeBusy = useRef(false);
+  const lastPostRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -70,12 +92,76 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
 
   const stopCamera = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (decodeTimerRef.current) { clearInterval(decodeTimerRef.current); decodeTimerRef.current = null; }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    trackRef.current = null;
+    setTorchAvailable(false); setTorchOn(false);
   }, []);
   useEffect(() => stopCamera, [stopCamera]);
 
-  /** One frame → the server. The server decodes, matches by hardware address, and answers. */
+  /** One place decides what a scan answer means, whichever door carried it. */
+  const applyScanOutcome = useCallback((httpOk: boolean, body: any): boolean => {
+    if (httpOk && body?.ok && body?.matched) {
+      stopCamera();
+      setMatched({ phone: body.phone, makerLabel: body.makerLabel ?? null, total: body.total, scanned: body.scanned });
+      setOrder((o) => (o ? { ...o, scanned: body.scanned, total: body.total } : o));
+      setProblem(null);
+      setView("matched");
+      void load();
+      return true;
+    }
+    if (body?.error && !SILENT_SCAN_ERRORS.has(String(body.error))) setProblem(body.message || null);
+    return false;
+  }, [load, stopCamera]);
+
+  /** Decoded symbol values -> the server's gate. The text is the payload, never a picture. */
+  const postTexts = useCallback(async (texts: string[]) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      const r = await fetch(`${base}/scan-text`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texts }),
+      });
+      const body = await r.json().catch(() => ({}));
+      applyScanOutcome(r.ok, body);
+    } catch {
+      /* a dropped post is not an error; the next decode tries again */
+    } finally {
+      inFlight.current = false;
+    }
+  }, [base, applyScanOutcome]);
+
+  /** ~7 attempts a second on the centre of the frame - where the reticle points. */
+  const decodeTick = useCallback(async () => {
+    const video = videoRef.current, decode = decodeRef.current;
+    if (!video || !decode || decodeBusy.current || video.readyState < 2) return;
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) return;
+    decodeBusy.current = true;
+    try {
+      const cw = Math.round(w * 0.72), ch = Math.round(h * 0.46);
+      const canvas = document.createElement("canvas");
+      canvas.width = cw; canvas.height = ch;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch, 0, 0, cw, ch);
+      const values = await decode(ctx.getImageData(0, 0, cw, ch));
+      if (!values.length) return;
+      const key = [...values].sort().join("|");
+      const now = Date.now();
+      if (key === lastPostRef.current.key && now - lastPostRef.current.at < POST_EVERY_MS) return;
+      lastPostRef.current = { key, at: now };
+      await postTexts(values.slice(0, 8));
+    } catch {
+      /* one bad frame is nothing; the next tick tries again */
+    } finally {
+      decodeBusy.current = false;
+    }
+  }, [postTexts]);
+
+  /** FALLBACK ONLY (no wasm): one frame -> the server decodes, as the first build did. */
   const sendFrame = useCallback(async () => {
     const video = videoRef.current;
     if (!video || inFlight.current || video.readyState < 2) return;
@@ -92,40 +178,78 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
       form.append("file", blob, "scan.jpg");
       const r = await fetch(`${base}/scan`, { method: "POST", body: form });
       const body = await r.json().catch(() => ({}));
-      if (r.ok && body?.ok && body?.matched) {
-        stopCamera();
-        setMatched({ phone: body.phone, makerLabel: body.makerLabel ?? null, total: body.total, scanned: body.scanned });
-        setOrder((o) => (o ? { ...o, scanned: body.scanned, total: body.total } : o));
-        setProblem(null);
-        setView("matched");
-        void load();
-        return;
-      }
-      // "Not readable yet" is the normal state while someone lines the camera up —
-      // it must never flash an error. Only a decided refusal is worth showing.
-      if (body?.error && body.error !== "photo_unreadable") setProblem(body.message || null);
+      applyScanOutcome(r.ok, body);
     } catch {
       /* A dropped frame is not an error; the next tick tries again. */
     } finally {
       inFlight.current = false;
     }
-  }, [base, load, stopCamera]);
+  }, [base, applyScanOutcome]);
+
+  const toggleTorch = useCallback(async () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] } as unknown as MediaTrackConstraints);
+      setTorchOn(next);
+    } catch { /* no light is fine; the button just did nothing */ }
+  }, [torchOn]);
 
   const startCamera = useCallback(async () => {
     setProblem(null); setView("camera");
     try {
+      // 1080p + continuous focus is what makes a sticker at reading distance sharp.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false,
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
       });
       streamRef.current = stream;
+      const track = stream.getVideoTracks()[0] ?? null;
+      trackRef.current = track;
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play().catch(() => {}); }
-      timerRef.current = setInterval(() => { void sendFrame(); }, SCAN_EVERY_MS);
+      if (track) {
+        // Non-standard capabilities, applied only where the phone admits them -
+        // a camera that refuses simply stays on its defaults.
+        const caps = (track.getCapabilities?.() ?? {}) as Record<string, unknown>;
+        const advanced: Record<string, unknown>[] = [];
+        if (Array.isArray(caps.focusMode) && (caps.focusMode as string[]).includes("continuous")) {
+          advanced.push({ focusMode: "continuous" });
+        }
+        if (advanced.length) await track.applyConstraints({ advanced } as MediaTrackConstraints).catch(() => {});
+        setTorchAvailable(Boolean((caps as { torch?: boolean }).torch));
+      }
+      // The on-device engine: same zxing the server runs, wasm served from our own origin.
+      if (!decodeRef.current) {
+        try {
+          const zxing = await import("zxing-wasm/reader");
+          zxing.prepareZXingModule({
+            overrides: {
+              locateFile: (path: string, prefix: string) =>
+                path.endsWith(".wasm") ? "/zxing/zxing_reader.wasm" : prefix + path,
+            },
+          });
+          decodeRef.current = async (img: ImageData) => {
+            const results = await zxing.readBarcodes(img, {
+              tryHarder: true, tryRotate: true, tryInvert: true, maxNumberOfSymbols: 8,
+            });
+            return (results ?? []).map((r) => String(r?.text ?? "").trim()).filter((v) => v.length > 0);
+          };
+        } catch {
+          decodeRef.current = null; // old browser: the photo fallback below still works
+        }
+      }
+      if (decodeRef.current) {
+        decodeTimerRef.current = setInterval(() => { void decodeTick(); }, DECODE_EVERY_MS);
+      } else {
+        timerRef.current = setInterval(() => { void sendFrame(); }, SCAN_EVERY_MS);
+      }
     } catch {
       stopCamera();
       setView("list");
       setProblem("We couldn't open the camera. Allow camera access, or type the numbers instead.");
     }
-  }, [sendFrame, stopCamera]);
+  }, [decodeTick, sendFrame, stopCamera]);
 
   const submitTyped = useCallback(async () => {
     if (!typedFor || !typedText.trim()) return;
@@ -187,10 +311,17 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
             <video ref={videoRef} playsInline muted />
             <div className="ps-reticle"><i /><i /><i /><i /></div>
             <span className="ps-chip">{remaining > 0 ? `${order.scanned + 1} of ${order.total}` : "All scanned"}</span>
-            <p className="ps-camhint">Point at the barcode under the phone</p>
+            <p className="ps-camhint">Hold it about 6 inches from the sticker &mdash; it scans by itself</p>
           </div>
           {problem && <div className="ps-note" data-kind="bad">{problem}</div>}
-          <button type="button" className="ps-btn ghost" onClick={() => { stopCamera(); setView("list"); }}>Stop scanning</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {torchAvailable && (
+              <button type="button" className="ps-btn ghost" style={{ flex: 1 }} onClick={() => { void toggleTorch(); }}>
+                {torchOn ? "Light off" : "Light on"}
+              </button>
+            )}
+            <button type="button" className="ps-btn ghost" style={{ flex: 2 }} onClick={() => { stopCamera(); setView("list"); }}>Stop scanning</button>
+          </div>
         </div>
       )}
 

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { Card, EmptyState, LoadingCard, Note, PageHead, Pill, errText, money } from "../CreativeUi";
@@ -248,9 +249,13 @@ function StoryboardScreen() {
         <Pill kind="nub">Roughly {money(estimate)} to render what is left</Pill>
         <label className="cse-fld" style={{ marginLeft: "auto", minWidth: 150 }}>
           Shape
-          <select className="cse-input" value={ratio} onChange={(e) => board.setDocFields({ ratio: e.target.value })}>
-            {RATIOS.map(([v, label]) => <option key={v} value={v}>{label} · {v}</option>)}
-          </select>
+          <ConnectSelect
+            ariaLabel="Shape"
+            value={ratio}
+            onChange={(v) => board.setDocFields({ ratio: v })}
+            options={RATIOS.map(([v, label]) => ({ value: v, label: `${label} · ${v}` }))}
+            placeholder={ratio}
+          />
         </label>
       </div>
       <p className="cse-help" style={{ marginBottom: 10 }}>Drag a card by its handle to re-order. Everything saves as you go.</p>
@@ -286,14 +291,16 @@ function StoryboardScreen() {
                   onDragEnd={() => { dragging.current = ""; }}
                 >
                   <span>{shot.title || `Shot ${i + 1}`}</span>
-                  <select
-                    className="cse-input"
-                    style={{ marginLeft: "auto", width: 72, padding: "2px 4px", fontSize: 11 }}
-                    value={Number(shot.seconds || 5)}
-                    onChange={(e) => setShot(shot.id, { seconds: Number(e.target.value) }, "Shot length changed")}
-                  >
-                    {LENGTHS.map((n) => <option key={n} value={n}>{n}s</option>)}
-                  </select>
+                  <ConnectSelect
+                    ariaLabel="Shot length"
+                    size="sm"
+                    style={{ marginLeft: "auto", width: 72, minWidth: 72 }}
+                    value={String(Number(shot.seconds || 5))}
+                    onChange={(v) => setShot(shot.id, { seconds: Number(v) }, "Shot length changed")}
+                    options={LENGTHS.map((n) => ({ value: String(n), label: `${n}s` }))}
+                    placeholder={`${Number(shot.seconds || 5)}s`}
+                    dropdownWidth={96}
+                  />
                 </div>
 
                 <div className="cse-thumb" style={{ borderRadius: 0 }}>

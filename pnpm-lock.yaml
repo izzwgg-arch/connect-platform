@@ -452,6 +452,9 @@ importers:
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
+      zxing-wasm:
+        specifier: ^3.1.4
+        version: 3.1.4(@types/emscripten@1.41.6)
     devDependencies:
       '@types/node':
         specifier: ^24.3.0

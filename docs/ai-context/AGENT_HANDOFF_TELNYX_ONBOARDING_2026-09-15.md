@@ -422,6 +422,8 @@ Modules (all under apps/api/src):
 - **A real port**: Izzy picks the number + provides the carrier account #, PIN, name/address on the bill
   and a recent bill PDF. Only a real CONFIRM shows whether Telnyx accepts the requirements as sent.
   The landing sweep then needs its first real run.
+- ✅ 2026-09-16 `966c9110`: the shared 10DLC "texting is on" email (`SMS_REGISTRATION_ACTIVE`) could never
+  queue (EmailJob status "PENDING" + null tenantId, error swallowed) — fixed; see SignalWire handoff §2.
 - Telnyx 10DLC filing with a real EIN; the E911 manual-validation path (Telnyx support) for addresses
   like 33 NY-17M; NYC-core area codes (212/718/347/646/917/332/201) have NO Telnyx stock.
 - Scoped "transfer a number only" links on Telnyx still park the port in the Port queue (not auto-filed).

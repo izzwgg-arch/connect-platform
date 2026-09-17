@@ -10,6 +10,7 @@ import type { AgentConfig } from "../config";
 import type { AuditLog } from "../audit/audit";
 import type { ToolSpec, ToolContext } from "../tools/toolRegistry";
 import { toolsForRole, executeTool } from "../tools/toolRegistry";
+import { readFinalSpeech, SpeechStreamError, type SpeechDelta } from "./speechStream";
 
 export type TaskClass = "support_chat" | "task_extraction" | "diagnostics" | "security_analysis" | "report_writing" | "policy_editing";
 export type ProviderName = "openai" | "anthropic";
@@ -382,7 +383,7 @@ export class ModelRouter {
     messages: ChatMessage[],
     tools: ToolSpec[],
     ctx: ToolContext,
-    opts: { maxTokens?: number; conversationId?: string; maxIterations?: number; hooks?: ToolLoopHooks } = {},
+    opts: { maxTokens?: number; conversationId?: string; maxIterations?: number; hooks?: ToolLoopHooks; onSpeechDelta?: SpeechDelta } = {},
   ): Promise<CompletionResult & { toolCalls: number; hitIterationCap: boolean }> {
     const route = this.routes[task];
     if (!route) throw new Error(`No route for task class ${task}`);
@@ -390,6 +391,8 @@ export class ModelRouter {
     const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
     const maxIterations = opts.maxIterations ?? MAX_TOOL_ITERATIONS;
     const hooks = opts.hooks;
+    let speechCommitted = false;
+    const onSpeechDelta = opts.onSpeechDelta ? (text: string) => { speechCommitted = true; opts.onSpeechDelta!(text); } : undefined;
 
     // No tools visible to this role ⇒ nothing agentic to do; take the cheap path.
     if (visible.length === 0) {
@@ -429,7 +432,7 @@ export class ModelRouter {
       const out =
         route.primary === "anthropic"
           ? await this.anthropicToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool, hooks)
-          : await this.openaiToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool, hooks);
+          : await this.openaiToolLoop(route.model, messages, visible, maxTokens, maxIterations, runTool, hooks, onSpeechDelta);
       await this.audit.record({
         actor: "model",
         event: "llm.completion",
@@ -450,6 +453,7 @@ export class ModelRouter {
         conversationId: opts.conversationId,
         payload: { task, provider: route.primary, model: route.model, error: String(err) },
       });
+      if (speechCommitted || err instanceof SpeechStreamError) throw new SpeechStreamError();
       // Degrade to a plain completion rather than resume across providers.
       const res = await this.complete(task, messages, opts);
       return { ...res, toolCalls: 0, hitIterationCap: false };
@@ -530,6 +534,7 @@ export class ModelRouter {
     maxIterations: number,
     runTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: unknown }>,
     hooks?: ToolLoopHooks,
+    onSpeechDelta?: SpeechDelta,
   ) {
     if (!this.openai) throw new Error("OpenAI key not configured");
     // ⛔ Tools go through /v1/responses, NOT /v1/chat/completions. Proven in
@@ -553,7 +558,7 @@ export class ModelRouter {
     for (let i = 0; i < maxIterations; i++) {
       if (hooks?.shouldStop?.()) return this.toolLoopResult(STOPPED_REPLY, inputTokens, outputTokens, toolCalls, false);
       safeHook(() => hooks?.onThinking?.());
-      const res: any = await (this.openai as any).responses.create({
+      const request = {
         model,
         max_output_tokens: maxTokens,
         input,
@@ -563,14 +568,19 @@ export class ModelRouter {
           description: t.description,
           parameters: t.parameters as any,
         })),
-      });
+      };
+      const res: any = onSpeechDelta
+        ? await readFinalSpeech(await (this.openai as any).responses.create({ ...request, stream: true }), onSpeechDelta)
+        : await (this.openai as any).responses.create(request);
       inputTokens += res.usage?.input_tokens ?? 0;
       outputTokens += res.usage?.output_tokens ?? 0;
 
       const items: any[] = res.output ?? [];
       const calls = items.filter((o) => o.type === "function_call");
       if (calls.length === 0) {
+        const finalMessages = onSpeechDelta ? items.filter((o) => o.type === "message" && o.phase === "final_answer") : [];
         const text =
+          (finalMessages.length ? finalMessages.flatMap((o: any) => (o.content ?? []).filter((c: any) => c.type === "output_text").map((c: any) => c.text)).join("") : undefined) ??
           res.output_text ??
           items
             .filter((o) => o.type === "message")

@@ -10,7 +10,10 @@ import { checkConnection } from "../telnyx/telnyxClient";
 import { verifyTelnyxSignature } from "../loopcomMobile/mobileWebhookRoutes";
 import { createOneTimeChargeInvoice } from "../billing/invoiceEngine";
 import * as registry from "./registryClient";
-import { REGISTRATION_CHARGE_CENTS, REGISTRATION_CHARGE_DESCRIPTION, startTextingRegistrationSweep, type EngineDeps } from "./engine";
+import { advanceRegistration, REGISTRATION_CHARGE_CENTS, REGISTRATION_CHARGE_DESCRIPTION, startTextingRegistrationSweep, type EngineDeps } from "./engine";
+import { startTextingSwitcher } from "./switcher";
+import { configureOwnedNumber, findOwnedNumber } from "../telnyx/telnyxOnboardingClient";
+import { recordTelnyxEvent } from "../telnyx/telnyxRoutes";
 import { registerTextingRegistrationRoutes } from "./routes";
 
 export function wireTextingRegistration(input: {
@@ -69,4 +72,23 @@ export function wireTextingRegistration(input: {
   });
 
   startTextingRegistrationSweep(engine);
+
+  // The switcher: a customer's number that lands on the Telnyx account moves its
+  // texting over by itself (see switcher.ts for the traced blast radius).
+  startTextingSwitcher({
+    db,
+    now: () => new Date(),
+    resolveCreds: () => resolveTelnyxCredentials(db).catch(() => null),
+    findOwnedNumber,
+    resolveMessagingProfileId: async (creds) => {
+      // Lazy: the sign-up provisioning module is heavy and only needed on a landing.
+      const p = await import("../onboarding/telnyxProvisioning");
+      const { listMessagingProfilesRaw, createMessagingProfileWithWebhook } = await import("../telnyx/telnyxOnboardingClient");
+      return p.resolveSignupMessagingProfileId(creds, { listMessagingProfiles: listMessagingProfilesRaw, createMessagingProfile: createMessagingProfileWithWebhook });
+    },
+    setMessagingProfile: (creds, numberId, profileId) => configureOwnedNumber(creds, numberId, { messagingProfileId: profileId }),
+    advanceRegistration: (id) => advanceRegistration(engine, id),
+    audit: (event, payload) => recordTelnyxEvent(db, event, payload, "system"),
+    log: app.log,
+  });
 }

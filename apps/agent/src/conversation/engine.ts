@@ -10,6 +10,7 @@
 import type { ConversationStore, ConversationRow, MessageRow, Role } from "./store";
 import type { ModelRouter, ChatMessage, ChatContentPart } from "../llm/router";
 import { CHAT_MAX_TOKENS } from "../llm/router";
+import { SpeechStreamError, type SpeechDelta } from "../llm/speechStream";
 import fs from "node:fs";
 import type { ToolSpec, ToolRole } from "../tools/toolRegistry";
 import type { AuditLog } from "../audit/audit";
@@ -243,6 +244,12 @@ export interface ChatContext {
    */
   platformRole?: string;
   channel?: string;
+  requireYiddishLabs?: boolean;
+  inputLanguage?: string;
+  /** Internal opt-in transport hook; never accepted as authority from the body. */
+  onSpeechDelta?: SpeechDelta;
+  onSpeechDone?: () => void;
+  speechStopped?: () => boolean;
   /**
    * The language this person reads their screens in (User.uiLanguage). When
    * it is "yi" the assistant answers in Yiddish even if they happened to type
@@ -292,6 +299,8 @@ export interface ChatAttachmentRef {
 export interface ChatResult {
   conversationId: string;
   reply: string;
+  /** Original English for avatar speech; reply remains Yiddish in the chat. */
+  spokenReply?: string;
   language: "en" | "yi";
   model?: string;
   degraded: boolean;
@@ -506,15 +515,17 @@ export class ConversationEngine {
     let degraded = inDegraded;
     try {
       const out = await this.translator!.toYiddish(englishReply);
+      if (ctx.requireYiddishLabs && !out.text?.trim()) throw new Error("yiddishlabs_translation_empty");
       userFacing = out.text?.trim() || fallbackReply("yi");
     } catch (err) {
+      if (ctx.requireYiddishLabs) throw new Error("yiddishlabs_reply_translation_unavailable");
       userFacing = fallbackReply("yi");
       degraded = true;
       await this.audit.record({ actor: "system", event: "chat.bridge_out_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
     }
     await this.store.addMessage({ conversationId: conv.id, role: "assistant", content: userFacing, contentEn: englishReply, model });
     await this.audit.record({ actor: "agent", event: "chat.agent_reply", tenantId: ctx.tenantId, conversationId: conv.id, payload: { model, degraded, bridged: true } });
-    return { conversationId: conv.id, reply: userFacing, language: "yi", model, degraded };
+    return { conversationId: conv.id, reply: userFacing, language: "yi", model, degraded, ...(ctx.channel === "voice" ? { spokenReply: englishReply } : {}) };
   }
 
   async getOrOpenConversation(ctx: ChatContext): Promise<ConversationRow> {
@@ -545,10 +556,18 @@ export class ConversationEngine {
   }
 
   async handleMessage(ctx: ChatContext, text: string, attachments: ChatAttachmentRef[] = []): Promise<ChatResult> {
+    let speechStarted = false;
+    let speechText = "";
+    const speak = ctx.onSpeechDelta ? (delta: string) => {
+      if (ctx.speechStopped?.()) return;
+      speechStarted = true;
+      speechText += delta;
+      ctx.onSpeechDelta!(delta);
+    } : undefined;
     // A stored Yiddish preference wins; otherwise fall back to reading the
     // message. Never the reverse — an English-looking message from someone
     // whose account is Yiddish is still answered in Yiddish.
-    const language = ctx.preferredLanguage === "yi" ? "yi" : detectLanguage(text);
+    const language = ctx.preferredLanguage === "yi" || (ctx.requireYiddishLabs && (ctx.inputLanguage === "yi" || ctx.inputLanguage === "yi-en")) ? "yi" : detectLanguage(text);
     const bridging = this.bridging(language);
 
     // Per-tenant rate cap (Phase 7) — checked before any work. Owners exempt.
@@ -600,12 +619,15 @@ export class ConversationEngine {
     // English. The original Yiddish is stored as the user's message; the English
     // mirror (contentEn) drives triage + the LLM and feeds the tuning corpus.
     let englishText = text;
+    if (ctx.requireYiddishLabs && language === "yi" && !bridging) throw new Error("yiddishlabs_translation_not_available");
     let bridgeDegraded = false;
     if (bridging) {
       try {
         const inTx = await this.translator!.toEnglish(text);
+        if (ctx.requireYiddishLabs && !inTx.text?.trim()) throw new Error("yiddishlabs_translation_empty");
         englishText = inTx.text?.trim() || text;
       } catch (err) {
+        if (ctx.requireYiddishLabs) throw new Error("yiddishlabs_input_translation_unavailable");
         bridgeDegraded = true;
         await this.audit.record({ actor: "system", event: "chat.bridge_in_failed", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err) } });
       }
@@ -1034,8 +1056,9 @@ export class ConversationEngine {
                 {
                   maxTokens: CHAT_MAX_TOKENS,
                   conversationId: conv.id,
+                  onSpeechDelta: speak,
                   ...(handsOn && dyn!.maxIterations ? { maxIterations: dyn!.maxIterations } : ws ? { maxIterations: 16 } : {}),
-                  ...(ws ? { hooks: this.turnHooks(ws, ctx, conv.id) } : {}),
+                  ...(ws ? { hooks: this.turnHooks(ws, ctx, conv.id) } : ctx.speechStopped ? { hooks: { shouldStop: ctx.speechStopped } } : {}),
                 },
               )
             : await this.llm.complete("support_chat", msgs, { maxTokens: CHAT_MAX_TOKENS, conversationId: conv.id });
@@ -1046,6 +1069,11 @@ export class ConversationEngine {
           await this.audit.record({ actor: "agent", event: "chat.coworker_turn", tenantId: ctx.tenantId, conversationId: conv.id, payload: { taskId: dyn!.taskId ?? null, toolCalls: (res as { toolCalls?: number }).toolCalls ?? 0, hitIterationCap: (res as { hitIterationCap?: boolean }).hitIterationCap ?? false, desktopTools: dyn!.tools.length } });
         }
         const model = `${res.provider}:${res.model}`;
+        // Buffered providers/unphased output still skip persistence/translation
+        // latency. Never repeat deltas already delivered by the streaming model.
+        if (speak && res.text.trim() && !speechStarted) speak(res.text);
+        if (speechStarted && speechText !== res.text) throw new SpeechStreamError();
+        if (speechStarted && !ctx.speechStopped?.()) ctx.onSpeechDone?.();
         // An empty reply is NOT a normal outcome — on thinking-by-default models
         // it means the token budget was spent reasoning. Both branches below fall
         // back to canned text, which hides it. Record it so it is countable.
@@ -1068,6 +1096,7 @@ export class ConversationEngine {
         return { conversationId: conv.id, reply, language, model, degraded: false };
       } catch (err) {
         await this.audit.record({ actor: "system", event: "chat.llm_failed", conversationId: conv.id, payload: { error: String(err) } });
+        if (speechStarted || err instanceof SpeechStreamError) throw new SpeechStreamError();
         if (bridging) return this.finishBridged(conv, ctx, teamFallbackEn, "fallback", true);
       }
     }

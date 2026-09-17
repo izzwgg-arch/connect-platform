@@ -125,6 +125,13 @@ export const createPublicLinkSchema = z.object({
   companyName: z.string().min(1).max(200).optional(),
   mainEmail: z.string().email().optional(),
   kind: z.enum(["full", "port", "extension"]).optional().default("full"),
+  // Admin-set pricing (Izzy 2026-09-16): cold calling $65/ext, CRM $20/ext.
+  coldCalling: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional(),
+  crm: z
+    .object({ enabled: z.boolean(), extensions: z.union([z.literal("all"), z.number().int().min(1).max(500)]).nullable().optional() })
+    .optional(),
 });
 
 // Admin status update

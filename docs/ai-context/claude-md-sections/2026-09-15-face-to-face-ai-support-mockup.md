@@ -1,8 +1,17 @@
-# Talk to Laybel — owner confirms call works; latency needs improvement (2026-09-16)
+# Talk to Laybel — live VOICE crash diagnosed; YL microphone wiring LOCAL ONLY (2026-09-16)
 
-- Latest owner feedback: call works, but replies are too slow. Source trace shows whole-answer buffering before avatar speech. Streaming requires server/router and avatar integration, not just browser chunking. No live timing or speedup implemented. Prior unconfirmed-audio notes below are historical; Yiddish wiring and reliability remain open.
+- Current: real live transcripts reached Loopcom but two `/agent/chat/message` requests at 16:49Z returned 500 because Prisma rejected channel VOICE. Fixed locally by mapping video voice to CHAT; no migration. New-conversation schema regression added.
+- Implemented local microphone PCM/VAD capture -> authenticated Yiddish Labs-only STT -> existing Assistant/YL English bridge -> English avatar speech + YL Yiddish chat. Bounded/correlated capture, mute/end cancellation, provider/time label, explicit failures and no tool-turn retries. Anam STT is no longer the video input source in this local version.
+- Verification: 74 agent + 31 portal tests PASS, typechecks recorded in TESTS_RUN. Mock/source tests are not a real microphone/live-provider proof. No deployment, audible acceptance or measured speedup. Live portal has advanced to 47584ef6; preserve concurrent changes.
+- Release still blocked by pending approval for the previously rejected GitHub push to the two recorded branches. Assistant-only restart approval already exists. Customer rollout remains off. Full current evidence and safe resume checklist are at the top of the full handoff.
+
+## Earlier state (superseded by current local implementation above)
+
+- Owner confirms the call works but is slow. Implemented opt-in final-answer streaming through the same authenticated Assistant into Anam sentence streams, preserving tool authority, barge-in and no-retry behavior. Unphased/tool-bearing output stays buffered. English speech can precede YL chat translation; YL video microphone input is still NOT wired. Tests: 76 agent + 23 portal pass; portal and bundler-resolution agent typechecks pass (default agent resolver has unrelated shared-package errors). Owner approved Assistant-only release exception with rollback; deployment and measured live speedup remain pending. Baseline toggle/timing report speech queued, not audible playback. Customer rollout stays off.
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_FACE_TO_FACE_AI_SUPPORT_2026-09-15.md`**.
+
+- Release `bb16c34b` is committed locally, NOT deployed. Safety review blocked the push to the existing release and shared integration branches; explicit approval requested. Do not bypass the rejection. Assistant-only deployment permission is already granted; GitHub push approval and live latency evidence remain pending.
 
 - Owner demands user-visible proof before any working claim. Tests, deployment, tokens and Connected status are not a substitute for a heard question and audible reply.
 - New owner language contract: Yiddish Labs transcribes Yiddish speech and translates into English for the same AI; its English answer is translated through YL for Yiddish chat, while original English drives spoken avatar output. Current video bypasses YL input and speaks the chat reply; required wiring is NOT implemented. Source trace and acceptance criteria in full handoff; no runtime change/deploy in this requirements turn.
