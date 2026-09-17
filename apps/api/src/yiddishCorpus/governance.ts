@@ -228,7 +228,7 @@ export interface YcTrainingOpts {
  * The ladder. Order matters: the first rung that fires is the primary reason,
  * so a row excluded for several reasons is counted exactly once in a breakdown.
  *
- *   1. CUSTOMER_PRIVATE                        → EXCLUDED
+ *   1. CUSTOMER_PRIVATE, unconsented            → EXCLUDED
  *   2. YL-derived (or unprovably not-YL)       → EXCLUDED
  *   3. owner marked the source EXCLUDED        → EXCLUDED
  *   4. EXTERNAL without a training_export grant→ EXCLUDED
@@ -236,20 +236,30 @@ export interface YcTrainingOpts {
  *   6. anything else                           → RESTRICTED (kept, never exported)
  *
  * ALLOWED is reached only by a human or explicitly consented row on a PLATFORM
- * source, or by an EXTERNAL source the owner has granted training_export on —
- * that recorded grant IS the consent, and it is the only thing that makes the
- * Governance screen's grant meaningful.
+ * source, or by an EXTERNAL/CUSTOMER_PRIVATE source the owner has granted
+ * training_export on — that recorded grant IS the consent, and it is the only
+ * thing that makes the Governance screen's grant meaningful.
+ *
+ * ⛔ Rung 1 is no longer an unconditional wall. A CUSTOMER_PRIVATE source is
+ * treated as consented — and so does NOT trip rung 1 — ONLY when BOTH hold:
+ *   • the owner has recorded a basis to read it at all (`contentAllowed === true`), AND
+ *   • a `training_export` right for it is GRANTED (`opts.rights`).
+ * Either alone still refuses. This is the code path behind Izzy's "I have
+ * already cleared it with them… do what I tell you" consent for voicemail and
+ * call recordings — a recorded, checkable basis, never a code default.
  */
 export function trainingEligibilityOf(source: YcSourceLike, opts: YcTrainingOpts = {}): YcTrainingVerdict {
   const row = opts.row ?? null;
   const rights = Array.isArray(opts.rights) ? opts.rights : [];
   const reasons: YcExclusionReason[] = [];
 
-  if (source.governanceClass === "CUSTOMER_PRIVATE") reasons.push("CUSTOMER_PRIVATE");
+  const trainingGrant = rights.some((r) => r.allowedUse === "training_export" && r.state === "GRANTED");
+  const privateConsented =
+    source.governanceClass === "CUSTOMER_PRIVATE" && source.contentAllowed === true && trainingGrant;
+
+  if (source.governanceClass === "CUSTOMER_PRIVATE" && !privateConsented) reasons.push("CUSTOMER_PRIVATE");
   if (isYlDerived(row) || hasYlMarker(source.key)) reasons.push("YL_DERIVED");
   if (source.trainingExportEligibility === "EXCLUDED") reasons.push("SOURCE_MARKED_EXCLUDED");
-
-  const trainingGrant = rights.some((r) => r.allowedUse === "training_export" && r.state === "GRANTED");
   if (source.governanceClass === "EXTERNAL" && !trainingGrant) reasons.push("NO_EXTERNAL_RIGHTS");
 
   if (reasons.length > 0) {

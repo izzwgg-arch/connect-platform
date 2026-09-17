@@ -88,6 +88,61 @@ test("customer-private rows can never be exported, not even a human one", () => 
   assert.equal(verdict.primaryReason, "CUSTOMER_PRIVATE");
 });
 
+// ── The owner's recorded consent rung for CUSTOMER_PRIVATE sources ─────────
+//
+// 2026-09-17: Izzy authorised voicemail and call recordings as training
+// sources ("I have already cleared it with them… do what I tell you"). That
+// must become a recorded, CHECKABLE basis — never a code default — so the
+// rung only opens when BOTH the content-read basis AND a GRANTED
+// training_export right exist. Either alone still refuses.
+
+test("(a) private + contentAllowed + a GRANTED training_export right → rung 1 does not fire", () => {
+  const consented: YcSourceLike = { ...privateSource, contentAllowed: true, trainingExportEligibility: "UNKNOWN" };
+  const verdict = trainingEligibilityOf(consented, { rights: [granted("training_export")] });
+  assert.equal(verdict.eligibility, "ALLOWED");
+  assert.equal(verdict.primaryReason, null);
+  assert.equal(verdict.reasons.includes("CUSTOMER_PRIVATE"), false);
+});
+
+test("(b) private without the grant is EXCLUDED CUSTOMER_PRIVATE, even with contentAllowed true", () => {
+  const noGrant: YcSourceLike = { ...privateSource, contentAllowed: true, trainingExportEligibility: "UNKNOWN" };
+  assert.equal(trainingEligibilityOf(noGrant).primaryReason, "CUSTOMER_PRIVATE");
+  assert.equal(trainingEligibilityOf(noGrant, { rights: [] }).primaryReason, "CUSTOMER_PRIVATE");
+  // The grant alone, with contentAllowed still false, is not enough either.
+  assert.equal(
+    trainingEligibilityOf(privateSource, { rights: [granted("training_export")] }).primaryReason,
+    "CUSTOMER_PRIVATE",
+  );
+  // Nor is the wrong kind of grant.
+  assert.equal(
+    trainingEligibilityOf(noGrant, { rights: [granted("analysis")] }).primaryReason,
+    "CUSTOMER_PRIVATE",
+  );
+});
+
+test("(c) private + grant, but the row itself is YL-derived → still EXCLUDED, now for YL", () => {
+  const consented: YcSourceLike = { ...privateSource, contentAllowed: true, trainingExportEligibility: "UNKNOWN" };
+  const verdict = trainingEligibilityOf(consented, {
+    rights: [granted("training_export")],
+    row: { engine: "stt-yi", sttProvider: null },
+  });
+  assert.equal(verdict.eligibility, "EXCLUDED");
+  assert.equal(verdict.primaryReason, "YL_DERIVED");
+});
+
+test("the export preview / exclusionBreakdown reflect the consent rung honestly", () => {
+  const consented: YcSourceLike = { ...privateSource, contentAllowed: true, trainingExportEligibility: "UNKNOWN" };
+  const rows = [
+    { row: 1, source: consented, provenance: { engine: "ivrit", sttProvider: "ivrit" }, rights: [granted("training_export")] },
+    { row: 2, source: privateSource, provenance: { engine: "ivrit", sttProvider: "ivrit" } },
+  ];
+  const b = exclusionBreakdown(rows);
+  assert.equal(b.exportable, 1, "the consented row is exportable");
+  assert.equal(b.excluded, 1);
+  const byName = Object.fromEntries(b.byReason.map((r) => [r.reason, r.count]));
+  assert.equal(byName.CUSTOMER_PRIVATE, 1, "the unconsented row is still walled");
+});
+
 // ── Wall 2: Yiddish Labs is serving-only, and so is "we cannot prove it" ─────
 
 test("a legacy stt-yi row with an unknown provider is treated as YL-derived", () => {

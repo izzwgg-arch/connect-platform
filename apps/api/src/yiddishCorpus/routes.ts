@@ -30,8 +30,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join as pathJoin } from "node:path";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
 import { z } from "zod";
 import {
   YC_API_PREFIX,
@@ -58,10 +59,27 @@ import {
   type YcExclusionReason,
 } from "./governance";
 import { searchCorpus } from "./corpusService";
-import { YC_DISCOVERY_EVERY_MS, YC_RECHECK_EVERY_MS } from "./jobs";
+import {
+  YC_DISCOVERY_EVERY_MS,
+  YC_RECHECK_EVERY_MS,
+  YC_METRIC_TRANSCRIBE_MINUTES,
+  YC_METRIC_TRANSCRIBE_CENTS,
+} from "./jobs";
 import { reindexInternal } from "./internalIndexer";
 import { scoreVariants } from "./evidence";
 import { discover as discoverYiddish24 } from "./yiddish24Adapter";
+import {
+  buildGoldHumanRow,
+  finetuneReportPaths,
+  goldClipPath,
+  GOLD_DECISION_STATE,
+  GOLD_DECISIONS,
+  parseRangeHeader,
+  stratifiedGoldSample,
+  validateGoldClipUpload,
+  YC_GOLD_CLIP_MAX_BYTES,
+  type GoldCandidate,
+} from "./gold";
 
 export interface YiddishCorpusRouteDeps {
   app: any;
@@ -241,6 +259,18 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
 
   const actorOf = (user: any): string => String(user?.email || user?.sub || "unknown");
   const bad = (reply: any, parsed: any) => reply.code(400).send({ error: "invalid_body", detail: parsed.error.flatten() });
+
+  // Gold clips arrive as raw `audio/wav` bytes from the PC runner, never JSON.
+  // Fastify has no default parser for that content type, so this scopes one
+  // to exactly this route's needs (buffer body, capped at the clip limit).
+  // ⛔ Guarded: the route-level test harness's fake app has no such method.
+  if (typeof app.addContentTypeParser === "function") {
+    app.addContentTypeParser(
+      ["audio/wav", "audio/wave", "audio/x-wav"],
+      { parseAs: "buffer", bodyLimit: YC_GOLD_CLIP_MAX_BYTES },
+      (_req: any, body: Buffer, done: (err: Error | null, body?: unknown) => void) => done(null, body),
+    );
+  }
 
   const loadSource = async (key: string) => db.ycSource.findUnique({ where: { key: String(key) } });
 
@@ -958,6 +988,424 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     return reply.send({ item: row });
   });
 
+  // ══════════════════════════ GOLD SET ══════════════════════════════════════
+  //
+  // A native ear corrects a few hundred machine transcripts: the eval set
+  // that PROVES a fine-tune improved anything, and (duplicated in) the
+  // highest-weight training rows. See docs/ai-context/AGENT_HANDOFF_YIDDISH_
+  // WHISPER_FINETUNE_2026-09-17.md §3.3. Pure sampling/validation logic lives
+  // in ./gold.ts so it is testable without a database or a running server.
+  //
+  // ⛔ Never returns a CUSTOMER_PRIVATE row's text unless the source's
+  // CURRENT `contentAllowed` is true — the wall is re-checked on every read,
+  // not frozen at sample time, so revoking a grant hides text immediately.
+
+  const goldSampleBody = z.object({
+    count: z.number().int().min(1).max(500).optional(),
+    sourceKeys: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
+    minSec: z.number().min(0.5).max(60).optional(),
+    maxSec: z.number().min(0.5).max(120).optional(),
+  });
+  app.post(`${P}/gold/sample`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const parsed = goldSampleBody.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(reply, parsed);
+    const count = parsed.data.count ?? 50;
+    const minSec = parsed.data.minSec ?? 3;
+    const maxSec = parsed.data.maxSec ?? 20;
+    const sourceKeys = parsed.data.sourceKeys?.length ? parsed.data.sourceKeys : undefined;
+    if (minSec > maxSec) return reply.code(400).send({ error: "invalid_range", message: "minSec cannot exceed maxSec." });
+
+    // Only `ivrit` (machine) rows with timing are gold candidates — Lane A's
+    // migration adds startMs/endMs to YcTranscript; rows without them predate
+    // it and cannot be cut into a clip.
+    const where: any = { engine: "ivrit", startMs: { not: null }, endMs: { not: null } };
+    if (sourceKeys) where.item = { source: { key: { in: sourceKeys } } };
+    const rows: any[] = await safe(db.ycTranscript.findMany({ where, take: 20_000 }), []);
+    const inRange = rows.filter((t) => {
+      const durSec = (num(t.endMs) - num(t.startMs)) / 1000;
+      return durSec >= minSec && durSec <= maxSec;
+    });
+    if (inRange.length === 0) {
+      return reply.send({
+        created: 0,
+        candidatePool: 0,
+        requested: count,
+        note: "No transcript rows matched the sampling window (engine=ivrit, timed, duration in range).",
+      });
+    }
+
+    const itemIds = [...new Set(inRange.map((t) => String(t.itemId)))];
+    const items: any[] = await safe(db.ycSourceItem.findMany({ where: { id: { in: itemIds } } }), []);
+    const itemById = new Map(items.map((i) => [String(i.id), i]));
+    const sourceIds = [...new Set(items.map((i) => i.sourceId))];
+    const sources: any[] = await safe(db.ycSource.findMany({ where: { id: { in: sourceIds } } }), []);
+    const sourceById = new Map(sources.map((s) => [String(s.id), s]));
+    const assets: any[] = await safe(db.ycAudioAsset.findMany({ where: { itemId: { in: itemIds }, storage: "STORED" } }), []);
+    const assetByItem = new Map<string, any>();
+    for (const a of assets ?? []) if (!assetByItem.has(String(a.itemId))) assetByItem.set(String(a.itemId), a);
+
+    // Idempotent per transcript: `YcReviewItem` has a unique [subjectType,
+    // subjectId], so skip anything already sampled (open OR decided) rather
+    // than re-asking a question that has an answer.
+    const existing: any[] = await safe(
+      db.ycReviewItem.findMany({ where: { subjectType: "TRANSCRIPT", reason: "gold_candidate" }, select: { subjectId: true } }),
+      [],
+    );
+    const already = new Set((existing ?? []).map((r: any) => String(r.subjectId)));
+
+    const candidates: GoldCandidate[] = [];
+    for (const t of inRange) {
+      if (already.has(String(t.id))) continue;
+      const item = itemById.get(String(t.itemId));
+      if (!item) continue;
+      const source = sourceById.get(String(item.sourceId));
+      if (!source) continue;
+      const asset = assetByItem.get(String(t.itemId));
+      if (!asset) continue; // no stored audio held for this item — nothing to cut a clip from
+      candidates.push({
+        transcriptId: String(t.id),
+        itemId: String(item.id),
+        assetId: String(asset.id),
+        sourceKey: String(source.key),
+        confidence: t.confidence == null ? null : Number(t.confidence),
+        startMs: num(t.startMs),
+        endMs: num(t.endMs),
+        text: String(t.text ?? ""),
+        language: t.language ?? null,
+        segmentId: t.segmentId ?? null,
+      });
+    }
+
+    const picked = stratifiedGoldSample(candidates, count);
+    let created = 0;
+    for (const c of picked) {
+      // `safe(..., null)` doubles as the idempotency backstop: a unique-
+      // constraint race (two samples run at once) fails the create, and that
+      // failure is swallowed exactly like "already sampled" is.
+      const row = await safe<any>(
+        db.ycReviewItem.create({
+          data: {
+            subjectType: "TRANSCRIPT",
+            subjectId: c.transcriptId,
+            reason: "gold_candidate",
+            state: "OPEN",
+            resolvesCount: 1,
+            impactScore: 0,
+            detail: {
+              itemId: c.itemId,
+              assetId: c.assetId,
+              startMs: c.startMs,
+              endMs: c.endMs,
+              text: c.text,
+              confidence: c.confidence,
+              sourceKey: c.sourceKey,
+              language: c.language,
+              segmentId: c.segmentId,
+            },
+          },
+        }),
+        null,
+      );
+      if (row) created += 1;
+    }
+    await recordYiddishEvent(db, "gold.sampled", {
+      requested: count,
+      candidatePool: candidates.length,
+      created,
+      sourceKeys: sourceKeys ?? null,
+      by: actorOf(user),
+    });
+    return reply.send({
+      created,
+      candidatePool: candidates.length,
+      requested: count,
+      note:
+        created === 0
+          ? "Nothing new was sampled — every eligible transcript already has an open or decided gold review item."
+          : null,
+    });
+  });
+
+  const goldQueueQuery = z.object({
+    state: z.string().trim().max(20).default("OPEN"),
+    limit: z.coerce.number().int().min(1).max(300).default(50),
+  });
+  app.get(`${P}/gold`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const parsed = goldQueueQuery.safeParse(req.query ?? {});
+    if (!parsed.success) return bad(reply, parsed);
+    const rows: any[] = await safe(
+      db.ycReviewItem.findMany({
+        where: { subjectType: "TRANSCRIPT", reason: "gold_candidate", state: parsed.data.state },
+        orderBy: { createdAt: "asc" },
+        take: parsed.data.limit,
+      }),
+      [],
+    );
+    const sourceKeys = [...new Set((rows ?? []).map((r: any) => String(r.detail?.sourceKey ?? "")).filter(Boolean))];
+    const sources: any[] = sourceKeys.length ? await safe(db.ycSource.findMany({ where: { key: { in: sourceKeys } } }), []) : [];
+    const sourceByKey = new Map(sources.map((s) => [String(s.key), s]));
+
+    const items = (rows ?? []).map((r: any) => {
+      const detail = r.detail ?? {};
+      const source = sourceByKey.get(String(detail.sourceKey ?? ""));
+      // Unknown source (should not happen — /gold/sample always resolves one)
+      // defaults CLOSED, never open: the wall's default is "hide", not "show".
+      const readable = source ? badgeForSource(source).contentAllowed : false;
+      return {
+        id: String(r.id),
+        transcriptId: String(r.subjectId),
+        state: String(r.state),
+        sourceKey: detail.sourceKey ?? null,
+        confidence: detail.confidence ?? null,
+        startMs: detail.startMs ?? null,
+        endMs: detail.endMs ?? null,
+        durationMs: detail.startMs != null && detail.endMs != null ? Number(detail.endMs) - Number(detail.startMs) : null,
+        text: readable ? (detail.text ?? null) : null,
+        walled: !readable,
+        clipUrl: `${P}/gold/clips/${encodeURIComponent(String(r.id))}`,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+      };
+    });
+    return reply.send({
+      items,
+      total: items.length,
+      note: items.length ? null : "Nothing is waiting in the gold queue.",
+      wallNote: YC_CUSTOMER_WALL_MESSAGE,
+    });
+  });
+
+  const goldDecideBody = z.object({
+    decision: z.enum(GOLD_DECISIONS),
+    text: z.string().trim().min(1).max(2000).optional(),
+  });
+  app.post(`${P}/gold/:reviewId/decide`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const parsed = goldDecideBody.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(reply, parsed);
+    const item = await safe<any>(db.ycReviewItem.findUnique({ where: { id: String(req.params.reviewId) } }), null);
+    if (!item || item.subjectType !== "TRANSCRIPT" || item.reason !== "gold_candidate") {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const detail = item.detail ?? {};
+    const actor = actorOf(user);
+
+    let humanTranscriptId: string | null = null;
+    if (parsed.data.decision === "correct" || parsed.data.decision === "accept") {
+      const text = (parsed.data.decision === "correct" ? parsed.data.text : String(detail.text ?? "")) ?? "";
+      if (!text.trim()) {
+        return reply.code(400).send({
+          error: "text_required",
+          message:
+            parsed.data.decision === "correct"
+              ? "A \"correct\" decision needs the corrected text."
+              : "There is no machine text on this item to accept.",
+        });
+      }
+      // ⛔ Always a NEW row. The machine row (`item.subjectId`) is never
+      // updated here — it stays intact as evidence of what the model produced.
+      const humanRow = await db.ycTranscript.create({
+        data: buildGoldHumanRow({
+          reviewId: item.id,
+          itemId: String(detail.itemId ?? ""),
+          segmentId: detail.segmentId ?? null,
+          startMs: detail.startMs ?? null,
+          endMs: detail.endMs ?? null,
+          language: detail.language ?? null,
+          text: text.trim(),
+          actor,
+        }),
+      });
+      humanTranscriptId = String(humanRow?.id ?? "");
+    } else if (parsed.data.decision === "reject") {
+      // ⛔ Confidence only, never the text — the row stays as evidence of a
+      // wrong machine guess, it is just marked unusable for training/eval.
+      await db.ycTranscript.update({ where: { id: String(item.subjectId) }, data: { confidence: 0 } }).catch(() => undefined);
+    }
+
+    const row = await db.ycReviewItem.update({
+      where: { id: item.id },
+      data: {
+        state: GOLD_DECISION_STATE[parsed.data.decision],
+        decision: parsed.data.decision,
+        decidedBy: actor,
+        decidedAt: new Date(),
+        detail: { ...detail, decisionNote: parsed.data.decision === "reject" ? "marked unusable by a human reviewer" : null },
+      },
+    });
+    await recordYiddishEvent(db, "gold.decided", {
+      reviewId: item.id,
+      decision: parsed.data.decision,
+      transcriptId: item.subjectId,
+      humanTranscriptId,
+      by: actor,
+    });
+    return reply.send({ item: row, humanTranscriptId });
+  });
+
+  app.put(`${P}/gold/clips/:reviewId`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const reviewId = String(req.params.reviewId || "");
+    const item = await safe<any>(db.ycReviewItem.findUnique({ where: { id: reviewId } }), null);
+    if (!item || item.subjectType !== "TRANSCRIPT" || item.reason !== "gold_candidate") {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const body = (req as any).body;
+    const buf: Buffer | null = Buffer.isBuffer(body) ? body : null;
+    const contentType = String(req.headers?.["content-type"] ?? "");
+    const check = validateGoldClipUpload(contentType, buf ? buf.length : 0);
+    if (!check.ok) return reply.code(check.status).send({ error: check.error, message: check.message });
+
+    let clipPath: string;
+    try {
+      clipPath = goldClipPath(reviewId);
+    } catch {
+      return reply.code(400).send({ error: "invalid_review_id" });
+    }
+    try {
+      await mkdir(pathDirname(clipPath), { recursive: true });
+      await writeFile(clipPath, buf as Buffer);
+    } catch (e: any) {
+      return reply.code(500).send({ error: "clip_write_failed", message: String(e?.message ?? e) });
+    }
+    await recordYiddishEvent(db, "gold.clip_uploaded", { reviewId, bytes: (buf as Buffer).length, by: actorOf(user) });
+    return reply.send({ ok: true, bytes: (buf as Buffer).length, url: `${P}/gold/clips/${encodeURIComponent(reviewId)}` });
+  });
+
+  app.get(`${P}/gold/clips/:reviewId`, async (req: any, reply: any) => {
+    // The PC runner and a plain <audio> element can't send a bearer header,
+    // so a `?token=` query param is accepted here — same shim the voicemail-
+    // greeting stream route uses (apps/api/src/server.ts).
+    const tokenParam = (req.query ?? {})["token"];
+    if (tokenParam && !req.headers?.authorization) {
+      req.headers = req.headers ?? {};
+      req.headers.authorization = `Bearer ${tokenParam}`;
+    }
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const reviewId = String(req.params.reviewId || "");
+    let clipPath: string;
+    try {
+      clipPath = goldClipPath(reviewId);
+    } catch {
+      return reply.code(400).send({ error: "invalid_review_id" });
+    }
+    let st: any;
+    try {
+      st = await stat(clipPath);
+    } catch {
+      return reply.code(404).send({ error: "clip_not_found", message: "No clip has been uploaded for this review item yet." });
+    }
+    const range = parseRangeHeader(req.headers?.range, st.size);
+    reply.header("accept-ranges", "bytes");
+    reply.header("content-type", "audio/wav");
+    reply.header("cache-control", "private, max-age=60");
+    if (range) {
+      reply.code(206);
+      reply.header("content-range", `bytes ${range.start}-${range.end}/${st.size}`);
+      reply.header("content-length", String(range.end - range.start + 1));
+      return reply.send(createReadStream(clipPath, { start: range.start, end: range.end }));
+    }
+    reply.header("content-length", String(st.size));
+    return reply.send(createReadStream(clipPath));
+  });
+
+  app.get(`${P}/gold/stats`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const grouped: any[] = await safe(
+      db.ycReviewItem.groupBy({ by: ["state"], where: { subjectType: "TRANSCRIPT", reason: "gold_candidate" }, _count: { _all: true } }),
+      [],
+    );
+    const counts = Object.fromEntries((grouped ?? []).map((g: any) => [String(g.state), num(g?._count?._all ?? g?._count)]));
+    const open = num(counts.OPEN);
+    const decided = Object.entries(counts)
+      .filter(([k]) => k !== "OPEN")
+      .reduce((s, [, v]) => s + Number(v), 0);
+
+    const humanRows: any[] = await safe(
+      db.ycTranscript.findMany({ where: { engine: "human", originRef: { startsWith: "gold:" } }, select: { startMs: true, endMs: true } }),
+      [],
+    );
+    const goldMs = (humanRows ?? []).reduce((s: number, r: any) => s + Math.max(0, num(r.endMs) - num(r.startMs)), 0);
+
+    // Per-source breakdown: `detail` is JSON, so Prisma can't group by
+    // `detail.sourceKey` — the gold queue is a few hundred rows at most, so
+    // reading them all and tallying in JS is cheap and honest.
+    const allGold: any[] = await safe(
+      db.ycReviewItem.findMany({ where: { subjectType: "TRANSCRIPT", reason: "gold_candidate" }, select: { state: true, detail: true } }),
+      [],
+    );
+    const bySource = new Map<string, { open: number; decided: number }>();
+    for (const r of allGold ?? []) {
+      const key = String(r.detail?.sourceKey ?? "unknown");
+      const slot = bySource.get(key) ?? { open: 0, decided: 0 };
+      if (String(r.state) === "OPEN") slot.open += 1;
+      else slot.decided += 1;
+      bySource.set(key, slot);
+    }
+
+    let finetuneReport: any = null;
+    try {
+      const raw = await readFile(finetuneReportPaths().latest, "utf8");
+      finetuneReport = JSON.parse(raw);
+    } catch {
+      finetuneReport = null;
+    }
+
+    return reply.send({
+      open,
+      decided,
+      total: open + decided,
+      goldHours: Math.round((goldMs / 3_600_000) * 100) / 100,
+      perSource: [...bySource.entries()].map(([sourceKey, v]) => ({ sourceKey, open: v.open, decided: v.decided })),
+      finetuneReport,
+      note: open + decided === 0 ? "Nothing has been sampled into the gold set yet." : null,
+    });
+  });
+
+  // Lane B's `runpod-pod.ts` / `train.py` upload the fine-tune run's report
+  // here when it finishes. Stored as a JSON file, not a new table — the
+  // report's shape is Lane B's to define, and `/gold/stats` above just reads
+  // it back. Owner-only like the rest of this file: nothing in the engine
+  // calls it, and only a run someone deliberately kicked off produces one.
+  const finetuneReportBody = z
+    .object({
+      baselineWer: z.number().min(0).max(1).nullish(),
+      tunedWer: z.number().min(0).max(1).nullish(),
+      goldWerBefore: z.number().min(0).max(1).nullish(),
+      goldWerAfter: z.number().min(0).max(1).nullish(),
+      trainHours: z.number().min(0).nullish(),
+      steps: z.number().int().min(0).nullish(),
+      wallTimeSec: z.number().min(0).nullish(),
+      estimatedCostUsd: z.number().min(0).nullish(),
+      modelRepo: z.string().trim().max(300).nullish(),
+      notes: z.string().trim().max(4000).nullish(),
+    })
+    .passthrough();
+  app.post(`${P}/finetune/report`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    const parsed = finetuneReportBody.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(reply, parsed);
+    const paths = finetuneReportPaths();
+    const payload = { ...parsed.data, reportedAt: new Date().toISOString(), reportedBy: actorOf(user) };
+    try {
+      await mkdir(paths.dir, { recursive: true });
+      await writeFile(paths.latest, JSON.stringify(payload, null, 2), "utf8");
+      await writeFile(paths.history, JSON.stringify(payload, null, 2), "utf8");
+    } catch (e: any) {
+      return reply.code(500).send({ error: "report_write_failed", message: String(e?.message ?? e) });
+    }
+    await recordYiddishEvent(db, "finetune.report", { modelRepo: parsed.data.modelRepo ?? null, by: actorOf(user) });
+    return reply.send({ ok: true, report: payload });
+  });
+
   // ══════════════════════════ FINDINGS ══════════════════════════════════════
 
   app.get(`${P}/findings`, async (req: any, reply: any) => {
@@ -1463,6 +1911,42 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     const musicSec = num(musicAgg?._sum?.durationSec);
     const allSec = num(allAgg?._sum?.durationSec);
 
+    // The transcription cost ledger, per source: today's spend plus the
+    // all-time sum. Read straight off `YcMetricSnapshot` — never re-derived
+    // from `YcBudget`'s own daily counters, which reset and are about
+    // whether a job may RUN, not an honest permanent record of what ran.
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const spendRows = await safe<any[]>(
+      db.ycMetricSnapshot.findMany({
+        where: { metric: { in: [YC_METRIC_TRANSCRIBE_MINUTES, YC_METRIC_TRANSCRIBE_CENTS] } },
+      }),
+      [],
+    );
+    const bySource: Record<string, { minutesToday: number; centsToday: number; minutesAllTime: number; centsAllTime: number }> = {};
+    for (const row of spendRows ?? []) {
+      const key = String(row.sourceKey ?? "unknown");
+      const bucket = (bySource[key] ??= { minutesToday: 0, centsToday: 0, minutesAllTime: 0, centsAllTime: 0 });
+      const value = num(row.value);
+      if (row.metric === YC_METRIC_TRANSCRIBE_MINUTES) {
+        bucket.minutesAllTime += value;
+        if (row.day === todayKey) bucket.minutesToday += value;
+      } else if (row.metric === YC_METRIC_TRANSCRIBE_CENTS) {
+        bucket.centsAllTime += value;
+        if (row.day === todayKey) bucket.centsToday += value;
+      }
+    }
+    const spend = {
+      today: {
+        minutes: Object.values(bySource).reduce((s, b) => s + b.minutesToday, 0),
+        cents: Object.values(bySource).reduce((s, b) => s + b.centsToday, 0),
+      },
+      allTime: {
+        minutes: Object.values(bySource).reduce((s, b) => s + b.minutesAllTime, 0),
+        cents: Object.values(bySource).reduce((s, b) => s + b.centsAllTime, 0),
+      },
+      bySource,
+    };
+
     return reply.send({
       checkedAt: new Date().toISOString(),
       registered: true,
@@ -1507,6 +1991,7 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
         fetching: false,
         blockedReason: audioBlockedReason(source, rights ?? []),
       },
+      spend,
       listenNote:
         "Open an episode to hear it on yiddish24.com's own player. The engine does not hold or stream the audio; " +
         "it reads the public catalog, and audio stays blocked until Yiddish24 grants permission.",
@@ -1539,7 +2024,7 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
 
 /** Every route this file registers, in one list, so a gate test can walk them
  *  all without guessing. Kept beside the registrations on purpose. */
-export const YC_REGISTERED_ROUTES: { method: "GET" | "POST"; path: string }[] = [
+export const YC_REGISTERED_ROUTES: { method: "GET" | "POST" | "PUT"; path: string }[] = [
   { method: "GET", path: `${YC_API_PREFIX}/now` },
   { method: "GET", path: `${YC_API_PREFIX}/dashboard` },
   { method: "GET", path: `${YC_API_PREFIX}/sources` },
@@ -1558,6 +2043,13 @@ export const YC_REGISTERED_ROUTES: { method: "GET" | "POST"; path: string }[] = 
   { method: "POST", path: `${YC_API_PREFIX}/rules/:id/status` },
   { method: "GET", path: `${YC_API_PREFIX}/review` },
   { method: "POST", path: `${YC_API_PREFIX}/review/:id/decide` },
+  { method: "POST", path: `${YC_API_PREFIX}/gold/sample` },
+  { method: "GET", path: `${YC_API_PREFIX}/gold` },
+  { method: "POST", path: `${YC_API_PREFIX}/gold/:reviewId/decide` },
+  { method: "PUT", path: `${YC_API_PREFIX}/gold/clips/:reviewId` },
+  { method: "GET", path: `${YC_API_PREFIX}/gold/clips/:reviewId` },
+  { method: "GET", path: `${YC_API_PREFIX}/gold/stats` },
+  { method: "POST", path: `${YC_API_PREFIX}/finetune/report` },
   { method: "GET", path: `${YC_API_PREFIX}/findings` },
   { method: "POST", path: `${YC_API_PREFIX}/findings/:id/status` },
   { method: "GET", path: `${YC_API_PREFIX}/queue` },

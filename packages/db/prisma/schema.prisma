@@ -10129,6 +10129,13 @@ model YcTranscript {
   isConsensus Boolean      @default(false)
   originRef   String?
   createdAt   DateTime     @default(now())
+  // 20260917150000_yiddish_transcript_timing — per-chunk STT timing (additive, all nullable):
+  startMs      Int?
+  endMs        Int?
+  words        Json?
+  avgLogprob   Float?
+  noSpeechProb Float?
+  chunkIndex   Int?
 
   @@index([itemId])
   @@index([engine])

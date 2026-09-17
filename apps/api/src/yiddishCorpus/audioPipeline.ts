@@ -346,6 +346,157 @@ export async function detectSegments(
   };
 }
 
+// ── chunk cutting (for the transcribe stage) ───────────────────────────────
+
+export interface CutChunkResult {
+  available: boolean;
+  reason: string | null;
+}
+
+/**
+ * Cut `[startMs, endMs)` out of `inputPath` into a 16 kHz mono MP3 at
+ * `outPath`, small enough for the Everett runsync request cap. Re-encodes
+ * (never a stream copy), so the cut is sample-accurate rather than
+ * keyframe-accurate — there is no keyframe concept for a talk recording, and
+ * accuracy matters more here than the extra CPU a re-encode costs on a
+ * ≤10-minute chunk.
+ */
+export async function cutChunk(
+  inputPath: string,
+  startMs: number,
+  endMs: number,
+  outPath: string,
+  deps: AudioDeps = {},
+): Promise<CutChunkResult> {
+  const t = tools(deps);
+  const startSec = Math.max(0, startMs) / 1000;
+  const durSec = Math.max(0, (endMs - startMs)) / 1000;
+  if (durSec <= 0) return { available: false, reason: "empty chunk: endMs is not after startMs" };
+
+  const res = await t.run(
+    t.ffmpeg,
+    [
+      "-y",
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      inputPath,
+      "-ss",
+      startSec.toFixed(3),
+      "-t",
+      durSec.toFixed(3),
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "64k",
+      outPath,
+    ],
+    DEFAULT_TIMEOUT_MS,
+  );
+  const missing = missingReason(res, "ffmpeg");
+  if (missing) return { available: false, reason: missing };
+  if (res.code !== 0) return { available: false, reason: `ffmpeg could not cut this chunk (exit ${res.code})` };
+  return { available: true, reason: null };
+}
+
+// ── chunk planning (pure — no ffmpeg, no I/O) ──────────────────────────────
+
+export interface ChunkPlan {
+  index: number;
+  startMs: number;
+  endMs: number;
+}
+
+export interface ChunkableSegment {
+  startMs: number;
+  endMs: number;
+  klass: string;
+}
+
+/**
+ * Group SPEECH segments into windows of at most `chunkSec` seconds each, in
+ * chronological order. Only segments classed `SPEECH` are considered, so a
+ * window's span always contains real speech — a stretch with no speech at
+ * all (music, long silence, an unclassified span) never produces a window,
+ * which is the "skips windows with no speech" rule stated honestly: there is
+ * nothing here to skip AROUND, because nothing is ever built FROM it.
+ *
+ * A window's bounds run from its first included segment's start to its last
+ * included segment's end, so short non-speech gaps between speech sit inside
+ * the window (which is fine — the transcript is chunked, not the silence).
+ * A single SPEECH segment longer than `chunkSec` is itself split into
+ * chunk-sized pieces, so no window this function returns is ever longer than
+ * `chunkSec`.
+ *
+ * Pure and synchronous: no ffmpeg, no database, no network. `durationMs` is
+ * used only to clip a window that would otherwise run past the asset's
+ * measured length (a segment detector's rounding, not a real event).
+ */
+export function planChunks(
+  segments: ChunkableSegment[] | null | undefined,
+  durationMs: number | null | undefined,
+  chunkSec: number,
+): ChunkPlan[] {
+  const chunkMs = Math.max(1000, Math.round((Number(chunkSec) || 0) * 1000) || 600_000);
+  const cap = Number(durationMs) > 0 ? Number(durationMs) : null;
+
+  const speech = (Array.isArray(segments) ? segments : [])
+    .filter(
+      (s) =>
+        s &&
+        s.klass === "SPEECH" &&
+        Number.isFinite(s.startMs) &&
+        Number.isFinite(s.endMs) &&
+        s.endMs > s.startMs,
+    )
+    .map((s) => ({ startMs: Math.max(0, s.startMs), endMs: cap ? Math.min(s.endMs, cap) : s.endMs }))
+    .filter((s) => s.endMs > s.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+
+  const windows: ChunkPlan[] = [];
+  let index = 0;
+  let windowStart: number | null = null;
+  let windowEnd: number | null = null;
+
+  const closeWindow = () => {
+    if (windowStart == null || windowEnd == null) return;
+    windows.push({ index, startMs: windowStart, endMs: windowEnd });
+    index += 1;
+    windowStart = null;
+    windowEnd = null;
+  };
+
+  for (const seg of speech) {
+    let segStart = seg.startMs;
+    // A lone segment longer than the cap becomes its own chunk-sized pieces.
+    while (seg.endMs - segStart > chunkMs) {
+      closeWindow();
+      windows.push({ index, startMs: segStart, endMs: segStart + chunkMs });
+      index += 1;
+      segStart += chunkMs;
+    }
+    if (segStart >= seg.endMs) continue;
+
+    if (windowStart == null) {
+      windowStart = segStart;
+      windowEnd = seg.endMs;
+    } else if (seg.endMs - windowStart <= chunkMs) {
+      windowEnd = seg.endMs;
+    } else {
+      closeWindow();
+      windowStart = segStart;
+      windowEnd = seg.endMs;
+    }
+  }
+  closeWindow();
+
+  return windows;
+}
+
 // ── features ────────────────────────────────────────────────────────────────
 
 export interface AudioFeatures {

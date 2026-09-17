@@ -217,7 +217,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.mobile_console", section: "admin", label: "Mobile Console", href: "/admin/mobile-console", permission: "can_view_admin_mobile_console" },
   { id: "admin.compliance", section: "admin", label: "Compliance", href: "/admin/compliance", permission: "can_view_admin_compliance" },
   // Yiddish Learning Engine (2026-09-15) — the corpus + learning engine and
-  // its first external source. Ten pages, one key each (the per-page rule),
+  // its first external source. Eleven pages, one key each (the per-page rule),
   // none in any default bucket. Every one is SUPER_ADMIN-forced in navConfig
   // and sits in OWNER_ONLY_FIXED_NAV_ITEMS, so both permission editors render
   // them Locked: these screens count across every tenant's material and the
@@ -232,6 +232,9 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.yiddish_export", section: "admin", label: "Yiddish Export", href: "/admin/yiddish-learning/export", permission: "can_view_admin_yiddish_export" },
   { id: "admin.yiddish_governance", section: "admin", label: "Yiddish Governance", href: "/admin/yiddish-learning/governance", permission: "can_view_admin_yiddish_governance" },
   { id: "admin.yiddish24", section: "admin", label: "Yiddish24 Source", href: "/admin/yiddish-learning/yiddish24", permission: "can_view_admin_yiddish24" },
+  // Gold set (2026-09-17, the Whisper fine-tune build) — its eleventh page,
+  // same contract as the ten above: own key, no default bucket, Locked.
+  { id: "admin.yiddish_gold", section: "admin", label: "Yiddish Gold Set", href: "/admin/yiddish-learning/gold", permission: "can_view_admin_yiddish_gold" },
   { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
   { id: "admin.pbx_routing", section: "admin", label: "Trunks & Routing", href: "/admin/pbx-console?mod=routing", permission: "can_view_admin_pbx_routing" },
   { id: "admin.pbx_teams", section: "admin", label: "Ring Groups & Queues", href: "/admin/pbx-console?mod=teams", permission: "can_view_admin_pbx_teams" },

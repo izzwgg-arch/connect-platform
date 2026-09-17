@@ -1,0 +1,19 @@
+# Loopcom Yiddish fine-tune — Kaggle-notebook deps (the FREE path,
+# kaggle-run.ts / kaggle_train.ipynb).
+#
+# Deliberately NOT the same file as requirements.txt: a Kaggle GPU notebook
+# ships a working torch+CUDA already wired to its driver. Reinstalling
+# torch/torchaudio here has, historically, been the single most common way
+# to break a Kaggle GPU notebook (a pip-resolved torch build that doesn't
+# match the image's CUDA). So: everything EXCEPT torch/torchaudio.
+
+transformers~=4.44.0
+peft~=0.12.0
+accelerate~=0.33.0
+datasets~=2.21.0
+evaluate~=0.4.2
+jiwer~=3.0.4
+ctranslate2~=4.4.0
+soundfile~=0.12.1
+librosa~=0.10.2
+huggingface_hub~=0.24.6

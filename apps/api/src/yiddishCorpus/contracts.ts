@@ -241,6 +241,13 @@ export interface YcDashboardView {
  *  POST   /rules/:id/status               { status, approvedBy }
  *  GET    /review                         ?state&limit
  *  POST   /review/:id/decide              { decision, realization?, note? }
+ *  POST   /gold/sample                    { count?, sourceKeys?, minSec?, maxSec? } (creates gold review items)
+ *  GET    /gold                           ?state&limit → gold review queue, walled per row
+ *  POST   /gold/:reviewId/decide          { decision: correct|accept|reject|skip, text? }
+ *  PUT    /gold/clips/:reviewId           raw audio/wav ≤3MB (the clip to review)
+ *  GET    /gold/clips/:reviewId           → the clip, Range-aware (?token= accepted)
+ *  GET    /gold/stats                     → open/decided counts, gold hours, latest fine-tune report
+ *  POST   /finetune/report                Lane B's report.json, stored for /gold/stats to read back
  *  GET    /findings                       ?status
  *  POST   /findings/:id/status            { status }
  *  GET    /queue                          → job counts + recent failures

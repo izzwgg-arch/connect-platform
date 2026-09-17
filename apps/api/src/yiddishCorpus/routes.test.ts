@@ -29,7 +29,7 @@ function fakeApp() {
   const routes = new Map<string, Handler>();
   const record = (method: string) => (path: string, handler: Handler) => routes.set(`${method} ${path}`, handler);
   return {
-    app: { get: record("GET"), post: record("POST"), patch: record("PATCH"), log: { info() {}, warn() {}, error() {} } },
+    app: { get: record("GET"), post: record("POST"), put: record("PUT"), patch: record("PATCH"), log: { info() {}, warn() {}, error() {} } },
     routes,
   };
 }
@@ -273,6 +273,64 @@ test("audio stays blocked while the source says DISABLED, and the reason is plai
   assert.ok(audioBlockedReason(SOURCE_Y24, [])!.includes("does not come from its own pages") || audioBlockedReason(SOURCE_Y24, [])!.length > 40);
   assert.equal(audioBlockedReason({ ...SOURCE_Y24, audioFetchMode: "OWNER_AUTHORIZED" }, [{ allowedUse: "analysis", state: "GRANTED" }]), null);
   assert.ok(audioBlockedReason({ ...SOURCE_Y24, audioFetchMode: "OWNER_AUTHORIZED" }, [{ allowedUse: "analysis", state: "DENIED" }]));
+});
+
+// ── 2b. POST /sources/:key/budget works for INTERNAL_TABLE sources too ──────
+//
+// The Whisper fine-tune needs a per-source budget (transcriptionMinutesPerDay,
+// apiCentsPerDay) on `voicemail` and `call_recordings` — both INTERNAL_TABLE,
+// CUSTOMER_PRIVATE sources, not the EXTERNAL_ADAPTER the route was built and
+// mostly exercised against. Nothing in the handler branches on `kind` or
+// `governanceClass`, so this is the guard that keeps it that way.
+
+test("POST /sources/:key/budget upserts a budget for an INTERNAL_TABLE source (voicemail)", async () => {
+  const upserts: any[] = [];
+  const audits: any[] = [];
+  const db = fakeDb({
+    "ycSource.findUnique": SOURCE_VOICEMAIL,
+    "ycBudget.upsert": (a: any) => {
+      upserts.push(a);
+      return { ...a.create, ...a.update };
+    },
+    "agentAuditLog.create": (a: any) => {
+      audits.push(a);
+      return {};
+    },
+  });
+  const routes = register(db, allowingGate);
+  const handler = routes.get(`POST ${YC_API_PREFIX}/sources/:key/budget`)!;
+  const reply = fakeReply();
+  await handler(
+    {
+      params: { key: "voicemail" },
+      body: { mode: "AUDIO_ONLY", transcriptionMinutesPerDay: 120, apiCentsPerDay: 500, paused: false },
+      user: SUPER_ADMIN,
+    },
+    reply,
+  );
+  assert.equal(reply.statusCode, 200, `budget route refused an INTERNAL_TABLE source: ${JSON.stringify(reply.payload)}`);
+  assert.equal(upserts.length, 1);
+  assert.equal(upserts[0].where.scope, "source:voicemail");
+  assert.equal(upserts[0].create.sourceId, SOURCE_VOICEMAIL.id);
+  assert.equal(reply.payload.budget.transcriptionMinutesPerDay, 120);
+  assert.equal(reply.payload.budget.mode, "AUDIO_ONLY");
+});
+
+test("POST /sources/:key/budget upserts a budget for call_recordings the same way", async () => {
+  const SOURCE_CALL_RECORDINGS = { ...SOURCE_VOICEMAIL, id: "src_cr", key: "call_recordings", name: "Call recordings" };
+  const db = fakeDb({
+    "ycSource.findUnique": SOURCE_CALL_RECORDINGS,
+    "ycBudget.upsert": (a: any) => ({ ...a.create, ...a.update }),
+  });
+  const routes = register(db, allowingGate);
+  const handler = routes.get(`POST ${YC_API_PREFIX}/sources/:key/budget`)!;
+  const reply = fakeReply();
+  await handler(
+    { params: { key: "call_recordings" }, body: { transcriptionMinutesPerDay: 60 }, user: SUPER_ADMIN },
+    reply,
+  );
+  assert.equal(reply.statusCode, 200, `budget route refused call_recordings: ${JSON.stringify(reply.payload)}`);
+  assert.equal(reply.payload.budget.transcriptionMinutesPerDay, 60);
 });
 
 // ── 3. the governance badge is on the responses ─────────────────────────────

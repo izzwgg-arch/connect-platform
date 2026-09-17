@@ -29,7 +29,15 @@ const FFMPEG_BIN =
 process.env.YC_FFMPEG_PATH ||= path.join(FFMPEG_BIN, "ffmpeg.exe");
 process.env.YC_FFPROBE_PATH ||= path.join(FFMPEG_BIN, "ffprobe.exe");
 
-const STAGES = ["fetch_audio", "segment", "features"];
+// ⛔ 2026-09-17: transcribe/align now have handlers in the shared engine
+// (Lane A, apps/api/src/yiddishCorpus/jobs.ts). They are listed here so this
+// log line stays honest about which stages this runner is meant to carry;
+// actually claiming them (adding them to the `stages:` arrays in the loop
+// below, and to the server's YIDDISH_WORKER_EXCLUDE_STAGES) is the
+// integrator's step, done together with landing Lane A and regenerating this
+// runner's Prisma client — see §4.1 of
+// docs/ai-context/AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-09-17.md.
+const STAGES = ["fetch_audio", "segment", "features", "transcribe", "align"];
 const LEASE_OWNER = "izzy-pc";
 const BATCH = 3;
 const IDLE_MS = 20_000;
@@ -38,18 +46,45 @@ const ERROR_MS = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
 
-/** Customer voicemails (Izzy: customers cleared it, 2026-09-17). Audio was
- * bulk-copied from the server's voicemail volume into audio\voicemail; the
- * file name is the Voicemail.localAudioPath kept on the item's metadata.
- * AUDIO ONLY — the Yiddish Labs transcript is never read. */
-function voicemailFetchHandler(defaultFetch: any, probeAudio: any) {
+/**
+ * Any INTERNAL_TABLE source whose items carry `metadata.localAudioPath` reads
+ * its audio from `audio/<sourceKey>/<file>` on this PC instead of downloading
+ * it — this is how customer voicemails (Izzy: customers cleared it,
+ * 2026-09-17) AND call recordings (bulk-copied ahead of time by
+ * `copy-call-recordings.ts`, never fetched over the network by this handler)
+ * enter the pipeline. Presence of the `localAudioPath` field on the item's
+ * metadata IS the signal — sources with a real network fetch (Yiddish24)
+ * never set it, so this generalises to any future internal audio source with
+ * no further change here.
+ *
+ * AUDIO ONLY. Neither the Yiddish Labs voicemail transcript nor any call
+ * transcript text is ever read by this handler.
+ *
+ * TODO (integrator / Lane A): for `call_recordings` items specifically, the
+ * `transcribe` handler in `apps/api/src/yiddishCorpus/jobs.ts` should run the
+ * cheap language probe BEFORE paying to transcribe a whole call: submit the
+ * first ~30s with `language: "auto"`, then call `probeDecision(text,
+ * detectedLanguage)` from `scripts/yiddish-runner/languageProbe.ts` (pure,
+ * copy it or import it — it has no dependency on this runner). When
+ * `!decision.yiddish`, write the item SKIPPED with `decision.reason` and stop
+ * — same shape `fetch_audio` already uses for a lawful skip — instead of
+ * transcribing the rest of an English call. Yiddish24 and voicemail need no
+ * such probe (already known-Yiddish by construction / by
+ * `Voicemail.transcriptLanguage`). This runner does not call the probe
+ * itself: it downloads audio, it does not transcribe.
+ */
+function internalAudioFetchHandler(defaultFetch: any, probeAudio: any) {
   return async (ctx: any) => {
-    if (ctx.job?.sourceKey !== "voicemail") return defaultFetch(ctx);
-    const { db, item } = ctx;
+    const { db, item, job } = ctx;
+    const sourceKey = String(job?.sourceKey || "");
+    const hasLocalAudioField = !!item?.metadata && Object.prototype.hasOwnProperty.call(item.metadata, "localAudioPath");
+    if (!hasLocalAudioField) return defaultFetch(ctx);
     const name = String(item?.metadata?.localAudioPath || "");
-    if (!name || name.includes("..") || /[\\/]/.test(name)) return { ok: true, skipped: true, reason: "no local voicemail audio", advance: false };
-    const file = path.join(HERE, "audio", "voicemail", name);
-    if (!existsSync(file)) return { ok: false, reason: `voicemail audio not copied to this PC yet: ${name}` };
+    if (!name || name.includes("..") || /[\\/]/.test(name)) {
+      return { ok: true, skipped: true, reason: `no local ${sourceKey || "internal"} audio`, advance: false };
+    }
+    const file = path.join(HERE, "audio", sourceKey, name);
+    if (!existsSync(file)) return { ok: false, reason: `${sourceKey} audio not copied to this PC yet: ${name}` };
     const bytes = readFileSync(file);
     const sha256 = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
     const probed: any = await probeAudio(file);
@@ -59,7 +94,7 @@ function voicemailFetchHandler(defaultFetch: any, probeAudio: any) {
         data: {
           itemId: item.id,
           storage: "STORED",
-          uri: `voicemail:${item.externalId}`,
+          uri: `${sourceKey}:${item.externalId}`,
           storageKey: file,
           sha256,
           bytes: bytes.length,
@@ -79,7 +114,7 @@ async function main() {
   const { PrismaClient } = await import("@prisma/client");
   const { runDueJobs, defaultStageHandlers } = await import("./code/apps/api/src/yiddishCorpus/jobs");
   const { probeAudio } = await import("./code/apps/api/src/yiddishCorpus/audioPipeline");
-  const handlers = { ...defaultStageHandlers, fetch_audio: voicemailFetchHandler(defaultStageHandlers.fetch_audio, probeAudio) };
+  const handlers = { ...defaultStageHandlers, fetch_audio: internalAudioFetchHandler(defaultStageHandlers.fetch_audio, probeAudio) };
   const db = new PrismaClient();
   log(`runner up — stages ${STAGES.join(", ")}; audio in ${process.env.YC_AUDIO_DIR}`);
 
@@ -88,10 +123,13 @@ async function main() {
     try {
       // Analyze what is already on disk BEFORE downloading more, or a big
       // download queue starves the learning for days.
+      // Order inside the lane is by job nextRunAt/priority, not this list; the
+      // point is that every LOCAL/labelling stage is tried before another
+      // download is started, so a big fetch backlog never starves learning.
       let res: any = await runDueJobs(db, {
         leaseOwner: LEASE_OWNER,
         limit: BATCH,
-        stages: ["segment", "features"],
+        stages: ["segment", "features", "transcribe", "align"],
         leaseMs: 45 * 60_000,
         handlers,
       });

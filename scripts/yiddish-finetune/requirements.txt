@@ -1,0 +1,20 @@
+# Loopcom Yiddish fine-tune — pod-side Python deps (Lane B, §3.2.2).
+# Installed ON THE RENTED POD (runpod-pod.ts uploads this and runs
+# `pip install -r requirements.txt`), never on Izzy's PC (no GPU there).
+#
+# Pins are deliberately loose-but-bounded (compatible-release `~=`) so a pod
+# rented months from now still gets a working combination without silently
+# picking up a breaking major bump.
+
+transformers~=4.44.0
+peft~=0.12.0
+accelerate~=0.33.0
+datasets~=2.21.0
+evaluate~=0.4.2
+jiwer~=3.0.4
+ctranslate2~=4.4.0
+torch~=2.4.0
+torchaudio~=2.4.0
+soundfile~=0.12.1
+librosa~=0.10.2
+huggingface_hub~=0.24.6

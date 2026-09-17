@@ -39,8 +39,46 @@ import {
   resolveAudioGate,
 } from "./yiddish24Adapter";
 import { scoreNovelty, noveltyToPriority } from "./novelty";
-import { detectSegments, extractFeatures } from "./audioPipeline";
+import { detectSegments, extractFeatures, cutChunk, planChunks } from "./audioPipeline";
 import { recordProbes, noteDiscoveryRun, alertIfBroken } from "./siteHealth";
+import { resolveTranscribeBackend } from "./transcribeBackend";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+/**
+ * How long a single chunk sent to Everett may run, in seconds. The whole
+ * item is split on SPEECH-segment boundaries (`planChunks`) into windows no
+ * longer than this, both to stay under the runsync request-size cap and so
+ * one bad chunk never costs the whole item's transcript.
+ */
+export const YC_TRANSCRIBE_CHUNK_SEC = Number(process.env.YC_TRANSCRIBE_CHUNK_SEC) || 600;
+
+/**
+ * Moved to transcribeBackend.ts (so that module can be the one both this file
+ * and the backends themselves depend on, with no import cycle). Re-exported
+ * here for every existing caller/test that reads it off `jobs.ts`.
+ */
+export { YC_EVERETT_CENTS_PER_AUDIO_MINUTE } from "./transcribeBackend";
+
+/** Metric names for the transcription cost ledger (`YcMetricSnapshot`, per day per source). */
+export const YC_METRIC_TRANSCRIBE_MINUTES = "transcribe.minutes";
+export const YC_METRIC_TRANSCRIBE_CENTS = "transcribe.cents";
+
+/**
+ * faster-whisper's avg_logprob is a log-probability (≤ 0); exp() maps it back
+ * to a 0..1-ish confidence. no_speech_prob further docks a segment that the
+ * model itself flagged as possibly not speech at all. Both are heuristics
+ * ivrit.ai returns per segment, not something we invented.
+ */
+export function transcriptConfidence(avgLogprob: number | null | undefined, noSpeechProb: number | null | undefined): number {
+  let c = typeof avgLogprob === "number" && Number.isFinite(avgLogprob) ? Math.exp(avgLogprob) : 0.5;
+  c = Math.max(0, Math.min(1, c));
+  if (typeof noSpeechProb === "number" && Number.isFinite(noSpeechProb)) {
+    c = Math.max(0, c - noSpeechProb * 0.5);
+  }
+  return Number(c.toFixed(4));
+}
 
 export const YC_DEFAULT_LEASE_MS = 5 * 60_000;
 export const YC_DEFAULT_INTERVAL_MS = 60_000;
@@ -531,6 +569,203 @@ export const defaultStageHandlers: Partial<Record<YcStage, StageHandler>> = {
   },
 
   /**
+   * TRANSCRIBE - the stage that actually calls a speech-to-text backend
+   * (Everett/ivrit.ai, paid, or the local faster-whisper backend running on
+   * the office PC's own CPU for $0 — see `transcribeBackend.ts`).
+   *
+   * ⛔ This function must never import or reference Yiddish Labs, in any
+   * form. A guard test reads this file's source for exactly that.
+   *
+   * Order of checks mirrors `observe`'s wall re-read: a source can be walled
+   * (or its audio asset can vanish) after the job was queued, so nothing here
+   * is trusted from queue time.
+   */
+  async transcribe({ db, item, job, now }) {
+    if (!item) return { ok: false, reason: "no item on this job" };
+
+    const asset = await db.ycAudioAsset
+      .findFirst({ where: { itemId: item.id, storage: "STORED", deletedAt: null } })
+      .catch(() => null);
+    if (!asset?.storageKey) return { ok: true, skipped: true, reason: "no stored audio for this item", advance: false };
+
+    // Re-read here, not inherited from whoever queued the job — same rule as `observe`.
+    const source = await db.ycSource.findUnique({ where: { id: item.sourceId } }).catch(() => null);
+    if (source && source.contentAllowed === false) {
+      return { ok: true, skipped: true, reason: YC_CUSTOMER_WALL_MESSAGE, advance: false };
+    }
+
+    const segments = await db.ycSegment
+      .findMany({ where: { assetId: asset.id, klass: "SPEECH" } })
+      .catch(() => []);
+    const durationMs = Number(asset.durationMs) > 0 ? Number(asset.durationMs) : (Number(item.durationSec) > 0 ? Number(item.durationSec) * 1000 : null);
+    const chunkSec = Number(job.payload?.chunkSec) > 0 ? Number(job.payload.chunkSec) : YC_TRANSCRIBE_CHUNK_SEC;
+    const chunks = planChunks(segments, durationMs, chunkSec);
+    if (!chunks.length) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "no speech was detected in this asset, so there is nothing to send for transcription",
+        advance: false,
+      };
+    }
+
+    const backend = resolveTranscribeBackend();
+    if (!backend.configured) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: `the ${backend.name} transcription backend is not configured`,
+        advance: false,
+      };
+    }
+
+    let processedMs = 0;
+    let wroteAny = false;
+    let chunksAttempted = 0;
+    let chunksFailed = 0;
+
+    for (const chunk of chunks) {
+      chunksAttempted += 1;
+      const originRef = `${asset.id}#${chunk.index}`;
+
+      // Idempotent: a re-run of this exact chunk replaces its own rows, never
+      // doubles them. Other chunks' rows are untouched.
+      await db.ycTranscript
+        .deleteMany({ where: { itemId: item.id, engine: "ivrit", originRef } })
+        .catch(() => {});
+
+      const outPath = path.join(tmpdir(), `yc-transcribe-${item.id}-${chunk.index}-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+      const cut = await cutChunk(asset.storageKey, chunk.startMs, chunk.endMs, outPath);
+      if (!cut.available) {
+        chunksFailed += 1;
+        continue; // one bad chunk must not lose the whole item's transcript
+      }
+
+      let buffer: Buffer | null = null;
+      try {
+        buffer = await readFile(outPath);
+      } catch {
+        buffer = null;
+      } finally {
+        unlink(outPath).catch(() => {});
+      }
+      if (!buffer || !buffer.length) {
+        chunksFailed += 1;
+        continue;
+      }
+
+      let result;
+      try {
+        result = await backend.transcribeChunk({ file: buffer });
+      } catch {
+        chunksFailed += 1;
+        continue;
+      }
+      if (result.status !== "completed" || !Array.isArray(result.segments) || !result.segments.length) {
+        chunksFailed += 1;
+        continue;
+      }
+
+      for (const seg of result.segments) {
+        const startMs = chunk.startMs + Math.round((Number(seg.start) || 0) * 1000);
+        const endMs = chunk.startMs + Math.round((Number(seg.end) || 0) * 1000);
+        await db.ycTranscript.create({
+          data: {
+            itemId: item.id,
+            engine: "ivrit",
+            sttProvider: backend.model,
+            text: seg.text ?? "",
+            language: result.language ?? "yi",
+            startMs,
+            endMs,
+            words: (seg.words as any) ?? null,
+            avgLogprob: seg.avgLogprob ?? null,
+            noSpeechProb: seg.noSpeechProb ?? null,
+            confidence: transcriptConfidence(seg.avgLogprob, seg.noSpeechProb),
+            chunkIndex: chunk.index,
+            originRef,
+          },
+        });
+        wroteAny = true;
+      }
+      processedMs += chunk.endMs - chunk.startMs;
+    }
+
+    if (!wroteAny) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: `the ${backend.name} backend produced no usable transcript for this asset's ${chunksAttempted} chunk(s)`,
+        advance: false,
+      };
+    }
+
+    await db.ycSourceItem.update({ where: { id: item.id }, data: { state: "TRANSCRIBED" } }).catch(() => {});
+
+    const transcribedMinutes = Number((processedMs / 60_000).toFixed(4));
+    const costCents = Math.ceil(transcribedMinutes * backend.costCentsPerMinute);
+    await recordTranscribeSpend(db, job.sourceKey, now, { transcribedMinutes, costCents }).catch(() => {});
+
+    return {
+      ok: true,
+      advance: true,
+      transcribedMinutes,
+      costCents,
+      reason: `${chunksAttempted - chunksFailed} of ${chunksAttempted} chunk(s) transcribed`,
+    };
+  },
+
+  /**
+   * ALIGN - pin each `ivrit` transcript row to the SPEECH segment it overlaps
+   * most. A row with no overlapping SPEECH segment keeps `segmentId = null` —
+   * it is still usable text, just not tied to acoustic evidence. `observe`
+   * then produces ACOUSTIC_ALIGNED observations for free from the rows this
+   * stage pins down.
+   */
+  async align({ db, item }) {
+    if (!item) return { ok: false, reason: "no item on this job" };
+
+    const transcripts = await db.ycTranscript
+      .findMany({ where: { itemId: item.id, engine: "ivrit" } })
+      .catch(() => []);
+    if (!transcripts.length) {
+      return { ok: true, skipped: true, reason: "no ivrit transcript rows for this item yet", advance: false };
+    }
+
+    const asset = await db.ycAudioAsset
+      .findFirst({ where: { itemId: item.id, storage: "STORED", deletedAt: null } })
+      .catch(() => null);
+    const segments = asset
+      ? await db.ycSegment.findMany({ where: { assetId: asset.id, klass: "SPEECH" } }).catch(() => [])
+      : [];
+
+    let aligned = 0;
+    for (const t of transcripts) {
+      if (t.startMs == null || t.endMs == null) continue;
+      let best: any = null;
+      let bestOverlap = 0;
+      for (const seg of segments) {
+        const overlap = Math.min(t.endMs, seg.endMs) - Math.max(t.startMs, seg.startMs);
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          best = seg;
+        }
+      }
+      if (best) {
+        await db.ycTranscript.update({ where: { id: t.id }, data: { segmentId: best.id } });
+        aligned += 1;
+      }
+    }
+
+    await db.ycSourceItem.update({ where: { id: item.id }, data: { state: "ALIGNED" } }).catch(() => {});
+    return {
+      ok: true,
+      advance: true,
+      reason: `${aligned} of ${transcripts.length} transcript row(s) aligned to a speech segment`,
+    };
+  },
+
+  /**
    * OBSERVE - the stage that actually learns from an item.
    *
    * Two jobs, in this order, and the order matters:
@@ -886,6 +1121,45 @@ async function finishJob(
       nextRunAt: now,
     },
   });
+}
+
+// ── the transcription cost ledger ───────────────────────────────────────────
+
+/**
+ * Add `delta` to today's `(day, sourceKey, metric)` row. Read-then-write, not
+ * a Prisma `increment`, so the same arithmetic is checkable by a fake db in a
+ * test — the same style `chargeBudget` already uses for the budget counters.
+ */
+async function bumpMetric(db: any, day: string, sourceKey: string, metric: string, delta: number): Promise<void> {
+  if (!(delta > 0)) return;
+  const existing = await db.ycMetricSnapshot.findFirst({ where: { day, sourceKey, metric } }).catch(() => null);
+  const value = (Number(existing?.value) || 0) + delta;
+  await db.ycMetricSnapshot.upsert({
+    where: { day_sourceKey_metric: { day, sourceKey, metric } },
+    update: { value },
+    create: { day, sourceKey, metric, value },
+  });
+}
+
+/**
+ * The per-day, per-source cost ledger behind `GET /admin/yiddish/now`'s
+ * `spend` block: `transcribe.minutes` and `transcribe.cents`, additive across
+ * every transcribe job that ran that day for that source. Separate from
+ * `YcBudget`'s own daily counters (which gate whether a job may run at all) —
+ * this is the honest record of what was actually spent, kept even if a
+ * budget is later widened, paused or deleted.
+ */
+export async function recordTranscribeSpend(
+  db: any,
+  sourceKey: string,
+  now: Date,
+  spend: { transcribedMinutes?: number; costCents?: number },
+): Promise<void> {
+  const day = todayKey(now);
+  const minutes = Math.max(0, Number(spend.transcribedMinutes) || 0);
+  const cents = Math.max(0, Number(spend.costCents) || 0);
+  await bumpMetric(db, day, sourceKey, YC_METRIC_TRANSCRIBE_MINUTES, minutes);
+  await bumpMetric(db, day, sourceKey, YC_METRIC_TRANSCRIBE_CENTS, cents);
 }
 
 // ── heartbeat + the worker ──────────────────────────────────────────────────

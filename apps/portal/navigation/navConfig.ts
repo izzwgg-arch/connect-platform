@@ -84,7 +84,8 @@ import {
   KeyRound,
   Package,
   Tag,
-  Truck
+  Truck,
+  Award
 } from "lucide-react";
 import type { Permission } from "../types/app";
 
@@ -239,7 +240,7 @@ export const navItems: NavItem[] = [
   { id: "admin.mobile_console", href: "/admin/mobile-console", label: "Mobile Console", icon: "MC", lucide: Smartphone, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_mobile_console" },
   { id: "admin.creative_console", href: "/admin/creative-console", label: "Creative Console", icon: "CC", lucide: Clapperboard, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_creative_console" },
   // ── Yiddish Learning Engine (2026-09-15) — the corpus + learning engine and
-  // its first external source. Ten pages, ONE KEY EACH (the per-page rule), in
+  // its first external source. Eleven pages, ONE KEY EACH (the per-page rule), in
   // no default bucket, every one SUPER_ADMIN-forced below and listed in
   // OWNER_ONLY_FIXED_NAV_ITEMS so the custom-role editor renders them Locked
   // instead of offering a toggle that cannot take effect.
@@ -257,6 +258,11 @@ export const navItems: NavItem[] = [
   { id: "admin.yiddish_export", href: "/admin/yiddish-learning/export", label: "Yiddish Export", icon: "YE", lucide: Download, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_export" },
   { id: "admin.yiddish_governance", href: "/admin/yiddish-learning/governance", label: "Yiddish Governance", icon: "YG", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_governance" },
   { id: "admin.yiddish24", href: "/admin/yiddish-learning/yiddish24", label: "Yiddish24 Source", icon: "Y24", lucide: Radio, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish24" },
+  // The gold set (2026-09-17, the Whisper fine-tune build): a native ear
+  // corrects a few hundred machine transcripts, one clip at a time. Same
+  // contract as its ten siblings above: own key, no default bucket, forced
+  // SUPER_ADMIN below and listed in OWNER_ONLY_FIXED_NAV_ITEMS.
+  { id: "admin.yiddish_gold", href: "/admin/yiddish-learning/gold", label: "Yiddish Gold Set", icon: "YG2", lucide: Award, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_gold" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
@@ -414,7 +420,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.mobile_console",
   "admin.creative_console",
   "admin.texting_registration",
-  // The Yiddish Learning Engine's ten pages. Every one is SUPER_ADMIN-forced
+  // The Yiddish Learning Engine's eleven pages. Every one is SUPER_ADMIN-forced
   // in isNavItemVisibleForUser and requireSuperAdmin at the api, so a granted
   // key could only ever draw a door that refuses — they render Locked.
   "admin.yiddish_learning",
@@ -427,6 +433,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.yiddish_export",
   "admin.yiddish_governance",
   "admin.yiddish24",
+  "admin.yiddish_gold",
   "admin.compliance",
   "admin.billing",
   // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every
@@ -499,8 +506,8 @@ export function isNavItemVisibleForUser(
   // The Yiddish Learning Engine reads across every tenant's material (the
   // customer data wall counts it) and its Governance screen carries the switch
   // that authorizes fetching third-party audio. Platform staff only, always —
-  // the same contract as the console family above, and the reason all ten ids
-  // sit in OWNER_ONLY_FIXED_NAV_ITEMS.
+  // the same contract as the console family above, and the reason all eleven
+  // ids sit in OWNER_ONLY_FIXED_NAV_ITEMS.
   if (item.id.startsWith("admin.yiddish") && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

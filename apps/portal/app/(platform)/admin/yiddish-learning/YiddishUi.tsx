@@ -264,6 +264,7 @@ export const YIDDISH_SECTION_PAGES: { href: string; label: string }[] = [
   { href: "/admin/yiddish-learning/export", label: "Export" },
   { href: "/admin/yiddish-learning/governance", label: "Governance" },
   { href: "/admin/yiddish-learning/yiddish24", label: "Yiddish24" },
+  { href: "/admin/yiddish-learning/gold", label: "Gold set" },
 ];
 
 export function SectionNav() {

@@ -15,11 +15,13 @@ import path from "node:path";
 
 import {
   classifySpan,
+  cutChunk,
   detectSegments,
   extractFeatures,
   ffmpegAvailability,
   parseAstats,
   parseSilenceDetect,
+  planChunks,
   probeAudio,
   YC_SEGMENT_MAX_CONFIDENCE,
   type RunFn,
@@ -213,6 +215,96 @@ test("extractFeatures measures what it can and says plainly what it did not", as
   assert.match(String(f.speechRateBasis), /PROXY for speech rate, not a syllable count/);
   assert.equal(f.pitchMeanHz, null);
   assert.match(String(f.pitchBasis), /not measured/);
+});
+
+// ── 5b. cutChunk (Whisper fine-tune Lane A) ─────────────────────────────────
+
+test("cutChunk runs ffmpeg with a 16kHz mono output and the requested trim window", async () => {
+  const calls: { cmd: string; args: string[] }[] = [];
+  const run: RunFn = async (cmd, args) => {
+    calls.push({ cmd, args });
+    return { code: 0, stdout: "", stderr: "", error: null };
+  };
+  const res = await cutChunk("/audio/in.mp3", 10_000, 40_000, "/tmp/out.mp3", { run });
+  assert.equal(res.available, true);
+  assert.equal(res.reason, null);
+  assert.equal(calls.length, 1);
+  const args = calls[0].args;
+  assert.ok(args.includes("-i") && args.includes("/audio/in.mp3"));
+  assert.ok(args.includes("-ar") && args.includes("16000"), "must resample to 16kHz");
+  assert.ok(args.includes("-ac") && args.includes("1"), "must downmix to mono");
+  assert.ok(args.includes("/tmp/out.mp3"));
+  const ssIdx = args.indexOf("-ss");
+  assert.equal(args[ssIdx + 1], "10.000");
+  const tIdx = args.indexOf("-t");
+  assert.equal(args[tIdx + 1], "30.000", "duration is endMs-startMs, not endMs");
+});
+
+test("cutChunk degrades honestly with no ffmpeg, and refuses an empty window without running anything", async () => {
+  const res = await cutChunk("/audio/in.mp3", 0, 1000, "/tmp/out.mp3", { run: ENOENT });
+  assert.equal(res.available, false);
+  assert.match(res.reason!, /not installed/);
+
+  let ran = false;
+  const run: RunFn = async () => {
+    ran = true;
+    return { code: 0, stdout: "", stderr: "", error: null };
+  };
+  const empty = await cutChunk("/audio/in.mp3", 5000, 5000, "/tmp/out.mp3", { run });
+  assert.equal(empty.available, false);
+  assert.equal(ran, false, "an empty/backwards window must never invoke ffmpeg");
+});
+
+// ── 5c. planChunks — pure, no ffmpeg, no I/O ────────────────────────────────
+
+test("planChunks groups SPEECH segments into windows no longer than chunkSec", () => {
+  const segments = [
+    { startMs: 0, endMs: 100_000, klass: "SPEECH" },
+    { startMs: 100_000, endMs: 110_000, klass: "SILENCE" },
+    { startMs: 110_000, endMs: 200_000, klass: "SPEECH" },
+  ];
+  const windows = planChunks(segments, 200_000, 120); // 120s cap
+  assert.ok(windows.length >= 2, `expected at least 2 windows, got ${windows.length}`);
+  for (const w of windows) assert.ok(w.endMs - w.startMs <= 120_000, "no window may exceed chunkSec");
+  // Every ms of window time is covered by real speech somewhere in `segments`.
+  for (const w of windows) {
+    const covered = segments.some((s) => s.klass === "SPEECH" && s.startMs < w.endMs && s.endMs > w.startMs);
+    assert.ok(covered, `window ${w.startMs}-${w.endMs} must contain real speech`);
+  }
+});
+
+test("planChunks produces nothing for a span with no SPEECH at all — there is nothing to skip around", () => {
+  const segments = [
+    { startMs: 0, endMs: 60_000, klass: "MUSIC" },
+    { startMs: 60_000, endMs: 120_000, klass: "SILENCE" },
+  ];
+  assert.deepEqual(planChunks(segments, 120_000, 600), []);
+  assert.deepEqual(planChunks([], 120_000, 600), []);
+  assert.deepEqual(planChunks(null as any, 120_000, 600), []);
+});
+
+test("planChunks splits a single SPEECH segment longer than chunkSec into chunk-sized pieces", () => {
+  const segments = [{ startMs: 0, endMs: 25 * 60_000, klass: "SPEECH" }]; // 25 minutes
+  const windows = planChunks(segments, 25 * 60_000, 600); // 10-minute cap
+  assert.equal(windows.length, 3);
+  assert.deepEqual(
+    windows.map((w) => [w.startMs, w.endMs]),
+    [[0, 600_000], [600_000, 1_200_000], [1_200_000, 1_500_000]],
+  );
+  assert.deepEqual(windows.map((w) => w.index), [0, 1, 2]);
+});
+
+test("planChunks never produces overlapping windows, and windows stay in chronological order", () => {
+  const segments = [
+    { startMs: 0, endMs: 50_000, klass: "SPEECH" },
+    { startMs: 700_000, endMs: 950_000, klass: "SPEECH" },
+    { startMs: 1_000_000, endMs: 1_400_000, klass: "SPEECH" },
+  ];
+  const windows = planChunks(segments, 1_400_000, 600);
+  for (let i = 1; i < windows.length; i += 1) {
+    assert.ok(windows[i].startMs >= windows[i - 1].endMs, "windows must never overlap");
+    assert.ok(windows[i].startMs >= windows[i - 1].startMs, "windows must stay chronological");
+  }
 });
 
 // ── 6. SOURCE GUARD: no paid API may ever appear in this file ───────────────
