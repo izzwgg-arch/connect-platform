@@ -1,19 +1,23 @@
 /**
  * The pay line's prompt manifest — every recorded file the reducer can name,
- * with the words it says. The 09-17 one-time-code additions (23–33) are cut
- * from THIS list (apps/api/scripts/cut-pay-prompts.ts) in the line's own
- * voice: Amazon Polly, voice "Stephen", engine "neural" — Izzy's pick B on
- * 2026-08-25, and "Stephen = neural, always" (a generative/neural mix in one
- * set was audible and rejected). "Gesheft" is voiced through the IPA phoneme
- * the original set used, so the store's name sounds the same in every file.
+ * with the words it says. New files are cut from THIS list
+ * (apps/api/scripts/cut-pay-prompts.ts) in the line's own voice: Amazon Polly,
+ * voice "Stephen", engine "neural" — Izzy's pick B on 2026-08-25, and
+ * "Stephen = neural, always" (a generative/neural mix in one set was audible
+ * and rejected). "Gesheft" is voiced through the IPA phoneme the original set
+ * used, so the store's name sounds the same in every file.
  *
  * ⛔ The reducer never renders text at call time: these strings exist so the
  * recordings and the state machine cannot drift apart. Files 01–22 were cut on
  * 2026-08-25/26 and their scripts were never committed — the `text` for those
  * is a paraphrase from the handoffs; the RECORDINGS are the authority for
- * them. Files 23–33 (addedOn 2026-09-17) are cut from the text here, verbatim.
- * Numbers (num_0 … num_thousand) are read digit by digit or spliced by
- * payAmount.ts; they are not listed here.
+ * them. Files with `addedOn` are cut from the text here, verbatim.
+ * Numbers (num_0 … num_thousand) are spliced by payAmount.ts; not listed here.
+ *
+ * History: files 23–35 (the one-time code by call/text and the "own account
+ * unservable" redirect) were cut on 2026-09-17 and retired the same evening
+ * when Izzy replaced that flow with "your account or a different one → PIN".
+ * The WAVs stay on the PBX (harmless); the reducer no longer names them.
  */
 
 export const PAY_POLLY_VOICE_ID = "Stephen";
@@ -28,7 +32,7 @@ export type PayPromptSpec = {
   text: string;
   /** SSML body when the plain text is not enough (pronunciation); wrapped in <speak> by the cutter. */
   ssml?: string;
-  /** Files added 2026-09-17 for the one-time code flow. */
+  /** Files cut from this manifest (the cutter cuts exactly these). */
   addedOn?: "2026-09-17";
 };
 
@@ -55,42 +59,20 @@ export const PAY_PROMPTS: readonly PayPromptSpec[] = [
   { ref: "20_connect_person", text: "Please hold while we connect you to someone who can help." },
   { ref: "21_menu_after_balance", text: "To make a payment, press two. To hear your balance again, press one." },
   { ref: "22_main_menu", text: "To hear your balance, press one. To make a payment, press two." },
-  // ── 2026-09-17: the one-time code flow ─────────────────────────────────────
+  // ── 2026-09-17 evening (final flow) ───────────────────────────────────────
   {
-    ref: "23_pin_or_star",
-    text: "Please enter your PIN, followed by the pound key. If you do not have a PIN, press star.",
+    ref: "36_no_pin_visit_store",
+    text: "This account does not have a PIN set up yet. To pay by phone, please visit the store to set one up.",
     addedOn: "2026-09-17",
   },
   {
-    ref: "24_code_channel_menu",
-    text: "We can send you a one-time code to verify your account. To receive the code by phone call, press one. To receive it by text message, press two.",
-    addedOn: "2026-09-17",
-  },
-  { ref: "25_code_number_intro", text: "Which number on your account should receive the code?", addedOn: "2026-09-17" },
-  { ref: "26_press", text: "Press", addedOn: "2026-09-17" },
-  { ref: "27_for_number_ending_in", text: "for the number ending in", addedOn: "2026-09-17" },
-  {
-    ref: "28_code_call_intro",
-    text: "Hello. This is Gesheft. Your one-time phone payment code is",
-    ssml: `Hello. This is ${GESHEFT_SSML}. Your one-time phone payment code is`,
-    addedOn: "2026-09-17",
-  },
-  { ref: "29_code_again", text: "Once again, your code is", addedOn: "2026-09-17" },
-  { ref: "30_enter_code", text: "Please enter the six digit code, followed by the pound key.", addedOn: "2026-09-17" },
-  {
-    ref: "31_code_call_sent",
-    text: "We are calling you now with your code. When you have it, enter the six digits, followed by the pound key.",
+    ref: "37_which_account",
+    text: "To make a payment or hear a balance on the account for the number you are calling from, press one. For a different account, press two.",
     addedOn: "2026-09-17",
   },
   {
-    ref: "32_code_text_sent",
-    text: "We sent your code by text message. Enter the six digits, followed by the pound key.",
-    addedOn: "2026-09-17",
-  },
-  { ref: "33_code_wrong", text: "That code is not correct.", addedOn: "2026-09-17" },
-  {
-    ref: "34_enter_account_phone",
-    text: "We cannot take a phone payment on the account for the number you are calling from. Please enter the phone number on the account you would like to pay or hear the balance of, followed by the pound key.",
+    ref: "38_enter_phone",
+    text: "Please enter the phone number on the account, followed by the pound key.",
     addedOn: "2026-09-17",
   },
 ];

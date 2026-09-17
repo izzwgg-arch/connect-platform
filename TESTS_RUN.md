@@ -539,3 +539,26 @@ Commit: the `feat(pay-line): a matched caller whose own account can't be served 
   Izzy's cell (no-POS-PIN account) → `34_enter_account_phone` → keys 8457823064 → `23_pin_or_star`; 3762's own
   line → asked → keys its own number → `23_pin_or_star`; redirect fires ONCE (second no-PIN account → person,
   `status no_pin`). Vault 0 rows. NOT proven: a human hearing prompt 34; code call ringing; a charge.
+
+## 2026-09-17 (late evening, round 3 — FINAL) — pay line: "your account or a different one?" → PIN → menu; one-time code removed
+
+Commit: the `feat(pay-line): final flow` commit on `feat/ivr-migration-takeover` (deploy hash + proof in
+the docs line right after these). Summary `docs/ai-context/claude-md-sections/2026-09-17-pay-line-final-flow.md`.
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test "src/supermarket/*.test.ts"` → **208/208**:
+  `supermarketCore` 37/37 (pay-IVR block rewritten: choice gather, silent probe, keyed PIN every time, no-PIN →
+  36+20, choice/lookup/PIN caps, the money rule, legacy phase → human), `payLineStress` 8/8 (PAYLINE 1 = a
+  2,000-account matrix × {own #1, own #2 self-lookup, foreign} × {no PIN, right PIN, wrong ×3}: served ⇒ keyed
+  the PIN, no-PIN accounts hear exactly 36 then 20 and never 02_pin, vault touched 0 times, POS-request cap,
+  money reconciles), `supermarketStress` 28/28 (recorded-prompt set = `payPromptRefs()`; STRESS 22 now proves
+  the line never touches the vault), `payIvrDialplan` 10/10 (guard: no Originate/Dial in the conf),
+  `phonePinRoutes` 11/11, `supermarketWiring` 11/11, `customerSync` 11/11, `customerPhoneMatch` 14/14 …
+- `apps/api`: `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket/* (pre-existing elsewhere).
+- Prompt cutter inside `app-api-1` (Polly Stephen/neural, 8 kHz mono 16-bit): `36_no_pin_visit_store` 5.8 s,
+  `37_which_account` 7.3 s, `38_enter_phone` 3.5 s — installed on the PBX (`en-male` 64 → 67, md5-matched)
+  and in `loopcom:/root/stephen-neural/`.
+- PBX dialplan: code-call `Originate` + both contexts removed (backup `.bak.paycode-removed.20260917T204449Z`),
+  `dialplan reload` OK, `Originate` count 0, `connect-pay-code-say` gone, the two CURL steps intact.
+- Deploy + live door proof (`/root/payline-live-proof4.sh`): in the docs follow-up commit and the summary
+  file's "Round 3 — tested / deployed / proven" section.
+- NOT run: a human call; a real charge.

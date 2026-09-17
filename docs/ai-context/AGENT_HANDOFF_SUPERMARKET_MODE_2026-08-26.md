@@ -1215,3 +1215,29 @@ number on the account; it cannot manufacture the POS PIN the register demands, s
 caller on an un-enrolled account also lands on a person (`pin_not_enrolled`).
 
 **Verification:** the summary file's bottom section + `TESTS_RUN.md` (2026-09-17 evening).
+
+### §16f — 2026-09-17 late evening: THE FINAL FLOW — "your account or a different one?" → PIN → menu; the one-time code and the no-PIN-for-matched rule removed
+
+Izzy, ~20:20Z (quoted in full in `docs/ai-context/claude-md-sections/2026-09-17-pay-line-final-flow.md`):
+remove the code by text and call; ask every caller whether they want the account for the number
+they are calling from (→ PIN) or a different one (→ phone number → PIN); then the menu. Plus:
+"if they don't have a PIN, they should go down to the store and create one."
+
+**Built:** `payIvrCore.ts` rewritten around phases `start → choose_account | lookup_entry →
+pin_entry → main_menu …`; state drops every code/vault/policy field (`callerAccountId` added;
+`normalizePayIvrState` maps legacy phases to `human`); effects are lookup / verify_pin (probe or
+keyed) / read_balance / charge / transfer only. `payIvrRuntime.ts` no longer touches
+`SupermarketPhonePin`, has no SMS/code deps, and no `dial` in its result. `payIvrDialplan.ts`
+back to playback/action/maxDigits. Prompts `36_no_pin_visit_store`, `37_which_account`,
+`38_enter_phone` cut + installed; manifest trimmed to what the reducer can name (23–35 retired,
+WAVs left in place). Conf: `Originate` + `[connect-pay-code-say]` + `[connect-pay-code-dial-gesheft]`
+removed in the repo AND on the PBX (`extensions__60_custom.conf.bak.paycode-removed.20260917T204449Z`,
+splice + reload, verified). Deleted `payLineSms.ts`, `payLineCode.test.ts`.
+
+**Kept on purpose:** the silent probe before any PIN prompt (a no-POS-PIN account is told to
+visit the store and handed to a person instead of three futile tries — the register refuses
+balance AND charge on such accounts); the mirror fallback for lookups; the desk Phone-PIN routes
+(unused by the line now; a later "silent if enrolled" is one reducer branch away, but Izzy's
+instruction tonight is "ask for the PIN" — do not re-add silence without his word).
+
+**Verification:** the summary file's bottom section + `TESTS_RUN.md` (2026-09-17 late evening).

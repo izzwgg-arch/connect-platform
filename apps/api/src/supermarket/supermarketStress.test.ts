@@ -48,21 +48,20 @@ import { storeIntegrationKey, posClientForTenant } from "./integrationCredential
 import { registerSupermarketRoutes } from "./supermarketRoutes";
 import { checkInternalSecret } from "../internalSecret";
 import { shouldSkipJwtVerification } from "../jwtPublicRouteBypass";
+import { payPromptRefs } from "./payPrompts";
 
 // ─── the recorded voice set (both shipped voices carry identical names) ──────
-// 23-33 were added 2026-09-17 for the one-time-code flow (payPrompts.ts).
+// Exactly payPromptRefs() (the manifest 2026-08-25/26 files plus the
+// 2026-09-17-evening 36/37/38 trio) plus the spliced num_* refs — pulled from
+// the manifest itself so this allow-list can never drift from production.
+// The one-time-code flow's 23-35 were retired the same evening and are no
+// longer in payPromptRefs() at all — a reducer output naming one of them now
+// fails this test exactly like an unrecorded ref would.
 const RECORDED_PROMPTS = new Set<string>([
   ...Array.from({ length: 21 }, (_, i) => `num_${i}`),
   "num_30", "num_40", "num_50", "num_60", "num_70", "num_80", "num_90",
   "num_hundred", "num_thousand",
-  "01_welcome", "02_pin", "03_pin_wrong", "04_balance_intro", "05_amount_prompt",
-  "06_confirm_intro", "07_confirm_choice", "08_processing", "09_approved_intro",
-  "10_thanks_bye", "11_declined", "12_no_card", "13_not_recognized",
-  "14_invalid_amount", "15_too_many_tries", "16_dollars", "17_cents", "18_and",
-  "19_lookup_not_found", "20_connect_person", "21_menu_after_balance", "22_main_menu",
-  "23_pin_or_star", "24_code_channel_menu", "25_code_number_intro", "26_press",
-  "27_for_number_ending_in", "28_code_call_intro", "29_code_again", "30_enter_code",
-  "31_code_call_sent", "32_code_text_sent", "33_code_wrong", "34_enter_account_phone",
+  ...payPromptRefs(),
 ]);
 
 // ─── shared builders ─────────────────────────────────────────────────────────
@@ -190,10 +189,15 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
   const seed = 11;
   const rnd = mulberry32(seed);
   const eventPool = (state: PayIvrState): PayIvrEvent[] => [
-    { type: "call_start", callerKnown: rnd() < 0.5, hasStoredPin: rnd() < 0.5, storedPin: "1234" },
+    { type: "call_start", callerKnown: rnd() < 0.5, callerAccountId: "c1" },
     { type: "digits", value: ["1", "2", "3", "9999", "25*37", "8456624417", "", "*", "###", "0"][Math.floor(rnd() * 10)] },
     { type: "lookup_result", found: rnd() < 0.5, posCustomerId: "c1" },
-    { type: "pin_result", ok: rnd() < 0.5, balanceCents: Math.floor(rnd() * 10000) },
+    {
+      type: "pin_result",
+      ok: rnd() < 0.5,
+      balanceCents: Math.floor(rnd() * 10000),
+      reason: (["not_set", "invalid", "unknown"] as const)[Math.floor(rnd() * 3)],
+    },
     { type: "balance_result", ok: rnd() < 0.7, balanceCents: Math.floor(rnd() * 10000) },
     { type: "charge_result", outcome: (["approved", "declined", "no_card", "duplicate", "error"] as const)[Math.floor(rnd() * 5)], newBalanceCents: 100 },
     { type: "hangup" },
@@ -315,7 +319,8 @@ test("STRESS 4 — pay-call runtime marathon: 400 full calls with injected 500s/
     while (guard++ < 12 && out.gather && !out.transfer && !out.done) {
       const what = out.gather.what;
       const roll = rnd();
-      if (what === "pin") out = await step(roll < 0.8 ? "4321" : "9999");
+      if (what === "choice") out = await step(roll < 0.85 ? "1" : "2");
+      else if (what === "pin") out = await step(roll < 0.8 ? "4321" : "9999");
       else if (what === "menu") out = await step(roll < 0.5 ? "1" : "2");
       else if (what === "amount") out = await step(roll < 0.85 ? `${1 + Math.floor(rnd() * 90)}*${Math.floor(rnd() * 100)}`.replace("*100", "*99") : "###");
       else if (what === "confirm") out = await step(roll < 0.8 ? "1" : "2");
@@ -1039,46 +1044,69 @@ test("STRESS 21 — driver creation storm: 100 concurrent creates on one email m
 
 // ═════════════════════════════ STRESS 22 ═════════════════════════════════════
 
-test("STRESS 22 — the PIN store: enrolled only on caller-ID-matching keyed calls, encrypted at rest, purged when stale, never readable in plaintext", async () => {
+test("STRESS 22 — the PIN store: the LIVE PAY LINE never enrolls, never reads, never purges it — EVERY caller keys the PIN, every single call, own account or not", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   pos.addCustomer({ id: "c-pin", phone10: "8456624417", pin: "7777", balanceCents: 4200, cards: [{ id: "cd1", masked: "…1" }] });
   await seedPosTenant(db, "t-pin", pos);
   const clientFor = clientForFactory(new Map([["t-pin", pos]]));
-  // ask_once: this test is specifically about the ENROLLMENT mechanics (a
-  // keyed matched call gets enrolled, a stale one is purged) — under the
-  // default 'never' policy an un-enrolled matched caller is never offered a
-  // keying step at all, so this scenario needs the operator switch to reach it.
-  const deps = { db, clientFor: clientFor as any, matchedPinPolicy: "ask_once" as const };
+  const deps = { db, clientFor: clientFor as any };
 
-  // Call 1: known caller keys the right PIN → enrolled.
-  await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417" });
-  await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417", digits: "7777" });
-  const pins = db.rows("supermarketPhonePin");
-  assert.equal(pins.length, 1);
-  assert.equal(pins[0].phoneE164, "+18456624417");
-  // ⛔ encrypted at rest: the plaintext PIN appears NOWHERE in the stored row
-  assert.ok(!JSON.stringify(pins[0]).includes("7777"), "PIN stored in the clear");
+  // Instrument the table so a stray read counts as loudly as a stray write.
+  let vaultCalls = 0;
+  const realVault = db.supermarketPhonePin;
+  const proxyVault: any = {};
+  for (const m of ["findFirst", "findUnique", "findMany", "count", "create", "update", "updateMany", "upsert", "deleteMany"]) {
+    proxyVault[m] = async (...args: any[]) => {
+      vaultCalls++;
+      return (realVault as any)[m](...args);
+    };
+  }
+  db.supermarketPhonePin = proxyVault;
 
-  // Call 2 from the SAME number: silent — the caller keys nothing before the menu.
+  // Call 1: known caller presses 1 (own account) — probed silently, THEN keys
+  // the real PIN. No enrollment: the very next call from the same number is
+  // asked again, exactly the same way.
+  const start1 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417" });
+  assert.equal(start1.gather?.what, "choice");
+  const probe1 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417", digits: "1" });
+  assert.equal(probe1.gather?.what, "pin", "the probe alone must never skip the keyed PIN");
+  const menu1 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417", digits: "7777" });
+  assert.ok(menu1.prompts.includes("22_main_menu"));
+
+  // Call 2 from the SAME number: asked again, from scratch — nothing was remembered.
   const start2 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k2", callerNumber: "+18456624417" });
-  assert.ok(start2.prompts.includes("22_main_menu"), "stored PIN did not skip the keying");
-  assert.ok(!start2.prompts.includes("02_pin"));
+  assert.equal(start2.gather?.what, "choice");
+  const probe2 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k2", callerNumber: "+18456624417", digits: "1" });
+  assert.equal(probe2.gather?.what, "pin", "call 2 must be asked exactly like call 1 — nothing was ever enrolled");
+  const menu2 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k2", callerNumber: "+18456624417", digits: "7777" });
+  assert.ok(menu2.prompts.includes("22_main_menu"));
 
-  // The store PIN goes stale (customer changed it at the store) → purged + re-keyed.
+  // The store PIN changes → still just an ordinary wrong-then-right keying,
+  // never a "stale enrollment" concept — there is nothing to go stale.
   pos.customers.get("c-pin")!.pin = "8888";
   const start3 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k3", callerNumber: "+18456624417" });
-  assert.ok(start3.prompts.includes("02_pin"), "stale stored PIN must fall back to keying");
-  assert.equal(db.rows("supermarketPhonePin").length, 0, "stale enrollment not purged");
+  const probe3 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k3", callerNumber: "+18456624417", digits: "1" });
+  assert.equal(probe3.gather?.what, "pin");
+  const wrong3 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k3", callerNumber: "+18456624417", digits: "7777" });
+  assert.ok(wrong3.prompts.includes("03_pin_wrong"));
+  const right3 = await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k3", callerNumber: "+18456624417", digits: "8888" });
+  assert.ok(right3.prompts.includes("22_main_menu"));
+  void start3;
 
-  // A FOREIGN number that looks the account up NEVER enrolls, across 50 calls.
+  // A foreign number that looks the account up is treated identically — 50 calls.
   for (let i = 0; i < 50; i++) {
     const cid = `f-${i}`;
     await runPayIvrStep(deps, { tenantId: "t-pin", callId: cid, callerNumber: "+12120000000" });
     await runPayIvrStep(deps, { tenantId: "t-pin", callId: cid, callerNumber: "+12120000000", digits: "8456624417" });
     await runPayIvrStep(deps, { tenantId: "t-pin", callId: cid, callerNumber: "+12120000000", digits: "8888" });
   }
-  assert.equal(db.rows("supermarketPhonePin").length, 0, "a foreign number was enrolled");
+
+  // ⛔ THE POINT OF THIS TEST: across every one of the calls above, the pay
+  // line never touched the PIN vault table at all — not to read, not to
+  // write, not to purge. It does not exist from this door's point of view.
+  assert.equal(vaultCalls, 0, `the pay line touched the PIN vault ${vaultCalls} times`);
+  assert.equal(db.rows("supermarketPhonePin").length, 0, "a vault row appeared even though nothing on this line ever enrolls");
 });
 
 // ═════════════════════════════ STRESS 23 ═════════════════════════════════════
@@ -1245,21 +1273,20 @@ test("STRESS 25 — the life of 120 orders, end to end: voicemail/text → sweep
   assert.ok(["rate_above_threshold", "not_enough_weeks"].includes(stats2.autoSubmit.reason));
 
   // 6) and the pay line settles the balance on the same register: a real call.
-  // This account has no enrolled vault PIN yet, so under the DEFAULT policy
-  // 'never' the matched caller would be blocked at once (never asked) — the
-  // operator switch restores the ask-once-and-key behaviour this scenario needs.
-  process.env.SUPERMARKET_PAY_MATCHED_PIN_POLICY = "ask_once";
+  // This account has a real PIN in the POS ("4321") — the caller presses 1 for
+  // their own account, the register is probed silently, then they key the
+  // PIN like every caller does (2026-09-17 evening: nothing is ever enrolled).
   const step = (digits?: string) =>
     app.inject({
       method: "POST", url: "/internal/supermarket/pay-ivr/step", headers: { "x-cdr-secret": process.env.CDR_INGEST_SECRET! },
       payload: { tenantId: "t-life", callId: "life-call", callerNumber: "+18456624417", ...(digits === undefined ? {} : { digits }) },
     });
   await step();
+  await step("1"); // their own account — fires the silent probe, lands on the PIN ask
   await step("4321"); // PIN
   await step("2"); // payment
   await step("25*37"); // amount
   const charged = body(await step("1")); // confirm
-  delete process.env.SUPERMARKET_PAY_MATCHED_PIN_POLICY;
   assert.ok(charged.prompts.includes("09_approved_intro"), `charge flow: ${JSON.stringify(charged)}`);
   assert.equal([...pos.charges.values()].reduce((s, c) => s + c.amount, 0), 2537);
   assert.equal(pos.customers.get("cust1")!.balanceCents, 3750 - 2537);
