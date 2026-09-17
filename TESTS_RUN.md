@@ -1,5 +1,10 @@
 # Tests run
 
+## Yiddish24 outage no longer pauses the 24/7 listen — 2026-09-17
+
+- apps/api `src/yiddishCorpus/*.test.ts` **172/173** (4 new: 524 = unavailable not BLOCKED; challenge-on-5xx still BLOCKED; 403/503 still BLOCKED; outage runs never count empty/pause). The 1 failure = routes.ts audio-mode source guard, CRLF artifact on Windows, file untouched.
+- Deployed api `7c2554c8`: container commit matches, `Yiddish24Unavailable` present, 0 restarts, discovery DONE 11:31/11:36 UTC, budget unpaused.
+
 ## Creative Studio native selects → ConnectSelect — 2026-09-16 (night)
 
 - portal `lib/nativeSelectSweep.test.ts` + `lib/dropdownOutsideClose.test.ts` **5/5** (sweep was failing on audio:254/302, images:205, storyboard:251/289 before `a3768b14`).

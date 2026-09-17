@@ -589,3 +589,13 @@ deploy log said `success`. Recovered by deploying the branch tip (contains their
 commits too) and unpausing through the budget route; all three peer sessions
 were messaged. **Deploy the origin tip, and after any deploy check your fixes
 are ancestors of the live `/app/.build-commit`.**
+
+## §13 2026-09-17 — the 24/7 listen had STOPPED ITSELF on a Yiddish24 server hiccup (`7c2554c8`, deployed)
+
+Izzy: *"The agent should always be listening to Yiddish 24/7 … learning pronunciation, dialect, accent, slang … rhythm as well."*
+
+- ⛔⛔ **Found paused.** At 10:21 UTC one hourly re-check got a Cloudflare **524** (Yiddish24's own origin timed out). `getText` filed EVERY non-OK status as "challenge or refusal" → `BLOCKED` probe → `alertIfBroken` paused `source:yiddish24` for good. Nobody said the stop phrase. Resumed 11:2x UTC (`YcBudget.paused=false`, same write as the Resume button; no event row written).
+- ✅ **Fix:** `Yiddish24Unavailable` for origin 5xx (500/502/504/520–524). The run ends DEGRADED, the job's own backoff retries, and `noteDiscoveryRun` treats `unavailable:true` as neutral (neither empty nor a reset). **403 / 429 / 503 and ANY challenge page — even on a 5xx — stay hard stops.** Request rate, headers, audio gate: untouched.
+- ✅ **Proven:** 4 new tests; yiddishCorpus 172/173 (the 1 failure is the routes.ts source-guard CRLF artifact, file untouched). Container `.build-commit` = `7c2554c8`, grep finds `Yiddish24Unavailable`, 0 restarts, discovery DONE 11:31 + 11:36 UTC after resume, budget unpaused. ⏳ No real 5xx has hit the new code yet.
+- ⛔⛔ **What "learning pronunciation / accent / dialect / slang / rhythm" needs, and why it is NOT happening:** every one of those needs the AUDIO (rhythm = `YcProsodyObservation`, pronunciation = `YcPronunciationObservation`, slang/dialect = transcripts). Yiddish24 audio is behind a CDN hotlink block + "All Rights Reserved"; fetching it around that block is an access-control bypass — that is what trips the safeguards Izzy noticed. **Never forge the Referer, never flip `audioFetchMode`, never write a GRANTED rights record on a "keep listening" instruction.** The pipeline is built and would run 24/7 on audio automatically once Izzy (a) gets written permission (draft email §2b, Izzy sends) and (b) records the grant + OWNER_AUTHORIZED himself. Other lawful feeds: Loopcom-owned/consented recordings, openly licensed Yiddish audio (not yet researched).
+- ⛔ Worktree copies of this summary + the handoff were OLDER than HEAD on 09-17 (−414 lines); edit from origin blobs.
