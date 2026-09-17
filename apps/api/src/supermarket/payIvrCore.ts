@@ -9,9 +9,12 @@
  *      account is refused "Customer PIN required." with or without a header),
  *      so the runtime supplies it SILENTLY — the enrolled PIN if Loopcom holds
  *      one, else a one-credit probe that makes the register say which case
- *      applies. A matched caller whose PIN Loopcom does not hold is handed to a
- *      person with blockedReason "pin_not_enrolled" (the desk enrolls it from
- *      the Orders screen and the next call is silent). ⛔ `matchedPinPolicy:
+ *      applies. A matched caller whose own account cannot be served (no POS
+ *      PIN, or a PIN Loopcom does not hold) is asked for the phone number of
+ *      the account they want to pay or hear the balance on (Izzy, 09-17
+ *      evening) and continues down rules 2–4 — `ownAccountBlocked` records why
+ *      for the desk (the Orders screen "Phone PIN" enrols it and the next call
+ *      is silent). ⛔ `matchedPinPolicy:
  *      "ask_once"` keeps the pre-09-17 behaviour (ask once, enroll, silent after)
  *      — it is an operator switch, never the default.
  *   2. Caller-ID unknown → the caller keys the phone number on the account.
@@ -125,6 +128,13 @@ export type PayIvrState = {
   matchedPinPolicy: PayMatchedPinPolicy;
   /** Set when the line cannot serve this account. Desk-visible. */
   blockedReason: "pin_not_set" | "pin_not_enrolled" | null;
+  /**
+   * The caller-ID-matched account could not be served (Izzy, 09-17 evening:
+   * "it should have asked me for the phone number in the account I want to
+   * make a payment on, or hear balance"), so the caller was asked for another
+   * account instead of a person. Desk-visible; the call goes on.
+   */
+  ownAccountBlocked: "pin_not_set" | "pin_not_enrolled" | null;
   pinAttempts: number;
   amountAttempts: number;
   lookupAttempts: number;
@@ -211,6 +221,7 @@ export function initialPayIvrState(): PayIvrState {
     accountPinState: "unknown",
     matchedPinPolicy: "never",
     blockedReason: null,
+    ownAccountBlocked: null,
     pinAttempts: 0,
     amountAttempts: 0,
     lookupAttempts: 0,
@@ -243,6 +254,7 @@ export function normalizePayIvrState(raw: unknown): PayIvrState {
     accountPinState: s.accountPinState === "set" || s.accountPinState === "not_set" ? s.accountPinState : "unknown",
     matchedPinPolicy: s.matchedPinPolicy === "ask_once" ? "ask_once" : "never",
     blockedReason: s.blockedReason === "pin_not_set" || s.blockedReason === "pin_not_enrolled" ? s.blockedReason : null,
+    ownAccountBlocked: s.ownAccountBlocked === "pin_not_set" || s.ownAccountBlocked === "pin_not_enrolled" ? s.ownAccountBlocked : null,
     codeChannel: s.codeChannel === "call" || s.codeChannel === "text" ? s.codeChannel : null,
     codePhones: Array.isArray(s.codePhones) ? s.codePhones.filter((p) => typeof p === "string") : [],
     codeSentTo: typeof s.codeSentTo === "string" ? s.codeSentTo : null,
@@ -284,19 +296,50 @@ function afterBalanceMenu(state: PayIvrState, lead: string[]): PayIvrOutput {
   return out({ ...state, phase: "after_balance_menu" }, [...lead, "21_menu_after_balance"], G.menu);
 }
 
-/** The register can never serve this account: no PIN exists in the POS. A person, at once. */
-function blockedNoPin(state: PayIvrState): PayIvrOutput {
-  return toHuman(
-    { ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "not_set", blockedReason: "pin_not_set" },
-    [],
+/**
+ * A MATCHED caller whose own account cannot be served is not dead-ended on a
+ * person (Izzy, 09-17 evening, calling from his cell on a no-PIN account: "it
+ * should have asked me for the phone number in the account I want to make a
+ * payment on, or hear balance"). They are asked for the account's phone number
+ * and continue down the looked-up path (PIN or star), where any account with a
+ * PIN can be served. Only once, and only the caller's OWN account: a looked-up
+ * or owner-verified account that cannot be served still ends at a person.
+ */
+function redirectToLookup(state: PayIvrState, reason: "pin_not_set" | "pin_not_enrolled"): PayIvrOutput | null {
+  if (!state.callerIdMatched || state.ownerVerified || state.ownAccountBlocked) return null;
+  return out(
+    {
+      ...state,
+      phase: "lookup_entry",
+      posCustomerId: null,
+      callerIdMatched: false,
+      activePin: null,
+      pinFromStore: false,
+      pinProbe: false,
+      pinVerified: false,
+      accountPinState: "unknown",
+      blockedReason: null,
+      ownAccountBlocked: reason,
+      lookupAttempts: 0,
+    },
+    ["34_enter_account_phone"],
+    G.phone,
   );
 }
 
-/** The account has a PIN that Loopcom does not hold, and this caller is never asked for it. A person; the desk enrolls. */
+/** The register can never serve this account: no PIN exists in the POS. Another account, or a person. */
+function blockedNoPin(state: PayIvrState): PayIvrOutput {
+  return (
+    redirectToLookup(state, "pin_not_set") ??
+    toHuman({ ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "not_set", blockedReason: "pin_not_set" }, [])
+  );
+}
+
+/** The account has a PIN that Loopcom does not hold, and this caller is never asked for it. Another account, or a person; the desk enrolls. */
 function blockedNotEnrolled(state: PayIvrState): PayIvrOutput {
-  return toHuman(
-    { ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "set", blockedReason: "pin_not_enrolled" },
-    [],
+  return (
+    redirectToLookup(state, "pin_not_enrolled") ??
+    toHuman({ ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "set", blockedReason: "pin_not_enrolled" }, [])
   );
 }
 

@@ -134,9 +134,10 @@ async function scriptedCall(
 
 // ═══════════════════════════════ PAYLINE 1 ═══════════════════════════════════
 // Run twice: once for the DEFAULT policy ('never' — a matched caller with
-// nothing enrolled is blocked at once, never asked) and once for the operator
-// switch ('ask_once' — the pre-09-17 behaviour, verbatim). A foreign number's
-// PIN prompt is "23_pin_or_star", never "02_pin" — tracked separately.
+// nothing enrolled is never asked; instead redirected once, 2026-09-17
+// evening, to key another account) and once for the operator switch
+// ('ask_once' — the pre-09-17 behaviour, verbatim). A foreign number's PIN
+// prompt is "23_pin_or_star", never "02_pin" — tracked separately.
 
 async function runCallerIdMatrix(policy: "never" | "ask_once") {
   const ACCOUNTS = 2000;
@@ -209,7 +210,7 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
 
   let silentServed = 0;
   let askedOnce = 0; // ask_once policy only
-  let blockedNotEnrolled = 0; // never policy only
+  let redirectedThenKeyed = 0; // never policy, nothing enrolled: redirected, relooked-up, keyed
   let noPinLandings = 0;
   let foreignAskedOnce = 0;
   let charges = 0;
@@ -226,30 +227,57 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
     if (acct.scenario === "foreign") foreignAccountIds.add(acct.id);
 
     // ---- call 1 ----
+    // A matched caller whose own account cannot be served is redirected (rule
+    // 1, 2026-09-17 evening) to key another account instead of a person — so
+    // for every account row here, the scripted "phone" gather (if the
+    // redirect ever fires) is answered with the account's OWN primary number
+    // again, which resolves as a foreign lookup on the SAME account: one that
+    // truly has no PIN in the POS still ends at a person; one whose vault is
+    // just empty/stale gets asked for (and keys) the real PIN like any other
+    // foreign caller.
     const before1 = pos.requestLog.length;
     const call1 = await scriptedCall(deps, tenantId, `${acct.id}-c1`, callerNumber, {
-      targetPhone: acct.scenario === "foreign" ? primaryPhone(acct.i) : undefined,
+      targetPhone: primaryPhone(acct.i),
       pin: acct.realPin ?? "0000",
       wantsPayment: rnd() < 0.5,
     });
     const mine1 = pos.requestLog.slice(before1);
     const pinGated1 = mine1.filter((r) => r.pin !== null);
-    assert.ok(mine1.length <= 6, `call1 request count too high for ${acct.id}: ${mine1.length}`);
+    assert.ok(mine1.length <= 8, `call1 request count too high for ${acct.id}: ${mine1.length}`);
 
     const row1 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: `${acct.id}-c1` } });
     assert.ok(row1, `no session row for ${acct.id}`);
 
     if (!acct.pinSet) {
-      // No PIN anywhere in the POS: EVERY caller — matched or foreign — is
-      // blocked at once by the silent probe, regardless of policy. Nobody is
-      // ever asked, because nothing any caller keys can ever satisfy it.
-      assert.equal(pinGated1.length, 1, `no-pin account cost != 1 pin-gated read: ${acct.id}`);
-      assert.equal(call1.pin02Count, 0, `no-pin account heard the matched-caller PIN prompt: ${acct.id}`);
-      assert.equal(call1.pinStarCount, 0, `no-pin account heard the foreign PIN-or-star prompt: ${acct.id}`);
-      const last = call1.steps.at(-1);
-      assert.equal(last.transfer, true, `no-pin account not transferred: ${acct.id}`);
-      assert.equal(last.gather, null, `no-pin account had a gather before transfer: ${acct.id}`);
-      assert.ok(last.prompts.includes("20_connect_person"));
+      // No PIN anywhere in the POS. A foreign/looked-up caller is blocked at
+      // once by the silent probe, as before. A MATCHED caller is instead
+      // redirected once, relooks up the very same unservable account, and
+      // still ends at a person — the redirect is not a way around a real
+      // "nobody can be served" account, it only fires once.
+      if (acct.scenario === "foreign") {
+        assert.equal(pinGated1.length, 1, `no-pin account cost != 1 pin-gated read: ${acct.id}`);
+        assert.equal(call1.pin02Count, 0, `no-pin account heard the matched-caller PIN prompt: ${acct.id}`);
+        assert.equal(call1.pinStarCount, 0, `no-pin account heard the foreign PIN-or-star prompt: ${acct.id}`);
+        const last = call1.steps.at(-1);
+        assert.equal(last.transfer, true, `no-pin account not transferred: ${acct.id}`);
+        assert.equal(last.gather, null, `no-pin account had a gather before transfer: ${acct.id}`);
+        assert.ok(last.prompts.includes("20_connect_person"));
+      } else {
+        assert.equal(call1.pin02Count, 0, `redirected no-pin account heard the matched-caller PIN prompt: ${acct.id}`);
+        assert.equal(call1.pinStarCount, 0, `redirected no-pin account should never reach a keyed-PIN prompt: ${acct.id}`);
+        assert.equal(
+          pinGated1.length,
+          2,
+          `redirected no-pin account should cost exactly two pin-gated probes (own account, then the same account relooked-up): ${acct.id}`,
+        );
+        assert.ok(
+          call1.steps.some((s) => s.prompts.includes("34_enter_account_phone")),
+          `matched no-pin account (${acct.id}) was never redirected to key another account`,
+        );
+        const last = call1.steps.at(-1);
+        assert.equal(last.transfer, true, `redirected no-pin account not eventually transferred: ${acct.id}`);
+        assert.ok(last.prompts.includes("20_connect_person"));
+      }
       assert.equal(row1.status, "no_pin");
       assert.equal(row1.state.blockedReason, "pin_not_set");
       noPinLandings++;
@@ -283,20 +311,26 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
       );
       askedOnce++;
     } else {
-      // policy "never": nothing enrolled → blocked at once, never asked.
-      assert.equal(call1.pin02Count, 0, `matched caller under 'never' was asked for a PIN: ${acct.id}`);
-      assert.equal(pinGated1.length, 1, `'never' policy should cost exactly one pin-gated read: ${acct.id}`);
+      // policy "never", vault "none"/"stale": rule 1 redirects the matched
+      // caller at once instead of asking (never a keyed "02_pin"). Scripted
+      // by keying the SAME account's own number again — since the account
+      // DOES have a real PIN in the POS, that relookup resolves as a foreign
+      // lookup and the caller keys the real PIN (rule 3) exactly once. Never
+      // enrolled, because a looked-up account is never enrolled.
+      assert.equal(call1.pin02Count, 0, `matched caller under 'never' was asked for the matched-caller PIN prompt: ${acct.id}`);
+      assert.equal(call1.pinStarCount, 1, `redirected-then-relooked-up account should hear the foreign PIN-or-star prompt exactly once: ${acct.id}`);
       assert.equal(
         pinGated1[0]?.pin,
         acct.vault === "none" ? PAY_PROBE_PIN : `${acct.realPin}x`,
-        `unexpected probe/stale pin-gated value for ${acct.id}`,
+        `unexpected first (own-account) probe/stale pin-gated value for ${acct.id}`,
       );
-      const last = call1.steps.at(-1);
-      assert.equal(last.transfer, true, `matched caller with nothing enrolled not blocked under 'never': ${acct.id}`);
-      assert.ok(last.prompts.includes("20_connect_person"));
-      assert.equal(row1.status, "pin_not_enrolled");
-      assert.equal(row1.state.blockedReason, "pin_not_enrolled");
-      blockedNotEnrolled++;
+      assert.equal(pinGated1[1]?.pin, PAY_PROBE_PIN, `the relookup must silently probe again before asking: ${acct.id}`);
+      assert.equal(pinGated1[2]?.pin, acct.realPin, `the caller must key the real PIN to be served after the redirect: ${acct.id}`);
+      assert.ok(
+        call1.steps.some((s) => s.prompts.includes("34_enter_account_phone")),
+        `matched caller with nothing enrolled was never redirected under 'never': ${acct.id}`,
+      );
+      redirectedThenKeyed++;
     }
 
     // ---- call 2, from the OTHER of the account's own numbers (matched only) ----
@@ -304,6 +338,7 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
       const callerNumber2 = acct.scenario === "own_primary" ? secondPhone(acct.i) : primaryPhone(acct.i);
       const before2 = pos.requestLog.length;
       const call2 = await scriptedCall(deps, tenantId, `${acct.id}-c2`, callerNumber2, {
+        targetPhone: primaryPhone(acct.i),
         pin: acct.realPin ?? "0000",
         wantsPayment: rnd() < 0.5,
       });
@@ -317,11 +352,13 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
           `second call did not use the enrolled PIN for ${acct.id}: ${JSON.stringify(pinGated2)}`,
         );
       } else {
-        // policy "never" and nothing was ever enrolled: blocked again, identically — never asked either.
-        assert.equal(call2.pin02Count, 0, `second 'never'-policy call was asked for a PIN: ${acct.id}`);
-        assert.equal(call2.steps.at(-1).transfer, true, `second 'never'-policy call was not blocked again: ${acct.id}`);
+        // policy "never" and nothing was ever enrolled by call1 either (a
+        // looked-up account is never enrolled): call 2 redirects and resolves
+        // through the exact same relookup-then-keyed-PIN path, identically.
+        assert.equal(call2.pin02Count, 0, `second 'never'-policy call was asked for the matched-caller PIN prompt: ${acct.id}`);
+        assert.equal(call2.pinStarCount, 1, `second 'never'-policy call did not redirect+relookup identically: ${acct.id}`);
       }
-      assert.ok(mine2.length <= 6);
+      assert.ok(mine2.length <= 8);
     }
 
     for (const s of call1.steps) {
@@ -351,13 +388,13 @@ async function runCallerIdMatrix(policy: "never" | "ask_once") {
   assert.equal(new Set(pos.charges.keys()).size, pos.charges.size, "duplicate externalId in the ledger");
 
   console.log(
-    `[PAYLINE 1:${policy}] accounts=${ACCOUNTS} silentServed=${silentServed} askedOnce=${askedOnce} blockedNotEnrolled=${blockedNotEnrolled} ` +
+    `[PAYLINE 1:${policy}] accounts=${ACCOUNTS} silentServed=${silentServed} askedOnce=${askedOnce} redirectedThenKeyed=${redirectedThenKeyed} ` +
       `noPinLandings=${noPinLandings} foreignAskedOnce=${foreignAskedOnce} charges=${charges} ledgerCents=${ledgerTotal} posRequests=${pos.requestLog.length}`,
   );
 }
 
 test(
-  "PAYLINE 1a — caller-ID rule matrix at scale (DEFAULT policy 'never'): 2,000 accounts x {own primary, own second, foreign} caller x {no PIN, no vault, correct vault, stale vault} — nothing enrolled means blocked at once, never asked",
+  "PAYLINE 1a — caller-ID rule matrix at scale (DEFAULT policy 'never'): 2,000 accounts x {own primary, own second, foreign} caller x {no PIN, no vault, correct vault, stale vault} — a matched caller with nothing enrolled is never asked, redirected once instead (never a dead end for a servable account)",
   () => runCallerIdMatrix("never"),
 );
 
@@ -912,10 +949,15 @@ test("PAYLINE 7 — a real 'invalid'/'not_set' refusal on a stored PIN purges ex
     if (kinds[i] === "invalid") {
       assert.equal(out.gather?.what, "pin", `invalid-stored-pin call should ask once for pg-${i}`);
     } else {
-      assert.equal(out.transfer, true, `not_set-stored-pin call should transfer for pg-${i}`);
+      // "not_set" redirects the matched caller (rule 1, 09-17 evening) rather
+      // than transferring — the purge above still must have happened.
+      assert.equal(out.transfer, false, `not_set-stored-pin call should redirect, not transfer, for pg-${i}`);
+      assert.equal(out.gather?.what, "phone", `not_set-stored-pin call should land on the account-phone gather for pg-${i}`);
+      assert.ok(out.prompts.includes("34_enter_account_phone"));
       const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: `pg-call-${i}` } });
-      assert.equal(row.status, "no_pin");
-      assert.equal(row.state.blockedReason, "pin_not_set");
+      assert.equal(row.status, "open");
+      assert.equal(row.state.blockedReason, null);
+      assert.equal(row.state.ownAccountBlocked, "pin_not_set");
     }
   }
 

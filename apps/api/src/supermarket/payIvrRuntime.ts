@@ -250,6 +250,7 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
 
   // Build the inbound event.
   let event: PayIvrEvent;
+  let ownAccountId: string | null = null;
   if (input.hangup) {
     event = { type: "hangup" };
   } else if (state.phase === "start") {
@@ -257,6 +258,7 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
     const account = await resolveCallerAccount(db, client, input.tenantId, input.callerNumber, log);
     let storedPin: string | null = null;
     if (account) {
+      ownAccountId = account.posCustomerId;
       state = { ...state, posCustomerId: account.posCustomerId };
       storedPin = await findStoredPin(db, input.tenantId, account.posCustomerId);
     }
@@ -457,6 +459,12 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
     log.warn(
       { tenantId: input.tenantId, posCustomerId: state.posCustomerId, callerIdMatched: state.callerIdMatched },
       "pay-ivr: register has no PIN for this account — caller handed to a person",
+    );
+  }
+  if (state.ownAccountBlocked && state.phase === "lookup_entry" && prompts.includes("34_enter_account_phone")) {
+    log.warn(
+      { tenantId: input.tenantId, ownAccount: ownAccountId, reason: state.ownAccountBlocked },
+      "pay-ivr: the caller's own account cannot be served — asked for the account to pay instead",
     );
   }
   if (state.blockedReason === "pin_not_enrolled" && transfer) {

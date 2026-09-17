@@ -62,7 +62,7 @@ const RECORDED_PROMPTS = new Set<string>([
   "19_lookup_not_found", "20_connect_person", "21_menu_after_balance", "22_main_menu",
   "23_pin_or_star", "24_code_channel_menu", "25_code_number_intro", "26_press",
   "27_for_number_ending_in", "28_code_call_intro", "29_code_again", "30_enter_code",
-  "31_code_call_sent", "32_code_text_sent", "33_code_wrong",
+  "31_code_call_sent", "32_code_text_sent", "33_code_wrong", "34_enter_account_phone",
 ]);
 
 // ─── shared builders ─────────────────────────────────────────────────────────

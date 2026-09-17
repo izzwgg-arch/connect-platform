@@ -189,16 +189,22 @@ test("caller-ID match with a stored PIN: silent verify, straight to the menu, no
   assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "a matching caller with a stored PIN never hears the PIN prompt");
 });
 
-test("stored PIN gone stale: under the default policy 'never' the caller is blocked at once (never re-keyed); under the operator switch 'ask_once' it falls back to keying and re-enrolls; a foreign number is NEVER enrolled either way", () => {
-  // Default policy 'never': a stale enrollment is nothing enrolled — blocked
-  // at once, purge already happened in the runtime, no re-keying offered.
+test("stored PIN gone stale: under the default policy 'never' the caller is redirected to another account at once (never re-keyed); under the operator switch 'ask_once' it falls back to keying and re-enrolls; a foreign number is NEVER enrolled either way", () => {
+  // Default policy 'never': a stale enrollment is nothing enrolled — redirected
+  // to key another account at once (09-17 evening rule), purge already
+  // happened in the runtime, no re-keying of THIS account offered.
   const blocked = drive([
     { type: "call_start", callerKnown: true, hasStoredPin: true, storedPin: "0000" },
     { type: "pin_result", ok: false, reason: "invalid" },
   ]);
   assert.ok(!blocked.outputs.flatMap((o) => o.prompts).includes("02_pin"), "policy 'never' must not fall back to keying");
-  assert.equal(blocked.state.phase, "human");
-  assert.equal(blocked.state.blockedReason, "pin_not_enrolled");
+  assert.ok(!blocked.outputs.flatMap((o) => o.prompts).includes("20_connect_person"), "redirected instead of handed to a person on the first block");
+  assert.equal(blocked.state.phase, "lookup_entry");
+  assert.equal(blocked.state.blockedReason, null, "cleared — the block is recorded in ownAccountBlocked instead");
+  assert.equal(blocked.state.ownAccountBlocked, "pin_not_enrolled");
+  assert.equal(blocked.state.callerIdMatched, false, "cleared so the next lookup is treated as a fresh account");
+  assert.ok(blocked.outputs.at(-1)!.prompts.includes("34_enter_account_phone"));
+  assert.equal(blocked.outputs.at(-1)!.gather?.what, "phone");
 
   // Operator switch 'ask_once': restores the pre-09-17 behaviour verbatim.
   const { outputs, state } = drive([
@@ -246,21 +252,48 @@ test("wrong PIN caps at 3 and lands on a person, never a loop (operator switch m
   assert.ok(all.includes("20_connect_person"));
 });
 
-test("⛔ THE DEFAULT (policy 'never'): the exact same 'invalid' probe result blocks a matched caller AT ONCE — no PIN is ever keyed, no 3-strikes cap is ever reached", () => {
-  const { outputs, state } = drive([
+test("⛔ THE DEFAULT (policy 'never'): the exact same 'invalid' probe result redirects a matched caller to another account AT ONCE — no PIN is ever keyed, no 3-strikes cap is ever reached, never a person the first time — and the SAME call then continues: another account's number, probed, keyed, paid exactly once", () => {
+  const events: Parameters<typeof reducePayIvr>[1][] = [
     { type: "call_start", callerKnown: true, hasStoredPin: false },
     { type: "pin_result", ok: false, reason: "invalid" },
+  ];
+  const { outputs: redirectOutputs, state: redirectState } = drive(events);
+  assert.equal(redirectState.phase, "lookup_entry");
+  assert.equal(redirectState.blockedReason, null);
+  assert.equal(redirectState.ownAccountBlocked, "pin_not_enrolled");
+  assert.equal(redirectState.pinAttempts, 0, "never reaches a keyed attempt at all");
+  assert.equal(redirectState.lookupAttempts, 0);
+  const redirectPrompts = redirectOutputs.flatMap((o) => o.prompts);
+  assert.ok(!redirectPrompts.includes("02_pin"), "never asked");
+  assert.ok(!redirectPrompts.includes("15_too_many_tries"), "there is nothing to cap — it never starts trying");
+  assert.ok(!redirectPrompts.includes("20_connect_person"), "redirected instead of a person on the first block");
+  assert.ok(redirectPrompts.includes("34_enter_account_phone"));
+  assert.equal(redirectOutputs.at(-1)!.gather?.what, "phone");
+
+  // the SAME call goes on: a different account's phone number, a silent
+  // probe (this one HAS a PIN in the POS), the foreign PIN keyed correctly,
+  // the main menu, and exactly one charge.
+  const { outputs, state } = drive([
+    ...events,
+    { type: "digits", value: "8456624417" },
+    { type: "lookup_result", found: true, posCustomerId: "c9" },
+    { type: "pin_result", ok: false, reason: "invalid" }, // silent probe: this account has a PIN
+    { type: "digits", value: "5555" },
+    { type: "pin_result", ok: true, balanceCents: 4200 },
+    { type: "digits", value: "2" }, // payment
+    { type: "digits", value: "3*00" },
+    { type: "digits", value: "1" }, // confirm
+    { type: "charge_result", outcome: "approved", newBalanceCents: 900 },
   ]);
-  assert.equal(state.phase, "human");
-  assert.equal(state.blockedReason, "pin_not_enrolled");
-  assert.equal(state.pinAttempts, 0, "never reaches a keyed attempt at all");
-  const all = outputs.flatMap((o) => o.prompts);
-  assert.ok(!all.includes("02_pin"), "never asked");
-  assert.ok(!all.includes("15_too_many_tries"), "there is nothing to cap — it never starts trying");
-  assert.ok(all.includes("20_connect_person"));
+  assert.equal(countChargeEffects(outputs), 1);
+  assert.equal(state.phase, "after_balance_menu");
+  assert.equal(state.chargedCents, 300);
+  assert.equal(state.ownAccountBlocked, "pin_not_enrolled", "the desk-visible flag survives — it records what happened, it does not block anything further");
+  assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")), "a looked-up account (even the caller's own, relooked-up) must never be enrolled");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("20_connect_person"), "never reached a person — the redirect let the call succeed");
 });
 
-test("THE CALLER-ID RULE: a matched caller keys nothing — probe silently; 'PIN required' = no PIN in the POS → a person at once, flagged", () => {
+test("THE CALLER-ID RULE: a matched caller keys nothing — probe silently; 'PIN required' = no PIN in the POS → redirected to key another account instead of a person, flagged ownAccountBlocked; a SECOND unservable account still ends at a person (the redirect fires only once)", () => {
   const { outputs, state } = drive([
     { type: "call_start", callerKnown: true, hasStoredPin: false },
     { type: "pin_result", ok: false, reason: "not_set" },
@@ -268,11 +301,27 @@ test("THE CALLER-ID RULE: a matched caller keys nothing — probe silently; 'PIN
   assert.deepEqual(outputs[0].prompts, ["01_welcome"]);
   assert.equal(outputs[0].gather, null, "a matched caller must not be asked to key anything before the register answers");
   assert.deepEqual(outputs[0].effects, [{ kind: "verify_pin", pin: PAY_PROBE_PIN }]);
-  assert.deepEqual(outputs[1].prompts, ["20_connect_person"]);
-  assert.equal(state.phase, "human");
-  assert.equal(state.blockedReason, "pin_not_set");
+  assert.deepEqual(outputs[1].prompts, ["34_enter_account_phone"]);
+  assert.equal(outputs[1].gather?.what, "phone");
+  assert.equal(state.phase, "lookup_entry");
+  assert.equal(state.blockedReason, null);
+  assert.equal(state.ownAccountBlocked, "pin_not_set");
   assert.equal(state.pinAttempts, 0, "a silent probe is not an attempt");
   assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("20_connect_person"), "redirected instead of a person on the first block");
+
+  // the redirect fires only once per call: a second unservable account (also
+  // no PIN in the POS) ends exactly like the pre-09-17-evening behaviour.
+  const second = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "pin_result", ok: false, reason: "not_set" },
+    { type: "digits", value: "8456624417" },
+    { type: "lookup_result", found: true, posCustomerId: "c9" },
+    { type: "pin_result", ok: false, reason: "not_set" },
+  ]);
+  assert.equal(second.state.phase, "human");
+  assert.equal(second.state.blockedReason, "pin_not_set");
+  assert.ok(second.outputs.at(-1)!.prompts.includes("20_connect_person"));
 });
 
 test("THE CALLER-ID RULE (operator switch matchedPinPolicy:'ask_once'): the store set a PIN Loopcom does not know → asked ONCE, enrolled, and digits during the silent probe are ignored", () => {
@@ -290,16 +339,19 @@ test("THE CALLER-ID RULE (operator switch matchedPinPolicy:'ask_once'): the stor
   assert.equal(state.phase, "main_menu");
 });
 
-test("THE CALLER-ID RULE (default policy 'never'): the store set a PIN Loopcom does not know → the caller is NEVER asked, handed to a person at once, flagged pin_not_enrolled for the desk to enroll", () => {
+test("THE CALLER-ID RULE (default policy 'never'): the store set a PIN Loopcom does not know → the caller is NEVER asked, redirected to key another account at once, flagged pin_not_enrolled for the desk to enroll", () => {
   const { outputs, state } = drive([
     { type: "call_start", callerKnown: true, hasStoredPin: false },
     { type: "digits", value: "4321" }, // stray DTMF while the probe is in flight — still ignored
     { type: "pin_result", ok: false, reason: "invalid" },
   ]);
   assert.deepEqual(outputs[1].effects, [], "digits during a silent probe must not fire a second verify");
-  assert.equal(state.phase, "human");
-  assert.equal(state.blockedReason, "pin_not_enrolled");
+  assert.equal(state.phase, "lookup_entry");
+  assert.equal(state.blockedReason, null);
+  assert.equal(state.ownAccountBlocked, "pin_not_enrolled");
   assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked under the default policy");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("20_connect_person"), "redirected instead of a person on the first block");
+  assert.ok(outputs.at(-1)!.prompts.includes("34_enter_account_phone"));
   assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")), "nothing was ever keyed, so nothing can be enrolled");
 });
 

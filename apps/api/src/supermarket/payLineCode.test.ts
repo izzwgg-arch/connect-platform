@@ -305,6 +305,159 @@ test("zero numbers on the account (register AND mirror both empty): straight to 
   assert.ok(out.prompts.includes("20_connect_person"));
 });
 
+// ═══════════════════ THE CALLER-ID REDIRECT (2026-09-17 evening) ═════════════
+// A matched caller whose OWN account cannot be served (no POS PIN, or a PIN
+// Loopcom does not hold) is redirected — payIvrCore.redirectToLookup — to key
+// another account's phone instead of being handed straight to a person, and
+// the call continues exactly like an unknown caller from there. Exercised
+// end to end through the real runtime here; the pure-reducer shape is pinned
+// in supermarketCore.test.ts.
+
+test("a matched caller on a no-POS-PIN account is redirected, keys a DIFFERENT account with an ENROLLED vault PIN via star+code, and is served silently — one charge", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = "t-redirect-a";
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+
+  const ownPhone = accountPhone(50);
+  pos.addCustomer({ id: "own-a", phone10: ownPhone, pin: null, balanceCents: 0, cards: [] });
+  db.seed("posCustomer", { tenantId, posCustomerId: "own-a", phonesText: ownPhone, primaryPhone: ownPhone });
+
+  const otherPhone = accountPhone(51);
+  const enrolledPin = "7711";
+  pos.addCustomer({ id: "other-a", phone10: otherPhone, pin: enrolledPin, balanceCents: 8_000, cards: [{ id: "cd-a", masked: "x" }] });
+  db.seed("posCustomer", { tenantId, posCustomerId: "other-a", phonesText: otherPhone, primaryPhone: otherPhone });
+  db.seed("supermarketPhonePin", {
+    tenantId,
+    posCustomerId: "other-a",
+    phoneE164: `+1${otherPhone}`,
+    pinEnc: await encryptedPin(enrolledPin),
+    lastUsedAt: new Date(),
+  });
+
+  const CODE = "204681";
+  const sent: Sent[] = [];
+  const deps = makeDeps(db, clientFor, { codes: [CODE], sent, clock: { value: 9_000_000 } });
+  const step = (digits?: string, hangup?: boolean) =>
+    runPayIvrStep(deps, { tenantId, callId: "call-redirect-a", callerNumber: ownPhone, digits, hangup });
+
+  let out = await step();
+  assert.ok(out.prompts.includes("34_enter_account_phone"), `expected the redirect prompt: ${JSON.stringify(out)}`);
+  assert.equal(out.gather?.what, "phone");
+  assert.equal(out.transfer, false);
+
+  const row0 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: "call-redirect-a" } });
+  assert.equal(row0.state.ownAccountBlocked, "pin_not_set");
+  assert.equal(row0.state.blockedReason, null);
+  assert.equal(row0.status, "open");
+
+  out = await step(otherPhone);
+  assert.ok(out.prompts.includes("23_pin_or_star"), `expected the foreign PIN-or-star prompt: ${JSON.stringify(out)}`);
+
+  out = await step("*");
+  assert.ok(out.prompts.includes("24_code_channel_menu"));
+  out = await step("2"); // text
+  assert.ok(out.prompts.includes("32_code_text_sent"));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to10, otherPhone, "the code must go to the OTHER account's number");
+
+  out = await step(CODE);
+  assert.ok(out.prompts.includes("22_main_menu"), `expected silent service straight to the menu: ${JSON.stringify(out)}`);
+  assert.equal(out.transfer, false);
+
+  out = await step("2"); // payment
+  out = await step("4*50");
+  out = await step("1"); // confirm
+  assert.ok(out.prompts.includes("09_approved_intro"), JSON.stringify(out));
+  assert.equal(pos.charges.size, 1);
+
+  // never a second enrollment from the code flow, and the caller's own
+  // no-pin account never gets one either.
+  assert.equal(
+    db.rows("supermarketPhonePin").filter((r: any) => r.tenantId === tenantId).length,
+    1,
+    "the redirect+code flow must never enroll a new PIN",
+  );
+});
+
+test("a matched caller on a PIN-having but un-enrolled account is redirected, keys the SAME number back, probes, keys the correct POS PIN, and is served — nothing is ever enrolled", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = "t-redirect-b";
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+
+  const phone = accountPhone(52);
+  const realPin = "3390";
+  pos.addCustomer({ id: "acc-redirect-b", phone10: phone, pin: realPin, balanceCents: 6_000, cards: [{ id: "cd-b", masked: "x" }] });
+  db.seed("posCustomer", { tenantId, posCustomerId: "acc-redirect-b", phonesText: phone, primaryPhone: phone });
+  // ⛔ deliberately no supermarketPhonePin row: the store set a PIN Loopcom
+  // does not hold — "pin_not_enrolled", never "pin_not_set".
+
+  const deps = makeDeps(db, clientFor, { codes: [], sent: [], clock: { value: 1 } });
+  const step = (digits?: string, hangup?: boolean) =>
+    runPayIvrStep(deps, { tenantId, callId: "call-redirect-b", callerNumber: phone, digits, hangup });
+
+  let out = await step();
+  assert.ok(out.prompts.includes("34_enter_account_phone"), `expected the redirect prompt: ${JSON.stringify(out)}`);
+  assert.ok(!out.prompts.includes("02_pin"), "never asked the matched-caller PIN prompt before the redirect");
+  const row0 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: "call-redirect-b" } });
+  assert.equal(row0.state.ownAccountBlocked, "pin_not_enrolled");
+  assert.equal(row0.state.blockedReason, null);
+
+  out = await step(phone); // keys the SAME number back
+  assert.ok(out.prompts.includes("23_pin_or_star"), `expected the foreign PIN-or-star prompt: ${JSON.stringify(out)}`);
+
+  out = await step(realPin);
+  assert.ok(out.prompts.includes("22_main_menu"), `expected service on the correct POS pin: ${JSON.stringify(out)}`);
+  assert.equal(out.transfer, false);
+
+  out = await step("1"); // balance
+  assert.ok(out.prompts.includes("04_balance_intro"), JSON.stringify(out));
+
+  assert.equal(
+    db.rows("supermarketPhonePin").filter((r: any) => r.tenantId === tenantId).length,
+    0,
+    "a looked-up account (even the caller's own, relooked-up) must NEVER be enrolled",
+  );
+});
+
+test("the redirect happens once per call: a redirected caller who keys a SECOND unservable (no-PIN) account is handed to a person, status no_pin", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = "t-redirect-c";
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+
+  const ownPhone = accountPhone(53);
+  pos.addCustomer({ id: "own-c", phone10: ownPhone, pin: null, balanceCents: 0, cards: [] });
+  db.seed("posCustomer", { tenantId, posCustomerId: "own-c", phonesText: ownPhone, primaryPhone: ownPhone });
+
+  const secondPhoneNum = accountPhone(54);
+  pos.addCustomer({ id: "second-c", phone10: secondPhoneNum, pin: null, balanceCents: 0, cards: [] });
+  db.seed("posCustomer", { tenantId, posCustomerId: "second-c", phonesText: secondPhoneNum, primaryPhone: secondPhoneNum });
+
+  const deps = makeDeps(db, clientFor, { codes: [], sent: [], clock: { value: 1 } });
+  const step = (digits?: string, hangup?: boolean) =>
+    runPayIvrStep(deps, { tenantId, callId: "call-redirect-c", callerNumber: ownPhone, digits, hangup });
+
+  let out = await step();
+  assert.ok(out.prompts.includes("34_enter_account_phone"));
+  const row0 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: "call-redirect-c" } });
+  assert.equal(row0.state.ownAccountBlocked, "pin_not_set");
+
+  out = await step(secondPhoneNum);
+  assert.equal(out.transfer, true, "the SECOND unservable account must end at a person, not a second redirect");
+  assert.ok(out.prompts.includes("20_connect_person"));
+  assert.ok(!out.prompts.includes("34_enter_account_phone"), "the redirect must fire only once per call");
+
+  const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: "call-redirect-c" } });
+  assert.equal(row.status, "no_pin");
+  assert.equal(row.state.blockedReason, "pin_not_set");
+  assert.equal(row.state.ownAccountBlocked, "pin_not_set", "the first redirect's reason is still recorded, unchanged");
+});
+
 // ═══════════════════════════ entry-phase edge cases ═══════════════════════════
 
 test("empty digits (the caller never keys anything) replay 30_enter_code up to 8 times, then a person", async () => {

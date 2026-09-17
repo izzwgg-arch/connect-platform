@@ -514,3 +514,24 @@ Commit: the `feat(pay-line): matched caller never keys a PIN …` commit on `fea
   enrolled) → person (pin_not_enrolled), NO 02_pin; foreign→no-PIN account → person at once; foreign→3762
   star+1 → `dial=8457823064` + say-list, wrong code refused; star+2 → one REAL text from 845-244-9666;
   0 persisted codes, vault 0 rows. NOT proven: the Originate ringing a real phone, a keyed-back code, a charge.
+
+## 2026-09-17 (evening, round 2) — pay line: a matched caller whose own account can't be served is asked for the account to pay
+
+Commit: the `feat(pay-line): a matched caller whose own account can't be served …` commit on
+`feat/ivr-migration-takeover` (deploy hash + proof in the docs line right after these).
+
+- `apps/api`: the `src/supermarket/*.test.ts` suites, all green — `supermarketCore` 37/37 (4 reducer tests
+  now prove the redirect: prompt 34, phase `lookup_entry`, `ownAccountBlocked`, then the SAME call continues
+  to a charge or to a once-only second person-landing), `payLineCode` **16/16** (+3: no-POS-PIN own account
+  → redirected → another account with an enrolled PIN via star+code → one charge; un-enrolled own account →
+  same number re-keyed → probe → correct POS PIN → served, vault stays 0; redirect fires ONCE — a second
+  unservable account → person, `status no_pin`), `payLineStress` 9/9 (PAYLINE 1a/1b/7 reworked: matched
+  no-PIN / vault-none / stale now redirect-then-relookup; per-call request cap 6→8), `supermarketStress`
+  28/28 (recorded-prompt allow-list gained 34), `payIvrDialplan` 10/10, `phonePinRoutes` 11/11,
+  `supermarketWiring` 11/11. Re-run by hand after the agent: stress + code + core → 81/81.
+- `apps/api`: `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket/* (pre-existing elsewhere).
+- Prompt cutter inside `app-api-1`: `34_enter_account_phone` 9.5 s, 8 kHz mono 16-bit; installed on the
+  PBX (`en-male` 63 → 64, md5-matched) and in `loopcom:/root/stephen-neural/`.
+- Deploy + live door proof (`/root/payline-live-proof3.sh`): recorded in the docs follow-up commit and in the
+  summary file's "Round 2 — tested / deployed / proven" section.
+- NOT run: a human call; a real charge.

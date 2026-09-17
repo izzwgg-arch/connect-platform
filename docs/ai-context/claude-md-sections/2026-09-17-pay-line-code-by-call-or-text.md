@@ -108,6 +108,30 @@ phone number."* (the code call and the text both come from Gesheft's own 845-244
 - **Deploy + live door proof: see "Deployed + proven" at the bottom of this file** (written by the
   docs follow-up commit right after the code commit, with the exact hash).
 
+## Round 2 (same evening, ~19:00Z) — a matched caller whose OWN account can't be served is asked for another account, not handed off
+
+Izzy called from his cell (562-209-6644 → 1001021, NO POS PIN) right after the deploy: *"it took me
+to the phone orders menu … It should have asked me for the phone number in the account I want to
+make a payment on. Or hear balance."* Under round 1 that case (and the "POS PIN not enrolled" case)
+went to a person at once.
+
+- **Built (`redirectToLookup` in `payIvrCore.ts`):** a caller-ID-MATCHED caller whose own account
+  cannot be served (register "PIN required", or a POS PIN Loopcom does not hold under the default
+  "never" policy, or a stale stored PIN refused) now hears **`34_enter_account_phone`** ("We cannot
+  take a phone payment on the account for the number you are calling from. Please enter the phone
+  number on the account you would like to pay or hear the balance of, followed by the pound key")
+  and continues exactly like an unknown caller: lookup → silent probe → `23_pin_or_star` → PIN or
+  star → code. State: `ownAccountBlocked: pin_not_set | pin_not_enrolled` (desk-visible; the session
+  row keeps the own account id it wrote first), `blockedReason` cleared, `callerIdMatched` false.
+  **Once per call**: a second unservable account, a looked-up account, or an owner-verified account
+  still ends at `20_connect_person` with `status no_pin` / `pin_not_enrolled` as before. A warn
+  log names the own account and the reason. `ask_once` still asks `02_pin` for the POS-PIN case.
+- Useful side effect: a matched caller on a PIN-having un-enrolled account can pay by keying their
+  own number + their POS PIN on the looked-up path (never enrolled, never asked without keying).
+- Prompt `34_enter_account_phone` cut (Polly Stephen/neural, 9.5 s, 8 kHz) and installed —
+  `en-male` **63 → 64**, canonical `loopcom:/root/stephen-neural/` 64. No dialplan change.
+- ⏳ Verification for round 2: see "Round 2 — tested / deployed / proven" at the bottom.
+
 ## Sola vs the POS (Izzy, same evening: "if we can put it through the POS system straight, that would be more efficient" → "The PoS is way better")
 
 - **The pay line already goes straight through the POS**: `POST /customers/id/{id}/charges` with

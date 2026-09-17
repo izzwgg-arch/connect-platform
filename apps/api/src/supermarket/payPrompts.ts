@@ -88,6 +88,11 @@ export const PAY_PROMPTS: readonly PayPromptSpec[] = [
     addedOn: "2026-09-17",
   },
   { ref: "33_code_wrong", text: "That code is not correct.", addedOn: "2026-09-17" },
+  {
+    ref: "34_enter_account_phone",
+    text: "We cannot take a phone payment on the account for the number you are calling from. Please enter the phone number on the account you would like to pay or hear the balance of, followed by the pound key.",
+    addedOn: "2026-09-17",
+  },
 ];
 
 export const PAY_PROMPTS_ADDED_2026_09_17: readonly PayPromptSpec[] = PAY_PROMPTS.filter((p) => p.addedOn === "2026-09-17");
