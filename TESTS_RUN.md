@@ -1,5 +1,16 @@
 # Tests run
 
+## Desk-phone wizard round 22 — office-wizard Yealink RPS claim + scan-page canary — 2026-09-17
+
+- apps/api `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/*.test.ts` **328: 327 pass, 1 fail** (the fail = pre-existing `managedPhonePostgres.test.ts`, needs a local Postgres; baseline before this work 291/290/1). New: `yealinkRedirectClaim.test.ts` 23, `managedPhoneIntegration.test.ts` +8, `deviceCloudRoutes.test.ts` +10 (+3 claim, +7 scan mode / decoderExpected).
+- packages/shared `node --import tsx --test packages/shared/src/deskPhoneSetup/*.test.ts` **228/228** (+1: Yealink `claim` in supportedActions never flips reset/restart to vendor_cloud).
+- apps/portal `npx tsx --test components/deskPhones/*.test.ts lib/deskPhoneWizard.test.ts app/phone-setup/decoderSelfTest.test.ts` **131: 130 pass, 1 fail** (the fail = the documented pre-existing "standing provisioning listener — desktop full window only" test, unchanged). `decoderSelfTest.test.ts` alone 11/11 incl. a REAL zxing-wasm decode of the built-in PNG.
+- apps/api `npx tsc --noEmit -p tsconfig.json`: **689 errors before, 689 after, 0 new** (sorted line-list diff; all pre-existing in packages/db + elsewhere). apps/portal `npx tsc -p tsconfig.json --noEmit` **exit 0**. `bash -n scripts/deploy-portal.sh` OK.
+- Desktop `pnpResident.test.ts` + `pnp.test.ts` **41/41** (baseline, untouched).
+- Live read-only proofs (no code): office PC resident heard a synthetic multicast SUBSCRIBE in 5 ms; YMCS RPS token + server list + 0 devices from inside `app-api-1`; PBX cfg for the T42S fetched and compared field-by-field to the working T53W (identical shape).
+- DEPLOYED: see the desk-phone summary file (filled in after container verification).
+- NOT proven: any phone claimed through the new door against real RPS; a factory-fresh Yealink registering end to end.
+
 ## Yiddish24 outage no longer pauses the 24/7 listen — 2026-09-17
 
 - apps/api `src/yiddishCorpus/*.test.ts` **172/173** (4 new: 524 = unavailable not BLOCKED; challenge-on-5xx still BLOCKED; 403/503 still BLOCKED; outage runs never count empty/pause). The 1 failure = routes.ts audio-mode source guard, CRLF artifact on Windows, file untouched.

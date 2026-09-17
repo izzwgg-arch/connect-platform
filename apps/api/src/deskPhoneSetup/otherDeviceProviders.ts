@@ -38,17 +38,48 @@ export class YealinkDeviceProvider extends BaseDeviceProvider {
     }
   }
 
+  /**
+   * ⛔⛔ Izzy, 2026-09-17: "integrated with both databases" — a Yealink the office wizard
+   * knows (MAC + serial off the sticker) can now really be CLAIMED into Loopcom's RPS
+   * account, so `supportedActions` says so once RPS is live. That is honest about the
+   * MAKER: RPS really can register the device. It is NOT honest about what THIS class
+   * does with it — `claim()` below still refuses, deliberately.
+   *
+   * ⛔⛔ TRACED BEFORE SHIPPING (the blast-radius check Izzy's third standing rule
+   * demands): `capabilitiesFor` turns `supportedActions.includes("claim")` into
+   * `canClaim`, which `planDevicePreparation` turns into a "claim" step with
+   * `via: "vendor_cloud"` whenever `cloud.managedByUs !== true` — and the wizard's
+   * `/prepare` route (`deviceCloudRoutes.ts`) runs that step through THIS class's
+   * `claim()`. The ONLY caller of `/prepare` is `setupDriver.ts`'s `askMakerCloud`,
+   * gated on `decision.via === "vendor_cloud"` for reset/restart — and
+   * `deviceMechanismsFor` never sets that for Yealink because `redirectOnly: true`
+   * stays true (see below), so `/prepare` is never invoked for a Yealink phone by
+   * the driver. Nothing else in the portal reads `canClaim`. So advertising "claim"
+   * here changes only: `GET /desk-phones/providers`' `canRegisterDevices` flag (an
+   * honest "yes, RPS can" for staff/customers to read) and the identification
+   * view's capability flags — never a live network call through this path.
+   * ⛔ The REAL claim writer for the office wizard is `ManagedPhoneService.
+   * claimForOfficeWizard`, called from `yealinkRedirectClaim.ts` at the moments the
+   * wizard already writes the PBX record — "one RPS writer", not this interface.
+   * If `/prepare` or `/claim` ever actually reaches `claim()` below (it should not,
+   * traced above), refusing with `not_supported` is the correct, safe answer: it
+   * must never attempt a SECOND, competing RPS write of its own.
+   */
   async readiness(): Promise<ProviderReadiness> {
     const live = isLiveRps(this.adapter());
     return {
       manufacturer: "yealink",
       platform: "yealink_rps",
       cloudConfigured: live,
-      supportedActions: live ? ["lookup"] : [],
-      claimRequiresSerial: false,
+      supportedActions: live ? ["lookup", "claim"] : [],
+      claimRequiresSerial: live,
+      // ⛔⛔ MUST STAY true. `deviceMechanismsFor` only lets a maker cloud reset or
+      // restart a phone when `!redirectOnly` — RPS redirects a factory-fresh phone
+      // and manages nothing else, so a Yealink must keep clearing and restarting
+      // over the LAN (see deviceMechanisms.test.ts's "claim, still no cloud reset").
       redirectOnly: true,
       note: live
-        ? "Yealink's redirection service can tell whether a phone is assigned to Loopcom. It only redirects brand-new phones; it cannot restart or reset one."
+        ? "Yealink's redirection service can register a phone to Loopcom and tell whether one already is. It only redirects brand-new phones; it cannot restart or reset one."
         : "Yealink's redirection service isn't connected to Loopcom yet, so Yealink phones are set up over your network.",
     };
   }

@@ -254,7 +254,7 @@ function registry(opts: { unconfigured?: boolean; provider?: any } = {}) {
   return L.createDeviceProviderRegistry({ db: fakeDb, env: {}, overrides: { grandstream } });
 }
 
-async function makeApp(user: any, opts: { registry?: any; renderConfig?: any } = {}) {
+async function makeApp(user: any, opts: { registry?: any; renderConfig?: any; managedPhoneService?: any } = {}) {
   const app = Fastify();
   // ⛔ Registered here because it is registered globally in server.ts — the photo door reads
   // `req.isMultipart()`, so a test app without it would answer "multipart_required" to a perfectly
@@ -270,11 +270,26 @@ async function makeApp(user: any, opts: { registry?: any; renderConfig?: any } =
     withMacLock: sharedLock,
     gdmsRequest: sim.fetch,
     provisioningUrlFor: async () => FOLDER,
+    // Office wizard's own RPS claim (yealinkRedirectClaim.ts) — injectable for tests
+    // only; the real default is `new ManagedPhoneService()`.
+    managedPhoneService: opts.managedPhoneService,
     // The clean per-model template's rendered config (stubbed; the real one fetches cfg<mac>.xml).
     renderDeviceConfig: opts.renderConfig ?? (async () =>
       "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>"),
   });
   return app;
+}
+
+/** A spy standing in for `ManagedPhoneService.claimForOfficeWizard`. */
+function claimSpy(result: { rpsState: string; lastError?: string | null; conflict?: boolean } = { rpsState: "assigned" }) {
+  const calls: Array<{ actor: unknown; input: any; requestId: string }> = [];
+  return {
+    calls,
+    claimForOfficeWizard: async (actor: unknown, input: any, requestId: string) => {
+      calls.push({ actor, input, requestId });
+      return { id: "mdp-1", lastError: result.lastError ?? null, conflict: result.conflict ?? false, rpsState: result.rpsState };
+    },
+  };
 }
 
 const body = (r: any) => JSON.parse(r.body);
@@ -627,6 +642,74 @@ test("a scanned label names an unnamed device and stores its serial; another dev
   const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED");
   assert.ok(audit);
   noLeak(audit, [SN]);
+});
+
+/* ── the office wizard's own RPS claim (yealinkRedirectClaim.ts, 2026-09-17) ──── */
+
+const YEALINK_MAC = "805EC0C89B86";
+const YEALINK_SERIAL = "2142019121401463";
+
+test("a Yealink label accepted with an extension calls the office wizard's RPS claim once, at the tenant's folder", async () => {
+  reset();
+  const spy = claimSpy({ rpsState: "assigned" });
+  const app = await makeApp(CUSTOMER, { managedPhoneService: spy });
+  const { base, row } = await runWithPhone(app, { mac: YEALINK_MAC, vendor: "Yealink", model: "T53W" });
+  const assigned = await app.inject({ method: "POST", url: `${base}/assign`, payload: { extensionId: "e1" } });
+  assert.equal(assigned.statusCode, 200, assigned.body);
+
+  const r = await app.inject({
+    method: "POST", url: `${base}/scan-label`,
+    payload: { text: `Yealink T53W MAC: ${YEALINK_MAC} S/N: ${YEALINK_SERIAL}` },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, YEALINK_SERIAL);
+
+  assert.equal(spy.calls.length, 1, "claimForOfficeWizard is called exactly once");
+  assert.equal(spy.calls[0].input.mac, row.macAddress);
+  assert.equal(spy.calls[0].input.serialNumber, YEALINK_SERIAL);
+  assert.equal(spy.calls[0].input.model, "T53W");
+  assert.equal(spy.calls[0].input.extensionId, "e1");
+  assert.equal(spy.calls[0].input.redirectUrl, FOLDER, "the TENANT's own phoneprov folder, never a literal");
+
+  // The response already reflects the claim: zeroTouch is a customer-safe word,
+  // never a maker or platform name.
+  assert.equal(body(r).phone.zeroTouch, "on");
+  assert.equal(body(r).identification.zeroTouch, "on");
+  noLeak(r.body, ["RPS", "YMCS", "rps_"]);
+});
+
+test("a Grandstream label never calls the office wizard's Yealink RPS claim", async () => {
+  reset();
+  const spy = claimSpy();
+  const app = await makeApp(CUSTOMER, { managedPhoneService: spy });
+  const { base, row } = await runWithPhone(app, { model: undefined, identitySource: "none" });
+  await app.inject({ method: "POST", url: `${base}/assign`, payload: { extensionId: "e1" } });
+  const r = await app.inject({
+    method: "POST", url: `${base}/scan-label`,
+    payload: { text: `Grandstream GXP2170 MAC: C074AD8C605F S/N: ${SN}` },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, SN);
+  assert.equal(spy.calls.length, 0, "the Yealink-only hook is never reached for another maker");
+});
+
+test("a conflict from the office wizard's claim reads as zeroTouch=held_by_previous_provider, never a vendor word", async () => {
+  reset();
+  const spy = claimSpy({ rpsState: "conflict", lastError: "rps_ownership_conflict", conflict: true });
+  const app = await makeApp(CUSTOMER, { managedPhoneService: spy });
+  const { base } = await runWithPhone(app, { mac: YEALINK_MAC, vendor: "Yealink", model: "T53W" });
+  await app.inject({ method: "POST", url: `${base}/assign`, payload: { extensionId: "e1" } });
+  const r = await app.inject({
+    method: "POST", url: `${base}/scan-label`,
+    payload: { text: `Yealink T53W MAC: ${YEALINK_MAC} S/N: ${YEALINK_SERIAL}` },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(spy.calls.length, 1);
+  assert.equal(body(r).phone.zeroTouch, "held_by_previous_provider");
+  // ⛔ The customer-safe note names the maker "Yealink" (approved wording) but never
+  // RPS/YMCS jargon or a raw error code.
+  assert.match(body(r).phone.note ?? "", /previous provider/i);
+  noLeak(r.body, ["RPS", "YMCS", "rps_ownership_conflict"]);
 });
 
 /* ── Prepare Device ──────────────────────────────────────────────────────── */
@@ -1061,6 +1144,24 @@ function photoUpload(fileName = "label.jpg", mime = "image/jpeg", bytes = "prete
 const upload = async (app: any, base: string, file = photoUpload()) =>
   app.inject({ method: "POST", url: `${base}/label-photo`, payload: file.payload, headers: file.headers });
 
+/**
+ * The same shape as `photoUpload`, plus a `mode` text field BEFORE the file part —
+ * exactly the order the real scan page sends it in, and also the order the
+ * @fastify/multipart README recommends (value fields before file fields, so they land
+ * in `file.fields` without needing to read after `toBuffer()` — though the route reads
+ * after `toBuffer()` regardless, so this would work either order).
+ */
+function photoUploadWithMode(mode: string, fileName = "scan.jpg", mime = "image/jpeg", bytes = "pretend-jpeg-bytes") {
+  const boundary = "----deskphonetestboundarymode";
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="mode"\r\n\r\n${mode}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mime}\r\n\r\n`),
+    Buffer.from(bytes),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  return { payload, headers: { "content-type": `multipart/form-data; boundary=${boundary}` } };
+}
+
 /** The tenant's own number that can receive pictures. */
 function seedTextingNumber(e164 = "+18455550112", over: Record<string, unknown> = {}) {
   state.smsNumbers.push({
@@ -1328,6 +1429,10 @@ test("the link lists the customer's own phones, in the customer's view — never
   assert.equal(out.company, "ABC Company");
   assert.equal(out.total, 1);
   assert.equal(out.scanned, 0);
+  // ⛔ Round 21 follow-up: tells the page this server can judge decoded barcode TEXT
+  // (the fast, on-device door). An older server predating this field never sends it,
+  // and the page treats anything but an explicit `false` as support.
+  assert.equal(out.decoderExpected, true);
   const p = out.phones[0];
   assert.equal(p.mac, "C0:74:AD:8C:60:5F", "the address is shown the way a person reads it off the sticker");
   assert.equal(p.done, false);
@@ -1363,6 +1468,51 @@ test("a scanned sticker finds its own phone BY ADDRESS — the customer never pi
   const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED");
   assert.equal(audit.actorUserId, CUSTOMER.sub, "audited against whoever put the link in the customer's hands");
   assert.equal(audit.tenantId, "t_abc");
+});
+
+/* ── round 21 follow-up: which PATH a customer actually got, telemetry only ─────── */
+
+test("/scan defaults to mode=photo when the page sends no mode field at all", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  await scanUpload(app, token); // photoUpload() carries no "mode" field
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_SCAN_MODE");
+  assert.ok(audit, "an old page build (no mode field) still gets audited, as photo");
+  assert.equal(audit.metadata.mode, "photo");
+  assert.equal(audit.entityId, state.scanTokens[0].id);
+});
+
+test("/scan reads an explicit mode field off the multipart form", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  await scanUpload(app, token, photoUploadWithMode("device"));
+  const audit = state.audits.find((a: any) => a.action === "DESK_PHONE_SCAN_MODE");
+  assert.equal(audit.metadata.mode, "device");
+});
+
+test("the scan-mode telemetry audit is deduped in memory, at most once per token per hour", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+
+  // Two scans on the SAME token, same hour: one telemetry row, not two — a customer
+  // scanning a dozen stickers on the fast path must not write a dozen audit rows.
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  await scanUpload(app, token);
+  ocrNext = { text: `Grandstream GXP2170 MAC: ${MAC12.toUpperCase()} S/N: ${SN}`, confidence: 91 };
+  await scanUpload(app, token);
+  const modeAudits = state.audits.filter((a: any) => a.action === "DESK_PHONE_SCAN_MODE");
+  assert.equal(modeAudits.length, 1, "deduped — not one row per scan");
+  // ⛔ Never a gate: both scans still went through and both recorded the ordinary
+  // DESK_PHONE_LABEL_SCANNED audit, dedup or not.
+  assert.equal(state.audits.filter((a: any) => a.action === "DESK_PHONE_LABEL_SCANNED").length, 2);
 });
 
 test("a phone that is not on this order is refused BY MAKER, never attached to whatever is next", async () => {
@@ -1402,6 +1552,25 @@ test("scan-text: decoded barcode values match by MAC and go through the one gate
   assert.equal(row.serialNumber, SN, "the serial reached the record through the one gate");
   noLeak(out, [SN]);
   assert.equal(state.scanTokens[0].scanCount, 1);
+  // ⛔ Round 21 follow-up: this door IS the device path by construction, so it audits
+  // mode=device even though the request above sent no explicit `mode` field at all.
+  const modeAudit = state.audits.find((a: any) => a.action === "DESK_PHONE_SCAN_MODE");
+  assert.equal(modeAudit.metadata.mode, "device");
+});
+
+test("scan-text: an explicit mode on the body is honoured — telemetry only, never a gate on the scan itself", async () => {
+  reset();
+  const app = await makeApp(CUSTOMER);
+  const { runId, row } = await runWithPhone(app);
+  const { token } = await mintScanLink(app, runId);
+  const r = await app.inject({
+    method: "POST", url: `/phone-setup/${token}/scan-text`,
+    payload: { texts: [MAC12.toUpperCase(), SN], mode: "photo" },
+  });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(row.serialNumber, SN, "the mode field never changes what the gate does");
+  const modeAudit = state.audits.find((a: any) => a.action === "DESK_PHONE_SCAN_MODE");
+  assert.equal(modeAudit.metadata.mode, "photo");
 });
 
 test("scan-text: a value not on this order is refused BY MAKER, nothing attached", async () => {

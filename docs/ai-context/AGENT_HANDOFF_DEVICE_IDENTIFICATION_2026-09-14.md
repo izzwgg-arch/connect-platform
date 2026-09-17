@@ -976,6 +976,141 @@ the fresh CSP applies). ⛔ **Separately and finally: Izzy's own T42S cannot be 
 claimed by another org (800004). One physical factory reset (hold OK ~10 s) is the only path; a
 fresh phone never hits either wall.
 
+## 10u. Round 22 (2026-09-17) — "I didn't even have one successful register": the whole chain measured end to end, and why THIS rig cannot register by software alone
+
+Izzy, verbatim: *"We've been told many times that it's working, but it's not. I didn't even have one
+successful register … Let's start with the YML [Yealink] first … Scanning should work rock solid,
+sustainably, and integrated with both databases for years to come."* Five read-only agents measured
+every link before anything was built. **All of it is proven, none of it inferred:**
+
+**The office PC (rc.18 installed 09-15 20:45, running since 09-16 07:19):**
+- The standing PnP resident is armed hourly for 2 days (`arm_pnp urlHost=m.connectcomunications.com
+  macs=4 listening=true`), UDP 5060 + 5080 bound by `Loopcom.exe` (PID 23944), group 224.0.1.75 joined on
+  the Wi-Fi adapter (`192.168.6.102/22`, gateway 192.168.4.1 — the only connected NIC; Ethernet
+  unplugged), firewall rule `loopcom.exe` Inbound Allow on **Private AND Public** (the Wi-Fi is classed
+  Public — would have been a silent hole otherwise).
+- ✅ **The resident HEARS the LAN.** A synthetic Yealink-shaped `SUBSCRIBE … Event: ua-profile` for a
+  fake MAC sent to 224.0.1.75:5060 was logged **5 ms later**: `pnp resident: heard 001122334455, not on
+  the armed list; ignored`. Socket, join, parser, firewall, stranger-refusal all work. (Loopback proves the
+  host side; the phone→AP→PC multicast leg is proven only by a real boot.)
+- ⛔ In 2+ days it has heard NOTHING real: `deliveries=0`, 1,227 `set_provisioning` attempts on the T42S
+  all `delivered=false`, all 27 `factory_reset` attempts `refused:locked`. The phone never rebooted, so it
+  never asked.
+
+**The T42S itself (192.168.6.170, `80:5E:C0:B3:B2:D0`, fw 66.86.0.15 read off its own login page):** up,
+ports 80/443/5060/5061 open, web login page (RSA-encrypted form), does not answer an unsolicited SIP
+OPTIONS. Locked with the PREVIOUS provider's admin password (our `known-credential` can only recover a
+password WE wrote — §10r) AND RPS-claimed by ANOTHER organisation (800004, §10r). Two walls, both
+physical/contractual, neither passable by code.
+
+**The PBX (read-only):** `provisioning.devices` id 77 (tenant 21, template 3 "T42s A plus", model 147
+T42S), `accounts` 904 → phone device 130; the rendered
+`https://m.connectcomunications.com/phoneprov/a70274ea0f143ca0/805ec0b3b2d0.cfg` is **structurally
+identical to the working A plus T53W cfg** (`account.1.user_name/auth_name=T21_101`, server
+`209.145.60.79:5060/UDP`, no VPN, no VLAN, passwords set); `pjsip show auth authT21_101` username matches.
+⛔⛔ **13 days of PBX nginx logs hold ZERO requests for this MAC from any real client** (every hit is our
+own `curl`/`node` — the known-credential reads). Izzy's public IP (50.48.58.53) polls the same folder
+every ~2 min for his Grandstreams, so the path is open — this phone simply never used it. A stale
+Aug-5 cfg for the same MAC under Create A Box's folder (`59943f7a1616b24e`, T7_102 "Sender Weiss")
+shows this unit was CAB's ext 102 earlier this summer — a recycled phone, not a fresh one.
+`PbxEndpointRegistration` mirror is live (`ami_contactstatus`, seconds-fresh): `T21_101` UNREGISTERED
+since 09-15 13:44 (that contact was the GXP2170 .172 from round 13); only `T21_101_1` (softphone) is up.
+**No desk phone of any brand is registered on Izzy's rig today.**
+
+**The runs (Connect DB):** three runs since 09-15; the live run `cmu405wml…` has the T42S `ASSIGNED,
+attempts 0, resetCount 0` — ⛔ that row shape is IDENTICAL for "driver parked on the password rungs"
+and "wizard window closed" (nothing writes `attempts` on `ask_for_password`/halt; there is no heartbeat
+column). The audits show: 11:32 label scanned (serial captured by barcode), known-credential served
+3× (12:05, 12:13, 00:05 next day), halt "hold OK ~10 s", three scan links minted, **each opened within a
+minute and each with `scanCount 0`** — the round-21 CSP break (fixed live 02:18 on 09-17, AFTER the last
+open). One `ManagedDeskPhone` claim on 09-15 14:49 → `RPS PENDING_OR_FAILED` (800004) → released →
+retired. ✅ Our YMCS RPS account is live NOW: token OK, server "Loopcom"
+`01a0a48be8567d07b8eac49abab70f13` → `https://app.loopcom.net/api/phone-provisioning/`, **0 devices**.
+
+**Code trace (file:line in the agent report, kept here as the shape):** the office wizard NEVER adds a
+Yealink to RPS — `YealinkDeviceProvider` is `redirectOnly:true`, `supportedActions:["lookup"]`, and
+`deviceMechanismsFor` keeps Yealink off every cloud path; the only RPS writer is
+`ManagedPhoneService.provision/reconcile` (the separate panel). A delivery made by the STANDING resident
+(outside a `set_provisioning` call) is never reported to the server — only the driver's own op reports
+`delivered`. `/retry` zeroes `resetCount`, so after the hand reset the ladder will try ONE more LAN reset
+with admin/admin (harmless on a fresh phone — it just costs a boot) before `set_provisioning`.
+
+**Yealink's docs (research agent):** boot priority Zero-Touch → PnP → DHCP 66/43 → flash is documented;
+where RPS sits vs PnP is NOT settled in a primary source (one reseller says RPS is asked at every
+factory boot; a 2026 second-hand-Yealink write-up says PnP wins on T4x) — treat as undetermined until this
+phone's own boot shows it. **Releasing a claimed MAC is a Yealink ticket**:
+https://ticket.yealink.com/page/mac-removal.html with MAC + serial + a photo proving possession.
+`static.auto_provision.pnp_enable` default 1. ISRG Root X1 trusted from x.80.0.95 (66.86 qualifies).
+
+**THE VERDICT, plainly:** the wizard, the PBX record, the rendered config, the registration mirror and the
+office listener are all correct and proven live; **the one phone Izzy has been testing with cannot be
+provisioned by any software** until (a) somebody holds OK ~10 s on it once (factory reset — the previous
+provider's lock) and (b) Yealink releases its MAC from the other organisation (or LAN PnP happens to win
+the boot race). A factory-fresh Yealink hits neither wall. "Not one successful register" is the rig, not
+the product — and it stays unprovable until a clean handset is run through it.
+
+**WHAT WAS BUILT (worktree `connect2-wizard`, branch `fix/desk-phone-wizard-yealink-e2e` → pushed to the
+branch tip; two Sonnet builders, reviewed line by line):**
+
+1. **The office wizard claims a Yealink into OUR RPS — "integrated with both databases".**
+   `apps/api/src/deskPhoneSetup/yealinkRedirectClaim.ts` → `ensureYealinkRedirect(phone, user, req, deps)`:
+   preconditions (vendor yealink, ticked, extension, serial, model in `YEALINK_MANAGED_MODELS`, tenant folder
+   resolvable), 60 s cooldown unless the row changed, `managed` never re-claimed, 12 s bound, NEVER throws.
+   It calls `ManagedPhoneService.claimForOfficeWizard` (the ONE RPS writer): redirect URL fenced to
+   `https://<Loopcom host>/phoneprov/<16 hex>/` (a copy of the `classifyOurs` rule, dot-boundary hosts), one
+   `ManagedDeskPhone` row per MAC reused in place (`options: {source:"office_wizard", redirectUrl}`),
+   another tenant's LIVE row rehomed ONLY with the presence pair (release their RPS assignment best-effort,
+   `REHOMED_BY_OFFICE_WIZARD` event, fresh secrets), then `reconcile()` → RPS `assign` with
+   `uniqueServerUrl = the tenant folder`, `authName = mac`, `password = per-device secret` (inert against
+   the PBX folder, which never challenges — deliberately the same URL the PnP resident hands out, so one
+   config source). Outcome written on the setup row: `vendorCloudState` managed | conflict | unavailable,
+   `vendorCloudCheckedAt`; on conflict (800004) and only when the ladder has not halted the phone:
+   `customerNote` "Yealink's cloud still lists this phone under its previous provider … Loopcom will ask
+   Yealink to release it. Restarting the phone on your office network still sets it up." + a staff
+   `technicalNote` with MAC, serial tail and https://ticket.yealink.com/page/mac-removal.html. Audits
+   `DESK_PHONE_VENDOR_REDIRECT_CLAIMED|CONFLICT|FAILED` (serial tail only). Hooked: awaited after every
+   successful `recordLabel` (all six doors incl. the customer scan link), fire-and-forget beside
+   `ensureRecord` in `/assign`, `/identify`, `/retry`. `customerPhoneView` + `identificationView` gained
+   `zeroTouch: on | held_by_previous_provider | off`; `DeskPhoneWizard.tsx` renders the chip on found/match
+   and live rows. `YealinkDeviceProvider.readiness` advertises `claim` (serial required) but keeps
+   `redirectOnly: true`, and `deviceMechanisms.test.ts` pins that Yealink reset/restart NEVER become
+   `vendor_cloud` (the generic `/prepare` claim step would hit `not_supported`; traced safe because the
+   driver only calls `/prepare` on `via: vendor_cloud`, which Yealink never gets — documented at both ends).
+   ⛔ No migration. ⛔ `deskPhoneRoutes.ts` exports `requesterIpOf` + `defaultProvisioningUrlFor`;
+   `yealinkRedirectClaim.ts` must never import `deskPhoneRoutes.ts` back (circular value import) — deps
+   are passed in. Tests: `yealinkRedirectClaim.test.ts` (23), `managedPhoneIntegration.test.ts` (+8),
+   `deviceCloudRoutes.test.ts` (+3), `deviceMechanisms.test.ts` (+1).
+
+2. **The scan page is provably alive.** `apps/portal/app/phone-setup/[token]/decoderSelfTest.ts`: at page
+   LOAD (not camera start) the page imports zxing, prepares the module ONCE (module-scope `locateZXingWasm` —
+   zxing-wasm caches by shallow equality on `overrides`, a fresh arrow function double-compiles) and decodes
+   a built-in Code-128 PNG "LOOPCOMSELFTEST" through `readBarcodes` (4 s timeout). Result → chip "Fast
+   scanner ready" or "Slow mode: we'll read the picture on our side" (camera never hidden), and `mode:
+   device|photo` rides every `/scan-text` (JSON) and `/scan` (multipart field before the file) post →
+   `DESK_PHONE_SCAN_MODE` audit, deduped per token per hour; GET `/phone-setup/:token` answers
+   `decoderExpected: true`. ⛔ The test file lives at `apps/portal/app/phone-setup/decoderSelfTest.test.ts`,
+   OUTSIDE `[token]/` — node's test runner treats `[token]` as a glob class and silently matches nothing.
+   `scripts/deploy-portal.sh` verify stage now probes `https://app.loopcom.net/phone-setup/x` (same
+   loopback-first resolve helper as the public probe) and FAILS the deploy (rollback) when the edge answers
+   without `'wasm-unsafe-eval'`; a connection failure only WARNS (never roll a healthy portal back over an
+   edge hiccup — 2026-08-21); `DEPLOY_PORTAL_SKIP_CSP_CHECK=1` / `DEPLOY_PORTAL_CSP_CHECK_HOST`.
+   `docs/ops/nginx-security-headers.REQUIRED.md` records the exact line, its live-only location and the
+   backup. Tests: `decoderSelfTest.test.ts` (11, incl. a real end-to-end wasm decode), `deviceCloudRoutes.
+   test.ts` (+7).
+
+**Proof at build time:** api `src/deskPhoneSetup/*.test.ts` **328: 327 pass, 1 fail** = the pre-existing
+`managedPhonePostgres.test.ts` (local Postgres only; identical at baseline 291/290/1); shared deskPhoneSetup
+**228/228**; portal deskPhones + wizard + decoder **131: 130 pass, 1 fail** = the documented pre-existing
+"standing provisioning listener" test; api `tsc --noEmit` **689 errors before, 689 after, zero new**
+(sorted diff of the error lists); portal `tsc` **0**. Deploy state: see the summary file.
+
+**NOT BUILT (honest list):** a delivery made by the STANDING resident is still invisible to the server
+(`arm_pnp` returns only a count; reporting the list needs a desktop op change → an installer → Izzy's PC);
+no `lastAdvancedAt` heartbeat on the phone row; after a hand reset `/retry` still spends one LAN reset on
+the fresh phone before `set_provisioning` (converges, costs a boot); the desktop fingerprint still reads
+`vendor=unknown` off a Yealink login page that names `g_phonetype`/`g_strFirmware`; Grandstream untouched
+this round (Izzy: Yealink first); the Yealink MAC-removal ticket is filed by a person, never by code.
+
 ## 11. Traps hit
 
 - A new provider action added to one of two route files is invisible to the route-order guard unless

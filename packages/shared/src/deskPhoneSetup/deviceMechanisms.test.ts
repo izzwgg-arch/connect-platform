@@ -73,6 +73,25 @@ test("a Yealink is cleared and restarted from the office machine; a redirect-onl
   assert.equal(m.cloudPlatform, null);
 });
 
+test("⛔⛔ a Yealink that can CLAIM through RPS still gets no cloud reset — redirectOnly is the fence, not supportedActions (2026-09-17, office-wizard RPS claim)", () => {
+  // The office wizard can now register a Yealink with RPS (`claim` in supportedActions,
+  // proven live 2026-09-15), but RPS still only ever REDIRECTS a factory-fresh phone —
+  // it cannot reset or restart one. `redirectOnly: true` must keep doing that fencing job
+  // regardless of what `supportedActions` lists, or a phone the wizard cannot actually wipe
+  // over the network would be planned a `factory_reset` step nothing can carry out.
+  const rpsWithClaim: ProviderReadiness = {
+    manufacturer: "yealink", platform: "yealink_rps", cloudConfigured: true,
+    supportedActions: ["lookup", "claim"], claimRequiresSerial: true, redirectOnly: true, note: "",
+  };
+  const m = deviceMechanismsFor("yealink", [rpsWithClaim, gdms()]);
+  assert.equal(m.reset, "lan_http");
+  assert.notEqual(m.reset, "vendor_cloud");
+  assert.equal(m.restart, "lan_http");
+  assert.notEqual(m.restart, "vendor_cloud");
+  assert.equal(m.resetFallback, "none");
+  assert.equal(m.cloudPlatform, null);
+});
+
 test("a cloud for one brand never applies to another brand", () => {
   for (const vendor of ["yealink", "fanvil", "polycom", "snom", null, "unknown"]) {
     const m = deviceMechanismsFor(vendor, [gdms()]);

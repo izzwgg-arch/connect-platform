@@ -369,7 +369,7 @@ test("readiness: Grandstream configured, Yealink redirect-only, Fanvil and Poly 
   }
 });
 
-test("Yealink RPS: tells ours from another account's, and never claims or restarts", async () => {
+test("Yealink RPS: tells ours from another account's; reports it can claim through THIS interface but never actually does so here, and never restarts", async () => {
   const live = (answer: any) => new YealinkDeviceProvider({
     rps: () => ({ mode: "live", checkMac: async () => answer, assign: async () => ({ state: "assigned" }), release: async () => {} }) as any,
   });
@@ -381,7 +381,17 @@ test("Yealink RPS: tells ours from another account's, and never claims or restar
   const none = await live({ existed: false, self: null }).lookup(MAC);
   assert.equal(none.ok && none.state.found, false);
   const r = await live({ existed: true, self: true }).readiness();
-  assert.deepEqual(r.supportedActions, ["lookup"]);
+  // ⛔⛔ 2026-09-17: RPS can now really register a device (the office wizard's own
+  // claim, via ManagedPhoneService.claimForOfficeWizard — traced NOT to reach this
+  // class, see otherDeviceProviders.ts). `redirectOnly` still fences reset/restart
+  // off the cloud path (deviceMechanisms.test.ts covers that separately).
+  assert.deepEqual(r.supportedActions, ["lookup", "claim"]);
+  assert.equal(r.claimRequiresSerial, true);
+  assert.equal(r.redirectOnly, true);
+  // ⛔⛔ THE POINT OF THIS ASSERTION: `claim()` on THIS class stays refused even
+  // though readiness now advertises the action — "one RPS writer" means the real
+  // write lives in ManagedPhoneService, never a second, competing implementation
+  // reachable through the generic provider interface.
   const claim = await live({ existed: false, self: null }).claim({ mac: MAC, serialNumber: null });
   assert.equal(!claim.ok && claim.code, "not_supported");
 

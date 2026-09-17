@@ -87,6 +87,13 @@ import { readChatAttachmentBuffer } from "../chatAttachmentStorage";
 // ⛔ The platform's public identity lives in ONE module — the customer link must be
 // built from the same origin the pay links and billing emails use, never a literal.
 import { canonicalPortalOrigin } from "../publicOrigins";
+// ⛔ The office wizard's own RPS claim (Izzy, 2026-09-17). `recordLabel` is where a
+// Yealink's serial usually arrives, so it is the moment worth trying the claim.
+import { ensureYealinkRedirect, type OfficeWizardClaimer } from "./yealinkRedirectClaim";
+// ⛔ Duplicated in miniature from deskPhoneRoutes.ts's requesterIpOf rather than
+// imported: that file imports `registerDeviceCloudRoutes` FROM this one, so an
+// import the other way would be a runtime circular value-import.
+import { clientIpFromForwardedFor } from "../loginThrottle";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
@@ -103,6 +110,13 @@ export type DeviceCloudRouteContext = {
   resetApprovalFor: (run: any, phoneId: string) => string | null;
   isOurProvisioningUrl: (url: string | null | undefined) => boolean;
   isRegistered: (tenantId: string, extNumber: string) => Promise<boolean>;
+  /** The tenant's `/phoneprov/<16 hex>/` folder — threaded in from deskPhoneRoutes.ts's
+   * own `deps.provisioningUrlFor ?? defaultProvisioningUrlFor` so this file never
+   * imports that one back (it already imports `registerDeviceCloudRoutes` FROM here). */
+  provisioningUrlFor: (tenantId: string) => Promise<string | null>;
+  /** Injectable for tests only — threaded from `DeskPhoneDeps.managedPhoneService`,
+   * the same seam `deskPhoneRoutes.ts` uses. See yealinkRedirectClaim.ts. */
+  managedPhoneService?: OfficeWizardClaimer;
   /**
    * The rendered gs_provision config the PBX would serve this device (from its clean per-model
    * template), or null if none can be rendered. Used to SEND the config over the maker cloud —
@@ -197,6 +211,11 @@ function identificationView(id: DeviceIdentification, row: any, staff: boolean) 
     needsIdentifying: id.needsIdentifying,
     serialOnFile: Boolean(id.serialNumber),
     vendorCloudState: row?.vendorCloudState || "unchecked",
+    // ⛔ Plain English, never a maker name — same derivation as customerPhoneView's
+    // zeroTouch in deskPhoneRoutes.ts, kept in the two places that project a row.
+    zeroTouch: row?.vendorCloudState === "managed" ? "on" as const
+      : row?.vendorCloudState === "conflict" ? "held_by_previous_provider" as const
+      : "off" as const,
     provisioningStatus: status,
     provisioningStatusLabel: describeProvisioningStatus(status),
     capabilities: capabilityView(id.capabilities),
@@ -437,8 +456,15 @@ async function runClaim(ctx: DeviceCloudRouteContext, input: {
 export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloudRouteContext): void {
   const {
     deps, db, getUser, ownRun, allowedToSetUp, isSuper, mayRunSetup,
-    customerPhoneView, resetApprovalFor, registry,
+    customerPhoneView, resetApprovalFor, registry, provisioningUrlFor, managedPhoneService,
   } = ctx;
+
+  /** The public address the customer's own computer reached us from — the LAST
+   * X-Forwarded-For entry, exactly as deskPhoneRoutes.ts's requesterIpOf reads it. */
+  const requesterIpOf = (req: any): string | null => {
+    const ip = clientIpFromForwardedFor(req?.headers?.["x-forwarded-for"]);
+    return ip && ip !== "unknown" ? ip : null;
+  };
 
   /** What each maker's cloud can do in THIS deployment, in words a customer can read. */
   app.get("/desk-phones/providers", async (req: any, reply: any) => {
@@ -702,6 +728,10 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     confidence: number | null,
     /** Which OCR pass produced the text and how many ran. Names and counts only — audit material. */
     photoRead?: { pass: string; passesRun: number } | null,
+    /** For `ensureYealinkRedirect`'s presence pair — the request that carried this label,
+     * from whichever of the six doors it arrived through (office wizard or a customer's
+     * own scan link). */
+    req?: any,
   ): Promise<LabelOutcome> {
     const label = parseDeviceLabel(text);
 
@@ -783,13 +813,27 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
         ...(photoRead ? { photoPass: photoRead.pass, photoPassesRun: photoRead.passesRun } : {}),
       },
     });
+
+    // ⛔⛔ THE SERIAL JUST LANDED — for a Yealink this is usually the LAST input Yealink's
+    // RPS claim needed, so this is where "scan → claimed" becomes true through every one
+    // of the six doors above (office wizard or the customer's own scan link), never a
+    // seventh copy of the RPS logic. Awaited and re-read so the response below carries the
+    // real outcome; best-effort — ensureYealinkRedirect itself never throws.
+    let afterCloud = updated;
+    try {
+      await ensureYealinkRedirect(updated, user, req, {
+        audit: deps.audit, db, managedPhoneService, provisioningUrlFor, requesterIp: requesterIpOf,
+      });
+      afterCloud = (await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } })) ?? updated;
+    } catch { /* best-effort; the label itself is already saved above */ }
+
     return {
       ok: true,
       body: {
         ok: true,
         found: { model: label.model, manufacturer: label.manufacturer, serialFound: Boolean(label.serialNumber) },
-        phone: customerPhoneView(updated),
-        identification: identificationView(identify(updated, readiness), updated, staff),
+        phone: customerPhoneView(afterCloud),
+        identification: identificationView(identify(afterCloud, readiness), afterCloud, staff),
       },
     };
   }
@@ -820,7 +864,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     // ⛔ Typed or scanned text is trusted as read — a person looking at the sticker is not an OCR
     // guess — so no confidence is passed. Every refusal below lives in `recordLabel`, shared with
     // the photo and text-message doors.
-    const outcome = await recordLabel(user, phone, body.data.text, "typed_or_scanned", null);
+    const outcome = await recordLabel(user, phone, body.data.text, "typed_or_scanned", null, undefined, req);
     if (!outcome.ok) {
       return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     }
@@ -861,7 +905,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
     const outcome = await recordLabel(
       user, phone, labelTextFromPhoto(read.text), "photo", read.confidence,
-      { pass: read.pass, passesRun: read.passesRun },
+      { pass: read.pass, passesRun: read.passesRun }, req,
     );
     if (!outcome.ok) {
       // Numbers only — so "it couldn't read my photo" is answerable from the audit next time.
@@ -990,7 +1034,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     if (!read.ok) return reply.status(read.status).send({ ok: false, error: read.error, message: read.message });
     const outcome = await recordLabel(
       user, phone, labelTextFromPhoto(read.text), "texted_photo", read.confidence,
-      { pass: read.pass, passesRun: read.passesRun },
+      { pass: read.pass, passesRun: read.passesRun }, req,
     );
     if (!outcome.ok) {
       await deps.audit({
@@ -1410,6 +1454,36 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
   /** What the customer may see about one phone — the customer projection, plus done-ness. */
   const scanPhoneView = (p: any) => ({ ...customerPhoneView(p), done: Boolean(p.serialNumber) });
 
+  /**
+   * ⛔ Round 21 follow-up (2026-09-17): the CSP fix makes the on-device decoder run again,
+   * but nothing before this told us WHICH path a customer actually got — the round-20
+   * checklist proved the wasm FILE downloaded, not that it ran, and that gap is exactly
+   * what hid the CSP break for a full day. `recordLabel` already writes ONE audit per
+   * label and its signature is shared by typed/photo/scan-link doors alike — bolting a
+   * `mode` field onto it would touch every caller for one door's telemetry. This is a
+   * SECOND, tiny, telemetry-only audit, deliberately never a gate: it never changes what
+   * a scan does, only what production tells us it did.
+   * ⛔ Deduped IN MEMORY, at most once per token per hour — a customer scanning a dozen
+   * stickers on the fast path must not write a dozen near-identical audit rows.
+   */
+  const scanModeAuditedAt = new Map<string, number>();
+  const SCAN_MODE_AUDIT_INTERVAL_MS = 60 * 60_000;
+  async function auditScanMode(link: { row: any }, mode: "device" | "photo"): Promise<void> {
+    const tokenId = String(link.row.id);
+    const now = Date.now();
+    const last = scanModeAuditedAt.get(tokenId);
+    if (last && now - last < SCAN_MODE_AUDIT_INTERVAL_MS) return;
+    scanModeAuditedAt.set(tokenId, now);
+    await deps.audit({
+      tenantId: String(link.row.tenantId),
+      action: "DESK_PHONE_SCAN_MODE",
+      entityType: "DeskPhoneScanToken",
+      entityId: tokenId,
+      actorUserId: String(link.row.createdByUserId),
+      metadata: { mode, tokenId },
+    }).catch(() => null);
+  }
+
   /** GET the link: which phones this order has, and which are already scanned. */
   app.get("/phone-setup/:token", async (req: any, reply: any) => {
     const link = await scanLink(req.params.token);
@@ -1428,6 +1502,11 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       total: wanted.length,
       scanned: wanted.filter((p: any) => p.serialNumber).length,
       phones: wanted.map(scanPhoneView),
+      // ⛔ Lets the page know THIS server can judge decoded barcode TEXT (the fast,
+      // on-device path added round 20). An older server that predates this field never
+      // sends it — the page treats anything but an explicit `false` as support, so a
+      // server would have to opt OUT, never silently drop out by being older.
+      decoderExpected: true,
     });
   });
 
@@ -1452,6 +1531,15 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     if (!file) return reply.status(400).send({ ok: false, error: "file_required" });
     const buffer = await file.toBuffer();
     if (!buffer?.length) return reply.status(400).send({ ok: false, error: "file_required" });
+    // ⛔ Read AFTER toBuffer(): busboy parses multipart in stream order, so a "mode"
+    // field placed after "file" in the form only shows up in `file.fields` once the
+    // file part has been fully consumed (the package's own README warns of this).
+    // Optional and telemetry-only — an absent or unrecognised value just means an
+    // older page build, and the scan itself is judged exactly the same either way.
+    const modeField = file.fields?.mode;
+    const modeRaw = typeof modeField === "object" && modeField ? modeField.value : modeField;
+    const mode: "device" | "photo" = modeRaw === "device" ? "device" : "photo";
+    await auditScanMode(link, mode);
 
     // A pass is worth submitting when it yields a hardware address belonging to THIS
     // order — the match-by-MAC form of the single-phone preview used by the other doors.
@@ -1482,7 +1570,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     }
 
     const actor = scanActor(link.row);
-    const outcome = await recordLabel(actor, phone, text, "photo", read.confidence, { pass: read.pass, passesRun: read.passesRun });
+    const outcome = await recordLabel(actor, phone, text, "photo", read.confidence, { pass: read.pass, passesRun: read.passesRun }, req);
     if (!outcome.ok) {
       return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     }
@@ -1516,8 +1604,14 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
   app.post("/phone-setup/:token/scan-text", async (req: any, reply: any) => {
     const link = await scanLink(req.params.token);
     if (!link) return reply.status(404).send({ ok: false, error: "link_not_found", message: "This link is no longer active. Ask Loopcom for a new one." });
-    const body = z.object({ texts: z.array(z.string().trim().min(1).max(64)).min(1).max(8) }).safeParse(req.body ?? {});
+    const body = z.object({
+      texts: z.array(z.string().trim().min(1).max(64)).min(1).max(8),
+      // ⛔ Telemetry only (round 21 follow-up) — this door IS the device path by
+      // construction, so "photo" here would be a lying client, not a different judge.
+      mode: z.enum(["device", "photo"]).optional(),
+    }).safeParse(req.body ?? {});
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_request" });
+    await auditScanMode(link, body.data.mode === "photo" ? "photo" : "device");
 
     const lines = labelTextsFromSymbols(body.data.texts);
     const text = labelTextFromPhoto(lines.join("\n"));
@@ -1543,7 +1637,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     }
 
     // ⛔ via "typed_or_scanned": a barcode scanner's output, which is literally what this is.
-    const outcome = await recordLabel(scanActor(link.row), phone, text, "typed_or_scanned", null);
+    const outcome = await recordLabel(scanActor(link.row), phone, text, "typed_or_scanned", null, undefined, req);
     if (!outcome.ok) return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     await db.deskPhoneScanToken.update({
       where: { id: link.row.id }, data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },
@@ -1573,7 +1667,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     });
     if (!phone) return reply.status(404).send({ ok: false, error: "not_found" });
 
-    const outcome = await recordLabel(scanActor(link.row), phone, body.data.text, "typed_or_scanned", null);
+    const outcome = await recordLabel(scanActor(link.row), phone, body.data.text, "typed_or_scanned", null, undefined, req);
     if (!outcome.ok) return reply.status(outcome.status).send({ ok: false, error: outcome.error, message: outcome.message });
     await db.deskPhoneScanToken.update({
       where: { id: link.row.id }, data: { lastUsedAt: new Date(), scanCount: { increment: 1 } },

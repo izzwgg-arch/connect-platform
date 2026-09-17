@@ -209,3 +209,30 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   human still unproven (link must be RELOADED to pick up the new CSP); ⛔ Izzy's own T42S is
   unfixable in software (previous provider's password + RPS claimed by another org, 800004) — one
   physical factory reset, hold OK ~10 s.
+- ⛔⛔ **ROUND 22 (2026-09-17, handoff §10u — Izzy: "not one successful register … start with Yealink …
+  scanning rock solid, integrated with both databases"). FIVE READ-ONLY AGENTS MEASURED THE WHOLE CHAIN
+  FIRST:** the office PC's PnP resident is armed, bound, joined, firewall-allowed on the (Public) Wi-Fi
+  profile and **heard a synthetic multicast SUBSCRIBE in 5 ms** — it has heard nothing real because the
+  T42S never reboots (27/27 LAN resets `refused:locked`); the rendered T21_101 cfg is structurally
+  identical to the working A plus T53W's and the PBX auth matches; ⛔⛔ **13 days of PBX nginx logs hold
+  ZERO fetches of this MAC from any real client** (Izzy's IP polls the same folder every 2 min for his
+  Grandstreams); the registration mirror is seconds-fresh; our YMCS RPS account is live (server "Loopcom",
+  0 devices). **Verdict: the product is correct; the one phone on his desk is locked by its previous
+  provider AND RPS-claimed by another org (800004) — no software passes either wall.** Path for THAT unit:
+  hold OK ~10 s once + Yealink's MAC-removal ticket (MAC + serial + photo). A factory-fresh Yealink is the
+  acceptance test. ✅ BUILT: **(1) the office wizard claims every Yealink it knows into OUR RPS** (MAC +
+  serial from the sticker, per-device redirect = the tenant's own `/phoneprov/<hash>/` folder, so a
+  factory boot anywhere with internet self-provisions with no LAN/PnP/password) — `yealinkRedirectClaim.ts`
+  → `ManagedPhoneService.claimForOfficeWizard` (ONE RPS writer; cross-tenant only with the presence pair;
+  `options.redirectUrl`; no migration), hooked into the one label gate + `/assign` `/identify` `/retry`;
+  800004 → `vendorCloudState=conflict` + honest note + staff link to the release form; customer chip
+  "Zero-touch on" / "Held by previous provider" (`zeroTouch` on the customer view); Yealink stays OFF
+  every cloud-reset path (`redirectOnly`, test-pinned). **(2) scan page rock solid:** decoder canary at
+  page LOAD (built-in Code-128 "LOOPCOMSELFTEST" through the real wasm), honest chip "Fast scanner
+  ready" / "Slow mode…", `mode` reported on every scan post (`DESK_PHONE_SCAN_MODE` audit, 1/token/hour),
+  `deploy-portal.sh` verify FAILS a deploy whose CSP lacks `'wasm-unsafe-eval'` (warn-only when the edge
+  can't be reached), `docs/ops/nginx-security-headers.REQUIRED.md`. Tests: api deskPhoneSetup
+  **327/328** (+37; the 1 fail = the pre-existing local-Postgres test), shared **228/228**, portal
+  **130/131** (the 1 fail = the documented pre-existing standing-listener test), api tsc **0 new** vs
+  baseline, portal tsc 0. ⏳ NOT PROVEN: no phone has been claimed through the new door against real
+  RPS; no clean Yealink has registered end to end (needs the handset).

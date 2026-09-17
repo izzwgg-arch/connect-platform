@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getPortalApiBaseUrl } from "../../../services/apiClient";
+import { runDecoderSelfTest, type ZxingReaderLike } from "./decoderSelfTest";
 
 /**
  * The customer's desk-phone scan page — opened from a link we text or email.
@@ -15,6 +16,19 @@ import { getPortalApiBaseUrl } from "../../../services/apiClient";
  * server reads the barcodes with the same engine and the same one gate that the
  * typed, uploaded and texted doors already go through. That keeps one set of rules
  * for what may be attached to a phone, and means an old browser is not a dead end.
+ *
+ * ⛔⛔ ROUND 21 FOLLOW-UP (2026-09-17). The on-device decoder round 20 built went
+ * completely dark for a full day because the portal's CSP silently blocked
+ * WebAssembly.instantiate() — the wasm FILE downloaded fine (200, application/wasm),
+ * it just could never COMPILE, and the page's own dynamic-import catch swallowed
+ * that and fell back to the slow photo path with no signal anywhere that anything
+ * had changed. The fix lives on the server (nginx), not in this file — but nothing
+ * here would have told anyone it broke, or would tell us if it ever breaks again.
+ * Now: a SELF-TEST canary runs at page load (decoderSelfTest.ts), before the camera
+ * ever opens, against a known-good built-in image — and the result is both shown to
+ * the customer in plain words (the mode chip) and reported to the server (the `mode`
+ * field on every scan post), so a silent regression shows up in our own telemetry
+ * instead of only in a customer's "it doesn't scan" ticket.
  */
 
 type Phone = {
@@ -27,8 +41,24 @@ type Phone = {
   done: boolean;
 };
 
-type Order = { company: string | null; total: number; scanned: number; phones: Phone[] };
+type Order = {
+  company: string | null; total: number; scanned: number; phones: Phone[];
+  /** ⛔ Absent on a server predating this field — treated as supported (see decoderMode below). */
+  decoderExpected?: boolean;
+};
 type Matched = { phone: Phone; makerLabel: string | null; total: number; scanned: number };
+
+/**
+ * Stable across renders and across the self-test's `prepareZXingModule` call and the
+ * camera's later use of the SAME prepared module — zxing-wasm caches its instantiated
+ * module keyed by a SHALLOW-EQUALITY check on `overrides`, comparing `locateFile` by
+ * reference. A fresh arrow function here every time would fail that equality check and
+ * silently trigger a SECOND wasm compile just to serve the same file. Module-scope, so
+ * there is exactly one function identity for the page's whole lifetime.
+ */
+function locateZXingWasm(path: string, prefix: string): string {
+  return path.endsWith(".wasm") ? "/zxing/zxing_reader.wasm" : prefix + path;
+}
 
 /**
  * A SCANNER, NOT A PHOTOGRAPHER (Izzy, 2026-09-16: "It needs to scan very efficiently
@@ -66,12 +96,22 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
   const inFlight = useRef(false);
   const decodeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
-  /** On-device decoder once its wasm is up; null = fall back to photo posts. */
+  /** On-device decoder once its wasm is up and the self-test proved it decodes; null = fall back to photo posts. */
   const decodeRef = useRef<((img: ImageData) => Promise<string[]>) | null>(null);
   const decodeBusy = useRef(false);
   const lastPostRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+
+  /**
+   * The canary's own verdict, independent of server capability — combined with
+   * `order.decoderExpected` below into what the customer is actually told and what
+   * `startCamera` actually does. "checking" is brief (an import + a wasm compile +
+   * one tiny decode) and shows nothing; the button works in every state regardless.
+   */
+  const [selfTestState, setSelfTestState] = useState<"checking" | "ok" | "failed">("checking");
+  /** Resolved once the self-test settles either way — awaited by a camera opened early. */
+  const selfTestPromiseRef = useRef<Promise<void> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -81,7 +121,10 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
         setLoadError(body?.message || "This link is no longer active. Ask Loopcom for a new one.");
         return;
       }
-      setOrder({ company: body.company ?? null, total: body.total ?? 0, scanned: body.scanned ?? 0, phones: body.phones ?? [] });
+      setOrder({
+        company: body.company ?? null, total: body.total ?? 0, scanned: body.scanned ?? 0,
+        phones: body.phones ?? [], decoderExpected: body.decoderExpected,
+      });
       setLoadError(null);
     } catch {
       setLoadError("We couldn't reach Loopcom just now. Check your signal and try again.");
@@ -89,6 +132,53 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
   }, [base]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /**
+   * THE CANARY RUNS AT PAGE LOAD, NOT AT CAMERA START (Izzy: scanning must be "rock
+   * solid, sustainably... for years to come" — round 21 was found only because a
+   * human happened to try it, a day after it broke). Importing zxing and preparing
+   * the module here, once, means `startCamera` below never repeats this work — it
+   * just waits for this promise and reuses whatever it already proved.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const run = (async () => {
+      let zxing: ZxingReaderLike;
+      try {
+        const mod = await import("zxing-wasm/reader");
+        mod.prepareZXingModule({ overrides: { locateFile: locateZXingWasm } });
+        zxing = mod;
+      } catch {
+        if (!cancelled) { decodeRef.current = null; setSelfTestState("failed"); }
+        return;
+      }
+      const result = await runDecoderSelfTest(zxing);
+      if (cancelled) return;
+      if (result.ok) {
+        decodeRef.current = async (img: ImageData) => {
+          const results = await zxing.readBarcodes(img, {
+            tryHarder: true, tryRotate: true, tryInvert: true, maxNumberOfSymbols: 8,
+          });
+          return (results ?? []).map((r) => String(r?.text ?? "").trim()).filter((v) => v.length > 0);
+        };
+        setSelfTestState("ok");
+      } else {
+        // ⛔ round 21, 2026-09-17: a wasm that answers 200 still cannot COMPILE without
+        // 'wasm-unsafe-eval' in the CSP script-src — this is exactly that failure mode,
+        // caught here instead of surfacing only as a customer's "it doesn't scan" ticket.
+        decodeRef.current = null;
+        setSelfTestState("failed");
+      }
+    })();
+    selfTestPromiseRef.current = run;
+    return () => { cancelled = true; };
+  }, []);
+
+  /** Plain words only — no "CSP"/"wasm"/"decoder" on screen (Izzy's scan-page rule). */
+  const decoderMode: "checking" | "device" | "photo" =
+    selfTestState === "checking" ? "checking"
+      : selfTestState === "ok" && order?.decoderExpected !== false ? "device"
+        : "photo";
 
   const stopCamera = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -122,7 +212,10 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
     try {
       const r = await fetch(`${base}/scan-text`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ texts }),
+        // ⛔ Telemetry only — this door IS the on-device path by construction. Lets
+        // production tell "customers scan fast" from "customers fell back to photos"
+        // apart, which is exactly the signal round 21's CSP break had none of.
+        body: JSON.stringify({ texts, mode: "device" }),
       });
       const body = await r.json().catch(() => ({}));
       applyScanOutcome(r.ok, body);
@@ -175,6 +268,10 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
       const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.92));
       if (!blob) return;
       const form = new FormData();
+      // ⛔ The field name a browser sends BEFORE the file part reads reliably in
+      // `file.fields` on the server (fastify-multipart parses in stream order);
+      // telemetry only, same as scan-text's `mode` above.
+      form.append("mode", "photo");
       form.append("file", blob, "scan.jpg");
       const r = await fetch(`${base}/scan`, { method: "POST", body: form });
       const body = await r.json().catch(() => ({}));
@@ -219,27 +316,12 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
         if (advanced.length) await track.applyConstraints({ advanced } as MediaTrackConstraints).catch(() => {});
         setTorchAvailable(Boolean((caps as { torch?: boolean }).torch));
       }
-      // The on-device engine: same zxing the server runs, wasm served from our own origin.
-      if (!decodeRef.current) {
-        try {
-          const zxing = await import("zxing-wasm/reader");
-          zxing.prepareZXingModule({
-            overrides: {
-              locateFile: (path: string, prefix: string) =>
-                path.endsWith(".wasm") ? "/zxing/zxing_reader.wasm" : prefix + path,
-            },
-          });
-          decodeRef.current = async (img: ImageData) => {
-            const results = await zxing.readBarcodes(img, {
-              tryHarder: true, tryRotate: true, tryInvert: true, maxNumberOfSymbols: 8,
-            });
-            return (results ?? []).map((r) => String(r?.text ?? "").trim()).filter((v) => v.length > 0);
-          };
-        } catch {
-          decodeRef.current = null; // old browser: the photo fallback below still works
-        }
-      }
-      if (decodeRef.current) {
+      // The self-test at page load already imported zxing, prepared its wasm and
+      // PROVED it decodes (decoderSelfTest.ts) — reused here, never redone. A camera
+      // opened before that settles just waits for the same promise everyone else does.
+      if (selfTestPromiseRef.current) await selfTestPromiseRef.current;
+      const useDevice = Boolean(decodeRef.current) && order?.decoderExpected !== false;
+      if (useDevice) {
         decodeTimerRef.current = setInterval(() => { void decodeTick(); }, DECODE_EVERY_MS);
       } else {
         timerRef.current = setInterval(() => { void sendFrame(); }, SCAN_EVERY_MS);
@@ -249,7 +331,7 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
       setView("list");
       setProblem("We couldn't open the camera. Allow camera access, or type the numbers instead.");
     }
-  }, [decodeTick, sendFrame, stopCamera]);
+  }, [decodeTick, sendFrame, stopCamera, order]);
 
   const submitTyped = useCallback(async () => {
     if (!typedFor || !typedText.trim()) return;
@@ -379,6 +461,14 @@ export default function PhoneSetupPage({ params }: { params: { token: string } }
               ? `Let’s set up your ${order.total} desk ${order.total === 1 ? "phone" : "phones"}`
               : "Every sticker is scanned"}
           </h1>
+          {/* ⛔ Plain words only — a customer never needs to know this is a wasm decoder
+              behind a content-security-policy check (round 21, 2026-09-17). "checking"
+              is brief and shows nothing; the Scan button below works in every state. */}
+          {decoderMode !== "checking" && (
+            <span className={`ps-modechip ps-modechip--${decoderMode}`}>
+              {decoderMode === "device" ? "Fast scanner ready" : "Slow mode: we’ll read the picture on our side"}
+            </span>
+          )}
           <p className="ps-sub">
             {/* ⛔ HONEST WORDS ONLY (Izzy, 2026-09-16). This page knows about STICKERS, not
                 whether a phone is working — "All your phones are ready" here was the

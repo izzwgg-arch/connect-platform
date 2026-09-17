@@ -137,6 +137,120 @@ test("attested replacement needs a post-delivery registration; attestation alone
   assert.ok(f.rows().find(r => r.id === old.id).retiredAt);
   assert.ok(f.audits().some(a => a.action === "MANAGED_PHONE_REPLACEMENT_COMPLETED" && a.metadata.attestedWorking === true));
 });
+/* ── claimForOfficeWizard: the office wizard's own front door onto RPS ────────── */
+
+const REDIRECT = "https://loopcom.net/phoneprov/0123456789abcdef/";
+const officeInput = { mac: "805ec0334455", serialNumber: "SN-OFFICE-0001", model: "T53W", extensionId: "extension-101" };
+
+async function officeFixture(live = true, tenants: string[] = [actor.tenantId]) {
+  const memory = memoryDatabase(), rps = new RpsSimulator();
+  const load = async (tenantId: string, extensionId: string) => {
+    if (!tenants.includes(tenantId) || !["extension-101", "extension-102"].includes(extensionId))
+      throw new (await import("./yealinkRps")).DeviceError("extension_not_found", 404);
+    return { ...sip, endpoint: `T${21 + tenants.indexOf(tenantId)}_${extensionId === "extension-101" ? "101" : "102"}` };
+  };
+  const service = new ManagedPhoneService(new YealinkProvider(live ? rps.client() : new DisabledRps()), memory.database, load, base, () => "server");
+  return { ...memory, rps, service };
+}
+
+test("claimForOfficeWizard: creates a row and assigns it via RPS at the redirect URL", async () => {
+  const f = await officeFixture();
+  const result = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "office-1");
+  assert.equal(result.rpsState, "assigned");
+  assert.equal(result.conflict, false);
+  const row = f.rows()[0];
+  assert.equal(row.tenantId, actor.tenantId);
+  assert.equal(row.serialNumber, officeInput.serialNumber);
+  assert.equal((row.options as any).source, "office_wizard");
+  assert.equal((row.options as any).redirectUrl, REDIRECT);
+  const rpsRow = [...f.rps.devices.values()][0];
+  assert.equal(rpsRow.uniqueServerUrl, REDIRECT, "RPS was told to redirect to the TENANT'S folder, not this service's own route");
+  assert.equal(rpsRow.authName, row.macAddress);
+});
+
+test("claimForOfficeWizard: refuses any redirect URL that is not one of our own phoneprov folders", async () => {
+  const f = await officeFixture();
+  await assert.rejects(f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: "https://evil.example.com/x" }, "a"), /redirect_url_invalid/);
+  await assert.rejects(f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: "http://loopcom.net/phoneprov/0123456789abcdef/" }, "b"), /redirect_url_invalid/, "https only");
+  await assert.rejects(f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: "https://loopcom.net.evil.com/phoneprov/0123456789abcdef/" }, "c"), /redirect_url_invalid/, "dot-boundary host match only, never a substring");
+  await assert.rejects(f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: "https://loopcom.net/phoneprov/0123456789abcdef/?x=1" }, "d"), /redirect_url_invalid/, "no query string");
+  await assert.rejects(f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: "https://loopcom.net/some/other/path/" }, "e"), /redirect_url_invalid/, "the exact /phoneprov/<16 hex>/ shape only");
+  assert.equal(f.rows().length, 0, "an invalid URL is refused before any row is ever written");
+});
+
+test("claimForOfficeWizard: idempotent for the same tenant — no re-write and no extra RPS add when nothing changed", async () => {
+  const f = await officeFixture();
+  const first = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "a");
+  const addsAfterFirst = f.rps.calls.filter((c) => c === "rps/devices").length;
+  const second = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "b");
+  assert.equal(second.id, first.id);
+  assert.equal(f.rows().length, 1);
+  // reconcile() still runs (cheap, idempotent read-back through checkMac/listDevices),
+  // but never a second rps/devices ADD for exactly the same claim.
+  assert.equal(f.rps.calls.filter((c) => c === "rps/devices").length, addsAfterFirst);
+});
+
+test("claimForOfficeWizard: cross-tenant WITH the presence pair rehomes, releases the old RPS assignment, and audits both tenant ids", async () => {
+  const f = await officeFixture(true, [actor.tenantId, "tenant-b"]);
+  const first = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "a");
+  assert.equal(first.rpsState, "assigned");
+  const otherActor = { tenantId: "tenant-b", sub: "admin-b" };
+  const moved = await f.service.claimForOfficeWizard(otherActor, {
+    ...officeInput, extensionId: "extension-102", redirectUrl: REDIRECT,
+    presence: { discoveredIp: "192.168.1.50", requesterIp: "203.0.113.9" },
+  }, "b");
+  assert.equal(moved.id, first.id, "macAddress is globally unique — the one row is reused, never a second one");
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.rows()[0].tenantId, "tenant-b");
+  assert.equal(moved.rpsState, "assigned");
+  assert.equal(moved.conflict, false);
+  const audit = f.audits().find((a: any) => a.action === "MANAGED_PHONE_REHOMED_BY_OFFICE_WIZARD");
+  assert.ok(audit, "the rehome is audited");
+  assert.equal(audit.metadata.fromTenantId, actor.tenantId);
+  assert.equal(audit.metadata.toTenantId, "tenant-b");
+});
+
+test("claimForOfficeWizard: cross-tenant WITHOUT the presence pair is a conflict, never a silent move", async () => {
+  const f = await officeFixture(true, [actor.tenantId, "tenant-b"]);
+  await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "a");
+  const otherActor = { tenantId: "tenant-b", sub: "admin-b" };
+  await assert.rejects(
+    f.service.claimForOfficeWizard(otherActor, { ...officeInput, extensionId: "extension-102", redirectUrl: REDIRECT }, "b"),
+    /device_ownership_conflict/,
+  );
+  await assert.rejects(
+    f.service.claimForOfficeWizard(otherActor, {
+      ...officeInput, extensionId: "extension-102", redirectUrl: REDIRECT,
+      presence: { discoveredIp: "192.168.1.50", requesterIp: null },
+    }, "c"),
+    /device_ownership_conflict/,
+    "half a presence pair is not a presence pair",
+  );
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.rows()[0].tenantId, actor.tenantId, "still the original owner — nothing moved");
+  assert.ok(!f.audits().some((a: any) => a.action === "MANAGED_PHONE_REHOMED_BY_OFFICE_WIZARD"));
+});
+
+test("claimForOfficeWizard: disabled RPS records pending_credentials, never a false conflict", async () => {
+  const f = await officeFixture(false);
+  const result = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "a");
+  assert.equal(result.rpsState, "pending_credentials");
+  assert.equal(result.conflict, false);
+  assert.equal(f.rps.calls.length, 0);
+});
+
+test("claimForOfficeWizard: a MAC already claimed by ANOTHER RPS account (Izzy's T42S, 800004) surfaces as a recorded conflict, never a throw", async () => {
+  const f = await officeFixture();
+  f.rps.foreign.add(officeInput.mac);
+  const result = await f.service.claimForOfficeWizard(actor, { ...officeInput, redirectUrl: REDIRECT }, "a");
+  assert.equal(result.rpsState, "conflict");
+  assert.equal(result.conflict, true);
+  assert.equal(result.lastError, "rps_ownership_conflict");
+  // The row is still bookkept — the maker refused, not us.
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.rows()[0].tenantId, actor.tenantId);
+});
+
 test("handset source IP is the LAST X-Forwarded-For entry, never a spoofed first one", () => {
   const { handsetSourceIp } = require("./managedPhoneRoutes");
   assert.equal(handsetSourceIp({ headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9" }, ip: "172.19.0.1" }), "203.0.113.9");

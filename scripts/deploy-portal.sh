@@ -15,6 +15,13 @@
 #   DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE=1 — curl -k for HTTPS verify URLs
 #   DEPLOY_PORTAL_BLUEGREEN=0 — legacy compose_up (docker rm -sf gap on :3000)
 #
+# Verify stage, CSP wasm check (round 21, 2026-09-17 — see the verify stage below):
+#   DEPLOY_PORTAL_SKIP_CSP_CHECK=1 — skip the post-deploy check that the public CSP
+#     script-src still carries 'wasm-unsafe-eval' (needed for the desk-phone scan
+#     page's on-device barcode decoder to run at all). Skip only where there is no
+#     public nginx in front of the portal to check.
+#   DEPLOY_PORTAL_CSP_CHECK_HOST — hostname to probe (default app.loopcom.net)
+#
 # Rollback: docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md
 set -euo pipefail
 
@@ -177,6 +184,57 @@ if ! docker exec app-portal-1 sh -lc "grep -R -n -F 'sync-last' /app/apps/portal
   log "verify: expected marker 'sync-last' not found in compiled bundle"
   verify_ok=0
 fi
+
+# ⛔⛔ Round 21 (2026-09-17): the customer scan page's on-device barcode decoder needs
+# 'wasm-unsafe-eval' in the portal's CSP script-src, or WebAssembly.instantiate() throws
+# SILENTLY (the page's own catch swallows it and falls back to the slow photo path) —
+# live for a full day before anyone noticed, because the only check anyone had run
+# proved the wasm FILE downloads (200, application/wasm), which says nothing about
+# whether it can COMPILE. That header lives on the SERVER (nginx's shared
+# security-headers.conf), not in this repo, so a deploy can never FIX a missing one —
+# but it can catch a server-side regression (a config restore, a rebuilt nginx image,
+# anybody hand-editing the shared file) before a customer notices instead of after.
+# DEPLOY_PORTAL_SKIP_CSP_CHECK=1 skips this probe, for an environment with no public
+# nginx in front of the portal yet (the check needs the real HTTPS edge, not :3000
+# directly — that header is injected by nginx, never by the Next.js app itself).
+if [[ "${DEPLOY_PORTAL_SKIP_CSP_CHECK:-0}" != "1" ]]; then
+  csp_host="${DEPLOY_PORTAL_CSP_CHECK_HOST:-app.loopcom.net}"
+  csp_url="https://${csp_host}/phone-setup/x"
+  csp_tls=()
+  [[ "${DEPLOY_PORTAL_PUBLIC_VERIFY_TLS_INSECURE:-0}" == "1" ]] && csp_tls=(-k)
+  # Reuse the SAME loopback-preferred / DNS-fallback resolve logic the public verify
+  # probe above uses, for the SAME reason (2026-08-21: a hairpin 403 on the server's
+  # own public IP once rolled back a perfectly healthy deploy).
+  csp_specs=()
+  while IFS= read -r _spec; do csp_specs+=("$_spec"); done < <(deploy_portal_rollout_probe_resolve_specs "$csp_url")
+  csp_ok=0
+  csp_reached=0
+  for spec in "${csp_specs[@]}"; do
+    csp_resolve=()
+    [[ -n "$spec" ]] && csp_resolve=(--resolve "$spec")
+    csp_headers="$(curl "${csp_tls[@]}" "${csp_resolve[@]}" -sI --connect-timeout 3 --max-time 15 "$csp_url" 2>/dev/null || true)"
+    [[ -n "$csp_headers" ]] && csp_reached=1
+    if printf '%s' "$csp_headers" | grep -i '^content-security-policy:' | grep -qi 'wasm-unsafe-eval'; then
+      csp_ok=1
+      break
+    fi
+  done
+  if [[ "$csp_ok" -ne 1 ]]; then
+    if [[ "$csp_reached" -ne 1 ]]; then
+      # ⛔ A probe that could not CONNECT proves nothing about the header, and rolling a
+      # healthy portal back over a transient edge hiccup is the exact 2026-08-21 mistake.
+      # Say it loudly; never fail the deploy on it.
+      log "verify: WARNING could not reach ${csp_url} to check the CSP header (connection failure, not a bad status) — check 'curl -sI https://app.loopcom.net | grep -i content-security' by hand"
+    else
+      # The edge answered and the header is missing 'wasm-unsafe-eval': a real server-side
+      # regression that silently kills the scan page. Fail loudly (rollback runs below) so
+      # nobody reads "success" while customers cannot scan.
+      log "verify: CSP script-src lacks 'wasm-unsafe-eval' — the customer scan page's on-device decoder cannot run (round 21, 2026-09-17); fix /etc/nginx/connectcomms/security-headers.conf"
+      verify_ok=0
+    fi
+  fi
+fi
+
 deploy_common_log_timing "verify" "$(deploy_common_stopwatch_elapsed_ms "$VERIFY_START")"
 if [[ "$verify_ok" -ne 1 ]]; then
   rollback

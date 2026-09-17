@@ -36,6 +36,7 @@ import { clientIpFromForwardedFor } from "../loginThrottle";
 import { addEvidence, cloudStateFromRow, evidenceForRow, identityColumns, reportedEvidence, sanitizeEvidence } from "./deviceIdentityStore";
 import { createDeviceProviderRegistry, type DeviceProviderRegistry } from "./deviceProviderRegistry";
 import { registerDeviceCloudRoutes } from "./deviceCloudRoutes";
+import { ensureYealinkRedirect } from "./yealinkRedirectClaim";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -45,7 +46,7 @@ const getUser = (req: any): JwtUser => req.user as JwtUser;
  * X-Forwarded-For entry, because earlier entries are whatever the client sent.
  * null when unknown — which the record-move rule treats as unprovable, never as a match.
  */
-const requesterIpOf = (req: any): string | null => {
+export const requesterIpOf = (req: any): string | null => {
   const ip = clientIpFromForwardedFor(req?.headers?.["x-forwarded-for"]);
   return ip && ip !== "unknown" ? ip : null;
 };
@@ -118,6 +119,16 @@ export type DeskPhoneDeps = {
   withMacLock?: <T>(key: string, fn: (tx: any) => Promise<T>) => Promise<T>;
   /** Transport for the GDMS credential check; tests inject the simulator. */
   gdmsRequest?: typeof fetch;
+  /** Injectable for tests only — the real default is `new ManagedPhoneService()`
+   * (`yealinkRedirectClaim.ts`'s office-wizard RPS claim). Loosely typed so this
+   * file never has to import `managedPhoneService.ts`. */
+  managedPhoneService?: {
+    claimForOfficeWizard: (
+      actor: { tenantId: string; sub: string },
+      input: unknown,
+      requestId: string,
+    ) => Promise<{ id: string; rpsState: string; lastError: string | null; conflict: boolean }>;
+  };
 };
 
 /**
@@ -146,7 +157,7 @@ export function buildPhoneprovUrl(base: string | null, tenantPath: unknown): str
 const provisioningUrlCache = new Map<string, { url: string | null; at: number }>();
 const PROVISIONING_URL_CACHE_MS = 10 * 60_000;
 
-async function defaultProvisioningUrlFor(tenantId: string): Promise<string | null> {
+export async function defaultProvisioningUrlFor(tenantId: string): Promise<string | null> {
   const hit = provisioningUrlCache.get(tenantId);
   if (hit && Date.now() - hit.at < PROVISIONING_URL_CACHE_MS) return hit.url;
   let url: string | null = null;
@@ -459,6 +470,14 @@ function customerPhoneView(row: any) {
     identityConfidence: row.identityConfidence || null,
     provisioningStatus,
     provisioningStatusLabel: describeProvisioningStatus(provisioningStatus),
+    // ⛔ Plain English, never a vendor name (Grandstream/Yealink/GDMS/RPS stay staff-only):
+    // "on" once the maker's cloud genuinely holds this device, "held_by_previous_provider"
+    // when it is claimed by somebody else there, "off" for everything short of that
+    // (unchecked, not_found, claiming, unavailable). Vendor-neutral because ANY maker
+    // cloud claim — GDMS or RPS — sets the same `vendorCloudState`, not just Yealink's.
+    zeroTouch: row.vendorCloudState === "managed" ? "on" as const
+      : row.vendorCloudState === "conflict" ? "held_by_previous_provider" as const
+      : "off" as const,
   };
 }
 
@@ -910,6 +929,18 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       } catch { /* the note is a nicety; the assignment is the thing */ }
     }
 
+    // ⛔ Fire-and-forget: this is the office wizard's own moment where the record
+    // becomes writeable, so it is also the moment a Yealink's serial+extension are
+    // both worth trying against Yealink's RPS. Best-effort — ensureYealinkRedirect
+    // never throws, and the assignment the person made already landed above.
+    void ensureYealinkRedirect(updated, user, req, {
+      audit: deps.audit,
+      db,
+      managedPhoneService: deps.managedPhoneService,
+      provisioningUrlFor: deps.provisioningUrlFor ?? defaultProvisioningUrlFor,
+      requesterIp: requesterIpOf,
+    }).catch(() => {});
+
     return reply.send({ ok: true, phone: customerPhoneView(updated), record: recordView(record) });
   });
 
@@ -1049,6 +1080,16 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         setupSupported: picked.setupSupported, drivableLocally: picked.drivableLocally,
       },
     });
+
+    // ⛔ Fire-and-forget, same reasoning as /assign: naming the model is often the
+    // last input Yealink's RPS claim needed (the model gate `managedModel()`).
+    void ensureYealinkRedirect(updated, user, req, {
+      audit: deps.audit,
+      db,
+      managedPhoneService: deps.managedPhoneService,
+      provisioningUrlFor: deps.provisioningUrlFor ?? defaultProvisioningUrlFor,
+      requesterIp: requesterIpOf,
+    }).catch(() => {});
 
     return reply.send({ ok: true, phone: customerPhoneView(updated), record: recordView(record) });
   });
@@ -1208,6 +1249,15 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     });
 
     const after = await db.deskPhoneSetupPhone.findFirst({ where: { id: phone.id } });
+    // ⛔ Fire-and-forget, same reasoning as /assign and /identify: a retry is
+    // another moment the serial and extension may already both be on file.
+    void ensureYealinkRedirect(after ?? updated, user, req, {
+      audit: deps.audit,
+      db,
+      managedPhoneService: deps.managedPhoneService,
+      provisioningUrlFor: deps.provisioningUrlFor ?? defaultProvisioningUrlFor,
+      requesterIp: requesterIpOf,
+    }).catch(() => {});
     return reply.send({ ok: true, phone: customerPhoneView(after ?? updated), record: recordView(record) });
   });
 
@@ -2081,6 +2131,10 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     isRegistered: deps.isRegistered ?? defaultIsRegistered,
     registry,
     withMacLock: deps.withMacLock ?? defaultWithMacLock,
+    // Threaded in rather than imported by deviceCloudRoutes.ts, which would be a
+    // runtime circular value-import (this file already imports registerDeviceCloudRoutes).
+    provisioningUrlFor: deps.provisioningUrlFor ?? defaultProvisioningUrlFor,
+    managedPhoneService: deps.managedPhoneService,
     // The rendered gs_provision config the PBX serves this device — fetched the same way the
     // phone would (the tenant's phoneprov base + cfg<mac>.xml). Now sourced from a CLEAN per-model
     // template, so the server is correct. Used to SEND the config over the maker cloud.

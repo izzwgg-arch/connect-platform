@@ -89,6 +89,18 @@ body:has(.ps-shell) { overflow: auto !important; height: auto !important; }
 }
 .ps-tick[data-done="true"]{background:var(--good); color:var(--bg)}
 
+/* ── decoder mode chip (round 21 follow-up, 2026-09-17) ────────────────────────
+   Not the camera overlay's .ps-chip below, which sits on a dark video feed regardless
+   of theme — this one lives in normal page flow on the list view, so it uses the
+   page's OWN theme tokens and must read correctly in both light and dark. Same pill
+   shape and small-caps weight as every other chip on this page; just themed for here. */
+.ps-modechip{
+  display:inline-flex; align-self:flex-start; align-items:center;
+  font:600 12px Inter,sans-serif; padding:5px 12px; border-radius:999px; border:1px solid transparent;
+}
+.ps-modechip--device{ background:var(--good-soft); color:var(--good); border-color:color-mix(in srgb,var(--good) 32%,transparent) }
+.ps-modechip--photo{ background:var(--warn-soft); color:var(--warn); border-color:color-mix(in srgb,var(--warn) 32%,transparent) }
+
 /* ── buttons ────────────────────────────────────────────────────────────────── */
 .ps-btn{
   display:block; width:100%; text-align:center; border:0; cursor:pointer;

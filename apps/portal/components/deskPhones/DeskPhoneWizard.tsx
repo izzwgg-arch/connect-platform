@@ -63,6 +63,10 @@ type CustomerPhone = {
   identityConfidence?: string | null;
   provisioningStatus?: string | null;
   provisioningStatusLabel?: string | null;
+  /** Customer-safe word for the maker's cloud claim (Yealink RPS, Grandstream GDMS, …
+   * — never named). "on" once the maker genuinely holds this device; "held_by_previous_provider"
+   * when its cloud says somebody else does; "off" for everything short of that. */
+  zeroTouch?: "on" | "held_by_previous_provider" | "off" | null;
   status: "Finding" | "Preparing" | "Restarting" | "Connecting" | "Ready" | "Needs attention";
   note: string | null;
   needsAttention: boolean;
@@ -450,6 +454,19 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     const looks = p.displayName ? (named || describe(p.model)) : describe(p.model);
     const kind = p.deviceType && p.deviceType !== "unknown" ? (p.deviceTypeLabel ?? null) : null;
     return kind && !looks.toLowerCase().includes(kind.toLowerCase()) ? `${looks} · ${kind}` : looks;
+  };
+
+  /** Small chip on a phone's row for what its maker's cloud says (2026-09-17, office-wizard
+   * RPS claim) — never a maker or platform name, only the plain-English word the server
+   * already reduced it to. Silent when there is nothing worth a chip for. */
+  const zeroTouchChip = (p: CustomerPhone) => {
+    if (p.zeroTouch === "on") {
+      return <span className="dps-pill dps-pill-ok" style={{ marginLeft: 6 }}>Zero-touch on</span>;
+    }
+    if (p.zeroTouch === "held_by_previous_provider") {
+      return <span className="dps-pill dps-pill-hm" style={{ marginLeft: 6 }}>Held by previous provider</span>;
+    }
+    return null;
   };
 
   const assign = useCallback(async (phoneId: string, extensionId: string | null) => {
@@ -1068,6 +1085,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         : ([p.vendor, p.model].filter(Boolean).join(" ") || "Desk phone")}</b>
                       <span>{hardwareLine(p)}</span>
                       {(p.mac || p.ip) && <span className="dps-mac">{[p.mac, p.ip].filter(Boolean).join(" · ")}</span>}
+                      {zeroTouchChip(p)}
                     </div>
                     {step === "match" ? (
                       <ConnectSelect
@@ -1535,6 +1553,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
                         power-cycle ask lives here, where the person is looking. */}
                     {!p.note && hints[p.id] && <span className="dps-hintline">{hints[p.id]}</span>}
                     {p.mac && <span className="dps-mac">{p.mac}</span>}
+                    {zeroTouchChip(p)}
                   </div>
                   {p.needsAttention && (
                     <button className="dps-btn dps-btn-g" onClick={() => void retryPhone(p.id)}>Try again</button>
