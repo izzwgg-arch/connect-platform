@@ -273,6 +273,34 @@ test("never throws: a failing db write is swallowed, not propagated", async () =
   await assert.doesNotReject(ensureYealinkRedirect(basePhone(), user, {}, deps));
 });
 
+/* ── the halt's note always wins (live, 2026-09-17) ───────────────────────── */
+
+test("conflict: never overwrites the note of a phone the ladder halted after the snapshot was taken", async () => {
+  // The caller passed an ASSIGNED snapshot (a /retry had just happened); by the time the
+  // RPS round trip finished, advance had halted the phone with "hold OK ~10 s".
+  const { deps, db } = harness({
+    managedPhoneService: { claimForOfficeWizard: async () => ({ id: "mdp-1", rpsState: "conflict", lastError: "rps_ownership_conflict", conflict: true }) },
+  });
+  (db as any).deskPhoneSetupPhone.findUnique = async () => ({
+    state: "NEEDS_ATTENTION", haltedReason: "support", customerNote: "No problem — hold its OK button for about 10 seconds…",
+  });
+  const out = await ensureYealinkRedirect(basePhone({ state: "ASSIGNED", customerNote: null }), user, {}, deps);
+  assert.deepEqual(out, { ok: true, state: "conflict" });
+  const write = db.updates.at(-1)!;
+  assert.equal(write.data.vendorCloudState, "conflict", "the cloud word still lands");
+  assert.equal("customerNote" in write.data, false, "the halt's instruction was overwritten");
+  assert.equal("technicalNote" in write.data, false);
+});
+
+test("conflict: never overwrites a note somebody else wrote, only an empty one or our own", async () => {
+  const { deps, db } = harness({
+    managedPhoneService: { claimForOfficeWizard: async () => ({ id: "mdp-1", rpsState: "conflict", lastError: "rps_ownership_conflict", conflict: true }) },
+  });
+  (db as any).deskPhoneSetupPhone.findUnique = async () => ({ state: "ASSIGNED", haltedReason: null, customerNote: "Some other, more specific sentence." });
+  await ensureYealinkRedirect(basePhone(), user, {}, deps);
+  assert.equal("customerNote" in db.updates.at(-1)!.data, false);
+});
+
 /* ── bounded ────────────────────────────────────────────────────────────────── */
 
 test("bounded: a claim that never resolves still returns quickly as unavailable", async () => {

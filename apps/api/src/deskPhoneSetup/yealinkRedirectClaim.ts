@@ -221,14 +221,29 @@ async function writeOutcome(
 ) {
   const vendorCloudState = state; // "managed" | "conflict" | "unavailable" are all valid DeskPhoneSetupPhone.vendorCloudState values.
   const data: Record<string, unknown> = { vendorCloudState, vendorCloudCheckedAt: at };
+  // ⛔⛔ RE-READ THE ROW NOW, never trust the snapshot the caller passed in. Found live
+  // 2026-09-17: `/retry` fired this claim fire-and-forget on an ASSIGNED row, the ladder
+  // halted the phone ("hold OK ~10 s") a few hundred ms later, and this write — a full RPS
+  // round trip later — landed with the STALE "ASSIGNED" snapshot and replaced the one
+  // instruction the person needed with the cloud-conflict sentence. The halt's note is the
+  // more specific one and always wins; the cloud word rides `vendorCloudState` regardless.
+  let current: { state?: string | null; haltedReason?: string | null; customerNote?: string | null } = phone;
+  try {
+    const fresh = await db.deskPhoneSetupPhone.findUnique?.({
+      where: { id: phone.id }, select: { state: true, haltedReason: true, customerNote: true },
+    });
+    if (fresh) current = fresh;
+  } catch { /* the snapshot is the best we have */ }
+  const halted = current.state === "NEEDS_ATTENTION" || Boolean(current.haltedReason);
+  const noteIsOursOrEmpty = !current.customerNote || String(current.customerNote) === CONFLICT_NOTE;
   if (state === "conflict") {
-    // ⛔ Never overwrite a note the halt ladder set for its own, more specific reason.
-    if (phone.state !== "NEEDS_ATTENTION") {
+    // ⛔ Only onto an EMPTY row or our own earlier sentence, and never onto a halted phone.
+    if (!halted && noteIsOursOrEmpty) {
       data.customerNote = CONFLICT_NOTE;
       data.technicalNote = `yealink_rps_conflict mac=${phone.macAddress} serial=${serialTailOf(String(phone.serialNumber || ""))} `
         + `— release via https://ticket.yealink.com/page/mac-removal.html (MAC + serial + photo)`;
     }
-  } else if (state === "managed" && String(phone.customerNote || "") === CONFLICT_NOTE) {
+  } else if (state === "managed" && String(current.customerNote || "") === CONFLICT_NOTE) {
     // ⛔ Clear a previous conflict note of OUR OWN once the cloud confirms we hold it —
     // matched on the exact sentence we wrote, never a note the halt ladder set.
     data.customerNote = null;

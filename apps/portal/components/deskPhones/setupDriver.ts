@@ -295,6 +295,31 @@ export function createSetupDriver(
     m.stalledCount = 0;
   }
 
+  /**
+   * The person pressed "Try again" on this phone (the server's `/retry` already made it a
+   * fresh go: ASSIGNED, resetCount 0). THIS MACHINE MUST FORGET TOO.
+   *
+   * ⛔⛔ FOUND LIVE 2026-09-17 (Izzy, 14 presses in six minutes: "I keep pressing Try Again
+   * and nothing happens"). The server forgot the halt, but this window still remembered
+   * `locked` + `passwordUnavailable` from before — so the very next advance carried
+   * "no password" again and the ladder re-halted in under a second WITHOUT touching the
+   * phone. After a hand factory reset the phone is on defaults and would have accepted the
+   * reset; the wizard never asked it. A retry is a fresh go here exactly as it is on the
+   * server: every observation about the OLD state of the phone is dropped. What is kept
+   * is a password the person TYPED (`credentialRef`) — that is a fact about the person's
+   * knowledge, not about the phone's old state, and typing it again would be the wall
+   * Izzy called out.
+   */
+  function retried(phoneId: string) {
+    const prior = memos.get(phoneId);
+    memos.delete(phoneId);
+    if (prior?.haveCustomerCredentials && prior.credentialRef) {
+      const m = memo(phoneId);
+      m.haveCustomerCredentials = true;
+      m.credentialRef = prior.credentialRef;
+    }
+  }
+
   /** The serial number was saved for this phone: ask the maker's cloud again on the next tick. */
   function serialProvided(phoneId: string) {
     const m = memo(phoneId);
@@ -739,5 +764,5 @@ export function createSetupDriver(
     return all.length > 0 && all.every((m) => m.stalledCount >= MAX_CONSECUTIVE_STALLS);
   }
 
-  return { tick, credentialStored, passwordUnknown, declineReset, serialProvided, serialUnavailable, everythingStalled };
+  return { tick, credentialStored, passwordUnknown, retried, declineReset, serialProvided, serialUnavailable, everythingStalled };
 }

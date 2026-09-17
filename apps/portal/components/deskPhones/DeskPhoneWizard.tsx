@@ -483,6 +483,9 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       await apiPost(`/desk-phones/runs/${runId}/phones/${phoneId}/retry`, {});
+      // ⛔ The driver in THIS window must forget the old "locked / no password" answer too,
+      // or "Try again" re-halts instantly without touching the phone (live, 2026-09-17).
+      driverRef.current?.retried(phoneId);
       await loadRun(runId);
     } catch (err: any) {
       setError(err?.body?.message || "That phone could not be tried again just now.");
@@ -802,6 +805,7 @@ export function DeskPhoneWizard({ onClose }: { onClose: () => void }) {
       if (stuck.length > 0) {
         for (const p of stuck) {
           await apiPost(`/desk-phones/runs/${runId}/phones/${p.id}/retry`, {}).catch(() => null);
+          driverRef.current?.retried(p.id);
         }
         await loadRun(runId);
       }

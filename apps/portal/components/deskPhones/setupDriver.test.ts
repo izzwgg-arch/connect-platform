@@ -237,6 +237,34 @@ test("'I don't know the password' travels to the server and the wizard never re-
   assert.equal(adv.body.passwordUnavailable, true, "the answer never reached the server");
 });
 
+test("'Try again' makes the driver forget the old lock — the phone is tried again, not re-halted from memory", async () => {
+  // ⛔ Live 2026-09-17: fourteen presses, zero attempts. After a hand factory reset the phone
+  // accepts the reset; the window still remembered "locked + no password" and re-halted.
+  const api = fakeApi([phone("p1")], { p1: { action: "ask_for_password", customerMessage: "x" } });
+  const d = createSetupDriver("r1", api, fakeBridge());
+  await d.tick();
+  d.passwordUnknown("p1");
+  await d.tick();
+  assert.equal(api.calls.filter((c) => c.path.includes("/advance")).at(-1)!.body.passwordUnavailable, true);
+  d.retried("p1");
+  await d.tick();
+  const adv = api.calls.filter((c) => c.path.includes("/advance")).at(-1)!;
+  assert.equal(adv.body.passwordUnavailable, false, "the old 'no password' answer survived the retry");
+  assert.equal(adv.body.locked, false, "the old lock survived the retry");
+  assert.equal(adv.body.defaultCredentialsTried, false, "the old default-credential attempt survived the retry");
+});
+
+test("'Try again' keeps a password the person typed", async () => {
+  const api = fakeApi([phone("p1")], { p1: { action: "ask_for_password", customerMessage: "x" } });
+  const d = createSetupDriver("r1", api, fakeBridge());
+  await d.tick();
+  d.credentialStored("p1", "phone:p1");
+  d.retried("p1");
+  await d.tick();
+  const adv = api.calls.filter((c) => c.path.includes("/advance")).at(-1)!;
+  assert.equal(adv.body.haveCustomerCredentials, true, "the typed password was forgotten by the retry");
+});
+
 test("an unticked device is recorded as declined and the flag travels on every advance", async () => {
   const api = fakeApi([phone("p1"), phone("p2")], {
     p1: { action: "request_reset_authorization", customerMessage: "x" },
