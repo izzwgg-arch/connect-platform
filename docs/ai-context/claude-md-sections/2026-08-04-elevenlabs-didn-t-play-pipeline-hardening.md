@@ -58,60 +58,49 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md
   Studio modal) vs `/agent-api/voice/elevenlabs/status` (agent — owner
   settings page). Don't conflate them.
 
-## ⛔⛔ 2026-09-17 — IT RECURRED ("Polly voices + existing IVR recordings: I can't hear anything, other audio on the PC is fine") — SAME CAUSE, and the probe got sharper
+## ⛔⛔ 2026-09-17 — "Polly voices + existing IVR recordings: I can't hear anything, other audio on the PC is fine" — RESOLVED: WINDOWS VOLUME MIXER HAD CHROME AT 0. Not the product, not the pipeline.
 
 Read this before touching ANY code for a "no sound in the app" report from Izzy.
 
-- **Server was innocent again, proven first:** nginx on loopcom showed his IP's three
-  requests in the minutes before the report — two `POST /api/voice/polly/preview`
-  (200, 71,042 B and 66,262 B) and one `GET /api/voice/ivr/prompts/<id>/stream`
-  (200, 116,396 B). Full WAV bodies delivered. ⛔ Two different server paths dying
-  together is the tell: it is the CLIENT.
-- **"The app" was his real Chrome** (UA `Chrome/152` in nginx matched the Chrome the
-  extension drove; referer `app.loopcom.net/pbx/ivr-studio`).
-- **The definitive probe (run in his Chrome via the extension — no gesture needed):**
-  ```js
-  const url='https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3?x='+Date.now();
-  const f=await fetch(url).then(r=>r.arrayBuffer()).then(b=>b.byteLength);   // 39,868 B in 631 ms — network fine
-  const a=new Audio(url+'&m=1'); a.preload='auto'; a.load(); await new Promise(r=>setTimeout(r,3000));
-  ({f, readyState:a.readyState, entries:performance.getEntriesByType('resource').filter(e=>e.name.includes('t-rex')).length})
-  ```
-  Healthy Chrome: `readyState ≥ 1` and TWO resource entries in <1 s. His Chrome:
-  `readyState 0`, only `loadstart`, and **ONE resource entry — the media element never
-  even sent the request.** The media pipeline blocks on audio-output setup before it
-  loads anything. `decodeAudioData` on a WAV still works (different path) — that is
-  NOT evidence of health.
-- ⛔ **Two probe traps that gave false readings first:** (1) the extension's clicks do
-  NOT grant user activation (`navigator.userActivation.hasBeenActive === false`), so
-  `play()` → `NotAllowedError` and `AudioContext.resume()` pending forever are
-  INCONCLUSIVE — never cite them; the `load()`-only probe above is the one that
-  counts. (2) A `await ctx.resume()` inside the probe froze the renderer and timed out
-  the CDP evaluate (45 s) — always wrap with a `Promise.race` timeout.
-- **What did NOT fix it:** killing Chrome's audio helper (`chrome.exe --type=utility
-  --utility-sub-type=audio.mojom.AudioService`, alive since Chrome's Sep 15 04:03 start,
-  2¾ days). Chrome respawned it within 3 s and the probe was still stuck, incl. in a
-  brand-new renderer on a different origin (`example.com`). So the stuck state lives in
-  the BROWSER process, not the helper. **Full Chrome quit + reopen is the fix**
-  (⏳ still unconfirmed by Izzy at write time — see the follow-up in this file).
-- **Ruled out on the Windows side:** no per-app output override for chrome.exe
-  (`HKCU\Software\Microsoft\Multimedia\Audio\DefaultEndpoint` absent; the
-  `PolicyConfig\PropertyStore` chrome entries are volume memory with GUID zero, not
-  routing); two ACTIVE render endpoints (Realtek Speakers + UGA-4KDP dock audio);
-  `Audiosrv` + `AudioEndpointBuilder` running; other apps play.
-- **Follow-up, same evening ("see for yourself, open it and play it"):** ⛔ the
-  extension's tab group is signed OUT of Loopcom on both hostnames while nginx shows
-  his Studio tab signed in — Chrome had TWO profile windows open (`Default` "Iz" =
-  where the extension lives; `Profile 2` "jacob" = last used, his Studio tab).
-  Profiles do not share `localStorage["token"]`, so the extension cannot reach his
-  tab, and I will not sign in as him. It does NOT matter for the diagnosis: both
-  profile windows live in ONE `chrome.exe` browser process (PID 2360 since Sep 15)
-  with one audio pipeline. ⛔ Also ruled out the desktop app by evidence, not
-  assumption: `apps/desktop/src/userAgent.ts` stamps `Loopcom/<version>` into every
-  request (`Loopcom/0.1.17-rc.18 Chrome/146` sat on /dashboard), and the Studio
-  traffic carries a bare `Chrome/152` UA → real Chrome. `AuthGate.tsx` only READS
-  the token on a fresh load and never clears it, so a probe navigation cannot sign
-  him out. ⏳ Chrome still NOT restarted at write time (same Sep-15 instance).
-- ⛔ **Recipe next time, in order:** nginx grep for his IP's audio routes (200 + big
-  body → client) → the load()-only probe in his Chrome → tell him to fully quit Chrome
-  (tray icon too; verify `Get-Process chrome` is empty) and reopen → re-run the probe.
-  Don't touch the product for this.
+- **THE CAUSE (proven, then fixed live):** the Windows per-app **Volume Mixer slider for
+  Chrome was at 0.00** (not muted — turned down) on the default speakers (Realtek,
+  master 74 %, unmuted). Everything in Chrome "played" — the Studio's own player ran
+  `loadedmetadata → canplay → playing`, `play()` resolved, unmuted, volume 1, clock ran
+  7.27 s to `ended` — and Windows multiplied it by zero. Wispr Flow sat at 100 % next to
+  it, which is why every other program was audible. Read via CoreAudio
+  (`IAudioSessionManager2` → sessions → `ISimpleAudioVolume.GetMasterVolume`); fixed with
+  `SetMasterVolume(1.0)` on the chrome session: `0.00 → 1.00`, replayed, clock ran again.
+- ⛔⛔ **CHECK THE MIXER FIRST NEXT TIME — it is a 10-second read and it is the answer
+  to "other audio works, this app doesn't".** Windows remembers per-app volume by the
+  app's path, so it survives restarts of the app AND of Chrome's audio helper. The
+  CoreAudio recipe is in `docs/ai-context/AGENT_HANDOFF_ELEVENLABS_PLAYBACK_2026-08-04.md` §8.
+  Manual route: Settings → System → Sound → Volume mixer → Google Chrome.
+- ⛔⛔ **A WRONG DIAGNOSIS I MADE FIRST, KEPT SO NOBODY REPEATS IT:** I read
+  `readyState 0` / "the `<audio>` never fetched" in probe tabs as the Aug-4 pipeline wedge
+  and told Izzy to restart Chrome. Those probes ran in the EXTENSION's tab — a hidden,
+  background tab with NO user activation (`navigator.userActivation.hasBeenActive ===
+  false`; extension clicks grant none) — and Chrome defers media loading there. The
+  moment a real click landed in his signed-in, visible tab, the same player loaded and
+  played instantly. ⛔ **A media probe from an un-activated background tab proves
+  NOTHING about the pipeline.** Test in the user's real tab with a real click, or
+  don't call it a wedge. (Killing Chrome's `audio.mojom.AudioService` helper, PID
+  18384 since Sep 15, was harmless and unnecessary — it respawned in 3 s.)
+- **Still true and still useful:** the server was innocent — nginx showed his IP's
+  requests as `200` with full bodies (2× `POST /api/voice/polly/preview` 71,042 B /
+  66,262 B, `GET /api/voice/ivr/prompts/<id>/stream` 116,396 B). Two different server
+  paths dying together = the CLIENT. And the client was real Chrome, not the desktop
+  app: the desktop app stamps `Loopcom/<version>` into every UA
+  (`apps/desktop/src/userAgent.ts`; `Loopcom/0.1.17-rc.18 Chrome/146` sat on /dashboard)
+  while the Studio traffic was a bare `Chrome/152`.
+- **Chrome profiles:** his Chrome runs several profile windows in ONE browser process
+  (`Default` "Iz" = where the Claude extension lives; `Profile 2` "jacob"). Profiles do not
+  share `localStorage["token"]`, so the extension's tab was signed out while his Studio
+  tab was signed in. Izzy signed in on the extension's tab himself to let me drive the
+  real click. `AuthGate.tsx` only READS the token on load and never clears it — a probe
+  navigation cannot sign him out.
+- ⛔ **Recipe next time, in order:** (1) nginx grep his IP for the audio routes — 200 +
+  big body → client. (2) **Windows Volume Mixer for that app (CoreAudio read).** (3) Only
+  then a media probe, and ONLY with a real click in the user's own visible tab. Don't
+  touch the product for this; don't tell him to restart Chrome on a background-tab probe.
+- ⏳ **Not yet proven by a human ear at write time:** Izzy hearing the replay after the
+  mixer fix (asked; awaiting his answer).

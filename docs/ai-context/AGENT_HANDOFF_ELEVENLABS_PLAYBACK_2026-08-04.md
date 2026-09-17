@@ -239,10 +239,23 @@ Commit **`4fb512ed`** on `feat/ivr-migration-takeover`
   it runs unconditionally; NODE_ENV in this codebase is a trap that fails
   silently in the exact environment it was written for.
 
-## §8 — 2026-09-17 recurrence (Polly previews + existing IVR recordings silent in Izzy's Chrome)
+## §8 — 2026-09-17: "can't hear Polly voices / IVR recordings" = Windows Volume Mixer had Chrome at 0
 
-Same diagnosis as §1, second occurrence. Full write-up (probe code, what did not fix it, Windows-side checks) is in
-`docs/ai-context/claude-md-sections/2026-08-04-elevenlabs-didn-t-play-pipeline-hardening.md`, section "2026-09-17 — IT RECURRED".
-Key additions over §1: the `load()`-only fetch-vs-media-element probe is the definitive test (no user gesture
-needed; extension clicks grant none); killing Chrome's `audio.mojom.AudioService` helper does NOT clear it;
-full Chrome restart is the remedy. Nothing in apps/api or apps/portal was changed.
+NOT a recurrence of §1. The pipeline was fine; Windows' per-app mixer slider for Chrome was 0.00.
+Full narrative (including the wrong pipeline diagnosis I made first and why) is in
+`docs/ai-context/claude-md-sections/2026-08-04-elevenlabs-didn-t-play-pipeline-hardening.md`.
+Nothing in apps/api or apps/portal changed.
+
+**Read the mixer (PowerShell, no modules):** `Add-Type` a CoreAudio interop —
+`MMDeviceEnumerator.GetDefaultAudioEndpoint(eRender, eConsole)` → `Activate(IAudioSessionManager2)` →
+`GetSessionEnumerator` → per session `IAudioSessionControl2.GetProcessId` + `ISimpleAudioVolume.GetMasterVolume/GetMute`.
+A session with `vol=0.00` for the app's process is the answer; `SetMasterVolume(1.0)` fixes it (done live:
+chrome `0.00 → 1.00`). Interface GUIDs: MMDeviceEnumerator `BCDE0395-E52F-467C-8E3D-C4579291692E`,
+IMMDeviceEnumerator `A95664D2-9614-4F35-A746-DE8DB63617E6`, IMMDevice `D666063F-1587-4E43-81F1-B948E807363F`,
+IAudioSessionManager2 `77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F`, IAudioSessionEnumerator `E2F5BB11-0570-40CA-ACDD-3AA01277DEE8`,
+IAudioSessionControl2 `BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D`, ISimpleAudioVolume `87CE5498-68D6-44E5-9215-6DA47EF883D8`.
+Manual route for Izzy: Settings → System → Sound → Volume mixer.
+
+⛔ A media-element probe from the Claude-in-Chrome extension's tab is a hidden, un-activated tab: Chrome
+defers loading there (`readyState 0`, no request) and it looks exactly like §1's wedge. It is not. Test with a
+real click in the user's own visible tab before calling anything a wedge.
