@@ -130,7 +130,19 @@ went to a person at once.
   own number + their POS PIN on the looked-up path (never enrolled, never asked without keying).
 - Prompt `34_enter_account_phone` cut (Polly Stephen/neural, 9.5 s, 8 kHz) and installed —
   `en-male` **63 → 64**, canonical `loopcom:/root/stephen-neural/` 64. No dialplan change.
-- ⏳ Verification for round 2: see "Round 2 — tested / deployed / proven" at the bottom.
+- **Round 2 — tested / deployed / proven (~19:55Z):** tests — the supermarket glob all green
+  (`payLineCode` 16/16 with 3 new redirect cases, `supermarketCore` 37/37, `payLineStress` 9/9,
+  `supermarketStress` 28/28; 81/81 re-run by hand); **api `528bf977` deployed direct**, container
+  `.build-commit` = 528bf977, healthy, `/ready` 200, prompt 34 named in the container's reducer.
+  **Live door proof `/root/payline-live-proof3.sh`** (real register, probes only, no text, no charge):
+  1. Izzy's cell (1001021, no POS PIN) → `01_welcome, 34_enter_account_phone`, gather phone → keys
+     8457823064 → `23_pin_or_star` (row: own account first, then 3762, `ownAccountBlocked pin_not_set`,
+     `status done` on hangup, never `no_pin`).
+  2. 845-782-3064 (3762, POS PIN not enrolled) → `34_enter_account_phone` → keys its OWN number →
+     `23_pin_or_star` (`ownAccountBlocked pin_not_enrolled`) — the caller can pay by keying the POS PIN.
+  3. Izzy's cell → asked → keys 5622096644 again → `20_connect_person`, `status no_pin` — the
+     redirect fires once. Warn log per redirect names the own account + reason; vault still 0 rows.
+  ⏳ NOT proven by a human: hearing prompt 34 on a real call; the rest of the round-1 ⏳ list stands.
 
 ## Sola vs the POS (Izzy, same evening: "if we can put it through the POS system straight, that would be more efficient" → "The PoS is way better")
 

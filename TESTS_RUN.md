@@ -535,3 +535,7 @@ Commit: the `feat(pay-line): a matched caller whose own account can't be served 
 - Deploy + live door proof (`/root/payline-live-proof3.sh`): recorded in the docs follow-up commit and in the
   summary file's "Round 2 — tested / deployed / proven" section.
 - NOT run: a human call; a real charge.
+- DEPLOYED api `528bf977` (direct, container-verified, `/ready` 200) and LIVE-PROVEN (`/root/payline-live-proof3.sh`):
+  Izzy's cell (no-POS-PIN account) → `34_enter_account_phone` → keys 8457823064 → `23_pin_or_star`; 3762's own
+  line → asked → keys its own number → `23_pin_or_star`; redirect fires ONCE (second no-PIN account → person,
+  `status no_pin`). Vault 0 rows. NOT proven: a human hearing prompt 34; code call ringing; a charge.
