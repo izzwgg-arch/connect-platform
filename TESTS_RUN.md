@@ -470,3 +470,42 @@ Not run: a human phone call keying a real POS PIN and a real card charge (no tes
   44 s voicemail — NOT finished after 39 min / 2,084 CPU-s; killed. This PC cannot label audio.
 - NOT run: anything against a real RunPod pod/endpoint or Kaggle (no key/account), a real dataset build
   (no transcripts exist yet), a real fine-tune, any before/after WER.
+
+## 2026-09-17 (evening) — Gesheft pay line: Izzy's full spec (matched = never a PIN; unknown → account number → PIN or star → one-time code by call/text)
+
+Commit: the `feat(pay-line): matched caller never keys a PIN …` commit on `feat/ivr-migration-takeover`
+(hash + deploy + live proof recorded in the docs follow-up commit right after it). Summary
+`docs/ai-context/claude-md-sections/2026-09-17-pay-line-code-by-call-or-text.md`, handoff §16e.
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/supermarket/payIvrDialplan.test.ts`
+  → **10/10** (4 new: dial/dialPlayback view, ten-digits-or-nothing, the conf's single async
+  Originate + say leg never Read()s + Gesheft leg dials its own trunk with its own CID).
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test "src/supermarket/*.test.ts"` (the
+  `npm test` glob for this area) → **224/224**: `supermarketCore` 37/37 (4 updated to the new rule, 3
+  added: default "never" vs `matchedPinPolicy:"ask_once"`, foreign never enrolls, no-PIN foreign blocked
+  at once), `payLineCode` **13/13 NEW** (text + call delivery, last-four-only prompts, 8-wait / 3-wrong /
+  2-send caps, expiry + resend, `payLineCodeSmsBody`, `resolvePayLineFromNumber` matrix, two source
+  guards — `payIvrCore` imports only `./payAmount`, the runtime never logs the code — and a 500-account
+  × {call,text} × {1,3 numbers} × 5-behaviour stress: code never persisted, only account numbers
+  contacted, ≤2 sends/call, every failure lands on a person, exactly one charge per payer),
+  `payLineStress` 9/9 (PAYLINE 1 split into never/ask_once; 5/7 pinned to ask_once — they test
+  purge/concurrency; 8's blockedReason allow-list gained `pin_not_enrolled`), `supermarketStress` 28/28
+  (STRESS 1's recorded-prompt set gained 23–33; 22 → ask_once; 25 toggles the env lever around its
+  scenario), `supermarketWiring` 11/11 (the banned-substring guard's bare "expir" false-positived on
+  `codeExpiresAt` — replaced with the real PCI field names), `phonePinRoutes` 11/11, `customerSync`
+  11/11, `customerPhoneMatch` 14/14.
+- `apps/api`: `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket/*, voice/polly.ts,
+  mfa/loginOtp.ts (pre-existing errors elsewhere, untouched).
+- Register probe (read-only, inside `app-api-1`, real key): 3762 balance no header → 401
+  "Customer PIN required."; pin 0 → 401 "Invalid customer PIN."; 1001021 pin 0 → "required";
+  **1001021 POST /charges (bogus card, no header AND pin 0) → 401 "Customer PIN required."** —
+  the register refuses charges on a no-PIN account before anything else.
+- Prompt cutter (inside `app-api-1`, Polly Stephen/neural): 11/11 files, all natively 8 kHz
+  mono 16-bit, durations 0.7–9.1 s; installed on the PBX (`en-male` 52 → 63, md5-matched).
+- PBX dialplan: spliced + `dialplan reload` clean for the pay blocks (the reload's WARNINGs are
+  pre-existing VitalPBX files); `dialplan show` verified the three contexts.
+- Live door proof (`/root/payline-live-proof2.sh` on loopcom, after the deploy): recorded in the
+  docs follow-up commit and in the summary file's Verification section.
+- NOT run: a human code call / code text / real charge (needs Izzy on a phone that is NOT on an
+  account, keying an account that has a POS PIN Loopcom holds); `SUPERMARKET_PAY_MATCHED_PIN_POLICY=ask_once`
+  in production (covered by tests only).

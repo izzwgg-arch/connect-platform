@@ -1166,3 +1166,52 @@ Summary file: `docs/ai-context/claude-md-sections/2026-09-17-pay-line-caller-id-
 - Desk PIN management routes + Orders-desk "Phone PIN" control (see the summary file).
 
 **Verification:** see the summary file's Verification section and `TESTS_RUN.md` (2026-09-17).
+
+### §16e — 2026-09-17 evening: IZZY'S FULL SPEC — matched = never a PIN; unknown → account number → PIN or star → one-time code by CALL or TEXT to a number on the account
+
+Izzy, ~13:20 ET, after his 13:16 ET call from 845-782-3064 (account 3762, POS has a PIN Loopcom
+did not hold → §16d's ask-once branch played `02_pin`): the four-point spec quoted in full in
+the summary file **`docs/ai-context/claude-md-sections/2026-09-17-pay-line-code-by-call-or-text.md`**,
+plus *"Should come from their phone number."* and *"stress-tested"*.
+
+**Facts that shaped the build (all measured 09-17 evening):**
+- A charge on a no-PIN account is refused `"Customer PIN required."` with no header AND with
+  `X-Customer-Pin: 0` (probe on card-less 1001021 with a bogus card id, inside `app-api-1`). 3762:
+  no header → "required", `0` → "Invalid customer PIN." (has a PIN), 1 Visa (`…9603`), record
+  shape `{id, firstName, lastName, phone, phones[], email, address, customerCreditCards[],
+  shippingAddresses, lastModified, isOnAccountEligible, route, seq}`.
+- 1,202 of 13,836 mirrored customers have 2+ numbers (161 of the 326 on-account ones) — the
+  "pick which number" step is real, not theoretical.
+- Gesheft's texting number +18452449666 is VOIPMS on the platform's `default` VoIP.ms account,
+  `SMS_PROVIDER_TEST_MODE=false` on the api → a synchronous send from the store's own number is
+  possible through `resolvePlatformSmsSender(thatNumber)` (the billing sender's account, the
+  tenant's from). The Connect Chat lane was NOT used: it is asynchronous (thread + worker queue)
+  and a caller is holding for the code.
+- No api-side originate exists (no AMI client, no ARI POST, the vm record-call goes through the
+  PBX helper's `asterisk -rx`). Asterisk 20.18.2's `Originate()` app has `a` (async), `c(cid)`,
+  `v(vars)` → the DIALPLAN places the code call from inside the caller's channel; the say leg
+  inherits the file list via `v()`. Real Gesheft outbound calls dial
+  `PJSIP/<10 digits>@344022_gesheft` with `CIDNUM=8452449666` (12:50 ET call).
+- Stephen = **Amazon Polly neural** (§10 of the POS API handoff; Kristen is ElevenLabs).
+  Polly credentials live in `AgentSecret polly_credentials`; the cutter ran inside the container.
+
+**Built:** see the summary file's "What is built" — reducer phases `code_channel` /
+`code_number` / `code_entry`, state fields `ownerVerified`, `accountPinState`,
+`matchedPinPolicy`, `codePhones/codeSentTo/codeHash/codeExpiresAt/codeSends/codeAttempts/codeWaits`,
+`blockedReason: pin_not_set | pin_not_enrolled`; effects `list_numbers` / `send_code` /
+`verify_code`; runtime deps `sendSms` / `now` / `generateCode` / `matchedPinPolicy` /
+`storeName` (all injectable); step result `dial` + `dialPrompts`; dialplan view `dial` +
+`dialPlayback` (ten digits or nothing, sanitised like `playback`). `payAmount.digitsToPromptRefs`.
+Prompt manifest + cutter; `polly.ts` `ssml: true`. Dialplan: `PAY_CODE_CTX` / `PAY_CODE_CID`
+per tenant entry point, one `Originate`, `[connect-pay-code-say]`, `[connect-pay-code-dial-gesheft]`;
+guard tests in `payIvrDialplan.test.ts` read the conf (one Originate, async, tenant-set context,
+say leg never Read()s, Gesheft leg dials its own trunk with its own CID).
+
+**Trade-off stated to Izzy, not hidden:** under "never", the ONLY way a matched caller on a
+PIN-having account gets served is the desk enrolling that PIN (Orders → Phone PIN). The morning's
+ask-once was the automatic enrollment engine; it is now behind
+`SUPERMARKET_PAY_MATCHED_PIN_POLICY=ask_once`. The one-time code proves the caller controls a
+number on the account; it cannot manufacture the POS PIN the register demands, so an owner-verified
+caller on an un-enrolled account also lands on a person (`pin_not_enrolled`).
+
+**Verification:** the summary file's bottom section + `TESTS_RUN.md` (2026-09-17 evening).

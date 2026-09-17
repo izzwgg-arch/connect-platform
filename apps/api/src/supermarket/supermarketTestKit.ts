@@ -374,6 +374,8 @@ export type FakePosCustomer = {
   cards: Array<{ id: string; masked: string }>;
   address1?: string;
   city?: string;
+  /** Other numbers on the account (10 digits each), for the one-time-code flow's list_numbers. */
+  phones?: string[];
 };
 
 export type FakePosOptions = {
@@ -461,7 +463,15 @@ export class FakePos {
     if (m && init.method === "GET") {
       const c = this.customers.get(decodeURIComponent(m[1]));
       if (!c) return this.res(404, { error: "not found" });
-      return this.res(200, { id: c.id, firstName: c.firstName, lastName: c.lastName, address1: c.address1, city: c.city });
+      return this.res(200, {
+        id: c.id,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        address1: c.address1,
+        city: c.city,
+        phone: c.phone10,
+        phones: [c.phone10, ...(c.phones ?? [])],
+      });
     }
 
     // products

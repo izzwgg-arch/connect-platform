@@ -189,23 +189,36 @@ test("caller-ID match with a stored PIN: silent verify, straight to the menu, no
   assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "a matching caller with a stored PIN never hears the PIN prompt");
 });
 
-test("stored PIN gone stale: falls back to keying, and never enrolls a foreign number", () => {
-  const { outputs, state } = drive([
+test("stored PIN gone stale: under the default policy 'never' the caller is blocked at once (never re-keyed); under the operator switch 'ask_once' it falls back to keying and re-enrolls; a foreign number is NEVER enrolled either way", () => {
+  // Default policy 'never': a stale enrollment is nothing enrolled — blocked
+  // at once, purge already happened in the runtime, no re-keying offered.
+  const blocked = drive([
     { type: "call_start", callerKnown: true, hasStoredPin: true, storedPin: "0000" },
-    { type: "pin_result", ok: false },
+    { type: "pin_result", ok: false, reason: "invalid" },
+  ]);
+  assert.ok(!blocked.outputs.flatMap((o) => o.prompts).includes("02_pin"), "policy 'never' must not fall back to keying");
+  assert.equal(blocked.state.phase, "human");
+  assert.equal(blocked.state.blockedReason, "pin_not_enrolled");
+
+  // Operator switch 'ask_once': restores the pre-09-17 behaviour verbatim.
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: true, storedPin: "0000", matchedPinPolicy: "ask_once" },
+    { type: "pin_result", ok: false, reason: "invalid" },
     { type: "digits", value: "4321" },
     { type: "pin_result", ok: true, balanceCents: 1000 },
   ]);
-  assert.ok(outputs[1].prompts.includes("02_pin"), "stale store falls back to keying");
+  assert.ok(outputs[1].prompts.includes("02_pin"), "stale store falls back to keying under ask_once");
   // caller-ID matched + keyed → enrollment fires
   assert.ok(outputs[3].effects.some((e) => e.kind === "enroll_pin"));
   assert.equal(state.phase, "main_menu");
 
-  // Foreign number (looked up): NO enrollment ever.
+  // Foreign number (looked up): probed first, then keyed — NO enrollment ever,
+  // regardless of the matched-caller policy.
   const foreign = drive([
     { type: "call_start", callerKnown: false, hasStoredPin: false },
     { type: "digits", value: "8456624417" },
     { type: "lookup_result", found: true, posCustomerId: "c9" },
+    { type: "pin_result", ok: false, reason: "invalid" },
     { type: "digits", value: "4321" },
     { type: "pin_result", ok: true, balanceCents: 500 },
   ]);
@@ -215,11 +228,11 @@ test("stored PIN gone stale: falls back to keying, and never enrolls a foreign n
   );
 });
 
-test("wrong PIN caps at 3 and lands on a person, never a loop", () => {
-  // A matched caller with nothing enrolled is PROBED first (silent); the
-  // register's "invalid" means the store set a PIN → asked once, then keyed.
+test("wrong PIN caps at 3 and lands on a person, never a loop (operator switch matchedPinPolicy:'ask_once')", () => {
+  // A matched caller with nothing enrolled is PROBED first (silent); under the
+  // ask_once switch the register's "invalid" means asked once, then keyed.
   const events: Parameters<typeof reducePayIvr>[1][] = [
-    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "call_start", callerKnown: true, hasStoredPin: false, matchedPinPolicy: "ask_once" },
     { type: "pin_result", ok: false, reason: "invalid" },
   ];
   for (let i = 0; i < PAY_MAX_PIN_ATTEMPTS; i++) {
@@ -230,6 +243,20 @@ test("wrong PIN caps at 3 and lands on a person, never a loop", () => {
   assert.equal(state.phase, "human");
   const all = outputs.flatMap((o) => o.prompts);
   assert.ok(all.includes("15_too_many_tries"));
+  assert.ok(all.includes("20_connect_person"));
+});
+
+test("⛔ THE DEFAULT (policy 'never'): the exact same 'invalid' probe result blocks a matched caller AT ONCE — no PIN is ever keyed, no 3-strikes cap is ever reached", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "pin_result", ok: false, reason: "invalid" },
+  ]);
+  assert.equal(state.phase, "human");
+  assert.equal(state.blockedReason, "pin_not_enrolled");
+  assert.equal(state.pinAttempts, 0, "never reaches a keyed attempt at all");
+  const all = outputs.flatMap((o) => o.prompts);
+  assert.ok(!all.includes("02_pin"), "never asked");
+  assert.ok(!all.includes("15_too_many_tries"), "there is nothing to cap — it never starts trying");
   assert.ok(all.includes("20_connect_person"));
 });
 
@@ -248,9 +275,9 @@ test("THE CALLER-ID RULE: a matched caller keys nothing — probe silently; 'PIN
   assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked");
 });
 
-test("THE CALLER-ID RULE: the store set a PIN Loopcom does not know → asked ONCE, enrolled, and digits during the silent probe are ignored", () => {
+test("THE CALLER-ID RULE (operator switch matchedPinPolicy:'ask_once'): the store set a PIN Loopcom does not know → asked ONCE, enrolled, and digits during the silent probe are ignored", () => {
   const { outputs, state } = drive([
-    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "call_start", callerKnown: true, hasStoredPin: false, matchedPinPolicy: "ask_once" },
     { type: "digits", value: "4321" }, // stray DTMF while the probe is in flight
     { type: "pin_result", ok: false, reason: "invalid" },
     { type: "digits", value: "4321" },
@@ -263,18 +290,49 @@ test("THE CALLER-ID RULE: the store set a PIN Loopcom does not know → asked ON
   assert.equal(state.phase, "main_menu");
 });
 
-test("THE CALLER-ID RULE: a foreign number keys the PIN every time; 'PIN required' there lands on a person without three futile tries", () => {
+test("THE CALLER-ID RULE (default policy 'never'): the store set a PIN Loopcom does not know → the caller is NEVER asked, handed to a person at once, flagged pin_not_enrolled for the desk to enroll", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, hasStoredPin: false },
+    { type: "digits", value: "4321" }, // stray DTMF while the probe is in flight — still ignored
+    { type: "pin_result", ok: false, reason: "invalid" },
+  ]);
+  assert.deepEqual(outputs[1].effects, [], "digits during a silent probe must not fire a second verify");
+  assert.equal(state.phase, "human");
+  assert.equal(state.blockedReason, "pin_not_enrolled");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked under the default policy");
+  assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")), "nothing was ever keyed, so nothing can be enrolled");
+});
+
+test("THE CALLER-ID RULE: a foreign number whose account has NO PIN in the POS is blocked at once by the silent probe — never asked, just like a matched caller", () => {
   const { outputs, state } = drive([
     { type: "call_start", callerKnown: false, hasStoredPin: false },
     { type: "digits", value: "8456624417" },
     { type: "lookup_result", found: true, posCustomerId: "c9" },
-    { type: "digits", value: "1234" },
     { type: "pin_result", ok: false, reason: "not_set" },
   ]);
-  assert.ok(outputs[2].prompts.includes("02_pin"));
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("02_pin"), "never asked — nothing any caller keys can pass");
+  assert.ok(!outputs.flatMap((o) => o.prompts).includes("23_pin_or_star"), "never asked — nothing any caller keys can pass");
   assert.equal(state.phase, "human");
   assert.equal(state.blockedReason, "pin_not_set");
   assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")));
+});
+
+test("THE CALLER-ID RULE: a foreign number whose account HAS a PIN keys it every time (probed first, silently); three misses land on a person, never enrolled", () => {
+  const events: Parameters<typeof reducePayIvr>[1][] = [
+    { type: "call_start", callerKnown: false, hasStoredPin: false },
+    { type: "digits", value: "8456624417" },
+    { type: "lookup_result", found: true, posCustomerId: "c9" },
+    { type: "pin_result", ok: false, reason: "invalid" }, // the silent probe: the account has a PIN
+  ];
+  for (let i = 0; i < PAY_MAX_PIN_ATTEMPTS; i++) {
+    events.push({ type: "digits", value: "1234" });
+    events.push({ type: "pin_result", ok: false });
+  }
+  const { outputs, state } = drive(events);
+  assert.equal(state.phase, "human");
+  assert.ok(outputs.flatMap((o) => o.prompts).includes("23_pin_or_star"), "a foreign caller must be told they may press star for a code");
+  assert.ok(outputs.flatMap((o) => o.prompts).includes("15_too_many_tries"));
+  assert.ok(outputs.every((o) => !o.effects.some((e) => e.kind === "enroll_pin")), "a foreign number must NEVER enroll a PIN");
 });
 
 test("normalizePayIvrState reads pre-2026-09-17 rows (no pinProbe / blockedReason) safely", () => {

@@ -94,14 +94,16 @@ async function scriptedCall(
   callId: string,
   callerNumber: string,
   opts: ScriptOpts,
-): Promise<{ steps: any[]; pin02Count: number; finalOut: any }> {
+): Promise<{ steps: any[]; pin02Count: number; pinStarCount: number; finalOut: any }> {
   const step = (digits?: string, hangup?: boolean) =>
     runPayIvrStep(deps as any, { tenantId, callId, callerNumber, digits, hangup });
   const steps: any[] = [];
   let pin02Count = 0;
+  let pinStarCount = 0;
   const record = (o: any) => {
     steps.push(o);
     if (o.prompts.includes("02_pin")) pin02Count++;
+    if (o.prompts.includes("23_pin_or_star")) pinStarCount++;
   };
 
   let out = await step();
@@ -127,192 +129,241 @@ async function scriptedCall(
     out = await step(digits);
     record(out);
   }
-  return { steps, pin02Count, finalOut: out };
+  return { steps, pin02Count, pinStarCount, finalOut: out };
 }
 
 // ═══════════════════════════════ PAYLINE 1 ═══════════════════════════════════
+// Run twice: once for the DEFAULT policy ('never' — a matched caller with
+// nothing enrolled is blocked at once, never asked) and once for the operator
+// switch ('ask_once' — the pre-09-17 behaviour, verbatim). A foreign number's
+// PIN prompt is "23_pin_or_star", never "02_pin" — tracked separately.
 
-test(
-  "PAYLINE 1 — caller-ID rule matrix at scale: 2,000 accounts x {own primary, own second, foreign} caller x {no PIN, no vault, correct vault, stale vault}",
-  async () => {
-    const ACCOUNTS = 2000;
-    const seed = 5150;
-    const rnd = mulberry32(seed);
-    const db = makeSupermarketDb();
-    const pos = new FakePos();
-    const tenantId = "t-callerid";
-    await seedPosTenant(db, tenantId, pos);
-    const clientFor = clientForFactory(new Map([[tenantId, pos]]));
-    const deps = { db, clientFor: clientFor as any };
+async function runCallerIdMatrix(policy: "never" | "ask_once") {
+  const ACCOUNTS = 2000;
+  const seed = policy === "never" ? 5150 : 51501;
+  const rnd = mulberry32(seed);
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = `t-callerid-${policy}`;
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+  const deps = { db, clientFor: clientFor as any, matchedPinPolicy: policy };
 
-    type Scenario = "own_primary" | "own_second" | "foreign";
-    type Vault = "none" | "correct" | "stale";
-    type Account = {
-      i: number;
-      id: string;
-      pinSet: boolean;
-      realPin: string | null;
-      hasCard: boolean;
-      scenario: Scenario;
-      vault: Vault;
-    };
-    const accounts: Account[] = [];
+  type Scenario = "own_primary" | "own_second" | "foreign";
+  type Vault = "none" | "correct" | "stale";
+  type Account = {
+    i: number;
+    id: string;
+    pinSet: boolean;
+    realPin: string | null;
+    hasCard: boolean;
+    scenario: Scenario;
+    vault: Vault;
+  };
+  const accounts: Account[] = [];
 
-    for (let i = 0; i < ACCOUNTS; i++) {
-      const pinSet = rnd() < 0.16; // the live ratio noted in the task
-      const realPin = pinSet ? realPinFor(i) : null;
-      const hasCard = rnd() < 0.07;
-      const sRoll = rnd();
-      const scenario: Scenario = sRoll < 1 / 3 ? "own_primary" : sRoll < 2 / 3 ? "own_second" : "foreign";
-      const vRoll = rnd();
-      const vault: Vault =
-        !pinSet || scenario === "foreign" ? "none" : vRoll < 1 / 3 ? "none" : vRoll < 2 / 3 ? "correct" : "stale";
-      const id = `pl-${i}`;
-      accounts.push({ i, id, pinSet, realPin, hasCard, scenario, vault });
+  for (let i = 0; i < ACCOUNTS; i++) {
+    const pinSet = rnd() < 0.16; // the live ratio noted in the task
+    const realPin = pinSet ? realPinFor(i) : null;
+    const hasCard = rnd() < 0.07;
+    const sRoll = rnd();
+    const scenario: Scenario = sRoll < 1 / 3 ? "own_primary" : sRoll < 2 / 3 ? "own_second" : "foreign";
+    const vRoll = rnd();
+    const vault: Vault =
+      !pinSet || scenario === "foreign" ? "none" : vRoll < 1 / 3 ? "none" : vRoll < 2 / 3 ? "correct" : "stale";
+    const id = `pl-${i}`;
+    accounts.push({ i, id, pinSet, realPin, hasCard, scenario, vault });
 
-      pos.addCustomer({
-        id,
-        phone10: primaryPhone(i),
-        pin: realPin,
-        balanceCents: 500_000,
-        cards: hasCard ? [{ id: `card-${i}`, masked: `x${i}` }] : [],
-      });
-      db.seed("posCustomer", {
+    pos.addCustomer({
+      id,
+      phone10: primaryPhone(i),
+      pin: realPin,
+      balanceCents: 500_000,
+      cards: hasCard ? [{ id: `card-${i}`, masked: `x${i}` }] : [],
+    });
+    db.seed("posCustomer", {
+      tenantId,
+      posCustomerId: id,
+      name: `Acct ${i}`,
+      phonesText: `${primaryPhone(i)} ${secondPhone(i)}`,
+      primaryPhone: primaryPhone(i),
+    });
+    if (vault === "correct" && realPin) {
+      db.seed("supermarketPhonePin", {
         tenantId,
         posCustomerId: id,
-        name: `Acct ${i}`,
-        phonesText: `${primaryPhone(i)} ${secondPhone(i)}`,
-        primaryPhone: primaryPhone(i),
+        phoneE164: `+1${primaryPhone(i)}`,
+        pinEnc: await encryptedPin(realPin),
+        lastUsedAt: new Date(),
       });
-      if (vault === "correct" && realPin) {
-        db.seed("supermarketPhonePin", {
-          tenantId,
-          posCustomerId: id,
-          phoneE164: `+1${primaryPhone(i)}`,
-          pinEnc: await encryptedPin(realPin),
-          lastUsedAt: new Date(),
-        });
-      } else if (vault === "stale" && realPin) {
-        db.seed("supermarketPhonePin", {
-          tenantId,
-          posCustomerId: id,
-          phoneE164: `+1${primaryPhone(i)}`,
-          pinEnc: await encryptedPin(`${realPin}x`),
-          lastUsedAt: new Date(),
-        });
-      }
+    } else if (vault === "stale" && realPin) {
+      db.seed("supermarketPhonePin", {
+        tenantId,
+        posCustomerId: id,
+        phoneE164: `+1${primaryPhone(i)}`,
+        pinEnc: await encryptedPin(`${realPin}x`),
+        lastUsedAt: new Date(),
+      });
+    }
+  }
+
+  let silentServed = 0;
+  let askedOnce = 0; // ask_once policy only
+  let blockedNotEnrolled = 0; // never policy only
+  let noPinLandings = 0;
+  let foreignAskedOnce = 0;
+  let charges = 0;
+  const foreignAccountIds = new Set<string>();
+  const acctById = new Map(accounts.map((a) => [a.id, a]));
+
+  for (const acct of accounts) {
+    const callerNumber =
+      acct.scenario === "own_primary"
+        ? primaryPhone(acct.i)
+        : acct.scenario === "own_second"
+          ? secondPhone(acct.i)
+          : foreignPhone(acct.i);
+    if (acct.scenario === "foreign") foreignAccountIds.add(acct.id);
+
+    // ---- call 1 ----
+    const before1 = pos.requestLog.length;
+    const call1 = await scriptedCall(deps, tenantId, `${acct.id}-c1`, callerNumber, {
+      targetPhone: acct.scenario === "foreign" ? primaryPhone(acct.i) : undefined,
+      pin: acct.realPin ?? "0000",
+      wantsPayment: rnd() < 0.5,
+    });
+    const mine1 = pos.requestLog.slice(before1);
+    const pinGated1 = mine1.filter((r) => r.pin !== null);
+    assert.ok(mine1.length <= 6, `call1 request count too high for ${acct.id}: ${mine1.length}`);
+
+    const row1 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: `${acct.id}-c1` } });
+    assert.ok(row1, `no session row for ${acct.id}`);
+
+    if (!acct.pinSet) {
+      // No PIN anywhere in the POS: EVERY caller — matched or foreign — is
+      // blocked at once by the silent probe, regardless of policy. Nobody is
+      // ever asked, because nothing any caller keys can ever satisfy it.
+      assert.equal(pinGated1.length, 1, `no-pin account cost != 1 pin-gated read: ${acct.id}`);
+      assert.equal(call1.pin02Count, 0, `no-pin account heard the matched-caller PIN prompt: ${acct.id}`);
+      assert.equal(call1.pinStarCount, 0, `no-pin account heard the foreign PIN-or-star prompt: ${acct.id}`);
+      const last = call1.steps.at(-1);
+      assert.equal(last.transfer, true, `no-pin account not transferred: ${acct.id}`);
+      assert.equal(last.gather, null, `no-pin account had a gather before transfer: ${acct.id}`);
+      assert.ok(last.prompts.includes("20_connect_person"));
+      assert.equal(row1.status, "no_pin");
+      assert.equal(row1.state.blockedReason, "pin_not_set");
+      noPinLandings++;
+      continue;
     }
 
-    let silentServed = 0;
-    let askedOnce = 0;
-    let noPinLandings = 0;
-    let foreignPinAsks = 0;
-    let charges = 0;
-    const foreignAccountIds = new Set<string>();
+    if (acct.scenario === "foreign") {
+      // The account HAS a PIN in the POS: a foreign caller is probed first
+      // (silent — not counted), then keys it via the star-aware prompt, every
+      // single call, and is never enrolled.
+      assert.equal(call1.pinStarCount, 1, `foreign caller not asked exactly once: ${acct.id}`);
+      assert.equal(call1.pin02Count, 0, `foreign caller heard the matched-caller PIN prompt: ${acct.id}`);
+      assert.ok(
+        pinGated1.some((r) => r.pin === acct.realPin),
+        `foreign caller's keyed PIN never reached the register: ${acct.id}`,
+      );
+      foreignAskedOnce++;
+    } else if (acct.vault === "correct") {
+      assert.equal(call1.pin02Count, 0, `matched caller with a correct vault was asked: ${acct.id}`);
+      assert.ok(
+        pinGated1.every((r) => r.pin === acct.realPin),
+        `wrong pin sent for correct-vault ${acct.id}: ${JSON.stringify(pinGated1)}`,
+      );
+      silentServed++;
+    } else if (policy === "ask_once") {
+      assert.equal(call1.pin02Count, 1, `matched caller with '${acct.vault}' vault not asked exactly once: ${acct.id}`);
+      assert.equal(
+        pinGated1[0]?.pin,
+        acct.vault === "none" ? PAY_PROBE_PIN : `${acct.realPin}x`,
+        `unexpected first pin-gated value for ${acct.id}`,
+      );
+      askedOnce++;
+    } else {
+      // policy "never": nothing enrolled → blocked at once, never asked.
+      assert.equal(call1.pin02Count, 0, `matched caller under 'never' was asked for a PIN: ${acct.id}`);
+      assert.equal(pinGated1.length, 1, `'never' policy should cost exactly one pin-gated read: ${acct.id}`);
+      assert.equal(
+        pinGated1[0]?.pin,
+        acct.vault === "none" ? PAY_PROBE_PIN : `${acct.realPin}x`,
+        `unexpected probe/stale pin-gated value for ${acct.id}`,
+      );
+      const last = call1.steps.at(-1);
+      assert.equal(last.transfer, true, `matched caller with nothing enrolled not blocked under 'never': ${acct.id}`);
+      assert.ok(last.prompts.includes("20_connect_person"));
+      assert.equal(row1.status, "pin_not_enrolled");
+      assert.equal(row1.state.blockedReason, "pin_not_enrolled");
+      blockedNotEnrolled++;
+    }
 
-    for (const acct of accounts) {
-      const callerNumber =
-        acct.scenario === "own_primary"
-          ? primaryPhone(acct.i)
-          : acct.scenario === "own_second"
-            ? secondPhone(acct.i)
-            : foreignPhone(acct.i);
-      if (acct.scenario === "foreign") foreignAccountIds.add(acct.id);
-
-      // ---- call 1 ----
-      const before1 = pos.requestLog.length;
-      const call1 = await scriptedCall(deps, tenantId, `${acct.id}-c1`, callerNumber, {
-        targetPhone: acct.scenario === "foreign" ? primaryPhone(acct.i) : undefined,
+    // ---- call 2, from the OTHER of the account's own numbers (matched only) ----
+    if (acct.scenario !== "foreign") {
+      const callerNumber2 = acct.scenario === "own_primary" ? secondPhone(acct.i) : primaryPhone(acct.i);
+      const before2 = pos.requestLog.length;
+      const call2 = await scriptedCall(deps, tenantId, `${acct.id}-c2`, callerNumber2, {
         pin: acct.realPin ?? "0000",
         wantsPayment: rnd() < 0.5,
       });
-      const mine1 = pos.requestLog.slice(before1);
-      const pinGated1 = mine1.filter((r) => r.pin !== null);
-      assert.ok(mine1.length <= 6, `call1 request count too high for ${acct.id}: ${mine1.length}`);
-
-      const row1 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId: `${acct.id}-c1` } });
-      assert.ok(row1, `no session row for ${acct.id}`);
-
-      if (!acct.pinSet) {
-        assert.equal(pinGated1.length, 1, `no-pin account cost != 1 pin-gated read: ${acct.id}`);
-        if (acct.scenario !== "foreign") {
-          const first = call1.steps[0];
-          assert.equal(first.transfer, true, `matched no-pin account not transferred on the first step: ${acct.id}`);
-          assert.equal(first.gather, null, `matched no-pin account had a gather before transfer: ${acct.id}`);
-          assert.ok(first.prompts.includes("20_connect_person"));
-          assert.ok(!first.prompts.includes("02_pin"), `matched no-pin account was asked for a PIN: ${acct.id}`);
-          assert.equal(row1.status, "no_pin");
-          assert.equal(row1.state.blockedReason, "pin_not_set");
-          noPinLandings++;
-        } else {
-          assert.equal(call1.pin02Count, 1, `foreign caller on a no-pin account not asked exactly once: ${acct.id}`);
-          assert.equal(row1.status, "no_pin");
-          foreignPinAsks++;
-        }
-        continue;
-      }
-
-      if (acct.scenario === "foreign") {
-        assert.equal(call1.pin02Count, 1, `foreign caller not asked exactly once: ${acct.id}`);
-        foreignPinAsks++;
-      } else if (acct.vault === "correct") {
-        assert.equal(call1.pin02Count, 0, `matched caller with a correct vault was asked: ${acct.id}`);
-        assert.ok(
-          pinGated1.every((r) => r.pin === acct.realPin),
-          `wrong pin sent for correct-vault ${acct.id}: ${JSON.stringify(pinGated1)}`,
-        );
-        silentServed++;
-      } else {
-        assert.equal(call1.pin02Count, 1, `matched caller with '${acct.vault}' vault not asked exactly once: ${acct.id}`);
-        assert.equal(
-          pinGated1[0]?.pin,
-          acct.vault === "none" ? PAY_PROBE_PIN : `${acct.realPin}x`,
-          `unexpected first pin-gated value for ${acct.id}`,
-        );
-        askedOnce++;
-      }
-
-      // ---- call 2, from the OTHER of the account's own numbers (matched only) ----
-      if (acct.scenario !== "foreign") {
-        const callerNumber2 = acct.scenario === "own_primary" ? secondPhone(acct.i) : primaryPhone(acct.i);
-        const before2 = pos.requestLog.length;
-        const call2 = await scriptedCall(deps, tenantId, `${acct.id}-c2`, callerNumber2, {
-          pin: acct.realPin ?? "0000",
-          wantsPayment: rnd() < 0.5,
-        });
-        const mine2 = pos.requestLog.slice(before2);
-        const pinGated2 = mine2.filter((r) => r.pin !== null);
+      const mine2 = pos.requestLog.slice(before2);
+      const pinGated2 = mine2.filter((r) => r.pin !== null);
+      if (acct.vault === "correct" || policy === "ask_once") {
+        // an enrolled PIN exists by now (pre-seeded, or just enrolled by call1) — silent every time after.
         assert.equal(call2.pin02Count, 0, `second matched call (from the other own number) was asked for a PIN: ${acct.id}`);
         assert.ok(
           pinGated2.every((r) => r.pin === acct.realPin),
           `second call did not use the enrolled PIN for ${acct.id}: ${JSON.stringify(pinGated2)}`,
         );
-        assert.ok(mine2.length <= 6);
+      } else {
+        // policy "never" and nothing was ever enrolled: blocked again, identically — never asked either.
+        assert.equal(call2.pin02Count, 0, `second 'never'-policy call was asked for a PIN: ${acct.id}`);
+        assert.equal(call2.steps.at(-1).transfer, true, `second 'never'-policy call was not blocked again: ${acct.id}`);
       }
-
-      for (const s of call1.steps) {
-        if (s.prompts.includes("09_approved_intro")) charges++;
-      }
+      assert.ok(mine2.length <= 6);
     }
 
-    // GLOBAL: a foreign/looked-up account is NEVER enrolled, across the whole run.
+    for (const s of call1.steps) {
+      if (s.prompts.includes("09_approved_intro")) charges++;
+    }
+  }
+
+  // GLOBAL: a foreign/looked-up account is NEVER enrolled, across the whole run.
+  for (const row of db.rows("supermarketPhonePin")) {
+    assert.ok(!foreignAccountIds.has(row.posCustomerId), `foreign account ${row.posCustomerId} got a vault row`);
+  }
+  if (policy === "never") {
+    // GLOBAL: under 'never' the only vault rows that can exist are the ones
+    // pre-seeded as "correct" — nothing is ever enrolled by a live call.
     for (const row of db.rows("supermarketPhonePin")) {
-      assert.ok(!foreignAccountIds.has(row.posCustomerId), `foreign account ${row.posCustomerId} got a vault row`);
+      const acct = acctById.get(row.posCustomerId);
+      assert.ok(acct && acct.vault === "correct", `a vault row was created live under 'never' policy: ${row.posCustomerId}`);
     }
-    // GLOBAL: session bookkeeping reconciles with the register ledger to the cent.
-    const ledgerTotal = [...pos.charges.values()].reduce((s, c) => s + c.amount, 0);
-    const sessionTotal = db
-      .rows("supermarketPayCall")
-      .filter((r: any) => r.tenantId === tenantId)
-      .reduce((s: number, r: any) => s + r.chargedCents, 0);
-    assert.equal(sessionTotal, ledgerTotal, "session books disagree with the register ledger");
-    assert.equal(new Set(pos.charges.keys()).size, pos.charges.size, "duplicate externalId in the ledger");
+  }
+  // GLOBAL: session bookkeeping reconciles with the register ledger to the cent.
+  const ledgerTotal = [...pos.charges.values()].reduce((s, c) => s + c.amount, 0);
+  const sessionTotal = db
+    .rows("supermarketPayCall")
+    .filter((r: any) => r.tenantId === tenantId)
+    .reduce((s: number, r: any) => s + r.chargedCents, 0);
+  assert.equal(sessionTotal, ledgerTotal, "session books disagree with the register ledger");
+  assert.equal(new Set(pos.charges.keys()).size, pos.charges.size, "duplicate externalId in the ledger");
 
-    console.log(
-      `[PAYLINE 1] accounts=${ACCOUNTS} silentServed=${silentServed} askedOnce=${askedOnce} noPinLandings=${noPinLandings} ` +
-        `foreignPinAsks=${foreignPinAsks} charges=${charges} ledgerCents=${ledgerTotal} posRequests=${pos.requestLog.length}`,
-    );
-  },
+  console.log(
+    `[PAYLINE 1:${policy}] accounts=${ACCOUNTS} silentServed=${silentServed} askedOnce=${askedOnce} blockedNotEnrolled=${blockedNotEnrolled} ` +
+      `noPinLandings=${noPinLandings} foreignAskedOnce=${foreignAskedOnce} charges=${charges} ledgerCents=${ledgerTotal} posRequests=${pos.requestLog.length}`,
+  );
+}
+
+test(
+  "PAYLINE 1a — caller-ID rule matrix at scale (DEFAULT policy 'never'): 2,000 accounts x {own primary, own second, foreign} caller x {no PIN, no vault, correct vault, stale vault} — nothing enrolled means blocked at once, never asked",
+  () => runCallerIdMatrix("never"),
+);
+
+test(
+  "PAYLINE 1b — caller-ID rule matrix at scale (operator switch matchedPinPolicy:'ask_once'): the pre-09-17 behaviour verbatim — asked once, enrolled, silent after",
+  () => runCallerIdMatrix("ask_once"),
 );
 
 // ═══════════════════════════════ PAYLINE 2 ═══════════════════════════════════
@@ -671,7 +722,9 @@ test("PAYLINE 5 — the same call's step posted 10x concurrently never double-ch
   const tenantId = "t-dup10";
   await seedPosTenant(db, tenantId, pos);
   const clientFor = clientForFactory(new Map([[tenantId, pos]]));
-  const deps = { db, clientFor: clientFor as any };
+  // ask_once: this test is about concurrency safety around enrollment and
+  // charging, not the caller-ID default — it needs a live PIN ask to reach.
+  const deps = { db, clientFor: clientFor as any, matchedPinPolicy: "ask_once" as const };
 
   const N = 60;
   for (let i = 0; i < N; i++) {
@@ -817,7 +870,10 @@ test("PAYLINE 7 — a real 'invalid'/'not_set' refusal on a stored PIN purges ex
   const tenantId = "t-purge";
   await seedPosTenant(db, tenantId, pos);
   const clientFor = clientForFactory(new Map([[tenantId, pos]]));
-  const deps = { db, clientFor: clientFor as any };
+  // ask_once: this test is about the purge (never bleeding into another
+  // account's vault row), which is independent of the caller-ID policy — the
+  // "invalid" branch needs ask_once to still offer a fresh keyed PIN.
+  const deps = { db, clientFor: clientFor as any, matchedPinPolicy: "ask_once" as const };
 
   const N = 300;
   const kinds: Array<"invalid" | "not_set"> = [];
@@ -975,7 +1031,7 @@ test("PAYLINE 8 — pre-2026-09-17 session shapes (missing pinProbe/blockedReaso
     assert.ok(row, `no row persisted for legacy '${scenario.phase}'`);
     assert.equal(typeof row.state.pinProbe, "boolean", `pinProbe not normalized to boolean for '${scenario.phase}'`);
     assert.ok(
-      row.state.blockedReason === null || row.state.blockedReason === "pin_not_set",
+      row.state.blockedReason === null || row.state.blockedReason === "pin_not_set" || row.state.blockedReason === "pin_not_enrolled",
       `blockedReason not normalized for '${scenario.phase}'`,
     );
     ran++;

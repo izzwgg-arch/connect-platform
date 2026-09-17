@@ -50,6 +50,7 @@ import { checkInternalSecret } from "../internalSecret";
 import { shouldSkipJwtVerification } from "../jwtPublicRouteBypass";
 
 // ─── the recorded voice set (both shipped voices carry identical names) ──────
+// 23-33 were added 2026-09-17 for the one-time-code flow (payPrompts.ts).
 const RECORDED_PROMPTS = new Set<string>([
   ...Array.from({ length: 21 }, (_, i) => `num_${i}`),
   "num_30", "num_40", "num_50", "num_60", "num_70", "num_80", "num_90",
@@ -59,6 +60,9 @@ const RECORDED_PROMPTS = new Set<string>([
   "10_thanks_bye", "11_declined", "12_no_card", "13_not_recognized",
   "14_invalid_amount", "15_too_many_tries", "16_dollars", "17_cents", "18_and",
   "19_lookup_not_found", "20_connect_person", "21_menu_after_balance", "22_main_menu",
+  "23_pin_or_star", "24_code_channel_menu", "25_code_number_intro", "26_press",
+  "27_for_number_ending_in", "28_code_call_intro", "29_code_again", "30_enter_code",
+  "31_code_call_sent", "32_code_text_sent", "33_code_wrong",
 ]);
 
 // ─── shared builders ─────────────────────────────────────────────────────────
@@ -1041,7 +1045,11 @@ test("STRESS 22 — the PIN store: enrolled only on caller-ID-matching keyed cal
   pos.addCustomer({ id: "c-pin", phone10: "8456624417", pin: "7777", balanceCents: 4200, cards: [{ id: "cd1", masked: "…1" }] });
   await seedPosTenant(db, "t-pin", pos);
   const clientFor = clientForFactory(new Map([["t-pin", pos]]));
-  const deps = { db, clientFor: clientFor as any };
+  // ask_once: this test is specifically about the ENROLLMENT mechanics (a
+  // keyed matched call gets enrolled, a stale one is purged) — under the
+  // default 'never' policy an un-enrolled matched caller is never offered a
+  // keying step at all, so this scenario needs the operator switch to reach it.
+  const deps = { db, clientFor: clientFor as any, matchedPinPolicy: "ask_once" as const };
 
   // Call 1: known caller keys the right PIN → enrolled.
   await runPayIvrStep(deps, { tenantId: "t-pin", callId: "k1", callerNumber: "+18456624417" });
@@ -1236,7 +1244,11 @@ test("STRESS 25 — the life of 120 orders, end to end: voicemail/text → sweep
   assert.equal(stats2.autoSubmit.allowed, false);
   assert.ok(["rate_above_threshold", "not_enough_weeks"].includes(stats2.autoSubmit.reason));
 
-  // 6) and the pay line settles the balance on the same register: a real call
+  // 6) and the pay line settles the balance on the same register: a real call.
+  // This account has no enrolled vault PIN yet, so under the DEFAULT policy
+  // 'never' the matched caller would be blocked at once (never asked) — the
+  // operator switch restores the ask-once-and-key behaviour this scenario needs.
+  process.env.SUPERMARKET_PAY_MATCHED_PIN_POLICY = "ask_once";
   const step = (digits?: string) =>
     app.inject({
       method: "POST", url: "/internal/supermarket/pay-ivr/step", headers: { "x-cdr-secret": process.env.CDR_INGEST_SECRET! },
@@ -1247,6 +1259,7 @@ test("STRESS 25 — the life of 120 orders, end to end: voicemail/text → sweep
   await step("2"); // payment
   await step("25*37"); // amount
   const charged = body(await step("1")); // confirm
+  delete process.env.SUPERMARKET_PAY_MATCHED_PIN_POLICY;
   assert.ok(charged.prompts.includes("09_approved_intro"), `charge flow: ${JSON.stringify(charged)}`);
   assert.equal([...pos.charges.values()].reduce((s, c) => s + c.amount, 0), 2537);
   assert.equal(pos.customers.get("cust1")!.balanceCents, 3750 - 2537);

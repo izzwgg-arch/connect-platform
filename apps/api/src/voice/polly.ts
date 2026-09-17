@@ -481,7 +481,19 @@ function escapeXml(text: string): string {
  */
 export async function synthesisePollySpeech(
   credentials: PollyCredentials,
-  input: { voiceId: string; text: string; engine?: PollyEngineId; speed?: number; languageCode?: string | null },
+  input: {
+    voiceId: string;
+    text: string;
+    engine?: PollyEngineId;
+    speed?: number;
+    languageCode?: string | null;
+    /**
+     * The caller supplies a complete SSML body (the part inside <speak>) and
+     * takes responsibility for escaping — used by the pay-line prompt cutter
+     * for the IPA phoneme that pronounces "Gesheft". Speed is ignored.
+     */
+    ssml?: boolean;
+  },
 ): Promise<{ pcm: Buffer; sampleRate: number; engine: PollyEngineId }> {
   const text = String(input.text ?? "").trim();
   if (!text) throw new PollyError("empty_text", 400, "There's nothing to say — type the greeting first.");
@@ -498,10 +510,13 @@ export async function synthesisePollySpeech(
   // send plain text whatever the speed: wrapping markup Amazon will discard
   // buys nothing and is one more thing that can go wrong.
   const speed = Math.min(1.2, Math.max(0.7, Number(input.speed) || POLLY_DEFAULT_SPEED));
-  const usesSsml = Math.abs(speed - 1) > 0.001 && engineSupportsSpeed(engine);
-  const payloadText = usesSsml
-    ? `<speak><prosody rate="${Math.round(speed * 100)}%">${escapeXml(text)}</prosody></speak>`
-    : text;
+  const usesSsml = input.ssml === true || (Math.abs(speed - 1) > 0.001 && engineSupportsSpeed(engine));
+  const payloadText =
+    input.ssml === true
+      ? `<speak>${text}</speak>`
+      : usesSsml
+        ? `<speak><prosody rate="${Math.round(speed * 100)}%">${escapeXml(text)}</prosody></speak>`
+        : text;
 
   const body: Record<string, unknown> = {
     Text: payloadText,

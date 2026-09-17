@@ -1,23 +1,32 @@
 /**
  * Pay-by-phone IVR core — the pure state machine behind the Gesheft payment line.
  *
- * THE CALLER-ID RULE (Izzy, 2026-08-25, reaffirmed 2026-09-17 — "when somebody
- * calls in, it should just match the phone caller ID to the account; if they
- * want to enter a different account, they need to have a PIN"):
- *   caller-ID match → the caller is NEVER asked for a PIN by this machine's
- *   own choice. The register (POS with Logic) still demands X-Customer-Pin on
- *   every balance read and charge, so the runtime supplies it SILENTLY: the
- *   enrolled PIN if Loopcom has one, else a one-credit probe that asks the
- *   register whether the account even has a PIN. Three register answers:
- *     · served            → main menu, nothing keyed;
- *     · "PIN required"    → the store never set a PIN on this account; NO value
- *                            can ever work, so the line hands to a person at
- *                            once and the account is flagged for the desk;
- *     · "invalid PIN"     → the store set a PIN Loopcom does not know; the
- *                            caller keys it ONCE, ever — it is enrolled and
- *                            every later matching-caller-ID call is silent.
- *   foreign/unknown number → account lookup by keyed phone number, then the
- *   PIN is REQUIRED every time and NEVER enrolled — that is the PIN's job.
+ * THE RULES (Izzy, 2026-08-25; restated in full 2026-09-17 after his 3064 call
+ * was asked for a PIN):
+ *   1. Caller-ID matches an account → they can pay. NO PIN IS EVER ASKED. The
+ *      register (POS with Logic) still demands X-Customer-Pin on every balance
+ *      read and every charge (proven again 2026-09-17: a charge on a no-PIN
+ *      account is refused "Customer PIN required." with or without a header),
+ *      so the runtime supplies it SILENTLY — the enrolled PIN if Loopcom holds
+ *      one, else a one-credit probe that makes the register say which case
+ *      applies. A matched caller whose PIN Loopcom does not hold is handed to a
+ *      person with blockedReason "pin_not_enrolled" (the desk enrolls it from
+ *      the Orders screen and the next call is silent). ⛔ `matchedPinPolicy:
+ *      "ask_once"` keeps the pre-09-17 behaviour (ask once, enroll, silent after)
+ *      — it is an operator switch, never the default.
+ *   2. Caller-ID unknown → the caller keys the phone number on the account.
+ *   3. Account found → "enter your PIN, or press star if you do not have one".
+ *      A keyed PIN is verified by the register and NEVER enrolled (a foreign
+ *      number is exactly what the PIN protects against).
+ *   4. Star → a one-time 6-digit code, delivered by PHONE CALL (an outbound call
+ *      in the same recorded voice) or by TEXT, ONLY to a number on the account;
+ *      the caller picks which number by its last four digits. A correct code
+ *      proves the caller controls a number on the account, so they are served
+ *      exactly like a matched caller (silent enrolled PIN, else a person).
+ *   ⛔ An account the register has NO PIN for cannot be served by anyone —
+ *      every value and no value is refused identically — so the line hands such
+ *      a caller to a person AT ONCE (blockedReason "pin_not_set"), never after a
+ *      futile PIN or code. Only the store can set a PIN in the POS.
  * Main menu: 1 = balance, 2 = payment — the SAME keys everywhere. Amounts are
  * keyed with * as the decimal point.
  *
@@ -28,32 +37,46 @@
  *   an explicit `charge` effect the runtime performs ONCE per confirmation with
  *   an idempotent externalId. The reducer can never emit two charge effects
  *   without a fresh confirmation in between (stress-tested property).
- * - ⛔ Attempt caps everywhere (PIN 3, amount 3, lookup 3, confirm 3) — a
- *   stolen-card tester can't hammer the line; the cap lands on a human
+ * - ⛔ Attempt caps everywhere (PIN 3, amount 3, lookup 3, confirm 3, code
+ *   attempts 3, code sends 2, code waits 8) — a stolen-card tester can't hammer
+ *   the line and a text flood is bounded per call; every cap lands on a human
  *   (20_connect_person), never a loop. A silent probe is not an attempt.
+ * - ⛔ The code itself never enters this machine: the runtime hashes it, stores
+ *   the hash in the session, and answers `code_result`. Full phone numbers are
+ *   never spoken — only the last four digits.
  * - ⛔ Refunds are impossible through their api; nothing here offers one.
  *
- * Prompts are the file names of the two shipped voice sets (Stephen/Kristen —
- * identical names), spliced with payAmount.amountToPromptRefs so the amount is
- * read in the same voice. This module never renders text at call time.
+ * Prompts are the file names of the shipped voice set (Stephen neural), spliced
+ * with payAmount's number refs so amounts, last-four digits and codes are read
+ * in the same voice. This module never renders text at call time.
  *
  * Pure: no imports beyond payAmount, no IO, no Date. The runtime owns the DB
- * row, the POS client, and the clock.
+ * row, the POS client, the code secret, the SMS sender and the clock.
  */
 
-import { amountToPromptRefs, parseStarDecimalAmount, PAY_MAX_CENTS } from "./payAmount";
+import { amountToPromptRefs, digitsToPromptRefs, parseStarDecimalAmount, PAY_MAX_CENTS } from "./payAmount";
 
 export const PAY_MAX_PIN_ATTEMPTS = 3;
 export const PAY_MAX_AMOUNT_ATTEMPTS = 3;
 export const PAY_MAX_LOOKUP_ATTEMPTS = 3;
 export const PAY_MAX_CONFIRM_ROUNDS = 3;
 export const PAY_MAX_CHARGES_PER_CALL = 3;
+/** Wrong one-time codes before a person. */
+export const PAY_MAX_CODE_ATTEMPTS = 3;
+/** One-time codes SENT per call (call or text) — the text-flood bound. */
+export const PAY_MAX_CODE_SENDS = 2;
+/** Empty reads while waiting for a code (≈10 s each) before a person. */
+export const PAY_MAX_CODE_WAITS = 8;
+/** Numbers offered for code delivery (press 1–4). */
+export const PAY_MAX_CODE_NUMBERS = 4;
+export const PAY_CODE_LENGTH = 6;
 
 /**
- * The sentinel the runtime sends when a matched caller has no enrolled PIN.
+ * The sentinel the runtime sends when a caller has no enrolled PIN to try.
  * It exists only to make the register say WHICH refusal applies ("required"
- * = no PIN on the account, "invalid" = there is one). If it ever happens to be
- * right, the account is simply served — the outcome a matched caller wants.
+ * = no PIN on the account, "invalid" = there is one). For a MATCHED caller a
+ * lucky hit simply serves the account — the outcome a matched caller wants.
+ * For a FOREIGN caller a lucky hit is NOT trusted: they still key the PIN.
  */
 export const PAY_PROBE_PIN = "0";
 
@@ -61,6 +84,9 @@ export type PayIvrPhase =
   | "start"
   | "pin_entry"
   | "lookup_entry"
+  | "code_channel"
+  | "code_number"
+  | "code_entry"
   | "main_menu"
   | "after_balance_menu"
   | "amount_entry"
@@ -72,6 +98,11 @@ export type PayIvrPhase =
 /** Why the register refused the PIN — mirrors posWithLogic.PosPinRefusal. */
 export type PayPinReason = "not_set" | "invalid" | "unknown";
 
+/** What a matched caller gets when Loopcom does not hold the account's PIN. */
+export type PayMatchedPinPolicy = "never" | "ask_once";
+
+export type PayCodeChannel = "call" | "text";
+
 export type PayIvrState = {
   phase: PayIvrPhase;
   /** POS customer id once resolved; null until lookup succeeds. */
@@ -82,16 +113,33 @@ export type PayIvrState = {
   activePin: string | null;
   /** Whether activePin came from the enrolled store (silent) vs keyed. */
   pinFromStore: boolean;
-  /** Whether activePin is the silent probe sentinel (a matched caller with nothing enrolled). */
+  /** Whether activePin is the silent probe sentinel. */
   pinProbe: boolean;
   /** True only when the caller's own caller-ID matched the account — the ONLY case a keyed PIN may be enrolled. */
   callerIdMatched: boolean;
-  /** Set when the register can never serve this account (no PIN set in the POS). Desk-visible. */
-  blockedReason: "pin_not_set" | null;
+  /** True once a one-time code delivered to a number on the account was keyed back correctly. */
+  ownerVerified: boolean;
+  /** What the register said about the account's PIN, once probed. */
+  accountPinState: "unknown" | "set" | "not_set";
+  /** The operator switch for matched callers with nothing enrolled (see header). */
+  matchedPinPolicy: PayMatchedPinPolicy;
+  /** Set when the line cannot serve this account. Desk-visible. */
+  blockedReason: "pin_not_set" | "pin_not_enrolled" | null;
   pinAttempts: number;
   amountAttempts: number;
   lookupAttempts: number;
   confirmRounds: number;
+  /** One-time code: how it is being delivered, to which of the account's numbers. */
+  codeChannel: PayCodeChannel | null;
+  /** Numbers on the account offered for delivery (10 digits each, ≤ PAY_MAX_CODE_NUMBERS). */
+  codePhones: string[];
+  codeSentTo: string | null;
+  /** Opaque hash of the live code (runtime-owned) and its expiry, ms epoch. Never the code. */
+  codeHash: string | null;
+  codeExpiresAt: number | null;
+  codeSends: number;
+  codeAttempts: number;
+  codeWaits: number;
   /** Amount pending confirmation, cents. */
   pendingCents: number | null;
   /** Count of confirmed charges this call — drives the externalId sequence. */
@@ -107,14 +155,17 @@ export type PayIvrEffect =
   | { kind: "read_balance" }
   | { kind: "charge"; amountCents: number; chargeSeq: number }
   | { kind: "enroll_pin"; pin: string }
+  | { kind: "list_numbers" }
+  | { kind: "send_code"; channel: PayCodeChannel; phone10: string }
+  | { kind: "verify_code"; digits: string }
   | { kind: "transfer_to_person" }
   | { kind: "hangup" };
 
 export type PayIvrGather = {
   /** What the runtime should collect next. */
-  what: "pin" | "phone" | "menu" | "amount" | "confirm";
+  what: "pin" | "phone" | "menu" | "amount" | "confirm" | "code";
   maxDigits: number;
-  /** '#' always terminates; '*' is data only in amount entry. */
+  /** '#' always terminates; '*' is data only in amount entry (and means "no PIN" / "resend" in pin/code entry). */
   starIsData: boolean;
 };
 
@@ -126,10 +177,19 @@ export type PayIvrOutput = {
 };
 
 export type PayIvrEvent =
-  | { type: "call_start"; callerKnown: boolean; hasStoredPin: boolean; storedPin?: string }
+  | {
+      type: "call_start";
+      callerKnown: boolean;
+      hasStoredPin: boolean;
+      storedPin?: string;
+      matchedPinPolicy?: PayMatchedPinPolicy;
+    }
   | { type: "digits"; value: string }
   | { type: "lookup_result"; found: boolean; posCustomerId?: string }
   | { type: "pin_result"; ok: boolean; balanceCents?: number; reason?: PayPinReason }
+  | { type: "numbers_result"; phones: string[] }
+  | { type: "code_sent"; ok: boolean; codeHash?: string; expiresAt?: number }
+  | { type: "code_result"; ok: boolean; reason?: "wrong" | "expired" | "none"; storedPin?: string }
   | { type: "balance_result"; ok: boolean; balanceCents?: number }
   | {
       type: "charge_result";
@@ -147,11 +207,22 @@ export function initialPayIvrState(): PayIvrState {
     pinFromStore: false,
     pinProbe: false,
     callerIdMatched: false,
+    ownerVerified: false,
+    accountPinState: "unknown",
+    matchedPinPolicy: "never",
     blockedReason: null,
     pinAttempts: 0,
     amountAttempts: 0,
     lookupAttempts: 0,
     confirmRounds: 0,
+    codeChannel: null,
+    codePhones: [],
+    codeSentTo: null,
+    codeHash: null,
+    codeExpiresAt: null,
+    codeSends: 0,
+    codeAttempts: 0,
+    codeWaits: 0,
     pendingCents: null,
     chargeSeq: 0,
     chargedCents: 0,
@@ -159,7 +230,7 @@ export function initialPayIvrState(): PayIvrState {
   };
 }
 
-/** Rows persisted before 2026-09-17 lack the two new fields; read them as false/null. */
+/** Rows persisted before 2026-09-17 lack the newer fields; read them as their zero values. */
 export function normalizePayIvrState(raw: unknown): PayIvrState {
   const base = initialPayIvrState();
   if (!raw || typeof raw !== "object") return base;
@@ -168,7 +239,18 @@ export function normalizePayIvrState(raw: unknown): PayIvrState {
     ...base,
     ...s,
     pinProbe: s.pinProbe === true,
-    blockedReason: s.blockedReason === "pin_not_set" ? "pin_not_set" : null,
+    ownerVerified: s.ownerVerified === true,
+    accountPinState: s.accountPinState === "set" || s.accountPinState === "not_set" ? s.accountPinState : "unknown",
+    matchedPinPolicy: s.matchedPinPolicy === "ask_once" ? "ask_once" : "never",
+    blockedReason: s.blockedReason === "pin_not_set" || s.blockedReason === "pin_not_enrolled" ? s.blockedReason : null,
+    codeChannel: s.codeChannel === "call" || s.codeChannel === "text" ? s.codeChannel : null,
+    codePhones: Array.isArray(s.codePhones) ? s.codePhones.filter((p) => typeof p === "string") : [],
+    codeSentTo: typeof s.codeSentTo === "string" ? s.codeSentTo : null,
+    codeHash: typeof s.codeHash === "string" ? s.codeHash : null,
+    codeExpiresAt: typeof s.codeExpiresAt === "number" ? s.codeExpiresAt : null,
+    codeSends: Number.isInteger(s.codeSends) ? (s.codeSends as number) : 0,
+    codeAttempts: Number.isInteger(s.codeAttempts) ? (s.codeAttempts as number) : 0,
+    codeWaits: Number.isInteger(s.codeWaits) ? (s.codeWaits as number) : 0,
   };
 }
 
@@ -178,7 +260,13 @@ const G: Record<string, PayIvrGather> = {
   menu: { what: "menu", maxDigits: 1, starIsData: false },
   amount: { what: "amount", maxDigits: 9, starIsData: true },
   confirm: { what: "confirm", maxDigits: 1, starIsData: false },
+  code: { what: "code", maxDigits: PAY_CODE_LENGTH, starIsData: false },
 };
+
+/** The PIN prompt: a foreign caller is told about star; a matched caller under ask_once is not. */
+function pinPrompt(state: PayIvrState): string {
+  return state.callerIdMatched ? "02_pin" : "23_pin_or_star";
+}
 
 function out(state: PayIvrState, prompts: string[], gather: PayIvrGather | null, effects: PayIvrEffect[] = []): PayIvrOutput {
   return { state, prompts, gather, effects };
@@ -198,7 +286,58 @@ function afterBalanceMenu(state: PayIvrState, lead: string[]): PayIvrOutput {
 
 /** The register can never serve this account: no PIN exists in the POS. A person, at once. */
 function blockedNoPin(state: PayIvrState): PayIvrOutput {
-  return toHuman({ ...state, activePin: null, pinFromStore: false, pinProbe: false, blockedReason: "pin_not_set" }, []);
+  return toHuman(
+    { ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "not_set", blockedReason: "pin_not_set" },
+    [],
+  );
+}
+
+/** The account has a PIN that Loopcom does not hold, and this caller is never asked for it. A person; the desk enrolls. */
+function blockedNotEnrolled(state: PayIvrState): PayIvrOutput {
+  return toHuman(
+    { ...state, activePin: null, pinFromStore: false, pinProbe: false, accountPinState: "set", blockedReason: "pin_not_enrolled" },
+    [],
+  );
+}
+
+/** Silent probe: makes the register classify the account without the caller keying anything. */
+function probe(state: PayIvrState, prompts: string[]): PayIvrOutput {
+  return out(
+    { ...state, phase: "pin_entry", activePin: PAY_PROBE_PIN, pinFromStore: false, pinProbe: true },
+    prompts,
+    null,
+    [{ kind: "verify_pin", pin: PAY_PROBE_PIN }],
+  );
+}
+
+/** Silent verification with an enrolled PIN — the caller keys nothing. */
+function silentVerify(state: PayIvrState, storedPin: string, prompts: string[]): PayIvrOutput {
+  return out(
+    { ...state, phase: "pin_entry", activePin: storedPin, pinFromStore: true, pinProbe: false },
+    prompts,
+    null,
+    [{ kind: "verify_pin", pin: storedPin }],
+  );
+}
+
+/** The code-delivery menu: call or text. */
+function codeChannelMenu(state: PayIvrState, lead: string[] = []): PayIvrOutput {
+  return out({ ...state, phase: "code_channel", codeChannel: null }, [...lead, "24_code_channel_menu"], G.menu);
+}
+
+/** "Press 1 for the number ending in 3 0 6 4. Press 2 for …" — last four digits only, ever. */
+function codeNumberMenu(state: PayIvrState): PayIvrOutput {
+  const prompts: string[] = ["25_code_number_intro"];
+  state.codePhones.forEach((phone, i) => {
+    prompts.push("26_press", `num_${i + 1}`, "27_for_number_ending_in", ...digitsToPromptRefs(phone.slice(-4)));
+  });
+  return out({ ...state, phase: "code_number" }, prompts, G.menu);
+}
+
+function sendCode(state: PayIvrState, channel: PayCodeChannel, phone10: string): PayIvrOutput {
+  return out({ ...state, phase: "code_entry", codeChannel: channel, codeSentTo: phone10 }, [], null, [
+    { kind: "send_code", channel, phone10 },
+  ]);
 }
 
 /**
@@ -216,32 +355,24 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
   switch (state.phase) {
     case "start": {
       if (event.type !== "call_start") return out(state, [], null);
+      const policy: PayMatchedPinPolicy = event.matchedPinPolicy === "ask_once" ? "ask_once" : "never";
       if (!event.callerKnown) {
-        return out({ ...state, phase: "lookup_entry" }, ["01_welcome", "13_not_recognized"], G.phone);
+        return out({ ...state, matchedPinPolicy: policy, phase: "lookup_entry" }, ["01_welcome", "13_not_recognized"], G.phone);
       }
-      const matched = { ...state, callerIdMatched: true };
+      const matched = { ...state, matchedPinPolicy: policy, callerIdMatched: true };
       if (event.hasStoredPin && event.storedPin) {
-        // Silent verification with the enrolled PIN — the caller keys nothing.
-        return out(
-          { ...matched, phase: "pin_entry", activePin: event.storedPin, pinFromStore: true, pinProbe: false },
-          ["01_welcome"],
-          null,
-          [{ kind: "verify_pin", pin: event.storedPin }],
-        );
+        return silentVerify(matched, event.storedPin, ["01_welcome"]);
       }
       // Nothing enrolled: still nothing keyed. The probe makes the register say
       // whether this account has a PIN at all (see PAY_PROBE_PIN).
-      return out(
-        { ...matched, phase: "pin_entry", activePin: PAY_PROBE_PIN, pinFromStore: false, pinProbe: true },
-        ["01_welcome"],
-        null,
-        [{ kind: "verify_pin", pin: PAY_PROBE_PIN }],
-      );
+      return probe(matched, ["01_welcome"]);
     }
 
     case "lookup_entry": {
       if (event.type === "digits") {
-        const digits = event.value.replace(/\D/g, "");
+        const raw = event.value.replace(/\D/g, "");
+        // Izzy, 2026-08-26: "the area code is always 845" — seven digits are accepted.
+        const digits = raw.length === 7 ? `845${raw}` : raw.length === 11 && raw.startsWith("1") ? raw.slice(1) : raw;
         if (digits.length !== 10) {
           const attempts = state.lookupAttempts + 1;
           if (attempts >= PAY_MAX_LOOKUP_ATTEMPTS) return toHuman({ ...state, lookupAttempts: attempts }, ["19_lookup_not_found"]);
@@ -255,13 +386,12 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           if (attempts >= PAY_MAX_LOOKUP_ATTEMPTS) return toHuman({ ...state, lookupAttempts: attempts }, ["19_lookup_not_found"]);
           return out({ ...state, lookupAttempts: attempts }, ["19_lookup_not_found", "13_not_recognized"], G.phone);
         }
-        // ⛔ A looked-up account is a FOREIGN number by definition: PIN always
-        // keyed, never enrolled, never read from the store, never probed.
-        return out(
-          { ...state, phase: "pin_entry", posCustomerId: event.posCustomerId, callerIdMatched: false, pinProbe: false, pinFromStore: false },
-          ["02_pin"],
-          G.pin,
-        );
+        // ⛔ A looked-up account is a FOREIGN number by definition: the PIN is
+        // always keyed, never enrolled, never read from the store. Before
+        // asking, a silent probe learns whether the account HAS a PIN — an
+        // account with none cannot be served by anyone, so the caller is not
+        // sent through a PIN or a code that can never work.
+        return probe({ ...state, posCustomerId: event.posCustomerId, callerIdMatched: false, ownerVerified: false }, []);
       }
       return out(state, [], G.phone);
     }
@@ -270,26 +400,37 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
       if (event.type === "digits") {
         // A silent verification is in flight — digits cannot belong to it.
         if (state.pinFromStore || state.pinProbe) return out(state, [], null);
-        const pin = event.value.replace(/[^0-9]/g, "");
+        const value = event.value.trim();
+        // Star = "I do not have a PIN" (foreign callers only; the prompt says so).
+        if (!state.callerIdMatched && value.startsWith("*")) {
+          return codeChannelMenu(state);
+        }
+        const pin = value.replace(/[^0-9]/g, "");
         if (pin.length < 1 || pin.length > 8) {
           const attempts = state.pinAttempts + 1;
           if (attempts >= PAY_MAX_PIN_ATTEMPTS) return toHuman({ ...state, pinAttempts: attempts }, ["15_too_many_tries"]);
-          return out({ ...state, pinAttempts: attempts }, ["03_pin_wrong", "02_pin"], G.pin);
+          return out({ ...state, pinAttempts: attempts }, ["03_pin_wrong", pinPrompt(state)], G.pin);
         }
         return out({ ...state, activePin: pin, pinFromStore: false, pinProbe: false }, [], null, [{ kind: "verify_pin", pin }]);
       }
       if (event.type === "pin_result") {
         if (event.ok) {
+          // A foreign caller's PROBE happening to pass proves nothing about
+          // the caller: they still key the PIN. (A matched caller is served.)
+          if (state.pinProbe && !state.callerIdMatched && !state.ownerVerified) {
+            return out({ ...state, activePin: null, pinProbe: false, accountPinState: "set" }, [pinPrompt(state)], G.pin);
+          }
           const next: PayIvrState = {
             ...state,
             pinVerified: true,
             pinProbe: false,
+            accountPinState: "set",
             lastBalanceCents: typeof event.balanceCents === "number" ? event.balanceCents : state.lastBalanceCents,
           };
           const effects: PayIvrEffect[] = [];
           // Enrollment: ONLY when this very call's caller-ID matched the
-          // account, and ONLY a PIN that is not already enrolled. A looked-up
-          // account (foreign number) must never be enrolled.
+          // account, and ONLY a keyed PIN (ask_once). A looked-up account —
+          // even one whose owner keyed back a code — must never be enrolled.
           if (!state.pinFromStore && state.callerIdMatched && state.activePin) {
             effects.push({ kind: "enroll_pin", pin: state.activePin });
           }
@@ -300,21 +441,112 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
         // caller keys can pass; asking would be theatre. A person, at once,
         // and the desk learns why (blockedReason).
         if (event.reason === "not_set") return blockedNoPin(state);
-        // Stored PIN refused → the enrollment is stale; ask once, re-enroll on success.
+        const known = { ...state, accountPinState: "set" as const };
+        // A stored PIN refused → the enrollment is stale (the runtime purged
+        // it). The caller is treated as having nothing enrolled.
         if (state.pinFromStore) {
-          return out({ ...state, activePin: null, pinFromStore: false, pinProbe: false }, ["02_pin"], G.pin);
+          if (state.callerIdMatched && state.matchedPinPolicy === "ask_once") {
+            return out({ ...known, activePin: null, pinFromStore: false, pinProbe: false }, ["02_pin"], G.pin);
+          }
+          return blockedNotEnrolled(known);
         }
-        // The probe was refused as "invalid" → the store DID set a PIN and
-        // Loopcom does not know it yet. This is the ONE time a matched caller
-        // is asked; success enrolls it for every later call. Not an attempt.
         if (state.pinProbe) {
-          return out({ ...state, activePin: null, pinProbe: false }, ["02_pin"], G.pin);
+          // A matched caller: the store set a PIN Loopcom does not know.
+          // Rule 1 — never asked. (ask_once: the ONE time they are asked.)
+          if (state.callerIdMatched) {
+            if (state.matchedPinPolicy === "ask_once") {
+              return out({ ...known, activePin: null, pinProbe: false }, ["02_pin"], G.pin);
+            }
+            return blockedNotEnrolled(known);
+          }
+          // A foreign caller: the account has a PIN — ask for it, star for a code.
+          return out({ ...known, activePin: null, pinProbe: false }, ["23_pin_or_star"], G.pin);
         }
-        const attempts = state.pinAttempts + 1;
-        if (attempts >= PAY_MAX_PIN_ATTEMPTS) return toHuman({ ...state, pinAttempts: attempts, activePin: null }, ["15_too_many_tries"]);
-        return out({ ...state, pinAttempts: attempts, activePin: null }, ["03_pin_wrong", "02_pin"], G.pin);
+        const attempts = known.pinAttempts + 1;
+        if (attempts >= PAY_MAX_PIN_ATTEMPTS) return toHuman({ ...known, pinAttempts: attempts, activePin: null }, ["15_too_many_tries"]);
+        return out({ ...known, pinAttempts: attempts, activePin: null }, ["03_pin_wrong", pinPrompt(known)], G.pin);
       }
       return out(state, [], state.activePin ? null : G.pin);
+    }
+
+    case "code_channel": {
+      if (event.type === "digits") {
+        const key = event.value.trim();
+        if (key !== "1" && key !== "2") return codeChannelMenu(state);
+        if (state.codeSends >= PAY_MAX_CODE_SENDS) return toHuman(state, []);
+        const channel: PayCodeChannel = key === "1" ? "call" : "text";
+        return out({ ...state, codeChannel: channel }, [], null, [{ kind: "list_numbers" }]);
+      }
+      if (event.type === "numbers_result") {
+        const phones = event.phones.filter((p) => /^\d{10}$/.test(p)).slice(0, PAY_MAX_CODE_NUMBERS);
+        const channel = state.codeChannel ?? "text";
+        // No number on file = nowhere to prove ownership. A person.
+        if (phones.length === 0) return toHuman({ ...state, codePhones: [] }, []);
+        if (phones.length === 1) return sendCode({ ...state, codePhones: phones }, channel, phones[0]);
+        return codeNumberMenu({ ...state, codePhones: phones });
+      }
+      return out(state, [], G.menu);
+    }
+
+    case "code_number": {
+      if (event.type !== "digits") return out(state, [], G.menu);
+      const idx = Number(event.value.trim()) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= state.codePhones.length) return codeNumberMenu(state);
+      if (state.codeSends >= PAY_MAX_CODE_SENDS) return toHuman(state, []);
+      return sendCode(state, state.codeChannel ?? "text", state.codePhones[idx]);
+    }
+
+    case "code_entry": {
+      if (event.type === "code_sent") {
+        if (!event.ok || !event.codeHash) return toHuman({ ...state, codeHash: null }, []);
+        return out(
+          { ...state, codeHash: event.codeHash, codeExpiresAt: event.expiresAt ?? null, codeSends: state.codeSends + 1, codeAttempts: 0, codeWaits: 0 },
+          [state.codeChannel === "call" ? "31_code_call_sent" : "32_code_text_sent"],
+          G.code,
+        );
+      }
+      if (event.type === "digits") {
+        // The code is still on its way (a code_sent has not landed yet): ignore.
+        if (!state.codeHash) return out(state, [], null);
+        const value = event.value.trim();
+        if (value === "") {
+          // The caller is waiting for the call/text — keep listening, bounded.
+          const waits = state.codeWaits + 1;
+          if (waits > PAY_MAX_CODE_WAITS) return toHuman({ ...state, codeWaits: waits }, []);
+          return out({ ...state, codeWaits: waits }, ["30_enter_code"], G.code);
+        }
+        if (value.startsWith("*")) {
+          // Resend, bounded by PAY_MAX_CODE_SENDS.
+          if (state.codeSends >= PAY_MAX_CODE_SENDS) return toHuman(state, []);
+          return codeChannelMenu({ ...state, codeHash: null, codeExpiresAt: null });
+        }
+        const digits = value.replace(/\D/g, "");
+        if (digits.length !== PAY_CODE_LENGTH) {
+          const attempts = state.codeAttempts + 1;
+          if (attempts >= PAY_MAX_CODE_ATTEMPTS) return toHuman({ ...state, codeAttempts: attempts }, ["15_too_many_tries"]);
+          return out({ ...state, codeAttempts: attempts }, ["33_code_wrong", "30_enter_code"], G.code);
+        }
+        return out(state, [], null, [{ kind: "verify_code", digits }]);
+      }
+      if (event.type === "code_result") {
+        if (event.ok) {
+          // Ownership proven: from here on this caller is served like a
+          // matched caller. The code is spent.
+          const owner: PayIvrState = { ...state, ownerVerified: true, codeHash: null, codeExpiresAt: null };
+          if (event.storedPin) return silentVerify(owner, event.storedPin, []);
+          // The account has a PIN (probed "set" before the star) that Loopcom
+          // does not hold, and the caller said they do not have it.
+          return blockedNotEnrolled(owner);
+        }
+        if (event.reason === "expired") {
+          if (state.codeSends >= PAY_MAX_CODE_SENDS) return toHuman({ ...state, codeHash: null }, ["33_code_wrong"]);
+          return codeChannelMenu({ ...state, codeHash: null, codeExpiresAt: null }, ["33_code_wrong"]);
+        }
+        const attempts = state.codeAttempts + 1;
+        if (attempts >= PAY_MAX_CODE_ATTEMPTS) return toHuman({ ...state, codeAttempts: attempts, codeHash: null }, ["15_too_many_tries"]);
+        return out({ ...state, codeAttempts: attempts }, ["33_code_wrong", "30_enter_code"], G.code);
+      }
+      return out(state, [], state.codeHash ? G.code : null);
     }
 
     case "main_menu":
@@ -410,6 +642,12 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
     case "done":
       return out(state, [], null);
   }
+}
+
+/** The prompt refs an outbound code call plays once the callee answers: intro, the six digits, again, goodbye. */
+export function codeCallPromptRefs(code: string): string[] {
+  const digits = digitsToPromptRefs(code);
+  return ["28_code_call_intro", ...digits, "29_code_again", ...digits, "10_thanks_bye"];
 }
 
 /** Invariant helper for tests: how many charge effects a full event trace produced. */

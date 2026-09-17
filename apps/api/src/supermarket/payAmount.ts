@@ -102,6 +102,18 @@ export function amountToPromptRefs(cents: number): string[] {
   return refs;
 }
 
+/**
+ * Digit-by-digit refs for a code or the last four of a phone number:
+ * "3064" → [num_3, num_0, num_6, num_4]. Only 0–9 exist as single files, so
+ * non-digits are dropped rather than voiced — never a fallback TTS.
+ */
+export function digitsToPromptRefs(digits: string): string[] {
+  return String(digits ?? "")
+    .split("")
+    .filter((c) => c >= "0" && c <= "9")
+    .map((c) => `num_${c}`);
+}
+
 /** Display form used in audit rows and rep-facing screens: "$25.37". */
 export function formatCents(cents: number): string {
   const sign = cents < 0 ? "-" : "";

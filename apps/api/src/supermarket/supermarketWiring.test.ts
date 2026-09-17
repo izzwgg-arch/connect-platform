@@ -114,7 +114,10 @@ test("⛔ the submit path is the ONLY register-order writer in apps/api", () => 
 test("⛔ the pay runtime never captures a card number: no card-collection prompts, charges only against stored cards", () => {
   const runtime = read("./payIvrRuntime.ts").replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
   const core = read("./payIvrCore.ts").replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-  for (const banned of ["card_number", "cardNumber", "collectCard", "cvv", "expir"]) {
+  // ⛔ NOT bare "expir": the 2026-09-17 one-time code introduced legitimate
+  // "codeExpiresAt"/"expiresAt"/"expired"/"expiry" — none of that is a card
+  // field. The real PCI shapes (see billing/adminCardSave.ts) are these.
+  for (const banned of ["card_number", "cardNumber", "collectCard", "cvv", "expMonth", "expYear", "cardExpir", "expirationDate"]) {
     assert.ok(!runtime.includes(banned) && !core.includes(banned), `card-capture shape "${banned}" found — stored cards only, always`);
   }
   assert.match(runtime, /listCustomerCards/, "charging must resolve the STORED card");
