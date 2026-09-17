@@ -489,7 +489,7 @@ ssh -i C:\Users\izzyw\.ssh\connect2_server2_ed25519 root@209.145.60.79  # pbx
 Every file below is in `docs/ai-context/claude-md-sections/` (title starts with its date). Open it, then the full `AGENT_HANDOFF_*.md` it names. One line per area — never expand here.
 
 - 2026-09-15 · B Visible IVR: owner’s call disproved Connect recovery; authorized original PBX route 35/destination 293 restored 13:53:13 ET; post-restore call and PBX Main direct extension dialing pending; publisher 500 unresolved → `2026-09-15-b-visible-ivr-migration-recovery.md`
-- 2026-09-15 · Desk Phone Wizard: barcode-first labels, maker clouds, MAC claims, customer token-scanning; vouched-serial gate → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
+- 2026-09-17 · Desk Phone Wizard: barcode-first labels, maker clouds, MAC claims, customer token-scanning; vouched-serial gate; ⛔⛔ R21 “nothing scans” = portal CSP lacked wasm-unsafe-eval (a wasm 200 ≠ it runs; fixed LIVE in nginx security-headers.conf, server-only state) → `2026-09-14-desk-phone-wizard-automatic-device-identification.md`
 - HP/Poly partner + Poly Zero Touch + Poly Lens: RESEARCHED, nothing applied → `2026-09-14-hp-poly-partner-poly-zero-touch-poly-lens-resear.md`
 - 2026-09-15 · Fanvil REPLIED: FDPS account ISSUED (login is Izzy's to do, region "Europe"), FDMCS activation link expires ~Sep 18, reseller review + FDPS API review started, buy via 888VoIP → `2026-09-14-fanvil-partner-fdps-fdms-onboarding-started-noth.md`
 - Grandstream business onboarding (ITSP / reseller / GDMS) started in Chrome → `2026-09-14-grandstream-business-onboarding-itsp-reseller-gd.md`
