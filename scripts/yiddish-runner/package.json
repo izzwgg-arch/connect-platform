@@ -1,0 +1,14 @@
+{
+  "name": "loopcom-yiddish-runner",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "generate": "prisma generate --schema code/packages/db/prisma/schema.prisma",
+    "start": "tsx runner.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.2",
+    "prisma": "6.19.2",
+    "tsx": "^4.20.0"
+  }
+}

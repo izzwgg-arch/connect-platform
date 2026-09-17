@@ -415,3 +415,17 @@ Not run: Chrome Developer Mode unpacked extension loading, pairing, and live Cow
 - `apps/portal`: `node --import tsx --test components/floatingAssistantOpening.test.ts` — final **16/16 pass**. Existing support paths, same-brain video wiring, consent/cleanup guards, duplicate/serial turn handling, interruption, close/late-response suppression, takeover and no automatic retries.
 - Full portal typecheck passed with `--noEmit --incremental false --types node,react,react-dom`. Final focused portal/API typechecks **passed** using `scratchpad/laybel-typecheck.json` (includes Next declarations) and `scratchpad/laybel-api-typecheck.json` (extends actual workspace aliases). Default ambient discovery failed on missing emscripten declaration; sandbox tsx failed initializing `os.userInfo` but authorized elevated tests passed. Initial standalone API/portal focused commands omitted required workspace/Next declarations; corrected configs passed without source suppression.
 - No live Anam/SignalWire session, production deployment, provider portrait, microphone/playback or browser visual verification proven. Unit tests do not establish live-call readiness.
+
+## Yiddish Learning Engine — audio runner + 24/7 download un-stall — 2026-09-17
+
+- No code changed in the engine this session; no new tests run. The off-box
+  runner (`scripts/yiddish-runner/`) is a committed copy of the PC script.
+- Verified on production (read-only SQL, `connectcomms-postgres`): 34 Yiddish24
+  `fetch_audio` DONE (was 31), 34 `YcAudioAsset` STORED, 19,163 `YcSegment`,
+  and `YcTranscript`/`YcLexeme`/`YcPronunciationRule`/`YcFinding` all 0 —
+  confirming acoustic-only, no language learning (no transcribe/align/cluster
+  handler exists).
+- Verified the download un-stall live: after parking the 1,888 voicemail
+  fetch jobs (`nextRunAt`→2027-01-01), the runner produced new Yiddish24 assets
+  and its log advanced (`done=65` at 15:28:42Z).
+- Live api container `.build-commit` = `51072578`; `YIDDISH_WORKER_EXCLUDE_STAGES=fetch_audio,segment,features` present in the container env.

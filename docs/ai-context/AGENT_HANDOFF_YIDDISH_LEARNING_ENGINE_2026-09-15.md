@@ -599,3 +599,38 @@ Izzy: *"The agent should always be listening to Yiddish 24/7 … learning pronun
 - ✅ **Proven:** 4 new tests; yiddishCorpus 172/173 (the 1 failure is the routes.ts source-guard CRLF artifact, file untouched). Container `.build-commit` = `7c2554c8`, grep finds `Yiddish24Unavailable`, 0 restarts, discovery DONE 11:31 + 11:36 UTC after resume, budget unpaused. ⏳ No real 5xx has hit the new code yet.
 - ⛔⛔ **What "learning pronunciation / accent / dialect / slang / rhythm" needs, and why it is NOT happening:** every one of those needs the AUDIO (rhythm = `YcProsodyObservation`, pronunciation = `YcPronunciationObservation`, slang/dialect = transcripts). Yiddish24 audio is behind a CDN hotlink block + "All Rights Reserved"; fetching it around that block is an access-control bypass — that is what trips the safeguards Izzy noticed. **Never forge the Referer, never flip `audioFetchMode`, never write a GRANTED rights record on a "keep listening" instruction.** The pipeline is built and would run 24/7 on audio automatically once Izzy (a) gets written permission (draft email §2b, Izzy sends) and (b) records the grant + OWNER_AUTHORIZED himself. Other lawful feeds: Loopcom-owned/consented recordings, openly licensed Yiddish audio (not yet researched).
 - ⛔ Worktree copies of this summary + the handoff were OLDER than HEAD on 09-17 (−414 lines); edit from origin blobs.
+
+# §14 2026-09-17 (afternoon) — audio turned ON by owner permission, off-box PC runner, and the honest limit: it is NOT learning language yet
+
+Izzy this morning: *"It's all public. I know the owner. I spoke to him... You have full permission to use all their data."* and, for customer calls, *"I have already cleared it with them. They're fine with it... I want you to do what I tell you to do."* An earlier session (hit the weekly usage limit ~12:45 ET, mid-task) opened the audio gate on that authority and stood up an off-box runner. This section finishes that work and states plainly where it really stands.
+
+## What is real and running
+
+- **Two rights grants recorded** (`YcRightsRecord`), each with Izzy's quoted in-chat authorization as evidence:
+  - `yiddish24` — `analysis` + `store_audio` GRANTED (site owner said yes).
+  - `voicemail` — `analysis` + `store_audio` GRANTED (Izzy as carrier/owner).
+- **Audio gate open for Yiddish24**: source `yiddish24` is `OWNER_AUTHORIZED`, budget `source:yiddish24` = FULL, not paused.
+- **Off-box PC runner** at `C:\Users\izzyw\LoopcomYiddishRunner`, committed to the repo at `scripts/yiddish-runner/` (masked `.env.example`, never the real DB password). It claims only `fetch_audio`, `segment`, `features` as lease owner `izzy-pc`, keeps the MP3/WAV on the PC, and writes results back over an SSH tunnel. The server worker skips those stages via `YIDDISH_WORKER_EXCLUDE_STAGES=fetch_audio,segment,features` (commit `51072578`, deployed; live container env verified).
+- **Live state (2026-09-17 ~15:30Z):** 34 Yiddish24 episodes fetched + segmented + feature-extracted; 19,163 acoustic segments; 34 `YcAudioAsset` STORED, 100 already retention-DELETED. Metadata crawl healthy (all site-health probes OK, hourly re-check).
+
+## ⛔⛔ The honest limit — it downloads and measures audio, it does NOT learn language
+
+There are **no `transcribe`, `align` or `cluster` stage handlers** in the engine (`defaultStageHandlers`, jobs.ts:409, has only discover/fingerprint/fetch_audio/segment/features/novelty/observe/aggregate; the three audio stages are declared but unimplemented, which the missing-handler guard permits). No speech-to-text is wired anywhere (`audioPipeline.ts` is ffmpeg/ffprobe only). Consequences, confirmed on production:
+- `YcLexeme` 0, `YcPronunciationRule` 0, `YcFinding` 0, `YcTranscript` 0.
+- `observe` only ever SKIPs ("no transcript to observe"); `transcribe`/`align`/`cluster` SKIP "no handler".
+- So the engine currently produces **acoustic segmentation and features only** (silence/speech spans, rate-ish features). It is **not** learning pronunciation, dialect, slang or vocabulary. Rhythm is the only thing acoustics alone can begin to describe.
+- Opening budgets does **not** change this: a transcribe job with minutes budgeted still ends SKIPPED "no handler". No API spend is possible today, and none has been incurred.
+
+**The real remaining build** (a genuine scope + spend decision for Izzy, not a "finish"): write the `transcribe` handler (choose a Yiddish STT — YiddishLabs, which is contractually **no-train**, vs OpenAI Whisper, which is weak on Yiddish), the `align` handler (forced alignment so a transcript pins to a segment → `ACOUSTIC_ALIGNED` observations), and the `cluster` handler (speaker clustering). Only then do `observe`/`aggregate` produce lexemes and pronunciation rules. It needs a paid-STT decision and a daily budget.
+
+## The 24/7 download had stalled; fixed (data change, no deploy)
+
+The runner claims `fetch_audio` across **all** sources (`claimJobs` filters by stage only, jobs.ts:347-358 — no source filter). The 1,888 customer-voicemail fetch jobs, deferred every tick because their budget is the paused global budget, kept getting claimed and re-deferred, **starving the Yiddish24 download from ~13:30 to ~15:28Z**. Fix: parked the voicemail `fetch_audio` PENDING jobs (`nextRunAt` → 2027-01-01, reversible). Yiddish24 downloading resumed immediately — proven by new assets (31→34 DONE) and the runner log advancing again (`done=65` at 15:28:42Z). No code or deploy; a live `YcProcessingJob` update only.
+
+## Customer-voicemail leg — authorized but deliberately PARKED
+
+Izzy authorized it and it is registered (1,888 Yiddish voicemail items, `OWNER_AUTHORIZED`, `contentAllowed=true`), but it is held inert for now: (a) it can produce no learning anyway until the transcribe/align handlers exist; (b) its audio bulk-copy to the PC was interrupted at the usage limit; (c) it is the single highest-regret leg (a carrier learning from customers' private calls), so it should not pour customer audio through autonomously without Izzy seeing the clean Yiddish24 leg working first. The grant is left intact (his decision, not reverted). To revive: reset the parked jobs' `nextRunAt` to now and give the source a running (unpaused, non-METADATA_ONLY) budget — but only after the starvation limit above is handled and the handlers exist.
+
+## Nothing that costs money or crosses the customer wall was changed
+
+Budgets untouched (global still paused/METADATA_ONLY/0; `source:yiddish24` FULL). No transcription, no API spend, no customer audio ingested this session. The only live change was parking the voicemail fetch jobs to un-stall the owner-authorized Yiddish24 download.

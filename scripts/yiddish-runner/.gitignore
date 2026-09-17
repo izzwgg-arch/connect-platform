@@ -1,0 +1,6 @@
+.env
+audio/
+logs/
+node_modules/
+code/
+package-lock.json
