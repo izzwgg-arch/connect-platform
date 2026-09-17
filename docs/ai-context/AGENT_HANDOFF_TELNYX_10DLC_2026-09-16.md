@@ -354,3 +354,15 @@ Code: `apps/api/src/textingRegistration/switcher.ts` + `switcher.test.ts`, wired
 - It logs only when it acts (`texting switcher took action`, `texting_switcher_switched`), so a quiet log after boot is normal; proof it did nothing = provider counts unchanged + 0 `telnyx.texting_switched` rows in AgentAuditLog.
 - ⛔ Deploy lesson hit on the way: a server-side waiter written as `while pgrep -f "deploy-direct.sh"` matches ITS OWN `bash -c` command line and waits forever; so does any `ssh … 'pgrep -f "x"'` probe. Use `pgrep -f "[d]eploy-direct.sh"` or wait on a PID.
 - ⏳ First real proof = 845-723-1213 going active on Friday 9/18 (Connect Communications, no campaign) or a customer's port: expect the row TELNYX within 5 min + a `number_switched` History event.
+## 000c. 2026-09-17 — Trust Bookkeepings: the first real customer link
+Izzy: *"Prepare me a 10DLC link for trust bookkeeping."* Created via the deployed link route
+(same HS256-from-`JWT_SECRET` recipe as §000b; the container has no `@prisma/client` at `/app`,
+so a Prisma script fails — go through the api on 3001). Result: registration
+`cmu4l971x024qru13v8cv3rmw` `draft` → `awaiting_customer`, link expires 2026-10-17T15:29Z,
+`emailed:false` (Izzy sends it). Verified from outside: `/texting-registration/<token>` 200 and
+`/api/texting-registration/<token>` 200 — ⛔ and that api GET stamps `openedAt` (the public read
+route marks the link opened), so the board now shows Trust "opened" before the customer saw it.
+Verify a link through the portal page, never the api. ⛔ Only the hash is stored — the URL lives in
+the chat reply; a second Create link revokes it (older links turned off). Board state after this:
+links out for Gesheft, Relax Tires, Fixup (09-16 night, not recorded here until now) + Trust; still
+`draft` with no link: Displaydex, B Visible, Luxure, Hanna, Create A Box.
