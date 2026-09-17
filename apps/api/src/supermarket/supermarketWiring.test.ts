@@ -60,6 +60,9 @@ test("PORTAL_API_PERMISSION_RULES carries the three supermarket entries, mode-pr
 test("the two public doors are on the JWT bypass list — const AND the OR-chain", () => {
   assert.match(bypassSrc, /isInternalSupermarketPayIvrPath/);
   assert.match(bypassSrc, /\/internal\/supermarket\/pay-ivr\/step/);
+  // The keyed-card door rides the same bypass — the first deploy without this
+  // line answered 401 to the AGI with the CORRECT secret (2026-09-17).
+  assert.match(bypassSrc, /\/internal\/supermarket\/pay-ivr\/card/, "the card door is not JWT-bypassed — the AGI's POST 401s before the secret check");
   assert.match(bypassSrc, /isMarketingUnsubscribePath/);
   assert.match(bypassSrc, /\/marketing\/unsubscribe\//);
   // and both flags are actually consulted (an `|| flag` line — a const that is

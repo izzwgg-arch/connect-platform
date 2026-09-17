@@ -170,8 +170,13 @@ export function shouldSkipJwtVerification(path: string): boolean {
   // In-handler shared-secret auth via guardInternalSecret (fail-closed) — but
   // without this bypass the JWT hook 401s before that check ever runs (403 =
   // you reached the handler, 401 = you did not).
+  // The keyed-card door (2026-09-17) is the AGI collector's one request to the
+  // same line, under the same shared secret — same bypass, same fail-closed check.
   const isInternalSupermarketPayIvrPath =
-    path === "/internal/supermarket/pay-ivr/step" || path.endsWith("/internal/supermarket/pay-ivr/step");
+    path === "/internal/supermarket/pay-ivr/step" ||
+    path.endsWith("/internal/supermarket/pay-ivr/step") ||
+    path === "/internal/supermarket/pay-ivr/card" ||
+    path.endsWith("/internal/supermarket/pay-ivr/card");
   // Marketing one-click unsubscribe: opened from an email, no Bearer token.
   // The HMAC-signed token in the path is the whole credential (specials.ts).
   const isMarketingUnsubscribePath =
