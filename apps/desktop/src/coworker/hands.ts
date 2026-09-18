@@ -172,10 +172,15 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     onAwaitingApproval: (c) => { try { link?.progress(c.id, "awaiting_approval"); } catch { /* not started yet */ } },
   });
 
+  // ⛔ New on every launch of the app: the desktopId says WHICH computer, this says
+  // which RUN. The server treats a changed launchId as a fresh connection, which is
+  // how a person with two computers puts the work back on the one they are at —
+  // quit Loopcom and open it there.
+  const launchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const manifest = () => {
     const s = d.getSettings();
     return {
-      desktopId, appVersion: d.app.getVersion(), hostname: os.hostname(), os: `${os.type()} ${os.release()}`, username: os.userInfo().username,
+      desktopId, launchId, appVersion: d.app.getVersion(), hostname: os.hostname(), os: `${os.type()} ${os.release()}`, username: os.userInfo().username,
       profile: permissions().profile, workspace: workspaceFor(s), tools: runtime.manifestTools(),
       mcpServers: mcp.status().map((m) => ({ id: m.id, name: m.name, state: m.state, tools: m.tools.length })),
     };

@@ -205,6 +205,34 @@ test("an older app that sends no computer id still works exactly as before", asy
   assert.equal(link.status(ME).desktopId, "legacyDesk");
 });
 
+test("⛔ quitting and reopening Loopcom on the computer you are at puts new work there", async () => {
+  let now = 5_000_000;
+  const link = new DesktopLink(() => now);
+  const deskA = (launchId: string) => ({ ...manifest("deskA", "A", ["computer_fs_list"]), launchId });
+  const deskB = (launchId: string) => ({ ...manifest("deskB", "B", ["computer_fs_list"]), launchId });
+  link.hello(ME, deskA("runA1"));
+  now += 1000;
+  link.hello(ME, deskB("runB1"));
+  assert.equal(link.manifest(ME)!.hostname, "B", "the one opened last");
+  // B keeps running and re-hellos every five minutes — that must NOT reshuffle anything
+  for (let i = 0; i < 5; i++) { now += 60_000; link.hello(ME, deskA("runA1")); link.hello(ME, deskB("runB1")); }
+  assert.equal(link.manifest(ME)!.hostname, "B");
+  // the person quits Loopcom on A and opens it again → a NEW run → A is where work goes
+  now += 1000;
+  const r = link.hello(ME, deskA("runA2"));
+  assert.equal(r.reconnected, true);
+  assert.equal(link.manifest(ME)!.hostname, "A", "reopening the app moved new work to that computer");
+  // and an app with no launchId at all (older build) never jumps the queue this way
+  now += 1000;
+  const old = link.hello(ME, manifest("deskC", "C", ["computer_fs_list"]));
+  assert.equal(old.replaced, false);
+  now += 1000;
+  link.hello(ME, manifest("deskC", "C", ["computer_fs_list"]));
+  assert.equal(link.manifest(ME)!.hostname, "C", "a genuinely new computer is still preferred on its first connection");
+  link.hello(ME, deskA("runA2"));
+  assert.equal(link.manifest(ME)!.hostname, "C", "a same-run re-hello from A did not jump it back");
+});
+
 test("status names every computer and which one new work goes to", async () => {
   const link = new DesktopLink();
   link.hello(ME, manifest("deskA", "DESKTOP", ["computer_fs_list"]));

@@ -46,6 +46,14 @@ export type DesktopToolManifest = {
 
 export type DesktopManifest = {
   desktopId: string;
+  /**
+   * Random, new on every LAUNCH of the app (the desktopId identifies the machine
+   * and survives restarts; this identifies the run). ⛔ It is what makes "open
+   * Loopcom on the computer you are sitting at and new work goes there" true: a
+   * re-hello from the SAME run must not reshuffle anything, but a fresh run is a
+   * fresh connection. Absent from apps older than 2026-09-18.
+   */
+  launchId?: string;
   appVersion: string;
   hostname: string;
   os: string;
@@ -203,6 +211,7 @@ export function parseManifest(raw: unknown): { ok: true; manifest: DesktopManife
     ok: true,
     manifest: {
       desktopId,
+      launchId: str(m.launchId, 80) || undefined,
       appVersion: str(m.appVersion, 40),
       hostname: str(m.hostname, 80),
       os: str(m.os, 80),
@@ -261,15 +270,24 @@ export class DesktopLink {
   constructor(private now: () => number = () => Date.now()) {}
 
   /** The desktop announced itself (again). Replaces the manifest; keeps the queue. */
-  hello(identity: LinkIdentity, manifest: DesktopManifest): { key: string; replaced: boolean } {
+  hello(identity: LinkIdentity, manifest: DesktopManifest): { key: string; replaced: boolean; reconnected?: boolean } {
     const key = sessionKey(identity, manifest.desktopId);
     const existing = this.sessions.get(key);
     const t = this.now();
     if (existing) {
+      // ⛔ A NEW RUN of the app is a new connection, and that is the only thing the
+      // PERSON can do to say "work here": quitting and reopening Loopcom on the
+      // machine in front of them must put it back in front of the queue. A periodic
+      // re-hello from the same run must NOT (it would reshuffle idle machines every
+      // five minutes). Older apps send no launchId, so they keep their original
+      // connection time and simply never jump the queue.
+      const relaunched = !!manifest.launchId && !!existing.manifest.launchId && manifest.launchId !== existing.manifest.launchId;
+      const returned = t - existing.lastSeen >= DESKTOP_PRESENCE_MS;
+      if (relaunched || returned) existing.connectedAt = t;
       existing.manifest = manifest;
       existing.lastSeen = t;
       existing.helloAt = t;
-      return { key, replaced: true };
+      return { key, replaced: true, reconnected: relaunched || returned };
     }
     this.sessions.set(key, {
       key, identity, desktopId: manifest.desktopId, manifest, connectedAt: t, lastSeen: t, helloAt: t, lastActivityAt: 0,
