@@ -789,6 +789,636 @@
       "permissions": "signed in; owns the row",
       "api": "POST/PATCH/DELETE /me/profile/portfolio[/:id]",
       "testId": "profile-editor-portfolio-add, profile-editor-portfolio-edit-<id>, profile-editor-portfolio-delete-<id>, profile-editor-portfolio-save"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-follow",
+      "action": "click",
+      "expected": "follows/unfollows the company; followerCount and button label update",
+      "permissions": "signed in (anon is redirected to /login)",
+      "api": "POST /organizations/:id/follow | DELETE /organizations/:id/follow",
+      "testId": "company-follow"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-request-quote",
+      "action": "click",
+      "expected": "navigates to /rfq/new?vendor=:id",
+      "permissions": "shown only when viewer.canRequestQuote (org.acceptsRfqs)",
+      "api": "-",
+      "testId": "company-request-quote"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-call",
+      "action": "click",
+      "expected": "opens tel: link to the company's phone",
+      "permissions": "shown only when viewer.canCall and contact.phone is visible",
+      "api": "-",
+      "testId": "company-call"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-whatsapp",
+      "action": "click",
+      "expected": "opens wa.me link to the company's WhatsApp number",
+      "permissions": "shown only when contact.whatsapp is visible",
+      "api": "-",
+      "testId": "company-whatsapp"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-message",
+      "action": "click",
+      "expected": "creates/reuses a thread with the company's first listed person and navigates to /messages/:id",
+      "permissions": "shown only when viewer.canMessage and a person is listed; signed in",
+      "api": "POST /threads {personIds:[id]}",
+      "testId": "company-message"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-tab-<key>",
+      "action": "click",
+      "expected": "switches the visible tab (about/posts/services/catalog/jobs/people/trust/events)",
+      "permissions": "anyone",
+      "api": "GET /organizations/:id/posts | /services | /events (Posts/Services/Events show an Empty state if that domain's route isn't built yet)",
+      "testId": "company-tab-about | company-tab-posts | company-tab-services | company-tab-catalog | company-tab-jobs | company-tab-people | company-tab-trust | company-tab-events"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-catalog-<id>",
+      "action": "view / click Request quote",
+      "expected": "shows a catalog item; its Request quote button links to /rfq/new?vendor=:orgId&item=:id",
+      "permissions": "anyone; quote button only when viewer.canRequestQuote",
+      "api": "GET /public/companies/:slug",
+      "testId": "company-catalog-<id>"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-public-signin",
+      "action": "click",
+      "expected": "navigates to /login (anonymous header)",
+      "permissions": "signed out only",
+      "api": "-",
+      "testId": "company-public-signin"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "CompanyPublicPage",
+      "control": "company-public-join",
+      "action": "click",
+      "expected": "navigates to /join (anonymous header)",
+      "permissions": "signed out only",
+      "api": "-",
+      "testId": "company-public-join"
+    },
+    {
+      "screen": "company",
+      "component": "MyCompaniesPage",
+      "control": "company-create",
+      "action": "click",
+      "expected": "navigates to /company/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "company-create"
+    },
+    {
+      "screen": "company",
+      "component": "MyCompaniesPage",
+      "control": "company-claim-loopcom",
+      "action": "click",
+      "expected": "navigates to /company/new?claim=1 (create-then-claim flow)",
+      "permissions": "signed in and me.person.loopcomLinked",
+      "api": "-",
+      "testId": "company-claim-loopcom"
+    },
+    {
+      "screen": "company",
+      "component": "MyCompaniesPage",
+      "control": "company-row-<slug>",
+      "action": "click",
+      "expected": "navigates to the public company page /companies/:slug",
+      "permissions": "signed in",
+      "api": "GET /me/organizations",
+      "testId": "company-row-<slug>"
+    },
+    {
+      "screen": "company",
+      "component": "MyCompaniesPage",
+      "control": "company-manage-<slug>",
+      "action": "click",
+      "expected": "navigates to /company/admin",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "company-manage-<slug>"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyForm",
+      "control": "company-new-name",
+      "action": "type",
+      "expected": "sets the company's display name",
+      "permissions": "signed in, verified",
+      "api": "-",
+      "testId": "company-new-name"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyForm",
+      "control": "company-new-submit",
+      "action": "click",
+      "expected": "creates the org (and, with ?claim=1, immediately claims the caller's Loopcom tenant), then navigates to the new company page",
+      "permissions": "signed in, verified (email or phone)",
+      "api": "POST /organizations then POST /organizations/:id/claim-loopcom (claim flow only)",
+      "testId": "company-new-submit"
+    },
+    {
+      "screen": "company/invite",
+      "component": "AcceptInvite",
+      "control": "company-invite-continue",
+      "action": "click",
+      "expected": "navigates to the joined company's public page",
+      "permissions": "signed in; invite email must match the account's verified email",
+      "api": "POST /organizations/invites/accept {token}",
+      "testId": "company-invite-continue"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdmin",
+      "control": "company-admin-org-select",
+      "action": "change",
+      "expected": "switches the admin screen to a different company the person manages",
+      "permissions": "shown only when a member of more than one company",
+      "api": "-",
+      "testId": "company-admin-org-select"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdmin",
+      "control": "company-admin-tab-<key>",
+      "action": "click",
+      "expected": "switches between Members & roles / Verification / Page / Locations / Audit log",
+      "permissions": "any member (each tab further gates its own controls by permission)",
+      "api": "-",
+      "testId": "company-admin-tab-members | company-admin-tab-verification | company-admin-tab-page | company-admin-tab-locations | company-admin-tab-audit"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-invite-open",
+      "action": "click",
+      "expected": "opens the invite dialog",
+      "permissions": "org.manage_members",
+      "api": "-",
+      "testId": "company-admin-invite-open"
+    },
+    {
+      "screen": "company/admin",
+      "component": "InviteDialog",
+      "control": "company-admin-invite-send",
+      "action": "click",
+      "expected": "sends an email invite with a 14-day accept link; idempotent per (org,email) — resending refreshes the token",
+      "permissions": "org.manage_members",
+      "api": "POST /organizations/:id/invites",
+      "testId": "company-admin-invite-send"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-role-<personId>",
+      "action": "change",
+      "expected": "changes a member's role; refused with a 409 if it would leave the company with no OWNER",
+      "permissions": "org.manage_roles",
+      "api": "PATCH /organizations/:id/members/:personId",
+      "testId": "company-admin-role-<personId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-approve-<personId>",
+      "action": "click",
+      "expected": "approves a pending join request (affiliation → VERIFIED_ADMIN)",
+      "permissions": "org.manage_roles",
+      "api": "PATCH /organizations/:id/members/:personId {affiliation:VERIFIED_ADMIN}",
+      "testId": "company-admin-approve-<personId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-permissions-<personId>",
+      "action": "click",
+      "expected": "opens a dialog of every ORG_PERMISSIONS key as a toggle, for extra grants on top of the role",
+      "permissions": "org.manage_roles to save; visible to anyone who can see the members list",
+      "api": "-",
+      "testId": "company-admin-permissions-<personId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "PermissionsDialog",
+      "control": "company-admin-permissions-save",
+      "action": "click",
+      "expected": "saves the member's explicit permission set",
+      "permissions": "org.manage_roles",
+      "api": "PATCH /organizations/:id/members/:personId {permissions:[...]}",
+      "testId": "company-admin-permissions-save"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-remove-<personId>",
+      "action": "click",
+      "expected": "removes the member; refused with a 409 for the last OWNER",
+      "permissions": "org.manage_members",
+      "api": "DELETE /organizations/:id/members/:personId",
+      "testId": "company-admin-remove-<personId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "MembersTab",
+      "control": "company-admin-revoke-<inviteId>",
+      "action": "click",
+      "expected": "revokes a pending invite",
+      "permissions": "org.manage_members",
+      "api": "DELETE /organizations/:id/invites/:inviteId",
+      "testId": "company-admin-revoke-<inviteId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "VerificationTab",
+      "control": "company-admin-verify-domain",
+      "action": "click",
+      "expected": "runs a live DNS TXT lookup for loopcom-verify=<orgId>; verifies immediately if found, otherwise returns setup instructions",
+      "permissions": "org.verify; button disabled until a domain is set on the Page tab",
+      "api": "POST /organizations/:id/verifications {kind:DOMAIN}",
+      "testId": "company-admin-verify-domain"
+    },
+    {
+      "screen": "company/admin",
+      "component": "VerificationTab",
+      "control": "company-admin-verify-business",
+      "action": "click",
+      "expected": "submits a BUSINESS verification request as PENDING for staff review",
+      "permissions": "org.verify",
+      "api": "POST /organizations/:id/verifications {kind:BUSINESS}",
+      "testId": "company-admin-verify-business"
+    },
+    {
+      "screen": "company/admin",
+      "component": "VerificationTab",
+      "control": "company-admin-recheck-<id>",
+      "action": "click",
+      "expected": "re-runs the DNS TXT lookup for a pending domain verification",
+      "permissions": "org.verify",
+      "api": "POST /organizations/:id/verifications/:vid/recheck",
+      "testId": "company-admin-recheck-<id>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "PageTab",
+      "control": "company-admin-domain",
+      "action": "type",
+      "expected": "sets the company's domain (used by domain verification)",
+      "permissions": "org.edit_page",
+      "api": "-",
+      "testId": "company-admin-domain"
+    },
+    {
+      "screen": "company/admin",
+      "component": "PageTab",
+      "control": "company-admin-logo-upload",
+      "action": "choose file",
+      "expected": "uploads and sets the company logo (image only, sniffed server-side)",
+      "permissions": "org.edit_page",
+      "api": "POST /organizations/:id/logo",
+      "testId": "company-admin-logo-upload"
+    },
+    {
+      "screen": "company/admin",
+      "component": "PageTab",
+      "control": "company-admin-cover-upload",
+      "action": "choose file",
+      "expected": "uploads and sets the company cover photo",
+      "permissions": "org.edit_page",
+      "api": "POST /organizations/:id/cover",
+      "testId": "company-admin-cover-upload"
+    },
+    {
+      "screen": "company/admin",
+      "component": "PageTab",
+      "control": "company-admin-page-save",
+      "action": "click",
+      "expected": "saves all page fields, hours and the visibility toggles; audited with before/after",
+      "permissions": "org.edit_page",
+      "api": "PATCH /organizations/:id",
+      "testId": "company-admin-page-save"
+    },
+    {
+      "screen": "company/admin",
+      "component": "LocationsTab",
+      "control": "company-admin-location-add",
+      "action": "click",
+      "expected": "opens the add-location dialog",
+      "permissions": "org.manage_locations",
+      "api": "-",
+      "testId": "company-admin-location-add"
+    },
+    {
+      "screen": "company/admin",
+      "component": "LocationDialog",
+      "control": "company-admin-location-save",
+      "action": "click",
+      "expected": "creates or updates a location",
+      "permissions": "org.manage_locations",
+      "api": "POST /organizations/:id/locations | PATCH /organizations/:id/locations/:locId",
+      "testId": "company-admin-location-save"
+    },
+    {
+      "screen": "company/admin",
+      "component": "LocationsTab",
+      "control": "company-admin-location-<id>",
+      "action": "view / Edit / Remove",
+      "expected": "lists a location; Edit reopens the dialog pre-filled, Remove deletes it",
+      "permissions": "org.manage_locations for Edit/Remove",
+      "api": "GET /organizations/:id/locations | DELETE /organizations/:id/locations/:locId",
+      "testId": "company-admin-location-<id>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "AuditTab",
+      "control": "company-admin-audit-more",
+      "action": "click",
+      "expected": "loads the next page of the org's audit log",
+      "permissions": "org.manage_roles",
+      "api": "GET /organizations/:id/audit?cursor=",
+      "testId": "company-admin-audit-more"
+    },
+    {
+      "screen": "messages",
+      "component": "ThreadList",
+      "control": "messages-new",
+      "action": "click",
+      "expected": "navigates to /network to find someone to message (no in-place people search exists yet)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-new"
+    },
+    {
+      "screen": "messages",
+      "component": "ThreadList",
+      "control": "messages-tab-<tab>",
+      "action": "click",
+      "expected": "list re-fetches the chosen tab (inbox/requests/archived)",
+      "permissions": "signed in",
+      "api": "GET /threads?tab=<tab>",
+      "testId": "messages-tab-inbox | messages-tab-requests | messages-tab-archived"
+    },
+    {
+      "screen": "messages",
+      "component": "ThreadList",
+      "control": "messages-thread-<id>",
+      "action": "click",
+      "expected": "navigates to /messages/<id>, opening the conversation",
+      "permissions": "signed in; participant not DECLINED/LEFT",
+      "api": "GET /threads/:id",
+      "testId": "messages-thread-<id>"
+    },
+    {
+      "screen": "messages",
+      "component": "ThreadList",
+      "control": "messages-load-more",
+      "action": "click",
+      "expected": "appends the next page of threads for the active tab",
+      "permissions": "signed in",
+      "api": "GET /threads?tab=<tab>&cursor=",
+      "testId": "messages-load-more"
+    },
+    {
+      "screen": "messages/new",
+      "component": "NewThreadRedirect",
+      "control": "(auto, on load, ?to=<personId>)",
+      "action": "load",
+      "expected": "finds-or-creates the DIRECT thread with that person and redirects to /messages/<id>; blocked/requests-off/self shows a human refusal instead",
+      "permissions": "signed in + verified",
+      "api": "POST /threads {personIds:[to]}",
+      "testId": "-"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-back",
+      "action": "click",
+      "expected": "mobile only: returns to the thread list",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-back"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-conv-info",
+      "action": "click",
+      "expected": "opens the conversation-info dialog (mobile) / focuses the right rail (desktop)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-conv-info"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-accept-request",
+      "action": "click",
+      "expected": "my participant state REQUESTED -> ACTIVE; sender can message freely again",
+      "permissions": "signed in; myState === REQUESTED",
+      "api": "POST /threads/:id/accept",
+      "testId": "messages-accept-request"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-decline-request",
+      "action": "click",
+      "expected": "my participant state -> DECLINED; thread becomes invisible to me from then on, silently",
+      "permissions": "signed in; myState === REQUESTED",
+      "api": "POST /threads/:id/decline",
+      "testId": "messages-decline-request"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-load-older",
+      "action": "click",
+      "expected": "prepends the next page of older messages",
+      "permissions": "signed in",
+      "api": "GET /threads/:id/messages?cursor=",
+      "testId": "messages-load-older"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-react-<id>-<emoji>",
+      "action": "click",
+      "expected": "toggles my reaction on that message; count updates for everyone live",
+      "permissions": "signed in; thread participant",
+      "api": "POST /threads/:id/messages/:mid/react {emoji}",
+      "testId": "messages-react-<id>-<emoji> | messages-rx-<id>-<emoji>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-reply-<id>",
+      "action": "click",
+      "expected": "sets the composer's reply target to that message",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-reply-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-forward-<id>",
+      "action": "click",
+      "expected": "opens the forward dialog listing my other inbox threads",
+      "permissions": "signed in",
+      "api": "GET /threads?tab=inbox",
+      "testId": "messages-forward-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ForwardDialog",
+      "control": "messages-forward-to-<threadId>",
+      "action": "click",
+      "expected": "copies the message into that thread with forwardedFrom set, honouring that thread's own request cap",
+      "permissions": "signed in + verified; participant of target thread",
+      "api": "POST /threads/:id/messages/:mid/forward {toThreadIds}",
+      "testId": "messages-forward-to-<threadId>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-copy-<id>",
+      "action": "click",
+      "expected": "copies the message body to the clipboard",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-copy-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-edit-<id>",
+      "action": "click",
+      "expected": "turns the bubble into an editable field (sender only, within 24h)",
+      "permissions": "signed in; sender",
+      "api": "-",
+      "testId": "messages-edit-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-edit-save",
+      "action": "click",
+      "expected": "saves the edited body; editedAt stamped; live-updates for everyone",
+      "permissions": "signed in; sender; within 24h",
+      "api": "PATCH /threads/:id/messages/:mid {body}",
+      "testId": "messages-edit-save"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-delete-<id>",
+      "action": "click",
+      "expected": "opens a confirm dialog",
+      "permissions": "signed in; sender",
+      "api": "-",
+      "testId": "messages-delete-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-delete-confirm",
+      "action": "click",
+      "expected": "message body cleared, deletedAt stamped, shows \"Message deleted\" for everyone",
+      "permissions": "signed in; sender",
+      "api": "DELETE /threads/:id/messages/:mid",
+      "testId": "messages-delete-confirm"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-attach-btn / messages-photo-btn / messages-mic-btn",
+      "action": "click",
+      "expected": "uploads a file/photo/voice recording and sends it as a message (FILE/IMAGE/AUDIO)",
+      "permissions": "signed in + verified; within the thread's request cap",
+      "api": "POST /media then POST /threads/:id/messages",
+      "testId": "messages-attach-btn | messages-photo-btn | messages-mic-btn"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-input / messages-send",
+      "action": "type + Enter or click",
+      "expected": "sends a TEXT message; a stranger's 2nd message before acceptance is refused with a human 409",
+      "permissions": "signed in + verified",
+      "api": "POST /threads/:id/typing (while typing), POST /threads/:id/messages",
+      "testId": "messages-input | messages-send"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-reply-cancel",
+      "action": "click",
+      "expected": "clears the reply target",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-reply-cancel"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ThreadInfo",
+      "control": "messages-info-view-profile",
+      "action": "click",
+      "expected": "navigates to the other person's public profile",
+      "permissions": "signed in; DIRECT thread",
+      "api": "-",
+      "testId": "messages-info-view-profile"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ThreadInfo",
+      "control": "messages-info-mute / messages-info-pin / messages-info-archive",
+      "action": "click",
+      "expected": "toggles that state on my participant row; thread reorders/moves tabs accordingly",
+      "permissions": "signed in",
+      "api": "POST /threads/:id/mute|pin|archive",
+      "testId": "messages-info-mute | messages-info-pin | messages-info-archive"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ThreadInfo",
+      "control": "messages-info-report",
+      "action": "click",
+      "expected": "opens the report dialog for the other participant; they are never told",
+      "permissions": "signed in; DIRECT thread",
+      "api": "POST /reports {targetType:'person'}",
+      "testId": "messages-info-report -> messages-report-submit"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ThreadInfo",
+      "control": "messages-info-leave",
+      "action": "click",
+      "expected": "leaves a GROUP thread (my state -> LEFT); thread becomes invisible to me",
+      "permissions": "signed in; GROUP thread",
+      "api": "POST /threads/:id/leave",
+      "testId": "messages-info-leave"
     }
   ]
 }

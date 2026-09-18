@@ -1,0 +1,7 @@
+/* Loopcom Community — organizations domain (company profile + admin). */
+
+.company-perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+@media (max-width: 560px) {
+  .company-perm-grid { grid-template-columns: 1fr; }
+}
+.company-hours-grid { display: grid; grid-template-columns: 70px 1fr 1fr auto; gap: 8px; align-items: center; }
