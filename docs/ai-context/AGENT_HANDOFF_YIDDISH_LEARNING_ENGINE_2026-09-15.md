@@ -705,7 +705,18 @@ rights); PC runner refreshed + Prisma regenerated + restarted with the five stag
    endpoint (`runpod-endpoint.ts create`), set `EVERETT_*` in the runner's `.env`, apply
    `integrator-budgets.sql` ($3/day labelling split) and `unpark-voicemail-jobs.sql`; labelling starts.
    OR the laptop's GPU (`nvidia-smi`) → `YC_TRANSCRIBE_BACKEND=local` on that machine, $0.
-2. **Kaggle account** (create, PHONE-VERIFY, API token → `~/.kaggle/kaggle.json`) → free training.
+2. DONE 2026-09-17 evening — **Kaggle is LIVE**: account `izzywein` created + phone/identity
+   verified by Izzy; private notebook `izzywein/loopcom-gpu-check` PROVED 2x Tesla T4 (15 GB each,
+   CUDA true, torch sees both) with 30 GPU-h/week quota; session stopped after the proof. Auth on this
+   PC: `C:/Users/izzyw/.kaggle/access_token` (new KGAT token format — NOT kaggle.json; CLI 2.2.4 also
+   accepts `KAGGLE_API_TOKEN`), verified live via `kaggle kernels list --mine`; `KAGGLE_USERNAME=izzywein`
+   is a user env var. The token passed through chat — rotate it at kaggle.com/settings when convenient.
+   ALSO PROVEN the same evening, in Izzy's own Chrome: Google Colab free T4 (notebook `loopcom-gpu-check`
+   in his Drive, runtime released) and Lightning AI T4 in Studio `scratch-studio-devbox` (org `izzywkg-org`;
+   the "80 free GPU hours" marketing = $5 credits ≈ 9 T4-hours; $4.82 left; Studio asleep; no card added —
+   a card adds 25 credits, Izzy's call). TRAP: TWO Chromes are connected (two offices) — a first
+   Colab/Lightning pass ran in the WRONG one; always `list_connected_browsers` + `select_browser` first.
+   A stray `Untitled0.ipynb` remains in the other office's Google Drive.
 3. **~1 hour of his ear** on `/admin/yiddish-learning/gold` once transcripts exist (300 clips) — the only
    way to PROVE the fine-tune is better (gold WER before vs after), not just different.
 ⛔ Until 1 or the laptop GPU exists, `transcribe` jobs sit DEFERRED daily ("no transcription minutes

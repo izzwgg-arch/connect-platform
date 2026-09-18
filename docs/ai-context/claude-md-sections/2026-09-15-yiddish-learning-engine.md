@@ -283,4 +283,9 @@ Full record: parent handoff §15 + `AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-
   Prisma client regenerated (knows the new columns), restarted — logs "stages fetch_audio, segment,
   features, transcribe, align". Dry-run registration: 22,427 call recordings / 773 h across Yiddish tenants
   (NOT registered — needs a budget first or they starve the Yiddish24 download).
+- FREE GPU POOL LIVE (2026-09-17 evening): Kaggle `izzywein` verified — 2x T4 PROVEN, 30 h/week, KGAT
+  token at `C:/Users/izzyw/.kaggle/access_token` on this PC (rotate when convenient — it passed through
+  chat), CLI authenticates; Colab free T4 proven in Izzy's Chrome; Lightning AI T4 proven ($4.82 of $5
+  credits left, Studio asleep, no card). TRAP: two Chromes connected (two offices) — select the browser
+  first. Remaining for learning: Dell = labelling machine (bootstrap ready), the gold-review hour.
 
