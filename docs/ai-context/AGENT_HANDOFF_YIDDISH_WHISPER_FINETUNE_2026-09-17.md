@@ -253,3 +253,63 @@ and the highest-weight training rows.
 - ⛔ The PBX is read-only. ⛔ Never forge the Yiddish24 Referer outside the existing gate.
 - Every paid call is metered through `chargeBudget`; a stage that cannot meter must not run.
 - Tests: `cd apps/api && node --experimental-test-module-mocks --import tsx --test "src/yiddishCorpus/*.test.ts"`.
+
+
+---
+
+## 2026-09-18 — five dead training runs, and the four traps that produced them
+
+Runs 4–7 all died before the model learned anything. Every cause is now a guard in
+`scripts/yiddish-finetune/kaggle-run.ts`, because every one of them presented as a SUCCESS.
+
+### ⛔⛔ `kaggle kernels push` exits 0 in at least three different failure modes
+
+1. **The dataset was not attached.** It prints
+   `The following are not valid dataset sources and could not be added to the kernel: [...]`
+   above `Kernel version N successfully pushed`, exit code 0, and the run starts with no
+   data. Usual cause: the dataset is still PROCESSING right after an upload.
+   → `assertDatasetSourcesAttached()`.
+2. **The session was never created.** `Kernel push error: Maximum batch GPU session count
+   of 2 reached.` — same stdout, same zero exit code, no run at all. The free tier allows
+   TWO concurrent batch GPU sessions and a just-failed session keeps its slot for several
+   minutes. → `assertKernelActuallyStarted()`, plus `retry-training-push.sh`, which waits
+   for a slot instead of reporting a launch that did not happen.
+3. **⛔⛔ The kernel ran the PREVIOUS version of the code dataset.** This one is the
+   nastiest: nothing anywhere says so. Run 7 spent **25 minutes of GPU time** on a
+   `train.py` whose fix had been uploaded 30 seconds earlier and was still processing, and
+   died on the exact bug that upload fixed. `assertDatasetSourcesAttached` cannot catch it
+   — the dataset IS attached, it is just stale. → `waitForCodeDatasetCurrent()` compares
+   what Kaggle serves against the local files BYTE FOR BYTE and refuses to start a session
+   until they agree.
+
+### The code bugs themselves
+
+- **v5:** the CODE dataset was pushed but never listed in `kernel-metadata.json`
+  `dataset_sources`, so the notebook fell back to the stale `train.py` copy inside the DATA
+  set. → `kernelPush` always mounts `DEFAULT_CODE_DATASET_SLUG`.
+- **v6:** `dtype=` vs `torch_dtype=` — renamed across transformers versions; Kaggle's image
+  takes the old name. → `train.py` tries both.
+- **v7 (untested):** LoRA + gradient checkpointing severed the graph
+  (`element 0 of tensors does not require grad and does not have a grad_fn`) →
+  `model.enable_input_require_grads()` + `gradient_checkpointing_kwargs={"use_reentrant": False}`.
+  ⏳ **This fix has never actually run** — run 7 raced the dataset version and executed the
+  code from before it.
+
+### `watch-training.ts`
+
+Polls the kernel and writes the real outcome into `YcPipelineState`, with the ROOT-CAUSE
+lines from the log. ⛔ The TAIL of a Kaggle log is always papermill re-raising the notebook
+cell's `CalledProcessError` — true, useless, identical for every failure; the line that says
+what broke is in the FIRST traceback. Before this watcher existed the portal said
+"Training kernel running on Kaggle" through three dead runs.
+
+### Two process bugs that cost more than any of the above
+
+- `relaunch-with-reporting.sh` counted live orchestrators with a PowerShell `-match` filter
+  whose own command line contains the string it searches for, so it **always matched
+  itself**, never reached 0, and sat three hours without relaunching anything.
+- The orchestrator was relaunched with an **empty `DATABASE_URL`**: the runner's `.env`
+  lives at `~/LoopcomYiddishRunner/.env`, not in the repo, and four scripts loaded only the
+  repo path. One `grep: ... No such file` line was the entire symptom.
+  → `loadRunnerEnv()` in `build-dataset.ts`; all four callers use it; the shell script
+  refuses to start a blind orchestrator.

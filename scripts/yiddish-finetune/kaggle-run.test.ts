@@ -14,6 +14,9 @@ import {
   buildKernelMetadata,
   assertDatasetSourcesAttached,
   DEFAULT_CODE_DATASET_SLUG,
+  parseDatasetFileSizes,
+  diffServedVsLocal,
+  assertKernelActuallyStarted,
   datasetPush,
   DEFAULT_KERNEL_SLUG,
   DEFAULT_KERNEL_TITLE,
@@ -314,4 +317,37 @@ test("a refused dataset source fails the push instead of burning a GPU session",
   ].join("\n");
   assert.throws(() => assertDatasetSourcesAttached(output), /refused a dataset source/);
   assert.doesNotThrow(() => assertDatasetSourcesAttached("Kernel version 2 successfully pushed."));
+});
+
+test("a code dataset that is still processing blocks the kernel push", () => {
+  // Verbatim shape of `kaggle datasets files`.
+  const served = parseDatasetFileSizes(
+    [
+      "name                      size  creationDate                ",
+      "-----------------------  -----  --------------------------  ",
+      "baseline.py               4381  2026-09-18 20:37:31.513000  ",
+      "requirements-kaggle.txt    669  2026-09-18 20:37:31.561000  ",
+      "train.py                 26888  2026-09-18 20:37:31.550000  ",
+    ].join("\n"),
+  );
+  assert.deepEqual(served, { "baseline.py": 4381, "requirements-kaggle.txt": 669, "train.py": 26888 });
+
+  // Run 7: the fix was 27,819 bytes and Kaggle was still serving 26,888.
+  const stale = diffServedVsLocal(served, { "train.py": 27819, "baseline.py": 4381 });
+  assert.deepEqual(stale, [{ file: "train.py", servedBytes: 26888, localBytes: 27819 }]);
+
+  // Once it catches up, nothing is reported.
+  assert.deepEqual(diffServedVsLocal({ ...served, "train.py": 27819 }, { "train.py": 27819 }), []);
+  // A file Kaggle does not have at all is stale too, not silently fine.
+  assert.deepEqual(diffServedVsLocal(served, { "new.py": 10 }), [{ file: "new.py", servedBytes: null, localBytes: 10 }]);
+});
+
+test("a push that Kaggle refused to START is a failure, not a launch", () => {
+  // Verbatim 2026-09-18: exit code 0, "pushed" logged, no session created.
+  const output = [
+    "[kaggle-run] pushed + started kernel izzywein/loopcom-yiddish-whisper-finetune",
+    "Kernel push error: Maximum batch GPU session count of 2 reached.",
+  ].join("\n");
+  assert.throws(() => assertKernelActuallyStarted(output), /refused to start the kernel/);
+  assert.doesNotThrow(() => assertKernelActuallyStarted("Kernel version 8 successfully pushed."));
 });

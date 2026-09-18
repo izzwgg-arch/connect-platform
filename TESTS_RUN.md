@@ -723,3 +723,16 @@ New guards, each replaying a real 2026-09-18 failure:
 Live, not tests: bulletin harvest 3,227 articles / 324 pages / 0 empty; agreement measured over the
 98 bulletins that have ASR (median 0.636 — see the handoff for why that number is our ASR's error
 rate, not the article's); Kaggle training run 7 RUNNING past 25 minutes after four runs died inside 6.
+
+### 2026-09-18 (later) — the two remaining Kaggle "success" modes
+
+`scripts/yiddish-finetune/kaggle-run.test.ts`: **24 / 24** (2 more NEW).
+
+- `a code dataset that is still processing blocks the kernel push` — run 7 spent 25 minutes
+  of GPU time on a `train.py` whose fix had been uploaded 30 seconds earlier and was still
+  processing. Kaggle served the previous version and said nothing anywhere.
+- `a push that Kaggle refused to START is a failure, not a launch` — verbatim
+  "Kernel push error: Maximum batch GPU session count of 2 reached." on stdout, exit code 0.
+
+Live: the new guard correctly refused run 8 at 21:29Z (both free GPU slots busy) instead of
+reporting a launch; `retry-training-push.sh` is waiting for a slot.

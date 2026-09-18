@@ -32,7 +32,7 @@
  * of them, with nothing executed.
  */
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -314,6 +314,77 @@ export interface KernelPushOptions {
 }
 
 /**
+ * Parse `kaggle datasets files <ref>` into {name -> size}. The CLI prints a
+ * fixed-width table: a header, a rule of dashes, then one row per file whose
+ * first two columns are the name and the size in bytes.
+ */
+export function parseDatasetFileSizes(stdout: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("name") || /^-+\s/.test(line)) continue;
+    const m = line.match(/^(\S+)\s+(\d+)\b/);
+    if (m) out[m[1]] = Number(m[2]);
+  }
+  return out;
+}
+
+/**
+ * ⛔⛔ A dataset VERSION takes time to process, and while it does, Kaggle
+ * keeps serving the PREVIOUS one WITHOUT saying so anywhere. On 2026-09-18
+ * run 7 pushed 25 minutes into a GPU session against a `train.py` whose fix
+ * had been uploaded 30 seconds earlier and was still processing -- the run
+ * died on the exact bug that upload fixed, and nothing in any log said the
+ * code was stale. `assertDatasetSourcesAttached` cannot catch this: the
+ * dataset IS attached, it is just the wrong version of it.
+ *
+ * So compare, byte for byte, what Kaggle serves against what is on disk, and
+ * refuse to start a session until they agree.
+ */
+export function diffServedVsLocal(
+  served: Record<string, number>,
+  local: Record<string, number>,
+): Array<{ file: string; servedBytes: number | null; localBytes: number }> {
+  const out: Array<{ file: string; servedBytes: number | null; localBytes: number }> = [];
+  for (const [file, localBytes] of Object.entries(local)) {
+    const servedBytes = served[file] ?? null;
+    if (servedBytes !== localBytes) out.push({ file, servedBytes, localBytes });
+  }
+  return out;
+}
+
+/** Poll until the code dataset serves exactly the local files, or give up. */
+export async function waitForCodeDatasetCurrent(
+  owner: string,
+  slug: string,
+  codeDir: string,
+  deps: KaggleDeps = {},
+  opts: { attempts?: number; sleepMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+  const attempts = opts.attempts ?? 20;
+  const sleepMs = opts.sleepMs ?? 15_000;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const local: Record<string, number> = {};
+  for (const name of readdirSync(codeDir)) {
+    if (name === "dataset-metadata.json") continue;
+    local[name] = statSync(path.join(codeDir, name)).size;
+  }
+  let last: ReturnType<typeof diffServedVsLocal> = [];
+  for (let i = 0; i < attempts; i += 1) {
+    const res = await kaggle(["datasets", "files", `${owner}/${slug}`], deps);
+    last = diffServedVsLocal(parseDatasetFileSizes(res.stdout), local);
+    if (last.length === 0) return;
+    console.log(`[kaggle-run] code dataset still processing (${last.map((d) => d.file).join(", ")}); waiting…`);
+    if (i < attempts - 1) await sleep(sleepMs);
+  }
+  throw new Error(
+    `the code dataset ${owner}/${slug} is not serving the local files yet: ` +
+      last.map((d) => `${d.file} served=${d.servedBytes ?? "missing"} local=${d.localBytes}`).join("; ") +
+      ` -- starting a GPU session now would run the OLD code (this cost run 7 on 2026-09-18).`,
+  );
+}
+
+/**
  * ⛔ `kaggle kernels push` EXITS 0 and says "Kernel version N successfully
  * pushed" even when it could not attach a dataset — it only prints a
  * "not valid dataset sources" line above it. The run then starts on a free GPU
@@ -329,6 +400,19 @@ export function assertDatasetSourcesAttached(output: string): void {
     `kaggle refused a dataset source, so the kernel would run without it: ${line.trim()} — ` +
       `this usually means the dataset is still processing after an upload. Wait for it to finish, then push again.`,
   );
+}
+
+/**
+ * ⛔ `kaggle kernels push` ALSO exits 0 when it refuses to start the session at
+ * all -- "Kernel push error: Maximum batch GPU session count of 2 reached." is
+ * printed on stdout with a ZERO exit code, so a launcher that checks only the
+ * exit code reports a run it never started. Seen 2026-09-18 while the labelling
+ * kernel held one of the two free-tier slots.
+ */
+export function assertKernelActuallyStarted(output: string): void {
+  const line = output.split(/\r?\n/).find((l) => /Kernel push error/i.test(l));
+  if (!line) return;
+  throw new Error(`kaggle refused to start the kernel: ${line.trim()}`);
 }
 
 export async function kernelPush(opts: KernelPushOptions, deps: KaggleDeps = {}): Promise<void> {
@@ -348,10 +432,16 @@ export async function kernelPush(opts: KernelPushOptions, deps: KaggleDeps = {})
   if (!existsSync(path.join(opts.notebookDir, "kaggle_train.ipynb"))) {
     throw new Error(`${opts.notebookDir} has no kaggle_train.ipynb`);
   }
+  // Refuse to spend a GPU session on code Kaggle has not finished publishing.
+  if (opts.codeDatasetSlug) {
+    const codeDir = path.join(opts.notebookDir, "code-dataset");
+    if (existsSync(codeDir)) await waitForCodeDatasetCurrent(opts.owner, opts.codeDatasetSlug, codeDir, deps);
+  }
   writeFileSync(path.join(opts.notebookDir, "kernel-metadata.json"), JSON.stringify(metadata, null, 2), "utf8");
   const res = await kaggle(["kernels", "push", "-p", opts.notebookDir], deps);
   if (res.code !== 0) throw new Error(`kaggle kernels push failed: ${res.stderr.slice(0, 500) || res.stdout.slice(0, 500)}`);
   assertDatasetSourcesAttached(`${res.stdout}\n${res.stderr}`);
+  assertKernelActuallyStarted(`${res.stdout}\n${res.stderr}`);
   console.log(`[kaggle-run] pushed + started kernel ${metadata.id}`);
   console.log(res.stdout.trim());
 }

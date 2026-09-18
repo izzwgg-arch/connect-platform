@@ -344,3 +344,22 @@ into `publisher` (no timing, inert) vs `publisher_aligned` (audio timing, traina
 it as empty pages. ⏳ Nothing written to the DB yet; thresholds provisional until
 `measure-agreement.ts` runs. Full detail:
 `docs/ai-context/AGENT_HANDOFF_YIDDISH_BULLETIN_GOLD_2026-09-18.md`.
+
+### Later on 2026-09-18 — run 7 died too, and the cause was a RACE, not the code
+
+Run 7 reached **25 minutes** (all earlier runs died inside 6) and then failed on the same
+`element 0 of tensors does not require grad` it was launched to fix. Reason: the fixed
+`train.py` (27,819 bytes) finished processing on Kaggle at **20:53:45** — the same moment
+the kernel was pushed — so the session ran the PREVIOUS version and nothing anywhere said
+so. ⛔ **The gradient fix has still never actually executed.**
+
+Two more guards, both replaying failures that presented as success:
+- `waitForCodeDatasetCurrent()` compares what Kaggle SERVES against the local code files
+  byte for byte and refuses to start a session until they agree.
+- `assertKernelActuallyStarted()` — "Kernel push error: Maximum batch GPU session count of
+  2 reached." is printed on stdout with a ZERO exit code, so a launcher checking only the
+  exit code reports a run it never started.
+
+`retry-training-push.sh` now waits for one of the two free-tier GPU slots (the labelling
+kernel holds the other, and a just-failed session keeps its slot for minutes) and launches
+run 8 by itself. ⏳ Not yet started as of 21:29Z.
