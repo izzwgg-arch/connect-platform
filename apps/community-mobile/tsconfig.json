@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["react", "react-native", "node"],
+    "paths": {}
+  },
+  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx"]
+}
