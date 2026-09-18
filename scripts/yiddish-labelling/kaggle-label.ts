@@ -286,7 +286,12 @@ export function datasetSlugFor(batch: string): string {
 }
 
 export function kernelSlugFor(batch: string): string {
-  return `loopcom-label-${batch}`;
+  // ⛔ Kaggle derives a kernel's slug from its TITLE and refuses (409 Conflict)
+  // when that does not match the id in kernel-metadata.json. The title is
+  // `Loopcom YC label <batch>`, which resolves to loopcom-yc-label-<batch>, so
+  // the slug must say the same thing — otherwise the FIRST push warns and
+  // silently lands elsewhere, and every later push 409s against it.
+  return `loopcom-yc-label-${batch}`;
 }
 
 export interface PushOptions {
