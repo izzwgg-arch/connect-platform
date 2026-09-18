@@ -38,6 +38,13 @@ import { addEvidence, cloudStateFromRow, evidenceForRow, identityColumns, report
 import { createDeviceProviderRegistry, type DeviceProviderRegistry } from "./deviceProviderRegistry";
 import { registerDeviceCloudRoutes } from "./deviceCloudRoutes";
 import { ensureYealinkRedirect } from "./yealinkRedirectClaim";
+import { resetRecipeFor } from "@connect/shared";
+import { improvise, stickerEndsIn, type GuideFacts, type ModelCall } from "./laybelGuide";
+import { resolveOpenAiKey } from "../support/customerUpdate";
+
+/** Model calls Laybel may spend per setup run (in-process; a restart forgives). */
+const LAYBEL_MODEL_CALLS_PER_RUN = 60;
+const laybelBudget = new Map<string, number>();
 import { registerPhoneRobotRoutes } from "./phoneRobotRoutes";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
@@ -2144,6 +2151,73 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         id: e.id, extNumber: e.extNumber, displayName: e.displayName || e.extNumber,
       })),
     });
+  });
+
+  /**
+   * ⛔⛔ LAYBEL IN THE WIZARD (Izzy, 2026-09-18: "Laybel live with the customer… powered
+   * behind the GPT… ready for every situation, able to improvise"). What she says at a
+   * step, and her answer to whatever the person typed or said. Facts come ONLY from the
+   * run's rows through the same customer view every screen uses — including the
+   * per-device `connectedNow` — so she can never know something the screen does not.
+   * The model is consulted only for a free-form message, capped per run, and every
+   * reply passes the truth fence in `laybelGuide.ts`. A run with no OpenAI key still
+   * gets the full scripted guide.
+   */
+  app.post("/desk-phones/runs/:id/laybel", async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const { user, run } = owned;
+    const body = z.object({
+      situation: z.enum([
+        "choose_extension", "choose_phone", "confirm_phone", "reset", "reset_waiting", "connecting",
+        "connected", "stuck_old_provider", "stuck_password", "stuck_not_checking_in", "stuck_unsupported",
+        "needs_serial", "done_all",
+      ]),
+      phoneId: z.string().max(64).optional(),
+      message: z.string().max(600).optional(),
+      transcript: z.array(z.object({ role: z.enum(["laybel", "customer"]), text: z.string().max(400) })).max(12).optional(),
+      /** What the office machine observed about the phone, for WORDING only — never a decision. */
+      observed: z.object({ freshOutOfBox: z.boolean().optional(), statusLine: z.string().max(200).optional() }).optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+
+    const rows = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id, tenantId: user.tenantId }, orderBy: { createdAt: "asc" } });
+    const views = await withConnectedNow(deps, user.tenantId, rows.map(customerPhoneView));
+    const focused: any = body.data.phoneId ? views.find((v: any) => v.id === body.data.phoneId) ?? null : null;
+    const inSetup = views.filter((v: any) => v.selected !== false);
+    const facts: GuideFacts = {
+      extension: focused?.extNumber ? { number: String(focused.extNumber), name: String(focused.displayName || "") } : null,
+      phone: focused ? {
+        model: focused.model ?? null,
+        vendor: focused.vendor ?? null,
+        stickerEndsIn: stickerEndsIn(focused.mac),
+        connected: focused.connectedNow === true,
+        registeredAsExt: focused.registeredAsExt ?? null,
+        statusLine: body.data.observed?.statusLine ?? focused.note ?? null,
+        freshOutOfBox: body.data.observed?.freshOutOfBox === true,
+      } : null,
+      recipe: focused ? resetRecipeFor(focused.vendor, focused.model) : null,
+      progress: { connected: inSetup.filter((v: any) => v.connectedNow === true).length, total: inSetup.length || rows.length },
+    };
+
+    const budgetKey = run.id;
+    const spent = laybelBudget.get(budgetKey) ?? 0;
+    const apiKey = body.data.message ? await resolveOpenAiKey(db).catch(() => null) : null;
+    const callModel: ModelCall | null = apiKey ? async ({ system, user: u }) => {
+      const { default: OpenAI } = await import("openai");
+      const client = new OpenAI({ apiKey });
+      const r = await client.chat.completions.create({
+        model: "gpt-4o-mini", temperature: 0.4, max_tokens: 300,
+        response_format: { type: "json_object" },
+        messages: [{ role: "system", content: system }, { role: "user", content: u }],
+      });
+      return r.choices?.[0]?.message?.content ?? "";
+    } : null;
+    const out = await improvise(body.data.situation, facts, body.data.message ?? "", body.data.transcript ?? [], {
+      callModel,
+      budgetLeft: () => LAYBEL_MODEL_CALLS_PER_RUN - spent,
+      spend: () => laybelBudget.set(budgetKey, (laybelBudget.get(budgetKey) ?? 0) + 1),
+    });
+    return reply.send({ ok: true, ...out, facts: { connected: facts.phone?.connected ?? null, recipe: facts.recipe } });
   });
 
   /**

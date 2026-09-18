@@ -682,3 +682,10 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
 - `apps/api/src/deskPhoneSetup/phoneRegistrationTruth.test.ts` — 11/11 (node:test): the 2026-09-17 live T21 run replayed exactly (Yealink .170 + GS .172 both on ext 101, the .171 "extension held by another device" lie refused, x-ast-orig-host parsing incl. hostname/garbage refusals, WebRTC never greens a desk phone, cold-mirror fallback).
 - Desk-phone suites re-run with the change: deskPhoneRoutes + deskPhoneChaos + deskPhoneRecordWiring + phoneRegistrationTruth = 101/101; deskPhoneStress + deviceCloudRoutes + managedPhoneIntegration + gdmsRedirect + deviceProviders = 149/149. (Existing suites inject `isRegistered` only → they exercise the cold-mirror fallback path unchanged.)
 - api tsc: 45 pre-existing errors elsewhere, none in the touched files.
+
+## 2026-09-18 — guided desk-phone setup (R27)
+- `packages/shared`: `npx tsx --test src/deskPhoneSetup/resetRecipes.test.ts src/deskPhoneSetup/deskPhoneSetup.test.ts src/deskPhoneSetup/vendorCoverage.test.ts` — 84/84 (7 new: family mapping, honesty/confidence, customer-words guard, every catalogue vendor resolves).
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/*.test.ts` — 405/406 (14 new laybelGuide: scripted lines, truth fence, improviser budget/fallbacks; the 1 failure is `managedPhonePostgres.test.ts` needing a generated Prisma client in the fresh worktree — env, not code).
+- `apps/portal`: `node --import tsx --test components/deskPhones/guidedFlow.test.ts components/deskPhones/setupDriver.test.ts components/deskPhones/wizardHonestFinish.test.ts` — 72/72 (11 new: sticker match, connectedAsMapped, screen selection, stuck classification, candidate ordering).
+- Typecheck: api touched files 0 errors; portal `tsc --noEmit` exit 0 (0 errors). Portal `next build` run before deploy (result in the handoff).
+- ⏳ Not run: a human walking the guided setup on a real phone; Laybel video inside the rail.

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet } from "../../../../services/apiClient";
 import { DeskPhoneWizard } from "../../../../components/deskPhones/DeskPhoneWizard";
+import { GuidedPhoneSetup } from "../../../../components/deskPhones/GuidedPhoneSetup";
 
 type SetupState = {
   hasActiveRun: boolean;
@@ -45,6 +46,8 @@ export default function DeskPhonesPage() {
 function DeskPhonesConsole() {
   const [state, setState] = useState<SetupState | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  /** The guided one-phone-at-a-time setup is the door (2026-09-18); the classic wizard stays one click away. */
+  const [classic, setClassic] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
@@ -61,12 +64,12 @@ function DeskPhonesConsole() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const closeWizard = useCallback(() => { setWizardOpen(false); void load(); }, [load]);
+  const closeWizard = useCallback(() => { setWizardOpen(false); setClassic(false); void load(); }, [load]);
 
   if (wizardOpen) {
     return (
       <div style={{ padding: 24 }}>
-        <DeskPhoneWizard onClose={closeWizard} />
+        {classic ? <DeskPhoneWizard onClose={closeWizard} /> : <GuidedPhoneSetup onClose={closeWizard} onClassic={() => setClassic(true)} />}
       </div>
     );
   }

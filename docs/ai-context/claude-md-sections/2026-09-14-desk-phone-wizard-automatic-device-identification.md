@@ -293,3 +293,34 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   Laybel-in-the-wizard is to be built on the APPROVED shape, not bolted onto the 11-step batch wizard
   it replaces. ⛔ container note: `deskPhoneRoutes.test.ts` cannot run inside app-api-1 (its
   `mock.module("@connect/db")` has no workspace alias there — pre-existing, passes locally).
+- ✅ **ROUND 27 (2026-09-18, Izzy: "go"): THE GUIDED SETUP IS BUILT — one phone at a time, Laybel in
+  the rail, per-model reset pictures, last-4 sticker check.** Additive: the classic
+  `DeskPhoneWizard.tsx` is untouched and one click away ("Classic setup"); the settings page now opens
+  `GuidedPhoneSetup.tsx` by default. Same run, same routes, same `setupDriver.ts` — this is a different
+  SCREEN on the same engine, never a second engine.
+  • `packages/shared/src/deskPhoneSetup/resetRecipes.ts` — the reset-recipe library, one per MODEL
+    FAMILY (yealink T-series PROVEN hold-OK-10s; yealink DECT base, grandstream GXP/GRP menu path,
+    grandstream HT pinhole, polycom VVX = DOCUMENTED; fanvil/cisco/snom/htek = INFERRED with a caveat
+    on screen; everything else = the generic card). ⛔ `confidence` is the honesty flag — never dress
+    an inferred recipe up as certain. 7 tests incl. a customer-words guard (no "provisioning"/"LCD").
+  • `apps/api/src/deskPhoneSetup/laybelGuide.ts` + `POST /desk-phones/runs/:id/laybel` — Laybel's
+    brain: SCRIPTED lines per situation (13 situations, built from run facts incl. per-device
+    `connectedNow`) + the IMPROVISER (gpt-4o-mini via `resolveOpenAiKey(db)` — ⛔ the api's env key is
+    the "(paste…" placeholder, the real one is in AgentSecret) behind the TRUTH FENCE: any sentence
+    claiming connected/registered/live while `connected=false` is DROPPED, password asks dropped,
+    URLs/IPs stripped, empty → scripted fallback. 60 model calls per run (in-process). 14 tests.
+  • `apps/portal/components/deskPhones/GuidedPhoneSetup.tsx` (+ `guidedFlow.ts` pure screen logic,
+    11 tests; `ResetIllustration.tsx` per-shape SVGs; `guidedSetup.css` gps- classes on the dps
+    tokens): extension → phone cards keyed by the LAST 4 of the MAC (typed to confirm; a mismatch is
+    refused on screen) → reset screen with the recipe + picture that ADVANCES ITSELF (every 8 s a
+    Yealink `web_probe`; factory password opening the page = proof, then `/retry` + `driver.retried`)
+    → robot timeline from the driver's hints → connected (ONLY `connectedNow` + registered AS the
+    mapped ext; "Ring it now" = `crm:dial`) → next. Stuck screen wording from the server's note
+    (old_provider / password / not_checking_in / unsupported). ⛔ The confirm click ("Set it up — this
+    wipes it") is the reset authorization: `authorize-reset` is sent ONCE for the focused phone only.
+    Discovery runs in the background from the first screen and the robot logs into every Yealink in
+    parallel (3 workers) to mark "fresh out of the box". Laybel rail: captions ALWAYS (server words),
+    chips, text ask; the Anam `LaybelVideoCall` mounts on "Turn on video" when `/support/laybel/status`
+    allows it (owner preview today) and `onSpeaker` makes her SAY every caption.
+  ⏳ NOT PROVEN by a human yet: no customer has walked it; Laybel video in the rail untested live; the
+  robot family is Yealink-only so "fresh" is unknown (honest "Not connected yet") for other makers.
