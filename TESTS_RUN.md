@@ -1,5 +1,13 @@
 # Tests run
 
+## LoopCom Works — inventory, architecture, mockups — 2026-09-18
+
+- No product code changed; **no test suite run** (the Works copy's `tests/*.test.ts` were not executed — nothing to prove yet).
+- Eight read-only audits (`docs/ai-context/loopcom-works-audit/A1–A8`) — analysis, not tests. A4 covered all 277 API routes (none sampled) and found 13 CRITICAL / 7 HIGH / 15 MEDIUM / 11 LOW.
+- The mockup canvas (`docs/mockups/loopcom-works/mockups-v1.html`) was rendered headlessly once (puppeteer, Chrome 145) in light and dark: 0 unexpanded icon placeholders, 0 page errors; the wordmark/topbar/sidebar/AI panel render as designed. That is a render check of a mockup, not a test of the product.
+- NOT proven: everything — SSO, API, agent, telephony, mobile, deploy. Phase 1 (security) starts the real test record.
+
+
 ## Customer cost breakdown (office-only "what this customer cost us") — 2026-09-18
 
 - apps/api NEW `src/billing/cost/voipmsFeed.test.ts` + `costBreakdown.test.ts` **13/13**: parsers on the REAL VoIP.ms row shapes (getCDR incl. `call_logs` sub-account + "Doing a CNAM lookup", getSMS/getMMS, getTransactionHistory DID/E911/"CNAM Queries"); sync = one day pulled, tenants resolved by number, re-pull inserts 0, failing day recorded on the cursor; breakdown WITH the feed (carrier-priced inbound, CNAM/texts = carrier count × rate, Telocall = our minutes × rate minus backup-trunk minutes, fees from transactions) and WITHOUT it (our tables, `OUR_COUNT`); rate versioning by effective date; source guard (no pdf/email/public-pay import, no `getSubAccounts`). Registered in the api `test` script.
