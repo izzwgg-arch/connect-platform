@@ -4,7 +4,9 @@ import { startSchedulers } from "./core/schedulers.js";
 
 const app = await buildApp({ logger: true });
 const e = env();
-await app.listen({ port: e.PORT, host: "0.0.0.0" });
+// "::" = dual-stack: WebKit (Safari) resolves localhost to ::1 first and reports an IPv4-only
+// server as a failed "access control check" on every cross-origin call.
+await app.listen({ port: e.PORT, host: "::" });
 startSchedulers(app);
 app.log.info(`Loopcom Community api listening on ${e.PORT} (${e.NODE_ENV})`);
 

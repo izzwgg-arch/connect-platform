@@ -6,19 +6,23 @@ Per the brief (§62–§63): what was requested, what exists, where, and what pr
 
 | Check | Result | How to reproduce |
 |---|---|---|
-| Api integration tests (real Postgres) | **242 / 242** across 22 domains + auth/core/chaos/isolation | `cd apps/community-api && pnpm test` |
+| Api integration tests (real Postgres) | **243 / 243** across 22 domains + auth/core/chaos/isolation | `cd apps/community-api && pnpm test` |
 | Tier-1 repeatability (§49) | **17 flows × 20 = 340 / 340** over HTTP, no retries | `pnpm test:tier1` (api running with test hooks + rate-limit off) |
 | Chaos / failure (§52) | 5 / 5 — storage failure, mail relay down, no Redis, duplicate delivery, SSO outage | `pnpm test:chaos` |
 | Cross-org / privacy isolation, adversarial (§53) | 5 / 5 | `node --import tsx --test src/testing/isolation.test.ts` |
 | Load (§50), 100 virtual users, realistic mix | 0 errors; found the feed at 58 s p50 → fixed to 0.2–0.5 s uncontended; RFQ create 11.5 s → 2.2 s with 25 invites | `LOAD_USERS=100 LOAD_SECONDS=45 pnpm test:load` (numbers below) |
-| Control inventory (§47) | see E2E section | `pnpm test:controls` |
+| Control inventory (§47) | **✔ complete — 786 controls in source, 786 catalogued** | `pnpm test:controls` |
 | Web typecheck | clean | `cd apps/community-web && npx tsc --noEmit` |
 | Mobile | 65 / 65 unit tests, tsc clean, `expo export --platform android` bundles (1,497 modules) | `cd apps/community-mobile && pnpm test` |
-| Playwright E2E (real browser, 3 device projects) | see E2E section | `cd apps/community-web && npx playwright test` |
+| Playwright E2E (real browser) | **desktop-chromium: 47 passed, 1 skipped (mobile-only case), 0 failed** across 17 specs incl. axe a11y on 9 pages in both themes; mobile-iphone (WebKit) and mobile-android (Chromium, Pixel 7) runs recorded below | `cd apps/community-web && npx playwright test --workers=1` |
 | Dependency audit | `@fastify/jwt` bumped to 10.2.2; **Next 14.2.35 advisories open** (upgrade to 15.x tracked) | `pnpm audit` |
 | Docs generated from source | 387 routes, 86 models, 40 events, 32 notification classes, 22 domains | `pnpm docs:generate` |
 
 Load numbers (this laptop, Postgres shared with the test suites and other sessions — not a production-like box; `dbMs` for `SELECT 1` reached 240–490 ms under load): 100 VUs / 45 s → 1,064–1,380 requests, 22–28 rps, 0 errors, p95 ≈ 8 s under contention; uncontended single requests: feed 160–515 ms, search 150–670 ms, profile 120 ms, notifications 45 ms. Re-run on the target server before launch and record it here.
+
+## E2E defects found by driving the UI (all fixed 2026-09-18)
+
+unique post action test ids · `Switch` had no test id · MFA-disable/privacy/profile controls lacked ids or accessible names · read receipts fetched but never rendered · sign-out redirect race stranded people on `/login?next=` · profile privacy/block enforcement bypassable on cold navigation (auth rehydration race) · concierge page crash (implicit-return `useEffect`) · contrast on a login link · unnamed `<select>`s in the composer · nested interactive elements on job cards. These are exactly the class of bug a green unit suite does not see.
 
 ## Requested features — status
 
@@ -83,7 +87,7 @@ Legend: ✅ built + tested · ◐ built, partial (says what is missing) · ✗ n
 2. **High** — Mobile never executed on a real device or emulator (no device on this machine): SSE, calendar, lightbox gestures, push and biometric lock are typecheck+bundle-verified only.
 3. **Medium** — No malware scanner on uploads (`scanResult = not-scanned`); ClamAV sidecar planned for the server.
 4. **Medium** — No OpenTelemetry exporter / crash reporting service wired (logs + in-process p95 only).
-5. **Medium** — Backup/restore drill and the 1-hour soak have not been run yet (scripts exist).
+5. **Medium** — The 1-hour soak has not been run yet (a 10-minute sample is recorded below); the restore drill WAS run locally on 2026-09-18 (encrypted 4.7 MB dump → scratch db → 8 migrations, 6,648 people, 0 orphans, 0 double-accepted quotes).
 6. **Low** — Mobile gaps: passkeys, portfolio CRUD, notification prefs screen, saved searches, thread mute/pin/archive, native intros screen.
 7. **Low** — `introsForYou` model not exposed on a route; `customersYouMayWant` ignores opportunities (no category on them).
 8. **Low** — Search "all" runs the nine type searches concurrently and is the slowest read (~0.7 s uncontended).
