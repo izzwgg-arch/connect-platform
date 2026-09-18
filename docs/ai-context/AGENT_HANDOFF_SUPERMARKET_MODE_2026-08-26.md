@@ -1323,4 +1323,9 @@ door timings from inside loopcom):
   (`STRAY_WINDOW_S=6.0`), `GET_TIMEOUT_MS=10000`; `connect-pay-card.selftest.py` (fake pipe + clock).
 - Guards: `payIvrDialplan.test.ts` +3 (replay-FAIL on HEAD), `payLineNoInput.test.ts` NEW (7).
 
-**Deploy / PBX / proof:** filled in below once done.
+**Deploy / PBX / proof (2026-09-18 ~11:35Z):** api `816e5b00` deployed direct + container-verified
+(fix `a3cacc2b` ancestor); PBX block spliced + AGI installed under the pay-line mandate (backups
+`.bak.paystray.20260918T112759Z`, `/root/connect-pay-card.py.bak.paystray.*`), reload read back; door
+proof ×3 against the real register; **a real originated call (`C-00000029`) reproduced Izzy's exact
+06:49 sequence and hit `stray terminator, prompt again` → PIN served, 0 `03_pin_wrong`**; the installed
+AGI re-asked an instantly-empty CVV silently. Details + acceptance in the summary file.

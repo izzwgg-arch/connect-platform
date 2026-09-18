@@ -80,7 +80,37 @@ prompt to play after I hit a menu option."* · *"It would fast-forward and skip 
   rows; 800-call stress) · `payIvrDialplan.test.ts` 13/13 (3 NEW guards — **all 3 replay-FAIL
   against HEAD's conf/AGI**) · the supermarket glob **248/248** · AGI self-test 9/9 · api `tsc`
   0 errors in supermarket/*. Recorded in `TESTS_RUN.md`.
-- Deployed / PBX / live proof: see the bottom of §16i (filled in when done).
+- ✅ **DEPLOYED 2026-09-18 ~11:32Z: api `816e5b00`** (origin tip; fix `a3cacc2b` is an ancestor —
+  merge-base checked), direct blue/green `direct-api-20260918T112739Z.log` `done 816e5b00`,
+  container `.build-commit` = 816e5b00, healthy, `/ready` 200. **Live door proof against the real
+  register** (`stray-*` sessions): cell presses 2 → 8457823064 → EMPTY → `02_pin` only (not
+  `03_pin_wrong`) → PIN 3064 → `22_main_menu`, row `pinAttempts 0, noInputAttempts 0, pinVerified
+  true`; 3064 presses 1 → three EMPTY → `20_connect_person`, `pinAttempts 0, noInputAttempts 3`;
+  EMPTY at the which-account menu → `37_which_account` replayed, `choiceAttempts 0`.
+- ✅ **PBX (under the standing pay-line mandate, both backed up):** the `[connect-supermarket-pay]`
+  block spliced (live block diffed IDENTICAL to repo HEAD first; `cat >` keeps inode 15731699 +
+  ACLs; backup `extensions__60_custom.conf.bak.paystray.20260918T112759Z`), `dialplan reload`, read
+  back: `[gather] 29 … [read] 31 Set(PAY_T0) 32 Read() 33 GotoIf(…?stray) … [stray] 35–37`, card
+  block `45. Set(PAY_DIGITS=${PAY_CARD})`, 0 Originate/Dial, 2 header Sets in `s`, 0 in `h`. AGI
+  installed `md5 124741e0…` (old copy `/root/connect-pay-card.py.bak.paystray.<ts>`), self-test 9/9
+  on the PBX.
+- ✅ **LIVE PROOF ON A REAL PBX CALL** (`/root/paystray-call.py`: AMI originate of
+  `Local/799@T8_app-custom-application/n` as Izzy's cell, digits injected with `PlayDTMF` on the
+  `;1` leg, ⛔ hangs up on exit so a silent leg can never reach Gesheft's after-hours voicemail —
+  the first attempt sat in `Wait` and was hung up by hand). Call `C-00000029` / `1789731224.70`
+  07:33 ET, the exact shape of Izzy's 06:49 call: `2` → `38_enter_phone` → 10 digits → `User
+  entered '8457823064'` → `02_pin` starts 07:34:01 → `#` 07:34:02 → `User entered nothing.` →
+  **`GotoIf(1?stray)` → `pay-by-phone: stray terminator, prompt again` → `02_pin` replays** (no
+  api call) → `3064#` → `User entered '3064'` → `22_main_menu`. Zero `03_pin_wrong`.
+- ✅ **The INSTALLED AGI through the fake pipe** (`/root/agi-harness-stray.py`): an instantly-empty
+  CVV answer was re-asked with NO `45_card_invalid` between, then `123` accepted; the whole card
+  collected; the door answered no-session (unknown call id) → `PAY_CARD fail` as on 09-17; the test
+  PAN appears 0× contiguously in the full log (⛔ but see the DTMF-logger finding above — a REAL
+  call's digits DO land there one per line).
+- ⏳ **NOT proven by a human:** Izzy keying `10 digits + #` and hearing only the PIN prompt; the
+  card flow keying `MMYY + #` and hearing the CVV prompt once. Acceptance: call 845-244-9666, press
+  0, 2, key a number + `#`, hear "please enter your PIN" ONCE (maybe a clipped half-syllable first),
+  key the PIN + `#` → menu.
 
 ## What the store must do — unchanged
 
