@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { signUp, signIn, signOut, lastCode, uid } from "./helpers";
+import { signUp, signIn, signOut, lastCode, uid, snap } from "./helpers";
 
 test.describe("identity", () => {
   test("landing → join → verify → onboarding → sign out → sign in", async ({ page }) => {
@@ -15,11 +15,17 @@ test.describe("identity", () => {
     await signOut(page);
     await signIn(page, email, password);
     await expect(page.getByTestId("theme-toggle")).toBeVisible();
+    await snap(page, "auth");
   });
 
   test("light/dark toggle persists across reload", async ({ page }) => {
-    const { email, password } = await signUp(page);
-    await signIn(page, email, password);
+    // signUp() already leaves the session signed in; re-visiting /login while
+    // authenticated makes the login page redirect itself away immediately
+    // (app/login/page.tsx's own "already signed in" guard), racing any fill()
+    // on the form it's in the middle of unmounting — so there's nothing to sign
+    // into here on purpose.
+    await signUp(page);
+    await page.goto("/");
     await page.getByTestId("theme-toggle").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.reload();
@@ -33,7 +39,9 @@ test.describe("identity", () => {
     await page.getByTestId("login-identifier").fill(email);
     await page.getByTestId("login-password").fill("definitely-wrong-1");
     await page.getByTestId("login-submit").click();
-    await expect(page.getByRole("alert")).toContainText("don't match");
+    // Next.js's own hidden route announcer (#__next-route-announcer__) also
+    // carries role="alert", making the bare role query ambiguous.
+    await expect(page.locator('[role="alert"].chip')).toContainText("don't match");
     await page.goto("/forgot-password");
     await page.getByTestId("forgot-identifier").fill(email);
     await page.getByTestId("forgot-submit").click();
@@ -54,7 +62,8 @@ test.describe("identity", () => {
     const p2 = await other.newPage();
     await signIn(p2, email, password);
     await page.goto("/settings/security");
-    await expect(page.getByText("current")).toBeVisible();
+    // exact: "current" alone also substring-matches the "Current password" label
+    await expect(page.getByText("current", { exact: true })).toBeVisible();
     await page.getByText("Sign out of all other devices").click();
     await p2.reload();
     await expect(p2).toHaveURL(/\/login|\/$/);

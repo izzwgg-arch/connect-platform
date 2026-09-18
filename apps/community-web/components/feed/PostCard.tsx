@@ -297,9 +297,13 @@ export function PostCard({
   }
 
   const pollClosed = !!post.poll?.closesAt && new Date(post.poll.closesAt).getTime() < Date.now();
+  // Every action control is keyed by testId+post.id so two posts rendered with the
+  // same `testId` prop (e.g. every card in a feed list passes the literal "feed-post")
+  // still get distinct, addressable data-testids instead of colliding on one id.
+  const tid = `${testId}-${post.id}`;
 
   return (
-    <div className="card post" ref={rootRef} data-testid={`${testId}-${post.id}`}>
+    <div className="card post" ref={rootRef} data-testid={tid}>
       <div className="hd">
         <Link href={headerHref}>
           <Avatar name={headerName} assetId={headerAsset} size={40} square={isCompany} />
@@ -313,32 +317,32 @@ export function PostCard({
         <span className="x">
           <Menu label="Post options">
             {me ? (
-              <button type="button" data-testid={`${testId}-copy-link`} onClick={() => void copyLink()}>
+              <button type="button" data-testid={`${tid}-copy-link`} onClick={() => void copyLink()}>
                 <Icon name="link" /> Copy link
               </button>
             ) : null}
             {isMine ? (
-              <button type="button" data-testid={`${testId}-edit`} onClick={() => setEditing(true)}>
+              <button type="button" data-testid={`${tid}-edit`} onClick={() => setEditing(true)}>
                 <Icon name="edit" /> Edit
               </button>
             ) : null}
             {isMine ? (
-              <button type="button" data-testid={`${testId}-delete`} onClick={() => setConfirmDelete(true)}>
+              <button type="button" data-testid={`${tid}-delete`} onClick={() => setConfirmDelete(true)}>
                 <Icon name="trash" /> Delete
               </button>
             ) : null}
             {me && !isAuthor ? (
-              <button type="button" data-testid={`${testId}-hide`} onClick={() => void doHide()}>
+              <button type="button" data-testid={`${tid}-hide`} onClick={() => void doHide()}>
                 <Icon name="x" /> Hide this post
               </button>
             ) : null}
             {me && !isAuthor && post.author ? (
-              <button type="button" data-testid={`${testId}-mute`} onClick={() => void doMute()}>
+              <button type="button" data-testid={`${tid}-mute`} onClick={() => void doMute()}>
                 <Icon name="bell" /> Mute {post.author.name}
               </button>
             ) : null}
             {me && !isAuthor ? (
-              <button type="button" data-testid={`${testId}-report`} onClick={() => setReportOpen(true)}>
+              <button type="button" data-testid={`${tid}-report`} onClick={() => setReportOpen(true)}>
                 <Icon name="flag" /> Report
               </button>
             ) : null}
@@ -347,7 +351,7 @@ export function PostCard({
       </div>
 
       {why ? (
-        <div className="why" data-testid={`${testId}-why`}>
+        <div className="why" data-testid={`${tid}-why`}>
           <Icon name="spark" />
           {why}
         </div>
@@ -355,12 +359,12 @@ export function PostCard({
 
       {editing ? (
         <div className="composer-preview">
-          <textarea className="in composer-body" value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={3} data-testid={`${testId}-edit-body`} />
+          <textarea className="in composer-body" value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={3} data-testid={`${tid}-edit-body`} />
           <div className="row">
-            <Button kind="p" small loading={busy} onClick={() => void saveEdit()} data-testid={`${testId}-edit-save`}>
+            <Button kind="p" small loading={busy} onClick={() => void saveEdit()} data-testid={`${tid}-edit-save`}>
               Save
             </Button>
-            <Button kind="g" small onClick={() => { setEditing(false); setEditBody(post.body ?? ""); }} data-testid={`${testId}-edit-cancel`}>
+            <Button kind="g" small onClick={() => { setEditing(false); setEditBody(post.body ?? ""); }} data-testid={`${tid}-edit-cancel`}>
               Cancel
             </Button>
           </div>
@@ -369,10 +373,10 @@ export function PostCard({
         <>
           {post.body ? <p className="body">{renderBody(post.body, post.mentions)}</p> : null}
 
-          {post.media.length ? <MediaGallery assets={post.media.map((m) => ({ id: m.id, kind: m.kind, mime: "", alt: m.altText }))} testId={`${testId}-gallery`} /> : null}
+          {post.media.length ? <MediaGallery assets={post.media.map((m) => ({ id: m.id, kind: m.kind, mime: "", alt: m.altText }))} testId={`${tid}-gallery`} /> : null}
 
           {post.linkPreview ? (
-            <a className="link-preview" href={post.linkUrl ?? post.linkPreview.url} target="_blank" rel="noreferrer noopener" data-testid={`${testId}-link-preview`}>
+            <a className="link-preview" href={post.linkUrl ?? post.linkPreview.url} target="_blank" rel="noreferrer noopener" data-testid={`${tid}-link-preview`}>
               {post.linkPreview.image ? <img src={post.linkPreview.image} alt="" /> : null}
               <div className="lp-body">
                 <span className="lp-url">{safeHost(post.linkPreview.url)}</span>
@@ -383,13 +387,13 @@ export function PostCard({
           ) : null}
 
           {post.poll ? (
-            <div className="embed poll-block" data-testid={`${testId}-poll`}>
+            <div className="embed poll-block" data-testid={`${tid}-poll`}>
               <b>{post.poll.question}</b>
               {post.poll.options.map((o) => {
                 const pct = post.poll!.totalVotes ? Math.round((o.voteCount / post.poll!.totalVotes) * 100) : 0;
                 const mine = post.poll!.myVote === o.id;
                 return (
-                  <button key={o.id} type="button" className={`poll-opt ${mine ? "mine" : ""}`} onClick={() => void vote(o.id)} disabled={pollClosed} data-testid={`${testId}-poll-option`}>
+                  <button key={o.id} type="button" className={`poll-opt ${mine ? "mine" : ""}`} onClick={() => void vote(o.id)} disabled={pollClosed} data-testid={`${tid}-poll-option-${o.id}`}>
                     <div className="row sm" style={{ justifyContent: "space-between" }}>
                       <span>
                         {mine ? <Icon name="check" /> : null} {o.text}
@@ -409,7 +413,7 @@ export function PostCard({
           ) : null}
 
           {post.ref ? (
-            <Link className="embed" href={post.ref.href} data-testid={`${testId}-ref`}>
+            <Link className="embed" href={post.ref.href} data-testid={`${tid}-ref`}>
               <span className="k">{post.ref.type}</span>
               <b>{post.ref.title || "View"}</b>
             </Link>
@@ -425,7 +429,7 @@ export function PostCard({
 
       {!me ? (
         <div className="acts">
-          <Link className="btn s" href={`/login?next=${encodeURIComponent(`/posts/${post.id}`)}`} data-testid={`${testId}-signin-cta`}>
+          <Link className="btn s" href={`/login?next=${encodeURIComponent(`/posts/${post.id}`)}`} data-testid={`${tid}-signin-cta`}>
             Sign in to react, comment or save
           </Link>
         </div>
@@ -435,13 +439,13 @@ export function PostCard({
           {showPicker ? (
             <div className="react-picker-pop" role="menu">
               {REACTION_KINDS.map((k) => (
-                <button key={k} type="button" title={REACTION_LABELS[k]} onClick={() => void react(k)} data-testid={`${testId}-react-${k.toLowerCase()}`}>
+                <button key={k} type="button" title={REACTION_LABELS[k]} onClick={() => void react(k)} data-testid={`${tid}-react-${k.toLowerCase()}`}>
                   <Icon name={REACTION_ICONS[k]} />
                 </button>
               ))}
             </div>
           ) : null}
-          <button type="button" className={post.myReaction ? "on" : ""} onClick={() => void react((post.myReaction as ReactionKind) ?? "LIKE")} data-testid={`${testId}-react`}>
+          <button type="button" className={post.myReaction ? "on" : ""} onClick={() => void react((post.myReaction as ReactionKind) ?? "LIKE")} data-testid={`${tid}-react`}>
             <Icon name={post.myReaction ? REACTION_ICONS[post.myReaction as ReactionKind] : "like"} />
             {post.myReaction ? REACTION_LABELS[post.myReaction as ReactionKind] : "React"}
           </button>
@@ -452,24 +456,24 @@ export function PostCard({
             setShowComments((s) => !s);
             void loadComments();
           }}
-          data-testid={`${testId}-comment`}
+          data-testid={`${tid}-comment`}
         >
           <Icon name="msg" />
           Comment
         </button>
         <Menu trigger={<span className="row" style={{ gap: 6 }}><Icon name="repost" />Repost</span>} label="Repost options">
-          <button type="button" onClick={() => void repost(false)} data-testid={`${testId}-repost`}>
+          <button type="button" onClick={() => void repost(false)} data-testid={`${tid}-repost`}>
             <Icon name="repost" /> Repost
           </button>
-          <button type="button" onClick={() => setQuoteOpen(true)} data-testid={`${testId}-repost-quote`}>
+          <button type="button" onClick={() => setQuoteOpen(true)} data-testid={`${tid}-repost-quote`}>
             <Icon name="edit" /> Repost with your thoughts
           </button>
         </Menu>
-        <button type="button" onClick={() => void copyLink()} data-testid={`${testId}-share`}>
+        <button type="button" onClick={() => void copyLink()} data-testid={`${tid}-share`}>
           <Icon name="share" />
           Share
         </button>
-        <button type="button" className={`r ${post.saved ? "on" : ""}`} onClick={() => void toggleSave()} data-testid={`${testId}-save`}>
+        <button type="button" className={`r ${post.saved ? "on" : ""}`} onClick={() => void toggleSave()} data-testid={`${tid}-save`}>
           <Icon name="save" />
           {post.saved ? "Saved" : "Save"}
         </button>
@@ -477,7 +481,7 @@ export function PostCard({
       )}
 
       {showComments ? (
-        <div className="comment-thread" data-testid={`${testId}-comments`}>
+        <div className="comment-thread" data-testid={`${tid}-comments`}>
           {me ? (
             <div className="comment-composer">
               <Avatar name={me.profile ? `${me.profile.firstName} ${me.profile.lastName}` : me.person.username} assetId={me.profile?.avatarAssetId} size={30} />
@@ -487,9 +491,9 @@ export function PostCard({
                 value={commentBody}
                 onChange={(e) => setCommentBody(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void submitComment()}
-                data-testid={`${testId}-comment-input`}
+                data-testid={`${tid}-comment-input`}
               />
-              <Button small kind="p" loading={busy} onClick={() => void submitComment()} data-testid={`${testId}-comment-submit`}>
+              <Button small kind="p" loading={busy} onClick={() => void submitComment()} data-testid={`${tid}-comment-submit`}>
                 Post
               </Button>
               {replyTo ? (
@@ -504,7 +508,7 @@ export function PostCard({
           ) : comments.length === 0 ? (
             <div className="dim sm">No comments yet.</div>
           ) : (
-            comments.map((c) => <CommentRow key={c.id} comment={c} onReact={reactToComment} onReply={setReplyTo} testId={testId} />)
+            comments.map((c) => <CommentRow key={c.id} comment={c} onReact={reactToComment} onReply={setReplyTo} testId={tid} />)
           )}
         </div>
       ) : null}
@@ -512,7 +516,7 @@ export function PostCard({
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete this post?" footer={
         <>
           <Button kind="g" onClick={() => setConfirmDelete(false)}>Cancel</Button>
-          <Button kind="d" loading={busy} onClick={() => void doDelete()} data-testid={`${testId}-delete-confirm`}>Delete</Button>
+          <Button kind="d" loading={busy} onClick={() => void doDelete()} data-testid={`${tid}-delete-confirm`}>Delete</Button>
         </>
       }>
         <p className="sm dim">This can't be undone.</p>
@@ -521,13 +525,13 @@ export function PostCard({
       <Dialog open={quoteOpen} onClose={() => setQuoteOpen(false)} title="Repost with your thoughts" footer={
         <>
           <Button kind="g" onClick={() => setQuoteOpen(false)}>Cancel</Button>
-          <Button kind="p" loading={busy} onClick={() => void repost(true)} data-testid={`${testId}-repost-quote-submit`}>Repost</Button>
+          <Button kind="p" loading={busy} onClick={() => void repost(true)} data-testid={`${tid}-repost-quote-submit`}>Repost</Button>
         </>
       }>
-        <textarea className="in" rows={3} placeholder="Add your thoughts…" value={quoteText} onChange={(e) => setQuoteText(e.target.value)} data-testid={`${testId}-repost-quote-body`} />
+        <textarea className="in" rows={3} placeholder="Add your thoughts…" value={quoteText} onChange={(e) => setQuoteText(e.target.value)} data-testid={`${tid}-repost-quote-body`} />
       </Dialog>
 
-      {post.author ? <ReportDialog open={reportOpen} onClose={() => setReportOpen(false)} targetType="post" targetId={post.id} testId={`${testId}-report`} /> : null}
+      {post.author ? <ReportDialog open={reportOpen} onClose={() => setReportOpen(false)} targetType="post" targetId={post.id} testId={`${tid}-report`} /> : null}
     </div>
   );
 }

@@ -69,8 +69,8 @@ export function JobCard({
 }) {
   const { job, organization } = item;
   const salary = salaryLabel(job);
-  const body = (
-    <div className="li">
+  const content = (
+    <>
       <Avatar name={organization?.displayName ?? job.title} assetId={organization?.logoAssetId} size={44} square />
       <div className="t">
         <b style={{ fontSize: 14.5 }}>{job.title}</b>
@@ -89,34 +89,45 @@ export function JobCard({
           </small>
         ) : null}
       </div>
-      {onToggleSave ? (
-        <button
-          type="button"
-          className="ib"
-          aria-label={item.saved ? "Unsave" : "Save"}
-          style={item.saved ? { color: "var(--accent)" } : undefined}
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            onToggleSave();
-          }}
-          data-testid={`${testId}-save`}
-        >
-          <Icon name="save" />
-        </button>
-      ) : null}
-    </div>
+    </>
   );
+  const saveButton = onToggleSave ? (
+    <button
+      type="button"
+      className="ib"
+      aria-label={item.saved ? "Unsave" : "Save"}
+      style={item.saved ? { color: "var(--accent)" } : undefined}
+      onClick={() => onToggleSave()}
+      data-testid={`${testId}-save`}
+    >
+      <Icon name="save" />
+    </button>
+  ) : null;
   return (
     <div className={`card tight ${selected ? "hair" : ""}`} style={selected ? { borderColor: "var(--accent)" } : undefined} data-testid={testId}>
       {onClick ? (
-        <button type="button" onClick={onClick} style={{ all: "unset", display: "block", width: "100%", cursor: "pointer" }} data-testid={`${testId}-open`}>
-          {body}
-        </button>
+        // The "Save" button is a SIBLING of the clickable area, not nested
+        // inside it — a <button> (or role="button") containing another
+        // focusable element is invalid (axe: no-focusable-content) regardless
+        // of whether the outer element is a real <button> or an ARIA one.
+        <div className="li">
+          <button
+            type="button"
+            onClick={onClick}
+            style={{ all: "unset", display: "flex", alignItems: "center", gap: "inherit", flex: 1, minWidth: 0, cursor: "pointer" }}
+            data-testid={`${testId}-open`}
+          >
+            {content}
+          </button>
+          {saveButton}
+        </div>
       ) : (
-        <Link href={`/jobs/${job.id}`} style={{ color: "inherit" }}>
-          {body}
-        </Link>
+        <div className="li">
+          <Link href={`/jobs/${job.id}`} style={{ color: "inherit", display: "flex", alignItems: "center", gap: "inherit", flex: 1, minWidth: 0 }}>
+            {content}
+          </Link>
+          {saveButton}
+        </div>
       )}
     </div>
   );

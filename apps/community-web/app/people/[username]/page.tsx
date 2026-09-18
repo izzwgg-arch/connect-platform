@@ -102,8 +102,14 @@ export default function PublicProfilePage() {
 
   useEffect(() => {
     void load();
+    // Deliberately not just [username]: on a cold navigation, auth can still be
+    // rehydrating tokens from storage when this first fires, so `me` is briefly
+    // null and the profile fetch goes out unauthenticated — silently skipping
+    // both privacy filtering and the block check (both require a viewer id).
+    // Depending on `load` (or on `me` itself) would refetch on every renewed
+    // object identity; `me?.person.id` only changes on a real sign-in/out.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [username]);
+  }, [username, me?.person.id]);
 
   useEffect(() => {
     if (!me || !data) return;

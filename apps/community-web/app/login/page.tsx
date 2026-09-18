@@ -103,7 +103,7 @@ function LoginInner() {
           <Icon name="link" /> Sign in with Loopcom
         </Link>
         <p className="sm dim" style={{ textAlign: "center" }}>
-          New here? <Link href="/join">Create your Loopcom ID</Link> — free, no phone service needed.
+          New here? <Link href="/join" style={{ textDecoration: "underline" }}>Create your Loopcom ID</Link> — free, no phone service needed.
         </p>
       </form>
     </div>

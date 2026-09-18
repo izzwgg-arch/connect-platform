@@ -564,7 +564,7 @@ function PageTab({ org, onSaved }: { org: OrgDetail; onSaved: (o: OrgDetail) => 
               <div className="t">
                 <b style={{ fontWeight: 500 }}>{label}</b>
               </div>
-              <Switch on={form[key] as boolean} label={label} onChange={(v) => field(key, v as any)} />
+              <Switch on={form[key] as boolean} label={label} onChange={(v) => field(key, v as any)} id={`company-admin-page-${key}`} />
             </div>
           ))}
         </div>

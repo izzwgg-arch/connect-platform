@@ -89,8 +89,8 @@ export function Field({ label, htmlFor, help, error, children }: { label: string
 }
 
 /* ── Switch ─────────────────────────────────────────────────────────────── */
-export function Switch({ on, onChange, label, id }: { on: boolean; onChange: (v: boolean) => void; label: string; id?: string }) {
-  return <button type="button" id={id} role="switch" aria-checked={on} aria-label={label} className={`sw ${on ? "on" : ""}`} onClick={() => onChange(!on)} />;
+export function Switch({ on, onChange, label, id, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; id?: string; testId?: string }) {
+  return <button type="button" id={id} data-testid={testId ?? id} role="switch" aria-checked={on} aria-label={label} className={`sw ${on ? "on" : ""}`} onClick={() => onChange(!on)} />;
 }
 
 /* ── Toast ──────────────────────────────────────────────────────────────── */

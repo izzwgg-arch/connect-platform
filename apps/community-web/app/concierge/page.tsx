@@ -53,7 +53,14 @@ function Inner() {
   useEffect(() => {
     api<{ ai: boolean; mode: string }>("/concierge/status").then(setStatus).catch(() => {});
   }, []);
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [turns.length, busy]);
+  useEffect(() => {
+    // Implicit-return arrow (`() => x.scrollIntoView(...)`) hands whatever
+    // scrollIntoView returns back to React as the effect's cleanup function;
+    // if that's ever not undefined, React throws "destroy is not a function"
+    // on the next run. Braces make this an ordinary side effect with no
+    // cleanup, which is all this was ever meant to be.
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [turns.length, busy]);
 
   async function ask(question: string) {
     const text = question.trim();

@@ -28,7 +28,7 @@
       "expected": "list re-fetches scoped to the chosen class group (all/decisions/network/rfq/jobs/posts/events/security)",
       "permissions": "signed in",
       "api": "GET /notifications?filter=<key>",
-      "testId": "notifications-filter-all | notifications-filter-decisions | notifications-filter-network | notifications-filter-rfq | notifications-filter-jobs | notifications-filter-posts | notifications-filter-events | notifications-filter-security"
+      "testId": "notifications-filter-<key>"
     },
     {
       "screen": "notifications",
@@ -128,7 +128,7 @@
       "expected": "flips the local switch state; persisted on Save",
       "permissions": "signed in; sms only on security.alert and only with a verified phone (400 phone_not_verified / sms_not_allowed otherwise)",
       "api": "-",
-      "testId": "inApp-<kind>, push-<kind>, email-<kind>, sms-<kind>"
+      "testId": "-"
     },
     {
       "screen": "settings/notifications",
@@ -148,7 +148,7 @@
       "expected": "toggles that weekday in quiet hours (0=Sun..6=Sat)",
       "permissions": "signed in",
       "api": "-",
-      "testId": "notifsettings-quiet-day-0 .. notifsettings-quiet-day-6"
+      "testId": "notifsettings-quiet-day-<n>"
     },
     {
       "screen": "settings/notifications",
@@ -468,7 +468,7 @@
       "expected": "checks/unchecks that relationship kind for the connection",
       "permissions": "signed in; 1st-degree connection required",
       "api": "-",
-      "testId": "relationship-kind-CUSTOMER, -VENDOR, -PURCHASED_FROM, -SOLD_TO, -WORKED_WITH, -PARTNER, -REFERRED, -MENTOR"
+      "testId": "relationship-kind-<KIND>"
     },
     {
       "screen": "connections",
@@ -518,7 +518,7 @@
       "expected": "self-contained connect lifecycle: send request, withdraw a pending outgoing one, accept a pending incoming one, or remove an active connection from its menu",
       "permissions": "signed in (send/accept require verified email or phone)",
       "api": "POST /connections/request, POST /connections/:id/accept, POST /connections/:id/withdraw, DELETE /connections/:id",
-      "testId": "<testId>-connect (default connect-connect), -withdraw, -accept, -connected, -remove"
+      "testId": "<testId>-connect, <testId>-connected, <testId>-remove, <testId>-withdraw, <testId>-accept"
     },
     {
       "screen": "shared",
@@ -538,7 +538,7 @@
       "expected": "submits a report for any reportable object; never notifies the reported party; a duplicate report from the same person is a silent no-op",
       "permissions": "signed in",
       "api": "POST /reports",
-      "testId": "<testId>-reason (default report-reason), -details, -submit, -cancel"
+      "testId": "<testId>-reason, <testId>-details, <testId>-submit, <testId>-cancel"
     },
     {
       "screen": "people/[username]",
@@ -708,7 +708,7 @@
       "expected": "adds/removes a value from the local draft array; persisted on Save",
       "permissions": "signed in",
       "api": "-",
-      "testId": "profile-editor-servicearea-input/-add, profile-editor-languages-input/-add, profile-editor-skills-input/-add, profile-editor-objectives-input/-add"
+      "testId": "<testId>-input, <testId>-add"
     },
     {
       "screen": "me/profile",
@@ -848,7 +848,7 @@
       "expected": "switches the visible tab (about/posts/services/catalog/jobs/people/trust/events)",
       "permissions": "anyone",
       "api": "GET /organizations/:id/posts | /services | /events (Posts/Services/Events show an Empty state if that domain's route isn't built yet)",
-      "testId": "company-tab-about | company-tab-posts | company-tab-services | company-tab-catalog | company-tab-jobs | company-tab-people | company-tab-trust | company-tab-events"
+      "testId": "company-tab-<key>"
     },
     {
       "screen": "companies/[slug]",
@@ -968,7 +968,7 @@
       "expected": "switches between Members & roles / Verification / Page / Locations / Audit log",
       "permissions": "any member (each tab further gates its own controls by permission)",
       "api": "-",
-      "testId": "company-admin-tab-members | company-admin-tab-verification | company-admin-tab-page | company-admin-tab-locations | company-admin-tab-audit"
+      "testId": "company-admin-tab-<key>"
     },
     {
       "screen": "company/admin",
@@ -1178,7 +1178,7 @@
       "expected": "list re-fetches the chosen tab (inbox/requests/archived)",
       "permissions": "signed in",
       "api": "GET /threads?tab=<tab>",
-      "testId": "messages-tab-inbox | messages-tab-requests | messages-tab-archived"
+      "testId": "messages-tab-<t>"
     },
     {
       "screen": "messages",
@@ -1268,7 +1268,7 @@
       "expected": "toggles my reaction on that message; count updates for everyone live",
       "permissions": "signed in; thread participant",
       "api": "POST /threads/:id/messages/:mid/react {emoji}",
-      "testId": "messages-react-<id>-<emoji> | messages-rx-<id>-<emoji>"
+      "testId": "messages-react-<id>-<emoji>, messages-rx-<id>-<emoji>"
     },
     {
       "screen": "messages/[threadId]",
@@ -1358,7 +1358,7 @@
       "expected": "uploads a file/photo/voice recording and sends it as a message (FILE/IMAGE/AUDIO)",
       "permissions": "signed in + verified; within the thread's request cap",
       "api": "POST /media then POST /threads/:id/messages",
-      "testId": "messages-attach-btn | messages-photo-btn | messages-mic-btn"
+      "testId": "messages-attach-btn, messages-photo-btn, messages-mic-btn"
     },
     {
       "screen": "messages/[threadId]",
@@ -1368,7 +1368,7 @@
       "expected": "sends a TEXT message; a stranger's 2nd message before acceptance is refused with a human 409",
       "permissions": "signed in + verified",
       "api": "POST /threads/:id/typing (while typing), POST /threads/:id/messages",
-      "testId": "messages-input | messages-send"
+      "testId": "messages-input, messages-send"
     },
     {
       "screen": "messages/[threadId]",
@@ -1398,17 +1398,17 @@
       "expected": "toggles that state on my participant row; thread reorders/moves tabs accordingly",
       "permissions": "signed in",
       "api": "POST /threads/:id/mute|pin|archive",
-      "testId": "messages-info-mute | messages-info-pin | messages-info-archive"
+      "testId": "messages-info-mute, messages-info-pin, messages-info-archive"
     },
     {
       "screen": "messages/[threadId]",
       "component": "ThreadInfo",
       "control": "messages-info-report",
       "action": "click",
-      "expected": "opens the report dialog for the other participant; they are never told",
+      "expected": "opens the report dialog (testId=\"messages-report\") for the other participant; they are never told",
       "permissions": "signed in; DIRECT thread",
       "api": "POST /reports {targetType:'person'}",
-      "testId": "messages-info-report -> messages-report-submit"
+      "testId": "messages-info-report, messages-report"
     },
     {
       "screen": "messages/[threadId]",
@@ -1438,7 +1438,7 @@
       "expected": "runs the search; updates the URL (?q=) via router.replace so the search is shareable",
       "permissions": "anyone",
       "api": "GET /search?q=",
-      "testId": "search-main-input, search-main-submit, search-main-suggestions, search-main-suggestion-<i>"
+      "testId": "<testId>-input, <testId>-submit, <testId>-suggestions, <testId>-suggestion-<i>"
     },
     {
       "screen": "search",
@@ -1458,7 +1458,7 @@
       "expected": "switches the result list to that type (all/organizations/people/posts/jobs/listings/groups/events/rfqs/opportunities), each with a live count; updates the URL (?type=)",
       "permissions": "anyone",
       "api": "GET /search?type=<key>",
-      "testId": "search-tab-all, search-tab-organizations, search-tab-people, search-tab-posts, search-tab-jobs, search-tab-listings, search-tab-groups, search-tab-events, search-tab-rfqs, search-tab-opportunities"
+      "testId": "search-tab-<key>"
     },
     {
       "screen": "search",
@@ -1468,7 +1468,7 @@
       "expected": "same effect as the matching tab (single-select); clicking the active one clears back to All",
       "permissions": "anyone",
       "api": "GET /search?type=<key>",
-      "testId": "search-facet-type-organizations, search-facet-type-people, search-facet-type-posts, search-facet-type-jobs, search-facet-type-listings, search-facet-type-groups, search-facet-type-events, search-facet-type-rfqs, search-facet-type-opportunities"
+      "testId": "search-facet-type-<key>"
     },
     {
       "screen": "search",
@@ -1478,7 +1478,7 @@
       "expected": "restricts people results to 1st-degree (network), 1st-or-2nd (second), or no restriction (anyone); hidden for anonymous viewers",
       "permissions": "signed in",
       "api": "GET /search?distance=<key>",
-      "testId": "search-facet-distance-network, search-facet-distance-second, search-facet-distance-anyone"
+      "testId": "search-facet-distance-<key>"
     },
     {
       "screen": "search",
@@ -1488,7 +1488,7 @@
       "expected": "single-select location filter (Brooklyn/Boro Park/Monsey/Monroe/Lakewood); filters organizations by serviceArea and jobs/listings by location",
       "permissions": "anyone",
       "api": "GET /search?location=<name>",
-      "testId": "search-facet-location-Brooklyn, search-facet-location-Boro Park, search-facet-location-Monsey, search-facet-location-Monroe, search-facet-location-Lakewood"
+      "testId": "search-facet-location-<name>"
     },
     {
       "screen": "search",
@@ -1498,7 +1498,7 @@
       "expected": "multi-select organization verification filter (BUSINESS/INSURANCE/LICENSE)",
       "permissions": "anyone",
       "api": "GET /search?verified=<kind,...>",
-      "testId": "search-facet-verified-BUSINESS, search-facet-verified-INSURANCE, search-facet-verified-LICENSE"
+      "testId": "search-facet-verified-<kind>"
     },
     {
       "screen": "search",
@@ -1508,7 +1508,7 @@
       "expected": "single-select organization size filter",
       "permissions": "anyone",
       "api": "GET /search?size=<range>",
-      "testId": "search-facet-size-1–10, search-facet-size-11–50, search-facet-size-51–200, search-facet-size-200+"
+      "testId": "search-facet-size-<range>"
     },
     {
       "screen": "search",
@@ -1518,7 +1518,7 @@
       "expected": "single-select filter on the person's profile languages",
       "permissions": "anyone",
       "api": "GET /search?language=<lang>",
-      "testId": "search-facet-language-English, search-facet-language-Yiddish, search-facet-language-Hebrew, search-facet-language-Spanish"
+      "testId": "search-facet-language-<lang>"
     },
     {
       "screen": "search",
@@ -1568,7 +1568,7 @@
       "expected": "local text state updates; @name triggers mention dropdown",
       "permissions": "signed in",
       "api": "GET /search/suggest?q=",
-      "testId": "feed-composer-body"
+      "testId": "<testId>-body"
     },
     {
       "screen": "feed",
@@ -1578,7 +1578,7 @@
       "expected": "shows the Uploader (image/video/document)",
       "permissions": "signed in",
       "api": "POST /media",
-      "testId": "feed-composer-toggle-media"
+      "testId": "<testId>-toggle-media"
     },
     {
       "screen": "feed",
@@ -1588,7 +1588,7 @@
       "expected": "shows the poll builder (question + 2-6 options + optional close hours)",
       "permissions": "signed in",
       "api": "-",
-      "testId": "feed-composer-toggle-poll"
+      "testId": "<testId>-toggle-poll"
     },
     {
       "screen": "feed",
@@ -1598,7 +1598,7 @@
       "expected": "shows a future datetime picker",
       "permissions": "signed in",
       "api": "-",
-      "testId": "feed-composer-toggle-schedule"
+      "testId": "<testId>-toggle-schedule"
     },
     {
       "screen": "feed",
@@ -1608,7 +1608,7 @@
       "expected": "switches the author between the person and a company where they hold org.post",
       "permissions": "signed in; org.post on the chosen company",
       "api": "-",
-      "testId": "feed-composer-post-as"
+      "testId": "<testId>-post-as"
     },
     {
       "screen": "feed",
@@ -1618,7 +1618,7 @@
       "expected": "sets the new post visibility (PUBLIC/CONNECTIONS/ORGANIZATION/PRIVATE)",
       "permissions": "signed in",
       "api": "-",
-      "testId": "feed-composer-visibility"
+      "testId": "<testId>-visibility"
     },
     {
       "screen": "feed",
@@ -1628,7 +1628,7 @@
       "expected": "sets who can comment (ANYONE/CONNECTIONS/NOBODY)",
       "permissions": "signed in",
       "api": "-",
-      "testId": "feed-composer-comments-policy"
+      "testId": "<testId>-comments-policy"
     },
     {
       "screen": "feed",
@@ -1638,7 +1638,7 @@
       "expected": "creates the post (or schedules it); composer clears; new post appears at the top of the feed when published immediately",
       "permissions": "signed in + verified (email or phone)",
       "api": "POST /posts",
-      "testId": "feed-composer-submit"
+      "testId": "<testId>-submit"
     },
     {
       "screen": "feed",
@@ -1648,7 +1648,7 @@
       "expected": "switches feed mode (for_you/following/latest/industry/local/opportunities/jobs), persists the choice, re-fetches",
       "permissions": "signed in",
       "api": "GET /feed?mode=<mode>",
-      "testId": "feed-mode-for_you | feed-mode-following | feed-mode-latest | feed-mode-industry | feed-mode-local | feed-mode-opportunities | feed-mode-jobs"
+      "testId": "feed-mode-<mode>"
     },
     {
       "screen": "feed",
@@ -1688,7 +1688,7 @@
       "expected": "loads the next page of the current feed mode and appends it",
       "permissions": "signed in",
       "api": "GET /feed?mode=<mode>&cursor=",
-      "testId": "(IntersectionObserver, no discrete control)"
+      "testId": "-"
     },
     {
       "screen": "post",
@@ -1698,7 +1698,7 @@
       "expected": "toggles the default reaction (LIKE, or the viewer's current kind) and updates the count",
       "permissions": "signed in + verified",
       "api": "POST /posts/:id/react",
-      "testId": "post-<id>-react"
+      "testId": "<testId>-<id>-react"
     },
     {
       "screen": "post",
@@ -1708,7 +1708,7 @@
       "expected": "sets/toggles/replaces the reaction to LIKE|INSIGHTFUL|CELEBRATE|SUPPORT",
       "permissions": "signed in + verified",
       "api": "POST /posts/:id/react",
-      "testId": "post-<id>-react-like | post-<id>-react-insightful | post-<id>-react-celebrate | post-<id>-react-support"
+      "testId": "<testId>-<id>-react-like | <testId>-<id>-react-insightful | <testId>-<id>-react-celebrate | <testId>-<id>-react-support"
     },
     {
       "screen": "post",
@@ -1718,7 +1718,7 @@
       "expected": "opens the inline comment thread, loading it on first open",
       "permissions": "anyone (read); posting needs sign-in + verified",
       "api": "GET /posts/:id/comments",
-      "testId": "post-<id>-comment"
+      "testId": "<testId>-<id>-comment"
     },
     {
       "screen": "post",
@@ -1728,7 +1728,7 @@
       "expected": "posts a top-level comment or a reply (when replying), respecting the post's comments policy",
       "permissions": "signed in + verified; policy-gated (ANYONE/CONNECTIONS/NOBODY, author always allowed)",
       "api": "POST /posts/:id/comments",
-      "testId": "post-<id>-comment-input, post-<id>-comment-submit"
+      "testId": "<testId>-<id>-comment-input, <testId>-<id>-comment-submit"
     },
     {
       "screen": "post",
@@ -1738,7 +1738,7 @@
       "expected": "toggles a LIKE reaction on that comment",
       "permissions": "signed in + verified",
       "api": "POST /comments/:id/react",
-      "testId": "post-<id>-comment-like"
+      "testId": "<testId>-<id>-comment-like"
     },
     {
       "screen": "post",
@@ -1748,7 +1748,7 @@
       "expected": "focuses the composer in reply mode for that comment",
       "permissions": "signed in",
       "api": "-",
-      "testId": "post-<id>-comment-reply"
+      "testId": "<testId>-<id>-comment-reply"
     },
     {
       "screen": "post",
@@ -1758,7 +1758,7 @@
       "expected": "plain repost (409 on a second plain repost) or opens the quote-repost dialog",
       "permissions": "signed in + verified",
       "api": "POST /posts/:id/repost",
-      "testId": "post-<id>-repost, post-<id>-repost-quote, post-<id>-repost-quote-submit"
+      "testId": "<testId>-<id>-repost, <testId>-<id>-repost-quote, <testId>-<id>-repost-quote-submit"
     },
     {
       "screen": "post",
@@ -1768,7 +1768,7 @@
       "expected": "native share sheet if available, else copies the permalink and toasts",
       "permissions": "anyone",
       "api": "POST /posts/:id/impression (surface=share)",
-      "testId": "post-<id>-share"
+      "testId": "<testId>-<id>-share"
     },
     {
       "screen": "post",
@@ -1778,7 +1778,7 @@
       "expected": "toggles Save; appears/disappears from /me/saved",
       "permissions": "signed in + verified",
       "api": "POST or DELETE /posts/:id/save",
-      "testId": "post-<id>-save"
+      "testId": "<testId>-<id>-save"
     },
     {
       "screen": "post",
@@ -1788,7 +1788,7 @@
       "expected": "inline edit of the body; PATCH on save; editedAt shown",
       "permissions": "author only",
       "api": "PATCH /posts/:id",
-      "testId": "post-<id>-edit, post-<id>-edit-save, post-<id>-edit-cancel"
+      "testId": "<testId>-<id>-edit, <testId>-<id>-edit-save, <testId>-<id>-edit-cancel"
     },
     {
       "screen": "post",
@@ -1798,7 +1798,7 @@
       "expected": "confirm dialog, then soft-deletes the post and removes it from the list",
       "permissions": "author, or org.post holder for a company post, or platform staff",
       "api": "DELETE /posts/:id",
-      "testId": "post-<id>-delete, post-<id>-delete-confirm"
+      "testId": "<testId>-<id>-delete, <testId>-<id>-delete-confirm"
     },
     {
       "screen": "post",
@@ -1808,7 +1808,7 @@
       "expected": "records a Hide row and removes the post from this list",
       "permissions": "signed in",
       "api": "POST /posts/:id/hide",
-      "testId": "post-<id>-hide"
+      "testId": "<testId>-<id>-hide"
     },
     {
       "screen": "post",
@@ -1818,7 +1818,7 @@
       "expected": "mutes the author and removes the post from this list",
       "permissions": "signed in; not the author",
       "api": "POST /people/:id/mute",
-      "testId": "post-<id>-mute"
+      "testId": "<testId>-<id>-mute"
     },
     {
       "screen": "post",
@@ -1828,7 +1828,7 @@
       "expected": "opens the report dialog for this post",
       "permissions": "signed in; not the author",
       "api": "POST /reports",
-      "testId": "post-<id>-report"
+      "testId": "<testId>-<id>-report"
     },
     {
       "screen": "post",
@@ -1838,7 +1838,7 @@
       "expected": "casts or changes the viewer's poll vote; refused once the poll is closed",
       "permissions": "signed in + verified",
       "api": "POST /posts/:id/poll/vote",
-      "testId": "post-<id>-poll-option"
+      "testId": "<testId>-<id>-poll-option"
     },
     {
       "screen": "post",
@@ -1848,7 +1848,7 @@
       "expected": "copies the permalink to the clipboard",
       "permissions": "signed in",
       "api": "-",
-      "testId": "post-<id>-copy-link"
+      "testId": "<testId>-<id>-copy-link"
     },
     {
       "screen": "posts/[id]",
@@ -1858,7 +1858,7 @@
       "expected": "navigates to /login?next=/posts/:id",
       "permissions": "anonymous viewer",
       "api": "-",
-      "testId": "postpage-signin-cta"
+      "testId": "<testId>-<id>-signin-cta"
     },
     {
       "screen": "me/saved",
@@ -1916,16 +1916,7 @@
           "expected": "Dialog explains what will happen",
           "permissions": "signed in + verified",
           "api": "—",
-          "testId": "concierge-action-post_rfq"
-        },
-        {
-          "component": "Button",
-          "control": "Message business",
-          "action": "Opens the confirm dialog",
-          "expected": "Dialog explains a message is sent in your name",
-          "permissions": "signed in + verified",
-          "api": "—",
-          "testId": "concierge-action-message_org"
+          "testId": "concierge-action-<kind>"
         },
         {
           "component": "Button",
@@ -2095,7 +2086,7 @@
       "expected": "switches to that tab (feed/chat/files/events/jobs/listings/members/rules)",
       "permissions": "ACTIVE member",
       "api": "-",
-      "testId": "group-tab-feed | group-tab-chat | group-tab-files | group-tab-events | group-tab-jobs | group-tab-listings | group-tab-members | group-tab-rules"
+      "testId": "group-tab-<key>"
     },
     {
       "screen": "group-detail",
@@ -2365,7 +2356,7 @@
       "expected": "list filtered to that mode (all/ONLINE/IN_PERSON/HYBRID)",
       "permissions": "signed in",
       "api": "GET /events?mode=<mode>",
-      "testId": "events-mode-all | events-mode-ONLINE | events-mode-IN_PERSON | events-mode-HYBRID"
+      "testId": "events-mode-<m>"
     },
     {
       "screen": "events",
@@ -3270,82 +3261,82 @@
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-organizations-dismiss-<id>",
+      "control": "reco-<model>-dismiss-<id>",
       "action": "click",
       "expected": "removes the org from the rail and excludes it from byn-v1 for 90 days",
       "permissions": "signed in",
       "api": "POST /recommendations/:impressionId/dismiss",
-      "testId": "reco-organizations-dismiss-<id>"
+      "testId": "reco-<model>-dismiss-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-organizations-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "follows the company and marks the recommendation converted",
       "permissions": "signed in",
       "api": "POST /organizations/:id/follow, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-organizations-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-organizations-why-<id>",
+      "control": "reco-<model>-why-<id>",
       "action": "click",
       "expected": "opens a dialog with the reason and the evidence used (industry match, mutual counts, objectives)",
       "permissions": "signed in, own impression only",
       "api": "GET /recommendations/explain/:impressionId",
-      "testId": "reco-organizations-why-<id>"
+      "testId": "reco-<model>-why-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-customers-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "navigates to the person's profile or the company's page and marks the recommendation clicked",
       "permissions": "signed in, org.quote somewhere",
       "api": "GET /recommendations/customers, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-customers-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-jobs-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "opens the job listing and marks the recommendation clicked",
       "permissions": "signed in, objectives includes Find employment",
       "api": "GET /recommendations/jobs, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-jobs-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-groups-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "joins the group and marks the recommendation converted",
       "permissions": "signed in",
       "api": "POST /groups/:id/join, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-groups-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-events-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "RSVPs GOING and marks the recommendation converted",
       "permissions": "signed in",
       "api": "POST /events/:id/rsvp, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-events-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
       "component": "RecommendationRail",
-      "control": "reco-vendors-action-<id>",
+      "control": "reco-<model>-action-<id>",
       "action": "click",
       "expected": "follows the vendor org suggested for an RFQ and marks the recommendation converted",
       "permissions": "RFQ buyer, or org.manage_rfqs on the RFQ's org, or staff",
       "api": "GET /recommendations/vendors?rfqId=, POST /recommendations/:impressionId/outcome",
-      "testId": "reco-vendors-action-<id>"
+      "testId": "reco-<model>-action-<id>"
     },
     {
       "screen": "recommendations",
@@ -3475,7 +3466,7 @@
       "expected": "filters the grid to that listing type (or all)",
       "permissions": "signed in",
       "api": "GET /listings?type=",
-      "testId": "marketplace-type-all | marketplace-type-SERVICE | marketplace-type-PRODUCT | marketplace-type-WHOLESALE | marketplace-type-BUSINESS_ASSET | marketplace-type-PROFESSIONAL_SERVICE"
+      "testId": "marketplace-type-<value>"
     },
     {
       "screen": "marketplace",
@@ -3725,7 +3716,7 @@
       "expected": "uploads photos and attaches them to the listing",
       "permissions": "verified actor",
       "api": "POST /media",
-      "testId": "marketplace-new-uploader-dropzone"
+      "testId": "<testId>-dropzone"
     },
     {
       "screen": "marketplace-new",
@@ -3805,7 +3796,7 @@
       "expected": "files a report with that reason",
       "permissions": "signed in",
       "api": "POST /reports {targetType:\"listing\"}",
-      "testId": "marketplace-detail-report-spam | marketplace-detail-report-scam | marketplace-detail-report-fake_company | marketplace-detail-report-other"
+      "testId": "marketplace-detail-report-<reason>"
     },
     {
       "screen": "marketplace-detail",
@@ -3975,7 +3966,7 @@
       "expected": "filters the board to that type (or all)",
       "permissions": "signed in",
       "api": "GET /opportunities?type=",
-      "testId": "opportunities-type-all | opportunities-type-<slug>"
+      "testId": "opportunities-type-all, opportunities-type-<slug>"
     },
     {
       "screen": "opportunities",
@@ -4185,7 +4176,7 @@
       "expected": "files a report with that reason",
       "permissions": "signed in",
       "api": "POST /reports {targetType:\"opportunity\"}",
-      "testId": "opportunities-detail-report-spam | opportunities-detail-report-scam | opportunities-detail-report-fake_company | opportunities-detail-report-other"
+      "testId": "opportunities-detail-report-<reason>"
     },
     {
       "screen": "opportunities-detail",
@@ -4455,7 +4446,7 @@
       "expected": "switches the active CRM view and loads its data",
       "permissions": "signed in",
       "api": "GET /crm/contacts | /crm/notes | /crm/reminders | /crm/pipeline",
-      "testId": "crm-tab-contacts | crm-tab-notes | crm-tab-reminders | crm-tab-pipeline"
+      "testId": "crm-tab-<t>"
     },
     {
       "screen": "crm",
@@ -4535,7 +4526,7 @@
       "expected": "filters the reminders list by due date",
       "permissions": "signed in",
       "api": "GET /crm/reminders?due=",
-      "testId": "crm-due-today | crm-due-week | crm-due-all"
+      "testId": "crm-due-<d>"
     },
     {
       "screen": "crm",
@@ -4905,7 +4896,7 @@
       "expected": "toggles one profile section to include in the application snapshot",
       "permissions": "signed in",
       "api": "-",
-      "testId": "jobs-apply-section-headline | jobs-apply-section-about | jobs-apply-section-experience | jobs-apply-section-education | jobs-apply-section-skills | jobs-apply-section-certifications | jobs-apply-section-services"
+      "testId": "jobs-apply-section-<key>"
     },
     {
       "screen": "jobs",
@@ -5195,7 +5186,7 @@
       "expected": "filters the applicant list to that stage (click again to clear)",
       "permissions": "signed in, org.hire",
       "api": "GET /jobs/:id/applications?stage=",
-      "testId": "hiring-stage-APPLIED | hiring-stage-REVIEWED | hiring-stage-INTERVIEW | hiring-stage-OFFER | hiring-stage-HIRED | hiring-stage-CLOSED"
+      "testId": "hiring-stage-<s>"
     },
     {
       "screen": "company-hiring",
@@ -5250,112 +5241,12 @@
     {
       "screen": "admin",
       "component": "AdminLayout",
-      "control": "admin-nav-admin",
+      "control": "admin-nav-<section>",
       "action": "click",
       "expected": "navigates to /admin (Overview)",
       "permissions": "staff (MODERATOR/ADMIN)",
       "api": "GET /admin/overview",
-      "testId": "admin-nav-admin"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-moderation",
-      "action": "click",
-      "expected": "navigates to the moderation queue; badge shows open+in-review count",
-      "permissions": "staff",
-      "api": "GET /admin/overview",
-      "testId": "admin-nav-admin-moderation"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-verifications",
-      "action": "click",
-      "expected": "navigates to the verification queue; badge shows pending count",
-      "permissions": "staff",
-      "api": "GET /admin/overview",
-      "testId": "admin-nav-admin-verifications"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-users",
-      "action": "click",
-      "expected": "navigates to /admin/users",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-users"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-organizations",
-      "action": "click",
-      "expected": "navigates to /admin/organizations",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-organizations"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-content",
-      "action": "click",
-      "expected": "navigates to /admin/content",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-content"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-audit",
-      "action": "click",
-      "expected": "navigates to /admin/audit",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-audit"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-security",
-      "action": "click",
-      "expected": "navigates to /admin/security",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-security"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-notifications",
-      "action": "click",
-      "expected": "navigates to /admin/notifications",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-notifications"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-flags",
-      "action": "click",
-      "expected": "navigates to /admin/flags (built by the recommendations domain)",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-flags"
-    },
-    {
-      "screen": "admin",
-      "component": "AdminLayout",
-      "control": "admin-nav-admin-experiments",
-      "action": "click",
-      "expected": "navigates to /admin/experiments (built by the recommendations domain)",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "admin-nav-admin-experiments"
+      "testId": "admin-nav-<section>, admin-nav-back"
     },
     {
       "screen": "admin",
@@ -5380,42 +5271,12 @@
     {
       "screen": "admin/moderation",
       "component": "ModerationQueuePage",
-      "control": "moderation-tab-open",
+      "control": "moderation-tab-<status>",
       "action": "click",
       "expected": "filters the queue to OPEN + IN_REVIEW cases",
       "permissions": "staff",
       "api": "GET /admin/moderation/cases",
-      "testId": "moderation-tab-open"
-    },
-    {
-      "screen": "admin/moderation",
-      "component": "ModerationQueuePage",
-      "control": "moderation-tab-ACTIONED",
-      "action": "click",
-      "expected": "filters the queue to ACTIONED cases",
-      "permissions": "staff",
-      "api": "GET /admin/moderation/cases?status=ACTIONED",
-      "testId": "moderation-tab-ACTIONED"
-    },
-    {
-      "screen": "admin/moderation",
-      "component": "ModerationQueuePage",
-      "control": "moderation-tab-DISMISSED",
-      "action": "click",
-      "expected": "filters the queue to DISMISSED cases",
-      "permissions": "staff",
-      "api": "GET /admin/moderation/cases?status=DISMISSED",
-      "testId": "moderation-tab-DISMISSED"
-    },
-    {
-      "screen": "admin/moderation",
-      "component": "ModerationQueuePage",
-      "control": "moderation-tab-APPEALED",
-      "action": "click",
-      "expected": "filters the queue to APPEALED cases",
-      "permissions": "staff",
-      "api": "GET /admin/moderation/cases?status=APPEALED",
-      "testId": "moderation-tab-APPEALED"
+      "testId": "moderation-tab-<status>"
     },
     {
       "screen": "admin/moderation",
@@ -5450,62 +5311,12 @@
     {
       "screen": "admin/moderation/[caseId]",
       "component": "ModerationCasePage",
-      "control": "moderation-action-warn",
+      "control": "moderation-action-<kind>",
       "action": "click",
       "expected": "opens the action dialog for WARN",
       "permissions": "staff",
       "api": "-",
-      "testId": "moderation-action-warn"
-    },
-    {
-      "screen": "admin/moderation/[caseId]",
-      "component": "ModerationCasePage",
-      "control": "moderation-action-restrict_outreach",
-      "action": "click",
-      "expected": "opens the action dialog for RESTRICT_OUTREACH (asks for days)",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "moderation-action-restrict_outreach"
-    },
-    {
-      "screen": "admin/moderation/[caseId]",
-      "component": "ModerationCasePage",
-      "control": "moderation-action-remove_content",
-      "action": "click",
-      "expected": "opens the action dialog for REMOVE_CONTENT",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "moderation-action-remove_content"
-    },
-    {
-      "screen": "admin/moderation/[caseId]",
-      "component": "ModerationCasePage",
-      "control": "moderation-action-suspend",
-      "action": "click",
-      "expected": "opens the action dialog for SUSPEND (asks for days)",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "moderation-action-suspend"
-    },
-    {
-      "screen": "admin/moderation/[caseId]",
-      "component": "ModerationCasePage",
-      "control": "moderation-action-ban",
-      "action": "click",
-      "expected": "opens the action dialog for BAN",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "moderation-action-ban"
-    },
-    {
-      "screen": "admin/moderation/[caseId]",
-      "component": "ModerationCasePage",
-      "control": "moderation-action-dismiss",
-      "action": "click",
-      "expected": "opens the action dialog for DISMISS",
-      "permissions": "staff",
-      "api": "-",
-      "testId": "moderation-action-dismiss"
+      "testId": "moderation-action-<kind>"
     },
     {
       "screen": "admin/moderation/[caseId]",
@@ -5725,7 +5536,7 @@
       "expected": "lists recent posts",
       "permissions": "staff",
       "api": "GET /admin/content?type=posts",
-      "testId": "admin-content-tab-posts"
+      "testId": "admin-content-tab-<type>"
     },
     {
       "screen": "admin/content",
@@ -5785,7 +5596,7 @@
       "expected": "shows the last 30 days",
       "permissions": "org.view_analytics",
       "api": "GET /organizations/:id/analytics?range=30",
-      "testId": "analytics-range-30"
+      "testId": "analytics-range-<days>"
     },
     {
       "screen": "company/analytics",
@@ -5795,7 +5606,7 @@
       "expected": "shows the last 90 days",
       "permissions": "org.view_analytics",
       "api": "GET /organizations/:id/analytics?range=90",
-      "testId": "analytics-range-90"
+      "testId": "analytics-range-<days>"
     },
     {
       "screen": "company/analytics",
@@ -5805,7 +5616,7 @@
       "expected": "shows the last year",
       "permissions": "org.view_analytics",
       "api": "GET /organizations/:id/analytics?range=365",
-      "testId": "analytics-range-365"
+      "testId": "analytics-range-<days>"
     },
     {
       "screen": "company/analytics",
@@ -5846,6 +5657,2476 @@
       "permissions": "signed in",
       "api": "POST /appeals",
       "testId": "notices-appeal-submit"
+    },
+    {
+      "screen": "landing",
+      "component": "Landing",
+      "control": "landing-signin",
+      "action": "click",
+      "expected": "navigates to /login",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "landing-signin"
+    },
+    {
+      "screen": "landing",
+      "component": "Landing",
+      "control": "landing-join",
+      "action": "click",
+      "expected": "navigates to /join",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "landing-join"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-first",
+      "action": "type",
+      "expected": "sets first name",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-first"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-last",
+      "action": "type",
+      "expected": "sets last name",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-last"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-email",
+      "action": "type",
+      "expected": "sets email; used to send the verification code",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-email"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-phone",
+      "action": "type",
+      "expected": "sets optional phone number",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-phone"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-password",
+      "action": "type",
+      "expected": "sets password",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-password"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-tos",
+      "action": "check",
+      "expected": "must be checked before submit is enabled",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "join-tos"
+    },
+    {
+      "screen": "join",
+      "component": "JoinPage",
+      "control": "join-submit",
+      "action": "click",
+      "expected": "creates the account and redirects to /welcome",
+      "permissions": "anonymous",
+      "api": "POST /auth/register",
+      "testId": "join-submit"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-passkey",
+      "action": "click",
+      "expected": "starts a WebAuthn passkey sign-in",
+      "permissions": "anonymous",
+      "api": "POST /auth/passkey/login-options",
+      "testId": "login-passkey"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-identifier",
+      "action": "type",
+      "expected": "sets email or username",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "login-identifier"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-password",
+      "action": "type",
+      "expected": "sets password",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "login-password"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-totp",
+      "action": "type",
+      "expected": "shown after a 2FA-enabled account signs in with the right password; sets the 6-digit TOTP/backup code",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "login-totp"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-submit",
+      "action": "click",
+      "expected": "signs in and redirects home (or shows a human sentence on a mismatch)",
+      "permissions": "anonymous",
+      "api": "POST /auth/login",
+      "testId": "login-submit"
+    },
+    {
+      "screen": "login",
+      "component": "LoginPage",
+      "control": "login-loopcom",
+      "action": "click",
+      "expected": "navigates to /sso/loopcom to sign in with a Loopcom account",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "login-loopcom"
+    },
+    {
+      "screen": "forgot-password",
+      "component": "ForgotPasswordPage",
+      "control": "forgot-identifier",
+      "action": "type",
+      "expected": "sets the email/username to send the reset link to",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "forgot-identifier"
+    },
+    {
+      "screen": "forgot-password",
+      "component": "ForgotPasswordPage",
+      "control": "forgot-submit",
+      "action": "click",
+      "expected": "sends the reset email; shows \"on its way\" regardless of whether the account exists",
+      "permissions": "anonymous",
+      "api": "POST /auth/forgot-password",
+      "testId": "forgot-submit"
+    },
+    {
+      "screen": "reset-password",
+      "component": "ResetPasswordPage",
+      "control": "reset-password",
+      "action": "type",
+      "expected": "sets the new password",
+      "permissions": "anonymous, valid reset token",
+      "api": "-",
+      "testId": "reset-password"
+    },
+    {
+      "screen": "reset-password",
+      "component": "ResetPasswordPage",
+      "control": "reset-confirm",
+      "action": "type",
+      "expected": "must match reset-password",
+      "permissions": "anonymous, valid reset token",
+      "api": "-",
+      "testId": "reset-confirm"
+    },
+    {
+      "screen": "reset-password",
+      "component": "ResetPasswordPage",
+      "control": "reset-submit",
+      "action": "click",
+      "expected": "changes the password and redirects to /login",
+      "permissions": "anonymous, valid reset token",
+      "api": "POST /auth/reset-password",
+      "testId": "reset-submit"
+    },
+    {
+      "screen": "sso/loopcom",
+      "component": "LoopcomSsoPage",
+      "control": "sso-go",
+      "action": "click",
+      "expected": "redirects to the Loopcom portal SSO flow",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "sso-go"
+    },
+    {
+      "screen": "shell",
+      "component": "AppShell",
+      "control": "theme-toggle",
+      "action": "click",
+      "expected": "flips light/dark theme; persists across reload via data-theme on <html>",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "theme-toggle"
+    },
+    {
+      "screen": "settings",
+      "component": "SettingsPage",
+      "control": "verify-email",
+      "action": "click",
+      "expected": "sends (or re-sends) a verification code to the email on file",
+      "permissions": "signed in",
+      "api": "POST /me/verify/email/send",
+      "testId": "verify-email"
+    },
+    {
+      "screen": "settings",
+      "component": "SettingsPage",
+      "control": "verify-phone",
+      "action": "click",
+      "expected": "sends a verification code to the phone on file",
+      "permissions": "signed in",
+      "api": "POST /me/verify/phone/send",
+      "testId": "verify-phone"
+    },
+    {
+      "screen": "settings",
+      "component": "SettingsPage",
+      "control": "verify-code",
+      "action": "type",
+      "expected": "sets the 6-digit code just received",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "verify-code"
+    },
+    {
+      "screen": "settings",
+      "component": "SettingsPage",
+      "control": "verify-confirm",
+      "action": "click",
+      "expected": "confirms the code; the field is marked verified",
+      "permissions": "signed in",
+      "api": "POST /me/verify/email/confirm or /me/verify/phone/confirm",
+      "testId": "verify-confirm"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "add-passkey",
+      "action": "click",
+      "expected": "registers a new WebAuthn passkey for this account",
+      "permissions": "signed in",
+      "api": "POST /auth/passkey/register-options",
+      "testId": "add-passkey"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "change-password",
+      "action": "click",
+      "expected": "changes the password; other sessions are signed out",
+      "permissions": "signed in",
+      "api": "POST /me/change-password",
+      "testId": "change-password"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "mfa-toggle",
+      "action": "click",
+      "expected": "off to on opens the QR/secret dialog; on to off opens the disable-confirm dialog (rendered via the shared Switch component; the id prop value \"mfa-toggle\" becomes its data-testid at runtime, but Switch composes it via a JS expression the static control-inventory scanner cannot see)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "-"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "mfa-enable",
+      "action": "click",
+      "expected": "confirms the entered TOTP code and turns two-step verification on",
+      "permissions": "signed in",
+      "api": "POST /me/mfa/enable",
+      "testId": "mfa-enable"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "mfa-code",
+      "action": "type",
+      "expected": "sets the 6-digit code from the authenticator app",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "mfa-code"
+    },
+    {
+      "screen": "settings/privacy",
+      "component": "PrivacyPage",
+      "control": "privacy-<key>",
+      "action": "click",
+      "expected": "toggles a discovery/communication preference (searchEngineVisible, findableByPhone, readReceipts, showOnline, messageRequests, analytics) (rendered via the shared Switch component; same static-scanner limitation as mfa-toggle)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "-"
+    },
+    {
+      "screen": "settings/privacy",
+      "component": "PrivacyPage",
+      "control": "privacy-level-<section>-<level>",
+      "action": "click",
+      "expected": "sets who can see that profile section (public/connections/organization/private); saved on privacy-save",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "privacy-level-<section>-<level>"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-headline",
+      "action": "type",
+      "expected": "sets the profile headline shown on the public profile",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-headline"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-employer",
+      "action": "type",
+      "expected": "sets current employer/company",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-employer"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-title",
+      "action": "type",
+      "expected": "sets job title",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-title"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-industry",
+      "action": "select",
+      "expected": "sets industry",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-industry"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-location",
+      "action": "type",
+      "expected": "sets location",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-location"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-skill",
+      "action": "type + Enter",
+      "expected": "adds a skill chip",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-skill"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-services",
+      "action": "type",
+      "expected": "sets services offered",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-services"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-area",
+      "action": "type",
+      "expected": "sets service area",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "ob-area"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-follow-<slug>",
+      "action": "click",
+      "expected": "follows the suggested organization; button flips to Following",
+      "permissions": "signed in",
+      "api": "POST /organizations/:id/follow",
+      "testId": "ob-follow-<slug>"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-skip",
+      "action": "click",
+      "expected": "ends onboarding without finishing remaining steps; navigates home",
+      "permissions": "signed in",
+      "api": "POST /me/onboarding/done",
+      "testId": "ob-skip"
+    },
+    {
+      "screen": "welcome",
+      "component": "OnboardingWizard",
+      "control": "ob-continue",
+      "action": "click",
+      "expected": "saves the step and advances; on the last step, finishes onboarding and navigates home",
+      "permissions": "signed in",
+      "api": "PATCH /me/profile, POST /me/onboarding/done",
+      "testId": "ob-continue"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-add",
+      "action": "click",
+      "expected": "opens the add-experience dialog",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-add"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-edit-<id>",
+      "action": "click",
+      "expected": "opens that experience entry for editing",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-edit-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-delete-<id>",
+      "action": "click",
+      "expected": "removes that experience entry",
+      "permissions": "signed in, own profile",
+      "api": "DELETE /me/profile/experiences/:id",
+      "testId": "profile-editor-experience-delete-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-save",
+      "action": "click",
+      "expected": "creates or updates the experience entry and closes the dialog",
+      "permissions": "signed in, own profile",
+      "api": "POST/PATCH /me/profile/experiences[/:id]",
+      "testId": "profile-editor-experience-save"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-company",
+      "action": "type",
+      "expected": "sets the company name",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-company"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-title",
+      "action": "type",
+      "expected": "sets the job title",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-title"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-start",
+      "action": "type",
+      "expected": "sets the start date",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-start"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-end",
+      "action": "type",
+      "expected": "sets the end date",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-end"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-current",
+      "action": "check",
+      "expected": "marks this as the current role; disables the end-date field",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-current"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-location",
+      "action": "type",
+      "expected": "sets the location",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-location"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-experience-description",
+      "action": "type",
+      "expected": "sets the description",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-experience-description"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-add",
+      "action": "click",
+      "expected": "opens the add-education dialog",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-add"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-edit-<id>",
+      "action": "click",
+      "expected": "opens that education entry for editing",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-edit-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-delete-<id>",
+      "action": "click",
+      "expected": "removes that education entry",
+      "permissions": "signed in, own profile",
+      "api": "DELETE /me/profile/educations/:id",
+      "testId": "profile-editor-education-delete-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-save",
+      "action": "click",
+      "expected": "creates or updates the education entry and closes the dialog",
+      "permissions": "signed in, own profile",
+      "api": "POST/PATCH /me/profile/educations[/:id]",
+      "testId": "profile-editor-education-save"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-school",
+      "action": "type",
+      "expected": "sets the school name",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-school"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-degree",
+      "action": "type",
+      "expected": "sets the degree",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-degree"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-field",
+      "action": "type",
+      "expected": "sets the field of study",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-field"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-start",
+      "action": "type",
+      "expected": "sets the start year",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-start"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-education-end",
+      "action": "type",
+      "expected": "sets the end year",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-education-end"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-add",
+      "action": "click",
+      "expected": "opens the add-service dialog",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-add"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-edit-<id>",
+      "action": "click",
+      "expected": "opens that service entry for editing",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-edit-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-delete-<id>",
+      "action": "click",
+      "expected": "removes that service entry",
+      "permissions": "signed in, own profile",
+      "api": "DELETE /me/profile/services/:id",
+      "testId": "profile-editor-service-delete-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-save",
+      "action": "click",
+      "expected": "creates or updates the service entry and closes the dialog",
+      "permissions": "signed in, own profile",
+      "api": "POST/PATCH /me/profile/services[/:id]",
+      "testId": "profile-editor-service-save"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-name",
+      "action": "type",
+      "expected": "sets the service name",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-name"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-description",
+      "action": "type",
+      "expected": "sets the service description",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-description"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-price",
+      "action": "type",
+      "expected": "sets the starting price",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-price"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-service-note",
+      "action": "type",
+      "expected": "sets a free-text price note",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-service-note"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-add",
+      "action": "click",
+      "expected": "opens the add-certification dialog",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-add"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-edit-<id>",
+      "action": "click",
+      "expected": "opens that certification entry for editing",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-edit-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-delete-<id>",
+      "action": "click",
+      "expected": "removes that certification entry",
+      "permissions": "signed in, own profile",
+      "api": "DELETE /me/profile/certifications/:id",
+      "testId": "profile-editor-certification-delete-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-save",
+      "action": "click",
+      "expected": "creates or updates the certification entry and closes the dialog",
+      "permissions": "signed in, own profile",
+      "api": "POST/PATCH /me/profile/certifications[/:id]",
+      "testId": "profile-editor-certification-save"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-name",
+      "action": "type",
+      "expected": "sets the certification name",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-name"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-issuer",
+      "action": "type",
+      "expected": "sets the issuing body",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-issuer"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-issued",
+      "action": "type",
+      "expected": "sets the date issued",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-issued"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-certification-expires",
+      "action": "type",
+      "expected": "sets the expiry date",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-certification-expires"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-add",
+      "action": "click",
+      "expected": "opens the add-portfolio dialog",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-portfolio-add"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-edit-<id>",
+      "action": "click",
+      "expected": "opens that portfolio entry for editing",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-portfolio-edit-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-delete-<id>",
+      "action": "click",
+      "expected": "removes that portfolio entry",
+      "permissions": "signed in, own profile",
+      "api": "DELETE /me/profile/portfolios/:id",
+      "testId": "profile-editor-portfolio-delete-<id>"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-save",
+      "action": "click",
+      "expected": "creates or updates the portfolio entry and closes the dialog",
+      "permissions": "signed in, own profile",
+      "api": "POST/PATCH /me/profile/portfolios[/:id]",
+      "testId": "profile-editor-portfolio-save"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-title",
+      "action": "type",
+      "expected": "sets the portfolio item title",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-portfolio-title"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-description",
+      "action": "type",
+      "expected": "sets the portfolio item description",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-portfolio-description"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-portfolio-url",
+      "action": "type",
+      "expected": "sets the portfolio item URL",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-portfolio-url"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ChipEditor",
+      "control": "profile-editor-servicearea",
+      "action": "-",
+      "expected": "the servicearea chip editor container; passes testId=\"profile-editor-servicearea\" down to its own -input/-add controls",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-servicearea"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ChipEditor",
+      "control": "profile-editor-languages",
+      "action": "-",
+      "expected": "the languages chip editor container; passes testId=\"profile-editor-languages\" down to its own -input/-add controls",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-languages"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ChipEditor",
+      "control": "profile-editor-skills",
+      "action": "-",
+      "expected": "the skills chip editor container; passes testId=\"profile-editor-skills\" down to its own -input/-add controls",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-skills"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ChipEditor",
+      "control": "profile-editor-objectives",
+      "action": "-",
+      "expected": "the objectives chip editor container; passes testId=\"profile-editor-objectives\" down to its own -input/-add controls",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-editor-objectives"
+    },
+    {
+      "screen": "messages",
+      "component": "MessagesShell",
+      "control": "messages-shell",
+      "action": "-",
+      "expected": "two-pane shell; on mobile shows the thread list OR the open thread, never both (single-pane)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-shell"
+    },
+    {
+      "screen": "messages",
+      "component": "ThreadList",
+      "control": "messages-list",
+      "action": "-",
+      "expected": "scrollable list of threads for the active tab",
+      "permissions": "signed in",
+      "api": "GET /threads?tab=",
+      "testId": "messages-list"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "ThreadInfo",
+      "control": "messages-info",
+      "action": "-",
+      "expected": "the info panel for the open thread (mute/pin/archive/report/leave)",
+      "permissions": "signed in",
+      "api": "GET /threads/:id",
+      "testId": "messages-info"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-body",
+      "action": "-",
+      "expected": "scrollable message list for the open thread",
+      "permissions": "signed in",
+      "api": "GET /threads/:id/messages?cursor=",
+      "testId": "messages-body"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-bubble-<id>",
+      "action": "-",
+      "expected": "one message bubble; \"me\" styling when the viewer sent it",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-bubble-<id>"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-edit-input",
+      "action": "type",
+      "expected": "sets the edited body for the message being edited",
+      "permissions": "signed in, own message",
+      "api": "-",
+      "testId": "messages-edit-input"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-edit-cancel",
+      "action": "click",
+      "expected": "discards the in-progress edit",
+      "permissions": "signed in, own message",
+      "api": "-",
+      "testId": "messages-edit-cancel"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-forward-list",
+      "action": "-",
+      "expected": "pick-a-thread list shown in the forward dialog",
+      "permissions": "signed in",
+      "api": "GET /threads",
+      "testId": "messages-forward-list"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-reply-preview",
+      "action": "-",
+      "expected": "shows the message being replied to, above the composer",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "messages-reply-preview"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-attach-input",
+      "action": "choose file",
+      "expected": "attaches and sends a document",
+      "permissions": "signed in + verified",
+      "api": "POST /media, POST /threads/:id/messages",
+      "testId": "messages-attach-input"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Composer",
+      "control": "messages-photo-input",
+      "action": "choose file",
+      "expected": "attaches and sends a photo",
+      "permissions": "signed in + verified",
+      "api": "POST /media, POST /threads/:id/messages",
+      "testId": "messages-photo-input"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "postpage",
+      "action": "-",
+      "expected": "the testId prop PostCard is given on the standalone post page; its own controls render as postpage-<id>-<action>",
+      "permissions": "any viewer",
+      "api": "GET /posts/:id",
+      "testId": "postpage"
+    },
+    {
+      "screen": "posts/[id]",
+      "component": "PostDetailPage",
+      "control": "postpage-anon-signin",
+      "action": "click",
+      "expected": "navigates to /login for an anonymous viewer",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "postpage-anon-signin"
+    },
+    {
+      "screen": "posts/[id]",
+      "component": "PostDetailPage",
+      "control": "postpage-anon-join",
+      "action": "click",
+      "expected": "navigates to /join for an anonymous viewer",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "postpage-anon-join"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer",
+      "action": "-",
+      "expected": "the testId prop Composer is given on the home feed; its own controls render as feed-composer-<field>",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-composer"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-mode-tabs",
+      "action": "-",
+      "expected": "container for the feed-mode-<mode> tab buttons",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-mode-tabs"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-post",
+      "action": "-",
+      "expected": "the testId prop PostCard is given in the home feed; PostCard makes it unique per post as feed-post-<postId>-<action>",
+      "permissions": "signed in",
+      "api": "GET /feed?mode=&cursor=",
+      "testId": "feed-post"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-new",
+      "action": "-",
+      "expected": "new-experiment form card",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-new"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-key",
+      "action": "type",
+      "expected": "sets the experiment key",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-key"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-hypothesis",
+      "action": "type",
+      "expected": "sets the hypothesis",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-hypothesis"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-population",
+      "action": "type",
+      "expected": "sets the target population",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-population"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-treatment",
+      "action": "type",
+      "expected": "sets the treatment description",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-treatment"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-control",
+      "action": "type",
+      "expected": "sets the control description",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-control"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-success-metrics",
+      "action": "type",
+      "expected": "sets the success metrics",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-success-metrics"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-guardrail-metrics",
+      "action": "type",
+      "expected": "sets the guardrail metrics",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-guardrail-metrics"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-min-sample",
+      "action": "type",
+      "expected": "sets the minimum sample size",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-min-sample"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-rollback",
+      "action": "type",
+      "expected": "sets the rollback criteria",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-rollback"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-list",
+      "action": "-",
+      "expected": "list of existing experiments",
+      "permissions": "platform staff",
+      "api": "GET /admin/experiments",
+      "testId": "admin-experiments-list"
+    },
+    {
+      "screen": "admin/experiments",
+      "component": "ExperimentsPage",
+      "control": "admin-experiments-row-<key>",
+      "action": "-",
+      "expected": "one experiment's row (status, actions)",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-experiments-row-<key>"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-new",
+      "action": "-",
+      "expected": "new-flag form card",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-new"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-new-key",
+      "action": "type",
+      "expected": "sets the new flag's key",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-new-key"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-new-description",
+      "action": "type",
+      "expected": "sets the new flag's description",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-new-description"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-list",
+      "action": "-",
+      "expected": "flags list card",
+      "permissions": "platform staff",
+      "api": "GET /admin/flags",
+      "testId": "admin-flags-list"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-table",
+      "action": "-",
+      "expected": "the flags table body",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-table"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-row-<key>",
+      "action": "-",
+      "expected": "one flag's row",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-row-<key>"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-audience-<key>",
+      "action": "select",
+      "expected": "sets who the flag is rolled out to",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-audience-<key>"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-rollout-<key>",
+      "action": "type",
+      "expected": "sets the rollout percentage",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-rollout-<key>"
+    },
+    {
+      "screen": "admin/flags",
+      "component": "FlagsPage",
+      "control": "admin-flags-allowpersons-<key>",
+      "action": "type",
+      "expected": "sets the explicit allow-list of person ids",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-flags-allowpersons-<key>"
+    },
+    {
+      "screen": "admin/content",
+      "component": "ContentPage",
+      "control": "admin-content-row-<id>",
+      "action": "-",
+      "expected": "one flagged/queued content item's row",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-content-row-<id>"
+    },
+    {
+      "screen": "admin/organizations",
+      "component": "AdminOrgsPage",
+      "control": "admin-org-row-<id>",
+      "action": "-",
+      "expected": "one organization's row with its status controls",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-org-row-<id>"
+    },
+    {
+      "screen": "admin/verifications",
+      "component": "AdminVerificationsPage",
+      "control": "admin-verification-row-<id>",
+      "action": "-",
+      "expected": "one pending verification request's row",
+      "permissions": "platform staff",
+      "api": "-",
+      "testId": "admin-verification-row-<id>"
+    },
+    {
+      "screen": "me/applications",
+      "component": "MyApplicationsPage",
+      "control": "applications-list",
+      "action": "-",
+      "expected": "list of the signed-in person's job applications",
+      "permissions": "signed in",
+      "api": "GET /me/applications",
+      "testId": "applications-list"
+    },
+    {
+      "screen": "me/applications",
+      "component": "MyApplicationsPage",
+      "control": "applications-row-<id>",
+      "action": "-",
+      "expected": "one application's row with its current stage",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "applications-row-<id>"
+    },
+    {
+      "screen": "settings/blocked",
+      "component": "BlockedPage",
+      "control": "blocked-list",
+      "action": "-",
+      "expected": "list of blocked people",
+      "permissions": "signed in",
+      "api": "GET /me/blocked",
+      "testId": "blocked-list"
+    },
+    {
+      "screen": "settings/blocked",
+      "component": "BlockedPage",
+      "control": "muted-people-list",
+      "action": "-",
+      "expected": "list of muted people",
+      "permissions": "signed in",
+      "api": "GET /me/muted-people",
+      "testId": "muted-people-list"
+    },
+    {
+      "screen": "settings/blocked",
+      "component": "BlockedPage",
+      "control": "muted-orgs-list",
+      "action": "-",
+      "expected": "list of muted organizations",
+      "permissions": "signed in",
+      "api": "GET /me/muted-organizations",
+      "testId": "muted-orgs-list"
+    },
+    {
+      "screen": "connections",
+      "component": "ConnectionsPage",
+      "control": "connections-table",
+      "action": "-",
+      "expected": "connections table",
+      "permissions": "signed in",
+      "api": "GET /connections?filter=&q=&cursor=",
+      "testId": "connections-table"
+    },
+    {
+      "screen": "connections",
+      "component": "ConnectionsPage",
+      "control": "connections-row-<personId>",
+      "action": "-",
+      "expected": "one connection's row with message/relationship/note/remove/block actions",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "connections-row-<personId>"
+    },
+    {
+      "screen": "network/following",
+      "component": "FollowingPage",
+      "control": "following-orgs-list",
+      "action": "-",
+      "expected": "list of followed organizations",
+      "permissions": "signed in",
+      "api": "GET /me/following/organizations",
+      "testId": "following-orgs-list"
+    },
+    {
+      "screen": "network/following",
+      "component": "FollowingPage",
+      "control": "following-people-list",
+      "action": "-",
+      "expected": "list of followed people",
+      "permissions": "signed in",
+      "api": "GET /me/following/people",
+      "testId": "following-people-list"
+    },
+    {
+      "screen": "network/import",
+      "component": "ImportPage",
+      "control": "import-matches-list",
+      "action": "-",
+      "expected": "list of contacts matched to existing accounts",
+      "permissions": "signed in + verified",
+      "api": "POST /network/import/match",
+      "testId": "import-matches-list"
+    },
+    {
+      "screen": "network/intros",
+      "component": "IntrosPage",
+      "control": "intros-tome-list",
+      "action": "-",
+      "expected": "list of intro requests where the viewer is the middle person",
+      "permissions": "signed in",
+      "api": "GET /intros?role=middle",
+      "testId": "intros-tome-list"
+    },
+    {
+      "screen": "network/intros",
+      "component": "IntrosPage",
+      "control": "intros-mine-list",
+      "action": "-",
+      "expected": "list of intro requests the viewer asked for",
+      "permissions": "signed in",
+      "api": "GET /intros?role=requester",
+      "testId": "intros-mine-list"
+    },
+    {
+      "screen": "network/intros",
+      "component": "IntrosPage",
+      "control": "intro-ask-paths",
+      "action": "-",
+      "expected": "the discoverable-path picker shown when asking for an introduction",
+      "permissions": "signed in",
+      "api": "GET /people/:id/mutual",
+      "testId": "intro-ask-paths"
+    },
+    {
+      "screen": "network",
+      "component": "NetworkPage",
+      "control": "network-invitations",
+      "action": "-",
+      "expected": "list of pending connection requests received",
+      "permissions": "signed in",
+      "api": "GET /connections/pending",
+      "testId": "network-invitations"
+    },
+    {
+      "screen": "network",
+      "component": "NetworkPage",
+      "control": "network-suggestions",
+      "action": "-",
+      "expected": "grid of \"people you may know\" suggestions",
+      "permissions": "signed in",
+      "api": "GET /recommendations/customers",
+      "testId": "network-suggestions"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-member-<personId>",
+      "action": "-",
+      "expected": "one member's row (role, approve, permissions, remove)",
+      "permissions": "org admin/owner",
+      "api": "-",
+      "testId": "company-admin-member-<personId>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-invite-email",
+      "action": "type",
+      "expected": "sets the invite recipient's email",
+      "permissions": "org admin/owner",
+      "api": "-",
+      "testId": "company-admin-invite-email"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-invite-role",
+      "action": "select",
+      "expected": "sets the invited member's role",
+      "permissions": "org admin/owner",
+      "api": "-",
+      "testId": "company-admin-invite-role"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-verification-<id>",
+      "action": "-",
+      "expected": "one pending verification request's row",
+      "permissions": "org admin/owner",
+      "api": "-",
+      "testId": "company-admin-verification-<id>"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-verify-insurance",
+      "action": "click",
+      "expected": "opens an insurance verification request",
+      "permissions": "org admin/owner",
+      "api": "POST /organizations/:id/verifications",
+      "testId": "company-admin-verify-insurance"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-verify-license",
+      "action": "click",
+      "expected": "opens a license verification request",
+      "permissions": "org admin/owner",
+      "api": "POST /organizations/:id/verifications",
+      "testId": "company-admin-verify-license"
+    },
+    {
+      "screen": "company/admin",
+      "component": "CompanyAdminPage",
+      "control": "company-admin-location-label",
+      "action": "type",
+      "expected": "sets the location's label",
+      "permissions": "org admin/owner",
+      "api": "-",
+      "testId": "company-admin-location-label"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyPage",
+      "control": "company-new-industry",
+      "action": "type",
+      "expected": "sets the company's industry",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "company-new-industry"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyPage",
+      "control": "company-new-size",
+      "action": "type",
+      "expected": "sets the company's size",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "company-new-size"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyPage",
+      "control": "company-new-website",
+      "action": "type",
+      "expected": "sets the company's website",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "company-new-website"
+    },
+    {
+      "screen": "company/new",
+      "component": "NewCompanyPage",
+      "control": "company-new-description",
+      "action": "type",
+      "expected": "sets the company's description",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "company-new-description"
+    },
+    {
+      "screen": "company/invite",
+      "component": "CompanyInvitePage",
+      "control": "company-invite-card",
+      "action": "-",
+      "expected": "the accept-invite card",
+      "permissions": "signed in",
+      "api": "POST /organizations/invites/accept",
+      "testId": "company-invite-card"
+    },
+    {
+      "screen": "settings/data",
+      "component": "DataPage",
+      "control": "export-data",
+      "action": "click",
+      "expected": "downloads a JSON export of the account's data",
+      "permissions": "signed in",
+      "api": "GET /me/export",
+      "testId": "export-data"
+    },
+    {
+      "screen": "settings/data",
+      "component": "DataPage",
+      "control": "deactivate",
+      "action": "click",
+      "expected": "deactivates the account (reversible on next sign-in)",
+      "permissions": "signed in",
+      "api": "POST /me/deactivate",
+      "testId": "deactivate"
+    },
+    {
+      "screen": "settings/data",
+      "component": "DataPage",
+      "control": "delete-account",
+      "action": "click",
+      "expected": "opens the delete-in-14-days confirm dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "delete-account"
+    },
+    {
+      "screen": "settings/data",
+      "component": "DataPage",
+      "control": "delete-confirm",
+      "action": "click",
+      "expected": "schedules permanent deletion in 14 days",
+      "permissions": "signed in",
+      "api": "POST /me/delete",
+      "testId": "delete-confirm"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-contacts-list",
+      "action": "-",
+      "expected": "the contacts tab's list",
+      "permissions": "signed in",
+      "api": "GET /crm/contacts",
+      "testId": "crm-contacts-list"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-notes-list",
+      "action": "-",
+      "expected": "the notes tab's list",
+      "permissions": "signed in",
+      "api": "GET /crm/notes",
+      "testId": "crm-notes-list"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-reminders-list",
+      "action": "-",
+      "expected": "the reminders tab's list",
+      "permissions": "signed in",
+      "api": "GET /crm/reminders",
+      "testId": "crm-reminders-list"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-pipeline-list",
+      "action": "-",
+      "expected": "the pipeline tab's list",
+      "permissions": "signed in",
+      "api": "GET /crm/pipeline",
+      "testId": "crm-pipeline-list"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-timeline-list",
+      "action": "-",
+      "expected": "the timeline tab's combined activity list",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-timeline-list"
+    },
+    {
+      "screen": "crm/[personId]",
+      "component": "CrmContactPage",
+      "control": "crm-contact-reminders-list",
+      "action": "-",
+      "expected": "this contact's reminders list",
+      "permissions": "signed in",
+      "api": "GET /crm/reminders?personId=",
+      "testId": "crm-contact-reminders-list"
+    },
+    {
+      "screen": "crm/[personId]",
+      "component": "CrmContactPage",
+      "control": "crm-contact-timeline",
+      "action": "-",
+      "expected": "this contact's activity timeline",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-contact-timeline"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "PostCard (group-local)",
+      "control": "group-post-<id>",
+      "action": "-",
+      "expected": "one group post's card",
+      "permissions": "signed in member",
+      "api": "-",
+      "testId": "group-post-<id>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "PostCard (group-local)",
+      "control": "group-post-pin-<id>",
+      "action": "click",
+      "expected": "pins/unpins the post (admin only)",
+      "permissions": "group admin",
+      "api": "-",
+      "testId": "group-post-pin-<id>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "PostCard (group-local)",
+      "control": "group-post-like-<id>",
+      "action": "click",
+      "expected": "reacts to the group post",
+      "permissions": "signed in member",
+      "api": "POST /posts/:id/react",
+      "testId": "group-post-like-<id>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "GroupFilesTab",
+      "control": "group-file-<id>",
+      "action": "-",
+      "expected": "one uploaded file's row (download/delete)",
+      "permissions": "signed in member",
+      "api": "-",
+      "testId": "group-file-<id>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "GroupMembersTab",
+      "control": "group-member-<personId>",
+      "action": "-",
+      "expected": "one active member's row",
+      "permissions": "signed in member",
+      "api": "-",
+      "testId": "group-member-<personId>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "GroupMembersTab",
+      "control": "group-pending-<personId>",
+      "action": "-",
+      "expected": "one pending-approval member's row",
+      "permissions": "group admin",
+      "api": "-",
+      "testId": "group-pending-<personId>"
+    },
+    {
+      "screen": "groups/[slug]",
+      "component": "GroupRulesTab",
+      "control": "group-rules-textarea",
+      "action": "type",
+      "expected": "edits the group rules text",
+      "permissions": "group admin",
+      "api": "-",
+      "testId": "group-rules-textarea"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-jobs-list",
+      "action": "-",
+      "expected": "list of this company's job postings",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "GET /organizations/:id/jobs",
+      "testId": "hiring-jobs-list"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-stage-board",
+      "action": "-",
+      "expected": "the applicant pipeline board (columns per stage)",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-stage-board"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-applicant-list",
+      "action": "-",
+      "expected": "list of applicants in the selected stage column",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "GET /jobs/:id/applications",
+      "testId": "hiring-applicant-list"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-applicant-<id>",
+      "action": "-",
+      "expected": "one applicant's row",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-applicant-<id>"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-notes",
+      "action": "type",
+      "expected": "sets private employer notes on the applicant",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-notes"
+    },
+    {
+      "screen": "company/hiring",
+      "component": "HiringPage",
+      "control": "hiring-message",
+      "action": "type",
+      "expected": "sets a message to send the candidate",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-message"
+    },
+    {
+      "screen": "crm",
+      "component": "NoteEditor",
+      "control": "note-editor",
+      "action": "-",
+      "expected": "the private-note editor for a contact (used from crm and connections)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "note-editor"
+    },
+    {
+      "screen": "crm",
+      "component": "NoteEditor",
+      "control": "note-editor-list",
+      "action": "-",
+      "expected": "list of existing private notes for the contact",
+      "permissions": "signed in",
+      "api": "GET /crm/notes?personId=",
+      "testId": "note-editor-list"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-list",
+      "action": "-",
+      "expected": "search-results list of job cards",
+      "permissions": "any viewer",
+      "api": "GET /search?type=jobs",
+      "testId": "jobs-list"
+    },
+    {
+      "screen": "jobs/[id]",
+      "component": "JobDetailPanel",
+      "control": "jobs-detail",
+      "action": "-",
+      "expected": "the selected job's detail panel",
+      "permissions": "any viewer",
+      "api": "GET /jobs/:id",
+      "testId": "jobs-detail"
+    },
+    {
+      "screen": "jobs/[id]",
+      "component": "JobDetailPage",
+      "control": "jobs-anon-signin",
+      "action": "click",
+      "expected": "navigates to /login for an anonymous viewer",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "jobs-anon-signin"
+    },
+    {
+      "screen": "jobs/[id]",
+      "component": "JobDetailPage",
+      "control": "jobs-anon-join",
+      "action": "click",
+      "expected": "navigates to /join for an anonymous viewer",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "jobs-anon-join"
+    },
+    {
+      "screen": "jobs/[id]",
+      "component": "ApplyDialog",
+      "control": "jobs-apply-cancel",
+      "action": "click",
+      "expected": "closes the apply dialog without applying",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "jobs-apply-cancel"
+    },
+    {
+      "screen": "jobs/new",
+      "component": "NewJobPage",
+      "control": "jobs-new-requirement-input",
+      "action": "type",
+      "expected": "sets the requirement text to add",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-requirement-input"
+    },
+    {
+      "screen": "jobs/new",
+      "component": "NewJobPage",
+      "control": "jobs-new-requirement-<text>",
+      "action": "click",
+      "expected": "removes that requirement chip",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-requirement-<text>"
+    },
+    {
+      "screen": "jobs/new",
+      "component": "NewJobPage",
+      "control": "jobs-new-language-input",
+      "action": "type",
+      "expected": "sets the language to add",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-language-input"
+    },
+    {
+      "screen": "jobs/new",
+      "component": "NewJobPage",
+      "control": "jobs-new-language-<lang>",
+      "action": "click",
+      "expected": "removes that language chip",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-language-<lang>"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-title",
+      "action": "type",
+      "expected": "sets the job title",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-title"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-description",
+      "action": "type",
+      "expected": "sets the job description",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-description"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-location",
+      "action": "type",
+      "expected": "sets the job location",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-location"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-employmenttype",
+      "action": "select",
+      "expected": "sets the employment type",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-employmenttype"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-workmode",
+      "action": "select",
+      "expected": "sets the work mode",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-workmode"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-salarymin",
+      "action": "type",
+      "expected": "sets the minimum salary",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-salarymin"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-salarymax",
+      "action": "type",
+      "expected": "sets the maximum salary",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-salarymax"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-salaryperiod",
+      "action": "select",
+      "expected": "sets the salary period",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-salaryperiod"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-requirement-input",
+      "action": "type",
+      "expected": "sets the requirement text to add",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-requirement-input"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-requirement-add",
+      "action": "click",
+      "expected": "adds the requirement chip",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-requirement-add"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-requirement-<text>",
+      "action": "click",
+      "expected": "removes that requirement chip",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-requirement-<text>"
+    },
+    {
+      "screen": "jobs/[id]/edit",
+      "component": "EditJobPage",
+      "control": "jobs-promote-days",
+      "action": "type",
+      "expected": "sets how many days to promote the listing for",
+      "permissions": "org admin/owner or org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-promote-days"
+    },
+    {
+      "screen": "marketplace",
+      "component": "ListingCard",
+      "control": "marketplace-card-<id>",
+      "action": "-",
+      "expected": "one listing's card in the grid",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "marketplace-card-<id>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-category-chips",
+      "action": "-",
+      "expected": "the category breadcrumb/chip row",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "marketplace-category-chips"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-type-chips",
+      "action": "-",
+      "expected": "the type filter chip row",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "marketplace-type-chips"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-grid",
+      "action": "-",
+      "expected": "grid of listing cards",
+      "permissions": "any viewer",
+      "api": "GET /search?type=listings",
+      "testId": "marketplace-grid"
+    },
+    {
+      "screen": "marketplace/[id]",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail",
+      "action": "-",
+      "expected": "the listing detail panel",
+      "permissions": "any viewer",
+      "api": "GET /marketplace/:id",
+      "testId": "marketplace-detail"
+    },
+    {
+      "screen": "marketplace/[id]",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-gallery",
+      "action": "-",
+      "expected": "the listing's photo gallery",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "marketplace-detail-gallery"
+    },
+    {
+      "screen": "marketplace/new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-uploader",
+      "action": "-",
+      "expected": "the photo uploader; its own controls render as marketplace-new-uploader-<field>",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-uploader"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunityCard",
+      "control": "opportunities-card-<id>",
+      "action": "-",
+      "expected": "one opportunity's card in the grid",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "opportunities-card-<id>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-grid",
+      "action": "-",
+      "expected": "grid of opportunity cards",
+      "permissions": "any viewer",
+      "api": "GET /search?type=opportunities",
+      "testId": "opportunities-grid"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-type-chips",
+      "action": "-",
+      "expected": "the type filter chip row",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "opportunities-type-chips"
+    },
+    {
+      "screen": "opportunities/[id]",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail",
+      "action": "-",
+      "expected": "the opportunity detail panel",
+      "permissions": "any viewer",
+      "api": "GET /opportunities/:id",
+      "testId": "opportunities-detail"
+    },
+    {
+      "screen": "opportunities/[id]",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-interests",
+      "action": "-",
+      "expected": "list of people who showed interest (poster only)",
+      "permissions": "opportunity poster",
+      "api": "-",
+      "testId": "opportunities-detail-interests"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqBoardPage",
+      "control": "rfq-list",
+      "action": "-",
+      "expected": "grid of open RFQs",
+      "permissions": "signed in",
+      "api": "GET /rfq",
+      "testId": "rfq-list"
+    },
+    {
+      "screen": "rfq/new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-extracted",
+      "action": "-",
+      "expected": "card showing the fields extracted from the plain-text request before posting",
+      "permissions": "signed in + verified",
+      "api": "POST /rfq/extract",
+      "testId": "rfq-new-extracted"
+    },
+    {
+      "screen": "rfq/[id]",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-header",
+      "action": "-",
+      "expected": "the RFQ's header card (title, buyer, status)",
+      "permissions": "any viewer with access",
+      "api": "GET /rfq/:id",
+      "testId": "rfq-detail-header"
+    },
+    {
+      "screen": "rfq/[id]",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-row-<id>",
+      "action": "-",
+      "expected": "one vendor's quote row",
+      "permissions": "buyer, or the quoting vendor",
+      "api": "-",
+      "testId": "rfq-quote-row-<id>"
+    },
+    {
+      "screen": "rfq/[id]",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-menu-<id>",
+      "action": "click",
+      "expected": "opens shortlist/accept actions for that quote",
+      "permissions": "buyer or org.manage_rfqs",
+      "api": "-",
+      "testId": "rfq-quote-menu-<id>"
+    },
+    {
+      "screen": "rfq/[id]",
+      "component": "RfqDetailPage",
+      "control": "rfq-question-<id>",
+      "action": "-",
+      "expected": "one Q&A thread item",
+      "permissions": "any viewer with access",
+      "api": "-",
+      "testId": "rfq-question-<id>"
+    },
+    {
+      "screen": "rfq/[id]",
+      "component": "RfqDetailPage",
+      "control": "rfq-compare-dialog",
+      "action": "-",
+      "expected": "side-by-side quote comparison dialog",
+      "permissions": "buyer or org.manage_rfqs",
+      "api": "-",
+      "testId": "rfq-compare-dialog"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-main",
+      "action": "-",
+      "expected": "the top search box; its own controls render as search-main-<field>",
+      "permissions": "any viewer",
+      "api": "GET /search/suggest?q=",
+      "testId": "search-main"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-tabs",
+      "action": "-",
+      "expected": "container for the search-tab-<key> type tabs",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "search-tabs"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-results",
+      "action": "-",
+      "expected": "list of matching results for the active tab",
+      "permissions": "any viewer",
+      "api": "GET /search?q=&type=",
+      "testId": "search-results"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-saved-recent",
+      "action": "-",
+      "expected": "list of the viewer's saved and recent searches",
+      "permissions": "signed in",
+      "api": "GET /search/saved, GET /search/recent",
+      "testId": "search-saved-recent"
+    },
+    {
+      "screen": "shell",
+      "component": "AppShell",
+      "control": "nav-<href>",
+      "action": "click",
+      "expected": "navigates to that sidebar destination; highlighted when active",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "nav-<href>"
+    },
+    {
+      "screen": "shell",
+      "component": "AppShell",
+      "control": "top-post",
+      "action": "click",
+      "expected": "navigates to /post/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "top-post"
+    },
+    {
+      "screen": "post/new",
+      "component": "Composer",
+      "control": "new-post-composer",
+      "action": "-",
+      "expected": "the testId prop Composer is given on the standalone post-composer page; its own controls render as new-post-composer-<field>",
+      "permissions": "signed in + verified",
+      "api": "POST /posts",
+      "testId": "new-post-composer"
+    },
+    {
+      "screen": "people/[username]",
+      "component": "ProfilePage",
+      "control": "profile-edit-experience",
+      "action": "click",
+      "expected": "navigates to /me/profile to edit experience (own profile only)",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-edit-experience"
+    },
+    {
+      "screen": "people/[username]",
+      "component": "ProfilePage",
+      "control": "profile-edit-services",
+      "action": "click",
+      "expected": "navigates to /me/profile to edit services (own profile only)",
+      "permissions": "signed in, own profile",
+      "api": "-",
+      "testId": "profile-edit-services"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationsPage",
+      "control": "recommendations-section-<model>",
+      "action": "-",
+      "expected": "one model's recommendation section; hides itself when empty",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "recommendations-section-<model>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationsPage",
+      "control": "recommendations-empty",
+      "action": "-",
+      "expected": "shown when every section is empty",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "recommendations-empty"
+    },
+    {
+      "screen": "me/saved",
+      "component": "SavedPostsPage",
+      "control": "saved-post",
+      "action": "-",
+      "expected": "the testId prop PostCard is given on the saved-posts page",
+      "permissions": "signed in",
+      "api": "GET /me/saved?cursor=",
+      "testId": "saved-post"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-connect-status",
+      "action": "-",
+      "expected": "disabled status button shown while resolving a scanned QR/vCard before connecting",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-connect-status"
+    },
+    {
+      "screen": "concierge",
+      "component": "ConciergePage",
+      "control": "concierge-answer",
+      "action": "-",
+      "expected": "the answer card (intent line, explanation, matches, proposed actions)",
+      "permissions": "signed in",
+      "api": "POST /concierge/ask",
+      "testId": "concierge-answer"
+    },
+    {
+      "screen": "companies/[slug]",
+      "component": "ProfileCard",
+      "control": "profile-card-<username>",
+      "action": "-",
+      "expected": "one person's summary card (used in company People tab, search results, etc.)",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "profile-card-<username>"
+    },
+    {
+      "screen": "me/listings",
+      "component": "MyListingsPage",
+      "control": "me-listings-list",
+      "action": "-",
+      "expected": "list of the signed-in person's marketplace listings",
+      "permissions": "signed in",
+      "api": "GET /me/listings",
+      "testId": "me-listings-list"
+    },
+    {
+      "screen": "settings/privacy",
+      "component": "PrivacyPage",
+      "control": "privacy-save",
+      "action": "click",
+      "expected": "saves the privacy-level table and the discovery/communication preferences",
+      "permissions": "signed in",
+      "api": "PUT /me/privacy, PUT /me/profile/preferences",
+      "testId": "privacy-save"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "mfa-off",
+      "action": "type",
+      "expected": "sets the current TOTP code to confirm turning two-step verification off",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "mfa-off"
+    },
+    {
+      "screen": "settings/security",
+      "component": "SecurityPage",
+      "control": "mfa-disable-confirm",
+      "action": "click",
+      "expected": "confirms the code and turns two-step verification off",
+      "permissions": "signed in",
+      "api": "POST /me/mfa/disable",
+      "testId": "mfa-disable-confirm"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-avatar-input",
+      "action": "choose file",
+      "expected": "uploads and sets the avatar photo (Uploader was hidden/triggered by profile-editor-avatar-upload, but had no data-testid of its own)",
+      "permissions": "signed in, own profile",
+      "api": "POST /media, POST /me/avatar",
+      "testId": "profile-editor-avatar-input"
+    },
+    {
+      "screen": "me/profile",
+      "component": "ProfileEditor",
+      "control": "profile-editor-cover-input",
+      "action": "choose file",
+      "expected": "uploads and sets the cover photo (hidden input had no data-testid of its own)",
+      "permissions": "signed in, own profile",
+      "api": "POST /media, POST /me/cover",
+      "testId": "profile-editor-cover-input"
+    },
+    {
+      "screen": "messages/[threadId]",
+      "component": "Conversation",
+      "control": "messages-seen",
+      "action": "-",
+      "expected": "shown next to the viewer's own last message once the other DIRECT participant's lastReadAt reaches or passes it (read receipt; the type existed on ThreadDetail but was never rendered until now)",
+      "permissions": "signed in, DIRECT thread",
+      "api": "-",
+      "testId": "messages-seen"
     }
   ]
 }

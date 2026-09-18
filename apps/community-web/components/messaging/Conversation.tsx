@@ -186,6 +186,10 @@ export function Conversation({ threadId, onThreadChanged, onOpenInfo }: { thread
 
   const other = detail.kind === "DIRECT" ? detail.participants.find((p) => p.person.id !== me?.person.id) : null;
   const iAmRequested = detail.myState === "REQUESTED";
+  // The read-receipt privacy preference already gates whether `other.lastReadAt`
+  // is populated at all (server-side); the client just needs to show it.
+  const lastMineId = [...messages].reverse().find((m) => m.sender?.id === me?.person.id)?.id;
+  const seenLastMine = !!(other?.lastReadAt && lastMineId && new Date(other.lastReadAt).getTime() >= new Date(messages.find((m) => m.id === lastMineId)!.createdAt).getTime());
 
   let lastDay = "";
 
@@ -263,6 +267,7 @@ export function Conversation({ threadId, onThreadChanged, onOpenInfo }: { thread
                     <small>
                       {fmtDate(m.createdAt, { hour: "numeric", minute: "2-digit" } as any)}
                       {m.editedAt ? " · edited" : ""}
+                      {mine && m.id === lastMineId && seenLastMine ? <span data-testid="messages-seen"> · Seen</span> : null}
                     </small>
                   </div>
                 )}

@@ -279,14 +279,14 @@ export function Composer({ onPosted, placeholder = "Share an update, a job, or w
                 ))}
               </select>
             ) : null}
-            <select className="in" style={{ width: 150 }} value={visibility} onChange={(e) => setVisibility(e.target.value)} data-testid={`${testId}-visibility`}>
+            <select className="in" style={{ width: 150 }} value={visibility} onChange={(e) => setVisibility(e.target.value)} data-testid={`${testId}-visibility`} aria-label="Who can see this post">
               {VISIBILITY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
               ))}
             </select>
-            <select className="in" style={{ width: 170 }} value={commentsPolicy} onChange={(e) => setCommentsPolicy(e.target.value)} data-testid={`${testId}-comments-policy`}>
+            <select className="in" style={{ width: 170 }} value={commentsPolicy} onChange={(e) => setCommentsPolicy(e.target.value)} data-testid={`${testId}-comments-policy`} aria-label="Who can comment">
               {COMMENTS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}

@@ -196,15 +196,15 @@ function Inner() {
             <Button small className="profile-upload-btn" onClick={() => coverInput.current?.click()} loading={uploading === "cover"} data-testid="profile-editor-cover-upload">
               Change cover
             </Button>
-            <input ref={coverInput} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && void upload("cover", e.target.files[0])} />
+            <input ref={coverInput} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && void upload("cover", e.target.files[0])} data-testid="profile-editor-cover-input" />
           </div>
           <div style={{ padding: "0 20px 20px" }}>
             <div className="profile-avatar-upload" style={{ marginTop: -34, width: 84 }}>
               <Avatar name={`${profile.firstName} ${profile.lastName}`} assetId={profile.avatarAssetId} size={84} />
-              <Button small className="profile-avatar-upload-btn" icon="cam" onClick={() => avatarInput.current?.click()} loading={uploading === "avatar"} data-testid="profile-editor-avatar-upload">
+              <Button small className="profile-avatar-upload-btn" icon="cam" onClick={() => avatarInput.current?.click()} loading={uploading === "avatar"} data-testid="profile-editor-avatar-upload" aria-label="Change photo">
                 {""}
               </Button>
-              <input ref={avatarInput} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && void upload("avatar", e.target.files[0])} />
+              <input ref={avatarInput} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && void upload("avatar", e.target.files[0])} data-testid="profile-editor-avatar-input" />
             </div>
           </div>
         </div>
@@ -257,7 +257,7 @@ function Inner() {
           <div className="ct">Username</div>
           <div className="row">
             <span className="dim">loopcom.community/people/</span>
-            <input className="in" style={{ maxWidth: 220 }} value={username} onChange={(e) => setUsername(e.target.value)} data-testid="profile-editor-username" />
+            <input className="in" style={{ maxWidth: 220 }} value={username} onChange={(e) => setUsername(e.target.value)} data-testid="profile-editor-username" aria-label="Username" />
             <Button onClick={saveUsername} loading={usernameBusy} data-testid="profile-editor-username-save">
               Save
             </Button>

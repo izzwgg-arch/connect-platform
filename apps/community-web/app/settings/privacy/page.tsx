@@ -42,7 +42,7 @@ export default function PrivacyPage() {
         <b style={{ fontWeight: 500 }}>{label}</b>
         {help ? <small>{help}</small> : null}
       </div>
-      <Switch on={prefs[key] ?? true} label={label} onChange={(v) => setPrefs({ ...prefs, [key]: v })} />
+      <Switch on={prefs[key] ?? true} label={label} onChange={(v) => setPrefs({ ...prefs, [key]: v })} id={`privacy-${key}`} />
     </div>
   );
   return (
@@ -60,7 +60,7 @@ export default function PrivacyPage() {
                   <td>{LABELS[c] ?? c}</td>
                   {LEVELS.map((l) => (
                     <td key={l}>
-                      <input type="radio" name={`pv-${c}`} checked={settings[c] === l} onChange={() => setSettings({ ...settings, [c]: l })} aria-label={`${LABELS[c] ?? c}: ${l.toLowerCase()}`} style={{ accentColor: "var(--accent)" }} />
+                      <input type="radio" name={`pv-${c}`} checked={settings[c] === l} onChange={() => setSettings({ ...settings, [c]: l })} aria-label={`${LABELS[c] ?? c}: ${l.toLowerCase()}`} style={{ accentColor: "var(--accent)" }} data-testid={`privacy-level-${c}-${l.toLowerCase()}`} />
                     </td>
                   ))}
                 </tr>

@@ -130,7 +130,7 @@ export default function SecurityPage() {
               <b>Two-step verification (authenticator app)</b>
               <small>{me?.person.mfaEnabled ? "On — a code from your app is required at sign-in." : "Off. Adds a 6-digit code from Google Authenticator, 1Password, etc."}</small>
             </div>
-            <Switch on={!!me?.person.mfaEnabled} label="Two-step verification" onChange={(on) => (on ? startMfa() : setDisableOpen(true))} />
+            <Switch on={!!me?.person.mfaEnabled} label="Two-step verification" onChange={(on) => (on ? startMfa() : setDisableOpen(true))} id="mfa-toggle" />
           </div>
         </div>
       </div>
@@ -169,9 +169,9 @@ export default function SecurityPage() {
           </>
         ) : null}
       </Dialog>
-      <Dialog open={disableOpen} onClose={() => setDisableOpen(false)} title="Turn off two-step verification" footer={<><Button kind="g" onClick={() => setDisableOpen(false)}>Cancel</Button><Button kind="d" onClick={disableMfa} loading={busy}>Turn off</Button></>}>
+      <Dialog open={disableOpen} onClose={() => setDisableOpen(false)} title="Turn off two-step verification" footer={<><Button kind="g" onClick={() => setDisableOpen(false)}>Cancel</Button><Button kind="d" onClick={disableMfa} loading={busy} data-testid="mfa-disable-confirm">Turn off</Button></>}>
         <p className="sm">Enter the current code from your authenticator app to confirm.</p>
-        <Field label="Code" htmlFor="mfa-off"><input id="mfa-off" className="in" inputMode="numeric" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} /></Field>
+        <Field label="Code" htmlFor="mfa-off"><input id="mfa-off" className="in" inputMode="numeric" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} data-testid="mfa-off" /></Field>
       </Dialog>
     </>
   );

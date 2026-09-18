@@ -173,7 +173,23 @@ export function AppShell({ children, cols = "", title }: { children: ReactNode; 
                 <Icon name="lock" />
                 Security &amp; devices
               </Link>
-              <button type="button" onClick={() => void signOut().then(() => router.push("/"))}>
+              <button
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    // A client-side router.push("/") after clearing `me` races
+                    // RequireAuth's own effect on whatever auth-required page we're
+                    // currently on (Settings, CRM, Company admin, ...): that effect
+                    // reacts to `me` becoming null and calls router.replace(`/login
+                    // ?next=<current page>`), which reliably wins the race and
+                    // strands the viewer on a login prompt for the page they just
+                    // left instead of the public home page. A hard navigation sidesteps
+                    // the race entirely by discarding that page's React tree first.
+                    await signOut();
+                    window.location.href = "/";
+                  })();
+                }}
+              >
                 <Icon name="logout" />
                 Sign out
               </button>
