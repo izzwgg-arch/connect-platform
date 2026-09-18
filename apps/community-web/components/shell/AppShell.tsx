@@ -126,7 +126,7 @@ export function AppShell({ children, cols = "", title }: { children: ReactNode; 
       </aside>
       <div className="main">
         <header className="top">
-          <button type="button" className="ib" aria-label="Menu" onClick={() => setOpen(true)} style={{ display: "none" }} id="hamburger">
+          <button type="button" className="ib" aria-label="Menu" onClick={() => setOpen(true)} id="hamburger">
             <Icon name="menu" />
           </button>
           <form
