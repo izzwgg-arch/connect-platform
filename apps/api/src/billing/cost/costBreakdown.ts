@@ -86,6 +86,8 @@ export async function buildCostBreakdown(
     complete: periodDays.length > 0 && covered.length === periodDays.length,
   };
   const haveFeed = covered.length > 0;
+  const uncoveredDays = periodDays.filter((d) => !coveredDays.has(d));
+  const isCovered = (day: string) => coveredDays.has(day);
 
   // ── our own records ──────────────────────────────────────────────────────
   const ourCalls: any[] = await db.connectCdr.findMany({
@@ -176,6 +178,7 @@ export async function buildCostBreakdown(
   let ourOutBillableMin = 0;
   let ourInSec = 0;
   let ourInCalls = 0;
+  let ourInBillableMin = 0;
   let ourCnam = 0;
   for (const c of ourCalls) {
     const sec = Number(c.talkSec) || 0;
@@ -188,16 +191,16 @@ export async function buildCostBreakdown(
       const dd = dayRow(day);
       dd.minutes += sec / 60;
       dd.cost += bm * telocallRate;
-    } else {
+    } else if (!isCovered(day)) {
+      // A day the carrier feed has not been pulled for: our own log stands in.
       ourInSec += sec;
       ourInCalls += 1;
+      ourInBillableMin += billableMinutes6s(sec);
       const name = String(c.fromName || "").trim();
       if (name && !/^[\d+\s()-]*$/.test(name)) ourCnam += 1;
-      if (!haveFeed) {
-        const dd = dayRow(day);
-        dd.minutes += sec / 60;
-        dd.cost += billableMinutes6s(sec) * rateOf(rates, "voipms.inbound_min");
-      }
+      const dd = dayRow(day);
+      dd.minutes += sec / 60;
+      dd.cost += billableMinutes6s(sec) * rateOf(rates, "voipms.inbound_min");
     }
   }
   // Calls that fell to the backup trunk are in BOTH logs; take them out of the Telocall pool.
@@ -215,12 +218,13 @@ export async function buildCostBreakdown(
   let ourSmsIn = 0;
   let ourSmsOut = 0;
   let ourMms = 0;
-  if (!haveFeed) {
+  if (uncoveredDays.length > 0) {
     const msgs: any[] = await db.connectChatMessage.findMany({
       where: { tenantId, createdAt: { gte: periodStart, lt: periodEnd }, thread: { type: "SMS" } },
-      select: { direction: true, type: true, attachments: { select: { id: true }, take: 1 } },
+      select: { direction: true, type: true, createdAt: true, attachments: { select: { id: true }, take: 1 } },
     });
     for (const m of msgs) {
+      if (isCovered(ymd(new Date(m.createdAt)))) continue;
       const isMms = (Array.isArray(m.attachments) && m.attachments.length > 0) || (m.type && m.type !== "TEXT");
       if (isMms) ourMms += 1;
       else if (m.direction === "INBOUND") ourSmsIn += 1;
@@ -230,25 +234,30 @@ export async function buildCostBreakdown(
 
   // ── lines ────────────────────────────────────────────────────────────────
   const inboundRate = rateOf(rates, "voipms.inbound_min");
-  const inSec = haveFeed ? agg.inSec : ourInSec;
-  const inCalls = haveFeed ? agg.inCalls : ourInCalls;
-  const inBillableMin = haveFeed ? billableMinutes6s(agg.inSec) : billableMinutes6s(ourInSec);
-  const inCost = haveFeed && agg.inCarrierPriced ? agg.inCost : inBillableMin * inboundRate;
+  const inSec = agg.inSec + ourInSec;
+  const inCalls = agg.inCalls + ourInCalls;
+  const feedInCost = agg.inCarrierPriced ? agg.inCost : billableMinutes6s(agg.inSec) * inboundRate;
+  const inCost = feedInCost + ourInBillableMin * inboundRate;
+  // All days from the carrier → carrier tier; any day from our own log → say so.
+  const allCovered = uncoveredDays.length === 0 && periodDays.length > 0;
+  const coverageNote = allCovered
+    ? "every day from the carrier's own records"
+    : haveFeed
+      ? `${covered.length} of ${periodDays.length} days from the carrier's records, ${uncoveredDays.length} from our own log`
+      : "the carrier feed has not been pulled for these days — our own log";
 
   const calls: CostLine[] = [
     {
       key: "inbound",
       label: "Inbound talk time",
-      note: haveFeed
-        ? `${inCalls.toLocaleString()} answered calls · billed by the carrier in 6-second steps`
-        : `${inCalls.toLocaleString()} answered calls from our own log — the carrier feed has not been pulled for these days`,
+      note: `${inCalls.toLocaleString()} answered calls · 6-second steps · ${coverageNote}`,
       quantity: r2(inSec / 60),
       unit: "min",
-      rate: haveFeed && agg.inCarrierPriced ? null : inboundRate,
+      rate: allCovered && agg.inCarrierPriced ? null : inboundRate,
       rateKey: "voipms.inbound_min",
       carrier: "VoIP.ms",
       cost: r4(inCost),
-      tier: haveFeed && agg.inCarrierPriced ? "CARRIER_CDR" : "OUR_COUNT",
+      tier: allCovered && agg.inCarrierPriced ? "CARRIER_CDR" : "OUR_COUNT",
     },
     {
       key: "outbound_telocall",
@@ -276,11 +285,11 @@ export async function buildCostBreakdown(
     },
   ];
 
-  const smsIn = haveFeed ? agg.smsIn : ourSmsIn;
-  const smsOut = haveFeed ? agg.smsOut : ourSmsOut;
-  const mmsIn = haveFeed ? agg.mmsIn : ourMms;
-  const mmsOut = haveFeed ? agg.mmsOut : 0;
-  const msgTier = haveFeed ? "CARRIER_COUNT" : "OUR_COUNT";
+  const smsIn = agg.smsIn + ourSmsIn;
+  const smsOut = agg.smsOut + ourSmsOut;
+  const mmsIn = agg.mmsIn + ourMms;
+  const mmsOut = agg.mmsOut;
+  const msgTier = allCovered ? "CARRIER_COUNT" : "OUR_COUNT";
   const texting: CostLine[] = [
     { key: "sms_in", label: "Texts received", quantity: smsIn, unit: "msg", rate: smsRate, rateKey: "voipms.sms", carrier: "VoIP.ms", cost: r4(smsIn * smsRate), tier: msgTier },
     { key: "sms_out", label: "Texts sent", quantity: smsOut, unit: "msg", rate: smsRate, rateKey: "voipms.sms", carrier: "VoIP.ms", cost: r4(smsOut * smsRate), tier: msgTier },
@@ -288,21 +297,19 @@ export async function buildCostBreakdown(
     { key: "mms_out", label: "Picture messages sent", quantity: mmsOut, unit: "msg", rate: mmsRate, rateKey: "voipms.mms", carrier: "VoIP.ms", cost: r4(mmsOut * mmsRate), tier: msgTier },
   ];
 
-  const cnam = haveFeed ? agg.cnam : ourCnam;
+  const cnam = agg.cnam + ourCnam;
   const callerId: CostLine[] = [
     {
       key: "cnam_lookup",
       label: "Caller-name lookups on inbound calls (CNAM)",
-      note: haveFeed
-        ? "one lookup per inbound call the carrier logged as 'Doing a CNAM lookup' — its daily 'CNAM Queries' charge is these × the rate"
-        : "counted from our own log (inbound calls that arrived with a name)",
+      note: `one lookup per inbound call the carrier logs as 'Doing a CNAM lookup' (its daily 'CNAM Queries' charge is these × the rate) · ${coverageNote}`,
       quantity: cnam,
       unit: "lookup",
       rate: cnamRate,
       rateKey: "voipms.cnam_lookup",
       carrier: "VoIP.ms",
       cost: r4(cnam * cnamRate),
-      tier: haveFeed ? "CARRIER_COUNT" : "OUR_COUNT",
+      tier: allCovered ? "CARRIER_COUNT" : "OUR_COUNT",
     },
   ];
 
@@ -310,7 +317,7 @@ export async function buildCostBreakdown(
     {
       key: "did_monthly",
       label: "Phone numbers, monthly",
-      note: agg.didFees ? `${agg.didFees} monthly charge${agg.didFees === 1 ? "" : "s"} in this period` : haveFeed ? "no monthly number charge landed in this period" : "carrier feed not pulled for this period",
+      note: agg.didFees ? `${agg.didFees} monthly charge${agg.didFees === 1 ? "" : "s"} in this period` : allCovered ? "no monthly number charge landed in this period" : "monthly charges are only known from the carrier feed — not every day of this period is pulled",
       quantity: agg.didFees,
       unit: "number/mo",
       rate: null,

@@ -1,5 +1,14 @@
 # Tests run
 
+## Customer cost breakdown (office-only "what this customer cost us") — 2026-09-18
+
+- apps/api NEW `src/billing/cost/voipmsFeed.test.ts` + `costBreakdown.test.ts` **13/13**: parsers on the REAL VoIP.ms row shapes (getCDR incl. `call_logs` sub-account + "Doing a CNAM lookup", getSMS/getMMS, getTransactionHistory DID/E911/"CNAM Queries"); sync = one day pulled, tenants resolved by number, re-pull inserts 0, failing day recorded on the cursor; breakdown WITH the feed (carrier-priced inbound, CNAM/texts = carrier count × rate, Telocall = our minutes × rate minus backup-trunk minutes, fees from transactions) and WITHOUT it (our tables, `OUR_COUNT`); rate versioning by effective date; source guard (no pdf/email/public-pay import, no `getSubAccounts`). Registered in the api `test` script.
+- api `npx tsc --noEmit`: 0 errors in `src/billing/cost/*`, `billing/routes.ts`, my `server.ts` lines; the 52 listed errors are pre-existing (delivery/ops/mfa/…). Portal `tsc`: 0 errors in the billing screens.
+- Live, read-only probes inside `app-api-1` against VoIP.ms (2026-09-17 data): CNAM Queries transaction −4.1520 = 519 CDR rows with a CNAM lookup × 0.008 — reconciles exactly.
+- DEPLOYED 2026-09-18: api + portal `6d0fa490` (both `.build-commit` verified, api healthy, migration `20260918200000` applied by the deploy, `/admin/billing/cost/rates` 401 unauthenticated / 200 as SUPER_ADMIN in-container, portal chunks carry both cards, pages 200). Feed pulling: boot run (14 days) + Aug 3–Sep 3 backfill, 17,566+ records.
+- NOT proven: a human opening the card; the full Aug 3–Sep 3 backfill was still running at handoff (see the summary file for the acceptance numbers if they were captured).
+
+
 ## Loopcom Computer Control — 2026-09-18
 
 - **Deterministic layers, TEN consecutive runs each, zero failures.** desktop `computerControl.test.ts` + `computerControlSecurity.test.ts` + `screenControl.test.ts` + `coworkerHands.test.ts` **68/68 × 10**; agent `multiDesktop.test.ts` + `toolDiscovery.test.ts` + `desktopLink.test.ts` + `stepDescriber.test.ts` **41/41 × 10**. No flakes. (Two flakes found earlier on the way were made deterministic: a same-millisecond `hello` tie, and a poll-order race.)

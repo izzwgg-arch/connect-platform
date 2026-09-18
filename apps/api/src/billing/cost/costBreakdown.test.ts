@@ -63,8 +63,10 @@ test("6-second billing steps", async () => {
   assert.equal(billableMinutes6s(0), 0);
 });
 
-test("with the carrier feed: inbound is carrier-priced, CNAM/texts are carrier counts × rate, Telocall is our minutes × rate, fees come from transactions", async () => {
+test("with the carrier feed on every day: inbound is carrier-priced, CNAM/texts are carrier counts × rate, Telocall is our minutes × rate, fees come from transactions", async () => {
   const { buildCostBreakdown, billableMinutes6s, SHARED_OUTBOUND_TRUNK_LABEL, loadRates } = await load();
+  const S = new Date("2026-08-10T00:00:00Z");
+  const E = new Date("2026-08-14T00:00:00Z"); // 4 days: 10, 11, 12, 13
   const feed = [
     rec("CALL_IN", "2026-08-10", { quantity: 49, cost: 0.0081 }),
     rec("CALL_IN", "2026-08-10", { quantity: 0, cost: 0 }), // no-answer row: not a call
@@ -73,25 +75,27 @@ test("with the carrier feed: inbound is carrier-priced, CNAM/texts are carrier c
     rec("SMS_IN", "2026-08-11"),
     rec("MMS_IN", "2026-08-11"),
     rec("SMS_OUT", "2026-08-12"),
-    rec("DID_MONTHLY", "2026-08-19", { cost: 1.1 }),
-    rec("E911_MONTHLY", "2026-08-19", { cost: 1.5 }),
+    rec("DID_MONTHLY", "2026-08-12", { cost: 1.1 }),
+    rec("E911_MONTHLY", "2026-08-12", { cost: 1.5 }),
     rec("CNAM_DAILY", "2026-08-10", { tenantId: null, numberE164: null, cost: 4.152 }),
-    rec("OTHER", "2026-08-20", { cost: 25, description: "Port-in fee: 8452449666" }),
+    rec("OTHER", "2026-08-13", { cost: 25, description: "Port-in fee: 8452449666" }),
     // a call that fell to the VoIP.ms backup trunk: in BOTH logs
-    rec("CALL_OUT", "2026-08-15", { quantity: 120, cost: 0.02 }),
+    rec("CALL_OUT", "2026-08-13", { quantity: 120, cost: 0.02 }),
   ];
   const cdr = [
-    { tenantId: T, direction: "outgoing", disposition: "answered", talkSec: 120, startedAt: new Date("2026-08-15T10:00:00Z"), fromName: "" },
-    { tenantId: T, direction: "outgoing", disposition: "answered", talkSec: 61, startedAt: new Date("2026-08-16T10:00:00Z"), fromName: "" },
+    { tenantId: T, direction: "outgoing", disposition: "answered", talkSec: 120, startedAt: new Date("2026-08-13T10:00:00Z"), fromName: "" },
+    { tenantId: T, direction: "outgoing", disposition: "answered", talkSec: 61, startedAt: new Date("2026-08-11T10:00:00Z"), fromName: "" },
+    // our own copy of the inbound call — a covered day, so the carrier's row wins and this is NOT double counted
     { tenantId: T, direction: "incoming", disposition: "answered", talkSec: 49, startedAt: new Date("2026-08-10T10:00:00Z"), fromName: "SOME CALLER" },
   ];
   const db = fakeDb({ feed, cdr });
-  const rates = await loadRates(db as any, P1);
-  const b = await buildCostBreakdown(db as any, { tenantId: T, periodStart: P0, periodEnd: P1, rates, now: new Date("2026-09-18T00:00:00Z") });
+  const rates = await loadRates(db as any, E);
+  const b = await buildCostBreakdown(db as any, { tenantId: T, periodStart: S, periodEnd: E, rates, now: new Date("2026-09-18T00:00:00Z") });
 
   assert.equal(b.periodClosed, true);
-  assert.equal(b.feed.complete, false, "only some days of the period have any feed rows");
+  assert.equal(b.feed.complete, true);
   assert.equal(b.feed.coveredFrom, "2026-08-10");
+  assert.equal(b.feed.coveredTo, "2026-08-13");
 
   const line = (g: string, k: string) => b.groups.find((x) => x.key === g)!.lines.find((l) => l.key === k)!;
   const inbound = line("calls", "inbound");
@@ -117,6 +121,7 @@ test("with the carrier feed: inbound is carrier-priced, CNAM/texts are carrier c
   assert.equal(line("texting", "sms_in").quantity, 1);
   assert.equal(line("texting", "sms_out").quantity, 1);
   assert.equal(line("texting", "mms_in").quantity, 1);
+  assert.equal(line("texting", "sms_in").tier, "CARRIER_COUNT");
   assert.equal(b.groups.find((g) => g.key === "texting")!.cost, 0.035);
 
   assert.equal(line("numbers", "did_monthly").cost, 1.1);
@@ -133,7 +138,46 @@ test("with the carrier feed: inbound is carrier-priced, CNAM/texts are carrier c
   const main = b.byNumber.find((n) => n.numberE164 === "+18452449666")!;
   assert.equal(main.cnamLookups, 2);
   assert.equal(main.monthlyFees, 2.6);
-  assert.ok(b.byDay.some((d) => d.day === "2026-08-15" && d.cost > 0));
+  assert.ok(b.byDay.some((d) => d.day === "2026-08-13" && d.cost > 0));
+});
+
+test("a period the feed only partly covers is HYBRID per day: uncovered days come from our own log, the line says the split and drops to OUR_COUNT", async () => {
+  const { buildCostBreakdown, loadRates } = await load();
+  const S = new Date("2026-08-10T00:00:00Z");
+  const E = new Date("2026-08-14T00:00:00Z"); // 10, 11, 12 covered; 13 not
+  const feed = [
+    rec("CALL_IN", "2026-08-10", { quantity: 60, cost: 0.009 }),
+    rec("CNAM_LOOKUP", "2026-08-10"),
+    rec("SMS_IN", "2026-08-11"),
+    rec("CNAM_DAILY", "2026-08-12", { tenantId: null, numberE164: null, cost: 1 }),
+  ];
+  const cdr = [
+    { tenantId: T, direction: "incoming", disposition: "answered", talkSec: 60, startedAt: new Date("2026-08-10T10:00:00Z"), fromName: "COVERED DAY" }, // ignored: carrier has it
+    { tenantId: T, direction: "incoming", disposition: "answered", talkSec: 120, startedAt: new Date("2026-08-13T10:00:00Z"), fromName: "UNCOVERED DAY" },
+  ];
+  const msgs = [
+    { tenantId: T, direction: "INBOUND", type: "TEXT", attachments: [], createdAt: new Date("2026-08-11T09:00:00Z") }, // covered day: carrier count wins
+    { tenantId: T, direction: "OUTBOUND", type: "TEXT", attachments: [], createdAt: new Date("2026-08-13T09:00:00Z") },
+  ];
+  const db = fakeDb({ feed, cdr, msgs });
+  const rates = await loadRates(db as any, E);
+  const b = await buildCostBreakdown(db as any, { tenantId: T, periodStart: S, periodEnd: E, rates, now: new Date("2026-09-18T00:00:00Z") });
+  assert.equal(b.feed.complete, false);
+  assert.equal(b.feed.coveredFrom, "2026-08-10");
+  assert.equal(b.feed.coveredTo, "2026-08-12");
+  const line = (g: string, k: string) => b.groups.find((x) => x.key === g)!.lines.find((l) => l.key === k)!;
+  const inbound = line("calls", "inbound");
+  assert.equal(inbound.tier, "OUR_COUNT");
+  assert.equal(inbound.quantity, 3, "1 min from the carrier + 2 min from our log");
+  assert.equal(inbound.cost, 0.027);
+  assert.match(inbound.note!, /3 of 4 days from the carrier's records, 1 from our own log/);
+  assert.equal(b.tiles.inboundCalls, 2);
+  const cnam = line("caller_id", "cnam_lookup");
+  assert.equal(cnam.quantity, 2, "1 carrier lookup + 1 named call on the uncovered day");
+  assert.equal(cnam.tier, "OUR_COUNT");
+  assert.equal(line("texting", "sms_in").quantity, 1);
+  assert.equal(line("texting", "sms_out").quantity, 1, "the outbound text on the uncovered day is counted from our table");
+  assert.equal(line("texting", "sms_out").tier, "OUR_COUNT");
 });
 
 test("without the carrier feed: everything falls back to our own tables and says OUR_COUNT; the feed is reported as absent", async () => {
