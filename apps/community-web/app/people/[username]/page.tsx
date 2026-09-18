@@ -6,6 +6,8 @@ import { useParams, useRouter } from "next/navigation";
 import { api, ApiError, mediaUrl, newIdempotencyKey, trackEvent } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { AppShell } from "@/components/shell/AppShell";
+import { AskIntroDialog } from "@/components/intros/AskIntroDialog";
+import { NoteEditor } from "@/components/crm/NoteEditor";
 import { Avatar, Button, Chip, Empty, Icon, Skeleton, VChip, fmtDate, useToast } from "@/components/ui";
 import { ProfileCard, type PersonCardData } from "@/components/profile/ProfileCard";
 import "@/components/profile/profile.css";
@@ -474,6 +476,20 @@ export default function PublicProfilePage() {
                 </div>
               </div>
             </div>
+            {data.relationship.degree !== 1 ? (
+              <div style={{ marginTop: 10 }}>
+                <AskIntroDialog targetPersonId={data.person.id} targetName={data.person.name} triggerLabel="Request introduction" />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {me && !isOwner ? (
+          <div className="card">
+            <div className="ct">
+              Private notes <span className="more dim" style={{ fontWeight: 500 }}><Icon name="lock" /> Only you</span>
+            </div>
+            <NoteEditor targetPersonId={data.person.id} />
           </div>
         ) : null}
 
