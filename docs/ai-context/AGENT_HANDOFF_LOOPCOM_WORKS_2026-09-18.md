@@ -6,7 +6,8 @@ Index line: `CLAUDE.md` → HANDOFF INDEX. Memory: `loopcom-works-project`.
 **Status at the end of this task:** inventory DONE (eight audit reports under
 `docs/ai-context/loopcom-works-audit/`), architecture DECIDED (below, with the
 three decisions that are Izzy's to confirm), mockups PUBLISHED and awaiting Izzy's
-review, repo layout DONE. ⛔ **Nothing in the product is changed yet.** The Works
+review, repo layout DONE. **Evening update: Izzy said "build it" — the looks-only
+reskin + rebrand is DONE and click-through-proven, see §8.** Before that, the Works
 folder is a verbatim copy of `trim pro 2` @ `loopcom` `d380533` (only the legacy
 TrimPro DB password was scrubbed from six deploy/diag scripts, and a `.gitattributes`
 + `.gitignore` were added). Izzy asked for mockups before any UI conversion; the
@@ -479,3 +480,130 @@ Copied from A8 with the lead's decisions:
   boards are 390 px real. Every value in it traces to `A5-connect-design-system.md`;
   if the portal's tokens change, regenerate from `part1..4.html` in the session
   scratchpad (not preserved) — or edit `mockups-v1.html` directly.
+
+---
+
+## 8. Phase 2 executed — the looks-only reskin + rebrand (2026-09-18, evening)
+
+Izzy, mid-task: *"Build it and then start the dev server."* then *"Make sure every
+button, every click, everything works. No change on the code, just looks."* So this
+pass changed appearance, assets and customer-facing words and **nothing else**: no
+route, query, handler, permission, workflow or schema was touched. The security
+fixes (§3.8) and the Loopcom integration (§3.2–3.7) wait for his next go.
+
+### 8.1 How the whole app changed colour without touching 150 pages
+
+TrimPro's pages are written in plain Tailwind colour utilities (`bg-white`,
+`text-gray-900`, `border-gray-200`, `bg-blue-600`, `bg-green-50` …, 3,990
+occurrences in 153 files). Rewriting them would have been 153 JSX edits with 153
+chances to break a click. Instead:
+
+- `tailwind.config.ts` re-points every hue the app uses (`gray/slate/zinc/neutral/
+  stone`, `blue`, and 16 chromatic hues) at CSS variables
+  `--lw-c-<hue>-<shade>` (RGB triplets, so `/50` opacity modifiers still work).
+- `lib/branding/loopcom-palette.ts` defines those variables for BOTH themes: the
+  neutral scale is the portal's slate-based light theme / navy dark theme
+  (monotonic, so "darker than the card" stays darker than the card in dark mode);
+  `blue-500/600` are exactly the portal's `--accent`/`--accent-2`; chromatic hues
+  invert shade-for-shade in dark (a `bg-green-50` chip becomes a deep-green plate,
+  its `text-green-800` becomes light green — same contrast, other ground). A
+  Tailwind plugin emits them under `:root` / `.dark`.
+- `white` is NOT remapped (`text-white` sits on accent buttons and must stay
+  white); `bg-white` cards are flipped in dark by `.dark .bg-white` rules in
+  `app/globals.css`, plus guards for `bg-gray-900`/`bg-slate-800` plates that
+  carried white text.
+- `app/globals.css`: the shadcn variables (`--background`, `--primary`, `--ring`,
+  `--radius` 10px …) and the tenant-overridable `--brand-*` defaults now hold the
+  portal's values (light on `:root`, dark on `.dark`); headings use
+  `--brand-heading-color` (text colour) instead of the old slate primary; the
+  `bg-blue-600` button override paints the portal's accent gradient. Shell
+  primitives `.lw-topbar`, `.lw-sidebar`, `.lw-nav-link` (36px, 10px radius, 3px
+  accent left rail, 30px icon well), `.lw-icon-btn`, `.lw-login*`, `.lw-btn-primary`,
+  `.lw-works-tag` are copies of the portal's `.topbar/.console-nav/.drawer-nav-link/
+  .icon-btn/.lc-login*` rules.
+- Dark mode: `next-themes` (already a dependency, never wired) in `app/providers.tsx`
+  (`class` strategy, key `lw-theme`, light by default, never follows the OS — the
+  portal's rule); `components/layout/ThemeToggle.tsx` (Sun/Moon) in the sidebar
+  footer and the portal's segmented Light/Dark on the login page.
+- Fonts: Inter was already loaded via `next/font` — kept.
+
+### 8.2 Files changed by hand (all class strings / assets / copy)
+
+`components/ui/{button,card,input,textarea,label,checkbox,dialog,select,tabs}.tsx`,
+`dropdown-styles.ts`, `ViewModeSelector.tsx` (portal primitives: 10px radius, panel
+inputs, underline tabs, accent-soft highlighted select items, 14px-radius modal on
+the portal's `rgba(3,8,15,.62)` backdrop); `components/layout/sidebar.tsx` (light
+panel sidebar, 264/72px, nav links → `lw-nav-link`, theme toggle beside Logout —
+every handler, `PermissionGuard`, `NewBadge` and `NotificationBell` untouched);
+`components/layout/dashboard-layout.tsx` (topbar → `lw-topbar`, footer copy);
+`components/branding/TrimProLogo.tsx` + `TrimProMark.tsx` (same exports — 8
+importers — now render `/brand/loopcom-wordmark-560.png` + the "Works" tag, or the
+tenant's uploaded logo when one exists); `app/layout.tsx` (metadata, icons, OG,
+theme-color); `public/manifest.webmanifest`, `public/favicon.ico`, `public/brand/*`
+(Signal Core kit); `app/auth/{login,forgot-password,reset-password,set-password}`
+(portal login card); `app/(public)/layout.tsx`; `lib/email/shell.ts` +
+`templates/statement.ts` + 15 email/statement/PDF/preview files (TrimPro navy+tan
+→ Loopcom dark palette, colour literals only); `app/api/public/branding/route.ts`
+(mobile default palette + name); `lib/branding/pdf.ts` (`DEFAULT_ACCENT` #2563eb);
+`lib/branding/theme.ts` (email default button/primary #2563eb);
+`components/notifications/NotificationBell.tsx` (icon colours + compact size);
+`middleware.ts` (canonical host `works.loopcom.net`, env `CANONICAL_APP_HOST`); the
+`#2E4A59` sweep across 17 files (`bg-[#2E4A59]`→`bg-primary`, chart fills →
+`var(--brand-primary-color)`); `tests/branding-overrides.test.ts` (one expectation:
+default button colour).
+
+Two Sonnet agents, fenced to text/asset edits, did: (a) the customer-facing string
+sweep from audit A1 — 59 files, `Trim Pro`/`TrimPro` → `LoopCom Works`,
+`support@trimprony.com` → `support@loopcom.net`, Terms/Privacy party → `Loopcom LLC`,
+PDF fallback-logo SVG text + `pdf-templates.ts` alt/body text, all email
+`companyName`/`fromName` defaults; (b) the mobile app — `apps/mobile/app.json` name,
+permission strings, splash/adaptive colours `#0c1218`, the four asset PNGs from the
+kit + `assets/loopcom-wordmark.png`, `src/theme/tokens.ts`, `BrandingContext.tsx`
+defaults, the login screen logo (image instead of text), `RootNavigator` titles,
+notification channel name, exact-match brand hex swaps in 9 screens. Both left
+bundle ids, URL schemes, domains, storage keys, identifiers and `qbo-sync.ts` alone.
+The lead diffed every file against the pristine import (`diff -r` worktree vs dev
+copy) and spot-read the larger edits.
+
+### 8.3 What stays TrimPro on purpose (not looks, or someone else's decision)
+
+`https://app.trimprony.com` literals (~55, deploy-phase env/`public-url.ts` work),
+`noreply@trimpro.com` sender, `trimpro.*` localStorage keys, `trimpro://` deep-link
+schemes, `com.trimpro.field` bundle ids + Firebase, `TrimProMobile` user-agent,
+`lib/services/qbo-sync.ts` item names (written into customers' QuickBooks), the
+component export names, code comments, the legacy root `*.md` files.
+
+### 8.4 Proof
+
+- `next build` (production): ✓ Compiled successfully, 382 routes, BUILD_ID
+  `FmKMrwI6_G4-rIUUX29BL`. `tsc --noEmit`: 207 errors, all pre-existing (same set as
+  before this pass; none in touched files). `node:test` suites (`npx tsx --test
+  tests/*.test.ts` — they are node:test, not vitest as the Works CLAUDE.md said):
+  **154/156 pass**, the 2 failures (`voice note boundary drift`,
+  `qbo-line-amounts` needs vitest) fail identically on the untouched import.
+- **Click-through E2E** against the production build (`next start -p 3002`, reached
+  as `http://works.localtest.me:3002` because `middleware.ts` redirects
+  localhost/IP hosts in production — that is TrimPro's canonical-host rule, kept):
+  real form login → dashboard; every one of the 25 sidebar pages opens with content
+  and zero page errors; create a client through the real form → detail shows it →
+  edit → reload shows the edit; estimate/invoice/PO detail pages render and their
+  PDFs come back `200 application/pdf` (72/82/67 KB); job detail; theme toggle
+  persists across reload; sidebar collapse persists; global search finds the new
+  client; logout clears the token and lands on the login page. **Run 1: 40/41 pass**
+  (the one fail was the test's own assertion text — search titles results by company
+  name; fixed). Script: `Loopcom works/tests/e2e/reskin-clicks.js`. The
+  20-iteration run is recorded in `TESTS_RUN.md`.
+- Screenshots (headless Chrome 145, 1366×860) of login, dashboard, clients, client
+  detail, invoice detail, settings in light + dark — reviewed by the lead; the only
+  defect found (bell overlapping the "Works" tag in the sidebar header) was fixed.
+- ⏳ NOT PROVEN: Izzy's own eyes on it; mobile app build (no EAS run); email/PDF
+  rendering by a human (PDF endpoints return valid PDFs; their look was not
+  screenshotted); every page in dark mode (6 reviewed, 25 in light).
+
+### 8.5 Running it
+
+- Dev: `npm run dev:3001` in `Loopcom works/` → `http://localhost:3001` (port 3000
+  is taken by another TrimPro dev server on this machine). Seed:
+  `npx tsx scripts/seed-dev-demo.ts` (local DB only) → `admin@trimpro.com / admin123`.
+- Prod build: `npm run build && npx next start -p 3002` → open
+  `http://works.localtest.me:3002` (NOT localhost — see the middleware note).

@@ -1,4 +1,4 @@
-# ⛔⛔ AGENT HANDOFF — LOOPCOM WORKS (TrimPro → Loopcom product): inventory, architecture, mockups, repo layout (2026-09-18) — READ FIRST before touching `Loopcom works/`, the `works/loopcom-works` branch, `apps/agent/src/conversation/routes.ts`, or anything named `WorksIntegration` / `/api/v1/works/*`
+# ⛔⛔ AGENT HANDOFF — LOOPCOM WORKS (TrimPro → Loopcom product): inventory, architecture, mockups, repo layout, and the looks-only reskin (2026-09-18) — READ FIRST before touching `Loopcom works/`, the `works/loopcom-works` branch, `apps/agent/src/conversation/routes.ts`, or anything named `WorksIntegration` / `/api/v1/works/*`
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_WORKS_2026-09-18.md`**. Audits (8, verbatim):
 `docs/ai-context/loopcom-works-audit/`. Mockups: https://claude.ai/artifact/LZvf79qD8f5aF3nfQ55nDy
@@ -52,7 +52,35 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_WORKS_2026-09-18.md`**. A
   grouped vs flat sidebar); keep `com.trimpro.field` or new bundle ids; legal entity + support/sender
   addresses; provision the server + DNS; rename `Loopcom works/` → `loopcom-works/`; Works' own
   Sola/Cardknox merchant account.
-- ⛔ **NOT PROVEN / NOT DONE:** nothing in the product changed; no test suite run; no server exists;
+- **PHASE 2 DONE the same evening — the looks-only reskin + rebrand (Izzy: "Build it and then
+  start the dev server" / "No change on the code, just looks. Every button, every click must
+  work").** How: instead of editing 153 pages, `tailwind.config.ts` re-points every Tailwind
+  hue at CSS vars from `lib/branding/loopcom-palette.ts` (portal light/dark values; neutrals as
+  a monotonic surface scale, chromatic hues inverted shade-for-shade in dark; `white` kept for
+  `text-white`, `bg-white` flipped by `.dark .bg-white`), `app/globals.css` maps shadcn +
+  `--brand-*` defaults onto the portal tokens and adds the shell primitives (`lw-topbar`,
+  `lw-sidebar`, `lw-nav-link`, `lw-login*`), `next-themes` wired (`lw-theme`, class strategy,
+  Sun/Moon in the sidebar footer + segmented toggle on login), `components/ui/*` restyled (class
+  strings only), sidebar/topbar/login/auth/public layout restyled (handlers untouched), logo
+  components keep their exports but render `/brand/loopcom-wordmark-560.png` + a "Works" tag,
+  favicon/manifest/metadata/OG from the Signal Core kit, email shell + statement/PDF colours to
+  the Loopcom palette, `middleware.ts` canonical host → `works.loopcom.net` (`CANONICAL_APP_HOST`).
+  Two fenced Sonnet agents did the text-only sweeps: 59 web files (`Trim Pro`→`LoopCom Works`,
+  `support@loopcom.net`, Terms/Privacy party `Loopcom LLC`, PDF fallback-logo SVG text, email
+  defaults) and the Expo app (`app.json` name/permission strings/splash colours, Signal Core
+  icon+splash+adaptive+favicon, `loopcom-wordmark.png` on login, theme tokens, 9 screens'
+  brand hexes) — bundle ids/schemes/domains/storage keys/`qbo-sync.ts` untouched. ✅ PROOF:
+  production `next build` ✓ (382 routes); tsc 207 = baseline; node:test 154/156 (2 fail on the
+  untouched import too); **click-through E2E on the prod build: form login → 25 sidebar pages
+  (content, 0 page errors) → create + edit client through the real forms → estimate/invoice/PO
+  detail + 200 `application/pdf` → theme + collapse persist → search → logout = 40/41 (the 1
+  was the test's own assertion; fixed)**, 20-iteration run in `TESTS_RUN.md`; light+dark
+  screenshots of login/dashboard/clients/client/invoice/settings reviewed. ⛔ prod build
+  redirects localhost/IP hosts (TrimPro's canonical rule) — test it as
+  `http://works.localtest.me:3002`; dev is `npm run dev:3001` (3000 is another TrimPro dev
+  server). ⏳ NOT PROVEN: Izzy's eyes; mobile build; dark on all 96 pages (6 reviewed); email
+  look by a human. Security fixes + Loopcom integration still wait for his go.
+- ⛔ **NOT PROVEN / NOT DONE (phase 0):** no server exists;
   no SSO/API/agent code written; mockups reviewed by nobody yet. Browser 1 (office Chrome, signed in)
   froze its renderer on the portal `/dashboard` ("Application error") — portal issue, noted only.
 - **Build order:** phases 1–8 in handoff §6 (security → brand/reskin → server → Connect API/SSO →

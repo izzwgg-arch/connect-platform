@@ -1,5 +1,15 @@
 # Tests run
 
+## LoopCom Works — looks-only reskin + rebrand — 2026-09-18 (evening)
+
+- Production build `npm run build` in `Loopcom works/`: ✓ Compiled successfully, 382 routes, BUILD_ID `FmKMrwI6_G4-rIUUX29BL` (two pre-existing `Dynamic server usage` notices from TrimPro's public routes, unchanged).
+- `npx tsc --noEmit`: 207 errors — identical to the pre-pass baseline, none in any touched file.
+- Unit: the suites are `node:test`, run as `npx tsx --test tests/*.test.ts` (NOT vitest, whatever the Works CLAUDE.md said): **154/156 pass**. The 2 failures (`voice note boundary has no drift`, `tests/qbo-line-amounts.test.ts` imports vitest) fail identically on the untouched import in the worktree. One expectation updated in `tests/branding-overrides.test.ts` (default email button colour is now the Loopcom accent-2).
+- **Click-through E2E, production build** (`next start -p 3002`, reached as `http://works.localtest.me:3002` — localhost/IP hosts are redirected by TrimPro's canonical-host middleware in production; kept): `Loopcom works/tests/e2e/reskin-clicks.js`, headless Chrome 145, 1366×860, seeded local DB (`admin@trimpro.com`). Steps: real form login → dashboard; all 25 sidebar pages open with content and 0 page errors; create a client via the real form → detail shows it; edit → reload shows the edit; estimate/invoice/PO/job detail render; estimate/invoice/PO PDFs return 200 `application/pdf` (72/82/67 KB); theme toggle persists across reload; sidebar collapse persists (72 px rail); global search finds the new client; logout clears the token and lands on /auth/login. **Run 1: 40/41** — the single fail was the test asserting the client *name* while search titles results by *company*; assertion fixed. **20-iteration run: see the follow-up entry below (running at handoff time).**
+- Screenshots (`tests/e2e/screenshot-pages.js`): login, dashboard, clients, client detail, invoice detail, settings — light AND dark — reviewed by the lead. One defect found and fixed (notification bell overlapping the "Works" tag in the sidebar header).
+- Mobile: agent-reported `npx tsc --noEmit` in `apps/mobile` = 26 errors before and after (same set). No EAS/Expo build was run — NOT proven on a device.
+- NOT proven: a human clicking through; dark mode on the 90 pages not screenshotted; the rendered look of emails/PDFs (only that PDFs are valid).
+
 ## LoopCom Works — inventory, architecture, mockups — 2026-09-18
 
 - No product code changed; **no test suite run** (the Works copy's `tests/*.test.ts` were not executed — nothing to prove yet).
