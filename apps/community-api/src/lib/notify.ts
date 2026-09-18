@@ -101,9 +101,10 @@ export async function notify(db: Db, input: NotifyInput) {
       await db.notification.update({ where: { id: row.id }, data: { emailedAt: new Date() } });
     }
   }
-  if (p.push) {
-    // Push transport (FCM/APNs) plugs in via deviceTokens; queued here, sent by the push worker.
-    await db.notification.update({ where: { id: row.id }, data: { pushedAt: null } });
+  // pushedAt null = waiting for the push.deliver job (lib/push.ts); a class the
+  // person muted for push is stamped immediately so the job never picks it up.
+  if (!p.push) {
+    row = await db.notification.update({ where: { id: row.id }, data: { pushedAt: new Date() } });
   }
   return row;
 }

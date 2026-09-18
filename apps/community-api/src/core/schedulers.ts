@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { db as getDb, type Db } from "../db.js";
 import { sweepIdempotencyKeys } from "../lib/idempotency.js";
 import { notify } from "../lib/notify.js";
+import { deliverPush } from "../lib/push.js";
 
 /**
  * In-process schedulers (one api instance runs them; set COMMUNITY_SCHEDULERS=0
@@ -15,6 +16,7 @@ export const jobs: Job[] = [
   { name: "reminders.due", everyMs: 60_000, run: fireDueReminders },
   { name: "analytics.rollup", everyMs: 10 * 60_000, run: rollupAnalytics },
   { name: "codes.sweep", everyMs: 30 * 60_000, run: sweepCodes },
+  { name: "push.deliver", everyMs: 30_000, run: (db) => deliverPush(db) },
 ];
 
 /** Domains register extra jobs (scheduled posts, RFQ closing, event reminders). */
