@@ -703,3 +703,23 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
 - R29 (Grandstream robot family + Yiddish + mic): `apps/desktop` `node --import tsx --test src/phoneSetup/grandstreamWebRobot.test.ts src/phoneSetup/phoneWebRobot.test.ts` — 58/58 (11 new, fake GXP2170 incl. the GDMS-claimed no-op refused `save_not_verified`); `apps/api` laybelLanguage 8/8 + deskPhoneRoutes/RouteOrder 64/64; `apps/portal` setupDriver + guidedFlow 64/64; tsc clean api/portal/desktop.
 - R30 (first walk fixes): `apps/portal` guidedFlow 12/12 (+1: O→0, MAC label stripped); `apps/api` laybelGuide 14/14; portal tsc clean.
 - R31 (second walk): `apps/api` effectiveUser (real CUID/slug shapes) + laybelGuide + deskPhoneRoutes — 75/75; api + portal tsc clean.
+
+## 2026-09-18 — Yiddish training runs + bulletin gold
+
+| suite | result |
+|---|---|
+| `apps/api` yiddishCorpus (`src/yiddishCorpus/*.test.ts`) | **298 / 299** — the 1 failure is the pre-existing source-reading guard on `routes.ts` (file untouched today, fails at HEAD too) |
+| bulletin trio (`bulletinText`, `bulletinAlign`, `bulletinIngest`) | **29 / 29** — NEW |
+| `scripts/yiddish-finetune` (`kaggle-run`, `watch-training`, `build-dataset`, `report-state`) | **70 / 70** (2 NEW in kaggle-run, 4 in watch-training) |
+
+New guards, each replaying a real 2026-09-18 failure:
+- `kernelPush mounts the CODE dataset as well as the data dataset` — the run that executed a stale `train.py`.
+- `a refused dataset source fails the push instead of burning a GPU session` — `kaggle kernels push` exits 0 while reporting it dropped the dataset.
+- `the reported error is the ROOT cause, not papermill's re-raise of it` — the log tail is always the wrapper.
+- `the OLDER layout, with the body and no content_block wrapper, is harvested too` — the parser miss that lost 70% of the bulletin archive as "empty pages".
+- `a paragraph the reader SKIPPED is dropped, never invented into the audio` — the 97%-verbatim hazard.
+- `the raw article is stored UNUSABLE and only aligned spans carry timing`.
+
+Live, not tests: bulletin harvest 3,227 articles / 324 pages / 0 empty; agreement measured over the
+98 bulletins that have ASR (median 0.636 — see the handoff for why that number is our ASR's error
+rate, not the article's); Kaggle training run 7 RUNNING past 25 minutes after four runs died inside 6.

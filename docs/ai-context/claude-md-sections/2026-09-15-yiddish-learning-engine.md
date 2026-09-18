@@ -289,3 +289,58 @@ Full record: parent handoff §15 + `AGENT_HANDOFF_YIDDISH_WHISPER_FINETUNE_2026-
   credits left, Studio asleep, no card). TRAP: two Chromes connected (two offices) — select the browser
   first. Remaining for learning: Dell = labelling machine (bootstrap ready), the gold-review hour.
 
+
+
+## 2026-09-18 — training actually runs, and the first labels the model did not write
+
+**Training (Kaggle free GPU).** Four consecutive runs died before a single optimizer step;
+run 7 is the first to get past it. What each one was, because every one of them is a trap
+that will be walked into again:
+
+1. **v4 — the dataset was never attached.** `kaggle kernels push` exits 0 and prints
+   "Kernel version N successfully pushed" while printing, above it, *"The following are not
+   valid dataset sources and could not be added to the kernel"*. It then runs with no data.
+   Cause: the dataset was still PROCESSING one second after a 2 GB upload. ✅ `kernelPush`
+   now throws on that line (`assertDatasetSourcesAttached`).
+2. **v5 — it ran a STALE `train.py`.** The code and data are split into two Kaggle datasets
+   so a one-line fix re-versions in 20 s instead of re-uploading 2 GB. The code dataset was
+   pushed but **never added to `kernel-metadata.json` `dataset_sources`**, so the notebook
+   fell back to the copy of `train.py` sitting inside the DATA set and ran a bug that had
+   been fixed locally hours earlier. ✅ `kernelPush` always mounts
+   `loopcom-yiddish-whisper-code` now (`DEFAULT_CODE_DATASET_SLUG`), test-guarded.
+3. **v6 — `dtype=` vs `torch_dtype=`.** The kwarg was renamed across transformers versions;
+   Kaggle's image takes the old name. ✅ `train.py` tries both.
+4. **v7 — LoRA + gradient checkpointing severed the graph** (*"element 0 of tensors does not
+   require grad"*). ✅ `model.enable_input_require_grads()` + `use_reentrant: False`.
+
+⛔ **Two process bugs cost more than any of those.** The `relaunch-with-reporting.sh`
+watcher counted live orchestrators with a PowerShell filter whose own command line contains
+the string it searches for — so it **always matched itself**, never reached 0, and sat for
+three hours without relaunching anything. And the orchestrator was relaunched with an
+**empty `DATABASE_URL`**, because the runner's `.env` lives with the INSTALLED runner
+(`~/LoopcomYiddishRunner/.env`), not in the repo — the only symptom was one `grep: ... No
+such file` line. ✅ `loadRunnerEnv()` now tries the installed runner first and all four
+callers use it; the relaunch script refuses to start a blind orchestrator.
+
+✅ **`scripts/yiddish-finetune/watch-training.ts`** polls the kernel and writes the real
+outcome to `YcPipelineState`, with the ROOT-CAUSE lines from the log — the tail of a Kaggle
+log is always papermill re-raising a subprocess error, which is true and useless.
+⛔ Before it, the portal said "Training kernel running on Kaggle" through three dead runs.
+
+**State:** training run 7 RUNNING past 12 minutes (all four earlier runs died inside 6);
+labelling batch `2026-09-18-a` (195 files, 59.8 h) RUNNING on a second free GPU; both report
+live into `YcPipelineState`, so `/admin/yiddish-learning/pipeline` shows them.
+⏳ **No trained model exists yet.** Nothing has finished.
+
+**Bulletin gold — the first labels the model did not write.** Izzy found that Yiddish24's
+בולעטין section types out the same story it records. Every one of our 44,176 labels so far
+is our own model's output, which cannot fix a word the model gets wrong; this can.
+Proven on item 166573: our ASR heard `דאס רעדן` where the article reads `אפטרעטן`, and
+dropped `קיר`. BUILT: harvest (both listing layouts), LCS alignment, and an ingest split
+into `publisher` (no timing, inert) vs `publisher_aligned` (audio timing, trainable) so a
+97%-accurate article can never reach the trainer whole. 29 tests.
+⛔ **Business and Interviews have NO typed text** — Izzy asked for them; only בולעטין pairs.
+⛔ The first parser keyed on `content_block` and silently lost 70% of the archive, reporting
+it as empty pages. ⏳ Nothing written to the DB yet; thresholds provisional until
+`measure-agreement.ts` runs. Full detail:
+`docs/ai-context/AGENT_HANDOFF_YIDDISH_BULLETIN_GOLD_2026-09-18.md`.

@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, createReadStream } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { pathToFileURL } from "node:url";
 
 // Type-only: erased at runtime by tsx/esbuild, so this static path never has
@@ -58,6 +59,28 @@ export function loadEnvFile(file: string): void {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
   }
+}
+/**
+ * The runner's `.env` (DATABASE_URL, YC_* backend vars) lives with the
+ * INSTALLED runner, not in the repo: `scripts/yiddish-runner/` ships code only
+ * and never secrets. Loading just the repo path therefore silently yields an
+ * EMPTY DATABASE_URL in any checkout — which on 2026-09-18 left the relaunched
+ * labelling orchestrator unable to report status or import labels, with nothing
+ * in its log but a `grep: ... No such file` line. Try the installed runner
+ * first, then the repo path, and return the file that actually supplied a value
+ * so callers can say which one they used.
+ */
+export function loadRunnerEnv(scriptsDir: string): string | null {
+  const candidates = [
+    path.join(os.homedir(), "LoopcomYiddishRunner", ".env"),
+    path.join(scriptsDir, "..", "yiddish-runner", ".env"),
+  ];
+  for (const file of candidates) {
+    if (!existsSync(file)) continue;
+    loadEnvFile(file);
+    if (process.env.DATABASE_URL) return file;
+  }
+  return null;
 }
 
 const FFMPEG_WINGET_BIN =
@@ -642,7 +665,7 @@ async function resolveEligibilityFn(engineRoot: string): Promise<EligibilityFn> 
 }
 
 async function main(): Promise<void> {
-  loadEnvFile(path.join(HERE, "..", "yiddish-runner", ".env"));
+  loadRunnerEnv(HERE);
   process.env.YC_FFMPEG_PATH ||= path.join(FFMPEG_WINGET_BIN, "ffmpeg.exe");
   process.env.YC_FFPROBE_PATH ||= path.join(FFMPEG_WINGET_BIN, "ffprobe.exe");
 

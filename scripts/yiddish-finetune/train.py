@@ -170,9 +170,23 @@ def build_model_and_processor(model_name: str, use_lora: bool, lora_r: int, lora
     from transformers import WhisperForConditionalGeneration, WhisperProcessor  # noqa: PLC0415
 
     processor = WhisperProcessor.from_pretrained(model_name, language="yi", task="transcribe")
-    model = WhisperForConditionalGeneration.from_pretrained(
-        model_name, torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-    )
+    # Load in FLOAT32 even on GPU. Trainer's fp16=True does mixed precision by
+    # autocasting around fp32 master weights; loading the weights in fp16 as
+    # well double-applies it and the first training step dies with
+    #   RuntimeError: Input type (float) and bias type (c10::Half) should be the same
+    # because the feature extractor still hands over fp32 input_features.
+    # (Cost us a whole Kaggle run on 2026-09-18.)
+    # The kwarg NAME differs by transformers version: older releases (Kaggle's
+    # image, 2026-09) take `torch_dtype=`; newer ones renamed it to `dtype=` and
+    # `torch_dtype` is deprecated. Passing the wrong one is a hard TypeError at
+    # load time, so ask for both in turn rather than pinning a version.
+    # (Kaggle run v5 died on exactly this after v4 died on the fp16 VALUE.)
+    try:
+        model = WhisperForConditionalGeneration.from_pretrained(model_name, dtype=torch.float32)
+    except TypeError as exc:
+        if "dtype" not in str(exc):
+            raise
+        model = WhisperForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.float32)
     model.generation_config.language = "yi"
     model.generation_config.task = "transcribe"
     model.generation_config.forced_decoder_ids = None
@@ -189,6 +203,15 @@ def build_model_and_processor(model_name: str, use_lora: bool, lora_r: int, lora
         )
         model = get_peft_model(model, lora_cfg)
         model.print_trainable_parameters()
+        # ⛔⛔ LoRA + gradient checkpointing severs the graph without this.
+        # Only the adapter weights require grad, and the first checkpointed
+        # encoder block receives an input tensor that does not — so autograd
+        # has nothing to walk back through and the FIRST optimizer step dies
+        # with "element 0 of tensors does not require grad and does not have a
+        # grad_fn". Making the embedding output require grad reconnects it.
+        # (Kaggle run v6, 2026-09-18, died here after v5 reached the trainer.)
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
     return model, processor
 
 
@@ -269,6 +292,10 @@ def run_training(args: argparse.Namespace) -> dict[str, Any]:
         per_device_eval_batch_size=max(1, args.batch_size // 2),
         gradient_accumulation_steps=args.grad_accum,
         gradient_checkpointing=True,
+        # use_reentrant=False is the non-deprecated checkpoint implementation and
+        # the one that actually honours inputs whose requires_grad was turned on
+        # above; the reentrant one silently ignores it.
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         learning_rate=args.lr,
         max_steps=args.max_steps,
         fp16=not use_bf16,
@@ -530,6 +557,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--output-dir", default="out")
     p.add_argument("--push-to-hub", default=None, help="HF repo id to push the merged model to (needs HF_TOKEN)")
     p.add_argument("--self-test", action="store_true")
+    p.add_argument(
+        "--multi-gpu",
+        action="store_true",
+        help="use every visible GPU (DataParallel). Off by default: it broke the first Kaggle run.",
+    )
     return p.parse_args(argv)
 
 
@@ -537,6 +569,23 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.self_test:
         return self_test()
+
+    # Kaggle's free tier hands out TWO T4s. HF Trainer then wraps the model in
+    # nn.DataParallel, which is where the 2026-09-18 run actually died:
+    #   RuntimeError: Caught RuntimeError in replica 0 on device 0
+    # DataParallel + Whisper + gradient checkpointing is fragile and buys very
+    # little for LoRA at this size. Pin to ONE visible GPU unless the caller
+    # opts in. Must happen before torch initialises CUDA, i.e. before any
+    # `import torch` in the heavy path below — parse_args does not import it.
+    # ⛔ Kaggle PRE-SETS CUDA_VISIBLE_DEVICES, so an "only if unset" guard never
+    # fired and both T4s stayed visible. Mixed precision does not propagate into
+    # nn.DataParallel replicas, which is what really produced
+    #   Input type (float) and bias type (c10::Half) should be the same
+    # in replica 0. Overwrite it unless the caller explicitly opts in.
+    if not args.multi_gpu:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        print("[train] pinned to CUDA_VISIBLE_DEVICES=0 (pass --multi-gpu to use every card)", flush=True)
+
     if not args.dataset:
         print("error: --dataset is required (or pass --self-test)", file=sys.stderr)
         return 2

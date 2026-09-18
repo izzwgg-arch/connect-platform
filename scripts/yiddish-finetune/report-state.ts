@@ -11,9 +11,9 @@
  *     [--current 3 --total 10 --unit clips] \
  *     [--detail-json '{"kernelRef":"izzywein/loopcom-yiddish-whisper-finetune"}']
  *
- * Loads `DATABASE_URL` from `../yiddish-runner/.env` the same way every other
- * script in this repo does (`loadEnvFile`, never overwriting an already-set
- * env var). Never throws on a reporting failure — `reportPipelineState`
+ * Loads `DATABASE_URL` via `loadRunnerEnv` (installed runner first, repo copy
+ * second) the same way every other script here does, never overwriting an
+ * already-set env var. Never throws on a reporting failure — `reportPipelineState`
  * itself is fail-closed (see `../yiddish-shared/pipelineState.ts`), so a
  * missing `YcPipelineState` table or a dead DB connection prints one line to
  * stderr and this still exits 0, never aborting the calling shell script's
@@ -22,7 +22,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { loadEnvFile } from "./build-dataset";
+import { loadRunnerEnv } from "./build-dataset";
 import { pctOf, reportPipelineState, type PipelineKind, type PipelineStatus } from "../yiddish-shared/pipelineState";
 
 const HERE = __dirname;
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const input = parseReportArgs(argv);
 
-  loadEnvFile(path.join(HERE, "..", "yiddish-runner", ".env"));
+  loadRunnerEnv(HERE);
 
   let db: any = null;
   try {

@@ -12,6 +12,8 @@ import os from "node:os";
 import {
   buildDatasetMetadata,
   buildKernelMetadata,
+  assertDatasetSourcesAttached,
+  DEFAULT_CODE_DATASET_SLUG,
   datasetPush,
   DEFAULT_KERNEL_SLUG,
   DEFAULT_KERNEL_TITLE,
@@ -272,4 +274,44 @@ test("guard: this file never reads kaggle.json or an API key itself (only the ka
   // fine and expected; actually opening it here would not be.
   assert.doesNotMatch(src, /readFileSync\([^)]*kaggle\.json/i);
   assert.doesNotMatch(src, /KAGGLE_KEY|KAGGLE_API_KEY/);
+});
+
+// ── the two 2026-09-18 GPU-session killers, replayed ────────────────────────
+
+test("kernelPush mounts the CODE dataset as well as the data dataset", async () => {
+  // Replays the 2026-09-18 loss: only the data set was attached, so the
+  // notebook fell back to the STALE train.py sitting inside it and the run
+  // died on a bug that had already been fixed locally.
+  const dir = path.join(os.tmpdir(), `yc-kaggle-code-attach-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "kaggle_train.ipynb"), "{}");
+  const execFn: ExecFn = async () => ({ code: 0, stdout: "Kernel version 5 successfully pushed.", stderr: "" });
+  await kernelPush(
+    {
+      notebookDir: dir,
+      owner: "izzy",
+      kernelSlug: "k",
+      title: "k",
+      datasetSlug: "data",
+      codeDatasetSlug: DEFAULT_CODE_DATASET_SLUG,
+      confirm: true,
+      dryRun: false,
+    },
+    { execFn },
+  );
+  const meta = JSON.parse(readFileSync(path.join(dir, "kernel-metadata.json"), "utf8"));
+  assert.deepEqual(meta.dataset_sources, ["izzy/data", `izzy/${DEFAULT_CODE_DATASET_SLUG}`]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a refused dataset source fails the push instead of burning a GPU session", () => {
+  // `kaggle kernels push` exits 0 and reports success even when it silently
+  // dropped a dataset — the run then starts with no data. Verbatim output from
+  // the 2026-09-18 17:05Z push.
+  const output = [
+    "The following are not valid dataset sources and could not be added to the kernel: ['izzywein/loopcom-yiddish-whisper-dataset']",
+    "Kernel version 1 successfully pushed.  Please check progress at https://www.kaggle.com/code/izzywein/x",
+  ].join("\n");
+  assert.throws(() => assertDatasetSourcesAttached(output), /refused a dataset source/);
+  assert.doesNotThrow(() => assertDatasetSourcesAttached("Kernel version 2 successfully pushed."));
 });

@@ -56,7 +56,7 @@ import {
   statusBatch,
   type TranscriptsFile,
 } from "./kaggle-label";
-import { loadEnvFile } from "../yiddish-finetune/build-dataset";
+import { loadRunnerEnv } from "../yiddish-finetune/build-dataset";
 import type { ExecFn, KaggleDeps } from "../yiddish-finetune/kaggle-run";
 import { pctOf, reportPipelineState, type PipelineProgress, type PipelineStatus } from "../yiddish-shared/pipelineState";
 
@@ -731,7 +731,7 @@ async function main(): Promise<void> {
   }
   if (!opts.owner) throw new Error("Kaggle username required: pass --owner or set KAGGLE_USERNAME (public username, never a secret)");
 
-  loadEnvFile(path.join(HERE, "..", "yiddish-runner", ".env"));
+  loadRunnerEnv(HERE);
   mkdirSync(opts.batchesRoot, { recursive: true });
 
   const engineRoot = opts.engineRoot ? path.resolve(opts.engineRoot) : process.env.YC_ENGINE_ROOT || path.resolve(HERE, "../../apps/api/src/yiddishCorpus");

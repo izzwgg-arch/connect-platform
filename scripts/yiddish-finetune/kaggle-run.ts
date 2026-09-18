@@ -109,6 +109,9 @@ export interface KernelMetadataInput {
   kernelSlug: string;
   title: string;
   datasetSlug: string;
+  /** Extra datasets to attach, e.g. the tiny CODE dataset kept separate from the
+   *  multi-GB audio one so a script fix does not mean re-uploading the audio. */
+  extraDatasetSlugs?: string[];
   codeFile?: string;
 }
 
@@ -167,7 +170,10 @@ export function buildKernelMetadata(input: KernelMetadataInput): Record<string, 
     is_private: true,
     enable_gpu: true,
     enable_internet: true,
-    dataset_sources: [`${input.owner}/${input.datasetSlug}`],
+    dataset_sources: [
+      `${input.owner}/${input.datasetSlug}`,
+      ...(input.extraDatasetSlugs ?? []).map((slug) => `${input.owner}/${slug}`),
+    ],
     competition_sources: [],
     kernel_sources: [],
     model_sources: [],
@@ -179,6 +185,14 @@ export function buildKernelMetadata(input: KernelMetadataInput): Record<string, 
  * cannot drift apart again; see the agreement test in kaggle-run.test.ts. */
 export const DEFAULT_KERNEL_SLUG = "loopcom-yiddish-whisper-finetune";
 export const DEFAULT_KERNEL_TITLE = "Loopcom Yiddish Whisper finetune";
+/** The SECOND dataset every kernel run mounts: train.py/baseline.py only, no
+ * audio. Split from the data set so a one-line script fix re-versions in
+ * seconds instead of re-uploading 2 GB of clips. ⛔ It must be ATTACHED, not
+ * merely pushed: on 2026-09-18 it was pushed, the kernel's dataset_sources
+ * still named only the data set, and the notebook fell back to the STALE
+ * train.py that the first upload had left inside the data set — a whole free
+ * GPU session died on an error that had already been fixed locally. */
+export const DEFAULT_CODE_DATASET_SLUG = "loopcom-yiddish-whisper-code";
 
 // ── FLAC staging (pure manifest rewrite; ffmpeg calls are the only I/O) ────
 
@@ -293,12 +307,38 @@ export interface KernelPushOptions {
   kernelSlug: string;
   title: string;
   datasetSlug: string;
+  /** Extra code-only dataset to mount; omit only to reproduce an old run. */
+  codeDatasetSlug?: string;
   confirm: boolean;
   dryRun: boolean;
 }
 
+/**
+ * ⛔ `kaggle kernels push` EXITS 0 and says "Kernel version N successfully
+ * pushed" even when it could not attach a dataset — it only prints a
+ * "not valid dataset sources" line above it. The run then starts on a free GPU
+ * with no data (or, worse, with only SOME of its datasets) and dies minutes
+ * later. This turns that warning into a failure, before the session is spent.
+ * A source is "not valid" most often because the dataset is still PROCESSING
+ * right after an upload: wait, then push again.
+ */
+export function assertDatasetSourcesAttached(output: string): void {
+  const line = output.split(/\r?\n/).find((l) => /not valid dataset sources/i.test(l));
+  if (!line) return;
+  throw new Error(
+    `kaggle refused a dataset source, so the kernel would run without it: ${line.trim()} — ` +
+      `this usually means the dataset is still processing after an upload. Wait for it to finish, then push again.`,
+  );
+}
+
 export async function kernelPush(opts: KernelPushOptions, deps: KaggleDeps = {}): Promise<void> {
-  const metadata = buildKernelMetadata({ owner: opts.owner, kernelSlug: opts.kernelSlug, title: opts.title, datasetSlug: opts.datasetSlug });
+  const metadata = buildKernelMetadata({
+    owner: opts.owner,
+    kernelSlug: opts.kernelSlug,
+    title: opts.title,
+    datasetSlug: opts.datasetSlug,
+    extraDatasetSlugs: opts.codeDatasetSlug ? [opts.codeDatasetSlug] : [],
+  });
   if (opts.dryRun) {
     console.log(`[kaggle-run] dry-run kernel-push: would push ${metadata.id}`);
     console.log(JSON.stringify(metadata, null, 2));
@@ -311,6 +351,7 @@ export async function kernelPush(opts: KernelPushOptions, deps: KaggleDeps = {})
   writeFileSync(path.join(opts.notebookDir, "kernel-metadata.json"), JSON.stringify(metadata, null, 2), "utf8");
   const res = await kaggle(["kernels", "push", "-p", opts.notebookDir], deps);
   if (res.code !== 0) throw new Error(`kaggle kernels push failed: ${res.stderr.slice(0, 500) || res.stdout.slice(0, 500)}`);
+  assertDatasetSourcesAttached(`${res.stdout}\n${res.stderr}`);
   console.log(`[kaggle-run] pushed + started kernel ${metadata.id}`);
   console.log(res.stdout.trim());
 }
@@ -374,6 +415,7 @@ async function main(): Promise<void> {
           kernelSlug: argVal(rest, "--kernel-slug") ?? DEFAULT_KERNEL_SLUG,
           title: argVal(rest, "--title") ?? DEFAULT_KERNEL_TITLE,
           datasetSlug: argVal(rest, "--dataset-slug") ?? "loopcom-yiddish-whisper-dataset",
+          codeDatasetSlug: argVal(rest, "--code-dataset-slug") ?? DEFAULT_CODE_DATASET_SLUG,
           confirm,
           dryRun,
         },

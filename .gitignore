@@ -92,3 +92,18 @@ __pycache__/
 # away from being committed over the real file.
 *.orig
 *.rej
+
+# Yiddish scratch + Kaggle staging (2026-09-18). scripts/.tmp holds one-off
+# probe scripts and the harvested-article JSONL; kernel-log is whatever the
+# training watcher last pulled back from Kaggle; code-dataset/ mirrors
+# train.py + baseline.py purely so `kaggle datasets version` has a folder to
+# upload -- nothing in it is a source of truth.
+# (Its dataset-metadata.json is already ignored by scripts/yiddish-finetune/.gitignore,
+# so do not add a negation here: it would look like it tracks the file and would not.)
+scripts/.tmp/
+scripts/yiddish-finetune/kernel-log/
+scripts/yiddish-finetune/code-dataset/
+scripts/yiddish-finetune/*.log
+scripts/yiddish-labelling/*.log
+scripts/yiddish-labelling/batches/
+scripts/yiddish-finetune/dataset/

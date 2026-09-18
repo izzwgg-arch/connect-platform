@@ -612,7 +612,11 @@ function looksLikeChallenge(status: number, body: string): boolean {
   );
 }
 
-async function getText(
+// ⛔ Exported so the bulletin-text harvest uses THIS fetcher and nothing else:
+// a second fetcher would be a second rate limiter, a second user-agent and a
+// second (probably missing) Cloudflare-challenge check against the same site
+// we have written permission to read politely.
+export async function getText(
   url: string,
   limiter: RateLimiter,
   init?: { method?: string; body?: string; referer?: string },

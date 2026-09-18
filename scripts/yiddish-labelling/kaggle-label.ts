@@ -50,7 +50,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { buildDatasetMetadata, buildKernelMetadata, type ExecFn, type KaggleDeps } from "../yiddish-finetune/kaggle-run";
-import { loadEnvFile } from "../yiddish-finetune/build-dataset";
+import { loadRunnerEnv } from "../yiddish-finetune/build-dataset";
 
 const HERE = __dirname;
 
@@ -697,7 +697,7 @@ async function main(): Promise<void> {
       const source = argVal(rest, "--source");
       if (!source) throw new Error("--source <key> required");
       const batch = batchArg(rest);
-      loadEnvFile(path.join(HERE, "..", "yiddish-runner", ".env"));
+      loadRunnerEnv(HERE);
       const ffmpegPath = process.env.YC_FFMPEG_PATH || path.join(FFMPEG_WINGET_BIN, "ffmpeg.exe");
       const { PrismaClient } = await import("@prisma/client");
       const db: any = new PrismaClient();
