@@ -1419,6 +1419,146 @@
       "permissions": "signed in; GROUP thread",
       "api": "POST /threads/:id/leave",
       "testId": "messages-info-leave"
+    },
+    {
+      "screen": "shared",
+      "component": "SearchBox",
+      "control": "<testId>-input | -submit | -suggestion-<i>",
+      "action": "type / click / Enter / Arrow keys",
+      "expected": "debounced (200ms) autocomplete dropdown of people, organizations and recent/saved queries from /search/suggest; Enter or clicking a query suggestion submits, clicking a person/org suggestion navigates to their page; Escape closes",
+      "permissions": "anyone (queries suggestion list is empty for anonymous viewers)",
+      "api": "GET /search/suggest?q=",
+      "testId": "<testId>-input (default searchbox-input), <testId>-submit, <testId>-suggestions, <testId>-suggestion-<i>"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-main-input | search-main-submit",
+      "action": "type / click",
+      "expected": "runs the search; updates the URL (?q=) via router.replace so the search is shareable",
+      "permissions": "anyone",
+      "api": "GET /search?q=",
+      "testId": "search-main-input, search-main-submit, search-main-suggestions, search-main-suggestion-<i>"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-interpretation",
+      "action": "render",
+      "expected": "shown only when the query has 3+ words: 'Understood as: service = … · customer type = … · area = …' from the deterministic NLQ parser",
+      "permissions": "anyone",
+      "api": "GET /search (interpretation field)",
+      "testId": "search-interpretation"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-tab-<key>",
+      "action": "click",
+      "expected": "switches the result list to that type (all/organizations/people/posts/jobs/listings/groups/events/rfqs/opportunities), each with a live count; updates the URL (?type=)",
+      "permissions": "anyone",
+      "api": "GET /search?type=<key>",
+      "testId": "search-tab-all, search-tab-organizations, search-tab-people, search-tab-posts, search-tab-jobs, search-tab-listings, search-tab-groups, search-tab-events, search-tab-rfqs, search-tab-opportunities"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-type-<key>",
+      "action": "click",
+      "expected": "same effect as the matching tab (single-select); clicking the active one clears back to All",
+      "permissions": "anyone",
+      "api": "GET /search?type=<key>",
+      "testId": "search-facet-type-organizations, search-facet-type-people, search-facet-type-posts, search-facet-type-jobs, search-facet-type-listings, search-facet-type-groups, search-facet-type-events, search-facet-type-rfqs, search-facet-type-opportunities"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-distance-<key>",
+      "action": "click",
+      "expected": "restricts people results to 1st-degree (network), 1st-or-2nd (second), or no restriction (anyone); hidden for anonymous viewers",
+      "permissions": "signed in",
+      "api": "GET /search?distance=<key>",
+      "testId": "search-facet-distance-network, search-facet-distance-second, search-facet-distance-anyone"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-location-<name>",
+      "action": "click",
+      "expected": "single-select location filter (Brooklyn/Boro Park/Monsey/Monroe/Lakewood); filters organizations by serviceArea and jobs/listings by location",
+      "permissions": "anyone",
+      "api": "GET /search?location=<name>",
+      "testId": "search-facet-location-Brooklyn, search-facet-location-Boro Park, search-facet-location-Monsey, search-facet-location-Monroe, search-facet-location-Lakewood"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-verified-<kind>",
+      "action": "click",
+      "expected": "multi-select organization verification filter (BUSINESS/INSURANCE/LICENSE)",
+      "permissions": "anyone",
+      "api": "GET /search?verified=<kind,...>",
+      "testId": "search-facet-verified-BUSINESS, search-facet-verified-INSURANCE, search-facet-verified-LICENSE"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-size-<range>",
+      "action": "click",
+      "expected": "single-select organization size filter",
+      "permissions": "anyone",
+      "api": "GET /search?size=<range>",
+      "testId": "search-facet-size-1–10, search-facet-size-11–50, search-facet-size-51–200, search-facet-size-200+"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-facet-language-<lang>",
+      "action": "click",
+      "expected": "single-select filter on the person's profile languages",
+      "permissions": "anyone",
+      "api": "GET /search?language=<lang>",
+      "testId": "search-facet-language-English, search-facet-language-Yiddish, search-facet-language-Hebrew, search-facet-language-Spanish"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-save",
+      "action": "click",
+      "expected": "saves the current query + facets as a SavedSearch (alerts off by default)",
+      "permissions": "signed in",
+      "api": "POST /search/saved",
+      "testId": "search-save"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-saved-open-<id> | search-saved-alerts-<id> | search-saved-delete-<id>",
+      "action": "click",
+      "expected": "re-runs a saved search, toggles its alert emails/notifications, or deletes it",
+      "permissions": "signed in; owns the saved search",
+      "api": "GET /search/saved, PATCH /search/saved/:id {alerts}, DELETE /search/saved/:id",
+      "testId": "search-saved-open-<id>, search-saved-alerts-<id>, search-saved-delete-<id>"
+    },
+    {
+      "screen": "search",
+      "component": "SearchPage",
+      "control": "search-recent-open-<id> | search-recent-clear",
+      "action": "click",
+      "expected": "re-runs a recent query, or clears the whole recent-search list",
+      "permissions": "signed in",
+      "api": "GET /search/recent, DELETE /search/recent",
+      "testId": "search-recent-open-<id>, search-recent-clear"
+    },
+    {
+      "screen": "search",
+      "component": "ResultCard",
+      "control": "search-result-<type>-<id>",
+      "action": "render / click",
+      "expected": "one card per hit with a verification/private chip row and a one-line 'why' match reason; opening a result records a click for ranking",
+      "permissions": "anyone; blocked people, non-OPEN RFQs (unless buyer) and non-member private groups' details are already filtered out server-side",
+      "api": "GET /search, POST /search/click",
+      "testId": "search-result-people-<id>, search-result-organizations-<id>, search-result-posts-<id>, search-result-jobs-<id>, search-result-listings-<id>, search-result-groups-<id>, search-result-events-<id>, search-result-rfqs-<id>, search-result-opportunities-<id>, search-result-open-<id>, search-result-quote-<id> (organizations only), search-follow-<id> (organizations only)"
     }
   ]
 }

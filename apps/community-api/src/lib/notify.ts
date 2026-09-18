@@ -38,6 +38,7 @@ export const NOTIFICATION_CLASSES: Record<string, { label: string; batchMinutes:
   "security.alert": { label: "Security alerts", batchMinutes: 0, defaults: { inApp: true, push: true, email: true, sms: true } },
   "moderation.action": { label: "Moderation notices", batchMinutes: 0, defaults: { inApp: true, push: true, email: true, sms: false } },
   "reminder.due": { label: "Your reminders", batchMinutes: 0, defaults: { inApp: true, push: true, email: false, sms: false } },
+  "search.alert": { label: "Saved search alerts", batchMinutes: 0, defaults: { inApp: true, push: true, email: false, sms: false } },
 };
 
 export type NotifyInput = {

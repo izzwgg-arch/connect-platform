@@ -38,6 +38,7 @@ export const PUBLIC_PREFIXES = [
   "/auth/loopcom",
   "/auth/passkeys/login/",
   "/public/",
+  "/search",
   "/media/file/",
   "/flags",
   "/analytics/events",
