@@ -20,7 +20,7 @@
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import type { App, BrowserWindow as BW, Screen, DesktopCapturer } from "electron";
-import { ScreenControlSession, shouldYieldTo, SCREEN_SESSION_MAX_MS, RESUME_AFTER_IDLE_MS, type ScreenActionName, type ObservedInput } from "./session";
+import { ScreenControlSession, shouldYieldTo, SCREEN_SESSION_MAX_MS, RESUME_AFTER_IDLE_MS, SCREEN_IDLE_END_MS, type ScreenActionName, type ObservedInput } from "./session";
 import { ScreenOverlay, type OverlayFrame } from "./overlay";
 import type { ScreenController, ScreenActionResult } from "./controller";
 import { LocalWorker, type WorkerEvent } from "../computerControl/worker";
@@ -62,6 +62,7 @@ export class ElectronScreenController implements ScreenController {
   private lastActivityAt = 0;
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
   private ceilingTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private reason = "";
   private now: () => number;
   private hookOn = false;
@@ -104,6 +105,7 @@ export class ElectronScreenController implements ScreenController {
       if (!this.hookOn) this.deps.log(`screen: hook did not start (${hook.ok ? JSON.stringify(hook.result) : hook.error}) — Escape/yield unavailable, continuing`);
       this.overlay.show("blue", this.statusText());
       this.armCeiling(taskId);
+      this.keepAlive(taskId);
       signal.addEventListener("abort", () => { void this.end(taskId, "cancelled"); }, { once: true });
       const d = this.deps.screen.getPrimaryDisplay();
       const info = await this.worker.call("screen.info", {}, 5000);
@@ -147,7 +149,15 @@ export class ElectronScreenController implements ScreenController {
 
   /* ───────────────────────── read (UI Automation) ───────────────────────── */
 
+  /** Any action keeps the session alive; silence for SCREEN_IDLE_END_MS ends it. */
+  private keepAlive(taskId: string): void {
+    this.session.touch();
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => { if (this.session.isStale()) void this.end(taskId, "abandoned"); }, SCREEN_IDLE_END_MS + 500);
+  }
+
   async read(_taskId: string, args: Record<string, unknown>): Promise<ScreenActionResult> {
+    this.keepAlive(_taskId);
     const r = await this.worker.call("windows.controls", { ...windowSel(args), maxControls: Math.min(Math.max(1, Number(args.maxControls) || 120), 400), interactive: args.all !== true, includeOffscreen: args.includeOffscreen === true, budgetMs: 4000 }, 20_000);
     if (!r.ok) return { ok: false, error: r.error, message: r.message };
     this.overlay.update(this.session.frame() as OverlayFrame, this.statusText());
@@ -171,6 +181,7 @@ export class ElectronScreenController implements ScreenController {
     }
 
     // cursor / keyboard: the person's own hands win while they are using them
+    this.keepAlive(taskId);
     if (this.session.getState() === "paused") return { ok: false, error: "paused_by_person", message: "The person is using the mouse or keyboard right now, so the Coworker stepped aside. Try again in a moment (or use a computer_windows_* action, which does not need the mouse)." };
     const op = inputOp(name, args);
     if (!op) return { ok: false, error: "bad_action", message: "That action was missing a valid position, text or key, so it was not performed." };
@@ -184,6 +195,7 @@ export class ElectronScreenController implements ScreenController {
   async windows(taskId: string, name: WindowsToolName, args: Record<string, unknown>): Promise<ScreenActionResult> {
     if (!this.session.isApprovedFor(taskId)) return { ok: false, error: "screen_not_started", message: "Start with computer_screen_begin." };
     if (!this.isEnabled()) { void this.end(taskId, "disabled"); return { ok: false, error: "screen_control_off", message: "Screen control was turned off, so the Coworker stopped." }; }
+    this.keepAlive(taskId);
     const out = await runWindowsTool(name, args, (op, a, t) => this.worker.call(op, a, t));
     this.overlay.update(this.session.frame() as OverlayFrame, this.statusText());
     return out as ScreenActionResult;
@@ -277,6 +289,7 @@ export class ElectronScreenController implements ScreenController {
   private clearTimers(): void {
     if (this.resumeTimer) { clearTimeout(this.resumeTimer); this.resumeTimer = null; }
     if (this.ceilingTimer) { clearTimeout(this.ceilingTimer); this.ceilingTimer = null; }
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
   }
 
   /** App quit: stop the worker too. */

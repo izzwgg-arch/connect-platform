@@ -8,8 +8,10 @@
  * model said: files on disk, the acceptance app's own state JSON, a separate UI
  * Automation probe process (the same worker code the app ships), and the desktop's
  * journal (which tools ran, in which order — the tool-SELECTION tests read that).
- * The approval window is answered by approval-watcher.ps1 (Enter = Allow), which
- * stands in for the person at the keyboard.
+ * ⛔ The approval window is answered by a SCRIPT standing in for the person at the
+ * keyboard (it invokes the real Allow button through UI Automation, out of band from
+ * the Coworker, and screenshots every prompt it answers). It proves the path behind
+ * the prompt — never that a human read and understood the prompt.
  *
  *   node run-computer.mjs --token <jwt> [--out <dir>] [--only T1,T5] [--rounds N]
  *
@@ -34,7 +36,11 @@ const TEST_DIR = path.join(WS, "Loopcom Computer Test");
 const PORTAL_PORT = Number(arg("--portal-port", 8765));
 const LOCAL = `http://127.0.0.1:${PORTAL_PORT}`;
 const OUT = arg("--out", path.join(HOME, `Loopcom-Computer-Control-Proof-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`));
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+// ⛔ decodeURIComponent: a file:// pathname percent-encodes spaces, and this repo
+// lives under "C:\dev\projects\Connect 2". Without it every spawn from HERE silently
+// failed — which is how the approval watcher never started and three tests sat for
+// five minutes waiting for an answer nobody could give.
+const HERE = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"));
 const DIST = arg("--dist", "C:/dev/projects/Connect 2/scratchpad/computer-control-build-3960a256/stage/dist");
 const JOURNAL = path.join(process.env.APPDATA, "@connect", "desktop", "coworker", "journal.jsonl");
 const APP_LOG = path.join(process.env.APPDATA, "@connect", "desktop", "logs", "connect.log");
@@ -99,13 +105,47 @@ async function probeWindows(filter) { const r = await probe([{ op: "windows.list
 async function probeCapture(title, file) { const r = await probe([{ op: "screen.capture", args: title ? { title, format: "png", maxWidth: 1600 } : { format: "png", maxWidth: 1600 } }]); if (r[0]?.ok) { fs.writeFileSync(file, Buffer.from(r[0].result.dataBase64, "base64")); return file; } return null; }
 async function probeClose(title) { await probe([{ op: "windows.close", args: { title } }]); }
 
-/* ───────────── the person at the keyboard: the approval watcher ───────────── */
-let watcher = null;
+/* ───────────── the person at the keyboard: the approval answerer ─────────────
+ * ⛔ A SCRIPT PRESSES THE BUTTON, NOT A HUMAN, and every report says so. It stands
+ * in for the person exactly as the 2026-09-09 acceptance did; what it proves is the
+ * path behind the prompt, never that a human understood the prompt.
+ *
+ * It answers through UI AUTOMATION — it finds the approval window and invokes its
+ * real "Allow" / "Don't allow" button by name — because posting key messages to a
+ * Chromium window is unreliable and, when it fails, fails SILENTLY (the call just
+ * sits there until it times out). It runs in its own process, out of band from the
+ * Coworker, and screenshots every prompt it answers into the proof bundle.
+ */
+let answerer = null;
 function startWatcher(answer = "{ENTER}", maxAnswers = 10) {
   stopWatcher();
-  watcher = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(HERE, "approval-watcher.ps1"), "-OutDir", path.join(OUT, "screenshots"), "-Answer", answer, "-MaxMinutes", "30", "-MaxAnswers", String(maxAnswers)], { windowsHide: true, stdio: "ignore" });
+  const want = answer === "{ESC}" ? "Don't allow" : "Allow";
+  let answered = 0;
+  const state = { stop: false };
+  answerer = state;
+  const loop = async () => {
+    while (!state.stop && answered < maxAnswers) {
+      try {
+        const wins = await probeWindows("approval");
+        const w = wins.find((x) => String(x.title).includes("approval"));
+        if (w) {
+          const shot = path.join(OUT, "screenshots", `approval-${String(answered + 1).padStart(2, "0")}-${Date.now()}.png`);
+          await probeCapture(String(w.hwnd), shot).catch(() => null);
+          const r = await probe([{ op: "windows.invoke", args: { hwnd: w.hwnd, name: want, allowClick: true } }]);
+          const ok = r[0]?.ok === true;
+          answered++;
+          fs.appendFileSync(path.join(OUT, "logs", "approvals.log"), `${new Date().toISOString()} ${ok ? "answered" : "FAILED"} "${want}" on "${w.title}" → ${JSON.stringify(r[0] ?? null).slice(0, 200)}
+`);
+          await new Promise((r2) => setTimeout(r2, 1200));
+          continue;
+        }
+      } catch { /* keep watching */ }
+      await new Promise((r2) => setTimeout(r2, 700));
+    }
+  };
+  void loop();
 }
-function stopWatcher() { if (watcher) { try { watcher.kill(); } catch {} watcher = null; } }
+function stopWatcher() { if (answerer) { answerer.stop = true; answerer = null; } }
 
 /* ───────────── bookkeeping ───────────── */
 function record(id, capability, prompt, expected, actual, verification, status, evidence = [], extra = {}) {

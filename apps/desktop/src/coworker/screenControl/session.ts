@@ -139,6 +139,8 @@ export class ScreenControlSession {
   private state: ScreenControlState = "idle";
   private ownerTaskId: string | null = null;
   private approvedAt = 0;
+  /** When this session last did anything. Drives the abandoned-session rule below. */
+  private lastActionAt = 0;
   private resumeTimer: number | null = null;
 
   constructor(private now: () => number = () => Date.now()) {}
@@ -168,10 +170,38 @@ export class ScreenControlSession {
    * already driving — one physical screen, one owner. Returns false without
    * changing state on refusal.
    */
+  /** Something happened in this session — resets the abandoned-session clock. */
+  touch(): void {
+    this.lastActionAt = this.now();
+  }
+  /** How long since this session did anything (since it opened, if it never has). */
+  idleMs(): number {
+    if (!this.isBusy()) return 0;
+    return this.now() - (this.lastActionAt || this.approvedAt);
+  }
+  /**
+   * ⛔⛔ AN ABANDONED SESSION MUST NOT LOCK THE SCREEN. A turn can die without ever
+   * calling `computer_screen_end` — the chat is closed, the agent restarts, the
+   * person walks away mid-task. Before this, the session simply stayed open until
+   * the FOUR HOUR ceiling, and every later task was refused `screen_busy`: one
+   * interrupted job took the whole feature out for the rest of the day. Proven the
+   * hard way — an acceptance run killed mid-task made every following run fail.
+   */
+  isStale(idleMs: number = SCREEN_IDLE_END_MS): boolean {
+    return this.isBusy() && this.idleMs() >= idleMs;
+  }
+
   begin(taskId: string): boolean {
-    if (this.isBusy() && this.ownerTaskId !== taskId) return false;
+    if (this.isBusy() && this.ownerTaskId !== taskId) {
+      // Another task holds the screen. Take it over ONLY if that task has clearly
+      // been abandoned; a session that is actually working is never interrupted.
+      if (!this.isStale()) return false;
+      this.end();
+      this.reset();
+    }
     this.ownerTaskId = taskId;
     this.approvedAt = this.now();
+    this.lastActionAt = this.now();
     this.state = "working";
     return true;
   }
@@ -211,6 +241,7 @@ export class ScreenControlSession {
     this.state = "idle";
     this.ownerTaskId = null;
     this.approvedAt = 0;
+    this.lastActionAt = 0;
   }
 
   /** How long this session has been open, ms. For the hard ceiling. */
@@ -224,3 +255,11 @@ export const SCREEN_SESSION_MAX_MS = 4 * 60 * 60 * 1000;
 
 /** After the person stops touching input, wait this long before resuming on our own. */
 export const RESUME_AFTER_IDLE_MS = 2500;
+
+/**
+ * A screen-control session that has done NOTHING for this long is treated as
+ * abandoned: it ends itself, and another task may take the screen. ⛔ Not a
+ * convenience — without it one interrupted task holds the screen until the 4-hour
+ * ceiling and every later task is refused.
+ */
+export const SCREEN_IDLE_END_MS = 3 * 60 * 1000;

@@ -20,7 +20,7 @@ import { isProtectedPath, scriptTouchesProtected, scriptPathLiterals, classifySh
 import { LocalWorker, type SpawnLike } from "./computerControl/worker";
 import { runWindowsTool, compactControls, WINDOWS_TOOL_NAMES } from "./computerControl/windowsControl";
 import { WORKER_SCRIPT, SCREEN_CONTROL_SIGNATURE } from "./computerControl/workerScript";
-import { SCREEN_CONTROL_SIGNATURE as SESSION_SIGNATURE, ScreenControlSession } from "./screenControl/session";
+import { SCREEN_CONTROL_SIGNATURE as SESSION_SIGNATURE, ScreenControlSession, SCREEN_IDLE_END_MS } from "./screenControl/session";
 import type { ScreenController, ScreenActionName } from "./screenControl/controller";
 import { CoworkerRuntime, toolGroup, isScreenSessionTool, type RuntimeDeps } from "./runtime";
 import { McpManager } from "./runtime/mcp";
@@ -328,6 +328,26 @@ test("runtime: windows tools refuse without a session; after ONE begin approval 
   // another task cannot ride this session
   const other = await runtime.handle({ id: "o", name: "computer_windows_controls", args: {}, taskId: "t2" });
   assert.equal((other.content as any).error, "screen_not_started");
+});
+
+test("⛔⛔ an ABANDONED screen session never locks the screen: it ends itself and another task may take over", async () => {
+  const now = { t: 1_000_000 };
+  const s = new ScreenControlSession(() => now.t);
+  assert.equal(s.begin("taskA"), true);
+  assert.equal(s.begin("taskB"), false, "a WORKING session is never interrupted");
+  s.touch();
+  now.t += 60_000;                       // one minute of silence
+  assert.equal(s.isStale(), false);
+  assert.equal(s.begin("taskB"), false, "still working as far as anyone knows");
+  now.t += SCREEN_IDLE_END_MS;           // …and now it has clearly been abandoned
+  assert.equal(s.isStale(), true);
+  assert.equal(s.begin("taskB"), true, "the next task may take the screen");
+  assert.equal(s.owner(), "taskB");
+  assert.equal(s.isApprovedFor("taskA"), false, "the abandoned task's consent did not carry over");
+  assert.equal(s.isStale(), false, "taking over resets the clock");
+  // and an action keeps it alive
+  now.t += SCREEN_IDLE_END_MS - 1000; s.touch(); now.t += 2000;
+  assert.equal(s.isStale(), false);
 });
 
 test("runtime: the cross-tool rule — a protected path is refused by the file tools, by PowerShell, and by app launch alike; a path outside the fence is refused for PowerShell too", async () => {
