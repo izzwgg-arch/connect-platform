@@ -1287,3 +1287,40 @@ by the amount-attempt cap; `no_card` (chosen card vanished) → `12_no_card` + c
 48–50. `39`, `40`, `47` and `card_offer` retired (phase kept in the type for `normalizePayIvrState`).
 
 **Verification:** the summary file's "Round 5" bottom section + `TESTS_RUN.md`.
+
+### §16i — 2026-09-18: "invalid PIN before I key anything" = the POUND the prompt asks for lands on the NEXT prompt; silence is not a wrong answer; the AGI's 15-second wait; a PCI leak in the PBX's own DTMF logger
+
+Summary file: `docs/ai-context/claude-md-sections/2026-09-18-pay-line-stray-pound-no-input.md`
+(Izzy's three symptoms quoted there). Nothing in the FLOW changed — this is the collector layer.
+
+**Diagnosis, all read-only, all off real calls** (PBX `full` log, `SupermarketPayCall` rows, nginx,
+door timings from inside loopcom):
+- The phone gather is `maxDigits 10` → `Read()` closes on the 10th digit. The prompt said
+  "followed by the pound key"; the `#` keyed ~1.5 s later hits the PIN prompt's `Read()` as its
+  terminator → `User entered nothing.` → the reducer's `pin_entry` branch scored `""` as a wrong PIN
+  (`pin.length < 1` → `03_pin_wrong`, `pinAttempts++`). Calls `C-00000024` (06:49 ET, then PIN 6775
+  served account 3049), `C-0000122f`, `C-00001232`. The 1-digit menus (`1#`) do the same.
+- The AGI: `GET DATA 42_card_exp … 4` returns on the 4th digit; the `#` lands on `43_card_cvv` →
+  empty → `45_card_invalid` → he keyed `#` again → three strikes → `AGI … returning 4` (he hung up).
+- Latency: door 0.04–0.62 s per step (register lookup/probe/verify), PBX→api 0.4 s with TLS
+  (per-thread curl handle; first step ~2 s dead air after pressing 0). Not the complaint. The
+  complaint's wait is `GET_TIMEOUT_MS=15000` applied by Asterisk as BOTH first- and inter-digit
+  timeout: a 3-digit CVV / a card number without `#` = 15 s of silence, then "that does not look right".
+- "Fast-forward": `Read()` is interruptible (by design); the stray `#` cut "Please en—"; the 09-17
+  Lumen-path loss is unmeasured on these calls (no `rtpStats` samples on IVR-only legs).
+- ⛔⛔ PCI: `logger__50-files.conf` → `full`, `console`, `fail2ban` all carry `dtmf`. The 16-digit test
+  card keyed at 21:58:31–46 is in `/var/log/asterisk/full` as 16 `DTMF end 'd'` lines; so is every PIN.
+  The 09-17 proof grepped the contiguous number. Outside the pay-line mandate → reported, not changed.
+
+**Built:**
+- `payIvrCore.ts`: `PAY_MAX_NO_INPUT_ATTEMPTS`, state `noInputAttempts` (normalised), the pre-switch
+  rule in `reducePayIvr` + `replayForNoInput()` — empty → the phase's own prompt, no attempt spent, no
+  effect; 3 in a row → `20_connect_person`; any keyed answer resets. Probe-in-flight, `card_entry`,
+  `human`, `done`, no-cards `card_choice` keep their existing branches.
+- `connect-supermarket-pay.conf`: `gather` → `PAY_REREAD=0` → label `read` (`PAY_T0=${EPOCH}`) →
+  `Read()` → early-empty-once → `stray` → `Goto(read)`; the card block posts `PAY_DIGITS=${PAY_CARD}`.
+- `connect-pay-card.py`: `collect()` counts wrong/empty apart, re-asks an early empty once
+  (`STRAY_WINDOW_S=6.0`), `GET_TIMEOUT_MS=10000`; `connect-pay-card.selftest.py` (fake pipe + clock).
+- Guards: `payIvrDialplan.test.ts` +3 (replay-FAIL on HEAD), `payLineNoInput.test.ts` NEW (7).
+
+**Deploy / PBX / proof:** filled in below once done.

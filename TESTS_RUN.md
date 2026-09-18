@@ -1,5 +1,15 @@
 # Tests run
 
+## Gesheft pay line — the stray pound / "no input is not a wrong answer" — 2026-09-18
+
+- apps/api NEW `src/supermarket/payLineNoInput.test.ts` **7/7**: the real 06:49 ET call (C-00000024) replayed through the real runtime + FakePos (2 → 10 digits → "" → hears ONLY `02_pin`, `pinAttempts` 0 → PIN serves); three silences → a person with no "too many tries" and 0 PIN attempts (wrong PINs still cost one); silence/wrong interleaving; every gathering phase replays exactly its own prompt with no attempt spent and no register effect; probe-in-flight / card_entry / human / done / no-cards card_choice keep their branches; legacy rows normalise; 400 callers × random silences all served + 400 × three-in-a-row all handed over.
+- `src/supermarket/payIvrDialplan.test.ts` **13/13** (+3 NEW source guards: the gather block's timed single `Read()` + one bounded local re-ask under 6 s that never CURLs; the card block posts `${PAY_CARD}` as the next step's digits; the AGI's `collect()` branches on empty inside `STRAY_WINDOW_S`, never plays `45_card_invalid` for a silence, `GET_TIMEOUT_MS = 10000`). **Replayed against HEAD's conf + AGI (git stash): 10 pass / 3 fail — all three new guards red.**
+- The whole `src/supermarket/*.test.ts` glob **248/248** (238 before + 10 new).
+- `python3 scripts/pbx/supermarket/connect-pay-card.selftest.py` **9/9** (fake AGI pipe + fake clock: stray re-ask once uncounted, silence replays without "invalid", 3 silences give up, 3 wrong give up with 3 "invalid", mixes, hangup).
+- api `npx tsc --noEmit`: 0 errors in `src/supermarket/*`; the ~20 listed errors are pre-existing in billing/delivery/ops/mfa.
+- Live measurements (read-only, before the change): door step latency 0.04–0.62 s; PBX→api 0.39–0.47 s incl. TLS.
+- ⏳ NOT run here: a human call keying `10 digits + #` and hearing only the PIN prompt; the AGI card flow with `MMYY + #`.
+
 ## GDMS redirect for Grandstream (round 24) — fence + honest delivery — 2026-09-18
 
 - apps/api NEW `gdmsRedirect.test.ts` **15/15**: P237/P47 host parsing off the real config shape; the private/VPN/loopback/CGNAT gate (10.8.0.1 = the proven bug) ; no-P237 refused; look-alike public hostname refused; bare public IP passes; deliverRedirect → delivered / queued_offline / not_claimed / refused-without-pushing; deviceStatus reads online+synchronized.
