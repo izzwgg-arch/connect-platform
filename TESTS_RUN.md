@@ -6,7 +6,7 @@
 - `deviceCloudRoutes.test.ts` +2 (VPN-targeted render → fence refusal REPORTED, 0 cloud calls; offline phone → 'waiting for the phone to check in' words, still pushed for GDMS to hold); existing SEND/pushConfig tests updated to the real fenced config shape (they encoded the pre-fence contract).
 - Full `src/deskPhoneSetup/*.test.ts` **381: 380 pass, 1 fail = pre-existing `managedPhonePostgres.test.ts` (local Postgres only)**. `npx tsc --noEmit`: zero errors in every touched file (gdmsRedirect, gdmsClient, grandstreamProvider, gdmsSimulator, deviceCloudRoutes).
 - Research (read-only): Grandstream's machine-readable OpenAPI (doc.grandstream.dev api_data.json, 41 endpoints) confirms NO site/template-level redirect API exists — per-device `device/config/xml` is the only API redirect; the account-wide template is web-console-only.
-- DEPLOYED: see the desk-phone summary file after container verification.
+- DEPLOYED 2026-09-18: api `deploy-direct.sh api --commit bffc5ea6` (origin tip), `.build-commit` = `bffc5ea6`, 0 restarts, healthy, health 200 both hostnames; fence + deliverRedirect grepped in the running container.
 - NOT proven: a factory Grandstream claim→check-in→redirect→register hands-off (needs the handset).
 
 ## Desk-phone wizard round 23 — the hidden robot + OpenAI brain + auto RPS release — 2026-09-17 (night)
