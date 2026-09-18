@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { api, createOrg, createUser, grantStaff, tdb, testApp, uniq } from "../testing/harness.js";
+import { api, connectUsers, createOrg, createUser, grantStaff, tdb, testApp, uniq } from "../testing/harness.js";
 
 test("organizationsYouMayNeed: same-industry org surfaces with a reason + impression id; dismissing removes it", async () => {
   const app = await testApp();
@@ -197,4 +197,25 @@ test("feature flags: PUT is audited, and GET /flags reflects a PERCENT rollout d
   assert.equal(off.body.enabled, false);
   const flagsAfterOff = await api(app, { method: "GET", url: "/flags", token: person.accessToken });
   assert.equal(flagsAfterOff.body.flags[key], false);
+});
+
+test("intros for you: a discoverable path (a connection is a verified member at a matching org) yields a person with a reason; nothing without one", async () => {
+  const app = await testApp();
+  const me = await createUser(app);
+  await api(app, { method: "PATCH", url: "/me/profile", token: me.accessToken, payload: { industry: "Apparel & uniforms", objectives: ["Find partners"] } });
+  const friend = await createUser(app);
+  await connectUsers(app, me, friend);
+  const target = await createUser(app);
+  const org = await createOrg(app, target, `Intro Target ${uniq()}`);
+  await tdb().organization.update({ where: { id: org.id }, data: { industry: "Apparel & uniforms" } });
+  const none = await api(app, { method: "GET", url: "/recommendations/intros", token: me.accessToken });
+  assert.equal(none.status, 200);
+  assert.ok(!none.body.people.some((p: any) => p.id === target.personId), "no path yet → no recommendation");
+  // The friend becomes a verified member of the target org → a discoverable path exists.
+  await tdb().membership.create({ data: { personId: friend.personId, organizationId: org.id, role: "EMPLOYEE", affiliation: "VERIFIED_ADMIN" } });
+  const some = await api(app, { method: "GET", url: "/recommendations/intros", token: me.accessToken });
+  const hit = some.body.people.find((p: any) => p.id === target.personId);
+  assert.ok(hit, JSON.stringify(some.body).slice(0, 300));
+  assert.match(hit.reason, /connection/i);
+  assert.ok(hit.recommendationId);
 });

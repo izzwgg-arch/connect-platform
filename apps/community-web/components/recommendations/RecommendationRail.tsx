@@ -6,7 +6,7 @@ import { api, trackEvent } from "@/lib/api";
 import { Avatar, Button, Dialog, Empty, Skeleton, useToast } from "@/components/ui";
 import "./recommendations.css";
 
-export type RecoModel = "organizations" | "customers" | "jobs" | "groups" | "events" | "vendors";
+export type RecoModel = "organizations" | "customers" | "jobs" | "groups" | "events" | "vendors" | "intros";
 
 type Props = {
   model: RecoModel;
@@ -38,6 +38,7 @@ const ENDPOINT: Record<RecoModel, string> = {
   groups: "/recommendations/groups",
   events: "/recommendations/events",
   vendors: "/recommendations/vendors",
+  intros: "/recommendations/intros",
 };
 
 function normalize(model: RecoModel, body: any): Item[] {
@@ -83,6 +84,19 @@ function normalize(model: RecoModel, body: any): Item[] {
         avatarAssetId: j.organization?.logoAssetId ?? null,
         square: true,
         actionLabel: "View job",
+        actionDone: false,
+      }));
+    case "intros":
+      return (body.people ?? []).map((p: any) => ({
+        key: p.id,
+        recommendationId: p.recommendationId,
+        reason: p.reason,
+        name: p.name,
+        subtitle: [p.headline, p.primaryOrg?.displayName].filter(Boolean).join(" · ") || null,
+        href: `/people/${p.username}`,
+        avatarAssetId: p.avatarAssetId,
+        square: false,
+        actionLabel: "Ask for an intro",
         actionDone: false,
       }));
     case "groups":

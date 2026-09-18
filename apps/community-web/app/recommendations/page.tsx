@@ -12,6 +12,7 @@ const SECTIONS: Array<{ model: RecoModel; title: string }> = [
   { model: "jobs", title: "Jobs you may like" },
   { model: "groups", title: "Groups for you" },
   { model: "events", title: "Events for you" },
+  { model: "intros", title: "Introductions worth asking for" },
 ];
 
 export default function RecommendationsPage() {

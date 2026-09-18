@@ -11,6 +11,7 @@ import { personCards } from "../profiles/cards.js";
 import { hasOrgPermission, requireOrgPermission } from "../organizations/permissions.js";
 import { connectionIds } from "../policy/graph.js";
 import {
+  introsForYou,
   candidatesForJob,
   customersYouMayWant,
   eventsForYou,
@@ -200,6 +201,27 @@ export function registerRecommendationRoutes(app: FastifyInstance, db: Db) {
       })
       .filter((x): x is NonNullable<typeof x> => !!x);
     return { events };
+  });
+
+  /* ─────────────────────────── introductions for you (§34) ─────────────────── */
+  // People at organizations matching the viewer's objectives who are reachable
+  // through a DISCOVERABLE path (a connection is a verified member / mutual
+  // customer or vendor there). The reason names the path, never a private edge.
+  app.get("/recommendations/intros", async (req) => {
+    const actor = requireActor(req);
+    const { limit: rawLimit } = z.object({ limit: z.string().optional() }).parse(req.query);
+    const limit = clampLimit(rawLimit, 6, 20);
+    const excludeIds = await dismissedIds(db, actor.personId, "intros-v1", "Person");
+    const raw = await introsForYou(db, actor.personId, { excludeIds, limit });
+    const withImpressions = await recordImpressions(db, actor.personId, "intros", "intros-v1", raw);
+    const cards = await personCards(db, withImpressions.map((r) => r.objectId));
+    const people = withImpressions
+      .map((r) => {
+        const c = cards.get(r.objectId);
+        return c ? { ...c, reason: r.reason, recommendationId: r.recommendationId } : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    return { people };
   });
 
   /* ─────────────────────────── vendors for an RFQ ─────────────────────────── */
