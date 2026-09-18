@@ -1,0 +1,53 @@
+.jobs-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.jobs-search-row .in {
+  flex: 1;
+}
+.jobs-section-title {
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+.jobs-requirements {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+.jobs-section-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.jobs-section-checklist label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.jobs-stage-board {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+@media (max-width: 900px) {
+  .jobs-stage-board {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.jobs-stage-tile {
+  background: var(--bg-soft);
+  border-radius: 10px;
+  padding: 10px;
+}
+.jobs-referral-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
