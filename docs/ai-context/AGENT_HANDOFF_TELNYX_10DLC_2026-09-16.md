@@ -366,3 +366,24 @@ Verify a link through the portal page, never the api. ⛔ Only the hash is store
 the chat reply; a second Create link revokes it (older links turned off). Board state after this:
 links out for Gesheft, Relax Tires, Fixup (09-16 night, not recorded here until now) + Trust; still
 `draft` with no link: Displaydex, B Visible, Luxure, Hanna, Create A Box.
+
+## 000d. 2026-09-18 — Gesheft: the first REAL "File with Telnyx" press, refused at brand creation
+Izzy: *"gesheft has submitted their 10DLC, and I think it was denied. Check why."* Read straight off
+the live row (`TextingRegistration` `cmu4l96or0246ru13wg6jtq6r`) + its `TextingRegistrationEvent`s:
+`customer_submitted` 13:47:47Z (fields legalName/entityType/street/city/state/postalCode/website,
+einUpdated true, signature "Pinches Meisels", IP 199.16.53.3) → `filing` 13:55:30Z → `filing_refused`
+→ `filing` 13:55:54Z → `filing_refused`. `lastError` = *"Telnyx refused the business details: 400:
+10015 Bad Request stockExchange, stockSymbol, and businessContactEmail are required for public profit
+entity."* Cause: the customer chose `entityType = PUBLIC_PROFIT` ("Publicly traded company"). Telnyx
+requires stock exchange + symbol + business contact email for that type (§2 says so) and the form
+collects none of them, so brand creation is impossible for any PUBLIC_PROFIT submission. State after:
+`status submitted`, no brand id, `chargeAddedAt` null (the $24 claim happens only after a brand is
+created), `brandCreateStartedAt` null (reset by the refusal branch) — clean to refile.
+Two remedies, Izzy's call: (a) staff correct it on the review page ("Fill it in myself" →
+`staffUpdateBusiness`, allowed in `submitted`, `entityType` is in CUSTOMER_FIELDS) to PRIVATE_PROFIT
+and refile; (b) `sendBackToCustomer(["entityType","legalName"], note)` so the customer attests it
+themselves. Also: legal name "Gesheft " (trailing space, no LLC/Inc) is unlikely to be the IRS
+record → expect `UNVERIFIED` on the brand unless corrected; address "Suit 316-207" looks like a
+mailbox suite (TCR may flag). ⛔ Product hole to close (not done 09-18): either drop PUBLIC_PROFIT
+from the public form's choices, or add the three fields + a `fail` check in `runFilingChecks`. The
+$24 only lands after `brand_created`, so refusals never bill.
