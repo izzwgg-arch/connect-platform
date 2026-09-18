@@ -1,6 +1,5 @@
 import type { Db } from "../db.js";
-import { canSeePost, connectionIds, degreeBetween, isBlockedEitherWay, sharesOrganization, type Degree } from "../policy/graph.js";
-import { membershipOf } from "../organizations/permissions.js";
+import { blockedIdSet, canSeePost, connectionIds, sharesOrgSet, viewerOrgIdSet, type Degree } from "../policy/graph.js";
 import { POST_INCLUDE, type PostRow } from "../posts/service.js";
 
 /**
@@ -50,7 +49,7 @@ export async function loadViewerCtx(db: Db, personId: string): Promise<ViewerCtx
 const BASE_WHERE = { deletedAt: null, publishedAt: { not: null } } as const;
 
 /** Candidate generation. Each mode is its own generator, not a filter on one shared list. */
-export async function candidates(db: Db, mode: FeedMode, ctx: ViewerCtx, take = 300): Promise<PostRow[]> {
+export async function candidates(db: Db, mode: FeedMode, ctx: ViewerCtx, take = 150): Promise<PostRow[]> {
   const followedAuthorIds = [...new Set([...ctx.connectionIds, ...ctx.followedPersonIds, ctx.personId])];
   switch (mode) {
     case "following":
@@ -83,23 +82,31 @@ export async function candidates(db: Db, mode: FeedMode, ctx: ViewerCtx, take = 
   }
 }
 
-async function sameOrgForCandidate(db: Db, viewerId: string, r: PostRow): Promise<boolean> {
-  if (r.organizationId) return !!(await membershipOf(db, viewerId, r.organizationId));
-  return sharesOrganization(db, viewerId, r.authorId);
-}
-
-/** canSeePost + not hidden + not muted (author or org) + not blocked either way + published. */
+/**
+ * canSeePost + not hidden + not muted (author or org) + not blocked either way + published.
+ * Batched: the viewer's block set, org set and the authors' shared-org set are
+ * three queries for the whole page, never one per row (this was 900+ queries
+ * per feed call at 300 candidates — 58 s p50 under 100 users).
+ */
 export async function eligibility(db: Db, viewerId: string, ctx: ViewerCtx, rows: PostRow[]): Promise<PostRow[]> {
+  if (!rows.length) return [];
   const hiddenSet = new Set(ctx.hiddenPostIds);
+  const mutedPeople = new Set(ctx.mutedPersonIds);
+  const mutedOrgs = new Set(ctx.mutedOrgIds);
+  const connected = new Set(ctx.connectionIds);
+  const authorIds = [...new Set(rows.map((r) => r.authorId))];
+  const [blocked, myOrgs] = await Promise.all([blockedIdSet(db, viewerId), viewerOrgIdSet(db, viewerId)]);
+  const sharedOrgAuthors = await sharesOrgSet(db, myOrgs, authorIds);
   const out: PostRow[] = [];
   for (const r of rows) {
     if (!r.publishedAt) continue;
     if (hiddenSet.has(r.id)) continue;
-    if (ctx.mutedPersonIds.includes(r.authorId)) continue;
-    if (r.organizationId && ctx.mutedOrgIds.includes(r.organizationId)) continue;
-    if (await isBlockedEitherWay(db, viewerId, r.authorId)) continue;
+    if (mutedPeople.has(r.authorId)) continue;
+    if (r.organizationId && mutedOrgs.has(r.organizationId)) continue;
+    if (blocked.has(r.authorId)) continue;
     const isAuthor = r.authorId === viewerId;
-    const [degree, sameOrganization] = await Promise.all([degreeBetween(db, viewerId, r.authorId), sameOrgForCandidate(db, viewerId, r)]);
+    const degree: Degree = isAuthor ? 0 : connected.has(r.authorId) ? 1 : 3;
+    const sameOrganization = r.organizationId ? myOrgs.has(r.organizationId) : sharedOrgAuthors.has(r.authorId);
     if (!canSeePost(r.visibility as any, { degree, sameOrganization, isAuthor })) continue;
     out.push(r);
   }

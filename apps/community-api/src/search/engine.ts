@@ -4,7 +4,7 @@ import { ftsIds, type FtsRow } from "../lib/search.js";
 import { personCards, type PersonCard } from "../profiles/cards.js";
 import { orgCards, type OrgCard } from "../organizations/cards.js";
 import { membershipOf } from "../organizations/permissions.js";
-import { canSeePost, connectionIds, isBlockedEitherWay, sharesOrganization, type Degree } from "../policy/graph.js";
+import { blockedIdSet, canSeePost, connectionIds, sharesOrgSet, type Degree } from "../policy/graph.js";
 import { canSeeGroupDetail } from "../groups/policy.js";
 
 export type SearchType = "people" | "organizations" | "posts" | "jobs" | "listings" | "groups" | "events" | "rfqs" | "opportunities";
@@ -121,11 +121,8 @@ export async function searchPeople(db: Db, ctx: SearchCtx): Promise<SearchHit<Pe
     people.filter((p) => !ctx.language || p.profile?.languages.some((l) => l.toLowerCase() === ctx.language!.toLowerCase())).map((p) => p.id),
   );
   const candidates = rows.filter((r) => alive.has(r.id));
-  const kept: FtsRow[] = [];
-  for (const r of candidates) {
-    if (ctx.viewerId && ctx.viewerId !== r.id && (await isBlockedEitherWay(db, ctx.viewerId, r.id))) continue;
-    kept.push(r);
-  }
+  const blocked = await blockedIdSet(db, ctx.viewerId);
+  const kept: FtsRow[] = candidates.filter((r) => !(ctx.viewerId && ctx.viewerId !== r.id && blocked.has(r.id)));
   const degrees = await bulkDegrees(db, ctx.viewerId, kept.map((r) => r.id));
   const cards = await personCards(db, kept.map((r) => r.id));
   const out: SearchHit<PersonCard>[] = [];
@@ -194,6 +191,7 @@ export async function searchPosts(db: Db, ctx: SearchCtx): Promise<SearchHit<Pos
     ctx.viewerId ? db.membership.findMany({ where: { personId: ctx.viewerId, affiliation: { in: ["VERIFIED_ADMIN", "VERIFIED_DOMAIN"] } }, select: { organizationId: true } }) : Promise.resolve([]),
   ]);
   const myOrgIds = new Set(myOrgs.map((m) => m.organizationId));
+  const sharedAuthors = await sharesOrgSet(db, myOrgIds, authorIds);
   const out: SearchHit<PostHitItem>[] = [];
   for (const r of rows) {
     const post = posts.find((p) => p.id === r.id);
@@ -202,7 +200,7 @@ export async function searchPosts(db: Db, ctx: SearchCtx): Promise<SearchHit<Pos
     const degree = degrees.get(post.authorId) ?? 3;
     let sameOrganization = false;
     if (ctx.viewerId && !isAuthor) {
-      sameOrganization = post.organizationId ? myOrgIds.has(post.organizationId) : await sharesOrganization(db, ctx.viewerId, post.authorId);
+      sameOrganization = post.organizationId ? myOrgIds.has(post.organizationId) : sharedAuthors.has(post.authorId);
     }
     if (!canSeePost(post.visibility as any, { degree, sameOrganization, isAuthor })) continue;
     out.push({

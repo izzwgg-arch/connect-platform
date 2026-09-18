@@ -108,3 +108,24 @@ export function canSeePost(vis: PostVisibility, ctx: { degree: Degree; sameOrgan
   if (ctx.isAuthor) return true;
   return canSee(vis, ctx);
 }
+
+/** Everyone the viewer blocked or is blocked by, in ONE query — for list filtering (feed, search). */
+export async function blockedIdSet(db: Db, viewerId: string | null): Promise<Set<string>> {
+  if (!viewerId) return new Set();
+  const rows = await db.block.findMany({ where: { OR: [{ blockerId: viewerId }, { blockedId: viewerId }] }, select: { blockerId: true, blockedId: true } });
+  return new Set(rows.map((r) => (r.blockerId === viewerId ? r.blockedId : r.blockerId)));
+}
+
+/** Organizations the viewer verifiably belongs to (for ORGANIZATION-visibility checks). */
+export async function viewerOrgIdSet(db: Db, viewerId: string | null): Promise<Set<string>> {
+  if (!viewerId) return new Set();
+  const rows = await db.membership.findMany({ where: { personId: viewerId, affiliation: { in: ["VERIFIED_ADMIN", "VERIFIED_DOMAIN"] } }, select: { organizationId: true } });
+  return new Set(rows.map((r) => r.organizationId));
+}
+
+/** Which of `personIds` share one of the viewer's organizations — one query, not one per person. */
+export async function sharesOrgSet(db: Db, viewerOrgIds: Set<string>, personIds: string[]): Promise<Set<string>> {
+  if (!viewerOrgIds.size || !personIds.length) return new Set();
+  const rows = await db.membership.findMany({ where: { personId: { in: personIds }, organizationId: { in: [...viewerOrgIds] } }, select: { personId: true } });
+  return new Set(rows.map((r) => r.personId));
+}

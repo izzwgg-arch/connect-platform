@@ -16,7 +16,10 @@
     "seed": "tsx src/seed.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "test:tier1": "tsx src/testing/tier1Loop.ts",
-    "test:controls": "tsx src/testing/controlInventoryCheck.ts"
+    "test:controls": "tsx src/testing/controlInventoryCheck.ts",
+    "test:load": "tsx src/testing/loadTest.ts",
+    "test:chaos": "node --import tsx --test src/testing/chaos.test.ts",
+    "docs:generate": "tsx src/testing/generateDocs.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.1.0",

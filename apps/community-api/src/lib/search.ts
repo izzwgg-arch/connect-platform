@@ -21,7 +21,9 @@ export type FtsRow = { id: string; rank: number };
 
 /**
  * Full-text + trigram search over one table's searchText. Returns ids ranked.
- * Trigram similarity rescues typos ("embroidry") that tsquery misses.
+ * Trigram similarity rescues typos ("embroidry") that tsquery misses; the `%`
+ * operator is GIN-indexed, with the cut-off set per database (migration
+ * 20260918160000_trgm_threshold).
  */
 export async function ftsIds(db: Db, table: string, idColumn: string, q: string, limit = 50, extraWhere: Prisma.Sql = Prisma.empty): Promise<FtsRow[]> {
   const tsq = toTsQuery(q);
@@ -32,7 +34,7 @@ export async function ftsIds(db: Db, table: string, idColumn: string, q: string,
     SELECT ${idc} AS id,
            (ts_rank_cd("searchTsv", websearch_to_tsquery('simple', ${tsq})) * 2 + similarity(coalesce("searchText",''), ${q.toLowerCase()})) AS rank
     FROM ${t}
-    WHERE ("searchTsv" @@ websearch_to_tsquery('simple', ${tsq}) OR similarity(coalesce("searchText",''), ${q.toLowerCase()}) > 0.12)
+    WHERE ("searchTsv" @@ websearch_to_tsquery('simple', ${tsq}) OR "searchText" % ${q.toLowerCase()})
       ${extraWhere}
     ORDER BY rank DESC
     LIMIT ${limit}

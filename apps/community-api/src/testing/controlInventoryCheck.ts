@@ -21,11 +21,30 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * Dynamic ids (`data-testid={`row-${id}`}`) are compared by their static
+ * prefix; the inventory writes them as `row-<id>`. Both sides normalise to
+ * the prefix so a templated control is still accounted for exactly once.
+ */
+function normalise(id: string): string {
+  const cut = id.search(/[<$]/);
+  const base = cut >= 0 ? id.slice(0, cut) : id;
+  return base.replace(/-+$/, "").replace(/\s*\(.*\)$/, "").trim();
+}
+
 const inSource = new Map<string, string[]>();
 for (const file of walk(webDir)) {
   const src = readFileSync(file, "utf8");
-  for (const m of src.matchAll(/data-testid=["'`]([^"'`$]+)["'`]/g)) {
-    const id = m[1];
+  for (const m of src.matchAll(/data-testid=(?:\{)?["'`]([^"'`]*?)(?:\$\{|["'`])/g)) {
+    const id = normalise(m[1]);
+    if (!id) continue;
+    if (!inSource.has(id)) inSource.set(id, []);
+    inSource.get(id)!.push(path.relative(root, file));
+  }
+  // testId={`prefix-${x}`} / testId="literal" props on Chip/Menu/Button wrappers
+  for (const m of src.matchAll(/testId=(?:\{)?["'`]([^"'`]*?)(?:\$\{|["'`])/g)) {
+    const id = normalise(m[1]);
+    if (!id) continue;
     if (!inSource.has(id)) inSource.set(id, []);
     inSource.get(id)!.push(path.relative(root, file));
   }
@@ -37,7 +56,13 @@ const catalogued = new Map<string, Control>();
 const rows: Control[] = Array.isArray(inventory.screens)
   ? inventory.screens.flatMap((s: any) => (Array.isArray(s.controls) ? s.controls.map((c: any) => ({ screen: s.screen, ...c })) : [s]))
   : [];
-for (const c of rows) if (c.testId) catalogued.set(c.testId, c);
+for (const c of rows) {
+  if (!c.testId) continue;
+  for (const part of String(c.testId).split(",")) {
+    const id = normalise(part);
+    if (id) catalogued.set(id, c);
+  }
+}
 
 const missingFromInventory = [...inSource.keys()].filter((id) => !catalogued.has(id)).sort();
 const missingFromSource = [...catalogued.keys()].filter((id) => !inSource.has(id)).sort();

@@ -32,15 +32,16 @@ export function registerFeedRoutes(app: FastifyInstance, db: Db) {
     const { items: pageItems, nextCursor } = page(filtered, query.cursor, limit);
 
     const dtos = await hydratePosts(db, pageItems.map((p) => p.post), actor.personId);
-    const results: Array<{ post: (typeof dtos)[number]; recommendationId: string; why: string | null }> = [];
-    for (let i = 0; i < pageItems.length; i++) {
-      const dto = dtos[i];
-      const why = resolveWhy(pageItems[i].why, dto.author, dto.organization);
-      const impression = await db.recommendationImpression.create({
-        data: { personId: actor.personId, surface: "feed", model: "feed-v1", objectType: "Post", objectId: dto.id, reason: why, position: i },
-      });
-      results.push({ post: dto, recommendationId: impression.id, why });
-    }
+    const whys = pageItems.map((it, i) => resolveWhy(it.why, dtos[i].author, dtos[i].organization));
+    // One insert for the whole page, ids returned in order.
+    const impressions = pageItems.length
+      ? await db.recommendationImpression.createManyAndReturn({
+          data: pageItems.map((_, i) => ({ personId: actor.personId, surface: "feed", model: "feed-v1", objectType: "Post", objectId: dtos[i].id, reason: whys[i], position: i })),
+          select: { id: true, objectId: true },
+        })
+      : [];
+    const impressionByPost = new Map(impressions.map((im) => [im.objectId, im.id]));
+    const results = dtos.map((dto, i) => ({ post: dto, recommendationId: impressionByPost.get(dto.id) ?? "", why: whys[i] }));
     await track(db, { personId: actor.personId, event: "feed_view", surface: "feed", props: { mode } });
     return { items: results, nextCursor };
   });
