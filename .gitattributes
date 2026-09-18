@@ -43,3 +43,9 @@
 # 69ae1b37, so this costs zero churn to add. It also makes the NUL repair (see the
 # CLAUDE.md section about itself) a content-only change whenever somebody does it.
 /CLAUDE.md text eol=lf
+
+# Loopcom Community apps: LF everywhere (Linux server, Docker builds)
+apps/community-api/** text eol=lf
+apps/community-web/** text eol=lf
+infra/community/** text eol=lf
+docs/community/** text eol=lf
