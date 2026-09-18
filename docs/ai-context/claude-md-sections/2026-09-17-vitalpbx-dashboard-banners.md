@@ -1,4 +1,4 @@
-# VitalPBX dashboard banners ("Unlock premium features" + "global limit parameters") — DIAGNOSED READ-ONLY, fix is a one-time browser paste Izzy runs himself (2026-09-17)
+# VitalPBX dashboard banners ("Unlock premium features" + "global limit parameters") — ✅ SUPPRESSED SERVER-SIDE 2026-09-18 by an IZZY-AUTHORIZED scoped PBX write (see the dated section at the bottom; the browser-paste route below is the fallback if a panel update reverts it)
 
 Izzy asked to stop the two banners popping up on the PBX panel dashboard
 (`m.connectcomunications.com`) at every login, "without breaking anything else."
@@ -60,9 +60,30 @@ be affected by a browser cookie. Reversible by deleting the cookies.
   agent in auto mode. Hence: Izzy pastes the two lines himself, once, in
   whichever profile he uses for the panel.
 
-## State
+## 2026-09-18 — IZZY AUTHORIZED A SCOPED PBX WRITE; FIX IS LIVE SERVER-SIDE
 
-- ✅ Diagnosis complete and source-verified (read-only; ZERO writes to the PBX).
-- ⏳ NOT PROVEN: Izzy has not run the paste yet; proof = next login shows neither
-  banner. If he ever clears cookies for the site, the banners return — re-run
-  the same two lines (or ask for a Stylus/user-CSS rule as a sturdier fallback).
+Izzy asked "can you do it in the PBX server?" and explicitly authorized the one
+scoped write (AskUserQuestion, "Yes, fix it on the PBX"). ⛔ This does NOT lift
+the read-only guardrail for anything else.
+
+- **The edit (surgical, −56 bytes):** in
+  `/usr/share/vitalpbx/www/resources/js/01-pbx.min.js`, the two cookie reads in
+  `showStartUp()` were replaced with constants —
+  `t=Cookies.get("is_free_version")` → `t="no"` and
+  `n=Cookies.get("verify_global_limits")` → `n="yes"` — so the two banner
+  requests can never fire, for every browser/profile/computer. The
+  `asked_for_app_register` prompt was deliberately left untouched (not asked).
+- **Backup:** `/root/banner-fix-backup-20260918T031118Z/01-pbx.min.js` on the
+  PBX, md5-verified identical to the pre-edit file
+  (`ab74fd733d889981822680e9624d5962`). Restore = `cp -p` it back.
+- **Verified:** both target strings were unique before the edit (grep -c = 1
+  each); after: `t="no",n="yes"` present, zero references to either cookie
+  remain, ownership/perms restored to `www-data 644`, and the LIVE HTTPS
+  response from `m.connectcomunications.com/resources/js/01-pbx.min.js` serves
+  the edited bytes with intact surrounding syntax (Content-Length 42100).
+- ⛔ **A VitalPBX panel update will replace this file and the banners return.**
+  That is harmless — re-apply the same two substitutions (backup first), or
+  fall back to the browser cookie paste above.
+- ⏳ NOT PROVEN: Izzy hasn't logged in since. Proof = next login shows neither
+  banner; if they show ONCE more it's his browser's cached copy of the old JS
+  (no Cache-Control/ETag on this file) — one Ctrl+F5 fixes it.
