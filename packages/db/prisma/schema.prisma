@@ -6770,6 +6770,41 @@ model PbxEndpointRegistration {
   @@index([lastEventAt])
 }
 
+/// One row per PBX contact — per PHYSICAL DEVICE, not per extension. The AOR
+/// allows max_contacts=5, so two desk phones can hold one extension at once and
+/// `PbxEndpointRegistration` (one row per endpoint) masks one with the other.
+/// Keyed by the device's own LAN address (`x-ast-orig-host` in the contact URI,
+/// which NAT cannot rewrite), this is the wizard's only honest answer to "is
+/// THIS handset connected" (Izzy, 2026-09-17: never say connected without it
+/// actually being connected). Upserted by /internal/pbx/contact-status.
+model PbxContactRegistration {
+  id              String    @id @default(cuid())
+  /// pjsip endpoint / AOR name, e.g. "T21_101".
+  endpoint        String
+  /// The device's own LAN IPv4 from x-ast-orig-host — the per-device key behind NAT.
+  origIp          String
+  tenantId        String?
+  extensionId     String?
+  /// VitalPBX numeric tenant id parsed from the "T<n>_" prefix.
+  pbxTenantNumber String?
+  /// Extension number parsed from the endpoint (e.g. "101").
+  extNumber       String?
+  isWebrtcDevice  Boolean   @default(false)
+  /// "REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN" — this contact only.
+  status          String    @default("UNKNOWN")
+  contactUri      String?
+  userAgent       String?
+  lastRegisteredAt DateTime?
+  lastEventAt     DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([endpoint, origIp])
+  @@index([pbxTenantNumber, isWebrtcDevice])
+  @@index([tenantId])
+  @@index([origIp])
+}
+
 /// Append-only history of PBX registration state transitions for an endpoint.
 /// Powers the "why did this device go Not Registered" timeline in the admin UI.
 /// Pruned by the worker after ~14 days.

@@ -308,6 +308,7 @@ import { registerCoworkerTaskRoutes } from "./coworkerTaskRoutes";
 import { registerRemoteDesktopRoutes } from "./remoteDesktopRoutes";
 import { registerLanPhoneRoutes } from "./lanPhoneRoutes";
 import { registerDeskPhoneSetupRoutes } from "./deskPhoneSetup/deskPhoneRoutes";
+import { origIpOf } from "./deskPhoneSetup/phoneRegistrationTruth";
 import { registerManagedPhoneRoutes } from "./deskPhoneSetup/managedPhoneRoutes";
 import { registerManagedPhoneMetrics } from "./deskPhoneSetup/managedPhoneMetrics";
 import { registerSupermarketRoutes } from "./supermarket/supermarketRoutes";
@@ -35195,6 +35196,35 @@ app.post("/internal/pbx/contact-status", async (req, reply) => {
           details: { source: d.source ?? null, roundtripUsec: d.roundtripUsec ?? null },
         },
       });
+    }
+
+    // ⛔⛔ PER-DEVICE TRUTH, kept beside the per-endpoint row. An AOR holds up to
+    // 5 contacts, so two desk phones on one extension overwrite each other in the
+    // row above — which is how the wizard said "connected" off the WRONG handset
+    // (2026-09-17). Every push whose contact URI carries the device's own LAN IP
+    // (x-ast-orig-host) also lands here, keyed (endpoint, that IP). Best-effort:
+    // a failure never fails the push.
+    const contactOrigIp = origIpOf(d.contactUri);
+    if (contactOrigIp) {
+      try {
+        await (db as any).pbxContactRegistration.upsert({
+          where: { endpoint_origIp: { endpoint, origIp: contactOrigIp } },
+          create: {
+            endpoint, origIp: contactOrigIp, tenantId, extensionId,
+            pbxTenantNumber, extNumber, isWebrtcDevice,
+            status: d.status, contactUri: d.contactUri ?? null, userAgent: d.userAgent ?? null,
+            lastRegisteredAt: d.status === "REGISTERED" ? now : null, lastEventAt: now,
+          },
+          update: {
+            tenantId, extensionId, pbxTenantNumber, extNumber, isWebrtcDevice,
+            status: d.status, contactUri: d.contactUri ?? undefined, userAgent: d.userAgent ?? undefined,
+            ...(d.status === "REGISTERED" ? { lastRegisteredAt: now } : {}),
+            lastEventAt: now,
+          },
+        });
+      } catch (e: any) {
+        app.log.warn({ endpoint, contactOrigIp, err: e?.message }, "pbx contact-registration persist failed");
+      }
     }
   } catch (e: any) {
     app.log.warn({ endpoint, err: e?.message }, "pbx contact-status persist failed");

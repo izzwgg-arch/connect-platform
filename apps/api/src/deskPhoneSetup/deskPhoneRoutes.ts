@@ -29,6 +29,7 @@ import {
 } from "@connect/shared";
 import { listPbxProvisionedPhones, resolvePbxTenantNumber, type PbxProvisionedPhone } from "../pbxPhoneProvisioning";
 import { ensureProvisioningRecord, type RecordOutcome, type RecordQuery } from "./provisioningRecordWriter";
+import { phoneRegistrationTruth, type PhoneContactReg } from "./phoneRegistrationTruth";
 import { resolvePbxRouteHelperConfig } from "@connect/integrations";
 import { consoleSavePhone } from "../pbxInboundRouteHelperClient";
 import { connectOmbutelMysql } from "../pbxQueueDirectory";
@@ -61,6 +62,16 @@ export type DeskPhoneDeps = {
   ourProvisioningHosts: () => string[];
   /** Ask Asterisk whether an endpoint is genuinely registered. */
   isRegistered?: (tenantId: string, extNumber: string) => Promise<boolean>;
+  /**
+   * The tenant's live PER-DEVICE registration mirror (`PbxContactRegistration`,
+   * one row per contact keyed by the phone's own LAN IP from x-ast-orig-host).
+   * ⛔⛔ This is what lets the wizard tell TWO phones on ONE extension apart —
+   * `isRegistered` alone is per-extension and called the wrong handset
+   * "connected" on 2026-09-17. Optional and injectable; the default reads the
+   * table. Best-effort: an unreadable mirror returns [] and the caller falls
+   * back to the extension-level answer.
+   */
+  contactRegistrations?: (tenantId: string) => Promise<PhoneContactReg[]>;
   /** Where the PBX serves its installed handset photos, or null when unknown. */
   phoneImageBase?: () => string | null;
   /**
@@ -218,6 +229,53 @@ async function defaultIsRegistered(tenantId: string, extNumber: string): Promise
     return row?.status === "REGISTERED";
   } catch {
     return false;
+  }
+}
+
+/**
+ * The tenant's PER-DEVICE registration rows — one per (endpoint, phone LAN IP),
+ * desk endpoints only. ⛔ Best-effort: [] on any failure, so the callers fall
+ * back to the extension-level answer instead of erroring a customer screen.
+ */
+async function defaultContactRegistrations(tenantId: string): Promise<PhoneContactReg[]> {
+  try {
+    const link = await db.tenantPbxLink.findUnique({ where: { tenantId } });
+    const n = resolvePbxTenantNumber(link as any);
+    if (!n) return [];
+    const rows = await (db as any).pbxContactRegistration.findMany({
+      where: { pbxTenantNumber: String(n), isWebrtcDevice: false },
+      select: { endpoint: true, origIp: true, extNumber: true, isWebrtcDevice: true, status: true, lastEventAt: true },
+    });
+    return (rows ?? []) as PhoneContactReg[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Is THIS handset registered — per-device when the mirror can tell, extension-level
+ * only as the cold-mirror fallback. ⛔⛔ The one function every "connected"/green
+ * claim in this file goes through (Izzy, 2026-09-17: real data, never fake).
+ * Returns `connected` plus which extension the PBX actually sees it registered as.
+ */
+async function phoneConnectedTruth(
+  deps: DeskPhoneDeps,
+  tenantId: string,
+  phone: { ip: string | null; extNumber: string | null },
+  contacts?: PhoneContactReg[],
+): Promise<{ connected: boolean | null; registeredAsExt: string | null }> {
+  const rows = contacts ?? await (deps.contactRegistrations ?? defaultContactRegistrations)(tenantId);
+  const truth = phoneRegistrationTruth(phone, rows);
+  if (truth.kind === "device") return { connected: truth.connected, registeredAsExt: truth.registeredAsExt };
+  if (truth.kind === "extension_held_by_other_device") return { connected: false, registeredAsExt: null };
+  // Cold mirror / no bearing rows: the pre-2026-09-17 extension-level answer.
+  if (!phone.extNumber) return { connected: null, registeredAsExt: null };
+  const isReg = deps.isRegistered ?? defaultIsRegistered;
+  try {
+    const reg = await isReg(tenantId, String(phone.extNumber));
+    return { connected: reg, registeredAsExt: reg ? String(phone.extNumber) : null };
+  } catch {
+    return { connected: null, registeredAsExt: null };
   }
 }
 
@@ -393,13 +451,21 @@ const isSuper = (user: JwtUser) => String(user?.role || "").toUpperCase() === "S
  * ext-103 reset test, 2026-08-25). Best-effort: null when unknowable.
  */
 async function withConnectedNow(
-  deps: DeskPhoneDeps, tenantId: string, views: Array<Record<string, unknown> & { extNumber?: string | null }>,
+  deps: DeskPhoneDeps, tenantId: string, views: Array<Record<string, unknown> & { extNumber?: string | null; ip?: string | null }>,
 ): Promise<Array<Record<string, unknown>>> {
-  const isReg = deps.isRegistered ?? defaultIsRegistered;
+  // ⛔⛔ PER-DEVICE since 2026-09-17: the contact mirror is read ONCE and each
+  // phone is answered by ITS OWN contact (matched on the LAN IP the scan saw it
+  // at), never by its extension alone — two phones on one extension must not
+  // read off each other's registration. `registeredAsExt` says what the PBX
+  // actually sees, even when the wizard never set the phone up (a GDMS/RPS
+  // phone that provisioned itself is still shown as the connected thing it is).
+  const contacts = await (deps.contactRegistrations ?? defaultContactRegistrations)(tenantId).catch(() => [] as PhoneContactReg[]);
   return Promise.all(views.map(async (v) => {
-    if (!v.extNumber) return { ...v, connectedNow: null };
-    try { return { ...v, connectedNow: await isReg(tenantId, String(v.extNumber)) }; }
-    catch { return { ...v, connectedNow: null }; }
+    if (!v.extNumber && !v.ip) return { ...v, connectedNow: null, registeredAsExt: null };
+    try {
+      const truth = await phoneConnectedTruth(deps, tenantId, { ip: v.ip ?? null, extNumber: v.extNumber ? String(v.extNumber) : null }, contacts);
+      return { ...v, connectedNow: truth.connected, registeredAsExt: truth.registeredAsExt };
+    } catch { return { ...v, connectedNow: null, registeredAsExt: null }; }
   }));
 }
 
@@ -1437,11 +1503,20 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
     // ⛔⛔ REGISTRATION IS ASKED OF ASTERISK, NEVER INFERRED. A phone that accepted
     // our settings is not a working phone; only the PBX reporting the endpoint
     // registered turns anything green.
+    // ⛔⛔ And since 2026-09-17, PER DEVICE: the AOR holds up to 5 contacts, so
+    // "the extension is registered" can be ANOTHER handset — a phone only turns
+    // green off its OWN contact (matched by the LAN IP the scan saw it at).
     let registeredToUs = false;
     if (phone.extNumber) {
-      const isReg = deps.isRegistered ?? defaultIsRegistered;
-      try { registeredToUs = await isReg(user.tenantId, phone.extNumber); }
-      catch { registeredToUs = false; }
+      try {
+        const truth = await phoneConnectedTruth(deps, user.tenantId, {
+          ip: dottedIpv4(phone.ipAddress), extNumber: String(phone.extNumber),
+        });
+        // Green means THIS device, registered AS THE MAPPED EXTENSION — a phone
+        // that registered itself as some OTHER extension still needs provisioning.
+        registeredToUs = truth.connected === true
+          && (truth.registeredAsExt === null || truth.registeredAsExt === String(phone.extNumber));
+      } catch { registeredToUs = false; }
     }
 
     const provisioningIsOurs = classifyOurs(phone.provisioningUrl, deps.ourProvisioningHosts());
