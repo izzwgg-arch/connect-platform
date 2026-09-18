@@ -302,7 +302,9 @@ export class DesktopLink {
 
   /** The desktop signed off (app quitting). In-flight calls fail immediately. */
   goodbye(identity: LinkIdentity, desktopId?: string): boolean {
-    const s = desktopId ? this.sessions.get(sessionKey(identity, desktopId)) : this.preferred(identity);
+    // ⛔ An unnamed goodbye may only close the session it can be sure of — otherwise
+    // an old app quitting would disconnect the machine the person is actually using.
+    const s = desktopId ? this.sessions.get(sessionKey(identity, desktopId)) : this.unnamedPoller(identity);
     if (!s) return false;
     for (const [id, f] of s.inflight) {
       clearTimeout(f.timer);
@@ -318,12 +320,32 @@ export class DesktopLink {
 
   /**
    * One computer's session. `desktopId` names it (the app sends it on every call);
-   * without one this is the preferred computer, which is what an older app that
-   * does not send the header gets.
+   * without one this is the preferred computer — see `unnamedPoller` for why that
+   * is NOT good enough when the person has more than one computer.
    */
   session(identity: LinkIdentity, desktopId?: string): Session | null {
     if (desktopId) return this.sessions.get(sessionKey(identity, desktopId)) ?? null;
     return this.preferred(identity);
+  }
+
+  /**
+   * Which session an app that did NOT name itself is allowed to act on.
+   *
+   * ⛔⛔ An app older than 2026-09-18 sends no `x-loopcom-desktop-id`, so when it
+   * long-polls there is NOTHING in the request that says which computer it is. If
+   * we fall back to "the preferred computer" it sits on the NEWER machine's queue
+   * and is handed that machine's work — the exact bug this change exists to kill,
+   * re-opened for anyone with an old build still running somewhere. Proven live:
+   * one account here had three computers linked, two of them old builds.
+   *
+   * So an unnamed poller may only act when exactly ONE computer is present, which
+   * is every single-computer customer and therefore the ordinary case. With two or
+   * more present it is given nothing until it is updated — silence is the only safe
+   * answer to "which machine are you?".
+   */
+  private unnamedPoller(identity: LinkIdentity): Session | null {
+    const present = this.sessionsFor(identity).filter((s) => this.now() - s.lastSeen < DESKTOP_PRESENCE_MS);
+    return present.length === 1 ? present[0] : null;
   }
 
   /** Present = said hello and polled within DESKTOP_PRESENCE_MS (any computer, or the named one). */
@@ -343,7 +365,7 @@ export class DesktopLink {
    * has to call this every ≤ DESKTOP_PRESENCE_MS.
    */
   next(identity: LinkIdentity, waitMs: number, desktopId?: string): Promise<DesktopMessage | null> {
-    const s = this.session(identity, desktopId);
+    const s = desktopId ? this.session(identity, desktopId) : this.unnamedPoller(identity);
     if (!s) return Promise.resolve(null);
     s.lastSeen = this.now();
     const queued = s.queue.shift();

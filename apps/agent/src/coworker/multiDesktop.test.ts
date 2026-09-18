@@ -173,6 +173,25 @@ test("a result or an approval extension is accepted from whichever computer hold
   a.stop(); b.stop();
 });
 
+test("⛔ an old app that cannot name itself is never handed a NEWER computer's work", async () => {
+  const link = new DesktopLink();
+  const modern = new FakeDesktop(link, "deskNew", "NEW", ["computer_fs_list", "computer_app_launch"]);
+  link.hello(ME, manifest("deskOld", "OLD", ["computer_fs_list"]));   // an rc.10 app: says hello, polls with no id
+  modern.hello();
+  // the old app polls the ONLY way it knows how — with no id at all
+  const stolen = await link.next(ME, 30);
+  assert.equal(stolen, null, "an unnamed poll gets nothing while two computers are present");
+  // and the work goes to the computer that can name itself
+  const p = link.dispatch(ME, { name: "computer_app_launch", args: {}, taskId: "t" });
+  assert.equal(await link.next(ME, 30), null, "still nothing for the unnamed poller");
+  await modern.pump();
+  const r = await p;
+  assert.equal((r.content as { host: string }).host, "NEW");
+  // an unnamed goodbye cannot disconnect the machine the person is using either
+  assert.equal(link.goodbye(ME), false);
+  assert.equal(link.sessionsFor(ME).length, 2);
+});
+
 test("an older app that sends no computer id still works exactly as before", async () => {
   const link = new DesktopLink();
   link.hello(ME, manifest("legacyDesk", "OLD", ["computer_fs_list"]));
