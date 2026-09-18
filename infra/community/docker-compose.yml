@@ -1,0 +1,83 @@
+# Loopcom Community — self-contained stack for its OWN server (never the Connect box).
+# Usage on the target server:
+#   cp .env.example .env   (fill secrets)
+#   docker compose -f infra/community/docker-compose.yml up -d --build
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: loopcom_community
+      POSTGRES_USER: community
+      POSTGRES_PASSWORD: ${COMMUNITY_DB_PASSWORD:?set COMMUNITY_DB_PASSWORD}
+    volumes:
+      - community_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U community -d loopcom_community"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - community_redis:/data
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/community-api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3101
+      COMMUNITY_DATABASE_URL: postgresql://community:${COMMUNITY_DB_PASSWORD}@postgres:5432/loopcom_community
+      REDIS_URL: redis://redis:6379
+      COMMUNITY_JWT_SECRET: ${COMMUNITY_JWT_SECRET:?set COMMUNITY_JWT_SECRET}
+      COMMUNITY_PUBLIC_URL: ${COMMUNITY_PUBLIC_URL:-https://community.loopcom.net}
+      COMMUNITY_API_URL: ${COMMUNITY_API_URL:-https://community.loopcom.net/api}
+      COMMUNITY_MAIL_MODE: ${COMMUNITY_MAIL_MODE:-smtp}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-Loopcom Community <community@loopcom.net>}
+      COMMUNITY_STORAGE_DIR: /data/storage
+      COMMUNITY_S3_BUCKET: ${COMMUNITY_S3_BUCKET:-}
+      COMMUNITY_S3_REGION: ${COMMUNITY_S3_REGION:-}
+      COMMUNITY_S3_ENDPOINT: ${COMMUNITY_S3_ENDPOINT:-}
+      LOOPCOM_API_URL: ${LOOPCOM_API_URL:-https://app.loopcom.net/api}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-community.loopcom.net}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-https://community.loopcom.net}
+    volumes:
+      - community_storage:/data/storage
+    ports:
+      - "127.0.0.1:3101:3101"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3101/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/community-web/Dockerfile
+      args:
+        NEXT_PUBLIC_COMMUNITY_API_URL: ${COMMUNITY_API_URL:-https://community.loopcom.net/api}
+        NEXT_PUBLIC_LOOPCOM_PORTAL_URL: ${LOOPCOM_PORTAL_URL:-https://app.loopcom.net}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        NEXT_PUBLIC_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3100:3100"
+volumes:
+  community_pg:
+  community_redis:
+  community_storage:

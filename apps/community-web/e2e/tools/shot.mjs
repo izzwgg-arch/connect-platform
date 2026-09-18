@@ -1,0 +1,10 @@
+import { chromium } from "@playwright/test";
+const [url, out, theme = "dark", width = "1360"] = process.argv.slice(2);
+const b = await chromium.launch();
+const p = await b.newPage({ viewport: { width: Number(width), height: 900 } });
+await p.addInitScript((t) => { try { localStorage.setItem("lc.theme", t); } catch {} }, theme);
+await p.goto(url, { waitUntil: "networkidle" });
+await p.waitForTimeout(800);
+await p.screenshot({ path: out, fullPage: false });
+await b.close();
+console.log("saved", out);

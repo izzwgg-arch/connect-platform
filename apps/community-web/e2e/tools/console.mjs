@@ -1,0 +1,11 @@
+import { chromium } from "@playwright/test";
+const [url] = process.argv.slice(2);
+const b = await chromium.launch();
+const p = await b.newPage();
+p.on("console", (m) => console.log("[console]", m.type(), m.text().slice(0, 300)));
+p.on("pageerror", (e) => console.log("[pageerror]", e.message.slice(0, 500)));
+p.on("requestfailed", (r) => console.log("[reqfail]", r.url(), r.failure()?.errorText));
+await p.goto(url, { waitUntil: "networkidle" });
+await p.waitForTimeout(1500);
+console.log("[text]", (await p.locator("body").innerText()).slice(0, 300).replace(/\n/g, " | "));
+await b.close();
