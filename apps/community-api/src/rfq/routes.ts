@@ -377,11 +377,20 @@ export async function registerRfqRoutes(app: FastifyInstance, db: Db) {
     for (const m of matched) inviteMap.set(m.organizationId, m.reason);
     for (const id of new Set(body.inviteOrganizationIds ?? [])) inviteMap.set(id, "invited directly");
 
-    for (const [organizationId, reason] of inviteMap) {
-      await db.rfqInvite.upsert({ where: { rfqId_organizationId: { rfqId: rfq.id, organizationId } }, create: { rfqId: rfq.id, organizationId, reason }, update: {} });
-      const holders = await quoteHolders(db, organizationId);
-      for (const personId of holders) {
-        await notify(db, { personId, kind: "rfq.invite", title: "New request for a quote", body: rfq.title, href: `/rfq/${rfq.id}`, actorId: actor.personId, objectType: "Rfq", objectId: rfq.id, groupKey: `rfq-invite:${organizationId}` });
+    if (inviteMap.size) {
+      await db.rfqInvite.createMany({ data: [...inviteMap].map(([organizationId, reason]) => ({ rfqId: rfq.id, organizationId, reason })), skipDuplicates: true });
+      // Everyone who may quote at any invited org, in one query; notifications fan out in parallel batches.
+      const holders = await db.membership.findMany({
+        where: { organizationId: { in: [...inviteMap.keys()] }, affiliation: { in: ["VERIFIED_ADMIN", "VERIFIED_DOMAIN"] } },
+        select: { personId: true, organizationId: true, role: true, permissions: true },
+      });
+      const targets = holders.filter((m) => permissionsForMembership(m).has("org.quote"));
+      for (let i = 0; i < targets.length; i += 10) {
+        await Promise.all(
+          targets.slice(i, i + 10).map((m) =>
+            notify(db, { personId: m.personId, kind: "rfq.invite", title: "New request for a quote", body: rfq.title, href: `/rfq/${rfq.id}`, actorId: actor.personId, objectType: "Rfq", objectId: rfq.id, groupKey: `rfq-invite:${m.organizationId}` }),
+          ),
+        );
       }
     }
 

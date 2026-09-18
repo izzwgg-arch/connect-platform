@@ -1,7 +1,7 @@
 import type { Db } from "../db.js";
 import { Prisma } from "../db.js";
 import { ftsIds } from "../lib/search.js";
-import { degreeBetween } from "../policy/graph.js";
+import { connectionIds } from "../policy/graph.js";
 import { CATEGORY_KEYWORDS } from "./policy.js";
 
 export type MatchInput = {
@@ -55,16 +55,13 @@ export async function matchVendors(db: Db, input: MatchInput): Promise<MatchedVe
   const verified = await db.verification.findMany({ where: { organizationId: { in: orgIds }, kind: "BUSINESS", status: "VERIFIED" }, select: { organizationId: true } });
   const verifiedSet = new Set(verified.map((v) => v.organizationId));
 
+  // "In the buyer's network" = an owner/admin is a 1st-degree connection — one
+  // query for the buyer's connections, not one degree lookup per member.
+  const mine = new Set(await connectionIds(db, input.buyerPersonId));
   const networkSet = new Set<string>();
   for (const id of orgIds) {
     const org = orgById.get(id)!;
-    for (const m of org.memberships) {
-      // eslint-disable-next-line no-await-in-loop
-      if ((await degreeBetween(db, input.buyerPersonId, m.personId)) === 1) {
-        networkSet.add(id);
-        break;
-      }
-    }
+    if (org.memberships.some((m) => mine.has(m.personId))) networkSet.add(id);
   }
 
   orgIds.sort((a, b) => {

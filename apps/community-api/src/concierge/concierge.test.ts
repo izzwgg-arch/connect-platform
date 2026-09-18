@@ -39,10 +39,13 @@ test("understand() uses Claude through the tool schema when a key is set, and fa
 test("ask returns only real matches with why-lines and signed actions; act needs confirmation and posts a real RFQ inviting the match", async () => {
   const app = await testApp();
   const vendorOwner = await createUser(app, { firstName: "Shloimy", lastName: uniq("Weiss") });
-  const org = await createOrg(app, vendorOwner, `Weiss Embroidery ${uniq()}`);
-  await tdb().organization.update({ where: { id: org.id }, data: { searchText: `${org.displayName} embroidery uniforms jackets monroe`, description: "Custom embroidery" } });
+  // A word unique to this org so the thousands of embroidery rows a shared dev db
+  // accumulates cannot crowd it out of the top matches.
+  const brand = `zohar${uniq()}`;
+  const org = await createOrg(app, vendorOwner, `${brand} Embroidery`);
+  await tdb().organization.update({ where: { id: org.id }, data: { searchText: `${org.displayName} ${brand} embroidery uniforms jackets monroe`.toLowerCase(), description: "Custom embroidery" } });
   const buyer = await createUser(app);
-  const ask = await api(app, { method: "POST", url: "/concierge/ask", token: buyer.accessToken, payload: { question: "I need an embroidery shop for 25 jackets delivered to Monroe by October 20" } });
+  const ask = await api(app, { method: "POST", url: "/concierge/ask", token: buyer.accessToken, payload: { question: `I need a ${brand} embroidery shop for 25 jackets delivered to Monroe by October 20` } });
   assert.equal(ask.status, 200, JSON.stringify(ask.body));
   assert.equal(ask.body.intent.kind, "find_vendor");
   const orgMatch = ask.body.matches.find((m: any) => m.type === "organizations" && m.id === org.id);
