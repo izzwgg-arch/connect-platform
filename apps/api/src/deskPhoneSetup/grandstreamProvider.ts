@@ -12,6 +12,7 @@
  * ⛔ A claim is proven by READING THE DEVICE BACK, not by the add call answering.
  */
 import { createHash } from "node:crypto";
+import { assertRedirectConfigSafe, type RedirectDelivery } from "./gdmsRedirect";
 import {
   cleanSerialNumber,
   formatMac,
@@ -29,6 +30,7 @@ import {
   type ResetAuthorization,
 } from "./deviceProvider";
 import { assertGdmsRuntimeMode, GdmsClient, type GdmsCredentials } from "./gdmsClient";
+import { DeviceError } from "./yealinkRps";
 
 export const GRANDSTREAM_SUPPORTED_ACTIONS = ["lookup", "claim", "reboot", "factory_reset", "status"] as const;
 
@@ -141,10 +143,15 @@ export class GrandstreamProvider extends BaseDeviceProvider {
    * owns getting a correct one (a clean per-model template, not another tenant's). This method
    * only delivers; it does not judge the config's contents.
    */
-  async pushConfig(input: { mac: string; xml: string }): Promise<ActionResult> {
+  async pushConfig(input: { mac: string; xml: string; allowedHosts?: readonly string[] }): Promise<ActionResult> {
     const n = normalizeMac(input.mac);
     if (!n) return providerFailure("invalid_mac", this.makerName);
     try {
+      // ⛔⛔ THE TARGET FENCE, before anything leaves for the cloud. A config whose provisioning
+      // server (P237) or SIP server (P47) is a private / VPN / loopback address — the proven
+      // 10.8.0.1 bug — or a public host that is not ours is REFUSED here, never pushed. The route
+      // passes the Loopcom host allow-list; this always runs the address gate even without it.
+      assertRedirectConfigSafe(input.xml, input.allowedHosts ?? []);
       const client = await this.client();
       if (!client) return providerFailure("cloud_not_configured", this.makerName);
       // orgId omitted → GDMS uses the account's default org (where the device was claimed).
@@ -153,6 +160,46 @@ export class GrandstreamProvider extends BaseDeviceProvider {
     } catch (err) {
       return failureFromError(err, this.makerName);
     }
+  }
+
+  /** GDMS's view of a claimed device: is it connected (online), and has it taken our config
+   *  (synchronized)? Both null when unreadable — never guessed. `found:false` = not in our GDMS. */
+  async deviceStatus(mac: string): Promise<{ found: boolean; online: boolean | null; synchronized: boolean | null }> {
+    const n = normalizeMac(mac);
+    if (!n) return { found: false, online: null, synchronized: null };
+    try {
+      const client = await this.client();
+      if (!client) return { found: false, online: null, synchronized: null };
+      const d = await client.findDevice(n);
+      if (!d) return { found: false, online: null, synchronized: null };
+      return { found: true, online: d.online, synchronized: d.synchronized };
+    } catch {
+      return { found: false, online: null, synchronized: null };
+    }
+  }
+
+  /**
+   * The full REDIRECT, in one call the wizard can act on honestly. Points a claimed Grandstream
+   * at our phoneprov folder over the cloud (fenced), then reads GDMS back to say how far it got:
+   * `delivered` (the phone took the config), `sent_applying` (pushed, online, sync not yet
+   * confirmed), `queued_offline` (pushed, but the phone has not checked into GDMS — GDMS holds it
+   * until it does), `not_claimed`, or `refused`. Never throws.
+   */
+  async deliverRedirect(input: { mac: string; xml: string; allowedHosts?: readonly string[] }): Promise<RedirectDelivery> {
+    const n = normalizeMac(input.mac);
+    if (!n) return { state: "refused", code: "invalid_mac" };
+    // Fence before any network call — a bad target never reaches the cloud.
+    try { assertRedirectConfigSafe(input.xml, input.allowedHosts ?? []); }
+    catch (err) { return { state: "refused", code: err instanceof DeviceError ? err.code : "gdms_redirect_target_refused" }; }
+    const before = await this.deviceStatus(n);
+    if (!before.found) return { state: "not_claimed" };
+    const pushed = await this.pushConfig({ mac: n, xml: input.xml, allowedHosts: input.allowedHosts });
+    if (!pushed.ok) return { state: "refused", code: pushed.code ?? "gdms_request_rejected" };
+    if (before.online === false) return { state: "queued_offline" };
+    const after = await this.deviceStatus(n);
+    if (after.synchronized === true) return { state: "delivered" };
+    if (after.online === false) return { state: "queued_offline" };
+    return { state: "sent_applying" };
   }
 
   private async task(mac: string, type: "reboot" | "factory_reset"): Promise<ActionResult> {

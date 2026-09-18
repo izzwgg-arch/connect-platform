@@ -30,6 +30,8 @@ type SimDevice = {
    */
   owner: "ours" | "other" | "unowned";
   deviceName?: string;
+  /** Has the device applied a pushed config? Set true when a config is pushed while online. */
+  synchronized?: boolean;
 };
 
 export type SimFailure = "timeout" | "401" | "429" | "500" | "timeout_after_add" | "token_401";
@@ -132,6 +134,10 @@ export class GdmsSimulator {
       if (!mac) return json(200, { data: null, msg: "mac required", retCode: 50005 });
       if (!xml.includes("<gs_provision")) return json(200, { data: null, msg: "bad xml", retCode: 50005 });
       this.pushedConfigs.set(mac, xml);
+      const dev = this.devices.get(mac);
+      // A push to an ONLINE device is applied (synchronized); to an OFFLINE device it queues in
+      // GDMS and applies only when the device next checks in — modelled here as staying unsynced.
+      if (dev && dev.owner === "ours" && dev.status === "online") dev.synchronized = true;
       return json(200, { data: "", msg: "", retCode: 0 });
     }
 
@@ -143,6 +149,9 @@ export class GdmsSimulator {
     const row = (d: SimDevice) => ({
       mac: formatMac(d.mac), model: d.model, sn: d.sn, firmwareVersion: d.firmwareVersion,
       status: d.status, deviceName: d.deviceName ?? null, siteId: 1,
+      // ⛔ GDMS reports isSynchronized:1 once the device has PULLED + APPLIED a pushed config.
+      // An online device that took a config is synchronized; an offline one holds it queued.
+      isSynchronized: d.synchronized ? 1 : 0,
     });
 
     switch (api) {

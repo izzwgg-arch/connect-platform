@@ -206,7 +206,7 @@ test("the FORM signature sorts all params and uses the file's md5 (proven live f
 test("pushConfig delivers a gs_provision config to the device over the cloud, and GDMS stores it", async () => {
   const sim = new GdmsSimulator();
   const p = grandstream(sim);
-  const xml = "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>";
+  const xml = "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47><P212>2</P212><P237>209.145.60.79/phoneprov/a70274ea0f143ca0</P237></config></gs_provision>";
   const r = await p.pushConfig({ mac: MAC, xml });
   assert.equal(r.ok, true, JSON.stringify(r));
   if (!r.ok) return;

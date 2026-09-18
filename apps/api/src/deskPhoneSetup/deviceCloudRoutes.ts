@@ -66,6 +66,7 @@ import {
   vendorCloudStateFor,
 } from "./deviceIdentityStore";
 import { assertGdmsRuntimeMode, GdmsClient } from "./gdmsClient";
+import { hostOf } from "./gdmsRedirect";
 import { labelTextsFromSymbols, readLabelBarcodes } from "./labelBarcodes";
 import {
   describeGdmsCredentials,
@@ -1151,11 +1152,43 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
       if (row.vendorCloudState !== "managed" && cloud.managedByUs !== true) return;
       if (ran.some((r) => r.step === "factory_reset" && r.result.ok)) return; // wiping — next time
       if (!ctx.renderDeviceConfig) return;
+      if (typeof (provider as any).deliverRedirect !== "function") return; // older provider surface
       const xml = await ctx.renderDeviceConfig(user.tenantId, String(row.macAddress)).catch(() => null);
       if (!xml) return;
-      const pushed = await provider.pushConfig({ mac: String(row.macAddress), xml });
-      ran.push({ step: "reprovision", result: pushed });
-      await auditStep(deps, user, row, provider, "reprovision", pushed);
+
+      // ⛔⛔ THE REDIRECT (2026-09-18, Izzy: "Build the GDMS redirect"). Point the phone at OUR
+      // phoneprov folder over the cloud, FENCED so a config whose provisioning/SIP server is not
+      // ours (the proven 10.8.0.1 VPN bug) is refused before it is pushed, and read GDMS back so
+      // the wizard says the honest thing: delivered, still applying, or queued until the phone
+      // next checks into GDMS. The allow-list is the tenant's OWN provisioning host; a public IP
+      // (our PBX) passes the address gate on its own.
+      let allowedHosts: string[] = [];
+      try {
+        const folder = await ctx.provisioningUrlFor(user.tenantId);
+        const h = hostOf(folder);
+        if (h) allowedHosts = [h];
+      } catch { allowedHosts = []; }
+
+      const delivery = await (provider as any).deliverRedirect({ mac: String(row.macAddress), xml, allowedHosts })
+        .catch(() => ({ state: "refused", code: "gdms_redirect_error" }));
+
+      // Record it as a `reprovision` step in the honest shape the rest of /prepare uses, and
+      // reflect the delivery on the row + audit so a technician can see WHY a phone is or is not up.
+      const ok = delivery.state === "delivered" || delivery.state === "sent_applying" || delivery.state === "queued_offline";
+      const message = delivery.state === "delivered" ? "Loopcom settings delivered to the phone through Grandstream."
+        : delivery.state === "sent_applying" ? "Loopcom settings sent; the phone is applying them."
+        : delivery.state === "queued_offline" ? "Loopcom settings are waiting for the phone to check in to Grandstream, then they apply."
+        : delivery.state === "not_claimed" ? "The phone is not in Loopcom's Grandstream account yet."
+        : "Loopcom could not send these settings.";
+      const result: ActionResult = ok
+        ? { ok: true, outcome: "accepted", taskId: null, message }
+        : { ok: false, code: delivery.code ?? delivery.state, message, staffMessage: message, retryable: delivery.state === "not_claimed" };
+      ran.push({ step: "reprovision", result });
+      await auditStep(deps, user, row, provider, "reprovision", result, { redirect: delivery.state });
+      await db.deskPhoneSetupPhone.update({
+        where: { id: row.id },
+        data: { vendorCloudState: delivery.state === "not_claimed" ? row.vendorCloudState : "managed", vendorCloudCheckedAt: new Date() },
+      }).catch(() => null);
     }
 
     const respond = async (stoppedAt: PreparationStep | null, leftForOthers: PreparationStep[] = []) => {

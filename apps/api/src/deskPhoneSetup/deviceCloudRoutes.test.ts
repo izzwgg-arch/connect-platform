@@ -275,7 +275,7 @@ async function makeApp(user: any, opts: { registry?: any; renderConfig?: any; ma
     managedPhoneService: opts.managedPhoneService,
     // The clean per-model template's rendered config (stubbed; the real one fetches cfg<mac>.xml).
     renderDeviceConfig: opts.renderConfig ?? (async () =>
-      "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>"),
+      "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47><P212>2</P212><P237>209.145.60.79/phoneprov/a70274ea0f143ca0</P237></config></gs_provision>"),
   });
   return app;
 }
@@ -805,9 +805,43 @@ test("SEND: a managed Grandstream gets its config pushed over the cloud — the 
   row.extNumber = "101"; row.extensionId = "e1"; row.resetCount = 1; // reset already done → no wipe this run
   await tick(app, runId, [row.id]);
   const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
-  assert.equal(sim.pushedConfigs.get(MAC12), "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47></config></gs_provision>", "the rendered config reached GDMS: " + JSON.stringify(out.ran));
+  assert.equal(sim.pushedConfigs.get(MAC12), "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>209.145.60.79</P47><P212>2</P212><P237>209.145.60.79/phoneprov/a70274ea0f143ca0</P237></config></gs_provision>", "the rendered config reached GDMS: " + JSON.stringify(out.ran));
   assert.ok(out.ran.some((x: any) => x.step === "reprovision" && x.ok), "a reprovision (cloud send) step ran: " + JSON.stringify(out.ran));
   assert.ok(state.audits.some((a: any) => a.action === "DESK_PHONE_PREPARE_STEP" && a.metadata.step === "reprovision"));
+});
+
+test("⛔ SEND (round GDMS-redirect, 2026-09-18): a config aimed at a VPN address is REFUSED, never pushed", async () => {
+  // The proven 10.8.0.1 bug: a contaminated template pointed the SIP server at another
+  // customer's VPN. Pushing that over the cloud would redirect the phone at an address it can
+  // never reach. The fence refuses BEFORE the cloud is touched.
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "online", owner: "ours" });
+  const app = await makeApp(CUSTOMER, {
+    renderConfig: async () =>
+      "<?xml version=\"1.0\"?><gs_provision version=\"1\"><config version=\"1\"><P47>10.8.0.1</P47><P237>209.145.60.79/phoneprov/a70274ea0f143ca0</P237></config></gs_provision>",
+  });
+  const { base, row, runId } = await runWithPhone(app);
+  row.extNumber = "101"; row.extensionId = "e1"; row.resetCount = 1;
+  await tick(app, runId, [row.id]);
+  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  assert.equal(sim.configPushCalls, 0, "the fence stopped it before GDMS");
+  const step = out.ran.find((x: any) => x.step === "reprovision");
+  assert.ok(step && step.ok === false, "the refusal is reported, not hidden: " + JSON.stringify(out.ran));
+});
+
+test("SEND to an OFFLINE phone reports it honestly as waiting, never as delivered", async () => {
+  reset();
+  sim.seed({ mac: MAC, model: "GXP2170", sn: SN, firmwareVersion: "1", status: "offline", owner: "ours" });
+  const app = await makeApp(CUSTOMER);
+  const { base, row, runId } = await runWithPhone(app);
+  row.extNumber = "101"; row.extensionId = "e1"; row.resetCount = 1;
+  await tick(app, runId, [row.id]);
+  const out = body(await app.inject({ method: "POST", url: `${base}/prepare`, payload: {} }));
+  const step = out.ran.find((x: any) => x.step === "reprovision");
+  assert.ok(step && step.ok === true, JSON.stringify(out.ran));
+  assert.match(String(step.message ?? ""), /waiting for the phone to check in/i,
+    "the words say queued, not delivered: " + JSON.stringify(step));
+  assert.equal(sim.configPushCalls, 1, "still pushed — GDMS holds it for the check-in");
 });
 
 test("SEND is skipped when there is no rendered config (never pushes an empty send)", async () => {

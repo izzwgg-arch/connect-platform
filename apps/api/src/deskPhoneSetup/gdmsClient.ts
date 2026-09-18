@@ -102,6 +102,11 @@ export type GdmsDevice = {
   firmware: string | null;
   /** null = GDMS did not say in a form we can read. Never guessed. */
   online: boolean | null;
+  /** Has the device pulled + applied the config we pushed? 1 → true, 0 → false, else null.
+   *  ⛔ Round GDMS-redirect (2026-09-18): this is how a config PUSH is verified as DELIVERED
+   *  rather than merely queued — GDMS's device row carries `isSynchronized` once the phone
+   *  has taken the config. Never guessed; an unreadable value stays null. */
+  synchronized: boolean | null;
   name: string | null;
   siteId: string | null;
 };
@@ -136,6 +141,14 @@ export function parseGdmsDevice(row: unknown): GdmsDevice | null {
     serialNumber: cleanSerialNumber(pick(r, ["sn", "serialNumber", "deviceSn"])),
     firmware: text(["firmwareVersion", "firmware", "version", "programVersion"], 40),
     online,
+    synchronized: (() => {
+      const s = pick(r, ["isSynchronized", "synchronized", "syncStatus", "synchronizeStatus"]);
+      if (typeof s === "boolean") return s;
+      if (typeof s === "number") return s === 1 ? true : s === 0 ? false : null;
+      if (typeof s === "string" && /^(1|true|yes)$/i.test(s.trim())) return true;
+      if (typeof s === "string" && /^(0|false|no)$/i.test(s.trim())) return false;
+      return null;
+    })(),
     name: text(["deviceName", "name"], 80),
     siteId: text(["siteId", "site_id"], 40),
   };
