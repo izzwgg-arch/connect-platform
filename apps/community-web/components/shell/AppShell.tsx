@@ -29,6 +29,7 @@ export const NAV: Array<{ section: string; items: Array<{ icon: string; label: s
       { icon: "tag", label: "Marketplace", href: "/marketplace" },
       { icon: "quote", label: "RFQs", href: "/rfq" },
       { icon: "spark", label: "Opportunities", href: "/opportunities" },
+      { icon: "star", label: "Concierge", href: "/concierge" },
     ],
   },
   {
@@ -43,18 +44,22 @@ export const NAV: Array<{ section: string; items: Array<{ icon: string; label: s
     items: [
       { icon: "bldg", label: "Company page", href: "/company" },
       { icon: "gear", label: "Company admin", href: "/company/admin" },
+      { icon: "brief", label: "Hiring", href: "/company/hiring" },
       { icon: "chart", label: "Analytics", href: "/company/analytics" },
     ],
   },
   {
     section: "Relationships",
-    items: [{ icon: "star", label: "My CRM", href: "/crm" }],
+    items: [
+      { icon: "star", label: "My CRM", href: "/crm" },
+      { icon: "spark", label: "For you", href: "/recommendations" },
+    ],
   },
 ];
 
 function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
-  if (href === "/company") return pathname === "/company" || (pathname.startsWith("/company/") && !pathname.startsWith("/company/admin") && !pathname.startsWith("/company/analytics"));
+  if (href === "/company") return pathname === "/company" || (pathname.startsWith("/company/") && !pathname.startsWith("/company/admin") && !pathname.startsWith("/company/analytics") && !pathname.startsWith("/company/hiring"));
   return pathname === href || pathname.startsWith(href + "/");
 }
 
