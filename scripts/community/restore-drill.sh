@@ -15,11 +15,12 @@ if [[ "$latest" == *.gpg ]]; then
 fi
 admin_url="${COMMUNITY_DATABASE_URL%/*}/postgres"
 scratch="community_restore_drill_$(date +%s)"
-psql "$admin_url" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$scratch\""
-trap 'psql "$admin_url" -c "DROP DATABASE IF EXISTS \"$scratch\"" >/dev/null' EXIT
+psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$scratch\"" "$admin_url"
+trap 'psql -c "DROP DATABASE IF EXISTS \"$scratch\"" "$admin_url" >/dev/null' EXIT
 pg_restore --no-owner --no-privileges --dbname="${COMMUNITY_DATABASE_URL%/*}/$scratch" "$work"
 # Integrity: every migration recorded, relationships intact, counts sane.
-psql "${COMMUNITY_DATABASE_URL%/*}/$scratch" -v ON_ERROR_STOP=1 -tA <<'SQL'
+# Options BEFORE the connection string: Windows getopt stops at the first positional argument.
+psql -v ON_ERROR_STOP=1 -tA "${COMMUNITY_DATABASE_URL%/*}/$scratch" <<'SQL'
 SELECT 'migrations', count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL;
 SELECT 'people', count(*) FROM "Person";
 SELECT 'orphan_profiles', count(*) FROM "Profile" p LEFT JOIN "Person" q ON q.id = p."personId" WHERE q.id IS NULL;

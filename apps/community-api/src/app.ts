@@ -93,7 +93,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
   app.get("/health", async () => {
     const t0 = Date.now();
     await db.$queryRaw`SELECT 1`;
-    return { ok: true, service: "community-api", dbMs: Date.now() - t0, at: new Date().toISOString() };
+    const mem = process.memoryUsage();
+    return { ok: true, service: "community-api", dbMs: Date.now() - t0, rssMb: Math.round(mem.rss / 1048576), heapMb: Math.round(mem.heapUsed / 1048576), uptimeSec: Math.round(process.uptime()), at: new Date().toISOString() };
   });
 
   registerActorResolution(app, db);

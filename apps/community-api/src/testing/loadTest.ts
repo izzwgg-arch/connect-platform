@@ -99,10 +99,10 @@ async function main() {
   console.log(`load: ${USERS} virtual users, ${SECONDS}s, ramp ${RAMP_MS}ms → ${BASE}`);
   const start = Date.now();
   const end = start + SECONDS * 1000;
-  const healthSamples: Array<{ at: number; dbMs: number; inflight: number }> = [];
+  const healthSamples: Array<{ at: number; dbMs: number; rssMb: number; inflight: number }> = [];
   const monitor = setInterval(async () => {
     const h = await fetch(`${BASE}/health`).then((r) => r.json()).catch(() => null);
-    healthSamples.push({ at: Date.now() - start, dbMs: h?.dbMs ?? -1, inflight });
+    healthSamples.push({ at: Date.now() - start, dbMs: h?.dbMs ?? -1, rssMb: h?.rssMb ?? -1, inflight });
   }, 30_000);
   const workers = Array.from({ length: USERS }, async (_, i) => {
     await sleep((i / USERS) * RAMP_MS);
