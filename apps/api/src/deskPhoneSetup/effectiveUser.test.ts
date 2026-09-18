@@ -2,8 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { effectiveDeskPhoneUser, tenantContextOf } from "./effectiveUser";
 
-const ADMIN_TENANT = "11111111-1111-4111-8111-111111111111";
-const CUSTOMER = "22222222-2222-4222-8222-222222222222";
+// ⛔ Real shapes: the platform tenant is a slug, customers are CUIDs. Never UUIDs.
+const ADMIN_TENANT = "connect-admin-tenant-v1";
+const CUSTOMER = "cmnlgryll000lp9paakiiyizj";
 const req = (role: string, ctx?: string) => ({
   user: { sub: "u1", tenantId: ADMIN_TENANT, email: "izzy@loopcom.net", role },
   headers: ctx === undefined ? {} : { "x-tenant-context": ctx },
@@ -26,11 +27,16 @@ describe("effectiveDeskPhoneUser — the super-admin tenant switcher reaches the
     assert.equal(effectiveDeskPhoneUser(req("SUPER_ADMIN", "")).tenantId, ADMIN_TENANT);
     assert.equal(effectiveDeskPhoneUser(req("SUPER_ADMIN", ADMIN_TENANT)).tenantId, ADMIN_TENANT);
   });
-  it("only a UUID-shaped context counts (a slug, a path, an injection attempt are ignored)", () => {
+  it("a CUID or a slug counts; a vpbx: slug, 'local', a path or an injection attempt do not", () => {
+    assert.equal(tenantContextOf({ headers: { "x-tenant-context": CUSTOMER } }), CUSTOMER);
+    assert.equal(tenantContextOf({ headers: { "x-tenant-context": "connect-admin-tenant-v1" } }), "connect-admin-tenant-v1");
     assert.equal(tenantContextOf({ headers: { "x-tenant-context": "vpbx:landau" } }), null);
+    assert.equal(tenantContextOf({ headers: { "x-tenant-context": "local" } }), null);
     assert.equal(tenantContextOf({ headers: { "x-tenant-context": "../etc" } }), null);
+    assert.equal(tenantContextOf({ headers: { "x-tenant-context": "a b" } }), null);
+    assert.equal(tenantContextOf({ headers: { "x-tenant-context": "x".repeat(70) } }), null);
     assert.equal(tenantContextOf({ headers: { "x-tenant-context": " " + CUSTOMER + " " } }), CUSTOMER);
-    assert.equal(effectiveDeskPhoneUser(req("SUPER_ADMIN", "not-a-uuid")).tenantId, ADMIN_TENANT);
+    assert.equal(effectiveDeskPhoneUser(req("SUPER_ADMIN", "no")).tenantId, ADMIN_TENANT, "too short");
   });
   it("no user → undefined passes through (the route's own 401 fires)", () => {
     assert.equal(effectiveDeskPhoneUser({ headers: {} }), undefined);

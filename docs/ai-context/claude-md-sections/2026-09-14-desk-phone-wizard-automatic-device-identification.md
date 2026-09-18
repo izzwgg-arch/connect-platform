@@ -393,3 +393,18 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   guard trips on line endings), install with `powershell Start-Process <exe> -ArgumentList '/S' -Wait`,
   then relaunch `%LOCALAPPDATA%\Programs\@connectdesktop\Loopcom.exe` (the silent install closes
   the app and does not reopen it); the app's log is `%APPDATA%\@connect\desktop\logs\connect.log`.
+- ✅ **ROUND 31 (2026-09-18, Izzy's SECOND walk): "I switched to a different tenant and it still says
+  no extensions" + "it keeps asking me what the screen says — it should be able to see the screen".**
+  (1) ⛔⛔ MY BUG: `effectiveUser.ts` checked the tenant-context header for a UUID, but tenant ids here
+  are CUIDs (`cmnlgryll000lp9paakiiyizj`) and slugs (`connect-admin-tenant-v1`) — every real header
+  was silently ignored and the api kept answering for the admin's own tenant. Now the id alphabet the
+  chat door accepts (`[A-Za-z0-9][A-Za-z0-9_-]{5,63}`, not `local`, not `vpbx:`), tests use the real
+  shapes. R28's "verified" was containers + a 403 probe, never a real switch — the walk was the test.
+  (2) The settings page keys the setup on the acting `tenantId`: switching customers mid-setup
+  REMOUNTS (a run belongs to one tenant; the old run 404s under the new header and had kept its
+  empty list). (3) Laybel now SEES WHAT THE ROBOT SAW: the guided screen remembers every `web_probe`
+  per phone (family, login worked, factory password, model, firmware, whether it points at Loopcom)
+  and sends it with the driver's last six lines as `observed.robot` → `GuideFacts.robot`; playbook
+  rule 4 now says: answer from it first, say what you see, never ask what the screen says when the
+  robot already knows, ask about the physical screen only during THEIR reset step or when the phone
+  is unreachable, and then for one specific thing. ⏳ Izzy walks it a third time.

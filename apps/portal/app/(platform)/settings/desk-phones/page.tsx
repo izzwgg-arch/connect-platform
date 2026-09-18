@@ -18,6 +18,7 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet } from "../../../../services/apiClient";
 import { DeskPhoneWizard } from "../../../../components/deskPhones/DeskPhoneWizard";
 import { GuidedPhoneSetup } from "../../../../components/deskPhones/GuidedPhoneSetup";
+import { useAppContext } from "../../../../hooks/useAppContext";
 
 type SetupState = {
   hasActiveRun: boolean;
@@ -44,6 +45,7 @@ export default function DeskPhonesPage() {
 }
 
 function DeskPhonesConsole() {
+  const { tenantId } = useAppContext();
   const [state, setState] = useState<SetupState | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   /** The guided one-phone-at-a-time setup is the door (2026-09-18); the classic wizard stays one click away. */
@@ -69,7 +71,12 @@ function DeskPhonesConsole() {
   if (wizardOpen) {
     return (
       <div style={{ padding: 24 }}>
-        {classic ? <DeskPhoneWizard onClose={closeWizard} /> : <GuidedPhoneSetup onClose={closeWizard} onClassic={() => setClassic(true)} />}
+        {/* ⛔ keyed on the acting tenant: switching customers mid-setup is a NEW setup (a run
+            belongs to one tenant; the old one would 404 under the new header — Izzy's second
+            walk, 2026-09-18, kept an old run's empty extension list after switching). */}
+        {classic
+          ? <DeskPhoneWizard key={`classic:${tenantId}`} onClose={closeWizard} />
+          : <GuidedPhoneSetup key={`guided:${tenantId}`} onClose={closeWizard} onClassic={() => setClassic(true)} />}
       </div>
     );
   }

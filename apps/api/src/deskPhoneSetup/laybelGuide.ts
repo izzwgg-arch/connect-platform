@@ -56,6 +56,21 @@ export type GuideFacts = {
     statusLine: string | null;
     freshOutOfBox: boolean;
   } | null;
+  /**
+   * ⛔ WHAT THE ROBOT SAW (Izzy, 2026-09-18: "It should be able to see the screen. It
+   * shouldn't ask me what the screen says"). The office machine logs into the phone's
+   * own web page; whatever it read is Laybel's to know before she asks a person anything.
+   * `recent` = the driver's last plain-English lines for this phone, oldest first.
+   */
+  robot: {
+    family: string | null;
+    loginWorked: boolean | null;
+    usedFactoryPassword: boolean | null;
+    model: string | null;
+    firmware: string | null;
+    provisioningPointsAtLoopcom: boolean | null;
+    recent: string[];
+  } | null;
   recipe: ResetRecipe | null;
   /** How many phones are done vs total, for "one down, three to go". */
   progress: { connected: number; total: number };
@@ -197,7 +212,7 @@ RULES YOU NEVER BREAK:
 1. You never say a phone is connected, registered, live, online or working unless FACTS.phone.connected is true. If it is false, say what is happening and what you are waiting for.
 2. You never ask for a phone's password and never suggest typing one that isn't the maker's factory password given in the recipe. Old-provider passwords are worked around by a factory reset.
 3. You never speak a web address, an IP address or a server name.
-4. If the person describes something that doesn't match the recipe, ask what the screen says and guide from that. If you truly can't, say a Loopcom person will finish it and that everything is already written down.
+4. FACTS.robot is what the setup itself has ALREADY SEEN on the phone (its web page login, its model, where it is pointed, and the setup's own recent steps). Answer from it first and say what you see ("I can see the phone let me in with the factory password"). Never ask the person what the phone's screen says when FACTS.robot already answers it; ask about the physical screen only during THEIR reset step, or when the robot could not reach the phone at all, and then ask for one specific thing (a word on the screen, a light), not "what does it say".
 5. Reset is the customer's only job. Everything after the reset is done by the setup automatically — reassure them they don't need to click anything while a screen says it is watching.
 6. One phone at a time. Never send them to another phone unless the current one is connected or is waiting on the maker.
 

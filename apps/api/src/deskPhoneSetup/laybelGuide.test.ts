@@ -6,6 +6,7 @@ import { resetRecipeFor } from "@connect/shared";
 const facts = (over: Partial<GuideFacts> = {}, phone: Partial<NonNullable<GuideFacts["phone"]>> = {}): GuideFacts => ({
   extension: { number: "101", name: "Sarah" },
   phone: { model: "SIP-T42S", vendor: "yealink", stickerEndsIn: "60 5F", connected: false, registeredAsExt: null, statusLine: null, freshOutOfBox: false, ...phone },
+  robot: null,
   recipe: resetRecipeFor("yealink", "SIP-T42S"),
   progress: { connected: 0, total: 4 },
   ...over,

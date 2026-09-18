@@ -93,6 +93,20 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
   const [discoveryNote, setDiscoveryNote] = useState<string | null>(null);
   /** What the robot learned by LOOKING at each phone: fresh (factory password works) or not. */
   const [fresh, setFresh] = useState<Record<string, boolean | null>>({});
+  /** The robot's last look at each phone's web page — Laybel reads this before asking a person anything. */
+  const [probes, setProbes] = useState<Record<string, { family: string | null; loginWorked: boolean | null; usedFactoryPassword: boolean | null; model: string | null; firmware: string | null; provisioningPointsAtLoopcom: boolean | null }>>({});
+  const rememberProbe = useCallback((phoneId: string, r: any) => {
+    if (!r || r.ok !== true) return;
+    const url = typeof r.provisioningUrl === "string" ? r.provisioningUrl : null;
+    setProbes((p) => ({ ...p, [phoneId]: {
+      family: typeof r.family === "string" ? r.family : null,
+      loginWorked: typeof r.loginWorked === "boolean" ? r.loginWorked : null,
+      usedFactoryPassword: r.loginWorked === true ? r.usedDefault === true : null,
+      model: typeof r.model === "string" ? r.model : null,
+      firmware: typeof r.firmware === "string" ? r.firmware : null,
+      provisioningPointsAtLoopcom: url === null ? null : /connectcomunications\.com|loopcom|phoneprov/i.test(url),
+    } }));
+  }, []);
 
   const [phase, setPhase] = useState<Phase>("extension");
   const [focusExt, setFocusExt] = useState<Extension | null>(null);
@@ -160,6 +174,7 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
         observed: {
           freshOutOfBox: focusPhoneId ? fresh[focusPhoneId] === true : undefined,
           statusLine: focusPhoneId ? hints[focusPhoneId] : undefined,
+          robot: focusPhoneId ? { ...(probes[focusPhoneId] ?? {}), recent: timeline.slice(-6).map((t) => t.text) } : undefined,
         },
       });
       setCaptions((c) => [
@@ -174,7 +189,7 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
       /* the screen already says what is happening; a silent Laybel is not a broken setup */
       return undefined;
     }
-  }, [runId, focusPhoneId, captions, fresh, hints, language]);
+  }, [runId, focusPhoneId, captions, fresh, hints, language, probes, timeline]);
   const sayRef = useRef(laybelSay);
   sayRef.current = laybelSay;
 
@@ -258,10 +273,11 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
         const r = await bridge.run({ op: "web_probe", ip: p.ip, vendor: p.vendor ?? null }).catch(() => null);
         const isFresh = r?.ok === true && r.loginWorked === true && r.usedDefault === true ? true : r?.ok === true && r.loginWorked === false ? false : null;
         setFresh((f) => ({ ...f, [p.id]: isFresh }));
+        rememberProbe(p.id, r);
       }
     };
     await Promise.all([worker(), worker(), worker()]);
-  }, []);
+  }, [rememberProbe]);
 
   const discover = useCallback(async (id: string) => {
     const bridge = desktop()?.phoneSetup;
@@ -500,6 +516,7 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
     const look = async () => {
       const r = await bridge.run({ op: "web_probe", ip: focused.ip, vendor: focused.vendor ?? null }).catch(() => null);
       if (!live) return;
+      rememberProbe(focused.id, r);
       if (r?.ok === true && r.loginWorked === true && r.usedDefault === true) {
         setFresh((f) => ({ ...f, [focused.id]: true }));
         void restarted();
@@ -507,7 +524,7 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
     };
     const t = setInterval(look, FRESH_WATCH_MS);
     return () => { live = false; clearInterval(t); };
-  }, [screen, focused, saidRestarted, restarted]);
+  }, [screen, focused, saidRestarted, restarted, rememberProbe]);
 
   /* ── render ──────────────────────────────────────────────────────────── */
   const connectedCount = extRows.filter((r) => r.phone).length;

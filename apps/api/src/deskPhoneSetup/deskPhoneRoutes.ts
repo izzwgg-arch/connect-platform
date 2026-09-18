@@ -2184,7 +2184,20 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       message: z.string().max(600).optional(),
       transcript: z.array(z.object({ role: z.enum(["laybel", "customer"]), text: z.string().max(400) })).max(12).optional(),
       /** What the office machine observed about the phone, for WORDING only — never a decision. */
-      observed: z.object({ freshOutOfBox: z.boolean().optional(), statusLine: z.string().max(200).optional() }).optional(),
+      observed: z.object({
+        freshOutOfBox: z.boolean().optional(),
+        statusLine: z.string().max(200).optional(),
+        /** The robot's last look at this phone's web page, and the driver's recent lines. */
+        robot: z.object({
+          family: z.string().max(40).nullable().optional(),
+          loginWorked: z.boolean().nullable().optional(),
+          usedFactoryPassword: z.boolean().nullable().optional(),
+          model: z.string().max(60).nullable().optional(),
+          firmware: z.string().max(40).nullable().optional(),
+          provisioningPointsAtLoopcom: z.boolean().nullable().optional(),
+          recent: z.array(z.string().max(200)).max(8).optional(),
+        }).optional(),
+      }).optional(),
       /**
        * ⛔ "yi" = the customer reads Yiddish (Izzy, 2026-09-18). The brain still reasons in
        * English and the truth fence still runs on English; Yiddish Labs carries the words
@@ -2212,6 +2225,15 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         registeredAsExt: focused.registeredAsExt ?? null,
         statusLine: body.data.observed?.statusLine ?? focused.note ?? null,
         freshOutOfBox: body.data.observed?.freshOutOfBox === true,
+      } : null,
+      robot: body.data.observed?.robot ? {
+        family: body.data.observed.robot.family ?? null,
+        loginWorked: body.data.observed.robot.loginWorked ?? null,
+        usedFactoryPassword: body.data.observed.robot.usedFactoryPassword ?? null,
+        model: body.data.observed.robot.model ?? null,
+        firmware: body.data.observed.robot.firmware ?? null,
+        provisioningPointsAtLoopcom: body.data.observed.robot.provisioningPointsAtLoopcom ?? null,
+        recent: body.data.observed.robot.recent ?? [],
       } : null,
       recipe: focused ? resetRecipeFor(focused.vendor, focused.model) : null,
       progress: { connected: inSetup.filter((v: any) => v.connectedNow === true).length, total: inSetup.length || rows.length },
