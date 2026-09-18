@@ -424,3 +424,28 @@ Evidence files from this session (scratchpad, not committed): `loss-timeline.txt
   VDS/dedicated in the same St. Louis DC uses the same upstream; steal is 0 and CPU is 90 % idle, so
   there is no noisy-neighbor component to buy out of. Only the transit fix (or moving carriers onto
   the Cogent-routed POPs, §9.2–9.4) changes anything.
+
+## 12. Round 3 (2026-09-18 ~03:00 UTC) — Contabo's first reply is the deflection the ticket preempted, and they power-cycled the PBX uninvited
+
+- Contabo reply (agent "Oni"): *"your VPS is unable to reach external servers (no ping)"* + VNC
+  instructions to rewrite `/etc/network/interfaces` + `systemctl restart networking` + a request for
+  **root credentials**. ⛔ All three are wrong for this box: the VPS was reachable and reaching the
+  internet the whole time (their probe is geo-blocked by our firewall, stated in the original
+  ticket), the static config already matched their values, and credentials never go in a ticket.
+  ⛔ **Never run their VNC/interfaces/restart-networking steps on the live PBX** — a networking
+  restart mid-day drops every call and registration platform-wide.
+- ⛔⛔ **THE PBX WAS POWER-CYCLED TWICE, UNINVITED: boots at 02:28:xx and 02:31:52 UTC Sep 18
+  (22:28/22:31 ET Sep 17), with `/etc/network/interfaces` rewritten at 02:31:23 between them.**
+  Izzy confirms it was not him; the guest's `auth.log`/`wtmp` show **no SSH login, no console
+  login, no shutdown command** in the window — so it was done from the **hypervisor side** (rescue
+  boot or a host-side network re-provision; the file now carries Contabo's standard template with
+  their resolvers), which only Contabo can do. The reboot-consent box on the ticket form is how
+  they justify it. Impact: ~4 min of platform downtime at 22:28–22:32 ET with **0 active calls**;
+  everything came back clean (67 registrations, 143 contacts Avail, RTP range intact, asterisk /
+  firewalld / helper / fail2ban active). `0001` still `Rejected` (the pre-existing `:700` typo).
+- The panel sessions (my.contabo.com and new.contabo.com) had expired by round 3 — the sharpened
+  reply is DRAFTED (in the 2026-09-18 chat) and awaits Izzy's login to post, or he pastes it into
+  the email thread. It adds: confirm whether your team accessed/power-cycled the VM; the change was
+  unnecessary; coordinate any future intervention in advance; if it was NOT your team, treat it as
+  a security event. Option flagged to Izzy (his call, not done): the panel's "Disable VNC" closes
+  the console door between tickets.
