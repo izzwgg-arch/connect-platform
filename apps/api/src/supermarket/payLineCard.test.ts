@@ -1,7 +1,12 @@
 /**
- * payLineCard.test.ts — the 2026-09-17 NIGHT feature: "pay with a keyed card"
- * layered onto the Gesheft pay line (confirm's third option, the AGI card
- * door, the process-memory vault, card_save_choice/card_offer).
+ * payLineCard.test.ts — round 5 (2026-09-17 late night): "choose the card
+ * BEFORE charging" layered onto the Gesheft pay line. Confirm's "1" is back
+ * to plain accept (no "press 3") and silently lists the cards on file
+ * (`list_cards` / `cards_result`); the caller picks one by last four (or
+ * presses 9 for a new one) at the card_choice menu; a decline silently
+ * re-lists and replays the SAME menu, never re-asking the amount; the AGI
+ * card door, the process-memory vault, and card_save_choice (once/save) are
+ * unchanged from the 2026-09-17 night build.
  *
  * Drives the REAL modules (reducer, runtime, dialplan view, routes, vault)
  * against the faithful fakes in supermarketTestKit — no mocks of our own code,
@@ -18,8 +23,14 @@ import Fastify from "fastify";
 process.env.CREDENTIALS_MASTER_KEY = process.env.CREDENTIALS_MASTER_KEY || "ab".repeat(32);
 process.env.CDR_INGEST_SECRET = process.env.CDR_INGEST_SECRET || "card-door-secret-000111222333444";
 
-import { FakeDb, FakePos, makeSupermarketDb, mulberry32 } from "./supermarketTestKit";
-import { PAY_MAX_CARD_ENTRY_ATTEMPTS, initialPayIvrState, reducePayIvr } from "./payIvrCore";
+import { FakeDb, FakePos, makeSupermarketDb, maskedCard, mulberry32 } from "./supermarketTestKit";
+import {
+  PAY_MAX_AMOUNT_ATTEMPTS,
+  PAY_MAX_CARD_ENTRY_ATTEMPTS,
+  PAY_MAX_CHARGES_PER_CALL,
+  initialPayIvrState,
+  reducePayIvr,
+} from "./payIvrCore";
 import { runPayIvrStep, runPayIvrCardEntry, validateKeyedCard } from "./payIvrRuntime";
 import { payIvrDialplanView } from "./payIvrDialplan";
 import { vaultGet, vaultSize, CARD_VAULT_TTL_MS } from "./payCardVault";
@@ -83,24 +94,65 @@ async function toConfirm(
   return { out, step };
 }
 
-// ═══════════════════════ RULE 1 — confirm's third option ════════════════════
+// ═══════════════════════ RULE 1 — confirm is back to plain accept ═══════════
 
-test("confirm's prompt is 06_confirm_intro … 39_confirm_choice_card, and pressing 3 hands off to the AGI with no prompts of our own", async () => {
+test("confirm's prompt is 06_confirm_intro … 07_confirm_choice, with NO third 'press 3' option; pressing 1 silently lists the cards on file (list_cards, no prompts of our own)", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   const tenantId = "t-card-r1";
-  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [] });
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [{ id: "cdA", masked: maskedCard("1234") }] });
   await seedPosTenant(db, tenantId, pos);
   const clientFor = clientForFactory(new Map([[tenantId, pos]]));
   const deps = { db, clientFor: clientFor as any };
 
   const { out, step } = await toConfirm(deps, tenantId, "call-r1", "+18456624417", "4321");
   assert.ok(out.prompts.includes("06_confirm_intro"), "06_confirm_intro missing from the confirm lead");
-  assert.equal(out.prompts.at(-1), "39_confirm_choice_card");
+  assert.equal(out.prompts.at(-1), "07_confirm_choice", "confirm must be back to the plain two-option prompt, no 'press 3'");
+  assert.ok(!out.prompts.includes("39_confirm_choice_card"), "the retired three-option confirm prompt must never be named again");
 
-  const next = await step("3");
+  const next = await step("1");
+  // With a card on file, "1" silently lists the cards and lands on the
+  // card_choice menu — the menu prompts are real (they name the cards), but
+  // nothing plays BEFORE the register answers list_cards.
+  assert.equal(next.gather?.what, "menu");
+  assert.ok(next.prompts.includes("48_to_use_card_ending"));
+});
+
+test("with NO cards on file, confirm's '1' still emits list_cards silently first, then goes straight to keying one (12_no_card, action card)", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = "t-card-r1b";
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [] });
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+  const deps = { db, clientFor: clientFor as any };
+
+  const { step } = await toConfirm(deps, tenantId, "call-r1b", "+18456624417", "4321");
+  const next = await step("1");
+  assert.deepEqual(next.prompts, ["12_no_card"]);
   assert.equal(next.gather?.what, "card");
-  assert.deepEqual(next.prompts, [], "the dialplan must play nothing of ours before the AGI — it voices its own prompts");
+
+  const view = payIvrDialplanView(next);
+  assert.equal(view.action, "card");
+  assert.equal(view.maxDigits, 0);
+});
+
+test("pressing 9 at the card_choice menu (cards ARE on file) hands off to the AGI with no prompts of our own", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos();
+  const tenantId = "t-card-r1c";
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [{ id: "cdA", masked: maskedCard("1234") }] });
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+  const deps = { db, clientFor: clientFor as any };
+
+  const { step } = await toConfirm(deps, tenantId, "call-r1c", "+18456624417", "4321");
+  const menuOut = await step("1");
+  assert.equal(menuOut.gather?.what, "menu");
+
+  const next = await step("9");
+  assert.equal(next.gather?.what, "card");
+  assert.deepEqual(next.prompts, [], "explicitly asking for a new card must play nothing of ours before the AGI");
 
   const view = payIvrDialplanView(next);
   assert.equal(view.action, "card");
@@ -120,7 +172,7 @@ test("a valid keyed card lands in the vault under the session ROW id and advance
   const callId = "call-r2a";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
 
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
@@ -154,7 +206,7 @@ test("cardFailed:true clears the vault and lands on a person via 45_card_invalid
   const callId = "call-r2b";
 
   await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await runPayIvrStep(deps as any, { tenantId, callId, callerNumber: "+18456624417", digits: "3" });
+  await runPayIvrStep(deps as any, { tenantId, callId, callerNumber: "+18456624417", digits: "1" });
 
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
@@ -170,7 +222,7 @@ test("cardFailed:true clears the vault and lands on a person via 45_card_invalid
   // And through the actual door with cardFailed:true — same outcome.
   const callId2 = "call-r2b-2";
   await toConfirm(deps, tenantId, callId2, "+18456624417", "4321");
-  await runPayIvrStep(deps as any, { tenantId, callId: callId2, callerNumber: "+18456624417", digits: "3" });
+  await runPayIvrStep(deps as any, { tenantId, callId: callId2, callerNumber: "+18456624417", digits: "1" });
   const doorOut = await runPayIvrCardEntry(deps, { tenantId, callId: callId2, callerNumber: "+18456624417", cardFailed: true });
   assert.equal(doorOut.ok, false);
   assert.equal(doorOut.reason, "gave_up");
@@ -190,7 +242,7 @@ test("an invalid card shape (bad Luhn, month 13, cvv 2 digits) is refused by the
   const callId = "call-r2c";
 
   await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await runPayIvrStep(deps as any, { tenantId, callId, callerNumber: "+18456624417", digits: "3" });
+  await runPayIvrStep(deps as any, { tenantId, callId, callerNumber: "+18456624417", digits: "1" });
   const before = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(before.id);
 
@@ -221,7 +273,7 @@ test("empty digits while in card_entry re-enters the collector (action \"card\")
   assert.equal(PAY_MAX_CARD_ENTRY_ATTEMPTS, 2, "this test is written against a cap of 2 — update it if the cap changes");
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  let out = await step("3"); // attempt 1
+  let out = await step("1"); // attempt 1 (confirm -> silent list_cards -> 0 cards -> the collector)
   assert.equal(out.gather?.what, "card");
   out = await step(""); // attempt 2 — still the collector
   assert.equal(out.gather?.what, "card");
@@ -245,7 +297,7 @@ test("card_save_choice \"1\" charges once with an inline card body and NO cardId
   const callId = "call-r3a";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
   const doorOut = await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber: "+18456624417", card: goodCard() });
@@ -276,7 +328,7 @@ test("card_save_choice \"2\" stores the card first (POST /cards), then charges b
   const callId = "call-r3b";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
   await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber: "+18456624417", card: goodCard() });
@@ -296,7 +348,7 @@ test("card_save_choice \"2\" stores the card first (POST /cards), then charges b
   assert.equal(stored[0].id, chargeBodyKeyed.cardId);
 });
 
-test("exactly one charge per confirmation still holds when paying with a keyed card", () => {
+test("exactly one charge per confirmation still holds when paying with a keyed card (round 5: confirm '1' lists cards first; 0 on file goes straight to the collector)", () => {
   const events: Parameters<typeof reducePayIvr>[1][] = [
     { type: "call_start", callerKnown: true, callerAccountId: "c1" },
     { type: "digits", value: "1" },
@@ -305,7 +357,8 @@ test("exactly one charge per confirmation still holds when paying with a keyed c
     { type: "pin_result", ok: true, balanceCents: 10000 },
     { type: "digits", value: "2" },
     { type: "digits", value: "25*37" },
-    { type: "digits", value: "3" }, // pay with a different card
+    { type: "digits", value: "1" }, // confirm -> silent list_cards
+    { type: "cards_result", ok: true, cards: [] }, // nothing on file -> straight to the collector
     { type: "card_entered", ok: true, last4: "1111" },
     { type: "digits", value: "1" }, // once
   ];
@@ -318,7 +371,7 @@ test("exactly one charge per confirmation still holds when paying with a keyed c
   }
   const chargeEffects = outputs.flatMap((o) => o.effects).filter((e) => e.kind === "charge");
   assert.equal(chargeEffects.length, 1);
-  assert.deepEqual(chargeEffects[0], { kind: "charge", amountCents: 2537, chargeSeq: 1, cardMode: "once" });
+  assert.deepEqual(chargeEffects[0], { kind: "charge", amountCents: 2537, chargeSeq: 1, cardMode: "once", cardId: null });
   // a stray repeat of the same digit while charging must never charge again.
   const replay = reducePayIvr(state, { type: "digits", value: "1" });
   assert.equal(replay.effects.filter((e) => e.kind === "charge").length, 0);
@@ -326,7 +379,7 @@ test("exactly one charge per confirmation still holds when paying with a keyed c
 
 // ═══════════════════════ RULE 4 — no_card / declined branching ═════════════
 
-test("no card on file offers to key one, phase card_offer, gather menu", async () => {
+test("(round 5) 0 cards on file: confirm goes straight to keying one (12_no_card, phase card_entry, gather card) — the old card_offer menu step is gone", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   const tenantId = "t-card-r4a";
@@ -337,34 +390,52 @@ test("no card on file offers to key one, phase card_offer, gather menu", async (
   const callId = "call-r4a";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  const out = await step("1"); // try the card on file
-  assert.deepEqual(out.prompts, ["08_processing", "12_no_card", "40_card_offer"]);
-  assert.equal(out.gather?.what, "menu");
+  const out = await step("1"); // confirm -> silent list_cards -> 0 on file
+  assert.deepEqual(out.prompts, ["12_no_card"]);
+  assert.equal(out.gather?.what, "card");
+  assert.equal(out.gather?.maxDigits, 0);
   const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-  assert.equal(row.state.phase, "card_offer");
-
-  const next = await step("1"); // key a card now
-  assert.equal(next.gather?.what, "card");
+  assert.equal(row.state.phase, "card_entry");
 });
 
-test("\"2\" (or anything else) at card_offer goes to a person", async () => {
+test("(legacy) a resumed card_offer row from before round 5 (no longer reachable live) still obeys its old rules on replay: '1' keys a card, anything else is a person", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
-  const tenantId = "t-card-r4a2";
+  const tenantId = "t-card-legacy-offer";
   pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [] });
   await seedPosTenant(db, tenantId, pos);
   const clientFor = clientForFactory(new Map([[tenantId, pos]]));
   const deps = { db, clientFor: clientFor as any };
-  const callId = "call-r4a2";
 
-  const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("1");
-  const out = await step("2");
-  assert.equal(out.transfer, true);
-  assert.ok(out.prompts.includes("20_connect_person"));
+  db.seed("supermarketPayCall", {
+    tenantId,
+    callId: "call-legacy-offer-1",
+    callerNumber: "+18456624417",
+    state: { ...initialPayIvrState(), phase: "card_offer", posCustomerId: "c1", pinVerified: true, activePin: "4321", pendingCents: 500 },
+    posCustomerId: "c1",
+    chargeSeq: 0,
+    chargedCents: 0,
+    status: "open",
+  });
+  const keyOne = await runPayIvrStep(deps as any, { tenantId, callId: "call-legacy-offer-1", callerNumber: "+18456624417", digits: "1" });
+  assert.equal(keyOne.gather?.what, "card");
+
+  db.seed("supermarketPayCall", {
+    tenantId,
+    callId: "call-legacy-offer-2",
+    callerNumber: "+18456624417",
+    state: { ...initialPayIvrState(), phase: "card_offer", posCustomerId: "c1", pinVerified: true, activePin: "4321", pendingCents: 500 },
+    posCustomerId: "c1",
+    chargeSeq: 0,
+    chargedCents: 0,
+    status: "open",
+  });
+  const anythingElse = await runPayIvrStep(deps as any, { tenantId, callId: "call-legacy-offer-2", callerNumber: "+18456624417", digits: "2" });
+  assert.equal(anythingElse.transfer, true);
+  assert.ok(anythingElse.prompts.includes("20_connect_person"));
 });
 
-test("a declined KEYED card offers to try a different card without losing the pending amount", async () => {
+test("(round 5) a declined KEYED card, with NO cards on file, silently re-lists (finds none) and goes straight back to keying a card — amount kept", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   const tenantId = "t-card-r4b";
@@ -375,7 +446,8 @@ test("a declined KEYED card offers to try a different card without losing the pe
   const callId = "call-r4b";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321", "10*00");
-  await step("3");
+  const listed = await step("1"); // confirm -> silent list_cards -> 0 on file -> the collector
+  assert.deepEqual(listed.prompts, ["12_no_card"]);
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
   await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber: "+18456624417", card: goodCard() });
@@ -383,32 +455,79 @@ test("a declined KEYED card offers to try a different card without losing the pe
   pos.opts.declineCards = true;
   const out = await step("1"); // once — declined
   pos.opts.declineCards = false;
-  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "47_card_declined_offer"]);
-  assert.equal(out.gather?.what, "menu");
+  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "12_no_card"]);
+  assert.equal(out.gather?.what, "card");
   assert.equal(vaultGet(sessionId), null, "the vault must be empty after the declined attempt");
 
   const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-  assert.equal(row.state.phase, "card_offer");
+  assert.equal(row.state.phase, "card_entry");
   assert.equal(row.state.pendingCents, 1000, "the amount must be kept after a declined keyed card");
 });
 
-test("a declined CARD-ON-FILE charge keeps the OLD behavior: 11_declined then 05_amount_prompt, amount re-entry", async () => {
+test("(round 5) a declined CARD-ON-FILE charge silently re-lists and replays the SAME menu — a different card can be picked next; the amount is never re-asked", async () => {
   const db = makeSupermarketDb();
-  const pos = new FakePos({ declineCards: true });
+  const pos = new FakePos();
   const tenantId = "t-card-r4c";
-  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [{ id: "cd1", masked: "x" }] });
+  pos.addCustomer({
+    id: "c1",
+    phone10: "8456624417",
+    pin: "4321",
+    balanceCents: 10_000,
+    cards: [
+      { id: "cdA", masked: maskedCard("1111") },
+      { id: "cdB", masked: maskedCard("2222") },
+    ],
+  });
   await seedPosTenant(db, tenantId, pos);
   const clientFor = clientForFactory(new Map([[tenantId, pos]]));
   const deps = { db, clientFor: clientFor as any };
   const callId = "call-r4c";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  const out = await step("1"); // card on file
-  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "05_amount_prompt"]);
-  assert.equal(out.gather?.what, "amount");
+  const menuOut = await step("1"); // confirm -> silent list_cards -> 2 on file -> the menu
+  assert.equal(menuOut.gather?.what, "menu");
+  assert.ok(menuOut.prompts.includes("48_to_use_card_ending"));
+
+  pos.opts.declineCards = true;
+  const out = await step("1"); // pick card A — declined
+  pos.opts.declineCards = false;
+  assert.deepEqual(out.prompts.slice(0, 2), ["08_processing", "11_declined"], "a decline must lead with 08_processing, 11_declined");
+  assert.ok(out.prompts.includes("48_to_use_card_ending"), "the SAME menu must be replayed after a silent re-list");
+  assert.equal(out.gather?.what, "menu");
   const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-  assert.equal(row.state.phase, "amount_entry");
-  assert.equal(row.state.pendingCents, null, "the old card-on-file path clears pendingCents on decline, unlike the keyed path");
+  assert.equal(row.state.phase, "card_choice");
+  assert.equal(row.state.pendingCents, 1000, "the old card-on-file path used to clear the amount on decline — round 5 keeps it");
+
+  // a FRESH pick (the other card) now approves.
+  const approved = await step("2");
+  assert.ok(approved.prompts.includes("09_approved_intro"));
+  const lastCharge = [...pos.charges.values()].at(-1)!;
+  assert.equal(lastCharge.cardId, "cdB", "the second pick must charge the SECOND card, not silently retry the first");
+});
+
+test("(round 5) 3 consecutive declines hit PAY_MAX_AMOUNT_ATTEMPTS and land on a person: 11_declined then 20_connect_person, never a further re-list", async () => {
+  const db = makeSupermarketDb();
+  const pos = new FakePos({ declineCards: true });
+  const tenantId = "t-card-r4d";
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000, cards: [{ id: "cdA", masked: maskedCard("1111") }] });
+  await seedPosTenant(db, tenantId, pos);
+  const clientFor = clientForFactory(new Map([[tenantId, pos]]));
+  const deps = { db, clientFor: clientFor as any };
+  const callId = "call-r4d";
+
+  const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
+  let out = await step("1"); // menu
+  for (let i = 0; i < PAY_MAX_AMOUNT_ATTEMPTS - 1; i++) {
+    out = await step("1"); // pick the only card — declined, silently re-listed
+    assert.equal(out.gather?.what, "menu", `attempt ${i + 1} must still replay the menu`);
+  }
+  out = await step("1"); // final attempt — over the cap
+  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "20_connect_person"]);
+  assert.equal(out.transfer, true);
+  assert.equal(out.gather, null);
+  const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
+  assert.equal(row.state.phase, "human");
+  assert.equal(row.state.pendingCents, null, "the amount is finally cleared once capped to a person");
 });
 
 // ═══════════════════════ RULE 5 — the card number never leaks ══════════════
@@ -429,7 +548,7 @@ test("⛔ the card number never appears in the persisted session, any logged obj
   const callId = "call-r5";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
   const card = goodCard();
 
   // 1) the door's own response carries no digits.
@@ -486,7 +605,7 @@ test("a hangup step deletes the vault entry", async () => {
   const callId = "call-r6a";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
   const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
   const sessionId = String(session.id);
   await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber: "+18456624417", card: goodCard() });
@@ -506,7 +625,7 @@ test("vaultGet after TTL (injected `now`) returns null", async () => {
   assert.equal(get(id, t0 + CARD_VAULT_TTL_MS + 1), null, "the card must be gone just after the TTL");
 });
 
-test("a charge attempted with an empty vault is declined and returns to card_offer — never a charge on a card we don't hold", async () => {
+test("(round 5) a charge attempted with an empty vault is declined and re-lists to 0 cards — straight back to keying one, never a charge on a card we don't hold", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   const tenantId = "t-card-r6c";
@@ -517,7 +636,7 @@ test("a charge attempted with an empty vault is declined and returns to card_off
   const callId = "call-r6c";
 
   const { step } = await toConfirm(deps, tenantId, callId, "+18456624417", "4321");
-  await step("3");
+  await step("1"); // confirm -> silent list_cards -> 0 cards on file -> straight to the collector
   // Simulate the AGI's outcome WITHOUT ever putting a card in the vault (the
   // real trigger is an api restart / TTL between the two requests) by driving
   // the reducer event directly, bypassing runPayIvrCardEntry.
@@ -527,9 +646,10 @@ test("a charge attempted with an empty vault is declined and returns to card_off
   const chargesBefore = pos.charges.size;
   const out = await step("1"); // once
   assert.equal(pos.charges.size, chargesBefore, "a charge reached the register with no card in the vault");
-  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "47_card_declined_offer"]);
+  assert.deepEqual(out.prompts, ["08_processing", "11_declined", "12_no_card"]);
+  assert.equal(out.gather?.what, "card");
   const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-  assert.equal(row.state.phase, "card_offer");
+  assert.equal(row.state.phase, "card_entry");
 });
 
 // ═══════════════════════ ROUTE-LEVEL: the real HTTP door ════════════════════
@@ -580,7 +700,8 @@ test("POST /internal/supermarket/pay-ivr/card with the secret validates and vaul
   await app.inject({ method: "POST", url: stepUrl, payload: { tenantId, callId, digits: "4321" }, headers: stepHeaders });
   await app.inject({ method: "POST", url: stepUrl, payload: { tenantId, callId, digits: "2" }, headers: stepHeaders });
   await app.inject({ method: "POST", url: stepUrl, payload: { tenantId, callId, digits: "10*00" }, headers: stepHeaders });
-  const confirmRes = await app.inject({ method: "POST", url: stepUrl, payload: { tenantId, callId, digits: "3" }, headers: stepHeaders });
+  // confirm's "1" (0 cards on file) silently lists the cards and lands straight on the collector.
+  const confirmRes = await app.inject({ method: "POST", url: stepUrl, payload: { tenantId, callId, digits: "1" }, headers: stepHeaders });
   assert.equal(JSON.parse(confirmRes.body).action, "card");
 
   const cardRes = await app.inject({
@@ -622,7 +743,7 @@ test("POST /internal/supermarket/pay-ivr/card without the secret is refused (401
   assert.equal(wrongSecret.statusCode, 403, "a wrong secret must answer exactly like the internalGuard says for a bad header");
 });
 
-// ═══════════════════════ STRESS — rules 3–6 at volume ═══════════════════════
+// ═══════════════════════ STRESS (round 5) — rules 1–6 at volume ═════════════
 
 function cardPhone(i: number): string {
   return `932${String(i).padStart(7, "0")}`;
@@ -632,41 +753,41 @@ function cardPin(i: number): string {
 }
 
 test(
-  "CARD STRESS — 500 sessions x {card on file: none/declined/ok} x {keyed: once/save, valid/declined/gave-up} obey rules 3-6",
+  "CARD STRESS (round 5) — 500 sessions x {0,1,2,4 cards on file} x {pick ok / pick declined then pick other / 9 new card once / 9 new card save}: " +
+    "the charged cardId is always the one PICKED (never assumed first), a decline never charges again without a fresh pick, the amount survives " +
+    "every decline unchanged, and no call ever exceeds PAY_MAX_CHARGES_PER_CALL charges",
   async () => {
     const db = makeSupermarketDb();
     const pos = new FakePos();
-    const tenantId = "t-card-stress";
+    const tenantId = "t-card-stress2";
     await seedPosTenant(db, tenantId, pos);
     const clientFor = clientForFactory(new Map([[tenantId, pos]]));
     const deps = { db, clientFor: clientFor as any };
-    const rnd = mulberry32(20260917);
+    const rnd = mulberry32(20260918);
 
     const N = 500;
-    type Cof = "none" | "declined" | "ok";
-    type Choice = "once" | "save";
-    type Outcome = "valid" | "declined" | "gaveup";
-    const cofCounts: Record<Cof, number> = { none: 0, declined: 0, ok: 0 };
-    const choiceCounts: Record<Choice, number> = { once: 0, save: 0 };
-    const outcomeCounts: Record<Outcome, number> = { valid: 0, declined: 0, gaveup: 0 };
-    let vaultAlwaysEmptyAfterAttempt = 0;
+    const COF_OPTIONS = [0, 1, 2, 4] as const;
+    type Mode = "pick_ok" | "pick_declined_then_other" | "new_once" | "new_save";
+    const MODES: Mode[] = ["pick_ok", "pick_declined_then_other", "new_once", "new_save"];
+    const cofCounts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 4: 0 };
+    const modeCounts: Record<Mode, number> = { pick_ok: 0, pick_declined_then_other: 0, new_once: 0, new_save: 0 };
 
     for (let i = 0; i < N; i++) {
-      const cof: Cof = rnd() < 1 / 3 ? "none" : rnd() < 0.5 ? "declined" : "ok";
-      const keyedChoice: Choice = rnd() < 0.5 ? "once" : "save";
-      const keyedOutcome: Outcome = rnd() < 1 / 3 ? "valid" : rnd() < 0.5 ? "declined" : "gaveup";
+      const cof = COF_OPTIONS[Math.floor(rnd() * COF_OPTIONS.length)];
+      let mode = MODES[Math.floor(rnd() * MODES.length)];
+      // 0 cards on file can only ever key a new one — there is nothing to pick.
+      if (cof === 0 && (mode === "pick_ok" || mode === "pick_declined_then_other")) mode = rnd() < 0.5 ? "new_once" : "new_save";
       cofCounts[cof]++;
+      modeCounts[mode]++;
 
-      const callId = `cs-${i}`;
+      const callId = `cs2-${i}`;
       const callerNumber = cardPhone(i);
       const pin = cardPin(i);
-      pos.addCustomer({
-        id: `cs-${i}`,
-        phone10: callerNumber,
-        pin,
-        balanceCents: 500_000,
-        cards: cof === "none" ? [] : [{ id: `cd-${i}`, masked: "x" }],
-      });
+      const cards = Array.from({ length: cof }, (_, k) => ({
+        id: `cs2-${i}-card-${k}`,
+        masked: maskedCard(String(1000 + i * 10 + k).slice(-4)),
+      }));
+      pos.addCustomer({ id: `cs2-${i}`, phone10: callerNumber, pin, balanceCents: 500_000, cards });
 
       const step = (digits?: string, hangup?: boolean) => runPayIvrStep(deps as any, { tenantId, callId, callerNumber, digits, hangup });
       let out = await step();
@@ -680,70 +801,69 @@ test(
       out = await step("10*00");
       assert.equal(out.gather?.what, "confirm", `${callId}: confirm`);
 
-      pos.opts.declineCards = cof === "declined";
-      out = await step("1"); // try the card on file first
-      if (cof === "none") {
-        assert.deepEqual(out.prompts, ["08_processing", "12_no_card", "40_card_offer"], `${callId}: no_card prompts`);
-        out = await step("1"); // key one now
-      } else if (cof === "declined") {
-        assert.deepEqual(out.prompts, ["08_processing", "11_declined", "05_amount_prompt"], `${callId}: old decline prompts`);
-        assert.equal(out.gather?.what, "amount", `${callId}: must re-enter the amount, not offer a card`);
-        out = await step("10*00");
-        assert.equal(out.gather?.what, "confirm", `${callId}: confirm again`);
-        out = await step("3"); // now pay with a card instead
+      out = await step("1"); // confirm -> silent list_cards
+
+      if (cof === 0) {
+        assert.deepEqual(out.prompts, ["12_no_card"], `${callId}: 0-card lead-in`);
+        assert.equal(out.gather?.what, "card", `${callId}: 0-card goes straight to the collector`);
       } else {
-        // "ok": card on file — approved, call over.
-        pos.opts.declineCards = false;
-        assert.ok(out.prompts.includes("09_approved_intro"), `${callId}: card-on-file should have approved`);
-        continue;
+        assert.equal(out.gather?.what, "menu", `${callId}: card_choice menu`);
+        assert.ok(out.prompts.includes("50_new_card_press_9"), `${callId}: menu missing the new-card option`);
       }
 
-      assert.equal(out.gather?.what, "card", `${callId}: expected the card gather`);
-      assert.equal(out.gather?.maxDigits, 0);
+      const sessionRow = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
+      const sessionId = String(sessionRow.id);
+      const chargesBefore = pos.charges.size;
 
-      const session = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-      const sessionId = String(session.id);
-
-      if (keyedOutcome === "gaveup") {
-        outcomeCounts.gaveup++;
-        const doorOut = await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber, cardFailed: true });
-        assert.equal(doorOut.ok, false);
-        assert.equal(vaultGet(sessionId), null, `${callId}: vault must be empty after giving up`);
-        vaultAlwaysEmptyAfterAttempt++;
-        const row = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-        assert.equal(row.state.phase, "human", `${callId}: giving up must land on a person`);
-        continue;
-      }
-
-      const validCard = goodCard();
-      assert.ok(luhnValid(validCard.number));
-
-      const doorOut = await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber, card: validCard });
-      assert.equal(doorOut.ok, true, `${callId}: a well-formed card must be accepted by the door`);
-      assert.ok(vaultGet(sessionId), `${callId}: the card must be vaulted`);
-
-      const row1 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-      assert.equal(row1.state.phase, "card_save_choice");
-      assert.equal(row1.state.cardLast4, validCard.number.slice(-4));
-
-      choiceCounts[keyedChoice]++;
-      pos.opts.declineCards = keyedOutcome === "declined";
-      out = await step(keyedChoice === "once" ? "1" : "2");
-      pos.opts.declineCards = false;
-
-      assert.equal(vaultGet(sessionId), null, `${callId}: vault must be empty after ANY charge attempt`);
-      vaultAlwaysEmptyAfterAttempt++;
-
-      if (keyedOutcome === "declined") {
-        outcomeCounts.declined++;
-        assert.deepEqual(out.prompts, ["08_processing", "11_declined", "47_card_declined_offer"], `${callId}: declined-keyed prompts`);
-        const row2 = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
-        assert.equal(row2.state.pendingCents, 1000, `${callId}: amount must be kept after a declined keyed card`);
+      if (mode === "new_once" || mode === "new_save") {
+        if (cof > 0) {
+          out = await step("9"); // explicitly key a new card
+          assert.equal(out.gather?.what, "card", `${callId}: 9 must hand off to the collector`);
+        }
+        const doorOut = await runPayIvrCardEntry(deps, { tenantId, callId, callerNumber, card: goodCard() });
+        assert.equal(doorOut.ok, true, `${callId}: a well-formed keyed card must be accepted`);
+        assert.ok(vaultGet(sessionId), `${callId}: the card must be vaulted`);
+        out = await step(mode === "new_once" ? "1" : "2");
+        assert.ok(out.prompts.includes("09_approved_intro"), `${callId}: expected an approval for the keyed card`);
+        assert.equal(pos.charges.size, chargesBefore + 1, `${callId}: expected exactly one new charge`);
+        assert.equal(vaultGet(sessionId), null, `${callId}: the vault must be empty after ANY charge attempt`);
+        const lastCharge = [...pos.charges.values()].at(-1)!;
+        assert.equal(lastCharge.keyed, mode === "new_once", `${callId}: once/save charge shape mismatch`);
+        if (mode === "new_save") assert.ok(lastCharge.cardId, `${callId}: a saved card must charge by cardId`);
       } else {
-        outcomeCounts.valid++;
-        assert.ok(out.prompts.includes("09_approved_intro"), `${callId}: expected an approval`);
-        assert.equal(chargeShapeIsClean(pos, callId), true);
+        // a card-on-file scenario (cof > 0) — pick a RANDOM index, never assume the first.
+        const idx = Math.floor(rnd() * cof);
+        const pickedCardId = cards[idx].id;
+
+        if (mode === "pick_ok") {
+          out = await step(String(idx + 1));
+          assert.ok(out.prompts.includes("09_approved_intro"), `${callId}: expected an approval`);
+          assert.equal(pos.charges.size, chargesBefore + 1, `${callId}: exactly one charge`);
+          const lastCharge = [...pos.charges.values()].at(-1)!;
+          assert.equal(lastCharge.cardId, pickedCardId, `${callId}: charged the wrong card — must be the one picked, never assumed first`);
+        } else {
+          // pick_declined_then_other
+          pos.opts.declineCards = true;
+          out = await step(String(idx + 1));
+          pos.opts.declineCards = false;
+          assert.deepEqual(out.prompts.slice(0, 2), ["08_processing", "11_declined"], `${callId}: declined lead-in`);
+          assert.equal(pos.charges.size, chargesBefore, `${callId}: a declined attempt must never charge`);
+          assert.equal(out.gather?.what, "menu", `${callId}: a decline must silently re-list and replay the menu`);
+          const rowAfterDecline = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
+          assert.equal(rowAfterDecline.state.pendingCents, 1000, `${callId}: the amount must survive a decline unchanged`);
+
+          const otherIdx = (idx + 1) % cof;
+          const otherCardId = cards[otherIdx].id;
+          out = await step(String(otherIdx + 1)); // a FRESH pick — a different card.
+          assert.ok(out.prompts.includes("09_approved_intro"), `${callId}: expected an approval on the second pick`);
+          assert.equal(pos.charges.size, chargesBefore + 1, `${callId}: exactly one charge landed, after the fresh pick`);
+          const lastCharge = [...pos.charges.values()].at(-1)!;
+          assert.equal(lastCharge.cardId, otherCardId, `${callId}: charged the wrong card on the second pick`);
+        }
       }
+
+      const finalRow = await db.supermarketPayCall.findFirst({ where: { tenantId, callId } });
+      assert.ok(finalRow.chargeSeq <= PAY_MAX_CHARGES_PER_CALL, `${callId}: exceeded PAY_MAX_CHARGES_PER_CALL`);
     }
 
     // GLOBAL: the ledger reconciles to the cent, no duplicate externalIds.
@@ -760,17 +880,10 @@ test(
       assert.equal(findLuhnDigitRuns(row).length, 0, `CARD STRESS: a persisted row leaked a card number: ${row.callId}`);
     }
 
-    assert.ok(cofCounts.none > 0 && cofCounts.declined > 0 && cofCounts.ok > 0, "the cof matrix did not exercise all three buckets");
-    assert.ok(choiceCounts.once > 0 && choiceCounts.save > 0, "the choice matrix did not exercise both once and save");
-    assert.ok(outcomeCounts.valid > 0 && outcomeCounts.declined > 0 && outcomeCounts.gaveup > 0, "the outcome matrix did not exercise all three");
+    assert.ok(Object.values(cofCounts).every((c) => c > 0), "the card-on-file matrix did not exercise all four buckets (0/1/2/4)");
+    assert.ok(Object.values(modeCounts).every((c) => c > 0), "the mode matrix did not exercise all four buckets");
     console.log(
-      `[CARD STRESS] n=${N} cof=${JSON.stringify(cofCounts)} choice=${JSON.stringify(choiceCounts)} outcome=${JSON.stringify(outcomeCounts)} ` +
-        `vaultChecks=${vaultAlwaysEmptyAfterAttempt} ledgerCents=${ledgerTotal}`,
+      `[CARD STRESS round5] n=${N} cof=${JSON.stringify(cofCounts)} mode=${JSON.stringify(modeCounts)} ledgerCents=${ledgerTotal}`,
     );
   },
 );
-
-function chargeShapeIsClean(pos: FakePos, _callId: string): boolean {
-  const last = [...pos.charges.values()].at(-1);
-  return !!last;
-}

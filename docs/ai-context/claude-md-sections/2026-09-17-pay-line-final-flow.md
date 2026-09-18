@@ -127,6 +127,26 @@ card-less account: **`CardNumber` (Luhn-checked), `ExpMonth` 1–12, `ExpYear` 0
   card / MMYY / CVV / ZIP, press 1 (this payment only) — hear "approved" and the new balance; a
   second call pressing 2 (save it) should then show the card in the account's cards list.
 
+## Round 5 (~23:20Z) — CHOOSE THE CARD BEFORE CHARGING; a decline offers the other cards or a new one
+
+Izzy's real call on round 4: the line charged the card on file straight away ("your card on file
+was declined") and the decline fell into the OLD "enter a different amount" branch — no card
+option. His spec: *"If there are multiple cards … name me the last 4 digits of each card … press 1
+to use the card ending in 6666, press 2 … If a card was declined, ask, do you want to use a
+different card on file or enter a card number? … Before [charging] ask, do you want to use the
+card on file, or put in a new card? If they put in a new card, ask if … default or one-time."*
+
+- **Built:** confirm is back to `07_confirm_choice`; "1" → silent `list_cards` (the register's
+  `/cards`, mapped by `cardsOnFile()` to id + last four, ≤4) → **`card_choice`**: "`48_to_use_card_ending`
+  9 6 0 3 `49_press` 1 … `50_new_card_press_9`" — pick 1–N charges THAT card id (`performCharge`
+  never lists or picks a first card any more); 9 → the AGI card entry; 3 bad keys → person. No card
+  on file → `12_no_card` then card entry. **Declined — on file or keyed — → `11_declined` + the cards
+  re-read + the same menu**, amount kept; the amount-attempt cap (3) ends at a person. Keyed card →
+  `46_card_save_choice` (this payment only / save it as the card on file) unchanged. `39`/`40`/`47`
+  and the `card_offer` phase are retired (WAVs stay).
+- Prompts 48/49/50 cut + installed (`en-male` 76 → **79**). No dialplan change.
+- ⏳ Round 5 tests / deploy / proof: bottom of this file.
+
 ## What the store must do
 
 - Set a POS PIN for every customer who should pay by phone, and tell them the PIN — the line

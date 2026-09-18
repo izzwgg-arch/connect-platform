@@ -23,6 +23,8 @@ import {
 } from "./posWithLogic";
 import { amountToPromptRefs, formatCents, numberToPromptRefs, parseStarDecimalAmount } from "./payAmount";
 import {
+  PAY_MAX_CARD_CHOICE_ATTEMPTS,
+  PAY_MAX_CARDS_OFFERED,
   PAY_MAX_CHOICE_ATTEMPTS,
   PAY_MAX_LOOKUP_ATTEMPTS,
   PAY_MAX_PIN_ATTEMPTS,
@@ -182,7 +184,7 @@ function drive(events: Parameters<typeof reducePayIvr>[1][]): { outputs: PayIvrO
 }
 
 /** Every effect kind this machine may ever emit — nothing PIN-vault-shaped. */
-const KNOWN_EFFECT_KINDS = new Set(["lookup_by_phone", "verify_pin", "read_balance", "charge", "transfer_to_person", "hangup"]);
+const KNOWN_EFFECT_KINDS = new Set(["lookup_by_phone", "verify_pin", "read_balance", "list_cards", "charge", "transfer_to_person", "hangup"]);
 
 test("a caller whose number is on an account is offered it; a caller whose number is on no account goes straight to entering a phone number", () => {
   const known = drive([{ type: "call_start", callerKnown: true, callerAccountId: "c1" }]);
@@ -355,7 +357,7 @@ test("normalizePayIvrState reads pre-2026-09-17 rows (missing pinProbe/blockedRe
   assert.equal(normalizePayIvrState({ phase: "code_entry" }).phase, "human");
 });
 
-test("⛔ THE MONEY RULE: one confirmation = one charge effect, and a stray repeat event charges nothing", () => {
+test("⛔ THE MONEY RULE (round 5): confirm '1' never charges by itself — it silently lists cards; picking one is what charges; one confirmation still = one charge effect, and a stray repeat charges nothing", () => {
   const base: Parameters<typeof reducePayIvr>[1][] = [
     { type: "call_start", callerKnown: true, callerAccountId: "c1" },
     { type: "digits", value: "1" },
@@ -366,15 +368,27 @@ test("⛔ THE MONEY RULE: one confirmation = one charge effect, and a stray repe
     { type: "digits", value: "25*37" },
     { type: "digits", value: "1" }, // confirm
   ];
-  const { outputs, state } = drive(base);
+  const { outputs: preCard } = drive(base);
+  // confirm's "1" itself must not charge — it silently asks for the cards on file.
+  assert.equal(countChargeEffects(preCard), 0, "confirm '1' charged before a card was ever chosen");
+  assert.deepEqual(preCard.at(-1)!.effects, [{ kind: "list_cards" }]);
+  assert.deepEqual(preCard.at(-1)!.prompts, [], "the list_cards effect must be silent");
+  assert.equal(preCard.at(-1)!.gather, null);
+
+  const full: Parameters<typeof reducePayIvr>[1][] = [
+    ...base,
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] },
+    { type: "digits", value: "1" }, // pick the card ending in 1111
+  ];
+  const { outputs, state } = drive(full);
   assert.equal(countChargeEffects(outputs), 1);
-  assert.deepEqual(outputs.at(-1)!.effects, [{ kind: "charge", amountCents: 2537, chargeSeq: 1, cardMode: null }]);
+  assert.deepEqual(outputs.at(-1)!.effects, [{ kind: "charge", amountCents: 2537, chargeSeq: 1, cardMode: null, cardId: "cd1" }]);
   // A duplicated confirm (replayed webhook) in the charging phase is IGNORED.
   const replay = reducePayIvr(state, { type: "digits", value: "1" });
   assert.equal(countChargeEffects([replay]), 0, "a repeated digit in charging must never charge again");
 });
 
-test("declined → re-enter; three failed amounts → a person; approved reads the new balance", () => {
+test("approved reads the new balance, after the caller picked a card on file", () => {
   const { outputs } = drive([
     { type: "call_start", callerKnown: true, callerAccountId: "c1" },
     { type: "digits", value: "1" },
@@ -384,6 +398,8 @@ test("declined → re-enter; three failed amounts → a person; approved reads t
     { type: "digits", value: "2" },
     { type: "digits", value: "25*37" },
     { type: "digits", value: "1" },
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] },
+    { type: "digits", value: "1" }, // pick the (only) card ending in 1111
     { type: "charge_result", outcome: "approved", newBalanceCents: 7463 },
   ]);
   const last = outputs.at(-1)!;
@@ -393,7 +409,27 @@ test("declined → re-enter; three failed amounts → a person; approved reads t
   assert.ok(last.prompts.includes("16_dollars"));
 });
 
-test("no card on file offers to key one now (2026-09-17 night), keeping the pending amount", () => {
+test("(round 5) 0 cards on file → 12_no_card then straight to keying one (action \"card\"), keeping the pending amount", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" }, // confirm -> silent list_cards
+    { type: "cards_result", ok: true, cards: [] },
+  ]);
+  assert.equal(state.phase, "card_entry");
+  assert.equal(state.pendingCents, 1000, "the amount must be kept — the caller is about to key a card for it");
+  const last = outputs.at(-1)!;
+  assert.deepEqual(last.prompts, ["12_no_card"]);
+  assert.equal(last.gather?.what, "card");
+  assert.equal(last.gather?.maxDigits, 0);
+});
+
+test("(round 5) a cards_result the register refuses ({ok:false}) lands on a person", () => {
   const { outputs, state } = drive([
     { type: "call_start", callerKnown: true, callerAccountId: "c1" },
     { type: "digits", value: "1" },
@@ -403,13 +439,145 @@ test("no card on file offers to key one now (2026-09-17 night), keeping the pend
     { type: "digits", value: "2" },
     { type: "digits", value: "10" },
     { type: "digits", value: "1" },
+    { type: "cards_result", ok: false },
+  ]);
+  assert.equal(state.phase, "human");
+  assert.ok(outputs.at(-1)!.effects.some((e) => e.kind === "transfer_to_person"));
+});
+
+// ── round 5, night: choose the card BEFORE charging ──────────────────────────
+
+test("(round 5) a 2-card menu reads exactly: 48/last-four/49/num_N per card, then 50_new_card_press_9", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" },
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "6666" }, { id: "cd2", last4: "9603" }] },
+  ]);
+  const last = outputs.at(-1)!;
+  assert.deepEqual(last.prompts, [
+    "48_to_use_card_ending", "num_6", "num_6", "num_6", "num_6", "49_press", "num_1",
+    "48_to_use_card_ending", "num_9", "num_6", "num_0", "num_3", "49_press", "num_2",
+    "50_new_card_press_9",
+  ]);
+  assert.equal(last.gather?.what, "menu");
+  assert.equal(state.phase, "card_choice");
+  assert.deepEqual(state.cards, [{ id: "cd1", last4: "6666" }, { id: "cd2", last4: "9603" }]);
+
+  // pressing "2" charges the SECOND card, never the first by default.
+  const picked = reducePayIvr(state, { type: "digits", value: "2" });
+  assert.equal(countChargeEffects([picked]), 1);
+  assert.deepEqual(picked.effects, [{ kind: "charge", amountCents: 1000, chargeSeq: 1, cardMode: null, cardId: "cd2" }]);
+});
+
+test("(round 5) more than PAY_MAX_CARDS_OFFERED cards: only the first 4 are kept and read; the 5th is dropped", () => {
+  assert.equal(PAY_MAX_CARDS_OFFERED, 4, "this test is written against a cap of 4 — update it if the cap changes");
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" },
+    {
+      type: "cards_result",
+      ok: true,
+      cards: [
+        { id: "c1card", last4: "1111" },
+        { id: "c2card", last4: "2222" },
+        { id: "c3card", last4: "3333" },
+        { id: "c4card", last4: "4444" },
+        { id: "c5card", last4: "5555" },
+      ],
+    },
+  ]);
+  assert.equal(state.cards.length, 4, "the 5th card must be dropped");
+  assert.ok(!state.cards.some((c) => c.id === "c5card"));
+  const last = outputs.at(-1)!;
+  assert.equal(last.prompts.filter((p) => p === "48_to_use_card_ending").length, 4);
+  assert.ok(last.prompts.includes("50_new_card_press_9"));
+
+  // "9" always keys a new card, regardless of how many are on file.
+  const nine = reducePayIvr(state, { type: "digits", value: "9" });
+  assert.equal(nine.state.phase, "card_entry");
+  assert.equal(nine.gather?.what, "card");
+});
+
+test("(round 5) card_choice: an out-of-range digit replays the menu; 3 misses land on a person", () => {
+  const seeded: Parameters<typeof reducePayIvr>[1][] = [
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" },
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] },
+  ];
+  const events = [...seeded];
+  for (let i = 0; i < PAY_MAX_CARD_CHOICE_ATTEMPTS; i++) events.push({ type: "digits", value: "5" });
+  const { outputs, state } = drive(events);
+  assert.equal(state.phase, "human");
+  assert.ok(outputs.at(-1)!.prompts.includes("20_connect_person"));
+  assert.equal(state.cardChoiceAttempts, PAY_MAX_CARD_CHOICE_ATTEMPTS);
+});
+
+test("(round 5) a declined charge (card on file OR keyed) silently re-lists the cards and replays the menu — the amount is kept, never re-asked", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" },
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] },
+    { type: "digits", value: "1" },
+    { type: "charge_result", outcome: "declined" },
+  ]);
+  assert.equal(state.phase, "card_choice");
+  assert.equal(state.pendingCents, 1000, "the amount must be kept across a decline");
+  assert.equal(state.chosenCardId, null, "the vanished/declined choice must be cleared");
+  const last = outputs.at(-1)!;
+  assert.deepEqual(last.prompts, ["11_declined"]);
+  assert.deepEqual(last.effects, [{ kind: "list_cards" }], "a decline must silently re-list the cards, not replay a stale menu");
+  assert.equal(last.gather, null);
+
+  // the re-list plays the menu again, and a fresh pick charges again.
+  const relisted = reducePayIvr(state, { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] });
+  assert.equal(relisted.gather?.what, "menu");
+  const secondPick = reducePayIvr(relisted.state, { type: "digits", value: "1" });
+  assert.deepEqual(secondPick.effects, [{ kind: "charge", amountCents: 1000, chargeSeq: 2, cardMode: null, cardId: "cd1" }]);
+});
+
+test("(round 5) 'no_card' (the chosen card vanished between list and charge) keys a new one, amount kept", () => {
+  const { outputs, state } = drive([
+    { type: "call_start", callerKnown: true, callerAccountId: "c1" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: false, reason: "invalid" },
+    { type: "digits", value: "1" },
+    { type: "pin_result", ok: true },
+    { type: "digits", value: "2" },
+    { type: "digits", value: "10" },
+    { type: "digits", value: "1" },
+    { type: "cards_result", ok: true, cards: [{ id: "cd1", last4: "1111" }] },
+    { type: "digits", value: "1" },
     { type: "charge_result", outcome: "no_card" },
   ]);
-  assert.equal(state.phase, "card_offer");
-  assert.equal(state.pendingCents, 1000, "the amount must be kept — the caller is about to key a card for it");
+  assert.equal(state.phase, "card_entry");
+  assert.equal(state.pendingCents, 1000);
   const last = outputs.at(-1)!;
-  assert.deepEqual(last.prompts, ["12_no_card", "40_card_offer"]);
-  assert.equal(last.gather?.what, "menu");
+  assert.deepEqual(last.prompts, ["12_no_card"]);
+  assert.equal(last.gather?.what, "card");
 });
 
 test("session bookkeeping: the served account is posCustomerId; when the caller pressed 2 before a lookup ever lands, the runtime falls back to their own account id (payIvrRuntime's `posCustomerId ?? callerAccountId`)", () => {

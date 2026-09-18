@@ -40,7 +40,7 @@
  * row, the POS client and the clock.
  */
 
-import { amountToPromptRefs, parseStarDecimalAmount, PAY_MAX_CENTS } from "./payAmount";
+import { amountToPromptRefs, digitsToPromptRefs, parseStarDecimalAmount, PAY_MAX_CENTS } from "./payAmount";
 
 export const PAY_MAX_PIN_ATTEMPTS = 3;
 export const PAY_MAX_AMOUNT_ATTEMPTS = 3;
@@ -67,6 +67,7 @@ export type PayIvrPhase =
   | "after_balance_menu"
   | "amount_entry"
   | "confirm"
+  | "card_choice"
   | "card_entry"
   | "card_save_choice"
   | "card_offer"
@@ -78,6 +79,11 @@ export type PayIvrPhase =
 export type PayCardMode = "once" | "save";
 /** Times the AGI collector may be (re)started per call before a person. */
 export const PAY_MAX_CARD_ENTRY_ATTEMPTS = 2;
+/** Cards on file offered by last four (press 1–4); 9 = a new card. */
+export const PAY_MAX_CARDS_OFFERED = 4;
+export const PAY_MAX_CARD_CHOICE_ATTEMPTS = 3;
+/** A card on file as the reducer sees it — id + last four, nothing else. */
+export type PayCardOnFile = { id: string; last4: string };
 
 /** Why the register refused the PIN — mirrors posWithLogic.PosPinRefusal. */
 export type PayPinReason = "not_set" | "invalid" | "unknown";
@@ -110,6 +116,11 @@ export type PayIvrState = {
   /** Last four of the keyed card — the only card-derived value allowed in this state. */
   cardLast4: string | null;
   cardEntryAttempts: number;
+  /** Cards on file as last offered (id + last four), in the register's order. */
+  cards: PayCardOnFile[];
+  /** The card on file the caller picked for the next charge (null = a keyed card). */
+  chosenCardId: string | null;
+  cardChoiceAttempts: number;
   /** Amount pending confirmation, cents. */
   pendingCents: number | null;
   /** Count of confirmed charges this call — drives the externalId sequence. */
@@ -123,7 +134,9 @@ export type PayIvrEffect =
   | { kind: "lookup_by_phone"; phone10: string }
   | { kind: "verify_pin"; pin: string }
   | { kind: "read_balance" }
-  | { kind: "charge"; amountCents: number; chargeSeq: number; cardMode: PayCardMode | null }
+  /** Read the account's cards on file (id + masked) so the caller can pick one by last four. */
+  | { kind: "list_cards" }
+  | { kind: "charge"; amountCents: number; chargeSeq: number; cardMode: PayCardMode | null; cardId: string | null }
   | { kind: "transfer_to_person" }
   | { kind: "hangup" };
 
@@ -150,6 +163,8 @@ export type PayIvrEvent =
   | { type: "balance_result"; ok: boolean; balanceCents?: number }
   /** The AGI collector finished: a valid card is in the vault (ok) or the caller gave up. */
   | { type: "card_entered"; ok: boolean; last4?: string }
+  /** The account's cards on file (already reduced to id + last four by the runtime). */
+  | { type: "cards_result"; ok: boolean; cards?: PayCardOnFile[] }
   | {
       type: "charge_result";
       outcome: "approved" | "declined" | "no_card" | "duplicate" | "error";
@@ -176,6 +191,9 @@ export function initialPayIvrState(): PayIvrState {
     cardMode: null,
     cardLast4: null,
     cardEntryAttempts: 0,
+    cards: [],
+    chosenCardId: null,
+    cardChoiceAttempts: 0,
     pendingCents: null,
     chargeSeq: 0,
     chargedCents: 0,
@@ -192,6 +210,7 @@ const PHASES: PayIvrPhase[] = [
   "after_balance_menu",
   "amount_entry",
   "confirm",
+  "card_choice",
   "card_entry",
   "card_save_choice",
   "card_offer",
@@ -230,6 +249,14 @@ export function normalizePayIvrState(raw: unknown): PayIvrState {
     cardMode: s.cardMode === "once" || s.cardMode === "save" ? s.cardMode : null,
     cardLast4: typeof s.cardLast4 === "string" ? s.cardLast4.replace(/\D/g, "").slice(-4) : null,
     cardEntryAttempts: num(s.cardEntryAttempts),
+    cards: Array.isArray(s.cards)
+      ? (s.cards as any[])
+          .filter((c) => c && typeof c.id === "string" && typeof c.last4 === "string")
+          .map((c) => ({ id: String(c.id).slice(0, 64), last4: String(c.last4).replace(/\D/g, "").slice(-4) }))
+          .slice(0, PAY_MAX_CARDS_OFFERED)
+      : [],
+    chosenCardId: typeof s.chosenCardId === "string" ? s.chosenCardId : null,
+    cardChoiceAttempts: num(s.cardChoiceAttempts),
     pendingCents: Number.isInteger(s.pendingCents) ? (s.pendingCents as number) : null,
     chargeSeq: num(s.chargeSeq),
     chargedCents: num(s.chargedCents),
@@ -256,7 +283,29 @@ const G: Record<string, PayIvrGather> = {
 function cardEntry(state: PayIvrState, lead: string[] = []): PayIvrOutput {
   const attempts = state.cardEntryAttempts + 1;
   if (attempts > PAY_MAX_CARD_ENTRY_ATTEMPTS) return toHuman(state, []);
-  return out({ ...state, phase: "card_entry", cardEntryAttempts: attempts, cardMode: null, cardLast4: null }, lead, G.card);
+  return out(
+    { ...state, phase: "card_entry", cardEntryAttempts: attempts, cardMode: null, cardLast4: null, chosenCardId: null },
+    lead,
+    G.card,
+  );
+}
+
+/**
+ * "To use the card ending in 9 6 0 3, press 1. … To enter a new card, press 9."
+ * (Izzy, 2026-09-17 night). Read the account's cards first (`list_cards`); with
+ * none on file the caller goes straight to keying one.
+ */
+function askCards(state: PayIvrState, lead: string[] = []): PayIvrOutput {
+  return out({ ...state, phase: "card_choice", cards: [], chosenCardId: null, cardMode: null }, lead, null, [{ kind: "list_cards" }]);
+}
+
+function cardChoiceMenu(state: PayIvrState, lead: string[] = []): PayIvrOutput {
+  const prompts: string[] = [...lead];
+  state.cards.forEach((card, i) => {
+    prompts.push("48_to_use_card_ending", ...digitsToPromptRefs(card.last4), "49_press", `num_${i + 1}`);
+  });
+  prompts.push("50_new_card_press_9");
+  return out({ ...state, phase: "card_choice" }, prompts, G.menu);
 }
 
 function out(state: PayIvrState, prompts: string[], gather: PayIvrGather | null, effects: PayIvrEffect[] = []): PayIvrOutput {
@@ -426,7 +475,7 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
       }
       return out(
         { ...state, phase: "confirm", pendingCents: parsed.cents },
-        ["06_confirm_intro", ...amountToPromptRefs(parsed.cents), "39_confirm_choice_card"],
+        ["06_confirm_intro", ...amountToPromptRefs(parsed.cents), "07_confirm_choice"],
         G.confirm,
       );
     }
@@ -434,7 +483,8 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
     case "confirm": {
       if (event.type !== "digits") return out(state, [], G.confirm);
       const key = event.value.trim();
-      if (key === "1" && state.pendingCents !== null) return startCharge(state, null);
+      // Confirmed: the card is chosen NEXT (cards on file by last four, or a new one).
+      if (key === "1" && state.pendingCents !== null) return askCards(state);
       if (key === "2") {
         const rounds = state.confirmRounds + 1;
         if (rounds >= PAY_MAX_CONFIRM_ROUNDS) return toHuman({ ...state, confirmRounds: rounds }, []);
@@ -444,9 +494,27 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
           G.amount,
         );
       }
-      // "pay with a different card" — Izzy, 2026-09-17 night.
-      if (key === "3" && state.pendingCents !== null) return cardEntry(state);
-      return out(state, ["39_confirm_choice_card"], G.confirm);
+      return out(state, ["07_confirm_choice"], G.confirm);
+    }
+
+    case "card_choice": {
+      if (event.type === "cards_result") {
+        if (!event.ok) return toHuman(state, []);
+        const cards = (event.cards ?? []).filter((c) => c && c.id && /^\d{4}$/.test(c.last4)).slice(0, PAY_MAX_CARDS_OFFERED);
+        // Nothing on file: say so once, then key a card.
+        if (cards.length === 0) return cardEntry({ ...state, cards: [] }, ["12_no_card"]);
+        return cardChoiceMenu({ ...state, cards, cardChoiceAttempts: 0 });
+      }
+      if (event.type !== "digits") return out(state, [], state.cards.length ? G.menu : null);
+      const key = event.value.trim();
+      if (key === "9" && state.pendingCents !== null) return cardEntry(state);
+      const idx = Number(key) - 1;
+      if (Number.isInteger(idx) && idx >= 0 && idx < state.cards.length && state.pendingCents !== null) {
+        return startCharge({ ...state, chosenCardId: state.cards[idx].id }, null, state.cards[idx].id);
+      }
+      const attempts = state.cardChoiceAttempts + 1;
+      if (attempts >= PAY_MAX_CARD_CHOICE_ATTEMPTS) return toHuman({ ...state, cardChoiceAttempts: attempts }, []);
+      return cardChoiceMenu({ ...state, cardChoiceAttempts: attempts });
     }
 
     case "card_entry": {
@@ -467,8 +535,8 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
     case "card_save_choice": {
       if (event.type !== "digits") return out(state, [], G.menu);
       const key = event.value.trim();
-      if (key === "1" && state.pendingCents !== null) return startCharge(state, "once");
-      if (key === "2" && state.pendingCents !== null) return startCharge(state, "save");
+      if (key === "1" && state.pendingCents !== null) return startCharge(state, "once", null);
+      if (key === "2" && state.pendingCents !== null) return startCharge(state, "save", null);
       return out(state, ["46_card_save_choice"], G.menu);
     }
 
@@ -497,17 +565,17 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
         );
       }
       if (event.outcome === "no_card") {
-        // No card on file: offer to key one for THIS amount (the amount is kept).
-        return out({ ...state, cardMode: null, phase: "card_offer" }, ["12_no_card", "40_card_offer"], G.menu);
+        // The chosen card vanished between the list and the charge: key one. Amount kept.
+        return cardEntry({ ...state, cardMode: null, chosenCardId: null }, ["12_no_card"]);
       }
       if (event.outcome === "declined") {
-        if (keyed) {
-          // The keyed card was refused: another card, or a person. Amount kept.
-          return out({ ...state, cardMode: null, phase: "card_offer" }, ["11_declined", "47_card_declined_offer"], G.menu);
-        }
-        const attempts = cleared.amountAttempts + 1;
+        // Declined — on file or keyed: "a different card on file, or enter a card
+        // number" (Izzy, 2026-09-17 night). The amount is kept; the cards are
+        // re-read so the menu is current. Bounded by the amount-attempt cap.
+        const attempts = state.amountAttempts + 1;
         if (attempts >= PAY_MAX_AMOUNT_ATTEMPTS) return toHuman({ ...cleared, amountAttempts: attempts }, ["11_declined"]);
-        return out({ ...cleared, phase: "amount_entry", amountAttempts: attempts }, ["11_declined", "05_amount_prompt"], G.amount);
+        void keyed;
+        return askCards({ ...state, cardMode: null, chosenCardId: null, amountAttempts: attempts }, ["11_declined"]);
       }
       // error: their api unreachable / unexpected — a person, never a retry loop.
       return toHuman(cleared, []);
@@ -522,16 +590,17 @@ export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutp
   }
 }
 
-/** One confirmed charge: card on file (cardMode null) or the keyed card, once or saved first. */
-function startCharge(state: PayIvrState, cardMode: PayCardMode | null): PayIvrOutput {
+/** One confirmed charge: the chosen card on file (cardId, cardMode null) or the keyed card (once / saved first). */
+function startCharge(state: PayIvrState, cardMode: PayCardMode | null, cardId: string | null): PayIvrOutput {
   if (state.pendingCents === null) return toHuman(state, []);
+  if (!cardMode && !cardId) return toHuman(state, []);
   const seq = state.chargeSeq + 1;
   if (seq > PAY_MAX_CHARGES_PER_CALL) return toHuman(state, []);
   return out(
-    { ...state, phase: "charging", chargeSeq: seq, cardMode },
+    { ...state, phase: "charging", chargeSeq: seq, cardMode, chosenCardId: cardId },
     ["08_processing"],
     null,
-    [{ kind: "charge", amountCents: state.pendingCents, chargeSeq: seq, cardMode }],
+    [{ kind: "charge", amountCents: state.pendingCents, chargeSeq: seq, cardMode, cardId }],
   );
 }
 

@@ -20,7 +20,7 @@ import Fastify from "fastify";
 process.env.CREDENTIALS_MASTER_KEY = process.env.CREDENTIALS_MASTER_KEY || "ab".repeat(32);
 process.env.CDR_INGEST_SECRET = process.env.CDR_INGEST_SECRET || "stress-internal-secret-000111222333";
 
-import { FakeDb, FakePos, makeSupermarketDb, mulberry32 } from "./supermarketTestKit";
+import { FakeDb, FakePos, makeSupermarketDb, maskedCard, mulberry32 } from "./supermarketTestKit";
 import { classifyPinRefusal } from "./posWithLogic";
 import { PAY_MAX_PIN_ATTEMPTS, PAY_PROBE_PIN, initialPayIvrState, type PayIvrPhase, type PayIvrState } from "./payIvrCore";
 import { runPayIvrStep } from "./payIvrRuntime";
@@ -192,7 +192,7 @@ test(
         phone10: primaryPhone(i),
         pin: realPin,
         balanceCents: 500_000,
-        cards: hasCard ? [{ id: `card-${i}`, masked: `x${i}` }] : [],
+        cards: hasCard ? [{ id: `card-${i}`, masked: maskedCard(String(1000 + i).slice(-4)) }] : [],
       });
       db.seed("posCustomer", {
         tenantId,
@@ -345,6 +345,8 @@ class DialplanDriver {
       confirmAccept?: boolean;
       wantsCard?: boolean;
       cardChoice?: "1" | "2";
+      /** Deterministic PRNG for picking a card at the card_choice menu (round 5). */
+      cardPickRnd?: () => number;
     },
   ): string {
     if (names.includes("37_which_account")) return opts.choice ?? "1";
@@ -353,11 +355,17 @@ class DialplanDriver {
       return (opts.targetPhone ?? "8456624417").slice(0, maxDigits);
     }
     if (names.includes("05_amount_prompt") || names.includes("14_invalid_amount")) return opts.amount ?? "12*34";
-    // 39_confirm_choice_card replaced 07_confirm_choice on 2026-09-17 night
-    // (it is the same slot with a third option added).
-    if (names.includes("39_confirm_choice_card")) return opts.wantsCard ? "3" : opts.confirmAccept === false ? "2" : "1";
+    // round 5 (2026-09-17 late night): confirm is back to the plain two-option
+    // prompt — no "press 3". A card is chosen AFTER confirming, at the
+    // card_choice menu (50_new_card_press_9), never at confirm itself.
+    if (names.includes("07_confirm_choice")) return opts.confirmAccept === false ? "2" : "1";
+    if (names.includes("50_new_card_press_9")) {
+      const cardCount = names.filter((n) => n === "48_to_use_card_ending").length;
+      if (opts.wantsCard || cardCount === 0) return "9"; // key a new one
+      const rnd = opts.cardPickRnd ?? Math.random;
+      return String(1 + Math.floor(rnd() * cardCount)); // pick a card by last four — never assume the first
+    }
     if (names.includes("46_card_save_choice")) return opts.cardChoice ?? "1";
-    if (names.includes("40_card_offer") || names.includes("47_card_declined_offer")) return "1";
     if (names.includes("22_main_menu") || names.includes("21_menu_after_balance")) return opts.wantsPayment ? "2" : "1";
     return "0";
   }
@@ -413,7 +421,7 @@ test(
         phone10: primaryPhone(i),
         pin,
         balanceCents: 250_000,
-        cards: rnd() < 0.6 ? [{ id: `c${i}`, masked: "x" }] : [],
+        cards: rnd() < 0.6 ? [{ id: `c${i}`, masked: maskedCard(String(1000 + i).slice(-4)) }] : [],
       });
       db.seed("posCustomer", { tenantId, posCustomerId: `dl-${i}`, name: `D${i}`, phonesText: primaryPhone(i), primaryPhone: primaryPhone(i) });
       if (rnd() < 0.2) foreignAccounts.add(i);
@@ -445,6 +453,7 @@ test(
         confirmAccept: rnd() < 0.85,
         wantsCard,
         cardChoice: (rnd() < 0.5 ? "1" : "2") as "1" | "2",
+        cardPickRnd: rnd,
       };
       const cardIsValid = rnd() < 0.8;
 
@@ -519,7 +528,7 @@ test(
     assert.equal(sessionTotal, ledgerTotal, "dialplan-driven session books disagree with the register ledger");
     assert.equal(new Set(pos.charges.keys()).size, pos.charges.size, "duplicate externalId from a duplicated POST");
     assert.equal(db.rows("supermarketPhonePin").length, 0, "the dialplan-driven line created a vault row");
-    assert.ok(cardHandoffs > 0, "the keyed-card path (39_confirm_choice_card -> 3) was never exercised");
+    assert.ok(cardHandoffs > 0, "the keyed-card path (0 cards, or '9' at the card_choice menu) was never exercised");
 
     console.log(
       `[PAYLINE 2] calls=${calls} httpOk=${httpOk} chargesSeen=${chargesSeen} noPinSeen=${noPinSeen} midCallHangups=${midCallHangups} ` +
@@ -640,7 +649,7 @@ test(
         phone10: primaryPhone(i),
         pin: realPin,
         balanceCents: 300_000,
-        cards: [{ id: `card-${i}`, masked: "x" }],
+        cards: [{ id: `card-${i}`, masked: maskedCard(String(1000 + i).slice(-4)) }],
       });
       db.seed("posCustomer", { tenantId, posCustomerId: `cc-${i}`, name: `C${i}`, phonesText: primaryPhone(i), primaryPhone: primaryPhone(i) });
       accounts.push({ i, pinSet, realPin });
@@ -694,7 +703,7 @@ test(
 
 // ═══════════════════════════════ PAYLINE 5 ═══════════════════════════════════
 
-test("PAYLINE 5 — the same call's step posted 10x concurrently never double-charges", async () => {
+test("PAYLINE 5 — the same call's step posted 10x concurrently never double-charges (round 5: the racy money moment is the card_choice PICK, since confirm's '1' only lists cards)", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
   const tenantId = "t-dup10";
@@ -709,7 +718,7 @@ test("PAYLINE 5 — the same call's step posted 10x concurrently never double-ch
       phone10: primaryPhone(i),
       pin: realPinFor(i),
       balanceCents: 200_000,
-      cards: [{ id: `card-${i}`, masked: "x" }],
+      cards: [{ id: `card-${i}`, masked: maskedCard(String(1000 + i).slice(-4)) }],
     });
   }
 
@@ -731,11 +740,15 @@ test("PAYLINE 5 — the same call's step posted 10x concurrently never double-ch
     // 10 concurrent, IDENTICAL PIN posts.
     await Promise.all(Array.from({ length: 10 }, () => step(realPinFor(i))));
 
-    // Drive to the confirm gather, then fire the SAME confirm-accept digit 10x concurrently.
+    // Drive to the confirm gather, accept it ONCE (round 5: this only lists
+    // cards, it is not the money moment), then fire the SAME card_choice PICK
+    // digit 10x concurrently — that is the step that now emits `charge`.
     out = await step("2"); // payment
     if (out.gather?.what !== "amount") continue; // caps/edge case reached — nothing more to race here
     out = await step("5*00");
     if (out.gather?.what !== "confirm") continue;
+    out = await step("1"); // confirm accept -> silent list_cards
+    if (out.gather?.what !== "menu") continue; // no card on file after all — nothing more to race here
     confirmsReached++;
 
     const beforeCharges = pos.charges.size;

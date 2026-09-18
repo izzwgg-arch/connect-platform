@@ -630,3 +630,25 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
   ``connect-menu,mcmu67d91000sers12b070ba2h`` played ``custom/yossis_wood_works_vpbx89`` PASS; keys "0" →
   ``Goto(T28_app-announcement,announcement-36,1)`` + its recording played PASS. Keys 1–5 deliberately not
   probed (they ring real ring groups at 2 AM).
+
+## 2026-09-17 (late night, round 5) — pay line: choose the card by last four BEFORE charging; a decline re-offers the cards or a new card
+
+Commit: the `feat(pay-line): choose the card before charging` commit on `feat/ivr-migration-takeover` (deploy hash +
+proof in the docs line right after these). Summary `2026-09-17-pay-line-final-flow.md` "Round 5", handoff §16h.
+
+- `apps/api`: `node --experimental-test-module-mocks --import tsx --test "src/supermarket/*.test.ts"` → **238/238**:
+  `supermarketCore` 43/43 (+6: exact 2-card prompt sequence, 4-card cap with the 5th dropped, out-of-range pick
+  → cap → person, a decline re-lists silently, `no_card` keys a new card, `cards_result` failure → person),
+  `payLineCard` 22/22 (rewritten for choose-first; 2-card/9-new-card hand-off; card-on-file decline re-lists
+  and a DIFFERENT card can be picked; 3 declines hit the cap; new 500-session stress over {0,1,2,4 cards} ×
+  {pick ok / pick declined then other / 9 new once / 9 new save} asserting the charged cardId is ALWAYS the
+  picked one), `payLineStress` 8/8 (dialplan driver picks by counting `48_to_use_card_ending`; the
+  double-charge race now fires on the pick), `supermarketStress` 28/28 (fuzz pool gains `cards_result` incl.
+  malformed last-fours; cap invariants; ⛔ STRESS 4's seeded balance was 1 cent over PAY_MAX_CENTS — a latent
+  test-data bug, fixed), `payIvrDialplan` 10/10, `supermarketWiring` 11/11, `phonePinRoutes` 11/11, others
+  unchanged. Re-run by hand: fast suites 86/86, heavy suites 36/36.
+- `apps/api`: `npx tsc -p tsconfig.json --noEmit` → 0 errors in supermarket/* (pre-existing elsewhere).
+- Prompt cutter (Polly Stephen/neural, 8 kHz): 48/49/50 cut, installed on the PBX (`en-male` 76 → 79) + canonical
+  stash. No dialplan change.
+- Deploy + live proof: in the docs follow-up commit and the summary file's "Round 5" section.
+- NOT run: a real pick-a-card charge and a real keyed charge (need a caller with an account PIN and a card).

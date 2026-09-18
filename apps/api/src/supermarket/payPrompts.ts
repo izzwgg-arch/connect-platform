@@ -98,6 +98,12 @@ export const PAY_PROMPTS: readonly PayPromptSpec[] = [
     addedOn: "2026-09-17",
   },
   { ref: "47_card_declined_offer", text: "To try a different card, press one. To speak with someone, press two.", addedOn: "2026-09-17" },
+  // ── 2026-09-17 late night: choose the card BEFORE charging (Izzy: "name me the last 4 digits
+  // of each card … press 1 to use the card ending in 6666, press 2"; declined → "a different card
+  // on file or enter a card number") ──
+  { ref: "48_to_use_card_ending", text: "To use the card ending in", addedOn: "2026-09-17" },
+  { ref: "49_press", text: "press", addedOn: "2026-09-17" },
+  { ref: "50_new_card_press_9", text: "To enter a new card, press nine.", addedOn: "2026-09-17" },
 ];
 
 export const PAY_PROMPTS_ADDED_2026_09_17: readonly PayPromptSpec[] = PAY_PROMPTS.filter((p) => p.addedOn === "2026-09-17");

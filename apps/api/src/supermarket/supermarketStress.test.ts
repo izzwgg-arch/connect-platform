@@ -23,10 +23,12 @@ process.env.CREDENTIALS_MASTER_KEY = process.env.CREDENTIALS_MASTER_KEY || "ab".
 process.env.CDR_INGEST_SECRET = process.env.CDR_INGEST_SECRET || "stress-internal-secret-000111222333";
 delete process.env.MARKETING_MAIL_ENABLED;
 
-import { FakeDb, FakePos, makeSupermarketDb, mulberry32 } from "./supermarketTestKit";
+import { FakeDb, FakePos, makeSupermarketDb, maskedCard, mulberry32 } from "./supermarketTestKit";
 import { PosWithLogicClient } from "./posWithLogic";
 import {
   PAY_MAX_AMOUNT_ATTEMPTS,
+  PAY_MAX_CARD_CHOICE_ATTEMPTS,
+  PAY_MAX_CARD_ENTRY_ATTEMPTS,
   PAY_MAX_CHARGES_PER_CALL,
   PAY_MAX_CONFIRM_ROUNDS,
   PAY_MAX_LOOKUP_ATTEMPTS,
@@ -201,11 +203,23 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
     { type: "balance_result", ok: rnd() < 0.7, balanceCents: Math.floor(rnd() * 10000) },
     { type: "charge_result", outcome: (["approved", "declined", "no_card", "duplicate", "error"] as const)[Math.floor(rnd() * 5)], newBalanceCents: 100 },
     // 2026-09-17 night: the AGI card collector's result — lets the fuzzer
-    // reach card_entry/card_save_choice/card_offer. The fuzzer never feeds a
-    // "card" gather raw digits itself (that is the AGI's own job, never a
-    // step) — it only ever supplies the outcome via this event, exactly the
-    // shape runPayIvrCardEntry hands the reducer.
+    // reach card_entry/card_save_choice. The fuzzer never feeds a "card"
+    // gather raw digits itself (that is the AGI's own job, never a step) — it
+    // only ever supplies the outcome via this event, exactly the shape
+    // runPayIvrCardEntry hands the reducer.
     { type: "card_entered", ok: rnd() < 0.5, last4: "4242" },
+    // round 5 (late 2026-09-17): confirm's "1" silently lists the cards on
+    // file before anything can charge — lets the fuzzer reach card_choice's
+    // menu (1+ cards) or straight back to card_entry (0 cards, or a refused
+    // list). Occasionally malformed last4s exercise the reducer's own filter.
+    {
+      type: "cards_result",
+      ok: rnd() < 0.85,
+      cards: Array.from({ length: Math.floor(rnd() * 6) }, (_, k) => ({
+        id: `card-${k}`,
+        last4: rnd() < 0.85 ? String(1000 + Math.floor(rnd() * 9000)) : "12",
+      })),
+    },
     { type: "hangup" },
   ];
   for (let call = 0; call < 3000; call++) {
@@ -215,11 +229,20 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
     for (let i = 0; i < 20; i++) {
       const pool = eventPool(state);
       const event = pool[Math.floor(rnd() * pool.length)];
-      // A confirmed charge now starts from either "confirm" (card on file,
-      // key "1") or "card_save_choice" (a keyed card, once/save) — both are a
-      // fresh confirmation of the SAME pendingCents, never a second one.
+      // A confirmed charge now starts from either "card_choice" (a card on
+      // file picked by its listed position) or "card_save_choice" (a keyed
+      // card, once/save) — both are a fresh confirmation of the SAME
+      // pendingCents, never a second one. Confirm's own "1" (2026-09-17 late
+      // night, round 5) never charges by itself any more — it only lists.
+      const digitsValue = event.type === "digits" ? event.value : null;
+      const cardChoiceIdx = digitsValue === null ? NaN : Number(digitsValue.trim()) - 1;
       const wasConfirmAccept =
-        (state.phase === "confirm" && event.type === "digits" && event.value === "1" && state.pendingCents !== null) ||
+        (state.phase === "card_choice" &&
+          digitsValue !== null &&
+          Number.isInteger(cardChoiceIdx) &&
+          cardChoiceIdx >= 0 &&
+          cardChoiceIdx < state.cards.length &&
+          state.pendingCents !== null) ||
         (state.phase === "card_save_choice" &&
           event.type === "digits" &&
           (event.value === "1" || event.value === "2") &&
@@ -243,6 +266,9 @@ test("STRESS 1 — pay-IVR reducer fuzz: 3,000 random calls / ~60k events; money
       assert.ok(out.state.lookupAttempts <= PAY_MAX_LOOKUP_ATTEMPTS);
       assert.ok(out.state.confirmRounds <= PAY_MAX_CONFIRM_ROUNDS);
       assert.ok(out.state.chargeSeq <= PAY_MAX_CHARGES_PER_CALL);
+      assert.ok(out.state.cardChoiceAttempts <= PAY_MAX_CARD_CHOICE_ATTEMPTS);
+      assert.ok(out.state.cardEntryAttempts <= PAY_MAX_CARD_ENTRY_ATTEMPTS, `cardEntryAttempts overshoot (seed ${seed}, call ${call})`);
+      assert.ok(out.state.cards.length <= 4, `more than PAY_MAX_CARDS_OFFERED cards survived in state (seed ${seed}, call ${call})`);
       // INVARIANT: a truly terminal state ("done") absorbs every event.
       if (state.phase === "done") {
         assert.equal(out.effects.length, 0, `done state produced effects (seed ${seed})`);
@@ -327,7 +353,10 @@ test("STRESS 3 — number reading exhaustive: every dollar amount 0..99,999 spli
 test("STRESS 4 — pay-call runtime marathon: 400 full calls with injected 500s/timeouts/duplicates; the POS ledger reconciles to the cent", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos({ failEvery: 17, failStatus: 500 });
-  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 10_000_000, cards: [{ id: "card1", masked: "…4417" }] });
+  // ⛔ the balance must stay under PAY_MAX_CENTS (9,999,999) — the reducer's
+  // amountToPromptRefs throws above it, and this account only ever spends
+  // down over the marathon, so a safely-under-cap seed never has to be re-checked.
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "4321", balanceCents: 9_000_000, cards: [{ id: "card1", masked: "…4417" }] });
   await seedPosTenant(db, "t-pay", pos);
   const clientFor = clientForFactory(new Map([["t-pay", pos]]));
 
@@ -877,7 +906,7 @@ test("STRESS 17 — the pay-by-phone door: fail-closed secret matrix, disabled t
   const kit = await buildApp();
   const { app, db, posByTenant } = kit;
   const pos = new FakePos();
-  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "1111", balanceCents: 5000, cards: [{ id: "cd", masked: "x" }] });
+  pos.addCustomer({ id: "c1", phone10: "8456624417", pin: "1111", balanceCents: 5000, cards: [{ id: "cd", masked: maskedCard("1234") }] });
   posByTenant.set("t-door", pos);
   await seedPosTenant(db, "t-door", pos);
   db.seed("supermarketSettings", { tenantId: "t-door", payIvrEnabled: true });
@@ -1070,7 +1099,7 @@ test("STRESS 21 — driver creation storm: 100 concurrent creates on one email m
 test("STRESS 22 — the PIN store: the LIVE PAY LINE never enrolls, never reads, never purges it — EVERY caller keys the PIN, every single call, own account or not", async () => {
   const db = makeSupermarketDb();
   const pos = new FakePos();
-  pos.addCustomer({ id: "c-pin", phone10: "8456624417", pin: "7777", balanceCents: 4200, cards: [{ id: "cd1", masked: "…1" }] });
+  pos.addCustomer({ id: "c-pin", phone10: "8456624417", pin: "7777", balanceCents: 4200, cards: [{ id: "cd1", masked: maskedCard("1111") }] });
   await seedPosTenant(db, "t-pin", pos);
   const clientFor = clientForFactory(new Map([["t-pin", pos]]));
   const deps = { db, clientFor: clientFor as any };
@@ -1309,7 +1338,9 @@ test("STRESS 25 — the life of 120 orders, end to end: voicemail/text → sweep
   await step("4321"); // PIN
   await step("2"); // payment
   await step("25*37"); // amount
-  const charged = body(await step("1")); // confirm
+  const listed = body(await step("1")); // confirm -> silent list_cards -> the one card on file
+  assert.ok(listed.prompts.includes("48_to_use_card_ending"), `card_choice menu: ${JSON.stringify(listed)}`);
+  const charged = body(await step("1")); // pick the (only) card on file
   assert.ok(charged.prompts.includes("09_approved_intro"), `charge flow: ${JSON.stringify(charged)}`);
   assert.equal([...pos.charges.values()].reduce((s, c) => s + c.amount, 0), 2537);
   assert.equal(pos.customers.get("cust1")!.balanceCents, 3750 - 2537);

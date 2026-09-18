@@ -1274,3 +1274,16 @@ add-card validator), a real one-time charge, a real save-then-charge, and whethe
 treats the saved card as the one our charge-by-id path picks first (`listCustomerCards()[0]`).
 
 **Verification:** the summary file's "Round 4" bottom section + `TESTS_RUN.md` (2026-09-17 night).
+
+### §16h — 2026-09-17 ~23:20Z: the card is CHOSEN before the charge (last four, press N; 9 = new card); a decline re-offers
+
+Izzy's round-4 call charged the card on file at once and the decline fell into the old
+amount-retry branch (quoted in the summary file, "Round 5"). Built: `askCards` → effect `list_cards`
+→ `cards_result` → phase `card_choice` (`cardChoiceMenu`: per card `48_to_use_card_ending` + four
+`num_d` + `49_press` + `num_i`, then `50_new_card_press_9`); `startCharge(state, cardMode, cardId)`;
+`performCharge(…, chosenCardId)` never lists cards; `cardsOnFile()` maps the register's
+`{id, masked}`; declines (on file or keyed) → `11_declined` + re-list + menu, amount kept, bounded
+by the amount-attempt cap; `no_card` (chosen card vanished) → `12_no_card` + card entry. Prompts
+48–50. `39`, `40`, `47` and `card_offer` retired (phase kept in the type for `normalizePayIvrState`).
+
+**Verification:** the summary file's "Round 5" bottom section + `TESTS_RUN.md`.

@@ -114,6 +114,23 @@ function pinReasonOf(err: unknown): PayPinReason {
   return "unknown";
 }
 
+/**
+ * The register's cards list → id + last four, in the register's order. Their
+ * record: {id, masked "4xxxxxxxxxxx9603", exp, name, zipCode, issuer} (read
+ * live 2026-09-17). Anything without an id and four trailing digits is skipped.
+ */
+export function cardsOnFile(raw: any): Array<{ id: string; last4: string }> {
+  const list = Array.isArray(raw) ? raw : raw?.items ?? raw?.cards ?? [];
+  const out: Array<{ id: string; last4: string }> = [];
+  for (const c of Array.isArray(list) ? list : []) {
+    const id = c?.id ?? c?.cardId;
+    const masked = String(c?.masked ?? c?.maskedCardNumber ?? c?.last4 ?? "");
+    const last4 = masked.replace(/\D/g, "").slice(-4);
+    if (id !== undefined && id !== null && String(id) !== "" && last4.length === 4) out.push({ id: String(id), last4 });
+  }
+  return out;
+}
+
 function statusFor(state: PayIvrState): PayCallStatus {
   if (state.blockedReason === "pin_not_set") return "no_pin";
   if (state.phase === "done") return "done";
@@ -258,8 +275,21 @@ export async function runPayIvrStep(deps: PayIvrRuntimeDeps, input: PayIvrStepIn
         }
         continue;
       }
+      if (effect.kind === "list_cards") {
+        if (!state.posCustomerId) {
+          nextEvent = { type: "cards_result", ok: false };
+          continue;
+        }
+        try {
+          const cards: any = await client.listCustomerCards(state.posCustomerId);
+          nextEvent = { type: "cards_result", ok: true, cards: cardsOnFile(cards) };
+        } catch {
+          nextEvent = { type: "cards_result", ok: false };
+        }
+        continue;
+      }
       if (effect.kind === "charge") {
-        nextEvent = await performCharge(deps, client, session, state, input, effect.amountCents, effect.chargeSeq, effect.cardMode);
+        nextEvent = await performCharge(deps, client, session, state, input, effect.amountCents, effect.chargeSeq, effect.cardMode, effect.cardId);
         continue;
       }
     }
@@ -305,6 +335,7 @@ async function performCharge(
   amountCents: number,
   chargeSeq: number,
   cardMode: "once" | "save" | null,
+  chosenCardId: string | null,
 ): Promise<PayIvrEvent> {
   const { db } = deps;
   const log = deps.log ?? { info: () => {}, warn: () => {} };
@@ -339,15 +370,9 @@ async function performCharge(
       }
     }
   } else {
-    // Card on file: the first stored card. None = offer to key one.
-    try {
-      const cards: any = await client.listCustomerCards(state.posCustomerId);
-      const list = Array.isArray(cards) ? cards : cards?.items ?? cards?.cards ?? [];
-      const first = Array.isArray(list) && list.length > 0 ? list[0] : null;
-      cardId = first?.id ? String(first.id) : first?.cardId ? String(first.cardId) : null;
-    } catch {
-      return { type: "charge_result", outcome: "error" };
-    }
+    // The card on file the caller picked by its last four (list_cards ran
+    // moments ago). Nothing picked = nothing to charge: the caller keys one.
+    cardId = chosenCardId ? String(chosenCardId) : null;
     if (!cardId) return { type: "charge_result", outcome: "no_card" };
   }
 

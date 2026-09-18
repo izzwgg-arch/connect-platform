@@ -569,6 +569,20 @@ export class FakePos {
   }
 }
 
+/**
+ * A stored-card mask shaped like the real register's (read live 2026-09-17:
+ * "4xxxxxxxxxxx9603") — a leading digit, an "x" run, then the last four. Any
+ * seeded `cards: [{ id, masked }]` fixture must use digit-bearing last four
+ * characters (never a placeholder like "x") because payIvrRuntime.cardsOnFile
+ * strips non-digits and requires exactly four trailing digits to offer a card
+ * on the round-5 pay line's card_choice menu — a card that fails that shape
+ * is silently dropped, not offered.
+ */
+export function maskedCard(last4: string): string {
+  const digits = String(last4).replace(/\D/g, "").padStart(4, "0").slice(-4);
+  return `4xxxxxxxxxxx${digits}`;
+}
+
 /** Deterministic PRNG so every stress failure is reproducible from its seed. */
 export function mulberry32(seed: number) {
   let a = seed >>> 0;
