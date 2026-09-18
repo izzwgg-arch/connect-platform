@@ -175,6 +175,11 @@ test("checks catch the real rejection causes", () => {
   const noNumbers = runFilingChecks({ facts: FACTS, answers: GOOD_ANSWERS, content, einPresent: true, numbersOnTelnyx: 0 });
   assert.equal(noNumbers.find((c) => c.id === "numbers")?.level, "warn");
   assert.equal(checksBlockFiling(noNumbers), false);
+  // Gesheft 2026-09-18: the form offered "Publicly traded company", the registry refused the
+  // brand (400 10015: stock exchange/symbol/contact email required) — filing must be blocked here.
+  const publicProfit = runFilingChecks({ facts: FACTS, answers: { ...GOOD_ANSWERS, entityType: "PUBLIC_PROFIT" }, content, einPresent: true, numbersOnTelnyx: 1 });
+  assert.equal(publicProfit.find((c) => c.id === "entityType")?.level, "fail");
+  assert.equal(checksBlockFiling(publicProfit), true);
 });
 
 test("customer answers: every field the registry would refuse is caught with a plain message", () => {

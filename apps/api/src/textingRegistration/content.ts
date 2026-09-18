@@ -282,6 +282,11 @@ export function runFilingChecks(input: {
   const entity = String(answers.entityType || "");
   const fieldErrors = validateCustomerAnswers(answers, { einRequired: false });
   add("answers", Object.keys(fieldErrors).length === 0, "The customer's business details are complete", `Business details incomplete: ${Object.values(fieldErrors).join(" ")}`);
+  // ⛔ The registry refuses a PUBLIC_PROFIT brand without stockExchange + stockSymbol +
+  // businessContactEmail (400 10015), and nothing here collects them — so filing one can only
+  // fail. Proven on Gesheft 2026-09-18: two File presses, both refused at brand creation.
+  add("entityType", entity !== "PUBLIC_PROFIT", "Business type can be filed",
+    "\"Publicly traded company\" needs a stock exchange, ticker and business contact email, which this form does not collect. Change the business type (most businesses are \"LLC or corporation\") or send it back to the customer.");
   if (entity !== "SOLE_PROPRIETOR") {
     add("ein", input.einPresent, "EIN is on file (tokenized)", "No EIN on file. Ask the customer to enter it again.");
   }

@@ -55,13 +55,19 @@ type View = {
 
 type Unavailable = { error: string; message: string; displayName: string | null; submittedAt: string | null; signatureName: string | null };
 
-const ENTITY_OPTIONS = [
-  { value: "PRIVATE_PROFIT", label: "LLC or corporation" },
-  { value: "NON_PROFIT", label: "Non-profit" },
-  { value: "PUBLIC_PROFIT", label: "Publicly traded company" },
-  { value: "GOVERNMENT", label: "Government" },
-  { value: "SOLE_PROPRIETOR", label: "Just me, no EIN (sole proprietor)" },
+// Izzy, 2026-09-18: "Entity type should just ask: LLC, Corporation, C corp." Every one of
+// these is a privately held for-profit business, which the registry calls PRIVATE_PROFIT —
+// so the choice is only what the customer SEES; the value filed is always PRIVATE_PROFIT.
+// ⛔ Never offer "Publicly traded company" here: the registry demands a stock exchange,
+// ticker and business contact email for it, which this form does not collect (Gesheft picked
+// it on 2026-09-18 and every File press was refused at the door). Non-profit, government and
+// sole proprietor exist only on the staff review page, where the checks explain themselves.
+const BUSINESS_KIND_OPTIONS = [
+  { value: "LLC", label: "LLC" },
+  { value: "CORPORATION", label: "Corporation" },
+  { value: "C_CORP", label: "C corp" },
 ];
+const KIND_ENTITY_TYPE = "PRIVATE_PROFIT";
 
 const STATES = "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA PR RI SC SD TN TX UT VT VA WA WV WI WY"
   .split(" ")
@@ -161,6 +167,8 @@ export default function TextingRegistrationPage({ params }: { params: { token: s
   };
 
   const sole = answers.entityType === "SOLE_PROPRIETOR";
+  // What the customer picked from the three plain choices; only the registry value is stored.
+  const [businessKind, setBusinessKind] = useState("");
 
   const submit = async () => {
     if (!view) return;
@@ -361,10 +369,13 @@ export default function TextingRegistrationPage({ params }: { params: { token: s
             "Business type",
             <ConnectSelect
               id="tr-entityType"
-              value={answers.entityType || ""}
-              onChange={(v) => set("entityType", v)}
-              options={ENTITY_OPTIONS}
-              placeholder="Choose…"
+              value={businessKind}
+              onChange={(v) => {
+                setBusinessKind(v);
+                set("entityType", KIND_ENTITY_TYPE);
+              }}
+              options={BUSINESS_KIND_OPTIONS}
+              placeholder={answers.entityType ? "Answered — pick again to change" : "Choose…"}
               disabled={!editable("entityType")}
               ariaLabel="Business type"
             />,
