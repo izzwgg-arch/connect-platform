@@ -3,6 +3,7 @@ import { db as getDb, type Db } from "../db.js";
 import { sweepIdempotencyKeys } from "../lib/idempotency.js";
 import { notify } from "../lib/notify.js";
 import { deliverPush } from "../lib/push.js";
+import { retryFailedMail } from "../lib/mail.js";
 
 /**
  * In-process schedulers (one api instance runs them; set COMMUNITY_SCHEDULERS=0
@@ -17,6 +18,7 @@ export const jobs: Job[] = [
   { name: "analytics.rollup", everyMs: 10 * 60_000, run: rollupAnalytics },
   { name: "codes.sweep", everyMs: 30 * 60_000, run: sweepCodes },
   { name: "push.deliver", everyMs: 30_000, run: (db) => deliverPush(db) },
+  { name: "mail.retry", everyMs: 2 * 60_000, run: retryFailedMail },
 ];
 
 /** Domains register extra jobs (scheduled posts, RFQ closing, event reminders). */

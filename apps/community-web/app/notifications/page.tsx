@@ -212,7 +212,11 @@ function NotifRow({ item, onAct, onDelete }: { item: NotifItem; onAct: (id: stri
     <div className={`notif-row ${decision ? "decision" : ""} ${!item.readAt ? "unread" : ""}`} data-testid={`notifications-item-${item.id}`}>
       <Avatar name={item.actor?.name ?? item.title} assetId={item.actor?.avatarAssetId} size={40} />
       <div className="body">
-        <p dangerouslySetInnerHTML={{ __html: item.count > 1 ? `${item.title}${item.body ? ` — ${item.body}` : ""} <b>(${item.count})</b>` : `${item.title}${item.body ? ` — ${item.body}` : ""}` }} />
+        <p>
+          {item.title}
+          {item.body ? ` — ${item.body}` : ""}
+          {item.count > 1 ? <b> ({item.count})</b> : null}
+        </p>
         <time>{timeAgo(item.createdAt)}</time>
       </div>
       <div className="acts">

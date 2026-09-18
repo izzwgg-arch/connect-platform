@@ -104,7 +104,7 @@ export async function storeUpload(
     }
     const done = await db.mediaAsset.update({
       where: { id: asset.id },
-      data: { storageKey: originalKey, mime: finalMime, width, height, variants, status: "READY", scanResult: "clean" },
+      data: { storageKey: originalKey, mime: finalMime, width, height, variants, status: "READY", scanResult: "not-scanned" },
     });
     return toStored(done);
   } catch (err) {
