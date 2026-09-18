@@ -324,3 +324,18 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
     allows it (owner preview today) and `onSpeaker` makes her SAY every caption.
   ⏳ NOT PROVEN by a human yet: no customer has walked it; Laybel video in the rail untested live; the
   robot family is Yealink-only so "fresh" is unknown (honest "Not connected yet") for other makers.
+- ✅ **ROUND 28 (2026-09-18): A SUPER-ADMIN RUNS THE WIZARD FOR ANY CUSTOMER FROM THE TENANT
+  SWITCHER.** Izzy: *"if I'm at the tenant's location, connected to their network, I can just run
+  the wizard for them from my computer, from my account."* The portal already sends the switcher's
+  tenant as `x-tenant-context` on every call; the desk-phone doors read `req.user.tenantId` (the
+  admin's OWN tenant), so a super-admin's run, extensions, provisioning folder, PnP pending list
+  and Laybel were all Loopcom's. ✅ `apps/api/src/deskPhoneSetup/effectiveUser.ts`
+  (`effectiveDeskPhoneUser`): SUPER_ADMIN + UUID-shaped `x-tenant-context` → `tenantId` = that
+  tenant; every other role keeps the token's tenant (header ignored). Wired at the ONE source —
+  `deskPhoneRoutes.ts`'s `getUser` (shared by deviceCloudRoutes/phoneRobotRoutes/MAC-removal via
+  deps) and `managedPhoneRoutes.ts`'s `actor`. Ownership checks (`ownRun`) stay tenant-scoped, so
+  switching tenants mid-run 404s the other run (correct). Audit rows keep `actorUserId` = the admin.
+  The guided screen shows a standing banner "Setting up phones for <Tenant>" whenever acting as a
+  customer. 5 new tests; desk-phone api suites 155/155 with it. ⏳ Not yet done live by Izzy on a
+  customer LAN. ⛔ The desktop's PnP responder gets its folder through the PORTAL's `/pnp-config`
+  call (PnpResidentHost), so it follows the switcher too — the desktop itself never calls the api.

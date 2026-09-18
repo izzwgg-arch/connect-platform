@@ -699,3 +699,4 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
 - `apps/portal`: `node --import tsx --test components/deskPhones/guidedFlow.test.ts components/deskPhones/setupDriver.test.ts components/deskPhones/wizardHonestFinish.test.ts` — 72/72 (11 new: sticker match, connectedAsMapped, screen selection, stuck classification, candidate ordering).
 - Typecheck: api touched files 0 errors; portal `tsc --noEmit` exit 0 (0 errors). Portal `next build` run before deploy (result in the handoff).
 - ⏳ Not run: a human walking the guided setup on a real phone; Laybel video inside the rail.
+- R28 (super-admin tenant switcher reaches the desk-phone doors): `apps/api` `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/effectiveUser.test.ts src/deskPhoneSetup/deskPhoneRoutes.test.ts src/deskPhoneSetup/managedPhoneIntegration.test.ts src/deskPhoneSetup/deviceCloudRoutes.test.ts` — 155/155 (5 new); api + portal tsc clean.

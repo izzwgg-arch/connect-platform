@@ -33,6 +33,7 @@ import { ResetIllustration } from "./ResetIllustration";
 import { LaybelVideoCall } from "../LaybelVideoCall";
 import type { LaybelStatus } from "../LaybelSetup";
 import { wavBase64 } from "../../lib/laybelMic";
+import { useAppContext } from "../../hooks/useAppContext";
 import type { VoiceInput } from "../../lib/laybelSpeech";
 import "./deskPhones.css";
 import "./guidedSetup.css";
@@ -60,6 +61,15 @@ const TICK_MS = 4000;
 const FRESH_WATCH_MS = 8000;
 
 export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; onClassic?: () => void }) {
+  /*
+    ⛔ WHOSE PHONES (Izzy, 2026-09-18: "from the super admin account, I can run the wizard for
+    any customer just by selecting the tenant dropdown"). Every api call already carries the
+    switcher's tenant (x-tenant-context) and the desk-phone doors honour it for a super-admin,
+    so this screen is genuinely that customer's setup — and it SAYS so, in the header, the whole
+    time, so nobody provisions the wrong company's phones without seeing it.
+  */
+  const { backendJwtRole, adminScope, tenant } = useAppContext();
+  const actingFor = String(backendJwtRole ?? "").toUpperCase() === "SUPER_ADMIN" && adminScope === "TENANT" && tenant?.id && tenant.id !== "local" ? tenant : null;
   const [runId, setRunId] = useState<string | null>(null);
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [phones, setPhones] = useState<GuidedPhone[]>([]);
@@ -463,6 +473,11 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
       </aside>
 
       <main className="gps-main">
+        {actingFor && (
+          <div className="gps-acting" role="status">
+            Setting up phones for <b>{actingFor.name}</b> — pick a different company from the tenant menu to change this.
+          </div>
+        )}
         <header className="gps-head">
           <div>
             <div className="gps-kicker">{focusExt ? `SETTING UP EXT ${focusExt.extNumber} · ${focusExt.displayName}` : "DESK PHONE SETUP"}{focused ? ` · ${focused.model ?? focused.vendor ?? "phone"} · …${stickerEndsIn(focused.mac) ?? ""}` : ""}</div>

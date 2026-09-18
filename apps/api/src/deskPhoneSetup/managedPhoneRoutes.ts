@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { effectiveDeskPhoneUser } from "./effectiveUser";
 import { z } from "zod";
 import { userHasActionPermission } from "../permissionGates";
 import { ManagedPhoneService } from "./managedPhoneService";
@@ -36,10 +37,12 @@ export async function registerManagedPhoneRoutes(app: FastifyInstance, injected?
   let singleton: ManagedPhoneService | undefined = injected;
   const service = () => singleton ??= new ManagedPhoneService();
   const actor = async (req: any) => {
-    if (!req.user?.tenantId || !req.user?.sub) throw new DeviceError("unauthorized", 401);
-    if (!(await userHasActionPermission(req.user, "can_setup_desk_phones"))) throw new DeviceError("forbidden", 403);
+    // ⛔ The switcher's tenant for a super-admin (effectiveUser.ts), the token's otherwise.
+    const user = effectiveDeskPhoneUser(req);
+    if (!user?.tenantId || !user?.sub) throw new DeviceError("unauthorized", 401);
+    if (!(await userHasActionPermission(user, "can_setup_desk_phones"))) throw new DeviceError("forbidden", 403);
     if (!enabled()) throw new DeviceError("managed_provisioning_not_enabled", 503);
-    return { tenantId: req.user.tenantId, sub: req.user.sub };
+    return { tenantId: user.tenantId, sub: user.sub };
   };
   const guarded = (fn: (req: any, reply: any) => Promise<any>) => async (req: any, reply: any) => {
     const operation = req.routeOptions.url;

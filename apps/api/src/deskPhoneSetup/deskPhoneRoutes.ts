@@ -38,6 +38,7 @@ import { addEvidence, cloudStateFromRow, evidenceForRow, identityColumns, report
 import { createDeviceProviderRegistry, type DeviceProviderRegistry } from "./deviceProviderRegistry";
 import { registerDeviceCloudRoutes } from "./deviceCloudRoutes";
 import { ensureYealinkRedirect } from "./yealinkRedirectClaim";
+import { effectiveDeskPhoneUser } from "./effectiveUser";
 import { resetRecipeFor } from "@connect/shared";
 import { improvise, stickerEndsIn, type GuideFacts, type ModelCall } from "./laybelGuide";
 import { resolveOpenAiKey } from "../support/customerUpdate";
@@ -48,7 +49,12 @@ const laybelBudget = new Map<string, number>();
 import { registerPhoneRobotRoutes } from "./phoneRobotRoutes";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
-const getUser = (req: any): JwtUser => req.user as JwtUser;
+/**
+ * ⛔ THE SELECTED TENANT, NOT THE TOKEN'S (2026-09-18): a super-admin who picked a
+ * customer in the switcher runs every desk-phone door — runs, extensions, folder, the
+ * PnP responder's pending list, Laybel — for THAT customer. See effectiveUser.ts.
+ */
+const getUser = (req: any): JwtUser => effectiveDeskPhoneUser(req) as JwtUser;
 
 /**
  * The public address the customer's own computer reached us from: the LAST
