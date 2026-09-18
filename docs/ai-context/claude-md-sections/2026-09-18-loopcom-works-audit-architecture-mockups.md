@@ -80,6 +80,12 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_LOOPCOM_WORKS_2026-09-18.md`**. A
   `http://works.localtest.me:3002`; dev is `npm run dev:3001` (3000 is another TrimPro dev
   server). ⏳ NOT PROVEN: Izzy's eyes; mobile build; dark on all 96 pages (6 reviewed); email
   look by a human. Security fixes + Loopcom integration still wait for his go.
+- **CORRECTED the same night (`dea6eb22`) after Izzy: "not exactly like the mockups"** — the shell is now
+  the boards' shell: full-width top bar (brand chip, Ctrl-K search pill, bell, account menu with
+  Light/Dark + Sign out), sidebar profile block + company row + six collapsible sections (same 25
+  links/permissions), rail toggle in the footer, 19px titles, portal table/card density; the SSO
+  button, AI panel, comms timeline and dialer from the boards are held back (dead controls until
+  their phases). Click-through 42/42 on the dev server. Handoff §8.6.
 - ⛔ **NOT PROVEN / NOT DONE (phase 0):** no server exists;
   no SSO/API/agent code written; mockups reviewed by nobody yet. Browser 1 (office Chrome, signed in)
   froze its renderer on the portal `/dashboard` ("Application error") — portal issue, noted only.

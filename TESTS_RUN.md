@@ -1,5 +1,9 @@
 # Tests run
 
+## LoopCom Works — shell corrected to the mockups — 2026-09-18 (night)
+
+- After Izzy's "not exactly like the mockups": top bar / account menu / sidebar sections rebuilt to boards 02–04 (`dea6eb22`). `tsc` still 207 (baseline). **Click-through E2E on the dev server (`npm run dev`, port 3000): 42/42** — form login, all 25 sidebar pages, client create + edit through the real forms, estimate/invoice/PO detail + `200 application/pdf`, job detail, theme switched through the account menu persists across reload, a sidebar section collapse persists across reload and reopens, rail collapse persists, global search finds the new client, Sign out from the account menu clears the token. Screenshots: `scratchpad/e2e-v2/` (account menu open in dark, dashboard light/dark, client detail dark) reviewed. The 20-iteration run still has to be re-done (the previous one died with the session).
+
 ## LoopCom Works — looks-only reskin + rebrand — 2026-09-18 (evening)
 
 - Production build `npm run build` in `Loopcom works/`: ✓ Compiled successfully, 382 routes, BUILD_ID `FmKMrwI6_G4-rIUUX29BL` (two pre-existing `Dynamic server usage` notices from TrimPro's public routes, unchanged).

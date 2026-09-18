@@ -607,3 +607,26 @@ component export names, code comments, the legacy root `*.md` files.
   `npx tsx scripts/seed-dev-demo.ts` (local DB only) → `admin@trimpro.com / admin123`.
 - Prod build: `npm run build && npx next start -p 3002` → open
   `http://works.localtest.me:3002` (NOT localhost — see the middleware note).
+
+### 8.6 Correction the same night — "not exactly like the mockups"
+
+Izzy: *"This is not exactly like the mockups. I told you to do it 100% on the dot."*
+The first pass had restyled TrimPro's shell instead of building the boards' shell.
+`dea6eb22` fixes that: the full-width top bar (brand chip with wordmark + Works tag,
+search pill with Ctrl K centred, bell, account menu), the account menu
+(`components/layout/ProfileMenu.tsx`: My profile / Notifications / Light–Dark /
+Help / Sign out — the sidebar's logout body moved verbatim to
+`lib/auth/client-logout.ts`), the sidebar with the profile block + company row +
+Workspace/Money/Team/Communicate/Insight/System sections (collapsible, persisted
+under `sidebar-sections-collapsed`; same 25 links, hrefs, permissions, guards;
+Requests icon → Inbox), the rail toggle in the footer, 19px page titles and 12.5px
+subtitles (`.lw-main h1`), 11px uppercase table headers, 16px card padding.
+Deliberately NOT rendered from the boards because they would be dead controls
+until their phases: the "Continue with your Loopcom account" button, the AI
+assistant button/panel, the communications timeline/"Call via Loopcom", the
+top-bar dialer, "Open Loopcom" in the menu. Page bodies keep TrimPro's structure
+(the boards' client/job compositions were idealised; the layout rule says keep the
+workflow) with the boards' styling. Proof: click-through 42/42 on the dev server
+(the E2E now drives the theme through the account menu and checks section
+collapse persists). ⛔ Test-script lesson: `/dashboard/clients/new` matches a
+naive `/clients/[a-z0-9]+$` detail regex — exclude `new`.
