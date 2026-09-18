@@ -384,3 +384,12 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   normalized value as they type; 1 new test. ⛔ Landau has ONE Active extension in Connect's
   `Extension` table (101) — 102 exists on the PBX only, so the guided screen offers 101 alone until
   102 is added in Connect. ⏳ Izzy walks it again.
+  ✅ **Desktop `0.1.17-rc.21` BUILT + INSTALLED on Izzy's PC (2026-09-18 15:37Z):** tsc exit 0,
+  electron-builder exit 0, `Connect-Setup-0.1.17-rc.21.exe` 102,592,251 bytes; asar carries
+  `dist/phoneSetup/grandstreamWebRobot.js`; installed asar sha256 `acd25f1e…ca699` IDENTICAL to the
+  build; relaunched, log banner rc.21, 0 error lines; updater refuses the rc.10 fleet feed as a
+  downgrade (⛔ NOT published — the fleet stays at rc.10). ⛔ Build recipe that works under Node 24:
+  `npx tsc -p tsconfig.json` then `npx electron-builder --win` (never `pnpm build` — its schema
+  guard trips on line endings), install with `powershell Start-Process <exe> -ArgumentList '/S' -Wait`,
+  then relaunch `%LOCALAPPDATA%\Programs\@connectdesktop\Loopcom.exe` (the silent install closes
+  the app and does not reopen it); the app's log is `%APPDATA%\@connect\desktop\logs\connect.log`.
