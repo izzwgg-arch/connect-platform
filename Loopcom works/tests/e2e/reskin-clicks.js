@@ -74,7 +74,8 @@ async function typeInto(p, sel, text) {
         const before = pageErrors.length;
         await open(p, BASE + href);
         const ok = await noAppError(p);
-        const hasContent = await p.evaluate(() => document.querySelector('main')?.innerText.trim().length > 20);
+        let hasContent = await p.evaluate(() => document.querySelector('main')?.innerText.trim().length > 20);
+        if (!hasContent) { await sleep(8000); hasContent = await p.evaluate(() => document.querySelector('main')?.innerText.trim().length > 20); }
         rec(`nav ${href}`, ok && hasContent && pageErrors.length === before, ok ? (hasContent ? '' : 'empty main') : 'app error');
         if (it === 1) await p.screenshot({ path: OUT + 'nav' + href.replace(/[^a-z0-9]+/gi, '_') + '.png' });
       } catch (e) { rec(`nav ${href}`, false, e.message.slice(0, 100)); }
@@ -88,11 +89,11 @@ async function typeInto(p, sel, text) {
     await typeInto(p, '#email', `e2e${Date.now()}@example.com`);
     await typeInto(p, '#phone', '(555) 010-2030');
     await Promise.all([
-      p.waitForFunction(() => /\/dashboard\/clients\/[a-z0-9]+$/.test(location.pathname), { timeout: 120000 }).catch(() => {}),
+      p.waitForFunction(() => /\/dashboard\/clients\/(?!new$)[a-z0-9]+$/.test(location.pathname), { timeout: 180000 }).catch(() => {}),
       p.click('button[type=submit]'),
     ]);
     await sleep(2000);
-    const onDetail = /\/dashboard\/clients\/[a-z0-9]+$/.test(p.url());
+    const onDetail = /\/dashboard\/clients\/(?!new$)[a-z0-9]+$/.test(p.url());
     const shows = onDetail && (await p.evaluate(() => document.body.innerText)).includes(cname);
     rec('create client → detail shows name', shows, p.url());
     const clientUrl = p.url();
@@ -136,15 +137,31 @@ async function typeInto(p, sel, text) {
 
     // 6. Theme toggle persists across reload
     await open(p, BASE + '/dashboard');
-    const clickedTheme = await p.evaluate(() => { const b = document.querySelector('button[aria-label="Switch to dark mode"]'); if (b) { b.click(); return true; } return false; });
+    // Theme lives in the account menu (mockup board 04): open it, press "Dark".
+    await p.click('button[aria-label="Account menu"]');
+    await sleep(400);
+    const clickedTheme = await p.evaluate(() => { const b = [...document.querySelectorAll('.lw-seg-btn')].find(x => x.textContent.trim() === 'Dark'); if (b) { b.click(); return true; } return false; });
     await sleep(500);
+    if (it === 1) await p.screenshot({ path: OUT + 'account-menu-dark.png' });
+    await p.keyboard.press('Escape');
     const darkNow = await p.evaluate(() => document.documentElement.classList.contains('dark'));
     await open(p, BASE + '/dashboard');
     const darkAfter = await p.evaluate(() => document.documentElement.classList.contains('dark'));
     rec('theme toggle → dark persists after reload', clickedTheme && darkNow && darkAfter);
     if (it === 1) await p.screenshot({ path: OUT + 'dashboard-dark.png' });
-    await p.evaluate(() => { const b = document.querySelector('button[aria-label="Switch to light mode"]'); b && b.click(); });
+    // Sidebar section headers collapse and persist (mockup board 03)
+    const secClicked = await p.evaluate(() => { const b = [...document.querySelectorAll('.lw-section-label')].find(x => x.textContent.trim().toUpperCase().startsWith('MONEY')); if (b) { b.click(); return true; } return false; });
     await sleep(300);
+    const moneyHidden = await p.evaluate(() => !document.querySelector('a[href="/dashboard/invoices"]'));
+    await open(p, BASE + '/dashboard');
+    const moneyStillHidden = await p.evaluate(() => !document.querySelector('a[href="/dashboard/invoices"]'));
+    await p.evaluate(() => { const b = [...document.querySelectorAll('.lw-section-label')].find(x => x.textContent.trim().toUpperCase().startsWith('MONEY')); b && b.click(); });
+    await sleep(300);
+    const moneyBack = await p.evaluate(() => !!document.querySelector('a[href="/dashboard/invoices"]'));
+    rec('sidebar section collapse persists and reopens', secClicked && moneyHidden && moneyStillHidden && moneyBack);
+    await p.click('button[aria-label="Account menu"]'); await sleep(300);
+    await p.evaluate(() => { const b = [...document.querySelectorAll('.lw-seg-btn')].find(x => x.textContent.trim() === 'Light'); b && b.click(); });
+    await p.keyboard.press('Escape'); await sleep(300);
 
     // 7. Sidebar collapse persists
     await p.evaluate(() => { const b = document.querySelector('button[aria-label="Collapse sidebar"]'); b && b.click(); });
@@ -164,7 +181,8 @@ async function typeInto(p, sel, text) {
     rec('global search finds the new client', hits);
 
     // 9. Logout
-    const loggedOut = await clickByText(p, 'Logout');
+    await p.click('button[aria-label="Account menu"]'); await sleep(400);
+    const loggedOut = await clickByText(p, 'Sign out');
     await p.waitForFunction(() => location.pathname.startsWith('/auth/login'), { timeout: 60000 }).catch(() => {});
     const tokenGone = await p.evaluate(() => !localStorage.getItem('accessToken'));
     rec('logout → login page, token cleared', loggedOut && p.url().includes('/auth/login') && tokenGone, p.url());

@@ -5,6 +5,9 @@ import { useState, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Menu } from 'lucide-react'
+import { TrimProLogo } from '@/components/branding/TrimProLogo'
+import { NotificationBell } from '@/components/notifications/NotificationBell'
+import { ProfileMenu } from '@/components/layout/ProfileMenu'
 import { QboSyncFailureNotifier } from '@/components/qbo/QboSyncFailureNotifier'
 import { GlobalSearch } from '@/components/search/GlobalSearch'
 import { RoutePermissionGuard } from '@/components/permissions/RoutePermissionGuard'
@@ -57,18 +60,13 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-full min-h-screen bg-gray-100">
+    <div className="flex h-full min-h-screen flex-col bg-page">
       <DashboardNavCapture />
       {isAdmin && <QboSyncFailureNotifier />}
 
-      <Sidebar
-        mobileOpen={mobileMenuOpen}
-        onMobileClose={() => setMobileMenuOpen(false)}
-      />
-
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        {/* Top bar — always visible on all screen sizes */}
-        <header className="lw-topbar h-14 flex items-center gap-3 px-4 shrink-0 z-40">
+      {/* Top bar — the portal's 56px bar across the full width: brand · search · bell · account */}
+      <header className="lw-topbar grid h-14 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-3 px-4 pl-3 z-40">
+        <div className="lw-topbar-brand">
           {/* Hamburger — mobile only */}
           <button
             onClick={() => setMobileMenuOpen(true)}
@@ -77,20 +75,39 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           >
             <Menu className="h-5 w-5" />
           </button>
+          <Link href="/dashboard" aria-label="Go to dashboard" className="inline-flex items-center">
+            <TrimProLogo variant="light" size="md" />
+          </Link>
+        </div>
 
-          {/* Global search bar */}
-          <div className="flex-1 max-w-2xl">
+        {/* Global search bar */}
+        <div className="flex justify-center px-2">
+          <div className="w-full max-w-[720px]">
             <GlobalSearch />
           </div>
-        </header>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <NotificationBell />
+          <ProfileMenu />
+        </div>
+      </header>
+
+      <div className="flex flex-1 min-h-0">
+      <Sidebar
+        mobileOpen={mobileMenuOpen}
+        onMobileClose={() => setMobileMenuOpen(false)}
+      />
+
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
 
         {isFullBleed ? (
-          <main className="flex-1 min-h-0 overflow-hidden bg-gray-100">
+          <main className="lw-main flex-1 min-h-0 overflow-hidden bg-page">
             <RoutePermissionGuard>{children}</RoutePermissionGuard>
           </main>
         ) : (
-          <main className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-100">
-            <div className="min-h-full flex flex-col bg-gray-100 p-4 sm:p-6">
+          <main className="lw-main flex-1 overflow-y-auto overflow-x-hidden bg-page">
+            <div className="min-h-full flex flex-col bg-page p-4 sm:px-[26px] sm:pb-6 sm:pt-[22px]">
               <div className="flex-1">
                 <RoutePermissionGuard>{children}</RoutePermissionGuard>
               </div>
@@ -111,6 +128,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             </div>
           </main>
         )}
+      </div>
       </div>
     </div>
   )

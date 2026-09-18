@@ -5,9 +5,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { TrimProLogo } from '@/components/branding/TrimProLogo'
 import { PermissionGuard } from '@/components/permissions/PermissionGuard'
-import { resetPermissionsCache } from '@/hooks/usePermissions'
 import { SIDEBAR_PAGE_MODULE_IDS, getModuleById, getModuleSidebarPermissions } from '@/lib/page-module-permissions'
-import { NotificationBell } from '@/components/notifications/NotificationBell'
+import { displayNameOf, initialsOf, readStoredUser, roleLabelOf, type StoredUser } from '@/lib/auth/client-logout'
 import {
   LayoutDashboard,
   Users,
@@ -22,7 +21,6 @@ import {
   MessageSquare,
   Settings,
   HelpCircle,
-  LogOut,
   BarChart3,
   FileBarChart,
   Radio,
@@ -30,15 +28,16 @@ import {
   Mail,
   Package,
   Building2,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
+  PanelLeftClose,
+  PanelLeftOpen,
   X,
   ScrollText,
   Receipt,
   Factory,
+  Inbox,
 } from 'lucide-react'
 import { useRef, useState, useEffect } from 'react'
-import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { formatDistanceToNow } from 'date-fns'
 
 // Maps a nav item to the Notification.linkType whose unread count should
@@ -52,10 +51,12 @@ const NAV_ITEM_LINK_TYPES: Record<string, string> = {
   Messages: 'message',
 }
 
+// The same 25 pages, hrefs and permission keys TrimPro had. Only the Requests
+// icon changed (Inbox — the mockups) so it no longer duplicates Clients'.
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
   { name: 'Clients', href: '/dashboard/clients', icon: Users, permission: 'clients.view' },
-  { name: 'Requests', href: '/dashboard/requests', icon: Users, permission: 'leads.view' },
+  { name: 'Requests', href: '/dashboard/requests', icon: Inbox, permission: 'leads.view' },
   { name: 'Jobs', href: '/dashboard/jobs', icon: Briefcase, permission: 'jobs.view' },
   { name: 'Production', href: '/dashboard/production', icon: Factory, permission: 'production.view' },
   { name: 'Schedule', href: '/dashboard/schedule', icon: Calendar, permission: 'schedule.view' },
@@ -79,6 +80,18 @@ const navigation = [
   { name: 'Settings', href: '/dashboard/settings', icon: Settings, permission: 'settings.view' },
   { name: 'Help', href: '/dashboard/help', icon: HelpCircle, permission: 'dashboard.view' },
 ]
+
+// The approved mockups group those pages into the portal's sections (board 03).
+// Grouping is presentation only: every entry above keeps its href + permission.
+const SECTIONS: Array<{ label: string; items: string[] }> = [
+  { label: 'Workspace', items: ['Dashboard', 'Clients', 'Requests', 'Jobs', 'Production', 'Schedule'] },
+  { label: 'Money', items: ['Estimates', 'Invoices', 'Credit Memos', 'Purchase Orders', 'Items', 'Vendors'] },
+  { label: 'Team', items: ['Tasks', 'Issues', 'Teams', 'Dispatch', 'Maps'] },
+  { label: 'Communicate', items: ['Calls', 'Messages', 'Email'] },
+  { label: 'Insight', items: ['Analytics', 'Reports', 'Audit Logs'] },
+  { label: 'System', items: ['Settings', 'Help'] },
+]
+const SECTIONS_KEY = 'sidebar-sections-collapsed'
 
 interface SidebarProps {
   mobileOpen?: boolean
@@ -190,11 +203,18 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
   const [unreadNavNotifications, setUnreadNavNotifications] = useState<UnreadNavNotification[]>([])
+  const [closedSections, setClosedSections] = useState<Record<string, boolean>>({})
+  const [user, setUser] = useState<StoredUser | null>(null)
 
   // Persist collapse state across sessions
   useEffect(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
     if (saved === 'true') setCollapsed(true)
+    try {
+      const raw = localStorage.getItem(SECTIONS_KEY)
+      if (raw) setClosedSections(JSON.parse(raw))
+    } catch {}
+    setUser(readStoredUser())
   }, [])
 
   // Poll unread notifications to drive the "New" nav badges and their hover
@@ -235,149 +255,122 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
     })
   }
 
-  const handleLogout = async () => {
-    const refreshToken = localStorage.getItem('refreshToken')
-    if (refreshToken) {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
-      })
-    }
-    localStorage.removeItem('accessToken')
-    localStorage.removeItem('refreshToken')
-    localStorage.removeItem('user')
-    resetPermissionsCache()
-    window.location.href = '/auth/login'
+  const toggleSection = (label: string) => {
+    setClosedSections((prev) => {
+      const next = { ...prev, [label]: !prev[label] }
+      try {
+        localStorage.setItem(SECTIONS_KEY, JSON.stringify(next))
+      } catch {}
+      return next
+    })
   }
 
-  const sidebarContent = (
-    <div
-      className={cn(
-        'lw-sidebar flex h-full flex-col text-[var(--brand-text-primary-color)]',
-        collapsed ? 'w-[72px]' : 'w-[264px]'
-      )}
-    >
-      {/* Header */}
-      <div
-        className="flex h-14 flex-shrink-0 items-center justify-between border-b px-3"
-        style={{ borderColor: 'var(--brand-sidebar-border-color)' }}
+  const isActivePath = (href: string) =>
+    href === '/dashboard' ? pathname === '/dashboard' : pathname === href || pathname?.startsWith(href + '/')
+
+  // One nav link, guarded exactly as before (PermissionGuard + module sidebar permissions).
+  const renderItem = (item: (typeof navigation)[number], rail: boolean) => {
+    const isActive = isActivePath(item.href)
+    const navItem = (
+      <Link
+        key={item.name}
+        href={item.href}
+        onClick={onMobileClose}
+        title={rail ? item.name : undefined}
+        className={cn('lw-nav-link group', rail && 'is-rail', isActive && 'is-active')}
       >
-        {!collapsed && (
-          <Link
-            href="/dashboard"
-            aria-label="Go to dashboard"
-            className="inline-flex h-full min-h-0 min-w-0 flex-1 items-center justify-start overflow-hidden pr-1"
-          >
-            <TrimProLogo variant="sidebar" size="md" />
-          </Link>
+        <span className="lw-nav-icon">
+          <item.icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.85} />
+        </span>
+        {!rail && (
+          <span className="flex min-w-0 flex-1 items-center justify-between truncate">
+            {item.name}
+            <NewBadge items={unreadByNavItem(item.name)} />
+          </span>
         )}
-        {collapsed && (
-          <Link href="/dashboard" aria-label="Go to dashboard" className="flex flex-1 items-center justify-center">
-            <TrimProLogo variant="sidebar" size="sm" />
-          </Link>
-        )}
-        <div className="flex items-center gap-1 shrink-0">
-          {!collapsed && <NotificationBell />}
-          {/* Desktop collapse toggle */}
-          <button
-            onClick={toggleCollapsed}
-            className="lw-icon-btn hidden lg:inline-grid h-7 min-w-7 w-7"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-          </button>
-          {/* Mobile close button */}
-          {onMobileClose && (
+      </Link>
+    )
+
+    if (item.permission) {
+      const moduleId = SIDEBAR_PAGE_MODULE_IDS[item.name]
+      const module = moduleId ? getModuleById(moduleId) : undefined
+      const sidebarPermissions = module ? getModuleSidebarPermissions(module) : [item.permission]
+
+      return (
+        <PermissionGuard key={item.name} permissions={sidebarPermissions}>
+          {navItem}
+        </PermissionGuard>
+      )
+    }
+
+    return navItem
+  }
+
+  const renderSections = (rail: boolean) =>
+    SECTIONS.map((section) => {
+      const items = section.items
+        .map((name) => navigation.find((n) => n.name === name))
+        .filter((n): n is (typeof navigation)[number] => Boolean(n))
+      const closed = !rail && closedSections[section.label]
+      return (
+        <div key={section.label} className="lw-section">
+          {!rail && (
             <button
-              onClick={onMobileClose}
-              className="lw-icon-btn flex lg:hidden min-h-[44px] min-w-[44px] h-11 w-11"
-              aria-label="Close menu"
+              type="button"
+              className="lw-section-label"
+              onClick={() => toggleSection(section.label)}
+              aria-expanded={!closed}
             >
-              <X className="h-4 w-4" />
+              {section.label}
+              <ChevronDown className={cn('h-3 w-3 transition-transform', closed && '-rotate-90')} strokeWidth={2} />
             </button>
           )}
+          {!closed && <div className="space-y-0.5">{items.map((item) => renderItem(item, rail))}</div>}
         </div>
-      </div>
+      )
+    })
 
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto space-y-0.5 px-2.5 py-3 min-h-0">
-        {navigation.map((item) => {
-          const isActive =
-            item.href === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname === item.href || pathname?.startsWith(item.href + '/')
-          const navItem = (
-            <Link
-              key={item.name}
-              href={item.href}
-              onClick={onMobileClose}
-              title={collapsed ? item.name : undefined}
-              className={cn(
-                'lw-nav-link group',
-                collapsed ? 'is-rail' : '',
-                isActive ? 'is-active' : ''
-              )}
-            >
-              <span className="lw-nav-icon">
-                <item.icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.85} />
-              </span>
-              {!collapsed && (
-                <span className="flex min-w-0 flex-1 items-center justify-between truncate">
-                  {item.name}
-                  <NewBadge items={unreadByNavItem(item.name)} />
-                </span>
-              )}
-            </Link>
-          )
-
-          if (item.permission) {
-            const moduleId = SIDEBAR_PAGE_MODULE_IDS[item.name]
-            const module = moduleId ? getModuleById(moduleId) : undefined
-            const sidebarPermissions = module
-              ? getModuleSidebarPermissions(module)
-              : [item.permission]
-
-            return (
-              <PermissionGuard key={item.name} permissions={sidebarPermissions}>
-                {navItem}
-              </PermissionGuard>
-            )
-          }
-
-          return navItem
-        })}
-      </nav>
-
-      {/* Footer */}
-      <div
-        className="flex-shrink-0 border-t p-3"
-        style={{ borderColor: 'var(--brand-sidebar-border-color)' }}
-      >
-        {collapsed ? (
-          <div className="flex flex-col items-center gap-2">
-            <NotificationBell />
-            <ThemeToggle compact />
-            <button
-              onClick={handleLogout}
-              title="Logout"
-              className="lw-icon-btn h-8 w-8"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleLogout}
-              className="lw-nav-link flex-1"
-            >
-              <span className="lw-nav-icon"><LogOut className="h-[18px] w-[18px]" strokeWidth={1.85} /></span>
-              <span className="truncate">Logout</span>
-            </button>
-            <ThemeToggle compact />
+  const profileBlock = (rail: boolean) => (
+    <div className={cn('lw-drawer-profile', rail && 'is-rail')}>
+      <div className="flex items-center gap-2.5">
+        <div className="lw-avatar" title={displayNameOf(user)}>
+          {initialsOf(user)}
+        </div>
+        {!rail && (
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-semibold text-ink">{displayNameOf(user) || '—'}</div>
+            <div className="truncate text-[11px] text-dim">{roleLabelOf(user) || ' '}</div>
           </div>
         )}
+      </div>
+      {!rail && user?.tenantName && (
+        <div className="lw-tenant-row" title={user.tenantName}>
+          <Building2 className="h-3.5 w-3.5 flex-shrink-0" strokeWidth={1.85} />
+          <span className="truncate">{user.tenantName}</span>
+        </div>
+      )}
+    </div>
+  )
+
+  const sidebarContent = (
+    <div className={cn('lw-sidebar flex h-full flex-col', collapsed ? 'w-[72px]' : 'w-[280px]')}>
+      {profileBlock(collapsed)}
+
+      {/* Nav */}
+      <nav className={cn('flex-1 min-h-0 overflow-y-auto overflow-x-hidden', collapsed ? 'px-[10px] py-2' : 'px-[10px] pb-5 pt-2')}>
+        {renderSections(collapsed)}
+      </nav>
+
+      {/* Footer: the rail toggle, as in the portal drawer */}
+      <div className="lw-drawer-footer">
+        <button
+          onClick={toggleCollapsed}
+          className="lw-icon-btn h-8 w-8"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <PanelLeftOpen className="h-4 w-4" strokeWidth={1.85} /> : <PanelLeftClose className="h-4 w-4" strokeWidth={1.85} />}
+        </button>
       </div>
     </div>
   )
@@ -394,79 +387,28 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
         <div className="lg:hidden fixed inset-0 z-50 flex">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-black/50"
+            className="fixed inset-0 bg-[rgba(2,7,14,0.55)]"
             onClick={onMobileClose}
             aria-hidden="true"
           />
           {/* Drawer — always full width on mobile */}
-          <div className="lw-sidebar relative flex h-full w-[min(100vw,17rem)] max-w-[85vw] flex-col text-[var(--brand-text-primary-color)] shadow-float"
-          >
-            <div
-              className="flex h-14 flex-shrink-0 items-center justify-between border-b px-4"
-              style={{ borderColor: 'var(--brand-sidebar-border-color)' }}
-            >
-              <Link href="/dashboard" aria-label="Go to dashboard" className="inline-flex h-full flex-1 items-center justify-start pr-2" onClick={onMobileClose}>
+          <div className="lw-sidebar relative flex h-full w-[min(100vw,280px)] max-w-[85vw] flex-col shadow-float">
+            <div className="flex h-14 flex-shrink-0 items-center justify-between border-b border-line px-3">
+              <Link href="/dashboard" aria-label="Go to dashboard" className="inline-flex h-full min-w-0 flex-1 items-center justify-start overflow-hidden pr-1" onClick={onMobileClose}>
                 <TrimProLogo variant="sidebar" size="md" />
               </Link>
-              <div className="flex items-center gap-1">
-                <NotificationBell />
-                <button
-                  onClick={onMobileClose}
-                  className="lw-icon-btn flex min-h-[44px] min-w-[44px]"
-                  aria-label="Close menu"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <nav className="flex-1 overflow-y-auto space-y-0.5 px-2.5 py-3">
-              {navigation.map((item) => {
-                const isActive =
-                  item.href === '/dashboard'
-                    ? pathname === '/dashboard'
-                    : pathname === item.href || pathname?.startsWith(item.href + '/')
-                const navItem = (
-                  <Link
-                    key={item.name}
-                    href={item.href}
-                    onClick={onMobileClose}
-                    className={cn('lw-nav-link group min-h-[44px]', isActive ? 'is-active' : '')}
-                  >
-                    <span className="lw-nav-icon">
-                      <item.icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.85} />
-                    </span>
-                    <span className="flex min-w-0 flex-1 items-center justify-between truncate">
-                      {item.name}
-                      <NewBadge items={unreadByNavItem(item.name)} />
-                    </span>
-                  </Link>
-                )
-                if (item.permission) {
-                  const moduleId = SIDEBAR_PAGE_MODULE_IDS[item.name]
-                  const module = moduleId ? getModuleById(moduleId) : undefined
-                  const sidebarPermissions = module
-                    ? getModuleSidebarPermissions(module)
-                    : [item.permission]
-
-                  return (
-                    <PermissionGuard key={item.name} permissions={sidebarPermissions}>
-                      {navItem}
-                    </PermissionGuard>
-                  )
-                }
-                return navItem
-              })}
-            </nav>
-            <div className="flex flex-shrink-0 items-center gap-2 border-t p-3" style={{ borderColor: 'var(--brand-sidebar-border-color)' }}>
               <button
-                onClick={handleLogout}
-                className="lw-nav-link min-h-[44px] flex-1"
+                onClick={onMobileClose}
+                className="lw-icon-btn flex min-h-[44px] min-w-[44px]"
+                aria-label="Close menu"
               >
-                <span className="lw-nav-icon"><LogOut className="h-[18px] w-[18px]" strokeWidth={1.85} /></span>
-                <span className="truncate">Logout</span>
+                <X className="h-4 w-4" />
               </button>
-              <ThemeToggle compact />
             </div>
+            {profileBlock(false)}
+            <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-[10px] pb-5 pt-2">
+              {renderSections(false)}
+            </nav>
           </div>
         </div>
       )}

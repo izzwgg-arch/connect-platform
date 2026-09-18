@@ -195,10 +195,10 @@ export function GlobalSearch() {
           onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder="Search customers, jobs, invoices…"
+          placeholder="Search clients, jobs, invoices, estimates…"
           autoComplete="off"
           spellCheck={false}
-          className="w-full h-9 pl-9 pr-20 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 outline-none focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all"
+          className="w-full h-9 pl-9 pr-20 rounded-[10px] border border-line bg-panel-2 text-[13px] text-ink placeholder:text-dim outline-none focus:border-transparent focus:ring-2 focus:ring-ring transition-all"
         />
         {query ? (
           <button
@@ -209,15 +209,15 @@ export function GlobalSearch() {
             <X className="h-3.5 w-3.5" />
           </button>
         ) : (
-          <kbd className="absolute right-2 hidden sm:inline-flex items-center gap-0.5 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-400 pointer-events-none">
-            <span>⌘</span>K
+          <kbd className="absolute right-2 hidden sm:inline-flex items-center gap-0.5 rounded-[5px] border border-line bg-panel px-1.5 py-0.5 text-[10.5px] font-semibold text-dim pointer-events-none">
+            Ctrl K
           </kbd>
         )}
       </div>
 
       {/* ── dropdown results ─────────────────────────────────────────── */}
       {showDropdown && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-xl bg-white border border-gray-200 shadow-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-[10px] bg-popover border border-line shadow-float overflow-hidden max-h-[70vh] overflow-y-auto">
 
           {showEmpty && (
             <div className="px-4 py-8 text-center text-sm text-gray-400">
@@ -227,7 +227,7 @@ export function GlobalSearch() {
 
           {groups.map((group) => (
             <div key={group.type}>
-              <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 bg-gray-50 border-b border-gray-100">
+              <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-dim">
                 {group.label}
               </div>
 
@@ -241,7 +241,7 @@ export function GlobalSearch() {
                     onMouseDown={(e) => { e.preventDefault(); navigate(result.url) }}
                     onMouseEnter={() => setActiveIdx(idx)}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
-                      isActive ? 'bg-blue-50' : 'hover:bg-gray-50'
+                      isActive ? 'bg-accent-soft' : 'hover:bg-accent-soft'
                     }`}
                   >
                     <EntityIcon type={result.entityType} />
