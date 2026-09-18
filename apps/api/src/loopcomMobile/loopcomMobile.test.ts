@@ -272,7 +272,11 @@ test("every console route gates on the owner; every tenant route derives its ten
 test("the webhook handler fails closed and declares rawBody", () => {
   const hook = src("loopcomMobile/mobileWebhookRoutes.ts");
   const stripped = stripComments(hook);
-  assert.match(stripped, /config: \{ rawBody: true \}/);
+  // 2026-09-18: the plugin-provided `config: { rawBody: true }` never captured anything on the
+  // real server (deferred plugin, synchronous routes) — the door now takes the shared
+  // per-route capture options, which still declare rawBody AND actually populate it.
+  assert.match(stripped, /app\.post\("\/webhooks\/telnyx\/mobile", SIGNED_WEBHOOK_ROUTE_OPTIONS,/);
+  assert.match(stripComments(src("telnyx/rawBodyCapture.ts")), /config: \{ rawBody: true \}, preParsing: captureRawBodyPreParsing/);
   assert.match(stripped, /if \(!creds\?\.publicKey\) return reply\.code\(401\)/);
   assert.match(stripped, /if \(!signature \|\| !timestamp \|\| rawBody == null\) return reply\.code\(401\)/);
   assert.match(stripped, /if \(!verdict\.ok\) return reply\.code\(401\)/);

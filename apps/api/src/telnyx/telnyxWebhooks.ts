@@ -32,6 +32,7 @@
 import { getInboundSmsIngest } from "../smsInboundIngest";
 import { verifyTelnyxSignature } from "../loopcomMobile/mobileWebhookRoutes";
 import { resolveTelnyxCredentials } from "./telnyxCredentials";
+import { SIGNED_WEBHOOK_ROUTE_OPTIONS } from "./rawBodyCapture";
 import { recordTelnyxEvent } from "./telnyxRoutes";
 
 export const TELNYX_INBOUND_SMS_PATH = "/webhooks/telnyx/sms";
@@ -42,7 +43,7 @@ const FINAL_FAILED = new Set(["sending_failed", "delivery_failed", "undelivered"
 export function registerTelnyxWebhookRoutes(deps: { app: any; db: any }): void {
   const { app, db } = deps;
 
-  app.post(TELNYX_INBOUND_SMS_PATH, { config: { rawBody: true } }, async (req: any, reply: any) => {
+  app.post(TELNYX_INBOUND_SMS_PATH, SIGNED_WEBHOOK_ROUTE_OPTIONS, async (req: any, reply: any) => {
     const creds = await resolveTelnyxCredentials(db).catch(() => null);
     if (!creds?.publicKey) {
       // Fail closed: no key, no entry. (Not gated on NODE_ENV.)

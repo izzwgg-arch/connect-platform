@@ -19,6 +19,7 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
+import { SIGNED_WEBHOOK_ROUTE_OPTIONS } from "../telnyx/rawBodyCapture";
 import { resolveTelnyxCredentials } from "../telnyx/telnyxCredentials";
 
 const TIMESTAMP_TOLERANCE_SEC = 5 * 60;
@@ -97,7 +98,7 @@ export async function processMobileWebhookEvent(db: any, row: any): Promise<void
 export function registerMobileWebhookRoutes(deps: { app: any; db: any }): void {
   const { app, db } = deps;
 
-  app.post("/webhooks/telnyx/mobile", { config: { rawBody: true } }, async (req: any, reply: any) => {
+  app.post("/webhooks/telnyx/mobile", SIGNED_WEBHOOK_ROUTE_OPTIONS, async (req: any, reply: any) => {
     const creds = await resolveTelnyxCredentials(db);
     if (!creds?.publicKey) return reply.code(401).send({ error: "unverifiable" }); // fail closed: no key, no entry
 
