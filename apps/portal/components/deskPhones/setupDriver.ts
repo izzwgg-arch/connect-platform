@@ -738,10 +738,14 @@ export function createSetupDriver(
           // AutoProvisionServerURL but never locked the web page). This is a SECOND
           // mechanism, never a give-up: the no-clock rule is about halting forever,
           // not about trying one more door before anything has actually failed.
-          if (phone.vendor === "yealink" && r?.webLoginMayWork === true) {
+          // ⛔ 2026-09-18: Grandstream joined the robot's families (its cgi surface, with the
+          // factory admin/admin a reset GXP answers). The desktop's shared 3-failure gate is what
+          // keeps this from walking a phone toward its own 5-attempt lockout.
+          const robotFamily = phone.vendor === "yealink" ? r?.webLoginMayWork === true : phone.vendor === "grandstream";
+          if (robotFamily) {
             say(phone.id, HINT_WEB_SIGNING_IN);
             const probe = await bridge.run({
-              op: "web_probe", ip: phone.ip, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+              op: "web_probe", ip: phone.ip, vendor: phone.vendor, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
             }).catch(() => null);
             if (isUnknownScreen(probe, "web_probe")) {
               const handled = await runImproviser(
@@ -752,7 +756,7 @@ export function createSetupDriver(
             } else if (probe?.ok && probe.loginWorked === true) {
               // Not locked after all — reset-first still governs, only through the browser.
               const wr = await bridge.run({
-                op: "web_reset", ip: phone.ip, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+                op: "web_reset", ip: phone.ip, vendor: phone.vendor, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
               }).catch(() => null);
               if (isUnknownScreen(wr, "web_reset")) {
                 const handled = await runImproviser(
@@ -891,8 +895,9 @@ export function createSetupDriver(
         // resident above stays armed regardless of what happens here (13 days of PBX
         // logs held zero fetches for Izzy's own T42S — its PnP never asked at all), so
         // trying the web login costs nothing and reaches phones that never will.
-        // Yealink only for now, and never for a cloud brand (Yealink never gets one).
-        if (phone.vendor === "yealink" && !viaCloud) {
+        // Yealink and (2026-09-18) Grandstream — the two robot families; never while a
+        // cloud step is the mechanism for this phone.
+        if ((phone.vendor === "yealink" || phone.vendor === "grandstream") && !viaCloud) {
           const dueAt = m.webProvisionAt === null || now() - m.webProvisionAt >= WEB_PROVISION_INTERVAL_MS;
           if (dueAt && m.webProvisionAttempts < WEB_PROVISION_MAX_ATTEMPTS) {
             m.webProvisionAt = now();
@@ -903,7 +908,7 @@ export function createSetupDriver(
             // is a boolean FLAG telling the desktop to also set a password, never a
             // password value itself, but the guard cannot tell the difference by text.
             const webProvisionReq: Record<string, unknown> = {
-              op: "web_provision", ip: phone.ip, mac: phone.mac, url,
+              op: "web_provision", ip: phone.ip, mac: phone.mac, url, vendor: phone.vendor,
               ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
             };
             webProvisionReq.setPassword = true;

@@ -42,6 +42,8 @@ import { effectiveDeskPhoneUser } from "./effectiveUser";
 import { resetRecipeFor } from "@connect/shared";
 import { improvise, stickerEndsIn, type GuideFacts, type ModelCall } from "./laybelGuide";
 import { resolveOpenAiKey } from "../support/customerUpdate";
+import { hear, inboundForBrain, renderForCustomer } from "./laybelLanguage";
+import { laybelTranslator, ylTranscribeSync } from "./ylClient";
 
 /** Model calls Laybel may spend per setup run (in-process; a restart forgives). */
 const LAYBEL_MODEL_CALLS_PER_RUN = 60;
@@ -2183,8 +2185,18 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       transcript: z.array(z.object({ role: z.enum(["laybel", "customer"]), text: z.string().max(400) })).max(12).optional(),
       /** What the office machine observed about the phone, for WORDING only — never a decision. */
       observed: z.object({ freshOutOfBox: z.boolean().optional(), statusLine: z.string().max(200).optional() }).optional(),
+      /**
+       * ⛔ "yi" = the customer reads Yiddish (Izzy, 2026-09-18). The brain still reasons in
+       * English and the truth fence still runs on English; Yiddish Labs carries the words
+       * both ways (laybelLanguage.ts). English on screen when YL is unavailable — never silence.
+       */
+      language: z.enum(["en", "yi"]).optional(),
     }).safeParse(req.body ?? {});
     if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+    const language = body.data.language ?? "en";
+    const yl = language === "yi" || (body.data.message ? /[֐-׿]/.test(body.data.message) : false)
+      ? await laybelTranslator(db).catch(() => null) : null;
+    const inbound = await inboundForBrain(body.data.message ?? "", yl?.translator ?? null);
 
     const rows = await db.deskPhoneSetupPhone.findMany({ where: { runId: run.id, tenantId: user.tenantId }, orderBy: { createdAt: "asc" } });
     const views = await withConnectedNow(deps, user.tenantId, rows.map(customerPhoneView));
@@ -2218,12 +2230,49 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
       });
       return r.choices?.[0]?.message?.content ?? "";
     } : null;
-    const out = await improvise(body.data.situation, facts, body.data.message ?? "", body.data.transcript ?? [], {
+    const out = await improvise(body.data.situation, facts, inbound.english, body.data.transcript ?? [], {
       callModel,
       budgetLeft: () => LAYBEL_MODEL_CALLS_PER_RUN - spent,
       spend: () => laybelBudget.set(budgetKey, (laybelBudget.get(budgetKey) ?? 0) + 1),
     });
-    return reply.send({ ok: true, ...out, facts: { connected: facts.phone?.connected ?? null, recipe: facts.recipe } });
+    const rendered = await renderForCustomer(out, language, yl?.translator ?? null);
+    return reply.send({
+      ok: true, ...out, ...rendered, language,
+      customerHeard: inbound.translated ? inbound.english : null,
+      facts: { connected: facts.phone?.connected ?? null, recipe: facts.recipe },
+    });
+  });
+
+  /**
+   * THE MIC (Izzy, 2026-09-18: "Add a mic so they can talk for transcription"). The
+   * browser records a short clip and sends it here; Yiddish Labs transcribes it (auto
+   * Yiddish/English) and, for Yiddish, gives the brain its English. The transcript comes
+   * back to the screen as the customer's own words; the caller then sends it to /laybel
+   * as `message`. ⛔ Never retried (credits); an unusable clip is said so, not guessed.
+   */
+  app.post("/desk-phones/runs/:id/laybel/hear", { bodyLimit: 1_400_000 }, async (req: any, reply: any) => {
+    const owned = await ownRun(req, reply); if (!owned) return;
+    const body = z.object({
+      audioBase64: z.string().min(64).max(1_300_000),
+      filename: z.string().max(40).optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.status(400).send({ error: "invalid_request" });
+    const yl = await laybelTranslator(db).catch(() => null);
+    if (!yl) return reply.status(503).send({ ok: false, error: "transcription_unavailable", message: "Voice isn't available right now — type instead." });
+    let audio: Buffer;
+    try { audio = Buffer.from(body.data.audioBase64, "base64"); } catch { return reply.status(400).send({ error: "invalid_request" }); }
+    if (audio.length < 200) return reply.status(400).send({ ok: false, error: "too_short", message: "I didn't catch that — hold the mic and try again." });
+    const filename = /^[a-z0-9._-]{1,40}$/i.test(body.data.filename ?? "") ? String(body.data.filename) : "mic.webm";
+    try {
+      const heard = await hear(audio, filename, (a, f) => ylTranscribeSync(yl.apiKey, a, f), yl.translator);
+      return reply.send({ ok: true, ...heard });
+    } catch (e: any) {
+      const code = String(e?.code ?? "transcription_failed");
+      return reply.status(code === "yl_out_of_credits" ? 503 : 422).send({
+        ok: false, error: code,
+        message: code === "yl_empty_transcript" ? "I didn't catch any words — try again a little closer to the mic." : "Voice isn't available right now — type instead.",
+      });
+    }
   });
 
   /**

@@ -43,7 +43,12 @@ type Situation =
   | "choose_extension" | "choose_phone" | "confirm_phone" | "reset" | "reset_waiting" | "connecting"
   | "connected" | "stuck_old_provider" | "stuck_password" | "stuck_not_checking_in" | "stuck_unsupported"
   | "needs_serial" | "done_all";
-type Caption = { role: "laybel" | "customer"; text: string };
+type Caption = { role: "laybel" | "customer"; text: string; textYi?: string | null };
+type Chip = { en: string; yi: string | null };
+type Lang = "en" | "yi";
+const LANG_KEY = "gps-laybel-lang";
+function storedLang(): Lang { try { return localStorage.getItem(LANG_KEY) === "yi" ? "yi" : "en"; } catch { return "en"; } }
+const isRtl = (t: string) => /[\u0590-\u05FF]/.test(t);
 type Phase = "extension" | "phone" | "working";
 
 function desktop(): any | null {
@@ -101,7 +106,20 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
 
   /* ── Laybel ──────────────────────────────────────────────────────────── */
   const [captions, setCaptions] = useState<Caption[]>([]);
-  const [chips, setChips] = useState<string[]>([]);
+  const [chips, setChips] = useState<Chip[]>([]);
+  /*
+    ⛔ YIDDISH (Izzy, 2026-09-18: "I should be able to select Yiddish also, and the agent
+    should communicate through Yiddish Labs"). The choice is the customer's, remembered on
+    this computer. The server carries the words through Yiddish Labs both ways; the brain
+    and the truth fence stay in English; the avatar SPEAKS the English (the owner's
+    language contract). When YL cannot translate, the English caption shows — never nothing.
+  */
+  const [language, setLanguage] = useState<Lang>(storedLang);
+  const pickLanguage = useCallback((l: Lang) => { setLanguage(l); try { localStorage.setItem(LANG_KEY, l); } catch { /* per-viewer convenience only */ } }, []);
+  const [listening, setListening] = useState(false);
+  const [hearing, setHearing] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const [askDraft, setAskDraft] = useState("");
   const [asking, setAsking] = useState(false);
   const [laybelStatus, setLaybelStatus] = useState<LaybelStatus | null>(null);
@@ -120,28 +138,33 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
   const recipe: ResetRecipe | null = useMemo(() => (focused ? resetRecipeFor(focused.vendor, focused.model) : null), [focused]);
 
   /** Laybel says something about the current situation — the server's words, spoken if video is on. */
-  const laybelSay = useCallback(async (situation: Situation, message?: string) => {
+  const laybelSay = useCallback(async (situation: Situation, message?: string, shown?: string) => {
     if (!runId) return;
     try {
-      const out = await apiPost<{ say: string; chips: string[] }>(`/desk-phones/runs/${runId}/laybel`, {
+      const out = await apiPost<{ say: string; chips: string[]; sayYiddish?: string | null; chipsYiddish?: string[] | null }>(`/desk-phones/runs/${runId}/laybel`, {
         situation,
         phoneId: focusPhoneId ?? undefined,
         message: message || undefined,
-        transcript: captions.slice(-8),
+        language,
+        transcript: captions.slice(-8).map((c) => ({ role: c.role, text: c.text })),
         observed: {
           freshOutOfBox: focusPhoneId ? fresh[focusPhoneId] === true : undefined,
           statusLine: focusPhoneId ? hints[focusPhoneId] : undefined,
         },
       });
-      setCaptions((c) => [...c, ...(message ? [{ role: "customer" as const, text: message }] : []), { role: "laybel", text: out.say }]);
-      setChips(out.chips ?? []);
+      setCaptions((c) => [
+        ...c,
+        ...(message ? [{ role: "customer" as const, text: message, textYi: shown && shown !== message ? shown : null }] : []),
+        { role: "laybel" as const, text: out.say, textYi: out.sayYiddish ?? null },
+      ]);
+      setChips((out.chips ?? []).map((en, i) => ({ en, yi: out.chipsYiddish?.[i] ?? null })));
       speakerRef.current?.(out.say);
       return out.say;
     } catch {
       /* the screen already says what is happening; a silent Laybel is not a broken setup */
       return undefined;
     }
-  }, [runId, focusPhoneId, captions, fresh, hints]);
+  }, [runId, focusPhoneId, captions, fresh, hints, language]);
   const sayRef = useRef(laybelSay);
   sayRef.current = laybelSay;
 
@@ -151,7 +174,7 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
     void sayRef.current(situation);
   }, []);
 
-  const ask = useCallback(async (text: string) => {
+  const ask = useCallback(async (text: string, shown?: string) => {
     const t = text.trim();
     if (!t || asking) return;
     setAsking(true); setAskDraft("");
@@ -160,8 +183,52 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
       screen === "extension" ? "choose_extension" : screen === "phone" ? "choose_phone" : screen === "reset" ? (saidRestarted ? "reset_waiting" : "reset")
       : screen === "connecting" ? "connecting" : screen === "connected" ? "connected" : screen === "all_done" ? "done_all"
       : focused ? (`stuck_${classifyStuck(focused.note)}` as Situation) : "connecting";
-    try { await sayRef.current(situation, t); } finally { setAsking(false); }
+    try { await sayRef.current(situation, t, shown); } finally { setAsking(false); }
   }, [asking, saidRestarted, focused]);
+
+  /*
+    THE MIC (Izzy, 2026-09-18: "Add a mic so they can talk for transcription"). Press to
+    talk, press again to stop; the clip goes to the run's /laybel/hear door, Yiddish Labs
+    transcribes it (Yiddish or English, auto), and the words come back as the customer's
+    own caption before Laybel answers. ⛔ Nothing is sent until the person stops the
+    recording; a failed transcription is said on screen, never guessed.
+  */
+  const stopListening = useCallback(() => {
+    const r = recorderRef.current;
+    if (r && r.state !== "inactive") r.stop();
+    setListening(false);
+  }, []);
+  const startListening = useCallback(async () => {
+    if (!runId || listening || hearing) return;
+    let stream: MediaStream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { setError("The microphone isn't available on this computer — type instead."); return; }
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    const rec = new MediaRecorder(stream, { mimeType: mime });
+    chunksRef.current = [];
+    rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunksRef.current, { type: mime });
+      chunksRef.current = [];
+      if (blob.size < 200) return;
+      setHearing(true);
+      try {
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        const heard = await apiPost<{ ok: boolean; transcript: string; english: string; yiddish: boolean }>(`/desk-phones/runs/${runId}/laybel/hear`, { audioBase64: btoa(bin), filename: "mic.webm" });
+        if (heard.transcript) await ask(heard.english || heard.transcript, heard.transcript);
+      } catch (err: any) {
+        setError(err?.body?.message || "I couldn't hear that — try again, or type instead.");
+      } finally { setHearing(false); }
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setListening(true);
+    // A clip is at most 30 s — the mic is for a sentence, not a speech.
+    setTimeout(() => { if (recorderRef.current === rec && rec.state === "recording") { rec.stop(); setListening(false); } }, 30_000);
+  }, [runId, listening, hearing, ask]);
+  useEffect(() => () => { const r = recorderRef.current; if (r && r.state !== "inactive") r.stop(); }, []);
 
   /* ── the run ─────────────────────────────────────────────────────────── */
   const loadRun = useCallback(async (id: string) => {
@@ -173,12 +240,12 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
   const probeFresh = useCallback(async (list: GuidedPhone[]) => {
     const bridge = desktop()?.phoneSetup;
     if (!bridge) return;
-    // ⛔ Only a maker the robot can read (the Yealink web family today); a login is a READ.
-    const targets = list.filter((p) => p.ip && /yealink/i.test(p.vendor ?? "") && p.connectedNow !== true);
+    // ⛔ Only a maker the robot has a family for (Yealink page, Grandstream cgi); a login is a READ.
+    const targets = list.filter((p) => p.ip && /yealink|grandstream/i.test(p.vendor ?? "") && p.connectedNow !== true);
     const queue = [...targets];
     const worker = async () => {
       for (let p = queue.shift(); p; p = queue.shift()) {
-        const r = await bridge.run({ op: "web_probe", ip: p.ip }).catch(() => null);
+        const r = await bridge.run({ op: "web_probe", ip: p.ip, vendor: p.vendor ?? null }).catch(() => null);
         const isFresh = r?.ok === true && r.loginWorked === true && r.usedDefault === true ? true : r?.ok === true && r.loginWorked === false ? false : null;
         setFresh((f) => ({ ...f, [p.id]: isFresh }));
       }
@@ -397,12 +464,12 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
   // ⛔ The reset screen advances ITSELF: the moment the factory password opens the
   // phone's page again, the reset is proven and the driver is told to look afresh.
   useEffect(() => {
-    if (screen !== "reset" || !focused?.ip || !/yealink/i.test(focused.vendor ?? "") || saidRestarted) return;
+    if (screen !== "reset" || !focused?.ip || !/yealink|grandstream/i.test(focused.vendor ?? "") || saidRestarted) return;
     const bridge = desktop()?.phoneSetup;
     if (!bridge) return;
     let live = true;
     const look = async () => {
-      const r = await bridge.run({ op: "web_probe", ip: focused.ip }).catch(() => null);
+      const r = await bridge.run({ op: "web_probe", ip: focused.ip, vendor: focused.vendor ?? null }).catch(() => null);
       if (!live) return;
       if (r?.ok === true && r.loginWorked === true && r.usedDefault === true) {
         setFresh((f) => ({ ...f, [focused.id]: true }));
@@ -424,6 +491,10 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
         <div className="gps-rail-head">
           <span className="gps-dot" />
           <span className="gps-rail-title">LAYBEL · LIVE</span>
+          <div className="gps-lang" role="group" aria-label="Language">
+            <button type="button" className={`gps-lang-btn ${language === "en" ? "gps-lang-on" : ""}`} onClick={() => pickLanguage("en")} aria-pressed={language === "en"}>English</button>
+            <button type="button" className={`gps-lang-btn ${language === "yi" ? "gps-lang-on" : ""}`} onClick={() => pickLanguage("yi")} aria-pressed={language === "yi"} lang="yi">ייִדיש</button>
+          </div>
           {onClassic && <button type="button" className="gps-link" onClick={onClassic}>Classic setup</button>}
         </div>
         {laybelVideoAllowed && video ? (
@@ -456,20 +527,43 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
         )}
         <div className="gps-captions" aria-live="polite">
           {captions.length === 0 && <div className="gps-cap gps-cap-laybel">Hi, I'm Laybel. One moment while I look around your network…</div>}
-          {captions.slice(-6).map((c, i) => <div key={i} className={`gps-cap gps-cap-${c.role}`}>{c.text}</div>)}
+          {captions.slice(-6).map((c, i) => {
+            const shown = language === "yi" && c.textYi ? c.textYi : (c.role === "customer" && c.textYi ? c.textYi : c.text);
+            return <div key={i} className={`gps-cap gps-cap-${c.role}`} dir={isRtl(shown) ? "rtl" : "ltr"} lang={isRtl(shown) ? "yi" : "en"}>{shown}</div>;
+          })}
           <div ref={captionsEnd} />
         </div>
         {chips.length > 0 && (
           <div className="gps-chips">
-            {chips.map((c) => <button key={c} type="button" className="gps-chip" onClick={() => void ask(c)} disabled={asking}>{c}</button>)}
+            {chips.map((c) => {
+              const label = language === "yi" && c.yi ? c.yi : c.en;
+              return <button key={c.en} type="button" className="gps-chip" dir={isRtl(label) ? "rtl" : "ltr"} onClick={() => void ask(c.en, label)} disabled={asking}>{label}</button>;
+            })}
           </div>
         )}
         <form className="gps-ask" onSubmit={(e) => { e.preventDefault(); void ask(askDraft); }}>
           <label htmlFor="gps-ask" className="gps-sr">Ask Laybel</label>
-          <input id="gps-ask" className="dps-managed-input" placeholder="Ask me anything…" value={askDraft} onChange={(e) => setAskDraft(e.target.value)} disabled={asking} />
-          <button type="submit" className="dps-btn dps-btn-p dps-btn-s" disabled={asking || !askDraft.trim()}>Send</button>
+          <input id="gps-ask" className="dps-managed-input" placeholder={language === "yi" ? "פרעגט מיך עפּעס…" : "Ask me anything…"} dir={language === "yi" ? "rtl" : "ltr"} value={askDraft} onChange={(e) => setAskDraft(e.target.value)} disabled={asking || hearing} />
+          <button
+            type="button"
+            className={`gps-mic ${listening ? "gps-mic-on" : ""}`}
+            aria-label={listening ? "Stop and send" : "Talk to Laybel"}
+            aria-pressed={listening}
+            title={listening ? "Stop and send" : "Talk — Yiddish or English"}
+            disabled={hearing || asking}
+            onClick={() => (listening ? stopListening() : void startListening())}
+          >
+            {hearing ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7" /></svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
+            )}
+          </button>
+          <button type="submit" className="dps-btn dps-btn-p dps-btn-s" disabled={asking || hearing || !askDraft.trim()}>{language === "yi" ? "שיק" : "Send"}</button>
         </form>
-        <div className="gps-rail-note">Captions always on. If video pauses, I keep talking here.</div>
+        <div className="gps-rail-note">
+          {listening ? "Listening… press the mic again to send." : hearing ? "Turning your words into text…" : language === "yi" ? "Captions in Yiddish via Yiddish Labs. If video pauses, I keep talking here." : "Captions always on. If video pauses, I keep talking here."}
+        </div>
       </aside>
 
       <main className="gps-main">

@@ -339,3 +339,31 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   customer. 5 new tests; desk-phone api suites 155/155 with it. ⏳ Not yet done live by Izzy on a
   customer LAN. ⛔ The desktop's PnP responder gets its folder through the PORTAL's `/pnp-config`
   call (PnpResidentHost), so it follows the switcher too — the desktop itself never calls the api.
+- ✅ **ROUND 29 (2026-09-18): GRANDSTREAM ROBOT FAMILY + YIDDISH + THE MIC.** Izzy: *"add
+  Grandstream to the robot's web login families… I should be able to select Yiddish also, and the
+  agent should communicate through Yiddish Labs… Add a mic so they can talk for transcription."*
+  • **Grandstream family** (`apps/desktop/src/phoneSetup/grandstreamWebRobot.ts`, desktop rc.21): the
+    same three fenced ops through the phone's cgi surface (`access`→`dologin`→`api-sys_operation`,
+    proven live 09-14; admin/admin on a factory GXP proven 09-17) — probe (login + `api.values.get`
+    identity + `config_get` P237/P212), provision (URL fence → wrong-device check on the MAC the phone
+    reports → `config_update` P237/P212 → **READ-BACK; a phone that kept its own value is refused
+    `save_not_verified`, never "provisioned"** — that is the GDMS-claimed case, which the server's R24
+    redirect road then handles — → REBOOT), reset (RESET). `robotFamilyFor(vendor)` picks the family;
+    `vendor` now rides every `web_*` request (capability.ts, driver, guided screen); the driver's
+    Yealink-only gates (reset-fallback + web_provision) admit grandstream; the desktop's shared
+    3-failure lockout gate is what keeps a GXP off its 5-attempt lockout. 11 new desktop tests
+    (fake GXP2170 incl. the claimed no-op). ⛔ `mac_addr`/`sw_version` key names on `api.values.get`
+    are inferred (only `phone_model` is proven) — identity fields are optional and a missing MAC does
+    NOT block provisioning (the IP came from the same discovery as the MAC).
+  • **Yiddish** (`laybelLanguage.ts` + `ylClient.ts`, api): `language: "yi"` on `/laybel` → the
+    customer's Yiddish is translated to English for the brain (YL `translate-english`), the fenced
+    English reply is rendered in Yiddish (YL `translate-yiddish`, cached in-process) as
+    `sayYiddish`/`chipsYiddish`; the avatar still SPEAKS the English (owner's language contract);
+    YL failure → English on screen, never silence; YL never retried. Rail: English/ייִדיש toggle
+    (remembered per computer), RTL captions/chips/input.
+  • **The mic**: `POST /desk-phones/runs/:id/laybel/hear` (webm ≤1.3 MB base64) → YL
+    `transcriptions/sync` (auto Yiddish/English) → `{transcript, english, yiddish}`; the rail's
+    press-to-talk (MediaRecorder, ≤30 s) shows the transcript as the customer's caption and sends the
+    English to Laybel. 8 new api tests. ⏳ NOT PROVEN live: no Grandstream has been driven by the
+    cgi family from the wizard; no Yiddish turn or mic clip has gone through a real YL call from
+    this screen; desktop rc.21 build/install status in the next bullet.

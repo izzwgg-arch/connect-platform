@@ -47,6 +47,18 @@ import {
   type YealinkCredentials,
 } from "./yealink";
 import { normalizeMac } from "./pnp";
+import { GRANDSTREAM_DEFAULT_CREDENTIALS, gsProbe, gsProvision, gsReset } from "./grandstreamWebRobot";
+import type { HttpTransport } from "./yealink";
+
+/**
+ * Which robot family a request names. ⛔ The VENDOR decides, never the page: the
+ * Yealink family drives a web page, the Grandstream family (2026-09-18) talks to the
+ * phone's own cgi surface. A vendor with no family runs the Yealink page road, which
+ * honestly answers `family: "unknown"` when the page is not a Yealink login.
+ */
+export function robotFamilyFor(vendor: unknown): "yealink" | "grandstream" {
+  return /grandstream/i.test(String(vendor ?? "")) ? "grandstream" : "yealink";
+}
 
 /* ── the shapes a browser must offer, and nothing more ─────────────────────── */
 
@@ -290,6 +302,8 @@ export type WebActSessionStore = Map<string, WebActSession>;
 
 export type RobotDeps = {
   browser: RobotBrowser;
+  /** The plain HTTP transport, for the cgi family (Grandstream). */
+  http: HttpTransport;
   resolveCredential: ResolveCredential;
   /** The SAME per-phone lockout gate every other login in this app spends. */
   loginBlocked: (ip: string) => boolean;
@@ -331,8 +345,8 @@ export async function evictWebActSession(store: WebActSessionStore, ip: string):
 
 type CredsResolved = { ok: true; creds: YealinkCredentials; usedDefault: boolean } | { ok: false; refused: "credential_not_available" };
 
-async function resolveCreds(deps: RobotDeps, credentialRef: string | null | undefined): Promise<CredsResolved> {
-  if (!credentialRef) return { ok: true, creds: YEALINK_DEFAULT_CREDENTIALS, usedDefault: true };
+async function resolveCreds(deps: RobotDeps, credentialRef: string | null | undefined, fallback: YealinkCredentials = YEALINK_DEFAULT_CREDENTIALS): Promise<CredsResolved> {
+  if (!credentialRef) return { ok: true, creds: fallback, usedDefault: true };
   const creds = await deps.resolveCredential(credentialRef);
   // ⛔ A reference that resolves to nothing is a refusal, never a silent
   // unauthenticated attempt — see capability.ts's identical rule for every other op.
@@ -405,10 +419,10 @@ async function loginIfNeeded(
 
 /* ── op 1: web_probe ─────────────────────────────────────────────────────── */
 
-export type WebProbeRequest = { ip: string; credentialRef?: string | null };
+export type WebProbeRequest = { ip: string; credentialRef?: string | null; vendor?: string | null };
 export type WebProbeResult =
   | {
-      ok: true; op: "web_probe"; family: "yealink_v86" | "unknown"; loginWorked: boolean; usedDefault: boolean;
+      ok: true; op: "web_probe"; family: "yealink_v86" | "grandstream_cgi" | "unknown"; loginWorked: boolean; usedDefault: boolean;
       forcedPasswordChange: boolean; model: string | null; firmware: string | null; serial: string | null;
       provisioningUrl: string | null; snapshot?: RobotSnapshot;
     }
@@ -417,6 +431,12 @@ export type WebProbeResult =
 export async function runWebProbe(deps: RobotDeps, req: WebProbeRequest): Promise<WebProbeResult> {
   const ip = canonicalPrivateIpv4(req.ip);
   if (!ip) return { ok: false, refused: "not_a_private_address" };
+  if (robotFamilyFor(req.vendor) === "grandstream") {
+    const gcr = await resolveCreds(deps, req.credentialRef, GRANDSTREAM_DEFAULT_CREDENTIALS);
+    if (!gcr.ok) return gcr;
+    await evictWebActSession(deps.webActSessions, ip);
+    return gsProbe(deps, { ip, creds: gcr.creds, usedDefault: gcr.usedDefault });
+  }
   const cr = await resolveCreds(deps, req.credentialRef);
   if (!cr.ok) return cr;
   // ⛔ Exactly one thing drives a phone's page at a time — a lingering `web_act`
@@ -475,7 +495,7 @@ export async function runWebProbe(deps: RobotDeps, req: WebProbeRequest): Promis
 /* ── op 2: web_provision ─────────────────────────────────────────────────── */
 
 export type WebProvisionRequest = {
-  ip: string; mac: string; url: string; credentialRef?: string | null; setPassword?: boolean;
+  ip: string; mac: string; url: string; credentialRef?: string | null; setPassword?: boolean; vendor?: string | null;
 };
 export type WebProvisionResult =
   | { ok: true; op: "web_provision"; provisioned: true; urlVerified: true; credentialRefCreated?: string }
@@ -488,6 +508,12 @@ export async function runWebProvision(deps: RobotDeps, req: WebProvisionRequest)
   if (!isLoopcomProvisioningUrl(req.url)) return { ok: false, refused: "fenced_url_refused" };
   const targetMac = normalizeMac(req.mac);
   if (!targetMac) return { ok: false, refused: "bad_hardware_address" };
+  if (robotFamilyFor(req.vendor) === "grandstream") {
+    const gcr = await resolveCreds(deps, req.credentialRef, GRANDSTREAM_DEFAULT_CREDENTIALS);
+    if (!gcr.ok) return gcr;
+    await evictWebActSession(deps.webActSessions, ip);
+    return gsProvision(deps, { ip, mac: targetMac, url: req.url, creds: gcr.creds });
+  }
   const cr = await resolveCreds(deps, req.credentialRef);
   if (!cr.ok) return cr;
   if (deps.loginBlocked(ip)) return { ok: false, refused: "too_many_login_attempts" };
@@ -555,7 +581,7 @@ export async function runWebProvision(deps: RobotDeps, req: WebProvisionRequest)
 
 /* ── op 3: web_reset ─────────────────────────────────────────────────────── */
 
-export type WebResetRequest = { ip: string; credentialRef?: string | null };
+export type WebResetRequest = { ip: string; credentialRef?: string | null; vendor?: string | null };
 export type WebResetResult =
   | { ok: true; op: "web_reset"; sent: true }
   | { ok: false; refused: string; snapshot?: RobotSnapshot };
@@ -563,6 +589,12 @@ export type WebResetResult =
 export async function runWebReset(deps: RobotDeps, req: WebResetRequest): Promise<WebResetResult> {
   const ip = canonicalPrivateIpv4(req.ip);
   if (!ip) return { ok: false, refused: "not_a_private_address" };
+  if (robotFamilyFor(req.vendor) === "grandstream") {
+    const gcr = await resolveCreds(deps, req.credentialRef, GRANDSTREAM_DEFAULT_CREDENTIALS);
+    if (!gcr.ok) return gcr;
+    await evictWebActSession(deps.webActSessions, ip);
+    return gsReset(deps, { ip, creds: gcr.creds });
+  }
   const cr = await resolveCreds(deps, req.credentialRef);
   if (!cr.ok) return cr;
   if (deps.loginBlocked(ip)) return { ok: false, refused: "too_many_login_attempts" };

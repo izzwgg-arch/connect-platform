@@ -113,13 +113,15 @@ export type OperationRequest =
       /** Which brand's restart surface to use for the restart half. */
       vendor?: string | null;
     }
-  | { op: "web_probe"; ip: string; credentialRef?: string | null }
+  | { op: "web_probe"; ip: string; credentialRef?: string | null; vendor?: string | null }
   | {
       op: "web_provision"; ip: string; mac: string; url: string; credentialRef?: string | null;
       /** Mint and remember a new password if the phone forces a change mid-flow. */
       setPassword?: boolean;
+      /** Which robot family (yealink page / grandstream cgi). */
+      vendor?: string | null;
     }
-  | { op: "web_reset"; ip: string; credentialRef?: string | null }
+  | { op: "web_reset"; ip: string; credentialRef?: string | null; vendor?: string | null }
   | { op: "web_act"; ip: string; actions: RobotActionInput[]; credentialRef?: string | null; allowedUrl?: string | null };
 
 export type OperationResult =
@@ -375,6 +377,7 @@ export function createPhoneCapability(deps: CapabilityDeps) {
   // store, never leaking into another capability/test's.
   const robotDeps = {
     browser: robotBrowser,
+    http: deps.http,
     resolveCredential: deps.resolveCredential,
     loginBlocked,
     noteLogin,
@@ -664,15 +667,16 @@ export function createPhoneCapability(deps: CapabilityDeps) {
       // through pre-fenced (checked above, at line ~441) but phoneWebRobot checks it
       // again anyway, on purpose.
       case "web_probe":
-        return runWebProbe(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null });
+        return runWebProbe(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null, vendor: (req as any).vendor ?? null });
       case "web_provision":
         return runWebProvision(robotDeps, {
           ip, mac: (req as any).mac, url: (req as any).url,
           credentialRef: (req as any).credentialRef ?? null,
           setPassword: Boolean((req as any).setPassword),
+          vendor: (req as any).vendor ?? null,
         });
       case "web_reset":
-        return runWebReset(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null });
+        return runWebReset(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null, vendor: (req as any).vendor ?? null });
       case "web_act":
         return runWebAct(robotDeps, {
           ip, actions: Array.isArray((req as any).actions) ? (req as any).actions : [],

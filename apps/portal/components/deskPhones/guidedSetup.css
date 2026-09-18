@@ -44,6 +44,13 @@
 .gps-ask { display: flex; gap: 8px; align-items: center; margin-top: auto; }
 .gps-ask .dps-managed-input { flex: 1; min-height: 40px; }
 .gps-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.gps-lang { display: inline-flex; border: 1px solid var(--dps-border); border-radius: 999px; overflow: hidden; }
+.gps-lang-btn { background: transparent; border: 0; color: var(--dps-dim); font: 700 12px/1 Inter, sans-serif; padding: 7px 10px; cursor: pointer; min-height: 30px; }
+.gps-lang-on { background: var(--dps-accent); color: #04121d; }
+:root[data-theme="light"] .gps-lang-on { color: #fff; }
+.gps-mic { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--dps-border); background: var(--dps-panel); color: var(--dps-accent); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.gps-mic-on { background: var(--dps-danger); border-color: var(--dps-danger); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--dps-danger) 25%, transparent); }
+.gps-mic:disabled { opacity: 0.5; cursor: default; }
 .gps-rail-note { font: 400 12px/1.4 Inter, sans-serif; color: var(--dps-dim); }
 .gps-link { background: none; border: 0; color: var(--dps-accent); font: 600 13px/1 Inter, sans-serif; cursor: pointer; padding: 0; }
 

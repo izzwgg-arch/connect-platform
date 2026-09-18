@@ -209,6 +209,8 @@ function fakeDeps(browser: RobotBrowser, overrides: Partial<RobotDeps> = {}): Ro
   const vault = new Map<string, YealinkCredentials>();
   const deps: RobotDeps & { loginOutcomes: typeof loginOutcomes; storedCredentials: typeof storedCredentials; blockedIps: typeof blockedIps } = {
     browser,
+    // The page family never touches plain HTTP; the cgi family's own suite injects a transport.
+    http: async () => { throw new Error("no http in the page-family suite"); },
     resolveCredential: async (ref) => vault.get(ref) ?? null,
     loginBlocked: (ip) => blockedIps.has(ip),
     noteLogin: (ip, outcome) => loginOutcomes.push({ ip, outcome }),
