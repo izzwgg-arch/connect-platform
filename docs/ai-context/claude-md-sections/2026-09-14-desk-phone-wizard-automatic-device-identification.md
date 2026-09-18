@@ -367,3 +367,20 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
     English to Laybel. 8 new api tests. ⏳ NOT PROVEN live: no Grandstream has been driven by the
     cgi family from the wizard; no Yiddish turn or mic clip has gone through a real YL call from
     this screen; desktop rc.21 build/install status in the next bullet.
+- ✅ **ROUND 30 (2026-09-18, Izzy's first WALK of the guided setup): "stuck on 'We found 4 phones —
+  loading extensions'"** — the DB says why: run `cmu72hhgg…` was created on `connect-admin-tenant-v1`
+  (the platform's own tenant, 0 extensions) because the tenant menu was not on the customer; the
+  screen then showed an EMPTY list as "Loading…" for ever and Laybel had nothing to say about it.
+  ✅ Fixed: (1) a super-admin with no customer picked gets NO run — the screen says "Whose phones are we
+  setting up? Pick the customer in the tenant menu" and Laybel says it too; the run starts the moment
+  a customer is picked; (2) extensions have four honest states (loading / ready / empty "add the
+  people under Team first" / failed + Try again), each with a Laybel line; (3) THE STICKER
+  DEMONSTRATION on the phone screen (Izzy: "a few stickers… it has to be the MAC… give a
+  demonstration… how many digits, hyphens"): a drawn sticker line `MAC: 00-0B-82-1A-2B-3C` with the
+  last four lit, "12 characters in pairs, with - or : between or none, only 0–9 and A–F"; Laybel's
+  choose_phone line says the same; (4) **O → 0** (Izzy: "MAC addresses never have O's… take it as a
+  zero"): `normalizeSticker()` upper-cases, maps O→0, strips the word MAC (⛔ "MAC" is hex-shaped —
+  A, C — and was counted as digits until stripped) and everything non-hex; the field shows the
+  normalized value as they type; 1 new test. ⛔ Landau has ONE Active extension in Connect's
+  `Extension` table (101) — 102 exists on the PBX only, so the guided screen offers 101 alone until
+  102 is added in Connect. ⏳ Izzy walks it again.

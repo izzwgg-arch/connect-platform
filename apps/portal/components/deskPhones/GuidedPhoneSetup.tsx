@@ -26,8 +26,8 @@ import { classifyDiscoveredHosts, shouldFingerprint } from "@connect/shared";
 import { resetRecipeFor, type ResetRecipe } from "@connect/shared";
 import { createSetupDriver, type NeedsPerson } from "./setupDriver";
 import {
-  candidateStateLine, classifyStuck, connectedAsMapped, extensionsWithPhones, orderCandidates,
-  screenForFocused, stickerEndsIn, stickerMatches, type GuidedPhone, type GuidedScreen,
+  candidateStateLine, classifyStuck, connectedAsMapped, extensionsWithPhones, normalizeSticker, orderCandidates,
+  screenForFocused, STICKER_EXAMPLE, stickerEndsIn, stickerMatches, type GuidedPhone, type GuidedScreen,
 } from "./guidedFlow";
 import { ResetIllustration } from "./ResetIllustration";
 import { LaybelVideoCall } from "../LaybelVideoCall";
@@ -74,9 +74,19 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
     time, so nobody provisions the wrong company's phones without seeing it.
   */
   const { backendJwtRole, adminScope, tenant } = useAppContext();
-  const actingFor = String(backendJwtRole ?? "").toUpperCase() === "SUPER_ADMIN" && adminScope === "TENANT" && tenant?.id && tenant.id !== "local" ? tenant : null;
+  const isSuper = String(backendJwtRole ?? "").toUpperCase() === "SUPER_ADMIN";
+  const actingFor = isSuper && adminScope === "TENANT" && tenant?.id && tenant.id !== "local" ? tenant : null;
+  /*
+    ⛔⛔ A SUPER-ADMIN WITH NO CUSTOMER PICKED DOES NOT GET A RUN. Izzy's walk on 2026-09-18
+    created run cmu72hhgg… on `connect-admin-tenant-v1` — the platform's own tenant, which has
+    no extensions — and the screen sat on "Loading your extensions…" for ever. The run is
+    created only once the screen knows whose phones these are.
+  */
+  const needsCustomer = isSuper && !actingFor;
   const [runId, setRunId] = useState<string | null>(null);
   const [extensions, setExtensions] = useState<Extension[]>([]);
+  /** ⛔ An empty list is NOT "loading" — the three states are said apart on screen. */
+  const [extState, setExtState] = useState<"loading" | "ready" | "empty" | "failed">("loading");
   const [phones, setPhones] = useState<GuidedPhone[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [discovery, setDiscovery] = useState<"idle" | "running" | "done" | "failed">("idle");
@@ -293,25 +303,44 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
     }
   }, [probeFresh]);
 
+  const loadExtensions = useCallback(async () => {
+    setExtState("loading");
+    try {
+      const ext = await apiGet<{ extensions: Extension[] }>("/desk-phones/extensions");
+      const list = ext.extensions ?? [];
+      setExtensions(list);
+      setExtState(list.length ? "ready" : "empty");
+    } catch {
+      setExtState("failed");
+    }
+  }, []);
+
   useEffect(() => {
+    if (needsCustomer || runId) return;
     let live = true;
     (async () => {
       try {
         const out = await apiPost<{ run: { id: string } }>("/desk-phones/runs", { deviceLabel: typeof navigator !== "undefined" ? navigator.platform : undefined });
         if (!live) return;
         setRunId(out.run.id);
-        const ext = await apiGet<{ extensions: Extension[] }>("/desk-phones/extensions").catch(() => ({ extensions: [] }));
+        await loadExtensions();
         if (!live) return;
-        setExtensions(ext.extensions ?? []);
         void discover(out.run.id);
       } catch {
         if (live) setError("We could not start setup just now. Try again in a moment.");
       }
     })();
-    return () => { live = false; if (pollRef.current) clearInterval(pollRef.current); };
-  }, [discover]);
+    return () => { live = false; };
+  }, [discover, loadExtensions, needsCustomer, runId]);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  useEffect(() => { if (runId && phase === "extension") situationSaid(`ext:${runId}`, "choose_extension"); }, [runId, phase, situationSaid]);
+  useEffect(() => { if (runId && phase === "extension" && extState === "ready") situationSaid(`ext:${runId}`, "choose_extension"); }, [runId, phase, extState, situationSaid]);
+  useEffect(() => {
+    // Screen facts, not run facts — said here, in the customer's words, the moment they apply.
+    if (needsCustomer) setCaptions((c) => (c.some((x) => x.text.startsWith("Before we start")) ? c : [...c, { role: "laybel", text: "Before we start: pick the customer in the tenant menu at the top, so I set up the right company's phones." }]));
+    else if (extState === "empty") setCaptions((c) => (c.some((x) => x.text.startsWith("This account has no extensions")) ? c : [...c, { role: "laybel", text: "This account has no extensions yet, so there's nothing to put a phone on. Add the people under Team first, then come back to me." }]));
+    else if (extState === "failed") setCaptions((c) => (c.some((x) => x.text.startsWith("I couldn't load")) ? c : [...c, { role: "laybel", text: "I couldn't load this account's extensions just now. Press Try again — if it keeps failing, tell me." }]));
+  }, [needsCustomer, extState]);
 
   /* ── the driver loop (the classic wizard's, per focused phone) ─────────── */
   const stopTicking = useCallback(() => {
@@ -591,7 +620,16 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
 
         {error && <div className="dps-err" role="alert">{error}</div>}
 
-        {screen === "extension" && (
+        {needsCustomer && (
+          <div className="gps-live" style={{ borderColor: "var(--dps-warn)" }}>
+            <div className="gps-live-body">
+              <div className="gps-live-title">Whose phones are we setting up?</div>
+              <div className="gps-live-sub">Pick the customer in the tenant menu at the top of the app first — this screen then runs for that customer. Nothing has been started.</div>
+            </div>
+          </div>
+        )}
+
+        {!needsCustomer && screen === "extension" && (
           <>
             <div className="gps-grid2">
               {extRows.map((e) => (
@@ -606,7 +644,13 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
                   <span className="gps-card-cta">{e.phone ? "Replace →" : "Set up →"}</span>
                 </button>
               ))}
-              {extensions.length === 0 && <div className="dps-hint">Loading your extensions…</div>}
+              {extState === "loading" && <div className="dps-hint">Loading your extensions…</div>}
+              {extState === "failed" && (
+                <div className="gps-note">We couldn't load this account's extensions. <button type="button" className="gps-link" onClick={() => void loadExtensions()}>Try again</button></div>
+              )}
+              {extState === "empty" && (
+                <div className="gps-note">This account has no extensions yet, so there is nothing to put a phone on. Add the people under Team first, then come back.</div>
+              )}
             </div>
             <div className="gps-note">
               {discovery === "running" && "I'm looking around your network for phones in the background — by the time you pick, I'll know which ones I found."}
@@ -636,16 +680,24 @@ export function GuidedPhoneSetup({ onClose, onClassic }: { onClose: () => void; 
                     ) : (
                       <div className="gps-confirm">
                         <label htmlFor="gps-sticker">Type the last 4 from the sticker to be sure</label>
-                        <input id="gps-sticker" className="dps-managed-input" value={stickerTyped} onChange={(e) => setStickerTyped(e.target.value)} placeholder={stickerEndsIn(p.mac)?.replace(/[0-9A-F]/g, "•") ?? "••••"} autoFocus />
+                        <input id="gps-sticker" className="dps-managed-input" value={stickerTyped} onChange={(e) => setStickerTyped(normalizeSticker(e.target.value).slice(-12))} placeholder={stickerEndsIn(p.mac)?.replace(/[0-9A-F]/g, "•") ?? "••••"} autoFocus inputMode="text" autoCapitalize="characters" spellCheck={false} />
                         <button type="button" className="dps-btn dps-btn-p" disabled={!stickerMatches(p.mac, stickerTyped)} onClick={() => void beginPhone(p)}>
                           {fresh[p.id] === true || p.connectedNow === true ? "Set it up" : "Set it up (this wipes it)"}
                         </button>
-                        {stickerTyped.replace(/[^0-9a-f]/gi, "").length >= 4 && !stickerMatches(p.mac, stickerTyped) && <div className="gps-warn">That's a different phone — check the sticker again.</div>}
+                        {normalizeSticker(stickerTyped).length >= 4 && !stickerMatches(p.mac, stickerTyped) && <div className="gps-warn">That's a different phone — check the sticker again (the one that says MAC).</div>}
                       </div>
                     )}
                   </div>
                 );
               })}
+            </div>
+            <div className="gps-sticker-demo" aria-label="What the sticker looks like">
+              <div className="gps-sticker-demo-label">THE STICKER YOU WANT SAYS <b>MAC</b> — there are a few stickers; this is the one</div>
+              <div className="gps-sticker-demo-line" aria-hidden="true">
+                <span className="gps-sticker-demo-key">MAC:</span>
+                <span className="gps-sticker-demo-val">{STICKER_EXAMPLE.prefix}<mark>{STICKER_EXAMPLE.tail}</mark></span>
+              </div>
+              <div className="gps-sticker-demo-note">12 characters in pairs (with <code>-</code> or <code>:</code> between, or none). You only read me the <b>last four</b>. Only 0–9 and A–F — there is never a letter O, only a zero.</div>
             </div>
             <div className="gps-note">
               {discovery === "running" ? "Still looking — more phones may appear." : "Not in the list? Plug it in and wait a moment, then tell me the last four characters on its sticker."}

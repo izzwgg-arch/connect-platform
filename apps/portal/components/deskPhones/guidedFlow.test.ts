@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  candidateStateLine, classifyStuck, connectedAsMapped, extensionsWithPhones, orderCandidates,
+  candidateStateLine, classifyStuck, connectedAsMapped, extensionsWithPhones, normalizeSticker, orderCandidates,
   screenForFocused, stickerEndsIn, stickerMatches, type GuidedPhone,
 } from "./guidedFlow";
 
@@ -18,6 +18,14 @@ describe("sticker check — the last 4 of the MAC", () => {
     assert.equal(stickerMatches("c074ad8c605f", "65 4E"), false);
     assert.equal(stickerMatches("c074ad8c605f", "5F"), false, "too short is never a match");
     assert.equal(stickerMatches(null, "605F"), false);
+  });
+  it("⛔ a typed letter O is a zero (Izzy, 2026-09-18), and noise around the digits is ignored", () => {
+    assert.equal(normalizeSticker("6O 5f"), "605F");
+    assert.equal(normalizeSticker("MAC: c0-74-ad-8c-6o-5f"), "C074AD8C605F");
+    assert.equal(stickerMatches("c074ad8c605f", "6O5F"), true, "O typed for 0");
+    assert.equal(stickerMatches("c074ad8c605f", "oo5f"), false, "O→0 only helps when the phone really has zeros");
+    assert.equal(stickerMatches("c074ad8c0050", "oo5o"), true);
+    assert.equal(stickerMatches("c074ad8c605f", "MAC C0:74:AD:8C:60:5F"), true, "the whole sticker line is fine too");
   });
 });
 

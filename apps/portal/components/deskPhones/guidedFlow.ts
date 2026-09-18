@@ -49,12 +49,31 @@ export function stickerEndsIn(mac: string | null | undefined): string | null {
   return `${tail.slice(0, 2)} ${tail.slice(2)}`;
 }
 
-/** Whether the person's typed sticker code matches this phone (last 4, any spacing/case). */
+/**
+ * What a person typed off the sticker, as hex. ⛔ A MAC never contains the letter O —
+ * only zeros — and people type O anyway (Izzy, 2026-09-18: "if somebody types an O, the
+ * system should automatically take it as a zero"). Upper-cased, O→0, everything that is
+ * not 0-9/A-F dropped (spaces, colons, hyphens, the word MAC itself).
+ */
+export function normalizeSticker(typed: string): string {
+  return String(typed ?? "")
+    .toUpperCase()
+    // ⛔ The label itself is hex-shaped ("MAC" → A, C) — a person who types the whole
+    // sticker line must not have the word counted as digits.
+    .replace(/\bMAC(\s*ADDRESS)?\b\s*:?/g, "")
+    .replace(/O/g, "0")
+    .replace(/[^0-9A-F]/g, "");
+}
+
+/** Whether the person's typed sticker code matches this phone (last 4, any spacing/case, O = 0). */
 export function stickerMatches(mac: string | null | undefined, typed: string): boolean {
   const want = String(mac ?? "").replace(/[^0-9a-f]/gi, "").toUpperCase().slice(-4);
-  const got = String(typed ?? "").replace(/[^0-9a-f]/gi, "").toUpperCase().slice(-4);
+  const got = normalizeSticker(typed).slice(-4);
   return want.length === 4 && got.length === 4 && want === got;
 }
+
+/** The demonstration: what a MAC looks like on a sticker, with the four the person reads lit up. */
+export const STICKER_EXAMPLE = { prefix: "00-0B-82-1A-", tail: "2B-3C" } as const;
 
 /**
  * Why a phone is stuck, from the server's own customer note. ⛔ Only the WORDING of the

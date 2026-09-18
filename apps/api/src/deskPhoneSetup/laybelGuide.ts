@@ -120,8 +120,8 @@ export function scriptedLine(situation: GuideSituation, f: GuideFacts): GuideRep
       );
     case "choose_phone":
       return s(
-        `Pick up the phone that's going on ${who(f)}'s desk and turn it over. The sticker has a code after MAC — read me the last four characters.`,
-        ["I don't see it in the list", "There's no sticker"],
+        `Pick up the phone that's going on ${who(f)}'s desk and turn it over. There are a few stickers — you want the one that says MAC. It's twelve characters in pairs, like 00-0B-82-1A-2B-3C. Read me just the last four; there's never a letter O on it, only zeros.`,
+        ["I don't see it in the list", "There's no MAC sticker"],
       );
     case "confirm_phone":
       return s(
