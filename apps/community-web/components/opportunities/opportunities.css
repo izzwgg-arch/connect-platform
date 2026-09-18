@@ -1,0 +1,15 @@
+/* Loopcom Community — opportunities domain (board + dynamic-field posting). */
+
+.oc-title { display: block; margin: 8px 0 4px; font-size: 14.5px; }
+.oc-poster { margin-bottom: 6px; flex-wrap: wrap; }
+.oc-actions { margin-top: 10px; flex-wrap: wrap; }
+
+.opp-type-chips { flex-wrap: wrap; }
+
+.opp-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 10px; }
+@media (max-width: 560px) {
+  .opp-field-grid { grid-template-columns: 1fr; }
+}
+.opp-field-grid .kv { background: var(--bg-soft); border-radius: 9px; padding: 8px 10px; }
+
+.opp-multiselect { display: flex; flex-wrap: wrap; gap: 6px; }

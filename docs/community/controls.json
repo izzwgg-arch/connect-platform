@@ -3436,6 +3436,846 @@
       "permissions": "platform staff",
       "api": "PUT /admin/flags/:key {enabled:false}",
       "testId": "admin-flags-disable-<key>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-search-input",
+      "action": "type",
+      "expected": "updates the search box value",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-search-input"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-search-submit",
+      "action": "click",
+      "expected": "re-fetches listings filtered by the search text",
+      "permissions": "signed in",
+      "api": "GET /listings?q=",
+      "testId": "marketplace-search-submit"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-post-listing",
+      "action": "click",
+      "expected": "navigates to /marketplace/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-post-listing"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-type-<value>",
+      "action": "click",
+      "expected": "filters the grid to that listing type (or all)",
+      "permissions": "signed in",
+      "api": "GET /listings?type=",
+      "testId": "marketplace-type-all | marketplace-type-SERVICE | marketplace-type-PRODUCT | marketplace-type-WHOLESALE | marketplace-type-BUSINESS_ASSET | marketplace-type-PROFESSIONAL_SERVICE"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-crumb-<slug>",
+      "action": "click",
+      "expected": "truncates the category breadcrumb back to that level (or All)",
+      "permissions": "signed in",
+      "api": "GET /listings?category=",
+      "testId": "marketplace-crumb-<slug>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-category-<slug>",
+      "action": "click",
+      "expected": "drills into that category, showing its children and filtering the grid to it and its descendants",
+      "permissions": "signed in",
+      "api": "GET /listings?category=<slug>",
+      "testId": "marketplace-category-<slug>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-sort",
+      "action": "change",
+      "expected": "re-fetches listings in the chosen order",
+      "permissions": "signed in",
+      "api": "GET /listings?sort=",
+      "testId": "marketplace-sort"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-load-more",
+      "action": "click",
+      "expected": "appends the next page of listings",
+      "permissions": "signed in",
+      "api": "GET /listings?cursor=",
+      "testId": "marketplace-load-more"
+    },
+    {
+      "screen": "marketplace",
+      "component": "ListingCard",
+      "control": "marketplace-quote-<id>",
+      "action": "click",
+      "expected": "navigates to /rfq/new with the seller and listing prefilled",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-quote-<id>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "ListingCard",
+      "control": "marketplace-message-<id>",
+      "action": "click",
+      "expected": "opens the message-the-seller dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-message-<id>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "ListingCard",
+      "control": "marketplace-save-<id>",
+      "action": "click",
+      "expected": "toggles the listing saved for this person",
+      "permissions": "signed in",
+      "api": "POST/DELETE /listings/:id/save",
+      "testId": "marketplace-save-<id>"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-message-body",
+      "action": "type",
+      "expected": "updates the message dialog's draft text",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-message-body"
+    },
+    {
+      "screen": "marketplace",
+      "component": "MarketplacePage",
+      "control": "marketplace-message-send",
+      "action": "click",
+      "expected": "sends the message, creating or reusing a thread with the seller (both ACTIVE)",
+      "permissions": "verified actor",
+      "api": "POST /listings/:id/message",
+      "testId": "marketplace-message-send"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-org",
+      "action": "change",
+      "expected": "picks whether the listing posts as a company (needs org.manage_listings) or personally",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-org"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-type",
+      "action": "change",
+      "expected": "sets the listing type",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-type"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-category",
+      "action": "change",
+      "expected": "sets the category (indented select mirrors the tree)",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-category"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-title",
+      "action": "type",
+      "expected": "updates the title",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-title"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-description",
+      "action": "type",
+      "expected": "updates the description",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-description"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-pricemin",
+      "action": "type",
+      "expected": "updates the minimum price",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-pricemin"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-pricemax",
+      "action": "type",
+      "expected": "updates the maximum price",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-pricemax"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-priceunit",
+      "action": "type",
+      "expected": "updates the price unit (e.g. /pc, /mo)",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-priceunit"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-moq",
+      "action": "type",
+      "expected": "updates the minimum order text",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-moq"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-turnaround",
+      "action": "type",
+      "expected": "updates the turnaround text",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-turnaround"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-delivery",
+      "action": "type",
+      "expected": "updates the delivery text",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-delivery"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-availability",
+      "action": "change",
+      "expected": "sets availability (Available/Limited/Sold out)",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-availability"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-area-input",
+      "action": "type",
+      "expected": "drafts a service-area tag; Enter or Add commits it",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-area-input"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-area-add",
+      "action": "click",
+      "expected": "adds the drafted service-area tag as a chip",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-area-add"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-area-<value>",
+      "action": "click",
+      "expected": "removes that service-area chip",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "marketplace-new-area-<value>"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-uploader-dropzone",
+      "action": "click or drop",
+      "expected": "uploads photos and attaches them to the listing",
+      "permissions": "verified actor",
+      "api": "POST /media",
+      "testId": "marketplace-new-uploader-dropzone"
+    },
+    {
+      "screen": "marketplace-new",
+      "component": "NewListingForm",
+      "control": "marketplace-new-submit",
+      "action": "click",
+      "expected": "creates the listing and navigates to its detail page",
+      "permissions": "verified actor; org.manage_listings if posting as a company",
+      "api": "POST /listings",
+      "testId": "marketplace-new-submit"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-quote",
+      "action": "click",
+      "expected": "navigates to /rfq/new with the seller and listing prefilled",
+      "permissions": "anyone",
+      "api": "-",
+      "testId": "marketplace-detail-quote"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-message",
+      "action": "click",
+      "expected": "opens the message-the-seller dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-detail-message"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-signin-message",
+      "action": "click",
+      "expected": "sends an anonymous viewer to sign in, returning to this listing",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "marketplace-detail-signin-message"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-save",
+      "action": "click",
+      "expected": "toggles saved for this person",
+      "permissions": "signed in",
+      "api": "POST/DELETE /listings/:id/save",
+      "testId": "marketplace-detail-save"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-share",
+      "action": "click",
+      "expected": "opens the OS share sheet or copies the listing link",
+      "permissions": "anyone",
+      "api": "-",
+      "testId": "marketplace-detail-share"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-report",
+      "action": "click",
+      "expected": "opens the report dialog (hidden for the owner)",
+      "permissions": "signed in, not the owner",
+      "api": "-",
+      "testId": "marketplace-detail-report"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-report-<reason>",
+      "action": "click",
+      "expected": "files a report with that reason",
+      "permissions": "signed in",
+      "api": "POST /reports {targetType:\"listing\"}",
+      "testId": "marketplace-detail-report-spam | marketplace-detail-report-scam | marketplace-detail-report-fake_company | marketplace-detail-report-other"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-edit",
+      "action": "click",
+      "expected": "opens the inline edit dialog (owner only)",
+      "permissions": "owner (person or org.manage_listings)",
+      "api": "-",
+      "testId": "marketplace-detail-edit"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-edit-title",
+      "action": "type",
+      "expected": "updates the draft title",
+      "permissions": "owner",
+      "api": "-",
+      "testId": "marketplace-edit-title"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-edit-description",
+      "action": "type",
+      "expected": "updates the draft description",
+      "permissions": "owner",
+      "api": "-",
+      "testId": "marketplace-edit-description"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-edit-availability",
+      "action": "change",
+      "expected": "updates the draft availability",
+      "permissions": "owner",
+      "api": "-",
+      "testId": "marketplace-edit-availability"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-edit-save",
+      "action": "click",
+      "expected": "saves the edits",
+      "permissions": "owner",
+      "api": "PATCH /listings/:id",
+      "testId": "marketplace-edit-save"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-remove",
+      "action": "click",
+      "expected": "opens the remove-confirmation dialog (owner only)",
+      "permissions": "owner",
+      "api": "-",
+      "testId": "marketplace-detail-remove"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-remove-confirm",
+      "action": "click",
+      "expected": "removes the listing (status REMOVED) and returns to the marketplace",
+      "permissions": "owner",
+      "api": "DELETE /listings/:id",
+      "testId": "marketplace-detail-remove-confirm"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-message-body",
+      "action": "type",
+      "expected": "updates the message dialog's draft text",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "marketplace-detail-message-body"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-detail-message-send",
+      "action": "click",
+      "expected": "sends the message, creating or reusing a thread with the seller",
+      "permissions": "verified actor",
+      "api": "POST /listings/:id/message",
+      "testId": "marketplace-detail-message-send"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-public-signin",
+      "action": "click",
+      "expected": "navigates to sign in (anonymous viewer)",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "marketplace-public-signin"
+    },
+    {
+      "screen": "marketplace-detail",
+      "component": "ListingDetailPage",
+      "control": "marketplace-public-join",
+      "action": "click",
+      "expected": "navigates to join (anonymous viewer)",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "marketplace-public-join"
+    },
+    {
+      "screen": "me-listings",
+      "component": "MyListings",
+      "control": "me-listings-new",
+      "action": "click",
+      "expected": "navigates to /marketplace/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "me-listings-new"
+    },
+    {
+      "screen": "me-listings",
+      "component": "MyListings",
+      "control": "me-listings-open-<id>",
+      "action": "click",
+      "expected": "opens that listing's detail page",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "me-listings-open-<id>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-search-input",
+      "action": "type",
+      "expected": "updates the search box value",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-search-input"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-search-submit",
+      "action": "click",
+      "expected": "re-fetches opportunities filtered by the search text",
+      "permissions": "signed in",
+      "api": "GET /opportunities?q=",
+      "testId": "opportunities-search-submit"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-post",
+      "action": "click",
+      "expected": "navigates to /opportunities/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-post"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-type-<slug>",
+      "action": "click",
+      "expected": "filters the board to that type (or all)",
+      "permissions": "signed in",
+      "api": "GET /opportunities?type=",
+      "testId": "opportunities-type-all | opportunities-type-<slug>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-load-more",
+      "action": "click",
+      "expected": "appends the next page of opportunities",
+      "permissions": "signed in",
+      "api": "GET /opportunities?cursor=",
+      "testId": "opportunities-load-more"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunityCard",
+      "control": "opportunities-interested-<id>",
+      "action": "click",
+      "expected": "opens the I'm-interested dialog (disabled once already interested or closed)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-interested-<id>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunityCard",
+      "control": "opportunities-question-<id>",
+      "action": "click",
+      "expected": "opens the ask-a-question dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-question-<id>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunityCard",
+      "control": "opportunities-share-<id>",
+      "action": "click",
+      "expected": "opens the OS share sheet or copies the opportunity link",
+      "permissions": "anyone",
+      "api": "-",
+      "testId": "opportunities-share-<id>"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-interest-message",
+      "action": "type",
+      "expected": "updates the optional interest note",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-interest-message"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-interest-send",
+      "action": "click",
+      "expected": "records interest, creates a thread with the poster, notifies them",
+      "permissions": "verified actor, one per person",
+      "api": "POST /opportunities/:id/interest",
+      "testId": "opportunities-interest-send"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-question-text",
+      "action": "type",
+      "expected": "updates the question text",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-question-text"
+    },
+    {
+      "screen": "opportunities",
+      "component": "OpportunitiesPage",
+      "control": "opportunities-question-send",
+      "action": "click",
+      "expected": "sends the question as a thread message to the poster",
+      "permissions": "verified actor",
+      "api": "POST /opportunities/:id/question",
+      "testId": "opportunities-question-send"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-type",
+      "action": "change",
+      "expected": "switches the opportunity type, redrawing the dynamic fields for its schema",
+      "permissions": "verified actor",
+      "api": "GET /opportunities/types",
+      "testId": "opportunities-new-type"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-org",
+      "action": "change",
+      "expected": "picks whether the opportunity posts as a company or personally",
+      "permissions": "verified actor, member of the chosen company",
+      "api": "-",
+      "testId": "opportunities-new-org"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-title",
+      "action": "type",
+      "expected": "updates the title",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "opportunities-new-title"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-description",
+      "action": "type",
+      "expected": "updates the description",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "opportunities-new-description"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-location",
+      "action": "type",
+      "expected": "updates the location text",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "opportunities-new-location"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-field-<key>",
+      "action": "type or click",
+      "expected": "updates that type-specific field (text/number/money/date/select/multiselect/boolean)",
+      "permissions": "verified actor",
+      "api": "-",
+      "testId": "opportunities-new-field-<key>"
+    },
+    {
+      "screen": "opportunities-new",
+      "component": "NewOpportunityForm",
+      "control": "opportunities-new-submit",
+      "action": "click",
+      "expected": "validates the fields against the type's schema and creates the opportunity",
+      "permissions": "verified actor, phone or email verified, 20/day rate limit",
+      "api": "POST /opportunities",
+      "testId": "opportunities-new-submit"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-interested",
+      "action": "click",
+      "expected": "opens the I'm-interested dialog (hidden for the poster)",
+      "permissions": "signed in, not the poster",
+      "api": "-",
+      "testId": "opportunities-detail-interested"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-signin",
+      "action": "click",
+      "expected": "sends an anonymous viewer to sign in, returning to this opportunity",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "opportunities-detail-signin"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-question",
+      "action": "click",
+      "expected": "opens the ask-a-question dialog",
+      "permissions": "signed in, not the poster",
+      "api": "-",
+      "testId": "opportunities-detail-question"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-share",
+      "action": "click",
+      "expected": "opens the OS share sheet or copies the opportunity link",
+      "permissions": "anyone",
+      "api": "-",
+      "testId": "opportunities-detail-share"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-report",
+      "action": "click",
+      "expected": "opens the report dialog",
+      "permissions": "signed in, not the poster",
+      "api": "-",
+      "testId": "opportunities-detail-report"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-report-<reason>",
+      "action": "click",
+      "expected": "files a report with that reason",
+      "permissions": "signed in",
+      "api": "POST /reports {targetType:\"opportunity\"}",
+      "testId": "opportunities-detail-report-spam | opportunities-detail-report-scam | opportunities-detail-report-fake_company | opportunities-detail-report-other"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-close",
+      "action": "click",
+      "expected": "opens the close-confirmation dialog (poster only)",
+      "permissions": "poster",
+      "api": "-",
+      "testId": "opportunities-detail-close"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-close-confirm",
+      "action": "click",
+      "expected": "closes the opportunity (status CLOSED), hiding it from the board",
+      "permissions": "poster",
+      "api": "POST /opportunities/:id/close",
+      "testId": "opportunities-detail-close-confirm"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-interest-message",
+      "action": "type",
+      "expected": "updates the optional interest note",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-detail-interest-message"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-interest-send",
+      "action": "click",
+      "expected": "records interest, creates a thread with the poster, notifies them",
+      "permissions": "verified actor, one per person",
+      "api": "POST /opportunities/:id/interest",
+      "testId": "opportunities-detail-interest-send"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-question-text",
+      "action": "type",
+      "expected": "updates the question text",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "opportunities-detail-question-text"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-question-send",
+      "action": "click",
+      "expected": "sends the question as a thread message to the poster",
+      "permissions": "verified actor",
+      "api": "POST /opportunities/:id/question",
+      "testId": "opportunities-detail-question-send"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-detail-message-<i>",
+      "action": "click",
+      "expected": "opens the thread with that interested person (poster's Interests list)",
+      "permissions": "poster",
+      "api": "-",
+      "testId": "opportunities-detail-message-<i>"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-public-signin",
+      "action": "click",
+      "expected": "navigates to sign in (anonymous viewer)",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "opportunities-public-signin"
+    },
+    {
+      "screen": "opportunities-detail",
+      "component": "OpportunityDetailPage",
+      "control": "opportunities-public-join",
+      "action": "click",
+      "expected": "navigates to join (anonymous viewer)",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "opportunities-public-join"
     }
   ]
 }

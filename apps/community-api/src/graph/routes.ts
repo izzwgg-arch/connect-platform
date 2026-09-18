@@ -18,7 +18,7 @@ import { assertOutreachAllowed, recordOutreachSent, recomputeAcceptedRate } from
 
 const RELATIONSHIP_KINDS = ["WORKED_WITH", "PURCHASED_FROM", "SOLD_TO", "REFERRED", "PARTNER", "CUSTOMER", "VENDOR", "MENTOR"] as const;
 const REPORT_REASONS = ["SPAM", "SCAM", "HARASSMENT", "IMPERSONATION", "PHISHING", "MALWARE", "FAKE_JOB", "FAKE_COMPANY", "FAKE_REVIEW", "BOT", "MASS_SOLICITATION", "OTHER"] as const;
-const REPORT_TARGET_TYPES = ["person", "organization", "post", "comment", "message", "job", "listing", "rfq", "event", "group"] as const;
+const REPORT_TARGET_TYPES = ["person", "organization", "post", "comment", "message", "job", "listing", "rfq", "event", "group", "opportunity"] as const;
 
 const CONNECTION_FILTERS = ["all", "customers", "vendors", "worked_with", "referred", "partners", "loopcom"] as const;
 
