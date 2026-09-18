@@ -677,3 +677,8 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
   (``/root/payline-live-proof4.sh``, 5 scenarios) and the card-door proof (``/root/payline-live-proof5.sh``: wrong
   secret 403, no session, invalid refused, valid vaulted with 0 digits persisted/logged) both unchanged and green.
   NOT proven: a real pick-a-card charge and a real keyed charge (need a caller with an account PIN + a card).
+
+## 2026-09-18 — desk-phone per-device registration truth (api `828a07a8`)
+- `apps/api/src/deskPhoneSetup/phoneRegistrationTruth.test.ts` — 11/11 (node:test): the 2026-09-17 live T21 run replayed exactly (Yealink .170 + GS .172 both on ext 101, the .171 "extension held by another device" lie refused, x-ast-orig-host parsing incl. hostname/garbage refusals, WebRTC never greens a desk phone, cold-mirror fallback).
+- Desk-phone suites re-run with the change: deskPhoneRoutes + deskPhoneChaos + deskPhoneRecordWiring + phoneRegistrationTruth = 101/101; deskPhoneStress + deviceCloudRoutes + managedPhoneIntegration + gdmsRedirect + deviceProviders = 149/149. (Existing suites inject `isRegistered` only → they exercise the cold-mirror fallback path unchanged.)
+- api tsc: 45 pre-existing errors elsewhere, none in the touched files.
