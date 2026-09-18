@@ -21,21 +21,23 @@ function LoginInner() {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // A submit before hydration would be a plain GET — the button waits for React.
-  const [ready, setReady] = useState(false);
-  useEffect(() => setReady(true), []);
   const [pk, setPk] = useState(false);
   useEffect(() => setPk(passkeysSupported()), []);
   useEffect(() => {
     if (me) router.replace(next);
   }, [me, next, router]);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // Read the DOM, not state: text typed before hydration is only in the form.
+    const fd = new FormData(e.currentTarget);
+    const identifierNow = String(fd.get("identifier") ?? identifier);
+    const passwordNow = String(fd.get("password") ?? password);
+    const totpNow = String(fd.get("totp") ?? totp);
     setBusy(true);
     setError(null);
     try {
-      const body = await api("/auth/login", { body: { identifier, password, totp: needTotp ? totp : undefined }, auth: false });
+      const body = await api("/auth/login", { body: { identifier: identifierNow, password: passwordNow, totp: needTotp ? totpNow : undefined }, auth: false });
       applySession(body);
       trackEvent("login");
       const m = await reload();
@@ -79,14 +81,14 @@ function LoginInner() {
         ) : null}
         {pk ? <div className="or">or</div> : null}
         <Field label="Email or mobile number" htmlFor="l-id">
-          <input id="l-id" className="in" autoComplete="username webauthn" value={identifier} onChange={(e) => setIdentifier(e.target.value)} required data-testid="login-identifier" />
+          <input id="l-id" name="identifier" className="in" autoComplete="username webauthn" defaultValue={identifier} onChange={(e) => setIdentifier(e.target.value)} required data-testid="login-identifier" />
         </Field>
         <Field label="Password" htmlFor="l-pw">
-          <input id="l-pw" className="in" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required data-testid="login-password" />
+          <input id="l-pw" name="password" className="in" type="password" autoComplete="current-password" defaultValue={password} onChange={(e) => setPassword(e.target.value)} required data-testid="login-password" />
         </Field>
         {needTotp ? (
           <Field label="Authenticator code" htmlFor="l-totp" help="Six digits from your authenticator app.">
-            <input id="l-totp" className="in" inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(e) => setTotp(e.target.value)} autoFocus data-testid="login-totp" />
+            <input id="l-totp" name="totp" className="in" inputMode="numeric" autoComplete="one-time-code" defaultValue={totp} onChange={(e) => setTotp(e.target.value)} autoFocus data-testid="login-totp" />
           </Field>
         ) : null}
         {error ? <div className="chip bad" role="alert" style={{ justifySelf: "start" }}>{error}</div> : null}
@@ -94,7 +96,7 @@ function LoginInner() {
           <span />
           <Link href="/forgot-password">Forgot password?</Link>
         </div>
-        <Button kind="p" wide type="submit" loading={busy} disabled={!ready} data-testid="login-submit">
+        <Button kind="p" wide type="submit" loading={busy} data-testid="login-submit">
           Sign in
         </Button>
         <div className="or">or continue with</div>

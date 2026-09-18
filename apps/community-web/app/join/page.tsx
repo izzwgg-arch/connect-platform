@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, ApiError, trackEvent } from "@/lib/api";
 import { applySession, useAuth } from "@/lib/auth";
 import { Button, Field, Icon } from "@/components/ui";
@@ -26,14 +26,23 @@ export default function JoinPage() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  // A submit before hydration would be a plain GET — the button waits for React.
-  const [ready, setReady] = useState(false);
-  useEffect(() => setReady(true), []);
   const s = strength(f.password);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // The DOM is the source of truth: text typed before React hydrated (fast
+    // fingers, Safari, automation) is not in state yet, but it IS in the form.
+    const fd = new FormData(e.currentTarget);
+    const f = {
+      firstName: String(fd.get("firstName") ?? ""),
+      lastName: String(fd.get("lastName") ?? ""),
+      email: String(fd.get("email") ?? ""),
+      phone: String(fd.get("phone") ?? ""),
+      password: String(fd.get("password") ?? ""),
+      tos: fd.get("tos") === "on",
+    };
+    setF(f);
     const fe: Record<string, string> = {};
     if (!f.firstName.trim()) fe.firstName = "Enter your first name.";
     if (!f.lastName.trim()) fe.lastName = "Enter your last name.";
@@ -73,23 +82,23 @@ export default function JoinPage() {
         <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
           <div style={{ flex: 1 }}>
             <Field label="First name" htmlFor="r-fn" error={fieldErr.firstName}>
-              <input id="r-fn" className={`in ${fieldErr.firstName ? "err" : ""}`} autoComplete="given-name" value={f.firstName} onChange={set("firstName")} data-testid="join-first" />
+              <input id="r-fn" name="firstName" className={`in ${fieldErr.firstName ? "err" : ""}`} autoComplete="given-name" defaultValue={f.firstName} onChange={set("firstName")} data-testid="join-first" />
             </Field>
           </div>
           <div style={{ flex: 1 }}>
             <Field label="Last name" htmlFor="r-ln" error={fieldErr.lastName}>
-              <input id="r-ln" className={`in ${fieldErr.lastName ? "err" : ""}`} autoComplete="family-name" value={f.lastName} onChange={set("lastName")} data-testid="join-last" />
+              <input id="r-ln" name="lastName" className={`in ${fieldErr.lastName ? "err" : ""}`} autoComplete="family-name" defaultValue={f.lastName} onChange={set("lastName")} data-testid="join-last" />
             </Field>
           </div>
         </div>
         <Field label="Work email" htmlFor="r-em" help="We'll send a 6-digit code to confirm it." error={fieldErr.email}>
-          <input id="r-em" className={`in ${fieldErr.email ? "err" : ""}`} type="email" autoComplete="email" value={f.email} onChange={set("email")} data-testid="join-email" />
+          <input id="r-em" name="email" className={`in ${fieldErr.email ? "err" : ""}`} type="email" autoComplete="email" defaultValue={f.email} onChange={set("email")} data-testid="join-email" />
         </Field>
         <Field label="Mobile number (optional)" htmlFor="r-ph" help="Lets people who already have your number find you." error={fieldErr.phone}>
-          <input id="r-ph" className={`in ${fieldErr.phone ? "err" : ""}`} type="tel" autoComplete="tel" value={f.phone} onChange={set("phone")} data-testid="join-phone" />
+          <input id="r-ph" name="phone" className={`in ${fieldErr.phone ? "err" : ""}`} type="tel" autoComplete="tel" defaultValue={f.phone} onChange={set("phone")} data-testid="join-phone" />
         </Field>
         <Field label="Password" htmlFor="r-pw" error={fieldErr.password} help={f.password ? s.label : "At least 10 characters."}>
-          <input id="r-pw" className={`in ${fieldErr.password ? "err" : ""}`} type="password" autoComplete="new-password" value={f.password} onChange={set("password")} data-testid="join-password" />
+          <input id="r-pw" name="password" className={`in ${fieldErr.password ? "err" : ""}`} type="password" autoComplete="new-password" defaultValue={f.password} onChange={set("password")} data-testid="join-password" />
           {f.password ? (
             <div className="prog" style={{ marginTop: 6 }}>
               <i style={{ width: `${s.pct}%`, background: s.pct >= 80 ? "var(--success)" : undefined }} />
@@ -98,7 +107,7 @@ export default function JoinPage() {
         </Field>
         <div className="field">
           <label className="row sm" style={{ alignItems: "flex-start", gap: 8 }}>
-            <input type="checkbox" id="r-tos" checked={f.tos} onChange={set("tos")} style={{ marginTop: 3, accentColor: "var(--accent)" }} data-testid="join-tos" />
+            <input type="checkbox" id="r-tos" name="tos" defaultChecked={f.tos} onChange={set("tos")} style={{ marginTop: 3, accentColor: "var(--accent)" }} data-testid="join-tos" />
             <span className="dim">
               I agree to the <Link href="/legal/terms">Terms</Link> and <Link href="/legal/privacy">Privacy policy</Link>. Loopcom never infers religion, health or politics from what you do here.
             </span>
@@ -110,7 +119,7 @@ export default function JoinPage() {
             {error} {error.includes("Loopcom") ? <Link href="/sso/loopcom">Sign in with Loopcom</Link> : null}
           </div>
         ) : null}
-        <Button kind="p" wide type="submit" loading={busy} disabled={!ready} data-testid="join-submit">
+        <Button kind="p" wide type="submit" loading={busy} data-testid="join-submit">
           Continue <Icon name="arrow" />
         </Button>
         <div className="or">or</div>
