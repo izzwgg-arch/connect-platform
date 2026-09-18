@@ -1,0 +1,45 @@
+.note-input {
+  width: 100%;
+  min-height: 70px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px;
+  font: inherit;
+  resize: vertical;
+}
+.crm-pipeline-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.crm-pipeline-row:last-child {
+  border-bottom: none;
+}
+.crm-timeline-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.crm-timeline-item:last-child {
+  border-bottom: none;
+}
+.crm-timeline-kind {
+  width: 78px;
+  flex: none;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding-top: 2px;
+}
+.crm-due-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}

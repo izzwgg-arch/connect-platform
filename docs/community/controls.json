@@ -4276,6 +4276,976 @@
       "permissions": "anonymous",
       "api": "-",
       "testId": "opportunities-public-join"
+    },
+    {
+      "screen": "intro-ask",
+      "component": "AskIntroDialog",
+      "control": "intro-ask-open-<targetId>",
+      "action": "click",
+      "expected": "opens the dialog and loads GET /intros/paths for the target",
+      "permissions": "verified",
+      "api": "GET /intros/paths?targetPersonId=|targetOrgId=",
+      "testId": "intro-ask-open-<targetId>"
+    },
+    {
+      "screen": "intro-ask",
+      "component": "AskIntroDialog",
+      "control": "intro-ask-pick-<middleId>",
+      "action": "click",
+      "expected": "selects which 1st-degree connection should make the introduction",
+      "permissions": "verified",
+      "api": "-",
+      "testId": "intro-ask-pick-<middleId>"
+    },
+    {
+      "screen": "intro-ask",
+      "component": "AskIntroDialog",
+      "control": "intro-ask-message",
+      "action": "type",
+      "expected": "optional note sent along with the request",
+      "permissions": "verified",
+      "api": "-",
+      "testId": "intro-ask-message"
+    },
+    {
+      "screen": "intro-ask",
+      "component": "AskIntroDialog",
+      "control": "intro-ask-send",
+      "action": "click",
+      "expected": "creates the introduction request; target learns nothing until the middle approves",
+      "permissions": "verified",
+      "api": "POST /intros {middleId,targetPersonId|targetOrgId,message?}",
+      "testId": "intro-ask-send"
+    },
+    {
+      "screen": "intro-ask",
+      "component": "AskIntroDialog",
+      "control": "intro-ask-close",
+      "action": "click",
+      "expected": "closes the dialog after a request was sent",
+      "permissions": "verified",
+      "api": "-",
+      "testId": "intro-ask-close"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-tab-tome",
+      "action": "click",
+      "expected": "shows requests where the signed-in person is the middle",
+      "permissions": "signed in",
+      "api": "GET /intros?role=middle",
+      "testId": "intros-tab-tome"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-tab-mine",
+      "action": "click",
+      "expected": "shows requests the signed-in person made as requester",
+      "permissions": "signed in",
+      "api": "GET /intros?role=requester",
+      "testId": "intros-tab-mine"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-draft-<id>",
+      "action": "type",
+      "expected": "edits the introduction message before approving; saved on blur",
+      "permissions": "the middle only",
+      "api": "PATCH /intros/:id/draft {draft}",
+      "testId": "intros-draft-<id>"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-suggest-<id>",
+      "action": "click",
+      "expected": "fills the draft with a generated intro line (AI when configured, else a template)",
+      "permissions": "the middle only",
+      "api": "POST /intros/:id/draft/suggest",
+      "testId": "intros-suggest-<id>"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-approve-<id>",
+      "action": "click",
+      "expected": "creates the 3-person INTRO thread and sends the draft as its first message; only now does the target learn about it",
+      "permissions": "the middle only",
+      "api": "POST /intros/:id/approve {note?}",
+      "testId": "intros-approve-<id>"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-decline-<id>",
+      "action": "click",
+      "expected": "closes the request silently — the target is never told",
+      "permissions": "the middle only",
+      "api": "POST /intros/:id/decline",
+      "testId": "intros-decline-<id>"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-withdraw-<id>",
+      "action": "click",
+      "expected": "withdraws an open request the signed-in person made",
+      "permissions": "the requester only",
+      "api": "POST /intros/:id/withdraw",
+      "testId": "intros-withdraw-<id>"
+    },
+    {
+      "screen": "network-intros",
+      "component": "IntrosPage",
+      "control": "intros-open-thread-<id>",
+      "action": "click",
+      "expected": "navigates to the resulting INTRO thread",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "intros-open-thread-<id>"
+    },
+    {
+      "screen": "crm-note-editor",
+      "component": "NoteEditor",
+      "control": "note-editor-body",
+      "action": "type",
+      "expected": "private note text about a person or business — visible only to its owner",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "note-editor-body"
+    },
+    {
+      "screen": "crm-note-editor",
+      "component": "NoteEditor",
+      "control": "note-editor-tags",
+      "action": "type",
+      "expected": "comma-separated tags saved with the note",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "note-editor-tags"
+    },
+    {
+      "screen": "crm-note-editor",
+      "component": "NoteEditor",
+      "control": "note-editor-save",
+      "action": "click",
+      "expected": "creates the private note and refreshes the list",
+      "permissions": "signed in",
+      "api": "POST /crm/notes {targetPersonId|targetOrgId,body,tags?}",
+      "testId": "note-editor-save"
+    },
+    {
+      "screen": "crm-note-editor",
+      "component": "NoteEditor",
+      "control": "note-editor-delete-<id>",
+      "action": "click",
+      "expected": "deletes the note (404 if it isn't the caller's own)",
+      "permissions": "the note's owner only",
+      "api": "DELETE /crm/notes/:id",
+      "testId": "note-editor-delete-<id>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-tab-<contacts|notes|reminders|pipeline>",
+      "action": "click",
+      "expected": "switches the active CRM view and loads its data",
+      "permissions": "signed in",
+      "api": "GET /crm/contacts | /crm/notes | /crm/reminders | /crm/pipeline",
+      "testId": "crm-tab-contacts | crm-tab-notes | crm-tab-reminders | crm-tab-pipeline"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-export",
+      "action": "click",
+      "expected": "downloads a CSV of all the signed-in person's notes and reminders",
+      "permissions": "signed in",
+      "api": "GET /crm/export.csv",
+      "testId": "crm-export"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-open-<personId>",
+      "action": "click",
+      "expected": "navigates to that contact's full CRM page",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-open-<personId>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-quicknote-<personId>",
+      "action": "type",
+      "expected": "drafts a quick note for a contact from the list view",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-quicknote-<personId>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-quicknote-save-<personId>",
+      "action": "click",
+      "expected": "saves the quick note against that contact",
+      "permissions": "signed in",
+      "api": "POST /crm/notes {targetPersonId,body}",
+      "testId": "crm-quicknote-save-<personId>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-timeline-<personId>",
+      "action": "click",
+      "expected": "opens the merged timeline drawer for that contact",
+      "permissions": "signed in",
+      "api": "GET /crm/timeline?personId=",
+      "testId": "crm-timeline-<personId>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-push-loopcom-<personId>",
+      "action": "click",
+      "expected": "hands the contact + recent notes to Loopcom's CRM import (queued:false with the payload until Loopcom ships the route)",
+      "permissions": "signed in; shown only when the signed-in person's Loopcom account is linked",
+      "api": "POST /crm/push-to-loopcom {personId}",
+      "testId": "crm-push-loopcom-<personId>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-note-delete-<id>",
+      "action": "click",
+      "expected": "deletes a note from the flat notes list",
+      "permissions": "the note's owner only",
+      "api": "DELETE /crm/notes/:id",
+      "testId": "crm-note-delete-<id>"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-due-<today|week|all>",
+      "action": "click",
+      "expected": "filters the reminders list by due date",
+      "permissions": "signed in",
+      "api": "GET /crm/reminders?due=",
+      "testId": "crm-due-today | crm-due-week | crm-due-all"
+    },
+    {
+      "screen": "crm",
+      "component": "CrmPage",
+      "control": "crm-reminder-done-<id>",
+      "action": "click",
+      "expected": "marks a reminder done or not done",
+      "permissions": "the reminder's owner only",
+      "api": "PATCH /crm/reminders/:id {done}",
+      "testId": "crm-reminder-done-<id>"
+    },
+    {
+      "screen": "crm-contact",
+      "component": "CrmContactPage",
+      "control": "crm-contact-push-loopcom",
+      "action": "click",
+      "expected": "same Loopcom hand-off as the list view, scoped to this contact",
+      "permissions": "signed in; shown only when the signed-in person's Loopcom account is linked",
+      "api": "POST /crm/push-to-loopcom {personId}",
+      "testId": "crm-contact-push-loopcom"
+    },
+    {
+      "screen": "crm-contact",
+      "component": "CrmContactPage",
+      "control": "crm-contact-reminder-title",
+      "action": "type",
+      "expected": "drafts a new reminder's title",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-contact-reminder-title"
+    },
+    {
+      "screen": "crm-contact",
+      "component": "CrmContactPage",
+      "control": "crm-contact-reminder-due",
+      "action": "type",
+      "expected": "sets the new reminder's due date/time",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "crm-contact-reminder-due"
+    },
+    {
+      "screen": "crm-contact",
+      "component": "CrmContactPage",
+      "control": "crm-contact-reminder-save",
+      "action": "click",
+      "expected": "creates a reminder targeting this contact",
+      "permissions": "signed in",
+      "api": "POST /crm/reminders {targetPersonId,title,dueAt}",
+      "testId": "crm-contact-reminder-save"
+    },
+    {
+      "screen": "crm-contact",
+      "component": "CrmContactPage",
+      "control": "crm-contact-reminder-done-<id>",
+      "action": "click",
+      "expected": "marks this contact's reminder done or not done",
+      "permissions": "the reminder's owner only",
+      "api": "PATCH /crm/reminders/:id {done}",
+      "testId": "crm-contact-reminder-done-<id>"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-start-camera",
+      "action": "click",
+      "expected": "starts the camera and begins decoding QR codes with the browser's BarcodeDetector",
+      "permissions": "signed in; requires camera support",
+      "api": "-",
+      "testId": "scan-start-camera"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-stop-camera",
+      "action": "click",
+      "expected": "stops the camera without resolving a code",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-stop-camera"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-manual-input",
+      "action": "type",
+      "expected": "fallback: paste a Loopcom Community profile link when the camera/BarcodeDetector isn't available",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-manual-input"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-manual-submit",
+      "action": "click",
+      "expected": "resolves the pasted link/username to a person card",
+      "permissions": "signed in",
+      "api": "GET /qr/resolve?code=",
+      "testId": "scan-manual-submit"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-connect",
+      "action": "click",
+      "expected": "sends a connection request to the scanned person",
+      "permissions": "verified",
+      "api": "POST /connections/request {personId}",
+      "testId": "scan-connect"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-follow",
+      "action": "click",
+      "expected": "follows the scanned person",
+      "permissions": "signed in",
+      "api": "POST /people/:id/follow",
+      "testId": "scan-follow"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-save-contact",
+      "action": "click",
+      "expected": "downloads the scanned person's vCard (phone/email included only if their privacy settings allow this viewer)",
+      "permissions": "signed in",
+      "api": "GET /public/people/:username/vcard",
+      "testId": "scan-save-contact"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-add-note",
+      "action": "click",
+      "expected": "opens the 'met in person' note dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-add-note"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-met-event",
+      "action": "type",
+      "expected": "optional event name tagged on the met-in-person note",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-met-event"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-met-note",
+      "action": "type",
+      "expected": "optional free-text note about meeting them",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-met-note"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-met-save",
+      "action": "click",
+      "expected": "creates a private 'met-in-person' note and returns next-step suggestions",
+      "permissions": "signed in",
+      "api": "POST /qr/met {personId,event?,note?}",
+      "testId": "scan-met-save"
+    },
+    {
+      "screen": "scan",
+      "component": "ScanPage",
+      "control": "scan-again",
+      "action": "click",
+      "expected": "clears the resolved card to scan another code",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "scan-again"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-search-q",
+      "action": "type",
+      "expected": "keyword search box; Enter or Search re-runs the query",
+      "permissions": "signed in",
+      "api": "GET /jobs?q=",
+      "testId": "jobs-search-q"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-search-location",
+      "action": "type",
+      "expected": "location filter box",
+      "permissions": "signed in",
+      "api": "GET /jobs?location=",
+      "testId": "jobs-search-location"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-search-submit",
+      "action": "click",
+      "expected": "re-runs the search with the current filters and opens the first result",
+      "permissions": "signed in",
+      "api": "GET /jobs",
+      "testId": "jobs-search-submit"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-filter-fulltime",
+      "action": "click",
+      "expected": "toggles the Full time employmentType filter",
+      "permissions": "signed in",
+      "api": "GET /jobs?employmentType=FULL_TIME",
+      "testId": "jobs-filter-fulltime"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-filter-parttime",
+      "action": "click",
+      "expected": "toggles the Part time employmentType filter",
+      "permissions": "signed in",
+      "api": "GET /jobs?employmentType=PART_TIME",
+      "testId": "jobs-filter-parttime"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-filter-remote",
+      "action": "click",
+      "expected": "toggles the Remote workMode filter",
+      "permissions": "signed in",
+      "api": "GET /jobs?workMode=REMOTE",
+      "testId": "jobs-filter-remote"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-filter-postedweek",
+      "action": "click",
+      "expected": "toggles postedWithin=7",
+      "permissions": "signed in",
+      "api": "GET /jobs?postedWithin=7",
+      "testId": "jobs-filter-postedweek"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-filter-verified",
+      "action": "click",
+      "expected": "toggles verifiedEmployer=1",
+      "permissions": "signed in",
+      "api": "GET /jobs?verifiedEmployer=1",
+      "testId": "jobs-filter-verified"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-create-alert",
+      "action": "click",
+      "expected": "opens the create-alert dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "jobs-create-alert"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobsPage",
+      "control": "jobs-alert-submit",
+      "action": "click",
+      "expected": "creates a job alert for the current query/location",
+      "permissions": "signed in",
+      "api": "POST /me/job-alerts",
+      "testId": "jobs-alert-submit"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobCard",
+      "control": "jobs-card-<id>-open",
+      "action": "click",
+      "expected": "selects the job and loads its detail pane",
+      "permissions": "signed in",
+      "api": "GET /public/jobs/:id",
+      "testId": "jobs-card-<id>-open"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobCard",
+      "control": "jobs-card-<id>-save",
+      "action": "click",
+      "expected": "toggles saved state for that job from the list",
+      "permissions": "signed in",
+      "api": "POST|DELETE /jobs/:id/save",
+      "testId": "jobs-card-<id>-save"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-apply",
+      "action": "click",
+      "expected": "opens the Apply with profile dialog",
+      "permissions": "signed in, verified",
+      "api": "-",
+      "testId": "jobs-apply"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-signin-to-apply",
+      "action": "click",
+      "expected": "anonymous viewer is sent to /login with a next= back to the job",
+      "permissions": "anonymous",
+      "api": "-",
+      "testId": "jobs-signin-to-apply"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-save",
+      "action": "click",
+      "expected": "toggles saved state on the open job",
+      "permissions": "signed in",
+      "api": "POST|DELETE /jobs/:id/save",
+      "testId": "jobs-save"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-share",
+      "action": "click",
+      "expected": "copies the public job link to the clipboard",
+      "permissions": "any",
+      "api": "-",
+      "testId": "jobs-share"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-report",
+      "action": "click",
+      "expected": "opens the report dialog for this job",
+      "permissions": "signed in",
+      "api": "POST /reports",
+      "testId": "jobs-report"
+    },
+    {
+      "screen": "jobs",
+      "component": "JobDetailPanel",
+      "control": "jobs-ask-referral",
+      "action": "click",
+      "expected": "opens the ask-for-a-referral picker over the people-you-know-here list",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "jobs-ask-referral"
+    },
+    {
+      "screen": "jobs",
+      "component": "ApplyDialog",
+      "control": "jobs-apply-section-<key>",
+      "action": "click",
+      "expected": "toggles one profile section to include in the application snapshot",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "jobs-apply-section-headline | jobs-apply-section-about | jobs-apply-section-experience | jobs-apply-section-education | jobs-apply-section-skills | jobs-apply-section-certifications | jobs-apply-section-services"
+    },
+    {
+      "screen": "jobs",
+      "component": "ApplyDialog",
+      "control": "jobs-apply-resume",
+      "action": "upload",
+      "expected": "uploads a private resume document via the media pipeline",
+      "permissions": "signed in",
+      "api": "POST /media",
+      "testId": "jobs-apply-resume"
+    },
+    {
+      "screen": "jobs",
+      "component": "ApplyDialog",
+      "control": "jobs-apply-cover",
+      "action": "type",
+      "expected": "optional cover note text",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "jobs-apply-cover"
+    },
+    {
+      "screen": "jobs",
+      "component": "ApplyDialog",
+      "control": "jobs-apply-submit",
+      "action": "click",
+      "expected": "sends the application with only the chosen sections; refuses a duplicate with a human sentence",
+      "permissions": "signed in, verified",
+      "api": "POST /jobs/:id/apply",
+      "testId": "jobs-apply-submit"
+    },
+    {
+      "screen": "jobs",
+      "component": "ReferralDialog",
+      "control": "jobs-referral-send-<personId>",
+      "action": "click",
+      "expected": "sends a referral-ask message to that connection",
+      "permissions": "signed in, verified, 1st-degree + verified member",
+      "api": "POST /jobs/:id/ask-referral",
+      "testId": "jobs-referral-send-<personId>"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-org",
+      "action": "select",
+      "expected": "chooses which company the job posts under (only companies where the person has org.manage_jobs)",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-org"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-title",
+      "action": "type",
+      "expected": "job title",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-title"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-description",
+      "action": "type",
+      "expected": "job description",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-description"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-location",
+      "action": "type",
+      "expected": "job location, blank for remote",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-location"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-employmenttype",
+      "action": "select",
+      "expected": "employment type",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-employmenttype"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-workmode",
+      "action": "select",
+      "expected": "work mode",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-workmode"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-salarymin",
+      "action": "type",
+      "expected": "minimum salary",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-salarymin"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-salarymax",
+      "action": "type",
+      "expected": "maximum salary",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-salarymax"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-salaryperiod",
+      "action": "select",
+      "expected": "salary period (year/hour)",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-salaryperiod"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-requirement-add",
+      "action": "click",
+      "expected": "adds a requirement chip",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-requirement-add"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-language-add",
+      "action": "click",
+      "expected": "adds a language chip",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-language-add"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-status",
+      "action": "select",
+      "expected": "DRAFT (unpublished) or OPEN (visible to candidates)",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-new-status"
+    },
+    {
+      "screen": "jobs-new",
+      "component": "NewJobPage",
+      "control": "jobs-new-submit",
+      "action": "click",
+      "expected": "creates the job and routes to its hiring pipeline",
+      "permissions": "signed in, verified, org.manage_jobs",
+      "api": "POST /jobs",
+      "testId": "jobs-new-submit"
+    },
+    {
+      "screen": "jobs-edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-submit",
+      "action": "click",
+      "expected": "saves edits to title/description/location/type/mode/salary/requirements",
+      "permissions": "signed in, verified, org.manage_jobs",
+      "api": "PATCH /jobs/:id",
+      "testId": "jobs-edit-submit"
+    },
+    {
+      "screen": "jobs-edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-close",
+      "action": "click",
+      "expected": "closes the job (stops accepting applications, hides from search)",
+      "permissions": "signed in, verified, org.manage_jobs",
+      "api": "POST /jobs/:id/close",
+      "testId": "jobs-edit-close"
+    },
+    {
+      "screen": "jobs-edit",
+      "component": "EditJobPage",
+      "control": "jobs-edit-promote",
+      "action": "click",
+      "expected": "opens the promote dialog",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "jobs-edit-promote"
+    },
+    {
+      "screen": "jobs-edit",
+      "component": "EditJobPage",
+      "control": "jobs-promote-submit",
+      "action": "click",
+      "expected": "sets promotedUntil for N days (no payment, audit only)",
+      "permissions": "signed in, verified, org.manage_jobs",
+      "api": "POST /jobs/:id/promote",
+      "testId": "jobs-promote-submit"
+    },
+    {
+      "screen": "me-applications",
+      "component": "ApplicationsInner",
+      "control": "applications-view-<id>",
+      "action": "click",
+      "expected": "opens the public job page for this application",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "applications-view-<id>"
+    },
+    {
+      "screen": "me-applications",
+      "component": "ApplicationsInner",
+      "control": "applications-withdraw-<id>",
+      "action": "click",
+      "expected": "opens the withdraw-confirm dialog (hidden once HIRED or CLOSED)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "applications-withdraw-<id>"
+    },
+    {
+      "screen": "me-applications",
+      "component": "ApplicationsInner",
+      "control": "applications-withdraw-confirm",
+      "action": "click",
+      "expected": "withdraws the application",
+      "permissions": "signed in",
+      "api": "DELETE /jobs/:id/apply",
+      "testId": "applications-withdraw-confirm"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-org-select",
+      "action": "select",
+      "expected": "switches which company's jobs/pipeline are shown (only companies where the person has org.hire)",
+      "permissions": "signed in, org.hire",
+      "api": "GET /organizations/:id/jobs",
+      "testId": "hiring-org-select"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-new-job",
+      "action": "click",
+      "expected": "goes to /jobs/new (shown only with org.manage_jobs)",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-new-job"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-job-<id>",
+      "action": "click",
+      "expected": "selects a job and loads its pipeline + analytics",
+      "permissions": "signed in, org.hire",
+      "api": "GET /jobs/:id/applications, GET /jobs/:id/analytics",
+      "testId": "hiring-job-<id>"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-edit-job",
+      "action": "click",
+      "expected": "goes to /jobs/:id/edit (shown only with org.manage_jobs)",
+      "permissions": "signed in, org.manage_jobs",
+      "api": "-",
+      "testId": "hiring-edit-job"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-stage-<stage>",
+      "action": "click",
+      "expected": "filters the applicant list to that stage (click again to clear)",
+      "permissions": "signed in, org.hire",
+      "api": "GET /jobs/:id/applications?stage=",
+      "testId": "hiring-stage-APPLIED | hiring-stage-REVIEWED | hiring-stage-INTERVIEW | hiring-stage-OFFER | hiring-stage-HIRED | hiring-stage-CLOSED"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-applicant-open-<id>",
+      "action": "click",
+      "expected": "opens the applicant drawer (snapshot, resume, notes, message)",
+      "permissions": "signed in, org.hire",
+      "api": "-",
+      "testId": "hiring-applicant-open-<id>"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-applicant-stage-<id>",
+      "action": "select",
+      "expected": "moves the applicant to a new stage and notifies the candidate",
+      "permissions": "signed in, org.hire",
+      "api": "PATCH /jobs/:id/applications/:appId",
+      "testId": "hiring-applicant-stage-<id>"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-resume-link",
+      "action": "click",
+      "expected": "opens the applicant's resume via a signed URL",
+      "permissions": "signed in, org.hire",
+      "api": "-",
+      "testId": "hiring-resume-link"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-notes-save",
+      "action": "click",
+      "expected": "saves the employer's private note on this application",
+      "permissions": "signed in, org.hire",
+      "api": "PATCH /jobs/:id/applications/:appId",
+      "testId": "hiring-notes-save"
+    },
+    {
+      "screen": "company-hiring",
+      "component": "HiringPage",
+      "control": "hiring-message-send",
+      "action": "click",
+      "expected": "opens (or reuses) a direct thread with the candidate and sends the message",
+      "permissions": "signed in, org.hire",
+      "api": "POST /jobs/:id/applications/:appId/message",
+      "testId": "hiring-message-send"
     }
   ]
 }

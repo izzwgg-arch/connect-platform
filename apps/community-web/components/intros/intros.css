@@ -1,0 +1,44 @@
+.intro-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.intro-path:last-child {
+  border-bottom: none;
+}
+.intro-path .t {
+  flex: 1;
+  min-width: 0;
+}
+.intro-strength {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+}
+.intro-strength i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  display: inline-block;
+}
+.intro-strength i.on {
+  background: var(--accent);
+}
+.intro-draft {
+  width: 100%;
+  min-height: 84px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px;
+  font: inherit;
+  resize: vertical;
+}
+.intro-role-tab {
+  display: flex;
+  gap: 6px;
+}
