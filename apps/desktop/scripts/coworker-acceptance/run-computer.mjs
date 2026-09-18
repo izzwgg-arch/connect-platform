@@ -56,8 +56,14 @@ async function agent(path_, body, method = "POST") {
   const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
   return { status: res.status, json };
 }
+/** Which computer new work would go to right now (for takeover detection). */
+async function preferredHost() {
+  try { const st = await agent("coworker/status", null, "GET"); const p = (st.json?.desktops ?? []).find((d) => d.preferred); return p ? String(p.hostname) : null; } catch { return null; }
+}
+let lastTakeover = null;
 async function ask(prompt, { timeoutMs = 600_000, conversationId } = {}) {
   const t0 = Date.now(); log(`>>> ${prompt}`);
+  const hostBefore = await preferredHost();
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), timeoutMs);
   let r;
   try {
@@ -68,8 +74,16 @@ async function ask(prompt, { timeoutMs = 600_000, conversationId } = {}) {
   finally { clearTimeout(timer); }
   const ms = Date.now() - t0; const reply = String(r.reply ?? "");
   log(`<<< (${ms} ms, model ${r.model ?? "?"}) ${reply.replace(/\s+/g, " ").slice(0, 500)}${r.error ? ` [error ${r.error}]` : ""}${r.httpStatus ? ` [http ${r.httpStatus}]` : ""}`);
-  transcript.push({ at: new Date().toISOString(), prompt, reply, ms, model: r.model ?? null, conversationId: r.conversationId ?? null, error: r.error ?? null });
-  return { reply, ms, raw: r, conversationId: r.conversationId };
+  const hostAfter = await preferredHost();
+  const me = os.hostname();
+  // ⛔ Another computer on this account can reconnect mid-turn and become the one
+  // new work goes to. That is the documented behaviour (and the model says so in
+  // its reply) — but it means this test measured a DIFFERENT machine, so say that
+  // instead of calling the feature broken.
+  lastTakeover = hostAfter && hostAfter.toLowerCase() !== me.toLowerCase() ? hostAfter : null;
+  if (lastTakeover) log(`!! another computer (${lastTakeover}) took the queue during this turn`);
+  transcript.push({ at: new Date().toISOString(), prompt, reply, ms, model: r.model ?? null, conversationId: r.conversationId ?? null, error: r.error ?? null, hostBefore, hostAfter });
+  return { reply, ms, raw: r, conversationId: r.conversationId, takenOverBy: lastTakeover };
 }
 async function closeConversations() { try { const st = await agent("chat/history", {}); for (const c of (st.json?.conversations ?? []).filter((c) => c.status === "OPEN")) await agent("chat/close", { conversationId: c.id }); } catch { /* best effort */ } }
 
@@ -160,14 +174,53 @@ function stopWatcher() { if (answerer) { answerer.stop = true; answerer = null; 
 
 /* ───────────── bookkeeping ───────────── */
 function record(id, capability, prompt, expected, actual, verification, status, evidence = [], extra = {}) {
+  // a test whose turn ran on ANOTHER computer proves nothing about this one
+  if (status === "FAIL" && lastTakeover) { status = `BLOCKED: another computer (${lastTakeover}) took the queue mid-turn`; }
   const row = { id, capability, prompt, expected, actual, verification, status, evidence, at: new Date().toISOString(), ...extra };
   results.push(row);
   log(`### ${id} ${status} — ${capability}${actual ? ` :: ${String(actual).slice(0, 240)}` : ""}`);
   fs.writeFileSync(path.join(OUT, "acceptance-results.json"), JSON.stringify({ portal: PORTAL, startedAt: STARTED, machine: os.hostname(), results, transcript }, null, 2));
 }
+/**
+ * ⛔ THIS ACCOUNT HAS MORE THAN ONE COMPUTER SIGNED IN, and that is not a test
+ * artefact — it is how the person actually uses Loopcom. New work goes to the most
+ * recently CONNECTED computer, so if another machine's app restarts it takes the
+ * queue. The person's lever for redirecting it is to open Loopcom on the machine
+ * they are at, and that is exactly what this does before each test: check who is
+ * preferred, and if it is not this computer, relaunch the app here and wait.
+ * (It also exercises reconnect, which is worth having in the run.)
+ */
+async function ensurePreferred({ force = false } = {}) {
+  const me = os.hostname().toLowerCase();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const st = await agent("coworker/status", null, "GET");
+    const others = (st.json?.desktops ?? []).filter((d) => String(d.hostname).toLowerCase() !== me);
+    const pref = (st.json?.desktops ?? []).find((d) => d.preferred);
+    const mine = pref && String(pref.hostname).toLowerCase() === me && pref.present;
+    // ⛔ With another computer live on this account, being preferred NOW is not
+    // enough: the other machine's app restarts and takes the queue mid-test (its
+    // reply then honestly says it cannot control that computer). Reconnect here
+    // first so this machine is the most recently connected when the turn starts.
+    if (mine) return true;
+    void force;
+    log(`preferred computer is ${pref ? pref.hostname : "nobody"} — relaunching Loopcom here to take the queue back`);
+    ps("Get-Process Loopcom -ErrorAction SilentlyContinue | Stop-Process -Force");
+    await new Promise((r) => setTimeout(r, 3000));
+    ps(`Start-Process -FilePath "$env:LOCALAPPDATA/Programs/@connectdesktop/Loopcom.exe"`);
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const s2 = await agent("coworker/status", null, "GET");
+      const p2 = (s2.json?.desktops ?? []).find((d) => d.preferred);
+      if (p2 && String(p2.hostname).toLowerCase() === me && p2.present) { log(`this computer is preferred again (${p2.appVersion}, ${p2.tools} tools)`); return true; }
+    }
+  }
+  return false;
+}
+
 async function test(id, capability, fn) {
   if (ONLY.length && !ONLY.includes(id)) return;
   await closeConversations();
+  if (!(await ensurePreferred())) { record(id, capability, "", "this computer is the one the work goes to", "another computer kept the queue", "GET /agent-api/coworker/status", "BLOCKED: another computer on this account held the preferred slot"); return; }
   try { await fn(); } catch (e) { record(id, capability, "", "", `harness error: ${String(e?.stack ?? e).slice(0, 400)}`, "harness", "FAIL"); }
 }
 const STARTED = new Date().toISOString();
