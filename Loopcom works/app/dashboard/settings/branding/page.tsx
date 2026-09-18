@@ -430,7 +430,7 @@ export default function BrandingSettingsPage() {
     const footerBg = draft.emailFooterBackgroundColor || '#111827'
     const textPrimary = draft.emailTextPrimaryColor || 'rgba(255,255,255,0.92)'
     const textSecondary = draft.emailTextSecondaryColor || 'rgba(255,255,255,0.68)'
-    const button = draft.emailButtonColor || '#12344d'
+    const button = draft.emailButtonColor || '#2563eb'
     const buttonText = draft.emailButtonTextColor || '#ffffff'
     return { bg, cardBg, headerBg, footerBg, textPrimary, textSecondary, button, buttonText }
   }, [draft])
@@ -817,7 +817,7 @@ export default function BrandingSettingsPage() {
                 <div className="text-xs font-medium text-gray-500 mb-2">Sidebar preview (actual render size)</div>
                 <div
                   className="flex items-center px-4 gap-3 rounded"
-                  style={{ height: 64, backgroundColor: '#2E4A59' }}
+                  style={{ height: 64, backgroundColor: 'var(--brand-primary-color)' }}
                 >
                   {cropPreviewUrl ? (
                     <img

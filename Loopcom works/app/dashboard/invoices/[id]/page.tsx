@@ -931,7 +931,7 @@ export default function InvoiceDetailPage() {
   const handleDeletePayment = async (payment: { id: string; amount: string; method: string }) => {
     const confirmed = window.confirm(
       `Delete this ${formatCurrency(parseFloat(payment.amount))} ${payment.method} payment?\n\n` +
-        'This removes it from TrimPro and recalculates the invoice balance. Gateway/QuickBooks side may still need a separate void/refund.'
+        'This removes it from LoopCom Works and recalculates the invoice balance. Gateway/QuickBooks side may still need a separate void/refund.'
     )
     if (!confirmed) return
 

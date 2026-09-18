@@ -398,7 +398,7 @@ const styles = StyleSheet.create({
   },
   filterChipActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
   filterChipText: { ...typography.caption, color: colors.textSecondary, fontWeight: '600' },
-  filterChipTextActive: { color: '#E6C98B' },
+  filterChipTextActive: { color: '#2563eb' },
 
   loadingWrap: { padding: spacing.xl, alignItems: 'center' },
   loadingText: { ...typography.sub, color: colors.textSecondary },

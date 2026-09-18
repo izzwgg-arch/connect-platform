@@ -761,7 +761,7 @@ export default function RequestsPage() {
                             handleConvertToEstimate(request)
                           }}
                           disabled={convertingId === request.id || !canConvertRequest}
-                          className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                          className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                           title="Convert to Estimate"
                         >
                           <FileText className="h-3 w-3" />
@@ -774,7 +774,7 @@ export default function RequestsPage() {
                             handleConvertToJob(request)
                           }}
                           disabled={convertingId === request.id || !canConvertRequest}
-                          className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                          className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                           title="Convert to Job"
                         >
                           <Briefcase className="h-3 w-3" />
@@ -994,7 +994,7 @@ export default function RequestsPage() {
                       handleConvertToEstimate(request)
                     }}
                     disabled={convertingId === request.id || !canConvertRequest}
-                    className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                    className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                     title="Convert to Estimate"
                   >
                     <FileText className="h-3 w-3" />
@@ -1007,7 +1007,7 @@ export default function RequestsPage() {
                       handleConvertToJob(request)
                     }}
                     disabled={convertingId === request.id || !canConvertRequest}
-                    className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                    className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                     title="Convert to Job"
                   >
                     <Briefcase className="h-3 w-3" />

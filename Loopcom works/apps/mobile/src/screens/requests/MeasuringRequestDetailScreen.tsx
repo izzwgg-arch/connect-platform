@@ -292,7 +292,7 @@ const styles = StyleSheet.create({
   },
   completeButtonText: {
     ...typography.sub,
-    color: '#E6C98B',
+    color: '#2563eb',
     fontWeight: '700',
   },
   scheduleButton: {

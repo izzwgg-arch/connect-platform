@@ -216,7 +216,7 @@ async function sendViaGoogle(input: ProviderSendInput): Promise<IntegrationTestR
 }
 
 function getFromName(secrets: Record<string, any>) {
-  return String(secrets.fromName || secrets.senderName || secrets.brandName || 'TrimPro').trim() || 'TrimPro'
+  return String(secrets.fromName || secrets.senderName || secrets.brandName || 'LoopCom Works').trim() || 'LoopCom Works'
 }
 
 function getFromEmail(secrets: Record<string, any>, fallback: string) {

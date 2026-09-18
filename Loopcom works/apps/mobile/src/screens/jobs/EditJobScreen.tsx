@@ -442,7 +442,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statusChipTextActive: {
-    color: '#E6C98B',
+    color: '#2563eb',
   },
   dateButton: {
     flexDirection: 'row',

@@ -121,7 +121,7 @@ export default function EstimateViewPage() {
         </div>
 
         {/* Total hero */}
-        <div className="mb-4 rounded-2xl px-6 py-6 text-center" style={{ background: '#243f53' }}>
+        <div className="mb-4 rounded-2xl px-6 py-6 text-center" style={{ background: '#141f2b' }}>
           <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#8cb4cf' }}>
             Total Amount
           </p>

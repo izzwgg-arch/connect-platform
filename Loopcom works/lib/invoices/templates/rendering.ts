@@ -8,7 +8,7 @@ export function buildInvoiceRenderSnapshot(branding: AnyRecord | null | undefine
   return {
     templateKey: template?.id || null,
     templateVersion: template?.version || 1,
-    accentColor: template?.preview.accentColor || '#12344d',
+    accentColor: template?.preview.accentColor || '#2563eb',
     businessName: branding.invoiceBusinessName || null,
     businessPhone: branding.invoicePhone || null,
     businessEmail: branding.invoiceEmail || null,
@@ -24,7 +24,7 @@ export function resolveInvoiceRenderSnapshot(invoice: AnyRecord, branding: AnyRe
     return {
       templateKey: invoice.renderTemplateKey || snap.templateKey || null,
       templateVersion: invoice.renderTemplateVersion || snap.templateVersion || 1,
-      accentColor: snap.accentColor || '#12344d',
+      accentColor: snap.accentColor || '#2563eb',
       businessName: snap.businessName || null,
       businessPhone: snap.businessPhone || null,
       businessEmail: snap.businessEmail || null,
@@ -38,7 +38,7 @@ export function resolveInvoiceRenderSnapshot(invoice: AnyRecord, branding: AnyRe
   return {
     templateKey: template?.id || null,
     templateVersion: template?.version || 1,
-    accentColor: template?.preview.accentColor || '#12344d',
+    accentColor: template?.preview.accentColor || '#2563eb',
     businessName: branding?.invoiceBusinessName || null,
     businessPhone: branding?.invoicePhone || null,
     businessEmail: branding?.invoiceEmail || null,

@@ -98,7 +98,7 @@ export function SearchableSelect({
                     setOpen(false)
                     setQuery('')
                   }}
-                  className={`${DROPDOWN_ITEM} ${option.value === value ? 'bg-[#2E4A59] text-white' : ''}`}
+                  className={`${DROPDOWN_ITEM} ${option.value === value ? 'bg-primary text-primary-foreground' : ''}`}
                 >
                   {option.label}
                 </button>

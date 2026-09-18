@@ -160,7 +160,7 @@ export async function allocateNextEstimateNumber(params: {
     if (!localCollision) return candidate
   }
 
-  throw new Error('Unable to allocate an unused estimate number in TrimPro.')
+  throw new Error('Unable to allocate an unused estimate number in LoopCom Works.')
 }
 
 export async function assertEstimateNumberNotUsedLocally(
@@ -178,7 +178,7 @@ export async function assertEstimateNumberNotUsedLocally(
   if (existing) {
     throw new EstimateDocNumberError(
       'ESTIMATE_NUMBER_LOCAL_CONFLICT',
-      `Estimate number ${estimateNumber} already exists in TrimPro. Use a different number.`,
+      `Estimate number ${estimateNumber} already exists in LoopCom Works. Use a different number.`,
       estimateNumber
     )
   }
@@ -320,7 +320,7 @@ export async function allocateNextInvoiceNumber(params: {
     return candidate
   }
 
-  throw new Error('Unable to allocate an unused invoice number in TrimPro and QuickBooks.')
+  throw new Error('Unable to allocate an unused invoice number in LoopCom Works and QuickBooks.')
 }
 
 export async function allocateNextCreditMemoNumber(params: {
@@ -353,5 +353,5 @@ export async function allocateNextCreditMemoNumber(params: {
     return candidate
   }
 
-  throw new Error('Unable to allocate an unused credit memo number in TrimPro and QuickBooks.')
+  throw new Error('Unable to allocate an unused credit memo number in LoopCom Works and QuickBooks.')
 }

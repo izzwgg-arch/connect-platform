@@ -158,7 +158,7 @@ export async function POST(
       message: message ? String(message) : undefined,
       validUntil: validUntil || undefined,
       logoUrl: logoUrl || undefined,
-      companyName: (emailBranding as any)?.businessName || (emailBranding as any)?.companyName || 'TrimPro',
+      companyName: (emailBranding as any)?.businessName || (emailBranding as any)?.companyName || 'LoopCom Works',
       supportEmail: (emailBranding as any)?.supportEmail || (emailBranding as any)?.businessEmail || undefined,
     })
 

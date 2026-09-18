@@ -38,6 +38,7 @@ import {
   Factory,
 } from 'lucide-react'
 import { useRef, useState, useEffect } from 'react'
+import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { formatDistanceToNow } from 'date-fns'
 
 // Maps a nav item to the Notification.linkType whose unread count should
@@ -135,18 +136,18 @@ function NewBadge({ items }: { items: UnreadNavNotification[] }) {
         ref={badgeRef}
         onMouseEnter={show}
         onMouseLeave={scheduleClose}
-        className="ml-2 inline-flex cursor-default rounded bg-red-500 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-white"
+        className="ml-2 inline-flex cursor-default rounded-full bg-danger px-1.5 py-0.5 text-[9px] font-extrabold uppercase leading-none tracking-[0.04em] text-white"
       >
         New
       </span>
       {open && (
         <div
-          className="fixed z-[100] w-72 rounded-md border border-gray-200 bg-white p-2 pt-3 text-left normal-case shadow-lg"
+          className="fixed z-[100] w-72 rounded-[10px] border border-line bg-popover p-2 pt-3 text-left normal-case shadow-float"
           style={{ top: position.top, left: position.left }}
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
         >
-          <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-[0.08em] text-dim">
             What&apos;s new
           </p>
           {items.slice(0, 5).map((n) => (
@@ -167,17 +168,17 @@ function NewBadge({ items }: { items: UnreadNavNotification[] }) {
                 setOpen(false)
                 if (n.linkUrl) router.push(n.linkUrl)
               }}
-              className="cursor-pointer rounded px-1 py-1.5 hover:bg-gray-50"
+              className="cursor-pointer rounded-lg px-1.5 py-1.5 hover:bg-accent-soft"
             >
-              <p className="truncate text-xs font-medium text-gray-900">{n.title}</p>
-              {n.message && <p className="line-clamp-2 text-[11px] text-gray-600">{n.message}</p>}
-              <p className="mt-0.5 text-[10px] text-gray-400">
+              <p className="truncate text-xs font-medium text-ink">{n.title}</p>
+              {n.message && <p className="line-clamp-2 text-[11px] text-dim">{n.message}</p>}
+              <p className="mt-0.5 text-[10px] text-faint">
                 {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
               </p>
             </div>
           ))}
           {items.length > 5 && (
-            <p className="px-1 pt-1 text-[10px] text-gray-400">+{items.length - 5} more</p>
+            <p className="px-1 pt-1 text-[10px] text-faint">+{items.length - 5} more</p>
           )}
         </div>
       )}
@@ -253,21 +254,20 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   const sidebarContent = (
     <div
       className={cn(
-        'flex h-full flex-col text-white transition-all duration-300',
-        collapsed ? 'w-16' : 'w-64'
+        'lw-sidebar flex h-full flex-col text-[var(--brand-text-primary-color)]',
+        collapsed ? 'w-[72px]' : 'w-[264px]'
       )}
-      style={{ backgroundColor: 'var(--brand-sidebar-color)' }}
     >
       {/* Header */}
       <div
-        className="flex h-16 flex-shrink-0 items-center justify-between border-b px-3"
+        className="flex h-14 flex-shrink-0 items-center justify-between border-b px-3"
         style={{ borderColor: 'var(--brand-sidebar-border-color)' }}
       >
         {!collapsed && (
           <Link
             href="/dashboard"
             aria-label="Go to dashboard"
-            className="inline-flex h-full min-h-0 min-w-0 flex-1 items-center justify-start pr-2"
+            className="inline-flex h-full min-h-0 min-w-0 flex-1 items-center justify-start overflow-hidden pr-1"
           >
             <TrimProLogo variant="sidebar" size="md" />
           </Link>
@@ -282,7 +282,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           {/* Desktop collapse toggle */}
           <button
             onClick={toggleCollapsed}
-            className="hidden lg:flex items-center justify-center h-7 w-7 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            className="lw-icon-btn hidden lg:inline-grid h-7 min-w-7 w-7"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
@@ -291,7 +291,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           {onMobileClose && (
             <button
               onClick={onMobileClose}
-              className="flex lg:hidden items-center justify-center min-h-[44px] min-w-[44px] h-11 w-11 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              className="lw-icon-btn flex lg:hidden min-h-[44px] min-w-[44px] h-11 w-11"
               aria-label="Close menu"
             >
               <X className="h-4 w-4" />
@@ -301,7 +301,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto space-y-0.5 px-2 py-4 min-h-0">
+      <nav className="flex-1 overflow-y-auto space-y-0.5 px-2.5 py-3 min-h-0">
         {navigation.map((item) => {
           const isActive =
             item.href === '/dashboard'
@@ -314,14 +314,16 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
               onClick={onMobileClose}
               title={collapsed ? item.name : undefined}
               className={cn(
-                'group flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 !bg-transparent hover:!bg-transparent active:!bg-transparent focus:!bg-transparent',
-                collapsed ? 'justify-center' : '',
-                isActive ? 'text-[var(--brand-menu-color)]' : 'text-white hover:text-[var(--brand-menu-color)]'
+                'lw-nav-link group',
+                collapsed ? 'is-rail' : '',
+                isActive ? 'is-active' : ''
               )}
             >
-              <item.icon className={cn('h-5 w-5 flex-shrink-0', !collapsed && 'mr-3')} />
+              <span className="lw-nav-icon">
+                <item.icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.85} />
+              </span>
               {!collapsed && (
-                <span className="flex flex-1 items-center justify-between">
+                <span className="flex min-w-0 flex-1 items-center justify-between truncate">
                   {item.name}
                   <NewBadge items={unreadByNavItem(item.name)} />
                 </span>
@@ -355,22 +357,26 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
         {collapsed ? (
           <div className="flex flex-col items-center gap-2">
             <NotificationBell />
+            <ThemeToggle compact />
             <button
               onClick={handleLogout}
               title="Logout"
-              className="flex items-center justify-center h-8 w-8 rounded-md text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              className="lw-icon-btn h-8 w-8"
             >
-              <LogOut className="h-5 w-5" />
+              <LogOut className="h-4 w-4" />
             </button>
           </div>
         ) : (
-          <button
-            onClick={handleLogout}
-            className="flex w-full items-center rounded-md px-3 py-2 text-sm font-medium text-white transition-colors duration-200 ease-in-out !bg-transparent hover:!bg-transparent hover:text-[var(--brand-menu-color)]"
-          >
-            <LogOut className="mr-3 h-5 w-5" />
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLogout}
+              className="lw-nav-link flex-1"
+            >
+              <span className="lw-nav-icon"><LogOut className="h-[18px] w-[18px]" strokeWidth={1.85} /></span>
+              <span className="truncate">Logout</span>
+            </button>
+            <ThemeToggle compact />
+          </div>
         )}
       </div>
     </div>
@@ -393,11 +399,10 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
             aria-hidden="true"
           />
           {/* Drawer — always full width on mobile */}
-          <div className="relative flex h-full w-[min(100vw,16rem)] max-w-[85vw] flex-col text-white shadow-xl"
-            style={{ backgroundColor: 'var(--brand-sidebar-color)' }}
+          <div className="lw-sidebar relative flex h-full w-[min(100vw,17rem)] max-w-[85vw] flex-col text-[var(--brand-text-primary-color)] shadow-float"
           >
             <div
-              className="flex h-16 flex-shrink-0 items-center justify-between border-b px-4"
+              className="flex h-14 flex-shrink-0 items-center justify-between border-b px-4"
               style={{ borderColor: 'var(--brand-sidebar-border-color)' }}
             >
               <Link href="/dashboard" aria-label="Go to dashboard" className="inline-flex h-full flex-1 items-center justify-start pr-2" onClick={onMobileClose}>
@@ -407,14 +412,14 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                 <NotificationBell />
                 <button
                   onClick={onMobileClose}
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+                  className="lw-icon-btn flex min-h-[44px] min-w-[44px]"
                   aria-label="Close menu"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
-            <nav className="flex-1 overflow-y-auto space-y-0.5 px-2 py-4">
+            <nav className="flex-1 overflow-y-auto space-y-0.5 px-2.5 py-3">
               {navigation.map((item) => {
                 const isActive =
                   item.href === '/dashboard'
@@ -425,13 +430,12 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                     key={item.name}
                     href={item.href}
                     onClick={onMobileClose}
-                    className={cn(
-                      'group flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 !bg-transparent hover:!bg-transparent',
-                      isActive ? 'text-[var(--brand-menu-color)]' : 'text-white hover:text-[var(--brand-menu-color)]'
-                    )}
+                    className={cn('lw-nav-link group min-h-[44px]', isActive ? 'is-active' : '')}
                   >
-                    <item.icon className="mr-3 h-5 w-5 flex-shrink-0" />
-                    <span className="flex flex-1 items-center justify-between">
+                    <span className="lw-nav-icon">
+                      <item.icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.85} />
+                    </span>
+                    <span className="flex min-w-0 flex-1 items-center justify-between truncate">
                       {item.name}
                       <NewBadge items={unreadByNavItem(item.name)} />
                     </span>
@@ -453,14 +457,15 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                 return navItem
               })}
             </nav>
-            <div className="flex-shrink-0 border-t p-4" style={{ borderColor: 'var(--brand-sidebar-border-color)' }}>
+            <div className="flex flex-shrink-0 items-center gap-2 border-t p-3" style={{ borderColor: 'var(--brand-sidebar-border-color)' }}>
               <button
                 onClick={handleLogout}
-                className="flex w-full items-center rounded-md px-3 py-2 text-sm font-medium text-white !bg-transparent hover:!bg-transparent hover:text-[var(--brand-menu-color)]"
+                className="lw-nav-link min-h-[44px] flex-1"
               >
-                <LogOut className="mr-3 h-5 w-5" />
-                Logout
+                <span className="lw-nav-icon"><LogOut className="h-[18px] w-[18px]" strokeWidth={1.85} /></span>
+                <span className="truncate">Logout</span>
               </button>
+              <ThemeToggle compact />
             </div>
           </div>
         </div>

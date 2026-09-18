@@ -42,7 +42,7 @@ export function ViewModeSelector({
   const classes = sizeClasses[size]
 
   return (
-    <div className={cn('inline-flex items-center rounded-md border bg-background p-0.5', classes.wrapper)}>
+    <div className={cn('inline-flex items-center rounded-lg border border-line bg-panel-2 p-0.5', classes.wrapper)}>
       {allowedModes.map((mode) => {
         const meta = modeMeta[mode]
         const Icon = meta.icon
@@ -54,9 +54,9 @@ export function ViewModeSelector({
             type="button"
             onClick={() => onChange(mode)}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-sm transition-colors',
+              'inline-flex items-center gap-1.5 rounded-md transition-colors',
               classes.item,
-              active ? 'bg-[#2E4A59] text-white' : 'text-muted-foreground active:bg-muted sm:hover:bg-muted sm:hover:text-foreground'
+              active ? 'bg-primary text-primary-foreground shadow-panel' : 'text-dim active:bg-panel-3 sm:hover:bg-panel-3 sm:hover:text-ink'
             )}
             aria-pressed={active}
             title={meta.label}

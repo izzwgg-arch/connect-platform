@@ -192,7 +192,7 @@ export default function PaymentHistoryPage() {
     if (!canManagePayments) return
     const confirmed = window.confirm(
       `Delete payment ${row.id} (${row.currency} ${Number(row.amount || 0).toFixed(2)})?\n\n` +
-        'This removes it from TrimPro and recalculates the invoice. Gateway/QuickBooks may still need a separate void/refund.'
+        'This removes it from LoopCom Works and recalculates the invoice. Gateway/QuickBooks may still need a separate void/refund.'
     )
     if (!confirmed) return
 

@@ -123,7 +123,7 @@ export async function POST(
       (emailBranding as { businessName?: string; companyName?: string } | null)?.businessName ||
       (emailBranding as { companyName?: string } | null)?.companyName ||
       pdfBrand.businessName ||
-      'Trim Pro'
+      'LoopCom Works'
 
     const senderUser = await prisma.user.findFirst({
       where: { id: user.id, tenantId: user.tenantId },

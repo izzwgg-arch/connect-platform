@@ -68,7 +68,7 @@ export function WaterfallChart({ data, title, height = 300 }: WaterfallChartProp
           {chartData.map((entry, index) => (
             <Cell
               key={`cell-${index}`}
-              fill={entry.isAdjustment ? (entry.value >= 0 ? '#10b981' : '#ef4444') : '#2E4A59'}
+              fill={entry.isAdjustment ? (entry.value >= 0 ? '#10b981' : '#ef4444') : 'var(--brand-primary-color)'}
             />
           ))}
         </Bar>

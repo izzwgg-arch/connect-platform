@@ -2,9 +2,9 @@ import type { Metadata } from 'next'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export const metadata: Metadata = {
-  title: 'TrimPro – Privacy Policy',
+  title: 'LoopCom Works – Privacy Policy',
   description:
-    'TrimPro privacy policy describing what data we collect, how we use it, and your rights.',
+    'LoopCom Works privacy policy describing what data we collect, how we use it, and your rights.',
 }
 
 const EFFECTIVE_DATE = '2026-02-16'
@@ -16,7 +16,7 @@ export default function PrivacyPolicyPage() {
         <h1 className="text-3xl font-bold text-gray-900">Privacy Policy</h1>
         <p className="text-sm text-muted-foreground">Effective date: {EFFECTIVE_DATE}</p>
         <p className="text-gray-700">
-          This Privacy Policy explains how TrimPro (“TrimPro”, “we”, “us”) collects, uses,
+          This Privacy Policy explains how Loopcom LLC (“Loopcom LLC”, “we”, “us”) collects, uses,
           and shares information when you use our web application and mobile field app
           (collectively, the “Services”).
         </p>
@@ -68,7 +68,7 @@ export default function PrivacyPolicyPage() {
         </CardHeader>
         <CardContent className="space-y-3 text-gray-700">
           <p>
-            If you use the TrimPro Field mobile app, you may be prompted to grant device permissions.
+            If you use the LoopCom Works mobile app, you may be prompted to grant device permissions.
             You can typically enable/disable these in your device settings.
           </p>
           <ul className="list-disc pl-5 space-y-1">
@@ -166,8 +166,8 @@ export default function PrivacyPolicyPage() {
         <CardContent className="text-gray-700">
           <p>
             Questions about this policy? Contact us at{' '}
-            <a className="text-[#2E4A59] hover:underline" href="mailto:support@trimprony.com">
-              support@trimprony.com
+            <a className="text-primary hover:underline" href="mailto:support@loopcom.net">
+              support@loopcom.net
             </a>
             .
           </p>

@@ -183,7 +183,7 @@ export async function POST(request: NextRequest) {
 
       if (emailSecrets) {
         const html = buildInviteEmailHtml(firstName, setPasswordUrl, apkDownloadUrl, brandLogoUrl)
-        const subject = 'Welcome to TrimPro - Create Your Password'
+        const subject = 'Welcome to LoopCom Works - Create Your Password'
         const sendResult = await testEmailProvider(emailSecrets, email, subject, html)
         if (!sendResult.success) {
           emailError = sendResult.error || sendResult.message || 'Failed to send invite email'

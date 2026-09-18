@@ -89,7 +89,7 @@ export async function POST(
       (emailBranding as any)?.businessName ||
       (emailBranding as any)?.companyName ||
       pdfBrand.businessName ||
-      'Trim Pro'
+      'LoopCom Works'
     const clientName =
       creditMemo.client?.companyName || creditMemo.client?.name || 'Customer'
 

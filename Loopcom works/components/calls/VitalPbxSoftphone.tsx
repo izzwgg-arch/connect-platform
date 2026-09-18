@@ -184,7 +184,7 @@ export function VitalPbxSoftphone({
         uri,
         authorizationUsername: config.extension,
         authorizationPassword: config.password,
-        displayName: config.displayName || 'Trim Pro',
+        displayName: config.displayName || 'LoopCom Works',
         transportOptions: { server: config.wssUrl },
         sessionDescriptionHandlerFactoryOptions: {
           peerConnectionConfiguration: {

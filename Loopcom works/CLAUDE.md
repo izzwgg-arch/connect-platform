@@ -235,7 +235,7 @@ Hard guardrails that carry over regardless of server:
 ## Other standing rules
 - Schema changes go through `prisma/schema.prisma` + a migration under `prisma/migrations/`
   (the repo also uses `db push` locally; production must use migrations).
-- Tests: `vitest` on `tests/*.test.ts` (no npm script yet — run `npx vitest run`).
+- Tests: the suites are `node:test` — run `npx tsx --test tests/*.test.ts` (NOT vitest; `qbo-line-amounts.test.ts` alone imports vitest and fails without it).
   Record every run in `TESTS_RUN.md`.
 - Branding is data-driven (`BrandingSettings` + `components/branding/BrandingProvider.tsx`
   → `--brand-*` CSS vars). The reskin goes through that layer, not through component edits.
@@ -245,7 +245,7 @@ Hard guardrails that carry over regardless of server:
 
 ## HANDOFF INDEX — one line per area (newest first; add new ones at the top)
 
-- 2026-09-18 · LOOPCOM WORKS — folder moved into the Connect repo; inventory (8 audits), architecture (SSO code exchange, `/api/v1/works/*`, agent third identity branch, webhook dispatcher, Docker deploy) and 30-board mockups DONE, nothing built, 13 CRITICAL security findings to fix first → Connect repo `docs/ai-context/claude-md-sections/2026-09-18-loopcom-works-audit-architecture-mockups.md`
+- 2026-09-18 · LOOPCOM WORKS — folder moved into the Connect repo; inventory (8 audits), architecture and 30-board mockups DONE; **the looks-only reskin + rebrand is BUILT** (palette-by-CSS-vars in `tailwind.config.ts` + `lib/branding/loopcom-palette.ts`, portal tokens/shell/dark mode in `app/globals.css`, Signal Core assets in `public/brand/`, 59-file string sweep, mobile rebranded) and click-through-proven on a prod build (`tests/e2e/reskin-clicks.js`); run `npm run dev:3001`; ⛔ prod build redirects localhost → use `http://works.localtest.me:3002`; 13 CRITICAL security findings still to fix (next phase) → Connect repo `docs/ai-context/claude-md-sections/2026-09-18-loopcom-works-audit-architecture-mockups.md`
 
 - 2026-09-17 · PROJECT RULES ADOPTED FROM CONNECT + LOOPCOM JOINT-PROJECT DECISION (two servers, API between, Loopcom UI is the front door; separate repo pending; `loopcom` branch; sync hook) → `2026-09-17-project-rules-adopted-from-connect.md`
 - 2026-09-02 · LOOPCOM RESKIN MOCKUPS (light + dark, matched to the Loop Customer Portal; 13 artboards; approved look, NOT built) → `2026-09-02-loopcom-reskin-mockups.md`

@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="Trim Pro">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="LoopCom Works">
   <rect width="1200" height="360" fill="#2E4A59"/>
   <g fill="#E6C98B" font-family="Avenir Next, Montserrat, Poppins, Inter, Arial, Helvetica, sans-serif">
-    <text x="76" y="244" font-size="186" font-weight="800" letter-spacing="0.25">TrimPro</text>
+    <text x="76" y="244" font-size="130" font-weight="800" letter-spacing="0.25">LoopCom Works</text>
   </g>
   <g fill="#ffffff" transform="translate(900,62)">
     <rect x="0" y="0" width="220" height="18" rx="4"/>

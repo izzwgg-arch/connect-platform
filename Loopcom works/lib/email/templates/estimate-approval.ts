@@ -41,8 +41,8 @@ export function buildEstimateApprovalEmail(opts: EstimateApprovalEmailOptions): 
     message,
     validUntil,
     logoUrl,
-    companyName = 'TrimPro',
-    supportEmail = 'support@trimpro.app',
+    companyName = 'LoopCom Works',
+    supportEmail = 'support@loopcom.net',
   } = opts
 
   const bodyInner = [

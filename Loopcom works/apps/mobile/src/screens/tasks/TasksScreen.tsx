@@ -264,7 +264,7 @@ export function TasksScreen({ navigation }: Props) {
               }}
               disabled={saveLocalDraft.isPending}
             >
-              <Ionicons name="add" size={24} color="#E6C98B" />
+              <Ionicons name="add" size={24} color="#2563eb" />
             </Pressable>
           )}
         </View>
@@ -608,7 +608,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filterChipTextActive: {
-    color: '#E6C98B',
+    color: '#2563eb',
   },
   createButton: {
     width: 40,
@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     ...typography.caption,
-    color: '#E6C98B',
+    color: '#2563eb',
     fontWeight: '700',
   },
   disabledButton: {

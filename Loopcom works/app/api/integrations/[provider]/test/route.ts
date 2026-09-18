@@ -51,8 +51,8 @@ export async function POST(
         result = await testEmailProvider(
           secrets,
           testParams.to || user.email,
-          'Trim Pro Test Email',
-          '<p>This is a test email from Trim Pro. If you received this, your email integration is working correctly.</p>',
+          'LoopCom Works Test Email',
+          '<p>This is a test email from LoopCom Works. If you received this, your email integration is working correctly.</p>',
           { skipAdminCc: true }
         )
         break
@@ -61,21 +61,21 @@ export async function POST(
         if (!testParams.to) {
           return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
         }
-        result = await testVoipMsSms(secrets, testParams.to, testParams.message || 'Trim Pro SMS test')
+        result = await testVoipMsSms(secrets, testParams.to, testParams.message || 'LoopCom Works SMS test')
         break
 
       case 'whatsapp':
         if (!testParams.to) {
           return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
         }
-        result = await testWhatsApp(secrets, testParams.to, testParams.message || 'Trim Pro WhatsApp test')
+        result = await testWhatsApp(secrets, testParams.to, testParams.message || 'LoopCom Works WhatsApp test')
         break
 
       case 'webwhatis':
         if (!testParams.to) {
           return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
         }
-        result = await testWebWhatis(secrets, testParams.to, testParams.message || 'Trim Pro Web.whatis test')
+        result = await testWebWhatis(secrets, testParams.to, testParams.message || 'LoopCom Works Web.whatis test')
         break
 
       case 'quickbooks':

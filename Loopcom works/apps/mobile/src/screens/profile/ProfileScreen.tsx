@@ -224,7 +224,7 @@ export function ProfileScreen({ navigation }: Props) {
       </View>
       <View style={styles.card}>
         <Text style={styles.subtitle}>Sharing</Text>
-        <Text style={styles.row}>Share photos, videos, and documents into TrimPro from other apps.</Text>
+        <Text style={styles.row}>Share photos, videos, and documents into LoopCom Works from other apps.</Text>
         <Pressable style={styles.secondaryButton} onPress={() => navigation.navigate('ShareIngress')}>
           <Text style={styles.secondaryButtonText}>Test Share Ingress</Text>
         </Pressable>

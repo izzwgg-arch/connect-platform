@@ -528,7 +528,7 @@ export default function EstimatesPage() {
                         handleConvertToJob(estimate)
                       }}
                       disabled={convertingId === estimate.id}
-                      className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                      className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                       title={estimate.job ? 'Open Job' : 'Convert to Job'}
                     >
                       <Briefcase className="h-3 w-3" />
@@ -692,7 +692,7 @@ export default function EstimatesPage() {
                       handleConvertToJob(estimate)
                     }}
                     disabled={convertingId === estimate.id}
-                    className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                    className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                   >
                     <Briefcase className="h-3 w-3" />
                   </Button>

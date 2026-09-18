@@ -50,7 +50,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <p className="mt-4 text-dim">Loading…</p>
         </div>
       </div>
     )
@@ -68,11 +68,11 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
 
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Top bar — always visible on all screen sizes */}
-        <header className="h-14 flex items-center gap-3 px-4 bg-white border-b border-gray-200 shrink-0 z-40">
+        <header className="lw-topbar h-14 flex items-center gap-3 px-4 shrink-0 z-40">
           {/* Hamburger — mobile only */}
           <button
             onClick={() => setMobileMenuOpen(true)}
-            className="lg:hidden flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 shrink-0"
+            className="lw-icon-btn lg:hidden flex min-h-[44px] min-w-[44px] shrink-0"
             aria-label="Open menu"
           >
             <Menu className="h-5 w-5" />
@@ -94,8 +94,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               <div className="flex-1">
                 <RoutePermissionGuard>{children}</RoutePermissionGuard>
               </div>
-              <footer className="mt-10 border-t border-gray-200 pt-4 text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-3">
-                <div>© {new Date().getFullYear()} TrimPro</div>
+              <footer className="mt-10 border-t border-line pt-4 text-xs text-dim flex flex-wrap items-center justify-between gap-3">
+                <div>© {new Date().getFullYear()} Loopcom LLC · LoopCom Works</div>
                 <div className="flex items-center gap-4">
                   <Link href="/privacy" className="hover:underline">
                     Privacy Policy
@@ -103,8 +103,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                   <Link href="/terms" className="hover:underline">
                     Terms
                   </Link>
-                  <a className="hover:underline" href="mailto:support@trimprony.com">
-                    support@trimprony.com
+                  <a className="hover:underline" href="mailto:support@loopcom.net">
+                    support@loopcom.net
                   </a>
                 </div>
               </footer>

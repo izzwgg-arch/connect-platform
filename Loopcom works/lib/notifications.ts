@@ -108,7 +108,7 @@ async function createAndSendNotification(params: CreateNotificationParams): Prom
   const rateLimited = await shouldCollapseByRateLimit(params.tenantId, params.userId)
 
   const title = rateLimited ? 'You have new updates' : params.title
-  const message = rateLimited ? 'Open TrimPro to review your latest updates.' : params.message || null
+  const message = rateLimited ? 'Open LoopCom Works to review your latest updates.' : params.message || null
   const dedupeKey =
     params.dedupeKey ||
     makeDedupeKey({

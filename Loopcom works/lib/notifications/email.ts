@@ -35,7 +35,7 @@ export async function sendStaffNotificationEmail(params: {
       companyName:
         (branding as any)?.invoiceBusinessName ||
         (branding as any)?.emailFromName ||
-        'TrimPro',
+        'LoopCom Works',
       logoUrl:
         (branding as any)?.emailLogoUrl ||
         (branding as any)?.webLogoUrl ||

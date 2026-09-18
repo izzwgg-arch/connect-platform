@@ -233,7 +233,7 @@ export default function CallsPage() {
           <CardHeader>
             <CardTitle>Softphone</CardTitle>
             <CardDescription>
-              Connect Trim Pro to VitalPBX to make/receive calls in the browser (WebRTC).
+              Connect LoopCom Works to VitalPBX to make/receive calls in the browser (WebRTC).
             </CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-between">

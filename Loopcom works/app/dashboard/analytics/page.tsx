@@ -25,7 +25,7 @@ import { formatCurrency } from '@/lib/utils'
 import { EmptyState } from '@/components/charts/EmptyState'
 import { WaterfallChart } from '@/components/charts/WaterfallChart'
 
-const COLORS = ['#2E4A59', '#00C49F', '#FFBB28', '#FF8042', '#2E4A59']
+const COLORS = ['var(--brand-primary-color)', '#00C49F', '#FFBB28', '#FF8042', 'var(--brand-primary-color)']
 
 interface AnalyticsData {
   kpis: {
@@ -309,7 +309,7 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip formatter={(value: number) => formatCurrency(value)} />
                     <Legend />
-                    <Line type="monotone" dataKey="revenue" stroke="#2E4A59" name="Revenue" />
+                    <Line type="monotone" dataKey="revenue" stroke="var(--brand-primary-color)" name="Revenue" />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -333,7 +333,7 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="jobsCreated" fill="#2E4A59" name="Created" />
+                    <Bar dataKey="jobsCreated" fill="var(--brand-primary-color)" name="Created" />
                     <Bar dataKey="jobsCompleted" fill="#00C49F" name="Completed" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -353,7 +353,7 @@ export default function AnalyticsPage() {
               {funnel.totalLeads > 0 || funnel.jobsCreated > 0 || funnel.invoicesCreated > 0 ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-4 gap-4">
-                    <div className="text-center p-4 bg-[#2E4A59]/10 rounded-lg">
+                    <div className="text-center p-4 bg-primary/10 rounded-lg">
                       <div className="text-2xl font-bold">{funnel.totalLeads}</div>
                       <div className="text-sm text-gray-600">Requests</div>
                     </div>
@@ -459,7 +459,7 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="jobsCreated" stroke="#2E4A59" name="Created" />
+                    <Line type="monotone" dataKey="jobsCreated" stroke="var(--brand-primary-color)" name="Created" />
                     <Line type="monotone" dataKey="jobsCompleted" stroke="#00C49F" name="Completed" />
                   </LineChart>
                 </ResponsiveContainer>
@@ -524,7 +524,7 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip formatter={(value: number) => formatCurrency(value)} />
                     <Legend />
-                    <Line type="monotone" dataKey="revenue" stroke="#2E4A59" name="Revenue" />
+                    <Line type="monotone" dataKey="revenue" stroke="var(--brand-primary-color)" name="Revenue" />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -554,7 +554,7 @@ export default function AnalyticsPage() {
                       <XAxis dataKey="name" />
                       <YAxis />
                       <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                      <Bar dataKey="value" fill="#2E4A59" />
+                      <Bar dataKey="value" fill="var(--brand-primary-color)" />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -574,7 +574,7 @@ export default function AnalyticsPage() {
               {funnel.totalLeads > 0 ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-4 gap-4">
-                    <div className="text-center p-4 bg-[#2E4A59]/10 rounded-lg">
+                    <div className="text-center p-4 bg-primary/10 rounded-lg">
                       <div className="text-2xl font-bold">{funnel.totalLeads}</div>
                       <div className="text-sm text-gray-600">Requests</div>
                     </div>
@@ -611,7 +611,7 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="leadsCreated" stroke="#2E4A59" name="Created" />
+                    <Line type="monotone" dataKey="leadsCreated" stroke="var(--brand-primary-color)" name="Created" />
                     <Line type="monotone" dataKey="leadsConverted" stroke="#00C49F" name="Converted" />
                   </LineChart>
                 </ResponsiveContainer>

@@ -696,7 +696,7 @@ export default function PublicPaymentPage() {
             </p>
           </div>
         ) : (
-        <div className="mb-4 rounded-2xl px-6 py-6 text-center" style={{ background: '#243f53' }}>
+        <div className="mb-4 rounded-2xl px-6 py-6 text-center" style={{ background: '#141f2b' }}>
           <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#8cb4cf' }}>Balance Due</p>
           <p className="mt-2 text-5xl font-extrabold tracking-tight text-white">
             {toCurrency(selectedTotal || invoice.balance)}
@@ -720,7 +720,7 @@ export default function PublicPaymentPage() {
           className={`mb-4 flex cursor-pointer items-start gap-3 rounded-2xl border-2 p-4 transition-colors ${
             approved ? 'border-slate-200 bg-white' : 'border-slate-200 bg-white'
           }`}
-          style={approved ? { borderColor: '#243f53', backgroundColor: 'rgba(36,63,83,0.06)' } : undefined}
+          style={approved ? { borderColor: '#141f2b', backgroundColor: 'rgba(36,63,83,0.06)' } : undefined}
           onClick={() => setApproved((a) => !a)}
         >
           <Checkbox
@@ -819,7 +819,7 @@ export default function PublicPaymentPage() {
                   <div className="rounded-xl bg-slate-50 p-3">
                     <p className="text-xs font-semibold text-slate-700">Pay a custom total</p>
                     <p className="mt-0.5 text-xs text-slate-500">
-                      Applies to selected invoices only. Pays the current invoice first, then works down the list. Any invoice not fully covered is marked partial in Trim Pro and QuickBooks.
+                      Applies to selected invoices only. Pays the current invoice first, then works down the list. Any invoice not fully covered is marked partial in LoopCom Works and QuickBooks.
                     </p>
                     <div className="mt-2 flex gap-2">
                       <input

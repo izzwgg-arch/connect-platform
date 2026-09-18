@@ -77,7 +77,8 @@ test('invoice snapshot takes precedence over active branding style', () => {
 
 test('resolveEmailTheme falls back to defaults when unset', () => {
   const theme = resolveEmailTheme(null)
-  assert.equal(theme.button, '#12344d')
+  // LoopCom Works default button = the Loopcom accent-2 (2026-09-18 rebrand)
+  assert.equal(theme.button, '#2563eb')
   assert.equal(theme.background, '#ffffff')
 })
 

@@ -34,7 +34,7 @@ export const API_BASE_URL = resolveApiBaseUrl()
 
 export const BRAND = {
   primary: colors.brandPrimary,
-  accent: '#E6C98B',
+  accent: '#2563eb',
   bg: colors.background,
   white: colors.surface,
   text: colors.textPrimary,

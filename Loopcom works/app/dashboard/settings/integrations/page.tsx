@@ -146,7 +146,7 @@ export default function IntegrationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Integrations</h1>
-          <p className="mt-1 text-gray-600">Connect external services to enhance Trim Pro</p>
+          <p className="mt-1 text-gray-600">Connect external services to enhance LoopCom Works</p>
         </div>
         <div className="flex gap-2">
           <Link href="/dashboard/settings/email-integrations">

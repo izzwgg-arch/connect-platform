@@ -242,7 +242,7 @@ export default function IntegrationProviderPage() {
 
   const handleQuickBooksImport = async () => {
     if (importingQbo) return
-    if (!confirm('Import ALL clients and ALL items from QuickBooks into TrimPro? This may take a minute.')) {
+    if (!confirm('Import ALL clients and ALL items from QuickBooks into LoopCom Works? This may take a minute.')) {
       return
     }
 
@@ -299,7 +299,7 @@ export default function IntegrationProviderPage() {
 
   const handleQuickBooksImportOpenInvoices = async () => {
     if (importingQboInvoices) return
-    if (!confirm('Import open/unpaid invoices from QuickBooks into TrimPro?')) {
+    if (!confirm('Import open/unpaid invoices from QuickBooks into LoopCom Works?')) {
       return
     }
 
@@ -522,7 +522,7 @@ export default function IntegrationProviderPage() {
           return
         }
         body.to = testPhone
-        body.message = 'Trim Pro test message'
+        body.message = 'LoopCom Works test message'
       } else if (provider === 'email') {
         body.to = testEmail
       }
@@ -1005,7 +1005,7 @@ export default function IntegrationProviderPage() {
                         QuickBooks open invoices scanned (unpaid in QB):{' '}
                         <span className="font-medium text-gray-800">{importResult.qboOpenInvoicesScanned ?? 0}</span>
                         {' · '}
-                        Already linked in TrimPro:{' '}
+                        Already linked in LoopCom Works:{' '}
                         <span className="font-medium text-gray-800">{importResult.openInvoicesAlreadyInTrimPro ?? 0}</span>
                       </div>
                       <div className="mt-0.5">

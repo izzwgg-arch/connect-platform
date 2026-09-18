@@ -128,7 +128,7 @@ export function IssuesScreen({ navigation }: Props) {
               onPress={() => setShowCreateForm((prev) => !prev)}
               disabled={createIssueMutation.isPending}
             >
-              <Ionicons name="add" size={24} color="#E6C98B" />
+              <Ionicons name="add" size={24} color="#2563eb" />
             </Pressable>
           )}
         </View>
@@ -465,7 +465,7 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     ...typography.caption,
-    color: '#E6C98B',
+    color: '#2563eb',
     fontWeight: '700',
   },
   disabledButton: {

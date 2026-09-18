@@ -40,7 +40,7 @@ export default async function PublicQboAchPayPage({
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-sm text-gray-500">{inv.tenant?.name || 'TrimPro'}</div>
+            <div className="text-sm text-gray-500">{inv.tenant?.name || 'LoopCom Works'}</div>
             <h1 className="mt-1 text-2xl font-bold text-gray-900">Pay Invoice</h1>
             <div className="mt-1 text-sm text-gray-600">
               {inv.invoiceNumber} • {inv.title}

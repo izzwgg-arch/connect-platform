@@ -139,7 +139,7 @@ export async function sendInvoiceEmailForInvoice(params: {
     companyName:
       (emailBranding as { businessName?: string; companyName?: string } | null)?.businessName ||
       (emailBranding as { companyName?: string } | null)?.companyName ||
-      'TrimPro',
+      'LoopCom Works',
   })
 
   const pdfBranding = await getPdfBranding(tenantId)

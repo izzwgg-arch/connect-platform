@@ -67,7 +67,7 @@ export async function POST(
       const sendResult = await testEmailProvider(
         emailSecrets,
         targetUser.email,
-        'Welcome to TrimPro - Create Your Password',
+        'Welcome to LoopCom Works - Create Your Password',
         html
       )
       if (!sendResult.success) {

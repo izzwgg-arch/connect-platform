@@ -159,7 +159,7 @@ export default function QuickBooksEstimateImportPage() {
                 To find the ID: in QuickBooks go to <strong>Sales → Estimates</strong>, open the estimate, and copy the number from the URL — e.g. <code>…/app/estimate?txnId=<strong>1234</strong></code> → enter <strong>1234</strong>.
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                The import checks local mappings first. If that estimate is already in Trim Pro, the import is blocked instead of creating a duplicate.
+                The import checks local mappings first. If that estimate is already in LoopCom Works, the import is blocked instead of creating a duplicate.
               </p>
             </div>
 
@@ -206,7 +206,7 @@ export default function QuickBooksEstimateImportPage() {
                 </CardTitle>
                 <CardDescription className={result.success ? 'text-green-700' : 'text-red-700'}>
                   {result.success
-                    ? 'The requested QuickBooks estimate was imported into Trim Pro.'
+                    ? 'The requested QuickBooks estimate was imported into LoopCom Works.'
                     : result.error}
                 </CardDescription>
               </div>
@@ -239,7 +239,7 @@ export default function QuickBooksEstimateImportPage() {
 
             {result.success && result.placeholderClientCreated ? (
               <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                The QuickBooks customer was not mapped locally, so Trim Pro created a placeholder client to keep this import manual and one-off. No broad customer sync was run.
+                The QuickBooks customer was not mapped locally, so LoopCom Works created a placeholder client to keep this import manual and one-off. No broad customer sync was run.
               </div>
             ) : null}
           </CardContent>

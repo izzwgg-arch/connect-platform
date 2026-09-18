@@ -50,9 +50,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       from: `${integration.fromName || integration.displayName} <${integration.fromEmail}>`,
       to: toEmail,
       replyTo: integration.replyToEmail || undefined,
-      subject: `TrimPro test: ${integration.displayName}`,
-      html: '<p>This is a test email from your TrimPro Email Integration.</p>',
-      text: 'This is a test email from your TrimPro Email Integration.',
+      subject: `LoopCom Works test: ${integration.displayName}`,
+      html: '<p>This is a test email from your LoopCom Works Email Integration.</p>',
+      text: 'This is a test email from your LoopCom Works Email Integration.',
     })
 
     await db.emailIntegration.update({

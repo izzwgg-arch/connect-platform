@@ -27,16 +27,16 @@ export function buildStatementEmail(opts: StatementEmailOptions): string {
     totalOutstanding,
     viewUrl,
     hasPdf,
-    companyName = 'TrimPro',
+    companyName = 'LoopCom Works',
   } = opts
 
   const bodyInner = [
     buildEmailParagraph(`Hi ${escapeHtml(clientName)},`, { marginBottom: 10, bold: true }),
     `<p class="tp-body-text" style="margin:0 0 22px;font-size:15px;line-height:24px;color:#d5e1f1;mso-line-height-rule:exactly;">Please find your account statement${
-      hasPdf ? ' <strong style="color:#f0c974;">attached as a PDF</strong>' : ''
-    }. You currently have <strong style="color:#f0c974;">${openCount} open invoice${
+      hasPdf ? ' <strong style="color:#3b82f6;">attached as a PDF</strong>' : ''
+    }. You currently have <strong style="color:#3b82f6;">${openCount} open invoice${
       openCount !== 1 ? 's' : ''
-    }</strong> with a total outstanding balance of <strong style="color:#f0c974;">${escapeHtml(totalOutstanding)}</strong>.</p>`,
+    }</strong> with a total outstanding balance of <strong style="color:#3b82f6;">${escapeHtml(totalOutstanding)}</strong>.</p>`,
     buildEmailButtonGroup([{ label: 'View Statement', href: viewUrl }]),
     buildEmailParagraph(
       'If you have any questions about your account or would like to arrange payment, please contact us.',

@@ -603,7 +603,7 @@ export default function JobsPage() {
                           e.stopPropagation()
                           router.push(`/dashboard/estimates/new?jobId=${job.id}&clientId=${job.client.id}`)
                         }}
-                        className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                        className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                         title="New Estimate"
                       >
                         <Plus className="h-3 w-3" />
@@ -854,7 +854,7 @@ export default function JobsPage() {
                       e.stopPropagation()
                       router.push(`/dashboard/estimates/new?jobId=${job.id}&clientId=${job.client.id}`)
                     }}
-                    className="h-7 px-2 bg-transparent hover:bg-transparent text-[#2E4A59] hover:text-[#2E4A59] border border-[#2E4A59]/30 hover:border-[#2E4A59]"
+                    className="h-7 px-2 bg-transparent hover:bg-transparent text-primary hover:text-primary border border-primary/30 hover:border-primary"
                     title="New Estimate"
                   >
                     <Plus className="h-3 w-3" />

@@ -15,7 +15,7 @@ const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY
 const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN
 const AWS_SES_REGION = process.env.AWS_SES_REGION || 'us-east-1'
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@trimpro.com'
-const FROM_NAME = process.env.FROM_NAME || 'Trim Pro'
+const FROM_NAME = process.env.FROM_NAME || 'LoopCom Works'
 
 function formatEmailDate(value: Date | number | string) {
   const date = value instanceof Date ? value : new Date(value)
@@ -207,7 +207,7 @@ export async function sendInviteEmail(
   logoUrl?: string | null
 ): Promise<void> {
   const emailService = new EmailService()
-  const subject = 'Welcome to TrimPro - Create Your Password'
+  const subject = 'Welcome to LoopCom Works - Create Your Password'
   const html = buildInviteEmailHtml(firstName, setPasswordUrl, apkDownloadUrl, logoUrl)
   const text = buildInviteEmailText(firstName, setPasswordUrl, apkDownloadUrl)
 
@@ -234,7 +234,7 @@ export function buildInviteEmailHtml(
     ? `<img src="${safeLogoUrl}" alt="Brand logo" width="200"
          style="display:inline-block;height:auto;max-height:72px;width:auto;max-width:220px;border:0;margin-bottom:6px;"
          onerror="this.style.display='none'" />`
-    : `<div style="font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#f8dea4;margin-bottom:10px;">TrimPro</div>`
+    : `<div style="font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#4ab2ff;margin-bottom:10px;">LoopCom Works</div>`
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" data-tp-lock-colors="1">
 <head>
@@ -243,7 +243,7 @@ export function buildInviteEmailHtml(
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="color-scheme" content="light only" />
   <meta name="supported-color-schemes" content="light only" />
-  <title>Welcome to TrimPro</title>
+  <title>Welcome to LoopCom Works</title>
   <style>
     :root { color-scheme: dark; supported-color-schemes: dark; }
     @media only screen and (max-width:600px){
@@ -262,7 +262,7 @@ export function buildInviteEmailHtml(
       .headline { color:#1f2937 !important; }
       .hero-meta { color:#475569 !important; }
       .body-text { color:#1f2937 !important; }
-      .status-badge { background-color:#e5e7eb !important; color:#111827 !important; border-color:#f8dea4 !important; }
+      .status-badge { background-color:#e5e7eb !important; color:#111827 !important; border-color:#4ab2ff !important; }
       .support-card { background-color:#f1f5f9 !important; border-color:#d5dee8 !important; }
       .support-text, .support-strong { color:#111827 !important; }
       .foot-cell { background-color:#f8fafc !important; border-top-color:#e5e7eb !important; }
@@ -275,9 +275,9 @@ export function buildInviteEmailHtml(
     <tr>
       <td align="center" valign="top">
         <table role="presentation" class="main-card" cellpadding="0" cellspacing="0" border="0"
-          style="max-width:580px;width:100%;background-color:#243f53;border-radius:16px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.4),0 2px 8px rgba(0,0,0,0.25);">
+          style="max-width:580px;width:100%;background-color:#141f2b;border-radius:16px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.4),0 2px 8px rgba(0,0,0,0.25);">
           <tr>
-            <td style="background-color:#243f53;padding:34px 36px 26px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
+            <td style="background-color:#141f2b;padding:34px 36px 26px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
               ${headerLogoBlock}
               <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:2.2px;text-transform:uppercase;color:#f5e3aa;">
                 New Team Invitation
@@ -286,11 +286,11 @@ export function buildInviteEmailHtml(
           </tr>
           <tr>
             <td class="hero-pad" style="padding:30px 40px 22px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
-              <div class="status-badge" style="display:inline-block;background-color:#334155;border:1px solid #f8dea4;border-radius:999px;padding:5px 16px;margin-bottom:18px;color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.3px;">
+              <div class="status-badge" style="display:inline-block;background-color:#334155;border:1px solid #4ab2ff;border-radius:999px;padding:5px 16px;margin-bottom:18px;color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.3px;">
                 Account Activation
               </div>
-              <h1 class="headline" style="margin:0 0 10px;font-size:28px;font-weight:800;line-height:1.2;letter-spacing:-0.4px;color:#f8dea4;">
-                Welcome to TrimPro, ${escapeHtml(safeName)}
+              <h1 class="headline" style="margin:0 0 10px;font-size:28px;font-weight:800;line-height:1.2;letter-spacing:-0.4px;color:#4ab2ff;">
+                Welcome to LoopCom Works, ${escapeHtml(safeName)}
               </h1>
               <p class="hero-meta" style="margin:0;font-size:13px;font-weight:600;color:#c4d5e9;">
                 Invitation sent ${escapeHtml(sentDisplay)}
@@ -300,7 +300,7 @@ export function buildInviteEmailHtml(
           <tr>
             <td class="body-pad" style="padding:26px 40px;">
               <p class="body-text" style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#d5e1f1;">
-                Create your password to activate your account, then sign in to start using TrimPro.
+                Create your password to activate your account, then sign in to start using LoopCom Works.
               </p>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                 style="background-color:#1e3345;border:1px solid #46627f;border-radius:12px;overflow:hidden;margin-bottom:22px;">
@@ -320,8 +320,8 @@ export function buildInviteEmailHtml(
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:22px;">
                 <tr>
                   <td align="center">
-                    <a href="${safeSetPasswordUrl}" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#f0c974 100%);color:#1e2937;margin:0 6px 10px 0;">Create Password</a>
-                    <a href="${safeApkDownloadUrl}" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#f0c974 100%);color:#1e2937;">Download Field App</a>
+                    <a href="${safeSetPasswordUrl}" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#3b82f6 100%);color:#ffffff;margin:0 6px 10px 0;">Create Password</a>
+                    <a href="${safeApkDownloadUrl}" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#3b82f6 100%);color:#ffffff;">Download Field App</a>
                   </td>
                 </tr>
               </table>
@@ -338,8 +338,8 @@ export function buildInviteEmailHtml(
           </tr>
           <tr>
             <td class="foot-cell foot-pad" style="background-color:#223347;padding:22px 40px 24px;border-top:1px solid #46627f;text-align:center;">
-              <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#f8dea4;letter-spacing:0.2px;">TrimPro</p>
-              <p class="foot-copy" style="margin:0;font-size:11px;line-height:1.6;color:#93a9c2;">This invitation was sent by TrimPro.</p>
+              <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#4ab2ff;letter-spacing:0.2px;">LoopCom Works</p>
+              <p class="foot-copy" style="margin:0;font-size:11px;line-height:1.6;color:#93a9c2;">This invitation was sent by LoopCom Works.</p>
             </td>
           </tr>
         </table>
@@ -353,15 +353,15 @@ export function buildInviteEmailHtml(
 export function buildInviteEmailText(firstName: string, setPasswordUrl: string, apkDownloadUrl: string): string {
   const safeName = firstName?.trim() || 'there'
   return `
-Welcome to TrimPro, ${safeName}!
+Welcome to LoopCom Works, ${safeName}!
 
-Your TrimPro account has been created.
+Your LoopCom Works account has been created.
 Create your password here:
 ${setPasswordUrl}
 
 After setting your password, you will be redirected to the login page.
 
-Download TrimPro Field App (Android):
+Download LoopCom Works App (Android):
 ${apkDownloadUrl}
   `.trim()
 }
@@ -371,26 +371,26 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string): Prom
   
   await emailService.sendEmail({
     to,
-    subject: 'Reset Your Password - Trim Pro',
+    subject: 'Reset Your Password - LoopCom Works',
     html: `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
   <body style="margin:0;padding:0;background:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0f172a;padding:24px 12px 40px;">
       <tr><td align="center">
-        <table role="presentation" width="580" cellspacing="0" cellpadding="0" style="max-width:580px;width:100%;background:#243f53;border-radius:16px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.4),0 2px 8px rgba(0,0,0,0.25);">
-          <tr><td style="background:#243f53;padding:34px 36px 26px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
-            <div style="font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#f8dea4;margin-bottom:10px;">TrimPro</div>
+        <table role="presentation" width="580" cellspacing="0" cellpadding="0" style="max-width:580px;width:100%;background:#141f2b;border-radius:16px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.4),0 2px 8px rgba(0,0,0,0.25);">
+          <tr><td style="background:#141f2b;padding:34px 36px 26px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
+            <div style="font-size:22px;font-weight:800;letter-spacing:-0.3px;color:#4ab2ff;margin-bottom:10px;">LoopCom Works</div>
             <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:2.2px;text-transform:uppercase;color:#f5e3aa;">Security Notice</p>
           </td></tr>
           <tr><td style="padding:30px 40px 22px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.07);">
-            <h1 style="margin:0 0 10px;font-size:28px;font-weight:800;line-height:1.2;color:#f8dea4;">Password Reset Request</h1>
+            <h1 style="margin:0 0 10px;font-size:28px;font-weight:800;line-height:1.2;color:#4ab2ff;">Password Reset Request</h1>
             <p style="margin:0;font-size:13px;font-weight:600;color:#c4d5e9;">This link expires in 1 hour.</p>
           </td></tr>
           <tr><td style="padding:26px 40px;">
             <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#d5e1f1;">You requested to reset your password. Use the button below to continue.</p>
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;">
               <tr><td align="center">
-                <a href="${resetUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#f0c974 100%);color:#1e2937;">Reset Password</a>
+                <a href="${resetUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:16px 48px;font-size:17px;font-weight:700;letter-spacing:0.2px;line-height:1.2;text-decoration:none;text-align:center;border-radius:12px;background:linear-gradient(135deg,#2a5f82 0%,#3b82f6 100%);color:#ffffff;">Reset Password</a>
               </td></tr>
             </table>
             <p style="margin:0;font-size:13px;line-height:1.65;color:#d6e3f2;">If you did not request this, you can safely ignore this email.</p>
@@ -425,7 +425,7 @@ export async function sendEstimateEmail(
 
   await emailService.sendEmail({
     to,
-    subject: `Estimate ${estimate.estimateNumber} from Trim Pro`,
+    subject: `Estimate ${estimate.estimateNumber} from LoopCom Works`,
     html: buildEstimateApprovalEmail({
       recipientName: 'there',
       customerName: 'Customer',
@@ -456,7 +456,7 @@ export async function sendInvoiceEmail(
 
   await emailService.sendEmail({
     to,
-    subject: `Invoice ${invoice.invoiceNumber} from Trim Pro`,
+    subject: `Invoice ${invoice.invoiceNumber} from LoopCom Works`,
     html: buildInvoiceEmail({
       invoiceNumber: invoice.invoiceNumber,
       clientName: 'Customer',

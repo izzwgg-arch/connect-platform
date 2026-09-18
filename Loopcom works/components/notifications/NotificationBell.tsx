@@ -414,17 +414,17 @@ export function NotificationBell() {
           ref={buttonRef}
           variant="ghost"
           size="sm"
-          className="group relative !bg-transparent hover:!bg-transparent active:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent focus-visible:!ring-0 focus-visible:!ring-offset-0"
+          className="lw-icon-btn group relative h-8 w-8 min-h-0 min-w-0 p-0 !bg-panel-2 hover:!bg-panel-3 active:!bg-panel-3 focus:!bg-panel-2 focus-visible:!bg-panel-2 focus-visible:!ring-0 focus-visible:!ring-offset-0"
           onClick={() => setIsOpen(!isOpen)}
         >
           <Bell
             className={cn(
               'h-5 w-5 transition-colors duration-200 ease-in-out',
-              isOpen ? 'text-[#E6C98B]' : 'text-[#FFFFFF] group-hover:text-[#E6C98B]'
+              isOpen ? 'text-primary' : 'text-dim group-hover:text-ink'
             )}
           />
           {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">
+            <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
               {unreadCount > 9 ? '9+' : unreadCount}
             </span>
           )}

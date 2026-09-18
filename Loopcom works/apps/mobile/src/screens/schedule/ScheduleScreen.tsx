@@ -128,7 +128,7 @@ function getEventAccentColor(status?: string): string {
     case 'PENDING':
       return '#D97706'
     default:
-      return '#2E4A59'
+      return '#3b82f6'
   }
 }
 

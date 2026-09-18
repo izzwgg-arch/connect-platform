@@ -195,7 +195,7 @@ const SHARED_DOC_CSS = (accentColor: string, accentTextColor: string) => `
 function logoBlock(brand: PdfBranding, alt: string) {
   return brand.logoUrl
     ? `<img class="logo-image" src="${escapeHtml(brand.logoUrl)}" alt="${escapeHtml(alt)}" />`
-    : `<div class="logo-fallback">trimpro</div>`
+    : `<div class="logo-fallback">LoopCom Works</div>`
 }
 
 export interface InvoicePdfBuildOptions {
@@ -312,7 +312,7 @@ export function buildInvoicePdfHtml(
           <div class="header">
             <div>
               <div class="brand">
-                ${logoBlock(brand, 'Trim Pro Logo')}
+                ${logoBlock(brand, 'LoopCom Works')}
               </div>
               <h1 class="doc-title">Invoice</h1>
               <div class="muted">Generated on ${generatedAt}</div>
@@ -497,7 +497,7 @@ export function buildEstimatePdfHtml(
           <div class="header">
             <div>
               <div class="brand">
-                ${logoBlock(brand, 'Trim Pro Logo')}
+                ${logoBlock(brand, 'LoopCom Works')}
               </div>
               <h1 class="doc-title">Estimate</h1>
               <div class="muted">Generated on ${generatedAt}</div>
@@ -668,7 +668,7 @@ export function buildPurchaseOrderPdfHtml(
       <head>
         <meta charset="utf-8">
         <title>Purchase Order ${escapeHtml(purchaseOrder.poNumber)}</title>
-        <style>${SHARED_DOC_CSS('#12344d', '#f5e7b8')}
+        <style>${SHARED_DOC_CSS('#2563eb', '#f5e7b8')}
           .po-info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -702,8 +702,8 @@ export function buildPurchaseOrderPdfHtml(
               <div class="brand">
                 ${
                   branding.logoUrl
-                    ? `<img class="logo-image" src="${escapeHtml(branding.logoUrl)}" alt="Trim Pro Logo" />`
-                    : '<div class="logo-fallback">trimpro</div>'
+                    ? `<img class="logo-image" src="${escapeHtml(branding.logoUrl)}" alt="LoopCom Works" />`
+                    : '<div class="logo-fallback">LoopCom Works</div>'
                 }
               </div>
               <h1 class="doc-title">Purchase Order</h1>
@@ -766,7 +766,7 @@ export function buildPurchaseOrderPdfHtml(
           </div>
 
           <div class="footer">
-            <p>This is an official purchase order from Trim Pro.</p>
+            <p>This is an official purchase order from LoopCom Works.</p>
             <p>Generated on ${generatedAt}</p>
           </div>
         </div>
@@ -811,7 +811,7 @@ export function buildCreditMemoPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Credit Memo</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -871,7 +871,7 @@ export function buildCreditMemoPdfHtml(
           </div>
 
           <div class="footer">
-            <p>This is an official credit memo from Trim Pro.</p>
+            <p>This is an official credit memo from LoopCom Works.</p>
             <p>Generated on ${generatedAt}</p>
           </div>
         </div>
@@ -948,7 +948,7 @@ export function buildCustomerStatementPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Customer Statement</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -1053,7 +1053,7 @@ export function buildAgingReportPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Accounts Receivable Aging</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -1129,7 +1129,7 @@ export function buildRevenueReportPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Revenue by Month</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -1224,7 +1224,7 @@ export function buildJobProfitabilityPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Job Profitability</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -1303,7 +1303,7 @@ export function buildVendorSpendPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Vendor Spend</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>
@@ -1395,7 +1395,7 @@ export function buildPaymentHistoryPdfHtml(
         <div class="page">
           <div class="header">
             <div>
-              <div class="brand">${logoBlock(brand, 'Trim Pro Logo')}</div>
+              <div class="brand">${logoBlock(brand, 'LoopCom Works')}</div>
               <h1 class="doc-title">Payment History</h1>
               <div class="muted">Generated on ${generatedAt}</div>
             </div>

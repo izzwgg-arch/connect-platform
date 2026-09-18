@@ -118,7 +118,7 @@ export default function HelpPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Help & Instructions</h1>
-          <p className="mt-2 text-gray-600">Find answers and learn how to use Trim Pro</p>
+          <p className="mt-2 text-gray-600">Find answers and learn how to use LoopCom Works</p>
         </div>
         {userRole === 'ADMIN' && (
           <Button onClick={() => router.push('/dashboard/help/new')}>

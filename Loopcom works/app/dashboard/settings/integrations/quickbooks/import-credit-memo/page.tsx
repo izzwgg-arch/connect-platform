@@ -165,7 +165,7 @@ export default function QuickBooksCreditMemoImportPage() {
                 → enter <strong>1234</strong>.
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                If that credit memo is already in Trim Pro, the import is blocked instead of creating a duplicate.
+                If that credit memo is already in LoopCom Works, the import is blocked instead of creating a duplicate.
               </p>
             </div>
 
@@ -212,7 +212,7 @@ export default function QuickBooksCreditMemoImportPage() {
                 </CardTitle>
                 <CardDescription className={result.success ? 'text-green-700' : 'text-red-700'}>
                   {result.success
-                    ? 'The requested QuickBooks credit memo was imported into Trim Pro.'
+                    ? 'The requested QuickBooks credit memo was imported into LoopCom Works.'
                     : result.error}
                 </CardDescription>
               </div>
@@ -250,7 +250,7 @@ export default function QuickBooksCreditMemoImportPage() {
 
             {result.success && result.placeholderClientCreated ? (
               <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                The QuickBooks customer was not mapped locally, so Trim Pro created a placeholder client to keep this import manual and one-off. No broad customer sync was run.
+                The QuickBooks customer was not mapped locally, so LoopCom Works created a placeholder client to keep this import manual and one-off. No broad customer sync was run.
               </div>
             ) : null}
           </CardContent>

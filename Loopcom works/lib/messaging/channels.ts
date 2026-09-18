@@ -131,7 +131,7 @@ async function sendViaEmail(
 
   const result = await sendEmail({
     to,
-    subject: subject || 'Message from Trim Pro',
+    subject: subject || 'Message from LoopCom Works',
     html: html || text,
     text,
     from: from || secrets.fromEmail,

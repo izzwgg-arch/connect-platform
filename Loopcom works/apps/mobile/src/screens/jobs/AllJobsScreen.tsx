@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filterChipTextActive: {
-    color: '#E6C98B',
+    color: '#2563eb',
   },
   listContent: {
     padding: spacing.md,

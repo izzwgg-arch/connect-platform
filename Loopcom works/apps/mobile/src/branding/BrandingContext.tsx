@@ -45,16 +45,16 @@ export interface BrandingConfig {
 }
 
 export const DEFAULT_BRANDING: BrandingConfig = {
-  appDisplayName: 'TrimPro Field',
+  appDisplayName: 'LoopCom Works',
   loginLogoUrl: null,
   headerLogoUrl: null,
-  primaryColor: '#2E4A59',
-  secondaryColor: '#4a7c94',
-  accentColor: '#E6C98B',
-  buttonColor: '#2E4A59',
+  primaryColor: '#3b82f6',
+  secondaryColor: '#2563eb',
+  accentColor: '#2563eb',
+  buttonColor: '#3b82f6',
   buttonTextColor: '#ffffff',
-  sidebarColor: '#2E4A59',
-  menuColor: '#E6C98B',
+  sidebarColor: '#3b82f6',
+  menuColor: '#2563eb',
   backgroundColor: '#F5F7FA',
   invoiceLogoUrl: null,
   emailLogoUrl: null,

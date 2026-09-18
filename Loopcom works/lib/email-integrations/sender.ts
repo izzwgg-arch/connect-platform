@@ -27,7 +27,7 @@ interface SendDocumentEmailInput {
 }
 
 const SYSTEM_FROM = process.env.EMAIL_FROM || process.env.EMAIL_FROM_NAME || 'noreply@trimpro.com'
-const SYSTEM_FROM_NAME = process.env.FROM_NAME || 'Trim Pro'
+const SYSTEM_FROM_NAME = process.env.FROM_NAME || 'LoopCom Works'
 const SYSTEM_REPLY_TO = process.env.EMAIL_REPLY_TO || SYSTEM_FROM
 
 function formatFromHeader(fromName: string, fromEmail: string) {
@@ -81,7 +81,7 @@ async function getUserProfileSender(tenantId: string, userId: string): Promise<R
     return {
       source: 'user_profile_google_workspace',
       fromEmail: profile.fromEmail,
-      fromName: profile.fromName || 'Trim Pro',
+      fromName: profile.fromName || 'LoopCom Works',
       replyTo: profile.replyToEmail || null,
       userProfileId: profile.id,
     }

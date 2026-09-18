@@ -46,10 +46,10 @@ export async function POST(request: NextRequest) {
     })
 
     await transporter.sendMail({
-      from: `${profile.fromName || 'Trim Pro'} <${profile.fromEmail}>`,
+      from: `${profile.fromName || 'LoopCom Works'} <${profile.fromEmail}>`,
       to: toEmail,
       replyTo: profile.replyToEmail || undefined,
-      subject: 'Trim Pro profile sender test',
+      subject: 'LoopCom Works profile sender test',
       text: 'This is a test email from your profile sender configuration.',
       html: '<p>This is a test email from your profile sender configuration.</p>',
     })

@@ -25,9 +25,9 @@ export interface PdfBranding {
   footerText: string | null
 }
 
-const DEFAULT_ACCENT = '#2e4a59'
+const DEFAULT_ACCENT = '#2563eb'
 const DEFAULT_ACCENT_TEXT = '#ffffff'
-const DEFAULT_BUSINESS_NAME = 'Trim Pro'
+const DEFAULT_BUSINESS_NAME = 'LoopCom Works'
 
 /**
  * Fallback SVG logo data URI — only used when no logo URL is set in branding
@@ -40,7 +40,7 @@ function buildDefaultLogoDataUri(accentColor: string, textColor: string): string
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">` +
     `<rect width="1200" height="360" fill="#${bg}"/>` +
     `<g fill="#${txt}" font-family="Inter,Arial,Helvetica,sans-serif">` +
-    `<text x="78" y="238" font-size="182" font-weight="700" letter-spacing="1">TrimPro</text>` +
+    `<text x="78" y="238" font-size="130" font-weight="700" letter-spacing="1">LoopCom Works</text>` +
     `</g></svg>`
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
 }

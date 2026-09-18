@@ -23,11 +23,11 @@ export function buildStaffNotificationEmail(opts: StaffNotificationEmailOptions)
   html: string
   text: string
 } {
-  const companyName = opts.companyName || 'TrimPro'
+  const companyName = opts.companyName || 'LoopCom Works'
   const greeting = opts.recipientName?.trim()
     ? `Hi ${escapeHtml(opts.recipientName.trim())},`
     : 'Hi,'
-  const message = opts.message?.trim() || 'Open TrimPro to review this update.'
+  const message = opts.message?.trim() || 'Open LoopCom Works to review this update.'
   const actionUrl = opts.actionUrl?.trim() || null
 
   const bodyParts = [
@@ -37,7 +37,7 @@ export function buildStaffNotificationEmail(opts: StaffNotificationEmailOptions)
 
   if (actionUrl) {
     bodyParts.push(
-      buildEmailButtonGroup([{ label: 'Open in TrimPro', href: actionUrl }])
+      buildEmailButtonGroup([{ label: 'Open in LoopCom Works', href: actionUrl }])
     )
   }
 
@@ -51,12 +51,12 @@ export function buildStaffNotificationEmail(opts: StaffNotificationEmailOptions)
     }),
     bodyHtml:
       buildEmailHeroBlock({
-        badge: 'TrimPro Alert',
+        badge: 'LoopCom Works Alert',
         headline: opts.title,
       }) + buildEmailBodySection(bodyParts.join('')),
     footerHtml: buildEmailFooterBlock({
       companyName,
-      lines: ['You received this because notification emails are enabled on your TrimPro account.'],
+      lines: ['You received this because notification emails are enabled on your LoopCom Works account.'],
     }),
   })
 
@@ -67,7 +67,7 @@ export function buildStaffNotificationEmail(opts: StaffNotificationEmailOptions)
     message,
   ]
   if (actionUrl) {
-    textLines.push('', `Open in TrimPro: ${actionUrl}`)
+    textLines.push('', `Open in LoopCom Works: ${actionUrl}`)
   }
 
   return {

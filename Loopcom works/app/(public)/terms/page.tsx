@@ -2,9 +2,9 @@ import type { Metadata } from 'next'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export const metadata: Metadata = {
-  title: 'TrimPro – Terms of Service',
+  title: 'LoopCom Works – Terms of Service',
   description:
-    'TrimPro Terms of Service / User License Agreement governing use of the TrimPro platform.',
+    'LoopCom Works Terms of Service / User License Agreement governing use of the LoopCom Works platform.',
 }
 
 const EFFECTIVE_DATE = '2026-02-16'
@@ -16,7 +16,7 @@ export default function TermsPage() {
         <h1 className="text-3xl font-bold text-gray-900">Terms of Service / User License Agreement</h1>
         <p className="text-sm text-muted-foreground">Effective date: {EFFECTIVE_DATE}</p>
         <p className="text-gray-700">
-          These Terms govern your access to and use of TrimPro (“TrimPro”, “we”, “us”) including the
+          These Terms govern your access to and use of Loopcom LLC (“Loopcom LLC”, “we”, “us”) including the
           web portal and mobile field app (the “Services”). By using the Services, you agree to these Terms.
         </p>
       </div>
@@ -27,7 +27,7 @@ export default function TermsPage() {
         </CardHeader>
         <CardContent className="space-y-2 text-gray-700">
           <p>
-            Subject to these Terms, TrimPro grants you a limited, non-exclusive, non-transferable,
+            Subject to these Terms, Loopcom LLC grants you a limited, non-exclusive, non-transferable,
             revocable license to access and use the Services for your internal business purposes.
           </p>
           <p>You may not copy, resell, lease, reverse engineer, or attempt to extract source code except as permitted by law.</p>
@@ -95,9 +95,9 @@ export default function TermsPage() {
         <CardContent className="space-y-3 text-gray-700">
           <p className="font-semibold">QuickBooks / Intuit</p>
           <p>
-            If you connect QuickBooks via OAuth, you authorize TrimPro to access and sync data to/from Intuit APIs
+            If you connect QuickBooks via OAuth, you authorize Loopcom LLC to access and sync data to/from Intuit APIs
             based on your configuration (for example: customers, invoices, payments). Intuit is not responsible for
-            the Services and does not endorse TrimPro.
+            the Services and does not endorse Loopcom LLC.
           </p>
           <p className="font-semibold">VoIP/SMS/MMS</p>
           <p>
@@ -139,12 +139,12 @@ export default function TermsPage() {
         </CardHeader>
         <CardContent className="space-y-2 text-gray-700">
           <p>
-            TO THE MAXIMUM EXTENT PERMITTED BY LAW, TRIMPRO WILL NOT BE LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL,
+            TO THE MAXIMUM EXTENT PERMITTED BY LAW, LOOPCOM LLC WILL NOT BE LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL,
             CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR LOSS OF PROFITS, REVENUE, DATA, OR GOODWILL.
           </p>
           <p>
-            TO THE MAXIMUM EXTENT PERMITTED BY LAW, TRIMPRO’S TOTAL LIABILITY FOR ANY CLAIM RELATING TO THE SERVICES
-            WILL NOT EXCEED THE AMOUNT YOU PAID TO TRIMPRO FOR THE SERVICES IN THE 3 MONTHS BEFORE THE EVENT GIVING
+            TO THE MAXIMUM EXTENT PERMITTED BY LAW, LOOPCOM LLC’S TOTAL LIABILITY FOR ANY CLAIM RELATING TO THE SERVICES
+            WILL NOT EXCEED THE AMOUNT YOU PAID TO LOOPCOM LLC FOR THE SERVICES IN THE 3 MONTHS BEFORE THE EVENT GIVING
             RISE TO THE CLAIM.
           </p>
         </CardContent>
@@ -180,8 +180,8 @@ export default function TermsPage() {
         <CardContent className="text-gray-700">
           <p>
             Questions about these Terms? Contact{' '}
-            <a className="text-[#2E4A59] hover:underline" href="mailto:support@trimprony.com">
-              support@trimprony.com
+            <a className="text-primary hover:underline" href="mailto:support@loopcom.net">
+              support@loopcom.net
             </a>
             .
           </p>

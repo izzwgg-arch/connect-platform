@@ -278,7 +278,7 @@ export default function EmailIntegrationsPage() {
           </div>
           <div>
             <Label>From Name</Label>
-            <Input value={form.fromName} onChange={(e) => setForm({ ...form, fromName: e.target.value })} placeholder="TrimPro Billing" />
+            <Input value={form.fromName} onChange={(e) => setForm({ ...form, fromName: e.target.value })} placeholder="LoopCom Works Billing" />
           </div>
           <div>
             <Label>Reply-To (optional)</Label>

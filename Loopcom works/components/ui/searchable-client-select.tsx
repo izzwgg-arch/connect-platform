@@ -126,8 +126,8 @@ export function SearchableClientSelect({
                       onSelect(client.id)
                       setOpen(false)
                     }}
-                    className={`group flex w-full items-start justify-between rounded-sm px-3 py-2 text-left text-sm hover:bg-[#2E4A59] hover:text-white ${
-                      selected ? 'bg-[#2E4A59] text-white' : ''
+                    className={`group flex w-full items-start justify-between rounded-sm px-3 py-2 text-left text-sm hover:bg-primary hover:text-white ${
+                      selected ? 'bg-primary text-primary-foreground' : ''
                     }`}
                   >
                     <div className="min-w-0">

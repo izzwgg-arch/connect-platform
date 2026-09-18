@@ -84,7 +84,7 @@ async function refundWithQuickBooks(params: {
   const payload = {
     CustomerRef: { value: String(customerRef) },
     TxnDate: new Date().toISOString().slice(0, 10),
-    PrivateNote: params.reason || 'Refund from TrimPro',
+    PrivateNote: params.reason || 'Refund from LoopCom Works',
     TotalAmt: params.amount,
     Line: [
       {

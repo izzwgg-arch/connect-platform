@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
     const companyName =
       (emailBranding as { businessName?: string; companyName?: string } | null)?.businessName ||
       (emailBranding as { companyName?: string } | null)?.companyName ||
-      'TrimPro'
+      'LoopCom Works'
     const dateLabel = new Date().toISOString().split('T')[0]
     const filename = `${report}-report-${dateLabel}.pdf`
     const subject = `${meta.label} Report`

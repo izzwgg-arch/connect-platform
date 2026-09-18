@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
     invoiceDate: '03/01/2026',
     dueDate: '03/15/2026',
     generatedAt: new Date().toLocaleString(),
-    accentColor: '#12344d',
+    accentColor: '#2563eb',
     lineItems: [
       { description: 'Cabinet installation', notes: 'Main floor', quantity: 1, unitPrice: 950, total: 950 },
       { description: 'Trim package', notes: 'Premium profile', quantity: 2, unitPrice: 180, total: 360 },

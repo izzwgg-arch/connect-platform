@@ -1,25 +1,15 @@
 {
-  "name": "Trim Pro",
-  "short_name": "TrimPro",
-  "description": "Field Service Management for millwork, trim, and molding companies",
+  "name": "LoopCom Works",
+  "short_name": "Works",
+  "description": "Jobs, estimates, invoices, purchase orders and scheduling for field-service businesses — by Loopcom.",
   "start_url": "/dashboard",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#f3f4f6",
-  "theme_color": "#2e4a59",
+  "background_color": "#f6f8fb",
+  "theme_color": "#3b82f6",
   "icons": [
-    {
-      "src": "/branding/trimpro-icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/favicon-tp.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "maskable"
-    }
+    { "src": "/brand/favicon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

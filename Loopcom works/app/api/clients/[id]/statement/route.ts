@@ -115,7 +115,7 @@ async function buildStatementHtml(clientId: string, tenantId: string): Promise<{
         align-items: flex-start;
         margin-bottom: 32px;
         padding-bottom: 24px;
-        border-bottom: 2px solid #f0c974;
+        border-bottom: 2px solid #3b82f6;
       }
       .logo-image { height: 52px; width: auto; max-width: 240px; object-fit: contain; }
       .logo-fallback {
@@ -128,7 +128,7 @@ async function buildStatementHtml(clientId: string, tenantId: string): Promise<{
       .business-info { font-size: 12px; color: #6b7280; line-height: 1.8; text-align: right; }
       .business-info .biz-name { font-size: 14px; font-weight: 700; color: #111827; }
       .statement-title {
-        font-size: 28px; font-weight: 800; color: #243f53; margin-bottom: 24px; letter-spacing: -0.02em;
+        font-size: 28px; font-weight: 800; color: #141f2b; margin-bottom: 24px; letter-spacing: -0.02em;
       }
       .meta-grid {
         display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px;
@@ -137,7 +137,7 @@ async function buildStatementHtml(clientId: string, tenantId: string): Promise<{
       .meta-label { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
       .meta-value { font-size: 14px; color: #111827; white-space: pre-line; }
       table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-      thead tr { background: #243f53; color: #ffffff; }
+      thead tr { background: #141f2b; color: #ffffff; }
       th {
         padding: 11px 14px; font-size: 11px; font-weight: 600; text-transform: uppercase;
         letter-spacing: 0.05em; text-align: left;
@@ -149,11 +149,11 @@ async function buildStatementHtml(clientId: string, tenantId: string): Promise<{
         margin-top: 20px; display: flex; justify-content: flex-end;
       }
       .total-box {
-        background: linear-gradient(135deg, #243f53 0%, #1e4d6e 100%);
+        background: linear-gradient(135deg, #141f2b 0%, #1e4d6e 100%);
         color: #fff; border-radius: 12px; padding: 20px 28px; min-width: 260px;
       }
       .total-label { font-size: 13px; opacity: 0.8; margin-bottom: 6px; }
-      .total-amount { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: #f0c974; }
+      .total-amount { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: #3b82f6; }
       .footer {
         margin-top: 28px; padding-top: 20px; border-top: 1px solid #e5e7eb;
         font-size: 11px; color: #9ca3af; text-align: center;

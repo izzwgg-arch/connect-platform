@@ -32,8 +32,8 @@ export interface BrandingEmailTheme {
 }
 
 export const defaultEmailTheme = {
-  primary: '#12344d',
-  button: '#12344d',
+  primary: '#2563eb',
+  button: '#2563eb',
   buttonText: '#ffffff',
   background: '#ffffff',
   cardBackground: '#111827',

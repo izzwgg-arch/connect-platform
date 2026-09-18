@@ -63,7 +63,7 @@ export function buildInvoicePaymentReceiptEmail(opts: InvoicePaymentReceiptEmail
     transactionId,
     receiptUrl,
     logoUrl,
-    companyName = 'TrimPro',
+    companyName = 'LoopCom Works',
   } = opts
 
   const rows = [
@@ -144,7 +144,7 @@ export function buildBulkPaymentReceiptEmail(opts: {
     preheader: `Payment received: ${opts.amountPaid}`,
     headerHtml: buildEmailHeaderBlock({
       logoUrl: opts.logoUrl,
-      companyName: opts.companyName || 'TrimPro',
+      companyName: opts.companyName || 'LoopCom Works',
       eyebrow: 'Payment Receipt',
     }),
     bodyHtml: [
@@ -156,7 +156,7 @@ export function buildBulkPaymentReceiptEmail(opts: {
       buildEmailBodySection(bodyInner),
     ].join(''),
     footerHtml: buildEmailFooterBlock({
-      companyName: opts.companyName || 'TrimPro',
+      companyName: opts.companyName || 'LoopCom Works',
       lines: ['Thank you for your payment.'],
     }),
   })
@@ -170,8 +170,8 @@ export function buildPaymentReceiptEmail(opts: PaymentReceiptEmailOptions): stri
     transactionId,
     description = 'Outstanding invoices payment',
     logoUrl,
-    companyName = 'TrimPro',
-    supportEmail = 'support@trimprony.com',
+    companyName = 'LoopCom Works',
+    supportEmail = 'support@loopcom.net',
     companyAddress = '',
     receiptUrl,
     invoiceUrl,

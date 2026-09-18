@@ -21,17 +21,18 @@ import { prisma } from '@/lib/prisma'
 export const runtime = 'nodejs'
 
 const DEFAULT_BRANDING = {
-  appDisplayName: 'TrimPro Field',
+  appDisplayName: 'LoopCom Works',
   loginLogoUrl: null as string | null,
   headerLogoUrl: null as string | null,
-  primaryColor: '#2E4A59',
-  secondaryColor: '#4a7c94',
-  accentColor: '#E6C98B',
-  buttonColor: '#2E4A59',
+  // Loopcom light palette — the same values app/globals.css uses for the web app.
+  primaryColor: '#3b82f6',
+  secondaryColor: '#2563eb',
+  accentColor: '#22a8ff',
+  buttonColor: '#3b82f6',
   buttonTextColor: '#ffffff',
-  sidebarColor: '#2E4A59',
-  menuColor: '#E6C98B',
-  backgroundColor: '#F5F7FA',
+  sidebarColor: '#ffffff',
+  menuColor: '#3b82f6',
+  backgroundColor: '#f6f8fb',
   invoiceLogoUrl: null as string | null,
   emailLogoUrl: null as string | null,
   splashScreenRuntimeImageUrl: null as string | null,

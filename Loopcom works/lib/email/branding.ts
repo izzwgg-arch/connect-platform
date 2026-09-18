@@ -52,7 +52,7 @@ export function applyEmailBrandingHtml(
 
   // Legacy palette replacements (kept for older templates only).
   if (!lockTemplateColors) {
-    next = next.replaceAll('#12344d', theme.button)
+    next = next.replaceAll('#2563eb', theme.button)
     next = next.replaceAll('#111827', theme.cardBackground)
     next = next.replaceAll('rgba(255,255,255,0.92)', theme.textPrimary)
     next = next.replaceAll('rgba(255,255,255,0.68)', theme.textSecondary)

@@ -58,7 +58,7 @@ export function DashboardRevenueChart() {
         <XAxis dataKey="date" tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip formatter={(value: number) => formatCurrency(value)} />
-        <Line type="monotone" dataKey="revenue" stroke="#2E4A59" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="revenue" stroke="var(--brand-primary-color)" strokeWidth={2} dot={false} />
       </LineChart>
     </ResponsiveContainer>
   )

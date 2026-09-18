@@ -222,7 +222,7 @@ export const INTEGRATIONS: Record<IntegrationProvider, IntegrationDefinition> = 
         label: 'Display Name (Optional)',
         type: 'text',
         required: false,
-        placeholder: 'Trim Pro',
+        placeholder: 'LoopCom Works',
       },
       {
         key: 'outboundCallerId',

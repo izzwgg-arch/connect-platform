@@ -16,7 +16,9 @@ export function middleware(request: NextRequest) {
     if (isIpHost || isDirectNodePort) {
       const url = request.nextUrl.clone()
       url.protocol = 'https:'
-      url.hostname = 'app.trimprony.com' // trimprony.com is the actual production domain
+      // LoopCom Works (2026-09-18): the canonical host is works.loopcom.net. Override per
+      // environment with CANONICAL_APP_HOST (e.g. works-staging.loopcom.net).
+      url.hostname = process.env.CANONICAL_APP_HOST || 'works.loopcom.net'
       // Ensure we don't carry over a direct-node port (e.g., :3000) into the public URL.
       url.port = ''
       return NextResponse.redirect(url, 308)

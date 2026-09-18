@@ -74,7 +74,7 @@ export default function CreditMemosPage() {
         'Import open credit memos from QuickBooks?\n\n' +
           '• Creates local credit memos for QB credits with remaining balance\n' +
           '• Updates already-imported credit memos\n' +
-          '• Customers must already be mapped in TrimPro'
+          '• Customers must already be mapped in LoopCom Works'
       )
     ) {
       return

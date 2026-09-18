@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { TrimProLoginBadge } from '@/components/branding/TrimProLogo'
+import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { isDevEnvironment } from '@/lib/dev'
 
 type LoginResponse = {
@@ -113,9 +114,10 @@ function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <Card className="w-full max-w-md">
-        <CardHeader className="pt-10 pb-3 space-y-2">
+    <div className="lw-login relative min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <ThemeToggle className="absolute right-4 top-4 sm:right-6 sm:top-5" />
+      <Card className="lw-login-card w-full max-w-[392px]">
+        <CardHeader className="pt-8 pb-3 space-y-2">
           <CardTitle className="text-center">
             <div className="flex justify-center">
               <TrimProLoginBadge />
@@ -128,7 +130,7 @@ function LoginForm() {
         <CardContent className="pt-1">
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
+              <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
                 {error}
               </div>
             )}
@@ -203,10 +205,10 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="lw-login min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <p className="mt-4 text-dim">Loading…</p>
         </div>
       </div>
     }>

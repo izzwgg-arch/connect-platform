@@ -28,7 +28,7 @@ export function buildCreditMemoEmail(opts: CreditMemoEmailOptions): string {
     remaining,
     message,
     logoUrl,
-    companyName = 'TrimPro',
+    companyName = 'LoopCom Works',
   } = opts
 
   const bodyInner = [

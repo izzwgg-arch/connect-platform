@@ -175,7 +175,7 @@ function JobsStackNavigator() {
       <JobsStack.Screen
         name="ShareIngress"
         component={ShareIngressScreen}
-        options={detailsHeaderOptions('Share to TrimPro')}
+        options={detailsHeaderOptions('Share to LoopCom Works')}
       />
     </JobsStack.Navigator>
   )
@@ -427,7 +427,7 @@ function DrawerContent(props: DrawerContentComponentProps) {
     <View style={styles.drawerRoot}>
       <DrawerContentScrollView {...props} contentContainerStyle={styles.drawerScroll}>
         <View style={styles.brandWrap}>
-          <Text style={styles.brandTitle}>TrimPro</Text>
+          <Text style={styles.brandTitle}>LoopCom Works</Text>
           <Text style={styles.brandSubtitle}>Field Operations</Text>
         </View>
         <Card style={styles.userCard}>
@@ -515,7 +515,7 @@ export function RootNavigator() {
             sceneStyle: { backgroundColor: colors.background },
           }}
         >
-          <Drawer.Screen name="MainTabs" component={MainTabsNavigator} options={{ title: 'TrimPro' }} />
+          <Drawer.Screen name="MainTabs" component={MainTabsNavigator} options={{ title: 'LoopCom Works' }} />
         </Drawer.Navigator>
       )}
     </NavigationContainer>

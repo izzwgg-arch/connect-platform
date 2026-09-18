@@ -39,7 +39,7 @@ export function buildInvoiceEmail(opts: InvoiceEmailOptions): string {
     paymentLink,
     message,
     logoUrl,
-    companyName = 'TrimPro',
+    companyName = 'LoopCom Works',
   } = opts
 
   const buttons = [

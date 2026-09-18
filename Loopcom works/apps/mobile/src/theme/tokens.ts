@@ -5,7 +5,7 @@ export const colors = {
   textSecondary: '#475569',
   muted: '#94A3B8',
   divider: '#E2E8F0',
-  brandPrimary: '#2E4A59',
+  brandPrimary: '#3b82f6',
   success: '#16A34A',
   warning: '#D97706',
   danger: '#DC2626',

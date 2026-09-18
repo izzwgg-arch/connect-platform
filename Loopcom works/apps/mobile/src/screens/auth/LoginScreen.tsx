@@ -10,8 +10,7 @@ function BrandLogo() {
   const [imgError, setImgError] = useState(false)
   const logoUrl = (!imgError && branding.loginLogoUrl) ? branding.loginLogoUrl : null
   const bgColor = branding.sidebarColor || colors.brandPrimary
-  const textColor = branding.menuColor || '#E6C98B'
-  const displayName = branding.appDisplayName || 'TrimPro'
+  const displayName = branding.appDisplayName || 'LoopCom Works'
 
   return (
     <View style={[styles.logoContainer]}>
@@ -23,7 +22,14 @@ function BrandLogo() {
             onError={() => setImgError(true)}
           />
         ) : (
-          <Text style={[styles.logoText, { color: textColor }]}>{displayName}</Text>
+          <View style={styles.logoFallback}>
+            <Image
+              accessibilityLabel={displayName}
+              source={require('../../../assets/loopcom-wordmark.png')}
+              style={{ height: 30, width: 140, resizeMode: 'contain' }}
+            />
+            <Text style={styles.logoWorksTag}>Works</Text>
+          </View>
         )}
       </View>
     </View>
@@ -88,26 +94,26 @@ export function LoginScreen() {
             </View>
 
             <Pressable
-              style={[styles.button, { backgroundColor: branding.buttonColor || '#2E4A59' }, loading && styles.buttonDisabled]}
+              style={[styles.button, { backgroundColor: branding.buttonColor || '#3b82f6' }, loading && styles.buttonDisabled]}
               onPress={onSubmit}
               disabled={loading}
             >
-              <Text style={[styles.buttonText, { color: branding.buttonTextColor || '#E6C98B' }]}>{loading ? 'Signing in...' : 'Sign in'}</Text>
+              <Text style={[styles.buttonText, { color: branding.buttonTextColor || '#ffffff' }]}>{loading ? 'Signing in...' : 'Sign in'}</Text>
             </Pressable>
 
             <Pressable style={styles.forgotLink}>
-              <Text style={[styles.forgotText, { color: branding.primaryColor || '#2E4A59' }]}>Forgot password?</Text>
+              <Text style={[styles.forgotText, { color: branding.primaryColor || '#3b82f6' }]}>Forgot password?</Text>
             </Pressable>
           </View>
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>
               By signing in, you agree to our{' '}
-              <Text style={[styles.footerLink, { color: branding.primaryColor || '#2E4A59' }]} onPress={() => Linking.openURL('https://app.trimprony.com/terms')}>
+              <Text style={[styles.footerLink, { color: branding.primaryColor || '#3b82f6' }]} onPress={() => Linking.openURL('https://app.trimprony.com/terms')}>
                 Terms
               </Text>{' '}
               and{' '}
-              <Text style={[styles.footerLink, { color: branding.primaryColor || '#2E4A59' }]} onPress={() => Linking.openURL('https://app.trimprony.com/privacy')}>
+              <Text style={[styles.footerLink, { color: branding.primaryColor || '#3b82f6' }]} onPress={() => Linking.openURL('https://app.trimprony.com/privacy')}>
                 Privacy Policy
               </Text>
               .
@@ -155,11 +161,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  logoText: {
+  logoFallback: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  logoWorksTag: {
     fontFamily: 'System',
     fontWeight: '700',
-    fontSize: 30,
-    letterSpacing: -0.02,
+    fontSize: 13,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#ffffff',
+    marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,

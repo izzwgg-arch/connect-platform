@@ -57,7 +57,7 @@ export async function registerPushToken() {
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('trimpro-default', {
-      name: 'TrimPro',
+      name: 'LoopCom Works',
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#0F4C5C',

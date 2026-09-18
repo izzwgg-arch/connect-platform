@@ -180,7 +180,7 @@ function mapPaymentToReceiptContext(
       invoiceNumber: payment.invoice.invoiceNumber,
       tenantId: payment.invoice.tenantId,
     },
-    tenantName: payment.invoice.tenant?.name || 'TrimPro',
+    tenantName: payment.invoice.tenant?.name || 'LoopCom Works',
     clientName: payment.invoice.client?.name || 'Customer',
     clientEmail,
     methodLabel: formatPaymentMethodLabel(payment),

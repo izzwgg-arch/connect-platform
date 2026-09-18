@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
     integrations: integrations.map(mapIntegrationForResponse),
     fallbackSender: {
       fromEmail: process.env.EMAIL_FROM || process.env.EMAIL_FROM_NAME || 'noreply@trimpro.com',
-      fromName: process.env.FROM_NAME || 'Trim Pro',
+      fromName: process.env.FROM_NAME || 'LoopCom Works',
       replyTo: process.env.EMAIL_REPLY_TO || process.env.EMAIL_FROM || 'noreply@trimpro.com',
       note: 'Used for all platform/system emails and as fallback for invoice/estimate sends.',
     },

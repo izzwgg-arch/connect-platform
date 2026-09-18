@@ -45,8 +45,8 @@ export default function ForgotPasswordPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <Card className="w-full max-w-md">
+      <div className="lw-login min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <Card className="lw-login-card w-full max-w-[392px]">
           <CardHeader>
             <div className="mb-2 flex justify-center">
               <TrimProLogo variant="light" size="lg" />
@@ -67,8 +67,8 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <Card className="w-full max-w-md">
+    <div className="lw-login min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <Card className="lw-login-card w-full max-w-[392px]">
         <CardHeader>
           <div className="mb-2 flex justify-center">
             <TrimProLogo variant="light" size="lg" />
