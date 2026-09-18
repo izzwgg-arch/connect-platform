@@ -619,3 +619,14 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
   unknown call id, and 0 occurrences of the test number in ``/var/log/asterisk/full``.
   NOT proven: a real keyed charge (inline ``card`` shape on ``/charges``) and a real save-then-charge — needs a
   caller with an account PIN and a real card.
+
+2026-09-17 — Yossis Wood Works IVR migration + closed-Monday announcement (api `3049fd53`)
+  ``apps/api`` ``node --experimental-test-module-mocks --import tsx --test src/ivrMigration.test.ts`` →
+  **44/44 pass** (2 new: instructions-only menus keep their greeting; welcome still wins when both exist).
+  The fallback test **FAILS replayed against the pre-fix source** (promptRef came back null). api typecheck:
+  the only errors are 4 pre-existing syntax errors in another session's mid-edit local
+  ``deskPhoneSetup/deviceCloudRoutes.ts`` — zero in edited files; the pushed commit was built from a clean
+  worktree at the origin tip. LIVE proof on the PBX (``/root/ivr-e2e.sh``): bare call to 845-827-9500 →
+  ``connect-menu,mcmu67d91000sers12b070ba2h`` played ``custom/yossis_wood_works_vpbx89`` PASS; keys "0" →
+  ``Goto(T28_app-announcement,announcement-36,1)`` + its recording played PASS. Keys 1–5 deliberately not
+  probed (they ring real ring groups at 2 AM).
