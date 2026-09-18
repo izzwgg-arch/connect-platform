@@ -1,4 +1,4 @@
-# 2026-09-18 · CUSTOMER COST BREAKDOWN — office-only "What this customer cost us" on every invoice — ✅ BUILT + DEPLOYED (api+portal `6d0fa490`), VoIP.ms feed LIVE
+# 2026-09-18 · CUSTOMER COST BREAKDOWN — office-only "What this customer cost us" on every invoice — ✅ BUILT + DEPLOYED (portal `6d0fa490`, api `57d9c7b9`), VoIP.ms feed LIVE + Aug 3 → today backfilled, PROVEN on Gesheft's closed period
 
 Full handoff: **`docs/ai-context/AGENT_HANDOFF_CUSTOMER_COST_BREAKDOWN_2026-09-18.md`** — read it
 before touching anything under `apps/api/src/billing/cost/` or the cost cards in the portal.
@@ -12,16 +12,27 @@ broken down: how much we paid. Show me mockups before you build."* → mockups
 `docs/mockups/customer-cost-breakdown/v1/`) → *"talocall 00.06 / for voip.ms, you can see
 everything through their API"* → *"And approved, go."*
 
-## What is live (container-verified 2026-09-18 ~20:10Z)
-- **api `6d0fa490`** (`app-api-1` `.build-commit` = 6d0fa490, healthy, migration
+## ✅ PROVEN on real data (deployed api, 2026-09-18 20:40Z) — Gesheft, closed period Aug 5 – Sep 3 (invoice CC-202608-00002, $450.41)
+Feed complete for every day. **Cost to us $169.78 → margin $280.06 (62.2%).** Inbound 8,529 min /
+5,206 calls **$78.72** (carrier-priced) · outbound 5,157 min over Telocall **$30.94** (our minutes × $0.006)
++ 15 min on the VoIP.ms backup $0.16 · texts 570 in / 433 out + 165/12 pictures **$11.06** ·
+**CNAM lookups 4,949 = $39.59 (23% of their cost, 96% of inbound calls named)** · numbers 3 × $1.10 +
+911 4 × $1.50 = $9.30. The running Sep 3 – Oct 3 period reads $120.84 so far (73% margin). July
+(feed starts Aug 3) is hybrid: uncovered days from our own log, lines say "N of M days from the carrier".
+Census after backfill: 34,478 carrier records; 4 VoIP.ms DIDs carry cost but belong to NO Connect
+tenant (845-213-6776, 845-288-2286, 845-287-0706, 845-248-9567) — nobody's card shows them yet.
+
+## What is live (container-verified 2026-09-18 ~20:40Z)
+- **api `57d9c7b9`** (`app-api-1` `.build-commit` = 57d9c7b9, healthy, migration
   `20260918200000_customer_cost_breakdown` APPLIED by the deploy, `/admin/billing/cost/rates`
   answers 401 unauthenticated and 200 as SUPER_ADMIN inside the container).
 - **portal `6d0fa490`** (`app-portal-1` `.build-commit` = 6d0fa490; the shipped chunks carry
   "What this customer cost us" (shared chunk 3531 + customer + cost pages) and "What the carriers
   charge us" (catalog page); `/admin/billing/invoice/x` and `/admin/billing/customer/x/cost` 200).
-- **The VoIP.ms feed is PULLING**: boot run (last 14 days) + a hand backfill of Aug 3 – Sep 3
-  through `POST /admin/billing/cost/sync`; 17,566 carrier records on file mid-pull, ~800/day,
-  ~25 s per day. It runs by itself every 6 h (`CARRIER_COST_SYNC_DISABLED=1` to stop).
+- **The VoIP.ms feed is LIVE and backfilled Aug 3 → Sep 18** (boot run + hand backfills through
+  `POST /admin/billing/cost/sync`; ~800 records/day, ~25 s per day; cursor at Sep 18). It runs by
+  itself every 6 h (`CARRIER_COST_SYNC_DISABLED=1` to stop). ⛔ A deploy restarts the api and
+  kills a pull in flight — re-run the range, it is idempotent.
 - Where: invoice page card (under "What they are being charged for") · drill-down
   `/admin/billing/customer/[tenantId]/cost?invoiceId=…` · Catalog "What the carriers charge us"
   (typed rates + "Pull from VoIP.ms" date range) · customer page "month by month".
@@ -45,16 +56,18 @@ everything through their API"* → *"And approved, go."*
   renders nothing on 403; `billing/pdf.ts`, email templates, public pay and tenant `/billing` are
   not imported (guard test). No new sidebar page → no toggle work.
 - ⛔ Tests are CJS (`node --test` + tsx): no top-level `await` in test files; use `await import`
-  inside each test. 13/13 green, registered in the api `test` script.
+  inside each test. 14/14 green, registered in the api `test` script.
 - ⛔ The shared work tree had other sessions' uncommitted edits + the remote had moved: this was
   committed via a private index on the remote tip with `git merge-file` for `schema.prisma` and
   `server.ts` (both appended at EOF — conflict resolved keeping both, `YcPipelineState` +
   the three cost models).
 
 ## ⏳ Not proven
-- ⏳ Izzy has not opened the card in a browser. ⏳ The Aug 3 – Sep 3 backfill was still running
-  at handoff time — check `GET /admin/billing/cost/sync` (cursor + earliest/latest) or the
-  Catalog card; the Gesheft Aug 3 – Sep 3 breakdown is the acceptance check.
+- ⏳ Izzy has not opened the card in a browser (the numbers above came through the deployed api
+  as SUPER_ADMIN from inside the container).
+- One-off SQL on the live DB after `57d9c7b9`: 44 stored E911SETUP rows reclassified to
+  E911_MONTHLY, 172 French fee labels → English, 21 PayPal top-up rows deleted, 210 rows given
+  their tenant — all inside `CarrierUsageRecord`, nothing else touched.
 - ⏳ `getSMS`/`getMMS` `limit=100000` on a busy day; Telocall's real billing increment.
 - Not built: Telnyx feed (rates exist as placeholders), "services we run" (transcription /
   TTS / storage), a Margin column on the customer LIST.

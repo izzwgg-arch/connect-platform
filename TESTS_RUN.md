@@ -6,8 +6,8 @@
 - api `npx tsc --noEmit`: 0 errors in `src/billing/cost/*`, `billing/routes.ts`, my `server.ts` lines; the 52 listed errors are pre-existing (delivery/ops/mfa/…). Portal `tsc`: 0 errors in the billing screens.
 - Live, read-only probes inside `app-api-1` against VoIP.ms (2026-09-17 data): CNAM Queries transaction −4.1520 = 519 CDR rows with a CNAM lookup × 0.008 — reconciles exactly.
 - DEPLOYED 2026-09-18: api + portal `6d0fa490` (both `.build-commit` verified, api healthy, migration `20260918200000` applied by the deploy, `/admin/billing/cost/rates` 401 unauthenticated / 200 as SUPER_ADMIN in-container, portal chunks carry both cards, pages 200). Feed pulling: boot run (14 days) + Aug 3–Sep 3 backfill, 17,566+ records.
-- NOT proven: a human opening the card; the full Aug 3–Sep 3 backfill was still running at handoff (see the summary file for the acceptance numbers if they were captured).
-
+- Tests now **14/14** (hybrid per-day coverage case added in `8fad6359`; E911SETUP/labels/top-ups in `57d9c7b9`). Final api `57d9c7b9` container-verified. ACCEPTANCE on real data through the deployed api: Gesheft Aug 5–Sep 3 feed complete, cost $169.78 on $450.41 (62.2% margin), CNAM 4,949 lookups = $39.59.
+- NOT proven: a human opening the card in a browser.
 
 ## Loopcom Computer Control — 2026-09-18
 

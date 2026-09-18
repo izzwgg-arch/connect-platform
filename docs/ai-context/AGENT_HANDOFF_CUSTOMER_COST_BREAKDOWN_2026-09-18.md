@@ -10,7 +10,7 @@ approved, go."*
 
 Mockups (approved): https://claude.ai/artifact/BMtViAYuCsesLP9gNCYLVx ·
 repo copy `docs/mockups/customer-cost-breakdown/v1/`.
-Build commit: **`6d0fa490`** on `feat/ivr-migration-takeover`.
+Build commits on `feat/ivr-migration-takeover`: **`6d0fa490`** (build) · `8fad6359` (hybrid per-day coverage: uncovered days fall back to our tables, line says the split) · `57d9c7b9` (E911SETUP recurs monthly → E911_MONTHLY; English labels; PayPal top-ups skipped). Deployed: portal 6d0fa490, api 57d9c7b9.
 
 ---
 
@@ -59,9 +59,11 @@ Build commit: **`6d0fa490`** on `feat/ivr-migration-takeover`.
   - Texts/MMS = feed counts × rate. CNAM = feed CNAM_LOOKUP count × rate. Numbers/911 =
     DID_MONTHLY/E911_MONTHLY transactions in the period. OTHER transactions naming one of
     the tenant's numbers → "One-time / other".
-  - ⛔ **No feed for the period** (no VoIP.ms row on any day of it, any tenant) →
-    inbound/CNAM/texts fall back to `ConnectCdr` / `ConnectChatMessage` (SMS threads)
-    and every such line says `OUR_COUNT`; `feed.complete=false` and the UI says so.
+  - ⛔ **Coverage is PER DAY** (`8fad6359`): a day with no VoIP.ms row (any tenant) is
+    uncovered → that day's inbound/CNAM/texts come from `ConnectCdr` /
+    `ConnectChatMessage` (SMS threads); any uncovered day drops the line to `OUR_COUNT`
+    with "N of M days from the carrier's records"; `feed.complete=false` and the UI says so.
+    A covered day NEVER double-counts our own copy of the call.
   - Feed coverage is probed one `take:1` query per day — never load a month of rows
     to learn coverage.
 - **`carrierRates.ts`** — defaults + `loadRates(db, asOf)` + `saveTypedRate`.
@@ -101,9 +103,17 @@ Build commit: **`6d0fa490`** on `feat/ivr-migration-takeover`.
   session's uncommitted escape fix (`\"` vs `\\\"` on the yiddishCorpus glob) — it
   rode along in the commit.
 
-## 3. ⏳ Not proven / open
-- ⏳ First real pull + the card opened in a browser on a real invoice — see the
-  summary file for the deploy state.
+## 3. Proven on real data
+Gesheft Aug 5 – Sep 3 (CC-202608-00002): feed complete, cost $169.78 on $450.41 → 62.2% margin;
+inbound $78.72 carrier-priced, Telocall $30.94, backup $0.16, texting $11.06, CNAM 4,949 =
+$39.59, numbers/911 $9.30. Read via `GET /admin/billing/cost/tenants/<id>?from=2026-08-05&to=2026-09-03`
+as SUPER_ADMIN inside the container (token recipe: `/tmp/cost-sync.js` on loopcom, same
+HS256-from-JWT_SECRET trick as the October projection).
+
+## 3b. ⏳ Not proven / open
+- ⏳ The card opened in a browser by a human (the api answers were verified in-container).
+- 4 VoIP.ms DIDs carry cost but map to no Connect tenant (845-213-6776, 845-288-2286,
+  845-287-0706, 845-248-9567) — an "unattributed carrier cost" view would surface them.
 - ⏳ Whether `getSMS`/`getMMS` honour `limit=100000` for a busy day (the probe used 5).
 - ⏳ Telocall's billing increment (6 s assumed; the line says so).
 - Telnyx feed (for numbers that land there after porting) — rates exist, no puller.
