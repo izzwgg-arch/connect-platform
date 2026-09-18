@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="224" viewBox="0 0 220 224" role="img" aria-label="TrimPro icon" style="color:#ffffff">
+  <g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="8" y1="112" x2="86" y2="112" />
+    <line x1="134" y1="112" x2="212" y2="112" />
+    <circle cx="104" cy="112" r="4.75" fill="currentColor" />
+    <circle cx="116" cy="112" r="4.75" fill="currentColor" />
+    <circle cx="110" cy="86" r="4.75" fill="currentColor" />
+    <circle cx="110" cy="140" r="4.75" fill="currentColor" />
+  </g>
+</svg>

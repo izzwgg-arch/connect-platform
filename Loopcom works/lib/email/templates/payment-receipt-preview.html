@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="supported-color-schemes" content="light dark" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings>
+    <o:PixelsPerInch>96</o:PixelsPerInch>
+  </o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+  <title>Payment Receipt — TrimPro</title>
+  <style>
+    /* ── Reset ── */
+    body,table,td,a{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}
+    table,td{mso-table-lspace:0;mso-table-rspace:0}
+    img{-ms-interpolation-mode:bicubic;border:0;outline:none;text-decoration:none}
+    body{margin:0;padding:0;width:100%!important;min-width:100%}
+
+    /* ── Dark mode ── */
+    @media (prefers-color-scheme:dark){
+      .body-bg{background-color:#0f1117!important}
+      .card-bg{background-color:#1a1d27!important;border-color:#2d3146!important}
+      .receipt-box{background-color:#12151f!important;border-color:#2d3146!important}
+      .receipt-divider{border-color:#2d3146!important}
+      .h1-text{color:#f1f5f9!important}
+      .body-text{color:#94a3b8!important}
+      .label-text{color:#64748b!important}
+      .value-text{color:#e2e8f0!important}
+      .amount-text{color:#a5b4fc!important}
+      .txn-text{color:#7dd3fc!important}
+      .footer-bg{background-color:#0f1117!important}
+      .footer-text{color:#475569!important}
+      .prefooter-text{color:#334155!important}
+    }
+
+    /* ── Responsive ── */
+    @media only screen and (max-width:620px){
+      .email-container{width:100%!important;max-width:100%!important}
+      .card-padding{padding:28px 20px!important}
+      .receipt-padding{padding:18px 16px!important}
+    }
+  </style>
+</head>
+<body class="body-bg" style="margin:0;padding:0;background-color:#f0f2f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+  <!-- Email wrapper -->
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f0f2f8;">
+    <tr>
+      <td align="center" style="padding:32px 16px 40px;">
+
+        <!-- ═══════════════════════════════════ CARD ═══════════════════════════════════ -->
+        <table role="presentation" class="email-container card-bg" cellpadding="0" cellspacing="0" border="0"
+          width="600" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:16px;
+          border:1px solid #e2e8f0;box-shadow:0 4px 24px rgba(0,0,0,0.07),0 1px 4px rgba(0,0,0,0.05);">
+
+          <!-- ─── HEADER GRADIENT ─── -->
+          <tr>
+            <td style="border-radius:16px 16px 0 0;background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 60%,#9333ea 100%);padding:32px 40px 28px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td align="center">
+                    <!-- Logo — swap src for your actual logo URL -->
+                    <span style="font-size:24px;font-weight:800;letter-spacing:-0.5px;color:#ffffff;">TrimPro</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding-top:16px;">
+                    <span style="display:inline-block;background:rgba(255,255,255,0.18);
+                      border:1px solid rgba(255,255,255,0.28);border-radius:999px;
+                      padding:5px 14px;font-size:12px;font-weight:600;letter-spacing:0.06em;
+                      color:#ffffff;text-transform:uppercase;">
+                      Payment Receipt
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- ─── MAIN BODY ─── -->
+          <tr>
+            <td class="card-padding" style="padding:36px 40px 32px;">
+
+              <!-- Greeting -->
+              <p style="margin:0 0 6px;font-size:15px;color:#6b7280;">Hi Izzy Weinstock,</p>
+
+              <!-- Headline -->
+              <h1 class="h1-text" style="margin:0 0 14px;font-size:28px;font-weight:800;
+                letter-spacing:-0.6px;color:#111827;line-height:1.25;">
+                Payment Received ✓
+              </h1>
+
+              <!-- Body text -->
+              <p class="body-text" style="margin:0 0 28px;font-size:15px;line-height:1.65;color:#4b5563;">
+                Thank you for your payment. We've received and applied it to your
+                outstanding invoice(s). Your account is up to date.
+              </p>
+
+              <!-- ─── RECEIPT BOX ─── -->
+              <table role="presentation" class="receipt-box" cellpadding="0" cellspacing="0" border="0" width="100%"
+                style="background-color:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+
+                <!-- Amount row — hero -->
+                <tr>
+                  <td class="receipt-padding" style="padding:22px 24px 18px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <td>
+                          <p class="label-text" style="margin:0 0 4px;font-size:11px;font-weight:600;
+                            letter-spacing:0.08em;text-transform:uppercase;color:#9ca3af;">Amount Paid</p>
+                          <p class="amount-text" style="margin:0;font-size:36px;font-weight:800;
+                            letter-spacing:-1px;color:#4f46e5;line-height:1.1;">
+                            $0.20
+                          </p>
+                        </td>
+                        <!-- Green success pill -->
+                        <td align="right" valign="top" style="padding-top:4px;">
+                          <span style="display:inline-block;background:#dcfce7;border:1px solid #bbf7d0;
+                            border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;color:#15803d;">
+                            ✓ Paid
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Divider -->
+                <tr><td class="receipt-divider" style="border-top:1px solid #e5e7eb;font-size:0;line-height:0;">&nbsp;</td></tr>
+
+                <!-- Detail rows -->
+                <tr>
+                  <td class="receipt-padding" style="padding:18px 24px 20px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+
+                      <!-- Date -->
+                      <tr>
+                        <td style="padding:7px 0;" valign="top">
+                          <p class="label-text" style="margin:0;font-size:12px;font-weight:500;color:#9ca3af;">Date</p>
+                        </td>
+                        <td align="right" style="padding:7px 0;" valign="top">
+                          <p class="value-text" style="margin:0;font-size:13px;font-weight:500;color:#374151;">
+                            March 10, 2026&nbsp;&nbsp;11:22:13 AM
+                          </p>
+                        </td>
+                      </tr>
+
+                      <!-- Thin rule -->
+                      <tr><td colspan="2" style="border-top:1px solid #f3f4f6;font-size:0;line-height:0;padding:0;">&nbsp;</td></tr>
+
+                      <!-- Transaction ID -->
+                      <tr>
+                        <td style="padding:7px 0;" valign="top">
+                          <p class="label-text" style="margin:0;font-size:12px;font-weight:500;color:#9ca3af;">Transaction ID</p>
+                        </td>
+                        <td align="right" style="padding:7px 0;" valign="top">
+                          <p class="txn-text" style="margin:0;font-size:12px;font-weight:600;
+                            font-family:'SF Mono','Fira Mono','Cascadia Mono','Roboto Mono','Courier New',Courier,monospace;
+                            color:#0369a1;letter-spacing:0.04em;">
+                            109058510777
+                          </p>
+                        </td>
+                      </tr>
+
+                      <!-- Thin rule -->
+                      <tr><td colspan="2" style="border-top:1px solid #f3f4f6;font-size:0;line-height:0;padding:0;">&nbsp;</td></tr>
+
+                      <!-- Description -->
+                      <tr>
+                        <td style="padding:7px 0;" valign="top">
+                          <p class="label-text" style="margin:0;font-size:12px;font-weight:500;color:#9ca3af;">Description</p>
+                        </td>
+                        <td align="right" style="padding:7px 0;" valign="top">
+                          <p class="value-text" style="margin:0;font-size:13px;font-weight:500;color:#374151;">
+                            Outstanding invoices payment
+                          </p>
+                        </td>
+                      </tr>
+
+                    </table>
+                  </td>
+                </tr>
+
+              </table>
+              <!-- /RECEIPT BOX -->
+
+              <!-- Closing copy -->
+              <p class="body-text" style="margin:28px 0 0;font-size:14px;line-height:1.65;color:#6b7280;text-align:center;">
+                If you have any questions, just reply to this email —
+                we're here to help.
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- ─── FOOTER ─── -->
+          <tr>
+            <td class="footer-bg" style="background-color:#f8fafc;border-top:1px solid #e5e7eb;
+              border-radius:0 0 16px 16px;padding:24px 40px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td align="center">
+                    <p class="footer-text" style="margin:0 0 4px;font-size:13px;font-weight:600;color:#374151;">
+                      TrimPro
+                    </p>
+                    <p class="footer-text" style="margin:0;font-size:12px;color:#9ca3af;">
+                      Thank you for your business.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+        <!-- /CARD -->
+
+        <!-- Pre-footer note -->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600"
+          style="max-width:600px;width:100%;margin-top:16px;">
+          <tr>
+            <td align="center">
+              <p class="prefooter-text" style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5;">
+                This is an automated receipt — please do not reply unless you have questions.<br />
+                <a href="mailto:support@trimprony.com" style="color:#a5b4fc;text-decoration:none;">support@trimprony.com</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+
+<!--
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CUSTOMIZATION GUIDE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BRAND COLORS
+  Header gradient  → gradient(135deg, #4f46e5 → #7c3aed → #9333ea)
+                     Swap with your brand: e.g. #0ea5e9 → #6366f1 for
+                     a sky-indigo look, or #10b981 → #059669 for green.
+  Amount color     → #4f46e5 (indigo-600). Match your primary brand hue.
+  "Paid" badge     → #dcfce7 / #15803d (emerald). Always keep green for
+                     positive confirmation — it's universal.
+  Transaction ID   → #0369a1 (sky-700). Monospace, stands out clearly.
+  Dark-mode amount → #a5b4fc (indigo-300). Bright enough on dark slate.
+
+LOGO
+  Replace the <span> text in the header with:
+    <img src="https://app.trimprony.com/branding/trimpro-logo.svg"
+         alt="TrimPro" width="140" height="40"
+         style="display:block;height:40px;width:auto;max-width:180px;object-fit:contain;" />
+  Use absolute HTTPS URLs only — email clients don't follow relative paths.
+  Recommended: SVG or transparent PNG, 140-180px wide × 36-44px tall.
+
+HOW TO USE THE TYPESCRIPT TEMPLATE
+  import { buildPaymentReceiptEmail } from '@/lib/email/templates/payment-receipt'
+
+  const html = buildPaymentReceiptEmail({
+    recipientName: 'Izzy Weinstock',
+    amountPaid: '$0.20',
+    paidAt: new Date(),
+    transactionId: '109058510777',
+    description: 'Outstanding invoices payment',
+    logoUrl: 'https://app.trimprony.com/branding/trimpro-logo.svg',
+    companyName: 'TrimPro',
+    supportEmail: 'support@trimprony.com',
+    companyAddress: '123 Main St, Anytown, USA',
+  })
+
+EMAIL CLIENT GOTCHAS
+  • Outlook (Windows)  : border-radius on <td> is ignored — corners will
+    be square. Add a VML rounded-rect wrapper for pixel-perfect corners.
+    The <!--[if mso]> block sets 96 DPI so fonts scale correctly.
+  • Gmail (web/app)    : strips <style> blocks NOT in <head>. All critical
+    styles are inline; the <style> block handles dark-mode + responsive
+    only, so Gmail gracefully falls back to light mode.
+  • Apple Mail / iOS   : full dark-mode support via @media classes above.
+  • Yahoo Mail         : ignores @media entirely — light mode renders fine
+    since all inline styles are light-mode safe.
+  • linear-gradient    : not supported in Outlook. Add bgcolor fallback:
+    <td bgcolor="#4f46e5" style="background:linear-gradient(...)">
+  • box-shadow         : ignored everywhere — cosmetic webmail only.
+    The 1px border provides structure in all clients.
+  • iOS min font size  : iOS Mail enforces ≥13px on body copy. Labels
+    are 11-12px (accepted for secondary info); all primary text ≥13px.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-->

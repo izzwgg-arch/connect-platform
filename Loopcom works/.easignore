@@ -1,0 +1,25 @@
+# Build artifacts and caches
+.next/
+node_modules/
+**/node_modules/
+dist/
+build/
+
+# Local logs and captures
+*.log
+*.txt
+
+# Local archives/backups
+*.tgz
+*.tar
+*.zip
+
+# Local workspace metadata
+.cursor/
+
+# Keep app source and config
+!.env
+!apps/mobile/**
+!package.json
+!package-lock.json
+!tsconfig.json

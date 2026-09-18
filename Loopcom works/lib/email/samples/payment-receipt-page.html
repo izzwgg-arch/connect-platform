@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Payment Receipt — INV-2201</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827; margin: 0; padding: 0; background: #f1f5f9; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 32px 24px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
+    .header { background: #f8fafc; padding: 24px; border-bottom: 1px solid #e5e7eb; }
+    .body { padding: 24px; }
+    .amount { font-size: 32px; font-weight: 800; color: #1e4d6e; margin: 8px 0 0; }
+    table.details { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    table.details td { padding: 10px 0; border-bottom: 1px solid #f3f4f6; font-size: 14px; vertical-align: top; }
+    table.details td.label { color: #6b7280; width: 40%; font-weight: 600; }
+    table.details td.value { text-align: right; font-weight: 600; }
+    .footer { margin-top: 24px; font-size: 12px; color: #6b7280; text-align: center; }
+    .note { margin: 0 0 16px; padding: 12px 14px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #065f46; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="note">Example of what customers see after clicking <strong>View Receipt</strong> (and the same content as the PDF attachment).</p>
+    <div class="card">
+      <div class="header">
+        <div style="font-size:22px;font-weight:800;color:#1e4d6e;margin-bottom:8px;">TrimPro Demo</div>
+        <div style="font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#64748b;">Payment Receipt</div>
+        <div class="amount">$500.00</div>
+        <div style="font-size:13px;color:#64748b;margin-top:6px;">Invoice INV-2201</div>
+      </div>
+      <div class="body">
+        <table class="details">
+          <tr><td class="label">Customer</td><td class="value">Jane Client</td></tr>
+          <tr><td class="label">Payment Date</td><td class="value">May 25, 2026, 2:30:00 PM</td></tr>
+          <tr><td class="label">Payment Method</td><td class="value">Card</td></tr>
+          <tr><td class="label">Payment ID</td><td class="value">txn_998877</td></tr>
+          <tr><td class="label">Provider Invoice ID</td><td class="value">INV-2201</td></tr>
+          <tr><td class="label">Reference</td><td class="value">txn_998877</td></tr>
+        </table>
+      </div>
+    </div>
+    <p class="footer">Thank you for your business — TrimPro Demo</p>
+  </div>
+</body>
+</html>

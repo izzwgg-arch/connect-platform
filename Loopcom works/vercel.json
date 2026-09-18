@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/qbo/worker",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/payments/qbo/reconcile",
+      "schedule": "0 */2 * * *"
+    }
+  ]
+}

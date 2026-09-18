@@ -1,0 +1,7 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TP">
+  <rect width="1024" height="1024" fill="#2E4A59" />
+  <g fill="#E6C98B" transform="matrix(1.65 0 0 1.35 48 264)">
+    <path d="M46 96h214v45h-85v193h-44V141H46V96z" />
+    <path d="M286 96h106c45 0 74 6 98 23c21 15 32 39 32 69c0 31-11 55-32 70c-24 16-53 22-98 22h-62v54h-44V96zm44 45v94h62c30 0 51-3 64-11c14-8 21-21 21-36s-7-28-21-36c-13-8-34-11-64-11h-62z" />
+  </g>
+</svg>

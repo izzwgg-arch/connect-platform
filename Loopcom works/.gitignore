@@ -1,0 +1,114 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+build.log
+
+# Local env files
+.env
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Prisma
+prisma/migrations/*/migration.sql
+
+# Expo / EAS (mobile) - never commit credentials or build artifacts
+apps/mobile/credentials.json
+apps/mobile/credentials/
+apps/mobile/dist/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Archive files
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Deployment artifacts & local logs
+trimpro-deploy-*.tgz
+trimpro-hotfix-deploy.tgz
+trimpro-job-attach-hotfix.tgz
+restore-latest-local-state.tgz
+mobile-crash-live.log
+mobile-live-logcat.txt
+mobile-logcat.txt
+kbd-*.txt
+kbd-*.png
+kbd-live.png
+tmp-login.html
+trimpro-gap.png
+
+# Local Android install / proof APKs (prevents release drift from stray binaries)
+*.apk
+
+# Device QA screen captures often dropped at repo root
+screenshot*.png
+
+# ── Loopcom Works in the Connect repo (2026-09-18) ─────────────────────────
+# This folder was copied from C:\dev\projects\trim pro 2 with years of scratch
+# beside the source. None of it is product. The Connect root .gitignore already
+# drops node_modules/.next/*.log/.env; these are the leftovers that would
+# otherwise be staged into connect-platform (2.5 GB of tarballs, 580 MB of APKs,
+# 170 MB of logcat dumps).
+/*.apk
+/*.aab
+/*.ipa
+/kbd-*.txt
+/kbd-*.png
+/mobile-*logcat*.txt
+/mobile-crash-live.log
+/trimpro-gap.png
+/tmp-login.html
+/restore-latest-local-state.tgz
+/rollback-*.tar.gz
+/trimpro-deploy-*.tgz
+/trimpro-hotfix-deploy.tgz
+/trimpro-job-attach-hotfix.tgz
+/calls-vitalpbx.tar
+/messaging-ui-patch.tar
+/mms-*.tar
+/notifications-fix.tar
+/debug.log
+/build.log
+/.cursor/
+/.claude/
+/apps/mobile/credentials/
+/apps/mobile/dist/
+/apps/mobile/.expo/
+/mobile-app/node_modules/

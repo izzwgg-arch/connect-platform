@@ -94,3 +94,8 @@ cb19/
 Connect-2-apk-*/
 Connect-2-call-history-deploy/
 Connect2-ios-fg-active-fix/
+
+# Loopcom Works (2026-09-18): a whole second product (Next.js app + its own Expo
+# app) living beside Connect in this repo. It is never an input to a Connect
+# mobile build, and its node_modules/APKs alone are >1 GB.
+Loopcom works/

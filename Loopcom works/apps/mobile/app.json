@@ -1,0 +1,87 @@
+{
+  "expo": {
+    "name": "TrimPro Field",
+    "slug": "trimpro-field",
+    "scheme": ["trimprofield", "trimpro"],
+    "version": "1.0.18",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "enabled": false,
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/5d6344e3-86ce-4e96-93e8-13893313d47f"
+    },
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#2E4A59"
+    },
+    "ios": {
+      "bundleIdentifier": "com.trimpro.field",
+      "buildNumber": "3",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "TrimPro Field uses camera to capture job photos and videos.",
+        "NSPhotoLibraryUsageDescription": "TrimPro Field uses your photo library to attach media to jobs.",
+        "NSMicrophoneUsageDescription": "TrimPro Field uses microphone access for job videos and voice notes.",
+        "NSLocationWhenInUseUsageDescription": "TrimPro Field uses location to share technician location while on active jobs."
+      }
+    },
+    "android": {
+      "package": "com.trimpro.field",
+      "versionCode": 34,
+      "softwareKeyboardLayoutMode": "pan",
+      "googleServicesFile": "./google-services.json",
+      "notification": {
+        "icon": "./assets/adaptive-icon.png",
+        "color": "#0F4C5C"
+      },
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#2E4A59"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-notifications",
+      "expo-font",
+      "./plugins/withAndroidViewerQueries.js",
+      [
+        "expo-share-intent",
+        {
+          "disableIOS": true,
+          "androidIntentFilters": ["*/*", "image/*", "video/*", "application/pdf"],
+          "androidMultiIntentFilters": ["*/*", "image/*", "video/*", "application/pdf"],
+          "androidMainActivityAttributes": {
+            "android:launchMode": "singleTask"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5d6344e3-86ce-4e96-93e8-13893313d47f"
+      }
+    },
+    "owner": "izz8457s-organization"
+  }
+}
+

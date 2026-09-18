@@ -1,0 +1,253 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 201 32% 27%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 201 32% 27%;
+    --radius: 0.5rem;
+
+    /* Brand color defaults — overridden at runtime by BrandingProvider */
+    --brand-primary-color: #2e4a59;
+    --brand-secondary-color: #4a7c94;
+    --brand-background-color: #f3f4f6;
+    --brand-sidebar-color: #2E4A59;
+    --brand-sidebar-border-color: #3A5C70;
+    --brand-menu-color: #E6C98B;
+    --brand-button-color: #2e4a59;
+    --brand-button-hover-color: #243b47;
+    --brand-button-text-color: #ffffff;
+    --brand-text-primary-color: #111827;
+    --brand-text-secondary-color: #6b7280;
+    --brand-link-color: #2e4a59;
+    --brand-border-color: #e5e7eb;
+    --brand-success-color: #16a34a;
+    --brand-warning-color: #d97706;
+    --brand-danger-color: #dc2626;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 201 32% 27%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 201 32% 27%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--brand-primary-color);
+  }
+  html {
+    height: 100%;
+    background-color: rgb(243 244 246) !important; /* gray-100 */
+  }
+  body {
+    @apply text-foreground;
+    height: 100%;
+    background-color: rgb(243 244 246) !important; /* gray-100 */
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevent body scroll, let main handle it */
+    -webkit-tap-highlight-color: transparent;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Allow body scrolling on public portal pages that need natural page scroll. */
+  body[data-allow-scroll='true'] {
+    overflow: auto !important;
+  }
+  #__next {
+    height: 100%;
+    background-color: rgb(243 244 246) !important; /* gray-100 */
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* Emergency fix: Remove stuck dialog overlays */
+@layer utilities {
+  /* Hide closed dialog overlays */
+  [data-radix-dialog-overlay][data-state="closed"] {
+    display: none !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+  }
+  
+  /* Force remove any fixed overlay that shouldn't be visible */
+  body:not([data-dialog-open]) [data-radix-dialog-overlay] {
+    animation: fade-out 0.2s ease-in-out;
+  }
+
+  /* Always-visible scrollbar (horizontal or vertical) for scrolling
+     containers like the Production board and its columns — some OS/browser
+     settings auto-hide scrollbars until actively scrolling, which hides the
+     fact that there's more content to scroll to. */
+  .scrollbar-visible-x {
+    scrollbar-width: auto;
+    scrollbar-color: #94a3b8 #e2e8f0;
+  }
+  .scrollbar-visible-x::-webkit-scrollbar {
+    height: 12px;
+    width: 12px;
+  }
+  .scrollbar-visible-x::-webkit-scrollbar-track {
+    background: #e2e8f0;
+    border-radius: 9999px;
+  }
+  .scrollbar-visible-x::-webkit-scrollbar-thumb {
+    background-color: #94a3b8;
+    border-radius: 9999px;
+    border: 2px solid #e2e8f0;
+  }
+  .scrollbar-visible-x::-webkit-scrollbar-thumb:hover {
+    background-color: #64748b;
+  }
+}
+
+/* Global blue-button override — uses brand CSS variables so branding changes take effect.
+   Scoped to the solid action-button shades (600/700) only — bg-blue-50/100/200 are used
+   app-wide as light badge/chip backgrounds and must not be swept into this override. */
+@layer components {
+  button[class*="bg-blue-600"],
+  button[class*="bg-blue-700"],
+  a[class*="bg-blue-600"],
+  a[class*="bg-blue-700"],
+  [role="button"][class*="bg-blue-600"],
+  [role="button"][class*="bg-blue-700"] {
+    background-color: var(--brand-button-color) !important;
+    border-color: var(--brand-button-color) !important;
+  }
+
+  button[class*="bg-blue-600"]:hover,
+  button[class*="bg-blue-700"]:hover,
+  a[class*="bg-blue-600"]:hover,
+  a[class*="bg-blue-700"]:hover,
+  [role="button"][class*="bg-blue-600"]:hover,
+  [role="button"][class*="bg-blue-700"]:hover {
+    background-color: var(--brand-button-hover-color) !important;
+    border-color: var(--brand-button-hover-color) !important;
+  }
+
+  /* Global dropdown/select interaction color system */
+  select:focus,
+  select:focus-visible,
+  select[class*='focus:ring-blue-500']:focus,
+  select[class*='focus:ring-primary']:focus {
+    border-color: var(--brand-primary-color) !important;
+    outline: none !important;
+    --tw-ring-color: var(--brand-primary-color) !important;
+  }
+
+  /* Native option highlight (best-effort across browsers/OS) */
+  select option:hover,
+  select option:focus,
+  select option:checked,
+  select option:active {
+    background: var(--brand-primary-color) !important;
+    color: var(--brand-button-text-color) !important;
+  }
+
+  /* Prevent Android Chrome zoom-on-focus; keep inputs comfortably tappable. */
+  @media (pointer: coarse) {
+    input:not([type='checkbox']):not([type='radio']),
+    select,
+    textarea {
+      font-size: 16px;
+      min-height: 44px;
+    }
+  }
+
+  /* Line-item editor: stack numeric fields on narrow screens. */
+  [data-line-item-row] {
+    flex-wrap: wrap;
+  }
+
+  [data-line-item-row] > .line-item-field-wide {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    [data-line-item-row] > .line-item-field-wide {
+      flex: 1 1 12rem;
+      width: auto;
+    }
+  }
+
+  [data-line-item-row] .line-item-field-numeric {
+    flex: 1 1 calc(50% - 0.25rem);
+    width: calc(50% - 0.25rem);
+    min-width: 6rem;
+  }
+
+  @media (min-width: 640px) {
+    [data-line-item-row] .line-item-field-numeric {
+      flex: 0 0 auto;
+      width: 6rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    [data-line-item-row] .line-item-field-numeric {
+      width: 7rem;
+    }
+  }
+
+  .visibility-toggle-btn {
+    @apply inline-flex items-center justify-center rounded-md;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem;
+  }
+
+  .visibility-toggle-btn svg {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  /* Active state for touch (avoid hover-only feedback). */
+  .touch-active-row:active {
+    @apply bg-muted/40;
+  }
+}

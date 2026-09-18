@@ -1,0 +1,25 @@
+{
+  "name": "Trim Pro",
+  "short_name": "TrimPro",
+  "description": "Field Service Management for millwork, trim, and molding companies",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f4f6",
+  "theme_color": "#2e4a59",
+  "icons": [
+    {
+      "src": "/branding/trimpro-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon-tp.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

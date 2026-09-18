@@ -1,0 +1,3396 @@
+// Trim Pro - Field Service Management Platform
+// Production-ready Prisma schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// MULTI-TENANCY
+// ============================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  subdomain String?  @unique
+  domain    String?  @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  users                  User[]
+  clients                Client[]
+  leads                  Lead[]
+  jobs                   Job[]
+  estimates              Estimate[]
+  invoices               Invoice[]
+  creditMemos            CreditMemo[]
+  purchaseOrders         PurchaseOrder[]
+  vendors                Vendor[]
+  vendorContacts         VendorContact[]
+  tasks                  Task[]
+  timeEntries            TimeEntry[]
+  issues                 Issue[]
+  priceBook              PriceBookItem[]
+  items                  Item[]
+  itemCategories         ItemCategory[]
+  bundleDefinitions      BundleDefinition[]
+  bundleComponents       BundleComponent[]
+  documentLineGroups     DocumentLineGroup[]
+  qboIntegration         QuickBooksIntegration?
+  integrationConnections IntegrationConnection[]
+  paymentTransactions    PaymentTransaction[]
+  automations            Automation[]
+  notifications          Notification[]
+  helpArticles           HelpArticle[]
+  auditLogs              AuditLog[]
+  emailTemplates         EmailTemplate[]
+  smsTemplates           SmsTemplate[]
+  webhooks               Webhook[]
+  schedules              Schedule[]
+  calls                  Call[]
+  smsMessages            SmsMessage[]
+  emails                 Email[]
+  roles                  Role[]
+  reports                Report[]
+  reportSchedules        ReportSchedule[]
+  dailyStats             DailyStats[]
+  dispatchEvents         DispatchEvent[]
+  techAvailability       TechAvailability[]
+  serviceZones           ServiceZone[]
+  conversations          Conversation[]
+  messages               Message[]
+  webhookEvents          WebhookEvent[]
+  invoicePaymentIntents  InvoicePaymentIntent[]
+  paymentEvents          PaymentEvent[]
+  idempotencyKeys        IdempotencyKey[]
+  pushDevices            UserPushDevice[]
+  estimateApprovalTokens EstimateApprovalToken[]
+  estimateItemApprovals  EstimateItemApproval[]
+  invoiceLineItemSources InvoiceLineItemSource[]
+  estimateMaterialLines  EstimateMaterialLine[]
+  brandingSettings       BrandingSettings?
+  measuringRequests      MeasuringRequest[]
+
+  @@map("tenants")
+}
+
+// ============================================
+// AUTHENTICATION & USERS
+// ============================================
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  OFFICE
+  FIELD
+  SALES
+  ACCOUNTING
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum JobType {
+  CUSTOM
+  STANDARD
+  RAILING
+  CLOSETS
+}
+
+model User {
+  id        String     @id @default(cuid())
+  tenantId  String
+  email     String
+  firstName String
+  lastName  String
+  phone     String?
+  avatar    String?
+  role      UserRole   @default(FIELD)
+  status    UserStatus @default(INVITED)
+  managerId String?
+  allowWebLogin    Boolean @default(true)
+  allowMobileLogin Boolean @default(true)
+
+  // Password management
+  passwordHash         String?
+  temporaryPassword    String?
+  temporaryPasswordExp DateTime?
+  passwordResetToken   String?   @unique
+  passwordResetExp     DateTime?
+  lastPasswordChange   DateTime?
+
+  // Permissions (JSON for granular control)
+  permissions Json?
+
+  // Job types this user belongs to (empty = not scoped; with jobs.access_all_types they see all)
+  assignedJobTypes JobType[] @default([])
+
+  // Session management
+  refreshTokens RefreshToken[]
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+
+  // Relationships
+  tenant                       Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedJobs                 JobAssignment[]
+  timeEntries                  TimeEntry[]               @relation("TimeEntryWorker")
+  createdTimeEntries           TimeEntry[]               @relation("TimeEntryCreatedBy")
+  updatedTimeEntries           TimeEntry[]               @relation("TimeEntryUpdatedBy")
+  manager                      User?                     @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
+  managedFieldWorkers          User[]                    @relation("UserManager")
+  assignedTasks                Task[]                    @relation("TaskAssignee")
+  createdTasks                 Task[]                    @relation("TaskCreator")
+  assignedIssues               Issue[]                   @relation("IssueAssignee")
+  createdIssues                Issue[]                   @relation("IssueCreator")
+  watchedIssues                IssueWatcher[]
+  assignedLeads                Lead[]                    @relation("LeadAssignee")
+  urgentLeadsMarked            Lead[]                    @relation("LeadUrgentBy")
+  createdLeads                 Lead[]                    @relation("LeadCreatedBy")
+  sentEmails                   Email[]
+  calls                        Call[]
+  smsMessages                  SmsMessage[]
+  notifications                Notification[]
+  createdAuditLogs             AuditLog[]
+  activities                   Activity[]
+  schedules                    Schedule[]
+  userRoles                    UserRoleAssignment[]
+  permissionConstraints        PermissionConstraint[]    @relation("UserPermissionConstraints")
+  techAvailability             TechAvailability[]
+  assignedConversations        Conversation[]
+  conversationReadReceipts     ConversationReadReceipt[]
+  createdInvoicePaymentIntents InvoicePaymentIntent[]    @relation("InvoicePaymentIntentCreatedBy")
+  // Push devices + optional per-user notification category toggles (JSON)
+  pushDevices                  UserPushDevice[]
+  notificationPreferences      Json?
+  requestedPaymentRefunds      PaymentRefund[]
+  assignedMeasuringRequests    MeasuringRequest[]            @relation("MeasuringRequestAssignee")
+  createdMeasuringRequests     MeasuringRequest[]            @relation("MeasuringRequestCreatedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, email])
+  @@index([tenantId, email])
+  @@index([tenantId, status])
+  @@index([tenantId, role])
+  @@index([tenantId, managerId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  deviceId   String
+  token      String    @unique
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@index([userId, deviceId])
+  @@index([expiresAt, revokedAt])
+  @@map("refresh_tokens")
+}
+
+// ============================================
+// CRM - CLIENTS & CONTACTS
+// ============================================
+
+model Client {
+  id          String   @id @default(cuid())
+  tenantId    String
+  parentId    String?
+  name        String
+  companyName String?
+  email       String?
+  phone       String?
+  website     String?
+  notes       String?  @db.Text
+  tags        String[]
+  isActive    Boolean  @default(true)
+
+  // Billing - use Address model with type="billing" or "shipping"
+
+  // Relationships
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent         Client?         @relation("ClientHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  subClients     Client[]        @relation("ClientHierarchy")
+  contacts       Contact[]
+  addresses      Address[]       @relation("ClientAddresses")
+  jobs           Job[]
+  leads          Lead[]
+  estimates      Estimate[]
+  invoices       Invoice[]
+  creditMemos    CreditMemo[]
+  purchaseOrders PurchaseOrder[]
+  tasks          Task[]
+  issues         Issue[]
+  calls          Call[]
+  smsMessages    SmsMessage[]
+  emails         Email[]
+  notes_history  Note[]
+  attachments    Attachment[]
+  activities     Activity[]
+  conversations  Conversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, parentId])
+  @@index([tenantId, name])
+  @@index([tenantId, email])
+  @@map("clients")
+}
+
+model Contact {
+  id        String  @id @default(cuid())
+  clientId  String
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  mobile    String?
+  title     String?
+  isPrimary Boolean @default(false)
+  notes     String? @db.Text
+
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  calls       Call[]
+  smsMessages SmsMessage[]
+  emails      Email[]
+  activities  Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@map("contacts")
+}
+
+model Address {
+  id        String  @id @default(cuid())
+  clientId  String?
+  jobId     String?
+  type      String // billing, shipping, job_site
+  street    String
+  city      String
+  state     String
+  zipCode   String
+  country   String  @default("US")
+  latitude  Float?
+  longitude Float?
+  notes     String? @db.Text
+  isDefault Boolean @default(false)
+
+  client Client? @relation("ClientAddresses", fields: [clientId], references: [id], onDelete: Cascade)
+  job    Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([jobId])
+  @@map("addresses")
+}
+
+// ============================================
+// LEADS
+// ============================================
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  ESTIMATE_CREATED
+  ESTIMATE_SENT
+  FOLLOW_UP
+  CONVERTED
+  LOST
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  PHONE
+  EMAIL
+  SOCIAL_MEDIA
+  OTHER
+}
+
+model Lead {
+  id             String     @id @default(cuid())
+  tenantId       String
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  company        String?
+  source         LeadSource @default(OTHER)
+  status         LeadStatus @default(NEW)
+  jobType        JobType    @default(CUSTOM)
+  value          Decimal?   @db.Decimal(10, 2)
+  probability    Int?       @default(50) // 0-100
+  notes          String?    @db.Text
+  jobSiteAddress String?    @db.Text
+  isUrgent       Boolean    @default(false)
+  urgentAt       DateTime?
+  urgentByUserId String?
+
+  // Conversion
+  convertedToClientId String?
+  convertedAt         DateTime?
+
+  // Relationships
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client      Client?      @relation(fields: [convertedToClientId], references: [id])
+  estimates   Estimate[]
+  tasks       Task[]
+  issues      Issue[]
+  calls       Call[]
+  smsMessages SmsMessage[]
+  emails      Email[]
+  attachments Attachment[]
+  schedules   Schedule[]
+  activities  Activity[]
+
+  assignedToId    String?
+  createdByUserId String?
+  assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  urgentBy     User?   @relation("LeadUrgentBy", fields: [urgentByUserId], references: [id], onDelete: SetNull)
+  createdBy    User?   @relation("LeadCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  measuringRequests MeasuringRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, isUrgent])
+  @@index([tenantId, assignedToId])
+  @@map("leads")
+}
+
+// ============================================
+// JOBS
+// ============================================
+
+enum JobStatus {
+  QUOTE
+  SCHEDULED
+  IN_PROGRESS
+  MEASURED
+  NEED_TO_ORDER
+  ORDERED
+  INSTALLATION_COMPLETE
+  NEED_TOUCH_UPS
+  FINISHING_COMPLETE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+  INVOICED
+}
+
+enum TimeEntrySource {
+  TIMER
+  MANUAL
+}
+
+enum TimeEntryStatus {
+  ACTIVE
+  STOPPED
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  tenantId    String
+  clientId    String
+  jobNumber   String    @unique
+  title       String
+  description String?   @db.Text
+  status      JobStatus @default(QUOTE)
+  jobType     JobType   @default(CUSTOM)
+  priority    Int       @default(3) // 1-5
+
+  // Financials
+  estimateAmount Decimal? @db.Decimal(10, 2)
+  actualAmount   Decimal? @db.Decimal(10, 2)
+  laborCost      Decimal? @db.Decimal(10, 2)
+  materialCost   Decimal? @db.Decimal(10, 2)
+  chargeByHour   Boolean  @default(false)
+  hourlyRateCents Int?
+  billableMinutesTotal Int @default(0)
+
+  // Dates
+  scheduledStart DateTime?
+  scheduledEnd   DateTime?
+  actualStart    DateTime?
+  actualEnd      DateTime?
+
+  // Location - use addresses array with type="job_site"
+
+  // Relationships
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  addresses      Address[]
+  estimates      Estimate[]
+  invoices       Invoice[]
+  creditMemos    CreditMemo[]
+  purchaseOrders PurchaseOrder[]
+  assignments    JobAssignment[]
+  tasks          Task[]
+  issues         Issue[]
+  calls          Call[]
+  smsMessages    SmsMessage[]
+  emails         Email[]
+  notes          Note[]
+  attachments    Attachment[]
+  schedules      Schedule[]
+  activities     Activity[]
+  dispatchEvents DispatchEvent[]
+  conversations  Conversation[]
+  timeEntries    TimeEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, status])
+  @@index([jobNumber])
+  @@map("jobs")
+}
+
+model JobAssignment {
+  id     String  @id @default(cuid())
+  jobId  String
+  userId String
+  role   String? // crew_lead, installer, helper
+  notes  String? @db.Text
+
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([jobId, userId])
+  @@index([jobId])
+  @@index([userId])
+  @@map("job_assignments")
+}
+
+model TimeEntry {
+  id              String          @id @default(cuid())
+  tenantId        String
+  jobId           String
+  workerId        String
+  startedAt       DateTime?
+  endedAt         DateTime?
+  durationMinutes Int             @default(0)
+  source          TimeEntrySource @default(TIMER)
+  status          TimeEntryStatus @default(ACTIVE)
+  note            String?         @db.Text
+  editedReason    String?         @db.Text
+  deletedAt       DateTime?
+  createdById     String
+  updatedById     String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job        Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  worker     User   @relation("TimeEntryWorker", fields: [workerId], references: [id], onDelete: Cascade)
+  createdBy  User   @relation("TimeEntryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy  User   @relation("TimeEntryUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, jobId])
+  @@index([tenantId, workerId])
+  @@index([jobId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, deletedAt])
+  @@map("time_entries")
+}
+
+// ============================================
+// ESTIMATES
+// ============================================
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+}
+
+enum EstimateItemApprovalStatus {
+  APPROVED
+  REVOKED
+}
+
+model Estimate {
+  id             String         @id @default(cuid())
+  tenantId       String
+  clientId       String?
+  leadId         String?
+  jobId          String?
+  estimateNumber String         @unique
+  title          String
+  jobSiteAddress String?        @db.Text
+  status           EstimateStatus @default(DRAFT)
+  convertedPercent Int?
+
+  // Required initial deposit % the customer must pay when approving online.
+  // When set, approval creates a FULL-amount invoice and the deposit is collected
+  // as a partial payment (invoice stays PARTIAL until the full balance is paid).
+  depositPercent Decimal? @db.Decimal(5, 2)
+
+  // Financials
+  subtotal  Decimal  @db.Decimal(10, 2)
+  taxRate   Decimal? @default(0) @db.Decimal(5, 4)
+  taxAmount Decimal? @db.Decimal(10, 2)
+  discount  Decimal? @db.Decimal(10, 2)
+  total     Decimal  @db.Decimal(10, 2)
+
+  // Dates
+  validUntil DateTime?
+  sentAt     DateTime?
+  viewedAt   DateTime?
+  acceptedAt DateTime?
+
+  // Notes
+  notes                  String? @db.Text
+  isNotesVisibleToClient Boolean @default(true) // Toggle for notes visibility
+  terms                  String? @db.Text
+
+  // Relationships
+  tenant        Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client        Client?                    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  lead          Lead?                      @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  job           Job?                       @relation(fields: [jobId], references: [id])
+  lineItems     EstimateLineItem[]
+  optionalItems EstimateOptionalLineItem[]
+  attachments   Attachment[]
+  emails        Email[]
+  invoices      Invoice[]
+  activities    Activity[]
+  approvalTokens EstimateApprovalToken[]
+  itemApprovals  EstimateItemApproval[]
+  invoiceLineItemSources InvoiceLineItemSource[]
+  materialLines  EstimateMaterialLine[]
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, status])
+  @@index([estimateNumber])
+  @@index([jobId])
+  @@map("estimates")
+}
+
+model EstimateApprovalToken {
+  id        String   @id @default(cuid())
+  tenantId  String
+  estimateId String
+
+  // Store hash for lookup, and encrypted token for re-sending/copying the same link.
+  tokenHash String   @unique
+  tokenEnc  String   @db.Text
+
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime?
+  lastViewedAt DateTime?
+  revokedAt    DateTime?
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, estimateId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@map("estimate_approval_tokens")
+}
+
+model EstimateItemApproval {
+  id        String                    @id @default(cuid())
+  tenantId  String
+  estimateId String
+  estimateLineItemId String
+
+  // For now we approve the full line item; keep field for future partial qty approvals.
+  approvedQty Decimal? @db.Decimal(10, 2)
+
+  status     EstimateItemApprovalStatus @default(APPROVED)
+  approvedAt DateTime?
+  revokedAt  DateTime?
+
+  approvedByName  String?
+  approvedByEmail String?
+  notes           String? @db.Text
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, estimateId, estimateLineItemId])
+  @@index([tenantId])
+  @@index([tenantId, estimateId])
+  @@index([estimateLineItemId])
+  @@map("estimate_item_approvals")
+}
+
+model InvoiceLineItemSource {
+  id        String   @id @default(cuid())
+  tenantId  String
+  invoiceId String
+  estimateId String
+  estimateLineItemId String
+
+  createdAt DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, estimateId, estimateLineItemId])
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([estimateId])
+  @@map("invoice_line_item_sources")
+}
+
+model EstimateLineItem {
+  id                        String   @id @default(cuid())
+  estimateId                String
+  groupId                   String? // FK to DocumentLineGroup
+  sourceItemId              String? // FK to Item (template reference)
+  sourceBundleId            String? // FK to BundleDefinition (if derived from nested bundle)
+  description               String
+  quantity                  Decimal  @db.Decimal(10, 2)
+  unitPrice                 Decimal  @db.Decimal(10, 2)
+  unitCost                  Decimal? @db.Decimal(10, 2) // Internal vendor cost
+  total                     Decimal  @db.Decimal(10, 2)
+  sortOrder                 Int      @default(0)
+  isVisibleToClient         Boolean  @default(true) // Legacy - overall visibility
+  // Per-field visibility toggles
+  showDescriptionToCustomer Boolean  @default(true) // Show line item description/name to customer
+  showCostToCustomer        Boolean  @default(false) // Show unit cost to customer
+  showPriceToCustomer       Boolean  @default(true) // Show unit price to customer
+  showTaxToCustomer         Boolean  @default(true) // Show tax line/rate to customer
+  showNotesToCustomer       Boolean  @default(false) // Show notes to customer
+  notes                     String?  @db.Text // Line item notes (internal or customer-facing)
+  vendorId                  String? // Vendor for this specific line item
+  taxable                   Boolean  @default(true)
+  taxRate                   Decimal? @db.Decimal(5, 4)
+  isSubtotal                Boolean  @default(false) // True for subtotal rows (sums items since previous subtotal)
+
+  estimate   Estimate           @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  group      DocumentLineGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  sourceItem Item?              @relation("EstimateLineItemSource", fields: [sourceItemId], references: [id], onDelete: SetNull)
+  vendor     Vendor?            @relation("EstimateLineItemVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([estimateId])
+  @@index([groupId])
+  @@index([sourceItemId])
+  @@index([vendorId])
+  @@map("estimate_line_items")
+}
+
+/// Internal material pricing worksheet for an estimate (not synced to QuickBooks).
+/// Each row is a separate material/vendor/price line.
+model EstimateMaterialLine {
+  id          String   @id @default(cuid())
+  tenantId    String
+  estimateId  String
+  materialName String
+  vendorName  String?
+  vendorId    String?
+  quantity    Decimal  @default(1) @db.Decimal(10, 2)
+  unit        String?
+  unitPrice   Decimal  @default(0) @db.Decimal(10, 2)
+  notes       String?  @db.Text
+  sortOrder   Int      @default(0)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  estimate Estimate  @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  vendor   Vendor?   @relation("EstimateMaterialLineVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, estimateId])
+  @@index([estimateId, sortOrder])
+  @@index([vendorId])
+  @@map("estimate_material_lines")
+}
+
+model EstimateOptionalLineItem {
+  id                        String   @id @default(cuid())
+  estimateId                String
+  groupId                   String? // FK to DocumentLineGroup
+  sourceItemId              String? // FK to Item (template reference)
+  sourceBundleId            String? // FK to BundleDefinition (if derived from nested bundle)
+  description               String
+  quantity                  Decimal  @db.Decimal(10, 2)
+  unitPrice                 Decimal  @db.Decimal(10, 2)
+  unitCost                  Decimal? @db.Decimal(10, 2) // Internal vendor cost
+  total                     Decimal  @db.Decimal(10, 2)
+  sortOrder                 Int      @default(0)
+  isVisibleToClient         Boolean  @default(true) // Overall visibility in customer-facing output
+  // Per-field visibility toggles
+  showDescriptionToCustomer Boolean  @default(true)
+  showCostToCustomer        Boolean  @default(false)
+  showPriceToCustomer       Boolean  @default(true)
+  showTaxToCustomer         Boolean  @default(true)
+  showNotesToCustomer       Boolean  @default(false)
+  notes                     String?  @db.Text
+  vendorId                  String?
+  taxable                   Boolean  @default(true)
+  taxRate                   Decimal? @db.Decimal(5, 4)
+
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@index([estimateId])
+  @@index([groupId])
+  @@index([sourceItemId])
+  @@index([vendorId])
+  @@map("estimate_optional_line_items")
+}
+
+// ============================================
+// INVOICES
+// ============================================
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  VIEWED
+  PARTIAL
+  PAID
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  tenantId      String
+  clientId      String
+  jobId         String?
+  estimateId    String?
+  invoiceNumber String        @unique
+  title         String
+  status        InvoiceStatus @default(DRAFT)
+
+  // Financials
+  subtotal   Decimal  @db.Decimal(10, 2)
+  taxRate    Decimal? @default(0) @db.Decimal(5, 4)
+  taxAmount  Decimal? @db.Decimal(10, 2)
+  discount   Decimal? @db.Decimal(10, 2)
+  total      Decimal  @db.Decimal(10, 2)
+  paidAmount Decimal  @default(0) @db.Decimal(10, 2)
+  balance    Decimal  @db.Decimal(10, 2)
+  // Immutable snapshot of `total` at the moment this invoice was created from
+  // an estimate (only set when estimateId is set). Estimate "% converted"
+  // tracking uses this instead of the live `total`, so a discount applied to
+  // the invoice afterward doesn't retroactively shrink the estimate's
+  // recorded conversion — see lib/documents/conversion.ts.
+  originalTotalAtConversion Decimal? @db.Decimal(10, 2)
+
+  // Dates
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime?
+  sentAt      DateTime?
+  viewedAt    DateTime?
+  paidAt      DateTime?
+
+  // Notes
+  notes String? @db.Text
+  isNotesVisibleToClient Boolean @default(true) // Toggle for notes visibility
+  terms String? @db.Text
+  memo  String? @db.Text
+
+  // Progress billing / hosted payment
+  progressBillingMode    String?
+  progressBillingPercent Decimal? @db.Decimal(5, 2)
+  isBillRest             Boolean  @default(false)
+  paymentToken           String?  @unique
+  solaPaymentUrl         String?  @db.Text
+  solaTransactionId      String?
+
+  // Relationships
+  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client              Client                    @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  job                 Job?                      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  estimate            Estimate?                 @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  lineItems           InvoiceLineItem[]
+  optionalItems       InvoiceOptionalLineItem[]
+  payments            Payment[]
+  paymentTransactions PaymentTransaction[]
+  attachments         Attachment[]
+  emails              Email[]
+  tasks               Task[]
+  activities          Activity[]
+  paymentIntents      InvoicePaymentIntent[]
+  lineItemSources     InvoiceLineItemSource[]
+  creditMemoApplications CreditMemoApplication[]
+  sourceCreditMemos   CreditMemo[] @relation("CreditMemoSourceInvoice")
+
+  // QuickBooks
+  qboSyncId String?   @unique
+  qboSyncAt DateTime?
+
+  // QuickBooks Payments (ACH) - configuration is per-invoice; actual payment sessions are stored separately.
+  qboAchEnabled Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, status])
+  @@index([estimateId])
+  @@index([invoiceNumber])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id                        String   @id @default(cuid())
+  invoiceId                 String
+  groupId                   String? // FK to DocumentLineGroup
+  sourceItemId              String? // FK to Item (template reference)
+  sourceBundleId            String? // FK to BundleDefinition (if derived from nested bundle)
+  description               String
+  quantity                  Decimal  @db.Decimal(10, 2)
+  unitPrice                 Decimal  @db.Decimal(10, 2)
+  unitCost                  Decimal? @db.Decimal(10, 2) // Internal vendor cost
+  total                     Decimal  @db.Decimal(10, 2)
+  sortOrder                 Int      @default(0)
+  isVisibleToClient         Boolean  @default(true) // Legacy - overall visibility
+  // Per-field visibility toggles
+  showDescriptionToCustomer Boolean  @default(true) // Show line item description/name to customer
+  showCostToCustomer        Boolean  @default(false) // Show unit cost to customer
+  showPriceToCustomer       Boolean  @default(true) // Show unit price to customer
+  showTaxToCustomer         Boolean  @default(true) // Show tax line/rate to customer
+  showNotesToCustomer       Boolean  @default(false) // Show notes to customer
+  notes                     String?  @db.Text // Line item notes (internal or customer-facing)
+  vendorId                  String? // Vendor for this specific line item
+  taxable                   Boolean  @default(true)
+  taxRate                   Decimal? @db.Decimal(5, 4)
+  isSubtotal                Boolean  @default(false) // True for subtotal rows (sums items since previous subtotal)
+
+  invoice    Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  group      DocumentLineGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  sourceItem Item?              @relation("InvoiceLineItemSource", fields: [sourceItemId], references: [id], onDelete: SetNull)
+  vendor     Vendor?            @relation("InvoiceLineItemVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([groupId])
+  @@index([sourceItemId])
+  @@index([vendorId])
+  @@map("invoice_line_items")
+}
+
+model InvoiceOptionalLineItem {
+  id                        String   @id @default(cuid())
+  invoiceId                 String
+  groupId                   String? // FK to DocumentLineGroup
+  sourceItemId              String? // FK to Item (template reference)
+  sourceBundleId            String? // FK to BundleDefinition (if derived from nested bundle)
+  description               String
+  quantity                  Decimal  @db.Decimal(10, 2)
+  unitPrice                 Decimal  @db.Decimal(10, 2)
+  unitCost                  Decimal? @db.Decimal(10, 2)
+  total                     Decimal  @db.Decimal(10, 2)
+  sortOrder                 Int      @default(0)
+  isVisibleToClient         Boolean  @default(true)
+  // Per-field visibility toggles
+  showDescriptionToCustomer Boolean  @default(true)
+  showCostToCustomer        Boolean  @default(false)
+  showPriceToCustomer       Boolean  @default(true)
+  showTaxToCustomer         Boolean  @default(true)
+  showNotesToCustomer       Boolean  @default(false)
+  notes                     String?  @db.Text
+  vendorId                  String?
+  taxable                   Boolean  @default(true)
+  taxRate                   Decimal? @db.Decimal(5, 4)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([groupId])
+  @@index([sourceItemId])
+  @@index([vendorId])
+  @@map("invoice_optional_line_items")
+}
+
+// ============================================
+// CREDIT MEMOS
+// ============================================
+
+enum CreditMemoStatus {
+  DRAFT
+  SENT
+  PARTIALLY_APPLIED
+  APPLIED
+  VOID
+}
+
+model CreditMemo {
+  id               String          @id @default(cuid())
+  tenantId         String
+  clientId         String
+  jobId            String?
+  sourceInvoiceId  String?
+  creditMemoNumber String          @unique
+  title            String          @default("Credit Memo")
+  status           CreditMemoStatus @default(DRAFT)
+
+  subtotal         Decimal @db.Decimal(10, 2)
+  taxRate          Decimal? @default(0) @db.Decimal(5, 4)
+  taxAmount        Decimal? @default(0) @db.Decimal(10, 2)
+  total            Decimal @db.Decimal(10, 2)
+  appliedAmount    Decimal @default(0) @db.Decimal(10, 2)
+  remainingCredit  Decimal @db.Decimal(10, 2)
+
+  creditMemoDate   DateTime @default(now())
+  sentAt           DateTime?
+  voidedAt         DateTime?
+
+  notes            String? @db.Text
+  memo             String? @db.Text
+
+  qboSyncId        String? @unique
+  qboSyncAt        DateTime?
+
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client           Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  job              Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  sourceInvoice    Invoice? @relation("CreditMemoSourceInvoice", fields: [sourceInvoiceId], references: [id], onDelete: SetNull)
+  lineItems        CreditMemoLineItem[]
+  applications     CreditMemoApplication[]
+  activities       Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, status])
+  @@index([sourceInvoiceId])
+  @@index([creditMemoNumber])
+  @@map("credit_memos")
+}
+
+model CreditMemoLineItem {
+  id          String  @id @default(cuid())
+  creditMemoId String
+  description String
+  quantity    Decimal @db.Decimal(10, 2)
+  unitPrice   Decimal @db.Decimal(10, 2)
+  total       Decimal @db.Decimal(10, 2)
+  sortOrder   Int     @default(0)
+  notes       String? @db.Text
+  taxable     Boolean @default(true)
+
+  creditMemo CreditMemo @relation(fields: [creditMemoId], references: [id], onDelete: Cascade)
+
+  @@index([creditMemoId])
+  @@map("credit_memo_line_items")
+}
+
+model CreditMemoApplication {
+  id           String   @id @default(cuid())
+  creditMemoId String
+  invoiceId    String
+  paymentId    String?
+  amount       Decimal  @db.Decimal(10, 2)
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  creditMemo CreditMemo @relation(fields: [creditMemoId], references: [id], onDelete: Cascade)
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payment    Payment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([creditMemoId])
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@map("credit_memo_applications")
+}
+
+// ============================================
+// PAYMENTS (SOLA API)
+// ============================================
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CARD
+  ACH
+  BANK_TRANSFER
+  CHECK
+  CASH
+  OTHER
+  CREDIT
+}
+
+enum PaymentRefundStatus {
+  NOT_REFUNDED
+  PARTIALLY_REFUNDED
+  FULLY_REFUNDED
+  FAILED
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  amount    Decimal       @db.Decimal(10, 2)
+  currency  String        @default("USD")
+  status    PaymentStatus @default(PENDING)
+  method    PaymentMethod
+  // Unique per invoice so one check/reference can cover multiple invoices in a group.
+  reference String?
+  provider  String?
+  providerPaymentId String?
+  providerInvoiceId String?
+  providerRealmId   String?
+  rawPayload        Json?
+
+  // Groups sibling payments that belong to ONE customer transaction spread across
+  // multiple invoices (so it can be reported/synced to QuickBooks as one payment).
+  paymentGroupId String?
+
+  // SOLA API
+  solaTransactionId String? @unique
+  solaWebhookData   Json?
+
+  // Processing fees
+  processingFee Decimal? @db.Decimal(10, 2)
+  netAmount     Decimal? @db.Decimal(10, 2)
+
+  // Dates
+  processedAt DateTime?
+  refundedAt  DateTime?
+  refundedAmount Decimal @default(0) @db.Decimal(10, 2)
+  refundStatus   PaymentRefundStatus @default(NOT_REFUNDED)
+
+  // Notes
+  notes String? @db.Text
+  receiptToken         String?   @unique
+  receiptTokenExpiresAt DateTime?
+  receiptEmailSentAt   DateTime?
+  receiptEmailError    String?   @db.Text
+  receiptEmailAttempts Int       @default(0)
+
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  activities Activity[]
+  refunds    PaymentRefund[]
+  creditMemoApplications CreditMemoApplication[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@index([status])
+  @@index([solaTransactionId])
+  @@index([provider])
+  @@index([providerPaymentId])
+  @@index([paymentGroupId])
+  @@index([refundStatus])
+  @@index([reference])
+  @@unique([invoiceId, reference], map: "payments_invoice_id_reference_unique_idx")
+  @@unique([provider, providerPaymentId], map: "payments_provider_payment_id_unique_idx")
+  @@map("payments")
+}
+
+model PaymentRefund {
+  id               String        @id @default(cuid())
+  paymentId        String
+  provider         String
+  providerRefundId String?
+  amount           Decimal       @db.Decimal(10, 2)
+  currency         String        @default("USD")
+  status           PaymentStatus @default(PENDING)
+  reason           String?       @db.Text
+  idempotencyKey   String        @unique
+  requestedById    String?
+  rawResponse      Json?
+  errorMessage     String?       @db.Text
+  refundedAt       DateTime?
+
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  requestedBy User?   @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
+  @@index([provider])
+  @@index([status])
+  @@index([providerRefundId])
+  @@map("payment_refunds")
+}
+
+// ============================================
+// PURCHASE ORDERS
+// ============================================
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  ORDERED
+  RECEIVED
+  CANCELLED
+}
+
+// ============================================
+// VENDORS
+// ============================================
+
+enum VendorStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentTerms {
+  NET_15
+  NET_30
+  NET_45
+  DUE_ON_RECEIPT
+  CUSTOM
+}
+
+model Vendor {
+  id         String       @id @default(cuid())
+  tenantId   String
+  name       String
+  vendorCode String?      @unique
+  status     VendorStatus @default(ACTIVE)
+  email      String?
+  phone      String?
+  website    String?
+  notes      String?      @db.Text
+
+  // Billing Address
+  billingStreet  String?
+  billingCity    String?
+  billingState   String?
+  billingZip     String?
+  billingCountry String? @default("USA")
+
+  // Shipping Address (optional, can be same as billing)
+  shippingStreet  String?
+  shippingCity    String?
+  shippingState   String?
+  shippingZip     String?
+  shippingCountry String?
+
+  // Payment Terms
+  paymentTerms    PaymentTerms @default(NET_30)
+  customTermsText String?      @db.Text
+
+  // Tax Info
+  taxId String? // EIN/Tax ID (will be masked in UI)
+
+  // Currency
+  defaultCurrency String? @default("USD")
+
+  // Legacy fields (for backward compatibility)
+  address       String?
+  city          String?
+  state         String?
+  zipCode       String?
+  country       String?
+  contactPerson String?
+  isActive      Boolean @default(true) // Deprecated, use status
+
+  // Relationships
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrders         PurchaseOrder[]
+  items                  Item[]
+  contacts               VendorContact[]
+  attachments            Attachment[]
+  bundleComponents       BundleComponent[]
+  estimateLineItems      EstimateLineItem[]      @relation("EstimateLineItemVendor")
+  invoiceLineItems       InvoiceLineItem[]       @relation("InvoiceLineItemVendor")
+  purchaseOrderLineItems PurchaseOrderLineItem[] @relation("POLineItemVendor")
+  estimateMaterialLines  EstimateMaterialLine[]  @relation("EstimateMaterialLineVendor")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, isActive])
+  @@index([vendorCode])
+  @@map("vendors")
+}
+
+model VendorContact {
+  id        String  @id @default(cuid())
+  vendorId  String
+  tenantId  String
+  name      String
+  title     String? // Role/title
+  email     String?
+  phone     String?
+  isPrimary Boolean @default(false)
+  notes     String? @db.Text
+
+  // Relationships
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([tenantId])
+  @@index([vendorId, isPrimary])
+  @@map("vendor_contacts")
+}
+
+model PurchaseOrder {
+  id       String              @id @default(cuid())
+  tenantId String
+  clientId String?
+  jobId    String?
+  poNumber String              @unique
+  vendor   String // Vendor name (for backward compatibility)
+  vendorId String? // Optional relation to Vendor model
+  status   PurchaseOrderStatus @default(DRAFT)
+
+  // Financials
+  total Decimal @db.Decimal(10, 2)
+
+  // Dates
+  orderDate    DateTime? @default(now())
+  expectedDate DateTime?
+  receivedDate DateTime?
+
+  // Notes / delivery
+  notes            String? @db.Text // Vendor-facing notes (PDF / email)
+  internalNotes    String? @db.Text // Staff-only; never shown to vendor
+  deliveryAddress  String? @db.Text // Editable; defaults from job site address
+
+  // Relationships
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorRef   Vendor?                 @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  client      Client?                 @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  job         Job?                    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  lineItems   PurchaseOrderLineItem[]
+  attachments Attachment[]
+  activities  Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([poNumber])
+  @@index([vendorId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLineItem {
+  id             String   @id @default(cuid())
+  poId           String
+  groupId        String? // FK to DocumentLineGroup
+  sourceItemId   String? // FK to Item (template reference)
+  sourceBundleId String? // FK to BundleDefinition (if derived from nested bundle)
+  description    String
+  details        String?  @db.Text // Customer/vendor-facing description (UI label: Description)
+  quantity       Decimal  @db.Decimal(10, 2)
+  unitPrice      Decimal  @db.Decimal(10, 2)
+  unitCost       Decimal? @db.Decimal(10, 2) // Vendor cost (primary for PO)
+  total          Decimal  @db.Decimal(10, 2)
+  sortOrder      Int      @default(0)
+  notes          String?  @db.Text
+  vendorId       String? // Vendor for this specific line item
+  taxable        Boolean  @default(false)
+  taxRate        Decimal? @db.Decimal(5, 4)
+  isNote         Boolean  @default(false) // Free-text note row between line items — no qty/price
+  // Vendor-facing visibility (PDF / email attachment) — same pattern as estimate customer toggles
+  isVisibleToClient         Boolean @default(true)
+  showDescriptionToCustomer Boolean @default(true) // Item name
+  showDetailsToCustomer     Boolean @default(true) // Description (details)
+  showNotesToCustomer       Boolean @default(true) // Special notes
+  showPriceToCustomer       Boolean @default(true) // Unit price / cost on PDF
+
+  purchaseOrder PurchaseOrder      @relation(fields: [poId], references: [id], onDelete: Cascade)
+  group         DocumentLineGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  sourceItem    Item?              @relation("POLineItemSource", fields: [sourceItemId], references: [id], onDelete: SetNull)
+  vendor        Vendor?            @relation("POLineItemVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([poId])
+  @@index([groupId])
+  @@index([sourceItemId])
+  @@index([vendorId])
+  @@map("purchase_order_line_items")
+}
+
+// ============================================
+// PRICE BOOK
+// ============================================
+
+model PriceBookItem {
+  id          String   @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  description String?  @db.Text
+  category    String?
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  cost        Decimal? @db.Decimal(10, 2)
+  unit        String?  @default("ea")
+  isActive    Boolean  @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, category])
+  @@map("price_book_items")
+}
+
+// ============================================
+// ITEMS (PRODUCTS/SERVICES)
+// ============================================
+
+enum ItemType {
+  PRODUCT
+  SERVICE
+  MATERIAL
+  FEE
+}
+
+enum ItemKind {
+  SINGLE
+  BUNDLE
+}
+
+enum ItemPricingMode {
+  FIXED
+  PERCENT_OF_ABOVE
+}
+
+model ItemCategory {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  Item[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("item_categories")
+}
+
+model Item {
+  id               String   @id @default(cuid())
+  tenantId         String
+  name             String
+  sku              String?
+  type             ItemType @default(PRODUCT)
+  kind             ItemKind @default(SINGLE)
+  description      String?  @db.Text
+  unit             String   @default("ea")
+  defaultUnitCost  Decimal? @db.Decimal(10, 2)
+  defaultUnitPrice Decimal  @db.Decimal(10, 2)
+  // When pricingMode is PERCENT_OF_ABOVE, this item's price is computed at
+  // the moment it's added to a document, as percentOfAboveRate% of the total
+  // of the line items already listed above it (defaultUnitPrice is unused).
+  pricingMode        ItemPricingMode @default(FIXED)
+  percentOfAboveRate Decimal?        @db.Decimal(5, 2)
+  taxable          Boolean  @default(true)
+  taxRate          Decimal? @db.Decimal(5, 4)
+  isActive         Boolean  @default(true)
+  vendorId         String?
+  categoryId       String?
+  tags             String[] @default([])
+  notes            String?  @db.Text
+
+  // Relationships
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor                 Vendor?                 @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  category               ItemCategory?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  bundleDefinition       BundleDefinition?
+  bundleComponents       BundleComponent[]
+  estimateLineItems      EstimateLineItem[]      @relation("EstimateLineItemSource")
+  invoiceLineItems       InvoiceLineItem[]       @relation("InvoiceLineItemSource")
+  purchaseOrderLineItems PurchaseOrderLineItem[] @relation("POLineItemSource")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, kind])
+  @@index([tenantId, isActive])
+  @@index([tenantId, categoryId])
+  @@index([tenantId, vendorId])
+  @@index([sku])
+  @@map("items")
+}
+
+model BundleDefinition {
+  id          String  @id @default(cuid())
+  itemId      String  @unique
+  tenantId    String
+  name        String
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  // Pricing strategy
+  pricingStrategy String @default("SUM_COMPONENTS") // SUM_COMPONENTS | OVERRIDE_PRICE
+
+  // Relationships
+  item               Item                @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  components         BundleComponent[]
+  nestedIn           BundleComponent[]   @relation("BundleNested")
+  documentLineGroups DocumentLineGroup[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([itemId])
+  @@map("bundle_definitions")
+}
+
+model BundleComponent {
+  id                       String   @id @default(cuid())
+  bundleId                 String
+  tenantId                 String
+  componentType            String // "ITEM" | "BUNDLE"
+  componentItemId          String? // FK to Item (if componentType = "ITEM")
+  componentBundleId        String? // FK to BundleDefinition (if componentType = "BUNDLE")
+  quantity                 Decimal  @db.Decimal(10, 2)
+  sortOrder                Int      @default(0)
+  defaultUnitPriceOverride Decimal? @db.Decimal(10, 2) // Customer Price
+  defaultUnitCostOverride  Decimal? @db.Decimal(10, 2) // Vendor/Unit Cost
+  vendorId                 String? // FK to Vendor (specific vendor for this component)
+  notes                    String?  @db.Text
+
+  // Relationships
+  bundle          BundleDefinition  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  componentItem   Item?             @relation(fields: [componentItemId], references: [id], onDelete: SetNull)
+  componentBundle BundleDefinition? @relation("BundleNested", fields: [componentBundleId], references: [id], onDelete: SetNull)
+  vendor          Vendor?           @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bundleId])
+  @@index([tenantId])
+  @@index([componentItemId])
+  @@index([componentBundleId])
+  @@index([vendorId])
+  @@map("bundle_components")
+}
+
+model DocumentLineGroup {
+  id                    String    @id @default(cuid())
+  tenantId              String
+  documentType          String // "ESTIMATE" | "INVOICE" | "PURCHASE_ORDER"
+  documentId            String
+  name                  String
+  sourceBundleId        String? // FK to BundleDefinition (nullable for manual groups)
+  sourceBundleName      String?
+  sourceBundleUpdatedAt DateTime?
+  // Customer estimate bundle override (sticks until company line items for this group are edited)
+  customerDescription   String?   @db.Text
+  customerTotal         Decimal?  @db.Decimal(12, 2)
+  customerEdited        Boolean   @default(false)
+
+  // Relationships
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceBundle           BundleDefinition?       @relation(fields: [sourceBundleId], references: [id], onDelete: SetNull)
+  estimateLineItems      EstimateLineItem[]
+  invoiceLineItems       InvoiceLineItem[]
+  purchaseOrderLineItems PurchaseOrderLineItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, documentType, documentId])
+  @@index([sourceBundleId])
+  @@map("document_line_groups")
+}
+
+// ============================================
+// SCHEDULING
+// ============================================
+
+enum ScheduleType {
+  JOB
+  ESTIMATE
+  FOLLOW_UP
+  MEETING
+  OTHER
+}
+
+model Schedule {
+  id          String       @id @default(cuid())
+  tenantId    String
+  title       String
+  description String?      @db.Text
+  type        ScheduleType
+  startTime   DateTime
+  endTime     DateTime
+  allDay      Boolean      @default(false)
+
+  // Relationships
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobId  String?
+  job    Job?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, startTime])
+  @@index([userId])
+  @@map("schedules")
+}
+
+// ============================================
+// TASKS
+// ============================================
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  tenantId    String
+  title       String
+  description String?      @db.Text
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  // Links
+  clientId   String?
+  leadId     String?
+  jobId      String?
+  invoiceId  String?
+  issueId    String?
+  callId     String?
+  call       Call?       @relation(fields: [callId], references: [id], onDelete: Cascade)
+  smsId      String?
+  smsMessage SmsMessage? @relation(fields: [smsId], references: [id], onDelete: Cascade)
+
+  // Relationships
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client  Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  lead    Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  job     Job?     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  issue   Issue?   @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  assigneeId String?
+  assignee   User?  @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  createdById String
+  creator     User   @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  subtasks    Subtask[]
+  attachments Attachment[]
+  activities  Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  // Notification tracking
+  openedAt             DateTime?
+  lastNotificationAt   DateTime?
+  notificationAttempts Int       @default(0)
+
+  @@index([tenantId, assigneeId])
+  @@index([tenantId, jobId])
+  @@index([tenantId, status])
+  @@index([tenantId, dueDate])
+  @@map("tasks")
+}
+
+model Subtask {
+  id          String  @id @default(cuid())
+  taskId      String
+  title       String
+  isCompleted Boolean @default(false)
+  sortOrder   Int     @default(0)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId])
+  @@map("subtasks")
+}
+
+// ============================================
+// ISSUES / TICKETS
+// ============================================
+
+enum IssueType {
+  BILLING
+  SCHEDULING
+  WARRANTY
+  QUALITY
+  SAFETY
+  OTHER
+}
+
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  CANCELLED
+}
+
+enum IssuePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Issue {
+  id          String        @id @default(cuid())
+  tenantId    String
+  title       String
+  description String?       @db.Text
+  type        IssueType
+  status      IssueStatus   @default(OPEN)
+  priority    IssuePriority @default(MEDIUM)
+  dueDate     DateTime?
+
+  // Links
+  clientId String?
+  leadId   String?
+  jobId    String?
+
+  // SLA tracking
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+
+  // Notification tracking
+  openedAt             DateTime?
+  lastNotificationAt   DateTime?
+  notificationAttempts Int       @default(0)
+
+  // Relationships
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  job    Job?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  assigneeId String?
+  assignee   User?   @relation("IssueAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  createdById String
+  creator     User   @relation("IssueCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  watchers    IssueWatcher[]
+  notes       IssueNote[]
+  tasks       Task[]
+  attachments Attachment[]
+  emails      Email[]
+  activities  Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, assigneeId])
+  @@index([tenantId, jobId])
+  @@index([tenantId, type])
+  @@index([tenantId, dueDate])
+  @@map("issues")
+}
+
+model IssueWatcher {
+  id      String @id @default(cuid())
+  issueId String
+  userId  String
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([issueId, userId])
+  @@index([issueId])
+  @@index([userId])
+  @@map("issue_watchers")
+}
+
+model IssueNote {
+  id         String  @id @default(cuid())
+  issueId    String
+  content    String  @db.Text
+  isInternal Boolean @default(false)
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([issueId])
+  @@map("issue_notes")
+}
+
+// ============================================
+// COMMUNICATION - CALLS (VoIP)
+// ============================================
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallStatus {
+  RINGING
+  ANSWERED
+  MISSED
+  VOICEMAIL
+  FAILED
+  BUSY
+  CANCELLED
+}
+
+model Call {
+  id           String        @id @default(cuid())
+  tenantId     String
+  direction    CallDirection
+  status       CallStatus
+  fromNumber   String
+  toNumber     String
+  duration     Int? // seconds
+  recordingUrl String?
+
+  // Relationships
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  jobId     String?
+  job       Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  tasks      Task[]
+  activities Activity[]
+  notes      Note[]
+
+  startedAt  DateTime  @default(now())
+  answeredAt DateTime?
+  endedAt    DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@index([tenantId, clientId])
+  @@index([startedAt])
+  @@map("calls")
+}
+
+// ============================================
+// COMMUNICATION - SMS/MMS (VoIP.ms)
+// ============================================
+
+enum SmsDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SmsStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+model SmsMessage {
+  id         String       @id @default(cuid())
+  tenantId   String
+  direction  SmsDirection
+  status     SmsStatus    @default(PENDING)
+  fromNumber String
+  toNumber   String
+  body       String       @db.Text
+
+  // MMS
+  mediaUrls String[]
+
+  // VoIP.ms
+  voipmsMessageId   String? @unique
+  voipmsWebhookData Json?
+
+  // Relationships
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  jobId     String?
+  job       Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  tasks      Task[]
+  activities Activity[]
+
+  sentAt      DateTime? @default(now())
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@index([tenantId, clientId])
+  @@index([fromNumber, toNumber])
+  @@index([sentAt])
+  @@map("sms_messages")
+}
+
+// ============================================
+// COMMUNICATION - EMAIL
+// ============================================
+
+enum EmailDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum EmailStatus {
+  DRAFT
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  BOUNCED
+  READ
+}
+
+model Email {
+  id        String         @id @default(cuid())
+  tenantId  String
+  direction EmailDirection
+  status    EmailStatus    @default(DRAFT)
+  subject   String
+  body      String         @db.Text
+  bodyHtml  String?        @db.Text
+
+  // Addresses
+  fromEmail String
+  toEmails  String[]
+  ccEmails  String[]
+  bccEmails String[]
+  replyTo   String?
+
+  // Email provider
+  providerId   String? @unique // SendGrid/Mailgun message ID
+  providerData Json?
+
+  // Relationships
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clientId   String?
+  client     Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  contactId  String?
+  contact    Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  jobId      String?
+  job        Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  leadId     String?
+  lead       Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  estimateId String?
+  estimate   Estimate? @relation(fields: [estimateId], references: [id], onDelete: SetNull)
+  invoiceId  String?
+  invoice    Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  issueId    String?
+  issue      Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  attachments Attachment[]
+  activities  Activity[]
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@index([tenantId, clientId])
+  @@index([sentAt])
+  @@map("emails")
+}
+
+// ============================================
+// MEDIA & ATTACHMENTS
+// ============================================
+
+model Attachment {
+  id       String @id @default(cuid())
+  fileName String
+  fileSize Int // bytes
+  mimeType String
+  url      String // S3 URL or path
+  key      String // S3 key
+
+  // Links (polymorphic)
+  clientId        String?
+  client          Client?        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  jobId           String?
+  job             Job?           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  estimateId      String?
+  estimate        Estimate?      @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  invoiceId       String?
+  invoice         Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  taskId          String?
+  task            Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  issueId         String?
+  issue           Issue?         @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  leadId          String?
+  lead            Lead?          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  emailId         String?
+  email           Email?         @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  vendorId        String?
+  vendor          Vendor?        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([jobId])
+  @@index([leadId])
+  @@index([leadId, createdAt])
+  @@map("attachments")
+}
+
+model Note {
+  id       String  @id @default(cuid())
+  content  String  @db.Text
+  isPinned Boolean @default(false)
+
+  // Links
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  jobId    String?
+  job      Job?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  callId   String?
+  call     Call?   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([jobId])
+  @@map("notes")
+}
+
+// ============================================
+// QUICKBOOKS ONLINE INTEGRATION
+// ============================================
+
+model QuickBooksIntegration {
+  id          String  @id @default(cuid())
+  tenantId    String  @unique
+  isConnected Boolean @default(false)
+
+  // OAuth tokens
+  accessToken    String?   @db.Text
+  refreshToken   String?   @db.Text
+  tokenExpiresAt DateTime?
+  realmId        String? // Company ID
+
+  // Account mapping
+  incomeAccountId   String?
+  taxAccountId      String?
+  clearingAccountId String?
+  discountAccountId String?
+
+  // Cached QBO reference IDs (avoids repeated "query by name" API calls)
+  serviceItemId          String? // "Trim Pro Service" item ID in QBO
+  cachedExpenseAccountId String? // expense/COGS account ID in QBO
+  reconcileLastAt        DateTime? // rate guard for the ACH reconcile cron
+
+  // Sync settings
+  autoSync       Boolean   @default(false)
+  lastSyncAt     DateTime?
+  lastSyncStatus String?
+  lastSyncError  String?   @db.Text
+
+  // Relationships
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  syncLogs QuickBooksSyncLog[]
+  syncJobs QboSyncJob[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("quickbooks_integrations")
+}
+
+model QboSyncJob {
+  id          String    @id @default(cuid())
+  tenantId    String
+  entityType  String    // invoice, client, estimate, payment, vendor, purchase_order, job, lead
+  entityId    String
+  actionType  String    @default("sync")
+  status      String    @default("pending") // pending, processing, synced, failed, skipped
+  retryCount  Int       @default(0)
+  maxRetries  Int       @default(3)
+  nextRetryAt DateTime  @default(now())
+  lastError   String?   @db.Text
+  payloadHash String?   // deduplication: hash of the record data at enqueue time
+  processedAt DateTime?
+
+  integration QuickBooksIntegration @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextRetryAt])
+  @@index([tenantId, entityType, entityId, status])
+  @@map("qbo_sync_jobs")
+}
+
+model QuickBooksSyncLog {
+  id            String  @id @default(cuid())
+  integrationId String
+  type          String // client, invoice, payment, item
+  action        String // create, update, delete
+  status        String // success, error, conflict
+  entityId      String? // local entity ID
+  qboId         String? // QuickBooks ID
+  error         String? @db.Text
+  data          Json?
+
+  integration QuickBooksIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([integrationId])
+  @@index([integrationId, type])
+  @@map("quickbooks_sync_logs")
+}
+
+// ============================================
+// AUTOMATIONS
+// ============================================
+
+enum AutomationTrigger {
+  INVOICE_CREATED
+  INVOICE_OVERDUE
+  INVOICE_PAID
+  PAYMENT_RECEIVED
+  CALL_MISSED
+  SMS_UNANSWERED
+  TASK_OVERDUE
+  ISSUE_CREATED
+  SCHEDULE_CREATED
+}
+
+enum AutomationAction {
+  SEND_EMAIL
+  SEND_SMS
+  CREATE_TASK
+  CREATE_NOTIFICATION
+  UPDATE_STATUS
+  CREATE_ISSUE
+}
+
+model Automation {
+  id          String            @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?           @db.Text
+  isActive    Boolean           @default(true)
+  trigger     AutomationTrigger
+  action      AutomationAction
+  conditions  Json? // Additional conditions
+  config      Json? // Action-specific config
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("automations")
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+enum NotificationType {
+  PAYMENT_RECEIVED
+  INCOMING_CALL
+  INCOMING_SMS
+  JOB_ASSIGNED
+  JOB_UPDATED
+  TASK_ASSIGNED
+  TASK_UPDATED
+  TASK_OVERDUE
+  ISSUE_ASSIGNED
+  ISSUE_UPDATED
+  JOB_MEDIA_ADDED
+  MESSAGE_RECEIVED
+  INVOICE_OVERDUE
+  SCHEDULE_REMINDER
+  SYSTEM
+  OTHER
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  DISMISSED
+}
+
+enum NotificationDeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+model UserPushDevice {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String
+  expoPushToken String   @unique
+  platform      String
+  deviceId      String?
+  appVersion    String?
+  buildNumber   String?
+  locale        String?
+  timezone      String?
+  disabledAt    DateTime?
+  lastSeenAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([tenantId, disabledAt])
+  @@index([userId])
+  @@map("user_push_devices")
+}
+
+model Notification {
+  id       String             @id @default(cuid())
+  tenantId String
+  userId   String
+  type     NotificationType
+  title    String
+  message  String?            @db.Text
+  status   NotificationStatus @default(UNREAD)
+
+  // Links
+  linkUrl  String?
+  linkType String? // invoice, job, task, etc.
+  linkId   String?
+  data     Json?
+  traceId  String?
+  dedupeKey String? @unique
+  deliveryStatus NotificationDeliveryStatus @default(QUEUED)
+  sentAt DateTime?
+  failureReason String? @db.Text
+
+  // Forced acknowledgment (e.g., payment received)
+  requiresAck    Boolean   @default(false)
+  acknowledgedAt DateTime?
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  readAt      DateTime?
+  dismissedAt DateTime?
+
+  @@index([tenantId, userId])
+  @@index([tenantId, userId, status])
+  @@index([tenantId, userId, deliveryStatus])
+  @@index([createdAt])
+  @@index([traceId])
+  @@index([dedupeKey])
+  @@map("notifications")
+}
+
+// ============================================
+// HELP / INSTRUCTIONS
+// ============================================
+
+model HelpArticle {
+  id          String  @id @default(cuid())
+  tenantId    String
+  title       String
+  content     String  @db.Text
+  category    String?
+  module      String? // dashboard, crm, jobs, etc.
+  order       Int     @default(0)
+  isPublished Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, module])
+  @@index([tenantId, category])
+  @@map("help_articles")
+}
+
+// ============================================
+// ACTIVITY FEED
+// ============================================
+
+enum ActivityType {
+  CLIENT_CREATED
+  JOB_CREATED
+  JOB_STATUS_CHANGED
+  INVOICE_CREATED
+  INVOICE_PAID
+  PAYMENT_RECEIVED
+  CALL_MADE
+  SMS_SENT
+  EMAIL_SENT
+  TASK_CREATED
+  TASK_COMPLETED
+  ISSUE_CREATED
+  ISSUE_RESOLVED
+  ESTIMATE_CREATED
+  ESTIMATE_SENT
+  ESTIMATE_ACCEPTED
+  SCHEDULE_CREATED
+  SCHEDULE_UPDATED
+  SCHEDULE_DELETED
+  PURCHASE_ORDER_CREATED
+  PURCHASE_ORDER_UPDATED
+  HELP_ARTICLE_CREATED
+  HELP_ARTICLE_UPDATED
+  VENDOR_CREATED
+  VENDOR_UPDATED
+  OTHER
+}
+
+model Activity {
+  id          String       @id @default(cuid())
+  tenantId    String
+  type        ActivityType
+  description String       @db.Text
+
+  // Links
+  userId          String?
+  user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clientId        String?
+  client          Client?        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  contactId       String?
+  contact         Contact?       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  jobId           String?
+  job             Job?           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  invoiceId       String?
+  invoice         Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  estimateId      String?
+  estimate        Estimate?      @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  creditMemoId    String?
+  creditMemo      CreditMemo?    @relation(fields: [creditMemoId], references: [id], onDelete: Cascade)
+  paymentId       String?
+  payment         Payment?       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  taskId          String?
+  task            Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  issueId         String?
+  issue           Issue?         @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  leadId          String?
+  lead            Lead?          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  callId          String?
+  call            Call?          @relation(fields: [callId], references: [id], onDelete: Cascade)
+  smsMessageId    String?
+  smsMessage      SmsMessage?    @relation(fields: [smsMessageId], references: [id], onDelete: Cascade)
+  emailId         String?
+  email           Email?         @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, clientId])
+  @@index([tenantId, jobId])
+  @@map("activities")
+}
+
+// ============================================
+// AUDIT LOGS
+// ============================================
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  REFUND
+  LOGIN
+  LOGOUT
+  PASSWORD_RESET
+  PERMISSION_CHANGE
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  tenantId   String
+  userId     String?
+  action     AuditAction
+  entityType String // User, Client, Invoice, etc.
+  entityId   String?
+  changes    Json? // Before/after values
+  ipAddress  String?
+  userAgent  String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@index([tenantId, entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// ROLES & PERMISSIONS
+// ============================================
+
+model Role {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String? @db.Text
+  isSystem    Boolean @default(false) // System roles cannot be deleted
+  isActive    Boolean @default(true)
+
+  // Mobile app permissions (stored as JSON array of permission keys)
+  // Separate from web permissions to allow different access levels for mobile vs web
+  mobilePermissions Json? // Array of mobile permission keys, e.g., ["mobile.jobs.view_all", "mobile.tasks.create"]
+
+  // Relationships
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions           RolePermission[]
+  userRoles             UserRoleAssignment[]   @relation("RoleUserAssignments")
+  permissionConstraints PermissionConstraint[] @relation("RolePermissionConstraints")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, isSystem])
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique // e.g., "jobs.create"
+  label       String // e.g., "Create Jobs"
+  description String? @db.Text
+  category    String // e.g., "Jobs", "Clients", "Analytics"
+  module      String // e.g., "jobs", "clients"
+
+  // Relationships
+  rolePermissions       RolePermission[]
+  permissionConstraints PermissionConstraint[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([module])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRoleAssignment {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation("RoleUserAssignments", fields: [roleId], references: [id], onDelete: Cascade)
+
+  assignedBy String? // userId who assigned this role
+  assignedAt DateTime @default(now())
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model PermissionConstraint {
+  id              String  @id @default(cuid())
+  userId          String? // If null, applies to role
+  roleId          String?
+  permissionId    String
+  constraintType  String // "own_records_only", "team_only", "assigned_jobs_only", "region_only"
+  constraintValue Json? // Additional constraint data
+
+  user       User?      @relation("UserPermissionConstraints", fields: [userId], references: [id], onDelete: Cascade)
+  role       Role?      @relation("RolePermissionConstraints", fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("permission_constraints")
+}
+
+// ============================================
+// ANALYTICS & REPORTS
+// ============================================
+
+model Report {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String? @db.Text
+  type        String // "prebuilt" | "custom"
+  template    String? // Template name for prebuilt reports
+
+  // Custom report configuration
+  dataset    String? // "jobs", "leads", "invoices", etc.
+  columns    Json? // Selected columns
+  filters    Json? // Filter configuration
+  groupBy    Json? // Group by configuration
+  aggregates Json? // Aggregations (count, sum, avg)
+  sorting    Json? // Sort configuration
+
+  // Sharing
+  isPublic   Boolean  @default(false)
+  sharedWith String[] // User IDs who can view
+
+  // Relationships
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy String
+  schedules ReportSchedule[]
+  runs      ReportRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, createdBy])
+  @@map("reports")
+}
+
+model ReportSchedule {
+  id         String   @id @default(cuid())
+  reportId   String
+  tenantId   String
+  frequency  String // "daily" | "weekly" | "monthly"
+  dayOfWeek  Int? // 0-6 for weekly
+  dayOfMonth Int? // 1-31 for monthly
+  time       String // HH:mm format
+  recipients String[] // Email addresses
+  format     String   @default("pdf") // "pdf" | "csv" | "xlsx"
+  isActive   Boolean  @default(true)
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([reportId])
+  @@index([isActive])
+  @@map("report_schedules")
+}
+
+model ReportRun {
+  id       String  @id @default(cuid())
+  reportId String
+  tenantId String
+  runBy    String // User ID
+  status   String // "pending" | "running" | "completed" | "failed"
+  format   String // "pdf" | "csv" | "xlsx"
+  fileUrl  String? // URL to generated file
+  error    String? @db.Text
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([tenantId])
+  @@index([reportId])
+  @@index([runBy])
+  @@index([status])
+  @@map("report_runs")
+}
+
+model DailyStats {
+  id       String   @id @default(cuid())
+  tenantId String
+  date     DateTime @db.Date
+
+  // Job metrics
+  jobsCreated   Int @default(0)
+  jobsCompleted Int @default(0)
+  jobsActive    Int @default(0)
+
+  // Revenue metrics
+  revenueBooked    Decimal @default(0) @db.Decimal(10, 2)
+  revenueCollected Decimal @default(0) @db.Decimal(10, 2)
+  invoicesCreated  Int     @default(0)
+  invoicesPaid     Int     @default(0)
+
+  // Lead metrics
+  leadsCreated   Int @default(0)
+  leadsConverted Int @default(0)
+
+  // Dispatch metrics
+  jobsDispatched Int @default(0)
+  jobsOnTime     Int @default(0)
+  jobsLate       Int @default(0)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+  @@map("daily_stats")
+}
+
+// ============================================
+// DISPATCH SYSTEM
+// ============================================
+
+enum DispatchEventType {
+  ASSIGNED
+  REASSIGNED
+  SCHEDULED
+  RESCHEDULED
+  STATUS_CHANGED
+  NOTE_ADDED
+  LOCATION_UPDATED
+  ACCEPTED
+  DECLINED
+  EN_ROUTE
+  ARRIVED
+  STARTED
+  COMPLETED
+  CANCELED
+}
+
+model DispatchEvent {
+  id          String            @id @default(cuid())
+  tenantId    String
+  jobId       String
+  eventType   DispatchEventType
+  timestamp   DateTime          @default(now())
+  payload     Json? // Additional event data
+  actorUserId String? // User who triggered the event
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([jobId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@map("dispatch_events")
+}
+
+model TechAvailability {
+  id          String  @id @default(cuid())
+  tenantId    String
+  userId      String
+  dayOfWeek   Int // 0-6 (Sunday-Saturday)
+  startTime   String // HH:mm format
+  endTime     String // HH:mm format
+  timezone    String  @default("America/New_York")
+  isAvailable Boolean @default(true)
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId, dayOfWeek, startTime])
+  @@index([tenantId, userId])
+  @@index([userId, dayOfWeek])
+  @@map("tech_availability")
+}
+
+model ServiceZone {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String? @db.Text
+  boundaries  Json? // GeoJSON or coordinate boundaries
+  isActive    Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("service_zones")
+}
+
+// ============================================
+// EMAIL & SMS TEMPLATES
+// ============================================
+
+model EmailTemplate {
+  id        String  @id @default(cuid())
+  tenantId  String
+  name      String
+  subject   String
+  body      String  @db.Text
+  variables Json? // Available variables
+  isActive  Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("email_templates")
+}
+
+model SmsTemplate {
+  id        String  @id @default(cuid())
+  tenantId  String
+  name      String
+  message   String  @db.Text
+  variables Json?
+  isActive  Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("sms_templates")
+}
+
+// ============================================
+// WEBHOOKS
+// ============================================
+
+model Webhook {
+  id       String   @id @default(cuid())
+  tenantId String
+  url      String
+  events   String[] // payment.received, invoice.paid, etc.
+  secret   String
+  isActive Boolean  @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("webhooks")
+}
+
+// ============================================
+// INTEGRATIONS
+// ============================================
+
+model IntegrationConnection {
+  id               String    @id @default(cuid())
+  tenantId         String
+  provider         String // "email", "voipms_sms", "whatsapp", "quickbooks", "sola"
+  status           String    @default("NOT_CONFIGURED") // "NOT_CONFIGURED" | "CONNECTED" | "ERROR" | "CONNECTING"
+  displayName      String?
+  encryptedSecrets String?   @db.Text
+  metadata         Json?
+  lastCheckedAt    DateTime?
+  lastError        String?   @db.Text
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@index([tenantId, provider])
+  @@index([status])
+  @@map("integration_connections")
+}
+
+model PaymentTransaction {
+  id         String  @id @default(cuid())
+  tenantId   String
+  provider   String // "sola", "stripe", "paypal", etc.
+  status     String // "pending" | "succeeded" | "failed" | "refunded" | "chargeback"
+  amount     Decimal @db.Decimal(10, 2)
+  currency   String  @default("USD")
+  externalId String? @unique // Provider's transaction ID
+  customerId String?
+  invoiceId  String?
+  rawEvent   Json? // Raw webhook/event data
+  metadata   Json?
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, provider])
+  @@index([tenantId, status])
+  @@index([invoiceId])
+  @@index([externalId])
+  @@map("payment_transactions")
+}
+
+// ============================================
+// QUICKBOOKS PAYMENTS (ACH) - HOSTED FLOW
+// ============================================
+
+enum QboPaymentIntentStatus {
+  CREATED
+  LINK_CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+model InvoicePaymentIntent {
+  id        String @id @default(cuid())
+  tenantId  String
+  invoiceId String
+
+  provider String // "qbo"
+  method   String // "ach"
+
+  amount   Decimal                @db.Decimal(10, 2)
+  currency String                 @default("USD")
+  status   QboPaymentIntentStatus @default(CREATED)
+
+  // QBO identifiers (accounting API)
+  qboRealmId   String?
+  qboInvoiceId String?
+  qboPaymentId String?
+
+  // Hosted payment URL (QuickBooks hosted invoice/pay portal link)
+  hostedUrl String? @db.Text
+
+  // Public, unguessable token used in our public pay page URL
+  publicToken String    @unique
+  expiresAt   DateTime?
+  returnToken String?   @unique
+  returnTokenExpiresAt DateTime?
+  returnTokenUsedAt DateTime?
+
+  // Idempotency for session/link creation
+  idempotencyKey String @unique
+
+  createdById   String?
+  customerEmail String?
+  metadata      Json?
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("InvoicePaymentIntentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  events PaymentEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, status])
+  @@index([qboRealmId])
+  @@index([qboInvoiceId])
+  @@index([qboPaymentId])
+  @@index([returnToken])
+  @@map("invoice_payment_intents")
+}
+
+model PaymentEvent {
+  id       String @id @default(cuid())
+  tenantId String
+  intentId String
+
+  provider        String // "qbo"
+  providerEventId String? // webhook-derived event id (idempotency)
+  type            String // "webhook", "status_update", "reconcile"
+  statusFrom      String?
+  statusTo        String?
+
+  payloadHash String?
+  rawPayload  Json?
+
+  receivedAt DateTime @default(now())
+
+  tenant Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  intent InvoicePaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([intentId])
+  @@index([tenantId, provider])
+  @@index([providerEventId])
+  @@map("payment_events")
+}
+
+model IdempotencyKey {
+  id          String    @id @default(cuid())
+  tenantId    String
+  key         String    @unique
+  scope       String
+  requestHash String?
+  response    Json?
+  expiresAt   DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, scope])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ============================================
+// MESSAGING (SMS/MMS/WhatsApp)
+// ============================================
+
+enum MessageChannel {
+  SMS
+  MMS
+  WHATSAPP
+  EMAIL
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+  CLOSED
+}
+
+enum ChatConversationType {
+  TEAM
+  DM
+  JOB_THREAD
+}
+
+enum ChatMessageType {
+  TEXT
+  MEDIA
+  VOICE
+  LOCATION
+  SYSTEM
+}
+
+enum ChatDeliveryStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum ChatAttachmentKind {
+  IMAGE
+  VIDEO
+  FILE
+  VOICE
+  LOCATION
+}
+
+model Conversation {
+  id             String         @id @default(cuid())
+  tenantId       String
+  channel        MessageChannel
+  clientId       String?
+  assignedUserId String?
+  jobId          String?
+
+  // Participants (phone numbers, emails, etc.)
+  participants Json // Array of phone numbers/emails
+
+  status        ConversationStatus @default(ACTIVE)
+  lastMessageAt DateTime?
+  unreadCount   Int                @default(0)
+
+  // Metadata
+  metadata Json?
+
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client       Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  assignedUser User?   @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  job          Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  messages     Message[]
+  readReceipts ConversationReadReceipt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, clientId])
+  @@index([tenantId, assignedUserId])
+  @@index([tenantId, status])
+  @@index([tenantId, lastMessageAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  tenantId       String
+  direction      MessageDirection
+  channel        MessageChannel
+
+  // Content
+  body  String?        @db.Text
+  media MessageMedia[]
+
+  // Sender/Recipient
+  fromNumber String?
+  toNumber   String?
+  fromEmail  String?
+  toEmail    String?
+
+  // Provider tracking
+  provider          String // "webwhatis", "voipms", "twilio", etc.
+  providerMessageId String? @unique
+
+  // Status
+  status       MessageStatus @default(QUEUED)
+  errorCode    String?
+  errorMessage String?       @db.Text
+
+  // Delivery tracking
+  queuedAt    DateTime? @default(now())
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  failedAt    DateTime?
+
+  // Retry info
+  retryCount  Int       @default(0)
+  lastRetryAt DateTime?
+
+  // Metadata
+  metadata Json?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, conversationId])
+  @@index([tenantId, direction])
+  @@index([tenantId, status])
+  @@index([tenantId, channel])
+  @@index([providerMessageId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model MessageMedia {
+  id           String  @id @default(cuid())
+  messageId    String
+  type         String // "image", "video", "file", "audio"
+  url          String  @db.Text
+  thumbnailUrl String? @db.Text
+  mimeType     String?
+  size         Int? // Bytes
+  filename     String?
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+  @@map("message_media")
+}
+
+model ConversationReadReceipt {
+  id             String   @id @default(cuid())
+  conversationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([conversationId])
+  @@index([userId])
+  @@map("conversation_read_receipts")
+}
+
+model ChatConversation {
+  id            String               @id @default(cuid())
+  tenantId      String
+  type          ChatConversationType
+  title         String?
+  pinned        Boolean              @default(false)
+  userAId       String?
+  userBId       String?
+  jobId         String?
+  lastMessageAt DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([tenantId, type, pinned])
+  @@index([tenantId, lastMessageAt])
+  @@index([tenantId, userAId, userBId])
+  @@index([tenantId, jobId])
+  @@unique([tenantId, type, userAId, userBId])
+  @@map("chat_conversations")
+}
+
+model ChatConversationMember {
+  id             String   @id @default(cuid())
+  tenantId       String
+  conversationId String
+  userId         String
+  role           String?
+  lastReadAt     DateTime?
+  mutedUntil     DateTime?
+  createdAt      DateTime @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([tenantId, userId])
+  @@index([tenantId, conversationId])
+  @@map("chat_conversation_members")
+}
+
+model ChatMessage {
+  id             String             @id @default(cuid())
+  tenantId       String
+  conversationId String
+  senderId       String
+  type           ChatMessageType    @default(TEXT)
+  text           String?            @db.Text
+  jobId          String?
+  jobNumber      String?
+  jobName        String?
+  clientTempId   String?
+  replyToMessageId String?
+  replyToSenderName String?
+  replyToText      String?
+  replyToType      ChatMessageType?
+  status         ChatDeliveryStatus @default(SENT)
+  createdAt      DateTime           @default(now())
+
+  @@index([tenantId, conversationId, createdAt])
+  @@index([tenantId, senderId, createdAt])
+  @@unique([conversationId, senderId, clientTempId])
+  @@map("chat_messages")
+}
+
+model ChatMessageReaction {
+  id        String   @id @default(cuid())
+  tenantId  String
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@map("chat_message_reactions")
+}
+
+model ChatMessageAttachment {
+  id           String             @id @default(cuid())
+  tenantId     String
+  messageId    String
+  kind         ChatAttachmentKind
+  url          String             @db.Text
+  fileName     String?
+  mimeType     String?
+  sizeBytes    Int?
+  durationMs   Int?
+  thumbnailUrl String?            @db.Text
+  latitude     Float?
+  longitude    Float?
+  createdAt    DateTime           @default(now())
+
+  @@index([tenantId, messageId])
+  @@map("chat_message_attachments")
+}
+
+model WebhookEvent {
+  id        String @id @default(cuid())
+  tenantId  String
+  provider  String // "webwhatis", "voipms", etc.
+  eventId   String @unique // Provider's event ID for idempotency
+  eventType String // "inbound_message", "message_status_update", etc.
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  processed   Boolean   @default(false)
+  error       String?   @db.Text
+
+  // Raw payload (be careful - don't log secrets)
+  rawPayload Json?
+
+  // Hash for deduplication
+  payloadHash String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, provider])
+  @@index([tenantId, processed])
+  @@index([eventId])
+  @@index([payloadHash])
+  @@map("webhook_events")
+}
+
+// ============================================
+// BRANDING SETTINGS
+// ============================================
+
+model BrandingSettings {
+  id       String @id @default(cuid())
+  tenantId String @unique @map("tenantid")
+
+  // UI Colors — DB columns are all-lowercase (table was created without quoted identifiers)
+  primaryColor        String? @map("primarycolor")
+  secondaryColor      String? @map("secondarycolor")
+  backgroundColor     String? @map("backgroundcolor")
+  sidebarColor        String? @map("sidebarcolor")
+  menuColor           String? @map("menucolor")
+  buttonColor         String? @map("buttoncolor")
+  buttonTextColor     String? @map("buttontextcolor")
+  textPrimaryColor    String? @map("textprimarycolor")
+  textSecondaryColor  String? @map("textsecondarycolor")
+  linkColor           String? @map("linkcolor")
+  borderColor         String? @map("bordercolor")
+  successColor        String? @map("successcolor")
+  warningColor        String? @map("warningcolor")
+  dangerColor         String? @map("dangercolor")
+
+  // Logos / Assets
+  webLogoUrl             String? @map("weblogourl")
+  faviconUrl             String? @map("faviconurl")
+  mobileAppIconUrl       String? @map("mobileappiconurl")
+  mobileAppSplashLogoUrl String? @map("mobileappsplashlogourl")
+
+  // Invoice settings
+  invoicePdfTemplateId String? @map("invoicepdftemplateid")
+  invoiceStyle         String? @map("invoicestyle")
+  invoiceBusinessName  String? @map("invoicebusinessname")
+  invoicePhone         String? @map("invoicephone")
+  invoiceEmail         String? @map("invoiceemail")
+  invoiceAddress       String? @map("invoiceaddress")
+  invoiceFooterText    String? @map("invoicefootertext")
+  invoiceLogoUrl       String? @map("invoicelogourl")
+
+  // Email colors
+  emailPrimaryColor            String? @map("emailprimarycolor")
+  emailButtonColor             String? @map("emailbuttoncolor")
+  emailButtonTextColor         String? @map("emailbuttontextcolor")
+  emailBackgroundColor         String? @map("emailbackgroundcolor")
+  emailCardBackgroundColor     String? @map("emailcardbackgroundcolor")
+  emailHeaderBackgroundColor   String? @map("emailheaderbackgroundcolor")
+  emailFooterBackgroundColor   String? @map("emailfooterbackgroundcolor")
+  emailTextPrimaryColor        String? @map("emailtextprimarycolor")
+  emailTextSecondaryColor      String? @map("emailtextsecondarycolor")
+  emailLinkColor               String? @map("emaillinkcolor")
+  emailBorderColor             String? @map("emailbordercolor")
+
+  // Email content
+  emailLogoUrl          String? @map("emaillogourl")
+  emailFooterText       String? @map("emailfootertext")
+  emailSignature        String? @map("emailsignature")
+  emailCustomHeaderHTML String? @map("emailcustomheaderhtml")
+  emailCustomFooterHTML String? @map("emailcustomfooterhtml")
+
+  createdAt DateTime @default(now()) @map("createdat")
+  updatedAt DateTime @updatedAt @map("updatedat")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("branding_settings")
+}
+
+// ============================================
+// MEASURING REQUESTS
+// ============================================
+
+enum MeasuringRequestStatus {
+  PENDING
+  OPENED
+  COMPLETED
+}
+
+model MeasuringRequest {
+  id               String                 @id @default(cuid())
+  tenantId         String
+  requestId        String
+  assignedUserId   String
+  createdByUserId  String
+  status           MeasuringRequestStatus @default(PENDING)
+  notes            String?                @db.Text
+
+  createdAt            DateTime  @default(now())
+  openedAt             DateTime?
+  completedAt          DateTime?
+  lastNotificationAt   DateTime?
+  notificationAttempts Int       @default(0)
+
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  request     Lead   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  assignedUser    User @relation("MeasuringRequestAssignee", fields: [assignedUserId], references: [id], onDelete: Cascade)
+  createdByUser   User @relation("MeasuringRequestCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([requestId])
+  @@index([assignedUserId])
+  @@index([status])
+  @@index([tenantId, assignedUserId, status])
+  @@map("measuring_requests")
+}

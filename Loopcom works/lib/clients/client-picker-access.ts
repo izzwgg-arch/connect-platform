@@ -1,0 +1,22 @@
+/** Permissions that allow selecting clients in create/edit forms without full clients.view */
+export const CLIENT_PICKER_PERMISSIONS = [
+  'clients.view',
+  'clients.create',
+  'clients.edit',
+  'estimates.view',
+  'estimates.create',
+  'estimates.edit',
+  'invoices.view',
+  'invoices.create',
+  'invoices.edit',
+  'jobs.view',
+  'jobs.create',
+  'jobs.edit',
+  'leads.view',
+  'leads.create',
+  'leads.edit',
+  'purchase_orders.view',
+  'purchase_orders.create',
+  'tasks.create',
+  'issues.create',
+] as const

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "769650317030",
+    "project_id": "trimpro-83596",
+    "storage_bucket": "trimpro-83596.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:769650317030:android:851b65e25f4a25e0cb0d27",
+        "android_client_info": {
+          "package_name": "com.trimpro.field"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbyltu8zy2U8zct08RXvwSe08X9UhnxLI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

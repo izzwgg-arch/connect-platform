@@ -87,3 +87,8 @@ trace*.txt
 
 # Agent worktrees checked out inside the repo.
 .claude
+
+# Loopcom Works (2026-09-18): a whole second product beside Connect. No Connect
+# image reads it; it deploys to its own server from its own Dockerfile. Exact
+# path on purpose (see the rule above about bare patterns).
+Loopcom works
