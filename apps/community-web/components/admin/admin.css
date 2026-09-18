@@ -1,0 +1,17 @@
+.admin { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }
+.admin .aside { background: var(--bg-soft); border-right: 1px solid var(--border); padding: 14px 10px; position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; }
+.admin .aside .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
+.admin .aside .brand img { height: 22px; }
+.admin .aside .brand span { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--text-dim); }
+.admin .aside .grp { padding: 12px 10px 4px; font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-dim); font-weight: 700; }
+.admin .content { padding: 20px 22px 60px; max-width: 1400px; }
+.admin .content h1 { font-size: 19px; margin: 0 0 4px; }
+.admin .content .sub { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; }
+.admin .col { display: grid; gap: 14px; }
+.admin .two { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.sev-stripe { display: inline-block; width: 4px; align-self: stretch; border-radius: 2px; min-height: 26px; }
+@media (max-width: 900px) {
+  .admin { grid-template-columns: 1fr; }
+  .admin .aside { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .admin .two { grid-template-columns: 1fr; }
+}

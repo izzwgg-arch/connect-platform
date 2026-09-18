@@ -566,10 +566,11 @@ export function registerAuthRoutes(app: FastifyInstance, db: Db, deps: AuthDeps 
     });
     app.get("/dev/last-code", async (req) => {
       const q = z.object({ target: z.string() }).parse(req.query);
-      const row = await db.outboundMail.findFirst({ where: { to: q.target }, orderBy: { createdAt: "desc" } });
-      const m = row?.text.match(/\b(\d{6})\b/);
-      const link = row?.text.match(/token=([A-Za-z0-9_-]+)/);
-      return { code: m?.[1] ?? null, resetToken: link?.[1] ?? null };
+      // Newest first; a plain notification email may follow the one carrying the code/link.
+      const rows = await db.outboundMail.findMany({ where: { to: q.target }, orderBy: { createdAt: "desc" }, take: 10 });
+      const code = rows.map((r) => r.text.match(/\b(\d{6})\b/)?.[1]).find(Boolean) ?? null;
+      const resetToken = rows.map((r) => r.text.match(/token=([A-Za-z0-9_-]+)/)?.[1]).find(Boolean) ?? null;
+      return { code, resetToken };
     });
   }
 

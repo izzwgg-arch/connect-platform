@@ -1,7 +1,7 @@
 /**
  * Tier-1 repeatability loop (brief §49): runs every critical flow N times in a
  * row against a RUNNING api (COMMUNITY_API_URL, default http://localhost:3101)
- * with COMMUNITY_TEST_HOOKS=1, over real HTTP. Any single failure is reported
+ * with COMMUNITY_TEST_HOOKS=1 and COMMUNITY_RATE_LIMIT_OFF=1 (hundreds of signups from one IP), over real HTTP. Any single failure is reported
  * with the iteration and the step; the process exits 1. No retries, ever.
  *
  *   pnpm --filter @loopcom/community-api test:tier1            # 20 iterations
@@ -47,7 +47,7 @@ async function code(target: string): Promise<string> {
 
 async function makeUser(tag: string) {
   const email = `t1-${tag}-${uid()}@example.test`;
-  const password = "Tier1-pass-word-99";
+  const password = "Blue-anchor-marble-99";
   const reg = await call("/auth/register", { body: { firstName: "Tier", lastName: `One${tag}`, email, password } });
   expect(reg.status === 201, "signup", reg);
   const c = await call("/auth/verify/confirm", { token: reg.body.accessToken, body: { purpose: "email", target: email, code: await code(email) } });
@@ -171,7 +171,7 @@ const flows: Record<string, () => Promise<void>> = {
     const buyer = await makeUser("b");
     const vendor = await makeUser("v");
     const org = await call("/organizations", { token: vendor.token, body: { displayName: `Vendor Co ${uid()}` } });
-    const rfq = await call("/rfq", { token: buyer.token, body: { title: "25 embroidered jackets", description: "Navy softshell, logo left chest, delivered to Monroe by Oct 20", quantity: "25", location: "Monroe, NY" }, idem: uid() });
+    const rfq = await call("/rfq", { token: buyer.token, body: { title: "25 embroidered jackets", description: "Navy softshell, logo left chest, delivered to Monroe by Oct 20", quantity: "25", location: "Monroe, NY", inviteOrganizationIds: [org.body.id] }, idem: uid() });
     expect(rfq.status === 201, "create rfq", rfq);
     const rid = rfq.body.rfq?.id ?? rfq.body.id;
     const q = await call(`/rfq/${rid}/quotes`, { token: vendor.token, body: { organizationId: org.body.id, total: 1875, notes: "Sample in 3 days" }, idem: uid() });
@@ -180,13 +180,22 @@ const flows: Record<string, () => Promise<void>> = {
     const acc = await call(`/rfq/${rid}/quotes/${qid}/accept`, { method: "POST", token: buyer.token, idem: uid() });
     expect(acc.status === 200, "accept quote", acc);
     const again = await call(`/rfq/${rid}/quotes/${qid}/accept`, { method: "POST", token: buyer.token, idem: uid() });
-    expect(again.status === 409 || again.status === 200, "second accept is not a second acceptance", again);
+    expect(again.status === 409 || again.status === 400, "second accept is refused, never a second acceptance", again);
+    const after = await call(`/rfq/${rid}`, { token: buyer.token });
+    expect(after.status === 200 && after.body.rfq?.status === "ACCEPTED" || after.body.status === "ACCEPTED", "rfq accepted once", after);
   },
   async "opportunity create"() {
     const u = await makeUser("op");
-    const types = await call("/opportunities/types");
+    const types = await call("/opportunities/types", { token: u.token });
     expect(types.status === 200 && (types.body.types?.length ?? 0) > 0, "types", types);
-    const r = await call("/opportunities", { token: u.token, body: { typeSlug: types.body.types[0].slug, title: "Partner wanted", description: "Uniform program partner", location: "Monroe, NY" } });
+    const t = types.body.types.find((x: any) => x.slug === "partnerships") ?? types.body.types[0];
+    // Fill every required field from the type's own schema — the schema is data, so the loop reads it.
+    const fields: Record<string, unknown> = {};
+    for (const f of t.fieldSchema?.fields ?? t.fieldSchema ?? []) {
+      if (!f.required) continue;
+      fields[f.key] = f.type === "number" || f.type === "money" ? 1000 : f.type === "date" ? new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10) : f.type === "select" ? f.options?.[0] : f.type === "multiselect" ? [f.options?.[0]].filter(Boolean) : f.type === "boolean" ? true : "Uniform program partner";
+    }
+    const r = await call("/opportunities", { token: u.token, body: { typeSlug: t.slug, title: "Partner wanted", description: "Uniform program partner", location: "Monroe, NY", fields } });
     expect(r.status === 201, "create opportunity", r);
   },
   async "event rsvp"() {

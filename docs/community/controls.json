@@ -5246,6 +5246,606 @@
       "permissions": "signed in, org.hire",
       "api": "POST /jobs/:id/applications/:appId/message",
       "testId": "hiring-message-send"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin",
+      "action": "click",
+      "expected": "navigates to /admin (Overview)",
+      "permissions": "staff (MODERATOR/ADMIN)",
+      "api": "GET /admin/overview",
+      "testId": "admin-nav-admin"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-moderation",
+      "action": "click",
+      "expected": "navigates to the moderation queue; badge shows open+in-review count",
+      "permissions": "staff",
+      "api": "GET /admin/overview",
+      "testId": "admin-nav-admin-moderation"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-verifications",
+      "action": "click",
+      "expected": "navigates to the verification queue; badge shows pending count",
+      "permissions": "staff",
+      "api": "GET /admin/overview",
+      "testId": "admin-nav-admin-verifications"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-users",
+      "action": "click",
+      "expected": "navigates to /admin/users",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-users"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-organizations",
+      "action": "click",
+      "expected": "navigates to /admin/organizations",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-organizations"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-content",
+      "action": "click",
+      "expected": "navigates to /admin/content",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-content"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-audit",
+      "action": "click",
+      "expected": "navigates to /admin/audit",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-audit"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-security",
+      "action": "click",
+      "expected": "navigates to /admin/security",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-security"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-notifications",
+      "action": "click",
+      "expected": "navigates to /admin/notifications",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-notifications"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-flags",
+      "action": "click",
+      "expected": "navigates to /admin/flags (built by the recommendations domain)",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-flags"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-admin-experiments",
+      "action": "click",
+      "expected": "navigates to /admin/experiments (built by the recommendations domain)",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-admin-experiments"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminLayout",
+      "control": "admin-nav-back",
+      "action": "click",
+      "expected": "returns to the ordinary app at /",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "admin-nav-back"
+    },
+    {
+      "screen": "admin",
+      "component": "AdminOverviewPage",
+      "control": "admin-overview-tile-<label>",
+      "action": "view",
+      "expected": "shows a live count tile (open cases, pending verifications, organizations, signups, etc.)",
+      "permissions": "staff",
+      "api": "GET /admin/overview",
+      "testId": "admin-overview-tile-<label>"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-tab-open",
+      "action": "click",
+      "expected": "filters the queue to OPEN + IN_REVIEW cases",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases",
+      "testId": "moderation-tab-open"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-tab-ACTIONED",
+      "action": "click",
+      "expected": "filters the queue to ACTIONED cases",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases?status=ACTIONED",
+      "testId": "moderation-tab-ACTIONED"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-tab-DISMISSED",
+      "action": "click",
+      "expected": "filters the queue to DISMISSED cases",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases?status=DISMISSED",
+      "testId": "moderation-tab-DISMISSED"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-tab-APPEALED",
+      "action": "click",
+      "expected": "filters the queue to APPEALED cases",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases?status=APPEALED",
+      "testId": "moderation-tab-APPEALED"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-row-<id>",
+      "action": "click",
+      "expected": "opens the case detail page",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases/:id",
+      "testId": "moderation-row-<id>"
+    },
+    {
+      "screen": "admin/moderation",
+      "component": "ModerationQueuePage",
+      "control": "moderation-load-more",
+      "action": "click",
+      "expected": "appends the next page of cases",
+      "permissions": "staff",
+      "api": "GET /admin/moderation/cases?cursor=",
+      "testId": "moderation-load-more"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-assign-me",
+      "action": "click",
+      "expected": "assigns the case to the signed-in moderator; OPEN moves to IN_REVIEW",
+      "permissions": "staff",
+      "api": "POST /admin/moderation/cases/:id/assign",
+      "testId": "moderation-assign-me"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-warn",
+      "action": "click",
+      "expected": "opens the action dialog for WARN",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-warn"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-restrict_outreach",
+      "action": "click",
+      "expected": "opens the action dialog for RESTRICT_OUTREACH (asks for days)",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-restrict_outreach"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-remove_content",
+      "action": "click",
+      "expected": "opens the action dialog for REMOVE_CONTENT",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-remove_content"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-suspend",
+      "action": "click",
+      "expected": "opens the action dialog for SUSPEND (asks for days)",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-suspend"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-ban",
+      "action": "click",
+      "expected": "opens the action dialog for BAN",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-ban"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-dismiss",
+      "action": "click",
+      "expected": "opens the action dialog for DISMISS",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-action-dismiss"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-note",
+      "action": "type",
+      "expected": "moderator note, required, at least 10 characters",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-note"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-user-message",
+      "action": "type",
+      "expected": "optional plain-English sentence the subject sees instead of the default",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-user-message"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-days",
+      "action": "type",
+      "expected": "restriction/suspension length in days",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-days"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-action-submit",
+      "action": "click",
+      "expected": "applies the action, resolves the case, and refreshes the page",
+      "permissions": "staff",
+      "api": "POST /admin/moderation/cases/:id/action",
+      "testId": "moderation-action-submit"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-decide-appeal",
+      "action": "click",
+      "expected": "opens the appeal decision dialog",
+      "permissions": "staff",
+      "api": "-",
+      "testId": "moderation-decide-appeal"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-appeal-grant",
+      "action": "click",
+      "expected": "grants the appeal, lifting the restriction/suspension/ban",
+      "permissions": "staff",
+      "api": "POST /admin/moderation/appeals/:id/decide {decision:GRANTED}",
+      "testId": "moderation-appeal-grant"
+    },
+    {
+      "screen": "admin/moderation/[caseId]",
+      "component": "ModerationCasePage",
+      "control": "moderation-appeal-deny",
+      "action": "click",
+      "expected": "denies the appeal",
+      "permissions": "staff",
+      "api": "POST /admin/moderation/appeals/:id/decide {decision:DENIED}",
+      "testId": "moderation-appeal-deny"
+    },
+    {
+      "screen": "admin/users",
+      "component": "AdminUsersPage",
+      "control": "admin-users-search",
+      "action": "type",
+      "expected": "filters the user list by name, username or email",
+      "permissions": "staff",
+      "api": "GET /admin/users?q=",
+      "testId": "admin-users-search"
+    },
+    {
+      "screen": "admin/users",
+      "component": "AdminUsersPage",
+      "control": "admin-users-status",
+      "action": "change",
+      "expected": "filters by account status",
+      "permissions": "staff",
+      "api": "GET /admin/users?status=",
+      "testId": "admin-users-status"
+    },
+    {
+      "screen": "admin/users",
+      "component": "AdminUsersPage",
+      "control": "admin-users-row-<id>",
+      "action": "click",
+      "expected": "opens the user detail page",
+      "permissions": "staff",
+      "api": "GET /admin/users/:id",
+      "testId": "admin-users-row-<id>"
+    },
+    {
+      "screen": "admin/users",
+      "component": "AdminUsersPage",
+      "control": "admin-users-load-more",
+      "action": "click",
+      "expected": "appends the next page of users",
+      "permissions": "staff",
+      "api": "GET /admin/users?cursor=",
+      "testId": "admin-users-load-more"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-set-active",
+      "action": "click",
+      "expected": "opens the confirm dialog to set status ACTIVE",
+      "permissions": "ADMIN",
+      "api": "-",
+      "testId": "admin-user-set-active"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-set-suspended",
+      "action": "click",
+      "expected": "opens the confirm dialog to suspend the account",
+      "permissions": "ADMIN",
+      "api": "-",
+      "testId": "admin-user-set-suspended"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-set-banned",
+      "action": "click",
+      "expected": "opens the confirm dialog to ban the account",
+      "permissions": "ADMIN",
+      "api": "-",
+      "testId": "admin-user-set-banned"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-status-confirm",
+      "action": "click",
+      "expected": "applies the status change, revokes sessions if not ACTIVE, notifies the person, audits",
+      "permissions": "ADMIN",
+      "api": "POST /admin/users/:id/status",
+      "testId": "admin-user-status-confirm"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-verify-email",
+      "action": "click",
+      "expected": "manually marks the person's email verified",
+      "permissions": "ADMIN",
+      "api": "POST /admin/users/:id/verify-email",
+      "testId": "admin-user-verify-email"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-grant-moderator",
+      "action": "click",
+      "expected": "grants the MODERATOR staff role",
+      "permissions": "ADMIN",
+      "api": "POST /admin/users/:id/staff {role:MODERATOR}",
+      "testId": "admin-user-grant-moderator"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-grant-admin",
+      "action": "click",
+      "expected": "grants the ADMIN staff role",
+      "permissions": "ADMIN",
+      "api": "POST /admin/users/:id/staff {role:ADMIN}",
+      "testId": "admin-user-grant-admin"
+    },
+    {
+      "screen": "admin/users/[id]",
+      "component": "AdminUserDetailPage",
+      "control": "admin-user-remove-staff",
+      "action": "click",
+      "expected": "removes staff access entirely",
+      "permissions": "ADMIN",
+      "api": "POST /admin/users/:id/staff {role:null}",
+      "testId": "admin-user-remove-staff"
+    },
+    {
+      "screen": "admin/organizations",
+      "component": "AdminOrganizationsPage",
+      "control": "admin-orgs-search",
+      "action": "type",
+      "expected": "filters companies by name",
+      "permissions": "staff",
+      "api": "GET /admin/organizations?q=",
+      "testId": "admin-orgs-search"
+    },
+    {
+      "screen": "admin/organizations",
+      "component": "AdminOrganizationsPage",
+      "control": "admin-org-status-confirm",
+      "action": "click",
+      "expected": "applies the company status change (suspend/ban/reinstate) and audits",
+      "permissions": "ADMIN",
+      "api": "POST /admin/organizations/:id/status",
+      "testId": "admin-org-status-confirm"
+    },
+    {
+      "screen": "admin/content",
+      "component": "AdminContentPage",
+      "control": "admin-content-tab-posts",
+      "action": "click",
+      "expected": "lists recent posts",
+      "permissions": "staff",
+      "api": "GET /admin/content?type=posts",
+      "testId": "admin-content-tab-posts"
+    },
+    {
+      "screen": "admin/content",
+      "component": "AdminContentPage",
+      "control": "admin-content-search",
+      "action": "type",
+      "expected": "filters the listed content by title/body",
+      "permissions": "staff",
+      "api": "GET /admin/content?q=",
+      "testId": "admin-content-search"
+    },
+    {
+      "screen": "admin/content",
+      "component": "AdminContentPage",
+      "control": "admin-content-remove-confirm",
+      "action": "click",
+      "expected": "opens (or reuses) a case and actions REMOVE_CONTENT in one step",
+      "permissions": "staff",
+      "api": "POST /admin/content/remove",
+      "testId": "admin-content-remove-confirm"
+    },
+    {
+      "screen": "admin/audit",
+      "component": "AdminAuditPage",
+      "control": "admin-audit-load-more",
+      "action": "click",
+      "expected": "appends the next page of audit rows",
+      "permissions": "staff",
+      "api": "GET /admin/audit?cursor=",
+      "testId": "admin-audit-load-more"
+    },
+    {
+      "screen": "admin/verifications",
+      "component": "AdminVerificationsPage",
+      "control": "admin-verification-confirm",
+      "action": "click",
+      "expected": "approves or rejects the verification and notifies the subject",
+      "permissions": "staff",
+      "api": "POST /admin/verifications/:id/decide",
+      "testId": "admin-verification-confirm"
+    },
+    {
+      "screen": "company/analytics",
+      "component": "CompanyAnalyticsPage",
+      "control": "analytics-org-select",
+      "action": "change",
+      "expected": "switches which company's analytics are shown",
+      "permissions": "signed in, member of >1 company",
+      "api": "GET /organizations/:id/analytics",
+      "testId": "analytics-org-select"
+    },
+    {
+      "screen": "company/analytics",
+      "component": "CompanyAnalyticsPage",
+      "control": "analytics-range-30",
+      "action": "click",
+      "expected": "shows the last 30 days",
+      "permissions": "org.view_analytics",
+      "api": "GET /organizations/:id/analytics?range=30",
+      "testId": "analytics-range-30"
+    },
+    {
+      "screen": "company/analytics",
+      "component": "CompanyAnalyticsPage",
+      "control": "analytics-range-90",
+      "action": "click",
+      "expected": "shows the last 90 days",
+      "permissions": "org.view_analytics",
+      "api": "GET /organizations/:id/analytics?range=90",
+      "testId": "analytics-range-90"
+    },
+    {
+      "screen": "company/analytics",
+      "component": "CompanyAnalyticsPage",
+      "control": "analytics-range-365",
+      "action": "click",
+      "expected": "shows the last year",
+      "permissions": "org.view_analytics",
+      "api": "GET /organizations/:id/analytics?range=365",
+      "testId": "analytics-range-365"
+    },
+    {
+      "screen": "company/analytics",
+      "component": "CompanyAnalyticsPage",
+      "control": "analytics-export",
+      "action": "click",
+      "expected": "downloads a CSV of the current tiles + daily series",
+      "permissions": "org.view_analytics",
+      "api": "GET /organizations/:id/analytics/export.csv",
+      "testId": "analytics-export"
+    },
+    {
+      "screen": "settings/notices",
+      "component": "AccountNoticesPage",
+      "control": "notices-appeal-<id>",
+      "action": "click",
+      "expected": "opens the appeal dialog for that moderation action",
+      "permissions": "signed in, subject of the action",
+      "api": "-",
+      "testId": "notices-appeal-<id>"
+    },
+    {
+      "screen": "settings/notices",
+      "component": "AccountNoticesPage",
+      "control": "notices-appeal-body",
+      "action": "type",
+      "expected": "the appeal's explanation, at least 10 characters",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "notices-appeal-body"
+    },
+    {
+      "screen": "settings/notices",
+      "component": "AccountNoticesPage",
+      "control": "notices-appeal-submit",
+      "action": "click",
+      "expected": "files the appeal; the case moves to APPEALED for staff",
+      "permissions": "signed in",
+      "api": "POST /appeals",
+      "testId": "notices-appeal-submit"
     }
   ]
 }

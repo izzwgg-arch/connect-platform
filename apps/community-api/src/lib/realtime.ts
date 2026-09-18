@@ -57,3 +57,8 @@ export function subscribe(personId: string, cb: (e: RealtimeEvent) => void): () 
   local.on(key, cb);
   return () => local.off(key, cb);
 }
+
+/** Total connected SSE listeners on THIS instance (each open /realtime/stream holds one). Admin system health only. */
+export function subscriberCount(): number {
+  return local.eventNames().reduce((sum, name) => sum + local.listenerCount(name), 0);
+}

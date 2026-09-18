@@ -67,9 +67,14 @@ test("search: full-text hit on a real word", async () => {
 
 test("search: a typo is rescued by trigram similarity", async () => {
   const { app, pA, org1 } = await seed();
-  const r = await api(app, { method: "GET", url: `/search?q=${encodeURIComponent("embroidry")}&type=organizations`, token: pA.accessToken });
+  // A word unique to this org, misspelled — "embroidry" alone is crowded out by
+  // the hundreds of embroidery rows the Tier-1 loop leaves behind in a shared dev db.
+  const unique = `zephyrquilt${Date.now().toString(36)}`;
+  await tdb().organization.update({ where: { id: org1.id }, data: { description: `${unique} embroidery`, searchText: `${org1.displayName} ${unique} embroidery uniforms`.toLowerCase() } });
+  const typo = unique.replace("quilt", "qilt");
+  const r = await api(app, { method: "GET", url: `/search?q=${encodeURIComponent(typo)}&type=organizations`, token: pA.accessToken });
   assert.equal(r.status, 200);
-  assert.ok(r.body.results.some((x: any) => x.id === org1.id), JSON.stringify(r.body.results));
+  assert.ok(r.body.results.some((x: any) => x.id === org1.id), JSON.stringify(r.body.results).slice(0, 400));
 });
 
 test("search: type filter restricts to one type", async () => {

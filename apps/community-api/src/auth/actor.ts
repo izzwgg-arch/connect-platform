@@ -69,18 +69,26 @@ export function registerActorResolution(app: FastifyInstance, db: Db) {
     if (claims.typ !== "access") {
       return reply.status(401).send({ error: "unauthorized", message: "Sign in to continue." });
     }
-    const session = await db.session.findUnique({ where: { id: claims.sid }, select: { revokedAt: true, expiresAt: true } });
-    if (!session || session.revokedAt || session.expiresAt < new Date()) {
-      if (isPublic) return;
-      return reply.status(401).send({ error: "session_revoked", message: "That session was signed out. Sign in again." });
-    }
+    // Account status is checked BEFORE session validity on purpose: a moderation
+    // suspend/ban also revokes every session, and a still-in-flight request
+    // should surface the specific, actionable "account_restricted" reason
+    // rather than a generic "session was signed out" (a person only ever sees
+    // the latter for their OWN sign-outs, never for someone else's action).
     const person = await db.person.findUnique({
       where: { id: claims.sub },
       select: { id: true, status: true, username: true, loopcomTenantId: true },
     });
     if (!person) return reply.status(401).send({ error: "unauthorized", message: "Sign in to continue." });
     if (person.status === "BANNED" || person.status === "SUSPENDED") {
+      // A public path still tolerates a restricted account's stale token — it
+      // just falls back to anonymous, exactly like any other bad token would.
+      if (isPublic) return;
       return reply.status(403).send({ error: "account_restricted", message: "This account can't be used right now. Check your email for details or appeal in Settings." });
+    }
+    const session = await db.session.findUnique({ where: { id: claims.sid }, select: { revokedAt: true, expiresAt: true } });
+    if (!session || session.revokedAt || session.expiresAt < new Date()) {
+      if (isPublic) return;
+      return reply.status(401).send({ error: "session_revoked", message: "That session was signed out. Sign in again." });
     }
     const staff = await db.staffGrant.findUnique({ where: { personId: person.id } });
     req.actor = {
