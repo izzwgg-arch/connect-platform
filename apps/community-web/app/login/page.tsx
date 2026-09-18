@@ -21,6 +21,9 @@ function LoginInner() {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A submit before hydration would be a plain GET — the button waits for React.
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   const [pk, setPk] = useState(false);
   useEffect(() => setPk(passkeysSupported()), []);
   useEffect(() => {
@@ -91,7 +94,7 @@ function LoginInner() {
           <span />
           <Link href="/forgot-password">Forgot password?</Link>
         </div>
-        <Button kind="p" wide type="submit" loading={busy} data-testid="login-submit">
+        <Button kind="p" wide type="submit" loading={busy} disabled={!ready} data-testid="login-submit">
           Sign in
         </Button>
         <div className="or">or continue with</div>

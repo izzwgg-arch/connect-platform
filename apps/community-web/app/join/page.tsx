@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError, trackEvent } from "@/lib/api";
 import { applySession, useAuth } from "@/lib/auth";
 import { Button, Field, Icon } from "@/components/ui";
@@ -26,6 +26,9 @@ export default function JoinPage() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  // A submit before hydration would be a plain GET — the button waits for React.
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   const s = strength(f.password);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
 
@@ -107,7 +110,7 @@ export default function JoinPage() {
             {error} {error.includes("Loopcom") ? <Link href="/sso/loopcom">Sign in with Loopcom</Link> : null}
           </div>
         ) : null}
-        <Button kind="p" wide type="submit" loading={busy} data-testid="join-submit">
+        <Button kind="p" wide type="submit" loading={busy} disabled={!ready} data-testid="join-submit">
           Continue <Icon name="arrow" />
         </Button>
         <div className="or">or</div>
