@@ -148,6 +148,9 @@ export class DesktopLinkClient {
         if (r.status !== 200) { this.set({ state: "error", lastError: `poll ${r.status}` }); await sleep(backoff); backoff = Math.min(backoff * 2, 30_000); continue; }
         const msg = r.json?.message;
         if (msg && msg.kind === "cancel") { this.deps.runtime.cancel(typeof msg.taskId === "string" ? msg.taskId : null); continue; }
+        // The turn that owned this task is over — let go of anything held for it
+        // (the screen). ⛔ Not a cancel: nothing is aborted and nothing failed.
+        if (msg && msg.kind === "task_done" && typeof msg.taskId === "string") { void this.deps.runtime.taskDone(msg.taskId); continue; }
         if (msg && msg.kind === "call" && typeof msg.id === "string" && typeof msg.name === "string") {
           // Handle without blocking the poll loop: the next call may be needed to finish this one.
           this.inflight++;

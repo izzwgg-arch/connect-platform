@@ -158,6 +158,17 @@ export class CoworkerRuntime {
 
   private activity() { try { this.deps.onActivity?.(this.active.size); } catch { /* a badge must never break a call */ } }
 
+  /**
+   * The turn that owned this task has finished (any outcome). Nothing is aborted —
+   * this only releases what the task was HOLDING. Today that is the screen-control
+   * session: without it the session sits open until its idle timeout and the very
+   * next task is refused `screen_busy`, which is exactly what an acceptance run
+   * doing several on-screen jobs in a row hit.
+   */
+  async taskDone(taskId: string): Promise<void> {
+    try { if (this.deps.screen?.isApprovedFor(taskId)) await this.deps.screen.end(taskId, "task_done"); } catch { /* releasing must never throw */ }
+  }
+
   /** Cancel every call of a task (null = all). Aborts approvals, kills shell children, closes the browser. */
   cancel(taskId: string | null): number {
     let n = 0;

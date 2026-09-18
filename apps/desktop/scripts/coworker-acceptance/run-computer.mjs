@@ -100,9 +100,20 @@ async function probe(ops) {
   });
 }
 async function probeControls(title, max = 200) { const r = await probe([{ op: "windows.controls", args: { title, maxControls: max, includeOffscreen: true } }]); return r[0]?.ok ? r[0].result : null; }
-async function probeFind(title, q) { const r = await probe([{ op: "windows.find_control", args: { title, ...q, max: 5 } }]); return r[0]?.ok ? r[0].result.controls : []; }
+// ⛔ hwnd goes as a NUMBER. The worker reads `hwnd` and `title` as different things;
+// the tool façade converts a numeric-looking window string, the raw worker does not.
+async function probeFind(win, q) {
+  const sel = typeof win === "number" || /^\d{3,}$/.test(String(win)) ? { hwnd: Number(win) } : { title: String(win) };
+  const r = await probe([{ op: "windows.find_control", args: { ...sel, ...q, max: 5 } }]);
+  return r[0]?.ok ? r[0].result.controls : [];
+}
 async function probeWindows(filter) { const r = await probe([{ op: "windows.list", args: { filter } }]); return r[0]?.ok ? r[0].result.windows : []; }
-async function probeCapture(title, file) { const r = await probe([{ op: "screen.capture", args: title ? { title, format: "png", maxWidth: 1600 } : { format: "png", maxWidth: 1600 } }]); if (r[0]?.ok) { fs.writeFileSync(file, Buffer.from(r[0].result.dataBase64, "base64")); return file; } return null; }
+async function probeCapture(win, file) {
+  const sel = win == null ? {} : (typeof win === "number" || /^\d{3,}$/.test(String(win)) ? { hwnd: Number(win) } : { title: String(win) });
+  const r = await probe([{ op: "screen.capture", args: { ...sel, format: "png", maxWidth: 1600 } }]);
+  if (r[0]?.ok) { fs.writeFileSync(file, Buffer.from(r[0].result.dataBase64, "base64")); return file; }
+  return null;
+}
 async function probeClose(title) { await probe([{ op: "windows.close", args: { title } }]); }
 
 /* ───────────── the person at the keyboard: the approval answerer ─────────────
@@ -169,7 +180,8 @@ if (!status.json?.connected) { record("PRE", "Desktop link connected", "GET /age
 else record("PRE", "Desktop link connected", "GET /agent-api/coworker/status", "connected:true", `connected, ${status.json.tools} tools, profile ${status.json.profile}, app ${status.json.appVersion}, host ${status.json.hostname}`, "agent status route", status.json.tools >= 70 ? "PASS" : "FAIL");
 const manifest = await agent("coworker/manifest", null, "GET");
 fs.writeFileSync(path.join(OUT, "logs", "manifest.json"), JSON.stringify(manifest.json, null, 2));
-const manifestNames = (manifest.json?.tools ?? []).map((t) => t.name);
+// the route answers { manifest: { … } }
+const manifestNames = ((manifest.json?.manifest?.tools ?? manifest.json?.tools) ?? []).map((t) => t.name);
 record("PRE2", "Manifest carries the three layers", "GET /agent-api/coworker/manifest", "computer_app_launch, computer_windows_*, computer_screen_look, computer_services, computer_network_test", `${manifestNames.length} tools; windows=${manifestNames.filter((n) => n.startsWith("computer_windows_")).length} screen=${manifestNames.filter((n) => n.startsWith("computer_screen_")).length}`, "manifest", ["computer_app_launch", "computer_windows_invoke", "computer_windows_set_value", "computer_screen_look", "computer_services", "computer_network_test", "computer_process_kill"].every((n) => manifestNames.includes(n)) ? "PASS" : "FAIL");
 
 /* ───────────── local portal + acceptance app ───────────── */
@@ -180,12 +192,24 @@ async function ensurePortal() {
   for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 250)); try { const r = await fetch(`${LOCAL}/health`); if (r.ok) return true; } catch {} }
   return false;
 }
-let accProc = null;
+/**
+ * ⛔ THE ACCEPTANCE APP IS STARTED BY A HUMAN (or by a shell on the interactive
+ * desktop), NOT BY THIS HARNESS, and that is deliberate. A GUI process started by
+ * this node process never reaches the interactive desktop — it runs, writes its
+ * state file and blocks in ShowDialog, but no window ever appears to EnumWindows.
+ * That is a property of where the harness itself runs; the Loopcom app has no such
+ * problem (it IS the interactive desktop, which is why the Notepad and Calculator
+ * tests drive real windows). Rather than pretend, this checks and says BLOCKED with
+ * the command to run:
+ *
+ *   powershell -NoProfile -ExecutionPolicy Bypass -File acceptance-app.ps1  *       -StateDir %USERPROFILE%\LoopcomCoworkerAcceptance
+ */
+const ACC_APP_HINT = `start it with:  powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(HERE, "acceptance-app.ps1")}" -StateDir "${WS}"`;
 async function ensureAcceptanceApp() {
-  const wins = await probeWindows("Loopcom Acceptance App");
-  if (wins.length) return true;
-  accProc = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(HERE, "acceptance-app.ps1"), "-StateDir", WS], { windowsHide: true, stdio: "ignore", detached: true });
-  for (let i = 0; i < 30; i++) { await new Promise((r) => setTimeout(r, 400)); if ((await probeWindows("Loopcom Acceptance App")).length) return true; }
+  for (let i = 0; i < 3; i++) {
+    if ((await probeWindows("Loopcom Acceptance App")).length) return true;
+    await new Promise((r) => setTimeout(r, 800));
+  }
   return false;
 }
 async function killApp(name) { ps(`Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Stop-Process -Force`); await new Promise((r) => setTimeout(r, 600)); }
@@ -229,7 +253,14 @@ for (let round = 1; round <= ROUNDS; round++) {
     const rows = journalSince(m); const used = toolsUsed(rows);
     const wins = await probeWindows("Notepad");
     let text = null;
-    for (const w of wins) { const c = await probeFind(String(w.hwnd), { name: "Text editor" }); if (c[0]?.value) { text = c[0].value; break; } }
+    // ⛔ Check EVERY Notepad window and keep the one that has the sentence: the person
+    // may have other notes open, and the first window is not necessarily ours.
+    for (const w of wins) {
+      const c = await probeFind(String(w.hwnd), { name: "Text editor" });
+      const v = c[0]?.value;
+      if (typeof v === "string" && v.includes("Loopcom can control Windows")) { text = v; break; }
+      if (typeof v === "string" && v && text === null) text = v;
+    }
     const shot = await probeCapture(null, path.join(OUT, "screenshots", `${R}T3-notepad.png`));
     const good = wins.length > 0 && typeof text === "string" && text.includes("Loopcom can control Windows");
     const asked = rows.filter((r) => r.outcome === "asked").length; const approved = rows.filter((r) => r.outcome === "approved").length;
@@ -268,7 +299,8 @@ for (let round = 1; round <= ROUNDS; round++) {
   });
 
   await test(`${R}T6`, "Acceptance app: name, radio, checkbox, save (Phase 44)", async () => {
-    await killApp("powershell"); // any older acceptance app
+    // ⛔ Never `killApp("powershell")` here: it would kill the Loopcom app's OWN
+    // Local Worker and the probe, not just an old acceptance app.
     const up = await ensureAcceptanceApp();
     const m = journalMark();
     startWatcher("{ENTER}", 3);
@@ -278,7 +310,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     const st = readSaved(); const live = readState();
     const good = up && st && st.name === "Jacob" && st.option === "B" && st.enableFeature === true && st.saves >= 1;
     const dump = await probeControls("Loopcom Acceptance App"); if (dump) fs.writeFileSync(path.join(OUT, "UIA-dumps", `${R}T6-acceptance-app.json`), JSON.stringify(dump, null, 2));
-    record(`${R}T6`, "Acceptance app: text/radio/checkbox/button", "enter Jacob, select Option B, tick Enable Feature, press Save", "the app's own saved state: name=Jacob option=B enableFeature=true saves≥1", `appUp=${up} saved=${JSON.stringify(st)} tools=${used.join(",")} ${ms}ms`, "acceptance-app-state.json written by the app itself", good ? "PASS" : "FAIL", [], { reply: reply.slice(0, 300), tools: used, live });
+    record(`${R}T6`, "Acceptance app: text/radio/checkbox/button", "enter Jacob, select Option B, tick Enable Feature, press Save", "the app's own saved state: name=Jacob option=B enableFeature=true saves≥1", `appUp=${up} saved=${JSON.stringify(st)} tools=${used.join(",")} ${ms}ms${up ? "" : ` — ${ACC_APP_HINT}`}`, "acceptance-app-state.json written by the app itself", good ? "PASS" : up ? "FAIL" : "BLOCKED", [], { reply: reply.slice(0, 300), tools: used, live });
   });
 
   await test(`${R}T6b`, "Acceptance app: dropdown, dialog, tab (Phase 44)", async () => {
@@ -290,7 +322,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     const rows = journalSince(m); const used = toolsUsed(rows);
     const live = readState();
     const good = up && live && live.priority === "High" && live.settingsDialogOk >= 1 && live.weekly === true && live.tab === "Advanced";
-    record(`${R}T6b`, "Acceptance app: combo/dialog/tab", "set Priority to High, open Settings, tick, OK, select Advanced tab", "live state: priority=High settingsDialogOk≥1 weekly=true tab=Advanced", `appUp=${up} live=${JSON.stringify(live)} tools=${used.join(",")} ${ms}ms`, "acceptance-app-live.json written by the app itself", good ? "PASS" : "FAIL", [], { reply: reply.slice(0, 300), tools: used });
+    record(`${R}T6b`, "Acceptance app: combo/dialog/tab", "set Priority to High, open Settings, tick, OK, select Advanced tab", "live state: priority=High settingsDialogOk≥1 weekly=true tab=Advanced", `appUp=${up} live=${JSON.stringify(live)} tools=${used.join(",")} ${ms}ms${up ? "" : ` — ${ACC_APP_HINT}`}`, "acceptance-app-live.json written by the app itself", good ? "PASS" : up ? "FAIL" : "BLOCKED", [], { reply: reply.slice(0, 300), tools: used });
   });
 
   await test(`${R}T7`, "Vision fallback: the purple custom control (Phase 45)", async () => {
@@ -307,7 +339,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     const clicked = rows.some((r) => r.tool === "computer_screen_click" && r.outcome === "done");
     const shot = await probeCapture("Loopcom Acceptance App", path.join(OUT, "screenshots", `${R}T7-after-click.png`));
     const good = up && after > before && looked && clicked;
-    record(`${R}T7`, "Vision fallback → positional click → verify", "Click the purple square custom control", "UIA cannot name it → computer_screen_look → computer_screen_click → the app's own counter increments", `before=${before} after=${after} looked=${looked} clicked=${clicked} tools=${used.join(",")} ${ms}ms`, "acceptance-app-live.json customClicks + journal path", good ? "PASS" : "FAIL", shot ? [shot] : [], { reply: reply.slice(0, 300), tools: used });
+    record(`${R}T7`, "Vision fallback → positional click → verify", "Click the purple square custom control", "UIA cannot name it → computer_screen_look → computer_screen_click → the app's own counter increments", `before=${before} after=${after} looked=${looked} clicked=${clicked} tools=${used.join(",")} ${ms}ms`, "acceptance-app-live.json customClicks + journal path", good ? "PASS" : up ? "FAIL" : "BLOCKED", shot ? [shot] : [], { reply: reply.slice(0, 300), tools: used });
     for (const r of rows.filter((r) => r.tool === "computer_screen_look" || r.tool === "computer_screen_click")) fs.appendFileSync(path.join(OUT, "vision-results", `${R}T7-vision.jsonl`), JSON.stringify(r) + "\n");
   });
 
@@ -332,8 +364,12 @@ for (let round = 1; round <= ROUNDS; round++) {
     const rows = journalSince(m); const used = toolsUsed(rows);
     const content = exists(dest) ? fs.readFileSync(dest, "utf8") : "";
     const total = exp?.total ?? exp?.reportTotal ?? null;
-    const good = okPortal && exists(dest) && content.length > 0 && used.some((t) => t.startsWith("computer_chrome_") || t.startsWith("computer_browser_")) && (total === null || reply.replace(/,/g, "").includes(String(total).replace(/,/g, "")));
-    record(`${R}T9`, "Browser → download → files → analysis", "Open the Coworker browser … download the acceptance report … move it … total", `file at ${dest}; browser tools used; reply carries the total${total !== null ? ` (${total})` : ""}`, `portal=${okPortal} exists=${exists(dest)} bytes=${content.length} tools=${used.join(",")} ${ms}ms`, "fs + local portal /api/expected", good ? "PASS" : okPortal ? "FAIL" : "BLOCKED", exists(dest) ? [dest] : [], { reply: reply.slice(0, 300), tools: used });
+    // the CHAIN is browser → download → file on disk. The reply's arithmetic is a
+    // separate, weaker claim: record it, but do not fail the chain for an empty reply.
+    const chain = okPortal && exists(dest) && content.length > 0 && used.some((t) => t.startsWith("computer_chrome_") || t.startsWith("computer_browser_"));
+    const saidTotal = total === null || reply.replace(/,/g, "").includes(String(total).replace(/,/g, ""));
+    const good = chain && saidTotal;
+    record(`${R}T9`, "Browser → download → files → analysis", "Open the Coworker browser … download the acceptance report … move it … total", `file at ${dest}; browser tools used; reply carries the total${total !== null ? ` (${total})` : ""}`, `portal=${okPortal} exists=${exists(dest)} bytes=${content.length} saidTotal=${saidTotal} replyEmpty=${reply.trim() === ""} tools=${used.join(",")} ${ms}ms`, "fs + local portal /api/expected", good ? "PASS" : chain ? "PARTIAL: the file chain worked; the reply did not carry the total" : okPortal ? "FAIL" : "BLOCKED", exists(dest) ? [dest] : [], { reply: reply.slice(0, 300), tools: used });
   });
 
   await test(`${R}T10`, "Explorer test: open the workspace, then create a folder — selection (Phase 47)", async () => {
@@ -401,7 +437,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     await ensureAcceptanceApp();
     const m = journalMark(); const lm = appLogMark();
     startWatcher("{ENTER}", 3);
-    const p = ask("In the Loopcom Acceptance App, slowly: select the Advanced tab, wait 3 seconds, select the General tab, wait 3 seconds, select the Data tab, wait 3 seconds, then select General again, and repeat this whole cycle four times.", { timeoutMs: 240_000 });
+    const p = ask("Take control of my screen and, using the real mouse (look at the screen and click by position, not by control name), click the Save button in the Loopcom Acceptance App. Then wait 4 seconds and do it again. Repeat that six times in total, telling me after each one.", { timeoutMs: 240_000 });
     // wait for the screen session to begin, then cancel
     let began = false;
     for (let i = 0; i < 60; i++) { await new Promise((r) => setTimeout(r, 1000)); if (journalSince(m).some((r) => r.tool === "computer_screen_begin" && r.outcome === "done")) { began = true; break; } }
@@ -420,7 +456,10 @@ for (let round = 1; round <= ROUNDS; round++) {
     await ensureAcceptanceApp();
     const m = journalMark(); const lm = appLogMark();
     startWatcher("{ENTER}", 3);
-    const p = ask("In the Loopcom Acceptance App, using the mouse (positional clicks after looking at the screen), click the Save button five times with two seconds between clicks.", { timeoutMs: 240_000 });
+    // ⛔ MOVE, not click: there is no UI Automation equivalent of "move the pointer",
+    // so this is the one request that must use the shared cursor — which is the only
+    // thing the yield rule governs. Asking for clicks just gets (correct) UIA presses.
+    const p = ask("Take control of my screen and move the mouse pointer to eight different positions across the screen, one at a time, waiting 4 seconds between each move. Do not click anything. Tell me each position after you move there.", { timeoutMs: 240_000 });
     let began = false;
     for (let i = 0; i < 60; i++) { await new Promise((r) => setTimeout(r, 1000)); if (journalSince(m).some((r) => r.tool === "computer_screen_begin" && r.outcome === "done")) { began = true; break; } }
     // "the person": unstamped injected mouse movement from ANOTHER process, for ~4 s
@@ -434,7 +473,13 @@ for ($i=0; $i -lt 20; $i++) { [O]::mouse_event(0x0001, 2, 0, 0, [UIntPtr]::Zero)
     const rows = journalSince(m);
     const paused = rows.some((r) => /paused_by_person/.test(String(r.summary)) || /paused_by_person/.test(String(r.verdict))) || appLogSince(lm).some((l) => /Paused|paused/.test(l));
     const good = began && paused;
-    record(`${R}T16`, "Yield to the person", "positional clicks while a foreign process moves the mouse", "a screen action reports paused_by_person (or the frame went grey) while the person moved the mouse", `began=${began} paused=${paused} ${ms}ms`, "journal + app log", good ? "PASS" : began ? "FAIL" : "BLOCKED", [], { reply: reply.slice(0, 300) });
+    void 0;
+    // ⛔ By design only CURSOR/KEYBOARD actions wait for the person: UI Automation
+    // presses a control without touching the mouse, so a UIA-only task never pauses
+    // and never should. If the model chose UIA throughout, this test proves nothing
+    // either way and says so rather than claiming a pass.
+    const cursorActions = rows.filter((r) => /computer_screen_(click|type|key|scroll|move)/.test(String(r.tool))).length;
+    record(`${R}T16`, "Yield to the person", "positional clicks while a foreign process moves the mouse", "a screen action reports paused_by_person (or the frame went grey) while the person moved the mouse", `began=${began} cursorActions=${cursorActions} paused=${paused} ${ms}ms`, "journal + app log", good ? "PASS" : !began || cursorActions === 0 ? "BLOCKED: the model never used the cursor, so there was nothing to yield" : "FAIL", [], { reply: reply.slice(0, 300) });
   });
 
   await test(`${R}T17`, "Failure recovery: the worker is killed mid-task and comes back (Phase 53)", async () => {

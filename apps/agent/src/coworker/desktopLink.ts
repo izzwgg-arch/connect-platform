@@ -77,7 +77,15 @@ export type PendingCall = {
   timeoutMs: number;
 };
 export type CancelMessage = { kind: "cancel"; taskId: string | null; issuedAt: string };
-export type DesktopMessage = PendingCall | CancelMessage;
+/**
+ * The turn that owned this task is over (any outcome). ⛔ NOT a cancel: nothing is
+ * aborted and nothing failed. It exists because the desktop otherwise has no way to
+ * know a task ended — it only ever sees calls arrive — and a screen-control session
+ * whose task has finished would sit there holding the screen until it timed out,
+ * refusing the NEXT task with `screen_busy`. Older apps ignore unknown kinds.
+ */
+export type TaskDoneMessage = { kind: "task_done"; taskId: string; issuedAt: string };
+export type DesktopMessage = PendingCall | CancelMessage | TaskDoneMessage;
 
 export type DesktopCallResult = { ok: boolean; content: unknown; durationMs?: number };
 
@@ -576,8 +584,15 @@ export class DesktopLink {
     for (const s of this.sessionsFor(identity)) s.activeTasks.add(taskId);
   }
 
-  /** The task finished (any outcome): its flags and its computer binding go. */
+  /**
+   * The task finished (any outcome): its flags and its computer binding go, and the
+   * computer it ran on is TOLD, so anything it was holding for that task (a screen
+   * control session) can be let go at once instead of waiting to time out.
+   */
   endTask(identity: LinkIdentity, taskId: string): void {
+    const bound = this.taskDesktop.get(taskId);
+    const owner = bound ? this.sessions.get(bound) : null;
+    if (owner) this.deliver(owner, { kind: "task_done", taskId, issuedAt: new Date(this.now()).toISOString() });
     for (const s of this.sessionsFor(identity)) { s.cancelledTasks.delete(taskId); s.activeTasks.delete(taskId); }
     this.taskDesktop.delete(taskId);
   }

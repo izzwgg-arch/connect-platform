@@ -33,6 +33,7 @@ function manifest(desktopId: string, hostname: string, tools: string[]): Desktop
 class FakeDesktop {
   received: { name: string; id: string }[] = [];
   cancels: (string | null)[] = [];
+  taskDones: string[] = [];
   running = false;
   constructor(readonly link: DesktopLink, readonly id: string, readonly host: string, readonly tools: string[], readonly identity: LinkIdentity = ME) {}
   hello() { this.link.hello(this.identity, manifest(this.id, this.host, this.tools)); }
@@ -41,6 +42,7 @@ class FakeDesktop {
     const msg = await this.link.next(this.identity, 50, this.id);
     if (!msg) return null;
     if (msg.kind === "cancel") { this.cancels.push(msg.taskId); return "cancel"; }
+    if (msg.kind === "task_done") { this.taskDones.push(msg.taskId); return "task_done"; }
     this.received.push({ name: msg.name, id: msg.id });
     this.link.result(this.identity, msg.id, { ok: true, content: answer(msg.name) });
     return msg.name;
@@ -267,6 +269,22 @@ test("⛔ quitting and reopening Loopcom on the computer you are at puts new wor
   assert.equal(link.manifest(ME)!.hostname, "C", "a genuinely new computer is still preferred on its first connection");
   link.hello(ME, deskA("runA2"));
   assert.equal(link.manifest(ME)!.hostname, "C", "a same-run re-hello from A did not jump it back");
+});
+
+test("⛔ the computer a task ran on is TOLD when the turn ends, so it can let the screen go", async () => {
+  const link = new DesktopLink();
+  const a = new FakeDesktop(link, "deskA", "A", ["computer_screen_begin"]);
+  a.hello();
+  const p = link.dispatch(ME, { name: "computer_screen_begin", args: {}, taskId: "tScreen" });
+  await a.pump();
+  assert.equal((await p).ok, true);
+  assert.deepEqual(a.taskDones, []);
+  link.endTask(ME, "tScreen");
+  assert.equal(await a.pump(), "task_done");
+  assert.deepEqual(a.taskDones, ["tScreen"], "the computer that ran the task heard about it");
+  // a task that never reached a computer tells nobody
+  link.endTask(ME, "never-ran");
+  assert.equal(await a.pump(), null);
 });
 
 test("status names every computer and which one new work goes to", async () => {
