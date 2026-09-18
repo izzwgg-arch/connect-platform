@@ -3,3 +3,4 @@ dataset/
 out/
 kernel-metadata.json
 dataset-metadata.json
+auto-launch-*.log
