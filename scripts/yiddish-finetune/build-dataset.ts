@@ -37,8 +37,18 @@ import { pathToFileURL } from "node:url";
 // Type-only: erased at runtime by tsx/esbuild, so this static path never has
 // to resolve on disk when the real import is redirected via YC_ENGINE_ROOT.
 import type { YcRightsLike, YcRowProvenance, YcSourceLike, YcTrainingVerdict } from "../../apps/api/src/yiddishCorpus/governance";
+import { pctOf, reportPipelineState } from "../yiddish-shared/pipelineState";
 
 const HERE = __dirname;
+
+/** `YcPipelineState.key` this build reports under — one row per dataset version. */
+export function pipelineStateKeyFor(version: string): string {
+  return `dataset.build.${version}`;
+}
+
+/** Report progress at most this often while cutting clips, so an 80,000-clip
+ * build never floods `YcPipelineState` with one upsert per clip. */
+export const CLIP_REPORT_INTERVAL = 200;
 
 // ── env: same manual .env parser the PC runner uses, never overwriting a
 // variable that is already set in the real environment. ─────────────────────
@@ -641,6 +651,11 @@ async function main(): Promise<void> {
 
   const { PrismaClient } = await import("@prisma/client");
   const db: any = new PrismaClient();
+  const pipelineStateKey = pipelineStateKeyFor(cli.version);
+  const report = (input: { status: "running" | "idle" | "done" | "error"; headline: string; progress?: any; detail?: unknown }) =>
+    reportPipelineState(db, { key: pipelineStateKey, kind: "dataset", status: input.status, headline: input.headline, progress: input.progress ?? null, detail: input.detail });
+
+  await report({ status: "running", headline: `Building dataset ${cli.version}: reading labelled transcripts.` });
 
   console.log(`[build-dataset] querying YcTranscript engine in (ivrit, human)…`);
   // ⛔ The obvious query — findMany with `include: item.source.rights` over every
@@ -772,6 +787,7 @@ async function main(): Promise<void> {
 
   if (cli.dryRun) {
     console.log(`[build-dataset] --dry-run: no clips cut, no files written.`);
+    await report({ status: "done", headline: `Dataset ${cli.version}: dry run only — nothing cut or written.`, detail: { stats } });
     await db.$disconnect();
     return;
   }
@@ -779,8 +795,15 @@ async function main(): Promise<void> {
   const clipsDir = path.join(cli.outDir, cli.version, "clips");
   mkdirSync(clipsDir, { recursive: true });
 
+  const totalClips = clipsToCut.length;
   let cutOk = 0;
   let cutFailed = 0;
+  let cutCount = 0;
+  await report({
+    status: "running",
+    headline: `Cutting training clips for dataset ${cli.version} (0 of ${totalClips}).`,
+    progress: { current: 0, total: totalClips, unit: "clips", pct: pctOf(0, totalClips) },
+  });
   for (const c of clipsToCut) {
     const asset = assetByItem.get(c.itemId);
     if (!asset?.storageKey) {
@@ -793,6 +816,18 @@ async function main(): Promise<void> {
     else {
       cutFailed += 1;
       console.error(`[build-dataset] ffmpeg failed for item ${c.itemId} (${c.startMs}-${c.endMs}ms): ${res.reason}`);
+    }
+    cutCount += 1;
+    // Report at most every CLIP_REPORT_INTERVAL clips (plus the very last
+    // one), so an 80,000-clip build never floods YcPipelineState with one
+    // upsert per clip.
+    if (cutCount % CLIP_REPORT_INTERVAL === 0 || cutCount === totalClips) {
+      await report({
+        status: "running",
+        headline: `Cutting training clips for dataset ${cli.version} (${cutCount} of ${totalClips}).`,
+        progress: { current: cutCount, total: totalClips, unit: "clips", pct: pctOf(cutCount, totalClips) },
+        detail: { cutOk, cutFailed },
+      });
     }
   }
   console.log(`[build-dataset] cut ${cutOk} clips, ${cutFailed} failed`);
@@ -814,6 +849,15 @@ async function main(): Promise<void> {
   });
   writeFileSync(path.join(outDirVersion, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   console.log(`[build-dataset] wrote ${outDirVersion} (train=${train.length} eval=${evalRows.length})`);
+
+  await report({
+    status: "done",
+    headline:
+      `Dataset ${cli.version} ready: ${stats.trainClips} train / ${stats.evalClips} eval clip(s), ` +
+      `${stats.totalHours}h, mean confidence ${stats.meanConfidence}.`,
+    progress: { current: totalClips, total: totalClips, unit: "clips", pct: 100 },
+    detail: { clips: allClips.length, hours: stats.totalHours, meanConfidence: stats.meanConfidence, trainClips: stats.trainClips, evalClips: stats.evalClips, cutOk, cutFailed },
+  });
 
   await db.$disconnect();
 }

@@ -14,10 +14,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 DS="scripts/yiddish-finetune/dataset/$VERSION"
 LOG="scripts/yiddish-finetune/auto-launch-$VERSION.log"
+PIPELINE_KEY="training.run.$VERSION"
 
 export PATH="/c/Users/izzyw/LoopcomYiddishRunner/.venv/Scripts:$PATH"
 export PYTHONIOENCODING=utf-8 PYTHONUTF8=1 KAGGLE_USERNAME=izzywein
 say() { echo "[auto-launch $(date -u +%H:%M:%SZ)] $*" | tee -a "$LOG"; }
+
+# Best-effort live status for the portal (YcPipelineState). NEVER allowed to
+# abort this script: report-state.ts itself never throws on a DB/table
+# failure, and this wrapper also never lets a bad call trip `set -e`-style
+# failure (there is none here, but `run_report` is still defensive) — a
+# status write is not load-bearing for the actual training run.
+run_report() {
+  npx tsx scripts/yiddish-finetune/report-state.ts --key "$PIPELINE_KEY" --kind training "$@" >>"$LOG" 2>&1 || true
+}
+
+run_report --status running --headline "Waiting for dataset $VERSION's clips to finish cutting."
 
 say "waiting for $DS/manifest.json (build-dataset still cutting clips)"
 # manifest.json is written LAST by build-dataset, so its presence means done.
@@ -34,6 +46,8 @@ while [ ! -f "$DS/manifest.json" ]; do
     stall=$((stall + 1))
     if [ "$stall" -ge "$STALL_LIMIT" ]; then
       say "ERROR: clip count stuck at $now for $STALL_LIMIT minutes and no manifest — aborting."
+      run_report --status error --headline "Dataset $VERSION stalled: clip count stuck at $now for $STALL_LIMIT minutes, no manifest." \
+        --detail-json "{\"clipCount\":$now,\"stallLimitMinutes\":$STALL_LIMIT}"
       exit 1
     fi
   else
@@ -47,15 +61,21 @@ CLIPS=$(ls "$DS/clips" 2>/dev/null | wc -l)
 say "dataset ready: $CLIPS clip file(s)"
 
 say "pushing private Kaggle dataset (FLAC to halve the upload)"
+run_report --status running --headline "Uploading dataset $VERSION to Kaggle ($CLIPS clip file(s), FLAC)." --detail-json "{\"clips\":$CLIPS}"
 if ! npx tsx scripts/yiddish-finetune/kaggle-run.ts dataset-push --dataset "$DS" --flac --new --confirm --owner izzywein >>"$LOG" 2>&1; then
   say "ERROR: dataset-push failed — see $LOG"
+  run_report --status error --headline "Dataset $VERSION upload to Kaggle failed." --detail-json "{\"reason\":\"dataset-push failed, see $LOG\"}"
   exit 1
 fi
 say "dataset pushed"
 
+KERNEL_REF="izzywein/loopcom-yiddish-whisper-finetune"
 say "pushing + starting the training kernel (free GPU)"
 if ! npx tsx scripts/yiddish-finetune/kaggle-run.ts kernel-push --confirm --owner izzywein >>"$LOG" 2>&1; then
   say "ERROR: kernel-push failed — see $LOG"
+  run_report --status error --headline "Training kernel push for dataset $VERSION failed." \
+    --detail-json "{\"kernelRef\":\"$KERNEL_REF\",\"reason\":\"kernel-push failed, see $LOG\"}"
   exit 1
 fi
 say "TRAINING STARTED — poll with: kaggle-run.ts status --confirm --owner izzywein"
+run_report --status running --headline "Training kernel running on Kaggle for dataset $VERSION." --detail-json "{\"kernelRef\":\"$KERNEL_REF\"}"

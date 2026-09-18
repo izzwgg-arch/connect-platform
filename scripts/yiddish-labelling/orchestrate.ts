@@ -46,6 +46,7 @@ import {
   YIDDISH24_SOURCE_KEY,
   formatPackStats,
   importBatch,
+  kernelSlugFor,
   pullBatch,
   pushBatch,
   readManifestFile,
@@ -57,6 +58,10 @@ import {
 } from "./kaggle-label";
 import { loadEnvFile } from "../yiddish-finetune/build-dataset";
 import type { ExecFn, KaggleDeps } from "../yiddish-finetune/kaggle-run";
+import { pctOf, reportPipelineState, type PipelineProgress, type PipelineStatus } from "../yiddish-shared/pipelineState";
+
+/** Key this file reports its live status under in `YcPipelineState`. */
+export const PIPELINE_STATE_KEY = "labelling.orchestrator";
 
 const HERE = __dirname;
 
@@ -327,6 +332,16 @@ export function parseArgs(argv: string[], here: string): OrchestratorOptions {
 
 // ── the injectable driver loop ───────────────────────────────────────────────
 
+/** What one `deps.report()` call carries — mirrors `ReportPipelineStateInput`
+ * minus the `key`/`kind`/`startedAt` fields, which the driver (real or test)
+ * supplies itself so the pure state machine never has to know its own DB key. */
+export interface OrchestratorReportInput {
+  status: PipelineStatus;
+  headline: string;
+  progress?: PipelineProgress | null;
+  detail?: unknown;
+}
+
 export interface OrchestratorDeps {
   existingBatchIds: () => string[];
   pack: (batch: string, maxGb: number, maxHours: number, source: string) => Promise<BatchPackStats>;
@@ -340,6 +355,12 @@ export interface OrchestratorDeps {
   sleep: (ms: number) => Promise<void>;
   isStopRequested: () => boolean;
   log: (line: string) => void;
+  /** Report the orchestrator's current, plain-English status for the portal.
+   * Optional (defaults to a no-op) so every existing fake-deps test keeps
+   * working unchanged — only the tests that care about reporting need to
+   * supply it. Must never throw; `runOrchestrator` also guards every call
+   * defensively so a broken reporter can never take the 80-hour loop down. */
+  report?: (input: OrchestratorReportInput) => Promise<void> | void;
 }
 
 function nowIso(deps: OrchestratorDeps): string {
@@ -360,6 +381,18 @@ export async function runOrchestrator(
 ): Promise<OrchestratorState> {
   const log = deps.log;
 
+  // Never lets a broken/missing reporter take the 80-hour loop down — on top
+  // of `reportPipelineState` itself never throwing, this call site is also
+  // guarded, since `deps.report` may be ANY caller-supplied function (e.g. a
+  // test double) that does not carry that same guarantee.
+  const report = async (input: OrchestratorReportInput): Promise<void> => {
+    try {
+      await deps.report?.(input);
+    } catch {
+      // deliberately swallowed — see the doc comment on OrchestratorDeps.report
+    }
+  };
+
   outer: while (true) {
     let batch = state.batches.find((b) => !TERMINAL_STAGES.includes(b.stage));
 
@@ -370,12 +403,18 @@ export async function runOrchestrator(
       if (deps.isStopRequested()) {
         state.stoppedReason = "stop_file";
         log(`STOP file present — exiting cleanly (no batch in flight, ${state.batches.length} recorded).`);
+        await report({ status: "idle", headline: "Stopped (STOP file present) — no batch was in flight.", detail: { batches: state.batches.length } });
         break;
       }
       const elapsed = elapsedHours(state.startedAt, deps.now());
       if (elapsed >= opts.hours) {
         state.stoppedReason = "hours_budget";
         log(`hour budget reached (${elapsed.toFixed(2)}h >= ${opts.hours}h) — exiting cleanly.`);
+        await report({
+          status: "done",
+          headline: `Finished — hour budget reached (${elapsed.toFixed(2)}h of ${opts.hours}h).`,
+          detail: { batches: state.batches.length },
+        });
         break;
       }
       // Consider both what's already on disk (deps.existingBatchIds()) AND
@@ -384,6 +423,7 @@ export async function runOrchestrator(
       // the batches/ directory listing lags behind (e.g. a fake/test deps).
       const knownIds = [...deps.existingBatchIds(), ...state.batches.map((b) => b.id)];
       const id = nextBatchId(knownIds, new Date(deps.now()));
+      await report({ status: "idle", headline: `Between batches — starting batch ${id} next.`, detail: { nextBatchId: id } });
       batch = { id, source: opts.source, model: opts.model, stage: "new", createdAt: nowIso(deps) };
       state.batches.push(batch);
       persist(state);
@@ -392,6 +432,11 @@ export async function runOrchestrator(
     // ── PACK ──────────────────────────────────────────────────────────────
     if (batch.stage === "new") {
       log(`${batch.id}: packing (source=${opts.source} maxHours=${opts.maxHoursPerBatch} maxGb=${opts.maxGb})`);
+      await report({
+        status: "running",
+        headline: `Packing batch ${batch.id} from "${opts.source}" (up to ${opts.maxHoursPerBatch}h / ${opts.maxGb}GB).`,
+        detail: { batchId: batch.id, source: opts.source, maxHoursPerBatch: opts.maxHoursPerBatch, maxGb: opts.maxGb },
+      });
       const stats = await deps.pack(batch.id, opts.maxGb, opts.maxHoursPerBatch, opts.source);
       batch.pack = stats;
       if (stats.files === 0) {
@@ -400,11 +445,22 @@ export async function runOrchestrator(
         state.stoppedReason = "audio_exhausted";
         persist(state);
         log(`${batch.id}: pack found 0 candidate file(s) — no unlabelled "${opts.source}" audio left. Stopping.`);
+        await report({
+          status: "done",
+          headline: `Finished — no unlabelled "${opts.source}" audio left to pack.`,
+          detail: { batchId: batch.id, batches: state.batches.length },
+        });
         break;
       }
       batch.stage = "packed";
       batch.packedAt = nowIso(deps);
       log(`${batch.id}: packed ${stats.files} file(s), ${stats.hours}h, ~${stats.estimatedGb}GB`);
+      await report({
+        status: "running",
+        headline: `Packed batch ${batch.id}: ${stats.files} file(s), ${stats.hours}h, ~${stats.estimatedGb}GB — uploading next.`,
+        progress: { current: stats.files, total: stats.files, unit: "files", pct: 100 },
+        detail: { batchId: batch.id, pack: stats },
+      });
       persist(state);
     }
 
@@ -412,12 +468,18 @@ export async function runOrchestrator(
       state.stoppedReason = "stop_file";
       persist(state);
       log(`STOP file present after packing ${batch.id} — exiting cleanly.`);
+      await report({ status: "idle", headline: `Stopped after packing batch ${batch.id} (STOP file present).`, detail: { batchId: batch.id } });
       break;
     }
 
     // ── PUSH ──────────────────────────────────────────────────────────────
     if (batch.stage === "packed") {
       log(`${batch.id}: pushing dataset`);
+      await report({
+        status: "running",
+        headline: `Uploading batch ${batch.id} to Kaggle (${batch.pack?.hours ?? "?"}h, ${batch.pack?.files ?? "?"} file(s)).`,
+        detail: { batchId: batch.id },
+      });
       await deps.push(batch.id, true);
       batch.stage = "pushed";
       batch.pushedAt = nowIso(deps);
@@ -428,12 +490,19 @@ export async function runOrchestrator(
       state.stoppedReason = "stop_file";
       persist(state);
       log(`STOP file present after pushing ${batch.id} — exiting cleanly.`);
+      await report({ status: "idle", headline: `Stopped after uploading batch ${batch.id} (STOP file present).`, detail: { batchId: batch.id } });
       break;
     }
 
     // ── RUN ───────────────────────────────────────────────────────────────
     if (batch.stage === "pushed") {
+      const kernelRef = opts.owner ? `${opts.owner}/${kernelSlugFor(batch.id)}` : kernelSlugFor(batch.id);
       log(`${batch.id}: starting kernel (model=${batch.model})`);
+      await report({
+        status: "running",
+        headline: `Starting the labelling kernel for batch ${batch.id} on Kaggle (model=${batch.model}).`,
+        detail: { batchId: batch.id, kernelRef, model: batch.model },
+      });
       await deps.run(batch.id, batch.model);
       batch.stage = "running";
       batch.runStartedAt = nowIso(deps);
@@ -442,24 +511,35 @@ export async function runOrchestrator(
 
     // ── POLL ──────────────────────────────────────────────────────────────
     if (batch.stage === "running") {
+      const kernelRef = opts.owner ? `${opts.owner}/${kernelSlugFor(batch.id)}` : kernelSlugFor(batch.id);
       let kstatus: KernelStatus = "unknown";
       while (true) {
         if (deps.isStopRequested()) {
           state.stoppedReason = "stop_file";
           persist(state);
           log(`${batch.id}: STOP file present while polling — exiting cleanly (the kernel keeps running on Kaggle; re-running resumes polling it).`);
+          await report({
+            status: "idle",
+            headline: `Stopped while labelling batch ${batch.id} on Kaggle (STOP file present) — the kernel keeps running; re-run to resume polling it.`,
+            detail: { batchId: batch.id, kernelRef },
+          });
           break outer;
         }
         const raw = await deps.status(batch.id);
         batch.kernelStatus = raw;
         kstatus = classifyKernelStatus(raw);
-        if (kstatus === "complete" || kstatus === "error") break;
         const runningHours = elapsedHours(batch.runStartedAt!, deps.now());
+        if (kstatus === "complete" || kstatus === "error") break;
         if (runningHours > MAX_POLL_HOURS) {
           kstatus = "error";
           batch.kernelStatus = `timeout after ${runningHours.toFixed(2)}h polling (last raw status: ${raw})`;
           break;
         }
+        await report({
+          status: "running",
+          headline: `Labelling on Kaggle: batch ${batch.id} has been running ${runningHours.toFixed(2)}h (status: ${raw}).`,
+          detail: { batchId: batch.id, kernelRef, rawStatus: raw, runningHours: Number(runningHours.toFixed(2)) },
+        });
         persist(state);
         await deps.sleep(opts.pollIntervalMs);
       }
@@ -483,12 +563,18 @@ export async function runOrchestrator(
       batch.finishedAt = nowIso(deps);
       persist(state);
       log(`${batch.id}: marked failed. continuing.`);
+      await report({
+        status: "error",
+        headline: `Batch ${batch.id} failed on Kaggle (${batch.error.message}) — moving on to the next batch.`,
+        detail: { batchId: batch.id, message: batch.error.message, logTail },
+      });
       continue outer;
     }
 
     // ── PULL ──────────────────────────────────────────────────────────────
     if (batch.stage === "kernel_complete") {
       log(`${batch.id}: pulling transcripts`);
+      await report({ status: "running", headline: `Pulling transcripts for batch ${batch.id} from Kaggle.`, detail: { batchId: batch.id } });
       await deps.pull(batch.id);
       batch.stage = "pulled";
       batch.pulledAt = nowIso(deps);
@@ -499,18 +585,34 @@ export async function runOrchestrator(
       state.stoppedReason = "stop_file";
       persist(state);
       log(`STOP file present after pulling ${batch.id} — exiting cleanly.`);
+      await report({ status: "idle", headline: `Stopped after pulling batch ${batch.id} (STOP file present).`, detail: { batchId: batch.id } });
       break;
     }
 
     // ── IMPORT ────────────────────────────────────────────────────────────
     if (batch.stage === "pulled") {
+      const totalFiles = batch.pack?.files ?? 0;
       log(`${batch.id}: importing transcripts`);
+      await report({
+        status: "running",
+        headline: `Importing labelled segments for batch ${batch.id} (0 of ${totalFiles} file(s)).`,
+        progress: { current: 0, total: totalFiles, unit: "files", pct: pctOf(0, totalFiles) },
+        detail: { batchId: batch.id },
+      });
       const summary = await deps.importBatch(batch.id);
       batch.importSummary = summary;
       batch.stage = "imported";
       batch.finishedAt = nowIso(deps);
       persist(state);
       log(`${batch.id}: imported items=${summary.itemsImported} segments=${summary.segments} hours=${summary.hours} failures=${summary.failures}`);
+      await report({
+        status: "running",
+        headline:
+          `Finished batch ${batch.id}: imported ${summary.itemsImported} of ${totalFiles} item(s), ` +
+          `${summary.segments} segment(s), ${summary.hours}h${summary.failures ? `, ${summary.failures} failure(s)` : ""}.`,
+        progress: { current: summary.itemsImported, total: totalFiles, unit: "items", pct: pctOf(summary.itemsImported, totalFiles) },
+        detail: { batchId: batch.id, importSummary: summary },
+      });
     }
   }
 
@@ -524,7 +626,12 @@ function defaultFfmpegPath(): string {
   return process.env.YC_FFMPEG_PATH || path.join(FFMPEG_WINGET_BIN, "ffmpeg.exe");
 }
 
-async function buildRealDeps(opts: OrchestratorOptions, db: any, engineFns: Awaited<ReturnType<typeof resolveEngineFns>>): Promise<OrchestratorDeps> {
+async function buildRealDeps(
+  opts: OrchestratorOptions,
+  db: any,
+  engineFns: Awaited<ReturnType<typeof resolveEngineFns>>,
+  startedAt: string,
+): Promise<OrchestratorDeps> {
   const kaggleDeps: KaggleDeps = { execFn: kaggleAwareExecFn };
   const owner = opts.owner!;
 
@@ -583,6 +690,21 @@ async function buildRealDeps(opts: OrchestratorOptions, db: any, engineFns: Awai
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     isStopRequested: () => existsSync(opts.stopFile),
     log: (line) => console.log(`[orchestrate ${new Date().toISOString()}] ${line}`),
+
+    // Best-effort live status for the portal. `reportPipelineState` itself
+    // never throws (missing table, dead connection, anything) — see
+    // yiddish-shared/pipelineState.ts — so this can never take the 80-hour
+    // loop down even if YcPipelineState does not exist yet.
+    report: (input) =>
+      reportPipelineState(db, {
+        key: PIPELINE_STATE_KEY,
+        kind: "labelling",
+        status: input.status,
+        headline: input.headline,
+        progress: input.progress ?? null,
+        detail: input.detail,
+        startedAt,
+      }).then(() => undefined),
   };
 }
 
@@ -619,7 +741,7 @@ async function main(): Promise<void> {
   const db: any = new PrismaClient();
 
   let state = loadStateFile(opts.stateFile) ?? newState(opts, new Date());
-  const deps = await buildRealDeps(opts, db, engineFns);
+  const deps = await buildRealDeps(opts, db, engineFns, state.startedAt);
 
   try {
     state = await runOrchestrator(opts, state, deps, (s) => saveStateFile(opts.stateFile, s));

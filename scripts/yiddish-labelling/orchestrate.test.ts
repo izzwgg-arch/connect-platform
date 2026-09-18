@@ -422,3 +422,82 @@ test("runOrchestrator: the hour budget stops the loop before starting a new batc
 test("TERMINAL_STAGES matches the stages runOrchestrator treats as 'done, pick a new batch'", () => {
   assert.deepEqual(new Set(TERMINAL_STAGES), new Set(["imported", "failed", "skipped_empty"]));
 });
+
+// ── live status reporting (deps.report) ─────────────────────────────────────
+
+test("runOrchestrator: reports at least one status per stage transition of a full batch lifecycle", async () => {
+  const world = makeFakeWorld();
+  const opts = baseOpts();
+  const state = newState(opts, new Date(world.clockMs.v));
+  const reports: { status: string; headline: string }[] = [];
+  world.deps.report = (input) => {
+    reports.push({ status: input.status, headline: input.headline });
+  };
+
+  await runOrchestrator(opts, state, world.deps, () => {});
+
+  const headlines = reports.map((r) => r.headline);
+  // one report per documented transition, in order, for the (only) real batch.
+  assert.match(headlines[0], /between batches/i);
+  assert.match(headlines[1], /packing batch/i);
+  assert.ok(headlines.some((h) => /packed batch/i.test(h)));
+  assert.ok(headlines.some((h) => /uploading batch/i.test(h)));
+  assert.ok(headlines.some((h) => /starting the labelling kernel/i.test(h)));
+  assert.ok(headlines.some((h) => /pulling transcripts/i.test(h)));
+  assert.ok(headlines.some((h) => /importing labelled segments/i.test(h)));
+  assert.ok(headlines.some((h) => /finished batch/i.test(h)));
+  // and the run ends by reporting the terminal "no more audio" state.
+  assert.equal(reports[reports.length - 1].status, "done");
+  assert.match(reports[reports.length - 1].headline, /no unlabelled/i);
+});
+
+test("runOrchestrator: reports status='error' with the log tail in detail on a kernel error", async () => {
+  const world = makeFakeWorld();
+  world.statusQueue["2026-09-18-a"] = ["error"];
+  const opts = baseOpts();
+  const state = newState(opts, new Date(world.clockMs.v));
+  const reports: { status: string; headline: string; detail?: any }[] = [];
+  world.deps.report = (input) => {
+    reports.push({ status: input.status, headline: input.headline, detail: input.detail });
+  };
+
+  await runOrchestrator(opts, state, world.deps, () => {});
+
+  const errorReport = reports.find((r) => r.status === "error");
+  assert.ok(errorReport, "expected an error report");
+  assert.match(errorReport!.headline, /failed on kaggle/i);
+  assert.equal(errorReport!.detail?.logTail, "fake log tail for 2026-09-18-a");
+});
+
+test("runOrchestrator: reports status='idle' naming the next batch between batches, and status='idle' on a clean STOP exit", async () => {
+  const world = makeFakeWorld();
+  world.stop.requested = true;
+  const opts = baseOpts();
+  const state = newState(opts, new Date(world.clockMs.v));
+  const reports: { status: string; headline: string }[] = [];
+  world.deps.report = (input) => {
+    reports.push({ status: input.status, headline: input.headline });
+  };
+
+  await runOrchestrator(opts, state, world.deps, () => {});
+
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].status, "idle");
+  assert.match(reports[0].headline, /stopped/i);
+});
+
+test("runOrchestrator: a report() that throws never breaks the loop", async () => {
+  const world = makeFakeWorld();
+  const opts = baseOpts();
+  const state = newState(opts, new Date(world.clockMs.v));
+  world.deps.report = () => {
+    throw new Error("reporter is broken");
+  };
+
+  const final = await runOrchestrator(opts, state, world.deps, () => {});
+
+  // the run still completes its normal lifecycle despite every report() call
+  // throwing synchronously.
+  assert.equal(final.batches[0].stage, "imported");
+  assert.equal(final.stoppedReason, "audio_exhausted");
+});
