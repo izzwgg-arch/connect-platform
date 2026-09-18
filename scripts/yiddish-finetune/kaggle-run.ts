@@ -82,12 +82,25 @@ export interface DatasetMetadataInput {
   title: string;
 }
 
-/** https://github.com/Kaggle/kaggle-api — the shape `kaggle datasets init` writes. */
+/**
+ * https://github.com/Kaggle/kaggle-api — the shape `kaggle datasets init` writes.
+ *
+ * ⛔ 2026-09-18 FIX: this used to tag every dataset `CC0-1.0` — a PUBLIC-DOMAIN
+ * DEDICATION. That is a false statement about a dataset built from Yiddish24's
+ * copyrighted audio (the owner gave permission to ANALYSE and to use in
+ * training, never to place it in the public domain or to redistribute it).
+ * The sibling labelling flow (`scripts/yiddish-labelling/kaggle-label.ts`)
+ * already worked around this by overwriting `metadata.licenses` after calling
+ * this function — that override is now redundant (harmless no-op) but is left
+ * in place there. The dataset is private either way (`datasets create` is
+ * private unless `--public`), but the declared licence must still be honest
+ * for BOTH training data and label data derived from someone else's audio.
+ */
 export function buildDatasetMetadata(input: DatasetMetadataInput): Record<string, unknown> {
   return {
     title: input.title,
     id: `${input.owner}/${input.slug}`,
-    licenses: [{ name: "CC0-1.0" }],
+    licenses: [{ name: "other" }],
   };
 }
 
@@ -100,14 +113,51 @@ export interface KernelMetadataInput {
 }
 
 /**
+ * Kaggle derives a kernel's actual slug from its TITLE (lowercase, every
+ * run of non-alphanumeric characters collapsed to one hyphen, leading/
+ * trailing hyphens trimmed) — NOT from whatever id you put in
+ * kernel-metadata.json. When the two disagree, the FIRST push silently lands
+ * at the title-derived slug (not the id you asked for) and every LATER push
+ * against the id you meant 409 Conflicts, because that slug was never
+ * created. This bit `kaggle-run.ts` itself on 2026-09-18: the CLI's own
+ * default kernel-slug/title pair was `loopcom-yiddish-whisper-finetune` vs
+ * "Loopcom Yiddish Whisper fine-tune" (slugifies to
+ * `loopcom-yiddish-whisper-fine-tune` — an extra hyphen). Fixed by making the
+ * default title read "finetune" (no hyphen) so it slugifies back to the
+ * existing slug default; see `DEFAULT_KERNEL_SLUG`/`DEFAULT_KERNEL_TITLE`
+ * below and their agreement test in kaggle-run.test.ts.
+ */
+export function titleToKaggleSlug(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
  * ⛔ TODO(integrator, verify against the live `kaggle kernels init` template):
  * this mirrors the documented kaggle-api kernel-metadata.json shape as of
  * 2026-09-17 (github.com/Kaggle/kaggle-api, `kaggle kernels init -p .`).
  * The two fields that MUST be right for a free GPU run are `enable_gpu` and
  * `dataset_sources` — everything else degrades gracefully if the schema has
  * drifted (the CLI reports an error rather than silently ignoring a field).
+ *
+ * ⛔ Throws loudly, before any network call, if `kernelSlug` does not match
+ * what Kaggle will actually derive from `title` (see `titleToKaggleSlug`
+ * above) — the 2026-09-18 fix that turns a silent-wrong-slug-then-409-later
+ * bug into an immediate, obvious one at metadata-build time.
  */
 export function buildKernelMetadata(input: KernelMetadataInput): Record<string, unknown> {
+  const derivedSlug = titleToKaggleSlug(input.title);
+  if (derivedSlug !== input.kernelSlug) {
+    throw new Error(
+      `buildKernelMetadata: title ${JSON.stringify(input.title)} slugifies to "${derivedSlug}", ` +
+        `which does not match kernelSlug "${input.kernelSlug}". Kaggle derives the real kernel slug from ` +
+        `the TITLE, not from kernel-metadata.json's id — a mismatch here silently creates the WRONG slug on ` +
+        `first push and then 409 Conflicts on every push after. Make the title and kernelSlug agree ` +
+        `(titleToKaggleSlug(title) === kernelSlug) before calling this.`,
+    );
+  }
   return {
     id: `${input.owner}/${input.kernelSlug}`,
     title: input.title,
@@ -123,6 +173,12 @@ export function buildKernelMetadata(input: KernelMetadataInput): Record<string, 
     model_sources: [],
   };
 }
+
+/** This CLI's own kernel-push/status/download defaults — kept as named
+ * constants (rather than repeated string literals) specifically so they
+ * cannot drift apart again; see the agreement test in kaggle-run.test.ts. */
+export const DEFAULT_KERNEL_SLUG = "loopcom-yiddish-whisper-finetune";
+export const DEFAULT_KERNEL_TITLE = "Loopcom Yiddish Whisper finetune";
 
 // ── FLAC staging (pure manifest rewrite; ffmpeg calls are the only I/O) ────
 
@@ -315,8 +371,8 @@ async function main(): Promise<void> {
         {
           notebookDir: HERE,
           owner: ownerArg(rest),
-          kernelSlug: argVal(rest, "--kernel-slug") ?? "loopcom-yiddish-whisper-finetune",
-          title: argVal(rest, "--title") ?? "Loopcom Yiddish Whisper fine-tune",
+          kernelSlug: argVal(rest, "--kernel-slug") ?? DEFAULT_KERNEL_SLUG,
+          title: argVal(rest, "--title") ?? DEFAULT_KERNEL_TITLE,
           datasetSlug: argVal(rest, "--dataset-slug") ?? "loopcom-yiddish-whisper-dataset",
           confirm,
           dryRun,
@@ -326,13 +382,13 @@ async function main(): Promise<void> {
       return;
     }
     case "status": {
-      const out = await kernelStatus(ownerArg(rest), argVal(rest, "--kernel-slug") ?? "loopcom-yiddish-whisper-finetune", confirm, {});
+      const out = await kernelStatus(ownerArg(rest), argVal(rest, "--kernel-slug") ?? DEFAULT_KERNEL_SLUG, confirm, {});
       console.log(out);
       return;
     }
     case "download": {
       const outDir = argVal(rest, "--out") ?? path.join(HERE, "kaggle-out");
-      await kernelDownload(ownerArg(rest), argVal(rest, "--kernel-slug") ?? "loopcom-yiddish-whisper-finetune", outDir, confirm, {});
+      await kernelDownload(ownerArg(rest), argVal(rest, "--kernel-slug") ?? DEFAULT_KERNEL_SLUG, outDir, confirm, {});
       return;
     }
     default:

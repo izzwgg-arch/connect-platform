@@ -65,7 +65,15 @@ export const YIDDISH24_SOURCE_KEY = "yiddish24";
 const defaultExec: ExecFn = (cmd, args, opts) =>
   new Promise((resolve) => {
     execFile(cmd, args, { cwd: opts?.cwd, maxBuffer: 32 * 1024 * 1024, timeout: 30 * 60_000 }, (err: any, stdout, stderr) => {
-      resolve({ code: err?.code == null ? 0 : Number(err.code) || 1, stdout: String(stdout || ""), stderr: String(stderr || "") });
+      let errText = String(stderr || "");
+      // ⛔ A SPAWN failure (busy process table, ffmpeg momentarily unschedulable,
+      // ENOENT, etc.) sets `err` but can leave BOTH streams empty — 2026-09-18's
+      // pack run lost 228/666 files to exactly this and printed "ffmpeg failed
+      // for asset X: " with nothing after the colon. Always say something.
+      if (err && !errText && !String(stdout || "")) {
+        errText = `"${cmd}" produced no output and failed (${err.code ?? err.message ?? "unknown error"}).`;
+      }
+      resolve({ code: err?.code == null ? 0 : Number(err.code) || 1, stdout: String(stdout || ""), stderr: errText });
     });
   });
 
@@ -165,6 +173,39 @@ export function writeManifest(batchDir: string, entries: BatchManifestEntry[]): 
   return file;
 }
 
+// ── manifest.json: optional top-level "model" field ─────────────────────────
+//
+// `pack` always writes the plain array shape above (unchanged — every
+// existing reader/test keeps working). `run --model <hf-id>` is the ONLY
+// place that ever rewrites manifest.json into the `{model, entries}` object
+// shape, so a batch can tell `kaggle_label.ipynb` to load a non-default
+// model. `readManifestFile` accepts BOTH shapes so `import` (and anything
+// else that reads a manifest) never cares which one it is looking at.
+
+export interface ManifestFile {
+  model?: string;
+  entries: BatchManifestEntry[];
+}
+
+export function readManifestFile(batchDir: string): ManifestFile {
+  const raw = JSON.parse(readFileSync(path.join(batchDir, "manifest.json"), "utf8"));
+  if (Array.isArray(raw)) return { entries: raw };
+  if (raw && typeof raw === "object" && Array.isArray(raw.entries)) {
+    return { entries: raw.entries, model: typeof raw.model === "string" ? raw.model : undefined };
+  }
+  throw new Error(`manifest.json in ${batchDir} is neither an array of entries nor {model, entries}`);
+}
+
+/** Rewrites manifest.json to stamp (or replace) its `model` field, in place,
+ * without touching the entries. Used by `run --model <hf-id>` BEFORE the
+ * dataset is (re-)pushed, so the model the kernel sees always matches what
+ * Kaggle actually has. */
+export function stampManifestModel(batchDir: string, model: string): void {
+  const { entries } = readManifestFile(batchDir);
+  const file = path.join(batchDir, "manifest.json");
+  writeFileSync(file, JSON.stringify({ model, entries }, null, 2) + "\n", "utf8");
+}
+
 export interface PackStats {
   files: number;
   hours: number;
@@ -193,13 +234,58 @@ export function buildTranscodeArgs(sourceFile: string, outFile: string): string[
 export interface TranscodeResult {
   ok: boolean;
   reason?: string;
+  /** How many attempts it took (1 = succeeded first try, or the failure's final attempt count). */
+  attempts?: number;
 }
 
-export async function transcodeToOpus(ffmpegPath: string, sourceFile: string, outFile: string, deps: KaggleDeps = {}): Promise<TranscodeResult> {
+/** Always includes the exit code, so a silent-spawn-failure (see `defaultExec`)
+ * still reads as "exit code 1: (no output)" instead of a bare empty string. */
+export function formatTranscodeFailureReason(res: { code: number; stdout: string; stderr: string }): string {
+  const text = (res.stderr || res.stdout || "").trim();
+  const detail = text ? text.slice(0, 400) : "(ffmpeg produced no stdout/stderr — likely a spawn failure or transient resource contention)";
+  return `exit code ${res.code}: ${detail}`;
+}
+
+export interface TranscodeRetryOptions {
+  /** Total attempts including the first. Default 3 (1 try + 2 retries). */
+  retries?: number;
+  /** Delay before each retry, ms. Default [2000, 5000] — 2s then 5s, matching
+   * the 2026-09-18 incident where a transient ffmpeg spawn failure (the PC
+   * runner using ffmpeg on 4 other cores at the same moment) always cleared
+   * within a few seconds on the very next attempt. */
+  backoffMs?: number[];
+  sleepFn?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Transcodes one file, retrying a bounded number of times (sequentially —
+ * never in parallel with anything else) before giving up. A transient ffmpeg
+ * spawn failure that would have cost 228/666 files on 2026-09-18 now clears
+ * on retry instead of being recorded as a permanent loss.
+ */
+export async function transcodeToOpus(
+  ffmpegPath: string,
+  sourceFile: string,
+  outFile: string,
+  deps: KaggleDeps = {},
+  opts: TranscodeRetryOptions = {},
+): Promise<TranscodeResult> {
   const exec = deps.execFn ?? defaultExec;
-  const res = await exec(ffmpegPath, buildTranscodeArgs(sourceFile, outFile));
-  if (res.code !== 0) return { ok: false, reason: (res.stderr || res.stdout).slice(0, 400) };
-  return { ok: true };
+  const backoffMs = opts.backoffMs ?? [2000, 5000];
+  const maxAttempts = Math.max(1, opts.retries ?? backoffMs.length + 1);
+  const sleep = opts.sleepFn ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  let lastReason = "";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await exec(ffmpegPath, buildTranscodeArgs(sourceFile, outFile));
+    if (res.code === 0) return { ok: true, attempts: attempt };
+    lastReason = formatTranscodeFailureReason(res);
+    if (attempt < maxAttempts) {
+      const delay = backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1];
+      await sleep(delay);
+    }
+  }
+  return { ok: false, reason: lastReason, attempts: maxAttempts };
 }
 
 // ── pack: the impure driver (DB read-only; fs/ffmpeg writes only under
@@ -337,6 +423,13 @@ export interface RunOptions {
   batch: string;
   confirm: boolean;
   dryRun: boolean;
+  /** Non-default HF model id, e.g. "ivrit-ai/yi-whisper-large-v3-ct2". When
+   * set, `batchDir` is required: the local manifest.json is stamped with this
+   * model and the dataset is re-versioned BEFORE the kernel is pushed, so the
+   * copy Kaggle mounts always matches what the notebook is told to load.
+   * Omit (or pass the notebook's own turbo default) to skip both steps. */
+  model?: string;
+  batchDir?: string;
 }
 
 export async function runBatch(opts: RunOptions, deps: KaggleDeps = {}): Promise<void> {
@@ -348,6 +441,7 @@ export async function runBatch(opts: RunOptions, deps: KaggleDeps = {}): Promise
     codeFile: "kaggle_label.ipynb",
   });
   if (opts.dryRun) {
+    if (opts.model) console.log(`[kaggle-label] dry-run run: would stamp model="${opts.model}" onto manifest.json and re-version the dataset first`);
     console.log(`[kaggle-label] dry-run run: would push ${metadata.id}`);
     console.log(JSON.stringify(metadata, null, 2));
     return;
@@ -355,6 +449,16 @@ export async function runBatch(opts: RunOptions, deps: KaggleDeps = {}): Promise
   if (!opts.confirm) throw new Error("refusing run without --confirm (this starts a real Kaggle GPU session)");
   if (!existsSync(path.join(opts.notebookDir, "kaggle_label.ipynb"))) {
     throw new Error(`${opts.notebookDir} has no kaggle_label.ipynb`);
+  }
+  if (opts.model) {
+    if (!opts.batchDir) {
+      throw new Error("runBatch: --model requires batchDir (the batch's local folder, so its manifest.json can be stamped before the dataset is re-versioned)");
+    }
+    stampManifestModel(opts.batchDir, opts.model);
+    await pushBatch(
+      { batchDir: opts.batchDir, owner: opts.owner, batch: opts.batch, isNew: false, confirm: true, dryRun: false, message: `stamp model ${opts.model}` },
+      deps,
+    );
   }
   writeFileSync(path.join(opts.notebookDir, "kernel-metadata.json"), JSON.stringify(metadata, null, 2), "utf8");
   const res = await kaggleExec(["kernels", "push", "-p", opts.notebookDir], deps);
@@ -618,7 +722,8 @@ async function main(): Promise<void> {
     }
     case "run": {
       const batch = batchArg(rest);
-      await runBatch({ notebookDir: HERE, owner: ownerArg(rest), batch, confirm, dryRun });
+      const model = argVal(rest, "--model");
+      await runBatch({ notebookDir: HERE, batchDir: path.join(batchesRoot, batch), owner: ownerArg(rest), batch, confirm, dryRun, model });
       return;
     }
     case "status": {
@@ -635,7 +740,10 @@ async function main(): Promise<void> {
     case "import": {
       const batch = batchArg(rest);
       const batchDir = path.join(batchesRoot, batch);
-      const manifest: BatchManifestEntry[] = JSON.parse(readFileSync(path.join(batchDir, "manifest.json"), "utf8"));
+      // manifest.json may be the plain array `pack` always writes, or the
+      // `{model, entries}` object `run --model` stamps onto it — either way
+      // we only ever need the entries here.
+      const manifest: BatchManifestEntry[] = readManifestFile(batchDir).entries;
       const transcriptsFile: TranscriptsFile = JSON.parse(readFileSync(path.join(batchDir, "out", "transcripts.json"), "utf8"));
       const engineRootArg = argVal(rest, "--engine-root");
       const engineRoot = engineRootArg ? path.resolve(engineRootArg) : process.env.YC_ENGINE_ROOT || path.resolve(HERE, "../../apps/api/src/yiddishCorpus");
@@ -658,7 +766,7 @@ async function main(): Promise<void> {
         "usage: kaggle-label.ts <" +
           "pack --source <key> --batch <id> [--max-gb 15] [--max-hours N] [--allow-customer-sources]|" +
           "push --batch <id> --confirm [--new] [--owner <kaggle-username>]|" +
-          "run --batch <id> --confirm [--owner <kaggle-username>]|" +
+          "run --batch <id> --confirm [--owner <kaggle-username>] [--model <hf-id>]|" +
           "status --batch <id> --confirm [--owner <kaggle-username>]|" +
           "pull --batch <id> --confirm [--out <dir>] [--owner <kaggle-username>]|" +
           "import --batch <id> [--engine-root <dir>]" +

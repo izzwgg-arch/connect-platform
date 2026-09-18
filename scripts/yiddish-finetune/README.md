@@ -25,6 +25,57 @@ than 12h in one session / doesn't fit a T4's 16GB; fall back to RunPod
 otherwise. Both paths run the exact same `train.py`, whose defaults are now
 sized for a 16GB card either way.
 
+## ⛔ Honest limitation: the first training round is self-distillation
+
+The first labels this dataset builder can select (`YcTranscript.engine="ivrit"`,
+`sttProvider=kaggle:ivrit-ai/yi-whisper-large-v3-turbo`) come from the SAME
+model family being fine-tuned. Training on a model's own guesses about itself
+is **self-distillation**: it can genuinely help the model adapt to THIS
+acoustic domain (telephone/radio-quality Yiddish, these speakers' accents,
+Yiddish24's specific recording chain) and to the vocabulary this corpus is
+full of — but it **cannot fix an error the model makes consistently**, because
+a consistent error IS the label for every clip where it occurs. A model
+trained hard enough on its own confident mistakes gets better at being
+confidently wrong the same way. This is not a Lane B bug; it is a property of
+where the first round's labels come from, and it is the reason WER must be
+measured on gold (`engine="human"`) rows separately from the general eval set
+— gold is the only number in `report.json` that isn't measuring "did the
+model get better at agreeing with itself."
+
+Two real fixes, in order of how much they help:
+
+1. **Human gold rows** (Lane C, `/admin/yiddish-learning/gold`) — a native
+   Yiddish speaker corrects the model's actual output. This is real
+   supervision, weighted `--gold-weight` times into training and always kept
+   in eval. The single highest-value thing to grow.
+2. **Labels from the LARGER base model**, `ivrit-ai/yi-whisper-large-v3-ct2`
+   (not `-turbo`) — a bigger model's errors are less correlated with the
+   turbo model's errors, so training the turbo model on the larger model's
+   transcripts is closer to real distillation-from-a-better-teacher than
+   self-distillation. This requires a SEPARATE STT pass tagging its
+   `sttProvider` distinctly (e.g. `kaggle:ivrit-ai/yi-whisper-large-v3-ct2`) —
+   not built by Lane B; Lane A's `transcribe` handler would need to run that
+   pass and record the different `sttProvider` string.
+
+`build-dataset.ts` has two knobs to lean toward whichever of these you have:
+
+- **`--min-confidence <n>`** (default 0.55, already existed) — raising it
+  drops the machine's LEAST confident guesses, which correlates with (but
+  is not the same as) dropping its most wrong ones. Cheap, always available,
+  weakest signal.
+- **`--prefer-engine <substring>`** (repeatable, or comma-separated in one
+  flag; new 2026-09-18) — keeps only `ivrit` rows whose `sttProvider` contains
+  one of the given substrings; `engine="human"` (gold) rows are ALWAYS kept
+  regardless of this filter. Once a large-v3 pass exists:
+  `--prefer-engine large-v3-ct2` builds a dataset from ONLY the bigger model's
+  labels (plus all gold). Until it exists, this flag can still narrow a
+  mixed corpus down to one specific `ivrit` run by matching a fragment of its
+  `sttProvider` tag.
+
+Neither flag changes governance — `trainingEligibilityOf` still runs first
+and unconditionally; these are quality/provenance filters layered after it,
+exactly like `--min-confidence` always was.
+
 ## Where things run
 
 | Script | Runs on | Needs |
@@ -73,9 +124,20 @@ None of these are ever written into a file in this repo. Put them in
 # 1. See what a dataset would look like — no clips cut, no files written.
 npx tsx scripts/yiddish-finetune/build-dataset.ts --dry-run
 
+# 1b. A bounded SMOKE build against real data — cuts real clips but stops
+#     once the ivrit (machine) clips would exceed 2 hours total (gold clips
+#     are never capped). Good for a first real run end to end before
+#     committing a full corpus to a Kaggle upload.
+npx tsx scripts/yiddish-finetune/build-dataset.ts --version smoke-2h --max-hours 2
+
 # 2. Build it for real (defaults: min-confidence 0.55, eval-fraction 5%,
 #    gold-weight 3, 16kHz mono WAV clips under dataset/<version>/clips/).
 npx tsx scripts/yiddish-finetune/build-dataset.ts --version 2026-09-17-v1
+
+# 2b. Lean toward the least self-distilled labels available (see "Honest
+#     limitation" above) instead of the whole ivrit corpus:
+npx tsx scripts/yiddish-finetune/build-dataset.ts --version 2026-09-17-v1 \
+  --min-confidence 0.7 --prefer-engine large-v3-ct2
 ```
 
 Then pick ONE training path — Kaggle first, RunPod as the paid fallback.
@@ -114,6 +176,18 @@ npx tsx scripts/yiddish-finetune/kaggle-run.ts status --confirm --owner <your-ka
 npx tsx scripts/yiddish-finetune/kaggle-run.ts download --confirm \
   --owner <your-kaggle-username> --out out/2026-09-17-v1-kaggle
 ```
+
+**Spans more than one 12h session automatically.** `train.py` checkpoints
+every `--save-steps` (default 250) under `--output-dir` and, before starting,
+looks for the highest `checkpoint-<N>/` already there and resumes from it
+(`report.json`'s `resumed_from` records which one, or `null` for a fresh
+run). So if a session hits Kaggle's 12h wall mid-training: `kernel-push` the
+SAME dataset + `--output-dir` again (Kaggle's own dataset versioning does
+not carry `/kaggle/working/` between sessions, so the checkpoint has to
+travel WITH the dataset push, or be re-supplied as its own dataset version —
+either way, the `output_dir` the next session sees must contain the previous
+session's `checkpoint-<N>/`) and it continues from the last saved step
+instead of restarting at 0.
 
 Baseline WER (the "before" number, run once per dataset — needs
 torch+transformers, so run it inside a throwaway Kaggle session or a RunPod
@@ -234,7 +308,65 @@ WER/CER fallback used ONLY in the self-test) runs; Tiers 1 (`jiwer`) and 2
 stubbed features so nothing downloads from the HF hub) report themselves
 SKIPPED there and only run on a pod with the real deps installed.
 
-## What is NOT proven until a real run
+## What WAS verified against the live DB (2026-09-18)
+
+- `build-dataset.ts --dry-run` ran for real, through the runner's SSH tunnel,
+  against the production Connect database. It queries and exits cleanly.
+- **Governance was confirmed on real production rows**, not fixtures: Lane
+  A's governance update (§3.1.6) HAS landed in `apps/api/src/yiddishCorpus/
+  governance.ts` (verified by reading it — the `privateConsented` check is
+  in the ladder). Running the REAL `trainingEligibilityOf` against the ACTUAL
+  `yiddish24` `YcSource` + `YcRightsRecord` rows in production returns:
+  `{"eligibility":"ALLOWED","reasons":[],"primaryReason":null}` — exactly as
+  the build spec expected, because a `training_export` right for `yiddish24`
+  is GRANTED (`izzy-20260917-y24-training_export`, evidence: Izzy 2026-09-17
+  "Yiddish 24 is good."). **Yiddish24 rows are confirmed ALLOWED on real
+  data.**
+- ⛔⛔ **voicemail and call_recordings are NOT going to flow in even once
+  Lane A transcribes them — this is a DB configuration gap, not a Lane B
+  code bug.** Both sources DO have a GRANTED `training_export` right (Izzy's
+  "I have already cleared it with them… do what I tell you", recorded
+  2026-09-17), and `contentAllowed=true`, so rung 1 (`CUSTOMER_PRIVATE`
+  unconsented) would now correctly NOT fire for them. But both sources'
+  `YcSource.trainingExportEligibility` column is still literally `"EXCLUDED"`
+  — a separate, earlier manual flag that fires at rung 3
+  (`SOURCE_MARKED_EXCLUDED`) BEFORE the rights grant is ever consulted.
+  Verified directly: `trainingEligibilityOf` on the real `voicemail` and
+  `call_recordings` rows returns `EXCLUDED` / `SOURCE_MARKED_EXCLUDED` today.
+  Someone (the integrator, not Lane B — this is a data change, not a code
+  change, and outside `scripts/yiddish-finetune/`) needs to flip
+  `trainingExportEligibility` on those two `YcSource` rows away from
+  `EXCLUDED` once Izzy's consent is meant to actually take effect.
+- **0 `YcTranscript` rows exist in production right now** (`total` = 0, not
+  just 0-after-filtering) — confirmed with a direct count, not inferred from
+  the dry-run output alone. Lane A's `transcribe`/`align` handlers have not
+  produced any output yet, even though the schema migration and the
+  audio-ingest pipeline clearly have run (34,289 `YcSourceItem` rows, 1,421
+  `YcAudioAsset` rows with `storage="STORED"`, and a spot-checked
+  `storageKey` path resolves to a real 31MB mp3 on disk). **This means a real
+  "small build with `--max-hours 2`" could not be exercised beyond
+  `--dry-run` today — there is nothing yet to build a dataset FROM.** Once
+  Lane A produces transcripts, `build-dataset.ts` (including the new
+  `--max-hours`/`--prefer-engine` flags) is ready and unit-tested, but has
+  only been run against real DATA (as `--dry-run`), never against a real
+  non-empty `YcTranscript` set.
+- ⛔ **The generated Prisma client in THIS checkout is stale relative to
+  `schema.prisma`** — `Prisma.dmmf` for `YcTranscript` lists only the
+  pre-migration columns (no `startMs`/`endMs`/`words`/`avgLogprob`/
+  `noSpeechProb`/`chunkIndex`). `schema.prisma` has them (the
+  `20260917150000_yiddish_transcript_timing` migration's block is right
+  there in the file), so this is a codegen staleness issue (`prisma
+  generate` needs to run), not a schema/migration gap. Until that client is
+  regenerated in whatever checkout actually runs `build-dataset.ts` for
+  real, `db.ycTranscript.findMany()` would silently come back without those
+  fields and `hasTiming()` would correctly, but uselessly, skip every row —
+  this is exactly the kind of silent-drop the code is already defensive
+  about, but the defense only helps if someone notices the count is 0 for
+  the wrong reason. **Not fixed here** (regenerating a shared Prisma client
+  is outside `scripts/yiddish-finetune/`, the scope this build stayed in) —
+  flagging it for whoever runs the first real build.
+
+## What is still NOT proven
 
 - The GraphQL field names in `runpod-pod.ts` / `runpod-endpoint.ts`
   (`podFindAndDeployOnDemand`, `podTerminate`, `gpuTypes`, `saveEndpoint`,
@@ -246,20 +378,29 @@ SKIPPED there and only run on a pod with the real deps installed.
 - The `kernel-metadata.json` field list in `kaggle-run.ts`
   (`buildKernelMetadata`) mirrors the documented `kaggle kernels init`
   template as of 2026-09-17, marked `⛔ TODO(integrator, verify against the
-  live template)`. Nobody has run `kaggle-run.ts dataset-push` or
-  `kernel-push` against a real Kaggle account — that needs Izzy's one-time
-  setup above first.
+  live template)`. **2026-09-18: the one part of it that WAS wrong — the
+  default kernel-slug/title pair disagreeing with each other — is fixed and
+  now throws loudly if it ever happens again** (see `titleToKaggleSlug`);
+  the rest of the field list is still unverified against a real Kaggle
+  account. Nobody has run `kaggle-run.ts dataset-push` or `kernel-push`
+  against a real Kaggle account — that needs Izzy's one-time setup above
+  first. The dataset's declared licence is fixed to the honest `"other"`
+  (2026-09-18 — it used to falsely claim `CC0-1.0`, public domain, on
+  copyrighted audio) but this too has only been unit-tested, never pushed.
 - `train.py`'s heavy path (model loading, LoRA, `Seq2SeqTrainer`,
   `ct2-transformers-converter`) has never executed — there is no GPU on
   Izzy's PC or the Connect server to run it on. Only the self-test's Tier 0
-  has actually executed, on this machine, today. The new 16GB-card defaults
-  (batch 4, grad-accum 8, bf16-if-supported-else-fp16) and the T4/P100
-  no-bf16 codepath are logic-reviewed, not GPU-tested.
-- No dataset has been built for real yet (Lane A's `startMs`/`endMs`/etc.
-  columns and `transcribe`/`align` handlers are a concurrent, separate
-  build) — `build-dataset.ts --dry-run` against a real DB will report 0
-  eligible rows until Lane A's handlers have produced `YcTranscript` rows
-  with timing.
+  has actually executed, on this machine, today (now including
+  `find_latest_checkpoint`). The 16GB-card defaults (batch 4, grad-accum 8,
+  bf16-if-supported-else-fp16), the T4/P100 no-bf16 codepath, and the new
+  periodic-checkpoint + resume-from-checkpoint wiring (`save_strategy=
+  "steps"`, `find_latest_checkpoint` feeding `trainer.train
+  (resume_from_checkpoint=...)`) are logic-reviewed and self-test-covered
+  where they don't need a GPU, but not GPU-tested — nobody has actually
+  killed a session mid-training and confirmed the next one resumes.
+- The new `--prefer-engine` filter has no real `sttProvider` tag to filter
+  BY yet (see "What WAS verified" above — 0 transcripts exist), so it is
+  unit-tested against fixtures only, never against a real mixed corpus.
 - No pod has ever been rented, no Kaggle kernel ever pushed, no endpoint
   created, no fine-tune run, no gold WER comparison made. Every number in
   this README's cost formula is arithmetic on RunPod's published prices, not

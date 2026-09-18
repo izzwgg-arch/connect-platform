@@ -23,10 +23,12 @@ import {
   originRefFor,
   pullBatch,
   pushBatch,
+  readManifestFile,
   resolveEngineFns,
   runBatch,
   runPack,
   selectForPack,
+  stampManifestModel,
   statusBatch,
   transcodeToOpus,
   writeManifest,
@@ -116,6 +118,78 @@ test("writeManifest creates the batch dir and writes manifest.json", () => {
   }
 });
 
+// ── manifest.json: plain array vs {model, entries} ──────────────────────────
+
+test("readManifestFile accepts the plain array shape pack always writes", () => {
+  const dir = tmpDir("manifest-array");
+  try {
+    const entries: BatchManifestEntry[] = [{ itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 }];
+    writeManifest(dir, entries);
+    const parsed = readManifestFile(dir);
+    assert.deepEqual(parsed.entries, entries);
+    assert.equal(parsed.model, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readManifestFile accepts the {model, entries} object shape run --model stamps", () => {
+  const dir = tmpDir("manifest-object");
+  mkdirSync(dir, { recursive: true });
+  try {
+    const entries: BatchManifestEntry[] = [{ itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 }];
+    writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ model: "ivrit-ai/yi-whisper-large-v3-ct2", entries }, null, 2), "utf8");
+    const parsed = readManifestFile(dir);
+    assert.deepEqual(parsed.entries, entries);
+    assert.equal(parsed.model, "ivrit-ai/yi-whisper-large-v3-ct2");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stampManifestModel rewrites an array-shaped manifest into {model, entries} without touching the entries", () => {
+  const dir = tmpDir("stamp-array");
+  try {
+    const entries: BatchManifestEntry[] = [
+      { itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 },
+      { itemId: "i2", assetId: "a2", sourceKey: "yiddish24", file: "audio/a2.ogg", durationMs: 2000 },
+    ];
+    writeManifest(dir, entries);
+    stampManifestModel(dir, "ivrit-ai/yi-whisper-large-v3-ct2");
+    const parsed = readManifestFile(dir);
+    assert.equal(parsed.model, "ivrit-ai/yi-whisper-large-v3-ct2");
+    assert.deepEqual(parsed.entries, entries);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stampManifestModel replaces an already-stamped model (re-stamping is idempotent in shape)", () => {
+  const dir = tmpDir("stamp-twice");
+  try {
+    const entries: BatchManifestEntry[] = [{ itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 }];
+    writeManifest(dir, entries);
+    stampManifestModel(dir, "model-a");
+    stampManifestModel(dir, "model-b");
+    const parsed = readManifestFile(dir);
+    assert.equal(parsed.model, "model-b");
+    assert.deepEqual(parsed.entries, entries);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readManifestFile throws a clear error on a manifest that is neither shape", () => {
+  const dir = tmpDir("manifest-bad");
+  mkdirSync(dir, { recursive: true });
+  try {
+    writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ notEntries: [] }), "utf8");
+    assert.throws(() => readManifestFile(dir), /neither an array/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("formatPackStats sums hours/GB and carries the missing-source count through", () => {
   const entries: BatchManifestEntry[] = [
     { itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 3_600_000 },
@@ -146,11 +220,52 @@ test("transcodeToOpus succeeds when the injected exec returns code 0", async () 
   assert.equal(calls[0][0], "ffmpeg");
 });
 
-test("transcodeToOpus reports failure with the stderr reason", async () => {
+test("transcodeToOpus reports failure with the stderr reason and exit code", async () => {
   const execFn: ExecFn = async () => ({ code: 1, stdout: "", stderr: "no such filter: libopus" });
-  const res = await transcodeToOpus("ffmpeg", "/in/a.mp3", "/out/a.ogg", { execFn });
+  const res = await transcodeToOpus("ffmpeg", "/in/a.mp3", "/out/a.ogg", { execFn }, { retries: 1 });
   assert.equal(res.ok, false);
   assert.match(res.reason || "", /libopus/);
+  assert.match(res.reason || "", /exit code 1/);
+});
+
+test("transcodeToOpus never leaves an empty reason on a silent spawn failure (both streams empty)", async () => {
+  const execFn: ExecFn = async () => ({ code: 1, stdout: "", stderr: "" });
+  const res = await transcodeToOpus("ffmpeg", "/in/a.mp3", "/out/a.ogg", { execFn }, { retries: 1 });
+  assert.equal(res.ok, false);
+  assert.ok(res.reason && res.reason.length > 0, "reason must never be empty");
+  assert.match(res.reason || "", /exit code 1/);
+});
+
+test("transcodeToOpus retries with the documented 2s/5s backoff and succeeds on the 3rd attempt", async () => {
+  let calls = 0;
+  const execFn: ExecFn = async () => {
+    calls += 1;
+    if (calls < 3) return { code: 1, stdout: "", stderr: "transient spawn failure" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const sleeps: number[] = [];
+  const sleepFn = async (ms: number) => {
+    sleeps.push(ms);
+  };
+  const res = await transcodeToOpus("ffmpeg", "/in/a.mp3", "/out/a.ogg", { execFn }, { sleepFn });
+  assert.equal(res.ok, true);
+  assert.equal(calls, 3);
+  assert.deepEqual(sleeps, [2000, 5000]);
+});
+
+test("transcodeToOpus gives up after the bounded retry count and reports the last failure", async () => {
+  let calls = 0;
+  const execFn: ExecFn = async () => {
+    calls += 1;
+    return { code: 1, stdout: "", stderr: `attempt ${calls} failed` };
+  };
+  const sleeps: number[] = [];
+  const res = await transcodeToOpus("ffmpeg", "/in/a.mp3", "/out/a.ogg", { execFn }, { sleepFn: async (ms) => sleeps.push(ms) });
+  assert.equal(res.ok, false);
+  assert.equal(calls, 3, "default is 3 total attempts");
+  assert.equal(res.attempts, 3);
+  assert.match(res.reason || "", /attempt 3 failed/);
+  assert.deepEqual(sleeps, [2000, 5000]);
 });
 
 // ── runPack: fake db + fake ffmpeg, real fs in a temp dir ───────────────────
@@ -250,7 +365,10 @@ test("runPack refuses a customer source without --allow-customer-sources and nev
 
 test("datasetSlugFor / kernelSlugFor name a batch consistently", () => {
   assert.equal(datasetSlugFor("2026-09-17-a"), "loopcom-yc-2026-09-17-a");
-  assert.equal(kernelSlugFor("2026-09-17-a"), "loopcom-label-2026-09-17-a");
+  // ⛔ Must match what Kaggle derives from the TITLE ("Loopcom YC label <batch>").
+  // A mismatch made the first push land under a different slug and then 409 on
+  // every later push — see kernelSlugFor's comment.
+  assert.equal(kernelSlugFor("2026-09-17-a"), "loopcom-yc-label-2026-09-17-a");
 });
 
 // ── push / run / status / pull confirm gates (mirrors kaggle-run.test.ts) ──
@@ -377,11 +495,79 @@ test("runBatch writes kernel-metadata.json pointing at the batch's dataset and p
     await runBatch({ notebookDir: dir, owner: "izzy", batch: "b1", confirm: true, dryRun: false }, { execFn });
     assert.deepEqual(calledArgs, ["kaggle", "kernels", "push", "-p", dir]);
     const meta = JSON.parse(readFileSync(path.join(dir, "kernel-metadata.json"), "utf8"));
-    assert.equal(meta.id, "izzy/loopcom-label-b1");
+    assert.equal(meta.id, "izzy/loopcom-yc-label-b1");
     assert.equal(meta.enable_gpu, true);
     assert.equal(meta.enable_internet, true);
     assert.equal(meta.code_file, "kaggle_label.ipynb");
     assert.deepEqual(meta.dataset_sources, ["izzy/loopcom-yc-b1"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runBatch --model stamps the manifest, re-versions the dataset, then pushes the kernel", async () => {
+  const notebookDir = tmpDir("run-model-nb");
+  const batchDir = tmpDir("run-model-batch");
+  mkdirSync(notebookDir, { recursive: true });
+  writeFileSync(path.join(notebookDir, "kaggle_label.ipynb"), "{}");
+  const entries: BatchManifestEntry[] = [{ itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 }];
+  writeManifest(batchDir, entries);
+  const calls: string[][] = [];
+  const execFn: ExecFn = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return { code: 0, stdout: "ok", stderr: "" };
+  };
+  try {
+    await runBatch(
+      { notebookDir, batchDir, owner: "izzy", batch: "b1", confirm: true, dryRun: false, model: "ivrit-ai/yi-whisper-large-v3-ct2" },
+      { execFn },
+    );
+    // 1) dataset re-versioned (not "--new") BEFORE 2) the kernel push.
+    assert.deepEqual(calls[0], ["kaggle", "datasets", "version", "-p", batchDir, "-m", "stamp model ivrit-ai/yi-whisper-large-v3-ct2", "--dir-mode", "zip"]);
+    assert.deepEqual(calls[1], ["kaggle", "kernels", "push", "-p", notebookDir]);
+    assert.equal(calls.length, 2);
+
+    const parsed = readManifestFile(batchDir);
+    assert.equal(parsed.model, "ivrit-ai/yi-whisper-large-v3-ct2");
+    assert.deepEqual(parsed.entries, entries);
+  } finally {
+    rmSync(notebookDir, { recursive: true, force: true });
+    rmSync(batchDir, { recursive: true, force: true });
+  }
+});
+
+test("runBatch without --model never touches manifest.json (stays the plain array pack wrote)", async () => {
+  const notebookDir = tmpDir("run-nomodel-nb");
+  const batchDir = tmpDir("run-nomodel-batch");
+  mkdirSync(notebookDir, { recursive: true });
+  writeFileSync(path.join(notebookDir, "kaggle_label.ipynb"), "{}");
+  const entries: BatchManifestEntry[] = [{ itemId: "i1", assetId: "a1", sourceKey: "yiddish24", file: "audio/a1.ogg", durationMs: 1000 }];
+  writeManifest(batchDir, entries);
+  const calls: string[][] = [];
+  const execFn: ExecFn = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return { code: 0, stdout: "ok", stderr: "" };
+  };
+  try {
+    await runBatch({ notebookDir, batchDir, owner: "izzy", batch: "b1", confirm: true, dryRun: false }, { execFn });
+    assert.equal(calls.length, 1, "no dataset re-version call when --model is omitted");
+    assert.deepEqual(calls[0], ["kaggle", "kernels", "push", "-p", notebookDir]);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(batchDir, "manifest.json"), "utf8")), entries);
+  } finally {
+    rmSync(notebookDir, { recursive: true, force: true });
+    rmSync(batchDir, { recursive: true, force: true });
+  }
+});
+
+test("runBatch --model without batchDir refuses clearly", async () => {
+  const dir = tmpDir("run-model-no-batchdir");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "kaggle_label.ipynb"), "{}");
+  try {
+    await assert.rejects(
+      () => runBatch({ notebookDir: dir, owner: "izzy", batch: "b1", confirm: true, dryRun: false, model: "some/model" }, {}),
+      /requires batchDir/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -394,7 +580,7 @@ test("statusBatch refuses without --confirm", async () => {
 test("statusBatch calls kaggle kernels status with the batch's kernel slug", async () => {
   const execFn: ExecFn = async (cmd, args) => ({ code: 0, stdout: `${cmd} ${args.join(" ")}`, stderr: "" });
   const out = await statusBatch("izzy", "b1", true, { execFn });
-  assert.match(out, /kaggle kernels status izzy\/loopcom-label-b1/);
+  assert.match(out, /kaggle kernels status izzy\/loopcom-yc-label-b1/);
 });
 
 test("pullBatch refuses without --confirm", async () => {
@@ -410,7 +596,7 @@ test("pullBatch creates the out dir and calls kaggle kernels output", async () =
   };
   try {
     await pullBatch("izzy", "b1", dir, true, { execFn });
-    assert.deepEqual(calledArgs, ["kaggle", "kernels", "output", "izzy/loopcom-label-b1", "-p", dir]);
+    assert.deepEqual(calledArgs, ["kaggle", "kernels", "output", "izzy/loopcom-yc-label-b1", "-p", dir]);
     assert.ok(existsSync(dir));
   } finally {
     rmSync(dir, { recursive: true, force: true });

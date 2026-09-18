@@ -1,0 +1,5 @@
+# Built training datasets (audio clips) and downloaded model outputs — never in git.
+dataset/
+out/
+kernel-metadata.json
+dataset-metadata.json

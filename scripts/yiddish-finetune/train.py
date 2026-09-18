@@ -128,6 +128,32 @@ def compute_wer_cer(references: list[str], hypotheses: list[str]) -> dict[str, f
 # ── dataset loading (needs datasets/soundfile — real training only) ────────
 
 
+def find_latest_checkpoint(output_dir: Path) -> Path | None:
+    """The highest-step `checkpoint-<N>` directory directly under `output_dir`,
+    or None if there isn't one. Pure filesystem scan — no torch/transformers
+    needed, so this runs (and is tested) on Izzy's PC too.
+
+    This is what makes a 12-hour Kaggle session cap survivable across
+    multiple sessions: `run_training` calls this BEFORE `trainer.train()` and
+    passes the result as `resume_from_checkpoint`, so a session that hits the
+    wall mid-run leaves a checkpoint the NEXT session picks up automatically
+    (same `--output-dir`, same dataset) instead of starting over from step 0.
+    """
+    if not output_dir.exists():
+        return None
+    best: tuple[int, Path] | None = None
+    for p in output_dir.iterdir():
+        if not p.is_dir() or not p.name.startswith("checkpoint-"):
+            continue
+        suffix = p.name[len("checkpoint-") :]
+        if not suffix.isdigit():
+            continue
+        step = int(suffix)
+        if best is None or step > best[0]:
+            best = (step, p)
+    return best[1] if best else None
+
+
 def load_dataset_split(dataset_dir: Path, split: str) -> list[dict[str, Any]]:
     rows = load_jsonl(dataset_dir / f"{split}.jsonl")
     for r in rows:
@@ -251,7 +277,13 @@ def run_training(args: argparse.Namespace) -> dict[str, Any]:
         eval_steps=args.eval_steps,
         predict_with_generate=True,
         generation_max_length=225,
-        save_strategy="no",
+        # ⛔ 2026-09-18: was "no" — a Kaggle session that hit the 12h wall left
+        # NOTHING usable. Periodic checkpoints + save_total_limit (bounded disk
+        # use on a 20GB-ish /kaggle/working) + find_latest_checkpoint's resume
+        # below are what let a run span more than one 12h Kaggle session.
+        save_strategy="steps",
+        save_steps=args.save_steps,
+        save_total_limit=2,
         logging_steps=10,
         report_to=[],
     )
@@ -266,8 +298,11 @@ def run_training(args: argparse.Namespace) -> dict[str, Any]:
         tokenizer=processor.feature_extractor,
     )
 
+    resume_ckpt = find_latest_checkpoint(Path(args.output_dir))
+    if resume_ckpt:
+        print(f"[train] resuming from checkpoint {resume_ckpt}")
     started = time.time()
-    trainer.train()
+    trainer.train(resume_from_checkpoint=str(resume_ckpt) if resume_ckpt else None)
     wall_time_sec = time.time() - started
 
     eval_metrics = trainer.evaluate(eval_dataset=eval_ds)
@@ -312,6 +347,7 @@ def run_training(args: argparse.Namespace) -> dict[str, Any]:
         "batch_size": args.batch_size,
         "grad_accum": args.grad_accum,
         "precision": "bf16" if use_bf16 else "fp16",
+        "resumed_from": str(resume_ckpt) if resume_ckpt else None,
         "wall_time_sec": round(wall_time_sec, 1),
         "eval": {"wer": eval_metrics.get("eval_wer"), "cer": eval_metrics.get("eval_cer")},
         "gold": {"wer": gold_metrics.get("gold_wer"), "cer": gold_metrics.get("gold_cer")},
@@ -358,7 +394,27 @@ def self_test() -> int:
         assert 0 < wer < 1, f"unexpected wer {wer}"
         assert 0 < cer < 1, f"unexpected cer {cer}"
         assert simple_wer("same text", "same text") == 0.0
-        ran.append("tier0: jsonl load/round-trip, normalize_text, YL-marker guard, pure-Python WER/CER fallback")
+
+        # find_latest_checkpoint: pure filesystem scan, no GPU/torch needed —
+        # exercises the resume-from-checkpoint wiring's core logic.
+        import shutil
+        import tempfile
+
+        ckpt_root = Path(tempfile.mkdtemp(prefix="yc_train_selftest_ckpt_"))
+        try:
+            assert find_latest_checkpoint(ckpt_root) is None, "empty dir must resume from nothing"
+            (ckpt_root / "checkpoint-100").mkdir()
+            (ckpt_root / "checkpoint-250").mkdir()
+            (ckpt_root / "checkpoint-50").mkdir()
+            (ckpt_root / "not-a-checkpoint").mkdir()
+            (ckpt_root / "checkpoint-abc").mkdir()  # non-numeric suffix, must be ignored
+            latest = find_latest_checkpoint(ckpt_root)
+            assert latest is not None and latest.name == "checkpoint-250", f"expected checkpoint-250, got {latest}"
+            assert find_latest_checkpoint(ckpt_root / "does-not-exist") is None, "a missing output dir must resume from nothing"
+        finally:
+            shutil.rmtree(ckpt_root, ignore_errors=True)
+
+        ran.append("tier0: jsonl load/round-trip, normalize_text, YL-marker guard, pure-Python WER/CER fallback, find_latest_checkpoint")
     except Exception as exc:  # noqa: BLE001
         failed.append(f"tier0: {exc}")
 
@@ -469,6 +525,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--grad-accum", type=int, default=8)
     p.add_argument("--eval-steps", type=int, default=250)
+    p.add_argument("--save-steps", type=int, default=250, help="checkpoint interval — also the interval a chained 12h Kaggle session can resume from")
     p.add_argument("--lr", type=float, default=1e-5)
     p.add_argument("--output-dir", default="out")
     p.add_argument("--push-to-hub", default=None, help="HF repo id to push the merged model to (needs HF_TOKEN)")

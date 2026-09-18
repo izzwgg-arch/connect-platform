@@ -13,29 +13,32 @@ import {
   buildDatasetMetadata,
   buildKernelMetadata,
   datasetPush,
+  DEFAULT_KERNEL_SLUG,
+  DEFAULT_KERNEL_TITLE,
   kernelDownload,
   kernelPush,
   kernelStatus,
   planFlacConversion,
   stageFlacDataset,
+  titleToKaggleSlug,
   toFlacRows,
   type ExecFn,
 } from "./kaggle-run";
 
 // ── metadata shapes ──────────────────────────────────────────────────────────
 
-test("buildDatasetMetadata produces the owner/slug id and a CC0 license", () => {
+test("buildDatasetMetadata produces the owner/slug id and an honest 'other' license (2026-09-18: never CC0 — this data is someone else's copyrighted audio, never public domain)", () => {
   const meta = buildDatasetMetadata({ owner: "izzyloopcom", slug: "yiddish-whisper-dataset", title: "Yiddish Whisper dataset" });
   assert.equal(meta.id, "izzyloopcom/yiddish-whisper-dataset");
   assert.equal(meta.title, "Yiddish Whisper dataset");
-  assert.deepEqual(meta.licenses, [{ name: "CC0-1.0" }]);
+  assert.deepEqual(meta.licenses, [{ name: "other" }]);
 });
 
 test("buildKernelMetadata enables GPU and internet, and points at the right dataset", () => {
   const meta = buildKernelMetadata({
     owner: "izzyloopcom",
     kernelSlug: "yiddish-whisper-finetune",
-    title: "Yiddish Whisper fine-tune",
+    title: "Yiddish Whisper finetune",
     datasetSlug: "yiddish-whisper-dataset",
   });
   assert.equal(meta.id, "izzyloopcom/yiddish-whisper-finetune");
@@ -48,8 +51,33 @@ test("buildKernelMetadata enables GPU and internet, and points at the right data
 });
 
 test("buildKernelMetadata honours a custom code_file", () => {
-  const meta = buildKernelMetadata({ owner: "o", kernelSlug: "k", title: "t", datasetSlug: "d", codeFile: "other.ipynb" });
+  const meta = buildKernelMetadata({ owner: "o", kernelSlug: "k", title: "k", datasetSlug: "d", codeFile: "other.ipynb" });
   assert.equal(meta.code_file, "other.ipynb");
+});
+
+// ── slug/title agreement (2026-09-18 fix) ───────────────────────────────────
+
+test("titleToKaggleSlug mirrors Kaggle's real slugification: lowercase, non-alnum runs collapsed to one hyphen, trimmed", () => {
+  assert.equal(titleToKaggleSlug("Loopcom Yiddish Whisper finetune"), "loopcom-yiddish-whisper-finetune");
+  assert.equal(titleToKaggleSlug("Loopcom Yiddish Whisper fine-tune"), "loopcom-yiddish-whisper-fine-tune");
+  assert.equal(titleToKaggleSlug("Loopcom YC label 2026-09-17-a"), "loopcom-yc-label-2026-09-17-a");
+  assert.equal(titleToKaggleSlug("  Weird!!  Title__ "), "weird-title");
+});
+
+test("this script's own kernel-push/status/download default title and slug agree (the exact 2026-09-18 bug: they used to be off by one hyphen)", () => {
+  assert.equal(titleToKaggleSlug(DEFAULT_KERNEL_TITLE), DEFAULT_KERNEL_SLUG);
+});
+
+test("buildKernelMetadata throws BEFORE any network call when kernelSlug does not match what Kaggle will derive from title", () => {
+  assert.throws(
+    () => buildKernelMetadata({ owner: "o", kernelSlug: "loopcom-yiddish-whisper-finetune", title: "Loopcom Yiddish Whisper fine-tune", datasetSlug: "d" }),
+    /slugifies to "loopcom-yiddish-whisper-fine-tune".*does not match kernelSlug "loopcom-yiddish-whisper-finetune"/s,
+  );
+});
+
+test("buildKernelMetadata succeeds when kernelSlug and title agree", () => {
+  const meta = buildKernelMetadata({ owner: "o", kernelSlug: "loopcom-yiddish-whisper-finetune", title: "Loopcom Yiddish Whisper finetune", datasetSlug: "d" });
+  assert.equal(meta.id, "o/loopcom-yiddish-whisper-finetune");
 });
 
 // ── FLAC staging (pure parts) ────────────────────────────────────────────────
@@ -163,7 +191,7 @@ test("kernelPush refuses without --confirm and never calls kaggle", async () => 
   await assert.rejects(
     () =>
       kernelPush(
-        { notebookDir: __dirname, owner: "izzy", kernelSlug: "k", title: "t", datasetSlug: "d", confirm: false, dryRun: false },
+        { notebookDir: __dirname, owner: "izzy", kernelSlug: "k", title: "k", datasetSlug: "d", confirm: false, dryRun: false },
         { execFn },
       ),
     /--confirm/,
@@ -181,7 +209,7 @@ test("kernelPush --dry-run never writes kernel-metadata.json or calls kaggle", a
     return { code: 0, stdout: "", stderr: "" };
   };
   try {
-    await kernelPush({ notebookDir: tmp, owner: "izzy", kernelSlug: "k", title: "t", datasetSlug: "d", confirm: false, dryRun: true }, { execFn });
+    await kernelPush({ notebookDir: tmp, owner: "izzy", kernelSlug: "k", title: "k", datasetSlug: "d", confirm: false, dryRun: true }, { execFn });
     assert.equal(called, false);
     assert.ok(!existsSync(path.join(tmp, "kernel-metadata.json")));
   } finally {
@@ -199,7 +227,7 @@ test("kernelPush writes the real kernel-metadata.json and calls kaggle kernels p
     return { code: 0, stdout: "ok", stderr: "" };
   };
   try {
-    await kernelPush({ notebookDir: tmp, owner: "izzy", kernelSlug: "k", title: "t", datasetSlug: "d", confirm: true, dryRun: false }, { execFn });
+    await kernelPush({ notebookDir: tmp, owner: "izzy", kernelSlug: "k", title: "k", datasetSlug: "d", confirm: true, dryRun: false }, { execFn });
     assert.deepEqual(calledArgs, ["kaggle", "kernels", "push", "-p", tmp]);
     const written = JSON.parse(readFileSync(path.join(tmp, "kernel-metadata.json"), "utf8"));
     assert.equal(written.enable_gpu, true);

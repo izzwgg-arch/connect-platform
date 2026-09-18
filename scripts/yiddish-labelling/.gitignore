@@ -1,0 +1,6 @@
+# Packed audio batches are hundreds of MB of Yiddish24 media — never in git.
+batches/
+# Orchestrator run state and generated Kaggle metadata.
+orchestrate-state.json
+kernel-metadata.json
+dataset-metadata.json

@@ -6,12 +6,13 @@
  * change to the real ladder is what these tests actually exercise.
  *
  * ⛔ One of these tests ("private source + GRANTED training_export + content
- * allowed -> included") encodes the target semantics of Lane A's planned
- * governance update (handoff §3.1.6: a CUSTOMER_PRIVATE source becomes
- * consented only when BOTH contentAllowed and a GRANTED training_export
- * right exist). Until that lane lands, the ladder still excludes ALL
- * CUSTOMER_PRIVATE rows unconditionally, so this one test is EXPECTED to
- * fail — that is not a Lane B defect, see the final report.
+ * allowed -> included") encodes the target semantics of Lane A's governance
+ * update (handoff §3.1.6: a CUSTOMER_PRIVATE source becomes consented only
+ * when BOTH contentAllowed and a GRANTED training_export right exist).
+ * ✅ 2026-09-18: verified against the live `apps/api/src/yiddishCorpus/
+ * governance.ts` — Lane A's change has landed (the `privateConsented` check
+ * is in the ladder), so this test now genuinely passes rather than being a
+ * documented future-expectation. Left as an ordinary passing test.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -29,9 +30,12 @@ import {
   buildGoldClips,
   buildIvritClips,
   buildManifest,
+  capClipsByHours,
   computeStats,
   filterEligibleRows,
   mergeAdjacentRows,
+  parseArgs,
+  passesEnginePreference,
   passesRowQuality,
   sha256File,
   sha256Hex,
@@ -172,6 +176,81 @@ test("buildIvritClips drops low-confidence rows entirely (never merged in)", () 
   const clips = buildIvritClips(rows, DEFAULT_FILTER_OPTIONS);
   assert.equal(clips.length, 1);
   assert.equal(clips[0].text, "good conf");
+});
+
+// ── engine preference (self-distillation mitigation, 2026-09-18) ───────────
+
+test("passesEnginePreference: null/empty preference never filters anything (today's default, unchanged)", () => {
+  assert.equal(passesEnginePreference(row({ sttProvider: "kaggle:ivrit-ai/yi-whisper-large-v3-turbo" }), null), true);
+  assert.equal(passesEnginePreference(row({ sttProvider: "kaggle:ivrit-ai/yi-whisper-large-v3-turbo" }), []), true);
+});
+
+test("passesEnginePreference: keeps only rows whose sttProvider matches one of the preferred substrings, case-insensitively", () => {
+  const bigModelRow = row({ sttProvider: "kaggle:ivrit-ai/yi-whisper-LARGE-V3-CT2" });
+  const turboRow = row({ sttProvider: "kaggle:ivrit-ai/yi-whisper-large-v3-turbo" });
+  assert.equal(passesEnginePreference(bigModelRow, ["large-v3-ct2"]), true);
+  assert.equal(passesEnginePreference(turboRow, ["large-v3-ct2"]), false);
+});
+
+test("passesEnginePreference: a gold (engine=human) row always passes, regardless of preference", () => {
+  const goldRow = row({ engine: "human", sttProvider: null });
+  assert.equal(passesEnginePreference(goldRow, ["large-v3-ct2"]), true);
+});
+
+test("buildIvritClips honours preferEngines: a machine row from a non-preferred provider is dropped entirely", () => {
+  const opts = { ...DEFAULT_FILTER_OPTIONS, preferEngines: ["large-v3-ct2"] };
+  const rows = [
+    row({ id: "a", startMs: 0, endMs: 2000, text: "from the turbo model", sttProvider: "kaggle:ivrit-ai/yi-whisper-large-v3-turbo" }),
+    row({ id: "b", startMs: 5000, endMs: 7000, text: "from the bigger model", sttProvider: "kaggle:ivrit-ai/yi-whisper-large-v3-ct2" }),
+  ];
+  const clips = buildIvritClips(rows, opts);
+  assert.equal(clips.length, 1);
+  assert.equal(clips[0].text, "from the bigger model");
+});
+
+// ── --max-hours clip cap (2026-09-18: a bounded smoke build) ────────────────
+
+function clip(overrides: Partial<Clip> = {}): Clip {
+  return { itemId: "item-x", sourceKey: "yiddish24", startMs: 0, endMs: 60_000, text: "x", confidence: 0.9, gold: false, rowIds: [], ...overrides };
+}
+
+test("capClipsByHours: null means unlimited (unchanged default behaviour)", () => {
+  const clips = [clip({ startMs: 0, endMs: 3_600_000 }), clip({ startMs: 0, endMs: 3_600_000 })];
+  assert.equal(capClipsByHours(clips, null).length, 2);
+});
+
+test("capClipsByHours: stops accepting clips once the budget would be exceeded, keeping earlier ones whole", () => {
+  const oneHour = 3_600_000;
+  const clips = [clip({ itemId: "a", startMs: 0, endMs: oneHour }), clip({ itemId: "b", startMs: 0, endMs: oneHour }), clip({ itemId: "c", startMs: 0, endMs: oneHour })];
+  const capped = capClipsByHours(clips, 2);
+  assert.equal(capped.length, 2, "2 whole 1-hour clips fit the 2-hour budget; the 3rd would exceed it");
+});
+
+test("capClipsByHours: a budget of 0 keeps nothing", () => {
+  const clips = [clip({ startMs: 0, endMs: 1000 })];
+  assert.equal(capClipsByHours(clips, 0).length, 0);
+});
+
+// ── CLI arg parsing: --prefer-engine and --max-hours ─────────────────────────
+
+test("parseArgs: --prefer-engine is repeatable and accumulates into options.preferEngines", () => {
+  const cli = parseArgs(["--prefer-engine", "large-v3-ct2", "--prefer-engine", "human"]);
+  assert.deepEqual(cli.options.preferEngines, ["large-v3-ct2", "human"]);
+});
+
+test("parseArgs: --prefer-engine also accepts a comma-separated list in one flag", () => {
+  const cli = parseArgs(["--prefer-engine", "large-v3-ct2,large-v3"]);
+  assert.deepEqual(cli.options.preferEngines, ["large-v3-ct2", "large-v3"]);
+});
+
+test("parseArgs: no --prefer-engine leaves preferEngines null (unchanged default)", () => {
+  const cli = parseArgs([]);
+  assert.equal(cli.options.preferEngines, null);
+});
+
+test("parseArgs: --max-hours is parsed as a number, defaulting to null (unlimited)", () => {
+  assert.equal(parseArgs([]).maxHours, null);
+  assert.equal(parseArgs(["--max-hours", "2"]).maxHours, 2);
 });
 
 // ── merging ──────────────────────────────────────────────────────────────────

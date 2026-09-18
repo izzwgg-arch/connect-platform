@@ -84,6 +84,20 @@ export interface DatasetFilterOptions {
   mergeGapMs: number;
   evalFraction: number;
   goldWeight: number;
+  /**
+   * ⛔ 2026-09-18: this build is SELF-DISTILLATION — the first labels come
+   * from the same `ivrit-ai/yi-whisper-*` model family we are fine-tuning
+   * (see the README's "honest limitation" section). `--prefer-engine` lets a
+   * later build steer AWAY from that: a substring (case-insensitive) matched
+   * against a row's `sttProvider` (e.g. "large-v3-ct2" to prefer the bigger
+   * base model's labels over the turbo model's own guesses about itself, or
+   * a fragment of a specific run's tag). `engine="human"` (gold) rows are
+   * ALWAYS kept regardless — they are the one label source this filter can
+   * never need to steer away from. `null`/empty = no restriction (today's
+   * default; every "ivrit" row is eligible regardless of which run tagged
+   * it) — matches the pre-2026-09-18 behaviour exactly.
+   */
+  preferEngines: string[] | null;
 }
 
 export const DEFAULT_FILTER_OPTIONS: DatasetFilterOptions = {
@@ -96,6 +110,7 @@ export const DEFAULT_FILTER_OPTIONS: DatasetFilterOptions = {
   mergeGapMs: 1200,
   evalFraction: 0.05,
   goldWeight: 3,
+  preferEngines: null,
 };
 
 /** A merged, filtered slice of audio ready to become one dataset row. */
@@ -170,6 +185,19 @@ export function hasTiming(row: RawRow): boolean {
   return typeof row.startMs === "number" && typeof row.endMs === "number" && row.endMs > row.startMs;
 }
 
+/**
+ * Does this row's label source match `--prefer-engine`? `engine="human"`
+ * (gold) rows always pass — the preference exists to steer AWAY from
+ * self-distilled machine labels, never to filter out the one source that
+ * isn't self-distillation. `null`/empty preferEngines = no restriction.
+ */
+export function passesEnginePreference(row: RawRow, preferEngines: string[] | null): boolean {
+  if (!preferEngines || preferEngines.length === 0) return true;
+  if (row.engine === "human") return true;
+  const provider = (row.sttProvider || "").toLowerCase();
+  return preferEngines.some((p) => provider.includes(p.toLowerCase()));
+}
+
 /** Per-row machine-quality gate. Never applied to `engine="human"` rows —
  * a human correction does not need to clear the model's own confidence bar. */
 export function passesRowQuality(row: RawRow, opts: DatasetFilterOptions): boolean {
@@ -178,6 +206,7 @@ export function passesRowQuality(row: RawRow, opts: DatasetFilterOptions): boole
   if (confidence < opts.minConfidence) return false;
   const noSpeech = row.noSpeechProb ?? 0;
   if (noSpeech > opts.maxNoSpeechProb) return false;
+  if (!passesEnginePreference(row, opts.preferEngines)) return false;
   return true;
 }
 
@@ -520,6 +549,11 @@ interface Cli {
   dryRun: boolean;
   engineRoot: string;
   limit: number | null;
+  /** Stop accumulating ivrit clips once their total duration would exceed
+   * this many hours (gold/human clips are never capped — see `capClipsByHours`).
+   * `null` = unlimited (today's default behaviour, unchanged). Meant for a
+   * bounded smoke build against real data without cutting a full corpus. */
+  maxHours: number | null;
   options: DatasetFilterOptions;
 }
 
@@ -531,8 +565,10 @@ export function parseArgs(argv: string[]): Cli {
     dryRun: false,
     engineRoot: process.env.YC_ENGINE_ROOT || path.resolve(HERE, "../../apps/api/src/yiddishCorpus"),
     limit: null,
+    maxHours: null,
     options: opts,
   };
+  const preferEngines: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -542,6 +578,7 @@ export function parseArgs(argv: string[]): Cli {
       case "--dry-run": cli.dryRun = true; break;
       case "--engine-root": cli.engineRoot = path.resolve(next()); break;
       case "--limit": cli.limit = Number(next()); break;
+      case "--max-hours": cli.maxHours = Number(next()); break;
       case "--min-confidence": opts.minConfidence = Number(next()); break;
       case "--max-no-speech-prob": opts.maxNoSpeechProb = Number(next()); break;
       case "--min-text-len": opts.minTextLen = Number(next()); break;
@@ -551,11 +588,37 @@ export function parseArgs(argv: string[]): Cli {
       case "--merge-gap-ms": opts.mergeGapMs = Number(next()); break;
       case "--eval-fraction": opts.evalFraction = Number(next()); break;
       case "--gold-weight": opts.goldWeight = Number(next()); break;
+      // Repeatable: --prefer-engine large-v3-ct2 --prefer-engine large-v3 …
+      // (also accepts a comma-separated list in one flag).
+      case "--prefer-engine": preferEngines.push(...next().split(",").map((s) => s.trim()).filter(Boolean)); break;
       default:
         if (a && a.startsWith("--")) throw new Error(`unknown flag ${a}`);
     }
   }
+  opts.preferEngines = preferEngines.length ? preferEngines : null;
   return cli;
+}
+
+/**
+ * Trim ivrit clips to a total duration budget, in the order given (callers
+ * pass a deterministic order — see `main()`). Gold/human clips are handled
+ * separately by the caller and are NEVER subject to this cap: they are rare,
+ * high-value, and the whole point of `--max-hours` is to bound how much
+ * (self-distilled) machine audio gets cut for a smoke build, not to drop the
+ * one label source that already cleared a human's ear.
+ */
+export function capClipsByHours(clips: Clip[], maxHours: number | null): Clip[] {
+  if (maxHours == null || !Number.isFinite(maxHours) || maxHours < 0) return clips;
+  const budgetMs = maxHours * 3_600_000;
+  const out: Clip[] = [];
+  let totalMs = 0;
+  for (const c of clips) {
+    const durationMs = c.endMs - c.startMs;
+    if (totalMs + durationMs > budgetMs) break;
+    out.push(c);
+    totalMs += durationMs;
+  }
+  return out;
 }
 
 async function resolveEligibilityFn(engineRoot: string): Promise<EligibilityFn> {
@@ -644,8 +707,16 @@ async function main(): Promise<void> {
     `[build-dataset] ${transcripts.length} transcript rows -> ${skippedNoTiming} skipped (no timing) -> ${rows.length} timed -> ${eligible.length} governance-ALLOWED`,
   );
 
-  const ivritClips = buildIvritClips(eligible, cli.options);
+  let ivritClips = buildIvritClips(eligible, cli.options);
   const goldClips = buildGoldClips(eligible, cli.options);
+  if (cli.maxHours != null) {
+    // Deterministic order (item, then position) so a capped build is
+    // reproducible run to run, same as the rest of this file's ordering.
+    ivritClips = [...ivritClips].sort((a, b) => a.itemId.localeCompare(b.itemId) || a.startMs - b.startMs);
+    const before = ivritClips.length;
+    ivritClips = capClipsByHours(ivritClips, cli.maxHours);
+    console.log(`[build-dataset] --max-hours ${cli.maxHours}: kept ${ivritClips.length}/${before} ivrit clips (gold clips are never capped)`);
+  }
   const trainItemIds = [...new Set(ivritClips.map((c) => c.itemId))];
   const splitByItem = assignSplits(trainItemIds, cli.options.evalFraction);
   const { train, evalRows, clipsToCut } = assembleDatasetRows({ ivritClips, goldClips, splitByItem, goldWeight: cli.options.goldWeight });
