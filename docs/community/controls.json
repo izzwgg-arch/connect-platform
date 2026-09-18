@@ -225,7 +225,7 @@
       "component": "NetworkPage",
       "control": "network-ignore-<id>",
       "action": "click",
-      "expected": "connection ignored (silently — the requester still sees it as pending), row removed from Invitations",
+      "expected": "connection ignored (silently \u2014 the requester still sees it as pending), row removed from Invitations",
       "permissions": "signed in; recipient of the request",
       "api": "POST /connections/:id/ignore",
       "testId": "network-ignore-<id>"
@@ -985,7 +985,7 @@
       "component": "InviteDialog",
       "control": "company-admin-invite-send",
       "action": "click",
-      "expected": "sends an email invite with a 14-day accept link; idempotent per (org,email) — resending refreshes the token",
+      "expected": "sends an email invite with a 14-day accept link; idempotent per (org,email) \u2014 resending refreshes the token",
       "permissions": "org.manage_members",
       "api": "POST /organizations/:id/invites",
       "testId": "company-admin-invite-send"
@@ -1005,7 +1005,7 @@
       "component": "MembersTab",
       "control": "company-admin-approve-<personId>",
       "action": "click",
-      "expected": "approves a pending join request (affiliation → VERIFIED_ADMIN)",
+      "expected": "approves a pending join request (affiliation \u2192 VERIFIED_ADMIN)",
       "permissions": "org.manage_roles",
       "api": "PATCH /organizations/:id/members/:personId {affiliation:VERIFIED_ADMIN}",
       "testId": "company-admin-approve-<personId>"
@@ -1445,7 +1445,7 @@
       "component": "SearchPage",
       "control": "search-interpretation",
       "action": "render",
-      "expected": "shown only when the query has 3+ words: 'Understood as: service = … · customer type = … · area = …' from the deterministic NLQ parser",
+      "expected": "shown only when the query has 3+ words: 'Understood as: service = \u2026 \u00b7 customer type = \u2026 \u00b7 area = \u2026' from the deterministic NLQ parser",
       "permissions": "anyone",
       "api": "GET /search (interpretation field)",
       "testId": "search-interpretation"
@@ -1508,7 +1508,7 @@
       "expected": "single-select organization size filter",
       "permissions": "anyone",
       "api": "GET /search?size=<range>",
-      "testId": "search-facet-size-1–10, search-facet-size-11–50, search-facet-size-51–200, search-facet-size-200+"
+      "testId": "search-facet-size-1\u201310, search-facet-size-11\u201350, search-facet-size-51\u2013200, search-facet-size-200+"
     },
     {
       "screen": "search",
@@ -1869,6 +1869,83 @@
       "permissions": "signed in",
       "api": "GET /me/saved?cursor=",
       "testId": "saved-load-more"
+    },
+    {
+      "screen": "/concierge",
+      "controls": [
+        {
+          "component": "Chip",
+          "control": "Example question",
+          "action": "Asks the concierge that question",
+          "expected": "Answer card with matches and actions appears",
+          "permissions": "signed in",
+          "api": "POST /concierge/ask",
+          "testId": "concierge-example"
+        },
+        {
+          "component": "input",
+          "control": "Question",
+          "action": "Type a plain-English request",
+          "expected": "\u2014",
+          "permissions": "signed in",
+          "api": "",
+          "testId": "concierge-input"
+        },
+        {
+          "component": "Button",
+          "control": "Ask",
+          "action": "Submits the question",
+          "expected": "Answer with intent line, explanation, real matches, proposed actions",
+          "permissions": "signed in",
+          "api": "POST /concierge/ask",
+          "testId": "concierge-ask"
+        },
+        {
+          "component": "Link",
+          "control": "Match title",
+          "action": "Opens the matched page",
+          "expected": "Navigates to the person/company/job/listing/event/group",
+          "permissions": "",
+          "api": "\u2014",
+          "testId": "concierge-match"
+        },
+        {
+          "component": "Button",
+          "control": "Post as RFQ",
+          "action": "Opens the confirm dialog",
+          "expected": "Dialog explains what will happen",
+          "permissions": "signed in + verified",
+          "api": "\u2014",
+          "testId": "concierge-action-post_rfq"
+        },
+        {
+          "component": "Button",
+          "control": "Message business",
+          "action": "Opens the confirm dialog",
+          "expected": "Dialog explains a message is sent in your name",
+          "permissions": "signed in + verified",
+          "api": "\u2014",
+          "testId": "concierge-action-message_org"
+        },
+        {
+          "component": "Button",
+          "control": "Yes, do it",
+          "action": "Executes the signed action",
+          "expected": "RFQ posted / message sent; Done chip with link",
+          "permissions": "signed in + verified",
+          "api": "POST /concierge/act",
+          "testId": "concierge-confirm"
+        },
+        {
+          "component": "bubble",
+          "control": "Your question",
+          "action": "\u2014",
+          "expected": "Shown as sent",
+          "permissions": "",
+          "api": "",
+          "testId": "concierge-question"
+        }
+      ]
     }
   ]
 }
