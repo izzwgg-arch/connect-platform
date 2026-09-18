@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cost by number and by day</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#f6f8fb;color:#0f172a;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light}
+a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}
+.n{font-family:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:620;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.pill.ok{color:#0b8a5b;background:rgba(34,197,94,0.14)} .pill.warn{color:#b26a00;background:rgba(245,158,11,0.16)}
+.pill.bad{color:#c8324a;background:rgba(239,68,68,0.14)} .pill.info{color:#3b82f6;background:rgba(59,130,246,0.14)}
+.pill.off{color:#475569;background:rgba(15,23,42,0.07)}
+.card{border:1px solid rgba(15,23,42,0.12);border-radius:10px;background:#ffffff;overflow:hidden}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 15px;border-bottom:1px solid rgba(15,23,42,0.12);background:#f8fafc}
+.hd h3{margin:0;font-size:13.5px;font-weight:640;letter-spacing:-0.01em}
+.hint{font-size:11.5px;color:#475569}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#475569;font-weight:660;padding:9px 15px;border-bottom:1px solid rgba(15,23,42,0.12);background:#f8fafc;white-space:nowrap}
+td{padding:10px 15px;border-bottom:1px solid rgba(15,23,42,0.07);vertical-align:middle}
+tr:last-child td{border-bottom:0} td.r,th.r{text-align:right}
+tr.grp td{background:#f8fafc;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:680;color:#475569;padding:7px 15px}
+tr.sum td{font-weight:680;border-top:1px solid rgba(15,23,42,0.12)}
+.btn{font-size:13px;font-weight:600;padding:7px 14px;border-radius:7px;border:1px solid rgba(15,23,42,0.12);background:#ffffff;color:#0f172a;cursor:pointer;font-family:inherit}
+.btn.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.nav{display:flex;gap:2px;padding-bottom:4px;border-bottom:1px solid rgba(15,23,42,0.12)}
+.nav a{font-size:13px;font-weight:540;color:#475569;padding:6px 12px;border-radius:7px}
+.nav a.on{color:#3b82f6;background:rgba(59,130,246,0.14);font-weight:650}
+.tile{flex:1 1 0;min-width:0;padding:12px 14px;border:1px solid rgba(15,23,42,0.07);border-radius:9px;background:#ffffff}
+.tile .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#475569;font-weight:660}
+.tile .v{font-size:22px;font-weight:660;letter-spacing:-.03em;margin-top:4px}
+.tile .s{font-size:11.5px;color:#475569;margin-top:3px}
+.src{font-size:10.5px;color:#475569}
+.bar{height:8px;border-radius:4px;background:rgba(15,23,42,0.07);overflow:hidden}
+.bar i{display:block;height:100%;background:#3b82f6}
+.dim{color:#475569}
+</style>
+</helmet>
+<div style="width:1280px;height:1180px;box-sizing:border-box;padding:20px 24px;display:flex;flex-direction:column;gap:16px;background:#f6f8fb;color:#0f172a">
+  <nav class="nav" aria-label="Billing"><a href="#m">This month</a><a href="#c">Customers</a><a class="on" href="#i">Invoices</a><a href="#p">Payments</a><a href="#n">Needs you</a><a href="#k">Catalog</a></nav>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+    <div><h2 style="margin:0;font-size:22px;letter-spacing:-.02em">Gesheft Supermarket — cost by number and by day</h2>
+    <div class="hint" style="display:flex;gap:8px;align-items:center;margin-top:4px;font-size:13px"><span class="pill warn">Office only</span><a href="#i">← invoice CC-202608-00026</a><span>·</span><span>service Aug 3 – Sep 3, 2026</span></div></div>
+    <div style="display:flex;gap:8px"><button class="btn" type="button">Previous period</button><button class="btn" type="button">Next period</button><button class="btn" type="button">Export CSV</button></div>
+  </div>
+
+  <section class="card">
+    <div class="hd"><h3>By number</h3><span class="hint">every number that carried this customer's traffic, including the shared outbound trunk</span></div>
+    <table>
+      <thead><tr><th>Number</th><th class="r">Inbound min</th><th class="r">Outbound min</th><th class="r">Texts</th><th class="r">Caller ID lookups</th><th class="r">Monthly fees</th><th class="r">Cost</th><th>Share</th></tr></thead>
+      <tbody>
+        <tr><td><div style="font-weight:600" class="n">845-244-9666</div><div class="src">Main line · VoIP.ms · 911 registered</div></td><td class="r n">11,036<div class="src">$99.32</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">783<div class="src">$6.00</div></td><td class="r n">5,375<div class="src">$43.00</div></td><td class="r n">$2.35</td><td class="r n" style="font-weight:660">$150.67</td><td style="width:140px"><div class="bar"><i style="width:100%"></i></div></td></tr>
+        <tr><td><div style="font-weight:600" class="n">Shared trunk 0001</div><div class="src">Outbound · Telocall · caller ID shows 845-244-9666</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">8,759<div class="src">$65.69</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">—</td><td class="r n" style="font-weight:660">$65.69</td><td style="width:140px"><div class="bar"><i style="width:44%"></i></div></td></tr>
+        <tr><td><div style="font-weight:600" class="n">Internal / extension-to-extension</div><div class="src">246 calls · 657 min · no carrier</div></td><td class="r n">—<div class="src">$0.00</div></td><td class="r n">—<div class="src">$0.00</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">—<div class="src">—</div></td><td class="r n">—</td><td class="r n" style="font-weight:660">$0.00</td><td style="width:140px"><div class="bar"><i style="width:0%"></i></div></td></tr>
+        <tr class="sum"><td colspan="6" class="r">Carrier total</td><td class="r n">$216.36</td><td></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div style="display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:16px">
+    <section class="card">
+      <div class="hd"><h3>By day</h3><span class="hint">talk minutes, both directions · Sabbath-quiet Saturdays are real</span></div>
+      <table>
+        <thead><tr><th>Day</th><th class="r">Minutes</th><th></th><th class="r">Cost</th></tr></thead>
+        <tbody><tr><td>Sun Aug 3</td><td class="r n">380</td><td style="width:260px"><div class="bar"><i style="width:20%"></i></div></td><td class="r n">$4.33</td></tr><tr><td>Mon Aug 4</td><td class="r n">1,710</td><td style="width:260px"><div class="bar"><i style="width:93%"></i></div></td><td class="r n">$15.64</td></tr><tr><td>Tue Aug 5</td><td class="r n">1,650</td><td style="width:260px"><div class="bar"><i style="width:90%"></i></div></td><td class="r n">$15.12</td></tr><tr><td>Wed Aug 6</td><td class="r n">1,590</td><td style="width:260px"><div class="bar"><i style="width:87%"></i></div></td><td class="r n">$14.62</td></tr><tr><td>Thu Aug 7</td><td class="r n">1,820</td><td style="width:260px"><div class="bar"><i style="width:100%"></i></div></td><td class="r n">$16.57</td></tr><tr><td>Fri Aug 8</td><td class="r n">1,120</td><td style="width:260px"><div class="bar"><i style="width:61%"></i></div></td><td class="r n">$10.62</td></tr><tr><td>Sat Aug 9</td><td class="r n">0</td><td style="width:260px"><div class="bar"><i style="width:0%"></i></div></td><td class="r n">$0.00</td></tr><tr><td>Sun Aug 10</td><td class="r n">410</td><td style="width:260px"><div class="bar"><i style="width:22%"></i></div></td><td class="r n">$4.59</td></tr><tr><td colspan="4" class="hint">… 23 more days · busiest day Thu Aug 21 (2,104 min, $19.98)</td></tr></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="hd"><h3>Where this month's money went</h3><span class="hint">share of the $221.36</span></div>
+      <div style="padding:6px 15px 10px">
+        <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.07)"><span>Inbound calls</span><span class="n">$99.32 · 45%</span></div>
+        <div class="bar" style="margin-bottom:6px"><i style="width:45%"></i></div>
+        <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.07)"><span>Outbound calls</span><span class="n">$65.69 · 30%</span></div>
+        <div class="bar" style="margin-bottom:6px"><i style="width:30%"></i></div>
+        <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.07)"><span>Caller ID lookups</span><span class="n">$43.00 · 19%</span></div>
+        <div class="bar" style="margin-bottom:6px"><i style="width:19%;background:#b26a00"></i></div>
+        <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.07)"><span>Services (transcription, voices, storage, pay line)</span><span class="n">$10.00 · 5%</span></div>
+        <div class="bar" style="margin-bottom:6px"><i style="width:5%"></i></div>
+        <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.07)"><span>Texting</span><span class="n">$6.00 · 3%</span></div>
+        <div class="bar" style="margin-bottom:6px"><i style="width:3%"></i></div>
+        <div style="display:flex;justify-content:space-between;padding:9px 0"><span>Numbers &amp; 911</span><span class="n">$2.35 · 1%</span></div>
+        <div class="bar"><i style="width:1%"></i></div>
+        <div class="hint" style="margin-top:12px;padding:10px 12px;border:1px solid rgba(245,158,11,0.16);background:rgba(245,158,11,0.16);border-radius:8px;color:#0f172a">Caller-name lookups cost more than all texting and numbers together. If that surprises you, the same screen on every customer will show whether it is only Gesheft's call volume.</div>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

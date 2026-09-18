@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Customer — cost and margin by month</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0c1218;color:#e1e9f1;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark}
+a{color:#22a8ff;text-decoration:none} a:hover{text-decoration:underline}
+.n{font-family:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:620;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.pill.ok{color:#34c48b;background:rgba(52,194,123,0.14)} .pill.warn{color:#e0a04a;background:rgba(240,182,85,0.16)}
+.pill.bad{color:#f0788c;background:rgba(234,96,104,0.14)} .pill.info{color:#22a8ff;background:rgba(34,168,255,0.14)}
+.pill.off{color:#8ea0b2;background:rgba(38,55,74,0.7)}
+.card{border:1px solid #26374a;border-radius:10px;background:#141f2b;overflow:hidden}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 15px;border-bottom:1px solid #26374a;background:#1a2635}
+.hd h3{margin:0;font-size:13.5px;font-weight:640;letter-spacing:-0.01em}
+.hint{font-size:11.5px;color:#8ea0b2}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8ea0b2;font-weight:660;padding:9px 15px;border-bottom:1px solid #26374a;background:#1a2635;white-space:nowrap}
+td{padding:10px 15px;border-bottom:1px solid rgba(38,55,74,0.7);vertical-align:middle}
+tr:last-child td{border-bottom:0} td.r,th.r{text-align:right}
+tr.grp td{background:#1a2635;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:680;color:#8ea0b2;padding:7px 15px}
+tr.sum td{font-weight:680;border-top:1px solid #26374a}
+.btn{font-size:13px;font-weight:600;padding:7px 14px;border-radius:7px;border:1px solid #26374a;background:#141f2b;color:#e1e9f1;cursor:pointer;font-family:inherit}
+.btn.primary{background:#22a8ff;border-color:#22a8ff;color:#fff}
+.nav{display:flex;gap:2px;padding-bottom:4px;border-bottom:1px solid #26374a}
+.nav a{font-size:13px;font-weight:540;color:#8ea0b2;padding:6px 12px;border-radius:7px}
+.nav a.on{color:#22a8ff;background:rgba(34,168,255,0.14);font-weight:650}
+.tile{flex:1 1 0;min-width:0;padding:12px 14px;border:1px solid rgba(38,55,74,0.7);border-radius:9px;background:#141f2b}
+.tile .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8ea0b2;font-weight:660}
+.tile .v{font-size:22px;font-weight:660;letter-spacing:-.03em;margin-top:4px}
+.tile .s{font-size:11.5px;color:#8ea0b2;margin-top:3px}
+.src{font-size:10.5px;color:#8ea0b2}
+.bar{height:8px;border-radius:4px;background:rgba(38,55,74,0.7);overflow:hidden}
+.bar i{display:block;height:100%;background:#22a8ff}
+.dim{color:#8ea0b2}
+</style>
+</helmet>
+<div style="width:1280px;height:760px;box-sizing:border-box;padding:20px 24px;display:flex;flex-direction:column;gap:16px;background:#0c1218;color:#e1e9f1">
+  <nav class="nav" aria-label="Billing"><a href="#m">This month</a><a class="on" href="#c">Customers</a><a href="#i">Invoices</a><a href="#p">Payments</a><a href="#n">Needs you</a><a href="#k">Catalog</a></nav>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+    <div><h2 style="margin:0;font-size:22px;letter-spacing:-.02em">Gesheft Supermarket</h2>
+    <div class="hint" style="display:flex;gap:8px;align-items:center;margin-top:4px;font-size:13px"><span class="pill ok">Autopay · day 3</span><span>Amex •1007</span><span>·</span><span>6 extensions · 1 number · texting on</span></div></div>
+  </div>
+
+  <section class="card">
+    <div class="hd">
+      <div style="display:flex;align-items:center;gap:10px"><h3>What they cost us, month by month</h3><span class="pill warn">Office only</span></div>
+      <span class="hint">bar = cost as a share of what they paid · the whole customer list gets a "Margin" column from the same numbers</span>
+    </div>
+    <div style="display:flex;gap:10px;padding:14px 15px 4px">
+      <div class="tile"><div class="k">Last 6 closed months</div><div class="v n">$2,657.46</div><div class="s">paid to us</div></div>
+      <div class="tile"><div class="k">Cost us</div><div class="v n">$1,163.58</div><div class="s">43.8% of revenue</div></div>
+      <div class="tile" style="border-color:#34c48b"><div class="k" style="color:#34c48b">Margin</div><div class="v n" style="color:#34c48b">$1,493.88</div><div class="s">trend: cost up 22% since April — inbound minutes, mostly</div></div>
+      <div class="tile" style="border-color:#e0a04a"><div class="k" style="color:#e0a04a">Watch</div><div class="v n n">CNAM</div><div class="s">$43/mo on lookups — 19% of their cost</div></div>
+    </div>
+    <table style="margin-top:8px">
+      <thead><tr><th>Service period</th><th class="r">They paid</th><th class="r">Cost us</th><th class="r">Margin</th><th>Cost share</th><th>Period</th></tr></thead>
+      <tbody><tr><td>Sep 3 – Oct 3<div class="src">in progress · day 15</div></td><td class="r n">$450.41</td><td class="r n">$112.40<div class="src">so far</div></td><td class="r n dim">—</td><td style="width:220px"><div class="bar"><i style="width:24%;background:#8ea0b2"></i></div></td><td><span class="pill info">Running</span></td></tr><tr><td>Aug 3 – Sep 3<div class="src"><a href="#i">CC-202608-00026</a></div></td><td class="r n">$450.41</td><td class="r n">$221.36</td><td class="r n" style="color:#34c48b">$229.05 · 50.9%</td><td style="width:220px"><div class="bar"><i style="width:49%"></i></div></td><td><span class="pill ok">Closed</span></td></tr><tr><td>Jul 3 – Aug 3<div class="src"><a href="#i">CC-202607-00019</a></div></td><td class="r n">$450.41</td><td class="r n">$205.12</td><td class="r n" style="color:#34c48b">$245.29 · 54.5%</td><td style="width:220px"><div class="bar"><i style="width:45%"></i></div></td><td><span class="pill ok">Closed</span></td></tr><tr><td>Jun 3 – Jul 3<div class="src"><a href="#i">CC-202606-00021</a></div></td><td class="r n">$435.41</td><td class="r n">$198.77</td><td class="r n" style="color:#34c48b">$236.64 · 54.3%</td><td style="width:220px"><div class="bar"><i style="width:45%"></i></div></td><td><span class="pill ok">Closed</span></td></tr><tr><td>May 3 – Jun 3<div class="src"><a href="#i">CC-202605-00014</a></div></td><td class="r n">$435.41</td><td class="r n">$176.03</td><td class="r n" style="color:#34c48b">$259.38 · 59.6%</td><td style="width:220px"><div class="bar"><i style="width:40%"></i></div></td><td><span class="pill ok">Closed</span></td></tr><tr><td>Apr 3 – May 3<div class="src"><a href="#i">CC-202604-00011</a></div></td><td class="r n">$435.41</td><td class="r n">$181.90</td><td class="r n" style="color:#34c48b">$253.51 · 58.2%</td><td style="width:220px"><div class="bar"><i style="width:41%"></i></div></td><td><span class="pill ok">Closed</span></td></tr></tbody>
+    </table>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

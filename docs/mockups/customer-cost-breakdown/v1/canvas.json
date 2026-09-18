@@ -1,0 +1,80 @@
+{
+ "v": 3,
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-09-18T19:02:12Z"
+ },
+ "title": "Customer Cost Breakdown",
+ "launch": {
+  "view": "canvas"
+ },
+ "pages": [],
+ "boards": {
+  "Main.dc.html": {
+   "x": 0,
+   "y": 0,
+   "w": 1280,
+   "h": 1640,
+   "title": "1 \u00b7 Invoice page with the cost card (light)"
+  },
+  "Invoice-dark.dc.html": {
+   "x": 1360,
+   "y": 0,
+   "w": 1280,
+   "h": 1640,
+   "title": "1b \u00b7 Same, dark theme"
+  },
+  "By-number-and-day.dc.html": {
+   "x": 0,
+   "y": 1760,
+   "w": 1280,
+   "h": 1180,
+   "title": "2 \u00b7 Drill-down: by number and by day"
+  },
+  "Carrier-rates.dc.html": {
+   "x": 1360,
+   "y": 1760,
+   "w": 1280,
+   "h": 980,
+   "title": "3 \u00b7 Catalog: the rates we multiply by"
+  },
+  "Customer-months.dc.html": {
+   "x": 0,
+   "y": 3060,
+   "w": 1280,
+   "h": 760,
+   "title": "4 \u00b7 Customer page: month by month"
+  }
+ },
+ "order": [
+  "Main.dc.html",
+  "Invoice-dark.dc.html",
+  "By-number-and-day.dc.html",
+  "Carrier-rates.dc.html",
+  "Customer-months.dc.html"
+ ],
+ "notes": {
+  "t1": {
+   "x": 0,
+   "y": -240,
+   "text": "What each customer costs us \u2014 office-only, on their invoice",
+   "kind": "title1",
+   "maxW": 2640
+  },
+  "s1": {
+   "x": 1360,
+   "y": 3060,
+   "w": 560,
+   "text": "Volumes are Gesheft's REAL Aug 3 \u2013 Sep 3 numbers from our call log and chat table (11,036 inbound min, 8,759 outbound, 783 texts, 5,375 named inbound calls). The rates and the service costs are illustrative until the carrier feeds are wired and Izzy confirms the Telocall rate. The customer never sees any of this: the card is not in the PDF, the email, or the customer portal.",
+   "color": "orange"
+  },
+  "s2": {
+   "x": 1960,
+   "y": 3060,
+   "w": 560,
+   "text": "Three honesty tiers on every line \u2014 Carrier CDR (their per-call record), Our minutes \u00d7 rate (Telocall has no API), Estimated (we metered it, priced at list). Outbound goes over the shared 0001 trunk, so it can only ever be our minutes \u00d7 the Telocall rate unless Telocall gives us an export.",
+   "color": "blue"
+  }
+ },
+ "designSystems": []
+}

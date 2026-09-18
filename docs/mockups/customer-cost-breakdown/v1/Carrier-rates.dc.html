@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Catalog — carrier rates</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#f6f8fb;color:#0f172a;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light}
+a{color:#3b82f6;text-decoration:none} a:hover{text-decoration:underline}
+.n{font-family:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:620;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.pill.ok{color:#0b8a5b;background:rgba(34,197,94,0.14)} .pill.warn{color:#b26a00;background:rgba(245,158,11,0.16)}
+.pill.bad{color:#c8324a;background:rgba(239,68,68,0.14)} .pill.info{color:#3b82f6;background:rgba(59,130,246,0.14)}
+.pill.off{color:#475569;background:rgba(15,23,42,0.07)}
+.card{border:1px solid rgba(15,23,42,0.12);border-radius:10px;background:#ffffff;overflow:hidden}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 15px;border-bottom:1px solid rgba(15,23,42,0.12);background:#f8fafc}
+.hd h3{margin:0;font-size:13.5px;font-weight:640;letter-spacing:-0.01em}
+.hint{font-size:11.5px;color:#475569}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#475569;font-weight:660;padding:9px 15px;border-bottom:1px solid rgba(15,23,42,0.12);background:#f8fafc;white-space:nowrap}
+td{padding:10px 15px;border-bottom:1px solid rgba(15,23,42,0.07);vertical-align:middle}
+tr:last-child td{border-bottom:0} td.r,th.r{text-align:right}
+tr.grp td{background:#f8fafc;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:680;color:#475569;padding:7px 15px}
+tr.sum td{font-weight:680;border-top:1px solid rgba(15,23,42,0.12)}
+.btn{font-size:13px;font-weight:600;padding:7px 14px;border-radius:7px;border:1px solid rgba(15,23,42,0.12);background:#ffffff;color:#0f172a;cursor:pointer;font-family:inherit}
+.btn.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.nav{display:flex;gap:2px;padding-bottom:4px;border-bottom:1px solid rgba(15,23,42,0.12)}
+.nav a{font-size:13px;font-weight:540;color:#475569;padding:6px 12px;border-radius:7px}
+.nav a.on{color:#3b82f6;background:rgba(59,130,246,0.14);font-weight:650}
+.tile{flex:1 1 0;min-width:0;padding:12px 14px;border:1px solid rgba(15,23,42,0.07);border-radius:9px;background:#ffffff}
+.tile .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#475569;font-weight:660}
+.tile .v{font-size:22px;font-weight:660;letter-spacing:-.03em;margin-top:4px}
+.tile .s{font-size:11.5px;color:#475569;margin-top:3px}
+.src{font-size:10.5px;color:#475569}
+.bar{height:8px;border-radius:4px;background:rgba(15,23,42,0.07);overflow:hidden}
+.bar i{display:block;height:100%;background:#3b82f6}
+.dim{color:#475569}
+</style>
+</helmet>
+<div style="width:1280px;height:980px;box-sizing:border-box;padding:20px 24px;display:flex;flex-direction:column;gap:16px;background:#f6f8fb;color:#0f172a">
+  <nav class="nav" aria-label="Billing"><a href="#m">This month</a><a href="#c">Customers</a><a href="#i">Invoices</a><a href="#p">Payments</a><a href="#n">Needs you</a><a class="on" href="#k">Catalog</a></nav>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+    <div><h2 style="margin:0;font-size:22px;letter-spacing:-.02em">Catalog → What the carriers charge us</h2>
+    <div class="hint" style="margin-top:4px;font-size:13px">One place for every rate the cost card multiplies by. A carrier feed overrides a typed rate automatically; a typed rate is only used where no feed exists.</div></div>
+    <div style="display:flex;gap:8px"><button class="btn" type="button">Cancel</button><button class="btn primary" type="button">Save rates</button></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:16px;align-items:start">
+    <section class="card">
+      <div class="hd"><h3>Calls</h3><span class="hint">per started minute</span></div>
+      <table>
+        <thead><tr><th>What</th><th>Carrier</th><th class="r">Rate</th><th>Unit</th><th>Where it comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Inbound to a per-minute number</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.0090" aria-label="Inbound to a per-minute number rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill ok">Feed: per-call cost</span></td></tr>
+          <tr><td>Inbound to a Telnyx number</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="0.0035" aria-label="Inbound to a Telnyx number rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill ok">Feed: per-call cost</span></td></tr>
+          <tr><td>Outbound, primary</td><td>Telocall (0001)</td><td class="r"><input class="n" type="text" value="0.0075" aria-label="Outbound, primary rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill warn">Typed — no API</span></td></tr>
+          <tr><td>Outbound, backup</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.0100" aria-label="Outbound, backup rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill ok">Feed: per-call cost</span></td></tr>
+          <tr><td>Outbound, Loopcom Demo only</td><td>SignalWire</td><td class="r"><input class="n" type="text" value="0.0065" aria-label="Outbound, Loopcom Demo only rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill ok">Feed</span></td></tr>
+          <tr><td>International</td><td>Telocall / VoIP.ms</td><td class="r"><input class="n" type="text" value="by country" aria-label="International rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill warn">Feed where it exists</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="hd"><h3>Texting &amp; caller ID</h3><span class="hint">per message / per lookup</span></div>
+      <table>
+        <thead><tr><th>What</th><th>Carrier</th><th class="r">Rate</th><th>Unit</th><th>Where it comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Text sent or received</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.0075" aria-label="Text sent or received rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Picture message sent or received</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.0200" aria-label="Picture message sent or received rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Text sent</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="0.0040" aria-label="Text sent rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill ok">Feed: cost on each message</span></td></tr>
+          <tr><td>Text received</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="0.0000" aria-label="Text received rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill ok">Feed</span></td></tr>
+          <tr><td>Caller-name lookup (CNAM)</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.0080" aria-label="Caller-name lookup (CNAM) rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Caller-name lookup (CNAM)</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="0.0050" aria-label="Caller-name lookup (CNAM) rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ each</td><td><span class="pill ok">Feed</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="hd"><h3>Monthly per number</h3></div>
+      <table>
+        <thead><tr><th>What</th><th>Carrier</th><th class="r">Rate</th><th>Unit</th><th>Where it comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Number, per-minute plan</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="0.85" aria-label="Number, per-minute plan rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed: DID info</span></td></tr>
+          <tr><td>Number, flat-rate plan</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="4.25" aria-label="Number, flat-rate plan rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed: DID info</span></td></tr>
+          <tr><td>Number</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="1.00" aria-label="Number rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed</span></td></tr>
+          <tr><td>911 registration</td><td>VoIP.ms</td><td class="r"><input class="n" type="text" value="1.50" aria-label="911 registration rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed: DID info</span></td></tr>
+          <tr><td>911 registration</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="1.00" aria-label="911 registration rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed</span></td></tr>
+          <tr><td>Texting registration campaign (10DLC)</td><td>Telnyx</td><td class="r"><input class="n" type="text" value="1.50" aria-label="Texting registration campaign (10DLC) rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / mo</td><td><span class="pill ok">Feed</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="card">
+      <div class="hd"><h3>Services we run</h3><span class="hint">vendor list price × what we metered</span></div>
+      <table>
+        <thead><tr><th>What</th><th>Vendor</th><th class="r">Rate</th><th>Unit</th><th>Where it comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Voicemail &amp; call transcription</td><td>OpenAI Whisper</td><td class="r"><input class="n" type="text" value="0.0060" aria-label="Voicemail &amp; call transcription rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / min</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Menu voices (neural)</td><td>Amazon Polly</td><td class="r"><input class="n" type="text" value="16.00" aria-label="Menu voices (neural) rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / 1M chars</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Menu voices (premium)</td><td>ElevenLabs</td><td class="r"><input class="n" type="text" value="0.30" aria-label="Menu voices (premium) rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / 1k chars</td><td><span class="pill warn">Typed — plan price</span></td></tr>
+          <tr><td>Recording storage</td><td>S3</td><td class="r"><input class="n" type="text" value="0.023" aria-label="Recording storage rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$ / GB-mo</td><td><span class="pill warn">Typed — list price</span></td></tr>
+          <tr><td>Assistant / agent answers</td><td>OpenAI &amp; Claude</td><td class="r"><input class="n" type="text" value="by tokens" aria-label="Assistant / agent answers rate" style="width:96px;text-align:right;font-size:13px;padding:5px 8px;border:1px solid rgba(15,23,42,0.12);border-radius:6px;background:#ffffff;color:#0f172a"></td><td class="dim">$</td><td><span class="pill ok">Feed: usage API</span></td></tr>
+        </tbody>
+      </table>
+      <div class="hint" style="padding:10px 15px;border-top:1px solid rgba(15,23,42,0.12)">Rates are versioned: changing one applies from today; closed periods keep the rate they were costed at.</div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
