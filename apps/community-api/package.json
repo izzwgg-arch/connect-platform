@@ -1,0 +1,45 @@
+{
+  "name": "@loopcom/community-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "db:reset-test": "prisma migrate reset --force --skip-seed --schema prisma/schema.prisma",
+    "seed": "tsx src/seed.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:tier1": "tsx src/testing/tier1Loop.ts",
+    "test:controls": "tsx src/testing/controlInventoryCheck.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.1.0",
+    "@fastify/jwt": "^9.1.0",
+    "@fastify/multipart": "^9.4.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^8.2.0",
+    "@node-rs/argon2": "^2.0.2",
+    "@prisma/client": "^6.16.2",
+    "@simplewebauthn/server": "^13.1.1",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.6.0",
+    "google-auth-library": "^9.15.1",
+    "ioredis": "^5.8.0",
+    "nodemailer": "^8.0.7",
+    "sharp": "^0.34.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.17",
+    "prisma": "^6.16.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
