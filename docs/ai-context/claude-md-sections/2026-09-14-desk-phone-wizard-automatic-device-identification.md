@@ -269,3 +269,27 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   script is not executable). ⏳ T21 rows appear as the phones re-register (≤1h); Izzy has not yet
   re-opened the wizard to see honest statuses; "delivered-but-not-registered → robot reboots via
   phone UI" is designed, not wired.
+  re-opened the wizard to see honest statuses; "delivered-but-not-registered → robot reboots via
+  phone UI" is designed, not wired.
+- 🎨 **ROUND 26 (2026-09-18): THE WIZARD REDESIGN — MOCKUPS ONLY, awaiting Izzy (artifact
+  `Tty5aheU7hviHCMGi5vToG`).** Izzy's directive, verbatim in substance: *"this is how every phone is
+  going to be done. The wizard is going to have browsers, the backend, and literally open the UIs and
+  put the link in… All we have to do is get the customer to factory reset the phones… harden the fuck
+  out of this… Laybel live with the customer… powered behind the GPT… ready for every situation, able
+  to improvise, and get the phones connected at all costs… an illustration for each phone, for each
+  brand, on how to factory reset… connect one phone at a time… check the last 4 of the MAC."*
+  Seven artboards, Signal Core palette (#22A8FF/#4F7BFF on #0C1218): (1) which extension, (2) which
+  phone — cards keyed by the LAST 4 of the MAC + fresh/old-settings/already-connected state, (3)
+  factory reset with a per-MODEL illustration (Yealink T42S: hold OK 10 s; a Grandstream GXP2170
+  variant board proves the per-model library), the screen advances ITSELF when the network watch sees
+  the phone come back fresh (robot admin/admin login = proof of reset), (4) connecting — robot
+  timeline in plain words, green ONLY from per-device registration truth (R25), (5) connected → ring
+  it → next phone, (6) STUCK: the old-provider RPS claim case with the auto-filed Yealink release
+  (R23) and "I'll finish it myself when they let go" — never a dead end. Laybel = permanent left rail:
+  Anam face (customer rollout still OFF, 300 s cap, slow — see the Laybel summary) with captions that
+  never stop + quick-reply chips + text/mic; brain = the R23 OpenAI robot advisor + the wizard rules.
+  ⛔ NOT BUILT: nothing in the portal changed; the per-model reset recipe/illustration library does not
+  exist yet (427 models → recipes per FAMILY, verify each against the maker's manual before it ships);
+  Laybel-in-the-wizard is to be built on the APPROVED shape, not bolted onto the 11-step batch wizard
+  it replaces. ⛔ container note: `deskPhoneRoutes.test.ts` cannot run inside app-api-1 (its
+  `mock.module("@connect/db")` has no workspace alias there — pre-existing, passes locally).
