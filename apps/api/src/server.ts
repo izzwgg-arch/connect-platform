@@ -381,6 +381,7 @@ import { openReadConn } from "./pbxConsole/pbxConsoleReaders";
 import { fixApproverNumbers, sweepFixRepliesBatch } from "./agentFixByText";
 import { syncAllTenantFactsDocs } from "./agentTenantFacts";
 import { registerServiceInterruptionRoutes, startServiceInterruptionSweep } from "./billing/serviceInterruption/serviceInterruptionBoot";
+import { startCarrierCostSync } from "./billing/cost/costSyncBoot";
 import { explainCallFlow, narrateCallFlow, summariseHours, buildDestination, nextTeamNumber, explainChosenNumber, resolvePersonDisplayName, type TenantDirectory, type UsedNumbers } from "@connect/shared";
 import {
   buildVmRecordJobPublicView,
@@ -42681,6 +42682,9 @@ const port = Number(process.env.PORT || 3001);
   // SERVICE_INTERRUPTION_CUTOVER_AT is set — see serviceInterruptionJob.ts.
   registerServiceInterruptionRoutes(app, app.log as any, { publishAstDb: publishToAstDb, tenantSlug: getIvrSlugForTenant });
   registerShutdownTimer(startServiceInterruptionSweep(app.log as any, { publishAstDb: publishToAstDb, tenantSlug: getIvrSlugForTenant }));
+  // VoIP.ms cost feed for the office-only customer cost card (2026-09-18).
+  // Read-only against the carrier; CARRIER_COST_SYNC_DISABLED=1 turns it off.
+  { const t = startCarrierCostSync(app.log as any); if (t) registerShutdownTimer(t); }
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
   // Read-only door the assistant quotes prices from, so the figure it says in

@@ -10468,3 +10468,67 @@ model YcPipelineState {
 
   @@index([kind, updatedAt])
 }
+
+/// ── Customer cost breakdown (2026-09-18, office-only "what this customer cost us") ──
+/// A rate we are charged, per unit. Versioned: a new row per change; the row
+/// with the latest effectiveFrom at or before the period's end applies. Keys
+/// like "voipms.inbound_min", "telocall.outbound_min", "voipms.cnam_lookup".
+model CarrierRate {
+  id            String   @id @default(cuid())
+  key           String
+  carrier       String
+  label         String
+  unit          String
+  /// Dollars per unit (fractions of a cent are normal: 0.008 per lookup).
+  rate          Decimal  @db.Decimal(14, 6)
+  effectiveFrom DateTime
+  /// "TYPED" (entered in Catalog) | "FEED" (learned from a carrier record).
+  source        String   @default("TYPED")
+  note          String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([key, effectiveFrom])
+}
+
+/// One row per thing a carrier charged us for, pulled from the carrier's own
+/// records (VoIP.ms getCDR / getSMS / getMMS / getTransactionHistory). The
+/// unique key makes every re-pull idempotent. `tenantId` is resolved from the
+/// number at ingest and re-resolved by the sync when null.
+model CarrierUsageRecord {
+  id          String   @id @default(cuid())
+  carrier     String
+  accountId   String   @default("default")
+  externalId  String
+  /// CALL_IN | CALL_OUT | SMS_IN | SMS_OUT | MMS_IN | MMS_OUT | CNAM_LOOKUP |
+  /// DID_MONTHLY | E911_MONTHLY | CNAM_DAILY | OTHER
+  kind        String
+  occurredAt  DateTime
+  numberE164  String?
+  /// The carrier sub-account named on the record (e.g. "344022_gesheft").
+  subAccount  String?
+  tenantId    String?
+  /// Seconds for calls, 1 for messages/lookups/fees.
+  quantity    Decimal  @db.Decimal(14, 4)
+  /// Dollars the carrier says it charged (null when the carrier record carries
+  /// no cost, e.g. VoIP.ms SMS — then the breakdown prices it at the rate).
+  cost        Decimal? @db.Decimal(14, 6)
+  description String?
+  raw         Json?
+  createdAt   DateTime @default(now())
+
+  @@unique([carrier, kind, externalId])
+  @@index([tenantId, occurredAt])
+  @@index([occurredAt])
+  @@index([numberE164])
+}
+
+/// Where each carrier feed has got to, one row per feed ("voipms:default").
+model CarrierSyncCursor {
+  id          String    @id
+  lastDate    DateTime?
+  lastRunAt   DateTime?
+  lastError   String?
+  lastSummary Json?
+  updatedAt   DateTime  @updatedAt
+}

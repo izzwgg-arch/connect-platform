@@ -10,6 +10,7 @@ import { useParams } from "next/navigation";
 import { apiDelete, apiPost, apiPut } from "../../../../../../services/apiClient";
 import { ConnectSelect } from "../../../../../../components/ConnectSelect";
 import { BillingNav, Pill, asList, dateTime, errText, invoiceTone, longDate, money, useApi } from "../../_new/ui";
+import { CustomerCostCard } from "../../_new/CostCard";
 import "../../customer/customerBilling.css";
 
 type LineItem = {
@@ -271,6 +272,11 @@ export default function InvoicePage() {
           </table>
         </div>
       </section>
+
+      {/* Office-only: what the carriers charged US for this service period.
+          The api behind it is SUPER_ADMIN-gated and the card renders nothing
+          on a 403; it never reaches the PDF, the email or the customer. */}
+      <CustomerCostCard invoiceId={i.id} tenantId={i.tenantId} />
 
       {!voided && (
         <PaymentLink invoice={i} onSent={() => { void inv.reload(); void events.reload(); }} />

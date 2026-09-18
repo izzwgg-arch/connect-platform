@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { apiGet, apiPut } from "../../../../../../services/apiClient";
 import { ConnectSelect } from "../../../../../../components/ConnectSelect";
 import { BillingNav } from "../../_new/ui";
+import { CostMonthsCard } from "../../_new/CostMonthsCard";
 import "../customerBilling.css";
 import { ServiceInterruptionCard } from "./ServiceInterruptionCard";
 
@@ -376,6 +377,9 @@ export default function CustomerBillingPage() {
 
       <div className="cbill-grid">
         <div className="cbill-col">
+          {/* ── Office-only: what they cost US, month by month ─────────── */}
+          <CostMonthsCard tenantId={tenantId} />
+
           {/* ── What they pay for ─────────────────────────────────────── */}
           <section className="cbill-card">
             <div className="cbill-card-hd">

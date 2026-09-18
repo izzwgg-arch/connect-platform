@@ -5,6 +5,7 @@
 
 import Link from "next/link";
 import { BillingNav, Pill, asList, money, useApi } from "../_new/ui";
+import { CarrierRatesCard } from "../_new/CarrierRatesCard";
 import "../customer/customerBilling.css";
 
 type Plan = {
@@ -137,6 +138,9 @@ export default function BillingCatalogPage() {
           <a className="cbill-btn ghost" href="/api/admin/billing/reports/export/transactions" target="_blank" rel="noreferrer">⤓ Transactions CSV</a>
         </div>
       </section>
+
+      {/* Office-only: the rates behind "What this customer cost us" + the VoIP.ms feed door. */}
+      <CarrierRatesCard />
 
       <section className="cbill-card">
         <div className="cbill-card-hd">

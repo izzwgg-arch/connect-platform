@@ -55,6 +55,7 @@ import {
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
 import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, publicPortalBaseUrl, queueApologyEmailOnce, queuePaymentLinkEmail, queueReceiptEmailOnce } from "./billingEmailLifecycle";
 import { BILLING_PAY_TOKEN_TTL_MS, createBillingMultiPayToken } from "./billingPayToken";
+import { registerCustomerCostRoutes } from "./cost/costRoutes";
 import { formatUsPhoneForHumans, normalizeUsPhone, resolveBillingSmsSender } from "./billingSmsSender";
 import {
   buildBillingEmailJobCreateData,
@@ -374,6 +375,8 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 export async function registerBillingRoutes(app: FastifyInstance) {
   registerBillingPublicPayRoutes(app);
   registerBillingPayLinkRoutes(app, requirePlatformBilling);
+  // Office-only "what this customer cost us" (2026-09-18): same SUPER_ADMIN gate, never customer-facing.
+  registerCustomerCostRoutes(app, requirePlatformBilling, app.log as any);
   const sendLiveChargesDisabled = (reply: FastifyReply) =>
     reply.code(503).send({ error: "billing_live_charges_disabled" });
 
