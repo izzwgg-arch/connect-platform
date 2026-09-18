@@ -142,9 +142,9 @@ export function AppShell({ children, cols = "", title }: { children: ReactNode; 
             <kbd>/</kbd>
           </form>
           <div className="acts">
-            <Link href="/post/new" className="btn p s" data-testid="top-post">
+            <Link href="/post/new" className="btn p s" data-testid="top-post" aria-label="New post">
               <Icon name="plus" />
-              Post
+              <span className="btn-label">Post</span>
             </Link>
             <Link href="/messages" className="ib" aria-label="Messages">
               <Icon name="chat" />

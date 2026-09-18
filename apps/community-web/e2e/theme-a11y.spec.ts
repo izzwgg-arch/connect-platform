@@ -9,7 +9,10 @@ import { signUp, makeOrg, uid, snap } from "./helpers";
  * product defect this test guards against. Chromium has no equivalent line.
  */
 function isNavigationCancel(text: string): boolean {
-  return /localhost:3101\/.* due to access control checks\.$/.test(text);
+  // WebKit: a fetch (api call or Next RSC prefetch) cancelled by the test's own navigation.
+  if (/localhost:310[01]\/.* due to access control checks\.$/.test(text)) return true;
+  // Next.js: the same cancelled prefetch, reported by the router before it falls back to a full navigation.
+  return /Failed to fetch RSC payload for .* Falling back to browser navigation\. TypeError: Load failed$/.test(text);
 }
 
 async function setTheme(page: Page, theme: "light" | "dark") {
