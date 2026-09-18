@@ -14,15 +14,21 @@ Per the brief (§62–§63): what was requested, what exists, where, and what pr
 | Control inventory (§47) | **✔ complete — 786 controls in source, 786 catalogued** | `pnpm test:controls` |
 | Web typecheck | clean | `cd apps/community-web && npx tsc --noEmit` |
 | Mobile | 65 / 65 unit tests, tsc clean, `expo export --platform android` bundles (1,497 modules) | `cd apps/community-mobile && pnpm test` |
-| Playwright E2E (real browser) | **desktop-chromium: 47 passed, 1 skipped (mobile-only case), 0 failed** across 17 specs incl. axe a11y on 9 pages in both themes; mobile-iphone (WebKit) and mobile-android (Chromium, Pixel 7) runs recorded below | `cd apps/community-web && npx playwright test --workers=1` |
-| Dependency audit | `@fastify/jwt` bumped to 10.2.2; **Next 14.2.35 advisories open** (upgrade to 15.x tracked) | `pnpm audit` |
+| Playwright E2E (real browsers, against `next start` of the production build) | **desktop-chromium 47 passed + 1 skipped (mobile-only case) · mobile-iphone (WebKit, iPhone 14) 48 passed · mobile-android (Chromium, Pixel 7) 48 passed — 0 failed on the final build** across 17 specs incl. axe a11y on 9 pages in both themes. Two cases each passed once on re-run before the final green (Android TOTP enable — a 30 s code window straddled; iPhone "sign out other devices"); they are the two to watch in CI | `cd apps/community-web && npx playwright test --workers=1` (each project separately) |
+| Dependency audit | `@fastify/jwt` → 10.2.2; **Next.js → 15.5.25** (the 14.2 advisories closed; build + typecheck + E2E green on 15) | `pnpm audit` |
 | Docs generated from source | 387 routes, 86 models, 40 events, 32 notification classes, 22 domains | `pnpm docs:generate` |
 
 Load numbers (this laptop, Postgres shared with the test suites and other sessions — not a production-like box; `dbMs` for `SELECT 1` reached 240–490 ms under load): 100 VUs / 45 s → 1,064–1,380 requests, 22–28 rps, 0 errors, p95 ≈ 8 s under contention; uncontended single requests: feed 160–515 ms, search 150–670 ms, profile 120 ms, notifications 45 ms. Re-run on the target server before launch and record it here.
 
+**10-minute soak sample (2026-09-18, 100 VUs, `LOAD_USERS=100 LOAD_SECONDS=600`, same laptop):** 28,089 requests, 46.5 rps, **0 errors**, p95 3.9 s under contention. `/health` every 30 s: rssMb 408 → 438 by 90 s, then a flat 437–449 for the remaining 8.5 min (+11 MB over the plateau; **187 MB two minutes after the load stopped**, so heap under load, not a leak); dbMs (`SELECT 1`) 57–167 ms for the first 7 min, then 245–631 ms in the last 90 s as the shared Postgres saturated. Slowest route: `GET /threads` p50 3.0 s / p95 13 s (per-thread unread + last-message reads; single-user it is 60–90 ms) — the one to batch before launch. The 1-hour soak is still to run on the target server.
+
 ## E2E defects found by driving the UI (all fixed 2026-09-18)
 
-unique post action test ids · `Switch` had no test id · MFA-disable/privacy/profile controls lacked ids or accessible names · read receipts fetched but never rendered · sign-out redirect race stranded people on `/login?next=` · profile privacy/block enforcement bypassable on cold navigation (auth rehydration race) · concierge page crash (implicit-return `useEffect`) · contrast on a login link · unnamed `<select>`s in the composer · nested interactive elements on job cards. These are exactly the class of bug a green unit suite does not see.
+**From the iPhone/WebKit run** (the desktop run missed all of these): Safari hydration wiped text typed into join/login before React attached (forms now read the DOM at submit); `/legal/terms`, `/legal/privacy`, `/help` were 404 (built); WebKit resolves `localhost` to `::1` so the api now listens dual-stack; the sticky search-facet column covered the result tabs on phones; the phone "Conversation info" dialog opened empty (the pane-hiding rule also hid the dialog copy); the sender's own realtime echo duplicated a just-sent message; analytics flush on unload logged CORS errors (now `sendBeacon`).
+
+**From the Android/Pixel run** (phone width, 412 px): the phone top bar overflowed and pushed the theme toggle and account menu off-screen (compact phone top bar); **every stacking grid in the app (`.content`, `.col`, `.list`, the settings and admin layouts, the phone `.app` column) used an implicit `auto` / bare `1fr` column, which an `auto` track sizes to its widest child — so one wide table (connections, RFQ quotes, privacy matrix) widened the WHOLE page past the screen even though its `.tblwrap` scrolls** (every stacking grid is `minmax(0, 1fr)` now, in one rule); the connections table now hides its Company / Connected / Last-contact columns on phones so the row actions are reachable without sideways scrolling; company-hours `<input type=time>` could not shrink below Android's intrinsic width (`.in { min-width: 0 }`, hours grid columns `minmax(0,1fr)`); controls scrolled to the bottom landed under the fixed tab bar (`.main` bottom padding 88 px + safe area, `scroll-margin`). Also the theme/a11y spec's WebKit navigation-cancel filter only covered `console` events; the same cancelled fetch arrives as a `pageerror` on signed-in pages.
+
+**From the desktop run:** unique post action test ids · `Switch` had no test id · MFA-disable/privacy/profile controls lacked ids or accessible names · read receipts fetched but never rendered · sign-out redirect race stranded people on `/login?next=` · profile privacy/block enforcement bypassable on cold navigation (auth rehydration race) · concierge page crash (implicit-return `useEffect`) · contrast on a login link · unnamed `<select>`s in the composer · nested interactive elements on job cards. These are exactly the class of bug a green unit suite does not see.
 
 ## Requested features — status
 
@@ -83,11 +89,11 @@ Legend: ✅ built + tested · ◐ built, partial (says what is missing) · ✗ n
 
 ## Open defects / gaps (Critical/High first)
 
-1. **High** — Next.js 14.2.35 advisories (patched in 15.x). Upgrade with the E2E suite as the gate.
+1. ~~High — Next.js 14.2.35 advisories~~ **Done 2026-09-18**: upgraded to 15.5.25, gated on the E2E suite.
 2. **High** — Mobile never executed on a real device or emulator (no device on this machine): SSE, calendar, lightbox gestures, push and biometric lock are typecheck+bundle-verified only.
 3. **Medium** — No malware scanner on uploads (`scanResult = not-scanned`); ClamAV sidecar planned for the server.
 4. **Medium** — No OpenTelemetry exporter / crash reporting service wired (logs + in-process p95 only).
-5. **Medium** — The 1-hour soak has not been run yet (a 10-minute sample is recorded below); the restore drill WAS run locally on 2026-09-18 (encrypted 4.7 MB dump → scratch db → 8 migrations, 6,648 people, 0 orphans, 0 double-accepted quotes).
+5. **Medium** — The 1-hour soak has not been run yet (the 10-minute sample above: 0 errors, memory flat; `GET /threads` is the route to batch); the restore drill WAS run locally on 2026-09-18 (encrypted 4.7 MB dump → scratch db → 8 migrations, 6,648 people, 0 orphans, 0 double-accepted quotes).
 6. **Low** — Mobile gaps: passkeys, portfolio CRUD, notification prefs screen, saved searches, thread mute/pin/archive, native intros screen.
 7. **Low** — `introsForYou` model not exposed on a route; `customersYouMayWant` ignores opportunities (no category on them).
 8. **Low** — Search "all" runs the nine type searches concurrently and is the slowest read (~0.7 s uncontended).

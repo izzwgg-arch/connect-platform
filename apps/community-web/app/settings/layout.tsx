@@ -34,7 +34,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="col">{children}</div>
         </div>
-        <style>{`@media (max-width: 900px){.settings-grid{grid-template-columns:1fr!important}}`}</style>
+        <style>{`@media (max-width: 900px){.settings-grid{grid-template-columns:minmax(0,1fr)!important}}`}</style>
       </AppShell>
     </RequireAuth>
   );

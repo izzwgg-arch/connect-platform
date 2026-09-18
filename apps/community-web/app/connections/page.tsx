@@ -181,10 +181,10 @@ function Inner() {
               <thead>
                 <tr>
                   <th>Person</th>
-                  <th>Company</th>
+                  <th className="ph-hide">Company</th>
                   <th>Relationship</th>
-                  <th>Connected</th>
-                  <th>Last contact</th>
+                  <th className="ph-hide">Connected</th>
+                  <th className="ph-hide">Last contact</th>
                   <th />
                 </tr>
               </thead>
@@ -201,14 +201,14 @@ function Inner() {
                         </Link>
                       </div>
                     </td>
-                    <td className="dim">{r.person.primaryOrg?.displayName ?? r.person.headline ?? "—"}</td>
+                    <td className="dim ph-hide">{r.person.primaryOrg?.displayName ?? r.person.headline ?? "—"}</td>
                     <td>
                       <div className="rel-chip-row">
                         {r.relationship.length ? r.relationship.map((k) => <Chip key={k} kind="ac">{RELATIONSHIP_KINDS.find((x) => x.value === k)?.label ?? k}</Chip>) : <span className="dim sm">—</span>}
                       </div>
                     </td>
-                    <td className="dim mono">{r.connection.acceptedAt ? fmtDate(r.connection.acceptedAt) : "—"}</td>
-                    <td className="dim">{r.lastContactAt ? fmtDate(r.lastContactAt) : "—"}</td>
+                    <td className="dim mono ph-hide">{r.connection.acceptedAt ? fmtDate(r.connection.acceptedAt) : "—"}</td>
+                    <td className="dim ph-hide">{r.lastContactAt ? fmtDate(r.lastContactAt) : "—"}</td>
                     <td>
                       <div className="row" style={{ justifyContent: "flex-end" }}>
                         <Button small icon="msg" href={`/messages/new?to=${r.person.id}`} data-testid={`connections-message-${r.person.id}`}>

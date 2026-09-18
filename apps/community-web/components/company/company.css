@@ -4,4 +4,4 @@
 @media (max-width: 560px) {
   .company-perm-grid { grid-template-columns: 1fr; }
 }
-.company-hours-grid { display: grid; grid-template-columns: 70px 1fr 1fr auto; gap: 8px; align-items: center; }
+.company-hours-grid { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }

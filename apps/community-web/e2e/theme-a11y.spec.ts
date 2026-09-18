@@ -9,7 +9,8 @@ import { signUp, makeOrg, uid, snap } from "./helpers";
  * product defect this test guards against. Chromium has no equivalent line.
  */
 function isNavigationCancel(text: string): boolean {
-  // WebKit: a fetch (api call or Next RSC prefetch) cancelled by the test's own navigation.
+  // WebKit: a fetch (api call or Next RSC prefetch) cancelled by the test's own navigation. It surfaces as a
+  // console error on some pages and as a pageerror on others, so both listeners run this filter.
   if (/localhost:310[01]\/.* due to access control checks\.$/.test(text)) return true;
   // Next.js: the same cancelled prefetch, reported by the router before it falls back to a full navigation.
   return /Failed to fetch RSC payload for .* Falling back to browser navigation\. TypeError: Load failed$/.test(text);
@@ -32,7 +33,9 @@ test.describe("theme & accessibility", () => {
     test(`public pages render in ${theme} without console errors`, async ({ page }) => {
       await setTheme(page, theme);
       const errors: string[] = [];
-      page.on("pageerror", (e) => errors.push(e.message));
+      page.on("pageerror", (e) => {
+        if (!isNavigationCancel(e.message)) errors.push(e.message);
+      });
       page.on("console", (m) => {
         if (m.type() === "error" && !isNavigationCancel(m.text())) errors.push(m.text());
       });
@@ -46,7 +49,9 @@ test.describe("theme & accessibility", () => {
     test(`signed-in pages render in ${theme} without console errors`, async ({ page }) => {
       await setTheme(page, theme);
       const errors: string[] = [];
-      page.on("pageerror", (e) => errors.push(e.message));
+      page.on("pageerror", (e) => {
+        if (!isNavigationCancel(e.message)) errors.push(e.message);
+      });
       page.on("console", (m) => {
         if (m.type() === "error" && !isNavigationCancel(m.text())) errors.push(m.text());
       });
