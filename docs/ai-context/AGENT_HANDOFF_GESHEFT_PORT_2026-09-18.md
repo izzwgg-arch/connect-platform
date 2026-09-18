@@ -41,3 +41,6 @@ Still to attach before `actions/confirm`: LOA PDF (the wizard's generator in `te
 
 ## 6. ⏳ NOT PROVEN / open
 Real inbound call on a ported number; MMS to a handset on a major carrier (all probes ended on VoIP.ms); the switcher/engine timing on Gesheft's own row; CNAM after landing; the 662-3885 forward; the platform-sender outage (Izzy decides); WhatsApp door raw-body.
+
+## 7. 18:06Z — the carrier test (Izzy: "proven by a phone carrier, not VoIP.ms")
+From +18457231213 (Telnyx, NO campaign) to +15622096644 (T-Mobile, Wireless): SMS `4031a0b5-b2af-…` → `delivery_failed`, error 40010 Not 10DLC registered (DLR reached our door as `telnyx.sms_status delivery_failed` — the door works). MMS `4031a0b5-b2b4-…` with `media_urls=[signed m4a]` → `type MMS`, `to[].status sent`, media `audio/mp4 9132`, `completed_at null` after 2 min (T-Mobile MMS gives no final DLR). ⛔ Probe D's "unregistered sends are accepted" is TRUE ONLY toward VoIP.ms/Bandwidth destinations; toward wireless carriers the campaign assignment is mandatory. Plan §4 item 3 therefore = a hard ~2 h outbound-to-cell block after FOC for Gesheft.
