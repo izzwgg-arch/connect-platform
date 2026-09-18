@@ -714,8 +714,14 @@ export function buildImportPlan(
       pbxIvrId: ivr.id,
       name: ivr.description || `Menu ${ivr.id}`,
       type,
-      promptRef: noteRecording(ivr.welcome),
-      promptRecordingId: ivr.welcome?.id ?? null,
+      // VitalPBX plays the welcome message once and then loops the
+      // "instructions" message as the menu prompt. Menus configured with ONLY
+      // an instructions recording (welcome_msg_id NULL — Yossis Wood Works'
+      // Main, found 2026-09-17) still greet callers with a real recording, so
+      // when there is no welcome the instructions recording IS the greeting.
+      // When both exist, welcome keeps winning, exactly as before.
+      promptRef: noteRecording(ivr.welcome ?? ivr.instructions),
+      promptRecordingId: (ivr.welcome ?? ivr.instructions)?.id ?? null,
       // VitalPBX stores the per-iteration WaitExten timeout; Connect's field
       // means the same thing. Default to Connect's 7s when the PBX has none.
       timeoutSeconds: ivr.timeoutSec && ivr.timeoutSec > 0 ? ivr.timeoutSec : 7,

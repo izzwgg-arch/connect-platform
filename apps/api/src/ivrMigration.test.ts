@@ -345,6 +345,40 @@ test("every recording the copy needs is listed with its source file", () => {
   assert.equal(plan.requiredRecordings[0].staticPath, "/p/2");
 });
 
+test("a menu with only an instructions recording keeps it as the greeting", () => {
+  // VitalPBX plays the instructions message as the menu prompt when there is
+  // no welcome message (welcome_msg_id NULL). Yossis Wood Works' Main menu is
+  // configured exactly this way — dropping it would migrate the menu silent.
+  const withInstructionsOnly: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((ivr) =>
+      ivr.id === 1
+        ? { ...ivr, welcome: null, instructions: { id: 89, name: "Main", staticPath: "/p/89", durationSec: 26, known: true } }
+        : ivr,
+    ),
+  };
+  const plan = buildImportPlan(withInstructionsOnly, 1);
+  const home = plan.profiles.find((p) => p.pbxIvrId === 1);
+  assert.equal(home?.promptRef, "custom/a_plus_center_vpbx89");
+  assert.equal(home?.promptRecordingId, 89);
+  assert.equal(plan.requiredRecordings.some((r) => r.recordingId === 89), true);
+});
+
+test("when a menu has both recordings, welcome still wins", () => {
+  const withBoth: PbxTenantFlowMap = {
+    ...MAP,
+    ivrs: MAP.ivrs.map((ivr) =>
+      ivr.id === 1
+        ? { ...ivr, instructions: { id: 89, name: "Main", staticPath: "/p/89", durationSec: 26, known: true } }
+        : ivr,
+    ),
+  };
+  const plan = buildImportPlan(withBoth, 1);
+  const home = plan.profiles.find((p) => p.pbxIvrId === 1);
+  assert.equal(home?.promptRef, "custom/a_plus_center_vpbx2");
+  assert.equal(home?.promptRecordingId, 2);
+});
+
 test("already-copied menus are linked to instead of handed back", () => {
   const plan = buildImportPlan(MAP, 1, { connectProfileByPbxIvrId: { 4: "prof_after" } });
   // Key 2 still routes via the PBX hours rule (that's a time condition, not a
