@@ -17,19 +17,32 @@ goes back to its normal step loop.
 
 Rules kept here on purpose:
 - never log a digit (only "invalid"/"ok" and lengths);
-- three tries per field, then give up -> the api hands the caller to a person;
+- three WRONG tries per field, then give up -> the api hands the caller to a
+  person; an EMPTY answer is never a wrong one (2026-09-18): it replays the
+  same prompt, and three empties in a row give up the same way;
+- a stray pound is absorbed: the fixed-length fields (expiry 4, zip 5, a
+  4-digit code) close on their last digit, so the pound the prompt told the
+  caller to key lands on the NEXT field's GET DATA and returns it empty at
+  once — an empty answer inside STRAY_WINDOW_S is re-asked locally, once;
 - Luhn + expiry checked here first so a mistype costs the caller a retry, not
   a register credit.
 """
 import json
 import ssl
 import sys
+import time
 import urllib.request
 from datetime import date
 
 PROMPT_DIR = "/var/lib/asterisk/sounds/connect-pay/en-male"
 TRIES = 3
-GET_TIMEOUT_MS = 15000
+# First-digit AND inter-digit wait (Asterisk applies GET DATA's one timeout to
+# both). 15 s made "3-digit code, no pound" a 15-second silence — 10 s matches
+# the dialplan's Read() and is still generous for reading a card.
+GET_TIMEOUT_MS = 10000
+# An empty answer this soon after the prompt started cannot be a timeout (the
+# prompt alone is longer): it is a stray terminator from the previous field.
+STRAY_WINDOW_S = 6.0
 
 
 class Agi:
@@ -98,12 +111,21 @@ def exp_ok(s):
 
 
 def collect(agi, prompt, max_digits, check):
-    for _ in range(TRIES):
+    wrong, empty, reasked = 0, 0, False
+    while wrong < TRIES and empty < TRIES:
+        started = time.monotonic()
         v = agi.get_data(prompt, max_digits)
         if v is None:
             return None  # hangup
+        if v == "":
+            if not reasked and time.monotonic() - started < STRAY_WINDOW_S:
+                reasked = True  # the previous field's pound — ask again, nothing counted
+                continue
+            empty += 1  # a real silence: the prompt again, never "that does not look right"
+            continue
         if check(v):
             return v
+        wrong += 1
         agi.stream("45_card_invalid")
     return ""
 

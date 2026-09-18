@@ -145,3 +145,86 @@ test("⛔ the pay dialplan's card block hands off to the AGI card collector and 
   assert.equal(lines.filter((l) => /\bOriginate\(/.test(l)).length, 0);
   assert.equal(lines.filter((l) => /\bDial\(/.test(l)).length, 0);
 });
+
+// ── The stray pound (2026-09-18) ──────────────────────────────────────────────
+// Every prompt says "followed by the pound key", but a fixed-length gather
+// (10-digit phone, 1-digit menu) closes Read() on its last digit; the pound
+// the caller then keys lands on the NEXT Read() as its terminator and returns
+// it empty at once — the api heard "invalid PIN" before anything was keyed
+// (3 of the last 4 real calls). The dialplan re-asks an EARLY empty answer
+// locally, once, before it ever becomes a step. A real timeout is the prompt
+// plus 10 s, so the 6-second window cannot swallow one.
+function readPayConf(): string[] {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  return fs
+    .readFileSync(path.join(__dirname, "..", "..", "..", "..", "scripts", "pbx", "supermarket", "connect-supermarket-pay.conf"), "utf8")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith(";"));
+}
+
+test("⛔ the gather block re-asks an EARLY empty Read() once, locally — a stray pound never becomes a step, and a real timeout still does", () => {
+  const lines = readPayConf();
+  const gatherIdx = lines.findIndex((l) => l.includes("n(gather)"));
+  const cardIdx = lines.findIndex((l) => l.includes("n(card)"));
+  assert.ok(gatherIdx >= 0 && cardIdx > gatherIdx, "dialplan shape changed — re-check this guard");
+  const block = lines.slice(gatherIdx, cardIdx);
+  // exactly one Read(), under a re-entrant label, timed from a stamp taken right before it
+  const readLines = block.filter((l) => /\bRead\(/.test(l));
+  assert.equal(readLines.length, 1, "the gather block must hold exactly one Read()");
+  assert.ok(block.some((l) => l.includes("n(read)")), "the Read() needs its own label to be re-entered");
+  assert.ok(block.some((l) => /Set\(PAY_T0=\$\{EPOCH\}\)/.test(l)), "the Read() is not timed — an early empty cannot be told from a timeout");
+  // the decision: empty AND not yet re-asked AND inside the window → stray
+  const decision = block.find((l) => l.includes("?stray"));
+  assert.ok(decision, "no stray-terminator branch");
+  assert.ok(decision!.includes('"${PAY_DIGITS}" = ""'), "the stray branch must key on an EMPTY answer only");
+  assert.ok(decision!.includes("${PAY_REREAD} = 0"), "the stray branch must be bounded to one re-ask");
+  const window = decision!.match(/\$\[\$\{EPOCH\} - \$\{PAY_T0\}\] < (\d+)/);
+  assert.ok(window, "the stray branch must be bounded by elapsed time");
+  const seconds = Number(window![1]);
+  // shortest prompt (01_welcome 2.3 s) + Read()'s 10 s first-digit wait ≈ 12 s: the window must sit well under it
+  assert.ok(seconds >= 3 && seconds <= 8, `stray window ${seconds}s is outside [3, 8] — a real timeout could be mistaken for a stray pound`);
+  const readTimeout = readLines[0].match(/Read\(PAY_DIGITS,\$\{PAY_PLAY\},\$\{PAY_MAX\},,1,(\d+)\)/);
+  assert.ok(readTimeout && Number(readTimeout[1]) > seconds, "Read()'s timeout must exceed the stray window");
+  // the stray label flips the flag and goes back to the Read(), never to the api
+  const strayIdx = block.findIndex((l) => l.includes("n(stray)"));
+  assert.ok(strayIdx >= 0);
+  const strayTail = block.slice(strayIdx);
+  assert.ok(strayTail.some((l) => /Set\(PAY_REREAD=1\)/.test(l)), "the re-ask must mark itself so a second empty goes to the api");
+  assert.ok(strayTail.some((l) => /Goto\(read\)/.test(l)), "the re-ask must return to the Read(), not to step");
+  assert.ok(!strayTail.some((l) => /\bCURL\(/.test(l)), "the re-ask must not call the api");
+  // the flag is reset on every fresh gather, so each prompt gets its own one re-ask
+  assert.ok(block.slice(0, block.findIndex((l) => l.includes("n(read)"))).some((l) => /Set\(PAY_REREAD=0\)/.test(l)));
+});
+
+test("the card block posts the collector's outcome word as the next step's digits — the post-AGI step never looks like an empty answer", () => {
+  const lines = readPayConf();
+  const cardIdx = lines.findIndex((l) => l.includes("n(card)"));
+  const humanIdx = lines.findIndex((l) => l.includes("n(human)"));
+  const block = lines.slice(cardIdx, humanIdx);
+  const agiIdx = block.findIndex((l) => /\bAGI\(connect-pay-card\.py,/.test(l));
+  assert.ok(agiIdx >= 0);
+  const after = block.slice(agiIdx);
+  assert.ok(after.some((l) => /Set\(PAY_DIGITS=\$\{PAY_CARD\}\)/.test(l)), "after the AGI the step must carry PAY_CARD, not an empty PAY_DIGITS");
+  assert.ok(!after.some((l) => /Set\(PAY_DIGITS=\)/.test(l)), "an empty Set(PAY_DIGITS=) after the AGI would read as 'no input' to the api");
+});
+
+// ── The AGI collector carries the same two rules (2026-09-18) ────────────────
+test("⛔ the AGI card collector re-asks an early empty GET DATA once, treats a silence as a replay (never 'that does not look right'), and waits 10 s not 15", () => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  const src = fs
+    .readFileSync(path.join(__dirname, "..", "..", "..", "..", "scripts", "pbx", "supermarket", "connect-pay-card.py"), "utf8")
+    .replace(/\r\n/g, "\n");
+  assert.match(src, /^GET_TIMEOUT_MS = 10000$/m, "GET DATA's one timeout is first-digit AND inter-digit: 15 s made a 3-digit code with no pound a 15-second silence");
+  assert.match(src, /^STRAY_WINDOW_S = 6\.0$/m);
+  const collect = src.slice(src.indexOf("def collect("), src.indexOf("def main("));
+  assert.ok(/if v == "":/.test(collect), "collect() must branch on an empty answer");
+  assert.ok(/time\.monotonic\(\) - started < STRAY_WINDOW_S/.test(collect), "the early-empty re-ask is not time-bounded");
+  assert.ok(/reasked = True/.test(collect), "the re-ask must be once per field");
+  // an empty answer never plays 45_card_invalid: the only stream() sits under the wrong-answer branch
+  const emptyBranch = collect.slice(collect.indexOf('if v == "":'), collect.indexOf("if check(v):"));
+  assert.ok(!emptyBranch.includes("45_card_invalid"), "a silence must not be told it looks wrong");
+  assert.ok(/empty \+= 1/.test(emptyBranch) && /wrong < TRIES and empty < TRIES/.test(collect), "silences need their own bounded count");
+});

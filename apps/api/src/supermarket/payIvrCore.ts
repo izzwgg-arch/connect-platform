@@ -47,8 +47,17 @@ export const PAY_MAX_AMOUNT_ATTEMPTS = 3;
 export const PAY_MAX_LOOKUP_ATTEMPTS = 3;
 export const PAY_MAX_CONFIRM_ROUNDS = 3;
 export const PAY_MAX_CHARGES_PER_CALL = 3;
-/** Wrong/empty answers to "your account or a different one?" before a person. */
+/** Wrong answers to "your account or a different one?" before a person. */
 export const PAY_MAX_CHOICE_ATTEMPTS = 3;
+/**
+ * Consecutive EMPTY answers (a Read() that timed out, or a stray pound key that
+ * landed on the next prompt) before a person. An empty answer is never scored
+ * as a WRONG one: 2026-09-18, every "different account" call keyed 10 digits +
+ * pound, the gather had already closed on the 10th digit, the pound became the
+ * PIN prompt's terminator, and the caller heard "that PIN is not correct"
+ * before keying anything (3 of the last 4 real calls).
+ */
+export const PAY_MAX_NO_INPUT_ATTEMPTS = 3;
 
 /**
  * The sentinel the runtime sends to make the register say WHICH refusal
@@ -121,6 +130,8 @@ export type PayIvrState = {
   /** The card on file the caller picked for the next charge (null = a keyed card). */
   chosenCardId: string | null;
   cardChoiceAttempts: number;
+  /** Consecutive empty answers at the current prompt (reset by any keyed answer). */
+  noInputAttempts: number;
   /** Amount pending confirmation, cents. */
   pendingCents: number | null;
   /** Count of confirmed charges this call — drives the externalId sequence. */
@@ -194,6 +205,7 @@ export function initialPayIvrState(): PayIvrState {
     cards: [],
     chosenCardId: null,
     cardChoiceAttempts: 0,
+    noInputAttempts: 0,
     pendingCents: null,
     chargeSeq: 0,
     chargedCents: 0,
@@ -257,6 +269,7 @@ export function normalizePayIvrState(raw: unknown): PayIvrState {
       : [],
     chosenCardId: typeof s.chosenCardId === "string" ? s.chosenCardId : null,
     cardChoiceAttempts: num(s.cardChoiceAttempts),
+    noInputAttempts: num(s.noInputAttempts),
     pendingCents: Number.isInteger(s.pendingCents) ? (s.pendingCents as number) : null,
     chargeSeq: num(s.chargeSeq),
     chargedCents: num(s.chargedCents),
@@ -353,6 +366,60 @@ function probe(state: PayIvrState, posCustomerId: string, own: boolean): PayIvrO
 }
 
 /**
+ * The prompt a phase asks its question with, replayed for an empty answer.
+ * Returns null for phases that are not waiting for keyed digits (the
+ * reducer's own branch handles those — e.g. the card collector re-run).
+ */
+function replayForNoInput(state: PayIvrState): PayIvrOutput | null {
+  const attempts = state.noInputAttempts + 1;
+  const s: PayIvrState = { ...state, noInputAttempts: attempts };
+  switch (state.phase) {
+    case "choose_account":
+    case "lookup_entry":
+    case "main_menu":
+    case "after_balance_menu":
+    case "amount_entry":
+    case "confirm":
+    case "card_save_choice":
+    case "card_offer":
+      break;
+    case "pin_entry":
+      if (state.pinProbe) return null;
+      break;
+    case "card_choice":
+      if (state.cards.length === 0) return null;
+      break;
+    default:
+      return null;
+  }
+  if (attempts >= PAY_MAX_NO_INPUT_ATTEMPTS) return toHuman(s, []);
+  switch (state.phase) {
+    case "choose_account":
+      return chooseAccount(s);
+    case "lookup_entry":
+      return askPhone(s, ["38_enter_phone"]);
+    case "pin_entry":
+      return out(s, ["02_pin"], G.pin);
+    case "main_menu":
+      return mainMenu(s);
+    case "after_balance_menu":
+      return afterBalanceMenu(s, []);
+    case "amount_entry":
+      return out(s, ["05_amount_prompt"], G.amount);
+    case "confirm":
+      return out(s, ["07_confirm_choice"], G.confirm);
+    case "card_choice":
+      return cardChoiceMenu(s);
+    case "card_save_choice":
+      return out(s, ["46_card_save_choice"], G.menu);
+    case "card_offer":
+      return out(s, ["40_card_offer"], G.menu);
+    default:
+      return null;
+  }
+}
+
+/**
  * The reducer. Given the current state and an event, returns the next state,
  * the prompt refs to play, what to gather next, and the effects the runtime
  * must perform. Unknown/impossible events in a phase are ignored gracefully
@@ -362,6 +429,19 @@ function probe(state: PayIvrState, posCustomerId: string, own: boolean): PayIvrO
 export function reducePayIvr(state: PayIvrState, event: PayIvrEvent): PayIvrOutput {
   if (event.type === "hangup") {
     return out({ ...state, phase: "done" }, [], null);
+  }
+
+  // ⛔ An EMPTY answer is "no input" — a timed-out Read(), or a pound key that
+  // landed on this prompt after the previous gather had already closed. It
+  // replays the prompt it was asked at and is never scored as a wrong answer;
+  // the third one in a row ends at a person.
+  if (event.type === "digits") {
+    if (event.value.trim() === "") {
+      const replay = replayForNoInput(state);
+      if (replay) return replay;
+    } else if (state.noInputAttempts !== 0) {
+      state = { ...state, noInputAttempts: 0 };
+    }
   }
 
   switch (state.phase) {
