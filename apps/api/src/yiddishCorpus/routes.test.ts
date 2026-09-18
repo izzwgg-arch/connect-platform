@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { registerYiddishCorpusRoutes, YC_REGISTERED_ROUTES, badgeForSource, buildExportPreview, audioBlockedReason } from "./routes";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { YC_API_PREFIX, YC_CUSTOMER_WALL_MESSAGE } from "./contracts";
+import { YC_API_PREFIX, YC_CUSTOMER_WALL_MESSAGE, YC_STAGES } from "./contracts";
 
 // ── fakes ───────────────────────────────────────────────────────────────────
 
@@ -715,4 +715,142 @@ test("/now shows what the engine is on, links to the episode PAGE, and never lea
   // The CDN refuses any page but the site's own. Handing the MP3 to the portal
   // would invite embedding it, i.e. working around that restriction.
   assert.equal(JSON.stringify(p).includes("cloudfront"), false, "the raw media url must never reach the screen");
+});
+
+// ── 6. the pipeline monitor: on-box truth + the off-box processes table ─────
+//
+// The labelling loop, the training-clip build and the fine-tune run OFF this
+// server; `YcPipelineState` is the ONLY window into them, written by those
+// processes and only ever read here. These tests cover the three things that
+// would actually hurt if they broke: an empty engine must answer with honest
+// zeros (not nulls, not a missing key), a process row must reach the page
+// exactly as its owner wrote it, and one bad query must never 500 the page.
+
+test("GET /pipeline answers an empty database with every key present and real zeros, not nulls", async () => {
+  const db = fakeDb();
+  const routes = register(db, allowingGate);
+  const handler = routes.get(`GET ${YC_API_PREFIX}/pipeline`)!;
+  const reply = fakeReply();
+  await handler({ query: {}, params: {}, body: {}, user: SUPER_ADMIN }, reply);
+  assert.equal(reply.statusCode, 200);
+  const p = reply.payload;
+
+  assert.ok(typeof p.checkedAt === "string" && p.checkedAt.length > 0);
+
+  // Every stage in YC_STAGES appears, zero-filled, even though nothing has
+  // ever been queued.
+  // ⛔ FLAT rows { stage, state, count } — the Pipeline page builds its matrix
+  // from this exact shape; a nested { stage, counts } renders an EMPTY matrix
+  // while this test still passes. Zero-filled: every stage x canonical state.
+  const CANONICAL_STATES = ["DONE", "RUNNING", "PENDING", "SKIPPED", "FAILED"];
+  assert.equal(p.stages.length, YC_STAGES.length * CANONICAL_STATES.length);
+  for (const s of p.stages) {
+    assert.ok(YC_STAGES.includes(s.stage), `${s.stage} is not a real stage`);
+    assert.ok(CANONICAL_STATES.includes(s.state), `${s.state} is not a canonical state`);
+    assert.equal(s.count, 0);
+  }
+  for (const stage of YC_STAGES) {
+    assert.ok(
+      p.stages.some((s: any) => s.stage === stage),
+      `${stage} vanished from the matrix`,
+    );
+  }
+
+  assert.deepEqual(p.corpus.itemsByState, []);
+  // ⛔ FLAT keys with these exact names. The Pipeline page reads
+  // corpus.audioAssets / audioHours / transcripts / transcriptsTimed /
+  // observations / rules. A nested or renamed shape passes an API test while
+  // rendering blanks on the page, which is how these two lanes first diverged.
+  assert.equal(p.corpus.audioAssets, 0);
+  assert.equal(p.corpus.audioHours, 0);
+  assert.equal(p.corpus.transcripts, 0);
+  assert.equal(p.corpus.transcriptsTimed, 0);
+  assert.equal(p.corpus.segments, 0);
+  assert.equal(p.corpus.lexemes, 0);
+  assert.equal(p.corpus.observations, 0);
+  assert.equal(p.corpus.rules, 0);
+  assert.equal(p.corpus.findings, 0);
+
+  assert.deepEqual(p.sources, []);
+  assert.deepEqual(p.budgets, []);
+
+  assert.equal(p.spend.today.minutes, 0);
+  assert.equal(p.spend.today.cents, 0);
+  assert.equal(p.spend.allTime.minutes, 0);
+  assert.equal(p.spend.allTime.cents, 0);
+
+  assert.equal(p.worker.alive, false);
+  assert.equal(p.worker.lastSeenAt, null);
+
+  assert.deepEqual(p.processes, []);
+  assert.deepEqual(p.recent, []);
+});
+
+test("GET /pipeline hands off-box process rows back exactly as their owner wrote them", async () => {
+  const rows = [
+    {
+      id: "pl_1",
+      key: "labelling.orchestrator",
+      kind: "labelling",
+      status: "running",
+      headline: "Labelling batch 12 of 40",
+      progress: { current: 12, total: 40, unit: "batches", pct: 30 },
+      detail: { batchId: "b12", host: "izzy-pc" },
+      startedAt: "2026-09-18T00:00:00.000Z",
+      createdAt: "2026-09-17T23:00:00.000Z",
+      updatedAt: "2026-09-18T00:05:00.000Z",
+    },
+    {
+      id: "pl_2",
+      key: "training.run.v1",
+      kind: "training",
+      status: "error",
+      headline: "Kaggle kernel crashed on epoch 3",
+      progress: null,
+      detail: { kernelRef: "k-9981", lastError: "OOM" },
+      startedAt: null,
+      createdAt: "2026-09-17T20:00:00.000Z",
+      updatedAt: "2026-09-17T22:30:00.000Z",
+    },
+  ];
+  const db = fakeDb({ "ycPipelineState.findMany": rows });
+  const routes = register(db, allowingGate);
+  const handler = routes.get(`GET ${YC_API_PREFIX}/pipeline`)!;
+  const reply = fakeReply();
+  await handler({ query: {}, params: {}, body: {}, user: SUPER_ADMIN }, reply);
+  assert.deepEqual(reply.payload.processes, rows, "a process row must reach the page unchanged");
+});
+
+test("GET /pipeline: a thrown query degrades to a safe default instead of a 500", async () => {
+  const db = fakeDb({
+    "ycBudget.findMany": () => {
+      throw new Error("budget table unreachable");
+    },
+    "ycPipelineState.findMany": () => {
+      throw new Error("db down");
+    },
+    "ycSource.findMany": [
+      { id: "src_1", key: "yiddish24", governanceClass: "EXTERNAL", contentAllowed: true, audioFetchMode: "DISABLED", trainingExportEligibility: "UNKNOWN" },
+    ],
+    "ycSourceItem.count": () => {
+      throw new Error("count unreachable for this source too");
+    },
+  });
+  const routes = register(db, allowingGate);
+  const handler = routes.get(`GET ${YC_API_PREFIX}/pipeline`)!;
+  const reply = fakeReply();
+  await handler({ query: {}, params: {}, body: {}, user: SUPER_ADMIN }, reply);
+  assert.equal(reply.statusCode, 200, "one bad query must never 500 the whole page");
+  assert.deepEqual(reply.payload.budgets, []);
+  assert.deepEqual(reply.payload.processes, []);
+  // The source itself still comes back, with the failed per-source counts as
+  // honest zeros rather than a thrown error propagating up.
+  assert.equal(reply.payload.sources.length, 1);
+  assert.equal(reply.payload.sources[0].key, "yiddish24");
+  assert.equal(reply.payload.sources[0].itemCount, 0);
+  assert.equal(reply.payload.sources[0].unlabelledCount, 0);
+});
+
+test("GET /pipeline is registered, tenant-free and platform-gated like every other route here", () => {
+  assert.ok(YC_REGISTERED_ROUTES.some((r) => r.method === "GET" && r.path === `${YC_API_PREFIX}/pipeline`));
 });

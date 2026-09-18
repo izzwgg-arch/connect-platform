@@ -255,6 +255,7 @@ export function PageHead({ title, subtitle, actions }: { title: string; subtitle
 
 export const YIDDISH_SECTION_PAGES: { href: string; label: string }[] = [
   { href: "/admin/yiddish-learning", label: "Dashboard" },
+  { href: "/admin/yiddish-learning/pipeline", label: "Pipeline" },
   { href: "/admin/yiddish-learning/corpus", label: "Corpus" },
   { href: "/admin/yiddish-learning/alignment", label: "Alignment" },
   { href: "/admin/yiddish-learning/review", label: "Review" },

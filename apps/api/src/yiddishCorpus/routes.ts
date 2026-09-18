@@ -64,6 +64,7 @@ import {
   YC_RECHECK_EVERY_MS,
   YC_METRIC_TRANSCRIBE_MINUTES,
   YC_METRIC_TRANSCRIBE_CENTS,
+  YC_WORKER_HEARTBEAT_METRIC,
 } from "./jobs";
 import { reindexInternal } from "./internalIndexer";
 import { scoreVariants } from "./evidence";
@@ -1998,6 +1999,194 @@ export function registerYiddishCorpusRoutes(deps: YiddishCorpusRouteDeps): void 
     });
   });
 
+  // ══════════════════════════ PIPELINE MONITOR ══════════════════════════════
+  //
+  // Izzy wants one page showing "exactly where the agent is up to, progress,
+  // what it's doing now." The labelling loop, the training-clip build and the
+  // fine-tune all run OFF this server — the owner's PC and Kaggle — so the
+  // only way the portal can see them is through `YcPipelineState`, a table
+  // those off-box processes write to themselves. This route ONLY reads: it
+  // never invents a stage's progress, and a process that has never reported
+  // in simply does not appear in `processes` (no fake "idle" row is created
+  // for it).
+  //
+  // Everything else here is on-box truth already sitting in the database —
+  // job counts by stage, corpus totals, per-source labelling coverage,
+  // budgets and spend — assembled into ONE payload so the page never has to
+  // make a second call to explain what it is showing.
+
+  app.get(`${P}/pipeline`, async (req: any, reply: any) => {
+    const user = await requireOwner(req, reply);
+    if (!user) return;
+    void user;
+
+    const [
+      stageGroups,
+      itemStateGroups,
+      audioStoredCount,
+      audioDurationAgg,
+      transcriptTotal,
+      transcriptTimed,
+      segmentCount,
+      lexemeCount,
+      pronunciationObservationCount,
+      pronunciationRuleCount,
+      findingCount,
+      sources,
+      allRights,
+      budgets,
+      metricRows,
+      heartbeat,
+      processes,
+      recentJobs,
+    ] = await Promise.all([
+      safe<any[]>(db.ycProcessingJob.groupBy({ by: ["stage", "state"], _count: { _all: true } }), []),
+      safe<any[]>(db.ycSourceItem.groupBy({ by: ["state"], _count: { _all: true } }), []),
+      safe<number>(db.ycAudioAsset.count({ where: { storage: "STORED", deletedAt: null } }), 0),
+      safe<any>(db.ycAudioAsset.aggregate({ _sum: { durationMs: true }, where: { deletedAt: null } }), null),
+      safe<number>(db.ycTranscript.count(), 0),
+      safe<number>(db.ycTranscript.count({ where: { startMs: { not: null } } }), 0),
+      safe<number>(db.ycSegment.count(), 0),
+      safe<number>(db.ycLexeme.count(), 0),
+      safe<number>(db.ycPronunciationObservation.count(), 0),
+      safe<number>(db.ycPronunciationRule.count(), 0),
+      safe<number>(db.ycFinding.count(), 0),
+      safe<any[]>(db.ycSource.findMany({ orderBy: { key: "asc" } }), []),
+      safe<any[]>(db.ycRightsRecord.findMany(), []),
+      safe<any[]>(db.ycBudget.findMany(), []),
+      safe<any[]>(
+        db.ycMetricSnapshot.findMany({ where: { metric: { in: [YC_METRIC_TRANSCRIBE_MINUTES, YC_METRIC_TRANSCRIBE_CENTS] } } }),
+        [],
+      ),
+      safe<any>(db.ycMetricSnapshot.findFirst({ where: { metric: YC_WORKER_HEARTBEAT_METRIC }, orderBy: { createdAt: "desc" } }), null),
+      safe<any[]>(db.ycPipelineState.findMany({ orderBy: { updatedAt: "desc" } }), []),
+      safe<any[]>(
+        db.ycProcessingJob.findMany({
+          orderBy: { updatedAt: "desc" },
+          take: 40,
+          select: { stage: true, state: true, sourceKey: true, error: true, updatedAt: true },
+        }),
+        [],
+      ),
+    ]);
+
+    // Per-stage job counts by state, zero-filled for every stage in
+    // YC_STAGES — a stage nothing has queued yet must still appear, with an
+    // honest 0, never be missing from the list.
+    // ⛔ FLAT rows { stage, state, count } — the Pipeline page builds its
+    // stage x state matrix from exactly this shape. A nested { stage, counts }
+    // object renders an EMPTY matrix while every API test still passes.
+    // Still zero-filled: every stage x canonical state appears, so a stage
+    // nothing has queued yet shows an honest 0 rather than vanishing.
+    const canonicalStates = ["DONE", "RUNNING", "PENDING", "SKIPPED", "FAILED"];
+    const seenStates = new Set<string>(canonicalStates);
+    for (const g of stageGroups ?? []) seenStates.add(String(g.state));
+    const stageStateCount = new Map<string, number>();
+    for (const g of stageGroups ?? []) {
+      stageStateCount.set(`${String(g.stage)}|${String(g.state)}`, num(g?._count?._all ?? g?._count));
+    }
+    const stages = YC_STAGES.flatMap((stage) =>
+      [...seenStates].map((state) => ({
+        stage,
+        state,
+        count: stageStateCount.get(`${stage}|${state}`) ?? 0,
+      })),
+    );
+
+    // Per-source labelling coverage: an item counts as unlabelled when it has
+    // a STORED audio asset but no transcript at all — the exact thing the
+    // labelling loop is meant to close.
+    const sourceRows = await Promise.all(
+      (sources ?? []).map(async (s: any) => {
+        const [itemCount, unlabelledCount] = await Promise.all([
+          safe<number>(db.ycSourceItem.count({ where: { sourceId: s.id } }), 0),
+          safe<number>(
+            db.ycSourceItem.count({
+              where: { sourceId: s.id, assets: { some: { storage: "STORED", deletedAt: null } }, transcripts: { none: {} } },
+            }),
+            0,
+          ),
+        ]);
+        const trainingExportGranted = (allRights ?? []).some(
+          (r) => String(r.sourceId) === String(s.id) && r.allowedUse === "training_export" && String(r.state) === "GRANTED",
+        );
+        return {
+          key: String(s.key),
+          governanceClass: String(s.governanceClass),
+          contentAllowed: Boolean(s.contentAllowed),
+          audioFetchMode: String(s.audioFetchMode ?? "DISABLED"),
+          trainingExportEligibility: String(s.trainingExportEligibility ?? "UNKNOWN"),
+          trainingExportGranted,
+          itemCount: num(itemCount),
+          unlabelledCount: num(unlabelledCount),
+        };
+      }),
+    );
+
+    // The transcription cost ledger — same two metrics `/now` reads, summed
+    // platform-wide rather than per source, since this screen is about the
+    // whole pipeline's spend, not one adapter's.
+    const todayKey = new Date().toISOString().slice(0, 10);
+    let minutesToday = 0;
+    let centsToday = 0;
+    let minutesAllTime = 0;
+    let centsAllTime = 0;
+    for (const row of metricRows ?? []) {
+      const value = num(row.value);
+      if (row.metric === YC_METRIC_TRANSCRIBE_MINUTES) {
+        minutesAllTime += value;
+        if (row.day === todayKey) minutesToday += value;
+      } else if (row.metric === YC_METRIC_TRANSCRIBE_CENTS) {
+        centsAllTime += value;
+        if (row.day === todayKey) centsToday += value;
+      }
+    }
+
+    const beatMs = Number(heartbeat?.value);
+    const lastSeenAt = Number.isFinite(beatMs) && beatMs > 0 ? new Date(beatMs).toISOString() : null;
+
+    return reply.send({
+      checkedAt: new Date().toISOString(),
+      stages,
+      corpus: {
+        itemsByState: (itemStateGroups ?? []).map((g: any) => ({ state: String(g.state), count: num(g?._count?._all ?? g?._count) })),
+        // ⛔ FLAT keys, and these exact names: the Pipeline page is written
+        // against this contract. Nesting these (audioAssets.stored,
+        // transcripts.total) or renaming observations/rules silently renders
+        // blanks on the page — a mismatch a passing API test cannot catch.
+        audioAssets: num(audioStoredCount),
+        audioHours: Math.round((num(audioDurationAgg?._sum?.durationMs) / 3_600_000) * 100) / 100,
+        transcripts: num(transcriptTotal),
+        transcriptsTimed: num(transcriptTimed),
+        segments: num(segmentCount),
+        lexemes: num(lexemeCount),
+        observations: num(pronunciationObservationCount),
+        rules: num(pronunciationRuleCount),
+        findings: num(findingCount),
+      },
+      sources: sourceRows,
+      budgets: (budgets ?? []).map(budgetView),
+      spend: {
+        today: { minutes: minutesToday, cents: centsToday },
+        allTime: { minutes: minutesAllTime, cents: centsAllTime },
+      },
+      worker: {
+        alive: Boolean(lastSeenAt && Date.now() - new Date(lastSeenAt).getTime() < 5 * 60_000),
+        lastSeenAt,
+      },
+      // The off-box half, exactly as its own process wrote it — this route
+      // never reshapes or reinterprets another process's status.
+      processes: processes ?? [],
+      recent: (recentJobs ?? []).map((j: any) => ({
+        stage: String(j.stage),
+        state: String(j.state),
+        sourceKey: String(j.sourceKey),
+        error: j.error ?? null,
+        updatedAt: j.updatedAt ? new Date(j.updatedAt).toISOString() : null,
+      })),
+    });
+  });
+
   // ══════════════════════════ HEALTH ════════════════════════════════════════
 
   app.get(`${P}/health`, async (req: any, reply: any) => {
@@ -2066,5 +2255,6 @@ export const YC_REGISTERED_ROUTES: { method: "GET" | "POST" | "PUT"; path: strin
   { method: "POST", path: `${YC_API_PREFIX}/export/build` },
   { method: "GET", path: `${YC_API_PREFIX}/governance` },
   { method: "POST", path: `${YC_API_PREFIX}/internal/reindex` },
+  { method: "GET", path: `${YC_API_PREFIX}/pipeline` },
   { method: "GET", path: `${YC_API_PREFIX}/health` },
 ];

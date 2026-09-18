@@ -235,6 +235,9 @@ export const SIDEBAR_ITEMS = [
   // Gold set (2026-09-17, the Whisper fine-tune build) — its eleventh page,
   // same contract as the ten above: own key, no default bucket, Locked.
   { id: "admin.yiddish_gold", section: "admin", label: "Yiddish Gold Set", href: "/admin/yiddish-learning/gold", permission: "can_view_admin_yiddish_gold" },
+  // Pipeline monitor (2026-09-18) — its twelfth page, same contract as the
+  // eleven above: own key, no default bucket, Locked.
+  { id: "admin.yiddish_pipeline", section: "admin", label: "Yiddish Pipeline", href: "/admin/yiddish-learning/pipeline", permission: "can_view_admin_yiddish_pipeline" },
   { id: "admin.pbx_console", section: "admin", label: "PBX Console", href: "/admin/pbx-console", permission: "can_view_admin_pbx_console" },
   { id: "admin.pbx_routing", section: "admin", label: "Trunks & Routing", href: "/admin/pbx-console?mod=routing", permission: "can_view_admin_pbx_routing" },
   { id: "admin.pbx_teams", section: "admin", label: "Ring Groups & Queues", href: "/admin/pbx-console?mod=teams", permission: "can_view_admin_pbx_teams" },

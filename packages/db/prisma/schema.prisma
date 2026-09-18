@@ -10442,3 +10442,29 @@ model YcBenchmarkResult {
 
   @@unique([runId, caseId])
 }
+
+/// 20260918120000_yiddish_pipeline_state — the off-box half of the pipeline
+/// (labelling loop on the owner's PC, dataset build, the Kaggle fine-tune)
+/// writes its OWN status here so the portal can read "exactly where the agent
+/// is up to" straight from the database. The producers own the writes; this
+/// file's route (`GET /admin/yiddish/pipeline`) only ever reads it.
+model YcPipelineState {
+  id        String    @id @default(cuid())
+  /// stable id, e.g. "labelling.orchestrator", "dataset.build.v1", "training.run.v1"
+  key       String    @unique
+  /// labelling | dataset | training | runner
+  kind      String
+  /// running | idle | done | error
+  status    String
+  /// ONE plain-English line: what it is doing right now
+  headline  String?
+  /// { current, total, unit, pct }
+  progress  Json?
+  /// free-form (batch id, kernel ref, counts, last error…)
+  detail    Json?
+  startedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([kind, updatedAt])
+}

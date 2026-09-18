@@ -263,6 +263,12 @@ export const navItems: NavItem[] = [
   // contract as its ten siblings above: own key, no default bucket, forced
   // SUPER_ADMIN below and listed in OWNER_ONLY_FIXED_NAV_ITEMS.
   { id: "admin.yiddish_gold", href: "/admin/yiddish-learning/gold", label: "Yiddish Gold Set", icon: "YG2", lucide: Award, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_gold" },
+  // Pipeline monitor (2026-09-18): one live view of the whole engine — what
+  // it's doing right now, corpus growth, stage backlog, sources, spend and
+  // budgets, recent activity. Same contract as its siblings above: own key,
+  // no default bucket, forced SUPER_ADMIN below and listed in
+  // OWNER_ONLY_FIXED_NAV_ITEMS.
+  { id: "admin.yiddish_pipeline", href: "/admin/yiddish-learning/pipeline", label: "Yiddish Pipeline", icon: "YPL", lucide: GitBranch, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_yiddish_pipeline" },
   // Compliance calendar (2026-08-23, Izzy): the regulatory deadlines page —
   // RMD recert, CPNI, 499-A, CVAA, BDC. SUPER_ADMIN only (forced below), keyed
   // on can_manage_global_settings so the nav key and the api's
@@ -434,6 +440,7 @@ export const OWNER_ONLY_FIXED_NAV_ITEMS: readonly string[] = [
   "admin.yiddish_governance",
   "admin.yiddish24",
   "admin.yiddish_gold",
+  "admin.yiddish_pipeline",
   "admin.compliance",
   "admin.billing",
   // Its api (remoteSupport/controlRoutes.ts) is requireSuperAdmin on every

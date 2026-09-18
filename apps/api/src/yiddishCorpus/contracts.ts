@@ -261,6 +261,9 @@ export interface YcDashboardView {
  *  POST   /export/build                   → manifest file path + row count
  *  GET    /governance                     → walls, rights records, gaps
  *  POST   /internal/reindex               → re-count internal sources (counts only)
+ *  GET    /pipeline                       → YcPipelineMonitorView (stages, corpus, per-source
+ *                                            labelling coverage, budgets, spend, worker heartbeat,
+ *                                            and the off-box processes table, in one payload)
  *  GET    /health                         → adapter probes + worker heartbeat
  */
 export const YC_ROUTES = {
@@ -275,6 +278,7 @@ export const YC_ROUTES = {
   benchmark: `${YC_API_PREFIX}/benchmark`,
   exportPreview: `${YC_API_PREFIX}/export/preview`,
   governance: `${YC_API_PREFIX}/governance`,
+  pipeline: `${YC_API_PREFIX}/pipeline`,
   health: `${YC_API_PREFIX}/health`,
 } as const;
 
@@ -305,3 +309,68 @@ export const YC_CUSTOMER_WALL_MESSAGE =
 export const YC_YL_SERVING_ONLY_MESSAGE =
   "Yiddish Labs output is serving-only: it can inform spelling and meaning, and is excluded " +
   "from every training export.";
+
+/**
+ * `GET /pipeline` — the live monitor. The labelling loop, the training-clip
+ * build and the fine-tune all run OFF this server (the owner's PC + Kaggle),
+ * so `processes` is the ONLY window into them: each one writes its own row to
+ * `YcPipelineState`, and this view hands those rows back exactly as stored.
+ * Everything else here is on-box truth, assembled so the page needs one call.
+ */
+export interface YcPipelineMonitorView {
+  checkedAt: string;
+  /** One entry per `YC_STAGES` stage, zero-filled — a stage nothing has
+   *  queued yet still appears, with an honest 0. */
+  stages: { stage: YcStage; counts: Record<string, number>; total: number }[];
+  // ⛔ FLAT keys, and these exact names: the Pipeline page is written against
+  // this contract. Nesting these (audioAssets.stored, transcripts.total) or
+  // renaming observations/rules silently renders blanks on the page.
+  corpus: {
+    itemsByState: { state: string; count: number }[];
+    /** STORED audio assets held (not the catalog's published durations). */
+    audioAssets: number;
+    audioHours: number;
+    transcripts: number;
+    transcriptsTimed: number;
+    segments: number;
+    lexemes: number;
+    observations: number;
+    rules: number;
+    findings: number;
+  };
+  sources: {
+    key: string;
+    governanceClass: YcGovernanceClass;
+    contentAllowed: boolean;
+    audioFetchMode: YcAudioFetchMode;
+    trainingExportEligibility: YcTrainingEligibility;
+    /** A GRANTED `training_export` rights record exists for this source. */
+    trainingExportGranted: boolean;
+    itemCount: number;
+    /** A STORED audio asset with no transcript at all — what the labelling
+     *  loop is meant to close. */
+    unlabelledCount: number;
+  }[];
+  budgets: YcBudgetView[];
+  spend: {
+    today: { minutes: number; cents: number };
+    allTime: { minutes: number; cents: number };
+  };
+  worker: { alive: boolean; lastSeenAt: string | null };
+  /** The off-box half: every `YcPipelineState` row, newest first, exactly as
+   *  its own process wrote it. */
+  processes: {
+    id: string;
+    key: string;
+    kind: string;
+    status: string;
+    headline: string | null;
+    progress: unknown;
+    detail: unknown;
+    startedAt: string | Date | null;
+    createdAt: string | Date;
+    updatedAt: string | Date;
+  }[];
+  /** The 40 most recently updated jobs, so the page can show what it just did. */
+  recent: { stage: string; state: string; sourceKey: string; error: string | null; updatedAt: string | null }[];
+}
