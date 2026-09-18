@@ -1559,6 +1559,316 @@
       "permissions": "anyone; blocked people, non-OPEN RFQs (unless buyer) and non-member private groups' details are already filtered out server-side",
       "api": "GET /search, POST /search/click",
       "testId": "search-result-people-<id>, search-result-organizations-<id>, search-result-posts-<id>, search-result-jobs-<id>, search-result-listings-<id>, search-result-groups-<id>, search-result-events-<id>, search-result-rfqs-<id>, search-result-opportunities-<id>, search-result-open-<id>, search-result-quote-<id> (organizations only), search-follow-<id> (organizations only)"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-body",
+      "action": "type",
+      "expected": "local text state updates; @name triggers mention dropdown",
+      "permissions": "signed in",
+      "api": "GET /search/suggest?q=",
+      "testId": "feed-composer-body"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-toggle-media",
+      "action": "click",
+      "expected": "shows the Uploader (image/video/document)",
+      "permissions": "signed in",
+      "api": "POST /media",
+      "testId": "feed-composer-toggle-media"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-toggle-poll",
+      "action": "click",
+      "expected": "shows the poll builder (question + 2-6 options + optional close hours)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-composer-toggle-poll"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-toggle-schedule",
+      "action": "click",
+      "expected": "shows a future datetime picker",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-composer-toggle-schedule"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-post-as",
+      "action": "select",
+      "expected": "switches the author between the person and a company where they hold org.post",
+      "permissions": "signed in; org.post on the chosen company",
+      "api": "-",
+      "testId": "feed-composer-post-as"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-visibility",
+      "action": "select",
+      "expected": "sets the new post visibility (PUBLIC/CONNECTIONS/ORGANIZATION/PRIVATE)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-composer-visibility"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-comments-policy",
+      "action": "select",
+      "expected": "sets who can comment (ANYONE/CONNECTIONS/NOBODY)",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-composer-comments-policy"
+    },
+    {
+      "screen": "feed",
+      "component": "Composer",
+      "control": "feed-composer-submit",
+      "action": "click",
+      "expected": "creates the post (or schedules it); composer clears; new post appears at the top of the feed when published immediately",
+      "permissions": "signed in + verified (email or phone)",
+      "api": "POST /posts",
+      "testId": "feed-composer-submit"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-mode-<mode>",
+      "action": "click",
+      "expected": "switches feed mode (for_you/following/latest/industry/local/opportunities/jobs), persists the choice, re-fetches",
+      "permissions": "signed in",
+      "api": "GET /feed?mode=<mode>",
+      "testId": "feed-mode-for_you | feed-mode-following | feed-mode-latest | feed-mode-industry | feed-mode-local | feed-mode-opportunities | feed-mode-jobs"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-empty-network",
+      "action": "click",
+      "expected": "navigates to /network",
+      "permissions": "signed in; shown only on an empty Following tab",
+      "api": "-",
+      "testId": "feed-empty-network"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-rail-follow-<id>",
+      "action": "click",
+      "expected": "follows the recommended company",
+      "permissions": "signed in",
+      "api": "POST /organizations/:id/follow",
+      "testId": "feed-rail-follow-<id>"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "feed-rail-rsvp-<id>",
+      "action": "click",
+      "expected": "navigates to the event page to RSVP",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "feed-rail-rsvp-<id>"
+    },
+    {
+      "screen": "feed",
+      "component": "FeedHome",
+      "control": "(scroll sentinel)",
+      "action": "scroll to bottom",
+      "expected": "loads the next page of the current feed mode and appends it",
+      "permissions": "signed in",
+      "api": "GET /feed?mode=<mode>&cursor=",
+      "testId": "(IntersectionObserver, no discrete control)"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-react",
+      "action": "click",
+      "expected": "toggles the default reaction (LIKE, or the viewer's current kind) and updates the count",
+      "permissions": "signed in + verified",
+      "api": "POST /posts/:id/react",
+      "testId": "post-<id>-react"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-react-<kind>",
+      "action": "click (hover picker)",
+      "expected": "sets/toggles/replaces the reaction to LIKE|INSIGHTFUL|CELEBRATE|SUPPORT",
+      "permissions": "signed in + verified",
+      "api": "POST /posts/:id/react",
+      "testId": "post-<id>-react-like | post-<id>-react-insightful | post-<id>-react-celebrate | post-<id>-react-support"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-comment",
+      "action": "click",
+      "expected": "opens the inline comment thread, loading it on first open",
+      "permissions": "anyone (read); posting needs sign-in + verified",
+      "api": "GET /posts/:id/comments",
+      "testId": "post-<id>-comment"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-comment-input / post-<id>-comment-submit",
+      "action": "type + click",
+      "expected": "posts a top-level comment or a reply (when replying), respecting the post's comments policy",
+      "permissions": "signed in + verified; policy-gated (ANYONE/CONNECTIONS/NOBODY, author always allowed)",
+      "api": "POST /posts/:id/comments",
+      "testId": "post-<id>-comment-input, post-<id>-comment-submit"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-comment-like",
+      "action": "click",
+      "expected": "toggles a LIKE reaction on that comment",
+      "permissions": "signed in + verified",
+      "api": "POST /comments/:id/react",
+      "testId": "post-<id>-comment-like"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-comment-reply",
+      "action": "click",
+      "expected": "focuses the composer in reply mode for that comment",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "post-<id>-comment-reply"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-repost / post-<id>-repost-quote",
+      "action": "click",
+      "expected": "plain repost (409 on a second plain repost) or opens the quote-repost dialog",
+      "permissions": "signed in + verified",
+      "api": "POST /posts/:id/repost",
+      "testId": "post-<id>-repost, post-<id>-repost-quote, post-<id>-repost-quote-submit"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-share",
+      "action": "click",
+      "expected": "native share sheet if available, else copies the permalink and toasts",
+      "permissions": "anyone",
+      "api": "POST /posts/:id/impression (surface=share)",
+      "testId": "post-<id>-share"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-save",
+      "action": "click",
+      "expected": "toggles Save; appears/disappears from /me/saved",
+      "permissions": "signed in + verified",
+      "api": "POST or DELETE /posts/:id/save",
+      "testId": "post-<id>-save"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-edit / post-<id>-edit-save",
+      "action": "click",
+      "expected": "inline edit of the body; PATCH on save; editedAt shown",
+      "permissions": "author only",
+      "api": "PATCH /posts/:id",
+      "testId": "post-<id>-edit, post-<id>-edit-save, post-<id>-edit-cancel"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-delete / post-<id>-delete-confirm",
+      "action": "click",
+      "expected": "confirm dialog, then soft-deletes the post and removes it from the list",
+      "permissions": "author, or org.post holder for a company post, or platform staff",
+      "api": "DELETE /posts/:id",
+      "testId": "post-<id>-delete, post-<id>-delete-confirm"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-hide",
+      "action": "click",
+      "expected": "records a Hide row and removes the post from this list",
+      "permissions": "signed in",
+      "api": "POST /posts/:id/hide",
+      "testId": "post-<id>-hide"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-mute",
+      "action": "click",
+      "expected": "mutes the author and removes the post from this list",
+      "permissions": "signed in; not the author",
+      "api": "POST /people/:id/mute",
+      "testId": "post-<id>-mute"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-report",
+      "action": "click",
+      "expected": "opens the report dialog for this post",
+      "permissions": "signed in; not the author",
+      "api": "POST /reports",
+      "testId": "post-<id>-report"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-poll-option",
+      "action": "click",
+      "expected": "casts or changes the viewer's poll vote; refused once the poll is closed",
+      "permissions": "signed in + verified",
+      "api": "POST /posts/:id/poll/vote",
+      "testId": "post-<id>-poll-option"
+    },
+    {
+      "screen": "post",
+      "component": "PostCard",
+      "control": "post-<id>-copy-link",
+      "action": "click",
+      "expected": "copies the permalink to the clipboard",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "post-<id>-copy-link"
+    },
+    {
+      "screen": "posts/[id]",
+      "component": "PostDetailPage",
+      "control": "postpage-signin-cta",
+      "action": "click",
+      "expected": "navigates to /login?next=/posts/:id",
+      "permissions": "anonymous viewer",
+      "api": "-",
+      "testId": "postpage-signin-cta"
+    },
+    {
+      "screen": "me/saved",
+      "component": "SavedPostsPage",
+      "control": "saved-load-more",
+      "action": "click",
+      "expected": "appends the next page of saved posts",
+      "permissions": "signed in",
+      "api": "GET /me/saved?cursor=",
+      "testId": "saved-load-more"
     }
   ]
 }

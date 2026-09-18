@@ -1,0 +1,41 @@
+/* Posts & feed — additive only, never touches globals.css tokens/classes. */
+
+.composer-toolbar { flex-wrap: wrap; }
+.composer-body { min-height: 46px; resize: vertical; }
+.composer-preview { display: grid; gap: 8px; margin-top: 10px; }
+.composer-poll-opt { display: flex; gap: 8px; align-items: center; }
+.composer-mentions { position: relative; }
+.mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin-top: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); max-height: 220px; overflow: auto; }
+.mention-dropdown button { display: flex; gap: 8px; align-items: center; width: 100%; padding: 8px 10px; text-align: left; }
+.mention-dropdown button:hover { background: var(--soft); }
+.mention-link { color: var(--accent); font-weight: 600; }
+.link-preview { display: block; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-soft); }
+.link-preview img { display: block; width: 100%; max-height: 220px; object-fit: cover; }
+.link-preview .lp-body { padding: 10px 12px; display: grid; gap: 2px; }
+.link-preview .lp-url { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+
+.react-picker { position: relative; display: inline-block; }
+.react-picker-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 6px; display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 4px; box-shadow: var(--shadow); z-index: 15; }
+.react-picker-pop button { padding: 6px 8px; border-radius: 999px; }
+.react-picker-pop button:hover { background: var(--soft); }
+
+.mode-tabs-wrap { display: flex; align-items: center; }
+.feed-mode-more { margin-left: auto; }
+
+.comment-thread { display: grid; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.comment-row { display: flex; gap: 8px; align-items: flex-start; }
+.comment-bubble { flex: 1; min-width: 0; background: var(--bg-soft); border-radius: 12px; padding: 8px 12px; }
+.comment-bubble b { font-size: 13px; }
+.comment-bubble p { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 2px 0 0; }
+.comment-meta { display: flex; gap: 10px; font-size: 11.5px; color: var(--text-dim); margin-top: 3px; }
+.comment-meta button { font-weight: 600; }
+.comment-meta button.on { color: var(--accent); }
+.comment-replies { margin-left: 34px; display: grid; gap: 8px; margin-top: 6px; }
+.comment-composer { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; }
+.comment-composer .in { min-height: 36px; }
+
+.poll-block { display: grid; gap: 8px; }
+.poll-opt { width: 100%; text-align: left; cursor: pointer; border-radius: 8px; padding: 2px 0; }
+.poll-opt.mine .prog i { background: linear-gradient(90deg, var(--success), var(--accent-2)); }
+
+.saved-empty, .feed-empty { padding: 24px 0; }
