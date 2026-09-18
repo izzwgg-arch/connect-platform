@@ -145,7 +145,18 @@ card on file, or put in a new card? If they put in a new card, ask if … defaul
   `46_card_save_choice` (this payment only / save it as the card on file) unchanged. `39`/`40`/`47`
   and the `card_offer` phase are retired (WAVs stay).
 - Prompts 48/49/50 cut + installed (`en-male` 76 → **79**). No dialplan change.
-- ⏳ Round 5 tests / deploy / proof: bottom of this file.
+- **Round 5 — tested / deployed / proven (~00:20Z 09-18):** the supermarket glob → **238/238**
+  (`payLineCard` 22: a 500-session stress over {0,1,2,4 cards} × {pick ok / declined then other / 9
+  new once / 9 new save} asserts the charged id is ALWAYS the picked one; `supermarketCore` 43;
+  ⛔ STRESS 4's seeded balance was 1 cent over `PAY_MAX_CENTS` — a latent test-data bug, fixed).
+  **api `af23a052` deployed direct**, container `.build-commit` = af23a052, healthy, `/ready` 200,
+  `50_new_card_press_9` + `cardsOnFile` in the container. Live regression: the final-flow proof
+  (`proof4`) and the card-door proof (`proof5`) both unchanged and green on the deployed container.
+  ⏳ **NOT proven: a real pick-a-card charge and a real keyed charge** (both need a caller with an
+  account PIN and a card). Acceptance (Izzy): reach the account with the PIN, press 2, key an amount,
+  press 1 to confirm → hear "to use the card ending in … press 1 … to enter a new card press 9";
+  press 1 → "approved" + balance, or "declined" + the same menu; press 9 → key a card, MMYY, CVV,
+  ZIP → "this payment only press 1 / save it press 2" → "approved".
 
 ## What the store must do
 

@@ -652,3 +652,8 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
   stash. No dialplan change.
 - Deploy + live proof: in the docs follow-up commit and the summary file's "Round 5" section.
 - NOT run: a real pick-a-card charge and a real keyed charge (need a caller with an account PIN and a card).
+- DEPLOYED api ``af23a052`` (direct, container-verified: ``.build-commit``, healthy, ``/ready`` 200, ``50_new_card_press_9``
+  + ``cardsOnFile`` in the container). Live regression on the deployed container: the final-flow proof
+  (``/root/payline-live-proof4.sh``, 5 scenarios) and the card-door proof (``/root/payline-live-proof5.sh``: wrong
+  secret 403, no session, invalid refused, valid vaulted with 0 digits persisted/logged) both unchanged and green.
+  NOT proven: a real pick-a-card charge and a real keyed charge (need a caller with an account PIN + a card).
