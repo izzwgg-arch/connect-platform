@@ -125,3 +125,11 @@
 .search-public-top .logo-mark img {
   height: 26px;
 }
+
+/* Phones: the facet column stacks ABOVE the results, so a sticky one covers the tabs while scrolling. Declared last to win. */
+@media (max-width: 860px) {
+  .search-facets {
+    position: static;
+    top: auto;
+  }
+}

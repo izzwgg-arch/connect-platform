@@ -56,6 +56,19 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024, files: 10 } });
   // Clients send `content-type: application/json` on bodiless POSTs (fetch defaults);
   // an empty body means "{}", not an error.
+  // sendBeacon payloads arrive as text/plain (a "simple" request survives unload); parse JSON when it is JSON.
+  app.addContentTypeParser("text/plain", { parseAs: "string" }, (_req, body, done) => {
+    const text = String(body || "").trim();
+    if (!text) return done(null, {});
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return done(null, JSON.parse(text));
+      } catch {
+        /* fall through to raw */
+      }
+    }
+    done(null, { raw: text });
+  });
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
     const text = String(body || "").trim();

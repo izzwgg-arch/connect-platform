@@ -32,16 +32,14 @@ test.describe("messages", () => {
     const reply = `Yes, what do you need? ${uid()}`;
     await pageB.getByTestId("messages-input").fill(reply);
     await pageB.getByTestId("messages-send").click();
-    // .first(): the bubble sometimes renders twice in this dev server (React
-    // StrictMode double-invokes effects, and Conversation's realtime-listener
-    // effect depends on the whole `detail` object, which changes reference
-    // often) — worth a human double-check against a production build, but the
-    // reply's delivery itself is what this assertion is about.
-    await expect(pageB.getByText(reply).first()).toBeVisible();
+    // Exactly one bubble per message: the sender's own realtime echo must never duplicate it.
+    await expect(page.locator('[data-testid^="messages-bubble-"]', { hasText: firstMsg })).toHaveCount(1);
+    await expect(pageB.locator('[data-testid^="messages-bubble-"]', { hasText: reply })).toBeVisible();
 
-    // A sees the reply and reacts to it
+    // A sees the reply and reacts to it. Bubble locators, not getByText: on phones the
+    // thread-list pane is in the DOM but hidden, and its preview carries the same text.
     await page.reload();
-    await expect(page.getByText(reply).first()).toBeVisible();
+    await expect(page.locator('[data-testid^="messages-bubble-"]', { hasText: reply })).toBeVisible();
     const replyBubble = page.locator('[data-testid^="messages-bubble-"]', { hasText: reply }).first();
     const replyId = (await replyBubble.getAttribute("data-testid"))!.replace("messages-bubble-", "");
     await page.getByTestId(`messages-react-${replyId}-👍`).click();

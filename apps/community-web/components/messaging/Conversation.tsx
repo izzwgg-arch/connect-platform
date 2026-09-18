@@ -128,7 +128,8 @@ export function Conversation({ threadId, onThreadChanged, onOpenInfo }: { thread
   }
 
   function onComposerSent(message: Message) {
-    setMessages((cur) => [...cur, message]);
+    // The SSE echo of our own send can arrive before the POST resolves; never show it twice.
+    setMessages((cur) => (cur.some((m) => m.id === message.id) ? cur.map((m) => (m.id === message.id ? message : m)) : [...cur, message]));
     setReplyTo(null);
     setTimeout(() => bodyRef.current?.scrollTo(0, bodyRef.current!.scrollHeight), 0);
   }

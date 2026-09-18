@@ -2,6 +2,16 @@ import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { signUp, makeOrg, uid, snap } from "./helpers";
 
+/**
+ * WebKit reports a fetch that the test itself cancelled by navigating away
+ * ("... due to access control checks.") as a console error. It is not a CORS
+ * failure - the same requests succeed when the page stays - so it is not a
+ * product defect this test guards against. Chromium has no equivalent line.
+ */
+function isNavigationCancel(text: string): boolean {
+  return /localhost:3101\/.* due to access control checks\.$/.test(text);
+}
+
 async function setTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((t) => {
     try {
@@ -21,7 +31,7 @@ test.describe("theme & accessibility", () => {
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
       page.on("console", (m) => {
-        if (m.type() === "error") errors.push(m.text());
+        if (m.type() === "error" && !isNavigationCancel(m.text())) errors.push(m.text());
       });
       for (const url of PUBLIC_PAGES) {
         await page.goto(url);
@@ -35,7 +45,7 @@ test.describe("theme & accessibility", () => {
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
       page.on("console", (m) => {
-        if (m.type() === "error") errors.push(m.text());
+        if (m.type() === "error" && !isNavigationCancel(m.text())) errors.push(m.text());
       });
       await signUp(page);
       await makeOrg(page, { name: `E2E Theme Co ${uid()}` });

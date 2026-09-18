@@ -36,8 +36,9 @@ test.describe("admin", () => {
       await pageReporter.getByRole("button", { name: "Conversation actions" }).click();
       await pageReporter.getByTestId("messages-conv-info").click();
     }
-    await pageReporter.getByTestId("messages-info-report").first().click();
-    await pageReporter.getByTestId("messages-report-submit").first().click();
+    // On phones the persistent (hidden) pane comes first in the DOM; act on the visible copy.
+    await pageReporter.getByTestId("messages-info-report").filter({ visible: true }).first().click();
+    await pageReporter.getByTestId("messages-report-submit").filter({ visible: true }).first().click();
     await expect(pageReporter.getByText("Thanks — we'll take a look.")).toBeVisible();
 
     // Moderator (this session, now with staff granted) opens the admin console.

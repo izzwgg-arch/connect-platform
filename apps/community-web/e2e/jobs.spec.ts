@@ -28,7 +28,7 @@ test.describe("jobs", () => {
     await pageCandidate.getByTestId("jobs-apply-section-headline").check();
     await pageCandidate.getByTestId("jobs-apply-section-experience").check();
     await pageCandidate.getByTestId("jobs-apply-submit").click();
-    await expect(pageCandidate.getByText(/applied/i)).toBeVisible();
+    await expect(pageCandidate.getByText("Applied", { exact: true }).first()).toBeVisible();
 
     // Employer moves the applicant to the next stage
     await page.goto("/company/hiring");

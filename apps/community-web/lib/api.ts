@@ -166,10 +166,29 @@ export async function flushEvents() {
     /* analytics never blocks the UI */
   }
 }
+/** On hide/unload a fetch is cancelled by the browser (Safari logs it as an
+ *  access-control failure); sendBeacon is the API made for this moment. */
+function beaconEvents() {
+  if (!queue.length) return;
+  const events = queue.splice(0, 100);
+  const token = getAccessToken();
+  try {
+    if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
+      const url = `${API_URL}/analytics/events${token ? `?access_token=${encodeURIComponent(token)}` : ""}`;
+      // text/plain keeps the beacon a "simple" request (no preflight, which browsers drop on unload).
+      const ok = navigator.sendBeacon(url, new Blob([JSON.stringify({ events })], { type: "text/plain" }));
+      if (ok) return;
+    }
+  } catch {
+    /* fall through */
+  }
+  queue.unshift(...events);
+}
 if (typeof window !== "undefined") {
   window.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") void flushEvents();
+    if (document.visibilityState === "hidden") beaconEvents();
   });
+  window.addEventListener("pagehide", beaconEvents);
 }
 
 export function mediaUrl(assetId: string | null | undefined, variant: "thumb" | "medium" | "original" = "medium"): string | null {
