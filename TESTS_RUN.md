@@ -693,7 +693,6 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
 - Desk-phone suites re-run with the change: deskPhoneRoutes + deskPhoneChaos + deskPhoneRecordWiring + phoneRegistrationTruth = 101/101; deskPhoneStress + deviceCloudRoutes + managedPhoneIntegration + gdmsRedirect + deviceProviders = 149/149. (Existing suites inject `isRegistered` only → they exercise the cold-mirror fallback path unchanged.)
 - api tsc: 45 pre-existing errors elsewhere, none in the touched files.
 
-<<<<<<< HEAD
 ## 2026-09-18 — guided desk-phone setup (R27)
 - `packages/shared`: `npx tsx --test src/deskPhoneSetup/resetRecipes.test.ts src/deskPhoneSetup/deskPhoneSetup.test.ts src/deskPhoneSetup/vendorCoverage.test.ts` — 84/84 (7 new: family mapping, honesty/confidence, customer-words guard, every catalogue vendor resolves).
 - `apps/api`: `node --experimental-test-module-mocks --import tsx --test src/deskPhoneSetup/*.test.ts` — 405/406 (14 new laybelGuide: scripted lines, truth fence, improviser budget/fallbacks; the 1 failure is `managedPhonePostgres.test.ts` needing a generated Prisma client in the fresh worktree — env, not code).
@@ -704,10 +703,8 @@ proof in the docs line right after these). Summary `2026-09-17-pay-line-final-fl
 - R29 (Grandstream robot family + Yiddish + mic): `apps/desktop` `node --import tsx --test src/phoneSetup/grandstreamWebRobot.test.ts src/phoneSetup/phoneWebRobot.test.ts` — 58/58 (11 new, fake GXP2170 incl. the GDMS-claimed no-op refused `save_not_verified`); `apps/api` laybelLanguage 8/8 + deskPhoneRoutes/RouteOrder 64/64; `apps/portal` setupDriver + guidedFlow 64/64; tsc clean api/portal/desktop.
 - R30 (first walk fixes): `apps/portal` guidedFlow 12/12 (+1: O→0, MAC label stripped); `apps/api` laybelGuide 14/14; portal tsc clean.
 - R31 (second walk): `apps/api` effectiveUser (real CUID/slug shapes) + laybelGuide + deskPhoneRoutes — 75/75; api + portal tsc clean.
-=======
 ## 2026-09-18 · Telnyx webhook doors (raw body) + Gesheft port prep
 - `apps/api/src/telnyx/rawBodyCapture.test.ts` (new, real Fastify boot in server.ts order): 4/4 pass; replayed against HEAD's doors: 3 FAIL / 1 pass (the defect is visible to the test).
 - `telnyxWebhooks.test.ts` + `loopcomMobile.test.ts` + `jwtPublicRouteBypass.test.ts`: 34/34 after updating the mobile source guard to the shared route options.
 - `textingRegistration.test.ts`: 41/41 (PUBLIC_PROFIT check; new assertion fails on HEAD).
 - Live probes after deploy `9a27c130` (Loopcom-owned numbers only): Telnyx inbound SMS ingested (2 s), inbound MMS image stored, outbound through the chat door delivered + DLR (6 s), voice-note m4a MMS byte-identical (10 s). VoIP.ms send from 723-1213: `invalid_did` (platform sender broken).
->>>>>>> 2b018ed4 (docs(port): Gesheft 244-9666 -> Telnyx zero-downtime plan, draft 64106b7c at Telnyx; the webhook raw-body defect and the platform-sender outage recorded)
