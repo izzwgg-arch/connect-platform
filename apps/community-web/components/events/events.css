@@ -1,0 +1,8 @@
+.event-hero-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.event-hero-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.event-attendee-row { display: flex; gap: -6px; }
+.event-attendee-row .av { margin-left: -8px; border: 2px solid var(--panel); }
+.event-attendee-row .av:first-child { margin-left: 0; }
+.event-speaker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.event-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 640px) { .event-form-grid { grid-template-columns: 1fr; } }

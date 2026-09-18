@@ -225,7 +225,7 @@
       "component": "NetworkPage",
       "control": "network-ignore-<id>",
       "action": "click",
-      "expected": "connection ignored (silently \u2014 the requester still sees it as pending), row removed from Invitations",
+      "expected": "connection ignored (silently — the requester still sees it as pending), row removed from Invitations",
       "permissions": "signed in; recipient of the request",
       "api": "POST /connections/:id/ignore",
       "testId": "network-ignore-<id>"
@@ -985,7 +985,7 @@
       "component": "InviteDialog",
       "control": "company-admin-invite-send",
       "action": "click",
-      "expected": "sends an email invite with a 14-day accept link; idempotent per (org,email) \u2014 resending refreshes the token",
+      "expected": "sends an email invite with a 14-day accept link; idempotent per (org,email) — resending refreshes the token",
       "permissions": "org.manage_members",
       "api": "POST /organizations/:id/invites",
       "testId": "company-admin-invite-send"
@@ -1005,7 +1005,7 @@
       "component": "MembersTab",
       "control": "company-admin-approve-<personId>",
       "action": "click",
-      "expected": "approves a pending join request (affiliation \u2192 VERIFIED_ADMIN)",
+      "expected": "approves a pending join request (affiliation → VERIFIED_ADMIN)",
       "permissions": "org.manage_roles",
       "api": "PATCH /organizations/:id/members/:personId {affiliation:VERIFIED_ADMIN}",
       "testId": "company-admin-approve-<personId>"
@@ -1445,7 +1445,7 @@
       "component": "SearchPage",
       "control": "search-interpretation",
       "action": "render",
-      "expected": "shown only when the query has 3+ words: 'Understood as: service = \u2026 \u00b7 customer type = \u2026 \u00b7 area = \u2026' from the deterministic NLQ parser",
+      "expected": "shown only when the query has 3+ words: 'Understood as: service = … · customer type = … · area = …' from the deterministic NLQ parser",
       "permissions": "anyone",
       "api": "GET /search (interpretation field)",
       "testId": "search-interpretation"
@@ -1508,7 +1508,7 @@
       "expected": "single-select organization size filter",
       "permissions": "anyone",
       "api": "GET /search?size=<range>",
-      "testId": "search-facet-size-1\u201310, search-facet-size-11\u201350, search-facet-size-51\u2013200, search-facet-size-200+"
+      "testId": "search-facet-size-1–10, search-facet-size-11–50, search-facet-size-51–200, search-facet-size-200+"
     },
     {
       "screen": "search",
@@ -1886,7 +1886,7 @@
           "component": "input",
           "control": "Question",
           "action": "Type a plain-English request",
-          "expected": "\u2014",
+          "expected": "—",
           "permissions": "signed in",
           "api": "",
           "testId": "concierge-input"
@@ -1906,7 +1906,7 @@
           "action": "Opens the matched page",
           "expected": "Navigates to the person/company/job/listing/event/group",
           "permissions": "",
-          "api": "\u2014",
+          "api": "—",
           "testId": "concierge-match"
         },
         {
@@ -1915,7 +1915,7 @@
           "action": "Opens the confirm dialog",
           "expected": "Dialog explains what will happen",
           "permissions": "signed in + verified",
-          "api": "\u2014",
+          "api": "—",
           "testId": "concierge-action-post_rfq"
         },
         {
@@ -1924,7 +1924,7 @@
           "action": "Opens the confirm dialog",
           "expected": "Dialog explains a message is sent in your name",
           "permissions": "signed in + verified",
-          "api": "\u2014",
+          "api": "—",
           "testId": "concierge-action-message_org"
         },
         {
@@ -1939,13 +1939,903 @@
         {
           "component": "bubble",
           "control": "Your question",
-          "action": "\u2014",
+          "action": "—",
           "expected": "Shown as sent",
           "permissions": "",
           "api": "",
           "testId": "concierge-question"
         }
       ]
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-name",
+      "action": "type",
+      "expected": "group name entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "groups-new-name"
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-description",
+      "action": "type",
+      "expected": "description entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "groups-new-description"
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-category",
+      "action": "type",
+      "expected": "category entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "groups-new-category"
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-private",
+      "action": "click",
+      "expected": "toggles isPrivate",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "groups-new-private"
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-approval",
+      "action": "click",
+      "expected": "toggles requiresApproval",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "groups-new-approval"
+    },
+    {
+      "screen": "groups",
+      "component": "CreateGroupDialog",
+      "control": "groups-new-submit",
+      "action": "click",
+      "expected": "group created; creator is OWNER; appears in Your groups",
+      "permissions": "signed in + verified",
+      "api": "POST /groups",
+      "testId": "groups-new-submit"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupsBody",
+      "control": "groups-create",
+      "action": "click",
+      "expected": "opens the create-a-group dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "groups-create"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupsBody",
+      "control": "groups-search",
+      "action": "type",
+      "expected": "discover list re-fetches filtered by q",
+      "permissions": "signed in",
+      "api": "GET /groups?q=",
+      "testId": "groups-search"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupsBody",
+      "control": "groups-category-all",
+      "action": "click",
+      "expected": "clears the category filter",
+      "permissions": "signed in",
+      "api": "GET /groups",
+      "testId": "groups-category-all"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupsBody",
+      "control": "groups-category-<category>",
+      "action": "click",
+      "expected": "discover list filtered to that category",
+      "permissions": "signed in",
+      "api": "GET /groups?category=<category>",
+      "testId": "groups-category-<category>"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupRow",
+      "control": "groups-row-<slug>",
+      "action": "click",
+      "expected": "navigates to /groups/<slug>",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "groups-row-<slug>"
+    },
+    {
+      "screen": "groups",
+      "component": "GroupRow",
+      "control": "groups-join-<slug>",
+      "action": "click",
+      "expected": "joins (ACTIVE) or requests (PENDING) depending on the group's approval setting",
+      "permissions": "signed in + verified",
+      "api": "POST /groups/:id/join",
+      "testId": "groups-join-<slug>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "GroupDetailPage",
+      "control": "group-join",
+      "action": "click",
+      "expected": "joins the group, sends a request if it requires approval, or requests access to a private group",
+      "permissions": "signed in + verified",
+      "api": "POST /groups/:id/join",
+      "testId": "group-join"
+    },
+    {
+      "screen": "group-detail",
+      "component": "GroupDetailPage",
+      "control": "group-leave",
+      "action": "click",
+      "expected": "leaves the group (refused if the last owner/admin)",
+      "permissions": "signed in; ACTIVE member",
+      "api": "POST /groups/:id/leave",
+      "testId": "group-leave"
+    },
+    {
+      "screen": "group-detail",
+      "component": "GroupDetailPage",
+      "control": "group-tab-<key>",
+      "action": "click",
+      "expected": "switches to that tab (feed/chat/files/events/jobs/listings/members/rules)",
+      "permissions": "ACTIVE member",
+      "api": "-",
+      "testId": "group-tab-feed | group-tab-chat | group-tab-files | group-tab-events | group-tab-jobs | group-tab-listings | group-tab-members | group-tab-rules"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FeedTab",
+      "control": "group-feed-composer",
+      "action": "type",
+      "expected": "post body typed",
+      "permissions": "ACTIVE member",
+      "api": "-",
+      "testId": "group-feed-composer"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FeedTab",
+      "control": "group-feed-post",
+      "action": "click",
+      "expected": "creates a group post; appears at the top of the feed",
+      "permissions": "ACTIVE member + verified",
+      "api": "POST /groups/:id/posts",
+      "testId": "group-feed-post"
+    },
+    {
+      "screen": "group-detail",
+      "component": "PostCard",
+      "control": "group-post-pin-<id>",
+      "action": "click",
+      "expected": "toggles the post's pin; pinned posts sort first",
+      "permissions": "OWNER/ADMIN",
+      "api": "POST /groups/:id/posts/:postId/pin",
+      "testId": "group-post-pin-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "PostCard",
+      "control": "group-post-like-<id>",
+      "action": "click",
+      "expected": "toggles the viewer's reaction and the shown count",
+      "permissions": "ACTIVE member + verified",
+      "api": "POST or DELETE /posts/:id/react",
+      "testId": "group-post-like-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "GroupDetailPage",
+      "control": "group-chat-open",
+      "action": "click",
+      "expected": "opens the group's shared thread",
+      "permissions": "ACTIVE member",
+      "api": "GET /groups/:id/chat, then navigates to /messages/:threadId",
+      "testId": "group-chat-open"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FilesTab",
+      "control": "group-files-upload",
+      "action": "click",
+      "expected": "opens the file picker",
+      "permissions": "ACTIVE member",
+      "api": "-",
+      "testId": "group-files-upload"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FilesTab",
+      "control": "group-files-input",
+      "action": "change",
+      "expected": "uploads the chosen file to the group's Files tab",
+      "permissions": "ACTIVE member + verified",
+      "api": "POST /groups/:id/files",
+      "testId": "group-files-input"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FilesTab",
+      "control": "group-file-download-<id>",
+      "action": "click",
+      "expected": "opens the original file in a new tab",
+      "permissions": "ACTIVE member",
+      "api": "GET /media/file/:assetId/original",
+      "testId": "group-file-download-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "FilesTab",
+      "control": "group-file-delete-<id>",
+      "action": "click",
+      "expected": "removes the file (uploader or admin only)",
+      "permissions": "uploader or OWNER/ADMIN",
+      "api": "DELETE /groups/:id/files/:fileId",
+      "testId": "group-file-delete-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-members-invite",
+      "action": "click",
+      "expected": "opens the invite-connections dialog",
+      "permissions": "OWNER/ADMIN",
+      "api": "-",
+      "testId": "group-members-invite"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-approve-<id>",
+      "action": "click",
+      "expected": "activates a PENDING member and notifies them",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id/members/:personId {state:ACTIVE}",
+      "testId": "group-approve-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-deny-<id>",
+      "action": "click",
+      "expected": "bans the PENDING request",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id/members/:personId {state:BANNED}",
+      "testId": "group-deny-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-promote-<id>",
+      "action": "click",
+      "expected": "makes a MEMBER an ADMIN",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id/members/:personId {role:ADMIN}",
+      "testId": "group-promote-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-demote-<id>",
+      "action": "click",
+      "expected": "returns an ADMIN to MEMBER",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id/members/:personId {role:MEMBER}",
+      "testId": "group-demote-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "MembersTab",
+      "control": "group-ban-<id>",
+      "action": "click",
+      "expected": "removes an active member from the group",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id/members/:personId {state:BANNED}",
+      "testId": "group-ban-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "InviteDialog",
+      "control": "group-invite-pick-<id>",
+      "action": "click",
+      "expected": "selects/deselects a connection to invite",
+      "permissions": "ACTIVE member",
+      "api": "-",
+      "testId": "group-invite-pick-<id>"
+    },
+    {
+      "screen": "group-detail",
+      "component": "InviteDialog",
+      "control": "group-invite-send",
+      "action": "click",
+      "expected": "creates PENDING memberships and notifies the invited connections",
+      "permissions": "ACTIVE member + verified",
+      "api": "POST /groups/:id/invites",
+      "testId": "group-invite-send"
+    },
+    {
+      "screen": "group-detail",
+      "component": "RulesTab",
+      "control": "group-rules-edit",
+      "action": "click",
+      "expected": "opens the rules editor",
+      "permissions": "OWNER/ADMIN",
+      "api": "-",
+      "testId": "group-rules-edit"
+    },
+    {
+      "screen": "group-detail",
+      "component": "RulesTab",
+      "control": "group-rules-save",
+      "action": "click",
+      "expected": "saves the group's rules text",
+      "permissions": "OWNER/ADMIN",
+      "api": "PATCH /groups/:id {rules}",
+      "testId": "group-rules-save"
+    },
+    {
+      "screen": "group-detail",
+      "component": "EventsTab",
+      "control": "group-events-create",
+      "action": "click",
+      "expected": "navigates to /events/new?groupId=<id>, prefilled",
+      "permissions": "OWNER/ADMIN",
+      "api": "-",
+      "testId": "group-events-create"
+    },
+    {
+      "screen": "group-detail",
+      "component": "EventsTab",
+      "control": "group-event-<id>",
+      "action": "click",
+      "expected": "navigates to the event's page",
+      "permissions": "ACTIVE member",
+      "api": "-",
+      "testId": "group-event-<id>"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-tab-upcoming",
+      "action": "click",
+      "expected": "list shows startsAt >= now, ascending",
+      "permissions": "signed in",
+      "api": "GET /events?when=upcoming",
+      "testId": "events-tab-upcoming"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-tab-past",
+      "action": "click",
+      "expected": "list shows startsAt < now, descending",
+      "permissions": "signed in",
+      "api": "GET /events?when=past",
+      "testId": "events-tab-past"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-create",
+      "action": "click",
+      "expected": "navigates to /events/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "events-create"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-host",
+      "action": "click",
+      "expected": "navigates to /events/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "events-host"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-search",
+      "action": "type",
+      "expected": "list re-fetches filtered by q",
+      "permissions": "signed in",
+      "api": "GET /events?q=",
+      "testId": "events-search"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-mode-<mode>",
+      "action": "click",
+      "expected": "list filtered to that mode (all/ONLINE/IN_PERSON/HYBRID)",
+      "permissions": "signed in",
+      "api": "GET /events?mode=<mode>",
+      "testId": "events-mode-all | events-mode-ONLINE | events-mode-IN_PERSON | events-mode-HYBRID"
+    },
+    {
+      "screen": "events",
+      "component": "EventRowItem",
+      "control": "events-row-<slug>",
+      "action": "click",
+      "expected": "navigates to /events/<slug>",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "events-row-<slug>"
+    },
+    {
+      "screen": "events",
+      "component": "EventsBody",
+      "control": "events-mine-<slug>",
+      "action": "click",
+      "expected": "navigates to that event, showing the viewer's own relation (hosting/going/interested/waitlist)",
+      "permissions": "signed in",
+      "api": "GET /me/events",
+      "testId": "events-mine-<slug>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-title",
+      "action": "type",
+      "expected": "title entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-title"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-description",
+      "action": "type",
+      "expected": "description entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-description"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-mode",
+      "action": "select",
+      "expected": "switches between in-person/online/hybrid fields",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-mode"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-starts",
+      "action": "change",
+      "expected": "start time set",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-starts"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-ends",
+      "action": "change",
+      "expected": "end time set; must be after start",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-ends"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-venue",
+      "action": "type",
+      "expected": "venue entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-venue"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-address",
+      "action": "type",
+      "expected": "address entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-address"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-onlineurl",
+      "action": "type",
+      "expected": "online join link entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-onlineurl"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-capacity",
+      "action": "type",
+      "expected": "capacity entered; blank = unlimited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-capacity"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-visibility",
+      "action": "select",
+      "expected": "sets attendeeListVisibility",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-visibility"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-free",
+      "action": "click",
+      "expected": "toggles isFree; hides/shows the price field",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-free"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-price",
+      "action": "type",
+      "expected": "price entered (shown only when not free)",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-price"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-org",
+      "action": "select",
+      "expected": "hosts the event as that company (needs org.manage_events)",
+      "permissions": "signed in + verified; org member",
+      "api": "-",
+      "testId": "events-new-org"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-group",
+      "action": "select",
+      "expected": "attaches the event to a group the viewer admins",
+      "permissions": "signed in + verified; group OWNER/ADMIN",
+      "api": "-",
+      "testId": "events-new-group"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-speaker-add",
+      "action": "click",
+      "expected": "adds a blank speaker row",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-speaker-add"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-speaker-name-<i>",
+      "action": "type",
+      "expected": "speaker name entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-speaker-name-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-speaker-title-<i>",
+      "action": "type",
+      "expected": "speaker title entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-speaker-title-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-speaker-remove-<i>",
+      "action": "click",
+      "expected": "removes that speaker row",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-speaker-remove-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-sponsor-add",
+      "action": "click",
+      "expected": "adds a blank sponsor row",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-sponsor-add"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-sponsor-name-<i>",
+      "action": "type",
+      "expected": "sponsor name entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-sponsor-name-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-sponsor-url-<i>",
+      "action": "type",
+      "expected": "sponsor url entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-sponsor-url-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-sponsor-remove-<i>",
+      "action": "click",
+      "expected": "removes that sponsor row",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "events-new-sponsor-remove-<i>"
+    },
+    {
+      "screen": "events-new",
+      "component": "NewEventForm",
+      "control": "events-new-submit",
+      "action": "click",
+      "expected": "event created, host auto-RSVP'd GOING, redirected to the event page",
+      "permissions": "signed in + verified",
+      "api": "POST /events",
+      "testId": "events-new-submit"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-add-calendar",
+      "action": "click",
+      "expected": "downloads a .ics file for this event",
+      "permissions": "any viewer",
+      "api": "GET /events/:id/ics",
+      "testId": "event-add-calendar"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-google-calendar",
+      "action": "click",
+      "expected": "opens Google Calendar's prefilled event page in a new tab",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "event-google-calendar"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-share",
+      "action": "click",
+      "expected": "native share sheet, or copies the event link",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "event-share"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-edit",
+      "action": "click",
+      "expected": "navigates to /events/<slug>/edit",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-rsvp-going",
+      "action": "click",
+      "expected": "RSVPs GOING, or WAITLIST once capacity is reached",
+      "permissions": "signed in + verified",
+      "api": "POST /events/:id/rsvp {status:GOING}",
+      "testId": "event-rsvp-going"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-rsvp-interested",
+      "action": "click",
+      "expected": "RSVPs INTERESTED",
+      "permissions": "signed in + verified",
+      "api": "POST /events/:id/rsvp {status:INTERESTED}",
+      "testId": "event-rsvp-interested"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-cancel-rsvp",
+      "action": "click",
+      "expected": "removes the viewer's RSVP",
+      "permissions": "signed in; has an RSVP",
+      "api": "DELETE /events/:id/rsvp",
+      "testId": "event-cancel-rsvp"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-invite",
+      "action": "click",
+      "expected": "opens the invite-connections dialog",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "event-invite"
+    },
+    {
+      "screen": "event-detail",
+      "component": "InviteConnectionsDialog",
+      "control": "event-invite-pick-<id>",
+      "action": "click",
+      "expected": "selects/deselects a connection to invite",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "event-invite-pick-<id>"
+    },
+    {
+      "screen": "event-detail",
+      "component": "InviteConnectionsDialog",
+      "control": "event-invite-send",
+      "action": "click",
+      "expected": "notifies the invited connections",
+      "permissions": "signed in + verified",
+      "api": "POST /events/:id/invite",
+      "testId": "event-invite-send"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-chat",
+      "action": "click",
+      "expected": "opens the event's shared thread",
+      "permissions": "host, or GOING",
+      "api": "GET /events/:id/chat, then navigates to /messages/:threadId",
+      "testId": "event-chat"
+    },
+    {
+      "screen": "event-detail",
+      "component": "EventDetailPage",
+      "control": "event-sidebar-create",
+      "action": "click",
+      "expected": "navigates to /events/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "event-sidebar-create"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-title",
+      "action": "type",
+      "expected": "title entered",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-title"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-description",
+      "action": "type",
+      "expected": "description entered",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-description"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-starts",
+      "action": "change",
+      "expected": "start time changed",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-starts"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-ends",
+      "action": "change",
+      "expected": "end time changed",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-ends"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-venue",
+      "action": "type",
+      "expected": "venue changed",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-venue"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-address",
+      "action": "type",
+      "expected": "address changed",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-address"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-capacity",
+      "action": "type",
+      "expected": "capacity changed",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-capacity"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-save",
+      "action": "click",
+      "expected": "saves changes; GOING/INTERESTED/WAITLIST attendees are notified when time or venue changed",
+      "permissions": "host",
+      "api": "PATCH /events/:id",
+      "testId": "event-edit-save"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-cancel-event",
+      "action": "click",
+      "expected": "opens the cancel-event confirmation dialog",
+      "permissions": "host",
+      "api": "-",
+      "testId": "event-edit-cancel-event"
+    },
+    {
+      "screen": "event-edit",
+      "component": "EditEventForm",
+      "control": "event-edit-cancel-confirm",
+      "action": "click",
+      "expected": "cancels (deletes) the event and notifies attendees",
+      "permissions": "host",
+      "api": "DELETE /events/:id",
+      "testId": "event-edit-cancel-confirm"
     }
   ]
 }

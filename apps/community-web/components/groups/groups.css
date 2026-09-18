@@ -1,0 +1,7 @@
+.group-cover-wrap { position: relative; margin-top: -34px; }
+.group-hero-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.group-category-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.group-file-row { display: flex; align-items: center; gap: 10px; }
+.group-file-row .t { flex: 1; min-width: 0; }
+.group-rules-edit textarea { min-height: 140px; }
+.group-pinned { border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--bg-soft); }

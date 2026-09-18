@@ -92,12 +92,14 @@ model Person {
   recommendationsGot   Recommendation[] @relation("RecSubject")
   endorsementsGiven Endorsement[]    @relation("EndorseBy")
   listings          Listing[]
+  listingSaves      ListingSave[]
   savedSearches     SavedSearch[]
   analyticsEvents   AnalyticsEvent[]
   recImpressions    RecommendationImpression[]
   flagAssignments   ExperimentAssignment[]
   mediaAssets       MediaAsset[]
   jobAlerts         JobAlert[]
+  jobSaves          JobSave[]
   deviceTokens      DeviceToken[]
 
   @@index([status])
@@ -896,6 +898,8 @@ model Group {
   logoAssetId  String?
   memberCount  Int      @default(0)
   chatThreadId String?  @unique
+  /// Pinned post ids for the Feed tab, most-recently-pinned first. No separate pin table — small, ordered, per-group.
+  pinnedPostIds String[] @default([])
   searchText   String?
   searchTsv       Unsupported("tsvector")?
   createdById  String
@@ -1046,6 +1050,7 @@ model Job {
   updatedAt      DateTime  @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   applications   JobApplication[]
+  saves          JobSave[]
 
   @@index([status, createdAt])
   @@index([organizationId, status])
@@ -1093,6 +1098,18 @@ model JobAlert {
   person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
 
   @@index([personId])
+}
+
+/// Candidate-side saved job (mirrors Save's shape, kept separate — Save is for posts).
+model JobSave {
+  personId  String
+  jobId     String
+  createdAt DateTime @default(now())
+  person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([personId, jobId])
+  @@index([jobId])
 }
 
 // ───────────────────────────── Marketplace ─────────────────────────────
@@ -1148,6 +1165,7 @@ model Listing {
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   category       Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   media          ListingMedia[]
+  saves          ListingSave[]
 
   @@index([categoryId, status])
   @@index([organizationId])
@@ -1160,6 +1178,17 @@ model ListingMedia {
   assetId   String
   sortOrder Int     @default(0)
   listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+}
+
+/// A person's bookmark of a marketplace listing. Additive (20260918142000_listing_saves).
+model ListingSave {
+  personId  String
+  listingId String
+  createdAt DateTime @default(now())
+  person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@id([personId, listingId])
 }
 
 model CatalogItem {
@@ -1681,7 +1710,13 @@ model ModerationCase {
   subjectPerson   Person?    @relation("CaseSubjectPerson", fields: [subjectPersonId], references: [id], onDelete: SetNull)
   subjectOrg      Organization? @relation("CaseSubjectOrg", fields: [subjectOrgId], references: [id], onDelete: SetNull)
 
-  @@unique([targetType, targetId, status])
+  /// NOT @@unique — a target can rack up several ACTIONED/DISMISSED cases over its
+  /// lifetime; the real "one open case per target" rule is the partial unique index
+  /// `ModerationCase_one_open_per_target` (status IN ('OPEN','IN_REVIEW')) added by
+  /// migration 20260918150000_moderation_case_status_index_fix. A plain @@unique on
+  /// (targetType, targetId, status) would also forbid a SECOND resolved case ever
+  /// reaching the same status, which moderation.ts hits on every repeat offender.
+  @@index([targetType, targetId, status])
   @@index([status, createdAt])
 }
 
