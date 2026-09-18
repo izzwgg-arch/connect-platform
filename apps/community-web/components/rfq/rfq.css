@@ -1,0 +1,55 @@
+.rfq-from-text {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+  padding: 2px 7px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.rfq-field {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.rfq-field small {
+  display: block;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.rfq-compare {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 12px;
+  overflow-x: auto;
+}
+.rfq-compare .card {
+  min-width: 0;
+}
+
+.rfq-textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  font: inherit;
+  color: inherit;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.rfq-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}

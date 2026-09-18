@@ -2836,6 +2836,606 @@
       "permissions": "host",
       "api": "DELETE /events/:id",
       "testId": "event-edit-cancel-confirm"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqListPage",
+      "control": "rfq-new",
+      "action": "click",
+      "expected": "navigates to /rfq/new",
+      "permissions": "signed in",
+      "api": "-",
+      "testId": "rfq-new"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqListPage",
+      "control": "rfq-tab-buyer",
+      "action": "click",
+      "expected": "shows the signed-in person's own RFQs",
+      "permissions": "signed in",
+      "api": "GET /rfq?role=buyer",
+      "testId": "rfq-tab-buyer"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqListPage",
+      "control": "rfq-tab-vendor",
+      "action": "click",
+      "expected": "shows open RFQs invited to a company where the viewer holds org.quote",
+      "permissions": "signed in",
+      "api": "GET /rfq/inbox",
+      "testId": "rfq-tab-vendor"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqListPage",
+      "control": "rfq-tab-public",
+      "action": "click",
+      "expected": "shows PUBLIC open RFQs",
+      "permissions": "signed in",
+      "api": "GET /public/rfqs?limit=",
+      "testId": "rfq-tab-public"
+    },
+    {
+      "screen": "rfq",
+      "component": "RfqCard",
+      "control": "rfq-card-<id>",
+      "action": "click",
+      "expected": "navigates to /rfq/<id>",
+      "permissions": "-",
+      "api": "-",
+      "testId": "rfq-card-<id>"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-title",
+      "action": "type",
+      "expected": "title entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-title"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-description",
+      "action": "type",
+      "expected": "plain-English description entered",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-description"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-understand",
+      "action": "click",
+      "expected": "runs deterministic extraction on the text and reveals editable fields, each auto-filled one flagged 'from your text'",
+      "permissions": "signed in + verified",
+      "api": "POST /rfq/preview",
+      "testId": "rfq-new-understand"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-category",
+      "action": "select",
+      "expected": "category set",
+      "permissions": "signed in + verified",
+      "api": "GET /rfq/categories",
+      "testId": "rfq-new-category"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-quantity",
+      "action": "type",
+      "expected": "quantity edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-quantity"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-budgetmin",
+      "action": "type",
+      "expected": "budget minimum edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-budgetmin"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-budgetmax",
+      "action": "type",
+      "expected": "budget maximum edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-budgetmax"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-location",
+      "action": "type",
+      "expected": "location edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-location"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-deadline",
+      "action": "change",
+      "expected": "deadline edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-deadline"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-requirements",
+      "action": "type",
+      "expected": "requirements (one per line) edited",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-requirements"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-uploader",
+      "action": "change",
+      "expected": "uploads attachments (image/document) for the request",
+      "permissions": "signed in + verified",
+      "api": "POST /media",
+      "testId": "rfq-new-uploader"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-vendor-search",
+      "action": "type",
+      "expected": "searches companies to invite directly",
+      "permissions": "signed in + verified",
+      "api": "GET /organizations?q=",
+      "testId": "rfq-new-vendor-search"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-vendor-result-<id>",
+      "action": "click",
+      "expected": "adds that company to the explicit invite list",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-vendor-result-<id>"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-invited-<id>",
+      "action": "click",
+      "expected": "removes that company from the explicit invite list",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-invited-<id>"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-closes",
+      "action": "change",
+      "expected": "closesAt edited; defaults to the deadline or +14 days",
+      "permissions": "signed in + verified",
+      "api": "-",
+      "testId": "rfq-new-closes"
+    },
+    {
+      "screen": "rfq-new",
+      "component": "NewRfqPage",
+      "control": "rfq-new-publish",
+      "action": "click",
+      "expected": "creates the RFQ, matches and invites vendors, redirects to /rfq/<id>",
+      "permissions": "signed in + verified",
+      "api": "POST /rfq",
+      "testId": "rfq-new-publish"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-edit",
+      "action": "click",
+      "expected": "navigates to the edit form (buyer, OPEN only)",
+      "permissions": "buyer; rfq OPEN",
+      "api": "-",
+      "testId": "rfq-detail-edit"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-share",
+      "action": "click",
+      "expected": "copies the request's link to the clipboard",
+      "permissions": "any viewer",
+      "api": "-",
+      "testId": "rfq-detail-share"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-close",
+      "action": "click",
+      "expected": "closes the request; quoted vendors are notified",
+      "permissions": "buyer; rfq OPEN/SHORTLISTING",
+      "api": "POST /rfq/:id/close",
+      "testId": "rfq-detail-close"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-compare",
+      "action": "click",
+      "expected": "opens the side-by-side quote comparison dialog",
+      "permissions": "buyer, or vendor viewing their own quote",
+      "api": "-",
+      "testId": "rfq-detail-compare"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-message-<id>",
+      "action": "click",
+      "expected": "creates or opens the buyer-vendor thread for that quote and navigates to /messages/:threadId",
+      "permissions": "buyer or the quoting vendor",
+      "api": "POST /rfq/:id/quotes/:qid/thread",
+      "testId": "rfq-quote-message-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-accept-<id>",
+      "action": "click",
+      "expected": "opens the accept-confirmation dialog",
+      "permissions": "buyer; quote SUBMITTED/SHORTLISTED",
+      "api": "-",
+      "testId": "rfq-quote-accept-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-shortlist-<id>",
+      "action": "click",
+      "expected": "shortlists the quote; rfq status becomes SHORTLISTING; vendor notified",
+      "permissions": "buyer; quote SUBMITTED",
+      "api": "POST /rfq/:id/quotes/:qid/shortlist",
+      "testId": "rfq-quote-shortlist-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-decline-<id>",
+      "action": "click",
+      "expected": "declines the quote; vendor notified",
+      "permissions": "buyer",
+      "api": "POST /rfq/:id/quotes/:qid/decline",
+      "testId": "rfq-quote-decline-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-edit-<id>",
+      "action": "click",
+      "expected": "opens the quote dialog pre-filled for editing (a new version)",
+      "permissions": "the quoting vendor's org.quote holder",
+      "api": "-",
+      "testId": "rfq-quote-edit-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-quote-withdraw-<id>",
+      "action": "click",
+      "expected": "withdraws the quote",
+      "permissions": "the quoting vendor's org.quote holder",
+      "api": "POST /rfq/:id/quotes/:qid/withdraw",
+      "testId": "rfq-quote-withdraw-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-quote",
+      "action": "click",
+      "expected": "opens the submit-a-quote dialog",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "-",
+      "testId": "rfq-detail-quote"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-decline",
+      "action": "click",
+      "expected": "declines the invitation to quote",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "POST /rfq/:id/decline",
+      "testId": "rfq-detail-decline"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-detail-ask",
+      "action": "click",
+      "expected": "opens the ask-a-question dialog",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "-",
+      "testId": "rfq-detail-ask"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "RfqDetailPage",
+      "control": "rfq-question-reply-<id>",
+      "action": "click",
+      "expected": "opens the reply dialog for that question",
+      "permissions": "buyer",
+      "api": "-",
+      "testId": "rfq-question-reply-<id>"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "QuoteDialog",
+      "control": "rfq-quote-total",
+      "action": "type",
+      "expected": "quote total entered",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "-",
+      "testId": "rfq-quote-total"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "QuoteDialog",
+      "control": "rfq-quote-uploader",
+      "action": "change",
+      "expected": "uploads attachments for the quote",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "POST /media",
+      "testId": "rfq-quote-uploader"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "QuoteDialog",
+      "control": "rfq-quote-save",
+      "action": "click",
+      "expected": "submits a new quote (201) or a new version of an existing one (200); resubmitting keeps one row and increments version",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "POST /rfq/:id/quotes or PATCH /rfq/:id/quotes/:qid",
+      "testId": "rfq-quote-save"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "Dialog",
+      "control": "rfq-accept-confirm",
+      "action": "click",
+      "expected": "accepts the quote; every other quote on the rfq is declined; a TRANSACTION verification and a mutual CUSTOMER relationship tag are recorded for the winning vendor; a second accept anywhere is refused with 409",
+      "permissions": "buyer",
+      "api": "POST /rfq/:id/quotes/:qid/accept",
+      "testId": "rfq-accept-confirm"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "ReplyDialog",
+      "control": "rfq-reply-text",
+      "action": "type",
+      "expected": "answer text entered",
+      "permissions": "buyer",
+      "api": "-",
+      "testId": "rfq-reply-text"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "ReplyDialog",
+      "control": "rfq-reply-send",
+      "action": "click",
+      "expected": "answers the question; the asking vendor is notified",
+      "permissions": "buyer",
+      "api": "POST /rfq/:id/questions/:qid/answer",
+      "testId": "rfq-reply-send"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "AskDialog",
+      "control": "rfq-ask-text",
+      "action": "type",
+      "expected": "question text entered",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "-",
+      "testId": "rfq-ask-text"
+    },
+    {
+      "screen": "rfq-detail",
+      "component": "AskDialog",
+      "control": "rfq-ask-send",
+      "action": "click",
+      "expected": "asks the question; the buyer is notified",
+      "permissions": "invited vendor's org.quote holder",
+      "api": "POST /rfq/:id/questions",
+      "testId": "rfq-ask-send"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-organizations-dismiss-<id>",
+      "action": "click",
+      "expected": "removes the org from the rail and excludes it from byn-v1 for 90 days",
+      "permissions": "signed in",
+      "api": "POST /recommendations/:impressionId/dismiss",
+      "testId": "reco-organizations-dismiss-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-organizations-action-<id>",
+      "action": "click",
+      "expected": "follows the company and marks the recommendation converted",
+      "permissions": "signed in",
+      "api": "POST /organizations/:id/follow, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-organizations-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-organizations-why-<id>",
+      "action": "click",
+      "expected": "opens a dialog with the reason and the evidence used (industry match, mutual counts, objectives)",
+      "permissions": "signed in, own impression only",
+      "api": "GET /recommendations/explain/:impressionId",
+      "testId": "reco-organizations-why-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-customers-action-<id>",
+      "action": "click",
+      "expected": "navigates to the person's profile or the company's page and marks the recommendation clicked",
+      "permissions": "signed in, org.quote somewhere",
+      "api": "GET /recommendations/customers, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-customers-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-jobs-action-<id>",
+      "action": "click",
+      "expected": "opens the job listing and marks the recommendation clicked",
+      "permissions": "signed in, objectives includes Find employment",
+      "api": "GET /recommendations/jobs, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-jobs-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-groups-action-<id>",
+      "action": "click",
+      "expected": "joins the group and marks the recommendation converted",
+      "permissions": "signed in",
+      "api": "POST /groups/:id/join, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-groups-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-events-action-<id>",
+      "action": "click",
+      "expected": "RSVPs GOING and marks the recommendation converted",
+      "permissions": "signed in",
+      "api": "POST /events/:id/rsvp, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-events-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationRail",
+      "control": "reco-vendors-action-<id>",
+      "action": "click",
+      "expected": "follows the vendor org suggested for an RFQ and marks the recommendation converted",
+      "permissions": "RFQ buyer, or org.manage_rfqs on the RFQ's org, or staff",
+      "api": "GET /recommendations/vendors?rfqId=, POST /recommendations/:impressionId/outcome",
+      "testId": "reco-vendors-action-<id>"
+    },
+    {
+      "screen": "recommendations",
+      "component": "RecommendationsPage",
+      "control": "recommendations-page",
+      "action": "load",
+      "expected": "shows one section per model (organizations/customers/jobs/groups/events); a section with zero results hides itself",
+      "permissions": "signed in",
+      "api": "GET /recommendations/organizations|customers|jobs|groups|events",
+      "testId": "recommendations-page"
+    },
+    {
+      "screen": "admin-experiments",
+      "component": "AdminExperimentsPage",
+      "control": "admin-experiments-create",
+      "action": "click",
+      "expected": "creates a new experiment in DRAFT status; refuses with a sentence if a required field is missing or the key is already used",
+      "permissions": "platform staff (MODERATOR/ADMIN)",
+      "api": "POST /admin/experiments",
+      "testId": "admin-experiments-create"
+    },
+    {
+      "screen": "admin-experiments",
+      "component": "AdminExperimentsPage",
+      "control": "admin-experiments-set-<key>-running",
+      "action": "click",
+      "expected": "starts the experiment (DRAFT/PAUSED -> RUNNING); assignments begin",
+      "permissions": "platform staff",
+      "api": "PATCH /admin/experiments/:id {status:RUNNING}",
+      "testId": "admin-experiments-set-<key>-running"
+    },
+    {
+      "screen": "admin-experiments",
+      "component": "AdminExperimentsPage",
+      "control": "admin-experiments-set-<key>-paused",
+      "action": "click",
+      "expected": "pauses the experiment; every caller now resolves to control",
+      "permissions": "platform staff",
+      "api": "PATCH /admin/experiments/:id {status:PAUSED}",
+      "testId": "admin-experiments-set-<key>-paused"
+    },
+    {
+      "screen": "admin-experiments",
+      "component": "AdminExperimentsPage",
+      "control": "admin-experiments-set-<key>-done",
+      "action": "click",
+      "expected": "marks the experiment done; no further assignments",
+      "permissions": "platform staff",
+      "api": "PATCH /admin/experiments/:id {status:DONE}",
+      "testId": "admin-experiments-set-<key>-done"
+    },
+    {
+      "screen": "admin-experiments",
+      "component": "AdminExperimentsPage",
+      "control": "admin-experiments-results-<key>",
+      "action": "click",
+      "expected": "opens a dialog with per-variant sample size and success/guardrail metric counts, flagging insufficient sample",
+      "permissions": "platform staff",
+      "api": "GET /admin/experiments/:id/results",
+      "testId": "admin-experiments-results-<key>"
+    },
+    {
+      "screen": "admin-flags",
+      "component": "AdminFlagsPage",
+      "control": "admin-flags-new-create",
+      "action": "click",
+      "expected": "creates a new feature flag with the chosen audience/rollout",
+      "permissions": "platform staff",
+      "api": "PUT /admin/flags/:key",
+      "testId": "admin-flags-new-create"
+    },
+    {
+      "screen": "admin-flags",
+      "component": "AdminFlagsPage",
+      "control": "admin-flags-save-<key>",
+      "action": "click",
+      "expected": "saves enabled/rollout/audience/allowlists for that flag; audited",
+      "permissions": "platform staff",
+      "api": "PUT /admin/flags/:key",
+      "testId": "admin-flags-save-<key>"
+    },
+    {
+      "screen": "admin-flags",
+      "component": "AdminFlagsPage",
+      "control": "admin-flags-disable-<key>",
+      "action": "click",
+      "expected": "emergency-disables the flag (enabled:false) immediately, audited",
+      "permissions": "platform staff",
+      "api": "PUT /admin/flags/:key {enabled:false}",
+      "testId": "admin-flags-disable-<key>"
     }
   ]
 }

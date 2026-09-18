@@ -8,8 +8,9 @@ export const ANALYTICS_EVENTS = [
   "feed_view", "post_impression", "post_open", "profile_view", "company_view", "search", "search_result_click",
   "connection_request", "connection_accept", "follow", "unfollow", "reaction", "comment", "share", "save", "hide", "report",
   "message_started", "message_replied", "call_started", "call_completed", "job_view", "job_apply", "rfq_created",
-  "quote_submitted", "quote_accepted", "company_follow", "event_view", "event_rsvp", "marketplace_view", "opportunity_view",
+  "quote_submitted", "quote_accepted", "rfq_closed", "company_follow", "event_view", "event_rsvp", "marketplace_view", "opportunity_view",
   "signup", "login", "logout", "group_join", "intro_requested", "listing_view", "notification_open",
+  "recommendation_outcome",
 ] as const;
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[number];
 
