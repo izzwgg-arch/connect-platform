@@ -49,7 +49,19 @@ export type ExecFn = (cmd: string, args: string[], opts?: { cwd?: string }) => P
 const defaultExec: ExecFn = (cmd, args, opts) =>
   new Promise((resolve) => {
     execFile(cmd, args, { cwd: opts?.cwd, maxBuffer: 32 * 1024 * 1024, timeout: 30 * 60_000 }, (err: any, stdout, stderr) => {
-      resolve({ code: err?.code == null ? 0 : Number(err.code) || 1, stdout: String(stdout || ""), stderr: String(stderr || "") });
+      let errText = String(stderr || "");
+      // ⛔ A SPAWN failure (ENOENT: the CLI is not on PATH) sets err but leaves
+      // BOTH streams empty, so every caller reported `failed: ` with nothing
+      // after it. That cost two dead-end debugging rounds on 2026-09-18 — the
+      // `kaggle` CLI lives in the runner's venv, not on the system PATH. Say so.
+      if (err && !errText && !String(stdout || "")) {
+        errText =
+          err.code === "ENOENT"
+            ? `could not run "${cmd}" — it is not on PATH. The Kaggle CLI lives in the runner venv; ` +
+              `add C:\Users\<you>\LoopcomYiddishRunner\.venv\Scripts to PATH (or pip install kaggle).`
+            : `"${cmd}" produced no output and failed (${err.code ?? err.message ?? "unknown error"}).`;
+      }
+      resolve({ code: err?.code == null ? 0 : Number(err.code) || 1, stdout: String(stdout || ""), stderr: errText });
     });
   });
 

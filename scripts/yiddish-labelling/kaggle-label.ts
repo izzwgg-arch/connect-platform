@@ -301,6 +301,13 @@ export interface PushOptions {
 
 export async function pushBatch(opts: PushOptions, deps: KaggleDeps = {}): Promise<void> {
   const metadata = buildDatasetMetadata({ owner: opts.owner, slug: datasetSlugFor(opts.batch), title: `Loopcom YC label batch ${opts.batch}` });
+  // The shared builder tags CC0-1.0, which is a PUBLIC-DOMAIN DEDICATION. A label
+  // batch is somebody else's copyrighted audio (Yiddish24 gave permission to
+  // ANALYSE, never to license or redistribute), so claiming CC0 on it would be a
+  // false statement about a third party's work. The dataset is private either way
+  // (`datasets create` is private unless --public), but the declared licence must
+  // still be honest.
+  metadata.licenses = [{ name: "other" }];
   if (opts.dryRun) {
     console.log(`[kaggle-label] dry-run push: would ${opts.isNew ? "create" : "version"} ${metadata.id} from ${opts.batchDir}`);
     console.log(JSON.stringify(metadata, null, 2));
