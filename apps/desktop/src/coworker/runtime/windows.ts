@@ -87,3 +87,92 @@ export function humanDuration(sec: number): string {
   parts.push(`${m} minute${m === 1 ? "" : "s"}`);
   return parts.join(", ");
 }
+
+/* ───────────────────────── services (Phase 10) ───────────────────────── */
+
+const SERVICE_NAME_RE = /^[A-Za-z0-9_.\- ]{1,120}$/;
+
+export async function services(args: { name?: unknown; status?: unknown; limit?: unknown }, deps?: ShellDeps) {
+  const name = typeof args.name === "string" && SERVICE_NAME_RE.test(args.name.trim()) ? args.name.trim() : "";
+  const status = args.status === "running" || args.status === "stopped" ? args.status : "all";
+  const limit = Math.min(Math.max(1, Number(args.limit) || 50), 300);
+  const esc = (v: string) => v.replace(/'/g, "''");
+  const ps = `
+$svc = Get-Service ${name ? `| Where-Object { $_.Name -like '*${esc(name)}*' -or $_.DisplayName -like '*${esc(name)}*' }` : ""} ${status !== "all" ? `| Where-Object { $_.Status -eq '${status === "running" ? "Running" : "Stopped"}' }` : ""} | Sort-Object Name | Select-Object -First ${limit}
+@($svc | ForEach-Object { [pscustomobject]@{ name=$_.Name; displayName=$_.DisplayName; status=$_.Status.ToString(); startType=$(try { $_.StartType.ToString() } catch { $null }); canStop=$_.CanStop } }) | ConvertTo-Json -Depth 3 -Compress`;
+  const run = await runPowerShell(ps, { timeoutSec: 25, deps });
+  const parsed = run.ok ? asArray<any>(parseJson<any>(run.stdout)) : null;
+  if (!parsed) return { ok: false, error: "service_list_failed", message: run.stderr.slice(0, 300) || "PowerShell returned nothing." };
+  return { ok: true, measuredAt: new Date().toISOString(), filter: name || null, status, count: parsed.length, services: parsed };
+}
+
+/** start/stop/restart as the signed-in user (many services need admin — the error says so). */
+export async function serviceControl(name: string, action: "start" | "stop" | "restart", deps?: ShellDeps) {
+  if (!SERVICE_NAME_RE.test(name)) return { ok: false, error: "bad_service_name", message: "That is not a valid service name." };
+  const verb = action === "restart" ? "Restart-Service" : action === "start" ? "Start-Service" : "Stop-Service";
+  const n = name.replace(/'/g, "''");
+  const ps = `
+try {
+  $before = (Get-Service -Name '${n}' -ErrorAction Stop).Status.ToString()
+  ${verb} -Name '${n}' -ErrorAction Stop
+  Start-Sleep -Milliseconds 800
+  $s = Get-Service -Name '${n}'
+  [pscustomobject]@{ ok=$true; name=$s.Name; displayName=$s.DisplayName; before=$before; status=$s.Status.ToString() } | ConvertTo-Json -Compress
+} catch {
+  $m = $_.Exception.Message
+  $denied = ($m -match 'denied|Access is denied|Cannot open|not permitted')
+  [pscustomobject]@{ ok=$false; error=$(if ($denied) { 'needs_admin' } else { 'service_control_failed' }); message=$m } | ConvertTo-Json -Compress
+}`;
+  const run = await runPowerShell(ps, { timeoutSec: 60, deps });
+  const parsed = parseJson<any>(run.stdout);
+  if (!parsed) return { ok: false, error: "service_control_failed", message: run.stderr.slice(0, 300) || "PowerShell returned nothing." };
+  if (parsed.ok !== true && parsed.error === "needs_admin") return { ...parsed, action, message: `${parsed.message} — Windows requires administrator rights for this service. Retry with elevated:true (the person will see the Windows prompt).` };
+  return { ...parsed, action, verified: parsed.ok === true && (action === "stop" ? parsed.status === "Stopped" : parsed.status === "Running") };
+}
+
+/* ───────────────────────── networking (Phase 12) ───────────────────────── */
+
+export async function networkInfo(deps?: ShellDeps) {
+  const ps = `
+$adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object {
+  $a = $_
+  $ips = @(Get-NetIPAddress -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue | ForEach-Object { $_.IPAddress })
+  [pscustomobject]@{ name=$a.Name; description=$a.InterfaceDescription; status=$a.Status.ToString(); mac=$a.MacAddress; linkSpeed=$a.LinkSpeed; ips=$ips; virtual=[bool]$a.Virtual; ifIndex=$a.ifIndex }
+})
+$routes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { [pscustomobject]@{ gateway=$_.NextHop; ifIndex=$_.ifIndex; metric=$_.RouteMetric } })
+$dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.ServerAddresses } | ForEach-Object { [pscustomobject]@{ ifIndex=$_.InterfaceIndex; servers=@($_.ServerAddresses) } })
+$proxy = try { $p = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -ErrorAction Stop; [pscustomobject]@{ enabled=[bool]$p.ProxyEnable; server=$p.ProxyServer; autoConfig=$p.AutoConfigURL } } catch { $null }
+$vpn = @($adapters | Where-Object { $_.status -eq 'Up' -and ($_.description -match 'VPN|WireGuard|Tap-Windows|TAP|OpenVPN|Cisco AnyConnect|Fortinet|GlobalProtect|Tailscale|ZeroTier|Wintun|PANGP|NordLynx|Proton') } | ForEach-Object { $_.name })
+$conn = try { @(Get-NetConnectionProfile -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ name=$_.Name; category=$_.NetworkCategory.ToString(); ipv4=$_.IPv4Connectivity.ToString(); ipv6=$_.IPv6Connectivity.ToString() } }) } catch { @() }
+[pscustomobject]@{ adapters=$adapters; defaultRoutes=$routes; dns=$dns; proxy=$proxy; vpnAdaptersUp=$vpn; connectionProfiles=@($conn) } | ConvertTo-Json -Depth 5 -Compress`;
+  const run = await runPowerShell(ps, { timeoutSec: 35, deps });
+  const parsed = run.ok ? parseJson<any>(run.stdout) : null;
+  if (!parsed) return { ok: false, error: "network_info_failed", message: run.stderr.slice(0, 300) || "PowerShell returned nothing." };
+  return { ok: true, measuredAt: new Date().toISOString(), hostname: os.hostname(), ...parsed, adapters: asArray<any>(parsed.adapters), defaultRoutes: asArray<any>(parsed.defaultRoutes), dns: asArray<any>(parsed.dns), vpnAdaptersUp: asArray<any>(parsed.vpnAdaptersUp), connectionProfiles: asArray<any>(parsed.connectionProfiles) };
+}
+
+export async function networkTest(args: { host?: unknown; port?: unknown; count?: unknown }, deps?: ShellDeps) {
+  const host = typeof args.host === "string" ? args.host.trim() : "";
+  if (!/^[A-Za-z0-9.\-:]{1,253}$/.test(host)) return { ok: false, error: "bad_host", message: "host must be a hostname or IP address." };
+  const port = args.port === 0 ? 0 : Math.min(Math.max(0, Number(args.port) || 443), 65535);
+  const count = Math.min(Math.max(1, Number(args.count) || 4), 10);
+  const ps = `
+$target = '${host.replace(/'/g, "''")}'
+$dns = try { @((Resolve-DnsName -Name $target -ErrorAction Stop -DnsOnly | Where-Object { $_.Type -in 'A','AAAA' } | ForEach-Object { $_.IPAddress })) } catch { @() }
+$tcp = $null
+if (${port} -gt 0) {
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $client = New-Object System.Net.Sockets.TcpClient
+  try { $ar = $client.BeginConnect($target, ${port}, $null, $null); $okc = $ar.AsyncWaitHandle.WaitOne(4000); if ($okc) { $client.EndConnect($ar) }; $tcp = [pscustomobject]@{ port=${port}; connected=[bool]($okc -and $client.Connected); ms=[int]$sw.ElapsedMilliseconds } } catch { $tcp = [pscustomobject]@{ port=${port}; connected=$false; ms=[int]$sw.ElapsedMilliseconds; error=$_.Exception.Message } } finally { $client.Close() }
+}
+$ping = New-Object System.Net.NetworkInformation.Ping
+$times = @(); $lost = 0
+for ($i = 0; $i -lt ${count}; $i++) { try { $r = $ping.Send($target, 2000); if ($r.Status -eq 'Success') { $times += [int]$r.RoundtripTime } else { $lost++ } } catch { $lost++ } }
+$avg = if ($times.Count) { [math]::Round(($times | Measure-Object -Average).Average, 1) } else { $null }
+$jit = if ($times.Count -gt 1) { $d = @(); for ($j = 1; $j -lt $times.Count; $j++) { $d += [math]::Abs($times[$j] - $times[$j-1]) }; [math]::Round(($d | Measure-Object -Average).Average, 1) } else { $null }
+[pscustomobject]@{ host=$target; resolved=$dns; tcp=$tcp; ping=[pscustomobject]@{ sent=${count}; lost=$lost; lossPercent=[math]::Round($lost*100/${count}); avgMs=$avg; minMs=$(if ($times.Count) { ($times | Measure-Object -Minimum).Minimum } else { $null }); maxMs=$(if ($times.Count) { ($times | Measure-Object -Maximum).Maximum } else { $null }); jitterMs=$jit } } | ConvertTo-Json -Depth 4 -Compress`;
+  const run = await runPowerShell(ps, { timeoutSec: 50, deps });
+  const parsed = run.ok ? parseJson<any>(run.stdout) : null;
+  if (!parsed) return { ok: false, error: "network_test_failed", message: run.stderr.slice(0, 300) || "PowerShell returned nothing." };
+  return { ok: true, measuredAt: new Date().toISOString(), ...parsed, resolved: asArray<any>(parsed.resolved).filter((x) => typeof x === "string") };
+}

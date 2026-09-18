@@ -32,21 +32,30 @@ import { Journal } from "./journal";
 import type { BrowserCompanionRuntime } from "../browserCompanion/runtime";
 import { validateArgs, type CommandName } from "../browserCompanion/protocol";
 import { gitBranches, gitCheckout, gitClone, gitCommit, gitDiff, gitLog, gitPull, gitPush, gitStatus } from "./git";
+import { classifyShellScript, scriptTouchesProtected, scriptPathLiterals, isProtectedPath } from "../computerControl/protectedResources";
+import { isWindowsTool, WINDOWS_TOOL_NAMES } from "../computerControl/windowsControl";
+import { networkInfo, networkTest, serviceControl, services } from "./windows";
 
 /** The tool family a built-in tool belongs to, for the person's on/off switches. MCP tools have none. */
-export type ToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system";
+export type ToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system" | "windows" | "screen" | "services";
 export function toolGroup(name: string): ToolGroup | null {
   if (name.startsWith("computer_fs_") || name === "computer_open_path" || name === "computer_artifact_register") return "files";
   if (name.startsWith("computer_chrome_") || name.startsWith("computer_browser_")) return "browser";
   if (name.startsWith("computer_xlsx_")) return "sheets";
   if (name.startsWith("computer_git_")) return "git";
   if (name === "computer_powershell") return "shell";
-  if (name === "computer_system_info" || name === "computer_processes" || name === "computer_diagnostics") return "system";
+  if (name === "computer_system_info" || name === "computer_processes" || name === "computer_diagnostics" || name === "computer_network_info" || name === "computer_network_test") return "system";
+  if (name === "computer_services" || name === "computer_service_control") return "services";
+  // Layer 2 — programs and their windows (UI Automation, no cursor)
+  if (name.startsWith("computer_windows_") || name === "computer_app_launch" || name === "computer_process_kill") return "windows";
+  // Layer 3 — the real mouse, keyboard and pictures of the screen (begin/end ride with it)
+  if (name.startsWith("computer_screen_")) return "screen";
   return null;
 }
 
 const GROUP_WORDS: Record<ToolGroup, string> = {
   files: "Files on this computer", browser: "The web browser", sheets: "Spreadsheets", git: "Code projects", shell: "Running commands", system: "Checking this computer",
+  windows: "Windows programs", screen: "The mouse, keyboard and screen", services: "Windows services",
 };
 
 /** Webmail sites — the person's inbox. Blocked unless they switched Email on. */
@@ -59,11 +68,14 @@ export function isWebmailUrl(url: unknown): boolean {
   } catch { return false; }
 }
 
-/** The screen actions that require an already-open control session (everything but begin/end). */
+/** The screen/windows actions that require an already-open control session (everything but begin/end). */
 const SCREEN_ACTION_TOOLS = new Set<string>([
   "computer_screen_read", "computer_screen_look", "computer_screen_click", "computer_screen_type",
   "computer_screen_key", "computer_screen_scroll", "computer_screen_move", "computer_screen_capture",
+  ...WINDOWS_TOOL_NAMES,
 ]);
+/** Everything the ask-once screen session governs (for the manifest filter and the gate). */
+export function isScreenSessionTool(name: string): boolean { return name.startsWith("computer_screen_") || isWindowsTool(name); }
 
 export type ApprovalRequest = {
   callId: string;
@@ -132,7 +144,7 @@ export class CoworkerRuntime {
   }
 
   manifestTools() {
-    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).filter((t) => this.deps.screen ? true : !t.name.startsWith("computer_screen_")).filter((t) => !this.groupOff(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
+    const builtin = TOOL_CATALOG.filter(t => this.deps.chrome ? !t.name.startsWith("computer_browser_") : !t.name.startsWith("computer_chrome_")).filter((t) => this.deps.screen ? true : !isScreenSessionTool(t.name)).filter((t) => !this.groupOff(t.name)).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, category: t.spec.category, risk: t.spec.risk, domains: [...t.spec.domains], source: "builtin" as const, timeoutMs: t.spec.timeoutMs }));
     const mcp = this.deps.mcp.tools().map(({ client, tool }) => ({
       name: tool.modelName,
       description: `[${client.config.name}] ${tool.description}`.slice(0, 2000),
@@ -208,7 +220,7 @@ export class CoworkerRuntime {
        *    tools and still ask through the ordinary gate. A screen action with no open
        *    approved session is refused outright — the mouse never moves by surprise. */
       let screenPreApproved = false;
-      if (call.name.startsWith("computer_screen_")) {
+      if (isScreenSessionTool(call.name)) {
         const sc = this.deps.screen;
         if (!sc) return finish(false, { error: "screen_control_unavailable", denied: true, message: "This computer cannot control its own screen from the Coworker." }, "screen_control_unavailable", "denied");
         if (call.name === "computer_screen_begin" && !sc.isEnabled()) {
@@ -217,17 +229,55 @@ export class CoworkerRuntime {
         }
         if (SCREEN_ACTION_TOOLS.has(call.name)) {
           if (!sc.isApprovedFor(call.taskId)) {
-            const message = "Nothing is being controlled on the screen yet. Call computer_screen_begin first — the person approves once, then screen actions run without asking again.";
+            const message = "Nothing is being controlled on the screen yet. Call computer_screen_begin first — the person approves once, then program and screen actions run without asking again.";
             return finish(false, { error: "screen_not_started", denied: true, message }, "screen_not_started", "denied", message);
           }
-          screenPreApproved = true;
+          // ⛔ The pre-approval satisfies desktop.active's ask ONLY. A tool that is
+          // destructive / alwaysRequireApproval (process kill) still asks on its own.
+          screenPreApproved = !(spec.destructive || spec.alwaysRequireApproval === true);
         }
       }
 
-      /* ── administrator PowerShell: elevation raises the risk and always asks ── */
+      /* ── PowerShell: the script decides the risk (READ_ONLY / MODIFY / HIGH_RISK),
+       *    elevation raises it further, and the cross-tool policy applies BEFORE the
+       *    verdict — a protected resource or a path outside the fence is refused
+       *    whatever the profile says, exactly as the file tools would refuse it. ── */
       let effSpec = spec;
-      if (call.name === "computer_powershell" && args.elevated === true) {
+      if (call.name === "computer_powershell") {
+        const script = typeof args.script === "string" ? args.script : "";
+        const prot = scriptTouchesProtected(script);
+        if (!prot.ok) return finish(false, { error: prot.error, denied: true, message: prot.message }, prot.error, "denied", prot.message);
+        for (const lit of scriptPathLiterals(script)) {
+          const r = await resolveUserPath(lit, this.fsEnv());
+          if (!r.ok && r.error !== "not_found") {
+            const message = `The script mentions ${lit}, which is outside the folders the Coworker may use — the same fence the file tools have. ${r.message ?? ""}`.trim();
+            return finish(false, { error: `path_fence:${r.error}`, denied: true, message }, `path_fence:${r.error}`, "denied", message);
+          }
+        }
+        const cls = classifyShellScript(script);
+        if (args.elevated === true) effSpec = { ...spec, risk: "HIGH", alwaysRequireApproval: true };
+        else if (cls.class === "READ_ONLY") effSpec = { ...spec, risk: "READ_ONLY", domains: ["diagnostics"] };
+        else if (cls.class === "HIGH_RISK") effSpec = { ...spec, risk: "HIGH", alwaysRequireApproval: true };
+        (args as Record<string, unknown>).__shellClass = cls.class;
+      }
+      if (call.name === "computer_service_control" && args.elevated === true) {
         effSpec = { ...spec, risk: "HIGH", alwaysRequireApproval: true };
+      }
+
+      /* ── cross-tool policy for the program tools: a protected path handed to a
+       *    program (open it in Notepad, upload it) is refused HERE, in the boundary,
+       *    not only in the façade behind the controller ── */
+      if (call.name === "computer_app_launch" || call.name === "computer_windows_set_value" || call.name === "computer_chrome_upload" || call.name === "computer_open_path") {
+        const candidates: string[] = [];
+        for (const k of ["app", "args", "value", "text", "path"]) { const v = args[k]; if (typeof v === "string" && v.trim()) { candidates.push(v.trim()); candidates.push(...v.split(/\s+/)); } }
+        for (const raw of candidates) {
+          const lit = raw.replace(/^["']|["']$/g, "");
+          const v = isProtectedPath(lit);
+          if (v.protected && /[\\/]/.test(lit)) {
+            const message = `The Coworker will not point a program at ${lit} — it is a place where passwords or keys are kept, and that is refused for every tool.`;
+            return finish(false, { error: "protected_resource", denied: true, message }, "protected_resource", "denied", message);
+          }
+        }
       }
 
       /* ── the verdict ── */
@@ -284,7 +334,9 @@ export class CoworkerRuntime {
       case "computer_fs_move": what = `Move ${short(args.from)} to ${short(args.to)}.`; break;
       case "computer_fs_copy": what = `Copy ${short(args.from)} to ${short(args.to)}.`; break;
       case "computer_fs_delete": what = `DELETE ${short(args.path)}${args.recursive ? " and everything inside it" : ""}. This cannot be undone.`; break;
-      case "computer_powershell": what = `${args.elevated === true ? "Run this PowerShell script AS ADMINISTRATOR (Windows will ask you to confirm too):" : "Run this PowerShell script:"}\n${short(args.script, 600)}`; break;
+      case "computer_powershell": what = `${args.elevated === true ? "Run this PowerShell script AS ADMINISTRATOR (Windows will ask you to confirm too):" : args.__shellClass === "HIGH_RISK" ? "Run this PowerShell script (Loopcom rates it HIGH RISK):" : "Run this PowerShell script:"}\n${short(args.script, 600)}`; break;
+      case "computer_service_control": what = `${String(args.action ?? "change").toUpperCase()} the Windows service “${short(args.name, 80)}”${args.elevated === true ? " as administrator (Windows will ask you to confirm too)" : ""}.`; break;
+      case "computer_process_kill": what = `END the program ${short(args.name ?? `pid ${args.pid}`, 80)} on this computer. Unsaved work in it would be lost.`; break;
       case "computer_screen_begin": what = `Control your screen — move the mouse and type on your real desktop:\n${short(args.reason, 240)}\nA blue frame will show while it works; press Escape to take back the screen any time.`; break;
       case "computer_browser_open": what = `Open ${short(args.url)} in the Coworker's own background browser.`; break;
       case "computer_browser_download": what = `Download ${short(args.url ?? args.text ?? args.selector)} into the workspace downloads folder.`; break;
@@ -394,11 +446,54 @@ export class CoworkerRuntime {
         const cwdArg = typeof args.cwd === "string" && args.cwd.trim() ? await resolveUserPath(args.cwd, env, { mustExist: true }) : null;
         if (cwdArg && !cwdArg.ok) return wrap(cwdArg);
         const r = await runPowerShellChecked({ ...args, cwd: cwdArg ? cwdArg.abs : undefined }, { defaultCwd: this.deps.workspace, deps: this.deps.shellDeps, onSpawn: (child) => { rec.children.add(child); child.once("exit", () => rec.children.delete(child)); } });
-        return wrap(signal.aborted ? { ...r, ok: false, error: "task_cancelled" } : r);
+        return wrap(signal.aborted ? { ...r, ok: false, error: "task_cancelled" } : { ...r, classification: args.__shellClass ?? "MODIFY" });
+      }
+      case "computer_services": return wrap(await services(args, this.deps.shellDeps));
+      case "computer_service_control": {
+        const name = typeof args.name === "string" ? args.name.trim() : "";
+        const action = args.action === "start" || args.action === "stop" || args.action === "restart" ? args.action : null;
+        if (!name || !action) return wrap({ ok: false, error: "bad_args", message: "name and action (start|stop|restart) are required." });
+        if (/^(?:WinDefend|MpsSvc|wscsvc|SecurityHealthService|Sense|WdNisSvc|BFE|EventLog|RpcSs|DcomLaunch|LSM|Winmgmt|CryptSvc|TrustedInstaller|wuauserv|Loopcom\w*)$/i.test(name)) {
+          return wrap({ ok: false, error: "protected_service", message: `The Coworker will not change the ${name} service — it is part of Windows security or Loopcom itself.` });
+        }
+        if (args.elevated === true) {
+          if (!this.deps.runElevatedPowerShell) return wrap({ ok: false, error: "elevation_unavailable", message: "Running as administrator isn't available on this computer." });
+          const verb = action === "restart" ? "Restart-Service" : action === "start" ? "Start-Service" : "Stop-Service";
+          const r = await this.deps.runElevatedPowerShell(`${verb} -Name ${JSON.stringify(name)} -ErrorAction Stop; Get-Service -Name ${JSON.stringify(name)} | Select-Object Name,Status,StartType | ConvertTo-Json -Compress`, { timeoutSec: 90, signal });
+          return wrap(signal.aborted ? { ...r, ok: false, error: "task_cancelled" } : { ...r, name, action, elevated: true });
+        }
+        return wrap(await serviceControl(name, action, this.deps.shellDeps));
+      }
+      case "computer_network_info": return wrap(await networkInfo(this.deps.shellDeps));
+      case "computer_network_test": return wrap(await networkTest(args, this.deps.shellDeps));
+      case "computer_app_launch":
+      case "computer_process_kill":
+      case "computer_windows_list":
+      case "computer_windows_find":
+      case "computer_windows_activate":
+      case "computer_windows_close":
+      case "computer_windows_minimize":
+      case "computer_windows_controls":
+      case "computer_windows_find_control":
+      case "computer_windows_wait_for_control":
+      case "computer_windows_invoke":
+      case "computer_windows_set_value":
+      case "computer_windows_get_value":
+      case "computer_windows_select":
+      case "computer_windows_toggle":
+      case "computer_windows_expand":
+      case "computer_windows_collapse":
+      case "computer_windows_scroll":
+      case "computer_windows_focus":
+      case "computer_windows_menu": {
+        const sc = this.deps.screen;
+        if (!sc || !sc.windows) return wrap({ ok: false, error: "screen_control_unavailable", message: "This computer cannot control its programs from the Coworker." });
+        if (isWindowsTool(tool.name)) return wrap(await sc.windows(rec.taskId, tool.name, args));
+        return wrap({ ok: false, error: "not_implemented" });
       }
       case "computer_screen_begin": return wrap(this.deps.screen ? await this.deps.screen.begin(rec.taskId, typeof args.reason === "string" ? args.reason : "", signal) : { ok: false, error: "screen_control_unavailable" });
       case "computer_screen_read": return wrap(this.deps.screen ? await this.deps.screen.read(rec.taskId, args) : { ok: false, error: "screen_control_unavailable" });
-      case "computer_screen_look": return wrap(this.deps.screen ? await this.deps.screen.look(rec.taskId) : { ok: false, error: "screen_control_unavailable" });
+      case "computer_screen_look": return wrap(this.deps.screen ? await this.deps.screen.look(rec.taskId, args) : { ok: false, error: "screen_control_unavailable" });
       case "computer_screen_click":
       case "computer_screen_type":
       case "computer_screen_key":
@@ -446,7 +541,7 @@ export class CoworkerRuntime {
         const out = await run(args, env, gitDeps);
         return wrap(signal.aborted ? { ...(out as object), ok: false, error: "task_cancelled" } : out);
       }
-      case "computer_diagnostics": return wrap(await runDiagnostics({ ...this.deps.diagnostics, shell: this.deps.shellDeps }, args.sections));
+      case "computer_diagnostics": return wrap(await runDiagnostics({ ...this.deps.diagnostics, shell: this.deps.shellDeps, computerControl: this.deps.screen?.health ? () => this.deps.screen!.health!() : undefined }, args.sections));
       case "computer_mcp_servers": return wrap({ ok: true, servers: this.deps.mcp.status() });
       case "computer_task_history": {
         const j = await this.deps.journal.recent(Math.min(Math.max(1, Number(args.limit) || 30), 200));
@@ -473,6 +568,8 @@ function titleFor(name: string): string {
   if (name.startsWith("computer_git_")) return "Change a code project?";
   if (name === "computer_screen_begin") return "Let the Coworker control your screen?";
   if (name === "computer_powershell") return "Run PowerShell on this computer?";
+  if (name === "computer_service_control") return "Change a Windows service?";
+  if (name === "computer_process_kill") return "End a program?";
   if (name.startsWith("computer_browser_download")) return "Download a file?";
   if (name.startsWith("computer_browser_submit")) return "Submit a web form?";
   if (name.startsWith("computer_browser_")) return "Use the Coworker browser?";

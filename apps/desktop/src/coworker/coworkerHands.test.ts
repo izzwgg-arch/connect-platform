@@ -310,7 +310,10 @@ test("runtime: SAFE asks before a write and runs on Yes; a No runs nothing and i
   const trusted = runtimeFor("TRUSTED", env);
   assert.equal((await trusted.runtime.handle({ id: "c6", name: "computer_fs_mkdir", args: { path: "T" }, taskId: "t2" })).ok, true);
   assert.equal(trusted.asks.length, 0);
-  await trusted.runtime.handle({ id: "c7", name: "computer_powershell", args: { script: "'x'" }, taskId: "t2" });
+  // 2026-09-18: the SCRIPT decides the risk — a read-only script ('x', Get-*) runs without asking; a modifying one asks under TRUSTED.
+  const ro = await trusted.runtime.handle({ id: "c7a", name: "computer_powershell", args: { script: "'x'" }, taskId: "t2" });
+  assert.equal(trusted.asks.length, 0); assert.equal(ro.ok, true); assert.equal((ro.content as any).classification, "READ_ONLY");
+  await trusted.runtime.handle({ id: "c7", name: "computer_powershell", args: { script: "New-Item -ItemType Directory -Path made" }, taskId: "t2" });
   assert.equal(trusted.asks.length, 1);
   const auto = runtimeFor("AUTONOMOUS", env);
   const ps = await auto.runtime.handle({ id: "c8", name: "computer_powershell", args: { script: "hostname" }, taskId: "t3" });

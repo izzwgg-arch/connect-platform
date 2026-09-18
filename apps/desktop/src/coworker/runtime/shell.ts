@@ -84,7 +84,13 @@ export function runPowerShell(script: string, opts: { timeoutSec?: number; cwd?:
     child.on("close", (code) => finish(code));
     try {
       // Force UTF-8 output so names with accents survive, then the script itself.
-      child.stdin?.write("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Continue';\n" + script + "\n");
+      // ⛔ Wrapped in `& { … }` AND terminated by a BLANK LINE. Read from stdin
+      // (`-Command -`), PowerShell only runs a multi-line statement once an empty
+      // line follows it; a script whose last block ends at EOF is silently dropped —
+      // exit 0, no output (found 2026-09-18: a top-level multi-line `if { }` made the
+      // whole network test "return nothing"). Wrapping makes the script ONE
+      // statement and the trailing blank line completes it.
+      child.stdin?.write("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Continue';\n& {\n" + script + "\n}\n\n");
       child.stdin?.end();
     } catch (e: any) {
       stderr = cap(stderr, String(e?.message ?? e));

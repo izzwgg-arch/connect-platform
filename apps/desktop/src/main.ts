@@ -520,7 +520,7 @@ function rebuildTray(): void {
       // Screen control takes effect at once (read per action), so no "after restart".
       label: "Let the Coworker control the screen",
       type: "checkbox",
-      checked: settings.coworkerScreenControlEnabled === true,
+      checked: settings.coworkerScreenControlEnabled !== false,
       click: () => toggleScreenControl(),
     },
     {
@@ -679,7 +679,7 @@ function toggleCoworkerWidget(): void {
  */
 function toggleScreenControl(): void {
   try {
-    const enabled = !settings.coworkerScreenControlEnabled;
+    const enabled = settings.coworkerScreenControlEnabled === false;
     writeSettings({ ...settings, coworkerScreenControlEnabled: enabled });
     rebuildTray();
     diag("coworker", `screen control ${enabled ? "allowed" : "turned off"}`);

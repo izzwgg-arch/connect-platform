@@ -12,6 +12,7 @@
  */
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { isProtectedPath } from "../computerControl/protectedResources";
 import { resolveScopedPath, normalizePath, isInsideRoot } from "../policyCore";
 
 export type FsEnv = {
@@ -43,6 +44,10 @@ export async function resolveUserPath(input: unknown, env: FsEnv, opts: { mustEx
   if (!path.isAbsolute(candidate) && !/^[a-zA-Z]:/.test(candidate)) candidate = path.join(env.workspace, candidate);
   const scoped = resolveScopedPath(candidate, env.roots);
   if (!scoped.ok) return err(scoped.refused, refusalText(scoped.refused), candidate);
+  // ⛔ Cross-tool policy: a password/key store is refused HERE for the file tools,
+  // and the same check refuses it for PowerShell, UI Automation and browser upload.
+  const prot = isProtectedPath(candidate);
+  if (prot.protected) return err("protected_resource", "That is a place where passwords or keys are kept (" + prot.segment + "). The Coworker never reads or changes it, whichever tool would do it.", candidate);
   const abs = path.win32.normalize(candidate.replace(/\//g, "\\"));
   // Realpath the nearest EXISTING ancestor and re-check: a junction inside home
   // that points at C:\Windows must fail closed even though the string passed.

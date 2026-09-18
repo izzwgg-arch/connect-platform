@@ -136,7 +136,8 @@ export function startCoworkerHands(d: HandsDeps): Hands {
     app: d.app, BrowserWindow: d.BrowserWindow, screen: d.screen, desktopCapturer: d.desktopCapturer,
     assetPath: d.assetPath, preloadPath: d.preloadPath,
     artifactsDir: () => path.join(workspaceFor(d.getSettings()), "artifacts"),
-    isEnabled: () => d.getSettings().coworkerScreenControlEnabled === true,
+    // ON unless the person turned it off in the tray (2026-09-18); the per-task approval stays.
+    isEnabled: () => d.getSettings().coworkerScreenControlEnabled !== false,
     isCallActive: d.isCallActive,
     log: (l) => log(`screen: ${l}`),
     attachDiag: d.attachDiag,
@@ -215,6 +216,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
       appVersion: d.app.getVersion(),
       tools: runtime.manifestTools().length,
       chrome: chrome.status(),
+      computerControl: await screenController.health().catch(() => ({ alive: false })),
       mcp: mcp.status(),
       activeCalls: runtime.activeCalls(),
       pendingApprovals: pendingApprovals(),
@@ -307,7 +309,7 @@ export function startCoworkerHands(d: HandsDeps): Hands {
 
   return {
     link, runtime, mcp, journal,
-    stop: async () => { try { runtime.cancel(null); await screenController.end(undefined, "app_quit"); await chrome.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
+    stop: async () => { try { runtime.cancel(null); await screenController.shutdown(); await chrome.stop(); } catch { /* ignore */ } try { mcp.shutdown(); } catch { /* ignore */ } try { await link!.stop(); } catch { /* ignore */ } },
     openConnections: () => { openConnectionsWindow(approvalDeps); },
     status: () => ({ link: link!.status(), profile: permissions().profile, mcp: mcp.status().map((m) => ({ id: m.id, state: m.state, tools: m.tools.length })), active: runtime.activeCalls() }),
     busy: () => runtime.activeCalls().length > 0 || pendingApprovals().length > 0,

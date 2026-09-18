@@ -211,7 +211,7 @@ test("pure rules: raise detection, folder refusals, merge cap, switches and trus
   assert.equal(list.length, 20);
   assert.equal(mergeFolder(list, { path: "c:\\F29", name: "again", repo: true, addedAt: "" }).filter((f) => f.path.toLowerCase() === "c:\\f29").length, 1, "same folder is not listed twice");
   const s0 = {} as DesktopSettings;
-  assert.deepEqual(groupsView(s0), { files: true, browser: true, sheets: true, git: true, shell: true, system: true, email: false }, "everything on, email off by default");
+  assert.deepEqual(groupsView(s0), { files: true, browser: true, sheets: true, git: true, shell: true, system: true, windows: true, screen: true, services: true, email: false }, "everything on, email off by default");
   const s1 = applyGroups(s0, { browser: false, email: true, isAdmin: true, files: "no" });
   assert.deepEqual(s1.coworkerDisabledGroups, ["browser"]);
   assert.equal(s1.coworkerBlockEmail, false);

@@ -27,6 +27,7 @@ import { buildPortStatusTools } from "./tools/portStatusTools";
 import { buildCoworkerTaskTools } from "./tools/coworkerTaskTools";
 import { DesktopLink } from "./coworker/desktopLink";
 import { buildDesktopTools, coworkerHandsPrompt, COWORKER_NOT_CONNECTED_PROMPT, COWORKER_MAX_TOOL_ITERATIONS } from "./coworker/desktopTools";
+import { FamilyMemory, filterToolNames, selectFamilies } from "./coworker/toolDiscovery";
 import { registerCoworkerLinkRoutes } from "./coworker/routes";
 import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
@@ -324,7 +325,9 @@ async function main() {
     // desktop. In memory: a restart drops nothing usable (see desktopLink.ts).
     desktopLink = new DesktopLink();
     setInterval(() => { try { desktopLink!.sweep(); } catch { /* housekeeping */ } }, 60_000).unref();
-    const dynamicTools = async (ctx: { tenantId: string; clientUserId: string | null; viewingPath?: string; desktopApp?: boolean }, conversationId: string) => {
+    const familyMemory = new FamilyMemory();
+    setInterval(() => { try { familyMemory.sweep(); } catch { /* housekeeping */ } }, 10 * 60_000).unref();
+    const dynamicTools = async (ctx: { tenantId: string; clientUserId: string | null; viewingPath?: string; desktopApp?: boolean; coworkerFolders?: { repo?: boolean }[] }, conversationId: string, hint?: { text: string }) => {
       // ⛔ EVERY Coworker surface gets the hands, not only the desktop bubble.
       // This read `startsWith("/desktop/coworker")`, so the full-page workspace at
       // `/coworker` could NEVER touch the computer — while its own status pill said
@@ -349,8 +352,14 @@ async function main() {
       const taskId = `${conversationId}:${Date.now().toString(36)}`;
       // Registered now, before the first tool call, so a cancel during planning stops the job.
       desktopLink!.beginTask(identity, taskId);
+      // ⛔ Tool discovery (Phase 34): the model gets the families this message needs,
+      // plus what this conversation already used, plus the core — never all ~75 at once.
+      // The desktop still receives and judges every call; this only trims what is OFFERED.
+      const chosen = selectFamilies({ text: hint?.text ?? "", sticky: familyMemory.get(conversationId), hasRepo: (ctx.coworkerFolders ?? []).some((f) => f?.repo === true), hasMcp: (manifest.mcpServers ?? []).some((s) => s.state === "connected") });
+      const only = new Set(filterToolNames(manifest.tools.map((t) => t.name), chosen.families));
+      await audit.record({ actor: "system", event: "chat.coworker_tool_discovery", tenantId: ctx.tenantId, conversationId, payload: { offered: only.size, of: manifest.tools.length, families: [...chosen.families], reason: chosen.reason } }).catch(() => undefined);
       return {
-        tools: buildDesktopTools(desktopLink!, identity, manifest, taskId, conversationId),
+        tools: buildDesktopTools(desktopLink!, identity, manifest, taskId, conversationId, { only, onCalled: (name) => familyMemory.note(conversationId, name) }),
         prompt: coworkerHandsPrompt(manifest),
         maxIterations: COWORKER_MAX_TOOL_ITERATIONS,
         taskId,

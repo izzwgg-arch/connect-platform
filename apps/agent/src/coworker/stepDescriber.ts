@@ -64,6 +64,41 @@ export function describeStep(name: string, args: Record<string, unknown> = {}): 
     case "computer_processes": return { kind: "system", label: "Looking at the programs that are running" };
     case "computer_powershell": return { kind: "shell", label: "Running a command on this computer" };
     case "computer_diagnostics": return { kind: "system", label: "Running a checkup on this computer", resource: { kind: "system", title: "Checkup" } };
+    case "computer_services": return { kind: "system", label: s(args.name) ? `Checking the ${s(args.name).slice(0, 40)} service` : "Checking Windows services" };
+    case "computer_service_control": return { kind: "system", label: `${({ start: "Starting", stop: "Stopping", restart: "Restarting" } as Record<string, string>)[s(args.action)] ?? "Changing"} the ${s(args.name).slice(0, 40) || "Windows"} service` };
+    case "computer_network_info": return { kind: "system", label: "Checking the network on this computer" };
+    case "computer_network_test": return { kind: "system", label: `Testing the connection to ${s(args.host).slice(0, 60) || "a server"}` };
+    /* ── programs on the desktop (Loopcom Computer Control) ── */
+    case "computer_screen_begin": return { kind: "system", label: "Getting ready to work on your screen", resource: { kind: "system", title: "Your screen" } };
+    case "computer_screen_end": return { kind: "system", label: "Finished on your screen" };
+    case "computer_screen_read":
+    case "computer_windows_controls": return { kind: "system", label: s(args.window) ? `Reading the ${s(args.window).slice(0, 40)} window` : "Reading the window on your screen", resource: { kind: "system", title: s(args.window) || "Your screen" } };
+    case "computer_windows_list":
+    case "computer_windows_find": return { kind: "system", label: "Looking at the windows that are open" };
+    case "computer_windows_find_control":
+    case "computer_windows_wait_for_control": return { kind: "system", label: s(args.name) || s(args.contains) ? `Looking for “${(s(args.name) || s(args.contains)).slice(0, 40)}”` : "Looking for a control on the screen" };
+    case "computer_app_launch": return { kind: "system", label: `Opening ${s(args.app).slice(0, 40) || "a program"}`, resource: { kind: "system", title: s(args.app) } };
+    case "computer_windows_activate": return { kind: "system", label: `Bringing ${s(args.window).slice(0, 40) || "the window"} to the front` };
+    case "computer_windows_close": return { kind: "system", label: `Closing ${s(args.window).slice(0, 40) || "the window"}` };
+    case "computer_windows_minimize": return { kind: "system", label: `Minimizing ${s(args.window).slice(0, 40) || "the window"}` };
+    case "computer_windows_invoke": return { kind: "system", label: s(args.name) ? `Pressing “${s(args.name).slice(0, 40)}”` : "Pressing a button" };
+    case "computer_windows_set_value": return { kind: "system", label: s(args.name) ? `Filling in ${s(args.name).slice(0, 40)}` : "Typing into a field" };
+    case "computer_windows_get_value": return { kind: "system", label: "Checking what it says now" };
+    case "computer_windows_select": return { kind: "system", label: s(args.item) ? `Choosing “${s(args.item).slice(0, 40)}”` : "Choosing an item" };
+    case "computer_windows_toggle": return { kind: "system", label: args.checked === false ? "Unticking a box" : "Ticking a box" };
+    case "computer_windows_expand": return { kind: "system", label: "Opening a section" };
+    case "computer_windows_collapse": return { kind: "system", label: "Closing a section" };
+    case "computer_windows_scroll": return { kind: "system", label: "Scrolling" };
+    case "computer_windows_focus": return { kind: "system", label: "Moving to a field" };
+    case "computer_windows_menu": return { kind: "system", label: Array.isArray(args.path) ? `Opening the ${args.path.map((p) => s(p)).join(" › ").slice(0, 50)} menu` : "Opening a menu" };
+    case "computer_process_kill": return { kind: "system", label: `Ending ${s(args.name).slice(0, 40) || "a program"}` };
+    case "computer_screen_look": return { kind: "system", label: s(args.window) ? `Looking at the ${s(args.window).slice(0, 40)} window` : "Looking at your screen" };
+    case "computer_screen_capture": return { kind: "system", label: "Taking a picture of your screen" };
+    case "computer_screen_click": return { kind: "system", label: s(args.target) ? `Clicking “${s(args.target).slice(0, 40)}”` : "Clicking on your screen" };
+    case "computer_screen_type": return { kind: "system", label: "Typing on your screen" };
+    case "computer_screen_key": return { kind: "system", label: `Pressing ${[...(Array.isArray(args.modifiers) ? args.modifiers : []), s(args.key)].map((k) => s(k)).filter(Boolean).join("+").slice(0, 30) || "a key"}` };
+    case "computer_screen_scroll": return { kind: "system", label: "Scrolling on your screen" };
+    case "computer_screen_move": return { kind: "system", label: "Moving the mouse" };
     case "computer_mcp_servers": return { kind: "mcp", label: "Checking your connected apps" };
     case "computer_task_history": return { kind: "think", label: "Looking at what I did earlier" };
     case "computer_artifact_register": return { kind: "files", label: `Saving ${file || "the result"} to your results`, resource: { kind: "file", title: path } };

@@ -8,7 +8,7 @@
 export type DesktopWindowKind = "full" | "mini" | "phone-engine" | "coworker-widget" | "coworker-chat" | "coworker-approval" | "coworker-connections" | "coworker-screen-overlay";
 
 /** Tool families the person can switch off for the Coworker on this computer. */
-export type CoworkerToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system";
+export type CoworkerToolGroup = "files" | "browser" | "sheets" | "git" | "shell" | "system" | "windows" | "screen" | "services";
 
 /** One MCP server the person configured in Coworker Settings & Connections. */
 export type CoworkerMcpServerSetting = {
@@ -51,9 +51,10 @@ export type DesktopSettings = {
   coworkerPermissions?: "SAFE" | "TRUSTED" | "AUTONOMOUS";
   /**
    * Screen control (2026-09-15) — lets the Coworker move the mouse and type on the
-   * REAL desktop (a blue frame shows; Escape stops it). ⛔ OFF unless set true: the
-   * `computer_screen_*` tools refuse `begin` until the person opts in here, and the
-   * tools are hidden from the agent's manifest entirely when no controller is wired.
+   * REAL desktop (a blue frame shows; Escape stops it). Since 2026-09-18 (Loopcom
+   * Computer Control) it is ON unless set false — the per-task approval in the
+   * desktop's own window remains the gate (desktop.active is NEVER_AUTO); the tray
+   * checkbox turns it off, and turning it off stops a running session at once.
    */
   coworkerScreenControlEnabled?: boolean;
   /**

@@ -30,9 +30,11 @@ export type DiagDeps = {
   linkState: () => Record<string, unknown>;
   shell?: ShellDeps;
   stunServers?: string[];
+  /** Loopcom Computer Control: the local worker's health (2026-09-18). Absent = not wired. */
+  computerControl?: () => Promise<Record<string, unknown>>;
 };
 
-export const DIAG_SECTIONS = ["processes", "phone", "backend", "dns", "network", "latency", "stun", "vpn", "audio", "resources", "logs", "events"] as const;
+export const DIAG_SECTIONS = ["processes", "phone", "backend", "dns", "network", "latency", "stun", "vpn", "audio", "resources", "logs", "events", "computerControl"] as const;
 const SECTION_TIMEOUT_MS: Record<string, number> = { latency: 40_000, events: 30_000, default: 20_000 };
 
 function timeBox<T>(p: Promise<T>, ms: number): Promise<T | { timedOut: true }> {
@@ -57,6 +59,13 @@ export async function runDiagnostics(deps: DiagDeps, sections?: unknown): Promis
     resources: () => resourcesCheck(deps.shell),
     logs: () => logsCheck(deps.logFile),
     events: () => eventsCheck(deps.shell),
+    computerControl: async () => {
+      if (!deps.computerControl) return { status: "unknown", evidence: {}, note: "computer control is not wired on this build" };
+      const h = await deps.computerControl();
+      const enabled = h.enabled !== false;
+      const alive = h.alive === true;
+      return { status: !enabled ? "warn" : alive || h.session === "idle" ? "ok" : "warn", evidence: h, note: !enabled ? "screen control is switched off in the tray" : alive ? "the local worker is running" : "the local worker starts on the first program/screen task" };
+    },
   };
   // Run in parallel but with a bounded fan-out: PowerShell-heavy checks in twos.
   await Promise.all(wanted.map(async (section) => {

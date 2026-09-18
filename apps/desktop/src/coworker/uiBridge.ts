@@ -29,7 +29,7 @@ import { FORBIDDEN_ROOTS, normalizePath, isInsideRoot } from "./policyCore";
 import { gitInstalled, isGitRepoFolder } from "./runtime/git";
 
 export const MAX_ATTACHED_FOLDERS = 20;
-export const TOOL_GROUPS: readonly CoworkerToolGroup[] = ["files", "browser", "sheets", "git", "shell", "system"];
+export const TOOL_GROUPS: readonly CoworkerToolGroup[] = ["files", "browser", "sheets", "git", "shell", "system", "windows", "screen", "services"];
 export type AccessProfile = "SAFE" | "TRUSTED" | "AUTONOMOUS";
 const RANK: Record<AccessProfile, number> = { SAFE: 0, TRUSTED: 1, AUTONOMOUS: 2 };
 

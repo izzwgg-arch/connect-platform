@@ -363,7 +363,9 @@ export interface DynamicToolSet {
   /** "cancel"/"stop" typed by the person: stop the running job for this chat. */
   cancel?: () => { cancelled: number };
 }
-export type DynamicToolsProvider = (ctx: ChatContext, conversationId: string) => Promise<DynamicToolSet>;
+/** What the provider may use to pick a RELEVANT subset of the desktop's tools for this turn (Phase 34: tool discovery). */
+export type DynamicToolsHint = { text: string };
+export type DynamicToolsProvider = (ctx: ChatContext, conversationId: string, hint?: DynamicToolsHint) => Promise<DynamicToolSet>;
 
 /** "cancel", "stop", "stop it", "cancel the task." — a bare instruction, nothing else in the message. */
 export const CANCEL_RE = /^\s*(?:please\s+)?(?:cancel|stop|abort)(?:\s+(?:it|that|this|the task|the job|everything|now))?\s*[.!]*\s*$/i;
@@ -760,7 +762,7 @@ export class ConversationEngine {
     let dyn: DynamicToolSet | null = null;
     if (this.dynamicTools) {
       try {
-        dyn = await this.dynamicTools(ctx, conv.id);
+        dyn = await this.dynamicTools(ctx, conv.id, { text: bridging ? englishText : text });
       } catch (err) {
         dyn = null;
         await this.audit.record({ actor: "system", event: "chat.coworker_tools_unavailable", tenantId: ctx.tenantId, conversationId: conv.id, payload: { error: String(err).slice(0, 200) } });
