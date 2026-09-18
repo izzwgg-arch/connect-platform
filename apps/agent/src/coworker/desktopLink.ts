@@ -99,6 +99,11 @@ type Session = {
   helloAt: number;
   /** Last time a tool call was actually sent to or answered by THIS computer. */
   lastActivityAt: number;
+  /**
+   * This session has been polled by an app that NAMED itself. ⛔ Once true, an
+   * unnamed poll may never touch it again — see `unnamedPoller`.
+   */
+  sawNamedPoll: boolean;
   queue: DesktopMessage[];
   waiters: Waiter[];
   inflight: Map<string, Inflight>;
@@ -281,16 +286,23 @@ export class DesktopLink {
       // re-hello from the same run must NOT (it would reshuffle idle machines every
       // five minutes). Older apps send no launchId, so they keep their original
       // connection time and simply never jump the queue.
+      // ⛔⛔ ONLY a genuine relaunch, proven by a changed launchId. An earlier version
+      // of this also counted "has not polled for a while" as a reconnect, and that
+      // handed the queue to exactly the wrong machine: an app too old to name itself
+      // gets nothing from `unnamedPoller`, so its polls never refresh `lastSeen`, so
+      // EVERY one of its five-minute hellos looked like a return and put it back in
+      // front of the computer the person was actually using. Proven live — an rc.10
+      // machine took the preferred slot mid-acceptance-run and a newer machine's work
+      // went to it. An app that cannot name its run simply keeps its place.
       const relaunched = !!manifest.launchId && !!existing.manifest.launchId && manifest.launchId !== existing.manifest.launchId;
-      const returned = t - existing.lastSeen >= DESKTOP_PRESENCE_MS;
-      if (relaunched || returned) existing.connectedAt = t;
+      if (relaunched) existing.connectedAt = t;
       existing.manifest = manifest;
       existing.lastSeen = t;
       existing.helloAt = t;
-      return { key, replaced: true, reconnected: relaunched || returned };
+      return { key, replaced: true, reconnected: relaunched };
     }
     this.sessions.set(key, {
-      key, identity, desktopId: manifest.desktopId, manifest, connectedAt: t, lastSeen: t, helloAt: t, lastActivityAt: 0,
+      key, identity, desktopId: manifest.desktopId, manifest, connectedAt: t, lastSeen: t, helloAt: t, lastActivityAt: 0, sawNamedPoll: false,
       queue: [], waiters: [], inflight: new Map(), cancelledTasks: new Set(), activeTasks: new Set(),
       stats: { dispatched: 0, completed: 0, failed: 0, timedOut: 0, cancelled: 0 },
     });
@@ -356,14 +368,25 @@ export class DesktopLink {
    * re-opened for anyone with an old build still running somewhere. Proven live:
    * one account here had three computers linked, two of them old builds.
    *
-   * So an unnamed poller may only act when exactly ONE computer is present, which
-   * is every single-computer customer and therefore the ordinary case. With two or
-   * more present it is given nothing until it is updated — silence is the only safe
-   * answer to "which machine are you?".
+   * So an unnamed poller may act only when BOTH hold:
+   *   1. exactly one computer is present (every single-computer customer — the
+   *      ordinary case), and
+   *   2. that computer has never been polled by an app that named itself.
+   *
+   * ⛔⛔ Rule 2 is the one that matters and it was missing at first. A CURRENT app
+   * always names itself, so an unnamed poll can never be that app — but when the
+   * other machines happened to fall out of presence, "exactly one present" was the
+   * current machine, and an old app's poll was handed ITS work. Proven live: three
+   * computers on one account, and an acceptance run's tool calls vanished onto an
+   * rc.10 machine whenever the other two went quiet. Once a session has answered a
+   * named poll it is off limits to unnamed ones for good.
    */
   private unnamedPoller(identity: LinkIdentity): Session | null {
     const present = this.sessionsFor(identity).filter((s) => this.now() - s.lastSeen < DESKTOP_PRESENCE_MS);
-    return present.length === 1 ? present[0] : null;
+    if (present.length !== 1) return null;
+    const only = present[0];
+    if (only.sawNamedPoll || only.manifest.launchId) return null;
+    return only;
   }
 
   /** Present = said hello and polled within DESKTOP_PRESENCE_MS (any computer, or the named one). */
@@ -385,6 +408,7 @@ export class DesktopLink {
   next(identity: LinkIdentity, waitMs: number, desktopId?: string): Promise<DesktopMessage | null> {
     const s = desktopId ? this.session(identity, desktopId) : this.unnamedPoller(identity);
     if (!s) return Promise.resolve(null);
+    if (desktopId) s.sawNamedPoll = true;
     s.lastSeen = this.now();
     const queued = s.queue.shift();
     if (queued) return Promise.resolve(queued);

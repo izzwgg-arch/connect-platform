@@ -192,6 +192,42 @@ test("⛔ an old app that cannot name itself is never handed a NEWER computer's 
   assert.equal(link.sessionsFor(ME).length, 2);
 });
 
+test("⛔⛔ an old app never gets a CURRENT machine's work, even when it is the only one present", async () => {
+  let now = 7_000_000;
+  const link = new DesktopLink(() => now);
+  // one CURRENT computer (names itself, has a launchId) and one old one
+  link.hello(ME, { ...manifest("deskNew", "NEW", ["computer_app_launch"]), launchId: "run1" });
+  link.hello(ME, manifest("deskOld", "OLD", ["computer_fs_list"]));
+  assert.equal(await link.next(ME, 10), null, "two present → an unnamed poll gets nothing");
+  // the old machine goes quiet; the current one is now the ONLY present computer …
+  now += DESKTOP_PRESENCE_MS + 1;
+  link.hello(ME, { ...manifest("deskNew", "NEW", ["computer_app_launch"]), launchId: "run1" });
+  const p = link.dispatch(ME, { name: "computer_app_launch", args: {}, taskId: "t" });
+  // … and an old app's unnamed poll must STILL get nothing, or it runs that work
+  assert.equal(await link.next(ME, 10), null, "an unnamed poll can never be a self-naming app");
+  const msg = await link.next(ME, 30, "deskNew");
+  assert.ok(msg && msg.kind === "call", "the named computer got its own call");
+  link.result(ME, (msg as { id: string }).id, { ok: true, content: { ok: true } });
+  assert.equal((await p).ok, true);
+});
+
+test("⛔⛔ an app too old to name its run never jumps the queue on its periodic hello", async () => {
+  let now = 8_000_000;
+  const link = new DesktopLink(() => now);
+  link.hello(ME, manifest("deskOld", "OLD", ["computer_fs_list"]));       // no launchId, ever
+  now += 1000;
+  link.hello(ME, { ...manifest("deskNew", "NEW", ["computer_app_launch"]), launchId: "run1" });
+  assert.equal(link.manifest(ME)!.hostname, "NEW");
+  // the old app hellos every five minutes and never polls in a way that counts —
+  // it must NOT keep taking the preferred slot back
+  for (let i = 0; i < 6; i++) {
+    now += 5 * 60_000;
+    link.hello(ME, manifest("deskOld", "OLD", ["computer_fs_list"]));
+    link.hello(ME, { ...manifest("deskNew", "NEW", ["computer_app_launch"]), launchId: "run1" });
+    assert.equal(link.manifest(ME)!.hostname, "NEW", `hello round ${i} moved the queue`);
+  }
+});
+
 test("an older app that sends no computer id still works exactly as before", async () => {
   const link = new DesktopLink();
   link.hello(ME, manifest("legacyDesk", "OLD", ["computer_fs_list"]));
