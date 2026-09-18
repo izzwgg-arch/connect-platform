@@ -1,0 +1,27 @@
+.pymk-card {
+  text-align: center;
+  position: relative;
+}
+.pymk-dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pymk-dismiss:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.rel-chip-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
