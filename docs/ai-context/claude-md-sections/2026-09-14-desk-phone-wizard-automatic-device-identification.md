@@ -408,3 +408,17 @@ Memory: [[desk-phone-device-identification-built]], [[reset-first-is-izzys-decis
   rule 4 now says: answer from it first, say what you see, never ask what the screen says when the
   robot already knows, ask about the physical screen only during THEIR reset step or when the phone
   is unreachable, and then for one specific thing. ⏳ Izzy walks it a third time.
+  ✅ **R31 LIVE + PROVEN THROUGH THE REAL DOOR (2026-09-18 16:40Z):** api + portal at `9a27c130`
+  (0 restarts; `TENANT_ID` + `observed.robot` in the api container; "Whose phones are we setting up" +
+  the `guided:<tenantId>` remount key in the shipped portal chunks). LIVE PROOF, same super-admin JWT
+  against `GET /desk-phones/extensions` inside app-api-1: no header → `[]` (connect-admin-tenant-v1);
+  `x-tenant-context: cmnlgryll000lp9paakiiyizj` → `["101"]` (Landau). ⛔⛔ DEPLOY TRAPS MET ON THE WAY:
+  (a) the community commits (`ca831961…5b3b8db0`) shipped a `pnpm-lock.yaml` generated from a different
+  root package.json with the `patchedDependencies` block missing → `pnpm install --frozen-lockfile`
+  failed in EVERY api/portal Docker build on the tip; another session fixed it as `1fb253e6` (my
+  equivalent regeneration `15af2126` stays unpushed on the `wizard-redesign` worktree branch);
+  (b) three deploys from three sessions overlapped on the ONE server checkout — mine were refused by
+  the `HEAVY JOB ALREADY RUNNING` lock and the other session's build carried the tip (which held R31),
+  so the container CONTENT was verified, never just the sha; (c) `apps/community-web/public/brand/*.png`
+  are committed under a `text eol=lf` attribute, so every checkout shows them modified — a defect of
+  that commit, left alone, worked around with temp worktrees. ⏳ Izzy's third walk.
