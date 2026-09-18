@@ -10,7 +10,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/community-web/package.json apps/community-web/package.json
 RUN pnpm install --frozen-lockfile --filter @loopcom/community-web... --config.node-linker=hoisted --ignore-scripts || pnpm install --filter @loopcom/community-web... --config.node-linker=hoisted --ignore-scripts
 COPY apps/community-web apps/community-web
-RUN cd apps/community-web && pnpm build
+RUN cd apps/community-web && NEXT_STANDALONE=1 pnpm build
 
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production PORT=3100

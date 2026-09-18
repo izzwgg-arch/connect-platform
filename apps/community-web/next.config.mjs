@@ -2,7 +2,8 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  output: "standalone",
+  // Standalone tracing symlinks fail on Windows (EPERM); the Docker build sets NEXT_STANDALONE=1.
+  ...(process.env.NEXT_STANDALONE === "1" ? { output: "standalone" } : {}),
   async headers() {
     const api = process.env.NEXT_PUBLIC_COMMUNITY_API_URL || "http://localhost:3101";
     // Next dev mode evaluates source maps; production never gets unsafe-eval.
