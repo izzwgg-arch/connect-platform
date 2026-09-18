@@ -60,10 +60,6 @@ export function registerChatRoutes(
   app.post("/agent/chat/message", async (req, reply) => {
     const identity = resolveIdentity(req);
     if (!identity) return reply.code(403).send({ error: "forbidden" });
-    // SUPER_ADMIN / TENANT_ADMIN arrive in the JWT, but a custom role named
-    // "owner" cannot — it needs a DB read, so top it up here. Fails closed:
-    // any lookup error leaves the JWT's role untouched.
-    const role = await elevateForCustomOwnerRole(prisma, identity);
     const body = z
       .object({
         text: z.string().min(1).max(8000),
@@ -111,6 +107,14 @@ export function registerChatRoutes(
       if (!opened.ok) return reply.code(409).send({ error: opened.error });
       turnId = body.data.turnId;
     }
+    // SUPER_ADMIN / TENANT_ADMIN arrive in the JWT, but a custom role named
+    // "owner" cannot — it needs a DB read, so top it up here. Fails closed:
+    // any lookup error leaves the JWT's role untouched.
+    // ⛔ AFTER the turn is opened: the page's first activity poll races this
+    // request, and a database read sitting in front of hub.open() lost that race
+    // on every real send (2026-09-18). Nothing between here and the engine may
+    // return without hub.finish() — this read never throws.
+    const role = await elevateForCustomOwnerRole(prisma, identity);
     // Attachment ids resolve ONLY within the caller's own tenant — an id from
     // another tenant simply doesn't exist here.
     const attachments = (body.data.attachments ?? [])

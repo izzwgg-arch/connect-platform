@@ -34,6 +34,8 @@ export type VoiceState = "idle" | "recording" | "transcribing";
 const LAST_TASK_KEY = "cw.lastTask";
 const folderKey = (taskId: string | null) => `cw.folders.${taskId ?? "draft"}`;
 const POLL_MS = 700;
+/** How long a fresh watcher tolerates "not found" before it treats the turn as gone. */
+const TURN_OPEN_GRACE_MS = 10_000;
 const MAX_RECORDING_MS = 3 * 60 * 1000;
 
 function readFolders(taskId: string | null): AttachedFolder[] {
@@ -170,10 +172,13 @@ export function useCoworkerSession(opts: { path: string; initialTaskId?: string 
       let doneSeenAt = 0;
       let failures = 0;
       let latest: TurnView | null = null;
+      const startedAt = Date.now();
+      let sawTurn = false;
       while (!ctl.stop && mounted.current) {
         try {
           const r = await readActivity(turnId, after);
           failures = 0;
+          sawTurn = true;
           if (r.events.length) {
             setTurns((prev) => {
               const view = applyEvents(prev[turnId] ?? newTurn(turnId), r.events);
@@ -188,7 +193,12 @@ export function useCoworkerSession(opts: { path: string; initialTaskId?: string 
             if (replyReceived.current.has(turnId) || Date.now() - doneSeenAt > 20_000) break;
           }
         } catch (e) {
-          if (e instanceof AgentError && e.status === 404) break; // gone (agent restarted, or expired)
+          // ⛔ "Not found" means GONE (agent restarted, or expired) only once the turn
+          // has been seen. This poll is fired the same instant the message is sent, so
+          // for a fresh turn a 404 usually means "not open yet" — the send is still being
+          // verified. Giving up here left the person a blank spinner with no steps for
+          // the whole task (2026-09-18, every real send). Keep trying briefly.
+          if (e instanceof AgentError && e.status === 404 && (sawTurn || Date.now() - startedAt > TURN_OPEN_GRACE_MS)) break;
           if (++failures > 40) break;
         }
         await sleep(doneSeenAt ? 350 : POLL_MS);

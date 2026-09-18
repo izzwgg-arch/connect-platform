@@ -26,6 +26,18 @@ import { YiddishLabsClient } from "../transcription/yiddishlabs";
 
 export const TASK_HISTORY_DAYS = 30;
 
+/**
+ * ⛔ The page starts polling the SAME instant it sends the message, and the poll
+ * route is an in-memory lookup while /agent/chat/message verifies the token and reads
+ * the database before it opens the turn — so the very first poll lost that race on
+ * every real send (2026-09-18, three for three) and the page, told "not found", gave
+ * up watching for good: no steps, no "Right now", a blank spinner until the reply.
+ * A poll for a turn that is not open YET waits this long for it before saying 404.
+ */
+export const ACTIVITY_OPEN_GRACE_MS = 2000;
+const ACTIVITY_OPEN_TICK_MS = 50;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 type Owner = { tenantId: string; clientUserId: string };
 
 function owner(req: FastifyRequest): { id: Owner; role: string } | null {
@@ -120,9 +132,12 @@ export function registerCoworkerUiRoutes(
     audit: AuditLog;
     prefs: CoworkerPrefsStore;
     transcribe: TranscribeDeps;
+    /** How long a poll waits for a not-yet-open turn (tests shorten it). */
+    activityOpenGraceMs?: number;
   },
 ) {
   const { hub, prisma, store, prefs } = deps;
+  const openGraceMs = deps.activityOpenGraceMs ?? ACTIVITY_OPEN_GRACE_MS;
 
   // ⛔ Polled about once a second per open window while a task runs; logged at warn
   // so the agent's log is not two lines per poll.
@@ -131,7 +146,17 @@ export function registerCoworkerUiRoutes(
     if (!who) return reply.code(403).send({ error: "forbidden" });
     const body = z.object({ turnId: z.string().min(8).max(64), after: z.number().int().min(0).optional() }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    const r = hub.read(body.data.turnId, who.id, body.data.after ?? 0);
+    let r = hub.read(body.data.turnId, who.id, body.data.after ?? 0);
+    // Not open yet (the message that opens it is still being verified)? Wait for it.
+    // Only a FRESH watcher (after = 0) waits: one that already saw events and now
+    // reads "not found" is looking at a turn that is truly gone.
+    if (!r.ok && !(body.data.after ?? 0)) {
+      const deadline = Date.now() + openGraceMs;
+      while (!r.ok && Date.now() < deadline) {
+        await sleep(Math.min(ACTIVITY_OPEN_TICK_MS, Math.max(1, deadline - Date.now())));
+        r = hub.read(body.data.turnId, who.id, body.data.after ?? 0);
+      }
+    }
     if (!r.ok) return reply.code(404).send({ error: "not_found" });
     return { events: r.events, done: r.done, lastSeq: r.lastSeq };
   });

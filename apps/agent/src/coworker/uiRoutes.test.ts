@@ -70,6 +70,7 @@ beforeEach(async () => {
     store: { historyVisible: async () => true } as any,
     prefs: new CoworkerPrefsStore(db.prisma, audit),
     transcribe: { keys: {}, glossaryContext: async () => undefined },
+    activityOpenGraceMs: 400,
   });
   await app.ready();
 });
@@ -103,6 +104,33 @@ test("a message with a turnId opens the turn for that person, passes it to the e
   const body = after.json();
   assert.equal(body.done, true);
   assert.deepEqual(body.events.map((e: any) => (e.type === "step" ? `step:${e.state}` : e.type)), ["step:running", "step:failed", "done"]);
+});
+
+// ⛔ 2026-09-18: the page polls the same instant it sends, and its first poll lost
+// the race on EVERY real send — told 404, it stopped watching, and the person saw a
+// blank spinner with no steps until the reply. A poll for a turn that is not open
+// yet must wait for it; a poll from a watcher that already saw events must not.
+test("a poll that arrives before the message opens its turn waits for the turn instead of saying 404", async () => {
+  let release!: () => void;
+  engineImpl = () => new Promise((resolve) => { release = () => resolve({ conversationId: "c", reply: "", language: "en", degraded: false }); });
+  // The poll goes FIRST — exactly the order the page issues them.
+  const earlyPoll = post("/agent/coworker/activity", U1, { turnId: "turn-route-003", after: 0 });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(hub.has("turn-route-003"), false, "the turn is not open yet while the poll is already waiting");
+  const running = post("/agent/chat/message", U1, { text: "long task", turnId: "turn-route-003" });
+  const early = await earlyPoll;
+  assert.equal(early.statusCode, 200, "the early poll is answered once the turn opens");
+  assert.equal(early.json().done, false);
+  // A watcher that has already read events and now finds nothing is NOT held: the turn is gone.
+  const t0 = Date.now();
+  assert.equal((await post("/agent/coworker/activity", U1, { turnId: "turn-route-999", after: 3 })).statusCode, 404);
+  assert.ok(Date.now() - t0 < 300, "an established watcher's 404 is immediate");
+  // Someone else's turn still reads as not found — after the grace, never sooner.
+  const t1 = Date.now();
+  assert.equal((await post("/agent/coworker/activity", U2, { turnId: "turn-route-003", after: 0 })).statusCode, 404);
+  assert.ok(Date.now() - t1 >= 350, "an unknown/foreign turn waits the full grace before 404");
+  release();
+  await running;
 });
 
 test("someone else's turn reads as not found on every door, and a live turnId cannot be reused", async () => {
