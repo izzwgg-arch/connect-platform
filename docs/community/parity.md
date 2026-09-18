@@ -33,7 +33,7 @@ the gap is platform-specific native API availability and is noted.
 | Post visibility (anyone/connections/company) | ✓ | ✓ | ✓ | |
 | Post-as-company | ✓ | ✓ | ✓ | shown when the person has `org.post` on a membership |
 | Link preview card | ✓ | ✓ | ✓ | read-only render; app doesn't call `/posts/preview` itself before posting |
-| Media lightbox | ✓ (full) | partial | partial | full-screen view exists; **no pinch-to-zoom** (would need `react-native-gesture-handler` + `react-native-reanimated` wiring not built here) |
+| Media lightbox | ✓ (full) | ✓ | ✓ | `src/ui/Lightbox.tsx`: pinch-to-zoom, double-tap-to-zoom, one-finger pan while zoomed, tap-to-close — built on `react-native-gesture-handler` gestures driving RN core `Animated` (no `react-native-reanimated`, kept out to avoid a native rebuild for one screen; unverified on a real touchscreen) |
 | Impressions tracked | ✓ | ✓ | ✓ | `onViewableItemsChanged` → `POST /posts/:id/impression` |
 | **Network** |
 | Invitations (accept/ignore), sent requests (withdraw) | ✓ | ✓ | ✓ | |
@@ -41,13 +41,13 @@ the gap is platform-specific native API availability and is noted.
 | Connections list: search, filter, relationship tags, message, remove | ✓ | ✓ | ✓ | |
 | Follow / unfollow people and companies | ✓ | ✓ | ✓ | |
 | Mutual connections | ✓ | partial | partial | shown as a count on the profile; no dedicated "see mutuals" screen |
-| Block / mute | ✓ | — | — | not built in this pass; no screen calls `POST /people/:id/block` or `/mute` |
+| Block / mute | ✓ | ✓ | ✓ | Person profile's "…" menu (Block / Mute / Report), and Settings → Privacy → "Blocked & muted" (`BlockedScreen`) lists + unblocks/unmutes people and muted companies. The profile menu doesn't know the CURRENT blocked/muted state going in (`/public/people/:username` doesn't return it), so its buttons are one-shot actions rather than toggles — the Blocked & muted list is the source of truth for current state |
 | **Messaging** |
 | Thread list: inbox / requests / archived | ✓ | ✓ | ✓ | |
 | Conversation: send/reply/react/edit/delete | ✓ | ✓ | ✓ | |
 | Attachments: image, file, voice note | ✓ | ✓ | ✓ | `expo-image-picker`, `expo-document-picker`, `expo-av` recording |
 | Forward message | ✓ | ✓ | ✓ | via `NewMessageScreen` picking a recipient, then `POST /threads/:id/messages/:mid/forward` |
-| Typing indicator (send) | ✓ | ✓ | ✓ | app sends `POST /threads/:id/typing` on each keystroke (debounced); **does not render others' typing state** — needs the realtime `typing` event, which the polling-only realtime layer doesn't carry (see Realtime row) |
+| Typing indicator (send + receive) | ✓ | ✓ | ✓ | app sends `POST /threads/:id/typing` on each keystroke; the open conversation now renders a live "Typing…" line from the realtime `typing` SSE event (see Realtime row) |
 | Read receipts | ✓ | ✓ | ✓ | marks read on open; no receipt display in the bubble UI |
 | Accept / decline message requests | ✓ | ✓ | ✓ | |
 | Mute / pin / archive thread | ✓ | — | — | api routes exist (`/threads/:id/mute|pin|archive`); no UI control wired yet |
@@ -66,17 +66,25 @@ the gap is platform-specific native API availability and is noted.
 | View own / others' profile | ✓ | ✓ | ✓ | |
 | Edit basics (name, headline, about, location, industry) | ✓ | ✓ | ✓ | |
 | Avatar upload | ✓ | ✓ | ✓ | camera roll only — no in-app crop beyond the OS picker's own `allowsEditing` |
-| Cover photo upload | ✓ | — | — | `POST /me/cover` exists; no UI control (avatar-only in this pass) |
-| Experiences / educations / services / certifications / portfolio CRUD | ✓ | partial | partial | **read-only** render on the profile screen; no add/edit forms built (routes exist server-side) |
+| Cover photo upload | ✓ | ✓ | ✓ | `EditProfileScreen`'s cover strip, tap to upload — a real multipart `POST /me/cover` (`expo-image-picker`, 3:1 crop) |
+| Experiences / educations / services / certifications CRUD | ✓ | ✓ | ✓ | `EditProfileScreen`: add/edit/delete sheets for each section, wired to their real routes. Portfolio CRUD was left read-only in this pass (routes exist, no UI) |
 | Skills + endorsements | ✓ | partial | partial | skills shown; endorsing someone else's skill isn't wired to a control |
 | QR code (own profile) | ✓ (web) | ✓ | ✓ | `react-native-qrcode-svg`, encodes the same `/people/:username?via=qr` URL the web uses |
 | Scan a QR code | — (N/A on web) | ✓ | ✓ | `expo-camera`'s `CameraView` barcode scanning → `/qr/resolve` → connect/follow/save contact/"we just met" |
 | Save scanned contact to phone contacts | — (N/A) | ✓ | ✓ | `expo-contacts`; falls back to the OS share sheet with a vCard-style text if contacts permission is denied |
 | **Companies** |
 | Company page: About / Posts / Jobs / People | ✓ | ✓ | ✓ | |
-| Follow / message / request quote | ✓ | ✓ | partial | Follow and Message are fully wired; "Request quote" **opens the web RFQ form** (`/rfq/new?to=`) rather than an in-app RFQ flow — the brief allowed this fallback explicitly when time didn't allow the full screen |
+| Follow / message / request quote | ✓ | ✓ | ✓ | Follow and Message are fully wired; "Request quote" now opens `RfqNewScreen` pre-addressed to that company (native, in-app — was a web-form fallback before this pass) |
 | Create/manage a company, catalog, verification | ✓ | — | — | admin-side company management wasn't built for mobile in this pass |
-| **Jobs / Events / Groups / RFQ / Opportunities** | ✓ | — | — | no native screens; deep links to these paths open `ExternalLinkScreen`, which offers "Open on web" |
+| **Jobs** | ✓ | ✓ | ✓ | `JobsListScreen` (search, saved, work-mode filter), `JobDetailScreen` (apply sheet with section checklist + résumé document picker, save, ask-referral), `MyApplicationsScreen` (stage timeline) |
+| **RFQ** | ✓ | ✓ | ✓ | `RfqHomeScreen` (my requests / vendor inbox / browse), `RfqNewScreen`, `RfqDetailScreen` (quotes table with accept/shortlist/decline for the buyer, submit/update-a-quote sheet with a per-unit suggestion for the vendor, questions with an answer box, "Message" opens the quote's thread) |
+| **Events** | ✓ | ✓ | ✓ | `EventsListScreen` (upcoming/past/mine), `EventDetailScreen` (RSVP going/interested/cancel, attendees, add-to-calendar via `expo-calendar` with a share-the-`.ics` fallback on denied permission or any calendar-API error) |
+| **Groups** | ✓ | ✓ | ✓ | `GroupsListScreen` (mine/discover + search), `GroupDetailScreen` (feed/members/files tabs, join/request-to-join/leave, group chat, file upload) |
+| **Opportunities** | ✓ | ✓ | ✓ | `OpportunitiesListScreen` (type chips), `OpportunityDetailScreen` (renders the type's dynamic fields, "I'm interested" opens a thread with the poster, "Ask a question"), `PostOpportunityScreen` (fully dynamic form driven by `GET /opportunities/types`' field schema — `src/domain/dynamicFields.ts`) |
+| **Marketplace** | ✓ | ✓ | ✓ | `MarketplaceListScreen` (category chips, 2-column grid), `ListingDetailScreen` (photo gallery + lightbox, message seller, save), `PostListingScreen` (multi-photo picker) |
+| **CRM** | ✓ | ✓ | ✓ | `CrmScreen`: contacts (search, last-contact date), per-contact notes + a "set reminder" action, and a Reminders tab (due date, done toggle, delete) |
+| **Concierge** | ✓ | ✓ | ✓ | `ConciergeScreen`: chat-style ask → intent + explanation → matched people/orgs/jobs/events/groups (tap to open) → proposed actions → confirm sheet → `POST /concierge/act`. Nothing is sent until the person confirms, matching the api's own design |
+| **For you (recommendations)** | ✓ | ✓ | ✓ | `ForYouScreen`: horizontal rails for businesses/customers/jobs/groups/events, each card showing its `why`/`reason` and a Dismiss action (`POST /recommendations/:id/dismiss`) |
 | **Settings / Privacy** |
 | Privacy preference matrix | ✓ | ✓ | ✓ | search-engine visibility, findable by phone, read receipts, show online, message requests, analytics |
 | Linked Loopcom account status | ✓ | partial | partial | shown read-only; no in-app link/unlink control (`POST/DELETE /auth/link/loopcom` not wired to a button) |
@@ -87,18 +95,21 @@ the gap is platform-specific native API availability and is noted.
 | **Accessibility** |
 | Labels/roles on controls, 44pt touch targets, dynamic type respected | ✓ (web equivalent) | ✓ | ✓ | no fixed `allowFontScaling={false}` anywhere; every interactive element has `accessibilityRole`/`accessibilityLabel` |
 | **Realtime** |
-| Live updates (new message, notification, presence, typing) | ✓ (SSE) | partial | partial | polling every 15s for unread counts while foregrounded (`src/api/realtime.ts`); **no live per-thread message push while a conversation is open** beyond re-fetching on your own actions — a message from the other person won't appear until you back out and back in, or the badge count changes prompt a manual refresh. A documented-but-dormant SSE-over-fetch path exists in `realtime.ts` for when RN's fetch reliably exposes `ReadableStream` on both platforms |
+| Live updates (new message, notification, presence, typing) | ✓ (SSE) | ✓ | ✓ | Real SSE via `react-native-sse` (`src/api/realtime.ts`) against the same `GET /realtime/stream` the web uses — `react-native-sse` drives a plain `XMLHttpRequest` in streaming mode and re-reads its growing `responseText`, which both platforms' XHR support, sidestepping RN `fetch`'s unreliable `ReadableStream`. Exponential reconnect backoff (`src/api/backoff.ts`) on top of the library's own retry. **An open conversation now shows the other person's message and a live "Typing…" line immediately** (`ConversationScreen`), the thread list and notifications refresh on their respective live events, and `AuthProvider`'s badge counts update from the stream instead of only a 15s poll. Falls back to the original 15s-poll behavior if constructing the connection ever throws. Unverified against a live server without a device/emulator in this environment (see README) |
 
 ## Summary of the biggest gaps
 
-1. **RFQ, Jobs, Events, Groups, Opportunities have no native screens.** Deep
-   links and the company page's "Request quote" button open the web instead.
-2. **Realtime is polling, not push-per-event**, so an open conversation
-   doesn't show the other person's message live.
-3. **No pinch-to-zoom lightbox**, no cover-photo upload, no
-   experience/education/service/certification CRUD forms, no block/mute UI,
-   no notification-preferences screen, no saved-searches UI, no thread
-   mute/pin/archive controls. All of these have real, working api routes;
-   only the screen wasn't built in this pass.
-4. **Passkeys are not implemented anywhere** on mobile — there's no Expo API
+1. **Realtime is unverified on a device.** The SSE client is real (not a
+   dormant/documented-only path anymore) and typechecks, but nobody has
+   watched an actual event arrive on a phone — see README's "What could not
+   be verified" section.
+2. **Portfolio CRUD, notification-preferences screen, saved-searches UI, and
+   thread mute/pin/archive controls** still have no native screen — all have
+   real, working api routes; only the screen wasn't built in this pass.
+3. **Passkeys are not implemented anywhere** on mobile — there's no Expo API
    for it without a native module this app doesn't ship.
+4. **The pinch-to-zoom lightbox, add-to-calendar, and every new Jobs/RFQ/
+   Events/Groups/Opportunities/Marketplace/CRM/Concierge/For-you screen are
+   wired to the real api and typecheck clean, but none has been tapped
+   through on a device or emulator** — this environment has neither. Treat
+   them as "should work" rather than "proven" until someone does.

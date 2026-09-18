@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Image, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, ApiError, uploadMedia } from "../../api/client";
+import { realtime } from "../../api/realtime";
 import type { MessageDTO } from "../../api/types";
 import { Avatar, Button, Field, Icon, useToast } from "../../ui";
 import { useTheme } from "../../theme/ThemeProvider";
@@ -23,6 +24,8 @@ export function ConversationScreen({ route, navigation }: Props) {
   const [replyTo, setReplyTo] = useState<MessageDTO | null>(null);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [othersTyping, setOthersTyping] = useState(false);
+  const othersTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     navigation.setOptions({ title: title ?? "Conversation" });
@@ -46,6 +49,30 @@ export function ConversationScreen({ route, navigation }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Live updates while this conversation is open: the other person's message
+  // appears immediately (previously this needed backing out and back in, or
+  // a badge-count-triggered manual refresh — see docs/community/parity.md).
+  useEffect(() => {
+    const off = realtime.onEvent((type, data) => {
+      if (!data || data.threadId !== threadId) return;
+      if (type === "message" && data.message) {
+        setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message as MessageDTO]));
+        api(`/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
+      } else if (type === "typing") {
+        setOthersTyping(true);
+        if (othersTypingTimer.current) clearTimeout(othersTypingTimer.current);
+        othersTypingTimer.current = setTimeout(() => setOthersTyping(false), 4000);
+      } else if (type === "thread") {
+        // membership/left/removed changes on this thread — cheap to just reload.
+        load();
+      }
+    });
+    return () => {
+      off();
+      if (othersTypingTimer.current) clearTimeout(othersTypingTimer.current);
+    };
+  }, [threadId, load]);
 
   async function loadOlder() {
     if (!cursor) return;
@@ -179,6 +206,11 @@ export function ConversationScreen({ route, navigation }: Props) {
           contentContainerStyle={{ padding: 12, gap: 8 }}
           renderItem={({ item }) => <MessageBubble m={item} onReact={(e) => react(item, e)} onDelete={() => remove(item)} onReply={() => setReplyTo(item)} onForward={() => forward(item)} />}
         />
+        {othersTyping ? (
+          <Text accessibilityLiveRegion="polite" style={{ color: theme.dim, fontSize: 12, paddingHorizontal: 16, paddingBottom: 4 }}>
+            Typing…
+          </Text>
+        ) : null}
         {isPendingForMe ? (
           <View style={{ flexDirection: "row", gap: 10, padding: 12 }}>
             <Button title="Accept" kind="primary" onPress={accept} testID="thread-accept" />

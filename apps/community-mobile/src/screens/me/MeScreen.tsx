@@ -47,6 +47,26 @@ export function MeScreen({ navigation }: Props) {
     { icon: "gear", label: "Settings", onPress: () => navigation.navigate("Settings"), testID: "me-settings" },
   ];
 
+  // Cross-stack navigation into the Home stack's "Find & sell" screens — the
+  // same getParent() pattern ConnectionsScreen already uses to jump into
+  // MessagesTab. Kept in its own section (rather than a new tab) per the
+  // brief; a push notification or deep link for any of these paths (see
+  // src/navigation/deepLink.ts) reaches the same screens directly.
+  function openInHome(screen: string, params?: object) {
+    (navigation.getParent() as any)?.navigate("HomeTab", { screen, params });
+  }
+  const findAndSellRows: Array<{ icon: any; label: string; onPress: () => void; testID: string }> = [
+    { icon: "brief", label: "Jobs", onPress: () => openInHome("JobsList"), testID: "me-jobs" },
+    { icon: "quote", label: "Request for quotes", onPress: () => openInHome("RfqHome"), testID: "me-rfq" },
+    { icon: "cal", label: "Events", onPress: () => openInHome("EventsList"), testID: "me-events" },
+    { icon: "group", label: "Groups", onPress: () => openInHome("GroupsList"), testID: "me-groups" },
+    { icon: "tag", label: "Opportunities", onPress: () => openInHome("OpportunitiesList"), testID: "me-opportunities" },
+    { icon: "wallet", label: "Marketplace", onPress: () => openInHome("MarketplaceList"), testID: "me-marketplace" },
+    { icon: "people", label: "CRM", onPress: () => openInHome("Crm"), testID: "me-crm" },
+    { icon: "chat", label: "Concierge", onPress: () => openInHome("Concierge"), testID: "me-concierge" },
+    { icon: "star", label: "For you", onPress: () => openInHome("ForYou"), testID: "me-for-you" },
+  ];
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
@@ -73,6 +93,25 @@ export function MeScreen({ navigation }: Props) {
               <Icon name="arrow" size={16} color={theme.dim} />
             </Pressable>
           ))}
+        </View>
+
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: theme.dim, fontWeight: "800", fontSize: 13, textTransform: "uppercase" }}>Find & sell</Text>
+          <View style={{ backgroundColor: theme.panel, borderRadius: 14, borderWidth: 1, borderColor: theme.border }}>
+            {findAndSellRows.map((r, i) => (
+              <Pressable
+                key={r.label}
+                onPress={r.onPress}
+                accessibilityRole="button"
+                testID={r.testID}
+                style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderTopWidth: i ? 1 : 0, borderColor: theme.border }}
+              >
+                <Icon name={r.icon} size={20} />
+                <Text style={{ color: theme.text, flex: 1, fontSize: 15 }}>{r.label}</Text>
+                <Icon name="arrow" size={16} color={theme.dim} />
+              </Pressable>
+            ))}
+          </View>
         </View>
 
         <Button title={themeName === "dark" ? "Switch to light mode" : "Switch to dark mode"} icon={themeName === "dark" ? "sun" : "moon"} onPress={toggle} testID="me-theme" />

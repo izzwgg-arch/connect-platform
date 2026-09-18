@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Alert, Linking, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, ApiError, newIdempotencyKey } from "../../api/client";
 import { useAuth } from "../../auth/AuthProvider";
-import { Avatar, Button, Chip, Skeleton, useToast } from "../../ui";
+import { Avatar, Button, Chip, Icon, Sheet, Skeleton, useToast } from "../../ui";
 import { useTheme } from "../../theme/ThemeProvider";
 import type { HomeStackParamList } from "../../navigation/types";
 
@@ -80,6 +80,51 @@ export function PersonProfileScreen({ route, navigation }: Props) {
     }
   }
 
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  function block() {
+    if (!data) return;
+    setMenuOpen(false);
+    Alert.alert(`Block ${data.person.name}?`, "They won't be able to message, follow, or connect with you, and your existing connection will be removed.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Block",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await api(`/people/${data.person.id}/block`, { method: "POST" });
+            toast("Blocked.");
+            navigation.goBack();
+          } catch (err) {
+            toast((err as ApiError).message, { kind: "err" });
+          }
+        },
+      },
+    ]);
+  }
+
+  async function mute() {
+    if (!data) return;
+    setMenuOpen(false);
+    try {
+      await api(`/people/${data.person.id}/mute`, { method: "POST" });
+      toast(`You won't see ${data.person.name}'s posts as often.`);
+    } catch (err) {
+      toast((err as ApiError).message, { kind: "err" });
+    }
+  }
+
+  async function report() {
+    if (!data) return;
+    setMenuOpen(false);
+    try {
+      await api("/reports", { method: "POST", body: { targetType: "Person", targetId: data.person.id, reason: "other" }, idempotencyKey: newIdempotencyKey() });
+      toast("Reported. Our team will review it.");
+    } catch (err) {
+      toast((err as ApiError).message, { kind: "err" });
+    }
+  }
+
   if (!data) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg, padding: 16 }}>
@@ -120,6 +165,9 @@ export function PersonProfileScreen({ route, navigation }: Props) {
             {data.relationship.canCall ? (
               <Button title="Call" icon="phone" onPress={() => Linking.openURL(`tel:${p.phone ?? ""}`)} disabled={!p.phone} />
             ) : null}
+            <Pressable accessibilityRole="button" accessibilityLabel="More" onPress={() => setMenuOpen(true)} testID="profile-more" style={{ padding: 10 }}>
+              <Icon name="dots" size={18} />
+            </Pressable>
           </View>
         ) : null}
 
@@ -168,6 +216,20 @@ export function PersonProfileScreen({ route, navigation }: Props) {
           </Section>
         ) : null}
       </ScrollView>
+
+      <Sheet visible={menuOpen} onClose={() => setMenuOpen(false)} title={data.person.name}>
+        <View style={{ gap: 4 }}>
+          <Pressable accessibilityRole="button" onPress={mute} style={{ paddingVertical: 12 }} testID="profile-mute">
+            <Text style={{ color: theme.text, fontSize: 15 }}>Mute</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={block} style={{ paddingVertical: 12 }} testID="profile-block">
+            <Text style={{ color: theme.danger, fontSize: 15 }}>Block</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={report} style={{ paddingVertical: 12 }} testID="profile-report">
+            <Text style={{ color: theme.danger, fontSize: 15 }}>Report</Text>
+          </Pressable>
+        </View>
+      </Sheet>
     </SafeAreaView>
   );
 }

@@ -132,6 +132,7 @@ export function SettingsScreen({ navigation }: Props) {
               <Switch value={!!prefs[p.key]} onValueChange={() => togglePref(p.key)} accessibilityLabel={p.label} />
             </Row>
           ))}
+          <Button title="Blocked & muted" onPress={() => navigation.navigate("Blocked")} testID="settings-blocked" />
         </Section>
 
         <Section title="Your data">

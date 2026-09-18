@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, ApiError } from "../../api/client";
+import { realtime } from "../../api/realtime";
 import type { NotificationItem } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { resolveDeepLinkPath } from "../../navigation/linking";
@@ -35,6 +36,15 @@ export function NotificationsScreen({ navigation }: Props) {
   useEffect(() => {
     setLoading(true);
     load();
+  }, [load]);
+
+  // A live "notification" event refreshes the list in place, instead of
+  // only updating the tab badge until the next manual open.
+  useEffect(() => {
+    const off = realtime.onEvent((type) => {
+      if (type === "notification") load();
+    });
+    return off;
   }, [load]);
 
   async function markAllRead() {

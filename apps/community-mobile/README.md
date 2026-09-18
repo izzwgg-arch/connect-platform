@@ -39,7 +39,8 @@ Both resolve through the single table in `src/navigation/linking.ts` /
 | `/messages`, `/messages/:threadId` | Thread list / conversation |
 | `/notifications` | Notifications |
 | `/search` | Search |
-| `/jobs/:id`, `/events/:id`, `/groups/:slug`, `/rfq/:id`, `/opportunities/:id` | "Open on web" fallback (`ExternalLinkScreen`) — not yet built natively, see `docs/community/parity.md` |
+| `/jobs/:id`, `/rfq/:id`, `/events/:slug`, `/groups/:slug`, `/opportunities/:id`, `/marketplace/:id` | Native detail screens (Jobs / RFQ / Events / Groups / Opportunities / Marketplace) |
+| any other `/:kind/:id` | "Open on web" fallback (`ExternalLinkScreen`) |
 
 A push notification's `href` field is resolved through the same table (see
 `RootNavigator.tsx`'s notification-tap listener).
@@ -70,10 +71,10 @@ without crashing — no feature assumes a token exists).
 
 ## Tests
 
-`pnpm test` (`node --import tsx --test "src/**/*.test.ts"`). All four
-suites are pure-logic tests with **zero react-native/expo imports** — the
-same discipline `apps/mobile` uses — because `react-native`'s own package
-cannot be `require()`'d outside of Metro/Node's ESM loader used here only for
+`pnpm test` (`node --import tsx --test "src/**/*.test.ts"`). Every suite is a
+pure-logic test with **zero react-native/expo imports** — the same discipline
+`apps/mobile` uses — because `react-native`'s own package cannot be
+`require()`'d outside of Metro/Node's ESM loader used here only for
 TypeScript transpilation, not RN's Flow-typed source:
 
 - `src/api/client.test.ts` — the api core's refresh-and-retry-once-on-401
@@ -81,10 +82,19 @@ TypeScript transpilation, not RN's Flow-typed source:
   (against `src/api/apiCore.ts`, a native-import-free module `src/api/client.ts`
   wires up to the real fetch + SecureStore).
 - `src/api/realtime.test.ts` — the reconnect backoff schedule (`src/api/backoff.ts`).
-- `src/navigation/linking.test.ts` — every deep-link path resolves to the
-  right screen (`src/navigation/deepLink.ts`).
+- `src/api/sse.test.ts` — the SSE wire-format frame parser (`src/api/sse.ts`):
+  frame splitting across chunks, multi-line `data:`, comment/ping lines,
+  CRLF normalization, and safe JSON decoding.
+- `src/navigation/linking.test.ts` — every deep-link path (including the six
+  "Find & sell" domains added in this pass) resolves to the right screen
+  (`src/navigation/deepLink.ts`).
 - `src/auth/policy.test.ts` — the biometric-lock gate and the
   access-token-never-persisted / refresh-token-only storage rule.
+- `src/domain/quoteMath.test.ts` — the RFQ quote form's per-unit/total
+  suggestion math (`src/domain/quoteMath.ts`).
+- `src/domain/dynamicFields.test.ts` — the opportunity-type dynamic form
+  engine (`src/domain/dynamicFields.ts`), whose `validateFields` mirrors
+  `apps/community-api/src/opportunities/types.ts` sentence-for-sentence.
 
 `npx tsc -p tsconfig.json --noEmit` is clean (0 errors).
 
@@ -97,6 +107,22 @@ TypeScript transpilation, not RN's Flow-typed source:
 - Passkeys: there's no Expo API exposing platform passkey/WebAuthn ceremonies
   without a native module the app doesn't have, so no passkey UI was built
   (the web has one; the brief said not to fake it).
-- Realtime is polling-only (see `src/api/realtime.ts`'s doc comment) — a true
-  SSE stream needs a `response.body` `ReadableStream` that React Native's
-  fetch doesn't reliably expose on both platforms.
+- Realtime now uses a real SSE connection (`react-native-sse`, see
+  `src/api/realtime.ts`) instead of only polling, but it is unexercised
+  against a live server here — there's no device/emulator/simulator in this
+  environment to open a socket and watch events arrive. Falls back to the
+  original polling if the library ever fails to construct a connection.
+- The pinch-to-zoom/double-tap lightbox (`src/ui/Lightbox.tsx`, used by the
+  feed's photo viewer and the marketplace listing gallery) is built on
+  `react-native-gesture-handler` gestures driving plain RN `Animated` values
+  (`react-native-reanimated` isn't installed — see the file's doc comment)
+  but the gesture feel is unverified without a touchscreen.
+- `expo-calendar`'s add-to-calendar flow (`EventDetailScreen`) is written
+  against its documented API but unexercised — no device calendar to write
+  to here; it falls back to sharing the event's `.ics` file when calendar
+  permission is denied or the call throws.
+- The new Jobs/RFQ/Events/Groups/Opportunities/Marketplace/CRM/Concierge/For
+  you screens (`src/screens/{jobs,rfq,events,groups,opportunities,marketplace,crm,concierge,recommendations}`)
+  are wired against the real api routes and typecheck cleanly, but no screen
+  has been tapped through on a device/emulator — see
+  `docs/community/parity.md` for exactly what's proven vs. not.

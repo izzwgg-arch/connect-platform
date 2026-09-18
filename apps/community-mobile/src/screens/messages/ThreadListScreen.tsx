@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FlatList, Pressable, SafeAreaView, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, ApiError } from "../../api/client";
+import { realtime } from "../../api/realtime";
 import type { ThreadListItem } from "../../api/types";
 import { Avatar, Chip, Empty, Icon, useToast } from "../../ui";
 import { useTheme } from "../../theme/ThemeProvider";
@@ -44,6 +45,16 @@ export function ThreadListScreen({ navigation }: Props) {
   useEffect(() => {
     setLoading(true);
     load();
+  }, [load]);
+
+  // A live "message" or "thread" event (new message, accept, mute/pin/left,
+  // etc.) refreshes the current tab instead of waiting for the next manual
+  // pull-to-refresh.
+  useEffect(() => {
+    const off = realtime.onEvent((type) => {
+      if (type === "message" || type === "thread") load();
+    });
+    return off;
   }, [load]);
 
   function otherName(item: ThreadListItem): string {

@@ -21,11 +21,17 @@ export function resolveDeepLinkPath(path: string): { screen: string; params: Rec
     case "search":
       return { screen: "Search", params: {} };
     case "jobs":
-    case "events":
-    case "groups":
+      return rest ? { screen: "JobDetail", params: { id: rest } } : { screen: "JobsList", params: {} };
     case "rfq":
+      return rest ? { screen: "RfqDetail", params: { id: rest } } : { screen: "RfqHome", params: {} };
+    case "events":
+      return rest ? { screen: "EventDetail", params: { slug: rest } } : { screen: "EventsList", params: {} };
+    case "groups":
+      return rest ? { screen: "GroupDetail", params: { slug: rest } } : { screen: "GroupsList", params: {} };
     case "opportunities":
-      return rest ? { screen: "ExternalLink", params: { kind: head, id: rest } } : null;
+      return rest ? { screen: "OpportunityDetail", params: { id: rest } } : { screen: "OpportunitiesList", params: {} };
+    case "marketplace":
+      return rest ? { screen: "ListingDetail", params: { id: rest } } : { screen: "MarketplaceList", params: {} };
     default:
       return null;
   }

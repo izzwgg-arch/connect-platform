@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Image, Modal, Pressable, Share, Text, View } from "react-native";
+import { Image, Pressable, Share, Text, View } from "react-native";
 import { api, ApiError, newIdempotencyKey } from "../../api/client";
 import type { PostDTO } from "../../api/types";
 import { Avatar, Icon, useToast } from "../../ui";
+import { Lightbox } from "../../ui/Lightbox";
 import { useTheme } from "../../theme/ThemeProvider";
 import { CommentSheet } from "./CommentSheet";
 
@@ -217,11 +218,7 @@ export function PostCard({
 
       <CommentSheet postId={item.id} visible={commentsOpen} onClose={() => setCommentsOpen(false)} onCountChange={(n) => onChange({ ...item, counts: { ...item.counts, comments: n } })} />
 
-      <Modal visible={!!lightbox} transparent animationType="fade" onRequestClose={() => setLightbox(null)}>
-        <Pressable onPress={() => setLightbox(null)} accessibilityRole="button" accessibilityLabel="Close photo" style={{ flex: 1, backgroundColor: "#000", alignItems: "center", justifyContent: "center" }}>
-          {lightbox ? <Image source={{ uri: lightbox }} resizeMode="contain" style={{ width: "100%", height: "80%" }} /> : null}
-        </Pressable>
-      </Modal>
+      <Lightbox uri={lightbox} onClose={() => setLightbox(null)} />
     </View>
   );
 }

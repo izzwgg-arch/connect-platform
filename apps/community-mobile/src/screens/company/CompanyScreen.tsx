@@ -81,7 +81,7 @@ export function CompanyScreen({ route, navigation }: Props) {
 
   function requestQuote() {
     if (!data) return;
-    Linking.openURL(`https://community.loopcom.net/rfq/new?to=${data.id}`);
+    navigation.navigate("RfqNew", { toOrganizationId: data.id, toOrganizationName: data.displayName });
   }
 
   if (!data) {
@@ -132,7 +132,7 @@ export function CompanyScreen({ route, navigation }: Props) {
           <View style={{ gap: 10 }}>
             {data.openJobs.length === 0 ? <Text style={{ color: theme.dim }}>No open roles right now.</Text> : null}
             {data.openJobs.map((j) => (
-              <Pressable key={j.id} onPress={() => Linking.openURL(`https://community.loopcom.net/jobs/${j.id}`)} accessibilityRole="button" style={{ backgroundColor: theme.panel, padding: 12, borderRadius: 12 }}>
+              <Pressable key={j.id} onPress={() => navigation.navigate("JobDetail", { id: j.id })} accessibilityRole="button" style={{ backgroundColor: theme.panel, padding: 12, borderRadius: 12 }}>
                 <Text style={{ color: theme.text, fontWeight: "700" }}>{j.title}</Text>
                 <Text style={{ color: theme.dim, fontSize: 12 }}>
                   {j.location ?? ""} {j.employmentType}
